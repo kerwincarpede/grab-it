@@ -8,9 +8,13 @@
 //! save folder leaves older captures (and their rows) where they are.
 
 use std::{
+    collections::HashSet,
     fmt, fs, io,
     path::{Path, PathBuf},
-    sync::{Mutex, MutexGuard},
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
     time::UNIX_EPOCH,
 };
 
@@ -200,56 +204,18 @@ impl Library {
     }
 
     /// Adds a capture, or refreshes its row when the path is already known.
-    /// Its thumbnail is created if missing.
+    /// Its thumbnail is created if missing. The app uses
+    /// [`LibraryState::add_capture`], which makes it without the lock.
+    #[cfg(test)]
     pub fn add_capture(&mut self, png: &Path) -> LibraryResult<Shot> {
-        let path = canonical(png);
-        let thumb = thumb_path(&path);
-        ensure_thumbnail(&path, &thumb)?;
-        let meta = read_meta(&path);
-        let captured_at = meta
-            .as_ref()
-            .and_then(|meta| DateTime::parse_from_rfc3339(&meta.captured_at).ok())
-            .map(|time| time.timestamp_millis())
-            .unwrap_or_else(|| modified_millis(&path));
-        let (width, height) = match &meta {
-            Some(meta) if meta.width > 0 && meta.height > 0 => (meta.width, meta.height),
-            _ => image::image_dimensions(&path)?,
-        };
-        let mode = meta.as_ref().and_then(|meta| {
-            serde_json::to_value(meta.mode)
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_owned))
-        });
-        let (app, window_title) = meta
-            .map(|meta| (meta.app, meta.window_title))
-            .unwrap_or_default();
-        self.conn.execute(
-            "INSERT INTO shots (path, thumb_path, captured_at, mode, app, window_title, width, height)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT (path) DO UPDATE SET
-                thumb_path = excluded.thumb_path,
-                captured_at = excluded.captured_at,
-                mode = excluded.mode,
-                app = excluded.app,
-                window_title = excluded.window_title,
-                width = excluded.width,
-                height = excluded.height",
-            params![
-                path_text(&path),
-                path_text(&thumb),
-                captured_at,
-                mode,
-                app,
-                window_title,
-                width,
-                height
-            ],
-        )?;
-        let id: i64 = self.conn.query_row(
-            "SELECT id FROM shots WHERE path = ?1",
-            [path_text(&path)],
-            |row| row.get(0),
-        )?;
+        let prepared = prepare_capture(png)?;
+        self.insert(&prepared)
+    }
+
+    /// Stores a capture read by [`prepare_capture`], or refreshes its row
+    /// when the path is already known. Tags and notes are kept.
+    pub fn insert(&mut self, shot: &PreparedShot) -> LibraryResult<Shot> {
+        let id = insert_prepared(&self.conn, shot)?;
         self.get(id)
     }
 
@@ -257,53 +223,65 @@ impl Library {
     /// gone are dropped (in any folder), new PNGs in its `originals/` are
     /// added, and missing thumbnails are regenerated. Rows for captures in
     /// other folders are kept while their files exist.
+    ///
+    /// Single-owner shortcut for tests; the app uses [`LibraryState::rescan`],
+    /// which does the file work without holding the lock.
+    #[cfg(test)]
     pub fn rescan(&mut self, save_folder: &Path) -> LibraryResult<RescanReport> {
-        let mut report = RescanReport::default();
+        let known = self.known()?;
+        let scan = scan_files(&known, save_folder)?;
+        self.apply(&scan)
+    }
 
-        let known: Vec<(i64, String, String)> = {
-            let mut stmt = self
-                .conn
-                .prepare("SELECT id, path, thumb_path FROM shots")?;
-            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-                .collect::<Result<_, _>>()?
-        };
-        for (id, path, thumb) in &known {
-            let path = Path::new(path);
-            if path.is_file() {
-                if let Err(err) = ensure_thumbnail(path, Path::new(thumb)) {
-                    eprintln!(
-                        "Grab-it: could not make a thumbnail for {}: {err}",
-                        path.display()
-                    );
-                }
-            } else {
-                self.conn.execute("DELETE FROM shots WHERE id = ?1", [id])?;
+    /// Every row's id, path and thumbnail path.
+    pub fn known(&self) -> LibraryResult<Vec<KnownShot>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, path, thumb_path FROM shots")?;
+        let known = stmt
+            .query_map([], |row| {
+                Ok(KnownShot {
+                    id: row.get(0)?,
+                    path: PathBuf::from(row.get::<_, String>(1)?),
+                    thumb_path: PathBuf::from(row.get::<_, String>(2)?),
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(known)
+    }
+
+    /// Stores what [`scan_files`] found. The files are checked again, so a
+    /// capture recorded or restored while the scan ran is neither added
+    /// twice nor dropped.
+    pub fn apply(&mut self, scan: &ScanResult) -> LibraryResult<RescanReport> {
+        let mut report = RescanReport::default();
+        let tx = self.conn.transaction()?;
+        for id in &scan.gone {
+            let path: Option<String> = tx
+                .query_row("SELECT path FROM shots WHERE id = ?1", [id], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            if path.is_some_and(|path| !Path::new(&path).is_file()) {
+                tx.execute("DELETE FROM shots WHERE id = ?1", [id])?;
                 report.removed += 1;
             }
         }
-
-        for png in originals_in(save_folder)? {
-            let path = canonical(&png);
-            if self.id_for(&path)?.is_some() {
-                continue;
-            }
-            match self.add_capture(&path) {
-                Ok(_) => report.added += 1,
-                Err(err) => eprintln!("Grab-it: skipped {}: {err}", path.display()),
+        for shot in &scan.new {
+            let known: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM shots WHERE path = ?1",
+                    [path_text(&shot.path)],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if known.is_none() && shot.path.is_file() {
+                insert_prepared(&tx, shot)?;
+                report.added += 1;
             }
         }
+        tx.commit()?;
         Ok(report)
-    }
-
-    fn id_for(&self, path: &Path) -> LibraryResult<Option<i64>> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT id FROM shots WHERE path = ?1",
-                [path_text(path)],
-                |row| row.get(0),
-            )
-            .optional()?)
     }
 
     /// How many shots the library holds.
@@ -410,11 +388,145 @@ impl Library {
     }
 
     /// The shot's thumbnail PNG, regenerated if it is missing.
+    #[cfg(test)]
     pub fn thumbnail(&self, id: i64) -> LibraryResult<Vec<u8>> {
-        let shot = self.get(id)?;
-        ensure_thumbnail(&shot.path, &shot.thumb_path)?;
-        Ok(fs::read(&shot.thumb_path)?)
+        thumbnail_bytes(&self.get(id)?)
     }
+}
+
+/// A row as [`Library::known`] reads it for a rescan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownShot {
+    pub id: i64,
+    pub path: PathBuf,
+    pub thumb_path: PathBuf,
+}
+
+/// A capture's row, read from disk (with its thumbnail made) without
+/// touching the database.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedShot {
+    pub path: PathBuf,
+    pub thumb_path: PathBuf,
+    pub captured_at: i64,
+    pub mode: Option<String>,
+    pub app: Option<String>,
+    pub window_title: Option<String>,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// The file work of a rescan, for [`Library::apply`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScanResult {
+    /// Rows whose file was missing.
+    pub gone: Vec<i64>,
+    /// New captures in the save folder.
+    pub new: Vec<PreparedShot>,
+}
+
+/// Reads a capture's meta sidecar and size, and makes its thumbnail if
+/// missing. Touches only files, so it runs without the library lock.
+pub fn prepare_capture(png: &Path) -> LibraryResult<PreparedShot> {
+    let path = canonical(png);
+    let thumb_path = thumb_path(&path);
+    ensure_thumbnail(&path, &thumb_path)?;
+    let meta = read_meta(&path);
+    let captured_at = meta
+        .as_ref()
+        .and_then(|meta| DateTime::parse_from_rfc3339(&meta.captured_at).ok())
+        .map(|time| time.timestamp_millis())
+        .unwrap_or_else(|| modified_millis(&path));
+    let (width, height) = match &meta {
+        Some(meta) if meta.width > 0 && meta.height > 0 => (meta.width, meta.height),
+        _ => image::image_dimensions(&path)?,
+    };
+    let mode = meta.as_ref().and_then(|meta| {
+        serde_json::to_value(meta.mode)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+    });
+    let (app, window_title) = meta
+        .map(|meta| (meta.app, meta.window_title))
+        .unwrap_or_default();
+    Ok(PreparedShot {
+        path,
+        thumb_path,
+        captured_at,
+        mode,
+        app,
+        window_title,
+        width,
+        height,
+    })
+}
+
+/// The file side of a rescan: finds rows whose file is gone, regenerates
+/// missing thumbnails and prepares new PNGs in `<save_folder>/originals/`.
+/// Touches only files, so it runs without the library lock.
+pub fn scan_files(known: &[KnownShot], save_folder: &Path) -> LibraryResult<ScanResult> {
+    let mut scan = ScanResult::default();
+    for shot in known {
+        if shot.path.is_file() {
+            if let Err(err) = ensure_thumbnail(&shot.path, &shot.thumb_path) {
+                eprintln!(
+                    "Grab-it: could not make a thumbnail for {}: {err}",
+                    shot.path.display()
+                );
+            }
+        } else {
+            scan.gone.push(shot.id);
+        }
+    }
+    let paths: HashSet<&Path> = known.iter().map(|shot| shot.path.as_path()).collect();
+    for png in originals_in(save_folder)? {
+        let path = canonical(&png);
+        if paths.contains(path.as_path()) {
+            continue;
+        }
+        match prepare_capture(&path) {
+            Ok(shot) => scan.new.push(shot),
+            Err(err) => eprintln!("Grab-it: skipped {}: {err}", path.display()),
+        }
+    }
+    Ok(scan)
+}
+
+/// Upserts a prepared capture and returns its id.
+fn insert_prepared(conn: &Connection, shot: &PreparedShot) -> LibraryResult<i64> {
+    conn.execute(
+        "INSERT INTO shots (path, thumb_path, captured_at, mode, app, window_title, width, height)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT (path) DO UPDATE SET
+            thumb_path = excluded.thumb_path,
+            captured_at = excluded.captured_at,
+            mode = excluded.mode,
+            app = excluded.app,
+            window_title = excluded.window_title,
+            width = excluded.width,
+            height = excluded.height",
+        params![
+            path_text(&shot.path),
+            path_text(&shot.thumb_path),
+            shot.captured_at,
+            shot.mode,
+            shot.app,
+            shot.window_title,
+            shot.width,
+            shot.height
+        ],
+    )?;
+    Ok(conn.query_row(
+        "SELECT id FROM shots WHERE path = ?1",
+        [path_text(&shot.path)],
+        |row| row.get(0),
+    )?)
+}
+
+/// A shot's thumbnail PNG bytes, regenerated if missing.
+fn thumbnail_bytes(shot: &Shot) -> LibraryResult<Vec<u8>> {
+    ensure_thumbnail(&shot.path, &shot.thumb_path)?;
+    Ok(fs::read(&shot.thumb_path)?)
 }
 
 fn shot_from_row(row: &Row<'_>) -> rusqlite::Result<Shot> {
@@ -488,11 +600,22 @@ pub fn ensure_thumbnail(png: &Path, thumb: &Path) -> LibraryResult<()> {
         fs::create_dir_all(dir)?;
     }
     // Written beside the target first so a half-written thumbnail is never
-    // mistaken for a finished one.
-    let tmp = thumb.with_extension("png.tmp");
-    small.save_with_format(&tmp, image::ImageFormat::Png)?;
-    fs::rename(&tmp, thumb)?;
-    Ok(())
+    // mistaken for a finished one. The name is unique so a rescan and the
+    // Library window can make the same thumbnail at once.
+    static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
+    let tmp = thumb.with_extension(format!(
+        "png.{}-{}.tmp",
+        std::process::id(),
+        NEXT_TMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    let written = small
+        .save_with_format(&tmp, image::ImageFormat::Png)
+        .map_err(LibraryError::from)
+        .and_then(|()| fs::rename(&tmp, thumb).map_err(LibraryError::from));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written
 }
 
 fn read_meta(png: &Path) -> Option<CaptureMeta> {
@@ -574,6 +697,27 @@ impl LibraryState {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+
+    /// [`Library::rescan`], holding the lock only to read and write rows:
+    /// thumbnails are made unlocked, so the Library window and new
+    /// captures are not held up by a scan of a large folder.
+    pub fn rescan(&self, save_folder: &Path) -> LibraryResult<RescanReport> {
+        let known = self.lock().known()?;
+        let scan = scan_files(&known, save_folder)?;
+        self.lock().apply(&scan)
+    }
+
+    /// [`Library::add_capture`], making the thumbnail without the lock.
+    pub fn add_capture(&self, png: &Path) -> LibraryResult<Shot> {
+        let prepared = prepare_capture(png)?;
+        self.lock().insert(&prepared)
+    }
+
+    /// A shot's thumbnail PNG, regenerated without the lock if missing.
+    pub fn thumbnail(&self, id: i64) -> LibraryResult<Vec<u8>> {
+        let shot = self.lock().get(id)?;
+        thumbnail_bytes(&shot)
+    }
 }
 
 /// Opens `library.db` in the app data directory. If that fails the library
@@ -598,7 +742,7 @@ pub fn rescan_in_background(app: &AppHandle, save_folder: PathBuf) {
         let Some(state) = app.try_state::<LibraryState>() else {
             return;
         };
-        let report = state.lock().rescan(&save_folder);
+        let report = state.rescan(&save_folder);
         match report {
             Ok(report) if report.changed() => {
                 let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
@@ -617,7 +761,7 @@ pub fn record_capture(app: &AppHandle, png: &Path) {
     let Some(state) = app.try_state::<LibraryState>() else {
         return;
     };
-    let result = state.lock().add_capture(png);
+    let result = state.add_capture(png);
     match result {
         Ok(_) => {
             let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
@@ -633,7 +777,11 @@ fn to_message(err: LibraryError) -> String {
     err.to_string()
 }
 
-#[tauri::command]
+// The library commands run on Tauri's thread pool (`async`), never the main
+// thread, so waiting for the lock or making a thumbnail cannot freeze the
+// windows or the tray.
+
+#[tauri::command(async)]
 pub fn library_list(
     offset: u32,
     limit: u32,
@@ -643,16 +791,16 @@ pub fn library_list(
 }
 
 /// A shot's thumbnail PNG bytes.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_thumbnail(
     id: i64,
     state: State<'_, LibraryState>,
 ) -> Result<tauri::ipc::Response, String> {
-    let bytes = state.lock().thumbnail(id).map_err(to_message)?;
+    let bytes = state.thumbnail(id).map_err(to_message)?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_set_tags(
     id: i64,
     tags: Vec<String>,
@@ -661,7 +809,7 @@ pub fn library_set_tags(
     state.lock().set_tags(id, &tags).map_err(to_message)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_set_notes(
     id: i64,
     notes: String,
@@ -671,7 +819,7 @@ pub fn library_set_notes(
 }
 
 /// Deletes a shot from disk and the library, closing its editor first.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn library_delete(
     id: i64,
     app: AppHandle,
@@ -1059,6 +1207,86 @@ mod tests {
             names(&library),
             vec![new.file_name().unwrap().to_string_lossy().into_owned()]
         );
+    }
+
+    #[test]
+    fn a_capture_recorded_while_files_are_scanned_is_not_added_twice() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (4, 4));
+        let mut library = Library::open_in_memory().unwrap();
+
+        // The scan's file work runs unlocked; meanwhile the capture is
+        // recorded through the usual path.
+        let known = library.known().unwrap();
+        let scan = scan_files(&known, dir.path()).unwrap();
+        assert_eq!(scan.new.len(), 1);
+        library.add_capture(&png).unwrap();
+
+        assert_eq!(library.apply(&scan).unwrap(), RescanReport::default());
+        assert_eq!(library.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn a_file_restored_while_files_are_scanned_keeps_its_row() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (4, 4));
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        library.set_tags(shot.id, &["keep".into()]).unwrap();
+
+        let bytes = fs::read(&png).unwrap();
+        fs::remove_file(&png).unwrap();
+        let scan = scan_files(&library.known().unwrap(), dir.path()).unwrap();
+        assert_eq!(scan.gone, vec![shot.id]);
+        fs::write(&png, bytes).unwrap();
+
+        assert_eq!(library.apply(&scan).unwrap(), RescanReport::default());
+        assert_eq!(library.get(shot.id).unwrap().tags, vec!["keep"]);
+    }
+
+    #[test]
+    fn scanning_files_needs_no_library_and_makes_thumbnails() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (800, 400));
+        // Only the rows, read up front; the scan itself gets no `Library`.
+        let scan = scan_files(&[], dir.path()).unwrap();
+        assert_eq!(scan.gone, Vec::<i64>::new());
+        assert_eq!(scan.new.len(), 1);
+        let shot = &scan.new[0];
+        assert_eq!(shot.path, fs::canonicalize(&png).unwrap());
+        assert_eq!((shot.width, shot.height), (800, 400));
+        assert_eq!(
+            image::image_dimensions(&shot.thumb_path).unwrap(),
+            (THUMB_SIZE, 200)
+        );
+        // No temporary thumbnails are left behind.
+        let leftovers: Vec<_> = fs::read_dir(shot.thumb_path.parent().unwrap())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty());
+    }
+
+    #[test]
+    fn the_shared_state_rescans_records_and_serves_thumbnails() {
+        let dir = TempDir::new().unwrap();
+        let state = LibraryState::new(Library::open_in_memory().unwrap());
+        shoot(dir.path(), 1, (4, 4));
+        assert_eq!(
+            state.rescan(dir.path()).unwrap(),
+            RescanReport {
+                added: 1,
+                removed: 0
+            }
+        );
+        let fresh = state.add_capture(&shoot(dir.path(), 2, (4, 4))).unwrap();
+        assert_eq!(state.rescan(dir.path()).unwrap(), RescanReport::default());
+        assert_eq!(state.lock().count().unwrap(), 2);
+
+        fs::remove_file(&fresh.thumb_path).unwrap();
+        assert!(!state.thumbnail(fresh.id).unwrap().is_empty());
+        assert!(fresh.thumb_path.is_file());
     }
 
     #[test]
