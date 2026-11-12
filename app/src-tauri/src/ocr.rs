@@ -17,6 +17,7 @@ use std::{
         mpsc::{self, Receiver, Sender},
     },
     thread,
+    time::Duration,
 };
 
 use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
@@ -32,6 +33,12 @@ pub const MODELS_DIR: &str = "ocr-models";
 pub const MODELS_DIR_ENV: &str = "GRAB_IT_OCR_MODELS";
 /// Emitted with an [`OcrStatus`] whenever the OCR queue changes state.
 pub const OCR_STATUS_EVENT: &str = "ocr-status";
+
+/// How long the model download may wait to resolve the host, connect, or
+/// for any single read or write before it gives up. A stalled connection
+/// (Wi-Fi drop, sleep, hung proxy) then fails the download, so the Library
+/// offers Retry instead of waiting forever.
+pub const DOWNLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One ocrs model file.
 #[derive(Debug, Clone, Copy)]
@@ -98,10 +105,9 @@ impl From<image::ImageError> for OcrError {
     }
 }
 
-impl From<ocrs::OcrError> for OcrError {
-    fn from(err: ocrs::OcrError) -> Self {
-        Self::Engine(err.to_string())
-    }
+/// ocrs 0.12 reports engine failures as `anyhow::Error`.
+fn engine_error(err: impl fmt::Display) -> OcrError {
+    OcrError::Engine(err.to_string())
 }
 
 pub type OcrResult<T> = std::result::Result<T, OcrError>;
@@ -119,7 +125,29 @@ pub fn models_dir(app_data: &Path) -> PathBuf {
 /// downloaded so far and the total expected. Each file is written beside
 /// its final name and renamed when complete, so a cut-off download is never
 /// mistaken for a model.
-pub fn download_models(dir: &Path, mut progress: impl FnMut(u64, u64)) -> OcrResult<()> {
+pub fn download_models(dir: &Path, progress: impl FnMut(u64, u64)) -> OcrResult<()> {
+    download_models_from(&download_agent(DOWNLOAD_STALL_TIMEOUT), dir, progress)
+}
+
+/// An HTTP agent whose every network phase gives up after `stall`
+/// without progress. ureq has no timeouts by default.
+fn download_agent(stall: Duration) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_resolve(Some(stall))
+        .timeout_connect(Some(stall))
+        .timeout_send_request(Some(stall))
+        .timeout_recv_response(Some(stall))
+        .timeout_per_read(Some(stall))
+        .timeout_per_write(Some(stall))
+        .build()
+        .new_agent()
+}
+
+fn download_models_from(
+    agent: &ureq::Agent,
+    dir: &Path,
+    mut progress: impl FnMut(u64, u64),
+) -> OcrResult<()> {
     let missing: Vec<&ModelFile> = MODELS
         .iter()
         .filter(|model| !dir.join(model.file).is_file())
@@ -140,7 +168,7 @@ pub fn download_models(dir: &Path, mut progress: impl FnMut(u64, u64)) -> OcrRes
             std::process::id(),
             NEXT_PART.fetch_add(1, Ordering::Relaxed)
         ));
-        let result = download(model.url, &part, |bytes| {
+        let result = download(agent, model.url, &part, |bytes| {
             progress((done + bytes).min(total), total);
         })
         .and_then(|bytes| {
@@ -160,8 +188,14 @@ pub fn download_models(dir: &Path, mut progress: impl FnMut(u64, u64)) -> OcrRes
 }
 
 /// Streams `url` into `to`, returning how many bytes were written.
-fn download(url: &str, to: &Path, mut progress: impl FnMut(u64)) -> OcrResult<u64> {
-    let response = ureq::get(url)
+fn download(
+    agent: &ureq::Agent,
+    url: &str,
+    to: &Path,
+    mut progress: impl FnMut(u64),
+) -> OcrResult<u64> {
+    let response = agent
+        .get(url)
         .call()
         .map_err(|err| OcrError::Download(err.to_string()))?;
     let mut reader = response.into_body().into_reader();
@@ -202,21 +236,23 @@ impl Ocr {
             detection_model: Some(load(&MODELS[0])?),
             recognition_model: Some(load(&MODELS[1])?),
             ..Default::default()
-        })?;
+        })
+        .map_err(engine_error)?;
         Ok(Self { engine })
     }
 
     /// The text in an image, one line of text per line.
     pub fn read_text(&self, png: &Path) -> OcrResult<String> {
         let image = image::open(png)?.into_rgb8();
-        let source = ImageSource::from_bytes(image.as_raw(), image.dimensions())
-            .map_err(|err| OcrError::Engine(err.to_string()))?;
-        let input = self.engine.prepare_input(source)?;
-        let words = self.engine.detect_words(&input)?;
+        let source =
+            ImageSource::from_bytes(image.as_raw(), image.dimensions()).map_err(engine_error)?;
+        let input = self.engine.prepare_input(source).map_err(engine_error)?;
+        let words = self.engine.detect_words(&input).map_err(engine_error)?;
         let lines = self.engine.find_text_lines(&input, &words);
         let text = self
             .engine
-            .recognize_text(&input, &lines)?
+            .recognize_text(&input, &lines)
+            .map_err(engine_error)?
             .into_iter()
             .flatten()
             .map(|line| line.to_string().trim().to_owned())
@@ -507,6 +543,54 @@ pub(crate) mod tests {
             engine().read_text(&missing),
             Err(OcrError::Image(_))
         ));
+    }
+
+    /// Serves one connection: sends `reply`, then holds the connection
+    /// open without sending anything more, like a stalled network.
+    fn stalling_server(reply: &'static [u8]) -> (String, thread::JoinHandle<()>) {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/model.onnx", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request);
+            let _ = stream.write_all(reply);
+            let _ = stream.flush();
+            thread::sleep(Duration::from_secs(5));
+        });
+        (url, server)
+    }
+
+    fn assert_stalled_download_fails(reply: &'static [u8]) {
+        let (url, server) = stalling_server(reply);
+        let dir = tempfile::TempDir::new().unwrap();
+        let part = dir.path().join("model.onnx.part");
+        let started = std::time::Instant::now();
+        let result = download(
+            &download_agent(Duration::from_millis(300)),
+            &url,
+            &part,
+            |_| {},
+        );
+        assert!(
+            matches!(result, Err(OcrError::Download(_))),
+            "got {result:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(4));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_download_stalled_before_the_response_fails() {
+        assert_stalled_download_fails(b"");
+    }
+
+    #[test]
+    fn a_download_stalled_mid_body_fails() {
+        assert_stalled_download_fails(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\nonly a few bytes",
+        );
     }
 
     #[test]
