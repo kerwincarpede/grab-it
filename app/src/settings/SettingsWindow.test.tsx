@@ -62,7 +62,7 @@ describe("SettingsWindow", () => {
     expect(dialog?.payload).toMatchObject({
       options: { directory: true, defaultPath: "/home/me/Pictures/Grab-it" },
     });
-    expect(backend.calls.at(-1)).toEqual({ cmd: "set_save_folder", payload: { path: "/data/Shots" } });
+    expect(backend.calls[backend.calls.length - 1]).toEqual({ cmd: "set_save_folder", payload: { path: "/data/Shots" } });
   });
 
   it("keeps the folder when the dialog is cancelled", async () => {
