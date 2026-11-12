@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { emptyAnnotations, type Shape, type Style } from "./model";
 import {
   addShape,
+  ALL_ANCHORS,
+  anchorsFor,
+  CORNER_ANCHORS,
   beginShape,
   cropFromDrag,
   deleteShape,
@@ -139,6 +142,23 @@ describe("move and resize", () => {
     const step: Shape = { id: "s", type: "step", color: "red", x: 0, y: 0, radius: 10 };
     expect(transformShape(text, { x: 1, y: 2, scaleX: 2, scaleY: 2 })).toMatchObject({ x: 1, y: 2, fontSize: 40 });
     expect(transformShape(step, { x: 1, y: 2, scaleX: 1.5, scaleY: 1.5 })).toMatchObject({ radius: 15 });
+  });
+
+  it("resizes text and steps from whichever axis was stretched", () => {
+    const text: Shape = { id: "t", type: "text", color: "red", x: 0, y: 0, text: "Hi", fontSize: 20 };
+    const step: Shape = { id: "s", type: "step", color: "red", x: 0, y: 0, radius: 10 };
+    expect(transformShape(text, { x: -10, y: 0, scaleX: 1.5, scaleY: 1 })).toMatchObject({ fontSize: 30 });
+    expect(transformShape(step, { x: 0, y: -5, scaleX: 1, scaleY: 2 })).toMatchObject({ radius: 20 });
+    expect(transformShape(step, { x: 0, y: 0, scaleX: 1, scaleY: 0.8 })).toMatchObject({ radius: 8 });
+  });
+
+  it("offers text and steps only corner handles", () => {
+    const text: Shape = { id: "t", type: "text", color: "red", x: 0, y: 0, text: "Hi", fontSize: 20 };
+    const step: Shape = { id: "s", type: "step", color: "red", x: 0, y: 0, radius: 10 };
+    expect(anchorsFor(text)).toEqual(CORNER_ANCHORS);
+    expect(anchorsFor(step)).toEqual(CORNER_ANCHORS);
+    expect(anchorsFor(rect)).toEqual(ALL_ANCHORS);
+    expect(anchorsFor(null)).toEqual(ALL_ANCHORS);
   });
 
   it("restyles colour and width, never the blur", () => {

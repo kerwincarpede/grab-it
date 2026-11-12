@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { editorInfo, saveAnnotations, type EditorInfo } from "./api";
 import { canRedo, canUndo, commit, initHistory, redo, undo, type History } from "./history";
 import { emptyAnnotations, type Annotations } from "./model";
@@ -30,7 +31,9 @@ function reducer(history: History, action: Action): History {
 
 /**
  * Loads the capture's annotations, keeps undo/redo history, and auto-saves
- * the sidecar after each change (debounced, flushed on unmount).
+ * the sidecar after each change (debounced). A pending edit is written
+ * before the window closes: closing destroys the webview without unmounting
+ * React, so the close request waits for the write.
  */
 export function useAnnotations() {
   const [history, dispatch] = useReducer(reducer, undefined, () => initHistory(emptyAnnotations()));
@@ -59,15 +62,23 @@ export function useAnnotations() {
     };
   }, []);
 
-  const flush = useCallback(() => {
+  /** The latest sidecar write; writes run one after another. */
+  const writing = useRef<Promise<void>>(Promise.resolve());
+
+  /** Writes the pending edit, if any; resolves once every write so far has finished. */
+  const flush = useCallback((): Promise<void> => {
     const doc = pending.current;
-    if (!doc) return;
+    if (!doc) return writing.current;
     pending.current = null;
     saved.current = doc;
     setStatus("saving");
-    saveAnnotations(serializeAnnotations(doc))
-      .then(() => setStatus((now) => (now === "saving" ? "saved" : now)))
-      .catch(() => setStatus("error"));
+    writing.current = writing.current
+      .then(() => saveAnnotations(serializeAnnotations(doc)))
+      .then(
+        () => setStatus((now) => (now === "saving" ? "saved" : now)),
+        () => setStatus("error"),
+      );
+    return writing.current;
   }, []);
 
   useEffect(() => {
@@ -85,10 +96,31 @@ export function useAnnotations() {
   }, [history.present, flush]);
 
   useEffect(() => {
-    window.addEventListener("pagehide", flush);
+    // Tauri holds the close while a close-requested listener runs, then
+    // destroys the window once it returns.
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    let listening: Promise<() => void>;
+    try {
+      listening = getCurrentWindow().onCloseRequested(() => flush());
+    } catch (err) {
+      // Outside a Tauri window (no window metadata): nothing to hold.
+      listening = Promise.reject(err);
+    }
+    listening
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch(() => undefined);
+    const onPageHide = () => void flush();
+    window.addEventListener("pagehide", onPageHide);
     return () => {
-      window.removeEventListener("pagehide", flush);
-      flush();
+      disposed = true;
+      // The real unlisten is async; a failure only means the listener is gone.
+      Promise.resolve(unlisten?.()).catch(() => undefined);
+      window.removeEventListener("pagehide", onPageHide);
+      void flush();
     };
   }, [flush]);
 

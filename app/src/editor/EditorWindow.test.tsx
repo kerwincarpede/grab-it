@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import EditorWindow from "./EditorWindow";
 import type { Annotations } from "./model";
+import { AUTOSAVE_DELAY_MS } from "./useAnnotations";
 
 // jsdom has no canvas, so Konva nodes render as plain elements that keep
 // the props the tests look at.
@@ -11,10 +12,32 @@ vi.mock("react-konva", async () => {
   const { createElement } = await import("react");
   const node =
     (kind: string) =>
-    ({ children, id, text, onMouseDown }: { children?: ReactNode; id?: string; text?: string; onMouseDown?: () => void }) =>
+    ({
+      children,
+      id,
+      text,
+      enabledAnchors,
+      onMouseDown,
+    }: {
+      children?: ReactNode;
+      id?: string;
+      text?: string;
+      enabledAnchors?: string[];
+      onMouseDown?: () => void;
+    }) =>
       // Only annotations (which have ids) take clicks; the Stage's handler
       // needs real Konva events.
-      createElement("div", { "data-konva": kind, "data-id": id, "data-text": text, onMouseDown: id ? () => onMouseDown?.() : undefined }, children);
+      createElement(
+        "div",
+        {
+          "data-konva": kind,
+          "data-id": id,
+          "data-text": text,
+          "data-anchors": enabledAnchors?.join(" "),
+          onMouseDown: id ? () => onMouseDown?.() : undefined,
+        },
+        children,
+      );
   return {
     Stage: node("Stage"),
     Layer: node("Layer"),
@@ -74,6 +97,10 @@ async function ready() {
   await waitFor(() => expect(screen.getByTestId("editor")).toHaveAttribute("data-ready", "true"));
 }
 
+const last = <T,>(items: T[]): T | undefined => items[items.length - 1];
+
+const anchors = () => document.querySelector('[data-konva="Transformer"]')?.getAttribute("data-anchors")?.split(" ");
+
 const shapeIds = () =>
   Array.from(document.querySelectorAll("[data-konva] [data-id]")).map((element) => element.getAttribute("data-id"));
 
@@ -116,11 +143,11 @@ describe("EditorWindow", () => {
 
     fireEvent.keyDown(window, { key: "Delete" });
     expect(shapeIds()).toEqual(["t1", "s1", "s2"]);
-    await waitFor(() => expect(saved.at(-1)?.shapes.map((shape) => shape.id)).toEqual(["t1", "s1", "s2"]));
+    await waitFor(() => expect(last(saved)?.shapes.map((shape) => shape.id)).toEqual(["t1", "s1", "s2"]));
 
     fireEvent.keyDown(window, { key: "z", ctrlKey: true });
     expect(shapeIds()).toEqual(["a1", "t1", "s1", "s2"]);
-    await waitFor(() => expect(saved.at(-1)?.shapes.map((shape) => shape.id)).toEqual(["a1", "t1", "s1", "s2"]));
+    await waitFor(() => expect(last(saved)?.shapes.map((shape) => shape.id)).toEqual(["a1", "t1", "s1", "s2"]));
 
     fireEvent.keyDown(window, { key: "z", ctrlKey: true, shiftKey: true });
     expect(shapeIds()).toEqual(["t1", "s1", "s2"]);
@@ -132,6 +159,49 @@ describe("EditorWindow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.mouseDown(document.querySelector('[data-id="t1"]') as Element);
     fireEvent.click(screen.getByRole("button", { name: "Colour #0090ff" }));
-    await waitFor(() => expect(saved.at(-1)?.shapes.find((shape) => shape.id === "t1")).toMatchObject({ color: "#0090ff" }));
+    await waitFor(() => expect(last(saved)?.shapes.find((shape) => shape.id === "t1")).toMatchObject({ color: "#0090ff" }));
+  });
+
+  it("drops the selection when a key picks a drawing tool", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+    expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+
+    fireEvent.keyDown(window, { key: "r" });
+    expect(screen.getByRole("button", { name: "Rectangle" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+
+    // The new colour is for the next shape, not the arrow selected before.
+    fireEvent.click(screen.getByRole("button", { name: "Colour #0090ff" }));
+    expect(screen.getByRole("button", { name: "Colour #0090ff" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.keyDown(window, { key: "Delete" });
+    expect(shapeIds()).toEqual(["a1", "t1", "s1", "s2"]);
+    await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 100));
+    expect(saved).toEqual([]);
+  });
+
+  it("keeps the selection when a key picks Select", async () => {
+    mockEditor();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+    fireEvent.keyDown(window, { key: "v" });
+    expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+  });
+
+  it("resizes text and step badges from the corners only", async () => {
+    mockEditor();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+    expect(anchors()).toContain("middle-left");
+
+    const corners = ["top-left", "top-right", "bottom-left", "bottom-right"];
+    fireEvent.mouseDown(document.querySelector('[data-id="t1"]') as Element);
+    expect(anchors()).toEqual(corners);
+    fireEvent.mouseDown(document.querySelector('[data-id="s1"]') as Element);
+    expect(anchors()).toEqual(corners);
   });
 });

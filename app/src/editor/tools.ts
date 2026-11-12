@@ -107,6 +107,30 @@ export interface NodeTransform {
   scaleY: number;
 }
 
+/** Transformer anchors at the corners only. */
+export const CORNER_ANCHORS = ["top-left", "top-right", "bottom-left", "bottom-right"];
+/** Every Transformer anchor (Konva's default). */
+export const ALL_ANCHORS = [...CORNER_ANCHORS, "top-center", "middle-left", "middle-right", "bottom-center"];
+
+/**
+ * The resize handles a shape offers. Text and step badges have a single size
+ * (font size, radius), so a side handle could only stretch one axis; they
+ * resize from the corners, keeping their ratio.
+ */
+export function anchorsFor(shape: Shape | null): string[] {
+  return shape?.type === "text" || shape?.type === "step" ? CORNER_ANCHORS : ALL_ANCHORS;
+}
+
+/**
+ * One scale factor for a shape with a single size: whichever axis changed
+ * more, so a stretch along either axis resizes it.
+ */
+function uniformScale(t: NodeTransform): number {
+  const x = Math.abs(t.scaleX) || 1;
+  const y = Math.abs(t.scaleY) || 1;
+  return Math.abs(Math.log(x)) >= Math.abs(Math.log(y)) ? x : y;
+}
+
 export function transformShape(shape: Shape, t: NodeTransform): Shape {
   switch (shape.type) {
     case "arrow":
@@ -125,9 +149,9 @@ export function transformShape(shape: Shape, t: NodeTransform): Shape {
         ...normalizeRect({ x: t.x, y: t.y, width: shape.width * t.scaleX, height: shape.height * t.scaleY }),
       };
     case "text":
-      return { ...shape, x: t.x, y: t.y, fontSize: Math.max(6, shape.fontSize * Math.abs(t.scaleY)) };
+      return { ...shape, x: t.x, y: t.y, fontSize: Math.max(6, shape.fontSize * uniformScale(t)) };
     case "step":
-      return { ...shape, x: t.x, y: t.y, radius: Math.max(6, shape.radius * Math.abs(t.scaleX)) };
+      return { ...shape, x: t.x, y: t.y, radius: Math.max(6, shape.radius * uniformScale(t)) };
   }
 }
 

@@ -9,6 +9,7 @@ import { COLORS, DEFAULT_STYLE, STROKE_WIDTHS, TOOLS, type Point, type Shape, ty
 import ShapeNode from "./ShapeNode";
 import {
   addShape,
+  anchorsFor,
   beginShape,
   cropFromDrag,
   deleteShape,
@@ -114,7 +115,10 @@ export default function EditorWindow() {
   const [message, setMessage] = useState<string | null>(null);
 
   const imageSize = useMemo(() => (image ? { width: image.width, height: image.height } : null), [image]);
-  const currentView = view ?? (imageSize ? fitView(imageSize, size) : { scale: 1, x: 0, y: 0 });
+  const currentView = useMemo(
+    () => view ?? (imageSize ? fitView(imageSize, size) : { scale: 1, x: 0, y: 0 }),
+    [view, imageSize, size],
+  );
   const selected = doc.shapes.find((shape) => shape.id === selectedId) ?? null;
   const steps = useMemo(() => stepNumbers(doc.shapes), [doc.shapes]);
   const panning = tool === "pan" || spaceHeld;
@@ -226,6 +230,12 @@ export default function EditorWindow() {
     setView({ scale, x: centre.x - anchor.x * scale, y: centre.y - anchor.y * scale });
   };
 
+  /** Picks a tool; any tool but Select drops the selection, so nothing hidden is restyled or deleted. */
+  const pickTool = useCallback((next: Tool) => {
+    setTool(next);
+    if (next !== "select") setSelectedId(null);
+  }, []);
+
   const changeShape = (id: string, transform: NodeTransform) => {
     const shape = doc.shapes.find((candidate) => candidate.id === id);
     if (shape) commit(replaceShape(doc, transformShape(shape, transform)));
@@ -305,7 +315,7 @@ export default function EditorWindow() {
         setSpaceHeld(true);
       } else if (!mod && !event.altKey) {
         const match = TOOLS.find((entry) => entry.key === key);
-        if (match) setTool(match.tool);
+        if (match) pickTool(match.tool);
       }
     };
     const onKeyUp = (event: KeyboardEvent) => {
@@ -317,7 +327,7 @@ export default function EditorWindow() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [undoDoc, redoDoc, copy, removeSelected]);
+  }, [undoDoc, redoDoc, copy, removeSelected, pickTool]);
 
   const error = annotations.error ?? imageError;
   const cropPreview = cropDrag ? normalizeRect({ ...cropDrag.start, width: cropDrag.end.x - cropDrag.start.x, height: cropDrag.end.y - cropDrag.start.y }) : null;
@@ -336,10 +346,7 @@ export default function EditorWindow() {
               className="tool"
               aria-pressed={tool === entry}
               title={`${label} (${key.toUpperCase()})`}
-              onClick={() => {
-                setTool(entry);
-                if (entry !== "select") setSelectedId(null);
-              }}
+              onClick={() => pickTool(entry)}
             >
               {label}
             </button>
@@ -458,7 +465,13 @@ export default function EditorWindow() {
                   <KonvaRect {...crop} stroke="#ffffff" strokeWidth={1 / currentView.scale} dash={[6 / currentView.scale, 4 / currentView.scale]} listening={false} />
                 </>
               )}
-              <Transformer ref={transformerRef} rotateEnabled={false} ignoreStroke keepRatio={selected?.type === "text" || selected?.type === "step"} />
+              <Transformer
+                ref={transformerRef}
+                rotateEnabled={false}
+                ignoreStroke
+                keepRatio={selected?.type === "text" || selected?.type === "step"}
+                enabledAnchors={anchorsFor(selected)}
+              />
             </Layer>
           </Stage>
         )}
