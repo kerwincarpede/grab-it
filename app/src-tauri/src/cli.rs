@@ -3,30 +3,24 @@
 //! `--open <target>` opens a window directly at startup. It lets the app be
 //! driven without a tray host, for example under `xvfb-run` for screenshots.
 
-use std::fmt;
+use std::{fmt, path::PathBuf};
 
 /// A window that `--open` can show at startup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenTarget {
     Settings,
     /// Starts a region capture, showing the overlay.
     Region,
-}
-
-impl OpenTarget {
-    fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "settings" => Some(Self::Settings),
-            "region" => Some(Self::Region),
-            _ => None,
-        }
-    }
+    /// Opens a capture in the annotation editor: `--open editor <file>`.
+    Editor(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArgsError {
     MissingTarget,
     UnknownTarget(String),
+    /// `--open editor` without the capture to open.
+    MissingFile,
 }
 
 impl fmt::Display for ArgsError {
@@ -38,7 +32,13 @@ impl fmt::Display for ArgsError {
             Self::UnknownTarget(name) => {
                 write!(
                     f,
-                    "unknown --open target `{name}`; expected `settings` or `region`"
+                    "unknown --open target `{name}`; expected `settings`, `region` or `editor <file>`"
+                )
+            }
+            Self::MissingFile => {
+                write!(
+                    f,
+                    "--open editor needs a capture, for example `--open editor shot.png`"
                 )
             }
         }
@@ -72,9 +72,17 @@ where
         if name.is_empty() {
             return Err(ArgsError::MissingTarget);
         }
-        return OpenTarget::from_name(&name)
-            .map(Some)
-            .ok_or(ArgsError::UnknownTarget(name));
+        return match name.as_str() {
+            "settings" => Ok(Some(OpenTarget::Settings)),
+            "region" => Ok(Some(OpenTarget::Region)),
+            "editor" => match args.next() {
+                Some(file) if !file.as_ref().is_empty() => {
+                    Ok(Some(OpenTarget::Editor(PathBuf::from(file.as_ref()))))
+                }
+                _ => Err(ArgsError::MissingFile),
+            },
+            _ => Err(ArgsError::UnknownTarget(name)),
+        };
     }
     Ok(None)
 }
@@ -109,6 +117,27 @@ mod tests {
     fn open_region() {
         assert_eq!(parse(&["--open", "region"]), Ok(Some(OpenTarget::Region)));
         assert_eq!(parse(&["--open=region"]), Ok(Some(OpenTarget::Region)));
+    }
+
+    #[test]
+    fn open_editor_with_a_file() {
+        assert_eq!(
+            parse(&["--open", "editor", "/tmp/shot.png"]),
+            Ok(Some(OpenTarget::Editor(PathBuf::from("/tmp/shot.png"))))
+        );
+        assert_eq!(
+            parse(&["--open=editor", "shot.png"]),
+            Ok(Some(OpenTarget::Editor(PathBuf::from("shot.png"))))
+        );
+    }
+
+    #[test]
+    fn open_editor_without_a_file_is_an_error() {
+        assert_eq!(parse(&["--open", "editor"]), Err(ArgsError::MissingFile));
+        assert_eq!(
+            parse(&["--open", "editor", ""]),
+            Err(ArgsError::MissingFile)
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Starting captures from the tray, hotkeys and `--open region`, and
 //! finishing them: save to `originals/`, write the sidecar, copy to the
-//! clipboard.
+//! clipboard and open the capture in the editor.
 
 use chrono::Local;
 use image::RgbaImage;
@@ -10,7 +10,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use crate::{
     capture::{self, CaptureMode, Foreground, SavedCapture},
     commands::{SettingsState, lock},
-    overlay, permissions, screen,
+    overlay, permissions, screen, windows,
 };
 
 /// Emitted to every window after a capture is saved, with [`SavedCapture`].
@@ -98,11 +98,15 @@ pub fn start(app: &AppHandle, action: Action) {
     });
 }
 
-/// Saves a finished capture and copies it to the clipboard.
+/// Saves a finished capture, copies it to the clipboard and opens it in
+/// the editor. Runs off the main thread, so creating the window is safe.
 pub fn finish(app: &AppHandle, image: &RgbaImage, mode: CaptureMode, foreground: &Foreground) {
     match save(app, image, mode, foreground) {
         Ok(saved) => {
             let _ = app.emit(CAPTURE_SAVED_EVENT, &saved);
+            if let Err(err) = windows::show_editor(app, &saved.path) {
+                eprintln!("Grab-it: saved, but could not open the editor: {err}");
+            }
         }
         Err(err) => report_failure(app, &err),
     }

@@ -2,6 +2,7 @@ import "./App.css";
 import { routeFromHash, type Route } from "./routes";
 import RegionOverlay from "./overlay/RegionOverlay";
 import SettingsWindow from "./settings/SettingsWindow";
+import EditorWindow from "./editor/EditorWindow";
 
 interface AppProps {
   route?: Route;
@@ -13,6 +14,8 @@ function App({ route = routeFromHash(window.location.hash) }: AppProps) {
       return <SettingsWindow />;
     case "overlay":
       return <RegionOverlay />;
+    case "editor":
+      return <EditorWindow />;
     default:
       return (
         <main className="window">
