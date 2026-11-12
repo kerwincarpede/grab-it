@@ -33,6 +33,19 @@ export function setHotkeys(hotkeys: Hotkeys): Promise<HotkeysUpdate> {
   return invoke<HotkeysUpdate>("set_hotkeys", { hotkeys });
 }
 
+/**
+ * Stops the global hotkeys while a hotkey field records, so pressing a
+ * current hotkey there records it instead of starting a capture.
+ */
+export function pauseHotkeys(): Promise<void> {
+  return invoke<void>("pause_hotkeys");
+}
+
+/** Registers the saved hotkeys again after {@link pauseHotkeys}. */
+export function resumeHotkeys(): Promise<void> {
+  return invoke<void>("resume_hotkeys");
+}
+
 /** Asks the user for a folder. Resolves to null when they cancel. */
 export async function chooseFolder(defaultPath?: string): Promise<string | null> {
   const picked = await open({

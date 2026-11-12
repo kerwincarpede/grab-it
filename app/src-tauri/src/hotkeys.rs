@@ -5,13 +5,23 @@
 //! Cmd+Shift+F. On Wayland they are bound through the GlobalShortcuts portal
 //! (see `portal.rs`), since apps cannot grab keys there themselves.
 
-use std::{str::FromStr, sync::Mutex};
+use std::{
+    str::FromStr,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-use crate::{actions, capture::CaptureMode};
+use crate::{
+    actions,
+    capture::CaptureMode,
+    commands::{SettingsState, lock},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,18 +83,86 @@ impl Hotkeys {
 
 /// The registered hotkeys and the capture each one starts.
 #[derive(Default)]
-pub struct HotkeyState(Mutex<Vec<(Shortcut, CaptureMode)>>);
+pub struct HotkeyState {
+    bound: Mutex<Vec<(Shortcut, CaptureMode)>>,
+    /// Set while Settings records a hotkey, so pressing a current hotkey
+    /// there records it instead of starting a capture.
+    paused: AtomicBool,
+}
+
+impl HotkeyState {
+    fn bound(&self) -> std::sync::MutexGuard<'_, Vec<(Shortcut, CaptureMode)>> {
+        self.bound.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
+fn is_paused(app: &AppHandle) -> bool {
+    app.try_state::<HotkeyState>()
+        .is_some_and(|state| state.paused.load(Ordering::SeqCst))
+}
+
+/// Stops the hotkeys from starting captures while Settings records one.
+///
+/// Outside Wayland the shortcuts are unregistered too, since the system
+/// would otherwise keep the keys from ever reaching the Settings window.
+pub fn pause(app: &AppHandle) {
+    let Some(state) = app.try_state::<HotkeyState>() else {
+        return;
+    };
+    if state.paused.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    if crate::portal::is_wayland() {
+        return;
+    }
+    if let Err(err) = app.global_shortcut().unregister_all() {
+        eprintln!("Grab-it: could not pause hotkeys: {err}");
+    }
+    state.bound().clear();
+}
+
+/// Undoes [`pause`], registering the saved hotkeys again.
+pub fn resume(app: &AppHandle) {
+    let Some(state) = app.try_state::<HotkeyState>() else {
+        return;
+    };
+    if !state.paused.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    if crate::portal::is_wayland() {
+        return;
+    }
+    let Some(settings) = app.try_state::<SettingsState>() else {
+        return;
+    };
+    let hotkeys = lock(&settings).get().hotkeys.clone();
+    for problem in apply(app, &hotkeys) {
+        eprintln!("Grab-it: {problem}");
+    }
+}
+
+#[tauri::command]
+pub fn pause_hotkeys(app: AppHandle) {
+    pause(&app);
+}
+
+#[tauri::command]
+pub fn resume_hotkeys(app: AppHandle) {
+    resume(&app);
+}
 
 /// The global-shortcut plugin, dispatching presses to captures.
 pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri_plugin_global_shortcut::Builder::new()
         .with_handler(|app, shortcut, event| {
-            if event.state != ShortcutState::Pressed {
+            if event.state != ShortcutState::Pressed || is_paused(app) {
                 return;
             }
             let mode = app.try_state::<HotkeyState>().and_then(|state| {
-                let bound = state.0.lock().unwrap_or_else(|p| p.into_inner());
-                bound
+                state
+                    .bound()
                     .iter()
                     .find(|(s, _)| s == shortcut)
                     .map(|(_, mode)| *mode)
@@ -129,7 +207,7 @@ pub fn apply(app: &AppHandle, hotkeys: &Hotkeys) -> Vec<String> {
         }
     }
     if let Some(state) = app.try_state::<HotkeyState>() {
-        *state.0.lock().unwrap_or_else(|p| p.into_inner()) = bound;
+        *state.bound() = bound;
     }
     problems
 }
@@ -143,8 +221,11 @@ pub fn start(app: &AppHandle, hotkeys: &Hotkeys) {
         let handle = app.clone();
         let hotkeys = hotkeys.clone();
         tauri::async_runtime::spawn(async move {
-            let on_press =
-                move |mode: CaptureMode| actions::start(&handle, actions::Action::from_mode(mode));
+            let on_press = move |mode: CaptureMode| {
+                if !is_paused(&handle) {
+                    actions::start(&handle, actions::Action::from_mode(mode));
+                }
+            };
             if let Err(err) = crate::portal::run_global_shortcuts(hotkeys, on_press).await {
                 eprintln!("Grab-it: {err}. Use the tray menu to capture.");
             }

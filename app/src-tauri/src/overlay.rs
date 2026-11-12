@@ -7,7 +7,13 @@
 //! pixels-per-CSS-pixel, so monitors with different scale factors each crop
 //! correctly.
 
-use std::{collections::HashMap, sync::Mutex};
+use std::{
+    collections::HashMap,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
@@ -30,6 +36,9 @@ struct Frame {
 }
 
 struct Session {
+    /// Tells this session's windows apart from a later session's, which
+    /// reuse the same labels.
+    id: u64,
     mode: CaptureMode,
     foreground: Foreground,
     /// Frozen monitors, by overlay window label.
@@ -39,28 +48,71 @@ struct Session {
 }
 
 #[derive(Default)]
-pub struct OverlayState(Mutex<Option<Session>>);
+enum Phase {
+    #[default]
+    Idle,
+    /// A capture was started and the monitors are being frozen.
+    Opening,
+    Open(Session),
+}
+
+#[derive(Default)]
+pub struct OverlayState(Mutex<Phase>);
 
 impl OverlayState {
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Session>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Phase> {
         self.0.lock().unwrap_or_else(|p| p.into_inner())
     }
 }
 
-/// True while overlays are on screen.
+static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+
+/// True while a selection is starting or on screen.
 pub fn is_open(app: &AppHandle) -> bool {
     app.try_state::<OverlayState>()
-        .is_some_and(|state| state.lock().is_some())
+        .is_some_and(|state| !matches!(*state.lock(), Phase::Idle))
 }
 
-/// Freezes every monitor and shows an overlay on each.
+/// Claims the overlay for a new selection. False when one is already
+/// starting or on screen, so a second hotkey press or tray click does
+/// nothing instead of replacing it. Call [`open`] after a true result.
+pub fn begin(app: &AppHandle) -> bool {
+    let state = app.state::<OverlayState>();
+    let mut phase = state.lock();
+    if matches!(*phase, Phase::Idle) {
+        *phase = Phase::Opening;
+        true
+    } else {
+        false
+    }
+}
+
+/// Releases a claim from [`begin`] that never got its overlays.
+fn abandon(app: &AppHandle) {
+    let state = app.state::<OverlayState>();
+    let mut phase = state.lock();
+    if matches!(*phase, Phase::Opening) {
+        *phase = Phase::Idle;
+    }
+}
+
+/// Freezes every monitor and shows an overlay on each. Expects a claim
+/// from [`begin`], and releases it when the overlay cannot be shown.
 pub fn open(app: &AppHandle, mode: CaptureMode) -> Result<(), String> {
     let foreground = screen::foreground();
     let windows = screen::windows();
-    let frames = screen::capture_monitors()?;
+    let frames = match screen::capture_monitors() {
+        Ok(frames) => frames,
+        Err(err) => {
+            abandon(app);
+            return Err(err);
+        }
+    };
     let placements = app.available_monitors().unwrap_or_default();
 
+    let id = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
     let mut session = Session {
+        id,
         mode,
         foreground,
         frames: HashMap::new(),
@@ -73,10 +125,10 @@ pub fn open(app: &AppHandle, mode: CaptureMode) -> Result<(), String> {
         labels.push((label.clone(), placement));
         session.frames.insert(label, Frame { monitor, image });
     }
-    *app.state::<OverlayState>().lock() = Some(session);
+    *app.state::<OverlayState>().lock() = Phase::Open(session);
 
     for (label, (position, size)) in labels {
-        if let Err(err) = create_window(app, &label, position, size) {
+        if let Err(err) = create_window(app, id, &label, position, size) {
             close(app);
             return Err(format!("could not show the capture overlay: {err}"));
         }
@@ -116,6 +168,7 @@ fn placement_for(
 
 fn create_window(
     app: &AppHandle,
+    session: u64,
     label: &str,
     position: PhysicalPosition<i32>,
     size: PhysicalSize<u32>,
@@ -131,6 +184,11 @@ fn create_window(
             .visible(false)
             .focused(true)
             .build()?;
+    #[cfg(target_os = "macos")]
+    raise_above_menu_bar(&window)?;
+    // Placed after the level change, so the window keeps the monitor's
+    // full size, menu bar area included, and the region scale (image width
+    // over viewport width) holds vertically too.
     window.set_position(position)?;
     window.set_size(size)?;
     window.show()?;
@@ -138,12 +196,43 @@ fn create_window(
 
     let app = app.clone();
     window.on_window_event(move |event| {
-        // An overlay closed some other way (Alt+F4) ends the selection.
+        // An overlay closed some other way (Alt+F4) ends its selection,
+        // but not a later one that reuses the window labels.
         if matches!(event, WindowEvent::Destroyed) {
-            close(&app);
+            close_session(&app, session);
         }
     });
     Ok(())
+}
+
+/// macOS: `always_on_top` puts the overlay at the floating level, under the
+/// menu bar and the Dock, which would then cover the frozen image. Lift it
+/// above both, and let it show over full-screen apps on any Space.
+#[cfg(target_os = "macos")]
+fn raise_above_menu_bar(window: &WebviewWindow) -> tauri::Result<()> {
+    /// `NSMainMenuWindowLevel` (24) + 1; the Dock is at 20.
+    const ABOVE_MENU_BAR: isize = 25;
+    /// `NSWindowCollectionBehaviorCanJoinAllSpaces | FullScreenAuxiliary`.
+    const ALL_SPACES: usize = 1 | (1 << 8);
+
+    let target = window.clone();
+    // AppKit windows may only be changed on the main thread. Queued ahead of
+    // the position and size changes, which go through the same event loop.
+    window.run_on_main_thread(move || {
+        let Ok(ns_window) = target.ns_window() else {
+            return;
+        };
+        let ns_window = ns_window.cast::<objc2::runtime::AnyObject>();
+        if ns_window.is_null() {
+            return;
+        }
+        // SAFETY: `ns_window` is this window's live NSWindow, used on the
+        // main thread; both selectors take an NSInteger / NSUInteger.
+        unsafe {
+            let _: () = objc2::msg_send![ns_window, setLevel: ABOVE_MENU_BAR];
+            let _: () = objc2::msg_send![ns_window, setCollectionBehavior: ALL_SPACES];
+        }
+    })
 }
 
 /// Removes every overlay and forgets the frozen images.
@@ -151,10 +240,32 @@ pub fn close(app: &AppHandle) {
     let _ = take_session(app);
 }
 
+/// Like [`close`], but only while session `id` is the one on screen.
+fn close_session(app: &AppHandle, id: u64) {
+    let current = {
+        let state = app.state::<OverlayState>();
+        let phase = state.lock();
+        matches!(&*phase, Phase::Open(session) if session.id == id)
+    };
+    if current {
+        close(app);
+    }
+}
+
 fn take_session(app: &AppHandle) -> Option<Session> {
     // Taken before the windows go, so their `Destroyed` events find nothing.
-    let session = app.state::<OverlayState>().lock().take();
-    let session = session?;
+    let session = {
+        let state = app.state::<OverlayState>();
+        let mut phase = state.lock();
+        match std::mem::take(&mut *phase) {
+            Phase::Open(session) => session,
+            other => {
+                // Idle, or another capture still freezing the monitors.
+                *phase = other;
+                return None;
+            }
+        }
+    };
     for label in session.frames.keys() {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.destroy();
@@ -255,7 +366,9 @@ pub fn overlay_info(
     state: State<'_, OverlayState>,
 ) -> Result<OverlayInfo, String> {
     let guard = state.lock();
-    let session = guard.as_ref().ok_or("no capture in progress")?;
+    let Phase::Open(session) = &*guard else {
+        return Err("no capture in progress".into());
+    };
     let frame = session
         .frames
         .get(window.label())
@@ -276,7 +389,9 @@ pub fn overlay_image(
 ) -> Result<tauri::ipc::Response, String> {
     let image = {
         let guard = state.lock();
-        let session = guard.as_ref().ok_or("no capture in progress")?;
+        let Phase::Open(session) = &*guard else {
+            return Err("no capture in progress".into());
+        };
         let frame = session
             .frames
             .get(window.label())

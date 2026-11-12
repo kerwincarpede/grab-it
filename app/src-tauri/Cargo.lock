@@ -1688,6 +1688,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "image",
+ "objc2",
  "serde",
  "serde_json",
  "tauri",

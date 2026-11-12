@@ -1,8 +1,8 @@
 //! Creating and focusing the app's windows.
 
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-use crate::{actions, cli::OpenTarget};
+use crate::{actions, cli::OpenTarget, hotkeys};
 
 pub const SETTINGS_LABEL: &str = "settings";
 
@@ -25,7 +25,7 @@ pub fn show_settings(app: &AppHandle) -> tauri::Result<()> {
         window.set_focus()?;
         return Ok(());
     }
-    WebviewWindowBuilder::new(
+    let window = WebviewWindowBuilder::new(
         app,
         SETTINGS_LABEL,
         WebviewUrl::App("index.html#/settings".into()),
@@ -35,5 +35,12 @@ pub fn show_settings(app: &AppHandle) -> tauri::Result<()> {
     .min_inner_size(460.0, 440.0)
     .center()
     .build()?;
+    let handle = app.clone();
+    window.on_window_event(move |event| {
+        // Closed while recording a hotkey: give the hotkeys back.
+        if matches!(event, WindowEvent::Destroyed) {
+            hotkeys::resume(&handle);
+        }
+    });
     Ok(())
 }

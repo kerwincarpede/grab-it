@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
@@ -49,6 +49,9 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
           warnings: backend.hotkeyWarnings,
         };
       }
+      case "pause_hotkeys":
+      case "resume_hotkeys":
+        return null;
       default:
         throw new Error(`unexpected command ${cmd}`);
     }
@@ -129,7 +132,7 @@ describe("SettingsWindow", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save hotkeys" }));
 
     expect(await screen.findByText("Hotkeys updated.")).toBe(screen.getByRole("status"));
-    expect(backend.calls.at(-1)).toEqual({
+    expect(backend.calls[backend.calls.length - 1]).toEqual({
       cmd: "set_hotkeys",
       payload: { hotkeys: { ...DEFAULT_HOTKEYS, region: "Ctrl+Shift+R" } },
     });
@@ -175,5 +178,55 @@ describe("SettingsWindow", () => {
 
     expect(await screen.findByText("Window and Region use the same hotkey.")).toBeInTheDocument();
     expect(windowField).toHaveValue("PrintScreen");
+  });
+
+  it("records PrintScreen from key up, as Windows sends no key down for it", async () => {
+    mockBackend({ hotkeys: { ...DEFAULT_HOTKEYS, region: "F9" } });
+    render(<SettingsWindow />);
+    const region = await screen.findByLabelText("Region");
+
+    fireEvent.keyUp(region, { key: "PrintScreen", code: "PrintScreen" });
+    expect(region).toHaveValue("PrintScreen");
+
+    fireEvent.keyUp(region, { key: "PrintScreen", code: "PrintScreen", altKey: true });
+    expect(region).toHaveValue("Alt+PrintScreen");
+  });
+
+  it("pauses the global hotkeys while a hotkey field has focus", async () => {
+    const backend = mockBackend();
+    render(<SettingsWindow />);
+    const region = await screen.findByLabelText("Region");
+
+    await userEvent.click(region);
+    expect(commands(backend).filter((cmd) => cmd.endsWith("_hotkeys"))).toEqual([
+      "pause_hotkeys",
+    ]);
+
+    // Moving to another hotkey field keeps them paused.
+    await userEvent.tab();
+    expect(screen.getByLabelText("Window")).toHaveFocus();
+    expect(commands(backend)).not.toContain("resume_hotkeys");
+
+    // Pressing the current Screen hotkey records it rather than capturing.
+    await userEvent.keyboard("{Control>}[PrintScreen]{/Control}");
+    expect(screen.getByLabelText("Window")).toHaveValue("Ctrl+PrintScreen");
+
+    await userEvent.click(screen.getByRole("button", { name: "Revert" }));
+    await waitFor(() =>
+      expect(commands(backend).filter((cmd) => cmd.endsWith("_hotkeys"))).toEqual([
+        "pause_hotkeys",
+        "resume_hotkeys",
+      ]),
+    );
+  });
+
+  it("resumes the global hotkeys when Settings closes mid-recording", async () => {
+    const backend = mockBackend();
+    const { unmount } = render(<SettingsWindow />);
+    await userEvent.click(await screen.findByLabelText("Screen"));
+
+    unmount();
+
+    await waitFor(() => expect(commands(backend)).toContain("resume_hotkeys"));
   });
 });

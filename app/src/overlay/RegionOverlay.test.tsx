@@ -38,7 +38,7 @@ function mockOverlay(info: Partial<OverlayInfo> = {}): Call[] {
   return calls;
 }
 
-const last = (calls: Call[]) => calls.at(-1);
+const last = (calls: Call[]) => calls[calls.length - 1];
 
 /** Waits until overlay_info has loaded. */
 async function ready() {

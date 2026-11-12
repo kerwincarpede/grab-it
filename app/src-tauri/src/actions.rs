@@ -70,6 +70,13 @@ pub fn start(app: &AppHandle, action: Action) {
         return;
     }
 
+    // Claimed before the thread starts, so a second press while the
+    // monitors are still freezing does not open a second overlay.
+    let uses_overlay = matches!(action, Action::Region | Action::Window);
+    if uses_overlay && !overlay::begin(app) {
+        return;
+    }
+
     let app = app.clone();
     std::thread::spawn(move || {
         let result = match action {

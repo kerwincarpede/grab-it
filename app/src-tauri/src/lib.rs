@@ -34,6 +34,8 @@ pub fn run() {
             commands::get_settings,
             commands::set_save_folder,
             commands::set_hotkeys,
+            hotkeys::pause_hotkeys,
+            hotkeys::resume_hotkeys,
             overlay::overlay_info,
             overlay::overlay_image,
             overlay::overlay_finish,
