@@ -39,11 +39,13 @@ npm run tauri dev
 
 Grab-it starts in the tray with no window open. Use the tray menu to open Settings or quit. Closing a window keeps the app running in the tray.
 
-To open a window directly, for example on a desktop without a tray host, pass `--open`:
+To open a window directly, for example on a desktop without a tray host, pass `--open`. npm, the Tauri CLI and cargo each consume one `--`, so three are needed:
 
 ```sh
-npm run tauri dev -- -- --open settings
+npm run tauri dev -- -- -- --open settings
 ```
+
+A built binary takes the argument directly, for example `src-tauri/target/release/grab-it --open settings`.
 
 ## Settings
 
