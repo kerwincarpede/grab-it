@@ -45,6 +45,9 @@ jobs:
     defaults:
       run:
         working-directory: app
+    env:
+      # The OCR tests download the ocrs models here once; cached below.
+      GRAB_IT_OCR_MODELS: ${{ github.workspace }}/.ocr-models
     steps:
       - uses: actions/checkout@v4
 
@@ -75,6 +78,12 @@ jobs:
       - run: npm run build
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      # Bump the key when the model URLs in src-tauri/src/ocr.rs change.
+      - name: Cache the ocrs models
+        uses: actions/cache@v4
+        with:
+          path: .ocr-models
+          key: ocrs-models-v1
       - run: cargo test --manifest-path src-tauri/Cargo.toml
 
   build:

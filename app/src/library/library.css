@@ -164,7 +164,98 @@ button.danger {
   background: #cf222e;
 }
 
+/* Search box, filter bar and OCR progress. */
+.library-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.library-search-box {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.library-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.library-search input,
+.library-search select {
+  padding: 6px 8px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid #8c959f;
+  border-radius: 6px;
+}
+
+.library-date {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #57606a;
+}
+
+.ocr-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+  color: #57606a;
+  font-size: 12px;
+}
+
+.ocr-status progress {
+  width: 200px;
+}
+
+.ocr-status-error {
+  color: #cf222e;
+}
+
+.shot-snippet {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.shot-snippet-field {
+  color: #57606a;
+}
+
+.shot-snippet mark {
+  padding: 0 1px;
+  color: inherit;
+  background: #fff8c5;
+  border-radius: 2px;
+  font-weight: 600;
+}
+
 @media (prefers-color-scheme: dark) {
+  .library-date,
+  .ocr-status,
+  .shot-snippet-field {
+    color: #8b949e;
+  }
+
+  .ocr-status-error {
+    color: #ff7b72;
+  }
+
+  .shot-snippet mark {
+    background: #6e5a00;
+  }
+
   .shot-card {
     background: #161b22;
   }

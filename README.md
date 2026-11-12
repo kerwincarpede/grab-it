@@ -73,6 +73,18 @@ Each capture is copied to the clipboard and saved to `<save folder>/originals/` 
 - **Wayland** (`WAYLAND_DISPLAY` set): captures go through the desktop's Screenshot portal, which lets you pick the region or window. Hotkeys are offered to the desktop through the GlobalShortcuts portal; where the desktop has no such portal, use the tray menu.
 - **macOS**: grant Grab-it *Screen Recording* under System Settings → Privacy & Security. Grab-it offers to open that page when the permission is missing.
 
+## Searching
+
+Type in the search box at the top of the Library to find captures by the text in the image, their tags, notes, app or window title. Results update once you pause typing (or press Enter). Each word matches the start of a word, and every word must match, so `inv 2026` finds a receipt reading "Invoice 2026-03". Each result shows where it matched, with the matching words highlighted.
+
+The filter bar narrows the Library, with or without words: by app, by tag, and by the days captured (From and To are both included). **Clear** resets the search and the filters.
+
+The text in each image is read by [ocrs](https://github.com/robertknight/ocrs) in the background, one capture at a time, newest first. Captures become findable by their text once they have been read; their tags, notes, app and window title are searchable straight away.
+
+The OCR models (about 12 MB) are not bundled: they are downloaded into `ocr-models/` in the app data directory the first time a capture needs reading, with progress shown in the Library. If the download fails, the Library says so and offers **Retry**; the next capture also retries. Set `GRAB_IT_OCR_MODELS` to use another models directory.
+
+The search index is a SQLite FTS5 table in `library.db`, kept in step with each capture's tags, notes and text as they change.
+
 ## Settings
 
 `settings.json` lives in the app data directory (`com.kerwincarpede.grabit`):
@@ -97,11 +109,13 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
+The OCR tests download the ocrs models once into `src-tauri/target/ocr-models/`, or into `$GRAB_IT_OCR_MODELS` when set; CI caches that directory. Their fixture, `src-tauri/tests/fixtures/ocr-pineapple.png`, was made with ImageMagick (the command is in `src-tauri/src/ocr.rs`).
+
 To build installers locally, run `npm run tauri build`; they land in `app/src-tauri/target/release/bundle/`.
 
 ## CI
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the checks on Ubuntu 22.04, then builds unsigned installers with `tauri-action` on Ubuntu 22.04, Windows and macOS and uploads them as workflow artifacts.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the checks on Ubuntu 22.04 (caching the ocrs models for the OCR tests), then builds unsigned installers with `tauri-action` on Ubuntu 22.04, Windows and macOS and uploads them as workflow artifacts.
 
 ## License
 

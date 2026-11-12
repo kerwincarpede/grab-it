@@ -5,11 +5,13 @@ mod commands;
 mod editor;
 mod hotkeys;
 mod library;
+mod ocr;
 mod overlay;
 mod permissions;
 #[cfg(target_os = "linux")]
 mod portal;
 mod screen;
+mod search;
 mod settings;
 mod tray;
 mod windows;
@@ -53,7 +55,11 @@ pub fn run() {
             library::library_set_tags,
             library::library_set_notes,
             library::library_delete,
-            library::library_open
+            library::library_open,
+            search::library_search,
+            search::library_filter_options,
+            ocr::ocr_status,
+            ocr::ocr_retry
         ])
         .setup(move |app| {
             // A tray app: no Dock icon on macOS.
@@ -63,13 +69,16 @@ pub fn run() {
             let store = open_settings(app)?;
             let hotkeys = store.get().hotkeys.clone();
             app.manage(Mutex::new(store));
-            app.manage(library::open_for_app(&app.path().app_data_dir()?));
+            let data_dir = app.path().app_data_dir()?;
+            app.manage(library::open_for_app(&data_dir));
 
             let handle = app.handle();
             if uses_hotkey_plugin() {
                 handle.plugin(hotkeys::plugin())?;
             }
             hotkeys::start(handle, &hotkeys);
+            // Reads captures waiting for OCR, downloading the models first.
+            ocr::start(handle, ocr::models_dir(&data_dir));
             // Picks up captures added while Grab-it was not running.
             library::rescan_in_background(handle, library::current_save_folder(handle));
             tray::create(handle)?;
