@@ -20,7 +20,9 @@ interface HotkeysSectionProps {
  *
  * While a field has focus the global hotkeys are paused, so pressing a
  * current hotkey records it rather than taking a capture. PrintScreen is
- * also recorded on key up, since Windows webviews send no key down for it.
+ * also recorded on key up, since Windows webviews send no key down for it,
+ * but only when no key down was seen: elsewhere the modifier may already be
+ * released by key up, which would overwrite Alt+PrintScreen with PrintScreen.
  */
 function HotkeysSection({ saved, disabled, onSave }: HotkeysSectionProps) {
   const [draft, setDraft] = useState<Hotkeys | null>(null);
@@ -28,6 +30,8 @@ function HotkeysSection({ saved, disabled, onSave }: HotkeysSectionProps) {
   const current = draft ?? saved;
   const changed = FIELDS.some(({ key }) => current[key] !== saved[key]);
   const paused = useRef(false);
+  // The field whose PrintScreen key down was seen and whose key up is pending.
+  const printScreenDown = useRef<keyof Hotkeys | null>(null);
 
   useEffect(
     () => () => {
@@ -55,21 +59,37 @@ function HotkeysSection({ saved, disabled, onSave }: HotkeysSectionProps) {
     void resumeHotkeys().catch(() => undefined);
   }
 
+  function clearPrintScreenDown() {
+    printScreenDown.current = null;
+  }
+
+  function apply(field: keyof Hotkeys, event: KeyboardEvent<HTMLInputElement>) {
+    event.preventDefault();
+    const accelerator = acceleratorFromEvent(event, isMacPlatform());
+    if (accelerator) setDraft({ ...current, [field]: accelerator });
+  }
+
   function record(field: keyof Hotkeys) {
     return (event: KeyboardEvent<HTMLInputElement>) => {
       const plainTab =
         event.key === "Tab" && !event.ctrlKey && !event.altKey && !event.metaKey;
       if (plainTab) return;
-      event.preventDefault();
-      const accelerator = acceleratorFromEvent(event, isMacPlatform());
-      if (accelerator) setDraft({ ...current, [field]: accelerator });
+      if (event.code === "PrintScreen") printScreenDown.current = field;
+      apply(field, event);
     };
   }
 
   function recordPrintScreen(field: keyof Hotkeys) {
-    const onKeyDown = record(field);
     return (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.code === "PrintScreen") onKeyDown(event);
+      if (event.code !== "PrintScreen") return;
+      const sawKeyDown = printScreenDown.current === field;
+      printScreenDown.current = null;
+      // Key down already recorded it, with the modifiers held at that time.
+      if (sawKeyDown) {
+        event.preventDefault();
+        return;
+      }
+      apply(field, event);
     };
   }
 
@@ -100,7 +120,10 @@ function HotkeysSection({ saved, disabled, onSave }: HotkeysSectionProps) {
             onKeyDown={record(key)}
             onKeyUp={recordPrintScreen(key)}
             onFocus={pause}
-            onBlur={resume}
+            onBlur={(event) => {
+              clearPrintScreenDown();
+              resume(event);
+            }}
             disabled={disabled}
             aria-describedby="hotkeys-hint"
           />

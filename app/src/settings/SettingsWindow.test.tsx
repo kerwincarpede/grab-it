@@ -190,6 +190,26 @@ describe("SettingsWindow", () => {
 
     fireEvent.keyUp(region, { key: "PrintScreen", code: "PrintScreen", altKey: true });
     expect(region).toHaveValue("Alt+PrintScreen");
+
+    // Repeated key-up-only presses keep recording.
+    fireEvent.keyUp(region, { key: "PrintScreen", code: "PrintScreen", ctrlKey: true });
+    expect(region).toHaveValue("Ctrl+PrintScreen");
+  });
+
+  it("keeps the key down PrintScreen combination when the modifier is released first", async () => {
+    mockBackend({ hotkeys: { ...DEFAULT_HOTKEYS, window: "F9" } });
+    render(<SettingsWindow />);
+    const windowField = await screen.findByLabelText("Window");
+
+    fireEvent.keyDown(windowField, { key: "PrintScreen", code: "PrintScreen", altKey: true });
+    expect(windowField).toHaveValue("Alt+PrintScreen");
+
+    fireEvent.keyUp(windowField, { key: "PrintScreen", code: "PrintScreen" });
+    expect(windowField).toHaveValue("Alt+PrintScreen");
+
+    // The next press with no key down falls back to key up again.
+    fireEvent.keyUp(windowField, { key: "PrintScreen", code: "PrintScreen", ctrlKey: true });
+    expect(windowField).toHaveValue("Ctrl+PrintScreen");
   });
 
   it("pauses the global hotkeys while a hotkey field has focus", async () => {
