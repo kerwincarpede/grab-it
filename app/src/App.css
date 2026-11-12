@@ -80,7 +80,8 @@ button:disabled {
   margin: 16px 0 0;
 }
 
-.status-saved {
+.status-saved,
+.status-hotkeys-saved {
   color: #1a7f37;
 }
 
@@ -93,11 +94,114 @@ button:disabled {
     color: #8b949e;
   }
 
-  .status-saved {
+  .status-saved,
+  .status-hotkeys-saved {
     color: #3fb950;
   }
 
   .status-error {
     color: #f85149;
   }
+}
+
+/* Capture overlay: the frozen monitor fills the window. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  cursor: crosshair;
+  user-select: none;
+  background: #000;
+}
+
+.overlay-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.overlay-dim {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 35%);
+  pointer-events: none;
+}
+
+.overlay-selection {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid #1f6feb;
+  /* Dims everything outside the selection. */
+  box-shadow: 0 0 0 100vmax rgb(0 0 0 / 35%);
+  pointer-events: none;
+}
+
+.overlay-window {
+  border-color: #2da44e;
+  background: rgb(45 164 78 / 12%);
+}
+
+.overlay-label {
+  position: absolute;
+  top: -26px;
+  left: -2px;
+  max-width: 480px;
+  overflow: hidden;
+  padding: 2px 8px;
+  color: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: rgb(0 0 0 / 70%);
+  border-radius: 4px;
+}
+
+.overlay-hint {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  margin: 0;
+  padding: 6px 14px;
+  color: #fff;
+  background: rgb(0 0 0 / 70%);
+  border-radius: 6px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.hotkeys {
+  margin-top: 20px;
+}
+
+.hotkey-row {
+  display: grid;
+  grid-template-columns: 7em 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.hotkey-row input {
+  padding: 6px 8px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid #8c959f;
+  border-radius: 6px;
+}
+
+.hotkey-actions {
+  display: flex;
+  gap: 8px;
+}
+
+button.secondary {
+  color: inherit;
+  background: transparent;
+  border: 1px solid #8c959f;
+}
+
+.field-heading {
+  font-weight: 600;
 }

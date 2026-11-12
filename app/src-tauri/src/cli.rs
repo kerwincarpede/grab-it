@@ -9,12 +9,15 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenTarget {
     Settings,
+    /// Starts a region capture, showing the overlay.
+    Region,
 }
 
 impl OpenTarget {
     fn from_name(name: &str) -> Option<Self> {
         match name {
             "settings" => Some(Self::Settings),
+            "region" => Some(Self::Region),
             _ => None,
         }
     }
@@ -33,7 +36,10 @@ impl fmt::Display for ArgsError {
                 write!(f, "--open needs a target, for example `--open settings`")
             }
             Self::UnknownTarget(name) => {
-                write!(f, "unknown --open target `{name}`; expected `settings`")
+                write!(
+                    f,
+                    "unknown --open target `{name}`; expected `settings` or `region`"
+                )
             }
         }
     }
@@ -97,6 +103,12 @@ mod tests {
     #[test]
     fn open_settings_with_equals() {
         assert_eq!(parse(&["--open=settings"]), Ok(Some(OpenTarget::Settings)));
+    }
+
+    #[test]
+    fn open_region() {
+        assert_eq!(parse(&["--open", "region"]), Ok(Some(OpenTarget::Region)));
+        assert_eq!(parse(&["--open=region"]), Ok(Some(OpenTarget::Region)));
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 Cross-platform screenshot tool with annotation and fast full-text search, built with Rust and [Tauri 2](https://tauri.app/).
 
-Grab-it lives in the system tray. Right now the tray menu has **Settings…** and **Quit Grab-it**; capture, the annotation editor and the searchable library are on the way.
+Grab-it lives in the system tray. Capture a region, a window, every monitor or one monitor from the tray menu or a hotkey; each capture is saved as a PNG and copied to the clipboard. The annotation editor and the searchable library are on the way.
 
 ## Layout
 
@@ -23,6 +23,13 @@ Grab-it lives in the system tray. Right now the tray menu has **Settings…** an
      librsvg2-dev libxdo-dev libssl-dev patchelf build-essential curl wget file
    ```
 
+   Screen capture ([xcap](https://github.com/nashaofu/xcap)) also needs these on Debian/Ubuntu:
+
+   ```sh
+   sudo apt-get install -y pkg-config libclang-dev libxcb1-dev libxrandr-dev \
+     libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev
+   ```
+
 3. Install the frontend dependencies:
 
    ```sh
@@ -37,15 +44,34 @@ cd app
 npm run tauri dev
 ```
 
-Grab-it starts in the tray with no window open. Use the tray menu to open Settings or quit. Closing a window keeps the app running in the tray.
+Grab-it starts in the tray with no window open. Closing a window keeps the app running in the tray.
 
-To open a window directly, for example on a desktop without a tray host, pass `--open`. npm, the Tauri CLI and cargo each consume one `--`, so three are needed:
+To open a window directly, for example on a desktop without a tray host, pass `--open settings` or `--open region`. npm, the Tauri CLI and cargo each consume one `--`, so three are needed:
 
 ```sh
 npm run tauri dev -- -- -- --open settings
+npm run tauri dev -- -- -- --open region
 ```
 
 A built binary takes the argument directly, for example `src-tauri/target/release/grab-it --open settings`.
+
+## Capturing
+
+| Capture | Tray item | Default hotkey | macOS |
+| --- | --- | --- | --- |
+| Region (drag, or click a window) | Region | PrintScreen | Cmd+Shift+2 |
+| Window (hover and click) | Window | Alt+PrintScreen | Cmd+Shift+W |
+| Every monitor | Screen (all monitors) | Ctrl+PrintScreen | Cmd+Shift+F |
+| One monitor | Monitor ▸ | – | – |
+
+Change the hotkeys in Settings: click a field and press the new keys. If another app holds a hotkey, Settings says so and the tray still works.
+
+Region and Window freeze every monitor and show it fullscreen. Drag to select a region, or hover a window and click it; Esc or right-click cancels. Each monitor is cropped at its own scale factor, so mixed-DPI setups capture sharp.
+
+Each capture is copied to the clipboard and saved to `<save folder>/originals/` as `Grab-it YYYY-MM-DD HH-MM-SS.png`, with `<name>.meta.json` beside it holding the time, mode, size, foreground app and window title. The PNG is never modified.
+
+- **Wayland** (`WAYLAND_DISPLAY` set): captures go through the desktop's Screenshot portal, which lets you pick the region or window. Hotkeys are offered to the desktop through the GlobalShortcuts portal; where the desktop has no such portal, use the tray menu.
+- **macOS**: grant Grab-it *Screen Recording* under System Settings → Privacy & Security. Grab-it offers to open that page when the permission is missing.
 
 ## Settings
 
@@ -55,7 +81,7 @@ A built binary takes the argument directly, for example `src-tauri/target/releas
 - macOS: `~/Library/Application Support/com.kerwincarpede.grabit/`
 - Windows: `%APPDATA%\com.kerwincarpede.grabit\`
 
-The save folder defaults to `~/Pictures/Grab-it/`. Changing it only affects new captures: earlier captures stay where they are and stay in the library.
+The save folder defaults to `~/Pictures/Grab-it/`. Changing it only affects new captures: earlier captures stay where they are and stay in the library. `settings.json` also holds the capture hotkeys.
 
 ## Checks
 

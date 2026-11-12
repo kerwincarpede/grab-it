@@ -11,7 +11,10 @@ describe("App", () => {
   });
 
   it("renders the Settings window for the settings route", async () => {
-    mockIPC(() => ({ saveFolder: "/home/me/Pictures/Grab-it" }));
+    mockIPC(() => ({
+      saveFolder: "/home/me/Pictures/Grab-it",
+      hotkeys: { region: "PrintScreen", window: "Alt+PrintScreen", screen: "Ctrl+PrintScreen" },
+    }));
     render(<App route="settings" />);
     expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
     expect(await screen.findByDisplayValue("/home/me/Pictures/Grab-it")).toBeInTheDocument();
@@ -21,6 +24,7 @@ describe("App", () => {
 describe("routeFromHash", () => {
   it.each([
     ["#/settings", "settings"],
+    ["#/overlay", "overlay"],
     ["#settings", "settings"],
     ["#/settings?tab=general", "settings"],
     ["", "home"],

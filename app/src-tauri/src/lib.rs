@@ -1,5 +1,13 @@
+mod actions;
+mod capture;
 mod cli;
 mod commands;
+mod hotkeys;
+mod overlay;
+mod permissions;
+#[cfg(target_os = "linux")]
+mod portal;
+mod screen;
 mod settings;
 mod tray;
 mod windows;
@@ -19,9 +27,17 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .manage(overlay::OverlayState::default())
+        .manage(hotkeys::HotkeyState::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
-            commands::set_save_folder
+            commands::set_save_folder,
+            commands::set_hotkeys,
+            overlay::overlay_info,
+            overlay::overlay_image,
+            overlay::overlay_finish,
+            overlay::overlay_cancel
         ])
         .setup(move |app| {
             // A tray app: no Dock icon on macOS.
@@ -29,9 +45,14 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let store = open_settings(app)?;
+            let hotkeys = store.get().hotkeys.clone();
             app.manage(Mutex::new(store));
 
             let handle = app.handle();
+            if uses_hotkey_plugin() {
+                handle.plugin(hotkeys::plugin())?;
+            }
+            hotkeys::start(handle, &hotkeys);
             tray::create(handle)?;
             if let Some(target) = open_target {
                 windows::open(handle, target)?;
@@ -51,6 +72,19 @@ pub fn run() {
             api.prevent_exit();
         }
     });
+}
+
+/// Wayland binds hotkeys through the GlobalShortcuts portal instead of the
+/// global-shortcut plugin, which only works on X11, Windows and macOS.
+fn uses_hotkey_plugin() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        !portal::is_wayland()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
 }
 
 fn open_settings(app: &App) -> tauri::Result<SettingsStore> {

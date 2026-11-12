@@ -26,6 +26,17 @@ env:
     curl
     wget
     file
+  # xcap: X11 (xcb, randr), Wayland (wayland, EGL, GBM) and PipeWire capture.
+  XCAP_DEPS: >-
+    pkg-config
+    libclang-dev
+    libxcb1-dev
+    libxrandr-dev
+    libdbus-1-dev
+    libpipewire-0.3-dev
+    libwayland-dev
+    libegl-dev
+    libgbm-dev
 
 jobs:
   checks:
@@ -41,7 +52,7 @@ jobs:
         working-directory: .
         run: |
           sudo apt-get update
-          sudo apt-get install -y $LINUX_DEPS
+          sudo apt-get install -y $LINUX_DEPS $XCAP_DEPS
 
       - uses: actions/setup-node@v4
         with:
@@ -81,7 +92,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y $LINUX_DEPS
+          sudo apt-get install -y $LINUX_DEPS $XCAP_DEPS
 
       - uses: actions/setup-node@v4
         with:
