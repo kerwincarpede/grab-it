@@ -4,6 +4,7 @@ mod cli;
 mod commands;
 mod editor;
 mod hotkeys;
+mod library;
 mod overlay;
 mod permissions;
 #[cfg(target_os = "linux")]
@@ -46,7 +47,13 @@ pub fn run() {
             editor::editor_image,
             editor::editor_save_annotations,
             editor::editor_copy,
-            editor::editor_export
+            editor::editor_export,
+            library::library_list,
+            library::library_thumbnail,
+            library::library_set_tags,
+            library::library_set_notes,
+            library::library_delete,
+            library::library_open
         ])
         .setup(move |app| {
             // A tray app: no Dock icon on macOS.
@@ -56,12 +63,15 @@ pub fn run() {
             let store = open_settings(app)?;
             let hotkeys = store.get().hotkeys.clone();
             app.manage(Mutex::new(store));
+            app.manage(library::open_for_app(&app.path().app_data_dir()?));
 
             let handle = app.handle();
             if uses_hotkey_plugin() {
                 handle.plugin(hotkeys::plugin())?;
             }
             hotkeys::start(handle, &hotkeys);
+            // Picks up captures added while Grab-it was not running.
+            library::rescan_in_background(handle, library::current_save_folder(handle));
             tray::create(handle)?;
             if let Some(target) = open_target {
                 windows::open(handle, target)?;

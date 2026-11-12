@@ -24,10 +24,17 @@ pub fn get_settings(state: State<'_, SettingsState>) -> Settings {
 }
 
 #[tauri::command]
-pub fn set_save_folder(path: String, state: State<'_, SettingsState>) -> Result<Settings, String> {
-    lock(&state)
+pub fn set_save_folder(
+    path: String,
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+) -> Result<Settings, String> {
+    let settings = lock(&state)
         .set_save_folder(&path)
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    // Captures already in the new folder join the library; older ones stay.
+    crate::library::rescan_in_background(&app, settings.save_folder.clone());
+    Ok(settings)
 }
 
 /// The saved settings and any hotkey the system would not register.
