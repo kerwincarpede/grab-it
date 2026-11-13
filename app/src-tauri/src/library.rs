@@ -42,7 +42,7 @@ const MAX_TAG_CHARS: usize = 64;
 
 /// Schema migrations; `PRAGMA user_version` is how many have run.
 /// Append new ones, never edit old ones.
-const MIGRATIONS: &[&str] = &[
+pub(crate) const MIGRATIONS: &[&str] = &[
     // 1: shots and their tags.
     "CREATE TABLE shots (
         id INTEGER PRIMARY KEY,
@@ -63,6 +63,56 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (shot_id, tag)
     );
     CREATE INDEX shot_tags_tag ON shot_tags (tag);",
+    // 2: OCR text and the full-text index over it and the metadata.
+    // `ocr_state` is 0 while waiting for OCR, 1 when read, 2 when the
+    // image could not be read. Triggers keep `shots_fts` (rowid = shot id)
+    // in step with `shots` and `shot_tags`.
+    "ALTER TABLE shots ADD COLUMN ocr_text TEXT;
+    ALTER TABLE shots ADD COLUMN ocr_state INTEGER NOT NULL DEFAULT 0;
+    CREATE INDEX shots_ocr_queue ON shots (ocr_state, captured_at DESC, id DESC);
+    CREATE VIRTUAL TABLE shots_fts USING fts5 (
+        ocr_text, tags, notes, app, window_title,
+        tokenize = 'unicode61 remove_diacritics 2'
+    );
+    CREATE TRIGGER shots_fts_insert AFTER INSERT ON shots BEGIN
+        INSERT INTO shots_fts (rowid, ocr_text, tags, notes, app, window_title)
+        SELECT s.id, coalesce(s.ocr_text, ''),
+               coalesce((SELECT group_concat(t.tag, ' ') FROM shot_tags t WHERE t.shot_id = s.id), ''),
+               s.notes, coalesce(s.app, ''), coalesce(s.window_title, '')
+        FROM shots s WHERE s.id = new.id;
+    END;
+    CREATE TRIGGER shots_fts_update AFTER UPDATE OF ocr_text, notes, app, window_title ON shots BEGIN
+        DELETE FROM shots_fts WHERE rowid = old.id;
+        INSERT INTO shots_fts (rowid, ocr_text, tags, notes, app, window_title)
+        SELECT s.id, coalesce(s.ocr_text, ''),
+               coalesce((SELECT group_concat(t.tag, ' ') FROM shot_tags t WHERE t.shot_id = s.id), ''),
+               s.notes, coalesce(s.app, ''), coalesce(s.window_title, '')
+        FROM shots s WHERE s.id = new.id;
+    END;
+    CREATE TRIGGER shots_fts_delete AFTER DELETE ON shots BEGIN
+        DELETE FROM shots_fts WHERE rowid = old.id;
+    END;
+    CREATE TRIGGER shot_tags_fts_insert AFTER INSERT ON shot_tags BEGIN
+        DELETE FROM shots_fts WHERE rowid = new.shot_id;
+        INSERT INTO shots_fts (rowid, ocr_text, tags, notes, app, window_title)
+        SELECT s.id, coalesce(s.ocr_text, ''),
+               coalesce((SELECT group_concat(t.tag, ' ') FROM shot_tags t WHERE t.shot_id = s.id), ''),
+               s.notes, coalesce(s.app, ''), coalesce(s.window_title, '')
+        FROM shots s WHERE s.id = new.shot_id;
+    END;
+    CREATE TRIGGER shot_tags_fts_delete AFTER DELETE ON shot_tags BEGIN
+        DELETE FROM shots_fts WHERE rowid = old.shot_id;
+        INSERT INTO shots_fts (rowid, ocr_text, tags, notes, app, window_title)
+        SELECT s.id, coalesce(s.ocr_text, ''),
+               coalesce((SELECT group_concat(t.tag, ' ') FROM shot_tags t WHERE t.shot_id = s.id), ''),
+               s.notes, coalesce(s.app, ''), coalesce(s.window_title, '')
+        FROM shots s WHERE s.id = old.shot_id;
+    END;
+    INSERT INTO shots_fts (rowid, ocr_text, tags, notes, app, window_title)
+    SELECT s.id, coalesce(s.ocr_text, ''),
+           coalesce((SELECT group_concat(t.tag, ' ') FROM shot_tags t WHERE t.shot_id = s.id), ''),
+           s.notes, coalesce(s.app, ''), coalesce(s.window_title, '')
+    FROM shots s;",
 ];
 
 #[derive(Debug)]
@@ -155,6 +205,13 @@ impl RescanReport {
     }
 }
 
+/// A shot waiting for OCR.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OcrJob {
+    pub id: i64,
+    pub path: PathBuf,
+}
+
 pub struct Library {
     conn: Connection,
 }
@@ -179,6 +236,12 @@ impl Library {
         let mut library = Self { conn };
         library.migrate()?;
         Ok(library)
+    }
+
+    /// The database connection, for queries that live in other modules
+    /// (see `search.rs`).
+    pub(crate) fn connection(&self) -> &Connection {
+        &self.conn
     }
 
     /// The schema version, from `PRAGMA user_version`.
@@ -326,7 +389,7 @@ impl Library {
         Ok(shot)
     }
 
-    fn tags_of(&self, id: i64) -> LibraryResult<Vec<String>> {
+    pub(crate) fn tags_of(&self, id: i64) -> LibraryResult<Vec<String>> {
         let mut stmt = self
             .conn
             .prepare("SELECT tag FROM shot_tags WHERE shot_id = ?1 ORDER BY tag COLLATE NOCASE")?;
@@ -385,6 +448,63 @@ impl Library {
         }
         self.conn.execute("DELETE FROM shots WHERE id = ?1", [id])?;
         Ok(shot)
+    }
+
+    /// The newest shot still waiting for OCR, if any.
+    pub fn next_for_ocr(&self) -> LibraryResult<Option<OcrJob>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, path FROM shots WHERE ocr_state = 0
+                 ORDER BY captured_at DESC, id DESC LIMIT 1",
+                [],
+                |row| {
+                    Ok(OcrJob {
+                        id: row.get(0)?,
+                        path: PathBuf::from(row.get::<_, String>(1)?),
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// How many shots are waiting for OCR.
+    pub fn pending_ocr_count(&self) -> LibraryResult<u32> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM shots WHERE ocr_state = 0",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Stores the text OCR found in a shot; it becomes searchable at once.
+    pub fn set_ocr_text(&mut self, id: i64, text: &str) -> LibraryResult<()> {
+        let changed = self.conn.execute(
+            "UPDATE shots SET ocr_text = ?1, ocr_state = 1 WHERE id = ?2",
+            params![text, id],
+        )?;
+        if changed == 0 {
+            return Err(LibraryError::NotFound(id));
+        }
+        Ok(())
+    }
+
+    /// Marks a shot whose image OCR could not read, so it is not retried.
+    pub fn mark_ocr_failed(&mut self, id: i64) -> LibraryResult<()> {
+        self.conn
+            .execute("UPDATE shots SET ocr_state = 2 WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// The text OCR found in a shot, or `None` while it waits for OCR.
+    #[cfg(test)]
+    pub fn ocr_text(&self, id: i64) -> LibraryResult<Option<String>> {
+        self.conn
+            .query_row("SELECT ocr_text FROM shots WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()?
+            .ok_or(LibraryError::NotFound(id))
     }
 
     /// The shot's thumbnail PNG, regenerated if it is missing.
@@ -529,7 +649,7 @@ fn thumbnail_bytes(shot: &Shot) -> LibraryResult<Vec<u8>> {
     Ok(fs::read(&shot.thumb_path)?)
 }
 
-fn shot_from_row(row: &Row<'_>) -> rusqlite::Result<Shot> {
+pub(crate) fn shot_from_row(row: &Row<'_>) -> rusqlite::Result<Shot> {
     let path = PathBuf::from(row.get::<_, String>(1)?);
     let file_name = path
         .file_name()
@@ -743,6 +863,9 @@ pub fn rescan_in_background(app: &AppHandle, save_folder: PathBuf) {
             return;
         };
         let report = state.rescan(&save_folder);
+        // Captures found by the scan, or left over from an earlier run,
+        // wait for OCR.
+        crate::ocr::wake(&app);
         match report {
             Ok(report) if report.changed() => {
                 let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
@@ -765,6 +888,7 @@ pub fn record_capture(app: &AppHandle, png: &Path) {
     match result {
         Ok(_) => {
             let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
+            crate::ocr::wake(app);
         }
         Err(err) => eprintln!(
             "Grab-it: saved, but could not add {} to the library: {err}",
