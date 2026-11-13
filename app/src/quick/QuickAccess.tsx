@@ -12,6 +12,7 @@ import {
   recordStop,
   type QuickAction,
   type QuickItem,
+  type QuickShown,
 } from "./api";
 
 function errorMessage(err: unknown): string {
@@ -117,19 +118,26 @@ function useElapsed(startedAt: number | null): number {
  * on it keeps it.
  */
 function QuickAccess() {
-  const [item, setItem] = useState<QuickItem | null>(null);
+  const [current, setCurrent] = useState<QuickShown | null>(null);
+  const item = current?.item ?? null;
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hovered, setHovered] = useState(false);
   /** Bumped for each new item, restarting the dismiss timer and its bar. */
   const [shown, setShown] = useState(0);
-  const closing = useRef(false);
+  /** An action is under way; a second click must not start another. */
+  const busy = useRef(false);
+  /** What the card shows, for reading outside a render. */
+  const latest = useRef<QuickShown | null>(null);
   const thumbnail = useThumbnail(item);
   const elapsed = useElapsed(item?.kind === "recording" ? item.startedAt : null);
   const [stopping, setStopping] = useState(false);
 
-  const show = useCallback((next: QuickItem | null) => {
-    setItem(next);
+  const show = useCallback((next: QuickShown | null) => {
+    // The window is reused after a dismissal: it can act again.
+    busy.current = false;
+    latest.current = next;
+    setCurrent(next);
     setFlash(null);
     setError(null);
     setStopping(false);
@@ -150,8 +158,17 @@ function QuickAccess() {
       if (!cancelled) show(next);
     })
       .then((stop) => {
-        if (cancelled) stop();
-        else unlisten = stop;
+        if (cancelled) {
+          stop();
+          return;
+        }
+        unlisten = stop;
+        // An item set while the subscription was being made sent its event
+        // to nobody: read once more now that events arrive.
+        return quickInfo().then((fresh) => {
+          if (cancelled || fresh === null) return;
+          if (latest.current?.generation !== fresh.generation) show(fresh);
+        });
       })
       .catch(() => {
         // Without events the card still shows what it opened with.
@@ -163,15 +180,30 @@ function QuickAccess() {
   }, [show]);
 
   const run = useCallback((action: QuickAction, done?: string) => {
-    if (closing.current) return;
-    if (action === "close") closing.current = true;
+    const target = latest.current;
+    if (!target || busy.current) return;
+    // Copy and Show in folder leave the card up and may be repeated; the
+    // others end it, so a double-click must not run them twice.
+    const ends = action !== "copy" && action !== "reveal";
+    if (ends) busy.current = true;
     setError(null);
-    quickAction(action)
+    quickAction(action, target.generation)
       .then(() => {
+        // A newer item arrived meanwhile: this result is not about it.
+        if (latest.current !== target) return;
         if (done) setFlash(done);
+        if (ends) {
+          // The card is now hidden but keeps its page: clear it, so the
+          // next card does not open on this one's content for a frame.
+          latest.current = null;
+          setCurrent(null);
+          // A hidden window gets no mouse-leave; do not stay "hovered".
+          setHovered(false);
+        }
       })
       .catch((err: unknown) => {
-        closing.current = false;
+        if (latest.current !== target) return;
+        busy.current = false;
         setError(errorMessage(err));
       });
   }, []);
@@ -199,10 +231,16 @@ function QuickAccess() {
   const hover = { onMouseEnter: () => setHovered(true), onMouseLeave: () => setHovered(false) };
 
   if (!item) {
+    // Dismissed, or not yet told what to show: an empty card, unless
+    // something went wrong on the way.
     return (
       <main className="quick quick-message" data-testid="quick" {...hover}>
-        <p role="status">{error ?? "Nothing to show yet."}</p>
-        {close}
+        {error && (
+          <>
+            <p role="alert">{error}</p>
+            {close}
+          </>
+        )}
       </main>
     );
   }

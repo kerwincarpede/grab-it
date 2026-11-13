@@ -12,6 +12,16 @@ export type QuickItem =
   | { kind: "recording"; startedAt: number; maxSeconds: number }
   | { kind: "recorded"; path: string; fileName: string; durationMs: number; bytes: number };
 
+/**
+ * What is on the card, numbered so an action can say which card it was
+ * clicked on. Mirrors `Shown` in src-tauri/src/quick.rs.
+ */
+export interface QuickShown {
+  /** Different for every item the card has shown. */
+  generation: number;
+  item: QuickItem;
+}
+
 /** Mirrors `QuickAction` in src-tauri/src/quick.rs. */
 export type QuickAction = "copy" | "edit" | "pin" | "reveal" | "delete" | "close";
 
@@ -19,8 +29,8 @@ export type QuickAction = "copy" | "edit" | "pin" | "reveal" | "delete" | "close
 export const QUICK_CHANGED_EVENT = "quick-changed";
 
 /** What the card should show; null when it was opened with nothing. */
-export function quickInfo(): Promise<QuickItem | null> {
-  return invoke<QuickItem | null>("quick_info");
+export function quickInfo(): Promise<QuickShown | null> {
+  return invoke<QuickShown | null>("quick_info");
 }
 
 /** The capture on the card as a small PNG. */
@@ -28,8 +38,12 @@ export function quickThumbnail(): Promise<ArrayBuffer> {
   return invoke<ArrayBuffer>("quick_thumbnail");
 }
 
-export function quickAction(action: QuickAction): Promise<void> {
-  return invoke<void>("quick_action", { action });
+/**
+ * Runs a button of the card that showed item `generation`. The backend
+ * drops the action when the card has since moved on to a newer item.
+ */
+export function quickAction(action: QuickAction, generation: number): Promise<void> {
+  return invoke<void>("quick_action", { action, generation });
 }
 
 /** Ends the recording under way; the card then shows the saved GIF. */
@@ -38,8 +52,8 @@ export function recordStop(): Promise<void> {
 }
 
 /** Calls `handler` when the card is reused for something new. */
-export function onQuickChanged(handler: (item: QuickItem) => void): Promise<UnlistenFn> {
-  return listen<QuickItem>(QUICK_CHANGED_EVENT, (event) => handler(event.payload));
+export function onQuickChanged(handler: (shown: QuickShown) => void): Promise<UnlistenFn> {
+  return listen<QuickShown>(QUICK_CHANGED_EVENT, (event) => handler(event.payload));
 }
 
 /**

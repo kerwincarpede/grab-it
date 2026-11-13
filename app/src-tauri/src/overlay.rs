@@ -547,7 +547,7 @@ pub fn overlay_finish(
         .ok_or("the selection is empty")?;
         let monitor = frame.monitor.clone();
         std::thread::spawn(move || {
-            if let Err(err) = crate::record::start(&app, &monitor, rect) {
+            if let Err(err) = crate::record::start(&app, &monitor, size, rect) {
                 actions::report_failure(&app, &err);
             }
         });

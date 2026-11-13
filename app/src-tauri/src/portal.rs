@@ -17,21 +17,26 @@ pub fn is_wayland() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty())
 }
 
-/// Takes a screenshot through the Screenshot portal.
+/// Takes a screenshot through the Screenshot portal. `Ok(None)` when the
+/// user cancelled the desktop's picker, which is not a failure.
 ///
 /// Region, window and monitor captures are interactive, so the desktop's
 /// own picker lets the user choose; a full-screen capture is not. The file
 /// the portal writes is read and then removed, since Grab-it saves its own
 /// copy in `originals/`.
-pub async fn screenshot(mode: CaptureMode) -> Result<RgbaImage, String> {
+pub async fn screenshot(mode: CaptureMode) -> Result<Option<RgbaImage>, String> {
     let interactive = !matches!(mode, CaptureMode::Screen);
     let response = Screenshot::request()
         .interactive(interactive)
         .modal(true)
         .send()
         .await
-        .and_then(|request| request.response())
-        .map_err(|err| format!("the screenshot portal failed: {err}"))?;
+        .and_then(|request| request.response());
+    let response = match response {
+        Ok(response) => response,
+        Err(err) if is_cancelled(&err) => return Ok(None),
+        Err(err) => return Err(format!("the screenshot portal failed: {err}")),
+    };
     let path = response
         .uri()
         .to_file_path()
@@ -45,17 +50,31 @@ pub async fn screenshot(mode: CaptureMode) -> Result<RgbaImage, String> {
             path.display()
         );
     }
-    Ok(image)
+    Ok(Some(image))
 }
 
-/// Asks the desktop's colour picker for a pixel's colour.
-pub async fn pick_colour() -> Result<[u8; 3], String> {
-    let colour = ashpd::desktop::Color::pick()
+/// Asks the desktop's colour picker for a pixel's colour. `Ok(None)` when
+/// the user cancelled.
+pub async fn pick_colour() -> Result<Option<[u8; 3]>, String> {
+    let picked = ashpd::desktop::Color::pick()
         .send()
         .await
-        .and_then(|request| request.response())
-        .map_err(|err| format!("the colour picker portal failed: {err}"))?;
-    Ok([colour.red(), colour.green(), colour.blue()].map(channel_to_byte))
+        .and_then(|request| request.response());
+    match picked {
+        Ok(colour) => Ok(Some(
+            [colour.red(), colour.green(), colour.blue()].map(channel_to_byte),
+        )),
+        Err(err) if is_cancelled(&err) => Ok(None),
+        Err(err) => Err(format!("the colour picker portal failed: {err}")),
+    }
+}
+
+/// True when a portal request ended because the user backed out of it.
+fn is_cancelled(err: &ashpd::Error) -> bool {
+    matches!(
+        err,
+        ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)
+    )
 }
 
 /// A portal colour channel (0.0 to 1.0) as a byte.

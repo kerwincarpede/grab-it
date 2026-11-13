@@ -133,9 +133,15 @@ pub fn frame_size(region: (u32, u32)) -> (u32, u32) {
     (MAX_WIDTH, scaled.max(1))
 }
 
-/// Starts recording `rect` (in the monitor's image pixels) of `monitor`.
-/// Runs until [`stop`] or [`MAX_DURATION`]. Call this off the main thread.
-pub fn start(app: &AppHandle, monitor: &MonitorInfo, rect: Rect) -> Result<(), String> {
+/// Starts recording `rect` of `monitor`. `rect` is in the pixels of the
+/// monitor's image, whose size is `image_size`. Runs until [`stop`] or
+/// [`MAX_DURATION`]. Call this off the main thread.
+pub fn start(
+    app: &AppHandle,
+    monitor: &MonitorInfo,
+    image_size: (u32, u32),
+    rect: Rect,
+) -> Result<(), String> {
     let state = app.state::<RecordState>();
     let flag = Arc::new(AtomicBool::new(false));
     {
@@ -164,12 +170,8 @@ pub fn start(app: &AppHandle, monitor: &MonitorInfo, rect: Rect) -> Result<(), S
         }
     };
 
-    // The monitor's image size is the monitor's size times its scale, near
-    // enough to keep the card clear of the region.
-    let image_size = (
-        (f64::from(monitor.width) * monitor.scale_factor) as u32,
-        (f64::from(monitor.height) * monitor.scale_factor) as u32,
-    );
+    // Measured against the frozen frame itself: whether a monitor's
+    // reported size is in pixels or points differs between platforms.
     let corner = quick::corner_clear_of(rect, image_size, monitor.scale_factor);
     quick::show_in(
         app,
@@ -240,7 +242,17 @@ fn record(monitor: usize, rect: Rect, path: &Path, stop: &AtomicBool) -> Result<
     let mut total = Duration::ZERO;
     loop {
         let grabbed_at = Instant::now();
-        let frame = grab(monitor, rect)?;
+        let frame = match grab(monitor, rect) {
+            Ok(frame) => frame,
+            // Nothing recorded yet: the recording failed outright.
+            Err(err) if pending.is_none() => return Err(err),
+            // The screen went away mid-recording (a monitor unplugged,
+            // say): keep what was recorded rather than throw it away.
+            Err(err) => {
+                eprintln!("Grab-it: recording ended early: {err}");
+                break;
+            }
+        };
         if let Some((previous, since)) = pending.take() {
             total += write_frame(&mut encoder, previous, grabbed_at - since)?;
         }

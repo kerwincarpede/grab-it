@@ -9,7 +9,10 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{Mutex, MutexGuard},
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use image::imageops::FilterType;
@@ -124,9 +127,19 @@ pub fn hex_colour(rgb: [u8; 3]) -> String {
     format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
 }
 
+/// What is on the card, numbered so that an action can say which card it
+/// was clicked on. Mirrors `QuickShown` in src/quick/api.ts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Shown {
+    /// Different for every item the card has shown.
+    pub generation: u64,
+    pub item: QuickItem,
+}
+
 #[derive(Default)]
 pub struct QuickState {
-    current: Mutex<Option<QuickItem>>,
+    current: Mutex<Option<Shown>>,
+    generations: AtomicU64,
     /// The newest capture, for the tray's "Show last capture".
     last_capture: Mutex<Option<QuickItem>>,
 }
@@ -145,18 +158,26 @@ pub fn show(app: &AppHandle, item: QuickItem) {
 
 /// Like [`show`], in a chosen corner: a recording keeps the card out of
 /// the area being recorded.
+///
+/// An existing card window is told about the item by event; a card still
+/// loading reads it with `quick_info` once it is up, and reads it again
+/// after subscribing, so an item set in between is not missed.
 pub fn show_in(app: &AppHandle, item: QuickItem, corner: Corner) {
     let state = app.state::<QuickState>();
     if matches!(item, QuickItem::Capture { .. }) {
         *lock(&state.last_capture) = Some(item.clone());
     }
-    *lock(&state.current) = Some(item.clone());
+    let shown = Shown {
+        generation: state.generations.fetch_add(1, Ordering::Relaxed) + 1,
+        item,
+    };
+    *lock(&state.current) = Some(shown.clone());
 
     if let Some(window) = app.get_webview_window(LABEL) {
         if let Some(position) = corner_position(app, corner) {
             let _ = window.set_position(position);
         }
-        let _ = window.emit(QUICK_CHANGED_EVENT, &item);
+        let _ = window.emit(QUICK_CHANGED_EVENT, &shown);
         let _ = window.show();
         return;
     }
@@ -187,11 +208,21 @@ pub fn show_last(app: &AppHandle) -> bool {
     true
 }
 
-/// Removes the card.
-pub fn close(app: &AppHandle) {
-    *lock(&app.state::<QuickState>().current) = None;
+/// Takes the card off screen, if it still shows item `generation`; a
+/// newer item stays. The window is hidden, not destroyed, and reused for
+/// the next item, so the next card appears without waiting for a webview.
+fn dismiss(app: &AppHandle, generation: u64) {
+    {
+        let state = app.state::<QuickState>();
+        let mut current = lock(&state.current);
+        match current.as_ref() {
+            Some(shown) if shown.generation == generation => *current = None,
+            // A newer item has taken the card over.
+            _ => return,
+        }
+    }
     if let Some(window) = app.get_webview_window(LABEL) {
-        let _ = window.destroy();
+        let _ = window.hide();
     }
 }
 
@@ -294,32 +325,21 @@ pub fn corner_clear_of(region: crate::capture::Rect, image_size: (u32, u32), sca
     }
 }
 
-/// The file the card's actions apply to: a capture or a finished recording.
-fn current_file(state: &QuickState) -> Result<PathBuf, String> {
-    match &*lock(&state.current) {
-        Some(QuickItem::Capture { path, .. } | QuickItem::Recorded { path, .. }) => {
-            Ok(path.clone())
-        }
-        _ => Err("there is no capture on the card".to_owned()),
-    }
-}
-
-fn current_capture(state: &QuickState) -> Result<PathBuf, String> {
-    match &*lock(&state.current) {
-        Some(QuickItem::Capture { path, .. }) => Ok(path.clone()),
-        _ => Err("there is no capture on the card".to_owned()),
-    }
-}
-
 #[tauri::command]
-pub fn quick_info(state: State<'_, QuickState>) -> Option<QuickItem> {
+pub fn quick_info(state: State<'_, QuickState>) -> Option<Shown> {
     lock(&state.current).clone()
 }
 
 /// The capture on the card as a small PNG.
 #[tauri::command(async)]
 pub fn quick_thumbnail(state: State<'_, QuickState>) -> Result<tauri::ipc::Response, String> {
-    let path = current_capture(&state)?;
+    let path = match &*lock(&state.current) {
+        Some(Shown {
+            item: QuickItem::Capture { path, .. },
+            ..
+        }) => path.clone(),
+        _ => return Err("there is no capture on the card".to_owned()),
+    };
     let image =
         image::open(&path).map_err(|err| format!("could not open {}: {err}", path.display()))?;
     let small = if image.width() > THUMB_MAX || image.height() > THUMB_MAX {
@@ -346,49 +366,56 @@ pub enum QuickAction {
     Close,
 }
 
+/// Runs a button of the card that showed item `generation`. When the card
+/// has moved on to a newer item the action is dropped: a click (or a
+/// dismiss timer) racing a new capture must never copy, delete or hide the
+/// newer one.
+///
 /// Async, so the windows some actions open are never created on the main
 /// thread inside a command, which deadlocks on Windows.
 #[tauri::command]
-pub async fn quick_action(action: QuickAction, app: AppHandle) -> Result<(), String> {
+pub async fn quick_action(
+    action: QuickAction,
+    generation: u64,
+    app: AppHandle,
+) -> Result<(), String> {
     let state = app.state::<QuickState>();
-    if action == QuickAction::Close {
-        close(&app);
-        return Ok(());
-    }
-    if matches!(action, QuickAction::Reveal | QuickAction::Delete) {
-        // These two also apply to a recording, which is a file but not a
-        // capture: it cannot be annotated, pinned or copied as an image.
-        let path = current_file(&state)?;
-        if action == QuickAction::Reveal {
-            return app
-                .opener()
-                .reveal_item_in_dir(&path)
-                .map_err(|err| format!("could not show the file in its folder: {err}"));
+    let item = match &*lock(&state.current) {
+        Some(shown) if shown.generation == generation => shown.item.clone(),
+        _ => return Ok(()),
+    };
+    match (action, &item) {
+        (QuickAction::Close, _) => dismiss(&app, generation),
+        // A recording is a file but not a capture: it can be shown in its
+        // folder and deleted, not annotated, pinned or copied as an image.
+        (
+            QuickAction::Reveal,
+            QuickItem::Capture { path, .. } | QuickItem::Recorded { path, .. },
+        ) => {
+            app.opener()
+                .reveal_item_in_dir(path)
+                .map_err(|err| format!("could not show the file in its folder: {err}"))?;
         }
-        if matches!(&*lock(&state.current), Some(QuickItem::Recorded { .. })) {
-            fs::remove_file(&path)
+        (QuickAction::Delete, QuickItem::Recorded { path, .. }) => {
+            fs::remove_file(path)
                 .map_err(|err| format!("could not delete the recording: {err}"))?;
-            close(&app);
-            return Ok(());
+            dismiss(&app, generation);
         }
-    }
-    let path = current_capture(&state)?;
-    match action {
-        QuickAction::Copy => copy_file(&app, &path)?,
-        QuickAction::Edit => {
-            windows::show_editor(&app, &path).map_err(|err| err.to_string())?;
-            close(&app);
-        }
-        QuickAction::Pin => {
-            pin::open(&app, &path, false)?;
-            close(&app);
-        }
-        QuickAction::Delete => {
-            delete_capture(&app, &path)?;
+        (QuickAction::Delete, QuickItem::Capture { path, .. }) => {
+            delete_capture(&app, path)?;
             *lock(&state.last_capture) = None;
-            close(&app);
+            dismiss(&app, generation);
         }
-        QuickAction::Reveal | QuickAction::Close => {}
+        (QuickAction::Copy, QuickItem::Capture { path, .. }) => copy_file(&app, path)?,
+        (QuickAction::Edit, QuickItem::Capture { path, .. }) => {
+            windows::show_editor(&app, path).map_err(|err| err.to_string())?;
+            dismiss(&app, generation);
+        }
+        (QuickAction::Pin, QuickItem::Capture { path, .. }) => {
+            pin::open(&app, path, false)?;
+            dismiss(&app, generation);
+        }
+        _ => return Err("there is no capture on the card".to_owned()),
     }
     Ok(())
 }

@@ -117,17 +117,21 @@ pub fn start(app: &AppHandle, action: Action) {
             }
             if action == Action::Colour {
                 match crate::portal::pick_colour().await {
-                    Ok(rgb) => finish_colour(&app, rgb),
+                    Ok(Some(rgb)) => finish_colour(&app, rgb),
+                    // The user cancelled the picker.
+                    Ok(None) => {}
                     Err(err) => report_failure(&app, &err),
                 }
                 return;
             }
             match crate::portal::screenshot(mode).await {
-                Ok(image) if action == Action::Text => {
+                Ok(Some(image)) if action == Action::Text => {
                     // OCR is slow: keep it off the async runtime's threads.
                     std::thread::spawn(move || finish_text(&app, &image));
                 }
-                Ok(image) => finish(&app, &image, mode, &Foreground::default()),
+                Ok(Some(image)) => finish(&app, &image, mode, &Foreground::default()),
+                // The user cancelled the desktop's picker.
+                Ok(None) => {}
                 Err(err) => report_failure(&app, &err),
             }
         });

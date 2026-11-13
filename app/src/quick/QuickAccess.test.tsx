@@ -4,7 +4,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import QuickAccess from "./QuickAccess";
-import { describeText, dismissAfter, type QuickItem } from "./api";
+import { describeText, dismissAfter, formatBytes, formatElapsed, type QuickItem } from "./api";
 
 const CAPTURE: QuickItem = {
   kind: "capture",
@@ -26,7 +26,7 @@ function mockBackend(item: QuickItem | null, options: Partial<Backend> = {}): Ba
     backend.calls.push({ cmd, payload });
     switch (cmd) {
       case "quick_info":
-        return item;
+        return item && { generation: 7, item };
       case "quick_thumbnail":
         return new ArrayBuffer(4);
       case "quick_action":
@@ -40,8 +40,11 @@ function mockBackend(item: QuickItem | null, options: Partial<Backend> = {}): Ba
   return backend;
 }
 
-const actions = (backend: Backend) =>
-  backend.calls.filter((call) => call.cmd === "quick_action").map((call) => (call.payload as { action: string }).action);
+const actionCalls = (backend: Backend) =>
+  backend.calls
+    .filter((call) => call.cmd === "quick_action")
+    .map((call) => call.payload as { action: string; generation: number });
+const actions = (backend: Backend) => actionCalls(backend).map((call) => call.action);
 
 afterEach(() => {
   vi.useRealTimers();
@@ -93,6 +96,32 @@ describe("QuickAccess", () => {
     await userEvent.click(button as HTMLElement);
 
     await waitFor(() => expect(actions(backend)).toEqual([action]));
+  });
+
+  it("says which card an action was clicked on", async () => {
+    const backend = mockBackend(CAPTURE);
+    render(<QuickAccess />);
+    await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(actionCalls(backend)).toEqual([{ action: "delete", generation: 7 }]));
+  });
+
+  it("runs Pin once however fast it is clicked", async () => {
+    const backend = mockBackend(CAPTURE);
+    render(<QuickAccess />);
+    const toolbar = await screen.findByRole("toolbar", { name: "Capture actions" });
+    const pin = Array.from(toolbar.querySelectorAll("button")).find((button) => button.textContent === "Pin");
+    await userEvent.dblClick(pin as HTMLElement);
+    await waitFor(() => expect(actions(backend)).toEqual(["pin"]));
+  });
+
+  it("lets Copy be repeated", async () => {
+    const backend = mockBackend({ ...CAPTURE, copied: false });
+    render(<QuickAccess />);
+    const toolbar = await screen.findByRole("toolbar", { name: "Capture actions" });
+    const copy = toolbar.querySelector("button") as HTMLElement;
+    await userEvent.click(copy);
+    await userEvent.click(copy);
+    await waitFor(() => expect(actions(backend)).toEqual(["copy", "copy"]));
   });
 
   it("confirms a copy made from the card", async () => {
@@ -165,6 +194,47 @@ describe("QuickAccess", () => {
     expect(actions(backend)).toEqual(["close"]);
   });
 
+  it("clears itself once dismissed, ready to be reused", async () => {
+    const backend = mockBackend({ kind: "colour", hex: "#EF4444", rgb: "rgb(239, 68, 68)" });
+    render(<QuickAccess />);
+    await screen.findByText("#EF4444");
+
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    await waitFor(() => expect(screen.queryByText("#EF4444")).not.toBeInTheDocument());
+    expect(actions(backend)).toEqual(["close"]);
+  });
+
+  it("shows a recording's clock and stops it", async () => {
+    const backend = mockBackend({ kind: "recording", startedAt: Date.now() - 65_000, maxSeconds: 60 });
+    render(<QuickAccess />);
+    expect(await screen.findByText("Recording")).toBeInTheDocument();
+    expect(screen.getByText(/^1:0\d of 1:00$/)).toBeInTheDocument();
+    // Nothing dismisses a recording but Stop.
+    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(await screen.findByText("Saving…")).toBeInTheDocument();
+    expect(backend.calls.map((call) => call.cmd)).toContain("record_stop");
+  });
+
+  it("shows a saved recording with its length and size", async () => {
+    const backend = mockBackend({
+      kind: "recorded",
+      path: "/shots/recordings/Grab-it 2026-03-07 09-05-01.gif",
+      fileName: "Grab-it 2026-03-07 09-05-01.gif",
+      durationMs: 6100,
+      bytes: 720_815,
+    });
+    render(<QuickAccess />);
+    expect(await screen.findByText("GIF saved")).toBeInTheDocument();
+    expect(screen.getByText("0:06 · 704 KB")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show in folder" }));
+    await waitFor(() => expect(actions(backend)).toEqual(["reveal"]));
+  });
+
   it("waits for as long as work is under way", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const backend = mockBackend({ kind: "working", message: "Reading text…" });
@@ -183,6 +253,16 @@ describe("quick helpers", () => {
     expect(dismissAfter({ kind: "text", text: "x" })).toBe(5000);
     expect(dismissAfter({ kind: "working", message: "…" })).toBeNull();
     expect(dismissAfter({ kind: "error", message: "x" })).toBe(10000);
+  });
+
+  it("formats a clock and a file size", () => {
+    expect(formatElapsed(0)).toBe("0:00");
+    expect(formatElapsed(59_999)).toBe("0:59");
+    expect(formatElapsed(61_000)).toBe("1:01");
+    expect(formatElapsed(-5)).toBe("0:00");
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(2048)).toBe("2 KB");
+    expect(formatBytes(2_816_389)).toBe("2.7 MB");
   });
 
   it("counts lines and characters", () => {
