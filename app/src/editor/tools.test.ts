@@ -6,16 +6,22 @@ import {
   anchorsFor,
   CORNER_ANCHORS,
   beginShape,
+  contrastColor,
   cropFromDrag,
   deleteShape,
   dragShape,
+  duplicateShape,
   finishShape,
   HIGHLIGHTER_WIDTH,
   moveShape,
+  nudgeDelta,
   replaceShape,
   restyleShape,
+  spotlightDim,
   stepNumbers,
+  stepStrokeWidth,
   transformShape,
+  withAlpha,
 } from "./tools";
 
 const style: Style = { color: "#e5484d", strokeWidth: 4 };
@@ -39,7 +45,7 @@ describe("drawing tools", () => {
     });
   });
 
-  it.each(["rect", "ellipse", "blur"] as const)("normalises a %s dragged up and left", (tool) => {
+  it.each(["rect", "ellipse", "blur", "spotlight"] as const)("normalises a %s dragged up and left", (tool) => {
     const shape = draw(tool, [100, 80], [40, 30]);
     expect(shape).toMatchObject({ type: tool, x: 40, y: 30, width: 60, height: 50 });
   });
@@ -52,6 +58,20 @@ describe("drawing tools", () => {
     const blur = draw("blur", [0, 0], [40, 40]);
     expect(blur).toMatchObject({ type: "blur", pixelSize: expect.any(Number) });
     expect(blur).not.toHaveProperty("color");
+  });
+
+  it("gives a spotlight only its area", () => {
+    expect(draw("spotlight", [10, 10], [60, 40])).toEqual({ id: "id", type: "spotlight", x: 10, y: 10, width: 50, height: 30 });
+    expect(draw("spotlight", [10, 10], [11, 11])).toBeNull();
+  });
+
+  it("writes fill and blur mode only when they are on", () => {
+    expect(draw("rect", [0, 0], [10, 10])).not.toHaveProperty("fill");
+    expect(draw("blur", [0, 0], [10, 10])).not.toHaveProperty("mode");
+    const at = { x: 0, y: 0 };
+    expect(beginShape("ellipse", at, { ...style, fill: true }, "e")).toMatchObject({ fill: true });
+    expect(beginShape("blur", at, { ...style, blurMode: "blur" }, "b")).toMatchObject({ mode: "blur" });
+    expect(beginShape("blur", at, { ...style, blurMode: "pixelate" }, "b")).not.toHaveProperty("mode");
   });
 
   it("records every point of a freehand path", () => {
@@ -165,6 +185,114 @@ describe("move and resize", () => {
     expect(restyleShape(rect, { color: "blue", strokeWidth: 10 })).toMatchObject({ color: "blue", strokeWidth: 10 });
     const blur: Shape = { id: "b", type: "blur", x: 0, y: 0, width: 5, height: 5, pixelSize: 8 };
     expect(restyleShape(blur, { color: "blue" })).toBe(blur);
+  });
+});
+
+describe("style options", () => {
+  const rect: Shape = { id: "r", type: "rect", color: "#e5484d", strokeWidth: 2, x: 0, y: 0, width: 5, height: 5 };
+  const text: Shape = { id: "t", type: "text", color: "#e5484d", x: 0, y: 0, text: "Hi", fontSize: 20 };
+  const blur: Shape = { id: "b", type: "blur", x: 0, y: 0, width: 5, height: 5, pixelSize: 8 };
+  const spotlight: Shape = { id: "s", type: "spotlight", x: 0, y: 0, width: 5, height: 5 };
+
+  it("toggles fill on boxes and background on text only", () => {
+    expect(restyleShape(rect, { fill: true })).toMatchObject({ fill: true });
+    expect(restyleShape({ ...rect, fill: true }, { fill: false })).toMatchObject({ fill: false });
+    expect(restyleShape(text, { background: true })).toMatchObject({ background: true });
+    expect(restyleShape(text, { fill: true })).toBe(text);
+    expect(restyleShape(rect, { background: true })).toBe(rect);
+  });
+
+  it("switches the blur mode, leaving an unchanged blur alone", () => {
+    expect(restyleShape(blur, { blurMode: "blur" })).toMatchObject({ mode: "blur" });
+    expect(restyleShape(blur, { blurMode: "pixelate" })).toBe(blur);
+    expect(restyleShape({ ...blur, mode: "blur" }, { blurMode: "pixelate" })).toMatchObject({ mode: "pixelate" });
+  });
+
+  it("never restyles a spotlight", () => {
+    expect(restyleShape(spotlight, { color: "blue", strokeWidth: 10, fill: true })).toBe(spotlight);
+  });
+
+  it("steps the stroke width through the presets and stops at the ends", () => {
+    expect(stepStrokeWidth(4, 1)).toBe(6);
+    expect(stepStrokeWidth(4, -1)).toBe(2);
+    expect(stepStrokeWidth(2, -1)).toBe(2);
+    expect(stepStrokeWidth(10, 1)).toBe(10);
+    // A width between presets moves to the nearest one in that direction.
+    expect(stepStrokeWidth(5, 1)).toBe(6);
+    expect(stepStrokeWidth(5, -1)).toBe(4);
+  });
+
+  it("fades hex colours and picks readable text for a background", () => {
+    expect(withAlpha("#ff0000", 0.25)).toBe("rgba(255, 0, 0, 0.25)");
+    expect(withAlpha("#0f0", 0.5)).toBe("rgba(0, 255, 0, 0.5)");
+    expect(withAlpha("tomato", 0.25)).toBe("tomato");
+    expect(contrastColor("#ffffff")).toBe("#1f2328");
+    expect(contrastColor("#f5a524")).toBe("#1f2328");
+    expect(contrastColor("#1f2328")).toBe("#ffffff");
+    expect(contrastColor("#e5484d")).toBe("#ffffff");
+  });
+});
+
+describe("duplicate and nudge", () => {
+  it("duplicates a shape 12px down and right under a new id", () => {
+    const rect: Shape = { id: "r", type: "rect", color: "red", strokeWidth: 2, x: 10, y: 10, width: 20, height: 40, fill: true };
+    expect(duplicateShape(rect, "copy")).toEqual({ ...rect, id: "copy", x: 22, y: 22 });
+    const arrow: Shape = { id: "a", type: "arrow", color: "red", strokeWidth: 2, points: [10, 10, 20, 30] };
+    expect(duplicateShape(arrow, "copy")).toEqual({ ...arrow, id: "copy", points: [22, 22, 32, 42] });
+    expect(duplicateShape(arrow).id).not.toBe("a");
+  });
+
+  it("nudges by 1px, or 10px with Shift", () => {
+    expect(nudgeDelta("ArrowLeft", false)).toEqual({ x: -1, y: 0 });
+    expect(nudgeDelta("ArrowRight", true)).toEqual({ x: 10, y: 0 });
+    expect(nudgeDelta("ArrowUp", false)).toEqual({ x: 0, y: -1 });
+    expect(nudgeDelta("ArrowDown", true)).toEqual({ x: 0, y: 10 });
+    expect(nudgeDelta("a", false)).toBeNull();
+  });
+
+  it("moves a spotlight like any box", () => {
+    const spotlight: Shape = { id: "s", type: "spotlight", x: 10, y: 10, width: 20, height: 40 };
+    expect(moveShape(spotlight, 1, -1)).toEqual({ ...spotlight, x: 11, y: 9 });
+    expect(transformShape(spotlight, { x: 0, y: 0, scaleX: 2, scaleY: 0.5 })).toMatchObject({ width: 40, height: 20 });
+  });
+});
+
+describe("spotlight", () => {
+  const bounds = { x: 0, y: 0, width: 100, height: 80 };
+  const area = (rects: { width: number; height: number }[]) => rects.reduce((sum, rect) => sum + rect.width * rect.height, 0);
+
+  it("dims nothing without a spotlight", () => {
+    expect(spotlightDim(bounds, [])).toEqual([]);
+    // One wholly outside the capture lights nothing, so nothing is dimmed either.
+    expect(spotlightDim(bounds, [{ x: 200, y: 200, width: 10, height: 10 }])).toEqual([]);
+  });
+
+  it("dims everything around one spotlight", () => {
+    expect(spotlightDim(bounds, [{ x: 20, y: 10, width: 30, height: 40 }])).toEqual([
+      { x: 0, y: 0, width: 100, height: 10 },
+      { x: 0, y: 10, width: 20, height: 40 },
+      { x: 50, y: 10, width: 50, height: 40 },
+      { x: 0, y: 50, width: 100, height: 30 },
+    ]);
+  });
+
+  it("keeps the union of overlapping spotlights bright, without overlapping shade", () => {
+    const holes = [
+      { x: 10, y: 10, width: 40, height: 40 },
+      { x: 30, y: 30, width: 40, height: 40 },
+    ];
+    const dim = spotlightDim(bounds, holes);
+    // Union: 1600 + 1600 - the 20x20 overlap.
+    expect(area(dim)).toBe(100 * 80 - 2800);
+    const inside = (rect: (typeof dim)[number], x: number, y: number) => x > rect.x && x < rect.x + rect.width && y > rect.y && y < rect.y + rect.height;
+    expect(dim.some((rect) => inside(rect, 40, 40))).toBe(false);
+    expect(dim.some((rect) => inside(rect, 60, 20))).toBe(true);
+  });
+
+  it("clips a spotlight to the capture and accepts one still being dragged", () => {
+    // Dragged up and left from 30, 20 past the corner.
+    const dim = spotlightDim(bounds, [{ x: 30, y: 20, width: -50, height: -40 }]);
+    expect(area(dim)).toBe(100 * 80 - 30 * 20);
   });
 });
 

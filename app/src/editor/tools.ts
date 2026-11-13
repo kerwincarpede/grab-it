@@ -1,5 +1,7 @@
-import type { Annotations, Point, Rect, Shape, Style, Tool } from "./model";
+import { STROKE_WIDTHS, type Annotations, type Point, type Rect, type Shape, type Style, type Tool } from "./model";
 
+/** How far a duplicate lands from its original, in capture pixels. */
+export const DUPLICATE_OFFSET = 12;
 /** Shapes smaller than this many pixels are treated as a stray click. */
 export const MIN_SIZE = 3;
 export const HIGHLIGHTER_WIDTH = 18;
@@ -33,9 +35,21 @@ export function beginShape(tool: Tool, at: Point, style: Style, id = newId()): S
       return { id, type: "highlighter", color, strokeWidth: Math.max(HIGHLIGHTER_WIDTH, strokeWidth * 3), points: [at.x, at.y] };
     case "rect":
     case "ellipse":
-      return { id, type: tool, color, strokeWidth, x: at.x, y: at.y, width: 0, height: 0 };
+      // Optional fields are written only when set, so plain shapes match old sidecars.
+      return { id, type: tool, color, strokeWidth, x: at.x, y: at.y, width: 0, height: 0, ...(style.fill ? { fill: true } : {}) };
     case "blur":
-      return { id, type: "blur", x: at.x, y: at.y, width: 0, height: 0, pixelSize: DEFAULT_PIXEL_SIZE };
+      return {
+        id,
+        type: "blur",
+        x: at.x,
+        y: at.y,
+        width: 0,
+        height: 0,
+        pixelSize: DEFAULT_PIXEL_SIZE,
+        ...(style.blurMode === "blur" ? { mode: "blur" as const } : {}),
+      };
+    case "spotlight":
+      return { id, type: "spotlight", x: at.x, y: at.y, width: 0, height: 0 };
     case "step":
       return { id, type: "step", color, x: at.x, y: at.y, radius: 12 + strokeWidth * 2 };
     default:
@@ -55,6 +69,7 @@ export function dragShape(shape: Shape, to: Point): Shape {
     case "rect":
     case "ellipse":
     case "blur":
+    case "spotlight":
       return { ...shape, width: to.x - shape.x, height: to.y - shape.y };
     default:
       return shape;
@@ -75,7 +90,8 @@ export function finishShape(shape: Shape): Shape | null {
       return shape.points.length === 2 ? { ...shape, points: [...shape.points, shape.points[0] + 0.5, shape.points[1]] } : shape;
     case "rect":
     case "ellipse":
-    case "blur": {
+    case "blur":
+    case "spotlight": {
       const rect = normalizeRect(shape);
       return rect.width < MIN_SIZE || rect.height < MIN_SIZE ? null : { ...shape, ...rect };
     }
@@ -144,6 +160,7 @@ export function transformShape(shape: Shape, t: NodeTransform): Shape {
     case "rect":
     case "ellipse":
     case "blur":
+    case "spotlight":
       return {
         ...shape,
         ...normalizeRect({ x: t.x, y: t.y, width: shape.width * t.scaleX, height: shape.height * t.scaleY }),
@@ -170,14 +187,121 @@ export function stepNumbers(shapes: Shape[]): Map<string, number> {
   return numbers;
 }
 
-/** Recolours a shape; blur has no colour. Stroke width applies to stroked shapes. */
-export function restyleShape(shape: Shape, style: Partial<{ color: string; strokeWidth: number }>): Shape {
-  if (shape.type === "blur") return shape;
-  const next = { ...shape, ...(style.color ? { color: style.color } : {}) };
+/**
+ * Applies the parts of `style` a shape has: colour (not blur or spotlight),
+ * stroke width on stroked shapes, fill on boxes, background on text and the
+ * blur mode. A style that changes nothing returns the same shape.
+ */
+export function restyleShape(shape: Shape, style: Partial<Style>): Shape {
+  if (shape.type === "spotlight") return shape;
+  if (shape.type === "blur") {
+    if (!style.blurMode || style.blurMode === (shape.mode ?? "pixelate")) return shape;
+    return { ...shape, mode: style.blurMode };
+  }
+  let next: Shape = style.color ? { ...shape, color: style.color } : shape;
   if (style.strokeWidth && "strokeWidth" in next && next.type !== "highlighter") {
-    return { ...next, strokeWidth: style.strokeWidth };
+    next = { ...next, strokeWidth: style.strokeWidth };
+  }
+  if (style.fill !== undefined && (next.type === "rect" || next.type === "ellipse")) {
+    next = { ...next, fill: style.fill };
+  }
+  if (style.background !== undefined && next.type === "text") {
+    next = { ...next, background: style.background };
   }
   return next;
+}
+
+/** A copy with a new id, offset so it does not hide the original. */
+export function duplicateShape(shape: Shape, id = newId(), offset = DUPLICATE_OFFSET): Shape {
+  return { ...moveShape(shape, offset, offset), id };
+}
+
+/** The move an arrow key makes: 1px, or 10px with Shift. Null for any other key. */
+export function nudgeDelta(key: string, shift: boolean): Point | null {
+  const step = shift ? 10 : 1;
+  switch (key) {
+    case "ArrowLeft":
+      return { x: -step, y: 0 };
+    case "ArrowRight":
+      return { x: step, y: 0 };
+    case "ArrowUp":
+      return { x: 0, y: -step };
+    case "ArrowDown":
+      return { x: 0, y: step };
+    default:
+      return null;
+  }
+}
+
+/** The next stroke width down (-1) or up (1) the presets, stopping at the ends. */
+export function stepStrokeWidth(current: number, direction: -1 | 1): number {
+  if (direction > 0) return STROKE_WIDTHS.find((width) => width > current) ?? current;
+  return [...STROKE_WIDTHS].reverse().find((width) => width < current) ?? current;
+}
+
+/**
+ * The area to dim around spotlights: `bounds` minus every hole, as
+ * rectangles that do not overlap (so their shade never doubles up). Empty
+ * when no hole lies inside the bounds, so a capture without spotlights is
+ * not dimmed.
+ */
+export function spotlightDim(bounds: Rect, holes: Rect[]): Rect[] {
+  const right = bounds.x + bounds.width;
+  const bottom = bounds.y + bounds.height;
+  const lit = holes
+    .map(normalizeRect)
+    .map((hole) => {
+      const x = Math.max(bounds.x, hole.x);
+      const y = Math.max(bounds.y, hole.y);
+      return { x, y, width: Math.min(right, hole.x + hole.width) - x, height: Math.min(bottom, hole.y + hole.height) - y };
+    })
+    .filter((hole) => hole.width > 0 && hole.height > 0);
+  if (lit.length === 0) return [];
+  // Cut the bounds along every hole edge; each cell is then wholly lit or wholly dim.
+  const cuts = (values: number[]) => [...new Set(values)].sort((a, b) => a - b);
+  const xs = cuts([bounds.x, right, ...lit.flatMap((hole) => [hole.x, hole.x + hole.width])]);
+  const ys = cuts([bounds.y, bottom, ...lit.flatMap((hole) => [hole.y, hole.y + hole.height])]);
+  const dim: Rect[] = [];
+  for (let row = 0; row < ys.length - 1; row += 1) {
+    const cy = (ys[row] + ys[row + 1]) / 2;
+    let run: Rect | null = null;
+    for (let col = 0; col < xs.length - 1; col += 1) {
+      const cx = (xs[col] + xs[col + 1]) / 2;
+      if (lit.some((hole) => cx > hole.x && cx < hole.x + hole.width && cy > hole.y && cy < hole.y + hole.height)) {
+        run = null;
+      } else if (run) {
+        // Join neighbouring dim cells in a row.
+        run.width = xs[col + 1] - run.x;
+      } else {
+        run = { x: xs[col], y: ys[row], width: xs[col + 1] - xs[col], height: ys[row + 1] - ys[row] };
+        dim.push(run);
+      }
+    }
+  }
+  return dim;
+}
+
+/** `#rgb` or `#rrggbb` as 0-255 channels; null for anything else. */
+function hexChannels(color: string): [number, number, number] | null {
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim())?.[1];
+  if (!hex) return null;
+  const full = hex.length === 3 ? [...hex].map((digit) => digit + digit).join("") : hex;
+  return [0, 2, 4].map((at) => parseInt(full.slice(at, at + 2), 16)) as [number, number, number];
+}
+
+/** A hex colour at `alpha`; a colour that is not hex is returned unchanged. */
+export function withAlpha(color: string, alpha: number): string {
+  const channels = hexChannels(color);
+  return channels ? `rgba(${channels.join(", ")}, ${alpha})` : color;
+}
+
+/** White or near-black, whichever reads better on `color`. */
+export function contrastColor(color: string): string {
+  const channels = hexChannels(color);
+  if (!channels) return "#ffffff";
+  const [r, g, b] = channels;
+  // Perceived brightness (ITU-R BT.601).
+  return (r * 299 + g * 587 + b * 114) / 1000 > 160 ? "#1f2328" : "#ffffff";
 }
 
 export function addShape(doc: Annotations, shape: Shape): Annotations {

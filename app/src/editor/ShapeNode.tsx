@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 import Konva from "konva";
-import { Arrow, Circle, Ellipse, Group, Image as KonvaImage, Line, Rect, Text } from "react-konva";
-import type { BlurShape, Shape } from "./model";
-import { normalizeRect, type NodeTransform } from "./tools";
+import { Arrow, Circle, Ellipse, Group, Image as KonvaImage, Label, Line, Rect, Shape as KonvaShape, Tag, Text } from "react-konva";
+import { FILL_OPACITY, SPOTLIGHT_DIM, type BlurShape, type Rect as Box, type Shape } from "./model";
+import { contrastColor, normalizeRect, withAlpha, type NodeTransform } from "./tools";
 
 interface ShapeNodeProps {
   shape: Shape;
@@ -31,12 +31,13 @@ function takeTransform(node: Konva.Node, shape: Shape): NodeTransform {
 function BlurNode({ shape, image, common }: { shape: BlurShape; image: HTMLImageElement | null; common: object }) {
   const ref = useRef<Konva.Image>(null);
   const rect = normalizeRect(shape);
+  const smooth = shape.mode === "blur";
   useEffect(() => {
     const node = ref.current;
     if (!node || !image || rect.width < 1 || rect.height < 1) return;
     node.cache({ pixelRatio: 1 });
     node.getLayer()?.batchDraw();
-  }, [image, rect.x, rect.y, rect.width, rect.height, shape.pixelSize]);
+  }, [image, rect.x, rect.y, rect.width, rect.height, shape.pixelSize, smooth]);
   if (!image) return null;
   return (
     <KonvaImage
@@ -48,8 +49,29 @@ function BlurNode({ shape, image, common }: { shape: BlurShape; image: HTMLImage
       width={rect.width}
       height={rect.height}
       crop={rect}
-      filters={[Konva.Filters.Pixelate]}
+      filters={[smooth ? Konva.Filters.Blur : Konva.Filters.Pixelate]}
       pixelSize={shape.pixelSize}
+      blurRadius={shape.pixelSize}
+    />
+  );
+}
+
+/**
+ * The shade outside the spotlights. `dim` holds rectangles that do not
+ * overlap, filled as one path so shared edges leave no seams.
+ */
+export function SpotlightDim({ dim }: { dim: Box[] }) {
+  if (dim.length === 0) return null;
+  return (
+    <KonvaShape
+      name="spotlight-dim"
+      listening={false}
+      fill={`rgba(0, 0, 0, ${SPOTLIGHT_DIM})`}
+      sceneFunc={(ctx, node) => {
+        ctx.beginPath();
+        for (const rect of dim) ctx.rect(rect.x, rect.y, rect.width, rect.height);
+        ctx.fillShape(node);
+      }}
     />
   );
 }
@@ -116,7 +138,15 @@ export default function ShapeNode({ shape, image, step, editable, onSelect, onCh
       );
     case "rect": {
       const rect = normalizeRect(shape);
-      return <Rect {...common} {...rect} stroke={shape.color} strokeWidth={shape.strokeWidth} />;
+      return (
+        <Rect
+          {...common}
+          {...rect}
+          stroke={shape.color}
+          strokeWidth={shape.strokeWidth}
+          fill={shape.fill ? withAlpha(shape.color, FILL_OPACITY) : undefined}
+        />
+      );
     }
     case "ellipse": {
       const rect = normalizeRect(shape);
@@ -132,12 +162,27 @@ export default function ShapeNode({ shape, image, step, editable, onSelect, onCh
           offsetY={-rect.height / 2}
           stroke={shape.color}
           strokeWidth={shape.strokeWidth}
+          fill={shape.fill ? withAlpha(shape.color, FILL_OPACITY) : undefined}
         />
       );
     }
     case "blur":
       return <BlurNode shape={shape} image={image} common={common} />;
+    case "spotlight":
+      // Draws nothing itself (SpotlightDim shades around it); the clear fill takes clicks.
+      return <Rect {...common} {...normalizeRect(shape)} fill="transparent" />;
     case "text":
+      if (shape.background) {
+        const padding = shape.fontSize * 0.35;
+        // The label sizes its pill to the text. Offset by the padding, so x, y
+        // stay the text's corner and toggling the background does not move it.
+        return (
+          <Label {...common} x={shape.x} y={shape.y} offsetX={padding} offsetY={padding} onDblClick={() => onEditText(shape.id)}>
+            <Tag fill={shape.color} cornerRadius={shape.fontSize * 0.4} />
+            <Text text={shape.text} fontSize={shape.fontSize} fontStyle="bold" fill={contrastColor(shape.color)} padding={padding} />
+          </Label>
+        );
+      }
       return (
         <Text
           {...common}
