@@ -7,7 +7,7 @@ use std::{
 
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-use crate::{actions, cli::OpenTarget, editor::EditorState, hotkeys};
+use crate::{actions, cli::OpenTarget, editor::EditorState, hotkeys, pin, quick};
 
 pub const SETTINGS_LABEL: &str = "settings";
 pub const LIBRARY_LABEL: &str = "library";
@@ -23,13 +23,53 @@ pub fn open(app: &AppHandle, target: OpenTarget) -> tauri::Result<()> {
             actions::start(app, actions::Action::Region);
             Ok(())
         }
-        OpenTarget::Editor(path) => match std::fs::canonicalize(&path) {
-            Ok(path) if path.is_file() => show_editor(app, &path),
-            _ => {
-                eprintln!("Grab-it: no capture at {}", path.display());
-                Ok(())
-            }
+        OpenTarget::Text => {
+            actions::start(app, actions::Action::Text);
+            Ok(())
+        }
+        OpenTarget::Colour => {
+            actions::start(app, actions::Action::Colour);
+            Ok(())
+        }
+        OpenTarget::Repeat => {
+            actions::start(app, actions::Action::Repeat);
+            Ok(())
+        }
+        OpenTarget::Record => {
+            actions::start(app, actions::Action::Record);
+            Ok(())
+        }
+        OpenTarget::Editor(path) => match existing_file(&path) {
+            Some(path) => show_editor(app, &path),
+            None => Ok(()),
         },
+        OpenTarget::Quick(path) => {
+            if let Some(path) = existing_file(&path) {
+                let size = image::image_dimensions(&path).unwrap_or_default();
+                quick::show(app, quick::QuickItem::capture(&path, size, false));
+            }
+            Ok(())
+        }
+        OpenTarget::Pin(path) => {
+            if let Some(path) = existing_file(&path)
+                && let Err(err) = pin::open(app, &path, false)
+            {
+                eprintln!("Grab-it: {err}");
+            }
+            Ok(())
+        }
+    }
+}
+
+/// The full path of a file named on the command line, or `None` (after
+/// saying so) when there is no such file.
+fn existing_file(path: &Path) -> Option<std::path::PathBuf> {
+    match std::fs::canonicalize(path) {
+        Ok(path) if path.is_file() => Some(path),
+        _ => {
+            eprintln!("Grab-it: no capture at {}", path.display());
+            None
+        }
     }
 }
 
@@ -96,8 +136,8 @@ pub fn show_settings(app: &AppHandle) -> tauri::Result<()> {
         WebviewUrl::App("index.html#/settings".into()),
     )
     .title("Grab-it Settings")
-    .inner_size(600.0, 520.0)
-    .min_inner_size(460.0, 440.0)
+    .inner_size(640.0, 720.0)
+    .min_inner_size(480.0, 480.0)
     .center()
     .build()?;
     let handle = app.clone();

@@ -1,8 +1,9 @@
-//! Global hotkeys for the three capture modes.
+//! Global hotkeys for the captures and the two capture tools.
 //!
 //! The defaults are PrintScreen, Alt+PrintScreen and Ctrl+PrintScreen for
-//! region, window and screen; on macOS Cmd+Shift+2, Cmd+Shift+W and
-//! Cmd+Shift+F. On Wayland they are bound through the GlobalShortcuts portal
+//! region, window and screen, Shift+PrintScreen to capture text and
+//! Ctrl+Shift+PrintScreen to pick a colour; on macOS Cmd+Shift+2,
+//! Cmd+Shift+W, Cmd+Shift+F, Cmd+Shift+1 and Cmd+Shift+9. On Wayland they are bound through the GlobalShortcuts portal
 //! (see `portal.rs`), since apps cannot grab keys there themselves.
 
 use std::{
@@ -18,8 +19,7 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use crate::{
-    actions,
-    capture::CaptureMode,
+    actions::{self, Action},
     commands::{SettingsState, lock},
 };
 
@@ -29,6 +29,10 @@ pub struct Hotkeys {
     pub region: String,
     pub window: String,
     pub screen: String,
+    /// Reads the text in a region and copies it.
+    pub text: String,
+    /// Copies the colour under the pointer.
+    pub colour: String,
 }
 
 impl Default for Hotkeys {
@@ -38,23 +42,30 @@ impl Default for Hotkeys {
                 region: "Cmd+Shift+2".into(),
                 window: "Cmd+Shift+W".into(),
                 screen: "Cmd+Shift+F".into(),
+                text: "Cmd+Shift+1".into(),
+                colour: "Cmd+Shift+9".into(),
             }
         } else {
             Self {
                 region: "PrintScreen".into(),
                 window: "Alt+PrintScreen".into(),
                 screen: "Ctrl+PrintScreen".into(),
+                text: "Shift+PrintScreen".into(),
+                colour: "Ctrl+Shift+PrintScreen".into(),
             }
         }
     }
 }
 
 impl Hotkeys {
-    fn entries(&self) -> [(CaptureMode, &'static str, &str); 3] {
+    /// Each hotkey with what it starts and its name in Settings.
+    pub fn entries(&self) -> [(Action, &'static str, &str); 5] {
         [
-            (CaptureMode::Region, "Region", self.region.as_str()),
-            (CaptureMode::Window, "Window", self.window.as_str()),
-            (CaptureMode::Screen, "Screen", self.screen.as_str()),
+            (Action::Region, "Region", self.region.as_str()),
+            (Action::Window, "Window", self.window.as_str()),
+            (Action::Screen, "Screen", self.screen.as_str()),
+            (Action::Text, "Capture text", self.text.as_str()),
+            (Action::Colour, "Pick a colour", self.colour.as_str()),
         ]
     }
 
@@ -64,6 +75,8 @@ impl Hotkeys {
             region: self.region.trim().to_owned(),
             window: self.window.trim().to_owned(),
             screen: self.screen.trim().to_owned(),
+            text: self.text.trim().to_owned(),
+            colour: self.colour.trim().to_owned(),
         };
         let mut seen: Vec<(Shortcut, &str)> = Vec::new();
         for (_, name, accelerator) in trimmed.entries() {
@@ -81,17 +94,17 @@ impl Hotkeys {
     }
 }
 
-/// The registered hotkeys and the capture each one starts.
+/// The registered hotkeys and what each one starts.
 #[derive(Default)]
 pub struct HotkeyState {
-    bound: Mutex<Vec<(Shortcut, CaptureMode)>>,
+    bound: Mutex<Vec<(Shortcut, Action)>>,
     /// Set while Settings records a hotkey, so pressing a current hotkey
     /// there records it instead of starting a capture.
     paused: AtomicBool,
 }
 
 impl HotkeyState {
-    fn bound(&self) -> std::sync::MutexGuard<'_, Vec<(Shortcut, CaptureMode)>> {
+    fn bound(&self) -> std::sync::MutexGuard<'_, Vec<(Shortcut, Action)>> {
         self.bound.lock().unwrap_or_else(|p| p.into_inner())
     }
 }
@@ -160,15 +173,15 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
             if event.state != ShortcutState::Pressed || is_paused(app) {
                 return;
             }
-            let mode = app.try_state::<HotkeyState>().and_then(|state| {
+            let action = app.try_state::<HotkeyState>().and_then(|state| {
                 state
                     .bound()
                     .iter()
                     .find(|(s, _)| s == shortcut)
-                    .map(|(_, mode)| *mode)
+                    .map(|(_, action)| *action)
             });
-            if let Some(mode) = mode {
-                actions::start(app, actions::Action::from_mode(mode));
+            if let Some(action) = action {
+                actions::start(app, action);
             }
         })
         .build()
@@ -191,7 +204,7 @@ pub fn apply(app: &AppHandle, hotkeys: &Hotkeys) -> Vec<String> {
     }
     let mut problems = Vec::new();
     let mut bound = Vec::new();
-    for (mode, name, accelerator) in hotkeys.entries() {
+    for (action, name, accelerator) in hotkeys.entries() {
         let shortcut = match Shortcut::from_str(accelerator) {
             Ok(shortcut) => shortcut,
             Err(err) => {
@@ -200,7 +213,7 @@ pub fn apply(app: &AppHandle, hotkeys: &Hotkeys) -> Vec<String> {
             }
         };
         match shortcuts.register(shortcut) {
-            Ok(()) => bound.push((shortcut, mode)),
+            Ok(()) => bound.push((shortcut, action)),
             Err(err) => problems.push(format!(
                 "{name} hotkey `{accelerator}` could not be registered: {err}"
             )),
@@ -221,9 +234,9 @@ pub fn start(app: &AppHandle, hotkeys: &Hotkeys) {
         let handle = app.clone();
         let hotkeys = hotkeys.clone();
         tauri::async_runtime::spawn(async move {
-            let on_press = move |mode: CaptureMode| {
+            let on_press = move |action: Action| {
                 if !is_paused(&handle) {
-                    actions::start(&handle, actions::Action::from_mode(mode));
+                    actions::start(&handle, action);
                 }
             };
             if let Err(err) = crate::portal::run_global_shortcuts(hotkeys, on_press).await {
@@ -252,6 +265,8 @@ mod tests {
             assert_eq!(defaults.region, "PrintScreen");
             assert_eq!(defaults.window, "Alt+PrintScreen");
             assert_eq!(defaults.screen, "Ctrl+PrintScreen");
+            assert_eq!(defaults.text, "Shift+PrintScreen");
+            assert_eq!(defaults.colour, "Ctrl+Shift+PrintScreen");
         }
     }
 
@@ -282,10 +297,20 @@ mod tests {
             region: "Ctrl+Shift+S".into(),
             window: "shift+ctrl+s".into(),
             screen: "PrintScreen".into(),
+            ..Hotkeys::default()
         };
         assert_eq!(
             duplicate.validated(),
             Err("Window and Region use the same hotkey.".into())
+        );
+
+        let tool_clash = Hotkeys {
+            colour: Hotkeys::default().text,
+            ..Hotkeys::default()
+        };
+        assert_eq!(
+            tool_clash.validated(),
+            Err("Pick a colour and Capture text use the same hotkey.".into())
         );
     }
 }

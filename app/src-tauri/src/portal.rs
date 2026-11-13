@@ -10,7 +10,7 @@ use ashpd::desktop::{
 use futures_util::StreamExt;
 use image::RgbaImage;
 
-use crate::{capture::CaptureMode, hotkeys::Hotkeys};
+use crate::{actions::Action, capture::CaptureMode, hotkeys::Hotkeys};
 
 /// True when running in a Wayland session.
 pub fn is_wayland() -> bool {
@@ -48,6 +48,21 @@ pub async fn screenshot(mode: CaptureMode) -> Result<RgbaImage, String> {
     Ok(image)
 }
 
+/// Asks the desktop's colour picker for a pixel's colour.
+pub async fn pick_colour() -> Result<[u8; 3], String> {
+    let colour = ashpd::desktop::Color::pick()
+        .send()
+        .await
+        .and_then(|request| request.response())
+        .map_err(|err| format!("the colour picker portal failed: {err}"))?;
+    Ok([colour.red(), colour.green(), colour.blue()].map(channel_to_byte))
+}
+
+/// A portal colour channel (0.0 to 1.0) as a byte.
+pub fn channel_to_byte(value: f64) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
 /// Converts an accelerator like `Alt+PrintScreen` into the XDG shortcut
 /// format the GlobalShortcuts portal expects, like `ALT+Print`.
 pub fn portal_trigger(accelerator: &str) -> String {
@@ -67,27 +82,25 @@ pub fn portal_trigger(accelerator: &str) -> String {
 }
 
 /// Binds the hotkeys through the GlobalShortcuts portal and calls
-/// `on_activated` with the mode for each press. Runs until the session ends.
+/// `on_activated` with what each press starts. Runs until the session ends.
 /// An error means the portal is missing or refused, and only the tray can
 /// start captures.
 pub async fn run_global_shortcuts<F>(hotkeys: Hotkeys, on_activated: F) -> Result<(), String>
 where
-    F: Fn(CaptureMode) + Send + 'static,
+    F: Fn(Action) + Send + 'static,
 {
     let fail = |err: ashpd::Error| format!("the GlobalShortcuts portal is not available: {err}");
     let portal = GlobalShortcuts::new().await.map_err(fail)?;
     let session = portal.create_session().await.map_err(fail)?;
-    let triggers = [
-        (CaptureMode::Region, "Capture a region", hotkeys.region),
-        (CaptureMode::Window, "Capture a window", hotkeys.window),
-        (CaptureMode::Screen, "Capture the screen", hotkeys.screen),
-    ];
-    let shortcuts: Vec<NewShortcut> = triggers
+    let shortcuts: Vec<NewShortcut> = hotkeys
+        .entries()
         .iter()
-        .map(|(mode, description, accelerator)| {
+        .filter_map(|(action, _, accelerator)| {
             let trigger = portal_trigger(accelerator);
-            NewShortcut::new(shortcut_id(*mode), *description)
-                .preferred_trigger(Some(trigger.as_str()))
+            Some(
+                NewShortcut::new(shortcut_id(*action)?, description(*action))
+                    .preferred_trigger(Some(trigger.as_str())),
+            )
         })
         .collect();
     portal
@@ -97,28 +110,47 @@ where
         .map_err(fail)?;
     let mut activated = portal.receive_activated().await.map_err(fail)?;
     while let Some(event) = activated.next().await {
-        if let Some(mode) = mode_for_id(event.shortcut_id()) {
-            on_activated(mode);
+        if let Some(action) = action_for_id(event.shortcut_id()) {
+            on_activated(action);
         }
     }
     Ok(())
 }
 
-fn shortcut_id(mode: CaptureMode) -> &'static str {
-    match mode {
-        CaptureMode::Region => "capture-region",
-        CaptureMode::Window => "capture-window",
-        CaptureMode::Screen | CaptureMode::Monitor => "capture-screen",
+/// The id a hotkey is bound under. Monitors have no hotkey.
+fn shortcut_id(action: Action) -> Option<&'static str> {
+    match action {
+        Action::Region => Some("capture-region"),
+        Action::Window => Some("capture-window"),
+        Action::Screen => Some("capture-screen"),
+        Action::Text => Some("capture-text"),
+        Action::Colour => Some("pick-colour"),
+        Action::Monitor(_) | Action::Repeat | Action::Record => None,
     }
 }
 
-fn mode_for_id(id: &str) -> Option<CaptureMode> {
-    match id {
-        "capture-region" => Some(CaptureMode::Region),
-        "capture-window" => Some(CaptureMode::Window),
-        "capture-screen" => Some(CaptureMode::Screen),
-        _ => None,
+/// What the desktop's shortcut settings call each hotkey.
+fn description(action: Action) -> &'static str {
+    match action {
+        Action::Region | Action::Repeat => "Capture a region",
+        Action::Window => "Capture a window",
+        Action::Screen | Action::Monitor(_) => "Capture the screen",
+        Action::Text => "Capture text",
+        Action::Colour => "Pick a colour",
+        Action::Record => "Record the screen",
     }
+}
+
+fn action_for_id(id: &str) -> Option<Action> {
+    [
+        Action::Region,
+        Action::Window,
+        Action::Screen,
+        Action::Text,
+        Action::Colour,
+    ]
+    .into_iter()
+    .find(|action| shortcut_id(*action) == Some(id))
 }
 
 #[cfg(test)]
@@ -134,14 +166,21 @@ mod tests {
     }
 
     #[test]
+    fn colour_channels_become_bytes() {
+        assert_eq!(channel_to_byte(0.0), 0);
+        assert_eq!(channel_to_byte(1.0), 255);
+        assert_eq!(channel_to_byte(0.5), 128);
+        assert_eq!(channel_to_byte(7.0), 255);
+        assert_eq!(channel_to_byte(-1.0), 0);
+    }
+
+    #[test]
     fn shortcut_ids_round_trip() {
-        for mode in [
-            CaptureMode::Region,
-            CaptureMode::Window,
-            CaptureMode::Screen,
-        ] {
-            assert_eq!(mode_for_id(shortcut_id(mode)), Some(mode));
+        for (action, _, _) in Hotkeys::default().entries() {
+            let id = shortcut_id(action).expect("every hotkey has an id");
+            assert_eq!(action_for_id(id), Some(action));
         }
-        assert_eq!(mode_for_id("other"), None);
+        assert_eq!(shortcut_id(Action::Monitor(0)), None);
+        assert_eq!(action_for_id("other"), None);
     }
 }

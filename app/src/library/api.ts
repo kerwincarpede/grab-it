@@ -60,6 +60,21 @@ export function openShot(id: number): Promise<void> {
   return invoke<void>("library_open", { id });
 }
 
+/** Copies the shot's original image to the clipboard. */
+export function copyShot(id: number): Promise<void> {
+  return invoke<void>("library_copy", { id });
+}
+
+/** Floats the shot above other windows. */
+export function pinShot(id: number): Promise<void> {
+  return invoke<void>("library_pin", { id });
+}
+
+/** Shows the shot's file in the system file manager. */
+export function revealShot(id: number): Promise<void> {
+  return invoke<void>("library_reveal", { id });
+}
+
 /** Calls `handler` whenever shots are added, changed or removed. */
 export function onLibraryChanged(handler: () => void): Promise<UnlistenFn> {
   return listen(LIBRARY_CHANGED_EVENT, () => handler());

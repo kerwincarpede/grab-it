@@ -6,6 +6,7 @@ import {
   PAGE_SIZE,
   SEARCH_DEBOUNCE_MS,
   buildQuery,
+  copyShot,
   deleteShot,
   filterOptions,
   formatCapturedAt,
@@ -16,7 +17,9 @@ import {
   onOcrStatus,
   openShot,
   parseTags,
+  pinShot,
   retryOcr,
+  revealShot,
   searchShots,
   setShotNotes,
   setShotTags,
@@ -200,6 +203,7 @@ function ShotDetails({ shot, onUpdated, onDeleted, onError }: DetailsProps) {
   const [notes, setNotes] = useState(shot.notes);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   async function saveTags() {
     const tags = parseTags(tagsText);
@@ -225,6 +229,17 @@ function ShotDetails({ shot, onUpdated, onDeleted, onError }: DetailsProps) {
   async function open() {
     try {
       await openShot(shot.id);
+    } catch (err) {
+      onError(errorMessage(err));
+    }
+  }
+
+  /** Runs a one-click action, saying so briefly when it leaves nothing to see. */
+  async function act(action: (id: number) => Promise<void>, done?: string) {
+    setNotice(null);
+    try {
+      await action(shot.id);
+      if (done) setNotice(done);
     } catch (err) {
       onError(errorMessage(err));
     }
@@ -266,9 +281,23 @@ function ShotDetails({ shot, onUpdated, onDeleted, onError }: DetailsProps) {
           {shot.width} × {shot.height}
         </dd>
       </dl>
-      <button type="button" onClick={() => void open()}>
-        Open in editor
-      </button>
+      <div className="shot-actions">
+        <button type="button" className="wide" onClick={() => void open()}>
+          Open in editor
+        </button>
+        <button type="button" className="secondary" onClick={() => void act(copyShot, "Copied to the clipboard.")}>
+          Copy
+        </button>
+        <button type="button" className="secondary" onClick={() => void act(pinShot)}>
+          Pin
+        </button>
+        <button type="button" className="secondary wide" onClick={() => void act(revealShot)}>
+          Show in folder
+        </button>
+      </div>
+      <p className="hint" role="status">
+        {notice}
+      </p>
 
       <form className="field" onSubmit={submitTags}>
         <label htmlFor="shot-tags">Tags</label>

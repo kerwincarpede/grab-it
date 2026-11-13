@@ -1,0 +1,369 @@
+/* The Quick Access card fills its small borderless window. It is always
+   dark, like the capture overlay, so it reads over any desktop. */
+.quick {
+  --q-bg: #1a1d24;
+  --q-surface: #252932;
+  --q-border: #353b48;
+  --q-text: #eef0f5;
+  --q-muted: #a0a8b6;
+  --q-accent: #4c8dff;
+
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--q-text);
+  font-size: 13px;
+  background: var(--q-bg);
+  border: 1px solid var(--q-border);
+  user-select: none;
+  cursor: default;
+}
+
+.quick p {
+  margin: 0;
+}
+
+.quick button {
+  color: var(--q-text);
+  background: transparent;
+  border: 0;
+}
+
+/* The capture: a preview above a row of actions. */
+.quick-preview {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  padding: 10px;
+  background:
+    radial-gradient(circle at 1px 1px, rgb(255 255 255 / 7%) 1px, transparent 0) 0 0 / 14px 14px,
+    #12141a;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.quick-preview:hover:not(:disabled) {
+  background:
+    radial-gradient(circle at 1px 1px, rgb(255 255 255 / 10%) 1px, transparent 0) 0 0 / 14px 14px,
+    #161920;
+}
+
+.quick-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 12px rgb(0 0 0 / 55%));
+}
+
+.quick-size {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 1px 7px;
+  color: var(--q-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  background: rgb(0 0 0 / 60%);
+  border-radius: 999px;
+}
+
+.quick-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px 2px 6px;
+  color: #0b1f12;
+  font-size: 11.5px;
+  font-weight: 650;
+  background: #4ade80;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.quick-badge svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 3;
+}
+
+.quick .quick-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  color: var(--q-muted);
+  background: rgb(0 0 0 / 55%);
+  border-radius: 999px;
+}
+
+.quick .quick-close:hover:not(:disabled) {
+  color: #fff;
+  background: rgb(255 255 255 / 18%);
+}
+
+.quick-actions {
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  background: var(--q-surface);
+  border-top: 1px solid var(--q-border);
+}
+
+.quick-actions button {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 6px;
+  font-size: 12.5px;
+  font-weight: 550;
+  border-radius: 6px;
+}
+
+.quick-actions button.icon-only {
+  flex: 0 0 32px;
+}
+
+.quick-actions button:hover:not(:disabled) {
+  background: rgb(255 255 255 / 10%);
+}
+
+.quick-actions button.danger:hover:not(:disabled) {
+  color: #ff8589;
+  background: rgb(248 81 73 / 16%);
+}
+
+.quick button:focus-visible {
+  outline: 2px solid var(--q-accent);
+  outline-offset: -2px;
+}
+
+.quick-error {
+  padding: 10px 12px;
+  color: #ff8589;
+  font-size: 12.5px;
+  background: var(--q-surface);
+  border-top: 1px solid var(--q-border);
+}
+
+/* Text, colours and messages: a compact body. */
+.quick-colour,
+.quick-message {
+  flex-direction: row;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 44px 20px 20px;
+}
+
+.quick-text {
+  gap: 10px;
+  padding: 16px 16px 14px;
+}
+
+.quick-body {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.quick-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.quick-colour .quick-title {
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  font-size: 22px;
+}
+
+.quick-detail {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--q-muted);
+  font-size: 12.5px;
+}
+
+.quick-title svg,
+.quick-detail svg {
+  flex: none;
+  color: #4ade80;
+  stroke-width: 3;
+}
+
+.quick-detail svg {
+  width: 13px;
+  height: 13px;
+}
+
+.quick-swatch {
+  flex: none;
+  width: 92px;
+  height: 92px;
+  border: 2px solid rgb(255 255 255 / 85%);
+  border-radius: 18px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 50%);
+}
+
+.quick-text-preview {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  color: var(--q-text);
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #12141a;
+  border: 1px solid var(--q-border);
+  border-radius: 8px;
+  user-select: text;
+}
+
+.quick-error .quick-title {
+  color: #ff8589;
+}
+
+.quick-spinner {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 3px solid rgb(255 255 255 / 18%);
+  border-top-color: var(--q-accent);
+  border-radius: 50%;
+  animation: quick-spin 800ms linear infinite;
+}
+
+/* Recording: a pulsing dot, the clock and Stop. */
+.quick-recording {
+  padding-right: 20px;
+}
+
+.quick-recording .quick-body {
+  flex: 1;
+}
+
+.quick-rec-dot {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  background: #ff4d4f;
+  border-radius: 50%;
+  box-shadow: 0 0 0 5px rgb(255 77 79 / 22%);
+  animation: quick-pulse 1200ms ease-in-out infinite;
+}
+
+.quick-elapsed {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quick .quick-stop {
+  flex: none;
+  padding: 9px 20px;
+  color: #fff;
+  font-weight: 650;
+  background: #e5484d;
+  border-radius: 8px;
+}
+
+.quick .quick-stop:hover:not(:disabled) {
+  background: #f2555a;
+}
+
+.quick-file {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.quick-error-text {
+  color: #ff8589;
+}
+
+.quick-inline-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.quick-inline-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  font-weight: 550;
+  background: rgb(255 255 255 / 8%);
+  border-radius: 6px;
+}
+
+.quick-inline-actions button:hover:not(:disabled) {
+  background: rgb(255 255 255 / 16%);
+}
+
+.quick-inline-actions button.danger:hover:not(:disabled) {
+  color: #ff8589;
+  background: rgb(248 81 73 / 16%);
+}
+
+@keyframes quick-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* Runs down while the card waits to dismiss itself. */
+.quick-timer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: var(--q-accent);
+  transform-origin: left;
+  animation: quick-countdown linear forwards;
+}
+
+@keyframes quick-countdown {
+  to {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes quick-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quick-spinner {
+    animation-duration: 2400ms;
+  }
+
+  .quick-timer {
+    animation: none;
+    opacity: 0;
+  }
+}

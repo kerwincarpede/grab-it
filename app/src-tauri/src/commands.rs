@@ -7,7 +7,7 @@ use tauri::{AppHandle, State};
 
 use crate::{
     hotkeys::{self, Hotkeys},
-    settings::{Settings, SettingsStore},
+    settings::{Preferences, Settings, SettingsStore},
 };
 
 pub type SettingsState = Mutex<SettingsStore>;
@@ -35,6 +35,16 @@ pub fn set_save_folder(
     // Captures already in the new folder join the library; older ones stay.
     crate::library::rescan_in_background(&app, settings.save_folder.clone());
     Ok(settings)
+}
+
+#[tauri::command]
+pub fn set_preferences(
+    preferences: Preferences,
+    state: State<'_, SettingsState>,
+) -> Result<Settings, String> {
+    lock(&state)
+        .set_preferences(preferences)
+        .map_err(|err| err.to_string())
 }
 
 /// The saved settings and any hotkey the system would not register.

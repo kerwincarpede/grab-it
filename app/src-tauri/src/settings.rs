@@ -15,6 +15,37 @@ use crate::hotkeys::Hotkeys;
 pub const SETTINGS_FILE: &str = "settings.json";
 pub const DEFAULT_FOLDER_NAME: &str = "Grab-it";
 
+/// What Grab-it shows once a capture is saved.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AfterCapture {
+    /// A small floating preview in the corner with Copy, Annotate, Pin…
+    #[default]
+    QuickAccess,
+    /// Straight into the annotation editor.
+    Editor,
+    /// Nothing: the capture is saved (and copied) silently.
+    Nothing,
+}
+
+/// The choices on the Settings window's Capture section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Preferences {
+    pub after_capture: AfterCapture,
+    /// Copy every capture to the clipboard as it is saved.
+    pub copy_to_clipboard: bool,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            after_capture: AfterCapture::default(),
+            copy_to_clipboard: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -22,6 +53,8 @@ pub struct Settings {
     pub save_folder: PathBuf,
     /// Global hotkeys for region, window and screen captures.
     pub hotkeys: Hotkeys,
+    #[serde(flatten)]
+    pub preferences: Preferences,
 }
 
 impl Settings {
@@ -31,6 +64,7 @@ impl Settings {
         Self {
             save_folder: pictures_dir.join(DEFAULT_FOLDER_NAME),
             hotkeys: Hotkeys::default(),
+            preferences: Preferences::default(),
         }
     }
 }
@@ -41,6 +75,8 @@ impl Settings {
 struct StoredSettings {
     save_folder: Option<PathBuf>,
     hotkeys: Option<StoredHotkeys>,
+    after_capture: Option<AfterCapture>,
+    copy_to_clipboard: Option<bool>,
 }
 
 /// Hotkeys on disk; a missing or empty one keeps its default.
@@ -49,6 +85,8 @@ struct StoredHotkeys {
     region: Option<String>,
     window: Option<String>,
     screen: Option<String>,
+    text: Option<String>,
+    colour: Option<String>,
 }
 
 impl StoredHotkeys {
@@ -62,6 +100,8 @@ impl StoredHotkeys {
             region: pick(self.region, defaults.region),
             window: pick(self.window, defaults.window),
             screen: pick(self.screen, defaults.screen),
+            text: pick(self.text, defaults.text),
+            colour: pick(self.colour, defaults.colour),
         }
     }
 }
@@ -76,6 +116,14 @@ impl StoredSettings {
             hotkeys: match self.hotkeys {
                 Some(stored) => stored.merge_onto(defaults.hotkeys),
                 None => defaults.hotkeys,
+            },
+            preferences: Preferences {
+                after_capture: self
+                    .after_capture
+                    .unwrap_or(defaults.preferences.after_capture),
+                copy_to_clipboard: self
+                    .copy_to_clipboard
+                    .unwrap_or(defaults.preferences.copy_to_clipboard),
             },
         }
     }
@@ -191,6 +239,17 @@ impl SettingsStore {
         Ok(self.current.clone())
     }
 
+    /// Changes what happens after a capture.
+    pub fn set_preferences(&mut self, preferences: Preferences) -> Result<Settings, SettingsError> {
+        let next = Settings {
+            preferences,
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
     /// Changes the capture hotkeys after checking them. Registering them is
     /// up to the caller.
     pub fn set_hotkeys(&mut self, hotkeys: &Hotkeys) -> Result<Settings, SettingsError> {
@@ -243,6 +302,10 @@ mod tests {
             hotkeys: Hotkeys {
                 region: "Ctrl+Shift+R".into(),
                 ..Hotkeys::default()
+            },
+            preferences: Preferences {
+                after_capture: AfterCapture::Nothing,
+                copy_to_clipboard: false,
             },
         };
         save(&path, &settings).unwrap();
@@ -366,6 +429,45 @@ mod tests {
         assert_eq!(updated.hotkeys.screen, "Ctrl+Shift+F");
         assert_eq!(updated.save_folder, defaults(&dir).save_folder);
         assert_eq!(load(&path, defaults(&dir)).unwrap(), updated);
+    }
+
+    #[test]
+    fn preferences_default_to_quick_access_and_copying() {
+        let dir = TempDir::new().unwrap();
+        let settings = defaults(&dir);
+        assert_eq!(
+            settings.preferences.after_capture,
+            AfterCapture::QuickAccess
+        );
+        assert!(settings.preferences.copy_to_clipboard);
+        // A settings file from before these existed keeps the defaults.
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"saveFolder": "/data/shots"}"#).unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.preferences, Preferences::default());
+        assert_eq!(loaded.save_folder, PathBuf::from("/data/shots"));
+    }
+
+    #[test]
+    fn set_preferences_persists_beside_the_other_settings() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let updated = store
+            .set_preferences(Preferences {
+                after_capture: AfterCapture::Editor,
+                copy_to_clipboard: false,
+            })
+            .unwrap();
+        assert_eq!(updated.preferences.after_capture, AfterCapture::Editor);
+        assert_eq!(load(&path, defaults(&dir)).unwrap(), updated);
+        // Flattened into the top level, in the frontend's spelling.
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(json["afterCapture"], "editor");
+        assert_eq!(json["copyToClipboard"], false);
+        assert!(json["hotkeys"]["text"].is_string());
     }
 
     #[test]

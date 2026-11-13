@@ -12,7 +12,7 @@ use std::{
     io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
     },
@@ -241,9 +241,13 @@ impl Ocr {
         Ok(Self { engine })
     }
 
-    /// The text in an image, one line of text per line.
+    /// The text in an image file, one line of text per line.
     pub fn read_text(&self, png: &Path) -> OcrResult<String> {
-        let image = image::open(png)?.into_rgb8();
+        self.read_image(&image::open(png)?.into_rgb8())
+    }
+
+    /// The text in an image already in memory, one line of text per line.
+    pub fn read_image(&self, image: &image::RgbImage) -> OcrResult<String> {
         let source =
             ImageSource::from_bytes(image.as_raw(), image.dimensions()).map_err(engine_error)?;
         let input = self.engine.prepare_input(source).map_err(engine_error)?;
@@ -314,6 +318,7 @@ impl OcrState {
 pub fn start(app: &AppHandle, models: PathBuf) {
     let (sender, receiver) = mpsc::channel();
     app.manage(OcrState::new(sender));
+    app.manage(TextOcr::new(models.clone()));
     let app = app.clone();
     let spawned = thread::Builder::new()
         .name("grab-it-ocr".into())
@@ -321,6 +326,45 @@ pub fn start(app: &AppHandle, models: PathBuf) {
     if let Err(err) = spawned {
         eprintln!("Grab-it: could not start OCR: {err}");
     }
+}
+
+/// The engine behind "Capture text", loaded the first time it is used and
+/// kept: the library's OCR thread owns its own engine and may be busy with
+/// a long queue, and a text capture should not wait behind it.
+pub struct TextOcr {
+    models: PathBuf,
+    engine: Mutex<Option<Arc<Ocr>>>,
+}
+
+impl TextOcr {
+    pub fn new(models: PathBuf) -> Self {
+        Self {
+            models,
+            engine: Mutex::new(None),
+        }
+    }
+}
+
+/// Reads the text in `image` right now, downloading the models first when
+/// this is the first OCR on this machine.
+pub fn read_now(app: &AppHandle, image: &image::RgbaImage) -> OcrResult<String> {
+    let state = app.state::<TextOcr>();
+    let engine = {
+        let mut slot = state
+            .engine
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match slot.as_ref() {
+            Some(engine) => Arc::clone(engine),
+            None => {
+                let engine = Arc::new(prepare(app, &state.models)?);
+                *slot = Some(Arc::clone(&engine));
+                engine
+            }
+        }
+    };
+    let rgb = image::DynamicImage::ImageRgba8(image.clone()).into_rgb8();
+    engine.read_image(&rgb)
 }
 
 /// Tells the OCR thread that captures may be waiting.
