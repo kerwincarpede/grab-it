@@ -16,6 +16,7 @@ const MENU_REGION: &str = "capture-region";
 const MENU_WINDOW: &str = "capture-window";
 const MENU_SCREEN: &str = "capture-screen";
 const MENU_MONITOR_PREFIX: &str = "capture-monitor-";
+const MENU_LIBRARY: &str = "library";
 const MENU_SETTINGS: &str = "settings";
 const MENU_QUIT: &str = "quit";
 
@@ -84,6 +85,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     )?;
     let monitors = monitor_submenu(app)?;
     let separator = PredefinedMenuItem::separator(app)?;
+    let library = MenuItem::with_id(app, MENU_LIBRARY, "Library…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit Grab-it", true, None::<&str>)?;
@@ -95,6 +97,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             &screen_item,
             &monitors,
             &separator,
+            &library,
             &settings,
             &separator2,
             &quit,
@@ -109,6 +112,11 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             MENU_SETTINGS => {
                 if let Err(err) = windows::show_settings(app) {
                     eprintln!("Grab-it: could not open Settings: {err}");
+                }
+            }
+            MENU_LIBRARY => {
+                if let Err(err) = windows::show_library(app) {
+                    eprintln!("Grab-it: could not open the Library: {err}");
                 }
             }
             MENU_QUIT => app.exit(0),
@@ -137,6 +145,7 @@ mod tests {
         assert_eq!(action_for("capture-monitor-2"), Some(Action::Monitor(2)));
         assert_eq!(action_for("capture-monitor-x"), None);
         assert_eq!(action_for(MENU_SETTINGS), None);
+        assert_eq!(action_for(MENU_LIBRARY), None);
     }
 
     #[test]

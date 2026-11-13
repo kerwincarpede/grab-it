@@ -25,6 +25,7 @@ tauri-plugin-clipboard-manager = "2"
 xcap = "0.7"
 image = { version = "0.25", default-features = false, features = ["png"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.12", default-features = false, features = ["tokio"] }

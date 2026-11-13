@@ -1,5 +1,5 @@
 /** The view a window shows, picked from its URL hash (`index.html#/settings`). */
-export type Route = "settings" | "overlay" | "editor" | "home";
+export type Route = "settings" | "overlay" | "editor" | "library" | "home";
 
 export function routeFromHash(hash: string): Route {
   const path = hash.replace(/^#\/?/, "").split(/[?/]/)[0];
@@ -10,6 +10,8 @@ export function routeFromHash(hash: string): Route {
       return "overlay";
     case "editor":
       return "editor";
+    case "library":
+      return "library";
     default:
       return "home";
   }

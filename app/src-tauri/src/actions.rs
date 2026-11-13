@@ -124,6 +124,7 @@ fn save(
         .clone();
     let saved = capture::save_capture(&folder, image, mode, foreground, Local::now())
         .map_err(|err| err.to_string())?;
+    crate::library::record_capture(app, &saved.path);
     let clip = tauri::image::Image::new(image.as_raw(), image.width(), image.height());
     if let Err(err) = app.clipboard().write_image(&clip) {
         // The file is saved; a clipboard failure is not worth losing it over.

@@ -43,11 +43,20 @@ impl EditorState {
         self.lock().remove(label);
     }
 
-    /// The label of the editor already showing `path`, if any.
+    /// The label of the editor already showing `path`, if any. Paths are
+    /// compared by the file they name, so a capture registered under its
+    /// save-folder spelling matches the library's canonical path (symlinks,
+    /// `..`, the `\\?\` prefix on Windows) and vice versa.
     pub fn label_for(&self, path: &Path) -> Option<String> {
+        let wanted = fs::canonicalize(path).ok();
         self.lock()
             .iter()
-            .find(|(_, open)| open.as_path() == path)
+            .find(|(_, open)| {
+                open.as_path() == path
+                    || wanted
+                        .as_ref()
+                        .is_some_and(|wanted| fs::canonicalize(open).ok().as_ref() == Some(wanted))
+            })
             .map(|(label, _)| label.clone())
     }
 
@@ -240,6 +249,48 @@ pub fn editor_export(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn label_for_matches_any_spelling_of_the_same_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let originals = dir.path().join("originals");
+        fs::create_dir_all(&originals).unwrap();
+        let png = originals.join("shot.png");
+        fs::write(&png, b"png").unwrap();
+        let other = originals.join("other.png");
+        fs::write(&other, b"png").unwrap();
+        // How the capture path is spelled from the save folder setting.
+        let spelled = originals.join("..").join("originals").join("shot.png");
+        let canonical = fs::canonicalize(&png).unwrap();
+
+        let state = EditorState::default();
+        state.insert("editor-1", spelled.clone());
+        state.insert("editor-2", other.clone());
+        assert_eq!(state.label_for(&canonical).as_deref(), Some("editor-1"));
+        assert_eq!(state.label_for(&spelled).as_deref(), Some("editor-1"));
+        assert_eq!(state.label_for(&png).as_deref(), Some("editor-1"));
+
+        let state = EditorState::default();
+        state.insert("editor-3", canonical);
+        assert_eq!(state.label_for(&spelled).as_deref(), Some("editor-3"));
+        assert_eq!(state.label_for(&dir.path().join("missing.png")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn label_for_sees_through_a_symlinked_save_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        fs::create_dir_all(&real).unwrap();
+        fs::write(real.join("shot.png"), b"png").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let state = EditorState::default();
+        state.insert("editor-1", link.join("shot.png"));
+        let canonical = fs::canonicalize(real.join("shot.png")).unwrap();
+        assert_eq!(state.label_for(&canonical).as_deref(), Some("editor-1"));
+    }
 
     #[test]
     fn missing_sidecar_reads_as_none() {

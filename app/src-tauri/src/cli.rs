@@ -13,6 +13,8 @@ pub enum OpenTarget {
     Region,
     /// Opens a capture in the annotation editor: `--open editor <file>`.
     Editor(PathBuf),
+    /// The Library window.
+    Library,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +34,7 @@ impl fmt::Display for ArgsError {
             Self::UnknownTarget(name) => {
                 write!(
                     f,
-                    "unknown --open target `{name}`; expected `settings`, `region` or `editor <file>`"
+                    "unknown --open target `{name}`; expected `settings`, `region`, `editor <file>` or `library`"
                 )
             }
             Self::MissingFile => {
@@ -75,6 +77,7 @@ where
         return match name.as_str() {
             "settings" => Ok(Some(OpenTarget::Settings)),
             "region" => Ok(Some(OpenTarget::Region)),
+            "library" => Ok(Some(OpenTarget::Library)),
             "editor" => match args.next() {
                 Some(file) if !file.as_ref().is_empty() => {
                     Ok(Some(OpenTarget::Editor(PathBuf::from(file.as_ref()))))
@@ -117,6 +120,12 @@ mod tests {
     fn open_region() {
         assert_eq!(parse(&["--open", "region"]), Ok(Some(OpenTarget::Region)));
         assert_eq!(parse(&["--open=region"]), Ok(Some(OpenTarget::Region)));
+    }
+
+    #[test]
+    fn open_library() {
+        assert_eq!(parse(&["--open", "library"]), Ok(Some(OpenTarget::Library)));
+        assert_eq!(parse(&["--open=library"]), Ok(Some(OpenTarget::Library)));
     }
 
     #[test]

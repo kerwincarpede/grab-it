@@ -26,6 +26,7 @@ describe("routeFromHash", () => {
     ["#/settings", "settings"],
     ["#/overlay", "overlay"],
     ["#/editor", "editor"],
+    ["#/library", "library"],
     ["#settings", "settings"],
     ["#/settings?tab=general", "settings"],
     ["", "home"],

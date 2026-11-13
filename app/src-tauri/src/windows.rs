@@ -10,6 +10,7 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use crate::{actions, cli::OpenTarget, editor::EditorState, hotkeys};
 
 pub const SETTINGS_LABEL: &str = "settings";
+pub const LIBRARY_LABEL: &str = "library";
 /// Editor windows are labelled `editor-<n>`.
 pub const EDITOR_LABEL_PREFIX: &str = "editor-";
 
@@ -17,6 +18,7 @@ pub const EDITOR_LABEL_PREFIX: &str = "editor-";
 pub fn open(app: &AppHandle, target: OpenTarget) -> tauri::Result<()> {
     match target {
         OpenTarget::Settings => show_settings(app),
+        OpenTarget::Library => show_library(app),
         OpenTarget::Region => {
             actions::start(app, actions::Action::Region);
             Ok(())
@@ -105,5 +107,26 @@ pub fn show_settings(app: &AppHandle) -> tauri::Result<()> {
             hotkeys::resume(&handle);
         }
     });
+    Ok(())
+}
+
+/// Shows the Library window, creating it on first use.
+pub fn show_library(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(LIBRARY_LABEL) {
+        window.unminimize()?;
+        window.show()?;
+        window.set_focus()?;
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(
+        app,
+        LIBRARY_LABEL,
+        WebviewUrl::App("index.html#/library".into()),
+    )
+    .title("Grab-it Library")
+    .inner_size(1100.0, 720.0)
+    .min_inner_size(560.0, 400.0)
+    .center()
+    .build()?;
     Ok(())
 }
