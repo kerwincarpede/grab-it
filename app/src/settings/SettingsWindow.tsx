@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
-import { chooseFolder, getSettings, setSaveFolder, type Settings } from "./api";
+import HotkeysSection from "./HotkeysSection";
+import {
+  chooseFolder,
+  getSettings,
+  setHotkeys,
+  setSaveFolder,
+  type Hotkeys,
+  type HotkeysUpdate,
+  type Settings,
+} from "./api";
 
 function errorMessage(err: unknown): string {
   if (typeof err === "string") return err;
@@ -7,7 +16,11 @@ function errorMessage(err: unknown): string {
   return "Something went wrong.";
 }
 
-type Status = { kind: "idle" } | { kind: "saved" } | { kind: "error"; message: string };
+type Status =
+  | { kind: "idle" }
+  | { kind: "saved" }
+  | { kind: "hotkeys-saved"; warnings: string[] }
+  | { kind: "error"; message: string };
 
 function SettingsWindow() {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -42,6 +55,18 @@ function SettingsWindow() {
     }
   }
 
+  async function saveHotkeys(hotkeys: Hotkeys): Promise<HotkeysUpdate | null> {
+    try {
+      const update = await setHotkeys(hotkeys);
+      setSettings(update.settings);
+      setStatus({ kind: "hotkeys-saved", warnings: update.warnings });
+      return update;
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+      return null;
+    }
+  }
+
   return (
     <main className="window">
       <h1>Settings</h1>
@@ -64,8 +89,13 @@ function SettingsWindow() {
           library.
         </p>
       </section>
+      {settings && (
+        <HotkeysSection saved={settings.hotkeys} disabled={busy} onSave={saveHotkeys} />
+      )}
       <p className={`status status-${status.kind}`} role="status">
         {status.kind === "saved" && "Save folder updated."}
+        {status.kind === "hotkeys-saved" &&
+          (status.warnings.length > 0 ? status.warnings.join(" ") : "Hotkeys updated.")}
         {status.kind === "error" && status.message}
       </p>
     </main>

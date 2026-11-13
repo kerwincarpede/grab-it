@@ -10,6 +10,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+use crate::hotkeys::Hotkeys;
+
 pub const SETTINGS_FILE: &str = "settings.json";
 pub const DEFAULT_FOLDER_NAME: &str = "Grab-it";
 
@@ -18,13 +20,17 @@ pub const DEFAULT_FOLDER_NAME: &str = "Grab-it";
 pub struct Settings {
     /// Where new captures are saved. Holds `originals/` and `thumbs/`.
     pub save_folder: PathBuf,
+    /// Global hotkeys for region, window and screen captures.
+    pub hotkeys: Hotkeys,
 }
 
 impl Settings {
-    /// The defaults: captures go to `<pictures>/Grab-it`.
+    /// The defaults: captures go to `<pictures>/Grab-it`, with the
+    /// platform's default hotkeys.
     pub fn defaults(pictures_dir: &Path) -> Self {
         Self {
             save_folder: pictures_dir.join(DEFAULT_FOLDER_NAME),
+            hotkeys: Hotkeys::default(),
         }
     }
 }
@@ -34,6 +40,30 @@ impl Settings {
 #[serde(rename_all = "camelCase")]
 struct StoredSettings {
     save_folder: Option<PathBuf>,
+    hotkeys: Option<StoredHotkeys>,
+}
+
+/// Hotkeys on disk; a missing or empty one keeps its default.
+#[derive(Debug, Default, Deserialize)]
+struct StoredHotkeys {
+    region: Option<String>,
+    window: Option<String>,
+    screen: Option<String>,
+}
+
+impl StoredHotkeys {
+    fn merge_onto(self, defaults: Hotkeys) -> Hotkeys {
+        let pick = |stored: Option<String>, default: String| {
+            stored
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(default)
+        };
+        Hotkeys {
+            region: pick(self.region, defaults.region),
+            window: pick(self.window, defaults.window),
+            screen: pick(self.screen, defaults.screen),
+        }
+    }
 }
 
 impl StoredSettings {
@@ -43,6 +73,10 @@ impl StoredSettings {
                 .save_folder
                 .filter(|folder| !folder.as_os_str().is_empty())
                 .unwrap_or(defaults.save_folder),
+            hotkeys: match self.hotkeys {
+                Some(stored) => stored.merge_onto(defaults.hotkeys),
+                None => defaults.hotkeys,
+            },
         }
     }
 }
@@ -150,6 +184,20 @@ impl SettingsStore {
         fs::create_dir_all(&folder)?;
         let next = Settings {
             save_folder: folder,
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
+    /// Changes the capture hotkeys after checking them. Registering them is
+    /// up to the caller.
+    pub fn set_hotkeys(&mut self, hotkeys: &Hotkeys) -> Result<Settings, SettingsError> {
+        let hotkeys = hotkeys.validated().map_err(SettingsError::Invalid)?;
+        let next = Settings {
+            hotkeys,
+            ..self.current.clone()
         };
         save(&self.path, &next)?;
         self.current = next;
@@ -192,6 +240,10 @@ mod tests {
         let path = settings_path(&dir);
         let settings = Settings {
             save_folder: dir.path().join("Shots"),
+            hotkeys: Hotkeys {
+                region: "Ctrl+Shift+R".into(),
+                ..Hotkeys::default()
+            },
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path, defaults(&dir)).unwrap(), settings);
@@ -205,6 +257,7 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert!(value.get("saveFolder").is_some(), "{value}");
+        assert!(value["hotkeys"].get("region").is_some(), "{value}");
         assert!(!path.with_extension("json.tmp").exists());
     }
 
@@ -280,5 +333,54 @@ mod tests {
         }
         assert_eq!(store.get(), &defaults(&dir));
         assert!(!path.exists(), "a rejected change must not write settings");
+    }
+
+    #[test]
+    fn missing_and_empty_hotkeys_keep_their_defaults() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"hotkeys": {"region": "Ctrl+Shift+R", "window": " "}}"#,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.hotkeys.region, "Ctrl+Shift+R");
+        assert_eq!(loaded.hotkeys.window, Hotkeys::default().window);
+        assert_eq!(loaded.hotkeys.screen, Hotkeys::default().screen);
+    }
+
+    #[test]
+    fn set_hotkeys_persists_and_keeps_the_folder() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let hotkeys = Hotkeys {
+            screen: " Ctrl+Shift+F ".into(),
+            ..Hotkeys::default()
+        };
+
+        let updated = store.set_hotkeys(&hotkeys).unwrap();
+
+        assert_eq!(updated.hotkeys.screen, "Ctrl+Shift+F");
+        assert_eq!(updated.save_folder, defaults(&dir).save_folder);
+        assert_eq!(load(&path, defaults(&dir)).unwrap(), updated);
+    }
+
+    #[test]
+    fn set_hotkeys_rejects_duplicates_without_writing() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let hotkeys = Hotkeys {
+            window: Hotkeys::default().region,
+            ..Hotkeys::default()
+        };
+        assert!(matches!(
+            store.set_hotkeys(&hotkeys),
+            Err(SettingsError::Invalid(_))
+        ));
+        assert!(!path.exists());
     }
 }

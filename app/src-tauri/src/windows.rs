@@ -1,8 +1,8 @@
 //! Creating and focusing the app's windows.
 
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-use crate::cli::OpenTarget;
+use crate::{actions, cli::OpenTarget, hotkeys};
 
 pub const SETTINGS_LABEL: &str = "settings";
 
@@ -10,6 +10,10 @@ pub const SETTINGS_LABEL: &str = "settings";
 pub fn open(app: &AppHandle, target: OpenTarget) -> tauri::Result<()> {
     match target {
         OpenTarget::Settings => show_settings(app),
+        OpenTarget::Region => {
+            actions::start(app, actions::Action::Region);
+            Ok(())
+        }
     }
 }
 
@@ -21,15 +25,22 @@ pub fn show_settings(app: &AppHandle) -> tauri::Result<()> {
         window.set_focus()?;
         return Ok(());
     }
-    WebviewWindowBuilder::new(
+    let window = WebviewWindowBuilder::new(
         app,
         SETTINGS_LABEL,
         WebviewUrl::App("index.html#/settings".into()),
     )
     .title("Grab-it Settings")
-    .inner_size(560.0, 300.0)
-    .min_inner_size(420.0, 260.0)
+    .inner_size(600.0, 520.0)
+    .min_inner_size(460.0, 440.0)
     .center()
     .build()?;
+    let handle = app.clone();
+    window.on_window_event(move |event| {
+        // Closed while recording a hotkey: give the hotkeys back.
+        if matches!(event, WindowEvent::Destroyed) {
+            hotkeys::resume(&handle);
+        }
+    });
     Ok(())
 }
