@@ -115,7 +115,7 @@ To build installers locally, run `npm run tauri build`; they land in `app/src-ta
 
 ## CI
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the checks on Ubuntu 22.04 (caching the ocrs models for the OCR tests), then builds unsigned installers with `tauri-action` on Ubuntu 22.04, Windows and macOS and uploads them as workflow artifacts.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the checks on Ubuntu 24.04 (caching the ocrs models for the OCR tests) and, in parallel, builds unsigned installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts.
 
 ## License
 

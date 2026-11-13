@@ -27,6 +27,8 @@ env:
     wget
     file
   # xcap: X11 (xcb, randr), Wayland (wayland, EGL, GBM) and PipeWire capture.
+  # Its PipeWire bindings (libspa 0.8) need PipeWire 1.0 headers or newer,
+  # which Ubuntu 22.04 does not ship; hence the 24.04 runners below.
   XCAP_DEPS: >-
     pkg-config
     libclang-dev
@@ -41,7 +43,7 @@ env:
 jobs:
   checks:
     name: Checks
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: app
@@ -49,7 +51,7 @@ jobs:
       # The OCR tests download the ocrs models here once; cached below.
       GRAB_IT_OCR_MODELS: ${{ github.workspace }}/.ocr-models
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Linux build dependencies
         working-directory: .
@@ -57,7 +59,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y $LINUX_DEPS $XCAP_DEPS
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -88,14 +90,13 @@ jobs:
 
   build:
     name: Build (${{ matrix.platform }})
-    needs: checks
     strategy:
       fail-fast: false
       matrix:
-        platform: [ubuntu-22.04, windows-latest, macos-latest]
+        platform: [ubuntu-24.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
@@ -103,7 +104,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y $LINUX_DEPS $XCAP_DEPS
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
