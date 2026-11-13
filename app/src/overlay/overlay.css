@@ -1,0 +1,289 @@
+/* Capture overlay: the frozen monitor fills the window. */
+.overlay {
+  --overlay-accent: #2f81f7;
+  --overlay-window: #2da44e;
+  --overlay-dim: rgb(0 0 0 / 38%);
+  --overlay-panel: rgb(22 22 24 / 82%);
+  --overlay-panel-edge: rgb(255 255 255 / 16%);
+
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  color: #fff;
+  cursor: crosshair;
+  user-select: none;
+  background: #000;
+}
+
+.overlay[data-mode="window"] {
+  cursor: default;
+}
+
+/* Space is held: the selection travels with the cursor. */
+.overlay[data-moving="true"] {
+  cursor: move;
+}
+
+.overlay-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.overlay-dim {
+  position: absolute;
+  inset: 0;
+  background: var(--overlay-dim);
+  pointer-events: none;
+}
+
+/* Guide lines through the cursor; moved with transforms, so no layout. */
+.overlay-guide {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: #fff;
+  opacity: 0.7;
+  pointer-events: none;
+  /* Inverts whatever is underneath, so the lines show on any background. */
+  mix-blend-mode: difference;
+  will-change: transform;
+}
+
+.overlay-guide-x {
+  width: 100%;
+  height: 1px;
+}
+
+.overlay-guide-y {
+  width: 1px;
+  height: 100%;
+}
+
+.overlay-selection {
+  position: absolute;
+  /*
+   * Both drawn as shadows so the selected pixels stay untouched: a crisp 1px
+   * border just outside the selection, then the dim over everything else.
+   */
+  box-shadow:
+    0 0 0 1px var(--overlay-accent),
+    0 0 0 100vmax var(--overlay-dim);
+  pointer-events: none;
+}
+
+/* Corner ticks: two short bars per corner, hugging the outside of the border. */
+.overlay-selection::after {
+  --tick: linear-gradient(var(--overlay-accent) 0 0);
+  --tick-long: 12px;
+  --tick-thick: 3px;
+
+  position: absolute;
+  inset: -3px;
+  background:
+    var(--tick) top left / var(--tick-long) var(--tick-thick),
+    var(--tick) top left / var(--tick-thick) var(--tick-long),
+    var(--tick) top right / var(--tick-long) var(--tick-thick),
+    var(--tick) top right / var(--tick-thick) var(--tick-long),
+    var(--tick) bottom left / var(--tick-long) var(--tick-thick),
+    var(--tick) bottom left / var(--tick-thick) var(--tick-long),
+    var(--tick) bottom right / var(--tick-long) var(--tick-thick),
+    var(--tick) bottom right / var(--tick-thick) var(--tick-long);
+  background-repeat: no-repeat;
+  content: "";
+}
+
+.overlay-window {
+  --overlay-accent: var(--overlay-window);
+
+  background: rgb(45 164 78 / 12%);
+  border-radius: 2px;
+}
+
+/* A hovered window is a suggestion, not a selection: no ticks. */
+.overlay-window::after {
+  content: none;
+}
+
+.overlay-label {
+  position: absolute;
+  max-width: 320px;
+  overflow: hidden;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: var(--overlay-panel);
+  border-radius: 6px;
+  box-shadow: 0 0 0 1px var(--overlay-panel-edge);
+}
+
+.overlay-label[data-side="above"] {
+  bottom: calc(100% + 8px);
+}
+
+.overlay-label[data-side="below"] {
+  top: calc(100% + 8px);
+}
+
+/* The selection spans the full height: the only room left is inside it. */
+.overlay-label[data-side="inside"] {
+  top: 8px;
+  margin-inline: 8px;
+}
+
+.overlay-label[data-align="start"] {
+  left: 0;
+}
+
+.overlay-label[data-align="end"] {
+  right: 0;
+}
+
+/* Magnifier: sizes here must match the constants in Loupe.tsx. */
+.overlay-loupe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 120px;
+  overflow: hidden;
+  background: var(--overlay-panel);
+  border-radius: 14px;
+  box-shadow:
+    0 0 0 1px var(--overlay-panel-edge),
+    0 10px 30px rgb(0 0 0 / 45%);
+  pointer-events: none;
+  will-change: transform;
+}
+
+.overlay-loupe-lens {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  background: #000;
+}
+
+.overlay-loupe-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* One image pixel per canvas pixel, scaled up without smoothing. */
+  image-rendering: pixelated;
+}
+
+/* The centre pixel: 8px wide, the seventh of fifteen cells each way. */
+.overlay-loupe-pixel {
+  position: absolute;
+  top: 56px;
+  left: 56px;
+  width: 8px;
+  height: 8px;
+  box-shadow:
+    0 0 0 1px #fff,
+    0 0 0 2px rgb(0 0 0 / 75%);
+}
+
+.overlay-loupe-readout {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: center;
+  justify-content: center;
+  height: 46px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 15px;
+  color: rgb(255 255 255 / 72%);
+}
+
+.overlay-loupe-colour {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.overlay-loupe-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 45%);
+}
+
+/* Hint pill, top centre. */
+.overlay-hint {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  max-width: calc(100% - 32px);
+  padding: 7px 14px;
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+  background: var(--overlay-panel);
+  border-radius: 999px;
+  box-shadow:
+    0 0 0 1px var(--overlay-panel-edge),
+    0 8px 24px rgb(0 0 0 / 35%);
+  backdrop-filter: blur(14px) saturate(160%);
+  transform: translateX(-50%);
+  transition: opacity 120ms ease-out;
+  pointer-events: none;
+}
+
+/* Out of the way while a selection is being drawn underneath it. */
+.overlay-hint[data-hidden="true"] {
+  opacity: 0;
+}
+
+.overlay-hint-text {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.overlay-hint-text[data-error="true"] {
+  color: #ff9a8f;
+}
+
+.overlay-keys {
+  display: flex;
+  gap: 12px;
+  margin: 0;
+  padding: 0 0 0 14px;
+  font-size: 12px;
+  color: rgb(255 255 255 / 68%);
+  list-style: none;
+  border-left: 1px solid var(--overlay-panel-edge);
+}
+
+.overlay-keys li {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.overlay-keys kbd {
+  padding: 0 5px;
+  font: inherit;
+  font-size: 11px;
+  color: #fff;
+  background: rgb(255 255 255 / 14%);
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay-hint {
+    transition: none;
+  }
+}
