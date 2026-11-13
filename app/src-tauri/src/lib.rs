@@ -2,6 +2,7 @@ mod actions;
 mod capture;
 mod cli;
 mod commands;
+mod editor;
 mod hotkeys;
 mod overlay;
 mod permissions;
@@ -30,6 +31,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(overlay::OverlayState::default())
         .manage(hotkeys::HotkeyState::default())
+        .manage(editor::EditorState::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
             commands::set_save_folder,
@@ -39,7 +41,12 @@ pub fn run() {
             overlay::overlay_info,
             overlay::overlay_image,
             overlay::overlay_finish,
-            overlay::overlay_cancel
+            overlay::overlay_cancel,
+            editor::editor_info,
+            editor::editor_image,
+            editor::editor_save_annotations,
+            editor::editor_copy,
+            editor::editor_export
         ])
         .setup(move |app| {
             // A tray app: no Dock icon on macOS.

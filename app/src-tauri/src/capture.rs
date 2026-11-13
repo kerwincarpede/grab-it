@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 pub const ORIGINALS_DIR: &str = "originals";
 pub const META_SUFFIX: &str = ".meta.json";
+pub const ANNOTATIONS_SUFFIX: &str = ".annotations.json";
 
 /// What the user asked to capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,11 +199,20 @@ pub fn unique_capture_path(dir: &Path, time: &DateTime<Local>) -> PathBuf {
 
 /// The sidecar path for a capture: `<name>.png` gives `<name>.meta.json`.
 pub fn meta_path(png: &Path) -> PathBuf {
+    sidecar_path(png, META_SUFFIX)
+}
+
+/// The annotations sidecar: `<name>.png` gives `<name>.annotations.json`.
+pub fn annotations_path(png: &Path) -> PathBuf {
+    sidecar_path(png, ANNOTATIONS_SUFFIX)
+}
+
+fn sidecar_path(png: &Path, suffix: &str) -> PathBuf {
     let stem = png
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
         .unwrap_or_default();
-    png.with_file_name(format!("{stem}{META_SUFFIX}"))
+    png.with_file_name(format!("{stem}{suffix}"))
 }
 
 /// What is known about the capture, written beside it as `meta.json`.

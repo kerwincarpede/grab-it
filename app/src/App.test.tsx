@@ -25,6 +25,7 @@ describe("routeFromHash", () => {
   it.each([
     ["#/settings", "settings"],
     ["#/overlay", "overlay"],
+    ["#/editor", "editor"],
     ["#settings", "settings"],
     ["#/settings?tab=general", "settings"],
     ["", "home"],
