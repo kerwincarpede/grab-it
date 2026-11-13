@@ -42,6 +42,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(overlay::OverlayState::default())
         .manage(overlay::LastRegionState::default())
         .manage(quick::QuickState::default())
@@ -54,6 +58,8 @@ pub fn run() {
             commands::set_save_folder,
             commands::set_hotkeys,
             commands::set_preferences,
+            commands::get_autostart,
+            commands::set_autostart,
             quick::quick_info,
             quick::quick_thumbnail,
             quick::quick_action,

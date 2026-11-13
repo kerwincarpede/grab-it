@@ -273,6 +273,10 @@ button.danger {
   cursor: pointer;
 }
 
+.toggle.first {
+  margin-top: 0;
+}
+
 .toggle input {
   margin: 3px 0 0;
   accent-color: var(--accent);

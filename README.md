@@ -148,6 +148,8 @@ The search index is a SQLite FTS5 table in `library.db`, kept in step with each 
 
 The save folder defaults to `~/Pictures/Grab-it/`. Changing it only affects new captures: earlier captures stay where they are and stay in the library. `settings.json` also holds the hotkeys, what happens after a capture, and whether captures are copied to the clipboard.
 
+**Start Grab-it when you sign in** is kept by the operating system rather than in `settings.json`: a login item on macOS, a registry entry on Windows, and an autostart entry on Linux.
+
 ## Checks
 
 Run these from `app/`. CI runs the same commands.

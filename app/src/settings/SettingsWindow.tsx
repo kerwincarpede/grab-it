@@ -3,7 +3,9 @@ import HotkeysSection from "./HotkeysSection";
 import {
   AFTER_CAPTURE_CHOICES,
   chooseFolder,
+  getAutostart,
   getSettings,
+  setAutostart,
   setHotkeys,
   setPreferences,
   setSaveFolder,
@@ -30,6 +32,23 @@ function SettingsWindow() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [busy, setBusy] = useState(false);
+  // Null until the system has answered, or when it cannot say: the toggle
+  // is then left out rather than shown in a state that may be wrong.
+  const [autostart, setAutostartState] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getAutostart()
+      .then((enabled) => {
+        if (!cancelled && typeof enabled === "boolean") setAutostartState(enabled);
+      })
+      .catch(() => {
+        // No start-up support here; Settings works without the toggle.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,6 +89,18 @@ function SettingsWindow() {
     setBusy(true);
     try {
       setSettings(await setPreferences(next));
+      setStatus({ kind: "preferences-saved" });
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function changeAutostart(enabled: boolean) {
+    setBusy(true);
+    try {
+      setAutostartState(await setAutostart(enabled));
       setStatus({ kind: "preferences-saved" });
     } catch (err) {
       setStatus({ kind: "error", message: errorMessage(err) });
@@ -146,6 +177,23 @@ function SettingsWindow() {
           library.
         </p>
       </section>
+      {autostart !== null && (
+        <section className="card" aria-labelledby="startup-heading">
+          <h2 id="startup-heading">Start-up</h2>
+          <label className="toggle first">
+            <input
+              type="checkbox"
+              checked={autostart}
+              disabled={busy}
+              onChange={(event) => void changeAutostart(event.target.checked)}
+            />
+            <span>
+              <span className="choice-title">Start Grab-it when you sign in</span>
+              <span className="hint">It waits in the tray, ready for your hotkeys.</span>
+            </span>
+          </label>
+        </section>
+      )}
       {settings && (
         <div className="card">
           <HotkeysSection saved={settings.hotkeys} disabled={busy} onSave={saveHotkeys} />

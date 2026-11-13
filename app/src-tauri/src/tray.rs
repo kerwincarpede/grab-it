@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use tauri::{
-    AppHandle,
+    AppHandle, Manager,
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
 };
@@ -14,6 +14,23 @@ use crate::{
 };
 
 const TRAY_ID: &str = "main";
+const RECORD_LABEL: &str = "Record GIF";
+const STOP_LABEL: &str = "Stop recording";
+
+/// The menu items whose text changes while Grab-it runs.
+pub struct TrayItems {
+    record: MenuItem<tauri::Wry>,
+}
+
+/// Makes the record item say what choosing it does now: start, or stop.
+pub fn set_recording(app: &AppHandle, recording: bool) {
+    if let Some(items) = app.try_state::<TrayItems>() {
+        let label = if recording { STOP_LABEL } else { RECORD_LABEL };
+        if let Err(err) = items.record.set_text(label) {
+            eprintln!("Grab-it: could not update the tray menu: {err}");
+        }
+    }
+}
 const MENU_REGION: &str = "capture-region";
 const MENU_WINDOW: &str = "capture-window";
 const MENU_SCREEN: &str = "capture-screen";
@@ -133,13 +150,10 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let timed = timed_submenu(app)?;
     let tools_separator = PredefinedMenuItem::separator(app)?;
     // One item for both: choosing it during a recording stops the recording.
-    let record = MenuItem::with_id(
-        app,
-        MENU_RECORD,
-        "Record GIF / Stop recording",
-        true,
-        None::<&str>,
-    )?;
+    let record = MenuItem::with_id(app, MENU_RECORD, RECORD_LABEL, true, None::<&str>)?;
+    app.manage(TrayItems {
+        record: record.clone(),
+    });
     let text = MenuItem::with_id(app, MENU_TEXT, "Capture text", true, None::<&str>)?;
     let colour = MenuItem::with_id(app, MENU_COLOUR, "Pick a colour", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;

@@ -145,6 +145,7 @@ pub fn start(app: &AppHandle, monitor: &MonitorInfo, rect: Rect) -> Result<(), S
         }
         *current = Some(Arc::clone(&flag));
     }
+    crate::tray::set_recording(app, true);
 
     let folder = lock(&app.state::<SettingsState>())
         .get()
@@ -158,6 +159,7 @@ pub fn start(app: &AppHandle, monitor: &MonitorInfo, rect: Rect) -> Result<(), S
         Ok(path) => path,
         Err(err) => {
             *state.lock() = None;
+            crate::tray::set_recording(app, false);
             return Err(err);
         }
     };
@@ -181,7 +183,7 @@ pub fn start(app: &AppHandle, monitor: &MonitorInfo, rect: Rect) -> Result<(), S
         corner,
     );
 
-    let app = app.clone();
+    let handle = app.clone();
     let index = monitor.index;
     let spawned = std::thread::Builder::new()
         .name("grab-it-record".into())
@@ -190,12 +192,13 @@ pub fn start(app: &AppHandle, monitor: &MonitorInfo, rect: Rect) -> Result<(), S
             // repaint so the first frame shows the screen, not the overlay.
             std::thread::sleep(SETTLE_DELAY);
             let result = record(index, rect, &path, &flag);
-            *app.state::<RecordState>().lock() = None;
+            *handle.state::<RecordState>().lock() = None;
+            crate::tray::set_recording(&handle, false);
             match result {
                 Ok(duration) => {
                     let bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
                     quick::show(
-                        &app,
+                        &handle,
                         QuickItem::Recorded {
                             file_name: path
                                 .file_name()
@@ -209,12 +212,13 @@ pub fn start(app: &AppHandle, monitor: &MonitorInfo, rect: Rect) -> Result<(), S
                 }
                 Err(err) => {
                     let _ = fs::remove_file(&path);
-                    actions::report_failure(&app, &format!("the recording failed: {err}"));
+                    actions::report_failure(&handle, &format!("the recording failed: {err}"));
                 }
             }
         });
     if let Err(err) = spawned {
         *state.lock() = None;
+        crate::tray::set_recording(app, false);
         return Err(format!("could not start recording: {err}"));
     }
     Ok(())

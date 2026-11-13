@@ -65,6 +65,16 @@ export function setPreferences(preferences: Preferences): Promise<Settings> {
   return invoke<Settings>("set_preferences", { preferences });
 }
 
+/** Whether Grab-it starts when the user signs in; the system holds this. */
+export function getAutostart(): Promise<boolean> {
+  return invoke<boolean>("get_autostart");
+}
+
+/** Turns starting at sign-in on or off; resolves to the setting as it now is. */
+export function setAutostart(enabled: boolean): Promise<boolean> {
+  return invoke<boolean>("set_autostart", { enabled });
+}
+
 export function setHotkeys(hotkeys: Hotkeys): Promise<HotkeysUpdate> {
   return invoke<HotkeysUpdate>("set_hotkeys", { hotkeys });
 }

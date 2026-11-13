@@ -14,6 +14,8 @@ const DEFAULT_HOTKEYS = {
 };
 
 interface Backend {
+  /** Undefined: the system cannot say, and `get_autostart` fails. */
+  autostart?: boolean;
   afterCapture: string;
   copyToClipboard: boolean;
   saveFolder: string;
@@ -46,6 +48,13 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     switch (cmd) {
       case "get_settings":
         return settings();
+      case "get_autostart":
+        if (backend.autostart === undefined) throw "not supported";
+        return backend.autostart;
+      case "set_autostart":
+        if (backend.setError) throw backend.setError;
+        backend.autostart = (payload as { enabled: boolean }).enabled;
+        return backend.autostart;
       case "set_preferences": {
         if (backend.setError) throw backend.setError;
         const { preferences } = payload as { preferences: { afterCapture: string; copyToClipboard: boolean } };
@@ -171,6 +180,25 @@ describe("SettingsWindow", () => {
 
     expect(await screen.findByText("disk full")).toBeInTheDocument();
     expect(quick).toBeChecked();
+  });
+
+  it("turns starting at sign-in on", async () => {
+    const backend = mockBackend({ autostart: false });
+    render(<SettingsWindow />);
+    const toggle = await screen.findByRole("checkbox", { name: /Start Grab-it when you sign in/ });
+    expect(toggle).not.toBeChecked();
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(backend.calls[backend.calls.length - 1]).toEqual({ cmd: "set_autostart", payload: { enabled: true } });
+  });
+
+  it("leaves the start-up toggle out where the system cannot say", async () => {
+    mockBackend();
+    render(<SettingsWindow />);
+    await screen.findByDisplayValue("/home/me/Pictures/Grab-it");
+    expect(screen.queryByRole("checkbox", { name: /Start Grab-it/ })).not.toBeInTheDocument();
   });
 
   it("shows the current hotkeys", async () => {
