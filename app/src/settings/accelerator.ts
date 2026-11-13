@@ -74,3 +74,11 @@ export function acceleratorFromEvent(event: KeyPress, isMac = false): string | n
 export function isMacPlatform(): boolean {
   return typeof navigator !== "undefined" && /Mac/i.test(navigator.platform || navigator.userAgent);
 }
+
+/** Splits an accelerator like `Ctrl+Shift+PrintScreen` into its keys, for showing each as a key cap. */
+export function acceleratorKeys(accelerator: string): string[] {
+  return accelerator
+    .split("+")
+    .map((key) => key.trim())
+    .filter((key) => key.length > 0);
+}

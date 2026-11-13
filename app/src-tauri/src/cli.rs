@@ -15,6 +15,8 @@ pub enum OpenTarget {
     Editor(PathBuf),
     /// The Library window.
     Library,
+    /// The Welcome window: what Grab-it does and its hotkeys.
+    Welcome,
     /// Starts a text capture: drag over text to copy it.
     Text,
     /// Starts the colour picker.
@@ -46,7 +48,7 @@ impl fmt::Display for ArgsError {
             Self::UnknownTarget(name) => {
                 write!(
                     f,
-                    "unknown --open target `{name}`; expected `settings`, `library`, `region`, `repeat`, `record`, `text`, `colour`, `editor <file>`, `quick <file>` or `pin <file>`"
+                    "unknown --open target `{name}`; expected `settings`, `library`, `welcome`, `region`, `repeat`, `record`, `text`, `colour`, `editor <file>`, `quick <file>` or `pin <file>`"
                 )
             }
             Self::MissingFile(target) => {
@@ -90,6 +92,7 @@ where
             "settings" => Ok(Some(OpenTarget::Settings)),
             "region" => Ok(Some(OpenTarget::Region)),
             "library" => Ok(Some(OpenTarget::Library)),
+            "welcome" => Ok(Some(OpenTarget::Welcome)),
             "text" => Ok(Some(OpenTarget::Text)),
             "colour" | "color" => Ok(Some(OpenTarget::Colour)),
             "repeat" => Ok(Some(OpenTarget::Repeat)),
@@ -147,6 +150,7 @@ mod tests {
     fn open_library() {
         assert_eq!(parse(&["--open", "library"]), Ok(Some(OpenTarget::Library)));
         assert_eq!(parse(&["--open=library"]), Ok(Some(OpenTarget::Library)));
+        assert_eq!(parse(&["--open", "welcome"]), Ok(Some(OpenTarget::Welcome)));
     }
 
     #[test]

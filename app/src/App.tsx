@@ -6,6 +6,7 @@ import EditorWindow from "./editor/EditorWindow";
 import LibraryWindow from "./library/LibraryWindow";
 import QuickAccess from "./quick/QuickAccess";
 import PinWindow from "./pin/PinWindow";
+import WelcomeWindow from "./welcome/WelcomeWindow";
 
 interface AppProps {
   route?: Route;
@@ -25,6 +26,8 @@ function App({ route = routeFromHash(window.location.hash) }: AppProps) {
       return <QuickAccess />;
     case "pin":
       return <PinWindow />;
+    case "welcome":
+      return <WelcomeWindow />;
     default:
       return (
         <main className="window home">

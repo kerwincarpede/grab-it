@@ -205,12 +205,15 @@ pub fn validate_save_folder(input: &str) -> Result<PathBuf, SettingsError> {
 pub struct SettingsStore {
     path: PathBuf,
     current: Settings,
+    /// No settings file existed when the store was opened.
+    first_run: bool,
 }
 
 impl SettingsStore {
     /// Loads settings from `path`. An unreadable file is reported and the
     /// defaults are used; the file is only overwritten on the next change.
     pub fn open(path: PathBuf, defaults: Settings) -> Self {
+        let first_run = !path.exists();
         let current = load(&path, defaults.clone()).unwrap_or_else(|err| {
             eprintln!(
                 "Grab-it: using default settings, could not read {}: {err}",
@@ -218,7 +221,26 @@ impl SettingsStore {
             );
             defaults
         });
-        Self { path, current }
+        Self {
+            path,
+            current,
+            first_run,
+        }
+    }
+
+    /// True the first time Grab-it runs for this user, until
+    /// [`Self::finish_first_run`] has written the settings file.
+    pub fn is_first_run(&self) -> bool {
+        self.first_run
+    }
+
+    /// Writes the settings file so the next launch is not a first run.
+    pub fn finish_first_run(&mut self) -> Result<(), SettingsError> {
+        if self.first_run {
+            save(&self.path, &self.current)?;
+            self.first_run = false;
+        }
+        Ok(())
     }
 
     pub fn get(&self) -> &Settings {
@@ -468,6 +490,21 @@ mod tests {
         assert_eq!(json["afterCapture"], "editor");
         assert_eq!(json["copyToClipboard"], false);
         assert!(json["hotkeys"]["text"].is_string());
+    }
+
+    #[test]
+    fn the_first_run_ends_once_the_file_is_written() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        assert!(store.is_first_run());
+        store.finish_first_run().unwrap();
+        assert!(!store.is_first_run());
+        assert_eq!(load(&path, defaults(&dir)).unwrap(), defaults(&dir));
+
+        // The next launch finds the file: not a first run.
+        let again = SettingsStore::open(path, defaults(&dir));
+        assert!(!again.is_first_run());
     }
 
     #[test]

@@ -37,6 +37,7 @@ describe("routeFromHash", () => {
     ["#/library", "library"],
     ["#/quick", "quick"],
     ["#/pin", "pin"],
+    ["#/welcome", "welcome"],
     ["#settings", "settings"],
     ["#/settings?tab=general", "settings"],
     ["", "home"],

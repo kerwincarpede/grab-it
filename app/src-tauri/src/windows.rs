@@ -11,6 +11,7 @@ use crate::{actions, cli::OpenTarget, editor::EditorState, hotkeys, pin, quick};
 
 pub const SETTINGS_LABEL: &str = "settings";
 pub const LIBRARY_LABEL: &str = "library";
+pub const WELCOME_LABEL: &str = "welcome";
 /// Editor windows are labelled `editor-<n>`.
 pub const EDITOR_LABEL_PREFIX: &str = "editor-";
 
@@ -19,6 +20,7 @@ pub fn open(app: &AppHandle, target: OpenTarget) -> tauri::Result<()> {
     match target {
         OpenTarget::Settings => show_settings(app),
         OpenTarget::Library => show_library(app),
+        OpenTarget::Welcome => show_welcome(app),
         OpenTarget::Region => {
             actions::start(app, actions::Action::Region);
             Ok(())
@@ -166,6 +168,28 @@ pub fn show_library(app: &AppHandle) -> tauri::Result<()> {
     .title("Grab-it Library")
     .inner_size(1100.0, 720.0)
     .min_inner_size(560.0, 400.0)
+    .center()
+    .build()?;
+    Ok(())
+}
+
+/// Shows the Welcome window: what Grab-it does and its hotkeys. Opened by
+/// itself on the first launch, and from the tray afterwards.
+pub fn show_welcome(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(WELCOME_LABEL) {
+        window.unminimize()?;
+        window.show()?;
+        window.set_focus()?;
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(
+        app,
+        WELCOME_LABEL,
+        WebviewUrl::App("index.html#/welcome".into()),
+    )
+    .title("Welcome to Grab-it")
+    .inner_size(620.0, 720.0)
+    .min_inner_size(480.0, 480.0)
     .center()
     .build()?;
     Ok(())

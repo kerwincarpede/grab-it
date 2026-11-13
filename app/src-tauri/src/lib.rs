@@ -58,6 +58,7 @@ pub fn run() {
             commands::set_save_folder,
             commands::set_hotkeys,
             commands::set_preferences,
+            commands::open_target,
             commands::get_autostart,
             commands::set_autostart,
             quick::quick_info,
@@ -101,8 +102,14 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            let store = open_settings(app)?;
+            let mut store = open_settings(app)?;
             let hotkeys = store.get().hotkeys.clone();
+            // A tray app shows nothing when it starts, so the very first
+            // launch opens a short welcome with the hotkeys.
+            let first_run = store.is_first_run();
+            if first_run && let Err(err) = store.finish_first_run() {
+                eprintln!("Grab-it: could not write the settings file: {err}");
+            }
             app.manage(Mutex::new(store));
             let data_dir = app.path().app_data_dir()?;
             app.manage(library::open_for_app(&data_dir));
@@ -120,6 +127,8 @@ pub fn run() {
             tray::create(handle)?;
             if let Some(target) = open_target {
                 windows::open(handle, target)?;
+            } else if first_run {
+                windows::show_welcome(handle)?;
             }
             Ok(())
         })

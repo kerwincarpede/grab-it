@@ -1,9 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "floating",
-  "description": "Pins and the Quick Access card have no title bar, so they are dragged by their content",
+  "description": "Pins have no title bar, so they are dragged by their content",
   "windows": [
-    "quick",
     "pin-*"
   ],
   "permissions": [

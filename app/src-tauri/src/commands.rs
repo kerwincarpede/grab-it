@@ -47,6 +47,23 @@ pub fn set_preferences(
         .map_err(|err| err.to_string())
 }
 
+/// Opens a window or starts a capture by its `--open` name (`region`,
+/// `settings`, `library`…), for the Welcome window's buttons.
+#[tauri::command]
+pub fn open_target(target: String, app: AppHandle) -> Result<(), String> {
+    let target = crate::cli::parse_open_target(["grab-it", "--open", target.as_str()])
+        .map_err(|err| err.to_string())?
+        .ok_or("nothing to open")?;
+    // Off the main thread: a window must not be created from inside a
+    // synchronous command.
+    std::thread::spawn(move || {
+        if let Err(err) = crate::windows::open(&app, target) {
+            eprintln!("Grab-it: {err}");
+        }
+    });
+    Ok(())
+}
+
 /// Whether Grab-it starts when the user signs in. The operating system
 /// holds this, not `settings.json`, so it is asked each time.
 #[tauri::command]

@@ -44,6 +44,7 @@ const MENU_TIMED_PREFIX: &str = "timed-";
 const MENU_LAST: &str = "last-capture";
 const MENU_LIBRARY: &str = "library";
 const MENU_SETTINGS: &str = "settings";
+const MENU_WELCOME: &str = "welcome";
 const MENU_QUIT: &str = "quit";
 
 /// The capture a menu item starts, if any.
@@ -160,6 +161,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let last = MenuItem::with_id(app, MENU_LAST, "Show last capture", true, None::<&str>)?;
     let library = MenuItem::with_id(app, MENU_LIBRARY, "Library…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
+    let welcome = MenuItem::with_id(app, MENU_WELCOME, "Shortcuts and tips…", true, None::<&str>)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit Grab-it", true, None::<&str>)?;
     let menu = Menu::with_items(
@@ -179,6 +181,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             &last,
             &library,
             &settings,
+            &welcome,
             &separator2,
             &quit,
         ],
@@ -192,6 +195,11 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             MENU_SETTINGS => {
                 if let Err(err) = windows::show_settings(app) {
                     eprintln!("Grab-it: could not open Settings: {err}");
+                }
+            }
+            MENU_WELCOME => {
+                if let Err(err) = windows::show_welcome(app) {
+                    eprintln!("Grab-it: could not open the welcome window: {err}");
                 }
             }
             MENU_LIBRARY => {
