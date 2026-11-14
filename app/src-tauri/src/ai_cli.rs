@@ -1,5 +1,5 @@
-//! Describing captures with an AI CLI the user already has, such as
-//! Claude Code, so describing needs no local model and no API key.
+//! Describing captures with an AI CLI the user already has, Claude Code or
+//! Codex, so describing needs no local model and no API key.
 //!
 //! The CLI is found even when Grab-it starts from Finder or a launcher and
 //! so lacks the shell's PATH, then run headlessly in an empty temporary
@@ -33,6 +33,10 @@ use crate::{
 pub const CLAUDE: &str = "claude";
 /// What the user calls Claude Code in messages.
 pub const CLAUDE_NAME: &str = "Claude Code";
+/// Codex's command name.
+pub const CODEX: &str = "codex";
+/// What the user calls Codex in messages.
+pub const CODEX_NAME: &str = "Codex";
 
 /// How long the login shell may take to report its PATH.
 const SHELL_PATH_TIMEOUT: Duration = Duration::from_secs(3);
@@ -47,6 +51,11 @@ const PATH_MARK: &str = "__GRAB_IT_PATH__";
 /// The `claude` to run, or none when it is not installed.
 pub fn find_claude() -> Option<PathBuf> {
     find(CLAUDE)
+}
+
+/// The `codex` to run, or none when it is not installed.
+pub fn find_codex() -> Option<PathBuf> {
+    find(CODEX)
 }
 
 /// Finds `name` in this process's PATH, then in the login shell's PATH,
@@ -227,6 +236,7 @@ fn read_pipe(pipe: Option<impl Read + Send + 'static>) -> thread::JoinHandle<Str
 fn display_name(program: &Path) -> String {
     match program.file_stem().and_then(OsStr::to_str) {
         Some(CLAUDE) => CLAUDE_NAME.to_owned(),
+        Some(CODEX) => CODEX_NAME.to_owned(),
         Some(name) => name.to_owned(),
         None => program.display().to_string(),
     }
@@ -426,10 +436,126 @@ pub fn claude_reply(
 
 /// Why describing with Claude Code cannot start.
 pub fn claude_missing() -> AiError {
+    missing(CLAUDE_NAME, CLAUDE)
+}
+
+/// Why describing with Codex cannot start.
+pub fn codex_missing() -> AiError {
+    missing(CODEX_NAME, CODEX)
+}
+
+fn missing(name: &str, command: &str) -> AiError {
     AiError::Endpoint(format!(
-        "{CLAUDE_NAME} is not installed: Grab-it could not find `{CLAUDE}`. Install it, or \
-         choose another provider in Settings."
+        "{name} is not installed: Grab-it could not find `{command}`. Install it, or choose \
+         another provider in Settings."
     ))
+}
+
+/// The capture Codex is given, beside it in its folder.
+const CODEX_IMAGE: &str = "capture.png";
+/// The JSON schema Codex's answer must follow, beside it in its folder.
+const CODEX_SCHEMA: &str = "schema.json";
+/// Where Codex writes its last message, beside it in its folder.
+const CODEX_REPLY: &str = "reply.txt";
+
+/// The arguments that run Codex headlessly: one read-only turn on `prompt`
+/// with the image attached, its answer held to the schema and written to
+/// the reply file, with nothing saved. Codex uses the model the user
+/// configured, at low reasoning effort.
+pub fn codex_args(image: &Path, schema: &Path, reply: &Path, prompt: &str) -> Vec<OsString> {
+    let flag = OsString::from;
+    vec![
+        flag("exec"),
+        flag("-i"),
+        image.as_os_str().to_owned(),
+        flag("-s"),
+        flag("read-only"),
+        flag("--skip-git-repo-check"),
+        flag("--ephemeral"),
+        flag("--output-schema"),
+        schema.as_os_str().to_owned(),
+        flag("-o"),
+        reply.as_os_str().to_owned(),
+        flag("-c"),
+        flag("model_reasoning_effort=\"low\""),
+        flag(prompt),
+    ]
+}
+
+/// What Codex is asked: it has no separate system prompt, so the system
+/// prompt leads.
+pub fn codex_prompt(text: &str) -> String {
+    format!("{SYSTEM_PROMPT}\n\n{text}")
+}
+
+/// At most the last `max` characters of `text`, with `…` when cut: Codex
+/// prints its progress first and why it failed last.
+fn tail(text: &str, max: usize) -> String {
+    let text = text.trim();
+    let count = text.chars().count();
+    if count <= max {
+        return text.to_owned();
+    }
+    let start = text
+        .char_indices()
+        .nth(count - max)
+        .map_or(0, |(start, _)| start);
+    format!("…{}", text[start..].trim_start())
+}
+
+/// Codex's answer: what it wrote to `reply`. A failed exit is an
+/// [`AiError::Endpoint`], so the queue stops and shows why.
+fn codex_answer(output: &Output, reply: &Path) -> Result<String, AiError> {
+    if !output.status.success() {
+        let stderr = output.stderr.trim();
+        let stdout = output.stdout.trim();
+        let why = if !stderr.is_empty() {
+            tail(stderr, 300)
+        } else if !stdout.is_empty() {
+            tail(stdout, 300)
+        } else {
+            format!("it exited with {}", output.status)
+        };
+        return Err(AiError::Endpoint(format!("{CODEX_NAME} failed: {why}")));
+    }
+    let text = fs::read_to_string(reply).unwrap_or_default();
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(AiError::Response(format!(
+            "{CODEX_NAME} sent no answer: {}",
+            truncate(&output.stdout, 200)
+        )));
+    }
+    Ok(text.to_owned())
+}
+
+/// Asks Codex at `program` about one PNG, holding its answer to `schema`,
+/// and returns its reply. It runs in an empty temporary directory, holding
+/// only the image and the schema, with stdin closed, and is killed once
+/// `timeout` has passed.
+pub fn codex_reply(
+    program: &Path,
+    text: &str,
+    png: &[u8],
+    schema: &Value,
+    timeout: Duration,
+) -> Result<String, AiError> {
+    let dir = WorkDir::new().map_err(|err| {
+        AiError::Endpoint(format!(
+            "could not make a folder to run {CODEX_NAME} in: {err}"
+        ))
+    })?;
+    let image = dir.0.join(CODEX_IMAGE);
+    let schema_path = dir.0.join(CODEX_SCHEMA);
+    let reply = dir.0.join(CODEX_REPLY);
+    fs::write(&image, png)
+        .and_then(|()| fs::write(&schema_path, schema.to_string()))
+        .map_err(|err| {
+            AiError::Endpoint(format!("could not give {CODEX_NAME} the capture: {err}"))
+        })?;
+    let args = codex_args(&image, &schema_path, &reply, &codex_prompt(text));
+    let output = run(program, &args, None, &dir.0, timeout)?;
+    codex_answer(&output, &reply)
 }
 
 #[cfg(test)]
@@ -744,6 +870,177 @@ pub(crate) mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(
             matches!(&err, AiError::Endpoint(message) if message.contains("no answer")),
+            "{err:?}"
+        );
+    }
+
+    // --- Codex -------------------------------------------------------------
+
+    #[test]
+    fn codex_runs_read_only_with_the_image_schema_and_reply_file() {
+        let args: Vec<String> = codex_args(
+            Path::new("/tmp/run/capture.png"),
+            Path::new("/tmp/run/schema.json"),
+            Path::new("/tmp/run/reply.txt"),
+            "Describe it.",
+        )
+        .into_iter()
+        .map(|arg| arg.into_string().unwrap())
+        .collect();
+        assert_eq!(
+            args,
+            [
+                "exec",
+                "-i",
+                "/tmp/run/capture.png",
+                "-s",
+                "read-only",
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "--output-schema",
+                "/tmp/run/schema.json",
+                "-o",
+                "/tmp/run/reply.txt",
+                "-c",
+                "model_reasoning_effort=\"low\"",
+                "Describe it.",
+            ]
+        );
+        let prompt = codex_prompt("Describe it.");
+        assert!(prompt.starts_with(SYSTEM_PROMPT), "{prompt}");
+        assert!(prompt.ends_with("\n\nDescribe it."), "{prompt}");
+    }
+
+    #[test]
+    fn a_long_message_keeps_its_end() {
+        assert_eq!(tail("  short  ", 10), "short");
+        assert_eq!(tail("progress… then the error", 9), "…the error");
+        assert_eq!(tail("ééééé", 2), "…éé");
+    }
+
+    /// A fake `codex` in `dir` that records its arguments, stdin, folder and
+    /// the files it was given beside itself, writes `answer` (when there is
+    /// one) to its `-o` file, prints `stderr` and exits with `code`.
+    #[cfg(unix)]
+    pub(crate) fn recording_codex(
+        dir: &Path,
+        answer: Option<&str>,
+        stderr: &str,
+        code: i32,
+    ) -> PathBuf {
+        let log = dir.join("log");
+        fs::create_dir_all(&log).unwrap();
+        fs::write(dir.join("stderr"), stderr).unwrap();
+        let write_answer = match answer {
+            Some(answer) => {
+                fs::write(dir.join("answer"), answer).unwrap();
+                format!("cat '{}' > \"$out\"\n", dir.join("answer").display())
+            }
+            None => String::new(),
+        };
+        let body = format!(
+            "for arg in \"$@\"; do printf '%s\\n' \"$arg\"; done > '{log}/args'\n\
+             cat > '{log}/stdin'\n\
+             pwd > '{log}/cwd'\n\
+             ls -A > '{log}/files'\n\
+             prev=''\n\
+             out=''\n\
+             for arg in \"$@\"; do\n\
+               [ \"$prev\" = '-o' ] && out=\"$arg\"\n\
+               [ \"$prev\" = '-i' ] && cp \"$arg\" '{log}/image'\n\
+               [ \"$prev\" = '--output-schema' ] && cp \"$arg\" '{log}/schema'\n\
+               prev=\"$arg\"\n\
+             done\n\
+             {write_answer}\
+             cat '{stderr}' >&2\n\
+             exit {code}",
+            log = log.display(),
+            stderr = dir.join("stderr").display(),
+        );
+        let path = dir.join("bin").join(CODEX);
+        executable(&path, &body);
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_gets_the_image_and_schema_in_an_empty_folder() {
+        let dir = TempDir::new().unwrap();
+        let codex = recording_codex(dir.path(), Some("{\"ok\": true}\n"), "", 0);
+        let schema = json!({ "type": "object", "required": ["ok"] });
+
+        let reply = codex_reply(
+            &codex,
+            "Describe it.",
+            b"png bytes",
+            &schema,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+
+        assert_eq!(reply, "{\"ok\": true}");
+        let log = dir.path().join("log");
+        let args = fs::read_to_string(log.join("args")).unwrap();
+        assert!(args.starts_with("exec\n-i\n"), "{args}");
+        assert!(args.contains("Describe it."), "{args}");
+        assert_eq!(fs::read(log.join("image")).unwrap(), b"png bytes");
+        let sent: Value =
+            serde_json::from_str(&fs::read_to_string(log.join("schema")).unwrap()).unwrap();
+        assert_eq!(sent, schema);
+        // Stdin is closed, so it has nothing to read.
+        assert_eq!(fs::read_to_string(log.join("stdin")).unwrap(), "");
+        // Its own folder, holding only what it was given, gone afterwards.
+        let cwd = PathBuf::from(fs::read_to_string(log.join("cwd")).unwrap().trim());
+        assert_ne!(cwd, env::current_dir().unwrap());
+        assert_eq!(
+            fs::read_to_string(log.join("files")).unwrap(),
+            "capture.png\nschema.json\n"
+        );
+        assert!(!cwd.exists(), "{}", cwd.display());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_codex_stops_with_the_end_of_its_message() {
+        let dir = TempDir::new().unwrap();
+        let progress = "OpenAI Codex v0.50\n--------\n".repeat(40);
+        let codex = recording_codex(
+            dir.path(),
+            None,
+            &format!("{progress}ERROR: You are not logged in. Run `codex login`."),
+            1,
+        );
+        let err = codex_reply(&codex, "x", b"x", &json!({}), Duration::from_secs(10)).unwrap_err();
+        let AiError::Endpoint(message) = err else {
+            panic!("{err:?}");
+        };
+        assert!(message.starts_with("Codex failed: …"), "{message}");
+        assert!(message.ends_with("Run `codex login`."), "{message}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_codex_that_writes_no_answer_fails_only_the_capture() {
+        let dir = TempDir::new().unwrap();
+        let codex = recording_codex(dir.path(), None, "", 0);
+        assert!(matches!(
+            codex_reply(&codex, "x", b"x", &json!({}), Duration::from_secs(10)),
+            Err(AiError::Response(message)) if message.starts_with("Codex sent no answer")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stalled_codex_is_killed_after_the_timeout() {
+        let dir = TempDir::new().unwrap();
+        let codex = dir.path().join("bin").join(CODEX);
+        executable(&codex, "exec sleep 30");
+        let started = Instant::now();
+        let err =
+            codex_reply(&codex, "x", b"x", &json!({}), Duration::from_millis(300)).unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(
+            matches!(&err, AiError::Endpoint(message) if message.starts_with("Codex gave no answer")),
             "{err:?}"
         );
     }

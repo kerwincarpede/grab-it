@@ -40,8 +40,21 @@ pub const DEFAULT_AI_MODEL: &str = "qwen2.5vl:7b";
 pub enum AiProvider {
     /// The user's own `claude` CLI, run headlessly (see `ai_cli.rs`).
     ClaudeCode,
+    /// The user's own `codex` CLI, run headlessly (see `ai_cli.rs`).
+    Codex,
     /// An OpenAI-compatible `/chat/completions` endpoint.
     Endpoint,
+}
+
+impl AiProvider {
+    /// What the user calls the provider in messages.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "Claude Code",
+            Self::Codex => "Codex",
+            Self::Endpoint => "an OpenAI-compatible endpoint",
+        }
+    }
 }
 
 /// Reads a stored provider leniently: one this version does not know, from
@@ -56,8 +69,8 @@ where
 
 /// How captures are described by a vision model (see `ai.rs`). Off by
 /// default: nothing leaves the machine until the user turns it on, or
-/// Grab-it turns it on once because Claude Code is installed (see
-/// [`SettingsStore::enable_claude_code`]). Mirrors `AiPreferences` in
+/// Grab-it turns it on once because Claude Code or Codex is installed (see
+/// [`SettingsStore::enable_cli_provider`]). Mirrors `AiPreferences` in
 /// src/settings/api.ts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -114,6 +127,8 @@ impl AiSettings {
     pub fn model_label(&self) -> String {
         match self.provider() {
             AiProvider::ClaudeCode => format!("claude-code/{CLAUDE_CODE_MODEL}"),
+            // Codex uses whichever model the user configured for it.
+            AiProvider::Codex => "codex".into(),
             AiProvider::Endpoint => self.model.clone(),
         }
     }
@@ -527,12 +542,15 @@ impl SettingsStore {
         Ok(self.current.clone())
     }
 
-    /// Turns describing on with Claude Code, for new captures only, and
-    /// asks for the one-time notice, when the user never turned describing
-    /// on. Finding `claude` is up to the caller. Returns the AI settings
-    /// from before, when they changed; once a provider is set this never
-    /// changes anything again.
-    pub fn enable_claude_code(&mut self) -> Result<Option<AiSettings>, SettingsError> {
+    /// Turns describing on with `provider`, a CLI provider, for new
+    /// captures only, and asks for the one-time notice, when the user never
+    /// turned describing on. Finding its CLI is up to the caller. Returns
+    /// the AI settings from before, when they changed; once a provider is
+    /// set this never changes anything again.
+    pub fn enable_cli_provider(
+        &mut self,
+        provider: AiProvider,
+    ) -> Result<Option<AiSettings>, SettingsError> {
         let before = self.current.preferences.ai.clone();
         if !before.never_enabled() {
             return Ok(None);
@@ -540,7 +558,7 @@ impl SettingsStore {
         let mut next = self.current.clone();
         next.preferences.ai = AiSettings {
             enabled: true,
-            provider: Some(AiProvider::ClaudeCode),
+            provider: Some(provider),
             new_captures_only: true,
             notice_pending: true,
             ..before.clone()
@@ -988,6 +1006,16 @@ mod tests {
         let ai = &updated.preferences.ai;
         assert_eq!(ai.provider(), AiProvider::ClaudeCode);
         assert_eq!(ai.model_label(), "claude-code/haiku");
+        let codex = store
+            .set_preferences(Preferences {
+                ai: AiSettings {
+                    provider: Some(AiProvider::Codex),
+                    ..ai.clone()
+                },
+                ..Preferences::default()
+            })
+            .unwrap();
+        assert_eq!(codex.preferences.ai.provider(), AiProvider::Codex);
         // The same fields are refused for an endpoint.
         assert!(matches!(
             store.set_preferences(Preferences {
@@ -1012,6 +1040,8 @@ mod tests {
         };
         let claude = read(r#"{"ai": {"enabled": true, "provider": "claudeCode"}}"#);
         assert_eq!(claude.provider, Some(AiProvider::ClaudeCode));
+        let codex = read(r#"{"ai": {"enabled": true, "provider": "codex"}}"#);
+        assert_eq!(codex.provider, Some(AiProvider::Codex));
         let old = read(r#"{"ai": {"enabled": true, "model": "llava"}}"#);
         assert_eq!(old.provider, None);
         assert_eq!(old.provider(), AiProvider::Endpoint);
@@ -1056,7 +1086,7 @@ mod tests {
         let path = settings_path(&dir);
         let mut store = SettingsStore::open(path.clone(), defaults(&dir));
 
-        let before = store.enable_claude_code().unwrap();
+        let before = store.enable_cli_provider(AiProvider::ClaudeCode).unwrap();
 
         assert_eq!(before, Some(AiSettings::default()));
         let ai = load(&path, defaults(&dir)).unwrap().preferences.ai;
@@ -1066,7 +1096,10 @@ mod tests {
         assert!(ai.notice_pending);
         // The endpoint fields are kept for whoever switches back.
         assert_eq!(ai.endpoint, DEFAULT_AI_ENDPOINT);
-        assert_eq!(store.enable_claude_code().unwrap(), None);
+        assert_eq!(
+            store.enable_cli_provider(AiProvider::ClaudeCode).unwrap(),
+            None
+        );
 
         // Turned off afterwards, it stays off.
         store
@@ -1078,8 +1111,34 @@ mod tests {
                 ..Preferences::default()
             })
             .unwrap();
-        assert_eq!(store.enable_claude_code().unwrap(), None);
+        assert_eq!(
+            store.enable_cli_provider(AiProvider::ClaudeCode).unwrap(),
+            None
+        );
         assert!(!store.get().preferences.ai.enabled);
+    }
+
+    #[test]
+    fn codex_is_turned_on_the_same_way() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+
+        let before = store.enable_cli_provider(AiProvider::Codex).unwrap();
+
+        assert_eq!(before, Some(AiSettings::default()));
+        let ai = load(&path, defaults(&dir)).unwrap().preferences.ai;
+        assert!(ai.enabled);
+        assert_eq!(ai.provider, Some(AiProvider::Codex));
+        assert!(ai.new_captures_only);
+        assert!(ai.notice_pending);
+        assert_eq!(ai.model_label(), "codex");
+        // Once set, neither CLI changes it.
+        assert_eq!(
+            store.enable_cli_provider(AiProvider::ClaudeCode).unwrap(),
+            None
+        );
+        assert_eq!(store.get().preferences.ai.provider, Some(AiProvider::Codex));
     }
 
     #[test]
@@ -1089,7 +1148,10 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, r#"{"ai": {"enabled": true, "model": "llava"}}"#).unwrap();
         let mut store = SettingsStore::open(path.clone(), defaults(&dir));
-        assert_eq!(store.enable_claude_code().unwrap(), None);
+        assert_eq!(
+            store.enable_cli_provider(AiProvider::ClaudeCode).unwrap(),
+            None
+        );
         assert_eq!(store.get().preferences.ai.provider, None);
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
@@ -1102,7 +1164,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
         let mut store = SettingsStore::open(path.clone(), defaults(&dir));
-        store.enable_claude_code().unwrap();
+        store.enable_cli_provider(AiProvider::ClaudeCode).unwrap();
         let mut stale = store.get().preferences.clone();
         stale.ai.notice_pending = false;
         stale.after_capture = AfterCapture::Editor;

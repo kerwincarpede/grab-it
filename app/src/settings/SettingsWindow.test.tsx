@@ -24,6 +24,8 @@ interface Backend {
   testResult: string;
   /** Where `ai_clis` finds Claude Code; null when it is not installed. */
   claudePath: string | null;
+  /** Where `ai_clis` finds Codex; null when it is not installed. */
+  codexPath: string | null;
   /** The editor section's auto-apply flag. */
   autoBackdrop?: boolean;
   saveFolder: string;
@@ -41,6 +43,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     ai: { ...DEFAULT_AI_PREFERENCES },
     testResult: "qwen2.5vl:7b (7.6B, Q4_K_M)",
     claudePath: "/usr/local/bin/claude",
+    codexPath: "/opt/homebrew/bin/codex",
     saveFolder: "/home/me/Pictures/Grab-it",
     picked: "/data/Shots",
     hotkeys: { ...DEFAULT_HOTKEYS },
@@ -84,7 +87,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
       case "ai_redescribe_all":
         return null;
       case "ai_clis":
-        return { claudeCode: backend.claudePath };
+        return { claudeCode: backend.claudePath, codex: backend.codexPath };
       case "set_auto_backdrop":
         if (backend.setError) throw backend.setError;
         backend.autoBackdrop = (payload as { enabled: boolean }).enabled;
@@ -568,6 +571,49 @@ describe("SettingsWindow AI descriptions", () => {
     await waitFor(() => expect(test).toBeEnabled());
     await userEvent.click(test);
     expect(await screen.findByText("Connected: Claude Code (haiku) answered.")).toBeInTheDocument();
+    expect(commands(backend)).not.toContain("set_preferences");
+  });
+
+  it("picks Codex at once, saying where screenshots go", async () => {
+    const backend = mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true } });
+    render(<SettingsWindow />);
+    const codex = await screen.findByRole("radio", { name: /^Codex/ });
+    await waitFor(() => expect(codex).toBeEnabled());
+
+    await userEvent.click(codex);
+
+    await waitFor(() => expect(codex).toBeChecked());
+    expect(backend.ai).toEqual({ ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "codex" });
+    expect(screen.getByRole("radio", { name: /Claude Code/ })).not.toBeChecked();
+    expect(screen.queryByLabelText("Endpoint URL")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Codex sends your screenshots.*to OpenAI/)).toHaveClass("ai-privacy-cloud");
+    expect(screen.queryByTestId("ai-missing")).not.toBeInTheDocument();
+  });
+
+  it("says when Codex is chosen but not installed", async () => {
+    mockBackend({
+      ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "codex" },
+      codexPath: null,
+    });
+    render(<SettingsWindow />);
+    expect(await screen.findByTestId("ai-missing")).toHaveTextContent(/cannot find Codex: there is no codex command/);
+
+    // Claude Code is installed, so choosing it clears the warning.
+    await userEvent.click(screen.getByRole("radio", { name: /Claude Code/ }));
+    await waitFor(() => expect(screen.queryByTestId("ai-missing")).not.toBeInTheDocument());
+  });
+
+  it("tests Codex without saving anything first", async () => {
+    const backend = mockBackend({
+      ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "codex" },
+      testResult: "Codex answered.",
+    });
+    render(<SettingsWindow />);
+    const test = await screen.findByRole("button", { name: "Test connection" });
+    await waitFor(() => expect(test).toBeEnabled());
+    await userEvent.click(test);
+    expect(await screen.findByText("Connected: Codex answered.")).toBeInTheDocument();
     expect(commands(backend)).not.toContain("set_preferences");
   });
 

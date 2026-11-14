@@ -10,11 +10,11 @@ import {
 } from "react";
 import "./library.css";
 import {
+  CLI_NAMES,
   FIELD_LABELS,
   NO_FILTERS,
   PAGE_SIZE,
   SEARCH_DEBOUNCE_MS,
-  aiNoticePending,
   aiStatus,
   buildQuery,
   categoryLabel,
@@ -35,6 +35,7 @@ import {
   onOcrStatus,
   openSettings,
   openShot,
+  pendingAiNotice,
   pinShot,
   redescribeShot,
   retryOcr,
@@ -43,6 +44,7 @@ import {
   setShotNotes,
   setShotTags,
   type AiStatus,
+  type CliProvider,
   type FilterOptions,
   type Filters,
   type OcrStatus,
@@ -167,6 +169,9 @@ function OcrBanner({ status, onRetry }: { status: OcrStatus; onRetry: () => void
   }
 }
 
+/** The command each CLI provider runs, for the user to try in a terminal. */
+const CLI_COMMANDS: Record<CliProvider, string> = { claudeCode: "claude", codex: "codex" };
+
 /** The AI describer's progress, or why it stopped, while there is something to say. */
 function AiBanner({ status, onSettings }: { status: AiStatus; onSettings: () => void }) {
   if (status.state === "working") {
@@ -184,8 +189,8 @@ function AiBanner({ status, onSettings }: { status: AiStatus; onSettings: () => 
       <div className="ocr-status ocr-status-error ai-status" role="status">
         <span>Could not describe captures{status.error ? `: ${status.error}` : "."}</span>
         <span className="hint">
-          {status.provider === "claudeCode"
-            ? "Is Claude Code installed and signed in? Run claude in a terminal to check, or choose another provider in Settings."
+          {status.provider === "claudeCode" || status.provider === "codex"
+            ? `Is ${CLI_NAMES[status.provider]} installed and signed in? Run ${CLI_COMMANDS[status.provider]} in a terminal to check, or choose another provider in Settings.`
             : "Is the AI endpoint running? Check its URL and model in Settings."}
         </span>
         <button type="button" className="pill-button" onClick={onSettings}>
@@ -197,14 +202,28 @@ function AiBanner({ status, onSettings }: { status: AiStatus; onSettings: () => 
   return null;
 }
 
-/** Says once that Grab-it turned on AI descriptions with Claude Code, until dismissed. */
-function AiNotice({ onSettings, onDismiss }: { onSettings: () => void; onDismiss: () => void }) {
+/** Where each CLI provider sends screenshots, for the notice. */
+const CLI_DESTINATIONS: Record<CliProvider, string> = {
+  claudeCode: "Anthropic under your Claude account",
+  codex: "OpenAI under your ChatGPT or OpenAI account",
+};
+
+/** Says once that Grab-it turned on AI descriptions with `provider`, until dismissed. */
+function AiNotice({
+  provider,
+  onSettings,
+  onDismiss,
+}: {
+  provider: CliProvider;
+  onSettings: () => void;
+  onDismiss: () => void;
+}) {
   return (
     <div className="ocr-status ai-status ai-notice" role="status">
       <SparkleIcon />
       <span>
-        Claude Code now describes your new captures, so you can search for what they show. Their screenshots go to
-        Anthropic under your Claude account.
+        {CLI_NAMES[provider]} now describes your new captures, so you can search for what they show. Their screenshots
+        go to {CLI_DESTINATIONS[provider]}.
       </span>
       <button type="button" className="pill-button" onClick={onSettings}>
         Open Settings
@@ -690,7 +709,7 @@ function LibraryWindow() {
   // Null until the backend says; the AI actions then stay available.
   const [ai, setAi] = useState<AiStatus | null>(null);
   // Grab-it turned AI descriptions on by itself and has not said so yet.
-  const [aiNotice, setAiNotice] = useState(false);
+  const [aiNotice, setAiNotice] = useState<CliProvider | null>(null);
   const [optionReloads, setOptionReloads] = useState(0);
   // Where each result matched, by shot id; empty when not searching.
   const [hits, setHits] = useState<Record<number, SearchHit>>({});
@@ -833,7 +852,7 @@ function LibraryWindow() {
   const aiProvider = ai?.provider;
   useEffect(() => {
     let cancelled = false;
-    aiNoticePending()
+    pendingAiNotice()
       .then((pending) => {
         if (!cancelled) setAiNotice(pending);
       })
@@ -937,7 +956,7 @@ function LibraryWindow() {
   }
 
   function dismissNotice() {
-    setAiNotice(false);
+    setAiNotice(null);
     dismissAiNotice().catch((err: unknown) => setError(errorMessage(err)));
   }
 
@@ -1035,6 +1054,7 @@ function LibraryWindow() {
         <OcrBanner status={ocr} onRetry={retry} />
         {aiNotice && (
           <AiNotice
+            provider={aiNotice}
             onSettings={() => {
               dismissNotice();
               showSettings();

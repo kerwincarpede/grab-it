@@ -6,13 +6,14 @@
 //! describes every capture waiting for it, newest first and one at a time,
 //! once OCR has finished with it. Each capture goes, downscaled, with its
 //! OCR text, app and window title, to the provider picked in Settings: the
-//! user's own Claude Code CLI (see `ai_cli.rs`), or an OpenAI-compatible
-//! `/chat/completions` endpoint (Ollama, LM Studio, llama.cpp's server,
-//! OpenAI, OpenRouter…). The model answers with a description, a category
-//! and a few tags.
+//! user's own Claude Code or Codex CLI (see `ai_cli.rs`), or an
+//! OpenAI-compatible `/chat/completions` endpoint (Ollama, LM Studio,
+//! llama.cpp's server, OpenAI, OpenRouter…). The model answers with a
+//! description, a category and a few tags.
 //!
-//! Describing turns itself on once, with Claude Code, for a user who never
-//! turned it on and has `claude` installed (see [`enable_claude_code_once`]).
+//! Describing turns itself on once, for a user who never turned it on, with
+//! Claude Code when `claude` is installed, otherwise with Codex when `codex`
+//! is (see [`enable_cli_once`]).
 
 use std::{
     fmt,
@@ -171,26 +172,33 @@ pub fn agent(stall: Duration) -> ureq::Agent {
 }
 
 /// What describing runs with: an HTTP agent for endpoints, and the
-/// `claude` CLI, when it was found, with how long it may take.
+/// `claude` and `codex` CLIs, when they were found, with how long they may
+/// take.
 #[derive(Clone)]
 pub struct Clients {
     pub http: ureq::Agent,
     pub claude: Option<PathBuf>,
+    pub codex: Option<PathBuf>,
     pub cli_timeout: Duration,
 }
 
 impl Clients {
-    /// Clients that give up after `stall`, with `claude` looked up now.
+    /// Clients that give up after `stall`, with the CLIs looked up now.
     pub fn new(stall: Duration) -> Self {
         Self {
             http: agent(stall),
             claude: ai_cli::find_claude(),
+            codex: ai_cli::find_codex(),
             cli_timeout: stall,
         }
     }
 
     fn claude(&self) -> Result<&Path, AiError> {
         self.claude.as_deref().ok_or_else(ai_cli::claude_missing)
+    }
+
+    fn codex(&self) -> Result<&Path, AiError> {
+        self.codex.as_deref().ok_or_else(ai_cli::codex_missing)
     }
 }
 
@@ -201,6 +209,11 @@ pub fn image_data_url(png: &Path) -> Result<String, AiError> {
 
 /// The capture as base64 PNG bytes, scaled down to fit [`MAX_IMAGE_EDGE`].
 pub fn png_base64(png: &Path) -> Result<String, AiError> {
+    Ok(BASE64_STANDARD.encode(png_bytes(png)?))
+}
+
+/// The capture as PNG bytes, scaled down to fit [`MAX_IMAGE_EDGE`].
+pub fn png_bytes(png: &Path) -> Result<Vec<u8>, AiError> {
     let image = image::open(png).map_err(|err| AiError::Image(err.to_string()))?;
     let image = if image.width().max(image.height()) > MAX_IMAGE_EDGE {
         image.resize(
@@ -215,7 +228,7 @@ pub fn png_base64(png: &Path) -> Result<String, AiError> {
     image::DynamicImage::ImageRgb8(image.into_rgb8())
         .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
         .map_err(|err| AiError::Image(err.to_string()))?;
-    Ok(BASE64_STANDARD.encode(bytes))
+    Ok(bytes)
 }
 
 /// At most `max` characters of `text`, with `…` when cut.
@@ -504,11 +517,49 @@ pub fn describe(clients: &Clients, ai: &AiSettings, job: &AiJob) -> Result<AiDes
             let image = png_base64(&job.path)?;
             ai_cli::claude_reply(claude, &prompt(job), &image, clients.cli_timeout)?
         }
+        AiProvider::Codex => {
+            let codex = clients.codex()?;
+            let image = png_bytes(&job.path)?;
+            ai_cli::codex_reply(
+                codex,
+                &prompt(job),
+                &image,
+                &description_schema(),
+                clients.cli_timeout,
+            )?
+        }
     };
     parse_description(&reply)
 }
 
+/// The JSON schema a description follows, for providers that hold their
+/// answer to one. Strict, as OpenAI's structured outputs want it: every
+/// field required and no others; [`parse_description`] still cuts the
+/// tags down.
+pub fn description_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "description": { "type": "string" },
+            "category": { "type": "string", "enum": CATEGORIES },
+            "tags": { "type": "array", "items": { "type": "string" } },
+        },
+        "required": ["description", "category", "tags"],
+        "additionalProperties": false,
+    })
+}
+
 const TEST_PROMPT: &str = "This is a connection test. Reply with {\"ok\": true}.";
+
+/// The JSON schema the connection test's answer follows.
+fn test_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "ok": { "type": "boolean" } },
+        "required": ["ok"],
+        "additionalProperties": false,
+    })
+}
 
 /// Sends a tiny image and checks the provider's model answers, for
 /// Settings' "Test connection".
@@ -521,7 +572,7 @@ pub fn test_connection(clients: &Clients, ai: &AiSettings) -> Result<String, AiE
     ))
     .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
     .map_err(|err| AiError::Image(err.to_string()))?;
-    let image = BASE64_STANDARD.encode(bytes);
+    let image = BASE64_STANDARD.encode(&bytes);
     let (reply, answered) = match ai.provider() {
         AiProvider::Endpoint => {
             let url = format!("data:image/png;base64,{image}");
@@ -536,6 +587,17 @@ pub fn test_connection(clients: &Clients, ai: &AiSettings) -> Result<String, AiE
                 reply,
                 format!("{} ({CLAUDE_CODE_MODEL}) answered.", ai_cli::CLAUDE_NAME),
             )
+        }
+        AiProvider::Codex => {
+            let codex = clients.codex()?;
+            let reply = ai_cli::codex_reply(
+                codex,
+                TEST_PROMPT,
+                &bytes,
+                &test_schema(),
+                clients.cli_timeout,
+            )?;
+            (reply, format!("{} answered.", ai_cli::CODEX_NAME))
         }
     };
     if reply.trim().is_empty() {
@@ -647,9 +709,9 @@ impl AiQueue {
     }
 }
 
-/// Starts the queue's thread. It first turns describing on with Claude
-/// Code if it should (see [`enable_claude_code_once`]), off the main thread
-/// because finding `claude` may wait on the login shell, then describes
+/// Starts the queue's thread. It first turns describing on with an
+/// installed CLI if it should (see [`enable_cli_once`]), off the main
+/// thread because finding one may wait on the login shell, then describes
 /// every waiting capture while describing is on, and sleeps until woken.
 pub fn start(app: &AppHandle) {
     let (sender, receiver) = mpsc::channel();
@@ -658,7 +720,7 @@ pub fn start(app: &AppHandle) {
     let spawned = thread::Builder::new()
         .name("grab-it-ai".into())
         .spawn(move || {
-            enable_claude_code_once(&app);
+            enable_cli_once(&app);
             run(&app, &receiver);
         });
     if let Err(err) = spawned {
@@ -694,23 +756,43 @@ pub fn settings_saved(app: &AppHandle, before: &AiSettings, after: &AiSettings) 
     }
 }
 
-/// Turns describing on with Claude Code, for new captures only, when the
-/// user never turned it on and `claude` is installed. Runs once at start-up
-/// on the queue's thread, before its first step, so no waiting capture is
-/// described before it is skipped. Once a provider is set it never does
-/// anything again, so a user who turns describing off keeps it off. The
-/// queue's first status event then tells open windows to look again.
-pub fn enable_claude_code_once(app: &AppHandle) {
+/// The CLI provider describing turns itself on with: Claude Code when
+/// `claude` is installed, otherwise Codex when `codex` is, otherwise none.
+/// `codex` is only looked for when `claude` is missing.
+pub fn installed_cli(
+    has_claude: impl FnOnce() -> bool,
+    has_codex: impl FnOnce() -> bool,
+) -> Option<AiProvider> {
+    if has_claude() {
+        Some(AiProvider::ClaudeCode)
+    } else if has_codex() {
+        Some(AiProvider::Codex)
+    } else {
+        None
+    }
+}
+
+/// Turns describing on with an installed CLI (see [`installed_cli`]), for
+/// new captures only, when the user never turned it on. Runs once at
+/// start-up on the queue's thread, before its first step, so no waiting
+/// capture is described before it is skipped. Once a provider is set it
+/// never does anything again, so a user who turns describing off keeps it
+/// off. The queue's first status event then tells open windows to look
+/// again.
+pub fn enable_cli_once(app: &AppHandle) {
     let state = app.state::<SettingsState>();
     if !lock(&state).get().preferences.ai.never_enabled() {
         return;
     }
     // Unlocked: the lookup may ask the login shell for its PATH.
-    if ai_cli::find_claude().is_none() {
+    let Some(provider) = installed_cli(
+        || ai_cli::find_claude().is_some(),
+        || ai_cli::find_codex().is_some(),
+    ) else {
         return;
-    }
+    };
     let mut store = lock(&state);
-    match store.enable_claude_code() {
+    match store.enable_cli_provider(provider) {
         Ok(Some(before)) => {
             let after = store.get().preferences.ai.clone();
             // Still locked, as when Settings saves: existing captures are
@@ -718,7 +800,10 @@ pub fn enable_claude_code_once(app: &AppHandle) {
             settings_saved(app, &before, &after);
         }
         Ok(None) => {}
-        Err(err) => eprintln!("Grab-it: could not turn on describing with Claude Code: {err}"),
+        Err(err) => eprintln!(
+            "Grab-it: could not turn on describing with {}: {err}",
+            provider.name()
+        ),
     }
 }
 
@@ -783,14 +868,18 @@ fn run(app: &AppHandle, receiver: &Receiver<Wake>) {
     let mut clients = Clients {
         http: agent(AI_STALL_TIMEOUT),
         claude: None,
+        codex: None,
         cli_timeout: AI_STALL_TIMEOUT,
     };
     loop {
         let ai = current_settings(app);
         let provider = ai.provider();
+        // Looked up each time, so installing it later needs no restart.
         if ai.enabled && provider == AiProvider::ClaudeCode {
-            // Looked up each time, so installing it later needs no restart.
             clients.claude = ai_cli::find_claude();
+        }
+        if ai.enabled && provider == AiProvider::Codex {
+            clients.codex = ai_cli::find_codex();
         }
         let library = app.state::<LibraryState>();
         let result = step(&library, &ai, &clients, || {
@@ -895,6 +984,7 @@ pub fn ai_test_connection(app: AppHandle) -> Result<String, String> {
 #[serde(rename_all = "camelCase")]
 pub struct AiClis {
     pub claude_code: Option<PathBuf>,
+    pub codex: Option<PathBuf>,
 }
 
 /// Looks for the AI CLIs, for Settings to say when the chosen one is
@@ -903,6 +993,7 @@ pub struct AiClis {
 pub fn ai_clis() -> AiClis {
     AiClis {
         claude_code: ai_cli::find_claude(),
+        codex: ai_cli::find_codex(),
     }
 }
 
@@ -1236,11 +1327,12 @@ mod tests {
         (LibraryState::new(library), id)
     }
 
-    /// Clients that give up fast, with no `claude`.
+    /// Clients that give up fast, with no `claude` or `codex`.
     fn fast() -> Clients {
         Clients {
             http: agent(Duration::from_millis(500)),
             claude: None,
+            codex: None,
             cli_timeout: Duration::from_secs(10),
         }
     }
@@ -1627,5 +1719,144 @@ mod tests {
         assert_eq!(message, "Claude Code (haiku) answered.");
         let stdin = std::fs::read_to_string(cli.path().join("log").join("stdin")).unwrap();
         assert!(stdin.contains("connection test"), "{stdin}");
+    }
+
+    // --- The queue with Codex ---------------------------------------------
+
+    fn codex_settings() -> AiSettings {
+        AiSettings {
+            enabled: true,
+            provider: Some(AiProvider::Codex),
+            new_captures_only: false,
+            ..AiSettings::default()
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_describes_a_capture_and_is_recorded_as_the_model() {
+        use crate::ai_cli::tests::recording_codex;
+        let dir = TempDir::new().unwrap();
+        let (library, id) = library_with_shot(dir.path(), Some("Invoice 42 total due"));
+        let cli = TempDir::new().unwrap();
+        let codex = recording_codex(cli.path(), Some(GOOD_REPLY), "", 0);
+        let clients = Clients {
+            codex: Some(codex),
+            ..fast()
+        };
+
+        assert_eq!(
+            step(&library, &codex_settings(), &clients, || {}).unwrap(),
+            Step::Described(id)
+        );
+
+        let guard = library.lock();
+        let shot = guard.get(id).unwrap();
+        assert_eq!(shot.ai_category.as_deref(), Some("receipt"));
+        assert_eq!(shot.ai_tags, vec!["acme", "billing", "invoice"]);
+        assert_eq!(guard.ai_model(id).unwrap().as_deref(), Some("codex"));
+        // The scaled-down capture, the prompt and the description's schema.
+        let log = cli.path().join("log");
+        let sent = image::load_from_memory(&std::fs::read(log.join("image")).unwrap()).unwrap();
+        assert_eq!(sent.width(), MAX_IMAGE_EDGE);
+        let args = std::fs::read_to_string(log.join("args")).unwrap();
+        assert!(args.contains("Invoice 42 total due"), "{args}");
+        assert!(args.contains(SYSTEM_PROMPT), "{args}");
+        let schema: Value =
+            serde_json::from_str(&std::fs::read_to_string(log.join("schema")).unwrap()).unwrap();
+        assert_eq!(schema, description_schema());
+    }
+
+    #[test]
+    fn the_description_schema_is_strict() {
+        let schema = description_schema();
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(
+            schema["required"],
+            json!(["description", "category", "tags"])
+        );
+        assert_eq!(schema["properties"]["category"]["enum"], json!(CATEGORIES));
+        let test = test_schema();
+        assert_eq!(test["additionalProperties"], false);
+        assert_eq!(test["required"], json!(["ok"]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_codex_stops_the_queue_with_its_message() {
+        use crate::ai_cli::tests::recording_codex;
+        let dir = TempDir::new().unwrap();
+        let (library, id) = library_with_shot(dir.path(), Some("x"));
+        let cli = TempDir::new().unwrap();
+        let codex = recording_codex(cli.path(), None, "Not logged in. Run `codex login`.", 1);
+        let clients = Clients {
+            codex: Some(codex),
+            ..fast()
+        };
+        let Step::Stopped(message) = step(&library, &codex_settings(), &clients, || {}).unwrap()
+        else {
+            panic!("the queue should stop");
+        };
+        assert!(message.contains("Run `codex login`"), "{message}");
+        assert_eq!(library.lock().ai_state(id).unwrap(), AI_WAITING);
+    }
+
+    #[test]
+    fn a_missing_codex_stops_the_queue_and_the_capture_waits() {
+        let dir = TempDir::new().unwrap();
+        let (library, id) = library_with_shot(dir.path(), Some("x"));
+        let Step::Stopped(message) = step(&library, &codex_settings(), &fast(), || {}).unwrap()
+        else {
+            panic!("the queue should stop");
+        };
+        assert!(message.contains("Codex is not installed"), "{message}");
+        assert_eq!(library.lock().ai_state(id).unwrap(), AI_WAITING);
+        assert!(test_connection(&fast(), &codex_settings()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_connection_test_runs_codex() {
+        use crate::ai_cli::tests::recording_codex;
+        let cli = TempDir::new().unwrap();
+        let codex = recording_codex(cli.path(), Some("{\"ok\": true}"), "", 0);
+        let clients = Clients {
+            codex: Some(codex),
+            ..fast()
+        };
+        let message = test_connection(&clients, &codex_settings()).unwrap();
+        assert_eq!(message, "Codex answered.");
+        let log = cli.path().join("log");
+        let args = std::fs::read_to_string(log.join("args")).unwrap();
+        assert!(args.contains("connection test"), "{args}");
+        let schema: Value =
+            serde_json::from_str(&std::fs::read_to_string(log.join("schema")).unwrap()).unwrap();
+        assert_eq!(schema, test_schema());
+    }
+
+    // --- Turning describing on by itself -----------------------------------
+
+    #[test]
+    fn claude_code_is_preferred_then_codex_then_nothing() {
+        let asked_codex = std::cell::Cell::new(false);
+        let codex = |found: bool| {
+            let asked_codex = &asked_codex;
+            move || {
+                asked_codex.set(true);
+                found
+            }
+        };
+        assert_eq!(
+            installed_cli(|| true, codex(true)),
+            Some(AiProvider::ClaudeCode)
+        );
+        // With `claude` found, `codex` is not even looked for.
+        assert!(!asked_codex.get());
+        assert_eq!(
+            installed_cli(|| false, codex(true)),
+            Some(AiProvider::Codex)
+        );
+        assert!(asked_codex.get());
+        assert_eq!(installed_cli(|| false, codex(false)), None);
     }
 }

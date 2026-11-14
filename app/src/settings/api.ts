@@ -12,14 +12,14 @@ export interface Preferences {
 }
 
 /** Mirrors `AiProvider` in src-tauri/src/settings.rs: who describes captures. */
-export type AiProvider = "claudeCode" | "endpoint";
+export type AiProvider = "claudeCode" | "codex" | "endpoint";
 
 /** Mirrors `AiSettings` in src-tauri/src/settings.rs: the vision model that describes captures. */
 export interface AiPreferences {
   enabled: boolean;
   /**
-   * Null until a provider was picked, or Grab-it picked Claude Code because
-   * it is installed; it then works as "endpoint" (see {@link aiProvider}).
+   * Null until a provider was picked, or Grab-it picked Claude Code or Codex
+   * because it is installed; it then works as "endpoint" (see {@link aiProvider}).
    */
   provider: AiProvider | null;
   /** An OpenAI-compatible API base URL, such as Ollama's. Only the endpoint provider uses it. */
@@ -58,6 +58,11 @@ export const AI_PROVIDERS: { value: AiProvider; title: string; hint: string }[] 
     hint: "Uses the claude command you already have and are signed in to, with the Haiku model. Nothing to set up or download.",
   },
   {
+    value: "codex",
+    title: "Codex",
+    hint: "Uses the codex command you already have and are signed in to, with the model you set up for it. Nothing to set up or download.",
+  },
+  {
     value: "endpoint",
     title: "OpenAI-compatible endpoint",
     hint: "Ollama or LM Studio on this computer, or a cloud API such as OpenAI or OpenRouter.",
@@ -66,12 +71,15 @@ export const AI_PROVIDERS: { value: AiProvider; title: string; hint: string }[] 
 
 /** A provider's name as messages show it. */
 export function providerName(provider: AiProvider): string {
-  return provider === "claudeCode" ? "Claude Code" : "the AI endpoint";
+  if (provider === "claudeCode") return "Claude Code";
+  if (provider === "codex") return "Codex";
+  return "the AI endpoint";
 }
 
 /** Mirrors `AiClis` in src-tauri/src/ai.rs: where each AI CLI was found, or null when it is not installed. */
 export interface AiClis {
   claudeCode: string | null;
+  codex: string | null;
 }
 
 /** Looks for the AI CLIs Grab-it can run. */
