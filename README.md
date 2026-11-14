@@ -188,7 +188,7 @@ The first release, made before any tag exists, takes the version in `app/src-tau
 
 A run opens a draft release, builds the installers into it, and publishes it (creating the tag) only when the checks and all three builds pass. A failed run leaves only a hidden draft, which the next run replaces. Each release is named after its tag, for example `v0.2.1`.
 
-The installers are not signed with a paid certificate. The macOS app is ad-hoc signed, so Gatekeeper says it cannot verify the developer rather than calling the app damaged: after the first attempt to open it, click **Open Anyway** under System Settings → Privacy & Security (or run `xattr -dr com.apple.quarantine /Applications/Grab-it.app`).
+The installers are not signed with a paid certificate. CI ad-hoc signs the macOS app (the `APPLE_SIGNING_IDENTITY` repository secret overrides the `-` identity), so Gatekeeper says it cannot verify the developer rather than calling the app damaged: after the first attempt to open it, click **Open Anyway** under System Settings → Privacy & Security (or run `xattr -dr com.apple.quarantine /Applications/Grab-it.app`).
 
 ## License
 

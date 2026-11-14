@@ -228,15 +228,16 @@ jobs:
             fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
           '
 
-      # macOS builds are ad-hoc signed (bundle.macOS.signingIdentity "-" in
-      # tauri.conf.json). Without any signature, Apple silicon reports a
-      # downloaded app as "damaged" and refuses to open it.
+      # The macOS app is signed with the APPLE_SIGNING_IDENTITY secret when it
+      # is set, and ad-hoc ("-") otherwise. Without any signature, Apple
+      # silicon reports a downloaded app as "damaged" and refuses to open it.
       # With a release id (main only) the installers are also uploaded to the
       # draft release; without one, tauri-action only builds.
       - name: Build installers
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
         with:
           projectPath: app
           releaseId: ${{ needs.version.outputs.release_id }}
