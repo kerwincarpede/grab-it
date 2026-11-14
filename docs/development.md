@@ -69,6 +69,8 @@ Region and Window freeze every monitor and show it fullscreen. Each monitor is c
 
 The overlay has to appear the moment it is asked for, so a spare overlay window per monitor is kept hidden with its page already loaded, and replaced after each selection. On macOS the overlay is a see-through window (hence `macOSPrivateApi` in `tauri.conf.json`), shown as soon as the monitors are frozen; the frozen image reaches the page a moment later and slots in underneath. On Windows and X11 the overlay stays hidden until the frozen image is painted.
 
+Nothing heavy happens while a selection is on screen. The frozen image is PNG-encoded on its own thread the moment the monitors freeze, never on the main thread. On macOS the window list is read in one pass over the window server's list (`screen::windows_and_foreground`) rather than through xcap, which fetches the whole list again for every property of every window, and only ordinary app windows are offered for hovering. The blur around a hovered window is drawn once per selection into a small canvas (`src/overlay/backdrop.ts`), not by a CSS filter. The OCR queue waits while an overlay is open. Set `GRAB_IT_TRACE_OVERLAY=1` to print how long freezing, listing windows, showing the overlay and encoding the image took.
+
 ### Wayland and macOS
 
 - **Wayland** (`WAYLAND_DISPLAY` set): captures go through the desktop's Screenshot portal, and Pick a colour uses the desktop's colour picker. Hotkeys are offered to the desktop through the GlobalShortcuts portal; where the desktop has no such portal, use the tray menu. Repeat last region and recording are not available, since only the desktop may read the screen there.

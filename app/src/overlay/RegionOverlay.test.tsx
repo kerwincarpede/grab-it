@@ -99,10 +99,11 @@ describe("RegionOverlay", () => {
       expect(screen.getByTestId("overlay-selection")).toHaveTextContent("Editor"),
     );
     expect(screen.getByTestId("overlay-selection")).toHaveClass("overlay-window");
-    // Around it the frozen screen is blurred, with the window cut out.
+    // Around it the frozen screen is blurred and tinted, with the window cut out.
     const blur = screen.getByTestId("overlay-blur");
-    expect(blur).toHaveClass("overlay-image-blur");
+    expect(blur).toHaveClass("overlay-backdrop");
     expect(blur.style.clipPath).toContain("M110 100H290");
+    expect(screen.getByTestId("overlay-dim").style.clipPath).toContain("M110 100H290");
     fireEvent.mouseDown(overlay, { button: 0, clientX: 150, clientY: 150 });
     fireEvent.mouseUp(overlay, { button: 0, clientX: 151, clientY: 150 });
 

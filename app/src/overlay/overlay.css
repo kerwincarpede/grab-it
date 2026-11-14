@@ -24,8 +24,6 @@
   --overlay-accent: #2f81f7;
   /* A hovered window's edge: a violet that reads on light and dark apps. */
   --overlay-window: 167 139 250;
-  /* Around a hovered window: near black, so the window is what you see. */
-  --overlay-around: rgb(8 9 12 / 52%);
   /*
    * A cool slate rather than black: it darkens a light screen and lifts a
    * dark one, so the tint shows on either.
@@ -76,11 +74,21 @@
   pointer-events: none;
 }
 
+/*
+ * The tint, with the selection or hovered window cut out of it (`clip-path`
+ * from the page). The hole glides from window to window, and follows a drag
+ * exactly.
+ */
 .overlay-dim {
   position: absolute;
   inset: 0;
   background: var(--overlay-dim);
   pointer-events: none;
+  will-change: clip-path;
+}
+
+.overlay[data-dragging="false"] .overlay-dim {
+  transition: clip-path 90ms ease-out;
 }
 
 /* Guide lines through the cursor; moved with transforms, so no layout. */
@@ -108,13 +116,8 @@
 
 .overlay-selection {
   position: absolute;
-  /*
-   * Both drawn as shadows so the selected pixels stay untouched: a crisp 1px
-   * border just outside the selection, then the dim over everything else.
-   */
-  box-shadow:
-    0 0 0 1px var(--overlay-accent),
-    0 0 0 100vmax var(--overlay-dim);
+  /* A shadow, so the selected pixels stay untouched: a crisp 1px border just outside. */
+  box-shadow: 0 0 0 1px var(--overlay-accent);
   pointer-events: none;
 }
 
@@ -141,18 +144,17 @@
 
 /*
  * A hovered window is shown as it is: no tint on it at all. Everything
- * around it steps back, darker and blurred (the blur is a copy of the
- * frozen screen with the window cut out, `.overlay-image-blur`), and the
- * window gets a crisp violet edge with a faint glow, rounded like the windows
- * themselves. A short glide from one window to the next.
+ * around it steps back, darker and blurred (`.overlay-backdrop`, with the
+ * window cut out), and the window gets a crisp violet edge with a faint
+ * glow, rounded like the windows themselves. A short glide from one window
+ * to the next.
  */
 .overlay-window {
   background: none;
   border-radius: 10px;
   box-shadow:
     0 0 0 2px rgb(var(--overlay-window)),
-    0 0 10px rgb(var(--overlay-window) / 16%),
-    0 0 0 100vmax var(--overlay-around);
+    0 0 10px rgb(var(--overlay-window) / 16%);
   transition:
     left 90ms ease-out,
     top 90ms ease-out,
@@ -167,11 +169,26 @@
   }
 }
 
-/* The frozen screen again, blurred, with the hovered window cut out. */
-.overlay-image-blur {
-  filter: blur(10px) saturate(0.9);
-  transition: clip-path 90ms ease-out;
-  animation: overlay-window-in 120ms ease-out;
+/*
+ * The frozen screen again, blurred and darkened ahead of time into a small
+ * canvas (backdrop.ts) that is stretched over the screen, with the hovered
+ * window cut out. Nothing is blurred while the pointer moves.
+ */
+.overlay-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 120ms ease-out,
+    clip-path 90ms ease-out;
+  will-change: opacity, clip-path;
+}
+
+.overlay-backdrop[data-active="true"] {
+  opacity: 1;
 }
 
 /* A hovered window is a suggestion, not a selection: no ticks. */
@@ -372,7 +389,9 @@
 @media (prefers-reduced-motion: reduce) {
   .overlay,
   .overlay-window,
-  .overlay-hint {
+  .overlay-hint,
+  .overlay-backdrop,
+  .overlay[data-dragging="false"] .overlay-dim {
     transition: none;
     animation: none;
   }

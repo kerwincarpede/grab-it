@@ -24,10 +24,10 @@
 use std::{
     collections::HashMap,
     sync::{
-        Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use image::RgbaImage;
@@ -62,9 +62,15 @@ const PAGE: &str = if INSTANT {
     "index.html#/overlay"
 };
 
+/// A frozen monitor as PNG for its overlay's page, or why it could not be
+/// encoded. Filled in once, off the main thread.
+type Encoded = Arc<OnceLock<Result<Vec<u8>, String>>>;
+
 struct Frame {
     monitor: MonitorInfo,
-    image: RgbaImage,
+    image: Arc<RgbaImage>,
+    /// `image` as PNG, being encoded from the moment the monitor froze.
+    png: Encoded,
     /// The overlay's page has asked what to show, so it is alive.
     responded: bool,
 }
@@ -307,7 +313,12 @@ pub fn open(app: &AppHandle, mode: CaptureMode, intent: Intent) -> Result<(), St
     // The windows are listed beside the capture, not ahead of it, so the
     // overlay waits only for the slower of the two. Both are done before an
     // overlay takes the focus from the window the user was in.
-    let listing = std::thread::spawn(|| (screen::foreground(), screen::windows()));
+    let started = Instant::now();
+    let listing = std::thread::spawn(move || {
+        let listed = screen::windows_and_foreground();
+        trace(format_args!("windows listed in {:?}", started.elapsed()));
+        listed
+    });
     let frames = match screen::capture_monitors() {
         Ok(frames) => frames,
         Err(err) => {
@@ -315,6 +326,7 @@ pub fn open(app: &AppHandle, mode: CaptureMode, intent: Intent) -> Result<(), St
             return Err(err);
         }
     };
+    trace(format_args!("monitors frozen in {:?}", started.elapsed()));
     let (foreground, windows) = listing.join().unwrap_or_default();
     let placements = app.available_monitors().unwrap_or_default();
 
@@ -349,10 +361,12 @@ pub fn open(app: &AppHandle, mode: CaptureMode, intent: Intent) -> Result<(), St
                 label
             }
         };
+        let image = Arc::new(image);
         session.frames.insert(
             label,
             Frame {
                 monitor,
+                png: encode_later(&image, started),
                 image,
                 responded: false,
             },
@@ -389,12 +403,52 @@ pub fn open(app: &AppHandle, mode: CaptureMode, intent: Intent) -> Result<(), St
         return Err(format!("could not show the capture overlay: {err}"));
     }
 
+    trace(format_args!("overlay shown in {:?}", started.elapsed()));
+
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(READY_TIMEOUT);
         settle(&app, id);
     });
     Ok(())
+}
+
+/// Prints how long the steps of opening an overlay took, when
+/// `GRAB_IT_TRACE_OVERLAY` is set.
+fn trace(message: std::fmt::Arguments<'_>) {
+    static ON: OnceLock<bool> = OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("GRAB_IT_TRACE_OVERLAY").is_some()) {
+        eprintln!("Grab-it overlay: {message}");
+    }
+}
+
+/// Starts encoding `image` as PNG on its own thread, so the page's request
+/// for it finds it done or nearly done, and the main thread never encodes.
+fn encode_later(image: &Arc<RgbaImage>, started: Instant) -> Encoded {
+    let encoded = Encoded::default();
+    let (image, out) = (Arc::clone(image), Arc::clone(&encoded));
+    std::thread::spawn(move || {
+        let _ = out.set(encode_png(&image));
+        trace(format_args!(
+            "frozen image encoded in {:?}",
+            started.elapsed()
+        ));
+    });
+    encoded
+}
+
+/// `image` as PNG, compressed lightly: it only travels to the page.
+fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, String> {
+    let mut png = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new_with_quality(
+        &mut png,
+        image::codecs::png::CompressionType::Fast,
+        image::codecs::png::FilterType::NoFilter,
+    );
+    image
+        .write_with_encoder(encoder)
+        .map_err(|err| err.to_string())?;
+    Ok(png)
 }
 
 /// How long an overlay's page may take to respond.
@@ -805,13 +859,14 @@ fn notch_height(_window: &WebviewWindow) -> f64 {
     0.0
 }
 
-/// The frozen monitor image as PNG bytes.
-#[tauri::command]
+/// The frozen monitor image as PNG bytes. Off the main thread: it may wait
+/// for the encoder, and the overlay must keep following the pointer.
+#[tauri::command(async)]
 pub fn overlay_image(
     window: WebviewWindow,
     state: State<'_, OverlayState>,
 ) -> Result<tauri::ipc::Response, String> {
-    let image = {
+    let png = {
         let guard = state.lock();
         let Phase::Open(session) = &*guard else {
             return Err("no capture in progress".into());
@@ -820,18 +875,10 @@ pub fn overlay_image(
             .frames
             .get(window.label())
             .ok_or("this window is not a capture overlay")?;
-        frame.image.clone()
+        Arc::clone(&frame.png)
     };
-
-    let mut png = Vec::new();
-    let encoder = image::codecs::png::PngEncoder::new_with_quality(
-        &mut png,
-        image::codecs::png::CompressionType::Fast,
-        image::codecs::png::FilterType::NoFilter,
-    );
-    image
-        .write_with_encoder(encoder)
-        .map_err(|err| err.to_string())?;
+    // Waited for without the lock, so the selection can end meanwhile.
+    let png = png.wait().clone()?;
     Ok(tauri::ipc::Response::new(png))
 }
 
@@ -1052,7 +1099,10 @@ mod tests {
     fn picked_windows_are_cropped_from_the_frozen_frame() {
         let frame = Frame {
             monitor: monitor(100, 0, 4, 4),
-            image: RgbaImage::from_fn(4, 4, |x, y| image::Rgba([x as u8, y as u8, 0, 255])),
+            image: Arc::new(RgbaImage::from_fn(4, 4, |x, y| {
+                image::Rgba([x as u8, y as u8, 0, 255])
+            })),
+            png: Encoded::default(),
             responded: false,
         };
         let image = window_image(&frame, &window(1, 101, 2, 2, 2)).unwrap();

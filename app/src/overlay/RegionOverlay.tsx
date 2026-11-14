@@ -27,6 +27,7 @@ import {
   type Point,
   type Size,
 } from "./geometry";
+import { drawBackdrop } from "./backdrop";
 import Loupe from "./Loupe";
 import "./overlay.css";
 
@@ -88,6 +89,11 @@ function RegionOverlay() {
   const [, resized] = useReducer((count: number) => count + 1, 0);
   const done = useRef(false);
   const reported = useRef(false);
+  const backdrop = useRef<HTMLCanvasElement>(null);
+  // The blurred screen around a hovered window has been drawn.
+  const [backdropReady, setBackdropReady] = useState(false);
+  // The last window hovered, so the blur keeps its hole while it fades out.
+  const [lastHovered, setLastHovered] = useState<Box | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -192,6 +198,12 @@ function RegionOverlay() {
   }, []);
 
   const view = viewport();
+
+  // Blurred once per image (and viewport size), not on every hover.
+  useEffect(() => {
+    if (!image || !backdrop.current) return;
+    setBackdropReady(drawBackdrop(backdrop.current, image, view.width, view.height));
+  }, [image, view.width, view.height]);
   const pickable = useMemo<PickableWindow[]>(() => {
     if (!info) return [];
     const monitor = { width: info.monitorWidth, height: info.monitorHeight };
@@ -218,6 +230,9 @@ function RegionOverlay() {
   const hovered =
     canPickWindow && !dragging && pointer ? topmostAt(pickable, pointer) : undefined;
   const highlight = dragging ? selection : (hovered?.box ?? null);
+  // Boxes are memoized with the windows, so this settles in one extra render.
+  if (hovered && hovered.box !== lastHovered) setLastHovered(hovered.box);
+  const blurHole = hovered && !dragging ? hovered.box : lastHovered;
 
   function cancel() {
     if (done.current) return;
@@ -313,19 +328,35 @@ function RegionOverlay() {
           }}
         />
       )}
-      {/* Around a hovered window the frozen screen is blurred; the window itself stays sharp. */}
-      {imageUrl && hovered && !dragging && (
-        <img
-          className="overlay-image overlay-image-blur"
-          data-testid="overlay-blur"
-          src={imageUrl}
-          alt=""
-          aria-hidden="true"
-          draggable={false}
-          style={{ clipPath: cutoutPath(hovered.box, view, WINDOW_RADIUS) }}
+      {/*
+        The tint, with a hole for the selection or the hovered window. One
+        screen-sized layer: the selection never casts a shadow over the
+        whole screen, which the browser would repaint on every move.
+      */}
+      {intent !== "color" && (
+        // Colours have to be judged as they are, so the colour picker never dims.
+        <div
+          className="overlay-dim"
+          data-testid="overlay-dim"
+          style={
+            highlight
+              ? { clipPath: cutoutPath(highlight, view, dragging ? 0 : WINDOW_RADIUS) }
+              : undefined
+          }
         />
       )}
-      {highlight && placement ? (
+      {/* Around a hovered window the frozen screen is blurred; the window itself stays sharp. */}
+      {canPickWindow && (
+        <canvas
+          ref={backdrop}
+          className="overlay-backdrop"
+          data-testid="overlay-blur"
+          data-active={backdropReady && hovered && !dragging ? "true" : "false"}
+          aria-hidden="true"
+          style={blurHole ? { clipPath: cutoutPath(blurHole, view, WINDOW_RADIUS) } : undefined}
+        />
+      )}
+      {highlight && placement && (
         <div
           className={dragging ? "overlay-selection" : "overlay-selection overlay-window"}
           data-testid="overlay-selection"
@@ -340,9 +371,6 @@ function RegionOverlay() {
             {label}
           </span>
         </div>
-      ) : (
-        // Colours have to be judged as they are, so the colour picker never dims.
-        intent !== "color" && <div className="overlay-dim" />
       )}
       {canDrag && pointer && !dragging && (
         <>
