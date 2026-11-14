@@ -548,8 +548,12 @@ mod win {
                         }
                     };
                     let _ = ready.send(Ok(()));
+                    // Frames that arrive while stopped were captured for
+                    // the last recording (or none) and are thrown away.
+                    let mut started = false;
                     loop {
                         while let Ok(start) = received.try_recv() {
+                            started = start;
                             // Each recording waits for a fresh frame rather
                             // than take one left from the last.
                             *slot.lock().unwrap_or_else(|p| p.into_inner()) = None;
@@ -563,15 +567,17 @@ mod win {
                             }
                         }
                         match frames.recv_timeout(POLL) {
-                            Ok(frame) => {
+                            Ok(frame) if started => {
                                 *slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(frame);
                             }
+                            Ok(_) => {}
                             Err(RecvTimeoutError::Timeout) => {}
                             // xcap's thread ended: the duplication is gone.
                             Err(RecvTimeoutError::Disconnected) => break,
                         }
                     }
                     living.store(false, Ordering::SeqCst);
+                    *slot.lock().unwrap_or_else(|p| p.into_inner()) = None;
                 })
                 .map_err(|err| err.to_string())?;
             opened
@@ -606,6 +612,9 @@ mod win {
             let fallback = RegionSource::open(info, rect, show_cursor)?;
             let monitor = fallback.monitor.id().map_err(|err| err.to_string())?;
             let duplicator = Duplicator::get(monitor)?;
+            // Grabs fall back to GDI until a frame of this recording comes:
+            // the thread may not see Start for up to a poll.
+            *duplicator.latest.lock().unwrap_or_else(|p| p.into_inner()) = None;
             duplicator.send(true);
             Ok(Self {
                 duplicator,
@@ -616,6 +625,11 @@ mod win {
 
     impl FrameSource for Duplication {
         fn grab(&mut self) -> Result<Grabbed, String> {
+            // A lost duplication (a full-screen app, a UAC prompt, the lock
+            // screen) sends nothing more: GDI takes over for the rest.
+            if !self.duplicator.alive.load(Ordering::SeqCst) {
+                return self.fallback.grab();
+            }
             let cropped = {
                 let latest = self
                     .duplicator
