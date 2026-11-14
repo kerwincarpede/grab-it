@@ -231,10 +231,13 @@ export type RecordingFormat = "gif" | "mp4";
 /** Mirrors `RecordingQuality` in src-tauri/src/settings.rs. */
 export type RecordingQuality = "low" | "medium" | "high";
 
-/** Mirrors `RecordingSettings` in src-tauri/src/settings.rs. */
 /** Mirrors `RecordingSettings::fps` in src-tauri/src/settings.rs: an MP4's frames a second. */
 export type RecordingFps = 30 | 60;
 
+/** Mirrors `RecordingAudio` in src-tauri/src/settings.rs: what sound an MP4 records. */
+export type RecordingAudio = "none" | "microphone";
+
+/** Mirrors `RecordingSettings` in src-tauri/src/settings.rs. */
 export interface RecordingSettings {
   format: RecordingFormat;
   /** MP4 only. */
@@ -243,9 +246,20 @@ export interface RecordingSettings {
   fps: RecordingFps;
   /** Draws the pointer into the recording. */
   showCursor: boolean;
+  /** MP4 only; a GIF is silent. */
+  audio: RecordingAudio;
+  /** The `Microphone.id` recorded; null records the system's default microphone. */
+  microphone: string | null;
 }
 
-export const DEFAULT_RECORDING: RecordingSettings = { format: "mp4", quality: "high", fps: 30, showCursor: true };
+export const DEFAULT_RECORDING: RecordingSettings = {
+  format: "mp4",
+  quality: "high",
+  fps: 30,
+  showCursor: true,
+  audio: "none",
+  microphone: null,
+};
 
 export const RECORDING_FORMATS: { value: RecordingFormat; title: string; hint: string }[] = [
   { value: "mp4", title: "MP4 video", hint: "Smooth video with no time limit, small enough to share." },
@@ -263,8 +277,26 @@ export const RECORDING_FPS: { value: RecordingFps; title: string }[] = [
   { value: 60, title: "60 fps" },
 ];
 
+export const RECORDING_AUDIO: { value: RecordingAudio; title: string }[] = [
+  { value: "none", title: "None" },
+  { value: "microphone", title: "Microphone" },
+];
+
 export function setRecording(recording: RecordingSettings): Promise<Settings> {
   return invoke<Settings>("set_recording", { recording });
+}
+
+/** Mirrors `MicrophoneInfo` in src-tauri/src/audio.rs. */
+export interface Microphone {
+  /** What `RecordingSettings.microphone` saves to pick it. */
+  id: string;
+  name: string;
+  isDefault: boolean;
+}
+
+/** The microphones that can be recorded. On Linux, empty until ffmpeg is ready, which lists them. */
+export function listMicrophones(): Promise<Microphone[]> {
+  return invoke<Microphone[]>("recording_microphones");
 }
 
 /** Mirrors `FfmpegStatus` in src-tauri/src/ffmpeg.rs: whether MP4 can be recorded yet. */

@@ -8,8 +8,11 @@
 //!
 //! An MP4 is piped through ffmpeg (see ffmpeg.rs) at a constant 30 or 60
 //! frames a second, with no length limit, and `<name>.cursor.json` beside
-//! it says where the pointer was in each frame. A GIF is encoded here,
-//! about ten frames a second, for at most [`MAX_DURATION`]. MP4 is the
+//! it says where the pointer was in each frame. With Audio set to
+//! Microphone, its sound is recorded alongside (see audio.rs) and muxed in
+//! when it stops; a recording whose sound failed is kept silent, and the
+//! card says why. A GIF is silent, encoded here at about ten frames a
+//! second, for at most [`MAX_DURATION`]. MP4 is the
 //! default; while ffmpeg is not ready yet, a recording is saved as a GIF
 //! and the card says why. Frames are grabbed as frames.rs says.
 //!
@@ -38,13 +41,14 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     actions,
+    audio::{self, Gap, Microphone},
     capture::{self, Rect},
     commands::{SettingsState, lock},
     ffmpeg::{self, Video, VideoSpec},
     frames::{self, FrameSource},
     quick::{self, QuickItem},
     screen::MonitorInfo,
-    settings::{RecordingFormat, RecordingSettings},
+    settings::{RecordingAudio, RecordingFormat, RecordingSettings},
 };
 
 pub const RECORDINGS_DIR: &str = "recordings";
@@ -161,14 +165,18 @@ pub fn frame_size(region: (u32, u32)) -> (u32, u32) {
 /// At most half a second of repeats follows each grab. Frame times further
 /// behind than that (ffmpeg taking frames in more slowly than the frame
 /// rate, or the computer sleeping mid-recording) are dropped, so a new
-/// frame is always grabbed soon and the video keeps moving.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// frame is always grabbed soon and the video keeps moving. Each stretch
+/// dropped is kept as a [`Gap`], so the same stretch can be cut out of the
+/// sound, which does not skip.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pacer {
     fps: u64,
     /// Frames written so far, repeats included.
     frames: u64,
     /// Frame times dropped because the recording fell too far behind.
     dropped: u64,
+    /// Where those frame times were, from the recording's start.
+    gaps: Vec<Gap>,
 }
 
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
@@ -179,6 +187,7 @@ impl Pacer {
             fps: u64::from(fps.max(1)),
             frames: 0,
             dropped: 0,
+            gaps: Vec::new(),
         }
     }
 
@@ -197,8 +206,22 @@ impl Pacer {
         let current = (elapsed.as_nanos() * u128::from(self.fps) / NANOS_PER_SECOND) as u64;
         let behind = current.saturating_sub(self.frames + self.dropped);
         let repeats = behind.min(self.max_repeats());
-        self.dropped += behind - repeats;
+        let dropped = behind - repeats;
+        if dropped > 0 {
+            // The dropped frame times follow this frame's repeats.
+            let first = self.frames + repeats + self.dropped;
+            self.gaps.push(Gap {
+                start: self.at(first),
+                length: self.at(first + dropped) - self.at(first),
+            });
+        }
+        self.dropped += dropped;
         repeats
+    }
+
+    /// The stretches of the recording the video skipped, in order.
+    pub fn gaps(&self) -> &[Gap] {
+        &self.gaps
     }
 
     /// Counts one repeat of the last frame.
@@ -315,7 +338,7 @@ pub fn start(
         let settings = store.get();
         (
             settings.save_folder.join(RECORDINGS_DIR),
-            settings.recording,
+            settings.recording.clone(),
         )
     };
     // MP4 needs ffmpeg; until it is ready, the recording is a GIF.
@@ -336,6 +359,14 @@ pub fn start(
         Output::Gif => RecordingFormat::Gif,
         Output::Mp4(..) => RecordingFormat::Mp4,
     };
+    // Only an MP4 has sound. macOS asks for the microphone first, the
+    // first time; the recording waits for the answer.
+    let microphone =
+        format == RecordingFormat::Mp4 && recording.audio == RecordingAudio::Microphone;
+    let microphone_allowed = microphone && crate::permissions::ensure_microphone(app);
+    if microphone && !microphone_allowed {
+        fallback = Some(no_sound("Grab-it may not use the microphone"));
+    }
     let started = Local::now();
     let prepared = fs::create_dir_all(&folder)
         .map(|()| unique_recording_path(&folder, &started, format))
@@ -382,17 +413,27 @@ pub fn start(
             std::thread::sleep(SETTLE_DELAY);
             let result = match &output {
                 Output::Gif => frames::open(&monitor, rect, GIF_FPS, recording.show_cursor)
-                    .and_then(|mut source| record_gif(source.as_mut(), &path, &flag)),
+                    .and_then(|mut source| record_gif(source.as_mut(), &path, &flag))
+                    .map(|duration| (duration, None)),
                 Output::Mp4(ready) => {
                     frames::open(&monitor, rect, recording.fps, recording.show_cursor).and_then(
-                        |mut source| record_mp4(source.as_mut(), &path, &flag, ready, &recording),
+                        |mut source| {
+                            record_mp4(
+                                source.as_mut(),
+                                &path,
+                                &flag,
+                                ready,
+                                &recording,
+                                microphone_allowed,
+                            )
+                        },
                     )
                 }
             };
             *handle.state::<RecordState>().lock() = None;
             crate::tray::set_recording(&handle, false);
             match result {
-                Ok(duration) => {
+                Ok((duration, note)) => {
                     let bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
                     quick::show(
                         &handle,
@@ -405,7 +446,7 @@ pub fn start(
                             duration_ms: duration.as_millis() as u64,
                             bytes,
                             format,
-                            fallback,
+                            fallback: fallback.or(note),
                         },
                     );
                 }
@@ -424,17 +465,40 @@ pub fn start(
     Ok(())
 }
 
+/// What the card says when a recording was saved without its sound.
+fn no_sound(why: &str) -> String {
+    format!("Saved without sound: {why}.")
+}
+
 /// Grabs frames into the MP4 at `path` until `stop` is set, at a constant
 /// frame rate: a frame time that goes by while a grab is under way
-/// repeats the frame before. Saves where the pointer was beside it.
-/// Returns how long the video runs.
+/// repeats the frame before. Saves where the pointer was beside it, and
+/// with `microphone` muxes in its sound. Returns how long the video runs,
+/// and why it has no sound when the microphone failed.
 fn record_mp4(
     source: &mut dyn FrameSource,
     path: &Path,
     stop: &AtomicBool,
     ready: &ffmpeg::Ready,
     recording: &RecordingSettings,
-) -> Result<Duration, String> {
+    microphone: bool,
+) -> Result<(Duration, Option<String>), String> {
+    let mut note = None;
+    // Started before the first grab, so the sound covers the first frame;
+    // what it heard before that frame is cut when it is muxed in. Dropped
+    // on an early return, which stops it and deletes its WAV.
+    let microphone = if microphone {
+        match Microphone::start(&ready.path, recording.microphone.as_deref()) {
+            Ok(microphone) => Some(microphone),
+            Err(err) => {
+                eprintln!("Grab-it: recording without sound: {err}");
+                note = Some(no_sound(&err));
+                None
+            }
+        }
+    } else {
+        None
+    };
     let first = source.grab()?;
     let (mut frame, mut pointer) = (first.image, first.pointer);
     let input = frame.dimensions();
@@ -485,11 +549,28 @@ fn record_mp4(
         };
     }
     video.finish().map_err(|err| err.to_string())?;
+    if let Some(microphone) = microphone {
+        let muxed = microphone.stop().and_then(|sound| {
+            let offset = audio::offset(started, sound.first_sample);
+            // The sound runs on through the frame times the video dropped:
+            // cut them out of it too, or it would run ahead of the video.
+            sound
+                .cut(pacer.gaps(), offset)
+                .map_err(|err| format!("could not cut the sound to the video: {err}"))?;
+            ffmpeg::add_audio(&ready.path, path, &sound.wav, offset, pacer.duration())
+                .map_err(|err| err.to_string())
+        });
+        // The video is kept, silent.
+        if let Err(err) = muxed {
+            eprintln!("Grab-it: the recording has no sound: {err}");
+            note = Some(no_sound(&err));
+        }
+    }
     // The video is fine without it.
     if let Err(err) = track.save(path) {
         eprintln!("Grab-it: no pointer sidecar: {err}");
     }
-    Ok(pacer.duration())
+    Ok((pacer.duration(), note))
 }
 
 /// Grabs frames into the GIF at `path` until `stop` is set or the time is
@@ -697,6 +778,33 @@ mod tests {
         }
         assert_eq!(written, 1800);
         assert_eq!(pacer.duration().as_secs(), 60);
+    }
+
+    #[test]
+    fn dropped_frame_times_are_kept_as_gaps_for_the_sound() {
+        let mut pacer = Pacer::new(10);
+        let ms = Duration::from_millis;
+        assert_eq!(pacer.wrote_frame(ms(10)), 0);
+        assert!(pacer.gaps().is_empty());
+        // The second grab took until 1.25 s: frame times 2 to 11 went by.
+        // Five are repeats (half a second); 7 to 11 are dropped.
+        let repeats = pacer.wrote_frame(ms(1250));
+        assert_eq!(repeats, 5);
+        for _ in 0..repeats {
+            pacer.repeated();
+        }
+        assert_eq!(
+            pacer.gaps(),
+            [Gap {
+                start: ms(700),
+                length: ms(500),
+            }]
+        );
+        assert_eq!(pacer.next_frame_at(), ms(1200));
+        assert_eq!(pacer.wrote_frame(ms(1210)), 0);
+        // The video plays 0.8 s; with the gap, 1.3 s of sound went by.
+        assert_eq!(pacer.duration(), ms(800));
+        assert_eq!(pacer.duration() + pacer.gaps()[0].length, ms(1300));
     }
 
     #[test]

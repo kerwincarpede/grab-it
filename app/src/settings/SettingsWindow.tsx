@@ -8,14 +8,18 @@ import {
   DEFAULT_APPEARANCE,
   DEFAULT_RECORDING,
   POPUP_CORNERS,
+  RECORDING_AUDIO,
   RECORDING_FORMATS,
   RECORDING_FPS,
   RECORDING_QUALITIES,
   ffmpegStatus,
+  listMicrophones,
   onFfmpegStatus,
   retryFfmpeg,
   setRecording,
   type FfmpegStatus,
+  type Microphone,
+  type RecordingAudio,
   type RecordingSettings,
   POPUP_SECONDS,
   TEXT_SCALE,
@@ -178,6 +182,9 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   /** Null until the backend has said; only the Recording page asks. */
   const [ffmpeg, setFfmpeg] = useState<FfmpegStatus | null>(null);
   const showsRecording = shows("recording");
+  /** The microphones to pick from; on Linux ffmpeg lists them, so they come once it is ready. */
+  const [microphones, setMicrophones] = useState<Microphone[]>([]);
+  const ffmpegReady = ffmpeg?.state === "ready";
   // Null until the system has answered, or when it cannot say: the toggle
   // is then left out rather than shown in a state that may be wrong.
   const [autostart, setAutostartState] = useState<boolean | null>(null);
@@ -237,10 +244,25 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     };
   }, [showsRecording]);
 
+  useEffect(() => {
+    if (!showsRecording) return;
+    let cancelled = false;
+    listMicrophones()
+      .then((list) => {
+        if (!cancelled && Array.isArray(list)) setMicrophones(list);
+      })
+      .catch(() => {
+        // System default still works without the list.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showsRecording, ffmpegReady]);
+
   async function changeRecording(change: Partial<RecordingSettings>) {
     setBusy(true);
     try {
-      const saved = await setRecording({ ...(settings?.recording ?? DEFAULT_RECORDING), ...change });
+      const saved = await setRecording({ ...DEFAULT_RECORDING, ...settings?.recording, ...change });
       setSettings(saved);
       setStatus({ kind: "preferences-saved" });
       // Choosing MP4 starts getting ffmpeg ready.
@@ -364,7 +386,12 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     section === "capture" ||
     section === "editor" ||
     section === "recording";
-  const recording = settings?.recording ?? DEFAULT_RECORDING;
+  const recording: RecordingSettings = { ...DEFAULT_RECORDING, ...settings?.recording };
+  const recordingOff = busy || settings === null;
+  const silent = recording.format === "gif";
+  const defaultMicrophone = microphones.find((microphone) => microphone.isDefault);
+  const savedMicrophoneMissing =
+    recording.microphone !== null && !microphones.some((microphone) => microphone.id === recording.microphone);
   const recordingFormat = RECORDING_FORMATS.find((choice) => choice.value === recording.format);
   const appearance = settings?.appearance ?? DEFAULT_APPEARANCE;
   const appearanceOff = busy || settings === null;
@@ -555,6 +582,56 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                 </div>
                 <FfmpegRow status={ffmpeg} onRetry={retry} />
               </>
+            )}
+            <div className="row">
+              <span className="row-text">
+                <label className="row-title" htmlFor="recording-audio">
+                  Audio
+                </label>
+                <span className="row-hint">
+                  {silent ? "GIFs are silent. Choose MP4 video to record sound." : "Records sound along with the video."}
+                </span>
+              </span>
+              <select
+                id="recording-audio"
+                className="row-field"
+                value={recording.audio}
+                disabled={recordingOff || silent}
+                onChange={(event) => void changeRecording({ audio: event.target.value as RecordingAudio })}
+              >
+                {RECORDING_AUDIO.map((choice) => (
+                  <option key={choice.value} value={choice.value}>
+                    {choice.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {recording.audio === "microphone" && (
+              <div className="row">
+                <span className="row-text">
+                  <label className="row-title" htmlFor="recording-microphone">
+                    Microphone
+                  </label>
+                  <span className="row-hint">System default follows the input chosen in your sound settings.</span>
+                </span>
+                <select
+                  id="recording-microphone"
+                  className="row-field"
+                  value={recording.microphone ?? ""}
+                  disabled={recordingOff || silent}
+                  onChange={(event) => void changeRecording({ microphone: event.target.value === "" ? null : event.target.value })}
+                >
+                  <option value="">{defaultMicrophone ? `System default (${defaultMicrophone.name})` : "System default"}</option>
+                  {microphones.map((microphone) => (
+                    <option key={microphone.id} value={microphone.id}>
+                      {microphone.name}
+                    </option>
+                  ))}
+                  {savedMicrophoneMissing && recording.microphone !== null && (
+                    <option value={recording.microphone}>{`${recording.microphone} (not connected)`}</option>
+                  )}
+                </select>
+              </div>
             )}
             <label className="row">
               <span className="row-text">
