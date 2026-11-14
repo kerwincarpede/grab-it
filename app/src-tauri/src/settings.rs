@@ -365,27 +365,17 @@ impl EditorPreferences {
     }
 }
 
-/// How big the Grab-it window draws everything, text included.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum TextSize {
-    Small,
-    #[default]
-    Default,
-    Large,
-    Larger,
-}
+/// The Grab-it window's text size, as a percentage: it zooms the whole
+/// window, text, buttons and thumbnails alike.
+pub const MIN_TEXT_SCALE: u32 = 85;
+pub const MAX_TEXT_SCALE: u32 = 130;
+/// Slightly larger than the page's own size, which reads small on most
+/// screens.
+pub const DEFAULT_TEXT_SCALE: u32 = 110;
 
-impl TextSize {
-    /// The Grab-it window's zoom for this size.
-    pub fn zoom(self) -> f64 {
-        match self {
-            Self::Small => 0.9,
-            Self::Default => 1.0,
-            Self::Large => 1.12,
-            Self::Larger => 1.25,
-        }
-    }
+/// `percent` held to what the slider offers.
+fn clamp_text_scale(percent: u32) -> u32 {
+    percent.clamp(MIN_TEXT_SCALE, MAX_TEXT_SCALE)
 }
 
 /// Which corner of the screen the popup after a capture sits in.
@@ -406,7 +396,10 @@ pub const MAX_POPUP_SECONDS: u32 = 60;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Appearance {
-    pub text_size: TextSize,
+    /// How big the Grab-it window draws everything, in percent.
+    pub text_scale: u32,
+    /// The same for the menu bar hub, whose window grows to match.
+    pub hub_scale: u32,
     pub popup_corner: PopupCorner,
     /// How long the popup stays, in seconds; 0 keeps it until it is closed.
     pub popup_seconds: u32,
@@ -415,7 +408,8 @@ pub struct Appearance {
 impl Default for Appearance {
     fn default() -> Self {
         Self {
-            text_size: TextSize::Default,
+            text_scale: DEFAULT_TEXT_SCALE,
+            hub_scale: DEFAULT_TEXT_SCALE,
             popup_corner: PopupCorner::BottomLeft,
             popup_seconds: 8,
         }
@@ -423,14 +417,29 @@ impl Default for Appearance {
 }
 
 impl Appearance {
+    /// The Grab-it window's zoom.
+    pub fn zoom(&self) -> f64 {
+        f64::from(clamp_text_scale(self.text_scale)) / 100.0
+    }
+
+    /// The menu bar hub's zoom.
+    pub fn hub_zoom(&self) -> f64 {
+        f64::from(clamp_text_scale(self.hub_scale)) / 100.0
+    }
+
     /// Read from the settings file: anything it cannot use keeps its default.
     fn from_stored(value: serde_json::Value) -> Self {
         let defaults = Self::default();
         let field = |key: &str| value.get(key).cloned();
         Self {
-            text_size: field("textSize")
-                .and_then(|v| serde_json::from_value(v).ok())
-                .unwrap_or(defaults.text_size),
+            text_scale: field("textScale")
+                .and_then(|v| v.as_u64())
+                .map(|percent| clamp_text_scale(percent.min(u64::from(u32::MAX)) as u32))
+                .unwrap_or(defaults.text_scale),
+            hub_scale: field("hubScale")
+                .and_then(|v| v.as_u64())
+                .map(|percent| clamp_text_scale(percent.min(u64::from(u32::MAX)) as u32))
+                .unwrap_or(defaults.hub_scale),
             popup_corner: field("popupCorner")
                 .and_then(|v| serde_json::from_value(v).ok())
                 .unwrap_or(defaults.popup_corner),
@@ -949,6 +958,8 @@ impl SettingsStore {
     pub fn set_appearance(&mut self, appearance: Appearance) -> Result<Settings, SettingsError> {
         let next = Settings {
             appearance: Appearance {
+                text_scale: clamp_text_scale(appearance.text_scale),
+                hub_scale: clamp_text_scale(appearance.hub_scale),
                 popup_seconds: appearance.popup_seconds.min(MAX_POPUP_SECONDS),
                 ..appearance
             },
@@ -1095,27 +1106,31 @@ mod tests {
         assert_eq!(store.get().appearance, Appearance::default());
         let saved = store
             .set_appearance(Appearance {
-                text_size: TextSize::Larger,
+                text_scale: 400,
+                hub_scale: 50,
                 popup_corner: PopupCorner::TopRight,
                 popup_seconds: 500,
             })
             .unwrap()
             .appearance;
         assert_eq!(saved.popup_seconds, MAX_POPUP_SECONDS);
+        assert_eq!(saved.text_scale, MAX_TEXT_SCALE);
+        assert_eq!(saved.hub_scale, MIN_TEXT_SCALE);
+        assert_eq!(Appearance::default().zoom(), 1.1);
         assert_eq!(load(&path, defaults(&dir)).unwrap().appearance, saved);
         assert_eq!(
             serde_json::to_value(saved).unwrap(),
-            serde_json::json!({"textSize": "larger", "popupCorner": "topRight", "popupSeconds": 60})
+            serde_json::json!({"textScale": 130, "hubScale": 85, "popupCorner": "topRight", "popupSeconds": 60})
         );
 
         // One bad value keeps its default; the rest still load.
         fs::write(
             &path,
-            r#"{"appearance": {"textSize": "huge", "popupCorner": "topLeft", "popupSeconds": -3}}"#,
+            r#"{"appearance": {"textScale": "huge", "popupCorner": "topLeft", "popupSeconds": -3}}"#,
         )
         .unwrap();
         let loaded = load(&path, defaults(&dir)).unwrap().appearance;
-        assert_eq!(loaded.text_size, TextSize::Default);
+        assert_eq!(loaded.text_scale, DEFAULT_TEXT_SCALE);
         assert_eq!(loaded.popup_corner, PopupCorner::TopLeft);
         assert_eq!(loaded.popup_seconds, 8);
     }

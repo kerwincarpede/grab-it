@@ -468,7 +468,8 @@ button.update-card {
   font-weight: 600;
 }
 
-/* The page scrolls under its heading; the close button stays put. */
+/* The heading stays put; only the page under it scrolls, so the
+   scrollbar starts below the heading. */
 .settings-body {
   position: relative;
   display: flex;
@@ -479,41 +480,30 @@ button.update-card {
 }
 
 .settings-body .window {
+  display: flex;
   flex: 1;
+  flex-direction: column;
   max-width: none;
   min-height: 0;
   margin: 0;
-  padding: 0 32px 32px;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
+  padding: 0;
 }
 
 .settings-body .settings-title {
-  position: sticky;
-  top: 0;
-  z-index: 3;
-  margin: 0 -32px;
-  padding: 22px 64px 12px 32px;
+  flex: none;
+  margin: 0;
+  padding: 22px 64px 14px 32px;
   font-size: 18px;
   font-weight: 600;
   letter-spacing: -0.01em;
-  background: var(--bg);
-  border-bottom: 1px solid transparent;
+  border-bottom: 1px solid var(--border);
 }
 
-/* A hairline under the heading once the page has scrolled beneath it. */
-@supports (animation-timeline: scroll()) {
-  .settings-body .settings-title {
-    animation: heading-edge linear both;
-    animation-timeline: scroll(nearest);
-    animation-range: 0 24px;
-  }
-
-  @keyframes heading-edge {
-    to {
-      border-bottom-color: var(--border);
-    }
-  }
+.settings-body .settings-content {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 32px 32px;
+  overflow-y: auto;
 }
 
 .settings-body .settings-lead {
@@ -522,7 +512,6 @@ button.update-card {
   font-size: 12.5px;
 }
 
-/* Above the sticky heading, which would otherwise cover it. */
 .settings-body .dialog-close {
   top: 18px;
   right: 18px;

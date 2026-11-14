@@ -735,15 +735,28 @@ describe("SettingsWindow AI descriptions", () => {
 });
 
 describe("SettingsWindow appearance", () => {
-  it("saves the text size, the popup's corner and its time at once", async () => {
-    const backend = mockBackend({ appearance: { textSize: "default", popupCorner: "bottomLeft", popupSeconds: 8 } });
+  it("saves the text sizes on release, and the popup's corner and time at once", async () => {
+    const backend = mockBackend({ appearance: { textScale: 110, hubScale: 110, popupCorner: "bottomLeft", popupSeconds: 8 } });
     render(<SettingsWindow section="appearance" />);
     expect(screen.getByRole("heading", { level: 1, name: "Appearance" })).toBeInTheDocument();
-    const larger = await screen.findByRole("radio", { name: "Larger" });
-    await waitFor(() => expect(larger).toBeEnabled());
+    const window = await screen.findByRole("slider", { name: "Grab-it window" });
+    await waitFor(() => expect(window).toBeEnabled());
+    expect(window).toHaveValue("110");
+    expect(screen.getByText("110%", { selector: ".scale-value[data-for='text-scale']" })).toBeInTheDocument();
 
-    await userEvent.click(larger);
-    await waitFor(() => expect(larger).toBeChecked());
+    // Dragging shows the value; letting go saves it.
+    fireEvent.change(window, { target: { value: "125" } });
+    expect(screen.getByText("125%", { selector: ".scale-value[data-for='text-scale']" })).toBeInTheDocument();
+    expect(backend.appearance).toMatchObject({ textScale: 110 });
+    fireEvent.pointerUp(window);
+    await waitFor(() => expect(backend.appearance).toMatchObject({ textScale: 125 }));
+
+    const hub = screen.getByRole("slider", { name: "Menu bar hub" });
+    await waitFor(() => expect(hub).toBeEnabled());
+    fireEvent.change(hub, { target: { value: "95" } });
+    fireEvent.keyUp(hub, { key: "ArrowLeft" });
+    await waitFor(() => expect(backend.appearance).toMatchObject({ hubScale: 95 }));
+
     const topRight = screen.getByRole("radio", { name: "Top right" });
     await waitFor(() => expect(topRight).toBeEnabled());
     await userEvent.click(topRight);
@@ -753,7 +766,7 @@ describe("SettingsWindow appearance", () => {
     await userEvent.selectOptions(seconds, "Until I close it");
 
     await waitFor(() =>
-      expect(backend.appearance).toEqual({ textSize: "larger", popupCorner: "topRight", popupSeconds: 0 }),
+      expect(backend.appearance).toEqual({ textScale: 125, hubScale: 95, popupCorner: "topRight", popupSeconds: 0 }),
     );
   });
 });

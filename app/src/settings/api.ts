@@ -171,28 +171,24 @@ export interface Settings extends Preferences {
   appearance?: Appearance;
 }
 
-/** Mirrors `TextSize` in src-tauri/src/settings.rs. */
-export type TextSize = "small" | "default" | "large" | "larger";
-
 /** Mirrors `PopupCorner` in src-tauri/src/settings.rs. */
 export type PopupCorner = "bottomLeft" | "bottomRight" | "topLeft" | "topRight";
 
 /** Mirrors `Appearance` in src-tauri/src/settings.rs. */
 export interface Appearance {
-  textSize: TextSize;
+  /** How big the Grab-it window draws everything, in percent. */
+  textScale: number;
+  /** The same for the menu bar hub. */
+  hubScale: number;
   popupCorner: PopupCorner;
   /** How long the popup stays, in seconds; 0 keeps it until it is closed. */
   popupSeconds: number;
 }
 
-export const DEFAULT_APPEARANCE: Appearance = { textSize: "default", popupCorner: "bottomLeft", popupSeconds: 8 };
+export const DEFAULT_APPEARANCE: Appearance = { textScale: 110, hubScale: 110, popupCorner: "bottomLeft", popupSeconds: 8 };
 
-export const TEXT_SIZES: { value: TextSize; title: string }[] = [
-  { value: "small", title: "Small" },
-  { value: "default", title: "Default" },
-  { value: "large", title: "Large" },
-  { value: "larger", title: "Larger" },
-];
+/** The text size sliders, in percent. Mirrors `MIN_TEXT_SCALE` and `MAX_TEXT_SCALE` in src-tauri/src/settings.rs. */
+export const TEXT_SCALE = { min: 85, max: 130, step: 5 };
 
 export const POPUP_CORNERS: { value: PopupCorner; title: string }[] = [
   { value: "topLeft", title: "Top left" },

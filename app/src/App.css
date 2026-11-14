@@ -728,6 +728,76 @@ input.switch:disabled {
   }
 }
 
+/* Settings → Appearance: a text size slider between a small and a large A. */
+.scale-slider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 6px;
+}
+
+.scale-slider input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  height: 4px;
+  margin: 0;
+  background: linear-gradient(to right, var(--accent) var(--fill, 50%), var(--border-strong) var(--fill, 50%));
+  border-radius: 2px;
+  appearance: none;
+}
+
+.scale-slider input[type="range"]::-webkit-slider-thumb {
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 35%), 0 0 0 1px rgb(0 0 0 / 8%);
+  appearance: none;
+}
+
+.scale-slider input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border: 0;
+  border-radius: 50%;
+}
+
+.scale-slider input[type="range"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 6px;
+}
+
+.scale-slider input[type="range"]:disabled {
+  opacity: 0.5;
+}
+
+.scale-a {
+  flex: none;
+  color: var(--text-muted);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.scale-a-small {
+  font-size: 11px;
+}
+
+.scale-a-large {
+  font-size: 17px;
+}
+
+.scale-value {
+  flex: none;
+  min-width: 44px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 /* Settings → Appearance: where the popup goes, as four tiny screens. */
 .corner-picker {
   display: grid;

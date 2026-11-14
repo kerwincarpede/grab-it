@@ -66,7 +66,8 @@ pub fn set_appearance(
     let settings = lock(&state)
         .set_appearance(appearance)
         .map_err(|err| err.to_string())?;
-    crate::windows::apply_text_size(&app, settings.appearance.text_size);
+    crate::windows::apply_zoom(&app, settings.appearance.zoom());
+    crate::hub::resize(&app);
     Ok(settings)
 }
 

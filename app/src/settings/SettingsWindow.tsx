@@ -8,7 +8,7 @@ import {
   DEFAULT_APPEARANCE,
   POPUP_CORNERS,
   POPUP_SECONDS,
-  TEXT_SIZES,
+  TEXT_SCALE,
   setAppearance,
   type Appearance,
   chooseFolder,
@@ -29,6 +29,67 @@ import {
   type Settings,
   type SettingsSection,
 } from "./api";
+
+interface ScaleSliderProps {
+  id: string;
+  label: string;
+  hint: string;
+  value: number;
+  disabled: boolean;
+  onCommit: (percent: number) => void;
+}
+
+/**
+ * A text size slider. It shows the value while dragging but saves only on
+ * release, so the window does not rescale under the pointer mid-drag.
+ */
+function ScaleSlider({ id, label, hint, value, disabled, onCommit }: ScaleSliderProps) {
+  // What is being dragged, tied to the saved value it started from: once a
+  // new value is saved (or comes from elsewhere) the slider shows that.
+  const [dragging, setDragging] = useState<{ from: number; to: number } | null>(null);
+  const draft = dragging && dragging.from === value ? dragging.to : value;
+  const setDraft = (to: number) => setDragging({ from: value, to });
+  const commit = () => {
+    if (draft !== value) onCommit(draft);
+  };
+  const fill = ((draft - TEXT_SCALE.min) * 100) / (TEXT_SCALE.max - TEXT_SCALE.min);
+  return (
+    <div className="row is-stacked">
+      <span className="row-text">
+        <label className="row-title" htmlFor={id}>
+          {label}
+        </label>
+        <span className="row-hint">{hint}</span>
+      </span>
+      <span className="scale-slider">
+        <span className="scale-a scale-a-small" aria-hidden="true">
+          A
+        </span>
+        <input
+          id={id}
+          type="range"
+          min={TEXT_SCALE.min}
+          max={TEXT_SCALE.max}
+          step={TEXT_SCALE.step}
+          value={draft}
+          disabled={disabled}
+          aria-valuetext={`${draft}%`}
+          style={{ "--fill": `${fill}%` } as React.CSSProperties}
+          onChange={(event) => setDraft(Number(event.target.value))}
+          onPointerUp={commit}
+          onKeyUp={commit}
+          onBlur={commit}
+        />
+        <span className="scale-a scale-a-large" aria-hidden="true">
+          A
+        </span>
+        <span className="scale-value" data-for={id} aria-hidden="true">
+          {draft}%
+        </span>
+      </span>
+    </div>
+  );
+}
 
 function errorMessage(err: unknown): string {
   if (typeof err === "string") return err;
@@ -194,6 +255,8 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   return (
     <main className={section === undefined ? "window settings" : "window settings settings-page"}>
       <h1 className="settings-title">{title}</h1>
+      {/* Scrolls on its own, so the heading and the scrollbar never overlap. */}
+      <div className="settings-content">
       <p className="settings-lead">
         {savesAtOnce ? "Changes save as you make them." : section === "hotkeys" ? "Press Save to use new hotkeys." : "Switches save at once; endpoint details save with Save."}
       </p>
@@ -309,23 +372,22 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
             Text size
           </h2>
           <div className="group">
-            <div className="row is-stacked">
-              <fieldset className="segmented" aria-labelledby="text-size-heading" disabled={appearanceOff}>
-                {TEXT_SIZES.map((choice) => (
-                  <label key={choice.value}>
-                    <input
-                      type="radio"
-                      name="text-size"
-                      value={choice.value}
-                      checked={appearance.textSize === choice.value}
-                      onChange={() => void changeAppearance({ textSize: choice.value })}
-                    />
-                    {choice.title}
-                  </label>
-                ))}
-              </fieldset>
-              <span className="row-hint">Scales the Grab-it window: text, buttons and thumbnails.</span>
-            </div>
+            <ScaleSlider
+              id="text-scale"
+              label="Grab-it window"
+              hint="Scales the library, Settings and every dialog: text, buttons and thumbnails."
+              value={appearance.textScale}
+              disabled={appearanceOff}
+              onCommit={(textScale) => void changeAppearance({ textScale })}
+            />
+            <ScaleSlider
+              id="hub-scale"
+              label="Menu bar hub"
+              hint="The menu under the Grab-it icon grows with it."
+              value={appearance.hubScale}
+              disabled={appearanceOff}
+              onCommit={(hubScale) => void changeAppearance({ hubScale })}
+            />
           </div>
 
           <h2 className="group-heading" id="popup-heading">
@@ -423,6 +485,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
           (status.warnings.length > 0 ? status.warnings.join(" ") : "Hotkeys updated.")}
         {status.kind === "error" && status.message}
       </p>
+      </div>
     </main>
   );
 }

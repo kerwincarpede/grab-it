@@ -53,7 +53,8 @@ pub fn toggle(app: &AppHandle, anchor: Option<Rect>) {
             let _ = window.hide();
             return;
         }
-        place(app, &window, anchor);
+        let zoom = zoom(app);
+        place(app, &window, anchor, zoom);
         let _ = window.emit(HUB_SHOWN_EVENT, ());
         let _ = window.show();
         let _ = window.set_focus();
@@ -64,10 +65,37 @@ pub fn toggle(app: &AppHandle, anchor: Option<Rect>) {
     }
 }
 
+/// The hub's zoom from Settings → Appearance.
+fn zoom(app: &AppHandle) -> f64 {
+    app.try_state::<crate::commands::SettingsState>()
+        .map(|state| crate::commands::lock(&state).get().appearance.hub_zoom())
+        .unwrap_or_else(|| crate::settings::Appearance::default().hub_zoom())
+}
+
+/// Sizes the hub for `zoom` and draws its page at that zoom, so a larger
+/// text size gets a larger window rather than a cut-off menu.
+fn apply_zoom(window: &WebviewWindow, zoom: f64) -> tauri::Result<()> {
+    window.set_size(tauri::LogicalSize::new(WIDTH * zoom, HEIGHT * zoom))?;
+    window.set_zoom(zoom)?;
+    #[cfg(target_os = "macos")]
+    round_corners(window, zoom)?;
+    Ok(())
+}
+
+/// Applies a changed hub size to the hub, when it exists.
+pub fn resize(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(LABEL)
+        && let Err(err) = apply_zoom(&window, zoom(app))
+    {
+        eprintln!("Grab-it: could not resize the menu bar hub: {err}");
+    }
+}
+
 fn create(app: &AppHandle, anchor: Option<Rect>) -> tauri::Result<()> {
+    let zoom = zoom(app);
     let window = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html#/hub".into()))
         .title("Grab-it")
-        .inner_size(WIDTH, HEIGHT)
+        .inner_size(WIDTH * zoom, HEIGHT * zoom)
         .decorations(false)
         .resizable(false)
         .always_on_top(true)
@@ -85,15 +113,15 @@ fn create(app: &AppHandle, anchor: Option<Rect>) -> tauri::Result<()> {
             }
         }
     });
-    #[cfg(target_os = "macos")]
-    round_corners(&window)?;
-    place(app, &window, anchor);
+    apply_zoom(&window, zoom)?;
+    place(app, &window, anchor, zoom);
     window.show()?;
     window.set_focus()?;
     Ok(())
 }
 
-/// The hub's corner radius, in points. Matches `.hub` in src/hub/hub.css.
+/// The hub's corner radius at actual size, in points. Matches `.hub` in
+/// src/hub/hub.css, which zooms with the page.
 #[cfg(target_os = "macos")]
 const CORNER_RADIUS: f64 = 12.0;
 
@@ -101,7 +129,7 @@ const CORNER_RADIUS: f64 = 12.0;
 /// its content clipped to rounded corners, so this needs no private API;
 /// the shadow is then redrawn to follow the new shape.
 #[cfg(target_os = "macos")]
-fn round_corners(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+fn round_corners(window: &tauri::WebviewWindow, zoom: f64) -> tauri::Result<()> {
     use objc2::runtime::AnyObject;
 
     let target = window.clone();
@@ -129,7 +157,7 @@ fn round_corners(window: &tauri::WebviewWindow) -> tauri::Result<()> {
             if layer.is_null() {
                 return;
             }
-            let _: () = objc2::msg_send![layer, setCornerRadius: CORNER_RADIUS];
+            let _: () = objc2::msg_send![layer, setCornerRadius: CORNER_RADIUS * zoom];
             let _: () = objc2::msg_send![layer, setMasksToBounds: true];
             let _: () = objc2::msg_send![ns_window, invalidateShadow];
         }
@@ -144,7 +172,7 @@ fn hide(app: &AppHandle) {
 
 /// Puts the hub under the tray icon (or above it, when the tray is at the
 /// bottom of the screen, as on Windows), inside the icon's monitor.
-fn place(app: &AppHandle, window: &WebviewWindow, anchor: Option<Rect>) {
+fn place(app: &AppHandle, window: &WebviewWindow, anchor: Option<Rect>, zoom: f64) {
     let Some(anchor) = anchor else {
         let _ = window.center();
         return;
@@ -171,7 +199,7 @@ fn place(app: &AppHandle, window: &WebviewWindow, anchor: Option<Rect>) {
             width: size.width,
             height: size.height,
         },
-        (WIDTH * scale, HEIGHT * scale),
+        (WIDTH * zoom * scale, HEIGHT * zoom * scale),
         GAP * scale,
         Bounds {
             x: f64::from(area.position.x),

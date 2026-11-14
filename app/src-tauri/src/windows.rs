@@ -169,11 +169,11 @@ pub fn show_main(app: &AppHandle, view: MainView) -> tauri::Result<()> {
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true);
     let window = builder.build()?;
-    let text_size = app
+    let zoom = app
         .try_state::<crate::commands::SettingsState>()
-        .map(|state| crate::commands::lock(&state).get().appearance.text_size)
-        .unwrap_or_default();
-    if let Err(err) = window.set_zoom(text_size.zoom()) {
+        .map(|state| crate::commands::lock(&state).get().appearance.zoom())
+        .unwrap_or_else(|| crate::settings::Appearance::default().zoom());
+    if let Err(err) = window.set_zoom(zoom) {
         eprintln!("Grab-it: could not set the text size: {err}");
     }
     let handle = app.clone();
@@ -187,10 +187,10 @@ pub fn show_main(app: &AppHandle, view: MainView) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Draws the Grab-it window at `size`, when it is open.
-pub fn apply_text_size(app: &AppHandle, size: crate::settings::TextSize) {
+/// Draws the Grab-it window at `zoom` (1.0 is actual size), when it is open.
+pub fn apply_zoom(app: &AppHandle, zoom: f64) {
     if let Some(window) = app.get_webview_window(MAIN_LABEL)
-        && let Err(err) = window.set_zoom(size.zoom())
+        && let Err(err) = window.set_zoom(zoom)
     {
         eprintln!("Grab-it: could not set the text size: {err}");
     }
