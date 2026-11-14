@@ -48,7 +48,7 @@ pub enum Action {
     Text,
     /// Copy the colour of the pixel the user clicks; nothing is saved.
     Colour,
-    /// Record a region or window as a GIF, or stop the recording under way.
+    /// Record a region or window as an MP4 or a GIF, or stop the recording under way.
     Record,
 }
 

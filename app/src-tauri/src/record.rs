@@ -151,11 +151,18 @@ pub fn frame_size(region: (u32, u32)) -> (u32, u32) {
 /// Keeps an MP4 at a constant frame rate: says when the next frame is due,
 /// and how many times to repeat the last one when a grab took so long that
 /// frame times went by without one.
+///
+/// At most half a second of repeats follows each grab. Frame times further
+/// behind than that (ffmpeg taking frames in more slowly than the frame
+/// rate, or the computer sleeping mid-recording) are dropped, so a new
+/// frame is always grabbed soon and the video keeps moving.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pacer {
     fps: u64,
     /// Frames written so far, repeats included.
     frames: u64,
+    /// Frame times dropped because the recording fell too far behind.
+    dropped: u64,
 }
 
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
@@ -165,29 +172,46 @@ impl Pacer {
         Self {
             fps: u64::from(fps.max(1)),
             frames: 0,
+            dropped: 0,
         }
     }
 
+    /// The most repeats written after one grab: half a second.
+    pub fn max_repeats(&self) -> u64 {
+        (self.fps / 2).max(1)
+    }
+
     /// Counts a frame just written, `elapsed` after the recording started.
-    /// Returns how many more times to write it: once for each frame time
-    /// that has fully gone by since, so the video keeps time.
+    /// Returns how many more times to write it, each counted with
+    /// [`Pacer::repeated`]: once for each frame time that has fully gone by
+    /// since, up to [`Pacer::max_repeats`].
     pub fn wrote_frame(&mut self, elapsed: Duration) -> u64 {
         self.frames += 1;
         // The frame time under way now, which the next grab fills.
         let current = (elapsed.as_nanos() * u128::from(self.fps) / NANOS_PER_SECOND) as u64;
-        let repeats = current.saturating_sub(self.frames);
-        self.frames += repeats;
+        let behind = current.saturating_sub(self.frames + self.dropped);
+        let repeats = behind.min(self.max_repeats());
+        self.dropped += behind - repeats;
         repeats
+    }
+
+    /// Counts one repeat of the last frame.
+    pub fn repeated(&mut self) {
+        self.frames += 1;
     }
 
     /// When the next frame should be grabbed, from the recording's start.
     pub fn next_frame_at(&self) -> Duration {
-        self.duration()
+        self.at(self.frames + self.dropped)
     }
 
     /// How long the frames written so far play for.
     pub fn duration(&self) -> Duration {
-        let nanos = u128::from(self.frames) * NANOS_PER_SECOND / u128::from(self.fps);
+        self.at(self.frames)
+    }
+
+    fn at(&self, frames: u64) -> Duration {
+        let nanos = u128::from(frames) * NANOS_PER_SECOND / u128::from(self.fps);
         Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
     }
 }
@@ -219,8 +243,9 @@ pub fn start(
     crate::tray::set_recording(app, true);
 
     let (folder, recording) = {
-        let settings = lock(&app.state::<SettingsState>());
-        let settings = settings.get();
+        let state = app.state::<SettingsState>();
+        let store = lock(&state);
+        let settings = store.get();
         (
             settings.save_folder.join(RECORDINGS_DIR),
             settings.recording,
@@ -353,8 +378,13 @@ fn record_mp4(
     let mut pacer = Pacer::new(VIDEO_FPS);
     loop {
         video.write(&frame).map_err(|err| err.to_string())?;
+        // Stop is checked between repeats, so it is never kept waiting.
         for _ in 0..pacer.wrote_frame(started.elapsed()) {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
             video.write(&frame).map_err(|err| err.to_string())?;
+            pacer.repeated();
         }
         if stop.load(Ordering::SeqCst) {
             break;
@@ -534,6 +564,8 @@ mod tests {
         // times at 200 and 300 ms went by, so it fills those too, and the
         // grab for 400 ms starts at once.
         assert_eq!(pacer.wrote_frame(ms(450)), 2);
+        pacer.repeated();
+        pacer.repeated();
         assert_eq!(pacer.next_frame_at(), ms(400));
         assert_eq!(pacer.wrote_frame(ms(460)), 0);
         assert_eq!(pacer.next_frame_at(), ms(500));
@@ -542,12 +574,54 @@ mod tests {
     }
 
     #[test]
+    fn a_slow_encoder_still_gets_new_frames() {
+        // Every write, repeats included, takes 50 ms: longer than a frame
+        // time at 30 fps. Repeats stay capped, so grabs keep coming.
+        let mut pacer = Pacer::new(30);
+        let write = Duration::from_millis(50);
+        let mut now = Duration::ZERO;
+        let mut most = 0;
+        for _ in 0..200 {
+            now += write;
+            let repeats = pacer.wrote_frame(now);
+            most = most.max(repeats);
+            for _ in 0..repeats {
+                now += write;
+                pacer.repeated();
+            }
+            now = now.max(pacer.next_frame_at());
+        }
+        assert!(most <= pacer.max_repeats(), "{most} repeats after one grab");
+        assert_eq!(pacer.max_repeats(), 15);
+        // The next grab is due no later than now: nothing waits on the past.
+        assert!(pacer.next_frame_at() <= now + Duration::from_secs(1) / 30);
+    }
+
+    #[test]
+    fn a_long_stall_writes_half_a_second_of_repeats_not_thousands() {
+        let mut pacer = Pacer::new(30);
+        assert_eq!(pacer.wrote_frame(Duration::ZERO), 0);
+        // The computer slept for an hour mid-recording.
+        assert_eq!(pacer.wrote_frame(Duration::from_secs(3600)), 15);
+        for _ in 0..15 {
+            pacer.repeated();
+        }
+        assert_eq!(pacer.next_frame_at(), Duration::from_secs(3600));
+        // The video holds what was written, not the hour.
+        assert_eq!(pacer.duration(), Duration::from_secs(17) / 30);
+    }
+
+    #[test]
     fn sixty_seconds_at_thirty_fps_is_1800_frames_and_a_minute_long() {
         let mut pacer = Pacer::new(VIDEO_FPS);
         let mut written = 0;
         while pacer.next_frame_at() < Duration::from_secs(60) {
             let at = pacer.next_frame_at() + Duration::from_millis(1);
-            written += 1 + pacer.wrote_frame(at);
+            written += 1;
+            for _ in 0..pacer.wrote_frame(at) {
+                pacer.repeated();
+                written += 1;
+            }
         }
         assert_eq!(written, 1800);
         assert_eq!(pacer.duration().as_secs(), 60);

@@ -136,7 +136,7 @@ function FfmpegRow({ status, onRetry }: { status: FfmpegStatus | null; onRetry: 
     <div className="row" data-testid="ffmpeg-status">
       <span className="row-text">
         <span className="row-title">Video encoder</span>
-        <span className={failed ? "row-hint ffmpeg-failed" : "row-hint"} role="status">
+        <span className={failed ? "row-hint ffmpeg-failed" : "row-hint"} aria-live="polite">
           {detail}
         </span>
         {progress && <progress aria-label="ffmpeg download" max={progress.max} value={progress.value} />}

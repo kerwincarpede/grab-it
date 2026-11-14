@@ -314,7 +314,7 @@ fn install_and_restart(app: &AppHandle, update: &Update) {
         total,
     };
     set_status(app, installing(0, None), true);
-    // A recording in progress is finished first, so its GIF is complete.
+    // A recording in progress is finished first, so its file is complete.
     crate::record::stop_and_wait(app);
 
     // Shared by the two callbacks: bytes so far, and the download's size.

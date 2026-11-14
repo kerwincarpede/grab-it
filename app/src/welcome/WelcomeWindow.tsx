@@ -54,7 +54,7 @@ const TIPS: { title: string; detail: string }[] = [
     detail: "Arrows, steps, blur and spotlight, plus a backdrop with padding and rounded corners.",
   },
   { title: "Pin", detail: "Keep a capture floating above your other windows while you work." },
-  { title: "Record", detail: "Record a region or a window as a GIF: click the Grab-it icon, then Record GIF." },
+  { title: "Record", detail: "Record a region or a window as an MP4 video or a GIF: click the Grab-it icon, then Record." },
   { title: "Library", detail: "Every capture, searchable by the text inside the image." },
 ];
 

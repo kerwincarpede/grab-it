@@ -23,7 +23,7 @@ pub enum OpenTarget {
     Colour,
     /// Captures the last dragged region again.
     Repeat,
-    /// Starts a GIF recording, or stops the one under way.
+    /// Starts a recording, or stops the one under way.
     Record,
     /// Shows a capture on the Quick Access card: `--open quick <file>`.
     Quick(PathBuf),
