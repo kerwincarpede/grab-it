@@ -55,6 +55,8 @@ function WebcamBubble({ options = webcamOptions(window.location.hash) }: WebcamB
 
   function onMouseDown(event: MouseEvent) {
     if (event.button !== 0) return;
+    // A drag must not start a text selection, which would be recorded.
+    event.preventDefault();
     try {
       void getCurrentWindow()
         .startDragging()

@@ -21,6 +21,8 @@
   /* Marks the bubble's edge against whatever is behind it. */
   box-shadow: 0 0 0 2px rgb(255 255 255 / 85%);
   cursor: grab;
+  /* WebKitGTK and Safari's WebKit only honour the prefixed one. */
+  -webkit-user-select: none;
   user-select: none;
 }
 

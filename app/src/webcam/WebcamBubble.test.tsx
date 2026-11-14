@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import WebcamBubble from "./WebcamBubble";
 import { cameraConstraints, cameraProblem, webcamOptions } from "./api";
@@ -91,6 +91,15 @@ describe("WebcamBubble", () => {
   it("says so when the window has no camera access at all", async () => {
     render(<WebcamBubble options={{ shape: "round", camera: null }} />);
     expect(await screen.findByRole("status")).toHaveTextContent("Camera unavailable");
+  });
+
+  it("never starts a text selection when the bubble is dragged", async () => {
+    media = fakeMedia({ fail: { name: "NotFoundError" } });
+    render(<WebcamBubble options={{ shape: "round", camera: null }} />);
+    const message = await screen.findByRole("status");
+    // fireEvent returns false when the default action was prevented.
+    expect(fireEvent.mouseDown(message, { button: 0 })).toBe(false);
+    expect(fireEvent.mouseDown(screen.getByTestId("webcam"), { button: 0 })).toBe(false);
   });
 
   it("stops the camera when it closes", async () => {
