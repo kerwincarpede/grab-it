@@ -204,7 +204,7 @@ export interface Appearance {
   popupSeconds: number;
 }
 
-export const DEFAULT_APPEARANCE: Appearance = { textScale: 110, hubScale: 110, popupCorner: "bottomLeft", popupSeconds: 8 };
+export const DEFAULT_APPEARANCE: Appearance = { textScale: 110, hubScale: 110, popupCorner: "bottomRight", popupSeconds: 8 };
 
 /** The text size sliders, in percent. Mirrors `MIN_TEXT_SCALE` and `MAX_TEXT_SCALE` in src-tauri/src/settings.rs. */
 export const TEXT_SCALE = { min: 85, max: 130, step: 5 };

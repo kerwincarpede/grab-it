@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::{quick, windows};
+use crate::windows;
 
 /// Emitted to every window with an [`UpdateEvent`] whenever the status
 /// changes.
@@ -256,22 +256,15 @@ fn check(app: &AppHandle, trigger: Trigger) {
     }
     match found {
         Ok(Some(update)) => {
+            // Found in the background or not, the update waits in the
+            // Grab-it window's sidebar; nothing pops up to announce it.
             let declined = lock(&state.declined).clone();
-            let ask = should_ask(trigger, declined.as_deref(), &update.version);
             let status = UpdateStatus::Available {
                 info: info_of(&update),
                 declined: declined.as_deref() == Some(update.version.as_str()),
             };
-            let version = update.version.clone();
             *lock(&state.pending) = Some(update);
             set_status(app, status, show);
-            if trigger == Trigger::Automatic && ask {
-                notice(
-                    app,
-                    &format!("Grab-it {version} is available"),
-                    "Open Grab-it to see what's new and install it.",
-                );
-            }
         }
         Ok(None) => {
             *lock(&state.pending) = None;
@@ -411,12 +404,6 @@ fn info_of(update: &Update) -> UpdateInfo {
     }
 }
 
-/// Whether to point out `version`: always when the user asked, otherwise
-/// only if they have not already said "Later" to it.
-fn should_ask(trigger: Trigger, declined: Option<&str>, version: &str) -> bool {
-    trigger == Trigger::User || declined != Some(version)
-}
-
 /// The changes between this copy and the update, newest first.
 fn changes_since(update: &Update) -> Vec<Changes> {
     let listed = update
@@ -479,29 +466,10 @@ fn shorten(item: &str) -> String {
     format!("{}…", cut.trim_end())
 }
 
-/// A Quick Access card: for news that needs no answer.
-fn notice(app: &AppHandle, title: &str, message: &str) {
-    quick::show(
-        app,
-        quick::QuickItem::Notice {
-            title: title.into(),
-            message: message.into(),
-        },
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn later_silences_automatic_checks_for_that_version_only() {
-        assert!(should_ask(Trigger::Automatic, None, "0.4.0"));
-        assert!(!should_ask(Trigger::Automatic, Some("0.4.0"), "0.4.0"));
-        assert!(should_ask(Trigger::Automatic, Some("0.4.0"), "0.5.0"));
-        assert!(should_ask(Trigger::User, Some("0.4.0"), "0.4.0"));
-    }
 
     fn changes(version: &str, items: &[&str]) -> Changes {
         Changes {

@@ -38,6 +38,10 @@ const WIDTH: f64 = 336.0;
 const HEIGHT: f64 = 232.0;
 /// The gap between the card and the edges of the monitor's work area.
 const MARGIN: f64 = 20.0;
+/// The card's corner radius, in points. Matches `.quick` in
+/// src/quick/quick.css and the menu bar hub.
+#[cfg(target_os = "macos")]
+const CORNER_RADIUS: f64 = 12.0;
 /// The longest side of the thumbnail sent to the card, in pixels: twice the
 /// card's width, so it stays sharp on a 2x display.
 const THUMB_MAX: u32 = 672;
@@ -329,8 +333,11 @@ fn create_window(app: &AppHandle, corner: Corner) -> tauri::Result<()> {
         .visible_on_all_workspaces(true)
         // The card must not pull the keyboard away from the user's work.
         .focused(false)
+        .shadow(true)
         .visible(false)
         .build()?;
+    #[cfg(target_os = "macos")]
+    windows::round_corners(&window, CORNER_RADIUS)?;
     if let Some(position) = corner_position(app, corner) {
         window.set_position(position)?;
     }

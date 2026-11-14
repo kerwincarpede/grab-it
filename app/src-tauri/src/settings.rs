@@ -450,8 +450,8 @@ fn clamp_text_scale(percent: u32) -> u32 {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PopupCorner {
-    #[default]
     BottomLeft,
+    #[default]
     BottomRight,
     TopLeft,
     TopRight,
@@ -478,7 +478,7 @@ impl Default for Appearance {
         Self {
             text_scale: DEFAULT_TEXT_SCALE,
             hub_scale: DEFAULT_TEXT_SCALE,
-            popup_corner: PopupCorner::BottomLeft,
+            popup_corner: PopupCorner::BottomRight,
             popup_seconds: 8,
         }
     }
