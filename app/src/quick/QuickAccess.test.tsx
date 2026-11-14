@@ -1,10 +1,12 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import QuickAccess from "./QuickAccess";
 import { describeText, dismissAfter, formatBytes, formatElapsed, formatName, type QuickItem } from "./api";
+import { LIBRARY_CHANGED_EVENT, type ShotText } from "../library/api";
 
 const CAPTURE: QuickItem = {
   kind: "capture",
@@ -18,25 +20,41 @@ const CAPTURE: QuickItem = {
 interface Backend {
   calls: { cmd: string; payload?: InvokeArgs }[];
   failAction?: string;
+  /** What `library_text` answers; the capture is not in the library when unset. */
+  text?: ShotText;
+  /** Mock Tauri events, so tests can emit them. */
+  events?: boolean;
 }
+
+/** The capture's id in the mocked library. */
+const SHOT_ID = 42;
 
 function mockBackend(item: QuickItem | null, options: Partial<Backend> = {}): Backend {
   const backend: Backend = { calls: [], ...options };
-  mockIPC((cmd, payload) => {
-    backend.calls.push({ cmd, payload });
-    switch (cmd) {
-      case "quick_info":
-        return item && { generation: 7, item };
-      case "quick_thumbnail":
-        return new ArrayBuffer(4);
-      case "quick_action":
-        if (backend.failAction) throw backend.failAction;
-        return null;
-      default:
-        // Event plumbing (`plugin:event|listen`) and anything else.
-        return null;
-    }
-  });
+  mockIPC(
+    (cmd, payload) => {
+      backend.calls.push({ cmd, payload });
+      switch (cmd) {
+        case "quick_info":
+          return item && { generation: 7, item };
+        case "quick_thumbnail":
+          return new ArrayBuffer(4);
+        case "quick_action":
+          if (backend.failAction) throw backend.failAction;
+          return null;
+        case "library_shot_id":
+          return backend.text ? SHOT_ID : null;
+        case "library_text":
+          return backend.text;
+        case "library_copy_text":
+          return backend.text?.state === "read" ? backend.text.text : null;
+        default:
+          // Event plumbing (`plugin:event|listen`) and anything else.
+          return null;
+      }
+    },
+    { shouldMockEvents: backend.events },
+  );
   return backend;
 }
 
@@ -138,6 +156,58 @@ describe("QuickAccess", () => {
     const toolbar = await screen.findByRole("toolbar", { name: "Capture actions" });
     await userEvent.click(toolbar.querySelector("button") as HTMLElement);
     expect(await screen.findByRole("alert")).toHaveTextContent("could not copy to the clipboard: busy");
+  });
+
+  it("offers Copy text once the capture's text has been read, and copies it", async () => {
+    const backend = mockBackend(
+      { ...CAPTURE, copied: false },
+      { text: { state: "read", text: "Invoice 2026-03\nTotal due: $12" } },
+    );
+    render(<QuickAccess />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Copy text" }));
+
+    await waitFor(() => expect(backend.calls.filter((call) => call.cmd === "library_copy_text")).toHaveLength(1));
+    expect(backend.calls.find((call) => call.cmd === "library_shot_id")?.payload).toEqual({ path: CAPTURE.path });
+    expect(backend.calls.find((call) => call.cmd === "library_copy_text")?.payload).toEqual({ id: SHOT_ID });
+    expect(await screen.findByRole("status")).toHaveTextContent("Copied 2 lines of text");
+    // Copy text leaves the card up.
+    expect(actions(backend)).toEqual([]);
+  });
+
+  it("says it is reading the text until OCR finishes", async () => {
+    const backend = mockBackend(CAPTURE, { text: { state: "waiting" }, events: true });
+    render(<QuickAccess />);
+
+    expect(await screen.findByRole("button", { name: "Reading text…" })).toBeDisabled();
+    // Let the event listeners finish registering.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    backend.text = { state: "read", text: "Hello" };
+    await act(async () => {
+      await emit(LIBRARY_CHANGED_EVENT);
+    });
+
+    expect(await screen.findByRole("button", { name: "Copy text" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Reading text…" })).not.toBeInTheDocument();
+  });
+
+  it.each<[string, ShotText | undefined]>([
+    ["is not in the library", undefined],
+    ["could not be read", { state: "failed" }],
+    ["has no text", { state: "read", text: "  " }],
+  ])("offers no Copy text when the capture %s", async (_, text) => {
+    const backend = mockBackend(CAPTURE, { text });
+    render(<QuickAccess />);
+    await screen.findByRole("toolbar", { name: "Capture actions" });
+    await waitFor(() => expect(backend.calls.some((call) => call.cmd === "library_shot_id")).toBe(true));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.queryByRole("button", { name: "Copy text" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reading text…" })).not.toBeInTheDocument();
   });
 
   it("shows copied text with a count", async () => {

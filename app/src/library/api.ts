@@ -116,6 +116,47 @@ export function copyShotText(id: number): Promise<string> {
   return invoke<string>("library_copy_text", { id });
 }
 
+/** The library id of the capture at `path`, or null when the library does not know it. */
+export function shotIdForPath(path: string): Promise<number | null> {
+  return invoke<number | null>("library_shot_id", { path });
+}
+
+/** Whether the shot has text worth offering Copy text for. */
+export function hasShotText(text: ShotText | null): boolean {
+  return text?.state === "read" && text.text.trim().length > 0;
+}
+
+/**
+ * Looks up the capture at `path` and calls `handler` with its id and text,
+ * now and again whenever the library changes (OCR finishing is one such
+ * change). A capture the library does not know, or a failed lookup, gives
+ * null for both. Returns a function that stops watching.
+ */
+export function watchShotText(path: string, handler: (id: number | null, text: ShotText | null) => void): () => void {
+  let live = true;
+  const load = () => {
+    shotIdForPath(path)
+      .then(async (id) => [id, id === null ? null : await shotText(id)] as const)
+      .then(([id, text]) => {
+        if (live) handler(id, text);
+      })
+      .catch(() => {
+        if (live) handler(null, null);
+      });
+  };
+  load();
+  // Without events the text stays as it was when first looked up.
+  const unlisten = onLibraryChanged(load).catch(() => null);
+  return () => {
+    live = false;
+    unlisten
+      .then((stop) => stop?.())
+      .catch(() => {
+        // Already gone with its window.
+      });
+  };
+}
+
 /** Floats the shot above other windows. */
 export function pinShot(id: number): Promise<void> {
   return invoke<void>("library_pin", { id });

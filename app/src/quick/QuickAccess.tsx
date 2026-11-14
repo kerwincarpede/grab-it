@@ -16,6 +16,7 @@ import {
   type QuickItem,
   type QuickShown,
 } from "./api";
+import { copyShotText, hasShotText, textCopied, watchShotText, type ShotText } from "../library/api";
 
 function errorMessage(err: unknown): string {
   if (typeof err === "string") return err;
@@ -76,7 +77,23 @@ const ICONS = {
     </>
   ),
   check: <path d="M5 12.5 10 17.5 19 7" />,
+  text: <path d="M5 7V5h14v2M12 5v14M9 19h6" />,
 };
+
+/**
+ * The library id and stored OCR text of the capture at `path`, looked up
+ * when it changes and again whenever the library does. Null until known, and
+ * for a capture the library does not know.
+ */
+function useStoredText(path: string | null): { id: number; text: ShotText } | null {
+  const [stored, setStored] = useState<{ id: number; text: ShotText } | null>(null);
+  useEffect(() => {
+    setStored(null);
+    if (!path) return;
+    return watchShotText(path, (id, text) => setStored(id !== null && text ? { id, text } : null));
+  }, [path]);
+  return stored;
+}
 
 function useThumbnail(item: QuickItem | null): string | null {
   const [loaded, setLoaded] = useState<{ path: string; url: string } | null>(null);
@@ -134,6 +151,7 @@ function QuickAccess() {
   const thumbnail = useThumbnail(item);
   const elapsed = useElapsed(item?.kind === "recording" ? item.startedAt : null);
   const [stopping, setStopping] = useState(false);
+  const stored = useStoredText(item?.kind === "capture" ? item.path : null);
 
   const show = useCallback((next: QuickShown | null) => {
     // The window is reused after a dismissal: it can act again.
@@ -210,6 +228,20 @@ function QuickAccess() {
       });
   }, []);
 
+  /** Copies the capture's stored OCR text; the card stays up, as for Copy. */
+  const copyText = useCallback((id: number) => {
+    const target = latest.current;
+    if (!target) return;
+    setError(null);
+    copyShotText(id)
+      .then((text) => {
+        if (latest.current === target) setFlash(textCopied(text));
+      })
+      .catch((err: unknown) => {
+        if (latest.current === target) setError(errorMessage(err));
+      });
+  }, []);
+
   const lifetime = item ? dismissAfter(item, current?.seconds ?? 8) : null;
   const paused = hovered || error !== null;
   useEffect(() => {
@@ -251,18 +283,38 @@ function QuickAccess() {
     const badge = flash ?? (item.copied ? "Copied" : null);
     return (
       <main className="quick quick-capture" data-testid="quick" {...hover}>
-        <button
-          type="button"
-          className="quick-preview"
-          aria-label={`Annotate ${item.fileName}`}
-          title="Click to annotate"
-          onClick={() => run("edit")}
-        >
-          {thumbnail && <img src={thumbnail} alt="" draggable={false} />}
-          <span className="quick-size">
-            {item.width} × {item.height}
-          </span>
-        </button>
+        <div className="quick-stage">
+          <button
+            type="button"
+            className="quick-preview"
+            aria-label={`Annotate ${item.fileName}`}
+            title="Click to annotate"
+            onClick={() => run("edit")}
+          >
+            {thumbnail && <img src={thumbnail} alt="" draggable={false} />}
+            <span className="quick-size">
+              {item.width} × {item.height}
+            </span>
+          </button>
+          {stored?.text.state === "waiting" ? (
+            <button type="button" className="quick-copy-text" disabled>
+              Reading text…
+            </button>
+          ) : (
+            stored &&
+            hasShotText(stored.text) && (
+              <button
+                type="button"
+                className="quick-copy-text"
+                onClick={() => copyText(stored.id)}
+                title="Copy the text in the capture"
+              >
+                <Icon>{ICONS.text}</Icon>
+                Copy text
+              </button>
+            )
+          )}
+        </div>
         {badge && (
           <span className="quick-badge" role="status">
             <Icon>{ICONS.check}</Icon>

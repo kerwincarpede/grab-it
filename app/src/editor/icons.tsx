@@ -115,6 +115,13 @@ export const CopyIcon = () => (
   </Icon>
 );
 
+export const CopyTextIcon = () => (
+  <Icon>
+    <path d="M5 6.5V5h11v1.5M10.5 5v11M8.5 16h4" />
+    <path d="M14.5 13.5h5M14.5 17h5M14.5 20.5h3.5" />
+  </Icon>
+);
+
 export const ExportIcon = () => (
   <Icon>
     <path d="M12 15V3.5M7.5 8L12 3.5 16.5 8" />
