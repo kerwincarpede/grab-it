@@ -88,6 +88,7 @@ export function parseBackdrop(value: unknown): Backdrop | null {
     parsed.gradient = { from: gradient.from, to: gradient.to, angle: ((gradient.angle % 360) + 360) % 360 };
   }
   if (isStr(backdrop.image) && backdrop.image !== "") parsed.image = backdrop.image;
+  if (backdrop.balance === true) parsed.balance = true;
   return parsed;
 }
 

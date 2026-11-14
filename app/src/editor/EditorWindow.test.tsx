@@ -190,11 +190,15 @@ vi.mock("react-konva", async () => {
 });
 
 const FLATTENED = new Uint8Array([1, 2, 3]);
-const flattened = vi.hoisted(() => ({ calls: [] as unknown[] }));
+const flattened = vi.hoisted(() => ({ calls: [] as unknown[], options: [] as unknown[] }));
+/** The capture's plain border as measured: an empty 80px margin on the right (jsdom cannot read pixels). */
+const MEASURED_BORDERS = vi.hoisted(() => ({ top: 0, right: 80, bottom: 0, left: 0 }));
 vi.mock("./flatten", async (original) => ({
   ...(await original<typeof import("./flatten")>()),
-  flatten: async (_layer: unknown, doc: unknown) => {
+  measureBorders: () => MEASURED_BORDERS,
+  flatten: async (_layer: unknown, doc: unknown, _image: unknown, _view: unknown, _format: unknown, options: unknown) => {
     flattened.calls.push(doc);
+    flattened.options.push(options);
     return new Uint8Array([1, 2, 3]);
   },
 }));
@@ -340,6 +344,7 @@ function holdKey(key: string, ms: number, during?: () => void) {
 describe("EditorWindow", () => {
   beforeEach(() => {
     flattened.calls = [];
+    flattened.options = [];
     vi.stubGlobal("Image", LoadedImage);
     URL.createObjectURL = vi.fn(() => "blob:capture");
     URL.revokeObjectURL = vi.fn();
@@ -1197,6 +1202,39 @@ describe("EditorWindow", () => {
     fireEvent.click(panel.getByRole("checkbox", { name: "Shadow" }));
     await waitFor(() => expect(last(saved)?.backdrop).toMatchObject({ shadow: false }));
     expect(size).toBeDisabled();
+  });
+
+  it("balances a capture with an empty margin, in the preview and the pinned image", async () => {
+    const calls: { cmd: string; payload: unknown }[] = [];
+    const backdrop = { fill: "ocean", padding: 20, radius: 12, shadow: true };
+    const saved = mockEditor({ ...sidecar, backdrop }, calls);
+    await ready();
+    const panel = backdropPanel();
+    const balance = panel.getByRole("checkbox", { name: "Balance" });
+    expect(balance).not.toBeChecked();
+    expect(screen.getByText("Output 440×340")).toBeInTheDocument();
+
+    fireEvent.click(balance);
+    await waitFor(() => expect(last(saved)?.backdrop).toEqual({ ...backdrop, balance: true }));
+    expect(balance).toBeChecked();
+    // 20px of padding a side cannot absorb an 80px margin, so the output grows to 80px on the left and none on the right.
+    expect(screen.getByText("Output 480×340")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+    await waitFor(() => expect(calls.map((call) => call.cmd)).toContain("editor_pin"));
+    expect(flattened.calls).toEqual([{ crop: null, backdrop: { ...backdrop, balance: true } }]);
+    expect(flattened.options).toEqual([expect.objectContaining({ borders: MEASURED_BORDERS })]);
+
+    // Off again drops the field, as older sidecars have it.
+    fireEvent.click(balance);
+    await waitFor(() => expect(last(saved)?.backdrop).toEqual(backdrop));
+    expect(screen.getByText("Output 440×340")).toBeInTheDocument();
+  });
+
+  it("disables Balance while the backdrop is off", async () => {
+    mockEditor();
+    await ready();
+    expect(backdropPanel().getByRole("checkbox", { name: "Balance" })).toBeDisabled();
   });
 
   it("pads the output to the aspect ratio picked", async () => {

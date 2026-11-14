@@ -12,7 +12,7 @@ import {
   type Point,
   type Rect,
 } from "./model";
-import { IDENTITY, orientationOf, orientRect, scaledSize, type Orientation } from "./orient";
+import { IDENTITY, isIdentity, orientationOf, orientedCanvas, orientRect, scaledSize, type Orientation } from "./orient";
 
 export interface View {
   scale: number;
@@ -75,6 +75,119 @@ export function aspectRatio(aspect: BackdropAspect | undefined): number | null {
   return BACKDROP_ASPECTS.find((entry) => entry.aspect === aspect)?.ratio ?? null;
 }
 
+/** How many rows (top, bottom) and columns (left, right) of plain border a capture has on each side. */
+export interface PlainBorders {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+/** No plain border on any side: what a capture that cannot be measured balances as. */
+export const NO_BORDERS: PlainBorders = { top: 0, right: 0, bottom: 0, left: 0 };
+
+/** How far (0–255) each channel of a plain border's pixel may be from its edge's colour. */
+export const PLAIN_TOLERANCE = 8;
+
+/**
+ * Counts the plain rows and columns on each side of `data`: a row or
+ * column is plain when every pixel in it is within `PLAIN_TOLERANCE`, on
+ * every channel, of the colour at the start of that edge. Rows are counted
+ * first; columns are then measured only over the rows between the top and
+ * bottom borders, so a band across the top does not hide a margin at the
+ * side. A capture that is plain all over has no content to centre, so it
+ * measures as `NO_BORDERS`.
+ */
+export function plainBorders(data: ImageData): PlainBorders {
+  const { width, height } = data;
+  const px = data.data;
+  if (width <= 0 || height <= 0) return NO_BORDERS;
+  const at = (x: number, y: number) => (y * width + x) * 4;
+  const near = (offset: number, ref: number) =>
+    Math.abs(px[offset] - px[ref]) <= PLAIN_TOLERANCE &&
+    Math.abs(px[offset + 1] - px[ref + 1]) <= PLAIN_TOLERANCE &&
+    Math.abs(px[offset + 2] - px[ref + 2]) <= PLAIN_TOLERANCE &&
+    Math.abs(px[offset + 3] - px[ref + 3]) <= PLAIN_TOLERANCE;
+  const plainRow = (y: number, ref: number) => {
+    for (let x = 0; x < width; x++) if (!near(at(x, y), ref)) return false;
+    return true;
+  };
+  const plainColumn = (x: number, from: number, to: number, ref: number) => {
+    for (let y = from; y < to; y++) if (!near(at(x, y), ref)) return false;
+    return true;
+  };
+
+  let top = 0;
+  const topRef = at(0, 0);
+  while (top < height && plainRow(top, topRef)) top++;
+  if (top === height) return NO_BORDERS;
+  let bottom = 0;
+  const bottomRef = at(0, height - 1);
+  while (bottom < height - top && plainRow(height - 1 - bottom, bottomRef)) bottom++;
+
+  const from = top;
+  const to = height - bottom;
+  let left = 0;
+  const leftRef = at(0, from);
+  while (left < width && plainColumn(left, from, to, leftRef)) left++;
+  if (left === width) return NO_BORDERS;
+  let right = 0;
+  const rightRef = at(width - 1, from);
+  while (right < width - left && plainColumn(width - 1 - right, from, to, rightRef)) right++;
+  return { top, right, bottom, left };
+}
+
+/**
+ * Measures the plain border of `area` of a capture image (its pixels only,
+ * never the annotations) as it is exported: turned and mirrored by
+ * `orientation`, so the sides match the output's. `size` is the whole
+ * image's. Null when it cannot be read, such as without a 2D canvas.
+ */
+export function measureBorders(
+  image: CanvasImageSource,
+  area: Rect,
+  size: { width: number; height: number },
+  orientation: Orientation = IDENTITY,
+): PlainBorders | null {
+  if (Math.round(area.width) <= 0 || Math.round(area.height) <= 0) return null;
+  try {
+    const canvas = isIdentity(orientation) ? croppedCanvas(image, area) : orientedCanvas(image, area, size, orientation);
+    const ctx = canvas?.getContext("2d", { willReadFrequently: true });
+    if (!canvas || !ctx) return null;
+    return plainBorders(ctx.getImageData(0, 0, canvas.width, canvas.height));
+  } catch {
+    return null;
+  }
+}
+
+/** The `area` of `image`, in whole pixels, on a canvas of its own; null without a 2D canvas. */
+function croppedCanvas(image: CanvasImageSource, area: Rect): HTMLCanvasElement | null {
+  const width = Math.round(area.width);
+  const height = Math.round(area.height);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(image, Math.round(area.x), Math.round(area.y), width, height, 0, 0, width, height);
+  return canvas;
+}
+
+/**
+ * The padding before and after the capture on one axis. Unbalanced, both
+ * are `padding`. Balanced, the capture shifts so plain border plus padding
+ * match on both sides, keeping the total; when the padding cannot absorb
+ * the difference, the side with less border gets all of it and the other
+ * none, so the output grows.
+ */
+function axisGaps(padding: number, before: number, after: number, balance: boolean): [number, number] {
+  if (!balance) return [padding, padding];
+  const difference = after - before;
+  if (Math.abs(difference) > padding * 2) return difference > 0 ? [difference, 0] : [0, -difference];
+  const lead = Math.round(padding + difference / 2);
+  return [lead, padding * 2 - lead];
+}
+
 /**
  * Lays a capture of `size` out on its backdrop: the output grows by the
  * padding on every side, then by more on one axis to reach the aspect
@@ -83,6 +196,10 @@ export function aspectRatio(aspect: BackdropAspect | undefined): number | null {
  * is used as it is. Without a backdrop the
  * capture is the output.
  *
+ * With `balance` on and the capture's `borders` measured, the padding is
+ * shared unevenly so the content inside the plain border is centred
+ * instead (see `axisGaps`); the aspect ratio then pads evenly around that.
+ *
  * The editor's preview and the export compose both lay out with this, so
  * they always agree.
  */
@@ -90,12 +207,19 @@ export function backdropLayout(
   size: { width: number; height: number },
   backdrop: Backdrop | null | undefined,
   scale = 1,
+  borders?: PlainBorders | null,
 ): BackdropLayout {
   if (!backdrop) return { width: size.width, height: size.height, x: 0, y: 0, radius: 0, shadow: null };
   // Whole pixels, so the capture is not resampled.
   const padding = Math.max(0, Math.round(backdrop.padding));
-  let width = size.width + padding * 2;
-  let height = size.height + padding * 2;
+  const balance = backdrop.balance === true && !!borders;
+  const measured = borders ?? NO_BORDERS;
+  const [left, right] = axisGaps(padding, measured.left, measured.right, balance);
+  const [top, bottom] = axisGaps(padding, measured.top, measured.bottom, balance);
+  const baseWidth = size.width + left + right;
+  const baseHeight = size.height + top + bottom;
+  let width = baseWidth;
+  let height = baseHeight;
   const ratio = aspectRatio(backdrop.aspect);
   if (ratio !== null && height > 0) {
     if (width / height < ratio) width = Math.round(height * ratio);
@@ -107,8 +231,8 @@ export function backdropLayout(
   return {
     width,
     height,
-    x: Math.round((width - size.width) / 2),
-    y: Math.round((height - size.height) / 2),
+    x: left + Math.round((width - baseWidth) / 2),
+    y: top + Math.round((height - baseHeight) / 2),
     radius: Math.max(0, Math.min(backdrop.radius * pixelsPerPoint, shorter / 2)),
     shadow: backdropShadow(backdrop, shorter),
   };
@@ -356,11 +480,13 @@ export function paintBackdrop(ctx: PaintContext, layers: PaintLayer[], size: { w
 /** How to draw a backdrop: the capture's pixels per point, and what the blurred and image fills draw from. */
 export interface ComposeOptions extends BackdropSources {
   scale?: number;
+  /** The plain border of the exported capture, for a balanced backdrop. */
+  borders?: PlainBorders | null;
 }
 
 /** Draws the flattened capture on its backdrop: fill, shadow, then the capture with rounded corners. */
 export function composeBackdrop(source: HTMLCanvasElement, backdrop: Backdrop, options: ComposeOptions = {}): HTMLCanvasElement {
-  const layout = backdropLayout({ width: source.width, height: source.height }, backdrop, options.scale);
+  const layout = backdropLayout({ width: source.width, height: source.height }, backdrop, options.scale, options.borders);
   const canvas = document.createElement("canvas");
   canvas.width = layout.width;
   canvas.height = layout.height;

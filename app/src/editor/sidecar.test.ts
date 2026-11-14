@@ -188,6 +188,15 @@ describe("annotations sidecar", () => {
     expect(parseBackdrop({ ...backdrop, gradient: { from: "#112233", to: "#445566", angle: -90 } })?.gradient?.angle).toBe(270);
   });
 
+  it("keeps balance only when it is on", () => {
+    const backdrop = { fill: "ocean", padding: 64, radius: 12, shadow: true };
+    expect(parseBackdrop({ ...backdrop, balance: true })).toEqual({ ...backdrop, balance: true });
+    expect(parseBackdrop({ ...backdrop, balance: false })).toEqual(backdrop);
+    expect(parseBackdrop({ ...backdrop, balance: "yes" })).toEqual(backdrop);
+    const doc: Annotations = { version: 1, shapes: [], crop: null, backdrop: { ...backdrop, balance: true } };
+    expect(parseAnnotations(JSON.parse(JSON.stringify(serializeAnnotations(doc))))).toEqual(doc);
+  });
+
   it("loads a backdrop from before the shadow sliders as it was", () => {
     expect(parseBackdrop({ fill: "ocean", padding: 64, radius: 12, shadow: true })).toEqual({
       fill: "ocean",

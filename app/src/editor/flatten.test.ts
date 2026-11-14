@@ -12,7 +12,9 @@ import {
   exportTarget,
   flatten,
   gradientStops,
+  NO_BORDERS,
   paintBackdrop,
+  plainBorders,
   resample,
   type PaintLayer,
 } from "./flatten";
@@ -102,6 +104,9 @@ describe("backdrop", () => {
     expect(sameBackdrop(backdrop, { ...backdrop, padding: 65 })).toBe(false);
     expect(sameBackdrop(null, undefined)).toBe(true);
     expect(sameBackdrop(backdrop, null)).toBe(false);
+    // A missing balance is balance off.
+    expect(sameBackdrop(backdrop, { ...backdrop, balance: false })).toBe(true);
+    expect(sameBackdrop(backdrop, { ...backdrop, balance: true })).toBe(false);
   });
 });
 
@@ -448,5 +453,113 @@ describe("oriented and resized export", () => {
       [125, 100],
       [100, 80],
     ]);
+  });
+});
+
+type RGBA = [number, number, number, number];
+
+/** A `width`×`height` image of `background`, with each of `boxes` painted over it. */
+function pixels(width: number, height: number, background: RGBA, boxes: { x: number; y: number; width: number; height: number; color: RGBA }[] = []): ImageData {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0; i < width * height; i++) data.set(background, i * 4);
+  for (const box of boxes) {
+    for (let y = box.y; y < box.y + box.height; y++) {
+      for (let x = box.x; x < box.x + box.width; x++) data.set(box.color, (y * width + x) * 4);
+    }
+  }
+  return { data, width, height, colorSpace: "srgb" } as ImageData;
+}
+
+const WHITE: RGBA = [255, 255, 255, 255];
+const BLACK: RGBA = [0, 0, 0, 255];
+
+describe("plain borders", () => {
+  it("counts the plain rows and columns on each side", () => {
+    const image = pixels(10, 8, WHITE, [{ x: 2, y: 1, width: 3, height: 5, color: BLACK }]);
+    expect(plainBorders(image)).toEqual({ top: 1, right: 5, bottom: 2, left: 2 });
+  });
+
+  it("counts a pixel within the tolerance as plain, and one past it as content", () => {
+    const near = pixels(10, 8, WHITE, [
+      { x: 2, y: 1, width: 3, height: 5, color: BLACK },
+      { x: 8, y: 3, width: 1, height: 1, color: [250, 250, 250, 255] },
+    ]);
+    expect(plainBorders(near).right).toBe(5);
+    const far = pixels(10, 8, WHITE, [
+      { x: 2, y: 1, width: 3, height: 5, color: BLACK },
+      { x: 8, y: 3, width: 1, height: 1, color: [230, 255, 255, 255] },
+    ]);
+    expect(plainBorders(far).right).toBe(1);
+  });
+
+  it("measures each edge against its own colour", () => {
+    // A grey band down the left, white elsewhere.
+    const image = pixels(10, 8, WHITE, [
+      { x: 0, y: 0, width: 3, height: 8, color: [128, 128, 128, 255] },
+      { x: 4, y: 2, width: 2, height: 2, color: BLACK },
+    ]);
+    expect(plainBorders(image)).toEqual({ top: 0, right: 4, bottom: 0, left: 3 });
+  });
+
+  it("measures the side margins only between the top and bottom borders", () => {
+    // A red title bar across the top would otherwise stop the left margin at column 0.
+    const image = pixels(10, 8, WHITE, [
+      { x: 0, y: 0, width: 10, height: 2, color: [229, 72, 77, 255] },
+      { x: 6, y: 4, width: 2, height: 2, color: BLACK },
+    ]);
+    expect(plainBorders(image)).toEqual({ top: 2, right: 2, bottom: 2, left: 6 });
+  });
+
+  it("measures a capture that is plain all over, or empty, as no border", () => {
+    expect(plainBorders(pixels(10, 8, WHITE))).toEqual(NO_BORDERS);
+    expect(plainBorders(pixels(0, 0, WHITE))).toEqual(NO_BORDERS);
+  });
+});
+
+describe("balanced backdrop", () => {
+  const backdrop: Backdrop = { fill: "ocean", padding: 64, radius: 12, shadow: true, balance: true };
+  const size = { width: 400, height: 300 };
+
+  it("shifts the capture so its content is centred, keeping the output size", () => {
+    // 80px of empty margin on the right: the left gets 40 more padding, the right 40 less.
+    const layout = backdropLayout(size, backdrop, 1, { top: 0, right: 80, bottom: 0, left: 0 });
+    expect(layout).toMatchObject({ width: 528, height: 428, x: 104, y: 64 });
+    // Plain border plus padding match: 104 on the left, 24 + 80 on the right.
+    expect(layout.width - layout.x - size.width + 80).toBe(layout.x);
+    expect(backdropLayout(size, backdrop, 1, { top: 40, right: 0, bottom: 0, left: 60 })).toMatchObject({ width: 528, height: 428, x: 34, y: 44 });
+  });
+
+  it("grows the output only when the padding cannot absorb the difference", () => {
+    expect(backdropLayout(size, { ...backdrop, padding: 20 }, 1, { top: 0, right: 100, bottom: 0, left: 0 })).toMatchObject({
+      width: 500,
+      height: 340,
+      x: 100,
+      y: 20,
+    });
+    expect(backdropLayout(size, { ...backdrop, padding: 0 }, 1, { top: 30, right: 0, bottom: 0, left: 0 })).toMatchObject({
+      width: 400,
+      height: 330,
+      x: 0,
+      y: 0,
+    });
+  });
+
+  it("reaches the aspect ratio after balancing, keeping the balance", () => {
+    // As the even 16:9 layout (x 181), shifted by the same 40px.
+    expect(backdropLayout(size, { ...backdrop, aspect: "16:9" }, 1, { top: 0, right: 80, bottom: 0, left: 0 })).toMatchObject({
+      width: 761,
+      height: 428,
+      x: 221,
+      y: 64,
+    });
+  });
+
+  it("pads evenly for a uniform capture, with balance off, or before the borders are measured", () => {
+    const even = { width: 528, height: 428, x: 64, y: 64 };
+    expect(backdropLayout(size, backdrop, 1, plainBorders(pixels(40, 30, WHITE)))).toMatchObject(even);
+    expect(backdropLayout(size, { ...backdrop, balance: false }, 1, { top: 0, right: 80, bottom: 0, left: 0 })).toMatchObject(even);
+    expect(backdropLayout(size, { ...backdrop, balance: undefined }, 1, { top: 0, right: 80, bottom: 0, left: 0 })).toMatchObject(even);
+    expect(backdropLayout(size, backdrop, 1, null)).toMatchObject(even);
+    expect(backdropLayout(size, backdrop)).toMatchObject(even);
   });
 });

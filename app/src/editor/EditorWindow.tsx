@@ -15,6 +15,7 @@ import {
   exportTarget,
   fallbackScale,
   flatten,
+  measureBorders,
   roundedRectPath,
   type ExportFormat,
   type PaintLayer,
@@ -468,6 +469,15 @@ export default function EditorWindow() {
   /** Image pixels per point: the corner radius is in points. Older captures do not say, so the window's density stands in. */
   const captureScale = info?.scaleFactor && info.scaleFactor > 0 ? info.scaleFactor : fallbackScale();
   const backdropImageEl = useBackdropImage(backdrop?.fill === BACKDROP_FILLS.image ? (backdrop.image ?? null) : null);
+  const balance = backdrop?.balance === true;
+  /**
+   * The plain border of the capture's pixels inside the crop, turned and
+   * mirrored as they are exported, measured only while Balance is on.
+   */
+  const borders = useMemo(() => {
+    if (!balance || !image || !imageSize) return null;
+    return measureBorders(image, doc.crop ?? { x: 0, y: 0, ...imageSize }, imageSize, { rotation, flipX, flipY });
+  }, [balance, image, imageSize, doc.crop, rotation, flipX, flipY]);
   /**
    * The backdrop preview: the area that is exported (the crop, or the whole
    * capture), where the backdrop sits around it, and the fit bounds. The
@@ -480,9 +490,9 @@ export default function EditorWindow() {
     if (!backdrop || tool === "crop") return { area: whole, bounds: whole, layout: null };
     // The exported area as it shows, in display space.
     const area = doc.crop ? orientRect(doc.crop, imageSize, o) : whole;
-    const layout = backdropLayout(area, backdrop, captureScale);
+    const layout = backdropLayout(area, backdrop, captureScale, borders);
     return { area, bounds: { x: area.x - layout.x, y: area.y - layout.y, width: layout.width, height: layout.height }, layout };
-  }, [imageSize, backdrop, tool, doc.crop, captureScale, rotation, flipX, flipY]);
+  }, [imageSize, backdrop, tool, doc.crop, captureScale, rotation, flipX, flipY, borders]);
   /** The capture as it shows, for the blurred fill: the image itself when nothing is turned. */
   const shownCapture = useMemo(() => {
     if (!image || !imageSize || backdrop?.fill !== BACKDROP_FILLS.blur) return image;
@@ -507,9 +517,9 @@ export default function EditorWindow() {
   const outputBase = useMemo(() => {
     if (!imageSize) return null;
     const area = orientRect(doc.crop ?? { x: 0, y: 0, ...imageSize }, imageSize, { rotation, flipX, flipY });
-    const layout = backdrop ? backdropLayout(area, backdrop, captureScale) : area;
+    const layout = backdrop ? backdropLayout(area, backdrop, captureScale, borders) : area;
     return { width: layout.width, height: layout.height };
-  }, [imageSize, doc.crop, backdrop, captureScale, rotation, flipX, flipY]);
+  }, [imageSize, doc.crop, backdrop, captureScale, rotation, flipX, flipY, borders]);
   const currentView = useMemo(() => view ?? (frame ? fitView(frame.bounds, size) : { scale: 1, x: 0, y: 0 }), [view, frame, size]);
   const selected = doc.shapes.find((shape) => shape.id === selectedId) ?? null;
   const steps = useMemo(() => stepNumbers(doc.shapes), [doc.shapes]);
@@ -883,9 +893,10 @@ export default function EditorWindow() {
         scale: captureScale,
         capture: shown ? { image: shown, area } : image ? { image, area } : null,
         image: backdropImageEl,
+        borders,
       });
     },
-    [doc.crop, backdrop, imageSize, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale],
+    [doc.crop, backdrop, imageSize, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale, borders],
   );
 
   /** Copies the flattened image; false when it failed (and said so). */
