@@ -38,10 +38,18 @@ function meshCss(mesh: (typeof BACKDROP_MESHES)[number]): string {
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
+/** The backdrop with Balance on, or without the field when it is off, as older sidecars have it. */
+function withBalance(backdrop: Backdrop, balance: boolean): Backdrop {
+  const next = { ...backdrop };
+  if (balance) next.balance = true;
+  else delete next.balance;
+  return next;
+}
+
 /**
  * The backdrop ("beautify") controls: fill (gradients, meshes, solids, the
- * blurred capture, an image), padding, aspect ratio, corner radius and
- * shadow.
+ * blurred capture, an image), padding and Balance, aspect ratio, corner
+ * radius and shadow.
  */
 export default function BackdropPanel({ backdrop, start, onPreview, onCommit, onPickImage }: BackdropPanelProps) {
   // Picking a fill turns the backdrop on with the sizes last used.
@@ -171,6 +179,15 @@ export default function BackdropPanel({ backdrop, start, onPreview, onCommit, on
         />
       </div>
       {slider("Padding", current.padding, BACKDROP_MAX_PADDING, "px", (padding) => ({ ...current, padding }))}
+      <label className="backdrop-row check" title="Pads unevenly so a capture with empty margins looks centred">
+        <input
+          type="checkbox"
+          checked={backdrop?.balance ?? false}
+          disabled={!backdrop}
+          onChange={(event) => onCommit(withBalance(current, event.target.checked))}
+        />
+        <span>Balance</span>
+      </label>
       <div className="backdrop-row">
         <span>Aspect ratio</span>
         <div className="backdrop-aspects" role="group" aria-label="Aspect ratio">

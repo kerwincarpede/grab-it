@@ -134,6 +134,8 @@ export interface Backdrop {
   gradient?: CustomGradient;
   /** The file the `image` fill shows. */
   image?: string;
+  /** Pads unevenly so the content, inside the capture's own plain border, looks centred; off when absent. */
+  balance?: boolean;
 }
 
 /** A quarter turn clockwise, in degrees. */
@@ -414,7 +416,8 @@ export function sameBackdrop(a: Backdrop | null | undefined, b: Backdrop | null 
     a.gradient?.from === b.gradient?.from &&
     a.gradient?.to === b.gradient?.to &&
     a.gradient?.angle === b.gradient?.angle &&
-    a.image === b.image
+    a.image === b.image &&
+    (a.balance ?? false) === (b.balance ?? false)
   );
 }
 
