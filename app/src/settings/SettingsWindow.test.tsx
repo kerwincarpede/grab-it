@@ -41,7 +41,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     afterCapture: "quickAccess",
     copyToClipboard: true,
     ai: { ...DEFAULT_AI_PREFERENCES },
-    testResult: "qwen2.5vl:7b (7.6B, Q4_K_M)",
+    testResult: "qwen3-vl:4b (4.4B, Q4_K_M)",
     claudePath: "/usr/local/bin/claude",
     codexPath: "/opt/homebrew/bin/codex",
     saveFolder: "/home/me/Pictures/Grab-it",
@@ -408,7 +408,8 @@ describe("SettingsWindow AI descriptions", () => {
     const toggle = await screen.findByRole("checkbox", { name: /Describe captures with AI/ });
     expect(toggle).not.toBeChecked();
     expect(screen.getByLabelText("Endpoint URL")).toHaveValue("http://localhost:11434/v1");
-    expect(screen.getByLabelText("Model")).toHaveValue("qwen2.5vl:7b");
+    expect(screen.getByLabelText("Model")).toHaveValue("qwen3-vl:4b");
+    expect(screen.getByLabelText("Preset")).toHaveValue("ollama");
     const key = screen.getByLabelText("API key");
     expect(key).toHaveAttribute("type", "password");
     expect(key).toHaveValue("sk-secret");
@@ -468,6 +469,69 @@ describe("SettingsWindow AI descriptions", () => {
     expect(endpoint).toHaveValue("https://api.openai.com/v1");
   });
 
+  it("fills in the endpoint and model from a preset, saving them with Save", async () => {
+    const backend = mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "endpoint" } });
+    render(<SettingsWindow />);
+    const preset = await screen.findByLabelText("Preset");
+    await waitFor(() => expect(preset).toBeEnabled());
+    expect(screen.getByRole("option", { name: "Custom" })).toBeInTheDocument();
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Custom",
+      "Ollama",
+      "OpenAI",
+      "Anthropic",
+      "OpenRouter",
+    ]);
+
+    await userEvent.selectOptions(preset, "OpenRouter");
+
+    expect(screen.getByLabelText("Endpoint URL")).toHaveValue("https://openrouter.ai/api/v1");
+    expect(screen.getByLabelText("Model")).toHaveValue("openai/gpt-5-mini");
+    expect(preset).toHaveValue("openrouter");
+    // Only filled in: nothing is saved until Save.
+    expect(commands(backend)).not.toContain("set_preferences");
+    expect(screen.getByText(/a cloud endpoint receives your screenshots/)).toHaveClass("ai-privacy-cloud");
+
+    await userEvent.type(screen.getByLabelText("API key"), "sk-or-1");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(backend.ai).toEqual({
+        ...DEFAULT_AI_PREFERENCES,
+        enabled: true,
+        provider: "endpoint",
+        endpoint: "https://openrouter.ai/api/v1",
+        model: "openai/gpt-5-mini",
+        apiKey: "sk-or-1",
+      }),
+    );
+  });
+
+  it("shows Custom once the model is the user's own, and fills each preset's model", async () => {
+    mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "endpoint" } });
+    render(<SettingsWindow />);
+    const preset = await screen.findByLabelText("Preset");
+    await waitFor(() => expect(preset).toBeEnabled());
+    expect(preset).toHaveValue("ollama");
+
+    const model = screen.getByLabelText("Model");
+    await userEvent.clear(model);
+    await userEvent.type(model, "llava:13b");
+    expect(preset).toHaveValue("");
+
+    await userEvent.selectOptions(preset, "OpenAI");
+    expect(screen.getByLabelText("Endpoint URL")).toHaveValue("https://api.openai.com/v1");
+    expect(model).toHaveValue("gpt-5-mini");
+    await userEvent.selectOptions(preset, "Anthropic");
+    expect(screen.getByLabelText("Endpoint URL")).toHaveValue("https://api.anthropic.com/v1");
+    expect(model).toHaveValue("claude-haiku-5-5");
+
+    // Back to Ollama brings back the default local model.
+    await userEvent.selectOptions(preset, "Ollama");
+    expect(screen.getByLabelText("Endpoint URL")).toHaveValue("http://localhost:11434/v1");
+    expect(model).toHaveValue("qwen3-vl:4b");
+    expect(screen.getByText(/nothing leaves this computer/)).not.toHaveClass("ai-privacy-cloud");
+  });
+
   it("saves an emptied key as none", async () => {
     const backend = mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, apiKey: "sk-old" } });
     render(<SettingsWindow />);
@@ -485,7 +549,7 @@ describe("SettingsWindow AI descriptions", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Test connection" }));
 
-    expect(await screen.findByText("Connected: qwen2.5vl:7b (7.6B, Q4_K_M)")).toBeInTheDocument();
+    expect(await screen.findByText("Connected: qwen3-vl:4b (4.4B, Q4_K_M)")).toBeInTheDocument();
     const order = commands(backend).filter((cmd) => cmd === "set_preferences" || cmd === "ai_test_connection");
     expect(order).toEqual(["set_preferences", "ai_test_connection"]);
     expect(backend.ai.model).toBe("llava:13b");

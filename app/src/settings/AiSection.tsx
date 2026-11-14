@@ -1,9 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   AI_PROVIDERS,
+  ENDPOINT_PRESETS,
   aiClis,
   aiProvider,
   isLocalEndpoint,
+  matchingPreset,
   redescribeAll,
   testAiConnection,
   type AiClis,
@@ -47,7 +49,7 @@ const PRIVACY: Record<AiProvider, string> = {
 /**
  * Who describes and sorts captures. The toggles and the provider save at
  * once; the endpoint's text fields save with Save, or before a connection
- * test.
+ * test. A preset only fills in those fields.
  */
 function AiSection({ saved, disabled, onSave }: Props) {
   const [draft, setDraft] = useState<Draft>(() => draftOf(saved));
@@ -137,6 +139,15 @@ function AiSection({ saved, disabled, onSave }: Props) {
   }
 
   const local = usesEndpoint && isLocalEndpoint(draft.endpoint.trim());
+  // The menu follows the fields, so typing your own shows "Custom".
+  const preset = matchingPreset(draft.endpoint.trim(), draft.model.trim());
+
+  function choosePreset(id: string) {
+    const chosen = ENDPOINT_PRESETS.find((candidate) => candidate.id === id);
+    if (!chosen) return;
+    setResult(null);
+    setDraft({ ...draft, endpoint: chosen.endpoint, model: chosen.model });
+  }
 
   return (
     <form className="ai-settings" aria-labelledby="ai-heading" onSubmit={submit}>
@@ -192,6 +203,23 @@ function AiSection({ saved, disabled, onSave }: Props) {
       {usesEndpoint && (
         <>
           <div className="field">
+            <label htmlFor="ai-preset">Preset</label>
+            <select
+              id="ai-preset"
+              value={preset?.id ?? ""}
+              disabled={busy}
+              onChange={(event) => choosePreset(event.target.value)}
+            >
+              <option value="">Custom</option>
+              {ENDPOINT_PRESETS.map((choice) => (
+                <option key={choice.id} value={choice.id}>
+                  {choice.name}
+                </option>
+              ))}
+            </select>
+            <p className="hint">Fills in the URL and a model. Cloud providers also need your API key.</p>
+          </div>
+          <div className="field">
             <label htmlFor="ai-endpoint">Endpoint URL</label>
             <input
               id="ai-endpoint"
@@ -213,7 +241,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
               spellCheck={false}
               value={draft.model}
               disabled={busy}
-              placeholder="qwen2.5vl:7b"
+              placeholder="qwen3-vl:4b"
               onChange={(event) => setDraft({ ...draft, model: event.target.value })}
             />
             <p className="hint">It must accept images.</p>

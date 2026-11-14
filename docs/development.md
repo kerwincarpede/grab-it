@@ -97,24 +97,33 @@ Grab-it looks for `claude` and `codex` on its own PATH, then on your login shell
 With Ollama as the endpoint, everything stays local:
 
 ```sh
-ollama pull qwen2.5vl:7b   # about 6 GB; any vision model works
-ollama serve               # if it is not already running
+ollama pull qwen3-vl:4b   # about 3 GB; any vision model works
+ollama serve              # if it is not already running
 ```
 
-Then pick the endpoint in Settings, or set it under `ai` in `settings.json`. The defaults already point at Ollama:
+Then pick the endpoint in Settings and choose the **Ollama** preset, or set it under `ai` in `settings.json`. The defaults already point at Ollama with `qwen3-vl:4b`. Earlier versions defaulted to `qwen2.5vl:7b`; a model already in `settings.json` is kept, so switching means picking the preset again or editing `model`:
 
 ```json
 "ai": {
   "enabled": true,
   "provider": "endpoint",
   "endpoint": "http://localhost:11434/v1",
-  "model": "qwen2.5vl:7b",
+  "model": "qwen3-vl:4b",
   "apiKey": null,
   "newCapturesOnly": true
 }
 ```
 
-For a cloud API, set `endpoint` (for example `https://api.openai.com/v1`), `model` and `apiKey`. The key is sent as `Authorization: Bearer …` and is stored in plain text in `settings.json`. With `newCapturesOnly`, captures that already existed when you turned describing on are skipped; set it to `false` before turning it on to describe the whole library. **Test connection** in Settings checks whichever provider is picked.
+For a cloud API, set `endpoint`, `model` and `apiKey`. The **Preset** menu in Settings fills in the URL and a vision model for the common ones; you add the key and press Save:
+
+| Preset | Endpoint | Model |
+| --- | --- | --- |
+| Ollama | `http://localhost:11434/v1` | `qwen3-vl:4b` |
+| OpenAI | `https://api.openai.com/v1` | `gpt-5-mini` |
+| Anthropic | `https://api.anthropic.com/v1` | `claude-haiku-5-5` |
+| OpenRouter | `https://openrouter.ai/api/v1` | `openai/gpt-5-mini` |
+
+Any other URL or model shows as **Custom**. The key is sent as `Authorization: Bearer …` and is stored in plain text in `settings.json`. With `newCapturesOnly`, captures that already existed when you turned describing on are skipped; set it to `false` before turning it on to describe the whole library. **Test connection** in Settings checks whichever provider is picked.
 
 Captures are described in the background, one at a time and newest first, once OCR has read them. Each one is scaled down to at most 1568 px on its long edge and sent with its OCR text, app and window title. A model on a CPU can take a minute or more per capture. If the endpoint cannot be reached or refuses the request, or the CLI fails, describing pauses. It tries again when you change the settings or ask for a capture to be described again, or when a new capture arrives a minute or more later. Changing the model does not redo old captures: each one records the model that described it, and you can ask for one capture, or all of them, to be described again.
 

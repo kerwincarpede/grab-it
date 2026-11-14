@@ -680,7 +680,7 @@ mod tests {
                     category: "receipt".into(),
                     tags: vec!["Invoice".into(), "stripe".into()],
                 },
-                "qwen2.5vl:7b",
+                "qwen3-vl:4b",
             )
             .unwrap();
         library
@@ -691,7 +691,7 @@ mod tests {
                     category: "code".into(),
                     tags: vec!["rust".into(), "lifetimes".into()],
                 },
-                "qwen2.5vl:7b",
+                "qwen3-vl:4b",
             )
             .unwrap();
 

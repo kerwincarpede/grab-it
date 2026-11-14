@@ -31,8 +31,9 @@ pub enum AfterCapture {
 
 /// The default OpenAI-compatible endpoint: a local Ollama.
 pub const DEFAULT_AI_ENDPOINT: &str = "http://localhost:11434/v1";
-/// The default vision model, as Ollama names it.
-pub const DEFAULT_AI_MODEL: &str = "qwen2.5vl:7b";
+/// The default vision model, as Ollama names it: small enough to pull and run
+/// on a laptop. A model already in settings.json is kept.
+pub const DEFAULT_AI_MODEL: &str = "qwen3-vl:4b";
 
 /// Who describes captures. Mirrors `AiProvider` in src/settings/api.ts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -880,7 +881,7 @@ mod tests {
         let ai = defaults(&dir).preferences.ai;
         assert!(!ai.enabled);
         assert_eq!(ai.endpoint, "http://localhost:11434/v1");
-        assert_eq!(ai.model, "qwen2.5vl:7b");
+        assert_eq!(ai.model, "qwen3-vl:4b");
         assert_eq!(ai.api_key, None);
         assert!(ai.new_captures_only);
 
@@ -897,6 +898,21 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_model_survives_the_new_default() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"ai": {"enabled": true, "provider": "endpoint", "model": "qwen2.5vl:7b"}}"#,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap().preferences.ai;
+        assert_eq!(loaded.model, "qwen2.5vl:7b");
+        assert_ne!(DEFAULT_AI_MODEL, "qwen2.5vl:7b");
+    }
+
+    #[test]
     fn ai_settings_serialize_in_the_frontends_spelling() {
         let dir = TempDir::new().unwrap();
         let json = serde_json::to_value(defaults(&dir)).unwrap();
@@ -906,7 +922,7 @@ mod tests {
                 "enabled": false,
                 "provider": null,
                 "endpoint": "http://localhost:11434/v1",
-                "model": "qwen2.5vl:7b",
+                "model": "qwen3-vl:4b",
                 "apiKey": null,
                 "newCapturesOnly": true,
                 "noticePending": false,

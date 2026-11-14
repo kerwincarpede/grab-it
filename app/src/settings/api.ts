@@ -39,7 +39,7 @@ export const DEFAULT_AI_PREFERENCES: AiPreferences = {
   enabled: false,
   provider: null,
   endpoint: "http://localhost:11434/v1",
-  model: "qwen2.5vl:7b",
+  model: "qwen3-vl:4b",
   apiKey: null,
   newCapturesOnly: true,
   noticePending: false,
@@ -68,6 +68,29 @@ export const AI_PROVIDERS: { value: AiProvider; title: string; hint: string }[] 
     hint: "Ollama or LM Studio on this computer, or a cloud API such as OpenAI or OpenRouter.",
   },
 ];
+
+/** An OpenAI-compatible API the endpoint provider can be pointed at in one step. */
+export interface EndpointPreset {
+  /** Stable key for the preset menu. */
+  id: string;
+  name: string;
+  endpoint: string;
+  /** A vision model the API offers; the user can type another. */
+  model: string;
+}
+
+/** The endpoint presets in the order Settings lists them. Ollama's matches {@link DEFAULT_AI_PREFERENCES}. */
+export const ENDPOINT_PRESETS: EndpointPreset[] = [
+  { id: "ollama", name: "Ollama", endpoint: DEFAULT_AI_PREFERENCES.endpoint, model: DEFAULT_AI_PREFERENCES.model },
+  { id: "openai", name: "OpenAI", endpoint: "https://api.openai.com/v1", model: "gpt-5-mini" },
+  { id: "anthropic", name: "Anthropic", endpoint: "https://api.anthropic.com/v1", model: "claude-haiku-5-5" },
+  { id: "openrouter", name: "OpenRouter", endpoint: "https://openrouter.ai/api/v1", model: "openai/gpt-5-mini" },
+];
+
+/** The preset an endpoint and model are, or null when they are the user's own. */
+export function matchingPreset(endpoint: string, model: string): EndpointPreset | null {
+  return ENDPOINT_PRESETS.find((preset) => preset.endpoint === endpoint && preset.model === model) ?? null;
+}
 
 /** A provider's name as messages show it. */
 export function providerName(provider: AiProvider): string {
