@@ -15,6 +15,7 @@ import {
   shownTextCorner,
   textCorner,
   toCapture,
+  toCaptureDelta,
   toDisplay,
   uprightTransform,
   withOrientation,
@@ -32,8 +33,9 @@ function konva(attrs: { x?: number; y?: number; rotation: number; scaleX: number
   const sx = p.x * attrs.scaleX;
   const sy = p.y * attrs.scaleY;
   return {
-    x: Math.round(sx * Math.cos(radians) - sy * Math.sin(radians) + (attrs.x ?? 0)),
-    y: Math.round(sx * Math.sin(radians) + sy * Math.cos(radians) + (attrs.y ?? 0)),
+    // `|| 0` turns -0 into 0, as toDisplay does.
+    x: Math.round(sx * Math.cos(radians) - sy * Math.sin(radians) + (attrs.x ?? 0)) || 0,
+    y: Math.round(sx * Math.sin(radians) + sy * Math.cos(radians) + (attrs.y ?? 0)) || 0,
   };
 }
 
@@ -100,6 +102,19 @@ describe("orientation", () => {
       const upright = uprightTransform(o);
       const p = { x: 7, y: 3 };
       expect(konva(group, konva(upright, p))).toEqual(p);
+    }
+  });
+
+  it("turns a nudge on show back into capture pixels", () => {
+    // Turned right, right on show is up the capture; flipped, left on show is right.
+    expect(toCaptureDelta({ x: 1, y: 0 }, right)).toEqual({ x: 0, y: -1 });
+    expect(toCaptureDelta({ x: -10, y: 0 }, { rotation: 0, flipX: true, flipY: false })).toEqual({ x: 10, y: 0 });
+    for (const o of ALL) {
+      const d = { x: 3, y: -7 };
+      const from = toDisplay({ x: 50, y: 60 }, size, o);
+      const moved = toCaptureDelta(d, o);
+      const to = toDisplay({ x: 50 + moved.x, y: 60 + moved.y }, size, o);
+      expect({ x: to.x - from.x, y: to.y - from.y }).toEqual(d);
     }
   });
 

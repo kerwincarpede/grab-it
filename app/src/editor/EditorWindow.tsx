@@ -72,6 +72,7 @@ import {
   shownTextCorner,
   textCorner,
   toCapture,
+  toCaptureDelta,
   withOrientation,
   withScale,
   type Orientation,
@@ -837,9 +838,11 @@ export default function EditorWindow() {
 
   const nudgeSelected = useCallback(
     (by: Point) => {
-      if (selected) commit(replaceShape(doc, moveShape(selected, by.x, by.y)));
+      // Arrow keys move on screen; shapes live in capture pixels.
+      const move = toCaptureDelta(by, orientation);
+      if (selected) commit(replaceShape(doc, moveShape(selected, move.x, move.y)));
     },
-    [selected, doc, commit],
+    [selected, doc, commit, orientation],
   );
 
   /** Turns or mirrors the capture with everything on it: one undo step. */

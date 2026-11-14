@@ -85,6 +85,15 @@ export function toCapture(p: Point, size: Size, o: Orientation): Point {
   return { x: a * q.x + b * q.y || 0, y: c * q.x + d * q.y || 0 };
 }
 
+/**
+ * A move on show (an arrow-key nudge) as a move in capture pixels: the turn
+ * and mirror undone, without the shift.
+ */
+export function toCaptureDelta(d: Point, o: Orientation): Point {
+  const [a, b, c, d2] = linear(o);
+  return { x: a * d.x + b * d.y || 0, y: c * d.x + d2 * d.y || 0 };
+}
+
 /** A rectangle of the capture (the crop) as it shows. */
 export function orientRect(rect: Rect, size: Size, o: Orientation): Rect {
   const a = toDisplay({ x: rect.x, y: rect.y }, size, o);
@@ -181,7 +190,7 @@ export function orientedCanvas(source: CanvasImageSource, area: Rect, size: Size
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(shown.width));
   canvas.height = Math.max(1, Math.round(shown.height));
-  let ctx: CanvasRenderingContext2D | null = null;
+  let ctx: CanvasRenderingContext2D | null;
   try {
     ctx = canvas.getContext("2d");
   } catch {

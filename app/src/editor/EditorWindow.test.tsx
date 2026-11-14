@@ -672,6 +672,22 @@ describe("EditorWindow", () => {
     );
   });
 
+  it("nudges the selected shape the way it shows once turned or flipped", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Rotate right" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="s1"]') as Element);
+    // Turned right, right on show is up the capture.
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    await waitFor(() => expect(last(saved)?.shapes.find((shape) => shape.id === "s1")).toMatchObject({ x: 50, y: 49 }));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate left" }));
+    fireEvent.click(screen.getByRole("button", { name: "Flip horizontal" }));
+    // Mirrored, left on show is right on the capture.
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    await waitFor(() => expect(last(saved)?.shapes.find((shape) => shape.id === "s1")).toMatchObject({ x: 51, y: 49 }));
+  });
+
   it("resizes by width, ratio locked, or by a percentage, and undoes it", async () => {
     const saved = mockEditor();
     await ready();
@@ -912,7 +928,7 @@ describe("EditorWindow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Pin" }));
     await waitFor(() => expect(calls.map((call) => call.cmd)).toEqual(["editor_pin"]));
     expect(bytes(calls[0].payload)).toEqual(Array.from(FLATTENED));
-    expect(flattened.calls).toEqual([{ crop: null, backdrop }]);
+    expect(flattened.calls).toEqual([{ crop: null, backdrop, rotation: 0, flipX: false, flipY: false, scale: 1 }]);
     expect(await screen.findByText("Pinned on top of other windows.")).toBeInTheDocument();
   });
 
