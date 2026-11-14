@@ -32,6 +32,9 @@ vi.mock("react-konva", async () => {
       y,
       points,
       bezier,
+      rotation,
+      scaleX,
+      scaleY,
       onDragMove,
       onDragEnd,
     }: {
@@ -46,6 +49,9 @@ vi.mock("react-konva", async () => {
       y?: number;
       points?: number[];
       bezier?: boolean;
+      rotation?: number;
+      scaleX?: number;
+      scaleY?: number;
       onDragMove?: (event: unknown) => void;
       onDragEnd?: (event: unknown) => void;
     }) =>
@@ -64,6 +70,9 @@ vi.mock("react-konva", async () => {
           "data-y": y,
           "data-points": points?.join(" "),
           "data-bezier": bezier === undefined ? undefined : String(bezier),
+          "data-rotation": rotation,
+          "data-scale-x": scaleX,
+          "data-scale-y": scaleY,
           onMouseDown: id ? () => onMouseDown?.() : undefined,
           // A DOM drag stands in for a Konva drag: the node lands where `pointerAt` says.
           onDrag: onDragMove ? (event: { nativeEvent: MouseEvent }) => onDragMove(dragEvent(event.nativeEvent)) : undefined,
@@ -342,7 +351,7 @@ describe("EditorWindow", () => {
     expect(screen.getByText("shot.png")).toBeInTheDocument();
     expect(shapeIds()).toEqual(["a1", "t1", "s1", "s2"]);
     expect(document.querySelector('[data-text="Click here"]')).toBeInTheDocument();
-    const badges = Array.from(document.querySelectorAll('[data-konva="Group"] [data-text]')).map((element) =>
+    const badges = Array.from(document.querySelectorAll('[data-konva="Group"][data-id] [data-text]')).map((element) =>
       element.getAttribute("data-text"),
     );
     expect(badges).toEqual(["1", "2"]);
@@ -450,6 +459,38 @@ describe("EditorWindow", () => {
     // Other shapes keep the box.
     fireEvent.mouseDown(document.querySelector('[data-id="t1"]') as Element);
     expect(lineHandle("bend")).toBeNull();
+  });
+
+  it("turns and mirrors the line handles with the capture, and bends in capture pixels", async () => {
+    const saved = mockEditor();
+    await ready();
+    const transform = (name: string) => {
+      const group = document.querySelector(`[data-konva="Group"][data-name="${name}"]`) as Element;
+      return ["data-x", "data-y", "data-rotation", "data-scale-x", "data-scale-y"].map((attr) => group.getAttribute(attr));
+    };
+    const savedArrow = () => last(saved)?.shapes.find((shape) => shape.id === "a1");
+    fireEvent.click(screen.getByRole("button", { name: "Rotate right" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+    // The 400×300 capture turned right: shifted 300 across, a quarter turn.
+    expect(transform("oriented")).toEqual(["300", "0", "90", "1", "1"]);
+    expect(transform("oriented-handles")).toEqual(transform("oriented"));
+    // The handles stay in capture pixels; the group turns them onto the line.
+    expect(handleAt("bend")).toEqual([55, 45]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Flip horizontal" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+    expect(transform("oriented-handles")).toEqual(transform("oriented"));
+    expect(transform("oriented")).toEqual(["0", "0", "270", "-1", "1"]);
+
+    // A dragged handle reports where it is in its group: capture pixels.
+    const writes = saved.length;
+    dragHandle("bend", [55, 15]);
+    await waitFor(() => expect(savedArrow()).toMatchObject({ points: [10, 10, 100, 80], control: [55, -15] }));
+    expect(saved).toHaveLength(writes + 1);
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(savedArrow()).not.toHaveProperty("control"));
+    expect(last(saved)).toMatchObject({ rotation: 90, flipX: true });
   });
 
   it("bends an arrow from its middle handle, straightens it near the line, and undoes each drag", async () => {
@@ -608,6 +649,128 @@ describe("EditorWindow", () => {
     fireEvent.keyDown(window, { key: "d", ctrlKey: true });
     await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 100));
     expect(saved).toEqual([]);
+  });
+
+  it("rotates the capture from the top bar, one undo step each", async () => {
+    const saved = mockEditor();
+    await ready();
+    const bar = within(screen.getByRole("toolbar", { name: "Style and actions" }));
+    fireEvent.click(bar.getByRole("button", { name: "Rotate right" }));
+    await waitFor(() => expect(last(saved)).toMatchObject({ rotation: 90 }));
+    // The 400×300 capture now shows 300×400; the shapes stay in capture pixels.
+    expect(screen.getByText("Output 300×400")).toBeInTheDocument();
+    expect(last(saved)?.shapes).toEqual(sidecar.shapes);
+
+    fireEvent.click(bar.getByRole("button", { name: "Rotate left" }));
+    fireEvent.click(bar.getByRole("button", { name: "Rotate left" }));
+    await waitFor(() => expect(last(saved)).toMatchObject({ rotation: 270 }));
+
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(last(saved)).not.toHaveProperty("rotation"));
+    expect(screen.queryByText(/^Output /)).not.toBeInTheDocument();
+  });
+
+  it("rotates with Ctrl+[ and Ctrl+] without changing the width", async () => {
+    const saved = mockEditor();
+    await ready();
+    expect(widthButton("Width")).toHaveTextContent("4px");
+    fireEvent.keyDown(window, { key: "]", ctrlKey: true });
+    await waitFor(() => expect(last(saved)).toMatchObject({ rotation: 90 }));
+    fireEvent.keyDown(window, { key: "[", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "[", metaKey: true });
+    await waitFor(() => expect(last(saved)).toMatchObject({ rotation: 270 }));
+    expect(widthButton("Width")).toHaveTextContent("4px");
+  });
+
+  it("flips the capture both ways, and a turn keeps how it shows", async () => {
+    const saved = mockEditor();
+    await ready();
+    const bar = within(screen.getByRole("toolbar", { name: "Style and actions" }));
+    fireEvent.click(bar.getByRole("button", { name: "Flip horizontal" }));
+    await waitFor(() => expect(last(saved)).toMatchObject({ flipX: true }));
+    expect(bar.getByRole("button", { name: "Flip horizontal" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(bar.getByRole("button", { name: "Flip vertical" }));
+    await waitFor(() => expect(last(saved)).toMatchObject({ flipX: true, flipY: true }));
+    fireEvent.click(bar.getByRole("button", { name: "Flip horizontal" }));
+    await waitFor(() => expect(last(saved)).not.toHaveProperty("flipX"));
+    // A turn of an image mirrored top to bottom mirrors it left to right instead.
+    fireEvent.click(bar.getByRole("button", { name: "Rotate right" }));
+    await waitFor(() => expect(last(saved)).toMatchObject({ rotation: 90, flipX: true }));
+    expect(last(saved)).not.toHaveProperty("flipY");
+  });
+
+  it("draws where the pointer is on the turned capture", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Rotate right" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rectangle" }));
+    // On show at 10,20 → 110,70; on the capture that is 20,290 → 70,190.
+    drag([10, 20], [110, 70]);
+    await waitFor(() =>
+      expect(last(last(saved)?.shapes ?? [])).toMatchObject({ type: "rect", x: 20, y: 190, width: 50, height: 100 }),
+    );
+  });
+
+  it("nudges the selected shape the way it shows once turned or flipped", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Rotate right" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="s1"]') as Element);
+    // Turned right, right on show is up the capture.
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    await waitFor(() => expect(last(saved)?.shapes.find((shape) => shape.id === "s1")).toMatchObject({ x: 50, y: 49 }));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate left" }));
+    fireEvent.click(screen.getByRole("button", { name: "Flip horizontal" }));
+    // Mirrored, left on show is right on the capture.
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    await waitFor(() => expect(last(saved)?.shapes.find((shape) => shape.id === "s1")).toMatchObject({ x: 51, y: 49 }));
+  });
+
+  it("resizes by width, ratio locked, or by a percentage, and undoes it", async () => {
+    const saved = mockEditor();
+    await ready();
+    const toggle = screen.getByRole("button", { name: "Resize" });
+    fireEvent.click(toggle);
+    const panel = within(screen.getByRole("dialog", { name: "Resize" }));
+    expect(panel.getByRole("spinbutton", { name: "Width" })).toHaveValue(400);
+    expect(panel.getByRole("spinbutton", { name: "Height" })).toHaveValue(300);
+
+    const width = panel.getByRole("spinbutton", { name: "Width" });
+    fireEvent.change(width, { target: { value: "200" } });
+    // The height follows as it is typed; nothing is kept yet.
+    expect(panel.getByRole("spinbutton", { name: "Height" })).toHaveValue(150);
+    fireEvent.keyDown(width, { key: "Enter" });
+    await waitFor(() => expect(last(saved)).toMatchObject({ scale: 0.5 }));
+    expect(screen.getByText("Output 200×150")).toBeInTheDocument();
+
+    const percent = panel.getByRole("spinbutton", { name: "Percent" });
+    fireEvent.change(percent, { target: { value: "1000" } });
+    fireEvent.blur(percent);
+    // Clamped to 400%.
+    await waitFor(() => expect(last(saved)).toMatchObject({ scale: 4 }));
+    expect(screen.getByText("Output 1600×1200")).toBeInTheDocument();
+
+    fireEvent.click(panel.getByRole("button", { name: "100%" }));
+    await waitFor(() => expect(last(saved)).not.toHaveProperty("scale"));
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(last(saved)).toMatchObject({ scale: 4 }));
+
+    fireEvent.keyDown(panel.getByRole("button", { name: "100%" }), { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Resize" })).not.toBeInTheDocument();
+  });
+
+  it("copies the turned, flipped and resized capture", async () => {
+    mockEditor();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Rotate left" }));
+    fireEvent.click(screen.getByRole("button", { name: "Flip vertical" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resize" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Resize" })).getByRole("button", { name: "50%" }));
+    fireEvent.keyDown(window, { key: "c", ctrlKey: true });
+    await waitFor(() => expect(last(flattened.calls)).toMatchObject({ rotation: 270, flipX: false, flipY: true, scale: 0.5 }));
   });
 
   it("steps the stroke width with [ and ]", async () => {
@@ -806,7 +969,7 @@ describe("EditorWindow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Pin" }));
     await waitFor(() => expect(calls.map((call) => call.cmd)).toEqual(["editor_pin"]));
     expect(bytes(calls[0].payload)).toEqual(Array.from(FLATTENED));
-    expect(flattened.calls).toEqual([{ crop: null, backdrop }]);
+    expect(flattened.calls).toEqual([{ crop: null, backdrop, rotation: 0, flipX: false, flipY: false, scale: 1 }]);
     expect(await screen.findByText("Pinned on top of other windows.")).toBeInTheDocument();
   });
 

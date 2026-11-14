@@ -136,15 +136,29 @@ export interface Backdrop {
   image?: string;
 }
 
+/** A quarter turn clockwise, in degrees. */
+export type Rotation = 0 | 90 | 180 | 270;
+
 /**
- * The sidecar document. `crop` and `backdrop` are non-destructive: applied
- * on copy/export, crop first.
+ * The sidecar document. `crop`, the orientation, `scale` and `backdrop` are
+ * non-destructive: applied on copy/export in the order crop, rotate and
+ * flip, backdrop, then resize. Shapes and the crop stay in capture pixels.
+ * The orientation and scale fields came later and are optional; absent
+ * means unchanged.
  */
 export interface Annotations {
   version: 1;
   shapes: Shape[];
   crop?: Rect | null;
   backdrop?: Backdrop | null;
+  /** Turns clockwise after the crop; 0 when absent. */
+  rotation?: Rotation;
+  /** Mirrored left to right after rotating. */
+  flipX?: boolean;
+  /** Mirrored top to bottom after rotating. */
+  flipY?: boolean;
+  /** Resizes the whole output, backdrop included; 1 when absent. */
+  scale?: number;
 }
 
 /** What the next shape is drawn with. */

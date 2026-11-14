@@ -12,6 +12,7 @@ import {
   type Point,
   type Rect,
 } from "./model";
+import { IDENTITY, orientationOf, orientRect, scaledSize, type Orientation } from "./orient";
 
 export interface View {
   scale: number;
@@ -21,9 +22,18 @@ export interface View {
 
 export type ExportFormat = "png" | "jpg";
 
-/** The area to flatten, in stage (screen) pixels, and the ratio that maps it back to capture pixels. */
-export function exportArea(crop: Rect | null | undefined, image: { width: number; height: number }, view: View) {
-  const area = crop ?? { x: 0, y: 0, width: image.width, height: image.height };
+/**
+ * The area to flatten, in stage (screen) pixels, and the ratio that maps it
+ * back to capture pixels. The crop is in capture pixels; what is flattened
+ * is the crop as it shows, turned and mirrored by `orientation`.
+ */
+export function exportArea(
+  crop: Rect | null | undefined,
+  image: { width: number; height: number },
+  view: View,
+  orientation: Orientation = IDENTITY,
+) {
+  const area = orientRect(crop ?? { x: 0, y: 0, width: image.width, height: image.height }, image, orientation);
   return {
     x: view.x + area.x * view.scale,
     y: view.y + area.y * view.scale,
@@ -383,6 +393,35 @@ export function composeBackdrop(source: HTMLCanvasElement, backdrop: Backdrop, o
   return canvas;
 }
 
+/**
+ * The output resized by `scale`. Shrinking halves at a time, so a big
+ * reduction stays smooth rather than skipping pixels.
+ */
+export function resample(source: HTMLCanvasElement, scale: number): HTMLCanvasElement {
+  if (!Number.isFinite(scale) || scale <= 0 || scale === 1) return source;
+  const target = scaledSize(source, scale);
+  let current = source;
+  while (current.width / 2 >= target.width && current.height / 2 >= target.height) {
+    const half = drawResized(current, { width: Math.round(current.width / 2), height: Math.round(current.height / 2) });
+    if (!half) return current;
+    current = half;
+  }
+  if (current.width === target.width && current.height === target.height) return current;
+  return drawResized(current, target) ?? current;
+}
+
+function drawResized(source: HTMLCanvasElement, size: { width: number; height: number }): HTMLCanvasElement | null {
+  const canvas = document.createElement("canvas");
+  canvas.width = size.width;
+  canvas.height = size.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(source, 0, 0, size.width, size.height);
+  return canvas;
+}
+
 /** JPEG has no transparency: what is see-through becomes white, not black. */
 export function onWhite(source: HTMLCanvasElement): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
@@ -398,21 +437,23 @@ export function onWhite(source: HTMLCanvasElement): HTMLCanvasElement {
 
 /**
  * Renders the capture and its annotations (the content layer only, never
- * the selection handles) at capture resolution, cropped, then framed by the
- * backdrop when there is one. A transparent backdrop stays transparent in
+ * the selection handles) at capture resolution, cropped, turned and
+ * mirrored as the layer shows it, then framed by the backdrop when there is
+ * one, then resized by `scale`. A transparent backdrop stays transparent in
  * a PNG.
  */
 export async function flatten(
   layer: Konva.Layer,
-  doc: { crop?: Rect | null; backdrop?: Backdrop | null },
+  doc: { crop?: Rect | null; backdrop?: Backdrop | null; rotation?: Orientation["rotation"]; flipX?: boolean; flipY?: boolean; scale?: number },
   image: { width: number; height: number },
   view: View,
   format: ExportFormat,
   options: ComposeOptions = {},
 ): Promise<Uint8Array> {
-  const flat = layer.toCanvas(exportArea(doc.crop, image, view));
+  const flat = layer.toCanvas(exportArea(doc.crop, image, view, orientationOf(doc)));
   const framed = doc.backdrop ? composeBackdrop(flat, doc.backdrop, options) : flat;
-  const canvas = format === "jpg" ? onWhite(framed) : framed;
+  const resized = resample(framed, doc.scale ?? 1);
+  const canvas = format === "jpg" ? onWhite(resized) : resized;
   const mime = format === "jpg" ? "image/jpeg" : "image/png";
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, mime, 0.92));
   if (!blob) throw new Error("could not encode the image");

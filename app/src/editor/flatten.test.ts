@@ -10,8 +10,10 @@ import {
   coverCrop,
   exportArea,
   exportTarget,
+  flatten,
   gradientStops,
   paintBackdrop,
+  resample,
   type PaintLayer,
 } from "./flatten";
 import { backdropColors, sameBackdrop, type Backdrop, type LineShape } from "./model";
@@ -36,6 +38,16 @@ describe("flatten", () => {
       height: 600,
       pixelRatio: 0.5,
     });
+  });
+
+  it("exports the crop as it shows once rotated", () => {
+    // A 400×300 capture turned right shows 300×400; the crop turns with it.
+    expect(
+      exportArea({ x: 10, y: 20, width: 100, height: 50 }, { width: 400, height: 300 }, { scale: 1, x: 0, y: 0 }, { rotation: 90, flipX: false, flipY: false }),
+    ).toEqual({ x: 230, y: 10, width: 50, height: 100, pixelRatio: 1 });
+    expect(
+      exportArea(null, { width: 400, height: 300 }, { scale: 0.5, x: 10, y: 0 }, { rotation: 270, flipX: true, flipY: false }),
+    ).toEqual({ x: 10, y: 0, width: 150, height: 200, pixelRatio: 2 });
   });
 
   it("picks PNG or JPG from the file name", () => {
@@ -367,5 +379,74 @@ describe("curved arrows in exports", () => {
     expect(calls.filter((call) => call[0] === "bezierCurveTo")).toEqual([]);
     expect(calls).toContainEqual(["lineTo", 100, 0]);
     expect(calls.find((call) => call[0] === "rotate")?.[1]).toBeCloseTo(0);
+  });
+});
+
+describe("oriented and resized export", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Flattens a fake layer; returns what it was asked to render and the size encoded. */
+  async function run(doc: Parameters<typeof flatten>[1], format: "png" | "jpg" = "png") {
+    const { ctx, calls } = recordingContext();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+    const encoded: { width: number; height: number; mime: string }[] = [];
+    vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation(function (this: HTMLCanvasElement, callback, mime) {
+      encoded.push({ width: this.width, height: this.height, mime: mime ?? "" });
+      callback(new Blob([new Uint8Array([7])]));
+    });
+    const areas: unknown[] = [];
+    const layer = {
+      toCanvas: (area: { width: number; height: number; pixelRatio: number }) => {
+        areas.push(area);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(area.width * area.pixelRatio);
+        canvas.height = Math.round(area.height * area.pixelRatio);
+        return canvas;
+      },
+    };
+    await flatten(layer as never, doc, { width: 400, height: 300 }, { scale: 1, x: 0, y: 0 }, format);
+    return { areas, encoded, calls };
+  }
+
+  it("renders the turned capture and keeps old documents as they were", async () => {
+    expect((await run({ crop: null })).encoded).toEqual([{ width: 400, height: 300, mime: "image/png" }]);
+    const turned = await run({ crop: { x: 0, y: 0, width: 100, height: 50 }, rotation: 90, flipY: true });
+    expect(turned.areas).toEqual([{ x: 250, y: 300, width: 50, height: 100, pixelRatio: 1 }]);
+    expect(turned.encoded[0]).toMatchObject({ width: 50, height: 100 });
+  });
+
+  it("resizes the whole output, backdrop included, before JPEG goes on white", async () => {
+    const { encoded, calls } = await run(
+      { crop: null, rotation: 270, scale: 0.5, backdrop: { fill: "#ffffff", padding: 50, radius: 0, shadow: false } },
+      "jpg",
+    );
+    // 300×400 turned, 400×500 framed, halved.
+    expect(encoded).toEqual([{ width: 200, height: 250, mime: "image/jpeg" }]);
+    expect(calls).toContainEqual(["drawImage", 0, 0, 200, 250]);
+  });
+
+  it("enlarges by a percentage", async () => {
+    expect((await run({ crop: null, scale: 1.5 })).encoded[0]).toMatchObject({ width: 600, height: 450 });
+  });
+
+  it("leaves the output alone at 100%", () => {
+    const source = document.createElement("canvas");
+    expect(resample(source, 1)).toBe(source);
+  });
+
+  it("halves step by step when shrinking a lot", () => {
+    const { ctx, calls } = recordingContext();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+    const source = document.createElement("canvas");
+    source.width = 1000;
+    source.height = 800;
+    const out = resample(source, 0.1);
+    expect([out.width, out.height]).toEqual([100, 80]);
+    expect(calls.filter((call) => call[0] === "drawImage").map((call) => call.slice(3))).toEqual([
+      [500, 400],
+      [250, 200],
+      [125, 100],
+      [100, 80],
+    ]);
   });
 });

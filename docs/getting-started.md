@@ -133,11 +133,14 @@ Click **Annotate** and the editor opens. Pick a tool from the rail on the left, 
 
 **Make it pretty:** turn on the **Backdrop** to put your screenshot on a gradient or solid colour, with padding, rounded corners and a soft shadow. Perfect for slides, docs and social posts.
 
+**Turn, flip and resize:** the top bar's **Rotate left** and **Rotate right** buttons turn the screenshot a quarter turn, and **Flip horizontal** and **Flip vertical** mirror it. Your annotations and crop move with the image, and text and step numbers stay upright. **Resize** sets a new width or height (the aspect ratio stays locked) or a percentage, from 10% to 400%; the status bar shows the output size. Each change is one step you can undo.
+
 **Handy keys while editing:**
 
 - `Ctrl/⌘ + D` duplicates the selected shape.
 - Arrow keys nudge it (hold `Shift` for bigger steps).
 - `[` and `]` make lines thinner or thicker.
+- `Ctrl/⌘ + [` and `Ctrl/⌘ + ]` rotate the screenshot left and right.
 - `Ctrl/⌘ + C` copies the finished image.
 - `Ctrl/⌘ + Enter` copies and closes the editor in one go.
 

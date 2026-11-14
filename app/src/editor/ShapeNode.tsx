@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import Konva from "konva";
 import { Arrow, Circle, Ellipse, Group, Image as KonvaImage, Label, Line, Rect, Shape as KonvaShape, Tag, Text } from "react-konva";
 import { FILL_OPACITY, SPOTLIGHT_DIM, type BlurShape, type Rect as Box, type Shape } from "./model";
+import { isIdentity, textSize, uprightTransform, type Orientation } from "./orient";
 import { contrastColor, curvePoints, normalizeRect, withAlpha, type NodeTransform } from "./tools";
 
 interface ShapeNodeProps {
@@ -16,6 +17,11 @@ interface ShapeNodeProps {
   /** Reports a drag in progress, so handles drawn elsewhere can follow the shape. */
   onMove?: (id: string, transform: NodeTransform) => void;
   onEditText: (id: string) => void;
+  /**
+   * How the capture is turned and mirrored. Text and step numbers undo it
+   * about their centres, so they read upright on the same spot.
+   */
+  orientation?: Orientation;
 }
 
 /**
@@ -79,7 +85,8 @@ export function SpotlightDim({ dim }: { dim: Box[] }) {
 }
 
 /** One annotation as a Konva node, named by its id so the transformer can find it. */
-export default function ShapeNode({ shape, image, step, editable, onSelect, onChange, onMove, onEditText }: ShapeNodeProps) {
+export default function ShapeNode({ shape, image, step, editable, onSelect, onChange, onMove, onEditText, orientation }: ShapeNodeProps) {
+  const upright = orientation && !isIdentity(orientation) ? uprightTransform(orientation) : null;
   const common = {
     id: shape.id,
     name: "annotation",
@@ -192,6 +199,26 @@ export default function ShapeNode({ shape, image, step, editable, onSelect, onCh
       // Draws nothing itself (SpotlightDim shades around it); the clear fill takes clicks.
       return <Rect {...common} {...normalizeRect(shape)} fill="transparent" />;
     case "text":
+      if (upright) {
+        // The draggable group keeps x, y as the text's corner in capture
+        // pixels; inside, the text turns back about its centre.
+        const box = textSize(shape.text, shape.fontSize);
+        const padding = shape.fontSize * 0.35;
+        return (
+          <Group {...common} x={shape.x} y={shape.y} onDblClick={() => onEditText(shape.id)}>
+            <Group x={box.width / 2} y={box.height / 2} offsetX={box.width / 2} offsetY={box.height / 2} {...upright}>
+              {shape.background ? (
+                <Label offsetX={padding} offsetY={padding}>
+                  <Tag fill={shape.color} cornerRadius={shape.fontSize * 0.4} />
+                  <Text text={shape.text} fontSize={shape.fontSize} fontStyle="bold" fill={contrastColor(shape.color)} padding={padding} />
+                </Label>
+              ) : (
+                <Text text={shape.text} fontSize={shape.fontSize} fontStyle="bold" fill={shape.color} />
+              )}
+            </Group>
+          </Group>
+        );
+      }
       if (shape.background) {
         const padding = shape.fontSize * 0.35;
         // The label sizes its pill to the text. Offset by the padding, so x, y
@@ -217,21 +244,24 @@ export default function ShapeNode({ shape, image, step, editable, onSelect, onCh
       );
     case "step": {
       const label = String(step ?? "");
+      // The badge is centred on x, y, so turning it back about 0, 0 keeps it in place.
       return (
         <Group {...common} x={shape.x} y={shape.y}>
-          <Circle radius={shape.radius} fill={shape.color} stroke="#ffffff" strokeWidth={2} />
-          <Text
-            text={label}
-            fontSize={shape.radius * 1.1}
-            fontStyle="bold"
-            fill="#ffffff"
-            width={shape.radius * 2}
-            height={shape.radius * 2}
-            offsetX={shape.radius}
-            offsetY={shape.radius}
-            align="center"
-            verticalAlign="middle"
-          />
+          <Group {...(upright ?? {})}>
+            <Circle radius={shape.radius} fill={shape.color} stroke="#ffffff" strokeWidth={2} />
+            <Text
+              text={label}
+              fontSize={shape.radius * 1.1}
+              fontStyle="bold"
+              fill="#ffffff"
+              width={shape.radius * 2}
+              height={shape.radius * 2}
+              offsetX={shape.radius}
+              offsetY={shape.radius}
+              align="center"
+              verticalAlign="middle"
+            />
+          </Group>
         </Group>
       );
     }

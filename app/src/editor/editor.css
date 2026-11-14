@@ -422,6 +422,37 @@
   margin: 0;
 }
 
+/* Resize popover: the backdrop panel's look, narrower. */
+.resize-anchor {
+  position: relative;
+}
+
+.resize-panel {
+  width: 240px;
+}
+
+.resize-row {
+  grid-template-columns: 64px 1fr 24px;
+}
+
+.resize-row input[type="number"] {
+  width: 100%;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--ed-border);
+  border-radius: var(--ed-radius);
+  background: var(--ed-bg, transparent);
+  color: var(--ed-text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.resize-note {
+  margin: 0;
+  color: var(--ed-muted);
+  font-size: 11px;
+}
+
 /* Tool rail on the left, canvas beside it. */
 .editor-body {
   display: flex;
