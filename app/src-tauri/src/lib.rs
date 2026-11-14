@@ -3,6 +3,7 @@ mod ai;
 mod ai_cli;
 mod capture;
 mod cli;
+mod codes;
 mod commands;
 mod editor;
 mod hotkeys;

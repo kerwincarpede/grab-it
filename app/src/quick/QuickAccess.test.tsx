@@ -5,7 +5,18 @@ import { emit } from "@tauri-apps/api/event";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import QuickAccess from "./QuickAccess";
-import { describeText, dismissAfter, formatBytes, formatElapsed, formatName, type QuickItem } from "./api";
+import {
+  codeFormats,
+  describeCodes,
+  describeText,
+  dismissAfter,
+  firstLink,
+  formatBytes,
+  formatElapsed,
+  formatName,
+  type QuickCode,
+  type QuickItem,
+} from "./api";
 import { LIBRARY_CHANGED_EVENT, type ShotText } from "../library/api";
 
 const CAPTURE: QuickItem = {
@@ -377,6 +388,70 @@ describe("QuickAccess", () => {
   });
 });
 
+const LINK: QuickCode = { format: "QR code", value: "https://example.com/menu", isLink: true };
+const BARCODE: QuickCode = { format: "Code 128", value: "GRAB-IT 0043", isLink: false };
+
+describe("QuickAccess code card", () => {
+  it("shows a code's value as copied, with only Copy when there is no text or link", async () => {
+    mockBackend({ kind: "code", codes: [BARCODE], text: "" });
+    render(<QuickAccess />);
+    expect(await screen.findByText("Code 128 copied")).toBeInTheDocument();
+    expect(screen.getByTestId("quick-codes")).toHaveTextContent("GRAB-IT 0043");
+    const toolbar = screen.getByRole("toolbar", { name: "Code actions" });
+    expect(Array.from(toolbar.querySelectorAll("button")).map((button) => button.textContent)).toEqual(["Copy"]);
+    expect(screen.queryByRole("button", { name: "Copy text" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open link" })).not.toBeInTheDocument();
+  });
+
+  it("shows several codes one per line, with their formats", async () => {
+    mockBackend({ kind: "code", codes: [LINK, BARCODE, { ...LINK, value: "second QR", isLink: false }], text: "" });
+    render(<QuickAccess />);
+    expect(await screen.findByText("3 codes copied")).toBeInTheDocument();
+    expect(screen.getByText("QR code · Code 128")).toBeInTheDocument();
+    expect(screen.getByTestId("quick-codes").textContent).toBe("https://example.com/menu\nGRAB-IT 0043\nsecond QR");
+  });
+
+  it("offers the text around a code, and a link to open, only when there are some", async () => {
+    mockBackend({ kind: "code", codes: [LINK], text: "Scan for the menu" });
+    render(<QuickAccess />);
+    expect(await screen.findByText("QR code copied")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy text" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open link" })).toHaveAttribute(
+      "title",
+      "Open https://example.com/menu in your browser",
+    );
+  });
+
+  it("treats text that is only whitespace as none", async () => {
+    mockBackend({ kind: "code", codes: [LINK], text: " \n" });
+    render(<QuickAccess />);
+    await screen.findByText("QR code copied");
+    expect(screen.queryByRole("button", { name: "Copy text" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open link" })).toBeInTheDocument();
+  });
+
+  it("copies the values and the text on request, and keeps the card", async () => {
+    const backend = mockBackend({ kind: "code", codes: [LINK], text: "Scan for the menu" });
+    render(<QuickAccess />);
+    await userEvent.click(await screen.findByRole("button", { name: "Copy text" }));
+    await waitFor(() => expect(actions(backend)).toEqual(["copyText"]));
+    expect(await screen.findByText("Text copied")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(actions(backend)).toEqual(["copyText", "copy"]));
+    expect(await screen.findByText("Copied")).toBeInTheDocument();
+  });
+
+  it("opens the link only when Open link is clicked, once", async () => {
+    const backend = mockBackend({ kind: "code", codes: [LINK], text: "" });
+    render(<QuickAccess />);
+    const open = await screen.findByRole("button", { name: "Open link" });
+    expect(actions(backend)).toEqual([]);
+    await userEvent.dblClick(open);
+    await waitFor(() => expect(actionCalls(backend)).toEqual([{ action: "openLink", generation: 7 }]));
+  });
+});
+
 describe("quick helpers", () => {
   it("stays for the chosen time, longer for errors, and without limit for work", () => {
     expect(dismissAfter(CAPTURE)).toBe(8000);
@@ -409,6 +484,15 @@ describe("quick helpers", () => {
     expect(formatName("code", "typescript")).toBe("TypeScript");
     expect(formatName("code", null)).toBe("Code");
     expect(formatName("plain", null)).toBeNull();
+  });
+
+  it("describes the codes found and picks the link to open", () => {
+    expect(describeCodes([LINK])).toBe("QR code copied");
+    expect(describeCodes([LINK, BARCODE])).toBe("2 codes copied");
+    expect(codeFormats([LINK, BARCODE, LINK])).toBe("QR code · Code 128");
+    expect(firstLink([BARCODE, LINK])).toBe("https://example.com/menu");
+    expect(firstLink([BARCODE])).toBeNull();
+    expect(dismissAfter({ kind: "code", codes: [LINK], text: "" }, 5)).toBe(5000);
   });
 
   it("counts lines and characters", () => {

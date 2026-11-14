@@ -3,8 +3,9 @@
 //! clipboard and show the capture in Quick Access or the editor.
 //!
 //! Two more actions reuse the region overlay without saving a capture:
-//! reading the text in a region, and picking a colour. Read text can be
-//! tidied up by AI afterwards (see `tidy.rs`).
+//! reading the text in a region, and picking a colour. Reading text reads
+//! any QR code or barcode in the region first (see `codes.rs`); text with
+//! no code in it can be tidied up by AI afterwards (see `tidy.rs`).
 
 use std::time::Duration;
 
@@ -16,6 +17,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use crate::{
     ai::{self, AiError},
     capture::{self, CaptureMode, Foreground, SavedCapture},
+    codes::{self, Code},
     commands::{SettingsState, lock},
     ocr, overlay,
     overlay::Intent,
@@ -279,6 +281,9 @@ fn save(
 /// then reads the image again: its text takes the place of OCR's on the
 /// card, and on the clipboard unless something else was copied meanwhile.
 /// When OCR found nothing, the AI's text is the only one.
+///
+/// A QR code or barcode in `image` comes first: its value is copied in
+/// place of the text, which the card offers instead, and nothing is tidied.
 pub fn finish_text(app: &AppHandle, image: &RgbaImage) {
     let working = quick::show(
         app,
@@ -286,6 +291,22 @@ pub fn finish_text(app: &AppHandle, image: &RgbaImage) {
             message: "Reading text…".into(),
         },
     );
+    let found = codes::decode(image);
+    if !found.is_empty() {
+        let text = ocr::read_now(app, image).unwrap_or_else(|err| {
+            // The codes are what matter; the text around them is a bonus.
+            eprintln!("Grab-it: read a code, but OCR could not read the text: {err}");
+            String::new()
+        });
+        let outcome = code_outcome(found, &text);
+        match app.clipboard().write_text(outcome.copy) {
+            Ok(()) => {
+                quick::show(app, outcome.item);
+            }
+            Err(err) => report_failure(app, &format!("could not copy the code: {err}")),
+        }
+        return;
+    }
     let ai = ai::current_settings(app);
     let tidies = ai.tidies_text();
     let read = match ocr::read_now(app, image) {
@@ -356,6 +377,30 @@ fn no_text_found() -> QuickItem {
     QuickItem::Notice {
         title: "No text found".into(),
         message: "Try a larger region, or zoom in on small text first.".into(),
+    }
+}
+
+/// What Capture text ends with when it found codes: the card's item, and
+/// the text to put on the clipboard.
+#[derive(Debug, PartialEq, Eq)]
+struct CodeOutcome {
+    item: QuickItem,
+    copy: String,
+}
+
+/// What the card shows, and what is copied, when Capture text found
+/// `codes` in an area where OCR read `text`: every code's value, one per
+/// line, with the text kept for the card's Copy text. Text that is only
+/// whitespace counts as none.
+fn code_outcome(codes: Vec<Code>, text: &str) -> CodeOutcome {
+    let text = if text.trim().is_empty() {
+        String::new()
+    } else {
+        text.to_owned()
+    };
+    CodeOutcome {
+        copy: codes::values(&codes),
+        item: QuickItem::Code { codes, text },
     }
 }
 
@@ -590,5 +635,55 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn one_code_copies_its_value() {
+        let outcome = code_outcome(vec![Code::new("QR code", "https://example.com")], "");
+        assert_eq!(outcome.copy, "https://example.com");
+        assert_eq!(
+            outcome.item,
+            QuickItem::Code {
+                codes: vec![Code {
+                    format: "QR code".into(),
+                    value: "https://example.com".into(),
+                    is_link: true,
+                }],
+                text: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn several_codes_copy_one_value_per_line() {
+        let codes = vec![
+            Code::new("QR code", "first"),
+            Code::new("Code 128", "second"),
+            Code::new("EAN-13", "4006381333931"),
+        ];
+        let outcome = code_outcome(codes.clone(), "  \n");
+        assert_eq!(outcome.copy, "first\nsecond\n4006381333931");
+        assert_eq!(
+            outcome.item,
+            QuickItem::Code {
+                codes,
+                text: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn text_around_a_code_is_kept_for_the_card_but_not_copied() {
+        let outcome = code_outcome(
+            vec![Code::new("QR code", "https://example.com/menu")],
+            "Scan for the menu\n",
+        );
+        assert_eq!(outcome.copy, "https://example.com/menu");
+        let QuickItem::Code { codes, text } = outcome.item else {
+            panic!("{:?}", outcome.item);
+        };
+        assert_eq!(text, "Scan for the menu\n");
+        assert_eq!(codes.len(), 1);
+        assert!(codes[0].is_link);
     }
 }

@@ -23,11 +23,22 @@ export type TextTidy =
     }
   | { state: "failed"; by: string; message: string };
 
+/** A QR code or barcode read from the screen. Mirrors `Code` in src-tauri/src/codes.rs. */
+export interface QuickCode {
+  /** The format as people call it, such as "QR code". */
+  format: string;
+  value: string;
+  /** Whether `value` is an http(s) link, which the card offers to open. */
+  isLink: boolean;
+}
+
 /** Mirrors `QuickItem` in src-tauri/src/quick.rs. */
 export type QuickItem =
   | { kind: "capture"; path: string; fileName: string; width: number; height: number; copied: boolean }
   /** `original` is what OCR read, when the AI's tidied text took its place. */
   | { kind: "text"; text: string; original?: string; tidy?: TextTidy }
+  /** Codes whose values are on the clipboard; `text` is what OCR read around them, empty when nothing. */
+  | { kind: "code"; codes: QuickCode[]; text: string }
   | { kind: "colour"; hex: string; rgb: string }
   | { kind: "working"; message: string }
   | { kind: "notice"; title: string; message: string }
@@ -48,7 +59,16 @@ export interface QuickShown {
 }
 
 /** Mirrors `QuickAction` in src-tauri/src/quick.rs. */
-export type QuickAction = "copy" | "copyOriginal" | "edit" | "pin" | "reveal" | "delete" | "close";
+export type QuickAction =
+  | "copy"
+  | "copyOriginal"
+  | "copyText"
+  | "openLink"
+  | "edit"
+  | "pin"
+  | "reveal"
+  | "delete"
+  | "close";
 
 /** Mirrors `QUICK_CHANGED_EVENT` in src-tauri/src/quick.rs. */
 export const QUICK_CHANGED_EVENT = "quick-changed";
@@ -115,6 +135,21 @@ export function describeText(text: string): string {
   const lines = text.split("\n").filter((line) => line.trim().length > 0).length;
   const characters = text.length;
   return `${lines} ${lines === 1 ? "line" : "lines"}, ${characters} ${characters === 1 ? "character" : "characters"}`;
+}
+
+/** "QR code copied", or "3 codes copied" when an area held several. */
+export function describeCodes(codes: QuickCode[]): string {
+  return codes.length === 1 ? `${codes[0].format} copied` : `${codes.length} codes copied`;
+}
+
+/** The formats found, each once, for the card: "QR code · Code 128". */
+export function codeFormats(codes: QuickCode[]): string {
+  return [...new Set(codes.map((code) => code.format))].join(" · ");
+}
+
+/** The link Open link opens: the first code that holds one. */
+export function firstLink(codes: QuickCode[]): string | null {
+  return codes.find((code) => code.isLink)?.value.trim() ?? null;
 }
 
 const FORMAT_NAMES: Record<string, string> = {

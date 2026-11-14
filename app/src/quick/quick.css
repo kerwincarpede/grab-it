@@ -285,6 +285,12 @@
   overflow-wrap: normal;
 }
 
+/* Code values are monospace, but a long link wraps rather than scrolls. */
+.quick-code .quick-text-preview.is-code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .quick-text-actions {
   margin-top: 0;
 }
