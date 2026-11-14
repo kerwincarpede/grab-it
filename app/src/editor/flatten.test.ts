@@ -327,6 +327,13 @@ describe("curved arrows in exports", () => {
       strokeShape: record("strokeShape"),
       fillStrokeShape: record("fillStrokeShape"),
     };
+    // jsdom has no 2D canvas; Konva probes one for its hit colours when a shape is made.
+    const probe = {
+      clearRect: () => undefined,
+      fillRect: () => undefined,
+      getImageData: () => ({ data: new Uint8ClampedArray(400).map((_, i) => (i % 4 === 3 ? 255 : 40)) }),
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(probe as unknown as CanvasRenderingContext2D);
     const arrow = new Konva.Arrow({
       points: curvePoints(shape),
       bezier: Boolean(shape.control),

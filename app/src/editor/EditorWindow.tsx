@@ -285,33 +285,52 @@ function LineHandles({
   onPreview: (shape: LineShape) => void;
   onCommit: (shape: LineShape) => void;
 }) {
-  const [x1, y1, x2, y2] = shape.points;
-  const handle = (key: string, at: Point, fill: string, update: (to: Point, shift: boolean) => LineShape) => (
-    <Circle
-      key={key}
-      name={`${LINE_HANDLE} ${LINE_HANDLE}-${key}`}
-      x={at.x}
-      y={at.y}
-      radius={LINE_HANDLE_RADIUS / scale}
-      fill={fill}
-      stroke={HANDLE_COLOR}
-      strokeWidth={1.5 / scale}
-      draggable
-      onDragMove={(event: Konva.KonvaEventObject<DragEvent>) => onPreview(update(event.target.position(), event.evt.shiftKey))}
-      onDragEnd={(event: Konva.KonvaEventObject<DragEvent>) => {
-        event.cancelBubble = true;
-        onCommit(update(event.target.position(), event.evt.shiftKey));
-      }}
-    />
-  );
+  /** Where each handle sits on a line: its ends, and the curve's midpoint. */
+  const places: Record<string, (line: LineShape) => Point> = {
+    start: (line) => ({ x: line.points[0], y: line.points[1] }),
+    end: (line) => ({ x: line.points[2], y: line.points[3] }),
+    bend: curveMidpoint,
+  };
+  const handle = (key: string, fill: string, update: (to: Point, shift: boolean) => LineShape) => {
+    const at = places[key](shape);
+    /**
+     * Konva leaves a dragged node under the pointer, and react-konva only
+     * re-applies x/y when they change, so a snapped result (Shift, or the
+     * straighten snap) would leave the handle off the line: put it where
+     * the line puts it.
+     */
+    const apply = (event: Konva.KonvaEventObject<DragEvent>) => {
+      const next = update(event.target.position(), event.evt.shiftKey);
+      event.target.position(places[key](next));
+      return next;
+    };
+    return (
+      <Circle
+        key={key}
+        name={`${LINE_HANDLE} ${LINE_HANDLE}-${key}`}
+        x={at.x}
+        y={at.y}
+        radius={LINE_HANDLE_RADIUS / scale}
+        fill={fill}
+        stroke={HANDLE_COLOR}
+        strokeWidth={1.5 / scale}
+        draggable
+        onDragMove={(event: Konva.KonvaEventObject<DragEvent>) => onPreview(apply(event))}
+        onDragEnd={(event: Konva.KonvaEventObject<DragEvent>) => {
+          event.cancelBubble = true;
+          onCommit(apply(event));
+        }}
+      />
+    );
+  };
   const otherEnd = (end: 0 | 1): Point => (end === 0 ? { x: base.points[2], y: base.points[3] } : { x: base.points[0], y: base.points[1] });
   // Shift holds a dragged end to 45° steps from the other end, as when drawing.
   const moveEnd = (end: 0 | 1) => (to: Point, shift: boolean) => moveLineEnd(base, end, shift ? snapAngle(otherEnd(end), to) : to);
   return (
     <>
-      {handle("start", { x: x1, y: y1 }, "#ffffff", moveEnd(0))}
-      {handle("end", { x: x2, y: y2 }, "#ffffff", moveEnd(1))}
-      {handle("bend", curveMidpoint(shape), HANDLE_COLOR, (to) => bendLine(base, to, STRAIGHTEN_SNAP / scale))}
+      {handle("start", "#ffffff", moveEnd(0))}
+      {handle("end", "#ffffff", moveEnd(1))}
+      {handle("bend", HANDLE_COLOR, (to) => bendLine(base, to, STRAIGHTEN_SNAP / scale))}
     </>
   );
 }
