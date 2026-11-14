@@ -1,9 +1,21 @@
+/*
+ * A pin window is see-through: the page paints no backdrop of its own, so
+ * a faded pin shows the windows behind it. The colour scheme is pinned
+ * because a dark one makes the browser fill the page behind the root.
+ */
+:root.pin-clear {
+  color-scheme: light;
+  background: transparent;
+}
+
 /* A pinned capture: the image is the window. Controls appear on hover. */
 .pin {
+  /* Set by the opacity control; fades the image and backdrop, not the bar. */
+  --pin-opacity: 1;
   position: fixed;
   inset: 0;
   overflow: hidden;
-  background: #101216;
+  background: rgb(16 18 22 / var(--pin-opacity));
   /* Marks the pin's edge against whatever is behind it. */
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 22%);
   cursor: grab;
@@ -19,6 +31,7 @@
   width: 100%;
   height: 100%;
   object-fit: contain;
+  opacity: var(--pin-opacity);
   pointer-events: none;
 }
 
@@ -27,6 +40,7 @@
   top: 6px;
   right: 6px;
   display: flex;
+  align-items: center;
   gap: 2px;
   padding: 3px;
   background: rgb(20 22 27 / 88%);
@@ -54,6 +68,13 @@
 
 .pin-bar button:hover:not(:disabled) {
   background: rgb(255 255 255 / 14%);
+}
+
+.pin-opacity {
+  width: 72px;
+  margin: 0 6px;
+  accent-color: #8b9cf4;
+  cursor: pointer;
 }
 
 .pin-message {

@@ -10,16 +10,17 @@ use tauri::{
 
 use crate::{
     actions::{self, Action},
-    hub, quick, screen, update, windows,
+    hub, pin, quick, screen, update, windows,
 };
 
 const TRAY_ID: &str = "main";
 const RECORD_LABEL: &str = "Record GIF";
 const STOP_LABEL: &str = "Stop recording";
 
-/// The menu items whose text changes while Grab-it runs.
+/// The menu items whose text or state changes while Grab-it runs.
 pub struct TrayItems {
     record: MenuItem<tauri::Wry>,
+    unlock: MenuItem<tauri::Wry>,
 }
 
 /// Makes the record item say what choosing it does now: start, or stop.
@@ -29,6 +30,14 @@ pub fn set_recording(app: &AppHandle, recording: bool) {
         if let Err(err) = items.record.set_text(label) {
             eprintln!("Grab-it: could not update the tray menu: {err}");
         }
+    }
+}
+/// Enables Unlock pinned captures while any pin is locked.
+pub fn set_unlock_enabled(app: &AppHandle, enabled: bool) {
+    if let Some(items) = app.try_state::<TrayItems>()
+        && let Err(err) = items.unlock.set_enabled(enabled)
+    {
+        eprintln!("Grab-it: could not update the tray menu: {err}");
     }
 }
 const MENU_REGION: &str = "capture-region";
@@ -41,6 +50,7 @@ const MENU_TEXT: &str = "capture-text";
 const MENU_COLOUR: &str = "pick-colour";
 /// Timed captures are `timed-<region|screen>-<seconds>`.
 const MENU_TIMED_PREFIX: &str = "timed-";
+const MENU_UNLOCK: &str = "unlock-pins";
 const MENU_LAST: &str = "last-capture";
 const MENU_LIBRARY: &str = "library";
 const MENU_SETTINGS: &str = "settings";
@@ -166,11 +176,21 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let tools_separator = PredefinedMenuItem::separator(app)?;
     // One item for both: choosing it during a recording stops the recording.
     let record = MenuItem::with_id(app, MENU_RECORD, RECORD_LABEL, true, None::<&str>)?;
-    app.manage(TrayItems {
-        record: record.clone(),
-    });
     let text = MenuItem::with_id(app, MENU_TEXT, "Capture text", true, None::<&str>)?;
     let colour = MenuItem::with_id(app, MENU_COLOUR, "Pick a colour", true, None::<&str>)?;
+    // Disabled until a pin is locked: a locked pin takes no clicks, so this
+    // is how it is unlocked.
+    let unlock = MenuItem::with_id(
+        app,
+        MENU_UNLOCK,
+        "Unlock pinned captures",
+        false,
+        None::<&str>,
+    )?;
+    app.manage(TrayItems {
+        record: record.clone(),
+        unlock: unlock.clone(),
+    });
     let separator = PredefinedMenuItem::separator(app)?;
     let last = MenuItem::with_id(app, MENU_LAST, "Show last capture", true, None::<&str>)?;
     let library = MenuItem::with_id(app, MENU_LIBRARY, "Open Grab-it…", true, None::<&str>)?;
@@ -192,6 +212,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             &record,
             &text,
             &colour,
+            &unlock,
             &separator,
             &last,
             &library,
@@ -232,6 +253,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                 }
             }
             MENU_UPDATES => update::user_check(app),
+            MENU_UNLOCK => pin::unlock_all(app),
             MENU_LIBRARY => {
                 if let Err(err) = windows::show_library(app) {
                     eprintln!("Grab-it: could not open the Library: {err}");
@@ -287,6 +309,7 @@ mod tests {
         assert_eq!(action_for(MENU_COLOUR), Some(Action::Colour));
         assert_eq!(action_for(MENU_LAST), None);
         assert_eq!(action_for(MENU_UPDATES), None);
+        assert_eq!(action_for(MENU_UNLOCK), None);
     }
 
     #[test]

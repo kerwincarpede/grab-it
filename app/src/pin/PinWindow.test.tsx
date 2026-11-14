@@ -4,7 +4,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { describe, expect, it } from "vitest";
 import PinWindow from "./PinWindow";
-import { wheelFactor, ZOOM_STEP } from "./api";
+import { clampOpacity, MIN_OPACITY, wheelFactor, wheelOpacity, ZOOM_STEP } from "./api";
 
 interface Backend {
   calls: { cmd: string; payload?: InvokeArgs }[];
@@ -34,7 +34,7 @@ describe("PinWindow", () => {
     mockBackend();
     render(<PinWindow />);
     expect(await screen.findByRole("button", { name: "Annotate" })).toBeInTheDocument();
-    for (const name of ["Copy", "Smaller", "Larger", "Close"]) {
+    for (const name of ["Copy", "Smaller", "Larger", "Lock", "Close"]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
   });
@@ -69,6 +69,71 @@ describe("PinWindow", () => {
     expect(factors).toEqual([ZOOM_STEP, 1 / ZOOM_STEP, ZOOM_STEP]);
   });
 
+  it("fades with the slider and Ctrl/⌘ + wheel, leaving plain wheel to resize", async () => {
+    const backend = mockBackend();
+    render(<PinWindow />);
+    const slider = await screen.findByRole("slider", { name: "Opacity" });
+    const pin = screen.getByTestId("pin");
+    expect(slider).toHaveValue("100");
+    expect(pin.style.getPropertyValue("--pin-opacity")).toBe("1");
+
+    fireEvent.change(slider, { target: { value: "50" } });
+    expect(slider).toHaveValue("50");
+    expect(pin.style.getPropertyValue("--pin-opacity")).toBe("0.5");
+
+    fireEvent.wheel(window, { deltaY: 120, ctrlKey: true });
+    expect(slider).toHaveValue("40");
+    fireEvent.wheel(window, { deltaY: -120, metaKey: true });
+    fireEvent.wheel(window, { deltaY: -120, metaKey: true });
+    expect(slider).toHaveValue("60");
+    expect(pin.style.getPropertyValue("--pin-opacity")).toBe("0.6");
+    // Fading never resizes.
+    expect(commands(backend)).toEqual([]);
+
+    // Never fainter than the minimum.
+    for (let i = 0; i < 10; i++) fireEvent.wheel(window, { deltaY: 120, ctrlKey: true });
+    expect(slider).toHaveValue(String(MIN_OPACITY * 100));
+
+    fireEvent.wheel(window, { deltaY: -120 });
+    await waitFor(() => expect(commands(backend)).toEqual(["pin_zoom"]));
+  });
+
+  it("locks the pin and says how to unlock it", async () => {
+    const backend = mockBackend();
+    render(<PinWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Lock" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("tray menu");
+    expect(commands(backend)).toEqual(["pin_lock"]);
+  });
+
+  it("nudges with the arrow keys, 1px or 10px with Shift", async () => {
+    const backend = mockBackend();
+    render(<PinWindow />);
+    await screen.findByRole("button", { name: "Lock" });
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    fireEvent.keyDown(window, { key: "ArrowUp" });
+    fireEvent.keyDown(window, { key: "ArrowLeft", shiftKey: true });
+    fireEvent.keyDown(window, { key: "ArrowDown", shiftKey: true });
+
+    await waitFor(() => expect(commands(backend)).toHaveLength(4));
+    const moves = backend.calls.filter((call) => call.cmd === "pin_nudge").map((call) => call.payload);
+    expect(moves).toEqual([
+      { dx: 1, dy: 0 },
+      { dx: 0, dy: -1 },
+      { dx: -10, dy: 0 },
+      { dx: 0, dy: 10 },
+    ]);
+  });
+
+  it("leaves the arrow keys to the opacity slider while it has focus", async () => {
+    const backend = mockBackend();
+    render(<PinWindow />);
+    const slider = await screen.findByRole("slider", { name: "Opacity" });
+    fireEvent.keyDown(slider, { key: "ArrowLeft" });
+    expect(commands(backend)).not.toContain("pin_nudge");
+  });
+
   it("closes on Escape and on a double-click, once", async () => {
     const backend = mockBackend();
     render(<PinWindow />);
@@ -93,5 +158,18 @@ describe("wheelFactor", () => {
     expect(wheelFactor(-100)).toBe(ZOOM_STEP);
     expect(wheelFactor(100)).toBe(1 / ZOOM_STEP);
     expect(wheelFactor(0)).toBeNull();
+  });
+});
+
+describe("opacity", () => {
+  it("steps by 10% and stays between the minimum and fully solid", () => {
+    expect(wheelOpacity(1, 100)).toBe(0.9);
+    expect(wheelOpacity(0.9, -100)).toBe(1);
+    expect(wheelOpacity(1, -100)).toBe(1);
+    expect(wheelOpacity(MIN_OPACITY, 100)).toBe(MIN_OPACITY);
+    expect(wheelOpacity(0.5, 0)).toBe(0.5);
+    expect(clampOpacity(0.33)).toBe(0.3);
+    expect(clampOpacity(0)).toBe(MIN_OPACITY);
+    expect(clampOpacity(Number.NaN)).toBe(1);
   });
 });
