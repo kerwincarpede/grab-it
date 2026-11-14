@@ -1,0 +1,313 @@
+name: ffmpeg
+
+# Publishes the LGPL ffmpeg that Grab-it downloads on first use to record MP4,
+# as the release `ffmpeg-n8.1`. Run it by hand, once per ffmpeg version:
+# Actions → ffmpeg → Run workflow, or
+#   gh workflow run ffmpeg.yml
+#   gh workflow run ffmpeg.yml -f replace=true   # rebuild an existing release
+#
+# ffmpeg stays LGPL: nothing here may add x264, --enable-gpl or
+# --enable-nonfree, and every build is checked for that before it is published.
+on:
+  workflow_dispatch:
+    inputs:
+      btbn_release:
+        description: BtbN/FFmpeg-Builds release the Linux and Windows builds come from ("latest" or an "autobuild-…" tag).
+        type: string
+        default: latest
+      replace:
+        description: Replace the assets of an existing release. Installed copies verify downloads against its checksums, so only do this to fix a broken build.
+        type: boolean
+        default: false
+
+# One run at a time, never cut short, so two runs cannot race to publish.
+concurrency:
+  group: ffmpeg
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # The release Grab-it downloads from, and the ffmpeg version in it.
+  RELEASE_TAG: ffmpeg-n8.1
+  FFMPEG_VERSION: '8.1'
+  # Cisco's OpenH264 (BSD-2-Clause), the H.264 encoder used when the OS has no
+  # hardware one.
+  OPENH264_VERSION: '2.6.0'
+  # The key FFmpeg signs its release tarballs with (ffmpeg-devel@ffmpeg.org).
+  FFMPEG_SIGNING_KEY: FCF986EA15E6E293A5644F10B4322F04D67658D8
+  # actions/checkout runs `git init`; naming the initial branch keeps git from
+  # printing its hint about the default branch name.
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+  # Run as `bash -c "$CHECK_FFMPEG" check <ffmpeg> <encoder>...`: fails unless
+  # the binary runs, says it is LGPL, was configured without GPL or non-free
+  # parts, and has AAC, OpenH264 and each encoder named.
+  CHECK_FFMPEG: |
+    set -euo pipefail
+    exe="$1"; shift
+    "$exe" -hide_banner -version
+    buildconf="$("$exe" -hide_banner -buildconf)"
+    if grep -Eq -- '--enable-(gpl|nonfree|libx264|libx265)' <<< "$buildconf"; then
+      echo "::error::$exe is configured with GPL or non-free components."
+      exit 1
+    fi
+    licence="$("$exe" -hide_banner -L | tr -s ' \r\n' ' ')"
+    if ! grep -q 'GNU Lesser General Public License' <<< "$licence"; then
+      echo "::error::$exe does not report the LGPL."
+      exit 1
+    fi
+    encoders="$("$exe" -hide_banner -encoders)"
+    for encoder in aac libopenh264 "$@"; do
+      if ! grep -Eq "[[:space:]]${encoder}[[:space:]]" <<< "$encoders"; then
+        echo "::error::$exe has no $encoder encoder."
+        exit 1
+      fi
+    done
+    echo "$exe is LGPL and has: aac libopenh264 $*"
+
+jobs:
+  # The ffmpeg source tarball, checked against FFmpeg's signature. The macOS
+  # build is made from it, and it is published beside the binaries, as the
+  # LGPL asks.
+  source:
+    name: Source
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download and verify the source tarball
+        run: |
+          tarball="ffmpeg-$FFMPEG_VERSION.tar.xz"
+          curl --fail -sSLO "https://ffmpeg.org/releases/$tarball"
+          curl --fail -sSLO "https://ffmpeg.org/releases/$tarball.asc"
+          curl --fail -sSL https://ffmpeg.org/ffmpeg-devel.asc | gpg --batch --import
+          # Only a good signature by the pinned key passes.
+          gpg --batch --status-fd 1 --verify "$tarball.asc" "$tarball" > gpg.status
+          if ! grep -q "^\[GNUPG:\] VALIDSIG $FFMPEG_SIGNING_KEY " gpg.status; then
+            cat gpg.status
+            echo "::error::$tarball is not signed by $FFMPEG_SIGNING_KEY."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: source
+          path: ffmpeg-${{ env.FFMPEG_VERSION }}.tar.xz
+          if-no-files-found: error
+
+  # Linux and Windows: BtbN's static LGPL builds of the n8.1 branch, which
+  # already carry OpenH264 and the NVENC, QSV, AMF, Media Foundation and VA-API
+  # encoders. Each is run on its own OS to check it before it is repackaged.
+  btbn:
+    name: ${{ matrix.asset }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux64
+            asset: ffmpeg-linux-x64
+            exe: ffmpeg
+            encoders: h264_nvenc h264_vaapi
+          - runner: windows-latest
+            target: win64
+            asset: ffmpeg-windows-x64.exe
+            exe: ffmpeg.exe
+            encoders: h264_nvenc h264_qsv h264_amf h264_mf
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Download BtbN's build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BTBN_RELEASE: ${{ inputs.btbn_release }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir download
+          # "-lgpl-8.1." leaves out the GPL and the shared-library builds.
+          gh release download "$BTBN_RELEASE" -R BtbN/FFmpeg-Builds -D download \
+            -p "ffmpeg-n$FFMPEG_VERSION*-$TARGET-lgpl-$FFMPEG_VERSION.*"
+          ls download
+          if [ "$(ls download | wc -l)" -ne 1 ]; then
+            echo "::error::Expected exactly one $TARGET LGPL build in BtbN's $BTBN_RELEASE release."
+            exit 1
+          fi
+          archive="$(ls download)"
+          echo "BTBN_ARCHIVE=$archive" >> "$GITHUB_ENV"
+          case "$archive" in
+            *.zip) 7z x -y -odownload "download/$archive" > /dev/null ;;
+            *) tar -xf "download/$archive" -C download ;;
+          esac
+
+      - name: Check the build is LGPL
+        env:
+          EXE: ${{ matrix.exe }}
+          ENCODERS: ${{ matrix.encoders }}
+        run: |
+          exe="$(find download -path "*/bin/$EXE" | sed -n 1p)"
+          [ -n "$exe" ] || { echo "::error::No bin/$EXE in $BTBN_ARCHIVE."; exit 1; }
+          cp "$exe" "$EXE"
+          # Word splitting of $ENCODERS is wanted.
+          # shellcheck disable=SC2086
+          bash -c "$CHECK_FFMPEG" check "./$EXE" $ENCODERS
+
+      - name: Package
+        env:
+          EXE: ${{ matrix.exe }}
+          ASSET: ${{ matrix.asset }}
+        run: |
+          mkdir out
+          gzip -9 -n -c "$EXE" > "out/$ASSET.gz"
+          "./$EXE" -hide_banner -version | sed -n 1p > "out/$ASSET.version"
+          echo "Repackaged from BtbN/FFmpeg-Builds $BTBN_ARCHIVE" >> "out/$ASSET.version"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset }}
+          path: out/
+          if-no-files-found: error
+
+  # macOS (Apple silicon): built here from the signed tarball, with
+  # VideoToolbox for H.264, AudioToolbox and OpenH264. Nothing is autodetected,
+  # so no library from Homebrew on the runner is linked in: the binary needs
+  # only what macOS ships.
+  macos:
+    name: ffmpeg-macos-arm64
+    needs: source
+    runs-on: macos-15
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: source
+
+      - name: Install build tools
+        run: brew install pkgconf
+
+      - name: Build OpenH264
+        run: |
+          git -c advice.detachedHead=false clone --depth 1 \
+            --branch "v$OPENH264_VERSION" https://github.com/cisco/openh264.git
+          make -C openh264 -j"$(sysctl -n hw.ncpu)" \
+            OS=darwin ARCH=arm64 PREFIX="$RUNNER_TEMP/deps" install-static
+
+      - name: Build ffmpeg
+        run: |
+          tar -xf "ffmpeg-$FFMPEG_VERSION.tar.xz"
+          cd "ffmpeg-$FFMPEG_VERSION"
+          # No --enable-gpl or --enable-nonfree. Unlike BtbN's builds (LGPL v3),
+          # this one also leaves out --enable-version3, so it is LGPL 2.1+.
+          # OpenH264 is C++, hence libc++.
+          PKG_CONFIG_PATH="$RUNNER_TEMP/deps/lib/pkgconfig" ./configure \
+            --prefix="$RUNNER_TEMP/ffmpeg" \
+            --arch=arm64 \
+            --cc=clang \
+            --disable-autodetect \
+            --disable-shared --enable-static \
+            --pkg-config-flags=--static \
+            --extra-libs=-lc++ \
+            --disable-doc --disable-debug \
+            --disable-ffplay --disable-ffprobe \
+            --enable-pthreads \
+            --enable-zlib \
+            --enable-videotoolbox \
+            --enable-audiotoolbox \
+            --enable-libopenh264
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
+
+      - name: Check the build is LGPL
+        run: |
+          cp "$RUNNER_TEMP/ffmpeg/bin/ffmpeg" ffmpeg
+          bash -c "$CHECK_FFMPEG" check ./ffmpeg h264_videotoolbox
+          # Only system libraries and frameworks may be linked.
+          otool -L ffmpeg
+          if otool -L ffmpeg | tail -n +2 | grep -Ev '^\s+(/usr/lib/|/System/Library/)'; then
+            echo "::error::ffmpeg links a library macOS does not ship."
+            exit 1
+          fi
+
+      - name: Package
+        run: |
+          mkdir out
+          gzip -9 -n -c ffmpeg > out/ffmpeg-macos-arm64.gz
+          ./ffmpeg -hide_banner -version | sed -n 1p > out/ffmpeg-macos-arm64.version
+          echo "Built from ffmpeg-$FFMPEG_VERSION.tar.xz with OpenH264 $OPENH264_VERSION" >> out/ffmpeg-macos-arm64.version
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-macos-arm64
+          path: out/
+          if-no-files-found: error
+
+  # Every asset gets `<asset>.sha256` (sha256sum's format), which Grab-it
+  # checks the download against.
+  publish:
+    name: Publish release
+    needs: [source, btbn, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Require main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::ffmpeg releases are made from main, not $GITHUB_REF."
+          exit 1
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Write checksums and release notes
+        run: |
+          mkdir release
+          cd artifacts
+          for asset in ffmpeg-linux-x64.gz ffmpeg-windows-x64.exe.gz ffmpeg-macos-arm64.gz "ffmpeg-$FFMPEG_VERSION.tar.xz"; do
+            [ -f "$asset" ] || { echo "::error::Missing $asset."; exit 1; }
+            cp "$asset" ../release/
+            sha256sum "$asset" > "../release/$asset.sha256"
+          done
+          cd ..
+          {
+            echo "LGPL builds of [FFmpeg](https://ffmpeg.org/) $FFMPEG_VERSION, downloaded by Grab-it the first time it records an MP4. Not a Grab-it release: the app's installers are in the \`v*\` releases."
+            echo
+            echo "| Asset | Build |"
+            echo "| --- | --- |"
+            for name in ffmpeg-linux-x64 ffmpeg-windows-x64.exe ffmpeg-macos-arm64; do
+              echo "| \`$name.gz\` | $(paste -sd ';' "artifacts/$name.version" | sed 's/;/<br>/') |"
+            done
+            echo
+            echo "None of these builds enables GPL or non-free components. The Linux and Windows builds are configured with \`--enable-version3\`, as all of BtbN's LGPL builds are, so they are licensed under the [GNU LGPL version 3](https://www.gnu.org/licenses/lgpl-3.0.html). The macOS build leaves it out and is under the [GNU LGPL 2.1 or later](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html). \`ffmpeg-$FFMPEG_VERSION.tar.xz\` is FFmpeg's own source tarball, as signed by FFmpeg. The Linux and Windows builds come from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), whose scripts build them; the macOS build is made by [\`.github/workflows/ffmpeg.yml\`](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/.github/workflows/ffmpeg.yml). All three include [OpenH264](https://github.com/cisco/openh264) (BSD-2-Clause)."
+          } > notes.md
+          cat notes.md
+          ls -l release
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPLACE: ${{ inputs.replace }}
+        run: |
+          if gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            if [ "$REPLACE" != true ]; then
+              echo "::error::$RELEASE_TAG is already published. Run with replace=true to rebuild it."
+              exit 1
+            fi
+            gh release edit "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --notes-file notes.md
+            gh release upload "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --clobber release/*
+          else
+            # A prerelease is never the repository's latest release, which
+            # installed copies read latest.json from, and release.yml leaves
+            # prereleases out of the changes it lists.
+            gh release create "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "FFmpeg $FFMPEG_VERSION (LGPL)" \
+              --notes-file notes.md \
+              --prerelease \
+              release/*
+          fi
