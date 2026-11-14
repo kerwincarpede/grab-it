@@ -83,6 +83,7 @@ pub fn run() {
             hotkeys::resume_hotkeys,
             overlay::overlay_info,
             overlay::overlay_image,
+            overlay::overlay_ready,
             overlay::overlay_finish,
             overlay::overlay_cancel,
             editor::editor_info,

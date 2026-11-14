@@ -6,6 +6,10 @@
 //! overlay's CSS pixels and are converted with the frozen image's own
 //! pixels-per-CSS-pixel, so monitors with different scale factors each crop
 //! correctly.
+//!
+//! An overlay stays hidden until its page has the frozen image on screen
+//! ([`overlay_ready`]), so it replaces the live desktop with an identical
+//! picture instead of flashing an empty webview first.
 
 use std::{
     collections::HashMap,
@@ -13,6 +17,7 @@ use std::{
         Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 use image::RgbaImage;
@@ -206,7 +211,44 @@ pub fn open(app: &AppHandle, mode: CaptureMode, intent: Intent) -> Result<(), St
             return Err(format!("could not show the capture overlay: {err}"));
         }
     }
+
+    // A page that never reports ready (a script error, a stalled image) must
+    // not leave the capture invisible and holding the claim.
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(READY_TIMEOUT);
+        reveal_session(&app, id);
+    });
     Ok(())
+}
+
+/// How long an overlay may stay hidden waiting for its page.
+const READY_TIMEOUT: Duration = Duration::from_millis(1500);
+
+/// Shows and focuses an overlay that is still hidden.
+fn reveal(window: &WebviewWindow) -> tauri::Result<()> {
+    if !window.is_visible()? {
+        window.show()?;
+        window.set_focus()?;
+    }
+    Ok(())
+}
+
+/// Shows every overlay of session `id` that is still hidden.
+fn reveal_session(app: &AppHandle, id: u64) {
+    let labels: Vec<String> = {
+        let state = app.state::<OverlayState>();
+        let phase = state.lock();
+        match &*phase {
+            Phase::Open(session) if session.id == id => session.frames.keys().cloned().collect(),
+            _ => return,
+        }
+    };
+    for label in labels {
+        if let Some(window) = app.get_webview_window(&label) {
+            let _ = reveal(&window);
+        }
+    }
 }
 
 /// Where to put a monitor's overlay, in physical pixels.
@@ -264,8 +306,7 @@ fn create_window(
     // over viewport width) holds vertically too.
     window.set_position(position)?;
     window.set_size(size)?;
-    window.show()?;
-    window.set_focus()?;
+    // Shown by `overlay_ready` once the page has painted the frozen image.
 
     let app = app.clone();
     window.on_window_event(move |event| {
@@ -505,6 +546,19 @@ pub fn overlay_image(
         .write_with_encoder(encoder)
         .map_err(|err| err.to_string())?;
     Ok(tauri::ipc::Response::new(png))
+}
+
+/// The page has the frozen image on screen: show its window.
+#[tauri::command]
+pub fn overlay_ready(window: WebviewWindow, state: State<'_, OverlayState>) -> Result<(), String> {
+    let current = matches!(
+        &*state.lock(),
+        Phase::Open(session) if session.frames.contains_key(window.label())
+    );
+    if !current {
+        return Err("no capture in progress".into());
+    }
+    reveal(&window).map_err(|err| err.to_string())
 }
 
 #[tauri::command]

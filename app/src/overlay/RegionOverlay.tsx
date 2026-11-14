@@ -4,6 +4,7 @@ import {
   finishOverlay,
   overlayImage,
   overlayInfo,
+  overlayReady,
   type OverlayInfo,
   type OverlayIntent,
   type OverlayWindow,
@@ -72,7 +73,10 @@ function RegionOverlay() {
   const [pointer, setPointer] = useState<Point | null>(null);
   const [square, setSquare] = useState(false);
   const [moving, setMoving] = useState(false);
+  // The window is on screen; until then it is hidden and nothing is dimmed.
+  const [shown, setShown] = useState(false);
   const done = useRef(false);
+  const reported = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,6 +102,20 @@ function RegionOverlay() {
       if (url) URL.revokeObjectURL(url);
     };
   }, []);
+
+  // The window starts hidden and is shown once the frozen image is painted,
+  // so it swaps in for the live desktop without a blank frame. An error is
+  // reported too, or it would never be seen.
+  const painted = (info !== null && image !== null) || error !== null;
+  useEffect(() => {
+    if (!painted || reported.current) return;
+    reported.current = true;
+    overlayReady()
+      .catch(() => {
+        // The backend shows the window after a timeout regardless.
+      })
+      .finally(() => setShown(true));
+  }, [painted]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -228,6 +246,7 @@ function RegionOverlay() {
       data-intent={intent}
       data-mode={windowMode ? "window" : "region"}
       data-moving={dragging && moving ? "true" : "false"}
+      data-shown={shown ? "true" : "false"}
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
@@ -242,7 +261,13 @@ function RegionOverlay() {
           src={imageUrl}
           alt=""
           draggable={false}
-          onLoad={(event) => setImage(event.currentTarget)}
+          onLoad={(event) => {
+            const img = event.currentTarget;
+            // Decoded before it counts as painted, so showing the window
+            // never catches it half drawn.
+            const decoded = typeof img.decode === "function" ? img.decode() : Promise.resolve();
+            decoded.catch(() => {}).finally(() => setImage(img));
+          }}
         />
       )}
       {highlight && placement ? (
