@@ -28,6 +28,7 @@ function mockOverlay(info: Partial<OverlayInfo> = {}): Call[] {
         };
       case "overlay_image":
         return new ArrayBuffer(8);
+      case "overlay_ready":
       case "overlay_finish":
       case "overlay_cancel":
         return null;
@@ -281,6 +282,25 @@ describe("RegionOverlay", () => {
     expect(tips).toHaveTextContent("Space Move");
   });
 
+  describe("revealing the window", () => {
+    it("shows the window when the image cannot be loaded, so the error is seen", async () => {
+      const calls: string[] = [];
+      mockIPC((cmd) => {
+        calls.push(cmd);
+        if (cmd === "overlay_info") {
+          return { mode: "region", monitorWidth: 1000, monitorHeight: 800, windows: [] };
+        }
+        if (cmd === "overlay_image") throw new Error("frozen image lost");
+        return null;
+      });
+      render(<RegionOverlay />);
+
+      await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("frozen image lost"));
+      await waitFor(() => expect(calls).toContain("overlay_ready"));
+      expect(screen.getByTestId("overlay")).toHaveAttribute("data-shown", "true");
+    });
+  });
+
   it("shows a failed finish in the status element", async () => {
     mockIPC((cmd) => {
       if (cmd === "overlay_info") {
@@ -419,8 +439,30 @@ describe("RegionOverlay", () => {
       Object.defineProperty(image, "naturalWidth", { value: 2000 });
       Object.defineProperty(image, "naturalHeight", { value: 1600 });
       fireEvent.load(image);
+      // Counted as painted once decoded, which is asynchronous.
+      await waitFor(() => expect(overlay).toHaveAttribute("data-shown", "true"));
       return overlay;
     }
+
+    it("stays hidden until the frozen image has loaded, then fades in", async () => {
+      Object.assign(URL, { createObjectURL: () => "blob:frozen", revokeObjectURL: () => {} });
+      const calls = mockOverlay();
+      const { container } = render(<RegionOverlay />);
+      const overlay = await ready();
+      const image = await waitFor(() => {
+        const img = container.querySelector("img");
+        expect(img).not.toBeNull();
+        return img as HTMLImageElement;
+      });
+
+      expect(calls.some((call) => call.cmd === "overlay_ready")).toBe(false);
+      expect(overlay).toHaveAttribute("data-shown", "false");
+
+      fireEvent.load(image);
+
+      await waitFor(() => expect(overlay).toHaveAttribute("data-shown", "true"));
+      expect(calls.filter((call) => call.cmd === "overlay_ready")).toHaveLength(1);
+    });
 
     it("magnifies the pixels around the cursor and names the centre colour", async () => {
       const context = mockCanvas();

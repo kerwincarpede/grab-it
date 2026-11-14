@@ -46,6 +46,11 @@ export function overlayImage(): Promise<ArrayBuffer> {
   return invoke<ArrayBuffer>("overlay_image");
 }
 
+/** The frozen image is on screen: the backend may show this overlay now. */
+export function overlayReady(): Promise<void> {
+  return invoke<void>("overlay_ready");
+}
+
 export function finishOverlay(selection: Selection): Promise<void> {
   return invoke<void>("overlay_finish", { selection });
 }

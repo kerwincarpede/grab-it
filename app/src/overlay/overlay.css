@@ -1,8 +1,18 @@
+/*
+ * Registered so it can be transitioned: the dim fades in once the window is
+ * shown, instead of the whole screen darkening in one frame.
+ */
+@property --overlay-dim-alpha {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
 /* Capture overlay: the frozen monitor fills the window. */
 .overlay {
   --overlay-accent: #2f81f7;
-  --overlay-window: #2da44e;
-  --overlay-dim: rgb(0 0 0 / 38%);
+  --overlay-dim-alpha: 0;
+  --overlay-dim: rgb(0 0 0 / var(--overlay-dim-alpha));
   --overlay-panel: rgb(22 22 24 / 82%);
   --overlay-panel-edge: rgb(255 255 255 / 16%);
 
@@ -13,6 +23,11 @@
   cursor: crosshair;
   user-select: none;
   background: #000;
+  transition: --overlay-dim-alpha 160ms ease-out;
+}
+
+.overlay[data-shown="true"] {
+  --overlay-dim-alpha: 0.32;
 }
 
 .overlay[data-mode="window"] {
@@ -95,11 +110,22 @@
   content: "";
 }
 
+/*
+ * A hovered window is lit by the dim around it rather than painted over: a
+ * soft light ring, rounded like the windows themselves, and a short glide
+ * from one window to the next.
+ */
 .overlay-window {
-  --overlay-accent: var(--overlay-window);
-
-  background: rgb(45 164 78 / 12%);
-  border-radius: 2px;
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 55%),
+    inset 0 0 0 1px rgb(0 0 0 / 12%),
+    0 0 0 100vmax var(--overlay-dim);
+  transition:
+    left 90ms ease-out,
+    top 90ms ease-out,
+    width 90ms ease-out,
+    height 90ms ease-out;
 }
 
 /* A hovered window is a suggestion, not a selection: no ticks. */
@@ -242,7 +268,8 @@
 }
 
 /* Out of the way while a selection is being drawn underneath it. */
-.overlay-hint[data-hidden="true"] {
+.overlay-hint[data-hidden="true"],
+.overlay[data-shown="false"] .overlay-hint {
   opacity: 0;
 }
 
@@ -283,6 +310,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .overlay,
+  .overlay-window,
   .overlay-hint {
     transition: none;
   }
