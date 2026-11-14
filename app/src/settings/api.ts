@@ -8,6 +8,38 @@ export type AfterCapture = "quickAccess" | "editor" | "nothing";
 export interface Preferences {
   afterCapture: AfterCapture;
   copyToClipboard: boolean;
+  ai: AiPreferences;
+}
+
+/** Mirrors `AiPreferences` in src-tauri/src/settings.rs: the vision model that describes captures. */
+export interface AiPreferences {
+  enabled: boolean;
+  /** An OpenAI-compatible API base URL, such as Ollama's. */
+  endpoint: string;
+  model: string;
+  /** Only cloud providers need one. */
+  apiKey: string | null;
+  /** Leave captures from before AI descriptions were turned on alone. */
+  newCapturesOnly: boolean;
+}
+
+/** What the backend starts with. */
+export const DEFAULT_AI_PREFERENCES: AiPreferences = {
+  enabled: false,
+  endpoint: "http://localhost:11434/v1",
+  model: "qwen2.5vl:7b",
+  apiKey: null,
+  newCapturesOnly: true,
+};
+
+/** Whether an endpoint URL points at this computer, so screenshots stay on it. */
+export function isLocalEndpoint(endpoint: string): boolean {
+  try {
+    const host = new URL(endpoint).hostname;
+    return host === "localhost" || host === "[::1]" || host === "::1" || /^127\./.test(host);
+  } catch {
+    return false;
+  }
 }
 
 /** Mirrors `Settings` in src-tauri/src/settings.rs. */
@@ -101,4 +133,14 @@ export async function chooseFolder(defaultPath?: string): Promise<string | null>
     title: "Choose where Grab-it saves captures",
   });
   return typeof picked === "string" ? picked : null;
+}
+
+/** Asks the AI endpoint about the saved model; resolves to what it says, or rejects with why not. */
+export function testAiConnection(): Promise<string> {
+  return invoke<string>("ai_test_connection");
+}
+
+/** Queues every capture to be described again. */
+export function redescribeAll(): Promise<void> {
+  return invoke<void>("ai_redescribe_all");
 }
