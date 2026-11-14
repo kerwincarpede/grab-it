@@ -2,6 +2,7 @@ import { useEffect, useMemo, useReducer, useRef, useState, type MouseEvent } fro
 import {
   cancelOverlay,
   finishOverlay,
+  imageType,
   isInstantOverlay,
   onOverlayStart,
   overlayImage,
@@ -58,10 +59,10 @@ function pointOf(event: MouseEvent): Point {
   return { x: event.clientX, y: event.clientY };
 }
 
-/** Turns the PNG bytes into a URL the <img> can show. */
+/** Turns the image bytes into a URL the <img> can show. */
 function toImageUrl(bytes: ArrayBuffer): string | null {
   if (typeof URL.createObjectURL !== "function") return null;
-  return URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+  return URL.createObjectURL(new Blob([bytes], { type: imageType(bytes) }));
 }
 
 /**

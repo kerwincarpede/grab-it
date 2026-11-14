@@ -62,15 +62,16 @@ const PAGE: &str = if INSTANT {
     "index.html#/overlay"
 };
 
-/// A frozen monitor as PNG for its overlay's page, or why it could not be
-/// encoded. Filled in once, off the main thread.
+/// A frozen monitor as an image file for its overlay's page, or why it
+/// could not be encoded. Filled in once, off the main thread.
 type Encoded = Arc<OnceLock<Result<Vec<u8>, String>>>;
 
 struct Frame {
     monitor: MonitorInfo,
     image: Arc<RgbaImage>,
-    /// `image` as PNG, being encoded from the moment the monitor froze.
-    png: Encoded,
+    /// `image` for the page ([`encode_for_page`]), being written from the
+    /// moment the monitor froze.
+    encoded: Encoded,
     /// The overlay's page has asked what to show, so it is alive.
     responded: bool,
 }
@@ -366,7 +367,7 @@ pub fn open(app: &AppHandle, mode: CaptureMode, intent: Intent) -> Result<(), St
             label,
             Frame {
                 monitor,
-                png: encode_later(&image, started),
+                encoded: encode_later(&image, started),
                 image,
                 responded: false,
             },
@@ -422,19 +423,87 @@ fn trace(message: std::fmt::Arguments<'_>) {
     }
 }
 
-/// Starts encoding `image` as PNG on its own thread, so the page's request
-/// for it finds it done or nearly done, and the main thread never encodes.
+/// Starts encoding `image` for the page on its own thread, so the page's
+/// request for it finds it done or nearly done, and the main thread never
+/// encodes.
 fn encode_later(image: &Arc<RgbaImage>, started: Instant) -> Encoded {
     let encoded = Encoded::default();
     let (image, out) = (Arc::clone(image), Arc::clone(&encoded));
     std::thread::spawn(move || {
-        let _ = out.set(encode_png(&image));
+        let _ = out.set(encode_for_page(&image));
         trace(format_args!(
             "frozen image encoded in {:?}",
             started.elapsed()
         ));
     });
     encoded
+}
+
+/// `image` as the overlay's page is sent it: an uncompressed BMP on macOS,
+/// where WebKit took about 100 ms to decode a 5K screen as PNG (the loupe
+/// and the hover blur have nothing to draw until then) and under 30 ms as
+/// a BMP. Elsewhere a PNG, until the BMP has been tried in those webviews.
+fn encode_for_page(image: &RgbaImage) -> Result<Vec<u8>, String> {
+    if cfg!(target_os = "macos") {
+        encode_bmp(image)
+    } else {
+        encode_png(image)
+    }
+}
+
+/// `image` as an uncompressed BMP. The frozen image only travels to the
+/// page, so nothing is gained by compressing it. The pixels are stored
+/// top-down in the image's own RGBA order, with bit masks saying so, so
+/// writing it is one copy. A BITMAPV5HEADER, since macOS's ImageIO refuses
+/// bit masks with alpha in the older headers.
+fn encode_bmp(image: &RgbaImage) -> Result<Vec<u8>, String> {
+    const FILE_HEADER: u32 = 14;
+    const INFO_HEADER: u32 = 124;
+    const OFFSET: u32 = FILE_HEADER + INFO_HEADER;
+    /// `BI_BITFIELDS`: the channels are where the masks say.
+    const BITFIELDS: u32 = 3;
+    /// `LCS_sRGB`, as the bytes spell it.
+    const SRGB: u32 = 0x7352_4742;
+    /// `LCS_GM_IMAGES`: perceptual rendering.
+    const PERCEPTUAL: u32 = 4;
+
+    let (width, height) = image.dimensions();
+    let too_large = || "the screen is too large to send to the overlay".to_string();
+    let pixels = image.as_raw();
+    let data_size = u32::try_from(pixels.len()).map_err(|_| too_large())?;
+    let file_size = data_size.checked_add(OFFSET).ok_or_else(too_large)?;
+    let width = i32::try_from(width).map_err(|_| too_large())?;
+    // Negative: the first row is the top one.
+    let height = i32::try_from(height)
+        .map_err(|_| too_large())?
+        .wrapping_neg();
+
+    let mut bmp = Vec::with_capacity(file_size as usize);
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&file_size.to_le_bytes());
+    bmp.extend_from_slice(&[0; 4]);
+    bmp.extend_from_slice(&OFFSET.to_le_bytes());
+    bmp.extend_from_slice(&INFO_HEADER.to_le_bytes());
+    bmp.extend_from_slice(&width.to_le_bytes());
+    bmp.extend_from_slice(&height.to_le_bytes());
+    bmp.extend_from_slice(&1u16.to_le_bytes()); // planes
+    bmp.extend_from_slice(&32u16.to_le_bytes()); // bits per pixel
+    bmp.extend_from_slice(&BITFIELDS.to_le_bytes());
+    bmp.extend_from_slice(&data_size.to_le_bytes());
+    bmp.extend_from_slice(&2835u32.to_le_bytes()); // 72 dpi, in pixels per metre
+    bmp.extend_from_slice(&2835u32.to_le_bytes());
+    bmp.extend_from_slice(&[0; 8]); // palette: none
+    // Red, green, blue and alpha masks: bytes 0 to 3 of each pixel.
+    for mask in [0x0000_00ffu32, 0x0000_ff00, 0x00ff_0000, 0xff00_0000] {
+        bmp.extend_from_slice(&mask.to_le_bytes());
+    }
+    bmp.extend_from_slice(&SRGB.to_le_bytes());
+    bmp.extend_from_slice(&[0; 36 + 12]); // endpoints and gamma, unused with sRGB
+    bmp.extend_from_slice(&PERCEPTUAL.to_le_bytes());
+    bmp.extend_from_slice(&[0; 12]); // no embedded profile; reserved
+    debug_assert_eq!(bmp.len(), OFFSET as usize);
+    bmp.extend_from_slice(pixels);
+    Ok(bmp)
 }
 
 /// `image` as PNG, compressed lightly: it only travels to the page.
@@ -548,6 +617,8 @@ fn create_window(
     let window = builder.build()?;
     #[cfg(target_os = "macos")]
     raise_above_menu_bar(&window)?;
+    #[cfg(target_os = "macos")]
+    render_at_display_rate(&window)?;
     // Placed after the level change, so the window keeps the monitor's
     // full size, menu bar area included, and the region scale (image width
     // over viewport width) holds vertically too.
@@ -610,6 +681,77 @@ fn raise_above_menu_bar(window: &WebviewWindow) -> tauri::Result<()> {
         unsafe {
             let _: () = objc2::msg_send![ns_window, setLevel: ABOVE_MENU_BAR];
             let _: () = objc2::msg_send![ns_window, setCollectionBehavior: ALL_SPACES];
+        }
+    })
+}
+
+/// macOS: WebKit draws a page at most 60 times a second by default, even on
+/// a 120 Hz ProMotion display, so a selection dragged with a 120 Hz pointer
+/// moved in steps behind the cursor. The overlay is told to keep up with
+/// the display instead. The switch is WebKit's internal "Prefer Page
+/// Rendering Updates near 60fps" feature; where a WebKit does not have it,
+/// nothing changes.
+#[cfg(target_os = "macos")]
+fn render_at_display_rate(window: &WebviewWindow) -> tauri::Result<()> {
+    use objc2::runtime::{AnyClass, AnyObject, Bool};
+    use objc2_foundation::NSString;
+
+    const FEATURE: &str = "PreferPageRenderingUpdatesNear60FPSEnabled";
+
+    window.with_webview(|webview| {
+        let web_view = webview.inner().cast::<AnyObject>();
+        if web_view.is_null() {
+            return;
+        }
+        let Some(class) = AnyClass::get(c"WKPreferences") else {
+            return;
+        };
+        let wanted = NSString::from_str(FEATURE);
+        // SAFETY: `web_view` is this window's live WKWebView, used on the
+        // main thread, where `with_webview` runs. The private selectors are
+        // only sent after checking they exist; `_features` is an NSArray of
+        // `_WKFeature`, each with an NSString `key`.
+        unsafe {
+            let has: Bool = objc2::msg_send![class, respondsToSelector: objc2::sel!(_features)];
+            if !has.as_bool() {
+                return;
+            }
+            let configuration: *mut AnyObject = objc2::msg_send![web_view, configuration];
+            if configuration.is_null() {
+                return;
+            }
+            let preferences: *mut AnyObject = objc2::msg_send![configuration, preferences];
+            if preferences.is_null() {
+                return;
+            }
+            let can_set: Bool = objc2::msg_send![
+                preferences,
+                respondsToSelector: objc2::sel!(_setEnabled:forFeature:)
+            ];
+            if !can_set.as_bool() {
+                return;
+            }
+            let features: *mut AnyObject = objc2::msg_send![class, _features];
+            if features.is_null() {
+                return;
+            }
+            let count: usize = objc2::msg_send![features, count];
+            for index in 0..count {
+                let feature: *mut AnyObject = objc2::msg_send![features, objectAtIndex: index];
+                let key: *mut AnyObject = objc2::msg_send![feature, key];
+                if key.is_null() {
+                    continue;
+                }
+                let same: Bool = objc2::msg_send![key, isEqualToString: &*wanted];
+                if same.as_bool() {
+                    let _: () = objc2::msg_send![
+                        preferences,
+                        _setEnabled: Bool::NO,
+                        forFeature: feature
+                    ];
+                    return;
+                }
+            }
         }
     })
 }
@@ -859,14 +1001,15 @@ fn notch_height(_window: &WebviewWindow) -> f64 {
     0.0
 }
 
-/// The frozen monitor image as PNG bytes. Off the main thread: it may wait
-/// for the encoder, and the overlay must keep following the pointer.
+/// The frozen monitor image, as [`encode_for_page`] wrote it. Off the main
+/// thread: it may wait for the encoder, and the overlay must keep following
+/// the pointer.
 #[tauri::command(async)]
 pub fn overlay_image(
     window: WebviewWindow,
     state: State<'_, OverlayState>,
 ) -> Result<tauri::ipc::Response, String> {
-    let png = {
+    let encoded = {
         let guard = state.lock();
         let Phase::Open(session) = &*guard else {
             return Err("no capture in progress".into());
@@ -875,11 +1018,11 @@ pub fn overlay_image(
             .frames
             .get(window.label())
             .ok_or("this window is not a capture overlay")?;
-        Arc::clone(&frame.png)
+        Arc::clone(&frame.encoded)
     };
     // Waited for without the lock, so the selection can end meanwhile.
-    let png = png.wait().clone()?;
-    Ok(tauri::ipc::Response::new(png))
+    let encoded = encoded.wait().clone()?;
+    Ok(tauri::ipc::Response::new(encoded))
 }
 
 /// The page has the frozen image on screen: show its window.
@@ -1095,6 +1238,34 @@ mod tests {
         assert_eq!(monitor_to_image_rect(rect, &retina, (1440, 900)), rect);
     }
 
+    fn u32_at(bytes: &[u8], at: usize) -> u32 {
+        u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+    }
+
+    #[test]
+    fn frozen_frames_are_sent_as_top_down_rgba_bitmaps() {
+        let image = RgbaImage::from_fn(3, 2, |x, y| image::Rgba([x as u8, y as u8, 7, 200]));
+        let bmp = encode_bmp(&image).unwrap();
+
+        assert_eq!(&bmp[..2], b"BM");
+        assert_eq!(u32_at(&bmp, 2) as usize, bmp.len());
+        let offset = u32_at(&bmp, 10) as usize;
+        assert_eq!(offset, 14 + 124);
+        // A BITMAPV5HEADER: ImageIO refuses alpha bit masks in older ones.
+        assert_eq!(u32_at(&bmp, 14), 124);
+        assert_eq!(u32_at(&bmp, 18), 3);
+        // Negative height: the rows run top to bottom.
+        assert_eq!(u32_at(&bmp, 22) as i32, -2);
+        assert_eq!(u16::from_le_bytes([bmp[28], bmp[29]]), 32);
+        assert_eq!(u32_at(&bmp, 30), 3, "BI_BITFIELDS");
+        assert_eq!(u32_at(&bmp, 34) as usize, 3 * 2 * 4);
+        let masks: Vec<u32> = (0..4).map(|i| u32_at(&bmp, 54 + i * 4)).collect();
+        assert_eq!(masks, [0xff, 0xff00, 0xff_0000, 0xff00_0000]);
+        assert_eq!(&bmp[70..74], b"BGRs", "LCS_sRGB");
+        // The pixels follow unchanged, in the image's own order.
+        assert_eq!(&bmp[offset..], image.as_raw().as_slice());
+    }
+
     #[test]
     fn picked_windows_are_cropped_from_the_frozen_frame() {
         let frame = Frame {
@@ -1102,7 +1273,7 @@ mod tests {
             image: Arc::new(RgbaImage::from_fn(4, 4, |x, y| {
                 image::Rgba([x as u8, y as u8, 0, 255])
             })),
-            png: Encoded::default(),
+            encoded: Encoded::default(),
             responded: false,
         };
         let image = window_image(&frame, &window(1, 101, 2, 2, 2)).unwrap();
