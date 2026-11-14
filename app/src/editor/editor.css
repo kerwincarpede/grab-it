@@ -349,6 +349,48 @@
   cursor: grab;
 }
 
+/* The right-click tool wheel: a ring of tools centred on the pointer. */
+.tool-wheel {
+  position: absolute;
+  z-index: 5;
+  width: 0;
+  height: 0;
+}
+
+.tool-wheel::before {
+  content: "";
+  position: absolute;
+  left: -112px;
+  top: -112px;
+  width: 224px;
+  height: 224px;
+  border: 1px solid var(--ed-border);
+  border-radius: 50%;
+  background: rgba(30, 33, 40, 0.92);
+  box-shadow: var(--ed-shadow);
+  backdrop-filter: blur(8px);
+}
+
+.editor .tool-wheel button {
+  position: absolute;
+  left: -18px;
+  top: -18px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  color: var(--ed-muted);
+}
+
+.editor .tool-wheel button:hover:not(:disabled) {
+  color: var(--ed-text);
+}
+
+.editor .tool-wheel button[aria-checked="true"],
+.editor .tool-wheel button[aria-checked="true"]:hover:not(:disabled) {
+  background: var(--ed-accent);
+  color: #ffffff;
+}
+
 .editor-canvas .text-draft {
   position: absolute;
   min-width: 160px;

@@ -6,10 +6,13 @@ import EditorWindow from "./EditorWindow";
 import type { Annotations } from "./model";
 import { AUTOSAVE_DELAY_MS } from "./useAnnotations";
 
+/** Where the mocked stage reports the pointer, in capture pixels. */
+const pointerAt = vi.hoisted(() => ({ x: 0, y: 0 }));
+
 // jsdom has no canvas, so Konva nodes render as plain elements that keep
 // the props the tests look at.
 vi.mock("react-konva", async () => {
-  const { createElement, useImperativeHandle } = await import("react");
+  const { createElement, useImperativeHandle, useMemo } = await import("react");
   const node =
     (kind: string) =>
     ({
@@ -18,6 +21,7 @@ vi.mock("react-konva", async () => {
       name,
       text,
       enabledAnchors,
+      draggable,
       onMouseDown,
     }: {
       children?: ReactNode;
@@ -25,6 +29,7 @@ vi.mock("react-konva", async () => {
       name?: string;
       text?: string;
       enabledAnchors?: string[];
+      draggable?: boolean;
       onMouseDown?: () => void;
     }) =>
       // Only annotations (which have ids) take clicks; the Stage's handler
@@ -37,6 +42,7 @@ vi.mock("react-konva", async () => {
           "data-name": name,
           "data-text": text,
           "data-anchors": enabledAnchors?.join(" "),
+          "data-draggable": draggable === undefined ? undefined : String(draggable),
           onMouseDown: id ? () => onMouseDown?.() : undefined,
         },
         children,
@@ -47,8 +53,58 @@ vi.mock("react-konva", async () => {
     useImperativeHandle(ref, () => ({ findOne: () => undefined }), []);
     return createElement(LayerNode, props);
   };
+  type Handler = ((event: unknown) => void) | undefined;
+  // The stage hands its mouse handlers a Konva-like event: the pointer
+  // comes from `pointerAt`, and the target is the annotation under the
+  // DOM event (its node reports the "annotation" name) or the stage.
+  const Stage = ({
+    ref,
+    children,
+    onMouseDown,
+    onMouseMove,
+    onMouseUp,
+  }: {
+    ref?: Ref<unknown>;
+    children?: ReactNode;
+    onMouseDown?: Handler;
+    onMouseMove?: Handler;
+    onMouseUp?: Handler;
+  }) => {
+    const stage = useMemo(() => {
+      const self: Record<string, unknown> = {
+        getRelativePointerPosition: () => ({ ...pointerAt }),
+        getPointerPosition: () => ({ ...pointerAt }),
+        getStage: () => self,
+        getParent: () => null,
+        getClassName: () => "Stage",
+        hasName: () => false,
+        name: () => "",
+        draggable: () => false,
+      };
+      return self;
+    }, []);
+    useImperativeHandle(ref, () => stage, [stage]);
+    const target = (element: EventTarget) => {
+      if (!(element instanceof Element) || !element.closest("[data-id]")) return stage;
+      return {
+        getStage: () => stage,
+        getParent: () => null,
+        getClassName: () => "Shape",
+        hasName: (name: string) => name === "annotation",
+        name: () => "annotation",
+        draggable: () => true,
+      };
+    };
+    const forward = (handler: Handler) => (event: { nativeEvent: MouseEvent; target: EventTarget }) =>
+      handler?.({ evt: event.nativeEvent, target: target(event.target) });
+    return createElement(
+      "div",
+      { "data-konva": "Stage", onMouseDown: forward(onMouseDown), onMouseMove: forward(onMouseMove), onMouseUp: forward(onMouseUp) },
+      children,
+    );
+  };
   return {
-    Stage: node("Stage"),
+    Stage,
     Layer,
     Shape: node("Shape"),
     Label: node("Label"),
@@ -133,6 +189,29 @@ const anchors = () => document.querySelector('[data-konva="Transformer"]')?.getA
 
 const shapeIds = () =>
   Array.from(document.querySelectorAll("[data-konva] [data-id]")).map((element) => element.getAttribute("data-id"));
+
+const stage = () => document.querySelector('[data-konva="Stage"]') as Element;
+const pressed = (name: string) =>
+  within(screen.getByRole("toolbar", { name: "Annotation tools" })).getByRole("button", { name });
+
+/** Drags across the stage from `from` to `to` (capture pixels) with the given modifier keys. */
+function drag(from: [number, number], to: [number, number], keys: { metaKey?: boolean; altKey?: boolean; shiftKey?: boolean } = {}) {
+  Object.assign(pointerAt, { x: from[0], y: from[1] });
+  fireEvent.mouseDown(stage(), keys);
+  Object.assign(pointerAt, { x: to[0], y: to[1] });
+  fireEvent.mouseMove(stage(), keys);
+  fireEvent.mouseUp(stage(), keys);
+}
+
+/** Presses and lets go of `key`, holding it for `ms` (Date.now is stubbed). */
+function holdKey(key: string, ms: number, during?: () => void) {
+  const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+  fireEvent.keyDown(window, { key });
+  during?.();
+  now.mockReturnValue(10_000 + ms);
+  fireEvent.keyUp(window, { key });
+  now.mockRestore();
+}
 
 describe("EditorWindow", () => {
   beforeEach(() => {
@@ -370,6 +449,144 @@ describe("EditorWindow", () => {
     expect(bytes(calls[0].payload)).toEqual(Array.from(FLATTENED));
     expect(flattened.calls).toEqual([{ crop: null, backdrop }]);
     expect(await screen.findByText("Pinned on top of other windows.")).toBeInTheDocument();
+  });
+
+  it("switches tools for good on a quick tap of a letter", async () => {
+    mockEditor();
+    await ready();
+    holdKey("b", 50);
+    expect(pressed("Blur")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("brings the previous tool back when a held letter is let go", async () => {
+    mockEditor();
+    await ready();
+    holdKey("b", 400);
+    expect(pressed("Arrow")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("ignores key repeats while a letter is held", async () => {
+    mockEditor();
+    await ready();
+    holdKey("b", 400, () => fireEvent.keyDown(window, { key: "b", repeat: true }));
+    expect(pressed("Arrow")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("uses a held tool once for a quick drag, then restores the old one", async () => {
+    const saved = mockEditor();
+    await ready();
+    holdKey("r", 100, () => drag([10, 10], [80, 60]));
+    expect(pressed("Arrow")).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => expect(last(saved)?.shapes[4]).toMatchObject({ type: "rect", x: 10, y: 10, width: 70, height: 50 }));
+  });
+
+  it("draws a rectangle on ⌘-drag and an arrow on ⌥-drag, keeping the tool", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    drag([10, 10], [80, 60], { metaKey: true });
+    await waitFor(() => expect(last(saved)?.shapes[4]).toMatchObject({ type: "rect", width: 70, height: 50 }));
+    drag([100, 100], [150, 120], { altKey: true });
+    await waitFor(() => expect(last(saved)?.shapes[5]).toMatchObject({ type: "arrow", points: [100, 100, 150, 120] }));
+    expect(pressed("Select")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("holds lines to 45° and boxes to squares with Shift", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.keyDown(window, { key: "l" });
+    drag([0, 0], [100, 10], { shiftKey: true });
+    await waitFor(() => expect(last(saved)?.shapes[4]).toMatchObject({ type: "line", points: [0, 0, 100, 0] }));
+    fireEvent.keyDown(window, { key: "e" });
+    drag([0, 0], [80, 30], { shiftKey: true });
+    await waitFor(() => expect(last(saved)?.shapes[5]).toMatchObject({ type: "ellipse", width: 80, height: 80 }));
+  });
+
+  it("picks colour swatches with the number keys", async () => {
+    mockEditor();
+    await ready();
+    fireEvent.keyDown(window, { key: "3" });
+    expect(screen.getByRole("button", { name: "Colour #30a46c" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.keyDown(window, { key: "7" });
+    expect(screen.getByRole("button", { name: "Colour #ffffff" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("keeps a just-drawn shape selected, so it can be restyled or deleted", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.keyDown(window, { key: "r" });
+    drag([10, 10], [80, 60]);
+    expect(shapeIds()).toHaveLength(5);
+    expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+    fireEvent.keyDown(window, { key: "4" });
+    await waitFor(() => expect(last(saved)?.shapes[4]).toMatchObject({ type: "rect", color: "#0090ff" }));
+    fireEvent.keyDown(window, { key: "Delete" });
+    expect(shapeIds()).toEqual(["a1", "t1", "s1", "s2"]);
+  });
+
+  it("moves an existing shape instead of drawing when a drawing tool drags it", async () => {
+    mockEditor();
+    await ready();
+    expect(document.querySelector('[data-id="t1"]')).toHaveAttribute("data-draggable", "true");
+    Object.assign(pointerAt, { x: 20, y: 200 });
+    fireEvent.mouseDown(document.querySelector('[data-id="t1"]') as Element);
+    Object.assign(pointerAt, { x: 120, y: 260 });
+    fireEvent.mouseMove(stage());
+    fireEvent.mouseUp(stage());
+    expect(shapeIds()).toEqual(["a1", "t1", "s1", "s2"]);
+    expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+    expect(anchors()).toEqual(["top-left", "top-right", "bottom-left", "bottom-right"]);
+
+    fireEvent.keyDown(window, { key: "c" });
+    expect(document.querySelector('[data-id="t1"]')).toHaveAttribute("data-draggable", "false");
+  });
+
+  it("opens a tool wheel on right-click and picks a tool from it", async () => {
+    mockEditor();
+    await ready();
+    const canvas = document.querySelector(".editor-canvas") as Element;
+    // The webview's own menu is suppressed.
+    expect(fireEvent.contextMenu(canvas, { clientX: 300, clientY: 200 })).toBe(false);
+    const wheel = within(screen.getByRole("menu", { name: "Tools" }));
+    expect(wheel.getAllByRole("menuitemradio")).toHaveLength(13);
+    expect(wheel.getByRole("menuitemradio", { name: "Arrow" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(wheel.getByRole("menuitemradio", { name: "Spotlight" }));
+    expect(screen.queryByRole("menu", { name: "Tools" })).not.toBeInTheDocument();
+    expect(pressed("Spotlight")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("closes the tool wheel on Escape or a click away", async () => {
+    mockEditor();
+    await ready();
+    const canvas = document.querySelector(".editor-canvas") as Element;
+    fireEvent.contextMenu(canvas, { clientX: 300, clientY: 200 });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "Tools" })).not.toBeInTheDocument();
+
+    fireEvent.contextMenu(canvas, { clientX: 300, clientY: 200 });
+    fireEvent.pointerDown(screen.getByRole("toolbar", { name: "Style and actions" }));
+    expect(screen.queryByRole("menu", { name: "Tools" })).not.toBeInTheDocument();
+    expect(pressed("Arrow")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("does not draw with the click on the canvas that closes the tool wheel", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.keyDown(window, { key: "n" });
+    const canvas = document.querySelector(".editor-canvas") as Element;
+    fireEvent.contextMenu(canvas, { clientX: 300, clientY: 200 });
+    Object.assign(pointerAt, { x: 150, y: 150 });
+    fireEvent.pointerDown(stage());
+    fireEvent.mouseDown(stage());
+    fireEvent.mouseUp(stage());
+    expect(screen.queryByRole("menu", { name: "Tools" })).not.toBeInTheDocument();
+    expect(shapeIds()).toEqual(["a1", "t1", "s1", "s2"]);
+
+    // The next click draws as usual.
+    fireEvent.mouseDown(stage());
+    fireEvent.mouseUp(stage());
+    expect(shapeIds()).toHaveLength(5);
+    await waitFor(() => expect(last(saved)?.shapes[4]).toMatchObject({ type: "step", x: 150, y: 150 }));
   });
 
   it("copies then closes the window on Ctrl+Enter", async () => {
