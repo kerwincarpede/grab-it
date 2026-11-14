@@ -1,8 +1,11 @@
-//! macOS Screen Recording and Microphone permissions. Without the first,
-//! captures come back with only the desktop wallpaper, so Grab-it checks
-//! first and offers to open System Settings. The second is asked for before
-//! a recording with Audio set to Microphone; its prompt shows Info.plist's
-//! `NSMicrophoneUsageDescription`. Other platforms need no permission.
+//! macOS Screen Recording, Microphone and Input Monitoring permissions.
+//! Without the first, captures come back with only the desktop wallpaper,
+//! so Grab-it checks first and offers to open System Settings. The second
+//! is asked for before a recording with Audio set to Microphone; its prompt
+//! shows Info.plist's `NSMicrophoneUsageDescription`. The third is asked
+//! for before a recording with Show clicks or Show keystrokes, whose input
+//! hooks (input.rs) see nothing without it. Other platforms need no
+//! permission.
 
 use tauri::AppHandle;
 
@@ -118,5 +121,62 @@ pub fn ensure_microphone(app: &AppHandle) -> bool {
 /// Returns true when the microphone may be recorded. Only macOS asks.
 #[cfg(not(target_os = "macos"))]
 pub fn ensure_microphone(_app: &AppHandle) -> bool {
+    true
+}
+
+/// Returns true when global mouse and keyboard events may be watched. On
+/// macOS, without Input Monitoring, asks the system for it, which shows
+/// its prompt the first time, and offers to open System Settings.
+#[cfg(target_os = "macos")]
+pub fn ensure_input_monitoring(app: &AppHandle) -> bool {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGPreflightListenEventAccess() -> bool;
+        fn CGRequestListenEventAccess() -> bool;
+    }
+
+    const SETTINGS_URL: &str =
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent";
+
+    // SAFETY: both functions take no arguments and only query or request
+    // the permission; they are safe to call from any thread.
+    if unsafe { CGPreflightListenEventAccess() } {
+        return true;
+    }
+    // Shows the system's prompt the first time, and adds Grab-it to the
+    // Input Monitoring list so the user can tick it.
+    // SAFETY: as above.
+    if unsafe { CGRequestListenEventAccess() } {
+        return true;
+    }
+
+    app.dialog()
+        .message(
+            "Grab-it needs the Input Monitoring permission to show your clicks and \
+             keystrokes in recordings.\n\n\
+             Turn on Grab-it under Privacy & Security → Input Monitoring, then record again. \
+             macOS may ask you to restart Grab-it. Until then, recordings are saved \
+             without clicks or keystrokes.",
+        )
+        .title("Allow input monitoring")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Open System Settings".into(),
+            "Not Now".into(),
+        ))
+        .show(|open| {
+            if open && let Err(err) = std::process::Command::new("open").arg(SETTINGS_URL).spawn() {
+                eprintln!("Grab-it: could not open System Settings: {err}");
+            }
+        });
+    false
+}
+
+/// Returns true when global mouse and keyboard events may be watched. Only
+/// macOS asks.
+#[cfg(not(target_os = "macos"))]
+pub fn ensure_input_monitoring(_app: &AppHandle) -> bool {
     true
 }

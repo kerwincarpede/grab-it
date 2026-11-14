@@ -59,6 +59,15 @@ rxing = { version = "0.9", default-features = false, features = [
     "full_barcode_format_support",
     "encoding_rs",
 ] }
+# Draws the keystroke overlay's label into recordings (frame_overlays.rs), in
+# the cut-down DejaVu Sans Bold in fonts/.
+ab_glyph = "0.2"
+# Global mouse and keyboard events while recording with Show clicks or Show
+# keystrokes (input.rs): an event tap on macOS, low-level hooks on Windows,
+# XRecord on X11 (libx11, libxtst and libxi headers). Its last release,
+# 0.5.3, looks key names up on the tap's own thread, which macOS 14 aborts;
+# main sends that to the main thread (`set_is_main_thread`).
+rdev = { git = "https://github.com/Narsil/rdev", rev = "b7e201bf80be7b9632207366f277d29fe732b9c1", default-features = false, features = ["x11"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.12", default-features = false, features = ["tokio"] }
