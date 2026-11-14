@@ -1,4 +1,4 @@
-import { STROKE_WIDTHS, type Annotations, type Point, type Rect, type Shape, type Style, type Tool } from "./model";
+import { COLORS, STROKE_WIDTHS, type Annotations, type Point, type Rect, type Shape, type Style, type Tool } from "./model";
 
 /** How far a duplicate lands from its original, in capture pixels. */
 export const DUPLICATE_OFFSET = 12;
@@ -57,20 +57,57 @@ export function beginShape(tool: Tool, at: Point, style: Style, id = newId()): S
   }
 }
 
-/** Updates a shape being drawn as the pointer moves to `to`. */
-export function dragShape(shape: Shape, to: Point): Shape {
+/** The angle a constrained line snaps to: every 45°. */
+export const SNAP_ANGLE = Math.PI / 4;
+
+/**
+ * Where a line from `from` towards `to` ends when held to `step` angles:
+ * `to` projected onto the nearest allowed direction, so the end stays
+ * under the pointer along that direction.
+ */
+export function snapAngle(from: Point, to: Point, step = SNAP_ANGLE): Point {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const angle = Math.round(Math.atan2(dy, dx) / step) * step;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const length = dx * cos + dy * sin;
+  // Rounding off float noise (and -0) keeps straight lines exactly straight.
+  const tidy = (value: number) => Math.round(value * 1e6) / 1e6 || 0;
+  return { x: tidy(from.x + length * cos), y: tidy(from.y + length * sin) };
+}
+
+/** The far corner of a square from `from` towards `to`: the longer side wins. */
+export function squareCorner(from: Point, to: Point): Point {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const side = Math.max(Math.abs(dx), Math.abs(dy));
+  return { x: from.x + (dx < 0 ? -side : side), y: from.y + (dy < 0 ? -side : side) };
+}
+
+/**
+ * Updates a shape being drawn as the pointer moves to `to`. `constrain`
+ * (Shift) holds lines and arrows to 45° steps and boxes to squares; paths
+ * are drawn freely.
+ */
+export function dragShape(shape: Shape, to: Point, constrain = false): Shape {
   switch (shape.type) {
     case "arrow":
-    case "line":
-      return { ...shape, points: [shape.points[0], shape.points[1], to.x, to.y] };
+    case "line": {
+      const from = { x: shape.points[0], y: shape.points[1] };
+      const end = constrain ? snapAngle(from, to) : to;
+      return { ...shape, points: [from.x, from.y, end.x, end.y] };
+    }
     case "freehand":
     case "highlighter":
       return { ...shape, points: [...shape.points, to.x, to.y] };
     case "rect":
     case "ellipse":
     case "blur":
-    case "spotlight":
-      return { ...shape, width: to.x - shape.x, height: to.y - shape.y };
+    case "spotlight": {
+      const end = constrain ? squareCorner(shape, to) : to;
+      return { ...shape, width: end.x - shape.x, height: end.y - shape.y };
+    }
     default:
       return shape;
   }
@@ -231,6 +268,34 @@ export function nudgeDelta(key: string, shift: boolean): Point | null {
     default:
       return null;
   }
+}
+
+/** How long a tool key must be held to count as a hold rather than a tap. */
+export const HOLD_MS = 250;
+
+/**
+ * Whether letting go of a tool key brings back the tool from before it: a
+ * key held past `HOLD_MS`, or held while something was drawn, was a hold
+ * ("use once"); a quick tap keeps the new tool.
+ */
+export function releaseRestores(heldMs: number, used: boolean): boolean {
+  return used || heldMs >= HOLD_MS;
+}
+
+/**
+ * The tool a modified drag draws, whatever tool is active: ⌘ (Ctrl
+ * elsewhere) a rectangle, ⌥ (Alt) an arrow. Null for a plain drag.
+ */
+export function modifierTool(event: { ctrlKey: boolean; metaKey: boolean; altKey: boolean }): Tool | null {
+  if (event.ctrlKey || event.metaKey) return "rect";
+  if (event.altKey) return "arrow";
+  return null;
+}
+
+/** The swatch a number key picks: 1 is the first colour. Null for any other key. */
+export function colorForKey(key: string): string | null {
+  if (!/^[1-9]$/.test(key)) return null;
+  return COLORS[Number(key) - 1] ?? null;
 }
 
 /** The next stroke width down (-1) or up (1) the presets, stopping at the ends. */

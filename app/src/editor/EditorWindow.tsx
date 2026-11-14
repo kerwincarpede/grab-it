@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
 import type Konva from "konva";
 import { Image as KonvaImage, Layer, Rect as KonvaRect, Stage, Transformer } from "react-konva";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -39,19 +39,23 @@ import {
   type Tool,
 } from "./model";
 import ShapeNode, { SpotlightDim } from "./ShapeNode";
+import ToolWheel, { clampWheel } from "./ToolWheel";
 import {
   addShape,
   anchorsFor,
   beginShape,
+  colorForKey,
   cropFromDrag,
   deleteShape,
   dragShape,
   duplicateShape,
   finishShape,
+  modifierTool,
   moveShape,
   newId,
   normalizeRect,
   nudgeDelta,
+  releaseRestores,
   replaceShape,
   restyleShape,
   spotlightDim,
@@ -138,6 +142,23 @@ function fitView(bounds: Rect, size: { width: number; height: number }): View {
 const isTyping = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
 
+/** What a pointer went down on: an annotation (its draggable node), a resize handle, or neither. */
+function hitTarget(target: Konva.Node): { annotation: Konva.Node | null; handle: boolean } {
+  for (let node: Konva.Node | null = target; node; node = node.getParent()) {
+    if (node.hasName("annotation")) return { annotation: node, handle: false };
+    if (node.getClassName() === "Transformer") return { annotation: null, handle: true };
+  }
+  return { annotation: null, handle: false };
+}
+
+/** A tool key being held: the tool it replaced, when it went down, and whether it drew anything. */
+interface ToolHold {
+  key: string;
+  previous: Tool;
+  downAt: number;
+  used: boolean;
+}
+
 /** The annotation editor: a react-konva stage over the original capture. */
 export default function EditorWindow() {
   const annotations = useAnnotations();
@@ -162,6 +183,11 @@ export default function EditorWindow() {
   const [backdropOpen, setBackdropOpen] = useState(false);
   /** A backdrop being adjusted (a slider mid-drag), shown but not yet committed. */
   const [backdropDraft, setBackdropDraft] = useState<Backdrop | null>(null);
+  /** Where the right-click tool wheel is open, in canvas pixels. */
+  const [wheelAt, setWheelAt] = useState<Point | null>(null);
+  const hold = useRef<ToolHold | null>(null);
+  /** A node whose own drag was turned off for a ⌘/⌥ drag, with the value to give back. */
+  const suppressedDrag = useRef<{ node: Konva.Node; draggable: boolean } | null>(null);
 
   const imageSize = useMemo(() => (image ? { width: image.width, height: image.height } : null), [image]);
   const backdrop = backdropDraft ?? doc.backdrop ?? null;
@@ -182,15 +208,21 @@ export default function EditorWindow() {
   const selected = doc.shapes.find((shape) => shape.id === selectedId) ?? null;
   const steps = useMemo(() => stepNumbers(doc.shapes), [doc.shapes]);
   const panning = tool === "pan" || spaceHeld;
+  /**
+   * Shapes can be selected, moved and resized: with Select, and with the
+   * drawing tools too (a drag that starts on a shape moves it). Crop and
+   * panning leave them alone.
+   */
+  const editable = !panning && tool !== "crop";
 
   // Attach the resize handles to the selected node.
   useEffect(() => {
     const transformer = transformerRef.current;
     if (!transformer) return;
-    const node = selectedId && tool === "select" ? contentRef.current?.findOne(`#${selectedId}`) : null;
+    const node = selectedId && editable ? contentRef.current?.findOne(`#${selectedId}`) : null;
     transformer.nodes(node ? [node] : []);
     transformer.getLayer()?.batchDraw();
-  }, [selectedId, tool, doc]);
+  }, [selectedId, editable, doc]);
 
   // Notes about an action give way to the save status again.
   useEffect(() => {
@@ -239,49 +271,83 @@ export default function EditorWindow() {
     setTextDraft(null);
   }, [textDraft, doc, commit, style]);
 
+  /** Turns off `node`'s own drag until mouse up, so a ⌘/⌥ drag draws instead of moving it. */
+  const suppressDrag = (node: Konva.Node) => {
+    suppressedDrag.current = { node, draggable: node.draggable() };
+    node.draggable(false);
+  };
+
   const onMouseDown = (event: Konva.KonvaEventObject<MouseEvent>) => {
-    if (panning || event.evt.button !== 0) return;
+    // Right-click opens the tool wheel (see onContextMenu).
+    if (event.evt.button !== 0) return;
+    // ⌘-drag draws a rectangle and ⌥-drag an arrow from any tool; Space still pans.
+    const override = modifierTool(event.evt);
+    if (spaceHeld || (panning && !override)) return;
     const at = pointer();
     if (!at) return;
-    if (tool === "select") {
-      if (event.target === event.target.getStage() || event.target.name() === "capture") setSelectedId(null);
+    // A tool key held while drawing was used once: letting go brings the old tool back.
+    if (hold.current) hold.current.used = true;
+    const hit = hitTarget(event.target);
+    // Resize handles keep working with every tool.
+    if (hit.handle) return;
+    const drawWith = override ?? tool;
+    if (override) {
+      if (hit.annotation) suppressDrag(hit.annotation);
+      else if (panning) suppressDrag(event.target.getStage() ?? event.target);
+    } else if (hit.annotation) {
+      // The shape selected itself; its own drag moves it.
+      return;
+    }
+    if (drawWith === "select") {
+      setSelectedId(null);
       return;
     }
     // Clicking away blurs the text box, which commits it.
     if (textDraft) return;
-    if (tool === "text") {
+    setSelectedId(null);
+    if (drawWith === "text") {
       // Opened on mouse up: mouse down's default action would blur it.
       textAt.current = at;
       return;
     }
-    if (tool === "crop") {
+    if (drawWith === "crop") {
       setCropDrag({ start: at, end: at });
       return;
     }
-    const shape = beginShape(tool, at, style);
+    const shape = beginShape(drawWith, at, style);
     if (shape?.type === "step") {
       commit(addShape(doc, shape));
+      setSelectedId(shape.id);
     } else {
       setDraft(shape);
     }
   };
 
-  const onMouseMove = () => {
+  const onMouseMove = (event: Konva.KonvaEventObject<MouseEvent>) => {
     if (!draft && !cropDrag) return;
     const at = pointer();
     if (!at) return;
-    if (draft) setDraft(dragShape(draft, at));
+    // Shift keeps lines to 45° steps and boxes square.
+    if (draft) setDraft(dragShape(draft, at, event.evt.shiftKey));
     if (cropDrag) setCropDrag({ ...cropDrag, end: at });
   };
 
   const onMouseUp = () => {
+    if (suppressedDrag.current) {
+      suppressedDrag.current.node.draggable(suppressedDrag.current.draggable);
+      suppressedDrag.current = null;
+    }
     if (textAt.current) {
       setTextDraft({ at: textAt.current, value: "" });
       textAt.current = null;
     }
     if (draft) {
       const shape = finishShape(draft);
-      if (shape) commit(addShape(doc, shape));
+      if (shape) {
+        commit(addShape(doc, shape));
+        // The new shape keeps its handles, ready to adjust, move or restyle.
+        setSelectedId(shape.id);
+      }
       setDraft(null);
     }
     if (cropDrag && imageSize) {
@@ -311,8 +377,32 @@ export default function EditorWindow() {
   /** Picks a tool; any tool but Select drops the selection, so nothing hidden is restyled or deleted. */
   const pickTool = useCallback((next: Tool) => {
     setTool(next);
+    setWheelAt(null);
     if (next !== "select") setSelectedId(null);
   }, []);
+
+  /**
+   * Brings back the tool from before a held key. What was just drawn stays
+   * selected unless the tool cannot edit shapes.
+   */
+  const restoreTool = useCallback((previous: Tool) => {
+    setTool(previous);
+    if (previous === "crop" || previous === "pan") setSelectedId(null);
+  }, []);
+
+  const closeWheel = useCallback(() => setWheelAt(null), []);
+
+  /** Right-click on the canvas opens the tool wheel there instead of the webview's menu. */
+  const onContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (isTyping(event.target)) return;
+    event.preventDefault();
+    // Control-click on macOS also reports a context menu: there it is a ⌘/Ctrl drag.
+    if (event.ctrlKey || !image) return;
+    const box = event.currentTarget.getBoundingClientRect();
+    setDraft(null);
+    setCropDrag(null);
+    setWheelAt(clampWheel({ x: event.clientX - box.left, y: event.clientY - box.top }, size));
+  };
 
   const changeShape = (id: string, transform: NodeTransform) => {
     const shape = doc.shapes.find((candidate) => candidate.id === id);
@@ -427,6 +517,8 @@ export default function EditorWindow() {
       if (isTyping(event.target)) return;
       const key = event.key.toLowerCase();
       const nudge = mod || event.altKey ? null : nudgeDelta(event.key, event.shiftKey);
+      // 1–7 pick the colour swatches, in bar order.
+      const swatch = mod || event.altKey ? null : colorForKey(event.key);
       if (mod && key === "z") {
         event.preventDefault();
         if (event.shiftKey) redoDoc();
@@ -452,32 +544,48 @@ export default function EditorWindow() {
         setDraft(null);
         setCropDrag(null);
         setBackdropOpen(false);
+        setWheelAt(null);
       } else if (event.key === " ") {
         event.preventDefault();
         setSpaceHeld(true);
       } else if (!mod && !event.altKey && (event.key === "[" || event.key === "]")) {
         changeStyle({ strokeWidth: stepStrokeWidth(style.strokeWidth, event.key === "[" ? -1 : 1) });
+      } else if (swatch) {
+        changeStyle({ color: swatch });
       } else if (!mod && !event.altKey) {
         const match = TOOLS.find((entry) => entry.key === key);
-        if (match) pickTool(match.tool);
+        // A held key repeats: only the first press switches and starts the hold.
+        if (!match || event.repeat) return;
+        hold.current = { key, previous: tool, downAt: Date.now(), used: false };
+        pickTool(match.tool);
       }
+    };
+    /** Ends a tool-key hold: a hold brings the old tool back, a tap keeps the new one. */
+    const endHold = () => {
+      const held = hold.current;
+      hold.current = null;
+      if (held && releaseRestores(Date.now() - held.downAt, held.used)) restoreTool(held.previous);
     };
     const onKeyUp = (event: KeyboardEvent) => {
       if (event.key === " ") setSpaceHeld(false);
+      if (hold.current?.key === event.key.toLowerCase()) endHold();
     };
+    // A key let go in another window never reports its key up.
+    const onBlur = () => endHold();
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
     };
-  }, [undoDoc, redoDoc, copy, copyAndClose, removeSelected, duplicateSelected, nudgeSelected, selectedId, changeStyle, style.strokeWidth, pickTool]);
+  }, [undoDoc, redoDoc, copy, copyAndClose, removeSelected, duplicateSelected, nudgeSelected, selectedId, changeStyle, style.strokeWidth, pickTool, restoreTool, tool]);
 
   const error = annotations.error ?? imageError;
   const cropPreview = cropDrag ? normalizeRect({ ...cropDrag.start, width: cropDrag.end.x - cropDrag.start.x, height: cropDrag.end.y - cropDrag.start.y }) : null;
   const crop = cropPreview ?? doc.crop ?? null;
   const shapes = draft ? [...doc.shapes, draft] : doc.shapes;
-  const editable = tool === "select" && !panning;
   const spotlights = shapes.filter((shape) => shape.type === "spotlight");
   const dim = imageSize ? spotlightDim({ x: 0, y: 0, ...imageSize }, spotlights) : [];
   const framed = frame?.layout ? { area: frame.area, bounds: frame.bounds, layout: frame.layout } : null;
@@ -628,7 +736,7 @@ export default function EditorWindow() {
             </Fragment>
           ))}
         </div>
-        <div ref={container} className={`editor-canvas tool-${panning ? "pan" : tool}`}>
+        <div ref={container} className={`editor-canvas tool-${panning ? "pan" : tool}`} onContextMenu={onContextMenu}>
           {error && <p className="editor-error">{error}</p>}
           {image && (
             <Stage
@@ -725,6 +833,7 @@ export default function EditorWindow() {
               </Layer>
             </Stage>
           )}
+          {wheelAt && <ToolWheel at={wheelAt} active={tool} onPick={pickTool} onClose={closeWheel} />}
           {textDraft && (
             <input
               className="text-draft"

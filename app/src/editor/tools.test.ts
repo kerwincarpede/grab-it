@@ -6,6 +6,7 @@ import {
   anchorsFor,
   CORNER_ANCHORS,
   beginShape,
+  colorForKey,
   contrastColor,
   cropFromDrag,
   deleteShape,
@@ -13,11 +14,16 @@ import {
   duplicateShape,
   finishShape,
   HIGHLIGHTER_WIDTH,
+  HOLD_MS,
+  modifierTool,
   moveShape,
   nudgeDelta,
+  releaseRestores,
   replaceShape,
   restyleShape,
+  snapAngle,
   spotlightDim,
+  squareCorner,
   stepNumbers,
   stepStrokeWidth,
   transformShape,
@@ -33,6 +39,76 @@ function draw(tool: Parameters<typeof beginShape>[0], from: [number, number], ..
   for (const [x, y] of path) shape = dragShape(shape, { x, y });
   return finishShape(shape);
 }
+
+/** Like `draw`, holding Shift for every move. */
+function drawConstrained(tool: Parameters<typeof beginShape>[0], from: [number, number], to: [number, number]) {
+  const shape = beginShape(tool, { x: from[0], y: from[1] }, style, "id");
+  return shape && finishShape(dragShape(shape, { x: to[0], y: to[1] }, true));
+}
+
+describe("constraining with Shift", () => {
+  it.each([
+    [{ x: 100, y: 10 }, { x: 100, y: 0 }],
+    [{ x: -10, y: 80 }, { x: 0, y: 80 }],
+    [{ x: 100, y: 90 }, { x: 95, y: 95 }],
+    [{ x: -60, y: -40 }, { x: -50, y: -50 }],
+  ])("snaps a line towards %o to %o", (to, expected) => {
+    expect(snapAngle({ x: 0, y: 0 }, to)).toEqual(expected);
+  });
+
+  it("snaps from the line's start, not the origin", () => {
+    expect(snapAngle({ x: 50, y: 50 }, { x: 150, y: 58 })).toEqual({ x: 150, y: 50 });
+  });
+
+  it.each([
+    [{ x: 80, y: 30 }, { x: 80, y: 80 }],
+    [{ x: -20, y: 50 }, { x: -50, y: 50 }],
+    [{ x: -40, y: -10 }, { x: -40, y: -40 }],
+  ])("squares a box dragged to %o at %o", (to, expected) => {
+    expect(squareCorner({ x: 0, y: 0 }, to)).toEqual(expected);
+  });
+
+  it.each(["arrow", "line"] as const)("keeps a %s to 45° steps", (tool) => {
+    expect(drawConstrained(tool, [10, 10], [110, 15])).toMatchObject({ points: [10, 10, 110, 10] });
+  });
+
+  it.each(["rect", "ellipse", "blur", "spotlight"] as const)("makes a %s square", (tool) => {
+    expect(drawConstrained(tool, [100, 100], [40, 70])).toMatchObject({ x: 40, y: 40, width: 60, height: 60 });
+  });
+
+  it("leaves freehand paths free", () => {
+    expect(drawConstrained("freehand", [0, 0], [30, 7])).toMatchObject({ points: [0, 0, 30, 7] });
+  });
+
+  it("draws freely without Shift", () => {
+    expect(draw("rect", [0, 0], [80, 30])).toMatchObject({ width: 80, height: 30 });
+  });
+});
+
+describe("quick tool shortcuts", () => {
+  it("treats a quick tap as a switch and a long press or a drag as a hold", () => {
+    expect(releaseRestores(HOLD_MS - 1, false)).toBe(false);
+    expect(releaseRestores(HOLD_MS, false)).toBe(true);
+    expect(releaseRestores(20, true)).toBe(true);
+  });
+
+  it("draws a rectangle on ⌘ or Ctrl and an arrow on ⌥ or Alt", () => {
+    expect(modifierTool({ ctrlKey: false, metaKey: true, altKey: false })).toBe("rect");
+    expect(modifierTool({ ctrlKey: true, metaKey: false, altKey: false })).toBe("rect");
+    expect(modifierTool({ ctrlKey: false, metaKey: false, altKey: true })).toBe("arrow");
+    expect(modifierTool({ ctrlKey: true, metaKey: false, altKey: true })).toBe("rect");
+    expect(modifierTool({ ctrlKey: false, metaKey: false, altKey: false })).toBeNull();
+  });
+
+  it("maps 1–7 to the swatches and ignores other keys", () => {
+    expect(colorForKey("1")).toBe("#e5484d");
+    expect(colorForKey("7")).toBe("#ffffff");
+    expect(colorForKey("8")).toBeNull();
+    expect(colorForKey("0")).toBeNull();
+    expect(colorForKey("a")).toBeNull();
+    expect(colorForKey("!")).toBeNull();
+  });
+});
 
 describe("drawing tools", () => {
   it.each(["arrow", "line"] as const)("draws a %s between two points", (tool) => {

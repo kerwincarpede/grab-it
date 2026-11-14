@@ -9,7 +9,7 @@ interface ShapeNodeProps {
   image: HTMLImageElement | null;
   /** The badge number for step shapes. */
   step?: number;
-  /** Selectable and draggable (the select tool is active). */
+  /** Selectable and draggable (Select or a drawing tool is active). */
   editable: boolean;
   onSelect: (id: string) => void;
   onChange: (id: string, transform: NodeTransform) => void;
