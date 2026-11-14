@@ -18,6 +18,7 @@ mod screen;
 mod search;
 mod settings;
 mod tray;
+mod update;
 mod windows;
 
 use std::{path::PathBuf, sync::Mutex};
@@ -47,6 +48,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(overlay::OverlayState::default())
         .manage(overlay::LastRegionState::default())
         .manage(quick::QuickState::default())
@@ -54,6 +56,7 @@ pub fn run() {
         .manage(record::RecordState::default())
         .manage(hotkeys::HotkeyState::default())
         .manage(editor::EditorState::default())
+        .manage(update::UpdateState::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
             commands::set_save_folder,
@@ -137,6 +140,8 @@ pub fn run() {
             library::rescan_in_background(handle, library::current_save_folder(handle));
             pin::clear_stale(handle);
             tray::create(handle)?;
+            // Offers newer releases from GitHub.
+            update::start(handle);
             if let Some(target) = open_target {
                 windows::open(handle, target)?;
             } else if first_run {

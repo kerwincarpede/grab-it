@@ -27,5 +27,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRERUVDNjY5MUI4OTdGQkQKUldTOWY0a2JhY2J1VFNpbHpxemlWNG9lMGV6VG40RFhqR1REQnAyZTBLSzdWL0U2a1JuZEhGLzYK",
+      "endpoints": [
+        "https://github.com/kerwincarpede/grab-it/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

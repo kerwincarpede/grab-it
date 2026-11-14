@@ -108,6 +108,8 @@ jobs:
 
           The installers are not signed with a paid certificate, so Windows SmartScreen and macOS Gatekeeper warn on first launch.
 
+          Already using a Grab-it that has **Check for updates…** in its tray menu? It offers this update itself.
+
           **macOS:** open the `.dmg`, drag Grab-it to Applications and open it. When macOS says it cannot verify the app, choose **Done**, then go to **System Settings → Privacy & Security** and click **Open Anyway**. Alternatively run `xattr -dr com.apple.quarantine /Applications/Grab-it.app` once.
           BODY
           )
@@ -142,6 +144,41 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
+
+      # Installed copies of Grab-it read latest.json from the newest release
+      # to find, and verify, the update package for their platform. Written
+      # here rather than by each build, so the three builds cannot race to
+      # rewrite it.
+      - name: Add the updater manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.version.outputs.release_id }}
+          TAG: v${{ needs.version.outputs.version }}
+        run: |
+          mkdir sigs
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
+            --jq '.[] | select(.name | endswith(".sig")) | "\(.id) \(.name)"' |
+            while read -r id name; do
+              gh api -H "Accept: application/octet-stream" \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$id" > "sigs/$name"
+            done
+          # The release notes, this release's and recent ones', become the
+          # list of changes Grab-it shows before updating.
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release.json
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" > history.json
+          python3 .github/scripts/updater_manifest.py \
+            --sigs sigs --release release.json --history history.json \
+            --download-base "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
+            > latest.json
+          cat latest.json
+          curl --fail-with-body -sS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @latest.json \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=latest.json" \
+            > /dev/null
+
       # Publishing the draft creates its tag on the released commit.
       - name: Publish the draft release
         env:

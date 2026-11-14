@@ -10,7 +10,7 @@ use tauri::{
 
 use crate::{
     actions::{self, Action},
-    quick, screen, windows,
+    quick, screen, update, windows,
 };
 
 const TRAY_ID: &str = "main";
@@ -45,6 +45,7 @@ const MENU_LAST: &str = "last-capture";
 const MENU_LIBRARY: &str = "library";
 const MENU_SETTINGS: &str = "settings";
 const MENU_WELCOME: &str = "welcome";
+const MENU_UPDATES: &str = "check-updates";
 const MENU_QUIT: &str = "quit";
 
 /// The capture a menu item starts, if any.
@@ -162,6 +163,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let library = MenuItem::with_id(app, MENU_LIBRARY, "Library…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
     let welcome = MenuItem::with_id(app, MENU_WELCOME, "Shortcuts and tips…", true, None::<&str>)?;
+    let updates = MenuItem::with_id(app, MENU_UPDATES, "Check for updates…", true, None::<&str>)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit Grab-it", true, None::<&str>)?;
     let menu = Menu::with_items(
@@ -182,6 +184,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             &library,
             &settings,
             &welcome,
+            &updates,
             &separator2,
             &quit,
         ],
@@ -202,6 +205,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                     eprintln!("Grab-it: could not open the welcome window: {err}");
                 }
             }
+            MENU_UPDATES => update::check_from_tray(app),
             MENU_LIBRARY => {
                 if let Err(err) = windows::show_library(app) {
                     eprintln!("Grab-it: could not open the Library: {err}");
@@ -263,6 +267,7 @@ mod tests {
         assert_eq!(action_for(MENU_TEXT), Some(Action::Text));
         assert_eq!(action_for(MENU_COLOUR), Some(Action::Colour));
         assert_eq!(action_for(MENU_LAST), None);
+        assert_eq!(action_for(MENU_UPDATES), None);
     }
 
     #[test]
