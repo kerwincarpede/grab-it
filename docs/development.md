@@ -9,7 +9,8 @@ Grab-it is built with Rust and [Tauri 2](https://tauri.app/), with a React + Typ
 | `app/` | The Tauri project |
 | `app/src/` | Frontend: React + TypeScript + Vite |
 | `app/src-tauri/` | Backend: Rust |
-| `.github/workflows/ci.yml` | Checks plus installer builds on Linux, Windows and macOS; releases from `main` |
+| `.github/workflows/ci.yml` | Checks plus installer builds on Linux, Windows and macOS |
+| `.github/workflows/release.yml` | Manually triggered release from `main` |
 | `docs/` | User and developer docs; `docs/assets/demo.svg` is the README animation |
 
 ## Setup
@@ -111,13 +112,23 @@ To build installers locally, run `npm run tauri build`; they land in `app/src-ta
 
 ## CI
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04 (caching the ocrs models for the OCR tests) and, in parallel, builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts.
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04 (caching the ocrs models for the OCR tests) and, in parallel, builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts. It runs on every pull request and push to `main`, and never publishes anything.
 
 ## Releases
 
-Every push to `main` publishes a [GitHub release](https://github.com/kerwincarpede/grab-it/releases) with the installers attached: `.msi` and `-setup.exe` for Windows, `.dmg` for macOS (Apple silicon), and `.AppImage`, `.deb` and `.rpm` for Linux.
+Releases are cut by hand. Each one publishes a [GitHub release](https://github.com/kerwincarpede/grab-it/releases) of the current `main` with the installers attached: `.msi` and `-setup.exe` for Windows, `.dmg` for macOS (Apple silicon), and `.AppImage`, `.deb` and `.rpm` for Linux.
 
-Versions come from the `v*` git tags. [`PaulHatch/semantic-version`](https://github.com/PaulHatch/semantic-version) reads the commits since the last tag and bumps by [Conventional Commits](https://www.conventionalcommits.org/):
+To release, open **Actions → Release → Run workflow** on GitHub, or from a terminal:
+
+```sh
+gh workflow run release.yml                # bump from the commits (below)
+gh workflow run release.yml -f bump=minor  # or force patch, minor or major
+gh run watch                               # follow it
+```
+
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) only runs from `main`, and refuses a commit that is already released. It runs the whole of `ci.yml` (checks and the three installer builds) as a reusable workflow, so a release gets exactly the checks a pull request does.
+
+Versions come from the `v*` git tags. With the default `auto` bump, [`PaulHatch/semantic-version`](https://github.com/PaulHatch/semantic-version) reads the commits since the last tag and bumps by [Conventional Commits](https://www.conventionalcommits.org/):
 
 | Commit (or squash-merged PR title) | Bump |
 | --- | --- |
@@ -127,7 +138,7 @@ Versions come from the `v*` git tags. [`PaulHatch/semantic-version`](https://git
 
 The first release, made before any tag exists, takes the version in `app/src-tauri/tauri.conf.json`. After that the tags are the source of truth: CI writes the release version into `tauri.conf.json` before building, so the version fields in the repository do not need bumping by hand.
 
-A run opens a draft release, builds the installers into it, and publishes it (creating the tag) only when the checks and all three builds pass. A failed run leaves only a hidden draft, which the next run replaces. Each release is named by its version, for example `0.2.1` for the tag `v0.2.1`.
+A run opens a draft release, builds the installers into it, and publishes it (creating the tag) only when the checks and all three builds pass. A failed run leaves only a hidden draft, which the next release of that version replaces. Each release is named by its version, for example `0.2.1` for the tag `v0.2.1`.
 
 The installers are not signed with a paid certificate. CI ad-hoc signs the macOS app (the `APPLE_SIGNING_IDENTITY` repository secret overrides the `-` identity), so Gatekeeper says it cannot verify the developer rather than calling the app damaged.
 
