@@ -92,6 +92,19 @@ objc2-core-video = "0.3"
 # Already in the tree: the handler for the microphone prompt
 # (permissions.rs).
 block2 = "0.6"
+# The system sound on macOS 13+ (audio/system_mac.rs): an audio-only
+# ScreenCaptureKit stream, read as Core Audio buffer lists. Linked weakly
+# (build.rs) so Grab-it still starts where ScreenCaptureKit is missing.
+objc2-screen-capture-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "SCShareableContent",
+    "SCStream",
+    "block2",
+    "dispatch2",
+    "objc2-core-foundation",
+    "objc2-core-media",
+] }
+objc2-core-audio-types = "0.3"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 # The microphone for recordings (audio.rs): Core Audio and WASAPI. Linux

@@ -234,8 +234,11 @@ export type RecordingQuality = "low" | "medium" | "high";
 /** Mirrors `RecordingSettings::fps` in src-tauri/src/settings.rs: an MP4's frames a second. */
 export type RecordingFps = 30 | 60;
 
-/** Mirrors `RecordingAudio` in src-tauri/src/settings.rs: what sound an MP4 records. */
-export type RecordingAudio = "none" | "microphone";
+/**
+ * Mirrors `RecordingAudio` in src-tauri/src/settings.rs: what sound an MP4 records. `system` is what the
+ * computer plays; `both` mixes it with the microphone.
+ */
+export type RecordingAudio = "none" | "microphone" | "system" | "both";
 
 /** Mirrors `RecordingSettings` in src-tauri/src/settings.rs. */
 export interface RecordingSettings {
@@ -280,7 +283,19 @@ export const RECORDING_FPS: { value: RecordingFps; title: string }[] = [
 export const RECORDING_AUDIO: { value: RecordingAudio; title: string }[] = [
   { value: "none", title: "None" },
   { value: "microphone", title: "Microphone" },
+  { value: "system", title: "System sound" },
+  { value: "both", title: "Microphone and system sound" },
 ];
+
+/** The choices that record what the computer plays, which macOS before 13 cannot. */
+export function recordsSystemSound(audio: RecordingAudio): boolean {
+  return audio === "system" || audio === "both";
+}
+
+/** The choices that record the microphone. */
+export function recordsMicrophone(audio: RecordingAudio): boolean {
+  return audio === "microphone" || audio === "both";
+}
 
 export function setRecording(recording: RecordingSettings): Promise<Settings> {
   return invoke<Settings>("set_recording", { recording });
@@ -292,6 +307,11 @@ export interface Microphone {
   id: string;
   name: string;
   isDefault: boolean;
+}
+
+/** Whether what the computer plays can be recorded here: on Windows, Linux and macOS 13 or later. */
+export function systemSoundAvailable(): Promise<boolean> {
+  return invoke<boolean>("recording_system_audio");
 }
 
 /** The microphones that can be recorded. On Linux, empty until ffmpeg is ready, which lists them. */

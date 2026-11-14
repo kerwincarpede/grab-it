@@ -105,6 +105,7 @@ pub fn run() {
             ffmpeg::ffmpeg_status,
             ffmpeg::ffmpeg_retry,
             audio::recording_microphones,
+            audio::recording_system_audio,
             hotkeys::pause_hotkeys,
             hotkeys::resume_hotkeys,
             overlay::overlay_info,

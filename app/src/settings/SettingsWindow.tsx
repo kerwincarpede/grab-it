@@ -15,6 +15,9 @@ import {
   ffmpegStatus,
   listMicrophones,
   onFfmpegStatus,
+  recordsMicrophone,
+  recordsSystemSound,
+  systemSoundAvailable,
   retryFfmpeg,
   setRecording,
   type FfmpegStatus,
@@ -184,6 +187,8 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   const showsRecording = shows("recording");
   /** The microphones to pick from; on Linux ffmpeg lists them, so they come once it is ready. */
   const [microphones, setMicrophones] = useState<Microphone[]>([]);
+  /** Whether system sound can be recorded here; null until the backend has said, which hides it. */
+  const [systemSound, setSystemSound] = useState<boolean | null>(null);
   const ffmpegReady = ffmpeg?.state === "ready";
   // Null until the system has answered, or when it cannot say: the toggle
   // is then left out rather than shown in a state that may be wrong.
@@ -258,6 +263,21 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
       cancelled = true;
     };
   }, [showsRecording, ffmpegReady]);
+
+  useEffect(() => {
+    if (!showsRecording) return;
+    let cancelled = false;
+    systemSoundAvailable()
+      .then((available) => {
+        if (!cancelled && typeof available === "boolean") setSystemSound(available);
+      })
+      .catch(() => {
+        // Without an answer System and Both stay hidden.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showsRecording]);
 
   async function changeRecording(change: Partial<RecordingSettings>) {
     setBusy(true);
@@ -389,6 +409,11 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   const recording: RecordingSettings = { ...DEFAULT_RECORDING, ...settings?.recording };
   const recordingOff = busy || settings === null;
   const silent = recording.format === "gif";
+  // System and Both are offered only where system sound can be recorded,
+  // but a saved choice is still shown as it is.
+  const audioChoices = RECORDING_AUDIO.filter(
+    (choice) => systemSound === true || !recordsSystemSound(choice.value) || choice.value === recording.audio,
+  );
   const defaultMicrophone = microphones.find((microphone) => microphone.isDefault);
   const savedMicrophoneMissing =
     recording.microphone !== null && !microphones.some((microphone) => microphone.id === recording.microphone);
@@ -599,14 +624,14 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                 disabled={recordingOff || silent}
                 onChange={(event) => void changeRecording({ audio: event.target.value as RecordingAudio })}
               >
-                {RECORDING_AUDIO.map((choice) => (
+                {audioChoices.map((choice) => (
                   <option key={choice.value} value={choice.value}>
                     {choice.title}
                   </option>
                 ))}
               </select>
             </div>
-            {recording.audio === "microphone" && (
+            {recordsMicrophone(recording.audio) && (
               <div className="row">
                 <span className="row-text">
                   <label className="row-title" htmlFor="recording-microphone">
