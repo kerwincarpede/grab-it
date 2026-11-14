@@ -35,6 +35,8 @@ rusqlite = { version = "0.42", features = ["bundled"] }
 ocrs = { version = "=0.12.2", default-features = false, features = ["onnx"] }
 rten = { version = "0.24", default-features = false, features = ["onnx_format"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
+# Already in the tree through ureq; encodes captures for vision models.
+base64 = "0.23"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.12", default-features = false, features = ["tokio"] }

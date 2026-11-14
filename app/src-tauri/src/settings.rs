@@ -28,13 +28,81 @@ pub enum AfterCapture {
     Nothing,
 }
 
-/// The choices on the Settings window's Capture section.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// The default OpenAI-compatible endpoint: a local Ollama.
+pub const DEFAULT_AI_ENDPOINT: &str = "http://localhost:11434/v1";
+/// The default vision model, as Ollama names it.
+pub const DEFAULT_AI_MODEL: &str = "qwen2.5vl:7b";
+
+/// How captures are described by a vision model (see `ai.rs`). Off by
+/// default: nothing leaves the machine until the user turns it on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AiSettings {
+    pub enabled: bool,
+    /// An OpenAI-compatible base URL; `/chat/completions` is appended.
+    pub endpoint: String,
+    pub model: String,
+    /// Sent as `Authorization: Bearer <key>` when set.
+    pub api_key: Option<String>,
+    /// Captures that existed when describing was turned on are skipped.
+    pub new_captures_only: bool,
+}
+
+impl Default for AiSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: DEFAULT_AI_ENDPOINT.into(),
+            model: DEFAULT_AI_MODEL.into(),
+            api_key: None,
+            new_captures_only: true,
+        }
+    }
+}
+
+impl AiSettings {
+    /// Trims the fields, drops a trailing `/` from the endpoint and an empty
+    /// key. Turned on, the endpoint must be an http(s) URL and the model set.
+    pub fn validated(&self) -> Result<Self, SettingsError> {
+        let endpoint = self.endpoint.trim().trim_end_matches('/').to_owned();
+        let model = self.model.trim().to_owned();
+        let api_key = self
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_owned);
+        if self.enabled {
+            let lower = endpoint.to_ascii_lowercase();
+            if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+                return Err(SettingsError::Invalid(format!(
+                    "The AI endpoint must start with http:// or https://, not `{endpoint}`."
+                )));
+            }
+            if model.is_empty() {
+                return Err(SettingsError::Invalid("Choose an AI model.".into()));
+            }
+        }
+        Ok(Self {
+            enabled: self.enabled,
+            endpoint,
+            model,
+            api_key,
+            new_captures_only: self.new_captures_only,
+        })
+    }
+}
+
+/// The choices on the Settings window's Capture and AI sections.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Preferences {
     pub after_capture: AfterCapture,
     /// Copy every capture to the clipboard as it is saved.
     pub copy_to_clipboard: bool,
+    /// Describing captures with a vision model.
+    #[serde(default)]
+    pub ai: AiSettings,
 }
 
 impl Default for Preferences {
@@ -42,6 +110,38 @@ impl Default for Preferences {
         Self {
             after_capture: AfterCapture::default(),
             copy_to_clipboard: true,
+            ai: AiSettings::default(),
+        }
+    }
+}
+
+/// What `set_preferences` takes: [`Preferences`], where a missing `ai`
+/// keeps the current AI settings (frontends from before it existed).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreferencesUpdate {
+    pub after_capture: AfterCapture,
+    pub copy_to_clipboard: bool,
+    #[serde(default)]
+    pub ai: Option<AiSettings>,
+}
+
+impl PreferencesUpdate {
+    fn apply_to(self, current: &Preferences) -> Preferences {
+        Preferences {
+            after_capture: self.after_capture,
+            copy_to_clipboard: self.copy_to_clipboard,
+            ai: self.ai.unwrap_or_else(|| current.ai.clone()),
+        }
+    }
+}
+
+impl From<Preferences> for PreferencesUpdate {
+    fn from(preferences: Preferences) -> Self {
+        Self {
+            after_capture: preferences.after_capture,
+            copy_to_clipboard: preferences.copy_to_clipboard,
+            ai: Some(preferences.ai),
         }
     }
 }
@@ -77,6 +177,7 @@ struct StoredSettings {
     hotkeys: Option<StoredHotkeys>,
     after_capture: Option<AfterCapture>,
     copy_to_clipboard: Option<bool>,
+    ai: Option<AiSettings>,
 }
 
 /// Hotkeys on disk; a missing or empty one keeps its default.
@@ -124,6 +225,7 @@ impl StoredSettings {
                 copy_to_clipboard: self
                     .copy_to_clipboard
                     .unwrap_or(defaults.preferences.copy_to_clipboard),
+                ai: self.ai.unwrap_or(defaults.preferences.ai),
             },
         }
     }
@@ -261,8 +363,13 @@ impl SettingsStore {
         Ok(self.current.clone())
     }
 
-    /// Changes what happens after a capture.
-    pub fn set_preferences(&mut self, preferences: Preferences) -> Result<Settings, SettingsError> {
+    /// Changes what happens after a capture and how captures are described.
+    pub fn set_preferences(
+        &mut self,
+        update: impl Into<PreferencesUpdate>,
+    ) -> Result<Settings, SettingsError> {
+        let mut preferences = update.into().apply_to(&self.current.preferences);
+        preferences.ai = preferences.ai.validated()?;
         let next = Settings {
             preferences,
             ..self.current.clone()
@@ -328,6 +435,12 @@ mod tests {
             preferences: Preferences {
                 after_capture: AfterCapture::Nothing,
                 copy_to_clipboard: false,
+                ai: AiSettings {
+                    enabled: true,
+                    model: "llava".into(),
+                    api_key: Some("sk-test".into()),
+                    ..AiSettings::default()
+                },
             },
         };
         save(&path, &settings).unwrap();
@@ -480,6 +593,7 @@ mod tests {
             .set_preferences(Preferences {
                 after_capture: AfterCapture::Editor,
                 copy_to_clipboard: false,
+                ai: AiSettings::default(),
             })
             .unwrap();
         assert_eq!(updated.preferences.after_capture, AfterCapture::Editor);
@@ -521,5 +635,114 @@ mod tests {
             Err(SettingsError::Invalid(_))
         ));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn ai_is_off_by_default_and_old_files_keep_it_off() {
+        let dir = TempDir::new().unwrap();
+        let ai = defaults(&dir).preferences.ai;
+        assert!(!ai.enabled);
+        assert_eq!(ai.endpoint, "http://localhost:11434/v1");
+        assert_eq!(ai.model, "qwen2.5vl:7b");
+        assert_eq!(ai.api_key, None);
+        assert!(ai.new_captures_only);
+
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"copyToClipboard": false}"#).unwrap();
+        assert_eq!(load(&path, defaults(&dir)).unwrap().preferences.ai, ai);
+        // A partial `ai` keeps the defaults for the rest.
+        fs::write(&path, r#"{"ai": {"enabled": true, "model": "llava"}}"#).unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap().preferences.ai;
+        assert!(loaded.enabled);
+        assert_eq!(loaded.model, "llava");
+        assert_eq!(loaded.endpoint, "http://localhost:11434/v1");
+    }
+
+    #[test]
+    fn ai_settings_serialize_in_the_frontends_spelling() {
+        let dir = TempDir::new().unwrap();
+        let json = serde_json::to_value(defaults(&dir)).unwrap();
+        assert_eq!(
+            json["ai"],
+            serde_json::json!({
+                "enabled": false,
+                "endpoint": "http://localhost:11434/v1",
+                "model": "qwen2.5vl:7b",
+                "apiKey": null,
+                "newCapturesOnly": true,
+            })
+        );
+    }
+
+    #[test]
+    fn set_preferences_without_ai_keeps_the_current_ai_settings() {
+        let dir = TempDir::new().unwrap();
+        let mut store = SettingsStore::open(settings_path(&dir), defaults(&dir));
+        let ai = AiSettings {
+            enabled: true,
+            model: "llava".into(),
+            ..AiSettings::default()
+        };
+        store
+            .set_preferences(Preferences {
+                ai: ai.clone(),
+                ..Preferences::default()
+            })
+            .unwrap();
+        let update: PreferencesUpdate =
+            serde_json::from_str(r#"{"afterCapture": "editor", "copyToClipboard": true}"#).unwrap();
+        let updated = store.set_preferences(update).unwrap();
+        assert_eq!(updated.preferences.after_capture, AfterCapture::Editor);
+        assert_eq!(updated.preferences.ai, ai);
+    }
+
+    #[test]
+    fn ai_settings_are_tidied_and_checked_when_on() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let with = |ai: AiSettings| Preferences {
+            ai,
+            ..Preferences::default()
+        };
+        let updated = store
+            .set_preferences(with(AiSettings {
+                enabled: true,
+                endpoint: " https://api.example.com/v1/ ".into(),
+                model: " gpt-4o-mini ".into(),
+                api_key: Some("  ".into()),
+                new_captures_only: false,
+            }))
+            .unwrap();
+        let ai = &updated.preferences.ai;
+        assert_eq!(ai.endpoint, "https://api.example.com/v1");
+        assert_eq!(ai.model, "gpt-4o-mini");
+        assert_eq!(ai.api_key, None);
+
+        for bad in [
+            AiSettings {
+                enabled: true,
+                endpoint: "localhost:11434".into(),
+                ..AiSettings::default()
+            },
+            AiSettings {
+                enabled: true,
+                model: " ".into(),
+                ..AiSettings::default()
+            },
+        ] {
+            assert!(matches!(
+                store.set_preferences(with(bad)),
+                Err(SettingsError::Invalid(_))
+            ));
+        }
+        // Off, anything goes: it is not used.
+        store
+            .set_preferences(with(AiSettings {
+                endpoint: String::new(),
+                ..AiSettings::default()
+            }))
+            .unwrap();
     }
 }

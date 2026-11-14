@@ -1,12 +1,16 @@
 //! Searching the library: full-text search over OCR text, tags, notes,
-//! app and window title (the `shots_fts` index, see `library.rs`), with
-//! date, app and tag filters and highlighted snippets.
+//! app, window title and the AI description and tags (the `shots_fts`
+//! index, see `library.rs`), with date, app, tag and category filters and
+//! highlighted snippets.
 
 use rusqlite::{params_from_iter, types::Value};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::library::{Library, LibraryResult, LibraryState, MAX_PAGE, Shot, shot_from_row};
+use crate::library::{
+    Library, LibraryResult, LibraryState, MAX_PAGE, SHOT_COLUMN_COUNT, SHOT_COLUMNS, Shot,
+    shot_from_row,
+};
 
 /// Marks the start and end of a match in snippets. Private-use characters,
 /// so they never clash with real text.
@@ -27,8 +31,10 @@ pub struct SearchQuery {
     pub to: Option<i64>,
     /// Captured from exactly this app.
     pub app: Option<String>,
-    /// Has this tag (case-insensitive).
+    /// Has this tag (case-insensitive), from the user or the AI.
     pub tag: Option<String>,
+    /// The AI put it in exactly this category (see `ai::CATEGORIES`).
+    pub category: Option<String>,
 }
 
 /// The `shots_fts` columns, in index order. Mirrors `MatchField` in
@@ -42,14 +48,19 @@ pub enum MatchField {
     Notes,
     App,
     WindowTitle,
+    /// The AI description.
+    Description,
 }
 
-const FIELDS: [MatchField; 5] = [
+/// What each `shots_fts` column reports as. AI tags count as tags.
+const FIELDS: [MatchField; 7] = [
     MatchField::Text,
     MatchField::Tags,
     MatchField::Notes,
     MatchField::App,
     MatchField::WindowTitle,
+    MatchField::Description,
+    MatchField::Tags,
 ];
 
 /// A piece of a snippet; `hit` pieces matched the search.
@@ -87,7 +98,10 @@ pub struct SearchPage {
 #[serde(rename_all = "camelCase")]
 pub struct FilterOptions {
     pub apps: Vec<String>,
+    /// The user's tags.
     pub tags: Vec<String>,
+    /// The AI categories some shot is in.
+    pub categories: Vec<String>,
 }
 
 /// Turns typed words into an FTS5 query: every word must match, each as a
@@ -143,17 +157,22 @@ fn filter_clause(query: &SearchQuery, params: &mut Vec<Value>) -> String {
         params.push(Value::Text(app.clone()));
     }
     if let Some(tag) = query.tag.as_ref().filter(|tag| !tag.is_empty()) {
-        clauses.push("EXISTS (SELECT 1 FROM shot_tags t WHERE t.shot_id = s.id AND t.tag = ?)");
+        clauses.push(
+            "(EXISTS (SELECT 1 FROM shot_tags t WHERE t.shot_id = s.id AND t.tag = ?)
+              OR EXISTS (SELECT 1 FROM shot_ai_tags a WHERE a.shot_id = s.id AND a.tag = ?))",
+        );
         params.push(Value::Text(tag.clone()));
+        params.push(Value::Text(tag.clone()));
+    }
+    if let Some(category) = query.category.as_ref().filter(|value| !value.is_empty()) {
+        clauses.push("s.ai_category = ?");
+        params.push(Value::Text(category.clone()));
     }
     clauses
         .iter()
         .map(|clause| format!(" AND {clause}"))
         .collect()
 }
-
-const SHOT_COLUMNS: &str = "s.id, s.path, s.thumb_path, s.captured_at, s.mode, s.app, \
-     s.window_title, s.width, s.height, s.notes";
 
 impl Library {
     /// Shots matching `query`: best matches first when there are words,
@@ -212,7 +231,7 @@ impl Library {
                 let mut snippet = Vec::new();
                 if with_snippets {
                     for (index, candidate) in FIELDS.iter().enumerate() {
-                        let raw: String = row.get(10 + index)?;
+                        let raw: String = row.get(SHOT_COLUMN_COUNT + index)?;
                         if raw.contains(HIT_START) {
                             field = Some(*candidate);
                             snippet = parse_snippet(&raw);
@@ -228,7 +247,7 @@ impl Library {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         for hit in &mut hits {
-            hit.shot.tags = self.tags_of(hit.shot.id)?;
+            self.fill_tags(&mut hit.shot)?;
         }
         Ok(SearchPage {
             hits,
@@ -237,7 +256,8 @@ impl Library {
         })
     }
 
-    /// Every app and tag in the library, for the filter bar.
+    /// Every app, user tag and AI category in the library, for the filter
+    /// bar.
     pub fn filter_options(&self) -> LibraryResult<FilterOptions> {
         let conn = self.connection();
         let column = |sql: &str| -> LibraryResult<Vec<String>> {
@@ -254,6 +274,10 @@ impl Library {
             )?,
             tags: column(
                 "SELECT tag FROM shot_tags GROUP BY tag COLLATE NOCASE ORDER BY tag COLLATE NOCASE",
+            )?,
+            categories: column(
+                "SELECT ai_category FROM shots WHERE ai_category IS NOT NULL AND ai_category <> ''
+                 GROUP BY ai_category ORDER BY ai_category",
             )?,
         })
     }
@@ -282,6 +306,7 @@ mod tests {
     use super::*;
     use crate::{
         capture::{CaptureMode, Foreground, ORIGINALS_DIR, save_capture},
+        library::AiDescription,
         ocr::tests::{FIXTURE_WORD, engine, fixture_png},
     };
     use chrono::{DateTime, Local, TimeZone};
@@ -461,6 +486,7 @@ mod tests {
             tag: Some("receipts".into()),
             from: Some(day(1).timestamp_millis()),
             to: None,
+            category: None,
         };
         let page = library.search(&combined, 0, 10).unwrap();
         assert_eq!((ids(&page), page.total), (vec![a], 1));
@@ -562,6 +588,282 @@ mod tests {
             );
         }
         assert_eq!(library.pending_ocr_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn upgrading_a_schema_2_library_keeps_its_index_and_queues_shots_for_ai() {
+        let dir = TempDir::new().unwrap();
+        let db = dir.path().join("library.db");
+        let png = shoot(dir.path(), day(1), "firefox", "Pricing page");
+        {
+            // A library as the OCR release left it: schema 2, one shot
+            // with OCR text, a tag and notes.
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            for migration in &crate::library::MIGRATIONS[..2] {
+                conn.execute_batch(migration).unwrap();
+            }
+            conn.execute(
+                "INSERT INTO shots (id, path, thumb_path, captured_at, app, window_title, notes,
+                                    ocr_text, ocr_state)
+                 VALUES (1, ?1, ?2, 0, 'firefox', 'Pricing page', 'quarterly numbers',
+                         'Total due 42 EUR', 1)",
+                [
+                    png.to_string_lossy().into_owned(),
+                    png.to_string_lossy().into_owned(),
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO shot_tags (shot_id, tag) VALUES (1, 'finance')",
+                [],
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 2).unwrap();
+        }
+        let mut library = Library::open(&db).unwrap();
+        assert_eq!(
+            library.schema_version().unwrap(),
+            crate::library::MIGRATIONS.len() as i64
+        );
+        for word in ["quarterly", "finance", "pricing", "firefox", "due"] {
+            assert_eq!(
+                library.search(&words(word), 0, 10).unwrap().total,
+                1,
+                "{word}"
+            );
+        }
+        let shot = library.get(1).unwrap();
+        assert_eq!(shot.tags, vec!["finance"]);
+        assert_eq!(
+            (shot.ai_description, shot.ai_category, shot.ai_tags.len()),
+            (None, None, 0)
+        );
+        assert_eq!(library.ai_state(1).unwrap(), crate::library::AI_WAITING);
+        assert_eq!(library.next_for_ai().unwrap().unwrap().id, 1);
+        assert_eq!(
+            library.next_for_ai().unwrap().unwrap().ocr_text.as_deref(),
+            Some("Total due 42 EUR")
+        );
+
+        // The rebuilt triggers keep the index in step, old fields and new.
+        library.set_notes(1, "monthly").unwrap();
+        assert_eq!(library.search(&words("quarterly"), 0, 10).unwrap().total, 0);
+        assert_eq!(library.search(&words("monthly"), 0, 10).unwrap().total, 1);
+        library
+            .set_ai_description(1, &described("A pricing table for Acme plans."), "m")
+            .unwrap();
+        assert_eq!(library.search(&words("acme"), 0, 10).unwrap().total, 1);
+        let rows: i64 = library
+            .connection()
+            .query_row("SELECT COUNT(*) FROM shots_fts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
+
+    fn described(description: &str) -> AiDescription {
+        AiDescription {
+            description: description.into(),
+            category: "browser".into(),
+            tags: vec!["pricing".into(), "Saas Plans".into()],
+        }
+    }
+
+    #[test]
+    fn descriptions_and_ai_tags_are_searched() {
+        let dir = TempDir::new().unwrap();
+        let (mut library, [a, b, _]) = sample(dir.path());
+        library
+            .set_ai_description(
+                a,
+                &AiDescription {
+                    description: "A checkout page showing an unpaid invoice.".into(),
+                    category: "receipt".into(),
+                    tags: vec!["Invoice".into(), "stripe".into()],
+                },
+                "qwen2.5vl:7b",
+            )
+            .unwrap();
+        library
+            .set_ai_description(
+                b,
+                &AiDescription {
+                    description: "Rust code with a borrow checker error.".into(),
+                    category: "code".into(),
+                    tags: vec!["rust".into(), "lifetimes".into()],
+                },
+                "qwen2.5vl:7b",
+            )
+            .unwrap();
+
+        let page = library.search(&words("unpai"), 0, 10).unwrap();
+        assert_eq!(ids(&page), vec![a]);
+        assert_eq!(page.hits[0].field, Some(MatchField::Description));
+        assert!(
+            page.hits[0]
+                .snippet
+                .iter()
+                .any(|part| part.hit && part.text == "unpaid")
+        );
+        assert_eq!(page.hits[0].shot.ai_tags, vec!["Invoice", "stripe"]);
+        assert_eq!(page.hits[0].shot.ai_category.as_deref(), Some("receipt"));
+
+        // AI tags are searched, and reported as tags.
+        let page = library.search(&words("lifetime"), 0, 10).unwrap();
+        assert_eq!(ids(&page), vec![b]);
+        assert_eq!(page.hits[0].field, Some(MatchField::Tags));
+
+        // A new description replaces the old one in the index.
+        library
+            .set_ai_description(b, &described("A terminal."), "llava")
+            .unwrap();
+        assert_eq!(library.search(&words("borrow"), 0, 10).unwrap().total, 0);
+        assert_eq!(library.search(&words("lifetimes"), 0, 10).unwrap().total, 0);
+        assert_eq!(library.search(&words("saas"), 0, 10).unwrap().total, 1);
+
+        // Clearing drops it from the index too.
+        library.clear_ai(a).unwrap();
+        assert_eq!(library.search(&words("unpaid"), 0, 10).unwrap().total, 0);
+        assert_eq!(library.search(&words("stripe"), 0, 10).unwrap().total, 0);
+
+        // Deleting a described shot leaves no index row behind.
+        library.delete(b).unwrap();
+        let rows: i64 = library
+            .connection()
+            .query_row("SELECT COUNT(*) FROM shots_fts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 2);
+        let ai_tags: i64 = library
+            .connection()
+            .query_row("SELECT COUNT(*) FROM shot_ai_tags", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(ai_tags, 0);
+    }
+
+    #[test]
+    fn category_and_tag_filters_cover_ai_fields() {
+        let dir = TempDir::new().unwrap();
+        let (mut library, [a, b, c]) = sample(dir.path());
+        library
+            .set_ai_description(
+                a,
+                &AiDescription {
+                    description: "An invoice.".into(),
+                    category: "receipt".into(),
+                    tags: vec!["finance".into()],
+                },
+                "m",
+            )
+            .unwrap();
+        library
+            .set_ai_description(b, &described("Code."), "m")
+            .unwrap();
+        library.set_tags(c, &["Finance".into()]).unwrap();
+
+        let by_category = |category: &str| SearchQuery {
+            category: Some(category.into()),
+            ..SearchQuery::default()
+        };
+        assert_eq!(
+            ids(&library.search(&by_category("receipt"), 0, 10).unwrap()),
+            vec![a]
+        );
+        assert_eq!(
+            ids(&library.search(&by_category("browser"), 0, 10).unwrap()),
+            vec![b]
+        );
+        // Exact: neither a prefix nor another case.
+        assert_eq!(library.search(&by_category("rec"), 0, 10).unwrap().total, 0);
+        assert_eq!(
+            library
+                .search(&by_category("Receipt"), 0, 10)
+                .unwrap()
+                .total,
+            0
+        );
+        assert_eq!(library.search(&by_category(""), 0, 10).unwrap().total, 3);
+
+        // A tag filter matches the user's tags or the AI's, in any case.
+        let by_tag = |tag: &str| SearchQuery {
+            tag: Some(tag.into()),
+            ..SearchQuery::default()
+        };
+        assert_eq!(
+            ids(&library.search(&by_tag("FINANCE"), 0, 10).unwrap()),
+            vec![c, a]
+        );
+        assert_eq!(
+            ids(&library.search(&by_tag("saas plans"), 0, 10).unwrap()),
+            vec![b]
+        );
+
+        let combined = SearchQuery {
+            text: "invoice".into(),
+            category: Some("receipt".into()),
+            tag: Some("finance".into()),
+            ..SearchQuery::default()
+        };
+        assert_eq!(ids(&library.search(&combined, 0, 10).unwrap()), vec![a]);
+
+        let options = library.filter_options().unwrap();
+        assert_eq!(options.categories, vec!["browser", "receipt"]);
+        // The tag list stays the user's own.
+        assert_eq!(options.tags, vec!["Finance"]);
+        assert_eq!(
+            serde_json::to_value(&options).unwrap()["categories"],
+            serde_json::json!(["browser", "receipt"])
+        );
+        assert_eq!(
+            serde_json::to_value(MatchField::Description).unwrap(),
+            serde_json::json!("description")
+        );
+    }
+
+    #[test]
+    fn shots_serialize_their_ai_fields_for_the_frontend() {
+        let dir = TempDir::new().unwrap();
+        let (mut library, [a, b, _]) = sample(dir.path());
+        library
+            .set_ai_description(a, &described("A pricing table."), "m")
+            .unwrap();
+        let json = serde_json::to_value(library.get(a).unwrap()).unwrap();
+        assert_eq!(json["aiDescription"], "A pricing table.");
+        assert_eq!(json["aiCategory"], "browser");
+        assert_eq!(json["aiTags"], serde_json::json!(["pricing", "Saas Plans"]));
+        let json = serde_json::to_value(library.get(b).unwrap()).unwrap();
+        assert_eq!(json["aiDescription"], serde_json::Value::Null);
+        assert_eq!(json["aiCategory"], serde_json::Value::Null);
+        assert_eq!(json["aiTags"], serde_json::json!([]));
+        // A query without a category, as older frontends send it, is fine.
+        let query: SearchQuery = serde_json::from_str(r#"{"text": "x", "tag": "y"}"#).unwrap();
+        assert_eq!(query.category, None);
+        let query: SearchQuery = serde_json::from_str(r#"{"category": "code"}"#).unwrap();
+        assert_eq!(query.category.as_deref(), Some("code"));
+    }
+
+    #[test]
+    fn the_ai_queue_waits_for_ocr_and_runs_newest_first() {
+        let dir = TempDir::new().unwrap();
+        let (mut library, [a, b, c]) = sample(dir.path());
+        // Nothing has been read by OCR yet.
+        assert!(library.next_for_ai().unwrap().is_none());
+        library.set_ocr_text(a, "older").unwrap();
+        library.mark_ocr_failed(b).unwrap();
+        let job = library.next_for_ai().unwrap().unwrap();
+        // b is newer than a; its OCR failed, so it goes without text.
+        assert_eq!((job.id, job.ocr_text), (b, None));
+        assert_eq!(job.app.as_deref(), Some("code"));
+        assert_eq!(job.window_title.as_deref(), Some("main.rs"));
+        library.mark_ai_failed(b).unwrap();
+        let job = library.next_for_ai().unwrap().unwrap();
+        assert_eq!((job.id, job.ocr_text.as_deref()), (a, Some("older")));
+        library.set_ocr_text(c, "").unwrap();
+        assert_eq!(library.next_for_ai().unwrap().unwrap().id, c);
+        let counts = library.ai_counts().unwrap();
+        assert_eq!((counts.done, counts.total), (1, 3));
+        assert_eq!(library.skip_waiting_ai().unwrap(), 2);
+        assert!(library.next_for_ai().unwrap().is_none());
+        let counts = library.ai_counts().unwrap();
+        assert_eq!((counts.done, counts.total), (1, 1));
     }
 
     #[test]

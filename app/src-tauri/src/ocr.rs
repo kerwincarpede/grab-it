@@ -462,6 +462,8 @@ fn run(app: &AppHandle, models: &Path, receiver: &Receiver<()>) {
         match saved {
             Ok(()) => {
                 let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
+                // The capture can now be described.
+                crate::ai::wake(app);
             }
             // Deleted while it was being read.
             Err(crate::library::LibraryError::NotFound(_)) => {}

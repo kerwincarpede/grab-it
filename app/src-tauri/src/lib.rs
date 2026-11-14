@@ -1,4 +1,5 @@
 mod actions;
+mod ai;
 mod capture;
 mod cli;
 mod commands;
@@ -95,7 +96,12 @@ pub fn run() {
             search::library_search,
             search::library_filter_options,
             ocr::ocr_status,
-            ocr::ocr_retry
+            ocr::ocr_retry,
+            ai::ai_status,
+            ai::ai_redescribe,
+            ai::ai_clear,
+            ai::ai_redescribe_all,
+            ai::ai_test_connection
         ])
         .setup(move |app| {
             // A tray app: no Dock icon on macOS.
@@ -121,6 +127,8 @@ pub fn run() {
             hotkeys::start(handle, &hotkeys);
             // Reads captures waiting for OCR, downloading the models first.
             ocr::start(handle, ocr::models_dir(&data_dir));
+            // Describes captures with a vision model, once turned on.
+            ai::start(handle);
             // Picks up captures added while Grab-it was not running.
             library::rescan_in_background(handle, library::current_save_folder(handle));
             pin::clear_stale(handle);

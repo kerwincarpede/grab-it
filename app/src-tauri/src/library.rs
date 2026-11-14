@@ -40,6 +40,24 @@ pub const LIBRARY_CHANGED_EVENT: &str = "library-changed";
 pub const MAX_PAGE: u32 = 500;
 const MAX_TAG_CHARS: usize = 64;
 
+/// The statement that (re)writes shot `$id`'s row in `shots_fts` from
+/// schema 3 on, with every indexed field.
+macro_rules! fts_v3_row {
+    ($id:literal) => {
+        concat!(
+            "INSERT INTO shots_fts (rowid, ocr_text, tags, notes, app, window_title, ai_description, ai_tags)
+            SELECT s.id, coalesce(s.ocr_text, ''),
+                   coalesce((SELECT group_concat(t.tag, ' ') FROM shot_tags t WHERE t.shot_id = s.id), ''),
+                   s.notes, coalesce(s.app, ''), coalesce(s.window_title, ''),
+                   coalesce(s.ai_description, ''),
+                   coalesce((SELECT group_concat(a.tag, ' ') FROM shot_ai_tags a WHERE a.shot_id = s.id), '')
+            FROM shots s WHERE s.id = ",
+            $id,
+            ";"
+        )
+    };
+}
+
 /// Schema migrations; `PRAGMA user_version` is how many have run.
 /// Append new ones, never edit old ones.
 pub(crate) const MIGRATIONS: &[&str] = &[
@@ -113,7 +131,78 @@ pub(crate) const MIGRATIONS: &[&str] = &[
            coalesce((SELECT group_concat(t.tag, ' ') FROM shot_tags t WHERE t.shot_id = s.id), ''),
            s.notes, coalesce(s.app, ''), coalesce(s.window_title, '')
     FROM shots s;",
+    // 3: AI descriptions. `ai_state` is 0 while waiting to be described,
+    // 1 when described, 2 when describing failed and 3 when skipped (made
+    // before describing was turned on, or cleared by the user). AI tags
+    // live apart from the user's tags. `shots_fts` is rebuilt with the
+    // description and AI tags as two more columns.
+    concat!(
+        "ALTER TABLE shots ADD COLUMN ai_description TEXT;
+        ALTER TABLE shots ADD COLUMN ai_category TEXT;
+        ALTER TABLE shots ADD COLUMN ai_model TEXT;
+        ALTER TABLE shots ADD COLUMN ai_state INTEGER NOT NULL DEFAULT 0;
+        CREATE INDEX shots_ai_queue ON shots (ai_state, captured_at DESC, id DESC);
+        CREATE INDEX shots_ai_category ON shots (ai_category);
+        CREATE TABLE shot_ai_tags (
+            shot_id INTEGER NOT NULL REFERENCES shots (id) ON DELETE CASCADE,
+            tag TEXT NOT NULL COLLATE NOCASE,
+            PRIMARY KEY (shot_id, tag)
+        );
+        CREATE INDEX shot_ai_tags_tag ON shot_ai_tags (tag);
+        DROP TRIGGER shots_fts_insert;
+        DROP TRIGGER shots_fts_update;
+        DROP TRIGGER shots_fts_delete;
+        DROP TRIGGER shot_tags_fts_insert;
+        DROP TRIGGER shot_tags_fts_delete;
+        DROP TABLE shots_fts;
+        CREATE VIRTUAL TABLE shots_fts USING fts5 (
+            ocr_text, tags, notes, app, window_title, ai_description, ai_tags,
+            tokenize = 'unicode61 remove_diacritics 2'
+        );
+        CREATE TRIGGER shots_fts_insert AFTER INSERT ON shots BEGIN ",
+        fts_v3_row!("new.id"),
+        " END;
+        CREATE TRIGGER shots_fts_update
+        AFTER UPDATE OF ocr_text, notes, app, window_title, ai_description ON shots BEGIN
+            DELETE FROM shots_fts WHERE rowid = old.id; ",
+        fts_v3_row!("new.id"),
+        " END;
+        CREATE TRIGGER shots_fts_delete AFTER DELETE ON shots BEGIN
+            DELETE FROM shots_fts WHERE rowid = old.id;
+        END;
+        CREATE TRIGGER shot_tags_fts_insert AFTER INSERT ON shot_tags BEGIN
+            DELETE FROM shots_fts WHERE rowid = new.shot_id; ",
+        fts_v3_row!("new.shot_id"),
+        " END;
+        CREATE TRIGGER shot_tags_fts_delete AFTER DELETE ON shot_tags BEGIN
+            DELETE FROM shots_fts WHERE rowid = old.shot_id; ",
+        fts_v3_row!("old.shot_id"),
+        " END;
+        CREATE TRIGGER shot_ai_tags_fts_insert AFTER INSERT ON shot_ai_tags BEGIN
+            DELETE FROM shots_fts WHERE rowid = new.shot_id; ",
+        fts_v3_row!("new.shot_id"),
+        " END;
+        CREATE TRIGGER shot_ai_tags_fts_delete AFTER DELETE ON shot_ai_tags BEGIN
+            DELETE FROM shots_fts WHERE rowid = old.shot_id; ",
+        fts_v3_row!("old.shot_id"),
+        " END;
+        INSERT INTO shots_fts (rowid, ocr_text, tags, notes, app, window_title, ai_description, ai_tags)
+        SELECT s.id, coalesce(s.ocr_text, ''),
+               coalesce((SELECT group_concat(t.tag, ' ') FROM shot_tags t WHERE t.shot_id = s.id), ''),
+               s.notes, coalesce(s.app, ''), coalesce(s.window_title, ''), '', ''
+        FROM shots s;"
+    ),
 ];
+
+/// `ai_state` values, for tests; the queries spell them out.
+#[cfg(test)]
+pub const AI_WAITING: i64 = 0;
+#[cfg(test)]
+pub const AI_DONE: i64 = 1;
+#[cfg(test)]
+pub const AI_FAILED: i64 = 2;
+#[cfg(test)]
+pub const AI_SKIPPED: i64 = 3;
 
 #[derive(Debug)]
 pub enum LibraryError {
@@ -180,7 +269,19 @@ pub struct Shot {
     pub height: u32,
     pub tags: Vec<String>,
     pub notes: String,
+    /// One or two sentences from the vision model, once described.
+    pub ai_description: Option<String>,
+    /// One of `ai::CATEGORIES`, once described.
+    pub ai_category: Option<String>,
+    /// Tags the vision model gave; the user's own are in `tags`.
+    pub ai_tags: Vec<String>,
 }
+
+/// The columns [`shot_from_row`] reads, in order, from `shots` as `s`.
+pub(crate) const SHOT_COLUMNS: &str = "s.id, s.path, s.thumb_path, s.captured_at, s.mode, s.app, \
+     s.window_title, s.width, s.height, s.notes, s.ai_description, s.ai_category";
+/// How many columns [`SHOT_COLUMNS`] holds.
+pub(crate) const SHOT_COLUMN_COUNT: usize = 12;
 
 /// One page of shots, newest first. Mirrors `ShotPage` in src/library/api.ts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -203,6 +304,33 @@ impl RescanReport {
     pub fn changed(self) -> bool {
         self.added > 0 || self.removed > 0
     }
+}
+
+/// A shot waiting to be described, with what helps describe it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiJob {
+    pub id: i64,
+    pub path: PathBuf,
+    /// `None` when OCR could not read the image.
+    pub ocr_text: Option<String>,
+    pub app: Option<String>,
+    pub window_title: Option<String>,
+}
+
+/// What the vision model said about a shot.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AiDescription {
+    pub description: String,
+    pub category: String,
+    pub tags: Vec<String>,
+}
+
+/// Progress of the describing queue: `done` counts described and failed
+/// shots, `total` every shot that is not skipped.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AiCounts {
+    pub done: u32,
+    pub total: u32,
 }
 
 /// A shot waiting for OCR.
@@ -357,15 +485,15 @@ impl Library {
     /// Up to `limit` shots, newest first, skipping the first `offset`.
     pub fn list(&self, offset: u32, limit: u32) -> LibraryResult<ShotPage> {
         let limit = limit.clamp(1, MAX_PAGE);
-        let mut stmt = self.conn.prepare(
-            "SELECT id, path, thumb_path, captured_at, mode, app, window_title, width, height, notes
-             FROM shots ORDER BY captured_at DESC, id DESC LIMIT ?1 OFFSET ?2",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {SHOT_COLUMNS} FROM shots s
+             ORDER BY s.captured_at DESC, s.id DESC LIMIT ?1 OFFSET ?2"
+        ))?;
         let mut shots = stmt
             .query_map(params![limit, offset], shot_from_row)?
             .collect::<Result<Vec<_>, _>>()?;
         for shot in &mut shots {
-            shot.tags = self.tags_of(shot.id)?;
+            self.fill_tags(shot)?;
         }
         Ok(ShotPage {
             shots,
@@ -398,21 +526,27 @@ impl Library {
         let mut shot = self
             .conn
             .query_row(
-                "SELECT id, path, thumb_path, captured_at, mode, app, window_title, width, height, notes
-                 FROM shots WHERE id = ?1",
+                &format!("SELECT {SHOT_COLUMNS} FROM shots s WHERE s.id = ?1"),
                 [id],
                 shot_from_row,
             )
             .optional()?
             .ok_or(LibraryError::NotFound(id))?;
-        shot.tags = self.tags_of(id)?;
+        self.fill_tags(&mut shot)?;
         Ok(shot)
     }
 
-    pub(crate) fn tags_of(&self, id: i64) -> LibraryResult<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT tag FROM shot_tags WHERE shot_id = ?1 ORDER BY tag COLLATE NOCASE")?;
+    /// Reads a shot's user and AI tags into it.
+    pub(crate) fn fill_tags(&self, shot: &mut Shot) -> LibraryResult<()> {
+        shot.tags = self.tags_in("shot_tags", shot.id)?;
+        shot.ai_tags = self.tags_in("shot_ai_tags", shot.id)?;
+        Ok(())
+    }
+
+    fn tags_in(&self, table: &str, id: i64) -> LibraryResult<Vec<String>> {
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT tag FROM {table} WHERE shot_id = ?1 ORDER BY tag COLLATE NOCASE"
+        ))?;
         let tags = stmt
             .query_map([id], |row| row.get(0))?
             .collect::<Result<_, _>>()?;
@@ -514,6 +648,150 @@ impl Library {
         self.conn
             .execute("UPDATE shots SET ocr_state = 2 WHERE id = ?1", [id])?;
         Ok(())
+    }
+
+    /// The newest shot waiting to be described whose OCR is finished
+    /// (read, or failed: then it is described without text).
+    pub fn next_for_ai(&self) -> LibraryResult<Option<AiJob>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, path, CASE WHEN ocr_state = 1 THEN ocr_text END, app, window_title
+                 FROM shots WHERE ai_state = 0 AND ocr_state <> 0
+                 ORDER BY captured_at DESC, id DESC LIMIT 1",
+                [],
+                |row| {
+                    Ok(AiJob {
+                        id: row.get(0)?,
+                        path: PathBuf::from(row.get::<_, String>(1)?),
+                        ocr_text: row.get(2)?,
+                        app: row.get(3)?,
+                        window_title: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// How far the describing queue has got.
+    pub fn ai_counts(&self) -> LibraryResult<AiCounts> {
+        Ok(self.conn.query_row(
+            "SELECT coalesce(sum(ai_state IN (1, 2)), 0), coalesce(sum(ai_state <> 3), 0)
+             FROM shots",
+            [],
+            |row| {
+                Ok(AiCounts {
+                    done: row.get(0)?,
+                    total: row.get(1)?,
+                })
+            },
+        )?)
+    }
+
+    /// A shot's `ai_state`.
+    #[cfg(test)]
+    pub fn ai_state(&self, id: i64) -> LibraryResult<i64> {
+        self.conn
+            .query_row("SELECT ai_state FROM shots WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()?
+            .ok_or(LibraryError::NotFound(id))
+    }
+
+    /// The model that wrote a shot's description, if any.
+    #[cfg(test)]
+    pub fn ai_model(&self, id: i64) -> LibraryResult<Option<String>> {
+        self.conn
+            .query_row("SELECT ai_model FROM shots WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()?
+            .ok_or(LibraryError::NotFound(id))
+    }
+
+    /// Stores what `model` said about a shot; it becomes searchable at once.
+    pub fn set_ai_description(
+        &mut self,
+        id: i64,
+        description: &AiDescription,
+        model: &str,
+    ) -> LibraryResult<()> {
+        let tags = normalize_tags(&description.tags);
+        let tx = self.conn.transaction()?;
+        let changed = tx.execute(
+            "UPDATE shots SET ai_description = ?1, ai_category = ?2, ai_model = ?3, ai_state = 1
+             WHERE id = ?4",
+            params![description.description, description.category, model, id],
+        )?;
+        if changed == 0 {
+            return Err(LibraryError::NotFound(id));
+        }
+        tx.execute("DELETE FROM shot_ai_tags WHERE shot_id = ?1", [id])?;
+        for tag in &tags {
+            tx.execute(
+                "INSERT INTO shot_ai_tags (shot_id, tag) VALUES (?1, ?2)",
+                params![id, tag],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Marks a shot that could not be described, so it is not retried
+    /// until the user asks. An earlier description is kept.
+    pub fn mark_ai_failed(&mut self, id: i64) -> LibraryResult<()> {
+        let changed = self
+            .conn
+            .execute("UPDATE shots SET ai_state = 2 WHERE id = ?1", [id])?;
+        if changed == 0 {
+            return Err(LibraryError::NotFound(id));
+        }
+        Ok(())
+    }
+
+    /// Queues one shot to be described again. Its current description
+    /// stays until the new one replaces it.
+    pub fn requeue_ai(&mut self, id: i64) -> LibraryResult<()> {
+        let changed = self
+            .conn
+            .execute("UPDATE shots SET ai_state = 0 WHERE id = ?1", [id])?;
+        if changed == 0 {
+            return Err(LibraryError::NotFound(id));
+        }
+        Ok(())
+    }
+
+    /// Queues every shot, skipped ones included, to be described again.
+    pub fn requeue_all_ai(&mut self) -> LibraryResult<usize> {
+        Ok(self
+            .conn
+            .execute("UPDATE shots SET ai_state = 0 WHERE ai_state <> 0", [])?)
+    }
+
+    /// Drops a shot's description, category and AI tags and skips it.
+    pub fn clear_ai(&mut self, id: i64) -> LibraryResult<()> {
+        let tx = self.conn.transaction()?;
+        let changed = tx.execute(
+            "UPDATE shots SET ai_description = NULL, ai_category = NULL, ai_model = NULL,
+                    ai_state = 3
+             WHERE id = ?1",
+            [id],
+        )?;
+        if changed == 0 {
+            return Err(LibraryError::NotFound(id));
+        }
+        tx.execute("DELETE FROM shot_ai_tags WHERE shot_id = ?1", [id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Skips every shot still waiting to be described: describing was just
+    /// turned on for new captures only.
+    pub fn skip_waiting_ai(&mut self) -> LibraryResult<usize> {
+        Ok(self
+            .conn
+            .execute("UPDATE shots SET ai_state = 3 WHERE ai_state = 0", [])?)
     }
 
     /// The text OCR found in a shot, or `None` while it waits for OCR.
@@ -688,6 +966,9 @@ pub(crate) fn shot_from_row(row: &Row<'_>) -> rusqlite::Result<Shot> {
         height: row.get(8)?,
         tags: Vec::new(),
         notes: row.get(9)?,
+        ai_description: row.get(10)?,
+        ai_category: row.get(11)?,
+        ai_tags: Vec::new(),
     })
 }
 
@@ -884,8 +1165,9 @@ pub fn rescan_in_background(app: &AppHandle, save_folder: PathBuf) {
         };
         let report = state.rescan(&save_folder);
         // Captures found by the scan, or left over from an earlier run,
-        // wait for OCR.
+        // wait for OCR and to be described.
         crate::ocr::wake(&app);
+        crate::ai::wake(&app);
         match report {
             Ok(report) if report.changed() => {
                 let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
@@ -909,6 +1191,7 @@ pub fn record_capture(app: &AppHandle, png: &Path) {
         Ok(_) => {
             let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
             crate::ocr::wake(app);
+            crate::ai::wake(app);
         }
         Err(err) => eprintln!(
             "Grab-it: saved, but could not add {} to the library: {err}",

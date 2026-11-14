@@ -7,7 +7,7 @@ use tauri::{AppHandle, State};
 
 use crate::{
     hotkeys::{self, Hotkeys},
-    settings::{Preferences, Settings, SettingsStore},
+    settings::{PreferencesUpdate, Settings, SettingsStore},
 };
 
 pub type SettingsState = Mutex<SettingsStore>;
@@ -37,14 +37,23 @@ pub fn set_save_folder(
     Ok(settings)
 }
 
+/// Saves the capture and AI preferences. Without `ai`, the AI settings
+/// are kept.
 #[tauri::command]
 pub fn set_preferences(
-    preferences: Preferences,
+    preferences: PreferencesUpdate,
+    app: AppHandle,
     state: State<'_, SettingsState>,
 ) -> Result<Settings, String> {
-    lock(&state)
+    let mut store = lock(&state);
+    let before = store.get().preferences.ai.clone();
+    let settings = store
         .set_preferences(preferences)
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    // Still locked, so the describing queue cannot start on a capture
+    // that turning it on for new captures only skips.
+    crate::ai::settings_saved(&app, &before, &settings.preferences.ai);
+    Ok(settings)
 }
 
 /// Opens a window or starts a capture by its `--open` name (`region`,
