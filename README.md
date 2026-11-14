@@ -186,7 +186,7 @@ Versions come from the `v*` git tags. [`PaulHatch/semantic-version`](https://git
 
 The first release, made before any tag exists, takes the version in `app/src-tauri/tauri.conf.json`. After that the tags are the source of truth: CI writes the release version into `tauri.conf.json` before building, so the version fields in the repository do not need bumping by hand.
 
-A run opens a draft release, builds the installers into it, and publishes it (creating the tag) only when the checks and all three builds pass. A failed run leaves only a hidden draft, which the next run replaces. Each release is named after its tag, for example `v0.2.1`.
+A run opens a draft release, builds the installers into it, and publishes it (creating the tag) only when the checks and all three builds pass. A failed run leaves only a hidden draft, which the next run replaces. Each release is named by its version, for example `0.2.1` for the tag `v0.2.1`.
 
 The installers are not signed with a paid certificate. CI ad-hoc signs the macOS app (the `APPLE_SIGNING_IDENTITY` repository secret overrides the `-` identity), so Gatekeeper says it cannot verify the developer rather than calling the app damaged: after the first attempt to open it, click **Open Anyway** under System Settings → Privacy & Security (or run `xattr -dr com.apple.quarantine /Applications/Grab-it.app`).
 

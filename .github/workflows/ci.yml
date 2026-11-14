@@ -141,6 +141,7 @@ jobs:
         if: steps.next.outputs.version != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.next.outputs.version }}
           TAG: v${{ steps.next.outputs.version }}
         run: |
           # Drop drafts an earlier, unfinished run left for this tag.
@@ -170,7 +171,7 @@ jobs:
           id=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
             -f tag_name="$TAG" \
             -f target_commitish="$GITHUB_SHA" \
-            -f name="$TAG" \
+            -f name="$VERSION" \
             -f body="$body" \
             -F draft=true \
             -F generate_release_notes=true \
