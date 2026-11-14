@@ -11,6 +11,7 @@ Grab-it is built with Rust and [Tauri 2](https://tauri.app/), with a React + Typ
 | `app/src-tauri/` | Backend: Rust |
 | `.github/workflows/ci.yml` | Checks plus installer builds on Linux, Windows and macOS |
 | `.github/workflows/release.yml` | Manually triggered release from `main` |
+| `.github/workflows/ffmpeg.yml` | Manually triggered release of the LGPL ffmpeg used to record MP4 |
 | `docs/` | User and developer docs; `docs/assets/demo.gif` is the README animation |
 
 ## Setup
@@ -225,6 +226,35 @@ The installers are not signed with a paid certificate, so Gatekeeper says it can
 CI signs the macOS app with a self-signed certificate, held in the `MACOS_CERTIFICATE` (a base64 `.p12`) and `MACOS_CERTIFICATE_PASSWORD` repository secrets. macOS remembers Screen Recording and keychain permissions by the app's signature. Each ad-hoc signature is tied to one exact build, so before this certificate every update lost them. With the certificate, every release has the same identity and keeps them. Tauri's own `APPLE_CERTIFICATE` import accepts only Apple-issued certificates, so CI imports this one into a temporary keychain itself and hands its name to Tauri as `APPLE_SIGNING_IDENTITY`, then fails the build if the signature is not tied to it. Without the secret, as in pull requests from forks, the app is signed ad-hoc (`-`). An `APPLE_SIGNING_IDENTITY` secret (a paid certificate) takes precedence over both.
 
 The certificate was made once with [`.github/scripts/make_macos_signing_cert.sh`](../.github/scripts/make_macos_signing_cert.sh) and is valid for 20 years. **Keep a backup of the `.p12` and its password**: a new certificate is a new identity, so every installed copy would have to grant its permissions again once.
+
+## ffmpeg builds
+
+MP4 recording encodes through ffmpeg, which is not bundled: Grab-it downloads the one for its platform from the [`ffmpeg-n8.1`](https://github.com/kerwincarpede/grab-it/releases/tag/ffmpeg-n8.1) release the first time it is needed. That release holds:
+
+| Asset | Platform | Made by |
+| --- | --- | --- |
+| `ffmpeg-linux-x64.gz` | Linux x64 | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds)' static `linux64-lgpl-8.1` build, repackaged |
+| `ffmpeg-windows-x64.exe.gz` | Windows x64 | BtbN's static `win64-lgpl-8.1` build, repackaged |
+| `ffmpeg-macos-arm64.gz` | macOS (Apple silicon) | Built in the workflow with VideoToolbox, AudioToolbox and OpenH264 |
+| `ffmpeg-8.1.tar.xz` | | FFmpeg's source tarball, checked against FFmpeg's signature |
+
+Each asset has a `<asset>.sha256` beside it, in `sha256sum`'s format, which the download is checked against. The release is a prerelease so that it never becomes the repository's latest release, which installed copies read `latest.json` from.
+
+The release is published by [`.github/workflows/ffmpeg.yml`](../.github/workflows/ffmpeg.yml), run by hand once per ffmpeg version:
+
+```sh
+gh workflow run ffmpeg.yml                              # BtbN's "latest" n8.1 builds
+gh workflow run ffmpeg.yml -f btbn_release=autobuild-…  # or a dated BtbN release
+gh run watch
+```
+
+It builds and checks every binary on any branch but publishes only from `main`, and refuses to touch a release that already exists unless run with `-f replace=true`. Installed copies check downloads against the published checksums, so replace a release only to fix a broken build. A new ffmpeg version is a new release: change `RELEASE_TAG` and `FFMPEG_VERSION` in the workflow, and the tag Grab-it downloads from.
+
+Before publishing, each binary is run on its own OS and must report the LGPL, have no `--enable-gpl`, `--enable-nonfree`, x264 or x265 in its configuration, and have the native `aac` encoder, `libopenh264` and the platform's hardware H.264 encoders (`h264_nvenc` and `h264_vaapi` on Linux; `h264_nvenc`, `h264_qsv`, `h264_amf` and `h264_mf` on Windows; `h264_videotoolbox` on macOS). The macOS build autodetects nothing and must link only libraries and frameworks macOS ships, so nothing from Homebrew on the runner sneaks in.
+
+### Licence
+
+Grab-it is MIT, but ffmpeg is licensed under the [GNU LGPL 2.1 or later](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html) and must stay that way: **never add x264, x265, `--enable-gpl` or `--enable-nonfree`** to these builds, or Grab-it could no longer download them. Grab-it runs ffmpeg as a separate program and does not link it. The LGPL asks that the source of the binaries we distribute is available, which is why the source tarball is published beside them; BtbN's builds are made by its public build scripts from the n8.1 branch, and each build's version is listed in the release notes. All three binaries include Cisco's [OpenH264](https://github.com/cisco/openh264) (BSD-2-Clause), built from source.
 
 ## The README animation
 
