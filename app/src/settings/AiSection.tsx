@@ -8,6 +8,7 @@ import {
   testAiConnection,
   type AiClis,
   type AiPreferences,
+  type AiProvider,
 } from "./api";
 
 function errorMessage(err: unknown): string {
@@ -32,6 +33,16 @@ interface Draft {
 }
 
 const draftOf = (ai: AiPreferences): Draft => ({ endpoint: ai.endpoint, model: ai.model, apiKey: ai.apiKey ?? "" });
+
+/** Where each provider sends screenshots. */
+const PRIVACY: Record<AiProvider, string> = {
+  claudeCode:
+    "Claude Code sends your screenshots, with their text, app and window title, to Anthropic under your Claude account.",
+  codex:
+    "Codex sends your screenshots, with their text, app and window title, to OpenAI under your ChatGPT or OpenAI account.",
+  endpoint:
+    "With a local endpoint such as Ollama nothing leaves this computer; a cloud endpoint receives your screenshots.",
+};
 
 /**
  * Who describes and sorts captures. The toggles and the provider save at
@@ -70,7 +81,15 @@ function AiSection({ saved, disabled, onSave }: Props) {
       (draft.apiKey.trim() || null) !== saved.apiKey);
   const valid = !usesEndpoint || typedValid;
   const busy = disabled || testing;
-  const claudeMissing = provider === "claudeCode" && clis !== null && clis.claudeCode === null;
+  // The chosen CLI provider's name and command, when Grab-it looked and could not find it.
+  const missing =
+    clis === null
+      ? null
+      : provider === "claudeCode" && clis.claudeCode === null
+        ? { name: "Claude Code", command: "claude" }
+        : provider === "codex" && clis.codex === null
+          ? { name: "Codex", command: "codex" }
+          : null;
 
   /** Saves the typed fields along with `change`. */
   async function save(change: Partial<AiPreferences> = {}): Promise<boolean> {
@@ -159,17 +178,15 @@ function AiSection({ saved, disabled, onSave }: Props) {
           </label>
         ))}
       </fieldset>
-      {claudeMissing && (
+      {missing && (
         <p className="hint ai-missing" data-testid="ai-missing">
-          Grab-it cannot find Claude Code: there is no claude command on this computer. Install Claude Code and sign
-          in, then reopen Settings, or choose an endpoint instead.
+          Grab-it cannot find {missing.name}: there is no {missing.command} command on this computer. Install{" "}
+          {missing.name} and sign in, then reopen Settings, or choose another provider instead.
         </p>
       )}
 
       <p className={`hint ai-privacy${local ? "" : " ai-privacy-cloud"}`}>
-        {provider === "claudeCode"
-          ? "Claude Code sends your screenshots, with their text, app and window title, to Anthropic under your Claude account."
-          : "With a local endpoint such as Ollama nothing leaves this computer; a cloud endpoint receives your screenshots."}
+        {PRIVACY[provider]}
       </p>
 
       {usesEndpoint && (

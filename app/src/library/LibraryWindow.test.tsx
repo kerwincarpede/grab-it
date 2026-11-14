@@ -62,7 +62,7 @@ interface Backend {
   /** Whether describing is on now; the notice's own flag when unset. */
   aiEnabled?: boolean;
   /** The provider now; Claude Code when unset. */
-  aiProvider?: "claudeCode" | "endpoint" | null;
+  aiProvider?: "claudeCode" | "codex" | "endpoint" | null;
 }
 
 /** A small stand-in for `Library::search`: every word must start a word in some field. */
@@ -109,6 +109,7 @@ function mockBackend(shots: Shot[]): Backend {
     ocrStatus: { state: "idle" },
     aiStatus: { state: "idle", done: 0, total: 0, error: null },
     aiNotice: false,
+    aiProvider: "claudeCode",
   };
   const find = (id: number) => {
     const found = backend.shots.find((item) => item.id === id);
@@ -727,6 +728,31 @@ describe("LibraryWindow AI descriptions", () => {
       await emit(AI_STATUS_EVENT, { state: "idle", done: 0, total: 0, error: null, provider: "claudeCode" });
     });
     expect(await screen.findByText(/Claude Code now describes your new captures/)).toBeInTheDocument();
+  });
+
+  it("names Codex in the error hint when it describes captures", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.aiStatus = {
+      state: "error",
+      done: 0,
+      total: 1,
+      error: "Codex failed: Not logged in. Run `codex login`.",
+      provider: "codex",
+    };
+    render(<LibraryWindow />);
+    expect(await screen.findByText(/Could not describe captures: Codex failed/)).toBeInTheDocument();
+    expect(screen.getByText(/Is Codex installed and signed in\? Run codex in a terminal/)).toBeInTheDocument();
+    expect(screen.queryByText(/Claude Code/)).not.toBeInTheDocument();
+  });
+
+  it("names Codex in the notice when Grab-it turned AI on with it", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.aiNotice = true;
+    backend.aiProvider = "codex";
+    render(<LibraryWindow />);
+    expect(await screen.findByText(/Codex now describes your new captures/)).toBeInTheDocument();
+    expect(screen.getByText(/go to OpenAI under your ChatGPT or OpenAI account/)).toBeInTheDocument();
+    expect(screen.queryByText(/Claude Code now describes/)).not.toBeInTheDocument();
   });
 
   it("shows no notice when Grab-it did not turn AI on", async () => {

@@ -365,8 +365,14 @@ export interface AiStatus {
   total: number;
   error: string | null;
   /** Who describes captures (`AiProvider` in src-tauri/src/settings.rs), so an error can say whom to check. */
-  provider?: "claudeCode" | "endpoint";
+  provider?: "claudeCode" | "codex" | "endpoint";
 }
+
+/** The providers that run a CLI the user already has, which Grab-it can turn on by itself. */
+export type CliProvider = "claudeCode" | "codex";
+
+/** What a CLI provider is called in messages. */
+export const CLI_NAMES: Record<CliProvider, string> = { claudeCode: "Claude Code", codex: "Codex" };
 
 /** Mirrors the AI status event in src-tauri. */
 export const AI_STATUS_EVENT = "ai-status";
@@ -396,16 +402,18 @@ export function openSettings(): Promise<void> {
 }
 
 /**
- * Whether Grab-it turned AI descriptions on by itself and the Library should
- * say so, once: only while Claude Code still describes captures, since the
- * user may have turned it off or picked another provider since.
+ * The CLI provider Grab-it turned AI descriptions on with by itself, while
+ * the Library should still say so, once; otherwise null. Only while that
+ * provider still describes captures, since the user may have turned
+ * describing off or picked an endpoint since.
  */
-export async function aiNoticePending(): Promise<boolean> {
+export async function pendingAiNotice(): Promise<CliProvider | null> {
   const settings = await invoke<{ ai?: { enabled?: boolean; provider?: string | null; noticePending?: boolean } }>(
     "get_settings",
   );
   const ai = settings.ai;
-  return ai?.noticePending === true && ai.enabled === true && ai.provider === "claudeCode";
+  if (ai?.noticePending !== true || ai.enabled !== true) return null;
+  return ai.provider === "claudeCode" || ai.provider === "codex" ? ai.provider : null;
 }
 
 /** Stops showing the notice that Grab-it turned AI descriptions on. */

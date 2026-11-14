@@ -162,7 +162,7 @@ The search box finds captures by **the text inside the image**, as well as by ta
 
 If you have [Claude Code](https://claude.com/claude-code) installed, Grab-it uses it to describe each new capture: a sentence or two, a category and a few tags, so you can search for what a screenshot *shows* and filter by category. It turns this on by itself the first time it finds Claude Code, and the Library says so once. Those screenshots go to Anthropic under your Claude account.
 
-To turn it off, or use another provider such as a local [Ollama](https://ollama.com) model that keeps everything on your computer, open **Settings** → **AI descriptions**. Without Claude Code, describing stays off until you turn it on there.
+To turn it off, or use another provider such as a local [Ollama](https://ollama.com) model that keeps everything on your computer, open **Settings** → **AI descriptions**. Without Claude Code but with [Codex](https://developers.openai.com/codex/cli) installed, Grab-it uses Codex the same way, and those screenshots go to OpenAI under your ChatGPT or OpenAI account. With neither, describing stays off until you turn it on there.
 
 ---
 
@@ -207,7 +207,7 @@ Open **Settings…** from the tray to change:
 - **Copy to clipboard**: on by default; turn it off if you'd rather not.
 - **Save folder**: where captures go (default `Pictures/Grab-it`). Earlier captures stay where they are and stay in your Library.
 - **Start Grab-it when you sign in**: so it's always ready.
-- **AI descriptions**: on or off, and who describes your captures: Claude Code or an OpenAI-compatible endpoint. **Test connection** checks it works.
+- **AI descriptions**: on or off, and who describes your captures: Claude Code, Codex or an OpenAI-compatible endpoint. **Test connection** checks it works.
 
 ---
 
