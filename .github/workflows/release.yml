@@ -21,6 +21,13 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # actions/checkout runs `git init`; naming the initial branch keeps git from
+  # printing its hint about the default branch name.
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+
 jobs:
   # Work out the next version from the git tags and open a draft release for
   # it. The draft becomes public, and its tag is created, only once the checks
@@ -40,7 +47,7 @@ jobs:
           echo "::error::Releases are made from main, not $GITHUB_REF."
           exit 1
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # The version is computed from the tags and the commits since them.
           fetch-depth: 0
@@ -144,7 +151,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Installed copies of Grab-it read latest.json from the newest release
       # to find, and verify, the update package for their platform. Written

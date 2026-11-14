@@ -36,6 +36,7 @@ pub const CODEX: &str = "codex";
 pub const CODEX_NAME: &str = "Codex";
 
 /// How long the login shell may take to report its PATH.
+#[cfg(unix)]
 const SHELL_PATH_TIMEOUT: Duration = Duration::from_secs(3);
 /// The most of a CLI's output that is read.
 const MAX_OUTPUT_BYTES: u64 = 4 * 1024 * 1024;
@@ -43,6 +44,7 @@ const MAX_OUTPUT_BYTES: u64 = 4 * 1024 * 1024;
 const POLL: Duration = Duration::from_millis(25);
 /// Marks the PATH in the login shell's output, around whatever its start-up
 /// files print.
+#[cfg(unix)]
 const PATH_MARK: &str = "__GRAB_IT_PATH__";
 
 /// The `claude` to run, or none when it is not installed.
