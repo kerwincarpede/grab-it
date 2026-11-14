@@ -128,7 +128,7 @@ Click **Annotate** and the editor opens. Pick a tool from the rail on the left, 
 | Highlighter | `H` | Highlighting text |
 | Blur | `B` | Hiding emails, names and passwords (pixelated or smooth) |
 | Spotlight | `S` | Dimming everything except what matters |
-| Crop | `C` | Trimming the edges |
+| Crop | `C` | Trimming the edges, free or to a ratio (Original, 16:9, 4:3, 1:1, 9:16) |
 | Select / Pan | `V` / `M` | Moving things around |
 
 **Make it pretty:** turn on the **Backdrop** to put your screenshot on a gradient or solid colour, with padding, rounded corners and a soft shadow. Perfect for slides, docs and social posts.
@@ -139,6 +139,7 @@ Click **Annotate** and the editor opens. Pick a tool from the rail on the left, 
 
 - `Ctrl/⌘ + D` duplicates the selected shape.
 - Arrow keys nudge it (hold `Shift` for bigger steps).
+- With **Crop**, pick a ratio in the top bar to keep the crop to that shape (picking one reshapes a crop you already drew). Drag the crop to move it, or its handles to resize it. Hold `Shift` for a square Free crop.
 - `[` and `]` make lines thinner or thicker.
 - `Ctrl/⌘ + [` and `Ctrl/⌘ + ]` rotate the screenshot left and right.
 - `Ctrl/⌘ + C` copies the finished image.

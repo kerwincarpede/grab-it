@@ -278,6 +278,22 @@ export const BACKDROP_ASPECTS: { aspect: BackdropAspect; label: string; ratio: n
   { aspect: "1:1", label: "1:1", ratio: 1 },
 ];
 
+/** A crop shape the Crop tool holds drags to. Chosen per editor session, never saved. */
+export type CropAspect = "free" | "original" | "16:9" | "4:3" | "1:1" | "9:16";
+
+/**
+ * The crop ratios, in picker order. `ratio` is width over height: null for
+ * Free, and for Original, whose ratio is the capture's own (see `cropAspectRatio`).
+ */
+export const CROP_ASPECTS: { aspect: CropAspect; label: string; ratio: number | null }[] = [
+  { aspect: "free", label: "Free", ratio: null },
+  { aspect: "original", label: "Original", ratio: null },
+  { aspect: "16:9", label: "16:9", ratio: 16 / 9 },
+  { aspect: "4:3", label: "4:3", ratio: 4 / 3 },
+  { aspect: "1:1", label: "1:1", ratio: 1 },
+  { aspect: "9:16", label: "9:16", ratio: 9 / 16 },
+];
+
 /** Gradient backdrops, drawn corner to corner (top-left to bottom-right). */
 export const BACKDROP_PRESETS: { id: string; label: string; colors: string[] }[] = [
   { id: "ocean", label: "Ocean", colors: ["#4c8dff", "#7b5cff"] },
