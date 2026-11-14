@@ -367,6 +367,7 @@ describe("QuickAccess", () => {
       fileName: "Grab-it 2026-03-07 09-05-01.gif",
       durationMs: 6100,
       bytes: 720_815,
+      format: "gif",
     });
     render(<QuickAccess />);
     expect(await screen.findByText("GIF saved")).toBeInTheDocument();
@@ -374,6 +375,47 @@ describe("QuickAccess", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Show in folder" }));
     await waitFor(() => expect(actions(backend)).toEqual(["reveal"]));
+  });
+
+  it("shows only the elapsed time while an MP4 records", async () => {
+    mockBackend({ kind: "recording", startedAt: Date.now() - 75_000 });
+    render(<QuickAccess />);
+    expect(await screen.findByText("Recording")).toBeInTheDocument();
+    expect(screen.getByText(/^1:1\d$/)).toBeInTheDocument();
+    expect(screen.queryByText(/ of /)).not.toBeInTheDocument();
+  });
+
+  it("says a video was saved, and offers its folder", async () => {
+    const backend = mockBackend({
+      kind: "recorded",
+      path: "/shots/recordings/Grab-it 2026-03-07 09-05-01.mp4",
+      fileName: "Grab-it 2026-03-07 09-05-01.mp4",
+      durationMs: 70_000,
+      bytes: 5_242_880,
+      format: "mp4",
+    });
+    render(<QuickAccess />);
+    expect(await screen.findByText("Video saved")).toBeInTheDocument();
+    expect(screen.queryByText("GIF saved")).not.toBeInTheDocument();
+    expect(screen.getByText("Grab-it 2026-03-07 09-05-01.mp4")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show in folder" }));
+    await waitFor(() => expect(actions(backend)).toEqual(["reveal"]));
+  });
+
+  it("says why an MP4 recording was saved as a GIF", async () => {
+    mockBackend({
+      kind: "recorded",
+      path: "/shots/recordings/Grab-it 2026-03-07 09-05-01.gif",
+      fileName: "Grab-it 2026-03-07 09-05-01.gif",
+      durationMs: 4000,
+      bytes: 300_000,
+      format: "gif",
+      fallback: "Saved as a GIF: ffmpeg, which MP4 needs, is still downloading.",
+    });
+    render(<QuickAccess />);
+    expect(await screen.findByText("GIF saved")).toBeInTheDocument();
+    expect(screen.getByText("Saved as a GIF: ffmpeg, which MP4 needs, is still downloading.")).toBeInTheDocument();
   });
 
   it("waits for as long as work is under way", async () => {

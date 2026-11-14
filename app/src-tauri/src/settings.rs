@@ -519,6 +519,74 @@ impl Appearance {
     }
 }
 
+/// What recordings are saved as.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordingFormat {
+    /// An animated GIF, silent and at most a minute long.
+    Gif,
+    /// An H.264 MP4, encoded by ffmpeg (see ffmpeg.rs).
+    #[default]
+    Mp4,
+}
+
+impl RecordingFormat {
+    /// The file extension, without the dot.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Gif => "gif",
+            Self::Mp4 => "mp4",
+        }
+    }
+}
+
+/// How good an MP4 looks, and so how big it is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordingQuality {
+    Low,
+    Medium,
+    #[default]
+    High,
+}
+
+impl RecordingQuality {
+    /// The MP4 bitrate, as bits per pixel of each frame.
+    pub fn bits_per_pixel(self) -> f64 {
+        match self {
+            Self::Low => 0.05,
+            Self::Medium => 0.1,
+            Self::High => 0.2,
+        }
+    }
+}
+
+/// How screen recordings are made. Mirrors `RecordingSettings` in
+/// src/settings/api.ts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RecordingSettings {
+    pub format: RecordingFormat,
+    /// MP4 only.
+    pub quality: RecordingQuality,
+}
+
+impl RecordingSettings {
+    /// Read from the settings file: anything it cannot use keeps its default.
+    fn from_stored(value: serde_json::Value) -> Self {
+        let defaults = Self::default();
+        let field = |key: &str| value.get(key).cloned();
+        Self {
+            format: field("format")
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or(defaults.format),
+            quality: field("quality")
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or(defaults.quality),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -535,6 +603,8 @@ pub struct Settings {
     pub show_in_dock: bool,
     /// Text size and the popup's place and time on screen.
     pub appearance: Appearance,
+    /// What screen recordings are saved as.
+    pub recording: RecordingSettings,
 }
 
 impl Settings {
@@ -548,6 +618,7 @@ impl Settings {
             editor: EditorPreferences::default(),
             show_in_dock: true,
             appearance: Appearance::default(),
+            recording: RecordingSettings::default(),
         }
     }
 }
@@ -566,6 +637,8 @@ struct StoredSettings {
     show_in_dock: Option<bool>,
     /// Read leniently by [`Appearance::from_stored`].
     appearance: Option<serde_json::Value>,
+    /// Read leniently by [`RecordingSettings::from_stored`].
+    recording: Option<serde_json::Value>,
 }
 
 /// Hotkeys on disk; a missing or empty one keeps its default.
@@ -626,6 +699,10 @@ impl StoredSettings {
                 .appearance
                 .map(Appearance::from_stored)
                 .unwrap_or(defaults.appearance),
+            recording: self
+                .recording
+                .map(RecordingSettings::from_stored)
+                .unwrap_or(defaults.recording),
         }
     }
 }
@@ -686,6 +763,7 @@ struct SettingsOnDisk<'a> {
     editor: &'a EditorPreferences,
     show_in_dock: bool,
     appearance: Appearance,
+    recording: RecordingSettings,
 }
 
 #[derive(Serialize)]
@@ -743,6 +821,7 @@ impl<'a> SettingsOnDisk<'a> {
             editor: &settings.editor,
             show_in_dock: settings.show_in_dock,
             appearance: settings.appearance,
+            recording: settings.recording,
         }
     }
 }
@@ -1063,6 +1142,21 @@ impl SettingsStore {
         Ok(self.current.clone())
     }
 
+    /// Changes how screen recordings are made. Getting ffmpeg ready for MP4
+    /// is up to the caller.
+    pub fn set_recording(
+        &mut self,
+        recording: RecordingSettings,
+    ) -> Result<Settings, SettingsError> {
+        let next = Settings {
+            recording,
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
     /// Shows or hides the Dock icon (macOS). Applying it is up to the caller.
     pub fn set_show_in_dock(&mut self, enabled: bool) -> Result<Settings, SettingsError> {
         let next = Settings {
@@ -1173,6 +1267,10 @@ mod tests {
             },
             show_in_dock: false,
             appearance: Appearance::default(),
+            recording: RecordingSettings {
+                format: RecordingFormat::Gif,
+                quality: RecordingQuality::Low,
+            },
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path, defaults(&dir)).unwrap(), settings);
@@ -1226,6 +1324,61 @@ mod tests {
         assert_eq!(loaded.text_scale, DEFAULT_TEXT_SCALE);
         assert_eq!(loaded.popup_corner, PopupCorner::TopLeft);
         assert_eq!(loaded.popup_seconds, 8);
+    }
+
+    #[test]
+    fn recordings_default_to_high_quality_mp4() {
+        let dir = TempDir::new().unwrap();
+        let recording = defaults(&dir).recording;
+        assert_eq!(recording.format, RecordingFormat::Mp4);
+        assert_eq!(recording.quality, RecordingQuality::High);
+        assert_eq!(RecordingFormat::Mp4.extension(), "mp4");
+        assert_eq!(RecordingFormat::Gif.extension(), "gif");
+        assert_eq!(RecordingQuality::Low.bits_per_pixel(), 0.05);
+        assert_eq!(RecordingQuality::Medium.bits_per_pixel(), 0.1);
+        assert_eq!(RecordingQuality::High.bits_per_pixel(), 0.2);
+        assert_eq!(
+            serde_json::to_value(recording).unwrap(),
+            serde_json::json!({"format": "mp4", "quality": "high"})
+        );
+    }
+
+    #[test]
+    fn recording_is_saved_and_read_leniently() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        // A file from before recording settings existed records MP4.
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"showInDock": false}"#).unwrap();
+        assert_eq!(
+            load(&path, defaults(&dir)).unwrap().recording,
+            RecordingSettings::default()
+        );
+
+        let mut store = open_store(path.clone(), defaults(&dir));
+        let chosen = RecordingSettings {
+            format: RecordingFormat::Gif,
+            quality: RecordingQuality::Medium,
+        };
+        assert_eq!(store.set_recording(chosen).unwrap().recording, chosen);
+        assert_eq!(load(&path, defaults(&dir)).unwrap().recording, chosen);
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            json["recording"],
+            serde_json::json!({"format": "gif", "quality": "medium"})
+        );
+        assert_eq!(json["showInDock"], false);
+
+        // One bad value keeps its default; the other still loads.
+        fs::write(
+            &path,
+            r#"{"recording": {"format": "webm", "quality": "low"}}"#,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap().recording;
+        assert_eq!(loaded.format, RecordingFormat::Mp4);
+        assert_eq!(loaded.quality, RecordingQuality::Low);
     }
 
     #[test]

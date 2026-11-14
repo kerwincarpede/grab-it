@@ -137,7 +137,7 @@ pub fn download_models(dir: &Path, progress: impl FnMut(u64, u64)) -> OcrResult<
 
 /// An HTTP agent whose every network phase gives up after `stall`
 /// without progress. ureq has no timeouts by default.
-fn download_agent(stall: Duration) -> ureq::Agent {
+pub(crate) fn download_agent(stall: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_resolve(Some(stall))
         .timeout_connect(Some(stall))

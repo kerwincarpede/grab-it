@@ -377,7 +377,9 @@ function QuickAccess() {
         <div className="quick-body" role="status">
           <p className="quick-title">{stopping ? "Saving…" : "Recording"}</p>
           <p className="quick-detail quick-elapsed">
-            {formatElapsed(elapsed)} of {formatElapsed(item.maxSeconds * 1000)}
+            {item.maxSeconds === undefined
+              ? formatElapsed(elapsed)
+              : `${formatElapsed(elapsed)} of ${formatElapsed(item.maxSeconds * 1000)}`}
           </p>
           {error && <p className="quick-detail quick-error-text">{error}</p>}
         </div>
@@ -393,8 +395,9 @@ function QuickAccess() {
       <main className="quick quick-message quick-recorded" data-testid="quick" {...hover}>
         <div className="quick-body" role="status">
           <p className="quick-title">
-            <Icon>{ICONS.check}</Icon> GIF saved
+            <Icon>{ICONS.check}</Icon> {item.format === "mp4" ? "Video saved" : "GIF saved"}
           </p>
+          {item.fallback && <p className="quick-detail quick-fallback">{item.fallback}</p>}
           <p className="quick-detail">
             {formatElapsed(item.durationMs)} · {formatBytes(item.bytes)}
           </p>

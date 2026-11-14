@@ -64,7 +64,7 @@ Only one Grab-it runs at a time. Starting it again hands the arguments to the ru
 
 Each capture is copied to the clipboard and saved to `<save folder>/originals/` as `Grab-it YYYY-MM-DD HH-MM-SS.png`, with `<name>.meta.json` beside it holding the time, mode, size, foreground app and window title. The PNG is never modified.
 
-Annotations are saved in `<name>.annotations.json` beside the capture. Crop and backdrop are non-destructive and only applied on copy and export. GIF recordings go to `<save folder>/recordings/`.
+Annotations are saved in `<name>.annotations.json` beside the capture. Crop and backdrop are non-destructive and only applied on copy and export. Recordings go to `<save folder>/recordings/` as `Grab-it YYYY-MM-DD HH-MM-SS.mp4` (or `.gif`).
 
 Region and Window freeze every monitor and show it fullscreen. Each monitor is cropped at its own scale factor, so mixed-DPI setups capture sharp.
 
@@ -76,6 +76,28 @@ Nothing heavy happens while a selection is on screen. The frozen image is encode
 
 - **Wayland** (`WAYLAND_DISPLAY` set): captures go through the desktop's Screenshot portal, and Pick a colour uses the desktop's colour picker. Hotkeys are offered to the desktop through the GlobalShortcuts portal; where the desktop has no such portal, use the tray menu. Repeat last region and recording are not available, since only the desktop may read the screen there.
 - **macOS**: Grab-it needs *Screen Recording* permission under System Settings → Privacy & Security, and offers to open that page when the permission is missing.
+
+### Recording
+
+**Settings → Recording** picks what recordings are saved as (`recording` in `settings.json`): `format` is `mp4` (the default) or `gif`, and `quality` is `low`, `medium` or `high` (the default), for MP4 only.
+
+An MP4 is recorded at a constant 30 fps with no time limit (`record::record_mp4`). Each grab of the recorded area is piped into ffmpeg's stdin as raw RGBA (`-f rawvideo -pix_fmt rgba`), and ffmpeg writes H.264 in yuv420p at even dimensions, at most 1920 px wide, with `-movflags +faststart` so it plays while it downloads. A grab that takes longer than a frame repeats the frame before for every frame time that went by (`record::Pacer`), so the video is as long as the recording. The bitrate is the quality's bits per pixel of each frame: 0.05 for low, 0.1 for medium and 0.2 for high, about 12 Mbit/s for 1080p at high. A GIF is still encoded in Grab-it at about 10 fps, scaled to at most 1280 px wide, and stops after a minute.
+
+ffmpeg is not bundled (see [ffmpeg builds](#ffmpeg-builds)). With MP4 chosen, Grab-it gets it ready in the background when it starts, or as soon as MP4 is picked in Settings (`ffmpeg.rs`):
+
+1. `GRAB_IT_FFMPEG`, when set, names the ffmpeg to use, and nothing is downloaded.
+2. Otherwise the copy in `ffmpeg/` in the app data directory is used.
+3. Otherwise this platform's asset is downloaded there from the `ffmpeg-n8.1` release, checked against its `.sha256`, unpacked and only then moved into place. Linux x64, Windows x64 and Apple-silicon Macs have one; elsewhere, set `GRAB_IT_FFMPEG`.
+
+The Recording page shows the download's progress, and **Retry** when it failed. Then each H.264 encoder is tried by encoding one frame, in this order, and the first that works is kept until Grab-it quits: `h264_videotoolbox` on macOS; `h264_nvenc`, `h264_qsv`, `h264_amf` and `h264_mf` on Windows; `h264_nvenc` and `h264_vaapi` (on `/dev/dri/renderD128`) on Linux; then `libopenh264` everywhere. The page names the one chosen. A copy downloaded on an earlier run that no encoder works with is deleted, so Retry downloads it again.
+
+A recording started while ffmpeg is not ready yet (still downloading, or failed) is saved as a GIF, and the card after it says why. When MP4 is ready the card counts up with no limit and says **Video saved** when done.
+
+To try MP4 recording without downloading anything, point `GRAB_IT_FFMPEG` at any LGPL ffmpeg with `libopenh264`, such as a BtbN `lgpl` build:
+
+```sh
+GRAB_IT_FFMPEG=/path/to/ffmpeg npm run tauri dev -- -- -- --open record
+```
 
 ### Search and OCR
 

@@ -98,8 +98,9 @@ pub enum QuickItem {
     Recording {
         /// Milliseconds since the Unix epoch, for the card's timer.
         started_at: u64,
-        /// The recording stops by itself after this long.
-        max_seconds: u64,
+        /// A GIF stops by itself after this long; an MP4 has no limit.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_seconds: Option<u64>,
     },
     /// A finished recording.
     #[serde(rename_all = "camelCase")]
@@ -110,6 +111,11 @@ pub enum QuickItem {
         duration_ms: u64,
         /// The file's size in bytes.
         bytes: u64,
+        /// What it was saved as.
+        format: crate::settings::RecordingFormat,
+        /// Why an MP4 recording was saved as a GIF instead.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fallback: Option<String>,
     },
 }
 
