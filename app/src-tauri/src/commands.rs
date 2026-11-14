@@ -72,6 +72,17 @@ pub fn set_editor_preferences(
         .map_err(|err| err.to_string())
 }
 
+/// Turns framing new captures with the last backdrop on or off.
+#[tauri::command]
+pub fn set_auto_backdrop(
+    enabled: bool,
+    state: State<'_, SettingsState>,
+) -> Result<Settings, String> {
+    lock(&state)
+        .set_auto_backdrop(enabled)
+        .map_err(|err| err.to_string())
+}
+
 /// Opens a window or starts a capture by its `--open` name (`region`,
 /// `settings`, `library`…), for the Welcome window's buttons.
 #[tauri::command]

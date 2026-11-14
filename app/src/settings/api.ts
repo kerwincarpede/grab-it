@@ -58,6 +58,10 @@ export interface EditorPreferences {
   textBackground?: boolean;
   /** `BlurMode` in editor/model.ts. */
   blurMode?: string;
+  /** The last backdrop picked (`Backdrop` in editor/model.ts); checked by the editor as it reads it. */
+  backdrop?: unknown;
+  /** Frame captures that have no annotations yet with `backdrop`. Set from Settings; the editor never writes it. */
+  autoBackdrop?: boolean;
 }
 
 /** Mirrors `Settings` in src-tauri/src/settings.rs. */
@@ -122,6 +126,11 @@ export function getEditorPreferences(): Promise<EditorPreferences> {
 
 export function setEditorPreferences(preferences: EditorPreferences): Promise<EditorPreferences> {
   return invoke<EditorPreferences>("set_editor_preferences", { preferences });
+}
+
+/** Turns framing new captures with the last backdrop on or off. */
+export function setAutoBackdrop(enabled: boolean): Promise<Settings> {
+  return invoke<Settings>("set_auto_backdrop", { enabled });
 }
 
 /** Whether Grab-it starts when the user signs in; the system holds this. */

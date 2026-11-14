@@ -229,6 +229,22 @@ pub struct CaptureMeta {
     pub window_title: Option<String>,
     pub width: u32,
     pub height: u32,
+    /// Image pixels per point on the monitor the capture came from (2 on
+    /// a Retina display). Absent in captures saved before it was recorded,
+    /// and when the platform could not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_factor: Option<f64>,
+}
+
+/// A usable scale factor: finite and positive, else `None`.
+pub fn valid_scale(scale: Option<f64>) -> Option<f64> {
+    scale.filter(|scale| scale.is_finite() && *scale > 0.0)
+}
+
+/// Reads `<name>.meta.json`; `None` when it is missing or unreadable.
+pub fn read_meta(png: &Path) -> Option<CaptureMeta> {
+    let text = fs::read_to_string(meta_path(png)).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 /// The foreground application and window when a capture started.
@@ -284,12 +300,14 @@ impl From<serde_json::Error> for SaveError {
 }
 
 /// Saves `image` as a timestamped PNG in `<save_folder>/originals/`, with
-/// its `meta.json` sidecar beside it.
+/// its `meta.json` sidecar beside it. `scale_factor` is the source
+/// monitor's image pixels per point, when known.
 pub fn save_capture(
     save_folder: &Path,
     image: &RgbaImage,
     mode: CaptureMode,
     foreground: &Foreground,
+    scale_factor: Option<f64>,
     time: DateTime<Local>,
 ) -> Result<SavedCapture, SaveError> {
     let dir = save_folder.join(ORIGINALS_DIR);
@@ -305,6 +323,7 @@ pub fn save_capture(
         window_title: foreground.window_title.clone(),
         width: image.width(),
         height: image.height(),
+        scale_factor: valid_scale(scale_factor),
     };
     let meta_path = meta_path(&path);
     let mut json = serde_json::to_string_pretty(&meta)?;
@@ -507,8 +526,15 @@ mod tests {
             window_title: Some("Docs".into()),
         };
 
-        let saved =
-            save_capture(dir.path(), &image, CaptureMode::Region, &foreground, time()).unwrap();
+        let saved = save_capture(
+            dir.path(),
+            &image,
+            CaptureMode::Region,
+            &foreground,
+            Some(2.0),
+            time(),
+        )
+        .unwrap();
 
         assert_eq!(saved.path.parent().unwrap(), dir.path().join(ORIGINALS_DIR));
         assert_eq!(image::open(&saved.path).unwrap().to_rgba8(), image);
@@ -520,11 +546,48 @@ mod tests {
         assert_eq!(meta["windowTitle"], "Docs");
         assert_eq!(meta["width"], 3);
         assert_eq!(meta["height"], 2);
+        assert_eq!(meta["scaleFactor"], 2.0);
+        assert_eq!(read_meta(&saved.path).unwrap().scale_factor, Some(2.0));
         assert!(
             meta["capturedAt"]
                 .as_str()
                 .unwrap()
                 .starts_with("2026-03-07T09:05:01")
         );
+    }
+
+    #[test]
+    fn an_unknown_scale_factor_is_left_out() {
+        let dir = TempDir::new().unwrap();
+        let image = RgbaImage::from_pixel(1, 1, Rgba([0, 0, 0, 255]));
+        for scale in [None, Some(0.0), Some(f64::NAN), Some(-1.0)] {
+            let saved = save_capture(
+                dir.path(),
+                &image,
+                CaptureMode::Screen,
+                &Foreground::default(),
+                scale,
+                time(),
+            )
+            .unwrap();
+            let text = fs::read_to_string(&saved.meta_path).unwrap();
+            assert!(!text.contains("scaleFactor"), "{text}");
+            assert_eq!(read_meta(&saved.path).unwrap().scale_factor, None);
+        }
+    }
+
+    #[test]
+    fn meta_written_before_the_scale_factor_still_reads() {
+        let dir = TempDir::new().unwrap();
+        let png = dir.path().join("shot.png");
+        fs::write(
+            meta_path(&png),
+            r#"{"version":1,"capturedAt":"2026-03-07T09:05:01+00:00","mode":"region","app":null,"windowTitle":null,"width":3,"height":2}"#,
+        )
+        .unwrap();
+        let meta = read_meta(&png).unwrap();
+        assert_eq!(meta.width, 3);
+        assert_eq!(meta.scale_factor, None);
+        assert!(read_meta(&dir.path().join("missing.png")).is_none());
     }
 }

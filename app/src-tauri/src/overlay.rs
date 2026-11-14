@@ -121,8 +121,9 @@ pub fn find_monitor<'a>(
         })
 }
 
-/// Captures the last dragged region again, as the screen looks now.
-pub fn capture_last_region(app: &AppHandle) -> Result<RgbaImage, String> {
+/// Captures the last dragged region again, as the screen looks now, with
+/// its monitor's scale factor.
+pub fn capture_last_region(app: &AppHandle) -> Result<(RgbaImage, f64), String> {
     let last = app
         .state::<LastRegionState>()
         .lock()
@@ -132,7 +133,8 @@ pub fn capture_last_region(app: &AppHandle) -> Result<RgbaImage, String> {
     let monitor = find_monitor(&last.monitor, &monitors)
         .ok_or("The monitor the last region was on is no longer connected.")?;
     let image = screen::capture_monitor(monitor.index)?;
-    capture::crop(&image, last.rect).ok_or_else(|| "the last region is off screen".to_owned())
+    let region = capture::crop(&image, last.rect).ok_or("the last region is off screen")?;
+    Ok((region, monitor.scale_factor))
 }
 
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
@@ -607,10 +609,11 @@ pub fn overlay_finish(
     };
 
     let intent = session.intent;
+    let scale = frame.monitor.scale_factor;
     std::thread::spawn(move || match intent {
         Intent::Text => actions::finish_text(&app, &image),
         Intent::Capture | Intent::Colour | Intent::Record => {
-            actions::finish(&app, &image, mode, &foreground)
+            actions::finish(&app, &image, mode, &foreground, Some(scale))
         }
     });
     Ok(())

@@ -76,6 +76,34 @@ pub struct EditorInfo {
     pub file_name: String,
     /// The saved sidecar, or `None` when the capture has no annotations yet.
     pub annotations: Option<Value>,
+    /// The capture's pixels per point, from its `meta.json`; `None` for
+    /// captures saved before it was recorded (the editor then uses its own
+    /// window's density).
+    pub scale_factor: Option<f64>,
+}
+
+/// Image types a backdrop may be filled with, by extension.
+pub const BACKDROP_IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "webp", "gif"];
+/// The largest backdrop image read, so a mistaken pick cannot exhaust memory.
+pub const BACKDROP_IMAGE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Reads an image picked as a backdrop fill. Only image files are read,
+/// and only up to [`BACKDROP_IMAGE_MAX_BYTES`].
+pub fn read_backdrop_image(path: &Path) -> Result<Vec<u8>, String> {
+    let extension = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if !BACKDROP_IMAGE_EXTENSIONS.contains(&extension.as_str()) {
+        return Err("the backdrop must be a PNG, JPEG, WebP or GIF image".to_owned());
+    }
+    let size = fs::metadata(path)
+        .map_err(|err| format!("could not open {}: {err}", path.display()))?
+        .len();
+    if size > BACKDROP_IMAGE_MAX_BYTES {
+        return Err("the backdrop image is too large".to_owned());
+    }
+    fs::read(path).map_err(|err| format!("could not open {}: {err}", path.display()))
 }
 
 /// Reads `<capture>.annotations.json`. A missing file is `Ok(None)`; an
@@ -182,11 +210,20 @@ pub fn editor_info(
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let annotations = read_annotations(&path)?;
+    let meta = crate::capture::read_meta(&path);
+    let scale_factor = crate::capture::valid_scale(meta.and_then(|meta| meta.scale_factor));
     Ok(EditorInfo {
         path,
         file_name,
         annotations,
+        scale_factor,
     })
+}
+
+/// The bytes of an image picked as the backdrop fill.
+#[tauri::command]
+pub fn editor_backdrop_image(path: PathBuf) -> Result<tauri::ipc::Response, String> {
+    read_backdrop_image(&path).map(tauri::ipc::Response::new)
 }
 
 /// The original capture's PNG bytes.
@@ -351,5 +388,38 @@ mod tests {
         assert_eq!(percent_decode("caf%C3%A9.jpg"), Ok("café.jpg".to_owned()));
         assert!(percent_decode("%zz").is_err());
         assert!(percent_decode("%2").is_err());
+    }
+
+    #[test]
+    fn backdrop_images_must_be_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let photo = dir.path().join("Beach.JPG");
+        fs::write(&photo, b"jpeg").unwrap();
+        assert_eq!(read_backdrop_image(&photo), Ok(b"jpeg".to_vec()));
+        let notes = dir.path().join("notes.txt");
+        fs::write(&notes, b"secret").unwrap();
+        assert!(read_backdrop_image(&notes).is_err());
+        assert!(read_backdrop_image(&dir.path().join("settings")).is_err());
+        assert!(read_backdrop_image(&dir.path().join("gone.png")).is_err());
+    }
+
+    #[test]
+    fn the_scale_factor_comes_from_the_capture_meta() {
+        use crate::capture::{CaptureMode, Foreground, read_meta, save_capture};
+        let dir = tempfile::tempdir().unwrap();
+        let image = image::RgbaImage::new(2, 2);
+        let saved = save_capture(
+            dir.path(),
+            &image,
+            CaptureMode::Region,
+            &Foreground::default(),
+            Some(2.0),
+            chrono::Local::now(),
+        )
+        .unwrap();
+        assert_eq!(
+            read_meta(&saved.path).and_then(|meta| meta.scale_factor),
+            Some(2.0)
+        );
     }
 }

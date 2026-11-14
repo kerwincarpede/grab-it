@@ -327,7 +327,7 @@ mod tests {
             app: Some(app.into()),
             window_title: Some(title.into()),
         };
-        save_capture(folder, &image, CaptureMode::Region, &foreground, when)
+        save_capture(folder, &image, CaptureMode::Region, &foreground, None, when)
             .unwrap()
             .path
     }

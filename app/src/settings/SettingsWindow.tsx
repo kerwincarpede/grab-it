@@ -7,6 +7,7 @@ import {
   chooseFolder,
   getAutostart,
   getSettings,
+  setAutoBackdrop,
   setAutostart,
   setHotkeys,
   setPreferences,
@@ -105,6 +106,18 @@ function SettingsWindow() {
 
   const saveAi = (ai: AiPreferences) => changePreferences({ ai });
 
+  async function changeAutoBackdrop(enabled: boolean) {
+    setBusy(true);
+    try {
+      setSettings(await setAutoBackdrop(enabled));
+      setStatus({ kind: "preferences-saved" });
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function changeAutostart(enabled: boolean) {
     setBusy(true);
     try {
@@ -161,6 +174,23 @@ function SettingsWindow() {
           <span>
             <span className="choice-title">Copy every capture to the clipboard</span>
             <span className="hint">Paste it straight into a chat, a document or an issue.</span>
+          </span>
+        </label>
+      </section>
+      <section className="card" aria-labelledby="editor-heading">
+        <h2 id="editor-heading">Editor</h2>
+        <label className="toggle first">
+          <input
+            type="checkbox"
+            checked={settings?.editor?.autoBackdrop ?? false}
+            disabled={busy || settings === null}
+            onChange={(event) => void changeAutoBackdrop(event.target.checked)}
+          />
+          <span>
+            <span className="choice-title">Frame new captures with the last backdrop</span>
+            <span className="hint">
+              The editor adds it when it first opens a capture. The saved capture and its clipboard copy stay unframed.
+            </span>
           </span>
         </label>
       </section>
