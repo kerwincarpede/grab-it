@@ -156,9 +156,54 @@ jobs:
             fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
           '
 
-      # The macOS app is signed with the APPLE_SIGNING_IDENTITY secret when it
-      # is set, and ad-hoc ("-") otherwise. Without any signature, Apple
-      # silicon reports a downloaded app as "damaged" and refuses to open it.
+      # macOS keeps privacy permissions (Screen Recording, keychain) by the
+      # app's code signature. An ad-hoc signature changes with every build, so
+      # every update lost them; the self-signed certificate in the
+      # MACOS_CERTIFICATE secret (made by make_macos_signing_cert.sh) keeps
+      # the same identity across releases. Tauri's own APPLE_CERTIFICATE
+      # import accepts only Apple-issued certificates, so it is imported here
+      # and handed to Tauri by name.
+      - name: Import the macOS signing certificate
+        id: macos-signing
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [[ -z "$MACOS_CERTIFICATE" ]]; then
+            echo "No MACOS_CERTIFICATE secret; the app is signed ad-hoc."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password=$(openssl rand -base64 24)
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -f pkcs12 \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/signing.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" \
+            $(security list-keychains -d user | tr -d '"')
+          # Self-signed, so not "valid" (-v); any identity in this keychain.
+          identity=$(security find-identity -p codesigning "$keychain" \
+            | sed -n 's/^ *1) [0-9A-F]\{40\} "\(.*\)".*/\1/p')
+          if [[ -z "$identity" ]]; then
+            security find-identity -p codesigning "$keychain"
+            echo "::error::No code-signing identity in MACOS_CERTIFICATE"
+            exit 1
+          fi
+          echo "Signing with \"$identity\""
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+
+      # The macOS app is signed with the APPLE_SIGNING_IDENTITY secret (a paid
+      # certificate already in the keychain) when it is set, then with the
+      # MACOS_CERTIFICATE one, and ad-hoc ("-") otherwise. Without any
+      # signature, Apple silicon reports a downloaded app as "damaged" and
+      # refuses to open it.
       # With a release id (release.yml only) the installers, and the update
       # packages with their .sig files, are also uploaded to the draft
       # release; without one, tauri-action only builds. latest.json is left
@@ -167,13 +212,28 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || steps.macos-signing.outputs.identity || '-' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: app
           releaseId: ${{ inputs.release_id }}
           includeUpdaterJson: false
+
+      # A designated requirement naming a cdhash is the per-build identity
+      # that loses permissions on update; a certificate one is stable.
+      - name: Check the macOS signature is stable
+        if: runner.os == 'macOS' && steps.macos-signing.outputs.identity != ''
+        shell: bash
+        run: |
+          app=app/src-tauri/target/release/bundle/macos/Grab-it.app
+          codesign --verify --strict --verbose=2 "$app"
+          requirement=$(codesign -d -r- "$app" 2>&1 | sed -n 's/^designated => //p')
+          echo "Designated requirement: $requirement"
+          if [[ "$requirement" != *certificate* || "$requirement" == *cdhash* ]]; then
+            echo "::error::The app's designated requirement is not tied to the certificate"
+            exit 1
+          fi
 
       - name: Upload installers
         uses: actions/upload-artifact@v4

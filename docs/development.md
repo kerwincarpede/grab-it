@@ -200,7 +200,11 @@ The updater accepts only packages signed with the key whose public half is `plug
 
 Development builds (`npm run tauri dev`) do not check by themselves; the tray's **Check for updates…** still works.
 
-The installers are not signed with a paid certificate. CI ad-hoc signs the macOS app (the `APPLE_SIGNING_IDENTITY` repository secret overrides the `-` identity), so Gatekeeper says it cannot verify the developer rather than calling the app damaged.
+The installers are not signed with a paid certificate, so Gatekeeper says it cannot verify the developer of the macOS app rather than calling it damaged, and Windows SmartScreen warns too.
+
+CI signs the macOS app with a self-signed certificate, held in the `MACOS_CERTIFICATE` (a base64 `.p12`) and `MACOS_CERTIFICATE_PASSWORD` repository secrets. macOS remembers Screen Recording and keychain permissions by the app's signature. Each ad-hoc signature is tied to one exact build, so before this certificate every update lost them. With the certificate, every release has the same identity and keeps them. Tauri's own `APPLE_CERTIFICATE` import accepts only Apple-issued certificates, so CI imports this one into a temporary keychain itself and hands its name to Tauri as `APPLE_SIGNING_IDENTITY`, then fails the build if the signature is not tied to it. Without the secret, as in pull requests from forks, the app is signed ad-hoc (`-`). An `APPLE_SIGNING_IDENTITY` secret (a paid certificate) takes precedence over both.
+
+The certificate was made once with [`.github/scripts/make_macos_signing_cert.sh`](../.github/scripts/make_macos_signing_cert.sh) and is valid for 20 years. **Keep a backup of the `.p12` and its password**: a new certificate is a new identity, so every installed copy would have to grant its permissions again once.
 
 ## The README animation
 
