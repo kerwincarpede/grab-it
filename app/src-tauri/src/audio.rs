@@ -12,8 +12,8 @@
 //! Grab-it, so no ALSA or Pulse headers are needed to build Grab-it.
 
 use std::{
-    fs::File,
-    io::{self, BufWriter, Seek, SeekFrom, Write},
+    fs::{self, File},
+    io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, MutexGuard,
@@ -205,6 +205,98 @@ pub struct Captured {
     pub wav: PathBuf,
     /// When the first sample was heard.
     pub first_sample: Instant,
+    channels: u16,
+    sample_rate: u32,
+}
+
+impl Captured {
+    /// Cuts the stretches the video skipped (`gaps`) out of the sound, so
+    /// what comes after them stays in step. `offset` is when the sound
+    /// starts against the first frame, as [`offset`] says.
+    pub fn cut(&self, gaps: &[Gap], offset: f64) -> io::Result<()> {
+        let ranges = gap_frames(gaps, offset, self.sample_rate);
+        if ranges.is_empty() {
+            return Ok(());
+        }
+        let cut = self.wav.with_extension("cut.wav");
+        let result = cut_wav(&self.wav, &cut, self.channels, self.sample_rate, &ranges)
+            .and_then(|()| fs::rename(&cut, &self.wav));
+        if result.is_err() {
+            let _ = fs::remove_file(&cut);
+        }
+        result
+    }
+}
+
+/// A stretch of the recording the video skipped, `start` after its first
+/// frame and `length` long (see `record::Pacer`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Gap {
+    pub start: Duration,
+    pub length: Duration,
+}
+
+/// The sample frames of the sound that fall in `gaps`, as sorted
+/// `[from, to)` ranges, given that the sound starts `offset` seconds after
+/// the first frame. Sound before the first frame is not counted here: the
+/// mux cuts it.
+pub fn gap_frames(gaps: &[Gap], offset: f64, sample_rate: u32) -> Vec<(u64, u64)> {
+    let frame_at = |seconds: f64| (seconds.max(0.0) * f64::from(sample_rate)).round() as u64;
+    let mut ranges: Vec<(u64, u64)> = gaps
+        .iter()
+        .filter_map(|gap| {
+            let start = gap.start.as_secs_f64() - offset;
+            let from = frame_at(start);
+            let to = frame_at(start + gap.length.as_secs_f64());
+            (to > from).then_some((from, to))
+        })
+        .collect();
+    ranges.sort_unstable();
+    ranges
+}
+
+/// Copies the 16-bit WAV `from` (as [`WavWriter`] writes it) to `to`,
+/// leaving out the sample frames in `ranges`.
+fn cut_wav(
+    from: &Path,
+    to: &Path,
+    channels: u16,
+    sample_rate: u32,
+    ranges: &[(u64, u64)],
+) -> io::Result<()> {
+    let mut input = BufReader::new(File::open(from)?);
+    input.seek(SeekFrom::Start(u64::from(WAV_HEADER_BYTES)))?;
+    let mut writer = WavWriter::new(BufWriter::new(File::create(to)?), channels, sample_rate)?;
+    let mut frame = vec![0u8; usize::from(channels.max(1)) * 2];
+    let mut kept: Vec<i16> = Vec::with_capacity(8 * 1024);
+    let mut index = 0u64;
+    loop {
+        match input.read_exact(&mut frame) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(err) => return Err(err),
+        }
+        if !ranges
+            .iter()
+            .any(|&(start, end)| (start..end).contains(&index))
+        {
+            kept.extend(
+                frame
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| i16::from_le_bytes(*pair)),
+            );
+            if kept.len() >= 8 * 1024 {
+                writer.write(&kept)?;
+                kept.clear();
+            }
+        }
+        index += 1;
+    }
+    writer.write(&kept)?;
+    writer.finish()?;
+    Ok(())
 }
 
 impl Drop for Captured {
@@ -245,11 +337,19 @@ impl Microphone {
             Some(capture) => capture.stop(),
             None => None,
         };
-        let finished = lock(&self.sink).finish();
+        let (finished, channels, sample_rate) = {
+            let mut sink = lock(&self.sink);
+            (sink.finish(), sink.channels, sink.sample_rate)
+        };
         // From here the WAV is the result's to delete.
         let wav = std::mem::take(&mut self.wav);
         match finished {
-            Ok(Some(first_sample)) => Ok(Captured { wav, first_sample }),
+            Ok(Some(first_sample)) => Ok(Captured {
+                wav,
+                first_sample,
+                channels,
+                sample_rate,
+            }),
             Ok(None) => {
                 let _ = std::fs::remove_file(&wav);
                 Err(said.unwrap_or_else(|| "the microphone sent no sound".to_owned()))
@@ -422,12 +522,14 @@ mod platform {
                         let mut bytes = Vec::with_capacity(read + 1);
                         bytes.extend(carry.take());
                         bytes.extend_from_slice(&buffer[..read]);
-                        if bytes.len() % 2 == 1 {
+                        if !bytes.len().is_multiple_of(2) {
                             carry = bytes.pop();
                         }
                         let samples: Vec<i16> = bytes
-                            .chunks_exact(2)
-                            .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|pair| i16::from_le_bytes(*pair))
                             .collect();
                         lock(&sink).push(&samples, at);
                     }
@@ -757,6 +859,72 @@ mod tests {
         let first = lock(&sink).finish().unwrap();
         assert_eq!(first, Some(at - Duration::from_millis(100)));
         assert_eq!(std::fs::metadata(&wav).unwrap().len(), 44 + 400);
+    }
+
+    #[test]
+    fn gaps_are_found_in_the_sound_by_its_offset() {
+        let ms = Duration::from_millis;
+        let gaps = [
+            Gap {
+                start: ms(2000),
+                length: ms(500),
+            },
+            Gap {
+                start: ms(700),
+                length: ms(100),
+            },
+        ];
+        // The sound started 250 ms before the first frame, so it is 250 ms
+        // further along at each gap.
+        assert_eq!(
+            gap_frames(&gaps, -0.25, 1000),
+            vec![(950, 1050), (2250, 2750)]
+        );
+        // Started 100 ms after: 100 ms less far along.
+        assert_eq!(gap_frames(&gaps, 0.1, 1000), vec![(600, 700), (1900, 2400)]);
+        // A gap over before the sound began cuts nothing.
+        assert_eq!(gap_frames(&[gaps[1]], 1.0, 1000), Vec::<(u64, u64)>::new());
+    }
+
+    #[test]
+    fn the_sound_the_video_skipped_is_cut_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("mic.wav");
+        // Stereo at 10 Hz: frame n holds the samples n and -n.
+        let mut writer =
+            WavWriter::new(BufWriter::new(File::create(&wav).unwrap()), 2, 10).unwrap();
+        let samples: Vec<i16> = (0..20).flat_map(|n| [n, -n]).collect();
+        writer.write(&samples).unwrap();
+        writer.finish().unwrap();
+        let sound = Captured {
+            wav: wav.clone(),
+            first_sample: Instant::now(),
+            channels: 2,
+            sample_rate: 10,
+        };
+        let gap = Gap {
+            start: Duration::from_millis(500),
+            length: Duration::from_millis(300),
+        };
+        sound.cut(&[gap], 0.0).unwrap();
+
+        let bytes = fs::read(&wav).unwrap();
+        let kept: Vec<i16> = bytes[44..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| i16::from_le_bytes(*pair))
+            .collect();
+        let expected: Vec<i16> = (0..5).chain(8..20).flat_map(|n| [n, -n]).collect();
+        assert_eq!(kept, expected);
+        assert_eq!(
+            u32::from_le_bytes(bytes[40..44].try_into().unwrap()),
+            (expected.len() * 2) as u32
+        );
+        // Nothing but the sound is left behind, and dropping it deletes it.
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        drop(sound);
+        assert!(!wav.exists());
     }
 
     #[test]

@@ -41,7 +41,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     actions,
-    audio::{self, Microphone},
+    audio::{self, Gap, Microphone},
     capture::{self, Rect},
     commands::{SettingsState, lock},
     ffmpeg::{self, Video, VideoSpec},
@@ -165,14 +165,18 @@ pub fn frame_size(region: (u32, u32)) -> (u32, u32) {
 /// At most half a second of repeats follows each grab. Frame times further
 /// behind than that (ffmpeg taking frames in more slowly than the frame
 /// rate, or the computer sleeping mid-recording) are dropped, so a new
-/// frame is always grabbed soon and the video keeps moving.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// frame is always grabbed soon and the video keeps moving. Each stretch
+/// dropped is kept as a [`Gap`], so the same stretch can be cut out of the
+/// sound, which does not skip.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pacer {
     fps: u64,
     /// Frames written so far, repeats included.
     frames: u64,
     /// Frame times dropped because the recording fell too far behind.
     dropped: u64,
+    /// Where those frame times were, from the recording's start.
+    gaps: Vec<Gap>,
 }
 
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
@@ -183,6 +187,7 @@ impl Pacer {
             fps: u64::from(fps.max(1)),
             frames: 0,
             dropped: 0,
+            gaps: Vec::new(),
         }
     }
 
@@ -201,8 +206,22 @@ impl Pacer {
         let current = (elapsed.as_nanos() * u128::from(self.fps) / NANOS_PER_SECOND) as u64;
         let behind = current.saturating_sub(self.frames + self.dropped);
         let repeats = behind.min(self.max_repeats());
-        self.dropped += behind - repeats;
+        let dropped = behind - repeats;
+        if dropped > 0 {
+            // The dropped frame times follow this frame's repeats.
+            let first = self.frames + repeats + self.dropped;
+            self.gaps.push(Gap {
+                start: self.at(first),
+                length: self.at(first + dropped) - self.at(first),
+            });
+        }
+        self.dropped += dropped;
         repeats
+    }
+
+    /// The stretches of the recording the video skipped, in order.
+    pub fn gaps(&self) -> &[Gap] {
+        &self.gaps
     }
 
     /// Counts one repeat of the last frame.
@@ -532,14 +551,14 @@ fn record_mp4(
     video.finish().map_err(|err| err.to_string())?;
     if let Some(microphone) = microphone {
         let muxed = microphone.stop().and_then(|sound| {
-            ffmpeg::add_audio(
-                &ready.path,
-                path,
-                &sound.wav,
-                audio::offset(started, sound.first_sample),
-                pacer.duration(),
-            )
-            .map_err(|err| err.to_string())
+            let offset = audio::offset(started, sound.first_sample);
+            // The sound runs on through the frame times the video dropped:
+            // cut them out of it too, or it would run ahead of the video.
+            sound
+                .cut(pacer.gaps(), offset)
+                .map_err(|err| format!("could not cut the sound to the video: {err}"))?;
+            ffmpeg::add_audio(&ready.path, path, &sound.wav, offset, pacer.duration())
+                .map_err(|err| err.to_string())
         });
         // The video is kept, silent.
         if let Err(err) = muxed {
@@ -759,6 +778,33 @@ mod tests {
         }
         assert_eq!(written, 1800);
         assert_eq!(pacer.duration().as_secs(), 60);
+    }
+
+    #[test]
+    fn dropped_frame_times_are_kept_as_gaps_for_the_sound() {
+        let mut pacer = Pacer::new(10);
+        let ms = Duration::from_millis;
+        assert_eq!(pacer.wrote_frame(ms(10)), 0);
+        assert!(pacer.gaps().is_empty());
+        // The second grab took until 1.25 s: frame times 2 to 11 went by.
+        // Five are repeats (half a second); 7 to 11 are dropped.
+        let repeats = pacer.wrote_frame(ms(1250));
+        assert_eq!(repeats, 5);
+        for _ in 0..repeats {
+            pacer.repeated();
+        }
+        assert_eq!(
+            pacer.gaps(),
+            [Gap {
+                start: ms(700),
+                length: ms(500),
+            }]
+        );
+        assert_eq!(pacer.next_frame_at(), ms(1200));
+        assert_eq!(pacer.wrote_frame(ms(1210)), 0);
+        // The video plays 0.8 s; with the gap, 1.3 s of sound went by.
+        assert_eq!(pacer.duration(), ms(800));
+        assert_eq!(pacer.duration() + pacer.gaps()[0].length, ms(1300));
     }
 
     #[test]
