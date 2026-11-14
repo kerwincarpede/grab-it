@@ -23,23 +23,30 @@ import {
   colorForKey,
   contrastColor,
   controlFromHandle,
+  cropAspectRatio,
+  cropBox,
+  cropDragRatio,
   cropFromDrag,
+  cropToCapture,
   curveMidpoint,
   curvePoints,
   deleteShape,
   dragShape,
   duplicateShape,
   finishShape,
+  fitCropToRatio,
   hasLineHandles,
   HIGHLIGHTER_WIDTH,
   highlighterWidth,
   HOLD_MS,
   modifierTool,
+  moveCrop,
   moveLineEnd,
   moveShape,
   nudgeDelta,
   releaseRestores,
   replaceShape,
+  resizeCrop,
   restyleShape,
   snapAngle,
   spotlightDim,
@@ -49,6 +56,7 @@ import {
   transformShape,
   withAlpha,
 } from "./tools";
+import { IDENTITY, orientRect } from "./orient";
 
 const style: Style = { color: "#e5484d", strokeWidth: 4 };
 
@@ -233,6 +241,127 @@ describe("crop", () => {
 
   it("ignores a stray click", () => {
     expect(cropFromDrag({ x: 10, y: 10 }, { x: 11, y: 11 }, { width: 80, height: 60 })).toBeNull();
+  });
+});
+
+describe("crop ratios", () => {
+  const image = { width: 400, height: 300 };
+
+  it("reads each aspect's ratio, Original from the capture", () => {
+    expect(cropAspectRatio("free", image)).toBeNull();
+    expect(cropAspectRatio("original", image)).toBeCloseTo(4 / 3);
+    expect(cropAspectRatio("original", { width: 100, height: 400 })).toBe(0.25);
+    expect(cropAspectRatio("original", null)).toBeNull();
+    expect(cropAspectRatio("16:9", image)).toBe(16 / 9);
+    expect(cropAspectRatio("9:16", image)).toBe(9 / 16);
+    expect(cropAspectRatio("1:1", image)).toBe(1);
+  });
+
+  it("squares a Free crop with Shift, and leaves a picked ratio alone", () => {
+    expect(cropDragRatio(null, false)).toBeNull();
+    expect(cropDragRatio(null, true)).toBe(1);
+    expect(cropDragRatio(16 / 9, true)).toBe(16 / 9);
+    expect(cropDragRatio(16 / 9, false)).toBe(16 / 9);
+    // A Shift-squared drag: the longer side wins.
+    expect(cropFromDrag({ x: 10, y: 10 }, { x: 60, y: 110 }, image, cropDragRatio(null, true))).toEqual({ x: 10, y: 10, width: 100, height: 100 });
+  });
+
+  it("holds a drag to the ratio from the start corner", () => {
+    expect(cropFromDrag({ x: 10, y: 10 }, { x: 110, y: 60 }, image, 2)).toEqual({ x: 10, y: 10, width: 100, height: 50 });
+    expect(cropFromDrag({ x: 10, y: 10 }, { x: 30, y: 110 }, image, 2)).toEqual({ x: 10, y: 10, width: 200, height: 100 });
+    expect(cropFromDrag({ x: 100, y: 100 }, { x: 0, y: 90 }, image, 1)).toEqual({ x: 0, y: 0, width: 100, height: 100 });
+    expect(cropFromDrag({ x: 0, y: 0 }, { x: 160, y: 0 }, image, 16 / 9)).toEqual({ x: 0, y: 0, width: 160, height: 90 });
+  });
+
+  it("shrinks a ratio drag to fit inside the image", () => {
+    // Heading right: only 100px are left before the edge.
+    expect(cropFromDrag({ x: 300, y: 200 }, { x: 420, y: 210 }, image, 2)).toEqual({ x: 300, y: 200, width: 100, height: 50 });
+    // Heading up and left: the top edge is nearer.
+    expect(cropFromDrag({ x: 50, y: 40 }, { x: 0, y: 0 }, image, 2)).toEqual({ x: 0, y: 15, width: 50, height: 25 });
+    // A start outside the image begins at its edge.
+    expect(cropFromDrag({ x: -20, y: -20 }, { x: 100, y: 50 }, image, 1)).toEqual({ x: 0, y: 0, width: 100, height: 100 });
+    // Every ratio box stays inside.
+    for (const ratio of [16 / 9, 4 / 3, 1, 9 / 16]) {
+      const crop = cropFromDrag({ x: 390, y: 290 }, { x: -500, y: -500 }, image, ratio);
+      expect(crop).not.toBeNull();
+      expect(crop!.x).toBeGreaterThanOrEqual(0);
+      expect(crop!.y).toBeGreaterThanOrEqual(0);
+      expect(crop!.x + crop!.width).toBeLessThanOrEqual(390);
+      expect(crop!.y + crop!.height).toBeLessThanOrEqual(290);
+    }
+  });
+
+  it("previews a drag that is still too small", () => {
+    expect(cropBox({ x: 10, y: 10 }, { x: 11, y: 11 }, image, 1)).toEqual({ x: 10, y: 10, width: 1, height: 1 });
+    expect(cropBox({ x: 10, y: 10 }, { x: 10, y: 10 }, image)).toEqual({ x: 10, y: 10, width: 0, height: 0 });
+    expect(cropFromDrag({ x: 10, y: 10 }, { x: 11, y: 11 }, image, 1)).toBeNull();
+  });
+
+  it("fits the largest centred box of a ratio inside a crop", () => {
+    expect(fitCropToRatio({ x: 0, y: 0, width: 320, height: 240 }, 16 / 9)).toEqual({ x: 0, y: 30, width: 320, height: 180 });
+    expect(fitCropToRatio({ x: 10, y: 20, width: 100, height: 50 }, 1)).toEqual({ x: 35, y: 20, width: 50, height: 50 });
+    expect(fitCropToRatio({ x: 0, y: 0, width: 160, height: 90 }, 9 / 16)).toEqual({ x: 55, y: 0, width: 51, height: 90 });
+    // A crop that already has the ratio stays as it is.
+    expect(fitCropToRatio({ x: 5, y: 5, width: 160, height: 90 }, 16 / 9)).toEqual({ x: 5, y: 5, width: 160, height: 90 });
+  });
+
+  it("keeps a moved crop inside the image", () => {
+    const crop = { x: 0, y: 0, width: 100, height: 50 };
+    expect(moveCrop(crop, { x: 350, y: -20 }, image)).toEqual({ x: 300, y: 0, width: 100, height: 50 });
+    expect(moveCrop(crop, { x: 20.6, y: 30.2 }, image)).toEqual({ x: 21, y: 30, width: 100, height: 50 });
+  });
+
+  it("clips a free resize to the image, holding the edges that did not move", () => {
+    const from = { x: 10, y: 10, width: 100, height: 100 };
+    // The right side dragged past the image.
+    expect(resizeCrop(from, { x: 10, y: 10, width: 500, height: 100 }, image)).toEqual({ x: 10, y: 10, width: 390, height: 100 });
+    // The top dragged above it.
+    expect(resizeCrop(from, { x: 10, y: -40, width: 100, height: 150 }, image)).toEqual({ x: 10, y: 0, width: 100, height: 110 });
+  });
+
+  it("keeps the ratio while resizing from a corner, shrinking to fit", () => {
+    // Bottom right dragged out: the top left holds.
+    expect(resizeCrop({ x: 0, y: 0, width: 160, height: 90 }, { x: 0, y: 0, width: 320, height: 100 }, image, 16 / 9)).toEqual({
+      x: 0,
+      y: 0,
+      width: 320,
+      height: 180,
+    });
+    expect(resizeCrop({ x: 200, y: 100, width: 100, height: 50 }, { x: 200, y: 100, width: 300, height: 150 }, image, 2)).toEqual({
+      x: 200,
+      y: 100,
+      width: 200,
+      height: 100,
+    });
+    // Top left dragged out: the bottom right holds.
+    expect(resizeCrop({ x: 100, y: 100, width: 100, height: 50 }, { x: 50, y: 75, width: 150, height: 75 }, image, 2)).toEqual({
+      x: 50,
+      y: 75,
+      width: 150,
+      height: 75,
+    });
+  });
+
+  it("turns a crop drawn on show back into capture pixels", () => {
+    const shown = { x: 10, y: 20, width: 160, height: 90 };
+    // Unturned, the two are the same.
+    expect(cropToCapture(shown, image, IDENTITY)).toEqual(shown);
+    // A quarter turn: the 400×300 capture shows 300×400, and a 16:9 box on show is 9:16 in the capture.
+    const turned = { rotation: 90 as const, flipX: false, flipY: false };
+    expect(cropToCapture(shown, image, turned)).toEqual({ x: 20, y: 130, width: 90, height: 160 });
+    // Every turn and mirror round-trips through orientRect.
+    for (const rotation of [0, 90, 180, 270] as const) {
+      for (const flipX of [false, true]) {
+        const o = { rotation, flipX, flipY: !flipX && rotation === 180 };
+        const crop = cropToCapture(shown, image, o);
+        expect(orientRect(crop, image, o)).toEqual(shown);
+      }
+    }
+  });
+
+  it("keeps the old crop when a resize would leave almost nothing", () => {
+    const from = { x: 10, y: 10, width: 100, height: 100 };
+    expect(resizeCrop(from, { x: 10, y: 10, width: 1, height: 100 }, image)).toEqual(from);
   });
 });
 

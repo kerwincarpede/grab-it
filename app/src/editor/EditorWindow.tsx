@@ -45,12 +45,14 @@ import {
 import {
   BACKDROP_FILLS,
   COLORS,
+  CROP_ASPECTS,
   sameBackdrop,
   TOOLS,
   widthFor,
   widthKind,
   type Backdrop,
   type BlurMode,
+  type CropAspect,
   type LineShape,
   type Point,
   type Rect,
@@ -83,26 +85,34 @@ import ShapeNode, { SpotlightDim } from "./ShapeNode";
 import ToolWheel from "./ToolWheel";
 import {
   addShape,
+  ALL_ANCHORS,
   anchorsFor,
   beginShape,
   bendLine,
   clampWheel,
   colorForKey,
+  CORNER_ANCHORS,
+  cropAspectRatio,
+  cropBox,
+  cropDragRatio,
   cropFromDrag,
+  cropToCapture,
   curveMidpoint,
   deleteShape,
   dragShape,
   duplicateShape,
   finishShape,
+  fitCropToRatio,
   hasLineHandles,
   modifierTool,
+  moveCrop,
   moveLineEnd,
   moveShape,
   newId,
-  normalizeRect,
   nudgeDelta,
   releaseRestores,
   replaceShape,
+  resizeCrop,
   restyleShape,
   snapAngle,
   spotlightDim,
@@ -129,6 +139,8 @@ const BLUR_MODES: { mode: BlurMode; label: string }[] = [
 /** How much ⌥-scroll moves one width step: about one mouse-wheel notch, or a short trackpad swipe. */
 const WIDTH_SCROLL_STEP = 40;
 const errorText = (err: unknown) => String(err instanceof Error ? err.message : err);
+/** The crop rect's Konva name: pressing on it moves the crop instead of starting a new one. */
+const CROP_BOX = "crop-box";
 
 interface TextDraft {
   /** Set when editing an existing text shape. */
@@ -277,13 +289,22 @@ function fitView(bounds: Rect, size: { width: number; height: number }): View {
 const isTyping = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
 
-/** What a pointer went down on: an annotation (its draggable node), a resize or line handle, or neither. */
-function hitTarget(target: Konva.Node): { annotation: Konva.Node | null; handle: boolean } {
+/**
+ * What a pointer went down on: an annotation (its draggable node), a resize
+ * or line handle, the crop (which moves when dragged), or none of them.
+ */
+function hitTarget(target: Konva.Node): { annotation: Konva.Node | null; handle: boolean; crop: Konva.Node | null } {
   for (let node: Konva.Node | null = target; node; node = node.getParent()) {
-    if (node.hasName("annotation")) return { annotation: node, handle: false };
-    if (node.getClassName() === "Transformer" || node.hasName(LINE_HANDLE)) return { annotation: null, handle: true };
+    if (node.hasName("annotation")) return { annotation: node, handle: false, crop: null };
+    if (node.getClassName() === "Transformer" || node.hasName(LINE_HANDLE)) return { annotation: null, handle: true, crop: null };
+    if (node.hasName(CROP_BOX)) return { annotation: null, handle: false, crop: node };
   }
-  return { annotation: null, handle: false };
+  return { annotation: null, handle: false, crop: null };
+}
+
+/** The box a node covers in its parent, with the scale a Transformer gave it applied. */
+function scaledBox(node: Konva.Node): Rect {
+  return { x: node.x(), y: node.y(), width: node.width() * node.scaleX(), height: node.height() * node.scaleY() };
 }
 
 /** Names the bend and end handles of a selected arrow or line. */
@@ -380,6 +401,8 @@ export default function EditorWindow() {
   const stageRef = useRef<Konva.Stage>(null);
   const contentRef = useRef<Konva.Layer>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
+  const cropBoxRef = useRef<Konva.Rect>(null);
+  const cropTransformerRef = useRef<Konva.Transformer>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<HTMLDivElement>(null);
 
@@ -394,7 +417,13 @@ export default function EditorWindow() {
   const [bending, setBending] = useState<LineShape | null>(null);
   /** A selected arrow or line being dragged, so its handles follow it. */
   const [moving, setMoving] = useState<{ id: string; transform: NodeTransform } | null>(null);
-  const [cropDrag, setCropDrag] = useState<{ start: Point; end: Point } | null>(null);
+  /** A crop being drawn; `square` is Shift, which squares a Free crop. */
+  const [cropDrag, setCropDrag] = useState<{ start: Point; end: Point; square: boolean } | null>(null);
+  /** The crop shape for this session only; it is never saved. */
+  const [cropAspect, setCropAspect] = useState<CropAspect>("free");
+  /** The crop mid-move or mid-resize, shown but not yet committed. */
+  const [cropEdit, setCropEdit] = useState<Rect | null>(null);
+  const cropEditRef = useRef<Rect | null>(null);
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -464,6 +493,20 @@ export default function EditorWindow() {
     [imageSize, rotation, flipX, flipY],
   );
   const outputScale = doc.scale ?? 1;
+  /**
+   * The capture's size as it shows. Crop ratios, drags, handles and moves all
+   * work on show, so a 16:9 crop looks 16:9 however the capture is turned.
+   */
+  const shownSize = useMemo(() => (imageSize ? displaySize(imageSize, { rotation, flipX, flipY }) : null), [imageSize, rotation, flipX, flipY]);
+  /** Width over height for the picked crop aspect, Original being the capture as it shows; null for a Free crop. */
+  const cropRatio = useMemo(() => cropAspectRatio(cropAspect, shownSize), [cropAspect, shownSize]);
+  /** The saved crop as it shows. */
+  const shownCrop = useMemo(
+    () => (doc.crop && imageSize ? orientRect(doc.crop, imageSize, { rotation, flipX, flipY }) : null),
+    [doc.crop, imageSize, rotation, flipX, flipY],
+  );
+  /** A crop on show back in capture pixels, for `doc.crop`. */
+  const shownToCapture = (shown: Rect): Rect => (imageSize ? cropToCapture(shown, imageSize, orientation) : shown);
   const backdrop = backdropDraft ?? doc.backdrop ?? null;
   /** Image pixels per point: the corner radius is in points. Older captures do not say, so the window's density stands in. */
   const captureScale = info?.scaleFactor && info.scaleFactor > 0 ? info.scaleFactor : fallbackScale();
@@ -532,6 +575,18 @@ export default function EditorWindow() {
     transformer.nodes(node ? [node] : []);
     transformer.getLayer()?.batchDraw();
   }, [selectedId, editable, lineSelected, doc]);
+
+  /** The saved crop gets move and resize handles while the Crop tool is out and no new crop is being drawn. */
+  const cropHandles = tool === "crop" && !panning && Boolean(doc.crop) && !cropDrag;
+  useEffect(() => {
+    // Handles going away under the pointer must not leave its move cursor behind.
+    if (!cropHandles && container.current) container.current.style.cursor = "";
+    const transformer = cropTransformerRef.current;
+    if (!transformer) return;
+    const node = cropHandles ? cropBoxRef.current : null;
+    transformer.nodes(node ? [node] : []);
+    transformer.getLayer()?.batchDraw();
+  }, [cropHandles, doc.crop, cropRatio]);
 
   // Notes about an action give way to the save status again.
   useEffect(() => {
@@ -626,10 +681,12 @@ export default function EditorWindow() {
     if (hit.handle) return;
     const drawWith = override ?? tool;
     if (override) {
+      // ⌘/⌥ draws over a shape or the crop rather than moving it.
       if (hit.annotation) suppressDrag(hit.annotation);
+      else if (hit.crop) suppressDrag(hit.crop);
       else if (panning) suppressDrag(event.target.getStage() ?? event.target);
-    } else if (hit.annotation) {
-      // The shape selected itself; its own drag moves it.
+    } else if (hit.annotation || hit.crop) {
+      // The shape selected itself, or the crop was grabbed; its own drag moves it.
       return;
     }
     if (drawWith === "select") {
@@ -645,7 +702,9 @@ export default function EditorWindow() {
       return;
     }
     if (drawWith === "crop") {
-      setCropDrag({ start: at, end: at });
+      // Drawn on show: see `shownSize`.
+      const shown = shownPointer() ?? at;
+      setCropDrag({ start: shown, end: shown, square: event.evt.shiftKey });
       return;
     }
     const shape = beginShape(drawWith, at, drawStyle(drawWith));
@@ -663,7 +722,7 @@ export default function EditorWindow() {
     if (!at) return;
     // Shift keeps lines to 45° steps and boxes square.
     if (draft) setDraft(dragShape(draft, at, event.evt.shiftKey));
-    if (cropDrag) setCropDrag({ ...cropDrag, end: at });
+    if (cropDrag) setCropDrag({ ...cropDrag, end: shownPointer() ?? at, square: event.evt.shiftKey });
   };
 
   const onMouseUp = () => {
@@ -684,9 +743,9 @@ export default function EditorWindow() {
       }
       setDraft(null);
     }
-    if (cropDrag && imageSize) {
-      const crop = cropFromDrag(cropDrag.start, cropDrag.end, imageSize);
-      if (crop) commit({ ...doc, crop });
+    if (cropDrag && shownSize) {
+      const shown = cropFromDrag(cropDrag.start, cropDrag.end, shownSize, cropDragRatio(cropRatio, cropDrag.square));
+      if (shown) commit({ ...doc, crop: shownToCapture(shown) });
       setCropDrag(null);
     }
   };
@@ -731,6 +790,56 @@ export default function EditorWindow() {
     setDraft(null);
     setCropDrag(null);
     setWheelAt(clampWheel({ x: event.clientX - box.left, y: event.clientY - box.top }, size));
+  };
+
+  /** Picks a crop aspect; a crop already in place is reshaped to the largest box of that ratio inside it. */
+  const pickCropAspect = (aspect: CropAspect) => {
+    setCropAspect(aspect);
+    const ratio = cropAspectRatio(aspect, shownSize);
+    if (!doc.crop || !shownCrop || !ratio) return;
+    // Fitted as it shows, then saved in capture pixels.
+    const fitted = shownToCapture(fitCropToRatio(shownCrop, ratio));
+    const same = fitted.x === doc.crop.x && fitted.y === doc.crop.y && fitted.width === doc.crop.width && fitted.height === doc.crop.height;
+    if (!same) commit({ ...doc, crop: fitted });
+  };
+
+  /** Shows a crop mid-edit, on show; the ref lets Konva's handlers read it before React re-renders. */
+  const showCropEdit = (next: Rect | null) => {
+    cropEditRef.current = next;
+    setCropEdit(next);
+  };
+
+  /** Puts the crop rect where the move or resize left it, at scale 1, and shows that crop. */
+  const placeCropBox = (node: Konva.Node, next: Rect) => {
+    node.setAttrs({ ...next, scaleX: 1, scaleY: 1 });
+    showCropEdit(next);
+  };
+
+  const onCropDragMove = (event: Konva.KonvaEventObject<DragEvent>) => {
+    const from = cropEditRef.current ?? shownCrop;
+    if (!from || !shownSize) return;
+    placeCropBox(event.target, moveCrop(from, event.target.position(), shownSize));
+  };
+
+  const onCropTransform = (event: Konva.KonvaEventObject<Event>) => {
+    const from = cropEditRef.current ?? shownCrop;
+    if (!from || !shownSize) return;
+    placeCropBox(event.target, resizeCrop(from, scaledBox(event.target), shownSize, cropRatio));
+  };
+
+  /** Commits a finished move or resize of the crop, in capture pixels, as one change. */
+  const commitCropEdit = () => {
+    const edited = cropEditRef.current;
+    showCropEdit(null);
+    const now = doc.crop;
+    if (!edited || !now) return;
+    const next = shownToCapture(edited);
+    if (next.x !== now.x || next.y !== now.y || next.width !== now.width || next.height !== now.height) commit({ ...doc, crop: next });
+  };
+
+  /** The move cursor over the crop (the handles set their own); "" gives back the tool's cursor. */
+  const cropCursor = (cursor: string) => {
+    if (container.current) container.current.style.cursor = cursor;
   };
 
   const changeShape = (id: string, transform: NodeTransform) => {
@@ -1040,8 +1149,10 @@ export default function EditorWindow() {
   }, [undoDoc, redoDoc, copy, copyAndClose, removeSelected, duplicateSelected, nudgeSelected, selectedId, changeStyle, stepWidth, pickTool, restoreTool, tool, image, rotateBy]);
 
   const error = annotations.error ?? imageError;
-  const cropPreview = cropDrag ? normalizeRect({ ...cropDrag.start, width: cropDrag.end.x - cropDrag.start.x, height: cropDrag.end.y - cropDrag.start.y }) : null;
-  const crop = cropPreview ?? doc.crop ?? null;
+  /** The crop as it shows: being drawn (the box that will be committed), mid-edit, or as saved. */
+  const cropShown = (cropDrag && shownSize ? cropBox(cropDrag.start, cropDrag.end, shownSize, cropDragRatio(cropRatio, cropDrag.square)) : null) ?? cropEdit ?? shownCrop;
+  /** The same crop in capture pixels, for the dim drawn in the oriented group. */
+  const crop = cropShown ? shownToCapture(cropShown) : null;
   const placed = bending ? doc.shapes.map((shape) => (shape.id === bending.id ? bending : shape)) : doc.shapes;
   const shapes = draft ? [...placed, draft] : placed;
   /** The selected arrow or line as its handles show it: mid-drag, mid-bend, or as saved. */
@@ -1054,8 +1165,6 @@ export default function EditorWindow() {
   const spotlights = shapes.filter((shape) => shape.type === "spotlight");
   const dim = imageSize ? spotlightDim({ x: 0, y: 0, ...imageSize }, spotlights) : [];
   const framed = frame?.layout ? { area: frame.area, bounds: frame.bounds, layout: frame.layout } : null;
-  /** The crop as it shows, for the status bar. */
-  const shownCrop = doc.crop && imageSize ? orientRect(doc.crop, imageSize, orientation) : null;
   const output = outputBase ? scaledSize(outputBase, outputScale) : null;
   const paint = framed && backdrop ? backdropPaint(backdrop, framed.layout) : [];
 
@@ -1067,27 +1176,30 @@ export default function EditorWindow() {
   return (
     <main className="editor" data-testid="editor" data-ready={image ? "true" : "false"}>
       <div className="editor-topbar" role="toolbar" aria-label="Style and actions">
-        <div className="bar-group" role="group" aria-label="Colour">
-          {COLORS.map((color) => (
-            <button
-              key={color}
-              type="button"
-              className="swatch"
-              style={{ background: color }}
-              aria-label={`Colour ${color}`}
-              aria-pressed={style.color === color}
-              onClick={() => changeStyle({ color })}
+        {/* Crop has no colour; its ratio picker takes the space instead, so the bar stays on one line. */}
+        {optionsFor !== "crop" && (
+          <div className="bar-group" role="group" aria-label="Colour">
+            {COLORS.map((color) => (
+              <button
+                key={color}
+                type="button"
+                className="swatch"
+                style={{ background: color }}
+                aria-label={`Colour ${color}`}
+                aria-pressed={style.color === color}
+                onClick={() => changeStyle({ color })}
+              />
+            ))}
+            <input
+              className="swatch custom"
+              aria-label="Custom colour"
+              title="Custom colour"
+              type="color"
+              value={style.color}
+              onChange={(event) => changeStyle({ color: event.target.value })}
             />
-          ))}
-          <input
-            className="swatch custom"
-            aria-label="Custom colour"
-            title="Custom colour"
-            type="color"
-            value={style.color}
-            onChange={(event) => changeStyle({ color: event.target.value })}
-          />
-        </div>
+          </div>
+        )}
         {width && <WidthControl kind={width} value={shownWidth} color={selected && "color" in selected ? selected.color : style.color} onChange={changeWidth} />}
         {boxOptions && (
           <div className="bar-group">
@@ -1114,6 +1226,15 @@ export default function EditorWindow() {
           <div className="bar-group segmented" role="group" aria-label="Blur style">
             {BLUR_MODES.map(({ mode, label }) => (
               <button key={mode} type="button" aria-pressed={blurMode === mode} onClick={() => changeStyle({ blurMode: mode })}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {optionsFor === "crop" && (
+          <div className="bar-group segmented" role="group" aria-label="Crop ratio">
+            {CROP_ASPECTS.map(({ aspect, label }) => (
+              <button key={aspect} type="button" aria-pressed={cropAspect === aspect} onClick={() => pickCropAspect(aspect)}>
                 {label}
               </button>
             ))}
@@ -1332,15 +1453,35 @@ export default function EditorWindow() {
               </Layer>
               <Layer>
                 {/* The backdrop preview already shows only the crop. */}
-                {crop && imageSize && !framed && (
+                {crop && cropShown && imageSize && !framed && (
+                  <>
                   <Group name="oriented-crop" {...groupAttrs}>
                     {/* Dim everything outside the crop; the capture itself is untouched. */}
                     <KonvaRect x={0} y={0} width={imageSize.width} height={crop.y} fill="black" opacity={0.5} listening={false} />
                     <KonvaRect x={0} y={crop.y + crop.height} width={imageSize.width} height={imageSize.height - crop.y - crop.height} fill="black" opacity={0.5} listening={false} />
                     <KonvaRect x={0} y={crop.y} width={crop.x} height={crop.height} fill="black" opacity={0.5} listening={false} />
                     <KonvaRect x={crop.x + crop.width} y={crop.y} width={imageSize.width - crop.x - crop.width} height={crop.height} fill="black" opacity={0.5} listening={false} />
-                    <KonvaRect {...crop} stroke="#ffffff" strokeWidth={1 / currentView.scale} dash={[6 / currentView.scale, 4 / currentView.scale]} listening={false} />
                   </Group>
+                  {/* The outline, its handles and its drag stay upright on show, outside the turned group. */}
+                  <KonvaRect
+                    ref={cropBoxRef}
+                    name={CROP_BOX}
+                    {...cropShown}
+                    // A see-through fill, so the whole box (not just its outline) takes the press.
+                    fill="rgba(0, 0, 0, 0)"
+                    stroke="#ffffff"
+                    strokeWidth={1 / currentView.scale}
+                    dash={[6 / currentView.scale, 4 / currentView.scale]}
+                    listening={cropHandles}
+                    draggable={cropHandles}
+                    onDragMove={onCropDragMove}
+                    onDragEnd={commitCropEdit}
+                    onTransform={onCropTransform}
+                    onTransformEnd={commitCropEdit}
+                    onMouseEnter={() => cropCursor("move")}
+                    onMouseLeave={() => cropCursor("")}
+                  />
+                  </>
                 )}
                 <Transformer
                   ref={transformerRef}
@@ -1360,6 +1501,17 @@ export default function EditorWindow() {
                       onCommit={commitLine}
                     />
                   </Group>
+                )}
+                {cropHandles && (
+                  <Transformer
+                    ref={cropTransformerRef}
+                    name="crop-handles"
+                    rotateEnabled={false}
+                    flipEnabled={false}
+                    ignoreStroke
+                    keepRatio={cropRatio !== null}
+                    enabledAnchors={cropRatio !== null ? CORNER_ANCHORS : ALL_ANCHORS}
+                  />
                 )}
               </Layer>
             </Stage>

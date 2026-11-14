@@ -147,6 +147,18 @@ vi.mock("react-konva", async () => {
           draggable: () => true,
         };
       }
+      // The crop rect reports its name, and its drag can be turned off and back on.
+      if (element instanceof Element && element.closest('[data-name="crop-box"]')) {
+        let draggable = true;
+        return {
+          getStage: () => stage,
+          getParent: () => null,
+          getClassName: () => "Rect",
+          hasName: (name: string) => name === "crop-box",
+          name: () => "crop-box",
+          draggable: (value?: boolean) => (value === undefined ? draggable : ((draggable = value), undefined)),
+        };
+      }
       if (!(element instanceof Element) || !element.closest("[data-id]")) return stage;
       return {
         getStage: () => stage,
@@ -1303,5 +1315,123 @@ describe("EditorWindow", () => {
     await ready();
     await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 100));
     expect(saved).toEqual([]);
+  });
+
+  it("offers crop ratios with the Crop tool and reshapes the crop to the one picked", async () => {
+    const saved = mockEditor({ ...sidecar, crop: { x: 0, y: 0, width: 320, height: 240 } });
+    await ready();
+    expect(screen.queryByRole("group", { name: "Crop ratio" })).not.toBeInTheDocument();
+
+    fireEvent.click(pressed("Crop"));
+    const ratios = within(screen.getByRole("group", { name: "Crop ratio" }));
+    expect(ratios.getAllByRole("button").map((button) => button.textContent)).toEqual(["Free", "Original", "16:9", "4:3", "1:1", "9:16"]);
+    expect(ratios.getByRole("button", { name: "Free" })).toHaveAttribute("aria-pressed", "true");
+    // Crop has no colour: the picker takes the swatches' place.
+    expect(screen.queryByRole("group", { name: "Colour" })).not.toBeInTheDocument();
+
+    // The largest 16:9 box inside the crop, centred.
+    fireEvent.click(ratios.getByRole("button", { name: "16:9" }));
+    expect(ratios.getByRole("button", { name: "16:9" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Crop 320×180")).toBeInTheDocument();
+    await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 0, y: 30, width: 320, height: 180 }));
+
+    // One change: a single undo brings the old crop back.
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(screen.getByText("Crop 320×240")).toBeInTheDocument();
+
+    // Original is the capture's own 4:3, which this crop already has.
+    fireEvent.click(ratios.getByRole("button", { name: "Original" }));
+    expect(screen.getByText("Crop 320×240")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Redo" })).toBeEnabled();
+
+    // Free leaves the crop alone.
+    fireEvent.click(ratios.getByRole("button", { name: "Free" }));
+    expect(screen.getByText("Crop 320×240")).toBeInTheDocument();
+    fireEvent.click(pressed("Arrow"));
+    expect(screen.queryByRole("group", { name: "Crop ratio" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Colour" })).toBeInTheDocument();
+  });
+
+  it("holds a crop drag to the picked ratio, and Shift squares a Free crop", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.click(pressed("Crop"));
+    fireEvent.click(screen.getByRole("button", { name: "1:1" }));
+    drag([10, 10], [110, 60]);
+    await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 10, y: 10, width: 100, height: 100 }));
+
+    // 16:9 shrinks to fit: only 100px are left below the start.
+    fireEvent.click(screen.getByRole("button", { name: "16:9" }));
+    drag([0, 200], [400, 300]);
+    await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 0, y: 200, width: 178, height: 100 }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Free" }));
+    drag([20, 20], [70, 120], { shiftKey: true });
+    await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 20, y: 20, width: 100, height: 100 }));
+    drag([0, 0], [50, 20]);
+    await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 0, y: 0, width: 50, height: 20 }));
+  });
+
+  it("crops a turned capture as it shows", async () => {
+    // The 400×300 capture, turned a quarter, shows 300×400; the stage reports the pointer on show.
+    const saved = mockEditor({ ...sidecar, rotation: 90 });
+    await ready();
+    fireEvent.click(pressed("Crop"));
+    fireEvent.click(screen.getByRole("button", { name: "16:9" }));
+    drag([0, 0], [160, 10]);
+    // 16:9 on show is 9:16 in capture pixels.
+    await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 0, y: 140, width: 90, height: 160 }));
+    expect(screen.getByText("Crop 160×90")).toBeInTheDocument();
+    expect(document.querySelector('[data-name="crop-box"]')).toHaveAttribute("data-draggable", "true");
+
+    // Reshaping fits the crop as it shows, too.
+    fireEvent.click(screen.getByRole("button", { name: "1:1" }));
+    await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 0, y: 175, width: 90, height: 90 }));
+    expect(screen.getByText("Crop 90×90")).toBeInTheDocument();
+  });
+
+  it("moves the crop on a plain press inside it, and draws over it with Ctrl", async () => {
+    const saved = mockEditor({ ...sidecar, crop: { x: 0, y: 0, width: 320, height: 240 } });
+    await ready();
+    fireEvent.click(pressed("Crop"));
+    const cropBox = document.querySelector('[data-name="crop-box"]') as Element;
+
+    // A plain press is the crop's own drag: no new crop is started.
+    Object.assign(pointerAt, { x: 10, y: 10 });
+    fireEvent.mouseDown(cropBox);
+    Object.assign(pointerAt, { x: 110, y: 60 });
+    fireEvent.mouseMove(stage());
+    fireEvent.mouseUp(stage());
+    expect(screen.getByText("Crop 320×240")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+
+    // Ctrl still draws a rectangle, and the crop stays where it was.
+    Object.assign(pointerAt, { x: 10, y: 10 });
+    fireEvent.mouseDown(cropBox, { ctrlKey: true });
+    Object.assign(pointerAt, { x: 110, y: 60 });
+    fireEvent.mouseMove(stage(), { ctrlKey: true });
+    fireEvent.mouseUp(stage(), { ctrlKey: true });
+    await waitFor(() => expect(last(saved)?.shapes).toHaveLength(5));
+    expect(last(saved)?.shapes[4]).toMatchObject({ type: "rect", x: 10, y: 10, width: 100, height: 50 });
+    expect(last(saved)?.crop).toEqual({ x: 0, y: 0, width: 320, height: 240 });
+  });
+
+  it("gives the crop move and resize handles with the Crop tool, corners only with a ratio", async () => {
+    mockEditor({ ...sidecar, crop: { x: 0, y: 0, width: 320, height: 240 } });
+    await ready();
+    const cropBox = () => document.querySelector('[data-name="crop-box"]');
+    const cropHandles = () => document.querySelector('[data-konva="Transformer"][data-name="crop-handles"]');
+    expect(cropBox()).toHaveAttribute("data-draggable", "false");
+    expect(cropHandles()).not.toBeInTheDocument();
+
+    fireEvent.click(pressed("Crop"));
+    expect(cropBox()).toHaveAttribute("data-draggable", "true");
+    expect(cropHandles()?.getAttribute("data-anchors")?.split(" ")).toContain("middle-left");
+
+    fireEvent.click(screen.getByRole("button", { name: "4:3" }));
+    expect(cropHandles()?.getAttribute("data-anchors")?.split(" ")).toEqual(["top-left", "top-right", "bottom-left", "bottom-right"]);
+
+    fireEvent.click(pressed("Arrow"));
+    expect(cropHandles()).not.toBeInTheDocument();
   });
 });

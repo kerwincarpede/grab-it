@@ -1,8 +1,10 @@
 import {
   COLORS,
+  CROP_ASPECTS,
   DEFAULT_STEP_RADIUS,
   STROKE_WIDTHS,
   type Annotations,
+  type CropAspect,
   type LineShape,
   type Point,
   type Rect,
@@ -10,6 +12,7 @@ import {
   type Style,
   type Tool,
 } from "./model";
+import { toCapture, type Orientation } from "./orient";
 
 /** How far a duplicate lands from its original, in capture pixels. */
 export const DUPLICATE_OFFSET = 12;
@@ -152,15 +155,104 @@ export function finishShape(shape: Shape): Shape | null {
   }
 }
 
-/** A finished crop drag, clipped to the image, or null for a stray click. */
-export function cropFromDrag(start: Point, end: Point, image: { width: number; height: number }): Rect | null {
-  const rect = normalizeRect({ x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y });
-  const x = Math.max(0, Math.round(rect.x));
-  const y = Math.max(0, Math.round(rect.y));
-  const right = Math.min(image.width, Math.round(rect.x + rect.width));
-  const bottom = Math.min(image.height, Math.round(rect.y + rect.height));
-  if (right - x < MIN_SIZE || bottom - y < MIN_SIZE) return null;
-  return { x, y, width: right - x, height: bottom - y };
+type Size = { width: number; height: number };
+
+/** The width-over-height ratio a crop aspect holds to: Original is the capture's own; null for Free. */
+export function cropAspectRatio(aspect: CropAspect, image: Size | null): number | null {
+  if (aspect === "original") return image && image.width > 0 && image.height > 0 ? image.width / image.height : null;
+  return CROP_ASPECTS.find((entry) => entry.aspect === aspect)?.ratio ?? null;
+}
+
+/** The ratio a crop drag is held to: the picked one, or a square when Shift is held on a Free crop. */
+export function cropDragRatio(ratio: number | null, shift: boolean): number | null {
+  return ratio ?? (shift ? 1 : null);
+}
+
+/**
+ * The box a crop drag from `start` to `end` covers, in whole pixels inside
+ * the image. With a `ratio` (width over height) the box keeps it from the
+ * start corner, its longer side following the pointer, and shrinks to fit
+ * when it would leave the image. May be empty; see `cropFromDrag`.
+ */
+export function cropBox(start: Point, end: Point, image: Size, ratio: number | null = null): Rect {
+  if (!ratio) {
+    const rect = normalizeRect({ x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y });
+    const x = Math.min(image.width, Math.max(0, Math.round(rect.x)));
+    const y = Math.min(image.height, Math.max(0, Math.round(rect.y)));
+    const right = Math.max(x, Math.min(image.width, Math.round(rect.x + rect.width)));
+    const bottom = Math.max(y, Math.min(image.height, Math.round(rect.y + rect.height)));
+    return { x, y, width: right - x, height: bottom - y };
+  }
+  const sx = Math.min(image.width, Math.max(0, Math.round(start.x)));
+  const sy = Math.min(image.height, Math.max(0, Math.round(start.y)));
+  const dx = end.x - sx;
+  const dy = end.y - sy;
+  // The room left between the start corner and the image edge the drag heads for.
+  const roomX = dx < 0 ? sx : image.width - sx;
+  const roomY = dy < 0 ? sy : image.height - sy;
+  const exact = Math.min(Math.max(Math.abs(dx), Math.abs(dy) * ratio), roomX, roomY * ratio);
+  const width = Math.min(roomX, Math.round(exact));
+  const height = Math.min(roomY, Math.round(exact / ratio));
+  return { x: dx < 0 ? sx - width : sx, y: dy < 0 ? sy - height : sy, width, height };
+}
+
+/**
+ * A finished crop drag, clipped to the image, or null for a stray click.
+ * With a `ratio` the crop keeps it (see `cropBox`).
+ */
+export function cropFromDrag(start: Point, end: Point, image: Size, ratio: number | null = null): Rect | null {
+  const box = cropBox(start, end, image, ratio);
+  return box.width < MIN_SIZE || box.height < MIN_SIZE ? null : box;
+}
+
+/** The largest box of `ratio` (width over height) inside `crop`, centred on it, in whole pixels. */
+export function fitCropToRatio(crop: Rect, ratio: number): Rect {
+  const exact = Math.min(crop.width, crop.height * ratio);
+  const width = Math.max(1, Math.min(crop.width, Math.round(exact)));
+  const height = Math.max(1, Math.min(crop.height, Math.round(exact / ratio)));
+  return {
+    x: crop.x + Math.round((crop.width - width) / 2),
+    y: crop.y + Math.round((crop.height - height) / 2),
+    width,
+    height,
+  };
+}
+
+/** A crop moved so its corner is at `to`, kept whole inside the image and in whole pixels. */
+export function moveCrop(crop: Rect, to: Point, image: Size): Rect {
+  const clamp = (value: number, max: number) => Math.min(Math.max(0, max), Math.max(0, Math.round(value)));
+  return { ...crop, x: clamp(to.x, image.width - crop.width), y: clamp(to.y, image.height - crop.height) };
+}
+
+/**
+ * Where a crop resized from `from` to the handle box `box` ends up: the
+ * edges that stayed put hold still, the box is clipped to the image, and
+ * with a `ratio` it keeps that ratio, shrinking to fit. A resize that would
+ * leave the crop smaller than `MIN_SIZE` keeps `from`.
+ */
+export function resizeCrop(from: Rect, box: Rect, image: Size, ratio: number | null = null): Rect {
+  const next = normalizeRect(box);
+  const right = next.x + next.width;
+  const bottom = next.y + next.height;
+  // Whichever edge moved less is the one held still.
+  const leftHeld = Math.abs(next.x - from.x) <= Math.abs(right - (from.x + from.width));
+  const topHeld = Math.abs(next.y - from.y) <= Math.abs(bottom - (from.y + from.height));
+  const start = { x: leftHeld ? next.x : right, y: topHeld ? next.y : bottom };
+  const end = { x: leftHeld ? right : next.x, y: topHeld ? bottom : next.y };
+  return cropFromDrag(start, end, image, ratio) ?? from;
+}
+
+/**
+ * A crop drawn on show (display space) back in capture pixels, where
+ * `Annotations.crop` lives: its two corners mapped with `toCapture` and
+ * normalised. The inverse of `orientRect`. `size` is the capture's own size.
+ */
+export function cropToCapture(shown: Rect, size: Size, o: Orientation): Rect {
+  const a = toCapture({ x: shown.x, y: shown.y }, size, o);
+  const b = toCapture({ x: shown.x + shown.width, y: shown.y + shown.height }, size, o);
+  const x = Math.round(Math.min(a.x, b.x));
+  const y = Math.round(Math.min(a.y, b.y));
+  return { x, y, width: Math.round(Math.max(a.x, b.x)) - x, height: Math.round(Math.max(a.y, b.y)) - y };
 }
 
 /**
