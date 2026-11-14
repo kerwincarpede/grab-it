@@ -53,9 +53,11 @@ describe("AppWindow", () => {
     backend();
     render(<AppWindow />);
     expect(screen.getByText("Grab-it")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Capture region" })).toBeInTheDocument();
+    const capture = screen.getByRole("button", { name: "New capture" });
     expect(screen.getByRole("heading", { name: "All captures" })).toBeInTheDocument();
     expect(await screen.findByText("v0.2.1")).toBeInTheDocument();
+    // The region hotkey shows on the button, but is not part of its name.
+    await waitFor(() => expect(capture).toHaveTextContent("Cmd+Shift+2"));
   });
 
   it("lists the apps captures came from and filters by one", async () => {
@@ -94,7 +96,7 @@ describe("AppWindow", () => {
   it("starts captures from the sidebar", async () => {
     const calls = backend();
     render(<AppWindow />);
-    await userEvent.click(screen.getByRole("button", { name: "Capture region" }));
+    await userEvent.click(screen.getByRole("button", { name: "New capture" }));
     await userEvent.click(screen.getByRole("button", { name: "More captures" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "Record GIF" }));
     const captures = calls.filter(({ cmd }) => cmd === "hub_capture").map(({ payload }) => (payload as { kind: string }).kind);
@@ -105,7 +107,7 @@ describe("AppWindow", () => {
   it("is the app route", () => {
     backend();
     render(<App route="app" />);
-    expect(screen.getByRole("button", { name: "Capture region" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New capture" })).toBeInTheDocument();
   });
 });
 

@@ -96,13 +96,13 @@ function WelcomeWindow() {
 
       {/* Straight under the introduction, so they are in view however short the window is. */}
       <div className="welcome-actions">
-        <button type="button" onClick={() => open("region")}>
+        <button type="button" className="cta welcome-cta" onClick={() => open("region")}>
           Capture a region now
         </button>
-        <button type="button" className="secondary" onClick={() => open("settings")}>
+        <button type="button" className="pill" onClick={() => open("settings")}>
           Open Settings
         </button>
-        <button type="button" className="secondary" onClick={() => open("library")}>
+        <button type="button" className="pill" onClick={() => open("library")}>
           Open the Library
         </button>
       </div>
@@ -110,14 +110,16 @@ function WelcomeWindow() {
         {error}
       </p>
 
-      <section className="card" aria-labelledby="welcome-shortcuts">
-        <h2 id="welcome-shortcuts">Hotkeys</h2>
-        <ul className="welcome-shortcuts">
+      <section aria-labelledby="welcome-shortcuts">
+        <h2 className="group-heading" id="welcome-shortcuts">
+          Hotkeys
+        </h2>
+        <ul className="group welcome-shortcuts">
           {SHORTCUTS.map(({ key, title, detail }) => (
-            <li key={key}>
-              <span>
-                <span className="choice-title">{title}</span>
-                <span className="hint">{detail}</span>
+            <li className="row" key={key}>
+              <span className="row-text">
+                <span className="row-title">{title}</span>
+                <span className="row-hint">{detail}</span>
               </span>
               <span className="welcome-keys" aria-label={hotkeys?.[key] ?? undefined}>
                 {acceleratorKeys(hotkeys?.[key] ?? "").map((part) => (
@@ -127,21 +129,24 @@ function WelcomeWindow() {
             </li>
           ))}
         </ul>
-        <p className="hint">Change them in Settings. Timed captures, Repeat last region and Record GIF are a click on the Grab-it icon away.</p>
+        <p className="hint welcome-note">
+          Change them in Settings. Timed captures, Repeat last region and Record GIF are a click on the Grab-it icon away.
+        </p>
       </section>
 
-      <section className="card" aria-labelledby="welcome-tips">
-        <h2 id="welcome-tips">Worth knowing</h2>
+      <section aria-labelledby="welcome-tips">
+        <h2 className="group-heading" id="welcome-tips">
+          Worth knowing
+        </h2>
         <ul className="welcome-tips">
           {(claudeDescribes ? [...TIPS, CLAUDE_TIP] : TIPS).map(({ title, detail }) => (
-            <li key={title}>
-              <span className="choice-title">{title}</span>
-              <span className="hint">{detail}</span>
+            <li className="group" key={title}>
+              <span className="row-title">{title}</span>
+              <span className="row-hint">{detail}</span>
             </li>
           ))}
         </ul>
       </section>
-
     </main>
   );
 }

@@ -174,7 +174,7 @@ describe("SettingsWindow", () => {
     render(<SettingsWindow />);
     const quick = await screen.findByRole("radio", { name: /Show Quick Access/ });
     await waitFor(() => expect(quick).toBeChecked());
-    expect(screen.getByRole("checkbox", { name: /Copy every capture/ })).toBeChecked();
+    expect(screen.getByRole("switch", { name: /Copy every capture/ })).toBeChecked();
 
     await userEvent.click(screen.getByRole("radio", { name: /Open the editor/ }));
 
@@ -189,7 +189,7 @@ describe("SettingsWindow", () => {
   it("turns copying to the clipboard off, keeping the other choice", async () => {
     const backend = mockBackend({ afterCapture: "nothing" });
     render(<SettingsWindow />);
-    const copy = await screen.findByRole("checkbox", { name: /Copy every capture/ });
+    const copy = await screen.findByRole("switch", { name: /Copy every capture/ });
     await waitFor(() => expect(copy).toBeEnabled());
 
     await userEvent.click(copy);
@@ -215,7 +215,7 @@ describe("SettingsWindow", () => {
   it("turns framing new captures with the last backdrop on and off", async () => {
     const backend = mockBackend();
     render(<SettingsWindow />);
-    const toggle = await screen.findByRole("checkbox", { name: /Frame new captures with the last backdrop/ });
+    const toggle = await screen.findByRole("switch", { name: /Frame new captures with the last backdrop/ });
     await waitFor(() => expect(toggle).toBeEnabled());
     expect(toggle).not.toBeChecked();
 
@@ -233,14 +233,14 @@ describe("SettingsWindow", () => {
   it("shows auto-apply as it is saved", async () => {
     mockBackend({ autoBackdrop: true });
     render(<SettingsWindow />);
-    const toggle = await screen.findByRole("checkbox", { name: /Frame new captures with the last backdrop/ });
+    const toggle = await screen.findByRole("switch", { name: /Frame new captures with the last backdrop/ });
     await waitFor(() => expect(toggle).toBeChecked());
   });
 
   it("turns starting at sign-in on", async () => {
     const backend = mockBackend({ autostart: false });
     render(<SettingsWindow />);
-    const toggle = await screen.findByRole("checkbox", { name: /Start Grab-it when you sign in/ });
+    const toggle = await screen.findByRole("switch", { name: /Start Grab-it when you sign in/ });
     expect(toggle).not.toBeChecked();
 
     await userEvent.click(toggle);
@@ -253,7 +253,7 @@ describe("SettingsWindow", () => {
     mockBackend();
     render(<SettingsWindow />);
     await screen.findByDisplayValue("/home/me/Pictures/Grab-it");
-    expect(screen.queryByRole("checkbox", { name: /Start Grab-it/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /Start Grab-it/ })).not.toBeInTheDocument();
   });
 
   it("shows the current hotkeys", async () => {
@@ -405,7 +405,7 @@ describe("SettingsWindow AI descriptions", () => {
     mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, apiKey: "sk-secret" } });
     render(<SettingsWindow />);
 
-    const toggle = await screen.findByRole("checkbox", { name: /Describe captures with AI/ });
+    const toggle = await screen.findByRole("switch", { name: /Describe captures with AI/ });
     expect(toggle).not.toBeChecked();
     expect(screen.getByLabelText("Endpoint URL")).toHaveValue("http://localhost:11434/v1");
     expect(screen.getByLabelText("Model")).toHaveValue("qwen3-vl:4b");
@@ -414,7 +414,7 @@ describe("SettingsWindow AI descriptions", () => {
     expect(key).toHaveAttribute("type", "password");
     expect(key).toHaveValue("sk-secret");
     expect(screen.getByText(/Only cloud providers need one/)).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: /Only describe new captures/ })).toBeChecked();
+    expect(screen.getByRole("switch", { name: /Only describe new captures/ })).toBeChecked();
     expect(screen.getByText(/nothing leaves this computer; a cloud endpoint receives your screenshots/)).toBeInTheDocument();
     // Nothing to re-describe while it is off.
     expect(screen.getByRole("button", { name: "Re-describe all…" })).toBeDisabled();
@@ -423,7 +423,7 @@ describe("SettingsWindow AI descriptions", () => {
   it("saves the toggles at once, keeping the other preferences", async () => {
     const backend = mockBackend({ afterCapture: "editor" });
     render(<SettingsWindow />);
-    const toggle = await screen.findByRole("checkbox", { name: /Describe captures with AI/ });
+    const toggle = await screen.findByRole("switch", { name: /Describe captures with AI/ });
     await waitFor(() => expect(toggle).toBeEnabled());
 
     await userEvent.click(toggle);
@@ -434,7 +434,7 @@ describe("SettingsWindow AI descriptions", () => {
       ai: { ...DEFAULT_AI_PREFERENCES, enabled: true },
     });
 
-    const newOnly = screen.getByRole("checkbox", { name: /Only describe new captures/ });
+    const newOnly = screen.getByRole("switch", { name: /Only describe new captures/ });
     await waitFor(() => expect(newOnly).toBeEnabled());
     await userEvent.click(newOnly);
     await waitFor(() => expect(newOnly).not.toBeChecked());

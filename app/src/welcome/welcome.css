@@ -1,37 +1,48 @@
-/* The Welcome window, built from the shared tokens and cards in App.css. */
+/* Shortcuts and tips, built from the grouped rows in App.css. */
 .welcome-header {
-  margin-bottom: 18px;
+  margin-bottom: 22px;
 }
 
 .welcome-header h1 {
-  margin-bottom: 6px;
-  font-size: 24px;
+  margin-bottom: 8px;
 }
 
 .welcome-lead {
   margin: 0;
   color: var(--text-muted);
+  font-size: 15px;
 }
 
-.welcome-shortcuts,
-.welcome-tips {
-  display: grid;
-  gap: 10px;
-  margin: 0 0 12px;
-  padding: 0;
+.welcome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.welcome-actions .welcome-cta {
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 12px;
+}
+
+.welcome-actions .pill {
+  height: 40px;
+  padding: 0 16px;
+  font-size: 13px;
+}
+
+.welcome .status {
+  margin: 8px 0 18px;
+}
+
+.welcome-shortcuts {
+  margin-bottom: 10px;
   list-style: none;
 }
 
-.welcome-shortcuts li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.welcome-shortcuts .hint,
-.welcome-tips .hint {
-  display: block;
+.welcome-note {
+  margin: 0 4px 30px;
 }
 
 .welcome-keys {
@@ -41,28 +52,28 @@
 }
 
 .welcome kbd {
-  padding: 2px 8px;
-  font: inherit;
+  min-width: 14px;
+  padding: 3px 8px;
+  color: var(--text);
   font-size: 12px;
-  font-weight: 600;
-  background: var(--surface-2);
-  border: 1px solid var(--border-strong);
-  border-bottom-width: 2px;
-  border-radius: 6px;
+  text-align: center;
+  background: var(--fill);
+  border-radius: 7px;
+  box-shadow: 0 1px 0 var(--divider);
 }
 
 .welcome-tips {
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 12px 20px;
-  margin-bottom: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.welcome-actions {
+.welcome-tips .group {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.welcome .status {
-  margin: 6px 0 10px;
+  flex-direction: column;
+  margin: 0;
+  padding: 14px 16px;
 }

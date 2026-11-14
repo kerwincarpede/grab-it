@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import AiSection from "./AiSection";
 import HotkeysSection from "./HotkeysSection";
+import { FolderIcon } from "../app/icons";
 import {
   AFTER_CAPTURE_CHOICES,
   DEFAULT_AI_PREFERENCES,
@@ -165,128 +166,158 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     }
   }
 
+  const afterCapture = AFTER_CAPTURE_CHOICES.find((choice) => choice.value === settings?.afterCapture);
+  const savesAtOnce = section === undefined || section === "general" || section === "capture" || section === "editor";
+  const showsMac = shows("general") && (hasDock() || autostart !== null);
+
   return (
-    <main className={section === undefined ? "window" : "window settings-page"}>
-      <h1>{title}</h1>
-      {shows("general") && hasDock() && (
-        <section className="card" aria-labelledby="dock-heading">
-          <h2 id="dock-heading">Where Grab-it lives</h2>
-          <label className="toggle first">
-            <input
-              type="checkbox"
-              checked={settings?.showInDock ?? true}
-              disabled={busy || settings === null}
-              onChange={(event) => void changeShowInDock(event.target.checked)}
-            />
-            <span>
-              <span className="choice-title">Show Grab-it in the Dock</span>
-              <span className="hint">Click the Dock icon to open this window. Off, Grab-it lives in the menu bar only.</span>
-            </span>
-          </label>
+    <main className={section === undefined ? "window settings" : "window settings settings-page"}>
+      <h1 className="settings-title">{title}</h1>
+      <p className="settings-lead">
+        {savesAtOnce ? "Changes save as you make them." : section === "hotkeys" ? "Press Save to use new hotkeys." : "Switches save at once; endpoint details save with Save."}
+      </p>
+      {showsMac && (
+        <section aria-labelledby="mac-heading">
+          <h2 className="group-heading" id="mac-heading">
+            Grab-it on your Mac
+          </h2>
+          <div className="group">
+            {hasDock() && (
+              <label className="row">
+                <span className="row-text">
+                  <span className="row-title">Show Grab-it in the Dock</span>
+                  <span className="row-hint">Click the Dock icon to open this window. Off, Grab-it lives in the menu bar only.</span>
+                </span>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  className="switch"
+                  checked={settings?.showInDock ?? true}
+                  disabled={busy || settings === null}
+                  onChange={(event) => void changeShowInDock(event.target.checked)}
+                />
+              </label>
+            )}
+            {autostart !== null && (
+              <label className="row">
+                <span className="row-text">
+                  <span className="row-title">Start Grab-it when you sign in</span>
+                  <span className="row-hint">It waits in the menu bar or tray, ready for your hotkeys.</span>
+                </span>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  className="switch"
+                  checked={autostart}
+                  disabled={busy}
+                  onChange={(event) => void changeAutostart(event.target.checked)}
+                />
+              </label>
+            )}
+          </div>
         </section>
       )}
       {shows("capture") && (
-        <section className="card" aria-labelledby="after-capture-heading">
-          <h2 id="after-capture-heading">After a capture</h2>
-          <fieldset className="choices" disabled={busy || settings === null}>
-            {AFTER_CAPTURE_CHOICES.map((choice) => (
-              <label className="choice" key={choice.value}>
-                <input
-                  type="radio"
-                  name="after-capture"
-                  value={choice.value}
-                  checked={settings?.afterCapture === choice.value}
-                  onChange={() => void changePreferences({ afterCapture: choice.value })}
-                />
-                <span>
-                  <span className="choice-title">{choice.title}</span>
-                  <span className="hint">{choice.hint}</span>
-                </span>
-              </label>
-            ))}
-          </fieldset>
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={settings?.copyToClipboard ?? true}
-              disabled={busy || settings === null}
-              onChange={(event) => void changePreferences({ copyToClipboard: event.target.checked })}
-            />
-            <span>
-              <span className="choice-title">Copy every capture to the clipboard</span>
-              <span className="hint">Paste it straight into a chat, a document or an issue.</span>
-            </span>
-          </label>
+        <section aria-labelledby="after-capture-heading">
+          <h2 className="group-heading" id="after-capture-heading">
+            When a capture is done
+          </h2>
+          <div className="group">
+            <div className="row is-stacked">
+              <fieldset className="segmented" aria-labelledby="after-capture-heading" disabled={busy || settings === null}>
+                {AFTER_CAPTURE_CHOICES.map((choice) => (
+                  <label key={choice.value}>
+                    <input
+                      type="radio"
+                      name="after-capture"
+                      value={choice.value}
+                      checked={settings?.afterCapture === choice.value}
+                      onChange={() => void changePreferences({ afterCapture: choice.value })}
+                    />
+                    {choice.title}
+                  </label>
+                ))}
+              </fieldset>
+              {afterCapture && <span className="row-hint">{afterCapture.hint}</span>}
+            </div>
+            <label className="row">
+              <span className="row-text">
+                <span className="row-title">Copy every capture to the clipboard</span>
+                <span className="row-hint">Paste it straight into a chat, a document or an issue.</span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                className="switch"
+                checked={settings?.copyToClipboard ?? true}
+                disabled={busy || settings === null}
+                onChange={(event) => void changePreferences({ copyToClipboard: event.target.checked })}
+              />
+            </label>
+          </div>
         </section>
       )}
       {shows("editor") && (
-        <section className="card" aria-labelledby="editor-heading">
-          <h2 id="editor-heading">Editor</h2>
-          <label className="toggle first">
-            <input
-              type="checkbox"
-              checked={settings?.editor?.autoBackdrop ?? false}
-              disabled={busy || settings === null}
-              onChange={(event) => void changeAutoBackdrop(event.target.checked)}
-            />
-            <span>
-              <span className="choice-title">Frame new captures with the last backdrop</span>
-              <span className="hint">
-                The editor adds it when it first opens a capture. The saved capture and its clipboard copy stay unframed.
+        <section aria-labelledby="editor-heading">
+          <h2 className="group-heading" id="editor-heading">
+            New captures
+          </h2>
+          <div className="group">
+            <label className="row">
+              <span className="row-text">
+                <span className="row-title">Frame new captures with the last backdrop</span>
+                <span className="row-hint">
+                  The editor adds it when it first opens a capture. The saved capture and its clipboard copy stay unframed.
+                </span>
               </span>
-            </span>
-          </label>
+              <input
+                type="checkbox"
+                role="switch"
+                className="switch"
+                checked={settings?.editor?.autoBackdrop ?? false}
+                disabled={busy || settings === null}
+                onChange={(event) => void changeAutoBackdrop(event.target.checked)}
+              />
+            </label>
+          </div>
         </section>
       )}
       {shows("general") && (
-        <section className="card field">
-          <h2>
+        <section>
+          <h2 className="group-heading">
             <label htmlFor="save-folder">Save folder</label>
           </h2>
-          <div className="field-row">
-            <input
-              id="save-folder"
-              type="text"
-              readOnly
-              value={settings?.saveFolder ?? ""}
-              placeholder={settings ? "" : "Loading…"}
-            />
-            <button type="button" className="secondary" onClick={changeFolder} disabled={busy || settings === null}>
-              Change…
-            </button>
+          <div className="group">
+            <div className="row">
+              <span className="icon-chip tint-blue" aria-hidden="true">
+                <FolderIcon size={14} />
+              </span>
+              <span className="row-text">
+                <input
+                  id="save-folder"
+                  className="mono-value"
+                  type="text"
+                  readOnly
+                  value={settings?.saveFolder ?? ""}
+                  placeholder={settings ? "" : "Loading…"}
+                  aria-describedby="save-folder-hint"
+                />
+                <span className="row-hint" id="save-folder-hint">
+                  New captures are saved here. Earlier captures stay where they are and stay in your library.
+                </span>
+              </span>
+              <button type="button" className="pill" onClick={changeFolder} disabled={busy || settings === null}>
+                Change…
+              </button>
+            </div>
           </div>
-          <p className="hint">
-            New captures are saved here. Earlier captures stay where they are and stay in your
-            library.
-          </p>
-        </section>
-      )}
-      {shows("general") && autostart !== null && (
-        <section className="card" aria-labelledby="startup-heading">
-          <h2 id="startup-heading">Start-up</h2>
-          <label className="toggle first">
-            <input
-              type="checkbox"
-              checked={autostart}
-              disabled={busy}
-              onChange={(event) => void changeAutostart(event.target.checked)}
-            />
-            <span>
-              <span className="choice-title">Start Grab-it when you sign in</span>
-              <span className="hint">It waits in the menu bar or tray, ready for your hotkeys.</span>
-            </span>
-          </label>
         </section>
       )}
       {shows("ai") && settings && (
-        <div className="card">
-          <AiSection saved={settings.ai ?? DEFAULT_AI_PREFERENCES} disabled={busy} onSave={saveAi} />
-        </div>
+        <AiSection saved={settings.ai ?? DEFAULT_AI_PREFERENCES} disabled={busy} onSave={saveAi} />
       )}
       {shows("hotkeys") && settings && (
-        <div className="card">
-          <HotkeysSection saved={settings.hotkeys} disabled={busy} onSave={saveHotkeys} />
-        </div>
+        <HotkeysSection saved={settings.hotkeys} disabled={busy} onSave={saveHotkeys} />
       )}
       <p className={`status status-${status.kind === "preferences-saved" ? "saved" : status.kind}`} role="status">
         {status.kind === "saved" && "Save folder updated."}

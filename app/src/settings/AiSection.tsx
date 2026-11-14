@@ -149,174 +149,219 @@ function AiSection({ saved, disabled, onSave }: Props) {
     setDraft({ ...draft, endpoint: chosen.endpoint, model: chosen.model });
   }
 
+  const chosen = AI_PROVIDERS.find((choice) => choice.value === provider);
+
   return (
     <form className="ai-settings" aria-labelledby="ai-heading" onSubmit={submit}>
-      <h2 id="ai-heading">AI descriptions</h2>
-      <label className="toggle first">
-        <input
-          type="checkbox"
-          checked={saved.enabled}
-          disabled={busy}
-          onChange={(event) => void save({ enabled: event.target.checked })}
-        />
-        <span>
-          <span className="choice-title">Describe captures with AI</span>
-          <span className="hint">
-            A vision model writes a short description, picks a category and suggests tags, so you can search
-            for what is in a capture.
-          </span>
-        </span>
-      </label>
-
-      <fieldset className="choices ai-providers" disabled={busy}>
-        <legend className="choice-title">Described by</legend>
-        {AI_PROVIDERS.map((choice) => (
-          <label className="choice" key={choice.value}>
-            <input
-              type="radio"
-              name="ai-provider"
-              value={choice.value}
-              checked={provider === choice.value}
-              onChange={() => {
-                setResult(null);
-                void save({ provider: choice.value });
-              }}
-            />
-            <span>
-              <span className="choice-title">{choice.title}</span>
-              <span className="hint">{choice.hint}</span>
+      <h2 className="group-heading" id="ai-heading">
+        Describing captures
+      </h2>
+      <div className="group">
+        <label className="row">
+          <span className="row-text">
+            <span className="row-title">Describe captures with AI</span>
+            <span className="row-hint">
+              A vision model writes a short description, picks a category and suggests tags, so you can search
+              for what is in a capture.
             </span>
-          </label>
-        ))}
-      </fieldset>
-      {missing && (
-        <p className="hint ai-missing" data-testid="ai-missing">
-          Grab-it cannot find {missing.name}: there is no {missing.command} command on this computer. Install{" "}
-          {missing.name} and sign in, then reopen Settings, or choose another provider instead.
-        </p>
-      )}
+          </span>
+          <input
+            type="checkbox"
+            role="switch"
+            className="switch"
+            checked={saved.enabled}
+            disabled={busy}
+            onChange={(event) => void save({ enabled: event.target.checked })}
+          />
+        </label>
+        <label className="row">
+          <span className="row-text">
+            <span className="row-title">Only describe new captures</span>
+            <span className="row-hint">Leave earlier captures alone. Turn it off to describe the whole library.</span>
+          </span>
+          <input
+            type="checkbox"
+            role="switch"
+            className="switch"
+            checked={saved.newCapturesOnly}
+            disabled={busy}
+            onChange={(event) => void save({ newCapturesOnly: event.target.checked })}
+          />
+        </label>
+      </div>
 
-      <p className={`hint ai-privacy${local ? "" : " ai-privacy-cloud"}`}>
-        {PRIVACY[provider]}
-      </p>
-
-      {usesEndpoint && (
-        <>
-          <div className="field">
-            <label htmlFor="ai-preset">Preset</label>
-            <select
-              id="ai-preset"
-              value={preset?.id ?? ""}
-              disabled={busy}
-              onChange={(event) => choosePreset(event.target.value)}
-            >
-              <option value="">Custom</option>
-              {ENDPOINT_PRESETS.map((choice) => (
-                <option key={choice.id} value={choice.id}>
-                  {choice.name}
-                </option>
-              ))}
-            </select>
-            <p className="hint">Fills in the URL and a model. Cloud providers also need your API key.</p>
-          </div>
-          <div className="field">
-            <label htmlFor="ai-endpoint">Endpoint URL</label>
-            <input
-              id="ai-endpoint"
-              type="text"
-              inputMode="url"
-              spellCheck={false}
-              value={draft.endpoint}
-              disabled={busy}
-              placeholder="http://localhost:11434/v1"
-              onChange={(event) => setDraft({ ...draft, endpoint: event.target.value })}
-            />
-            <p className="hint">Any OpenAI-compatible API, such as Ollama, LM Studio or a cloud provider.</p>
-          </div>
-          <div className="field">
-            <label htmlFor="ai-model">Model</label>
-            <input
-              id="ai-model"
-              type="text"
-              spellCheck={false}
-              value={draft.model}
-              disabled={busy}
-              placeholder="qwen3-vl:4b"
-              onChange={(event) => setDraft({ ...draft, model: event.target.value })}
-            />
-            <p className="hint">It must accept images.</p>
-          </div>
-          <div className="field">
-            <label htmlFor="ai-api-key">API key</label>
-            <input
-              id="ai-api-key"
-              type="password"
-              autoComplete="off"
-              value={draft.apiKey}
-              disabled={busy}
-              placeholder="Optional"
-              onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })}
-            />
-            <p className="hint" data-testid="ai-api-key-hint">
-              Only cloud providers need one. Leave it empty for Ollama.{" "}
-              {saved.apiKeyStorage === "keychain"
-                ? "It is kept in your system keychain, not in Grab-it's settings file."
-                : "This computer has no keychain Grab-it can use, so it is kept in plain text in Grab-it's settings file."}
+      <h2 className="group-heading" id="ai-provider-heading">
+        Described by
+      </h2>
+      <div className="group">
+        <div className="row is-stacked">
+          <fieldset className="segmented ai-providers" aria-labelledby="ai-provider-heading" disabled={busy}>
+            {AI_PROVIDERS.map((choice) => (
+              <label key={choice.value}>
+                <input
+                  type="radio"
+                  name="ai-provider"
+                  value={choice.value}
+                  checked={provider === choice.value}
+                  onChange={() => {
+                    setResult(null);
+                    void save({ provider: choice.value });
+                  }}
+                />
+                {choice.title}
+              </label>
+            ))}
+          </fieldset>
+          {chosen && <span className="row-hint">{chosen.hint}</span>}
+          {missing && (
+            <p className="hint ai-missing" data-testid="ai-missing">
+              Grab-it cannot find {missing.name}: there is no {missing.command} command on this computer. Install{" "}
+              {missing.name} and sign in, then reopen Settings, or choose another provider instead.
             </p>
-          </div>
-        </>
-      )}
-      <div className="ai-buttons">
+          )}
+          <p className={`hint ai-privacy${local ? "" : " ai-privacy-cloud"}`}>{PRIVACY[provider]}</p>
+        </div>
+
         {usesEndpoint && (
-          <button type="submit" disabled={busy || !edited || !valid}>
-            Save
-          </button>
-        )}
-        <button type="button" className="secondary" disabled={busy || !valid} onClick={() => void test()}>
-          {testing ? "Testing…" : "Test connection"}
-        </button>
-      </div>
-
-      <label className="toggle">
-        <input
-          type="checkbox"
-          checked={saved.newCapturesOnly}
-          disabled={busy}
-          onChange={(event) => void save({ newCapturesOnly: event.target.checked })}
-        />
-        <span>
-          <span className="choice-title">Only describe new captures</span>
-          <span className="hint">Leave earlier captures alone. Turn it off to describe the whole library.</span>
-        </span>
-      </label>
-
-      <div className="ai-buttons">
-        {confirmingAll ? (
           <>
-            <span className="hint">Describe every capture again, replacing the current descriptions?</span>
-            <button type="button" disabled={busy} onClick={() => void describeAll()}>
-              Re-describe all
-            </button>
-            <button type="button" className="secondary" onClick={() => setConfirmingAll(false)}>
-              Cancel
-            </button>
+            <div className="row">
+              <span className="row-text">
+                <label className="row-title" htmlFor="ai-preset">
+                  Preset
+                </label>
+                <span className="row-hint">Fills in the URL and a model. Cloud providers also need your API key.</span>
+              </span>
+              <select
+                id="ai-preset"
+                className="row-field"
+                value={preset?.id ?? ""}
+                disabled={busy}
+                onChange={(event) => choosePreset(event.target.value)}
+              >
+                <option value="">Custom</option>
+                {ENDPOINT_PRESETS.map((choice) => (
+                  <option key={choice.id} value={choice.id}>
+                    {choice.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="row">
+              <span className="row-text">
+                <label className="row-title" htmlFor="ai-endpoint">
+                  Endpoint URL
+                </label>
+                <span className="row-hint">Any OpenAI-compatible API, such as Ollama, LM Studio or a cloud provider.</span>
+              </span>
+              <input
+                id="ai-endpoint"
+                className="row-field"
+                type="text"
+                inputMode="url"
+                spellCheck={false}
+                value={draft.endpoint}
+                disabled={busy}
+                placeholder="http://localhost:11434/v1"
+                onChange={(event) => setDraft({ ...draft, endpoint: event.target.value })}
+              />
+            </div>
+            <div className="row">
+              <span className="row-text">
+                <label className="row-title" htmlFor="ai-model">
+                  Model
+                </label>
+                <span className="row-hint">It must accept images.</span>
+              </span>
+              <input
+                id="ai-model"
+                className="row-field"
+                type="text"
+                spellCheck={false}
+                value={draft.model}
+                disabled={busy}
+                placeholder="qwen3-vl:4b"
+                onChange={(event) => setDraft({ ...draft, model: event.target.value })}
+              />
+            </div>
+            <div className="row">
+              <span className="row-text">
+                <label className="row-title" htmlFor="ai-api-key">
+                  API key
+                </label>
+                <span className="row-hint" data-testid="ai-api-key-hint">
+                  Only cloud providers need one. Leave it empty for Ollama.{" "}
+                  {saved.apiKeyStorage === "keychain"
+                    ? "It is kept in your system keychain, not in Grab-it's settings file."
+                    : "This computer has no keychain Grab-it can use, so it is kept in plain text in Grab-it's settings file."}
+                </span>
+              </span>
+              <input
+                id="ai-api-key"
+                className="row-field"
+                type="password"
+                autoComplete="off"
+                value={draft.apiKey}
+                disabled={busy}
+                placeholder="Optional"
+                onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })}
+              />
+            </div>
           </>
-        ) : (
-          <button
-            type="button"
-            className="secondary"
-            disabled={busy || !saved.enabled}
-            onClick={() => setConfirmingAll(true)}
-          >
-            Re-describe all…
-          </button>
         )}
+        <div className="row">
+          {/* Not role="status": the window's own status line is that. */}
+          <p className={`ai-result ai-result-${result?.kind ?? "none"}`} aria-live="polite" data-testid="ai-result">
+            {result?.message}
+          </p>
+          <span className="row-control">
+            <button type="button" className="pill" disabled={busy || !valid} onClick={() => void test()}>
+              {testing ? "Testing…" : "Test connection"}
+            </button>
+            {usesEndpoint && (
+              <button type="submit" className="pill is-primary" disabled={busy || !edited || !valid}>
+                Save
+              </button>
+            )}
+          </span>
+        </div>
       </div>
 
-      {/* Not role="status": the window's own status line is that. */}
-      <p className={`ai-result ai-result-${result?.kind ?? "none"}`} aria-live="polite" data-testid="ai-result">
-        {result?.message}
-      </p>
+      <h2 className="group-heading">Your library</h2>
+      <div className="group">
+        <div className="row">
+          {confirmingAll ? (
+            <>
+              <span className="row-text">
+                <span className="row-title">Describe every capture again?</span>
+                <span className="row-hint">This replaces the current descriptions.</span>
+              </span>
+              <span className="row-control">
+                <button type="button" className="pill" onClick={() => setConfirmingAll(false)}>
+                  Cancel
+                </button>
+                <button type="button" className="pill is-primary" disabled={busy} onClick={() => void describeAll()}>
+                  Re-describe all
+                </button>
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="row-text">
+                <span className="row-title">Describe everything again</span>
+                <span className="row-hint">Useful after switching to a better model.</span>
+              </span>
+              <button
+                type="button"
+                className="pill"
+                disabled={busy || !saved.enabled}
+                onClick={() => setConfirmingAll(true)}
+              >
+                Re-describe all…
+              </button>
+            </>
+          )}
+        </div>
+      </div>
     </form>
   );
 }

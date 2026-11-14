@@ -6,33 +6,32 @@ import "./hub.css";
 import Logo from "../app/Logo";
 import {
   ColourIcon,
+  ChevronDownIcon,
   GearIcon,
   RecordIcon,
   RegionIcon,
-  RepeatIcon,
   ScreenIcon,
   TextIcon,
-  TimerIcon,
   WindowIcon,
 } from "../app/icons";
 import { openMain, startCapture, checkForUpdates, type CaptureKind } from "../app/api";
 import { getSettings, type Hotkeys } from "../settings/api";
 import { shortcutLabel } from "./keys";
-import { listShots, openShot, type Shot } from "../library/api";
+import { formatTime, listShots, openShot, type Shot } from "../library/api";
 import { useThumbnail } from "../library/thumbnails";
 
 /** Mirrors `HUB_SHOWN_EVENT` in src-tauri/src/hub.rs. */
 const HUB_SHOWN_EVENT = "hub-shown";
 /** How many recent captures the hub shows. */
-const RECENT = 4;
+const RECENT = 3;
 
-const CAPTURES: { kind: CaptureKind; title: string; hotkey?: keyof Hotkeys; icon: ReactNode }[] = [
-  { kind: "region", title: "Region", hotkey: "region", icon: <RegionIcon size={20} /> },
-  { kind: "window", title: "Window", hotkey: "window", icon: <WindowIcon size={20} /> },
-  { kind: "screen", title: "Screen", hotkey: "screen", icon: <ScreenIcon size={20} /> },
-  { kind: "record", title: "Record GIF", icon: <RecordIcon size={20} /> },
-  { kind: "text", title: "Text", hotkey: "text", icon: <TextIcon size={20} /> },
-  { kind: "colour", title: "Colour", hotkey: "colour", icon: <ColourIcon size={20} /> },
+/** The captures under Capture region, each in its own tint. */
+const TOOLS: { kind: CaptureKind; title: string; hotkey?: keyof Hotkeys; tint: string; icon: ReactNode }[] = [
+  { kind: "window", title: "Window", hotkey: "window", tint: "blue", icon: <WindowIcon size={18} /> },
+  { kind: "screen", title: "Screen", hotkey: "screen", tint: "violet", icon: <ScreenIcon size={18} /> },
+  { kind: "record", title: "Record", tint: "red", icon: <RecordIcon size={18} /> },
+  { kind: "text", title: "Text", hotkey: "text", tint: "green", icon: <TextIcon size={18} /> },
+  { kind: "colour", title: "Colour", hotkey: "colour", tint: "amber", icon: <ColourIcon size={18} /> },
 ];
 
 const TIMED: { kind: CaptureKind; title: string; seconds: number }[] = [
@@ -56,15 +55,18 @@ function errorMessage(err: unknown): string {
 function RecentShot({ shot }: { shot: Shot }) {
   const { url } = useThumbnail(shot.id, `${shot.id}:${shot.path}`, true);
   return (
-    <button
-      type="button"
-      className="hub-recent-shot"
-      title={shot.windowTitle ?? shot.fileName}
-      aria-label={`Open ${shot.windowTitle ?? shot.fileName} in the editor`}
-      onClick={() => void openShot(shot.id)}
-    >
-      {url && <img src={url} alt="" />}
-    </button>
+    <div className="hub-recent-item">
+      <button
+        type="button"
+        className="hub-recent-shot"
+        title={shot.windowTitle ?? shot.fileName}
+        aria-label={`Open ${shot.windowTitle ?? shot.fileName} in the editor`}
+        onClick={() => void openShot(shot.id)}
+      >
+        {url && <img src={url} alt="" />}
+      </button>
+      {typeof shot.capturedAt === "number" && <span className="hub-recent-time">{formatTime(shot.capturedAt)}</span>}
+    </div>
   );
 }
 
@@ -117,6 +119,9 @@ function Hub() {
     action.catch((err: unknown) => setError(errorMessage(err)));
   }
 
+  const keyLabel = (kind: CaptureKind, hotkey?: keyof Hotkeys) =>
+    kind === "record" ? "GIF" : hotkey && hotkeys?.[hotkey] ? shortcutLabel(hotkeys[hotkey]) : "";
+
   const toggle = (next: Panel) => setPanel((current) => (current === next ? null : next));
 
   return (
@@ -124,7 +129,7 @@ function Hub() {
       <header className="hub-head">
         <Logo size={28} />
         <span className="brand-name">Grab-it</span>
-        <button type="button" className="hub-open" onClick={() => run(openMain("library"))}>
+        <button type="button" className="pill hub-open" onClick={() => run(openMain("library"))}>
           Open Grab-it
         </button>
         <button type="button" className="hub-icon" aria-label="Settings" title="Settings" onClick={() => run(openMain("settings"))}>
@@ -132,38 +137,40 @@ function Hub() {
         </button>
       </header>
 
-      <div className="hub-captures">
-        {CAPTURES.map(({ kind, title, hotkey, icon }) => (
-          <button
-            type="button"
-            key={kind}
-            className={`hub-capture${kind === "region" ? " is-primary" : ""}`}
-            onClick={() => run(startCapture(kind))}
-          >
-            {icon}
-            <span>
-              {title}
-              <span className="hub-key">
-                {hotkey && hotkeys?.[hotkey] ? shortcutLabel(hotkeys[hotkey]) : kind === "record" ? "start or stop" : " "}
-              </span>
+      <div className="hub-primary">
+        <button type="button" className="cta hub-region" onClick={() => run(startCapture("region"))}>
+          <RegionIcon size={18} />
+          Capture region
+          {hotkeys?.region && <kbd className="cta-key">{shortcutLabel(hotkeys.region)}</kbd>}
+        </button>
+      </div>
+
+      <div className="hub-tools">
+        {TOOLS.map(({ kind, title, hotkey, tint, icon }) => (
+          <button type="button" key={kind} className="hub-tool" onClick={() => run(startCapture(kind))}>
+            <span className={`hub-tool-icon tint-${tint}`} aria-hidden="true">
+              {icon}
+            </span>
+            {title}{" "}
+            <span className="hub-key" title={keyLabel(kind, hotkey)}>
+              {keyLabel(kind, hotkey) || " "}
             </span>
           </button>
         ))}
       </div>
 
       <div className="hub-chips">
-        <button type="button" className="hub-chip" onClick={() => run(startCapture("repeat"))}>
-          <RepeatIcon size={14} />
+        <button type="button" className="pill" onClick={() => run(startCapture("repeat"))}>
           Repeat last region
         </button>
-        <button type="button" className="hub-chip" aria-expanded={panel === "timed"} onClick={() => toggle("timed")}>
-          <TimerIcon size={14} />
+        <button type="button" className="pill" aria-expanded={panel === "timed"} onClick={() => toggle("timed")}>
           Timed
+          <ChevronDownIcon size={12} />
         </button>
         {monitors.length > 1 && (
-          <button type="button" className="hub-chip" aria-expanded={panel === "monitor"} onClick={() => toggle("monitor")}>
-            <ScreenIcon size={14} />
+          <button type="button" className="pill" aria-expanded={panel === "monitor"} onClick={() => toggle("monitor")}>
             Monitor
+            <ChevronDownIcon size={12} />
           </button>
         )}
       </div>

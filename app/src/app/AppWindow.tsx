@@ -8,9 +8,11 @@ import {
   GearIcon,
   GridIcon,
   KeyboardIcon,
+  PenIcon,
   RecordIcon,
   RegionIcon,
   ScreenIcon,
+  SparkleIcon,
   TextIcon,
   WindowIcon,
 } from "./icons";
@@ -18,8 +20,9 @@ import { checkForUpdates, onNavigate, startCapture, type CaptureKind, type MainV
 import LibraryWindow from "../library/LibraryWindow";
 import SettingsWindow from "../settings/SettingsWindow";
 import WelcomeWindow from "../welcome/WelcomeWindow";
-import { SETTINGS_SECTIONS } from "../settings/api";
+import { getSettings, SETTINGS_SECTIONS, type SettingsSection } from "../settings/api";
 import { filterOptions, onLibraryChanged } from "../library/api";
+import { shortcutLabel } from "../hub/keys";
 
 /** The other captures, under the Capture region button. */
 const MORE_CAPTURES: { kind: CaptureKind; title: string; icon: ReactNode }[] = [
@@ -29,6 +32,33 @@ const MORE_CAPTURES: { kind: CaptureKind; title: string; icon: ReactNode }[] = [
   { kind: "text", title: "Capture text", icon: <TextIcon /> },
   { kind: "colour", title: "Pick a colour", icon: <ColourIcon /> },
 ];
+
+/** Each Settings page's icon and tint in the sidebar. */
+const SECTION_ICONS: Record<SettingsSection, { tint: string; icon: ReactNode }> = {
+  general: { tint: "gray", icon: <GearIcon size={14} /> },
+  capture: { tint: "blue", icon: <RegionIcon size={14} /> },
+  editor: { tint: "pink", icon: <PenIcon size={14} /> },
+  ai: { tint: "purple", icon: <SparkleIcon size={14} /> },
+  hotkeys: { tint: "green", icon: <KeyboardIcon size={14} /> },
+};
+
+/** The tints an app's chip can take; the app's name picks one, so it never changes. */
+const APP_TINTS = ["amber", "orange", "green", "blue", "purple", "pink", "teal", "violet", "red", "gray"];
+
+function appTint(app: string): string {
+  let hash = 0;
+  for (const char of app) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0;
+  return APP_TINTS[hash % APP_TINTS.length];
+}
+
+/** A tinted chip with an icon or a letter, for the sidebar. */
+function Chip({ tint, children }: { tint: string; children: ReactNode }) {
+  return (
+    <span className={`icon-chip tint-${tint}`} aria-hidden="true">
+      {children}
+    </span>
+  );
+}
 
 function placeFor(view: MainView): Place {
   if (view === "settings") return { view: "settings", section: "general" };
@@ -64,7 +94,7 @@ function NavItem({ current, icon, children, onClick }: NavItemProps) {
 }
 
 /** The Capture region button and its menu of the other captures. */
-function CaptureButton({ onError }: { onError: (message: string) => void }) {
+function CaptureButton({ hotkey, onError }: { hotkey: string | null; onError: (message: string) => void }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
@@ -90,9 +120,14 @@ function CaptureButton({ onError }: { onError: (message: string) => void }) {
 
   return (
     <div className="capture-split" ref={box}>
-      <button type="button" className="capture-main" onClick={() => capture("region")}>
+      <button type="button" className="capture-main cta" title="Capture a region" onClick={() => capture("region")}>
         <RegionIcon />
-        Capture region
+        New capture
+        {hotkey && (
+          <kbd className="cta-key" aria-hidden="true">
+            {shortcutLabel(hotkey)}
+          </kbd>
+        )}
       </button>
       <button
         type="button"
@@ -127,6 +162,22 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
   const [apps, setApps] = useState<string[]>([]);
   const [version, setVersion] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [regionHotkey, setRegionHotkey] = useState<string | null>(null);
+
+  // Read again on every move, so a hotkey changed in Settings shows here too.
+  useEffect(() => {
+    let cancelled = false;
+    getSettings()
+      .then((settings) => {
+        if (!cancelled) setRegionHotkey(settings?.hotkeys?.region || null);
+      })
+      .catch(() => {
+        // The button works without its hotkey label.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [place.view]);
 
   useEffect(() => {
     let disposed = false;
@@ -182,12 +233,16 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
           <Logo size={32} />
           <span className="brand-name">Grab-it</span>
         </div>
-        <CaptureButton onError={setError} />
+        <CaptureButton hotkey={regionHotkey} onError={setError} />
 
         <h2 className="nav-heading">Library</h2>
         <NavItem
           current={place.view === "library" && place.app === ""}
-          icon={<GridIcon />}
+          icon={
+            <Chip tint="blue">
+              <GridIcon size={14} />
+            </Chip>
+          }
           onClick={() => pickApp("")}
         >
           All captures
@@ -197,7 +252,7 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
           <NavItem
             key={app}
             current={place.view === "library" && place.app === app}
-            icon={<span className="app-dot" aria-hidden="true" />}
+            icon={<Chip tint={appTint(app)}>{[...app.trim()][0]?.toUpperCase() ?? "?"}</Chip>}
             onClick={() => pickApp(app)}
           >
             {app}
@@ -209,7 +264,7 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
           <NavItem
             key={id}
             current={place.view === "settings" && place.section === id}
-            icon={id === "general" ? <GearIcon /> : <span className="nav-indent" aria-hidden="true" />}
+            icon={<Chip tint={SECTION_ICONS[id].tint}>{SECTION_ICONS[id].icon}</Chip>}
             onClick={() => setPlace({ view: "settings", section: id })}
           >
             {title}
@@ -217,10 +272,19 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
         ))}
 
         <div className="sidebar-foot">
-          <NavItem current={place.view === "welcome"} icon={<KeyboardIcon />} onClick={() => setPlace({ view: "welcome" })}>
+          <NavItem
+            current={place.view === "welcome"}
+            icon={
+              <Chip tint="teal">
+                <KeyboardIcon size={14} />
+              </Chip>
+            }
+            onClick={() => setPlace({ view: "welcome" })}
+          >
             Shortcuts and tips
           </NavItem>
           <p className="version">
+            <span className="version-dot" aria-hidden="true" />
             {version && <span className="mono">v{version}</span>}
             <button type="button" className="link-button" onClick={checkUpdates}>
               Check for updates

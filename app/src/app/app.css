@@ -1,24 +1,16 @@
-/* The Grab-it window: a sidebar with the logo, the capture button and the
-   places to go, beside the library, a Settings page or the shortcuts. */
+/* The Grab-it window: the sidebar sits straight on the window background,
+   the library, a Settings page or the shortcuts on an inset panel beside it. */
 .app-window {
-  --sidebar: #eef0f3;
-  --sidebar-border: var(--border);
-  --nav-hover: rgb(16 24 40 / 5%);
-  --nav-current: rgb(16 24 40 / 8%);
-
   display: flex;
   height: 100vh;
   overflow: hidden;
-  background: var(--bg);
+  color: var(--text);
+  background: var(--chrome);
 }
 
-@media (prefers-color-scheme: dark) {
-  .app-window {
-    --sidebar: #17191e;
-    --sidebar-border: #23262d;
-    --nav-hover: rgb(255 255 255 / 4%);
-    --nav-current: #262a33;
-  }
+html:has(.app-window),
+body:has(.app-window) {
+  background: var(--chrome);
 }
 
 .sidebar {
@@ -27,28 +19,27 @@
   flex-direction: column;
   gap: 2px;
   box-sizing: border-box;
-  width: 240px;
-  padding: 18px 10px 12px;
+  width: 236px;
+  padding: 18px 10px 12px 12px;
   overflow-y: auto;
-  background: var(--sidebar);
-  border-right: 1px solid var(--sidebar-border);
+  scrollbar-width: none;
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 8px 16px;
+  padding: 0 6px 18px;
 }
 
 .brand-name {
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 650;
   letter-spacing: -0.04em;
 }
 
 .logo-tile {
-  fill: var(--surface);
+  fill: var(--panel);
   stroke: var(--border-strong);
 }
 
@@ -56,60 +47,60 @@
   stroke: var(--text);
 }
 
-/* Capture region, with the other captures under the chevron. */
+@media (prefers-color-scheme: dark) {
+  .logo-tile {
+    fill: #1b1d23;
+    stroke: #30333c;
+  }
+
+  .logo-frame {
+    stroke: #fff;
+  }
+}
+
+/* New capture, with the other captures under the chevron. */
 .capture-split {
   position: relative;
   display: flex;
   gap: 6px;
-  padding: 0 4px 8px;
+  padding: 0 2px 4px;
 }
 
 .capture-split .capture-main {
-  display: flex;
   flex: 1;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  height: 38px;
+  height: 40px;
   padding: 0 12px;
-  color: #fff;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  background: #2f6fe4;
-  border-radius: 10px;
-}
-
-.capture-split .capture-main:where(:hover) {
-  background: #2560d6;
+  font-size: 13.5px;
+  border-radius: 12px;
 }
 
 .capture-split .capture-more {
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 40px;
+  height: 40px;
   padding: 0;
   color: var(--text);
-  background: var(--surface);
-  border-color: var(--border);
-  border-radius: 10px;
+  background: var(--fill);
+  border: 0;
+  border-radius: 12px;
 }
 
 .capture-split .capture-more:where(:hover) {
-  background: var(--surface-2);
+  background: var(--fill-hover);
 }
 
 .capture-menu {
   position: absolute;
-  top: 44px;
-  right: 4px;
-  left: 4px;
+  top: 46px;
+  right: 2px;
+  left: 2px;
   z-index: 10;
   display: flex;
   flex-direction: column;
   padding: 5px;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--pop);
+  border: 1px solid var(--pop-edge);
   border-radius: 12px;
   box-shadow: 0 16px 40px -12px rgb(0 0 0 / 45%);
 }
@@ -127,7 +118,7 @@
 }
 
 .capture-menu button:where(:hover, :focus-visible) {
-  background: var(--nav-current);
+  background: var(--fill-hover);
 }
 
 .record-dot {
@@ -135,9 +126,9 @@
 }
 
 .nav-heading {
-  margin: 18px 10px 6px;
+  margin: 22px 8px 6px;
   color: var(--text-muted);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: 0;
   text-transform: none;
@@ -145,35 +136,29 @@
 
 .nav-item {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 10px;
   width: 100%;
-  min-height: 34px;
-  padding: 0 10px;
+  height: 36px;
+  padding: 0 8px;
   color: var(--text);
+  font-size: 13.5px;
   font-weight: 450;
-  letter-spacing: -0.005em;
+  letter-spacing: -0.01em;
   text-align: left;
   background: none;
-  border-radius: 8px;
+  border-radius: 10px;
 }
 
 .nav-item:where(:hover:not(.is-current)) {
-  background: var(--nav-hover);
+  background: var(--fill);
 }
 
 .nav-item.is-current {
-  font-weight: 600;
-  background: var(--nav-current);
-}
-
-.nav-item .icon {
-  flex: none;
-  color: var(--text-muted);
-}
-
-.nav-item.is-current .icon {
-  color: var(--accent);
+  font-weight: 550;
+  background: var(--fill-current);
+  box-shadow: var(--fill-current-shadow);
 }
 
 .nav-label {
@@ -182,39 +167,45 @@
   white-space: nowrap;
 }
 
-.app-dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  margin: 0 4px;
-  background: var(--accent);
-  border-radius: 3px;
-  opacity: 0.7;
-}
-
-.nav-indent {
-  flex: none;
-  width: 16px;
-}
-
 .sidebar-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   margin-top: auto;
-  padding-top: 10px;
-  border-top: 1px solid var(--sidebar-border);
+  padding-top: 14px;
 }
 
+/* The version and the update check, as a tinted pill. */
 .version {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 8px 10px 0;
-  color: var(--text-muted);
-  font-size: 12px;
+  margin: 8px 2px 0;
+  padding: 10px 12px;
+  color: var(--tint-blue-fg);
+  font-size: 12.5px;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--tint-blue-bg) 55%, transparent);
+  border-radius: 12px;
+}
+
+.version-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  background: var(--switch-on);
+  border-radius: 50%;
+}
+
+.version .link-button {
+  margin-left: auto;
+  color: inherit;
+  font-weight: 600;
 }
 
 .link-button {
   padding: 0;
-  color: var(--accent);
+  color: var(--link);
   font-size: inherit;
   font-weight: 500;
   background: none;
@@ -226,12 +217,16 @@
   background: none;
 }
 
+/* The content: a rounded panel inset from the window edge. */
 .app-content {
   position: relative;
   flex: 1;
   min-width: 0;
-  height: 100vh;
+  margin: 8px 8px 8px 0;
   overflow-y: auto;
+  background: var(--panel);
+  border-radius: 16px;
+  box-shadow: 0 0 0 1px var(--panel-edge) inset;
 }
 
 .app-error {
@@ -240,24 +235,19 @@
   margin: 12px 24px 0;
   padding: 8px 12px;
   color: var(--danger);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--group);
   border-radius: 10px;
+  box-shadow: 0 0 0 1px var(--group-edge) inset;
 }
 
-/* A Settings page or the shortcuts, inside the window: more room to breathe. */
+/* A Settings page or the shortcuts, inside the window. */
 .app-content .window {
-  max-width: 760px;
-  margin: 0;
-  padding: 44px 56px 40px;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 44px 32px 40px;
 }
 
-/* The library inside the window: the heading on its own line, then the
-   search and filters across the full width. */
-.app-content .library-title {
-  flex-basis: 100%;
-}
-
-.app-content .library-top {
-  padding: 22px 28px 14px;
+.app-content h1 {
+  font-size: 34px;
+  letter-spacing: -0.05em;
 }

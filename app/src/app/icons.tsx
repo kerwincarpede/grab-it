@@ -98,15 +98,22 @@ export const ChevronLeftIcon = ({ size }: IconProps) => (
   </Icon>
 );
 
-export const RepeatIcon = ({ size }: IconProps) => (
+
+
+export const PenIcon = ({ size }: IconProps) => (
   <Icon size={size}>
-    <path d="M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3" />
+    <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
   </Icon>
 );
 
-export const TimerIcon = ({ size }: IconProps) => (
+export const SparkleIcon = ({ size }: IconProps) => (
   <Icon size={size}>
-    <circle cx="12" cy="13" r="8" />
-    <path d="M12 9v4l2 2M9 2h6" />
+    <path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z" />
+  </Icon>
+);
+
+export const FolderIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
   </Icon>
 );

@@ -48,7 +48,7 @@ describe("Hub", () => {
   it("starts each capture by its kind", async () => {
     const calls = backend();
     render(<Hub />);
-    for (const name of [/^Region/, /^Window/, /^Screen/, /^Record GIF/, /^Text/, /^Colour/]) {
+    for (const name of [/^Capture region/, /^Window/, /^Screen/, /^Record GIF/, /^Text/, /^Colour/]) {
       await userEvent.click(screen.getByRole("button", { name }));
     }
     await userEvent.click(screen.getByRole("button", { name: "Repeat last region" }));

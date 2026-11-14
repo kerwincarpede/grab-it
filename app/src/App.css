@@ -17,6 +17,58 @@
   --radius: 8px;
   --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 4px 12px rgb(16 24 40 / 6%);
 
+  /* The "Modern" look: a near-black (or soft grey) window, content on an
+     inset panel, translucent fills for pills and rows. */
+  --chrome: #e9ebef;
+  --panel: #ffffff;
+  --panel-edge: rgb(16 24 40 / 9%);
+  --fill: rgb(16 24 40 / 5%);
+  --fill-hover: rgb(16 24 40 / 8%);
+  --fill-current: #ffffff;
+  --fill-current-shadow: 0 1px 2px rgb(16 24 40 / 10%), 0 0 0 1px rgb(16 24 40 / 5%);
+  --pill-on: #1b1f27;
+  --on-pill-on: #ffffff;
+  --group: #f5f6f8;
+  --group-edge: rgb(16 24 40 / 7%);
+  --divider: rgb(16 24 40 / 8%);
+  --hairline: rgb(16 24 40 / 10%);
+  --switch-off: #c9ced7;
+  --switch-on: #2f6fe4;
+  --seg-track: rgb(16 24 40 / 7%);
+  --seg-on: #ffffff;
+  --seg-on-shadow: 0 1px 2px rgb(16 24 40 / 18%);
+  --cta: linear-gradient(180deg, #326ce0 0%, #2459c8 100%);
+  --cta-hover: linear-gradient(180deg, #2c63d3 0%, #1f50b8 100%);
+  --on-cta: #ffffff;
+  --cta-glow: 0 1px 0 rgb(255 255 255 / 22%) inset, 0 8px 18px -10px rgb(36 89 200 / 70%);
+  --link: #1f56c4;
+  --pop: #ffffff;
+  --pop-edge: rgb(16 24 40 / 10%);
+  --float: rgb(18 20 25 / 86%);
+  --on-float: #f1f2f5;
+
+  /* Tinted chips: a pale fill with a dark ink, each pair at least 4.5:1. */
+  --tint-blue-bg: #dde7ff;
+  --tint-blue-fg: #1f4fb8;
+  --tint-violet-bg: #e6e3ff;
+  --tint-violet-fg: #4b3aa8;
+  --tint-purple-bg: #ece3ff;
+  --tint-purple-fg: #5b3cb0;
+  --tint-pink-bg: #fde0ee;
+  --tint-pink-fg: #a3245f;
+  --tint-red-bg: #fde0e0;
+  --tint-red-fg: #b42323;
+  --tint-orange-bg: #fde3d8;
+  --tint-orange-fg: #9a3a14;
+  --tint-amber-bg: #fbecd2;
+  --tint-amber-fg: #8a5200;
+  --tint-green-bg: #dbf3e4;
+  --tint-green-fg: #17683a;
+  --tint-teal-bg: #d6f1f0;
+  --tint-teal-fg: #0f6461;
+  --tint-gray-bg: #e3e6eb;
+  --tint-gray-fg: #3d4450;
+
   /* Geist for text, Geist Mono for keys, sizes and versions; bundled, so
      every system shows the same type. */
   --font-sans: "Geist Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -49,6 +101,52 @@
     --success: #3fb950;
     --danger: #f85149;
     --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 6px 16px rgb(0 0 0 / 28%);
+
+    --chrome: #0b0c0f;
+    --panel: #15171c;
+    --panel-edge: rgb(255 255 255 / 6%);
+    --fill: rgb(255 255 255 / 6%);
+    --fill-hover: rgb(255 255 255 / 9%);
+    --fill-current: rgb(255 255 255 / 7.5%);
+    --fill-current-shadow: none;
+    --pill-on: #eef1f6;
+    --on-pill-on: #0d0f13;
+    --group: rgb(255 255 255 / 3.5%);
+    --group-edge: rgb(255 255 255 / 6%);
+    --divider: rgb(255 255 255 / 6%);
+    --hairline: rgb(255 255 255 / 7%);
+    --switch-off: #3a3e48;
+    --switch-on: #3478f6;
+    --seg-track: rgb(0 0 0 / 35%);
+    --seg-on: #3a3e48;
+    --seg-on-shadow: 0 1px 2px rgb(0 0 0 / 40%);
+    --cta-glow: 0 1px 0 rgb(255 255 255 / 22%) inset, 0 8px 20px -8px rgb(47 111 228 / 75%);
+    --link: #9db8ff;
+    --pop: #1d2027;
+    --pop-edge: rgb(255 255 255 / 9%);
+    --float: rgb(12 13 16 / 86%);
+    --on-float: #f1f2f5;
+
+    --tint-blue-bg: #2a3c66;
+    --tint-blue-fg: #9db8ff;
+    --tint-violet-bg: #2e2a4f;
+    --tint-violet-fg: #b9a6ff;
+    --tint-purple-bg: #3a2d55;
+    --tint-purple-fg: #c4a8ff;
+    --tint-pink-bg: #4a2a3d;
+    --tint-pink-fg: #f59ac6;
+    --tint-red-bg: #4a2326;
+    --tint-red-fg: #ff8a8a;
+    --tint-orange-bg: #4a2a1f;
+    --tint-orange-fg: #f0a07e;
+    --tint-amber-bg: #4a3518;
+    --tint-amber-fg: #f2b860;
+    --tint-green-bg: #1d3d2c;
+    --tint-green-fg: #7fd6a0;
+    --tint-teal-bg: #163b3c;
+    --tint-teal-fg: #6fd3cf;
+    --tint-gray-bg: #2a2f3a;
+    --tint-gray-fg: #c9ccd3;
   }
 }
 
@@ -106,11 +204,6 @@ kbd,
   font-weight: 600;
 }
 
-.field-row {
-  display: flex;
-  gap: 8px;
-}
-
 /* An input without a type is a text field too. */
 input:not([type]),
 input[type="text"],
@@ -141,11 +234,6 @@ textarea:focus-visible {
   border-color: var(--accent);
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-.field-row input {
-  flex: 1;
-  min-width: 0;
 }
 
 button {
@@ -218,85 +306,18 @@ button.danger {
   margin-top: 0;
 }
 
-.hotkey-row {
-  display: grid;
-  grid-template-columns: 9em 1fr;
-  align-items: center;
-  gap: 8px;
-}
-
 .hotkey-row input {
+  width: 200px;
+  margin-left: auto;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
-.hotkey-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-/* The "After a capture" choices: one selectable row each. */
-.choices {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.choice {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition:
-    border-color 120ms,
-    background-color 120ms;
-}
-
-.choice:hover {
-  border-color: var(--border-strong);
-}
-
-.choice:has(input:checked) {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-}
-
-.choice:has(input:focus-visible) {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.choice input {
-  margin: 3px 0 0;
-  accent-color: var(--accent);
-}
-
+/* A bold title over its hint. */
 .choice-title {
   display: block;
   font-weight: 600;
-}
-
-.toggle {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin-top: 12px;
-  cursor: pointer;
-}
-
-.toggle.first {
-  margin-top: 0;
-}
-
-.toggle input {
-  margin: 3px 0 0;
-  accent-color: var(--accent);
 }
 
 .home {
@@ -308,17 +329,7 @@ button.danger {
 
 /* Settings: AI descriptions. */
 .ai-settings {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.ai-settings h2 {
-  margin-bottom: 0;
-}
-
-.ai-settings .toggle {
-  margin-top: 0;
+  display: block;
 }
 
 .ai-buttons {
@@ -329,9 +340,10 @@ button.danger {
 }
 
 .ai-privacy {
-  padding: 8px 10px;
-  background: var(--surface-2);
-  border-radius: var(--radius);
+  margin: 0;
+  padding: 8px 12px;
+  background: var(--fill);
+  border-radius: 10px;
 }
 
 .ai-privacy-cloud {
@@ -349,7 +361,10 @@ button.danger {
 }
 
 .ai-result {
+  flex: 1;
+  min-width: 0;
   margin: 0;
+  font-size: 12.5px;
   overflow-wrap: anywhere;
 }
 
@@ -359,4 +374,336 @@ button.danger {
 
 .ai-result-error {
   color: var(--danger);
+}
+
+/* ── Modern controls, shared by the Grab-it window and the hub ────────── */
+
+/* A small rounded square holding an icon or a letter, in one of the tints. */
+.icon-chip {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--chip-fg, var(--tint-gray-fg));
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  background: var(--chip-bg, var(--tint-gray-bg));
+  border-radius: 7px;
+}
+
+.tint-blue { --chip-bg: var(--tint-blue-bg); --chip-fg: var(--tint-blue-fg); }
+.tint-violet { --chip-bg: var(--tint-violet-bg); --chip-fg: var(--tint-violet-fg); }
+.tint-purple { --chip-bg: var(--tint-purple-bg); --chip-fg: var(--tint-purple-fg); }
+.tint-pink { --chip-bg: var(--tint-pink-bg); --chip-fg: var(--tint-pink-fg); }
+.tint-red { --chip-bg: var(--tint-red-bg); --chip-fg: var(--tint-red-fg); }
+.tint-orange { --chip-bg: var(--tint-orange-bg); --chip-fg: var(--tint-orange-fg); }
+.tint-amber { --chip-bg: var(--tint-amber-bg); --chip-fg: var(--tint-amber-fg); }
+.tint-green { --chip-bg: var(--tint-green-bg); --chip-fg: var(--tint-green-fg); }
+.tint-teal { --chip-bg: var(--tint-teal-bg); --chip-fg: var(--tint-teal-fg); }
+.tint-gray { --chip-bg: var(--tint-gray-bg); --chip-fg: var(--tint-gray-fg); }
+
+/* The gradient call to action: New capture, Capture region. */
+.cta {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--on-cta);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  background: var(--cta);
+  border: 0;
+  box-shadow: var(--cta-glow);
+}
+
+.cta:where(:hover:not(:disabled)) {
+  background: var(--cta-hover);
+}
+
+.cta-key {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+/* A rounded pill button: filters, Repeat, Change…. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--fill);
+  border: 0;
+  border-radius: 999px;
+}
+
+.pill:where(:hover:not(:disabled)) {
+  background: var(--fill-hover);
+}
+
+.pill[aria-pressed="true"],
+.pill.is-on {
+  color: var(--on-pill-on);
+  background: var(--pill-on);
+}
+
+.pill .icon {
+  flex: none;
+}
+
+/* Settings as grouped rows: label and hint on the left, the control on the right. */
+.settings-title {
+  margin-bottom: 6px;
+}
+
+.settings-lead {
+  margin: 0 0 30px;
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+.group-heading {
+  margin: 0 0 10px 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.group {
+  margin: 0 0 26px;
+  padding: 0;
+  overflow: hidden;
+  background: var(--group);
+  border: 0;
+  border-radius: 14px;
+  box-shadow: 0 0 0 1px var(--group-edge) inset;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-sizing: border-box;
+  min-height: 60px;
+  padding: 12px 18px;
+}
+
+.row + .row {
+  box-shadow: 0 1px 0 var(--divider) inset;
+}
+
+.row.is-stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+label.row {
+  cursor: pointer;
+}
+
+.row-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.row-title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+}
+
+.row-hint {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.row-control {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.row input:not([type]),
+.row input[type="text"],
+.row input[type="password"],
+.row select {
+  height: 34px;
+  padding: 0 12px;
+  background: var(--panel);
+  border-color: var(--group-edge);
+  border-radius: 10px;
+}
+
+.row .mono-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* A switch: a real checkbox with role="switch", drawn as a track and knob. */
+input.switch {
+  position: relative;
+  flex: none;
+  width: 42px;
+  height: 26px;
+  margin: 0;
+  background: var(--switch-off);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 160ms;
+  appearance: none;
+}
+
+input.switch::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  content: "";
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 35%);
+  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+input.switch:checked {
+  background: var(--switch-on);
+}
+
+input.switch:checked::after {
+  transform: translateX(16px);
+}
+
+input.switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input.switch:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* A segmented control: a radio group drawn as one track. */
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 3px;
+  background: var(--seg-track);
+  border: 0;
+  border-radius: 10px;
+}
+
+.segmented label {
+  position: relative;
+  padding: 6px 12px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background-color 140ms,
+    color 140ms;
+}
+
+.segmented label:hover {
+  color: var(--text);
+}
+
+.segmented input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.segmented label:has(input:checked) {
+  color: var(--text);
+  background: var(--seg-on);
+  box-shadow: var(--seg-on-shadow);
+}
+
+.segmented label:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.segmented:disabled label {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* A primary pill: Save, Save hotkeys. */
+.pill.is-primary {
+  color: var(--on-cta);
+  background: var(--cta);
+  box-shadow: var(--cta-glow);
+}
+
+.pill.is-primary:where(:hover:not(:disabled)) {
+  background: var(--cta-hover);
+}
+
+/* A text field or menu on the right of a row. */
+.row .row-field {
+  flex: none;
+  width: 240px;
+}
+
+/* The save folder: a read-only path, set in mono like a value, not a box. */
+.row input.mono-value {
+  width: 100%;
+  height: auto;
+  padding: 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+}
+
+.row input.mono-value:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.row .hint {
+  font-size: 12.5px;
+}
+
+.settings .status {
+  margin: 0 4px;
+  font-size: 13px;
+}
+
+.row.is-stacked .segmented {
+  align-self: flex-start;
 }

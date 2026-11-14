@@ -1,8 +1,22 @@
-/* The menu bar hub: a compact panel under the tray icon. */
+/* The menu bar hub: a compact panel under the tray icon. A solid dark tint
+   that reads like the frosted board (real translucency would need Tauri's
+   macOSPrivateApi), a soft light panel in light mode. */
 html:has(.hub),
 body:has(.hub) {
   overflow: hidden;
-  background: var(--surface);
+  background: var(--hub-bg);
+}
+
+:root {
+  --hub-bg: #f6f7f9;
+  --hub-edge: rgb(16 24 40 / 10%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --hub-bg: #17191f;
+    --hub-edge: rgb(255 255 255 / 9%);
+  }
 }
 
 .hub {
@@ -11,33 +25,28 @@ body:has(.hub) {
   box-sizing: border-box;
   height: 100vh;
   overflow-y: auto;
+  color: var(--text);
   user-select: none;
-  background: var(--surface);
+  background: var(--hub-bg);
+  box-shadow: 0 0 0 1px var(--hub-edge) inset;
+  scrollbar-width: none;
 }
 
 .hub-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 12px 14px 16px;
+  padding: 14px 10px 12px 16px;
 }
 
 .hub-head .brand-name {
-  font-size: 16px;
+  font-size: 15px;
 }
 
-.hub-open {
+.hub-head .hub-open {
+  height: 28px;
   margin-left: auto;
-  padding: 6px 11px;
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 500;
-  background: var(--surface-2);
-  border-radius: 8px;
-}
-
-.hub-open:where(:hover) {
-  background: var(--border);
+  padding: 0 11px;
 }
 
 .hub-icon {
@@ -48,89 +57,98 @@ body:has(.hub) {
   padding: 0;
   color: var(--text-muted);
   background: none;
-  border-radius: 8px;
+  border-radius: 9px;
 }
 
 .hub-icon:where(:hover) {
   color: var(--text);
-  background: var(--surface-2);
+  background: var(--fill);
 }
 
-.hub-captures {
+.hub-primary {
+  padding: 0 12px;
+}
+
+.hub-region {
+  gap: 10px;
+  width: 100%;
+  height: 48px;
+  padding: 0 16px;
+  font-size: 14.5px;
+  letter-spacing: -0.015em;
+  border-radius: 14px;
+}
+
+.hub-region .cta-key {
+  font-size: 12px;
+}
+
+.hub-tools {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  padding: 0 14px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+  padding: 10px 8px 4px;
 }
 
-.hub-capture {
+.hub-tool {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-  min-height: 86px;
-  padding: 12px;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 0 8px;
   color: var(--text);
-  font-size: 13.5px;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: -0.01em;
-  text-align: left;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 13px;
+  background: none;
+  border-radius: 12px;
 }
 
-.hub-capture:where(:hover) {
-  background: var(--border);
+.hub-tool:where(:hover) {
+  background: var(--fill);
 }
 
-.hub-capture.is-primary {
-  color: #fff;
-  background: #2f6fe4;
-  border-color: #3b7af0;
-}
-
-.hub-capture.is-primary:where(:hover) {
-  background: #2560d6;
+.hub-tool-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  color: var(--chip-fg);
+  background: var(--chip-bg);
+  border-radius: 12px;
 }
 
 .hub-key {
-  display: block;
-  margin-top: 2px;
+  max-width: calc(100% - 6px);
+  margin-top: -3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 400;
+  letter-spacing: 0;
   white-space: pre;
-}
-
-.hub-capture.is-primary .hub-key {
-  color: #dbe6ff;
 }
 
 .hub-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 10px 14px 0;
+  padding: 6px 14px 0;
 }
 
-.hub-chip {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 500;
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 9px;
+.hub-chips .pill {
+  height: 30px;
+  padding: 0 11px;
 }
 
-.hub-chip:where(:hover),
-.hub-chip[aria-expanded="true"] {
-  background: var(--surface-2);
+.hub-chips .pill[aria-expanded="true"] {
+  background: var(--fill-hover);
+}
+
+.hub-chips .pill[aria-expanded="true"] .icon:last-child {
+  transform: rotate(180deg);
 }
 
 .hub-options {
@@ -138,8 +156,8 @@ body:has(.hub) {
   flex-direction: column;
   margin: 8px 14px 0;
   padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  background: var(--fill);
+  border-radius: 12px;
 }
 
 .hub-options button {
@@ -148,25 +166,25 @@ body:has(.hub) {
   font-weight: 450;
   text-align: left;
   background: none;
-  border-radius: 7px;
+  border-radius: 8px;
 }
 
 .hub-options button:where(:hover) {
-  background: var(--surface-2);
+  background: var(--fill-hover);
 }
 
 .hub-recent-head {
   display: flex;
   align-items: baseline;
-  padding: 18px 16px 10px;
+  padding: 20px 16px 10px;
 }
 
 .hub-recent-head h2 {
   margin: 0;
   color: var(--text);
   font-size: 13.5px;
-  font-weight: 550;
-  letter-spacing: -0.01em;
+  font-weight: 600;
+  letter-spacing: -0.015em;
   text-transform: none;
 }
 
@@ -177,23 +195,37 @@ body:has(.hub) {
 
 .hub-recent {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  padding: 0 14px;
+  padding: 0 14px 16px;
 }
 
 .hub-recent-shot {
+  position: relative;
+  display: block;
+  width: 100%;
   aspect-ratio: 4 / 3;
   padding: 0;
   overflow: hidden;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  background: var(--fill);
+  border: 0;
+  border-radius: 10px;
+}
+
+.hub-recent-shot::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  border-radius: inherit;
+  box-shadow: 0 0 0 1px var(--hairline) inset;
 }
 
 .hub-recent-shot:where(:hover) {
-  background: var(--surface-2);
-  border-color: var(--accent);
+  background: var(--fill);
+}
+
+.hub-recent-shot:hover::after {
+  box-shadow: 0 0 0 2px var(--accent) inset;
 }
 
 .hub-recent-shot img {
@@ -203,14 +235,22 @@ body:has(.hub) {
   object-fit: cover;
 }
 
+.hub-recent-time {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
 .hub-empty {
-  margin: 0 16px;
+  margin: 0 16px 16px;
   color: var(--text-muted);
   font-size: 12.5px;
 }
 
 .hub-error {
-  margin: 10px 16px 0;
+  margin: 0 16px 10px;
   color: var(--danger);
   font-size: 12.5px;
 }
@@ -218,17 +258,16 @@ body:has(.hub) {
 .hub-foot {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   margin-top: auto;
   padding: 11px 16px;
   font-size: 12.5px;
-  background: var(--bg);
-  border-top: 1px solid var(--border);
+  box-shadow: 0 1px 0 var(--divider) inset;
 }
 
 .hub-foot .link-button {
   color: var(--text-muted);
-  font-weight: 450;
+  font-weight: 400;
 }
 
 .hub-foot .link-button:where(:hover) {

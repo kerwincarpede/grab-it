@@ -170,11 +170,15 @@ export function ChipSelect({ label, icon, allLabel, value, options, format = asI
 interface DateChipProps {
   fromDate: string;
   toDate: string;
+  /** What the chip says with no date chosen; "Any time" by default. */
+  idleLabel?: string;
+  /** Presets shown elsewhere as pills: the chip stays idle while one of them is on. */
+  quickPresets?: string[];
   onChange: (range: { fromDate: string; toDate: string }) => void;
 }
 
 /** A pill for the capture date: quick presets or a custom range. */
-export function DateChip({ fromDate, toDate, onChange }: DateChipProps) {
+export function DateChip({ fromDate, toDate, idleLabel = "Any time", quickPresets = [], onChange }: DateChipProps) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -182,7 +186,12 @@ export function DateChip({ fromDate, toDate, onChange }: DateChipProps) {
   useOutsideClick(root, open, close);
   // Presets are relative to when the menu was last opened.
   const [now, setNow] = useState(Date.now);
-  const label = dateFilterLabel(fromDate, toDate, now);
+  const quickOn = DATE_PRESETS.some((preset) => {
+    if (!quickPresets.includes(preset.id)) return false;
+    const range = preset.range(now);
+    return range.fromDate === fromDate && range.toDate === toDate;
+  });
+  const label = quickOn ? null : dateFilterLabel(fromDate, toDate, now);
 
   function pick(range: { fromDate: string; toDate: string }) {
     onChange(range);
@@ -215,7 +224,7 @@ export function DateChip({ fromDate, toDate, onChange }: DateChipProps) {
         }}
       >
         <CalendarIcon />
-        <span className="chip-text">{label ?? "Any time"}</span>
+        <span className="chip-text">{label ?? idleLabel}</span>
         <ChevronIcon />
       </button>
       {open && (

@@ -11,6 +11,7 @@ import {
 import "./library.css";
 import {
   CLI_NAMES,
+  DATE_PRESETS,
   FIELD_LABELS,
   NO_FILTERS,
   PAGE_SIZE,
@@ -254,15 +255,21 @@ interface ToolbarProps {
   onRowHeight: (height: number) => void;
   /** The app filter lives elsewhere (the Grab-it window's sidebar). */
   hideAppFilter?: boolean;
+  /** What "today" is for the date pills. */
+  now: number;
 }
 
-/** Search, filter chips and the thumbnail size slider. */
+/** The date presets that get a pill of their own; the date menu has the rest. */
+const QUICK_DATES = DATE_PRESETS.filter((preset) => preset.id === "today" || preset.id === "week");
+
+/** Search on the title row; then date pills, filter menus and the thumbnail size slider. */
 function Toolbar(props: ToolbarProps) {
-  const { text, filters, options, active, rowHeight, searchRef } = props;
+  const { text, filters, options, active, rowHeight, searchRef, now } = props;
   const set = (change: Partial<Filters>) => props.onFilters({ ...filters, ...change });
+  const quick = [{ id: "any", label: "Any time", range: () => ({ fromDate: "", toDate: "" }) }, ...QUICK_DATES];
   return (
-    <div className="toolbar" role="search">
-      <div className="search-field">
+    <>
+      <div className="search-field" role="search">
         <SearchIcon />
         <input
           ref={searchRef}
@@ -287,56 +294,74 @@ function Toolbar(props: ToolbarProps) {
           <kbd aria-hidden="true">/</kbd>
         )}
       </div>
-      <div className="chips">
-        {!props.hideAppFilter && (
+      <div className="toolbar" role="group" aria-label="Filters">
+        <div className="chips">
+          {quick.map((preset) => {
+            const range = preset.range(now);
+            const on = range.fromDate === filters.fromDate && range.toDate === filters.toDate;
+            return (
+              <button key={preset.id} type="button" className="pill" aria-pressed={on} onClick={() => set(range)}>
+                {preset.label}
+              </button>
+            );
+          })}
+          <span className="chips-divider" aria-hidden="true" />
+          {!props.hideAppFilter && (
+            <ChipSelect
+              label="Filter by app"
+              icon={<AppIcon />}
+              allLabel="All apps"
+              value={filters.app}
+              options={options.apps}
+              onChange={(app) => set({ app })}
+            />
+          )}
           <ChipSelect
-            label="Filter by app"
-            icon={<AppIcon />}
-            allLabel="All apps"
-            value={filters.app}
-            options={options.apps}
-            onChange={(app) => set({ app })}
+            label="Filter by tag"
+            icon={<TagIcon />}
+            allLabel="All tags"
+            value={filters.tag}
+            options={options.tags}
+            onChange={(tag) => set({ tag })}
           />
-        )}
-        <ChipSelect
-          label="Filter by tag"
-          icon={<TagIcon />}
-          allLabel="All tags"
-          value={filters.tag}
-          options={options.tags}
-          onChange={(tag) => set({ tag })}
-        />
-        <ChipSelect
-          label="Filter by category"
-          icon={<LayersIcon />}
-          allLabel="All categories"
-          value={filters.category}
-          options={options.categories ?? []}
-          format={categoryLabel}
-          onChange={(category) => set({ category })}
-        />
-        <DateChip fromDate={filters.fromDate} toDate={filters.toDate} onChange={(range) => set(range)} />
-        {active && (
-          <button type="button" className="chip chip-clear" onClick={props.onClear}>
-            Clear
-          </button>
-        )}
+          <ChipSelect
+            label="Filter by category"
+            icon={<LayersIcon />}
+            allLabel="All categories"
+            value={filters.category}
+            options={options.categories ?? []}
+            format={categoryLabel}
+            onChange={(category) => set({ category })}
+          />
+          <DateChip
+            fromDate={filters.fromDate}
+            toDate={filters.toDate}
+            idleLabel="Dates"
+            quickPresets={QUICK_DATES.map((preset) => preset.id)}
+            onChange={(range) => set(range)}
+          />
+          {active && (
+            <button type="button" className="chip chip-clear" onClick={props.onClear}>
+              Clear
+            </button>
+          )}
+        </div>
+        <label className="zoom" title="Thumbnail size">
+          <GridSmallIcon />
+          <input
+            type="range"
+            aria-label="Thumbnail size"
+            min={ROW_HEIGHT.min}
+            max={ROW_HEIGHT.max}
+            step={10}
+            value={rowHeight}
+            style={{ "--zoom-fill": `${((rowHeight - ROW_HEIGHT.min) * 100) / (ROW_HEIGHT.max - ROW_HEIGHT.min)}%` } as CSSProperties}
+            onChange={(event) => props.onRowHeight(Number(event.target.value))}
+          />
+          <GridLargeIcon />
+        </label>
       </div>
-      <label className="zoom" title="Thumbnail size">
-        <GridSmallIcon />
-        <input
-          type="range"
-          aria-label="Thumbnail size"
-          min={ROW_HEIGHT.min}
-          max={ROW_HEIGHT.max}
-          step={10}
-          value={rowHeight}
-          style={{ "--fill": `${((rowHeight - ROW_HEIGHT.min) * 100) / (ROW_HEIGHT.max - ROW_HEIGHT.min)}%` } as CSSProperties}
-          onChange={(event) => props.onRowHeight(Number(event.target.value))}
-        />
-        <GridLargeIcon />
-      </label>
-    </div>
+    </>
   );
 }
 
@@ -365,47 +390,53 @@ const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, 
         onClick={() => onSelect(shot.id)}
         onDoubleClick={() => onOpen(shot.id)}
       >
-        <Thumbnail shot={shot} />
-        <span className="tile-shade" aria-hidden="true" />
-        {shot.aiCategory && (
-          <span className="tile-category">
-            <CategoryChip category={shot.aiCategory} />
-          </span>
-        )}
-        <span className="tile-info">
-          {hit && <Snippet hit={hit} />}
-          {/* A description match shows as the highlighted snippet instead. */}
-          {shot.aiDescription && hit?.field !== "description" && (
-            <span className="shot-ai-line">
-              <span className="shot-description" title={shot.aiDescription}>
-                {shot.aiDescription}
-              </span>
+        <span className="tile-frame">
+          <Thumbnail shot={shot} />
+          <span className="tile-shade" aria-hidden="true" />
+          {shot.aiCategory && (
+            <span className="tile-category">
+              <CategoryChip category={shot.aiCategory} />
             </span>
           )}
-          {shot.tags.length > 0 && (
-            <span className="tile-tags">
-              {shot.tags.map((tag) => (
-                <span key={tag} className="tag">
-                  {tag}
+          <span className="tile-info">
+            {hit && <Snippet hit={hit} />}
+            {/* A description match shows as the highlighted snippet instead. */}
+            {shot.aiDescription && hit?.field !== "description" && (
+              <span className="shot-ai-line">
+                <span className="shot-description" title={shot.aiDescription}>
+                  {shot.aiDescription}
                 </span>
-              ))}
-            </span>
-          )}
-          <span className="tile-caption">
-            <span className="tile-time">{formatTime(shot.capturedAt)}</span>
-            {shot.app && <span className="tile-app">{shot.app}</span>}
+              </span>
+            )}
+            {shot.tags.length > 0 && (
+              <span className="tile-tags">
+                {shot.tags.map((tag) => (
+                  <span key={tag} className="tag">
+                    {tag}
+                  </span>
+                ))}
+              </span>
+            )}
+          </span>
+        </span>
+        <span className="tile-caption">
+          <span className="tile-title">{shot.windowTitle || shot.fileName}</span>
+          <span className="tile-meta">
+            {[shot.app, formatTime(shot.capturedAt), shot.width > 0 && shot.height > 0 ? `${shot.width}×${shot.height}` : null]
+              .filter(Boolean)
+              .join(" · ")}
           </span>
         </span>
       </button>
       <span className="tile-actions">
-        <button type="button" className="tile-action" aria-label={`Copy ${shot.fileName}`} title="Copy" onClick={() => onAction(shot, "copy")}>
-          <CopyIcon />
-        </button>
-        <button type="button" className="tile-action" aria-label={`Pin ${shot.fileName}`} title="Pin to screen" onClick={() => onAction(shot, "pin")}>
-          <PinIcon />
+        <button type="button" className="tile-action" aria-label={`Copy ${shot.fileName}`} title="Copy to the clipboard" onClick={() => onAction(shot, "copy")}>
+          Copy
         </button>
         <button type="button" className="tile-action" aria-label={`Edit ${shot.fileName}`} title="Open in editor" onClick={() => onOpen(shot.id)}>
-          <EditIcon />
+          Edit
+        </button>
+        <button type="button" className="tile-action" aria-label={`Pin ${shot.fileName}`} title="Pin to screen" onClick={() => onAction(shot, "pin")}>
+          Pin
         </button>
       </span>
     </li>
@@ -1077,6 +1108,7 @@ function LibraryWindow({ title = "Library", appFilter, onAppFilter }: LibraryWin
           onClear={clearSearch}
           onRowHeight={setRowHeight}
           hideAppFilter={appFilter !== undefined}
+          now={now}
         />
         <OcrBanner status={ocr} onRetry={retry} />
         {aiNotice && (

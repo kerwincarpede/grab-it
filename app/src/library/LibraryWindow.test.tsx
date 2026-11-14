@@ -425,6 +425,24 @@ describe("LibraryWindow search", () => {
     expect(callsTo(backend, "library_list").length).toBeGreaterThan(1);
   });
 
+  it("filters by the date pills", async () => {
+    const now = Date.now();
+    mockBackend([shot(1, { capturedAt: now }), shot(2, { capturedAt: now - 40 * 86_400_000 })]);
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: "Grab-it 2.png" });
+    expect(screen.getByRole("button", { name: "Any time" })).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(screen.getByRole("button", { name: "Today" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Grab-it 2.png" })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Grab-it 1.png" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Today" })).toHaveAttribute("aria-pressed", "true");
+    // The date menu stays idle: the pill already says which dates are shown.
+    expect(screen.getByRole("button", { name: "Filter by date" })).toHaveTextContent("Dates");
+
+    await userEvent.click(screen.getByRole("button", { name: "Any time" }));
+    expect(await screen.findByRole("button", { name: "Grab-it 2.png" })).toBeInTheDocument();
+  });
+
   it("filters by app, tag and date", async () => {
     const backend = mockBackend([
       shot(1, { tags: ["receipts"], capturedAt: new Date(2026, 2, 1, 12).getTime() }),
