@@ -14,7 +14,7 @@ use std::{
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, State, WebviewWindow, ipc::InvokeBody};
+use tauri::{AppHandle, Manager, State, WebviewWindow, ipc::InvokeBody};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::capture::annotations_path;
@@ -104,6 +104,64 @@ pub fn read_backdrop_image(path: &Path) -> Result<Vec<u8>, String> {
         return Err("the backdrop image is too large".to_owned());
     }
     fs::read(path).map_err(|err| format!("could not open {}: {err}", path.display()))
+}
+
+/// The folder under the app data dir holding backdrop presets' own copies
+/// of their images. Copies are never deleted, so captures framed with a
+/// preset that was since deleted keep their image.
+pub const BACKDROP_PRESETS_DIR: &str = "backdrop-presets";
+
+/// Copies a backdrop image into `dir` under a fresh name, so a preset keeps
+/// working when the original is moved, and returns the copy's path. The
+/// image is checked as [`read_backdrop_image`] checks it. An image already
+/// in `dir` is returned as it is.
+pub fn save_preset_image(dir: &Path, source: &Path) -> Result<PathBuf, String> {
+    let bytes = read_backdrop_image(source)?;
+    let canonical_dir = fs::canonicalize(dir).ok();
+    let source_dir = source
+        .parent()
+        .and_then(|parent| fs::canonicalize(parent).ok());
+    if canonical_dir.is_some() && canonical_dir == source_dir {
+        return Ok(source.to_path_buf());
+    }
+    fs::create_dir_all(dir).map_err(|err| format!("could not create {}: {err}", dir.display()))?;
+    let stem = source
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| "backdrop".to_owned());
+    let extension = source
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_millis())
+        .unwrap_or_default();
+    for attempt in 0..1000 {
+        let name = match attempt {
+            0 => format!("{stem}-{stamp}.{extension}"),
+            n => format!("{stem}-{stamp}-{n}.{extension}"),
+        };
+        let target = dir.join(name);
+        // `create_new` so two saves at once never share a file.
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target);
+        match file {
+            Ok(mut file) => {
+                use std::io::Write;
+                return file
+                    .write_all(&bytes)
+                    .map(|()| target)
+                    .map_err(|err| format!("could not save the preset image: {err}"));
+            }
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(format!("could not save the preset image: {err}")),
+        }
+    }
+    Err("could not name the preset image".to_owned())
 }
 
 /// Reads `<capture>.annotations.json`. A missing file is `Ok(None)`; an
@@ -224,6 +282,18 @@ pub fn editor_info(
 #[tauri::command]
 pub fn editor_backdrop_image(path: PathBuf) -> Result<tauri::ipc::Response, String> {
     read_backdrop_image(&path).map(tauri::ipc::Response::new)
+}
+
+/// Keeps a preset's own copy of its backdrop image in
+/// `<app data dir>/backdrop-presets/`; returns the path to save in the preset.
+#[tauri::command]
+pub fn save_backdrop_preset_image(path: PathBuf, app: AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|err| format!("could not find the app data folder: {err}"))?
+        .join(BACKDROP_PRESETS_DIR);
+    save_preset_image(&dir, &path)
 }
 
 /// The original capture's PNG bytes.
@@ -401,6 +471,59 @@ mod tests {
         assert!(read_backdrop_image(&notes).is_err());
         assert!(read_backdrop_image(&dir.path().join("settings")).is_err());
         assert!(read_backdrop_image(&dir.path().join("gone.png")).is_err());
+    }
+
+    #[test]
+    fn preset_images_are_copied_under_a_fresh_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let presets = dir.path().join("data").join(BACKDROP_PRESETS_DIR);
+        let photo = dir.path().join("Beach.JPG");
+        fs::write(&photo, b"jpeg").unwrap();
+
+        let first = save_preset_image(&presets, &photo).unwrap();
+        let second = save_preset_image(&presets, &photo).unwrap();
+        assert_ne!(first, second);
+        for copy in [&first, &second] {
+            assert_eq!(copy.parent(), Some(presets.as_path()));
+            assert_eq!(fs::read(copy).unwrap(), b"jpeg");
+            let name = copy.file_name().unwrap().to_string_lossy();
+            assert!(
+                name.starts_with("Beach-") && name.ends_with(".jpg"),
+                "{name}"
+            );
+        }
+        // The copy outlives the original.
+        fs::remove_file(&photo).unwrap();
+        assert_eq!(fs::read(&first).unwrap(), b"jpeg");
+    }
+
+    #[test]
+    fn a_preset_image_already_in_the_folder_is_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let presets = dir.path().join(BACKDROP_PRESETS_DIR);
+        let photo = dir.path().join("beach.png");
+        fs::write(&photo, b"png").unwrap();
+        let copy = save_preset_image(&presets, &photo).unwrap();
+
+        assert_eq!(save_preset_image(&presets, &copy), Ok(copy.clone()));
+        // Spelled another way, it is still the same folder.
+        let spelled = presets
+            .join("..")
+            .join(BACKDROP_PRESETS_DIR)
+            .join(copy.file_name().unwrap());
+        assert_eq!(save_preset_image(&presets, &spelled), Ok(spelled));
+        assert_eq!(fs::read_dir(&presets).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn only_images_are_copied_for_presets() {
+        let dir = tempfile::tempdir().unwrap();
+        let presets = dir.path().join(BACKDROP_PRESETS_DIR);
+        let notes = dir.path().join("notes.txt");
+        fs::write(&notes, b"secret").unwrap();
+        assert!(save_preset_image(&presets, &notes).is_err());
+        assert!(save_preset_image(&presets, &dir.path().join("gone.png")).is_err());
+        assert!(!presets.exists());
     }
 
     #[test]

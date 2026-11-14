@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { MAX_BACKDROP_PRESETS } from "../settings/api";
 import {
   BACKDROP_ASPECTS,
   BACKDROP_FILLS,
@@ -10,8 +12,10 @@ import {
   DEFAULT_GRADIENT,
   DEFAULT_SHADOW_SIZE,
   DEFAULT_SHADOW_STRENGTH,
+  sameBackdrop,
   type Backdrop,
 } from "./model";
+import type { SavedBackdrop } from "./preferences";
 
 interface BackdropPanelProps {
   /** The backdrop on show, or null when it is off. */
@@ -24,6 +28,12 @@ interface BackdropPanelProps {
   onCommit: (backdrop: Backdrop | null) => void;
   /** Asks for an image file; resolves to its path, or null when cancelled. */
   onPickImage: () => Promise<string | null>;
+  /** The backdrops saved by name; null while they cannot be read, which hides them. */
+  presets: SavedBackdrop[] | null;
+  /** Saves the backdrop on show as a new preset. */
+  onSavePreset: () => void;
+  /** Keeps a renamed or shortened list of presets. */
+  onPresetsChange: (presets: SavedBackdrop[]) => void;
 }
 
 const isHex = (fill: string) => /^#[0-9a-f]{6}$/i.test(fill);
@@ -38,6 +48,57 @@ function meshCss(mesh: (typeof BACKDROP_MESHES)[number]): string {
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
+/**
+ * How a preset's swatch shows its fill: the CSS background, or the class
+ * the built-in swatch for that fill uses (transparent, blurred, image).
+ */
+function presetLook(backdrop: Backdrop): { background: string; className: string } {
+  const gradient = BACKDROP_PRESETS.find((preset) => preset.id === backdrop.fill);
+  if (gradient) return { background: `linear-gradient(135deg, ${gradient.colors.join(", ")})`, className: "" };
+  const mesh = BACKDROP_MESHES.find((entry) => entry.id === backdrop.fill);
+  if (mesh) return { background: meshCss(mesh), className: "" };
+  switch (backdrop.fill) {
+    case BACKDROP_FILLS.custom: {
+      const custom = backdrop.gradient ?? DEFAULT_GRADIENT;
+      return { background: `linear-gradient(${custom.angle}deg, ${custom.from}, ${custom.to})`, className: "" };
+    }
+    case BACKDROP_FILLS.transparent:
+      return { background: "", className: "transparent" };
+    case BACKDROP_FILLS.blur:
+      return { background: "", className: "blurred" };
+    case BACKDROP_FILLS.image:
+      return { background: "", className: "image" };
+    default:
+      return { background: backdrop.fill, className: "" };
+  }
+}
+
+/**
+ * The name of the preset in use. Each change renames it straight away; a
+ * name cleared to nothing goes back to the last one when the field is left.
+ */
+function PresetName({ preset, onRename }: { preset: SavedBackdrop; onRename: (name: string) => void }) {
+  const [text, setText] = useState(preset.name);
+  return (
+    <input
+      type="text"
+      aria-label="Preset name"
+      value={text}
+      maxLength={60}
+      spellCheck={false}
+      onChange={(event) => {
+        setText(event.target.value);
+        const name = event.target.value.trim();
+        if (name) onRename(name);
+      }}
+      onBlur={() => setText(preset.name)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+      }}
+    />
+  );
+}
+
 /** The backdrop with Balance on, or without the field when it is off, as older sidecars have it. */
 function withBalance(backdrop: Backdrop, balance: boolean): Backdrop {
   const next = { ...backdrop };
@@ -51,7 +112,16 @@ function withBalance(backdrop: Backdrop, balance: boolean): Backdrop {
  * blurred capture, an image), padding and Balance, aspect ratio, corner
  * radius and shadow.
  */
-export default function BackdropPanel({ backdrop, start, onPreview, onCommit, onPickImage }: BackdropPanelProps) {
+export default function BackdropPanel({
+  backdrop,
+  start,
+  onPreview,
+  onCommit,
+  onPickImage,
+  presets,
+  onSavePreset,
+  onPresetsChange,
+}: BackdropPanelProps) {
   // Picking a fill turns the backdrop on with the sizes last used.
   const current = backdrop ?? start ?? DEFAULT_BACKDROP;
   // A drag previews every step and commits once, when it is let go.
@@ -102,6 +172,14 @@ export default function BackdropPanel({ backdrop, start, onPreview, onCommit, on
     />
   );
 
+  // The preset in use, whose name and Delete show under the saved swatches;
+  // the newest one when the same backdrop was saved twice.
+  const active = backdrop ? [...(presets ?? [])].reverse().find((preset) => sameBackdrop(preset.backdrop, backdrop)) : undefined;
+  const rename = (id: string, name: string) =>
+    presets && onPresetsChange(presets.map((preset) => (preset.id === id ? { ...preset, name } : preset)));
+  // The backdrop stays as it is: only the preset goes.
+  const remove = (id: string) => presets && onPresetsChange(presets.filter((preset) => preset.id !== id));
+
   const pickImage = async () => {
     const path = await onPickImage().catch(() => null);
     if (path) onCommit({ ...current, fill: BACKDROP_FILLS.image, image: path });
@@ -109,6 +187,49 @@ export default function BackdropPanel({ backdrop, start, onPreview, onCommit, on
 
   return (
     <div className="backdrop-panel" role="dialog" aria-label="Backdrop">
+      {presets && (
+        <>
+          <div className="backdrop-section">Saved</div>
+          <div className="backdrop-swatches" role="group" aria-label="Saved">
+            {presets.map((preset) => {
+              const look = presetLook(preset.backdrop);
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className={`backdrop-swatch ${look.className}`.trim()}
+                  style={{ background: look.background || undefined }}
+                  aria-label={preset.name}
+                  title={preset.name}
+                  aria-pressed={preset.id === active?.id}
+                  onClick={() => onCommit(preset.backdrop)}
+                />
+              );
+            })}
+            {presets.length < MAX_BACKDROP_PRESETS && (
+              <button
+                type="button"
+                className="backdrop-swatch add"
+                aria-label="Save as preset"
+                title={backdrop ? "Save this backdrop as a preset" : "Pick a backdrop to save it"}
+                disabled={!backdrop}
+                onClick={onSavePreset}
+              >
+                +
+              </button>
+            )}
+          </div>
+          {active && (
+            <div className="backdrop-preset">
+              {/* Keyed by preset, so picking another one shows its own name. */}
+              <PresetName key={active.id} preset={active} onRename={(name) => rename(active.id, name)} />
+              <button type="button" aria-label="Delete preset" title="Delete this preset" onClick={() => remove(active.id)}>
+                Delete
+              </button>
+            </div>
+          )}
+        </>
+      )}
       <div className="backdrop-section">Gradients</div>
       <div className="backdrop-swatches" role="group" aria-label="Gradients">
         <button

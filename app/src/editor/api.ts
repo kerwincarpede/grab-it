@@ -28,6 +28,15 @@ export function backdropImage(path: string): Promise<ArrayBuffer> {
   return invoke<ArrayBuffer>("editor_backdrop_image", { path });
 }
 
+/**
+ * Keeps a preset's own copy of a backdrop image, so the preset still works
+ * when the original is moved. Resolves to the copy's path; an image that is
+ * already a preset's copy comes back as it is.
+ */
+export function saveBackdropPresetImage(path: string): Promise<string> {
+  return invoke<string>("save_backdrop_preset_image", { path });
+}
+
 /** Asks for an image to fill the backdrop with. Resolves to null when the user cancels. */
 export async function chooseBackdropImage(): Promise<string | null> {
   const picked = await open({

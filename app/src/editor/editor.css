@@ -353,6 +353,39 @@
     linear-gradient(#8ec5ff, #d7ecff);
 }
 
+/* Save as preset: a dashed tile with a plus. */
+.editor .backdrop-swatch.add {
+  border-style: dashed;
+  color: var(--ed-muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* The preset in use: its name and Delete. */
+.backdrop-preset {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.editor .backdrop-preset input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--ed-border);
+  border-radius: var(--ed-radius);
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  font: inherit;
+  user-select: text;
+}
+
+.editor .backdrop-preset button {
+  height: 28px;
+  color: var(--ed-danger);
+}
+
 /* The custom gradient's colours and angle. */
 .backdrop-gradient {
   display: grid;

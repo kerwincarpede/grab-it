@@ -162,6 +162,22 @@ export interface EditorPreferences {
   backdrop?: unknown;
   /** Frame captures that have no annotations yet with `backdrop`. Set from Settings; the editor never writes it. */
   autoBackdrop?: boolean;
+  /** Backdrops saved by name. Set with `setBackdropPresets`; the editor's other saves keep them. */
+  backdropPresets?: BackdropPreset[];
+}
+
+/** Mirrors `MAX_BACKDROP_PRESETS` in src-tauri/src/settings.rs. */
+export const MAX_BACKDROP_PRESETS = 24;
+
+/**
+ * Mirrors `BackdropPreset` in src-tauri/src/settings.rs: a backdrop saved
+ * under a name. Names need not be unique; `id` tells presets apart.
+ */
+export interface BackdropPreset<B = unknown> {
+  id: string;
+  name: string;
+  /** `Backdrop` in editor/model.ts; checked by the editor as it reads it. */
+  backdrop: B;
 }
 
 /** Mirrors `Settings` in src-tauri/src/settings.rs. */
@@ -286,6 +302,11 @@ export function getEditorPreferences(): Promise<EditorPreferences> {
 
 export function setEditorPreferences(preferences: EditorPreferences): Promise<EditorPreferences> {
   return invoke<EditorPreferences>("set_editor_preferences", { preferences });
+}
+
+/** Replaces the saved backdrop presets; resolves to them as kept. */
+export function setBackdropPresets<B>(presets: BackdropPreset<B>[]): Promise<BackdropPreset[]> {
+  return invoke<BackdropPreset[]>("set_backdrop_presets", { presets });
 }
 
 /** Turns framing new captures with the last backdrop on or off. */

@@ -4,7 +4,8 @@ import { Circle, Group, Image as KonvaImage, Layer, Rect as KonvaRect, Stage, Tr
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import "./editor.css";
-import { backdropImage, chooseBackdropImage, copyImage, editorImage, exportImage, pinImage } from "./api";
+import { MAX_BACKDROP_PRESETS, setBackdropPresets } from "../settings/api";
+import { backdropImage, chooseBackdropImage, copyImage, editorImage, exportImage, pinImage, saveBackdropPresetImage } from "./api";
 import BackdropPanel from "./BackdropPanel";
 import { copyShotText, hasShotText, textCopied, watchShotText, type ShotText } from "../library/api";
 import { imageEdges, NO_EDGES, orientEdges, type Edges } from "./edges";
@@ -81,7 +82,7 @@ import {
   withScale,
   type Orientation,
 } from "./orient";
-import { DEFAULT_CHOICES, type EditorChoices } from "./preferences";
+import { DEFAULT_CHOICES, type EditorChoices, type SavedBackdrop } from "./preferences";
 import ResizePanel from "./ResizePanel";
 import ShapeNode, { SpotlightDim } from "./ShapeNode";
 import ToolWheel from "./ToolWheel";
@@ -445,6 +446,13 @@ export default function EditorWindow() {
   const [lastBackdrop, setLastBackdrop] = useState<Backdrop | null>(DEFAULT_CHOICES.backdrop);
   /** The backdrop to frame a capture without annotations with, when Settings asks for that. */
   const [autoBackdrop, setAutoBackdrop] = useState<Backdrop | null>(null);
+  /**
+   * The backdrops saved by name; null until settings.json is read, so
+   * presets that could not be read are never overwritten.
+   */
+  const [presets, setPresets] = useState<SavedBackdrop[] | null>(null);
+  /** `presets` as last set, for a save that finishes after copying its image. */
+  const presetsRef = useRef<SavedBackdrop[] | null>(null);
   const autoApplied = useRef(false);
   /** Where the right-click tool wheel is open, in canvas pixels. */
   const [wheelAt, setWheelAt] = useState<Point | null>(null);
@@ -463,6 +471,8 @@ export default function EditorWindow() {
     setWidths(choices.widths);
     setLastBackdrop(choices.backdrop);
     if (choices.autoBackdrop && choices.backdrop) setAutoBackdrop(choices.backdrop);
+    presetsRef.current = choices.backdropPresets ?? [];
+    setPresets(presetsRef.current);
   }, []);
   const choices = useMemo(() => ({ tool, style, widths, backdrop: lastBackdrop }), [tool, style, widths, lastBackdrop]);
   useEditorPreferences(choices, restoreChoices);
@@ -1023,6 +1033,40 @@ export default function EditorWindow() {
     if (!sameBackdrop(doc.backdrop, next)) commit({ ...doc, backdrop: next });
   };
 
+  /** Keeps the presets and writes the whole list to settings.json straight away. */
+  const changePresets = (next: SavedBackdrop[]) => {
+    presetsRef.current = next;
+    setPresets(next);
+    try {
+      setBackdropPresets(next).catch((err: unknown) => setMessage(`Could not save presets: ${errorText(err)}`));
+    } catch {
+      // No Tauri: nothing to save to.
+    }
+  };
+
+  /**
+   * Saves the backdrop on show as a new preset, "Preset N". An image fill
+   * gets the preset's own copy of its file, and the capture switches to the
+   * copy too, so the new preset shows as the one in use.
+   */
+  const savePreset = async () => {
+    const current = doc.backdrop;
+    if (!current || !presetsRef.current || presetsRef.current.length >= MAX_BACKDROP_PRESETS) return;
+    let backdrop = current;
+    if (current.fill === BACKDROP_FILLS.image && current.image) {
+      try {
+        backdrop = { ...current, image: await saveBackdropPresetImage(current.image) };
+      } catch (err) {
+        setMessage(`Could not save the preset: ${errorText(err)}`);
+        return;
+      }
+    }
+    const saved = presetsRef.current;
+    if (!saved || saved.length >= MAX_BACKDROP_PRESETS) return;
+    changePresets([...saved, { id: newId(), name: presetName(saved), backdrop }]);
+    if (backdrop !== current) commitBackdrop(backdrop);
+  };
+
   const render = useCallback(
     async (format: ExportFormat) => {
       const layer = contentRef.current;
@@ -1374,6 +1418,9 @@ export default function EditorWindow() {
               onPreview={setBackdropDraft}
               onCommit={commitBackdrop}
               onPickImage={chooseBackdropImage}
+              presets={presets}
+              onSavePreset={() => void savePreset()}
+              onPresetsChange={changePresets}
             />
           )}
           {doc.crop && (
@@ -1622,6 +1669,14 @@ export default function EditorWindow() {
       </footer>
     </main>
   );
+}
+
+/** "Preset N" for the next preset: one more than there are, skipping any name taken. */
+function presetName(presets: SavedBackdrop[]): string {
+  const taken = new Set(presets.map((preset) => preset.name));
+  let n = presets.length + 1;
+  while (taken.has(`Preset ${n}`)) n += 1;
+  return `Preset ${n}`;
 }
 
 function statusText(status: ReturnType<typeof useAnnotations>["status"]): string {

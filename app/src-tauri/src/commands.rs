@@ -7,7 +7,7 @@ use tauri::{AppHandle, State};
 
 use crate::{
     hotkeys::{self, Hotkeys},
-    settings::{EditorPreferences, PreferencesUpdate, Settings, SettingsStore},
+    settings::{BackdropPreset, EditorPreferences, PreferencesUpdate, Settings, SettingsStore},
 };
 
 pub type SettingsState = Mutex<SettingsStore>;
@@ -98,6 +98,17 @@ pub fn set_editor_preferences(
 ) -> Result<EditorPreferences, String> {
     lock(&state)
         .set_editor_preferences(preferences)
+        .map_err(|err| err.to_string())
+}
+
+/// Replaces the editor's saved backdrop presets; returns them as kept.
+#[tauri::command]
+pub fn set_backdrop_presets(
+    presets: Vec<BackdropPreset>,
+    state: State<'_, SettingsState>,
+) -> Result<Vec<BackdropPreset>, String> {
+    lock(&state)
+        .set_backdrop_presets(presets)
         .map_err(|err| err.to_string())
 }
 

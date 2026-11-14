@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CHOICES, fromPreferences, toPreferences } from "./preferences";
+import { DEFAULT_CHOICES, fromPreferences, parseBackdropPresets, toPreferences } from "./preferences";
 
 describe("editor preferences", () => {
   it("falls back to today's defaults when nothing is stored", () => {
@@ -80,5 +80,32 @@ describe("editor preferences", () => {
     expect(fromPreferences({ autoBackdrop: "yes" as unknown as boolean }).autoBackdrop).toBeUndefined();
     expect(toPreferences({ ...DEFAULT_CHOICES, backdrop, autoBackdrop: true })).not.toHaveProperty("autoBackdrop");
     expect(toPreferences(DEFAULT_CHOICES)).not.toHaveProperty("backdrop");
+  });
+  it("reads backdrop presets, each checked like a sidecar's backdrop, but never writes them", () => {
+    const backdrop = { fill: "ocean", padding: 64, radius: 36, shadow: true };
+    const stored = [
+      { id: "p1", name: "House", backdrop: { ...backdrop, radius: 500 } },
+      { id: "p2", name: "Broken", backdrop: { fill: "ocean" } },
+      { id: 3, name: "Bad id", backdrop },
+      { id: "p4", backdrop },
+      "junk",
+      { id: "p5", name: "House", backdrop: { ...backdrop, balance: true } },
+    ];
+    const presets = [
+      { id: "p1", name: "House", backdrop: { ...backdrop, radius: 80 } },
+      { id: "p5", name: "House", backdrop: { ...backdrop, balance: true } },
+    ];
+    expect(parseBackdropPresets(stored)).toEqual(presets);
+    expect(fromPreferences({ backdropPresets: stored as never }).backdropPresets).toEqual(presets);
+    // None stored: the choices are today's defaults.
+    expect(fromPreferences({ backdropPresets: [] })).toEqual(DEFAULT_CHOICES);
+    expect(parseBackdropPresets({ id: "p1" })).toEqual([]);
+    expect(toPreferences({ ...DEFAULT_CHOICES, backdropPresets: presets })).not.toHaveProperty("backdropPresets");
+  });
+
+  it("keeps at most 24 backdrop presets", () => {
+    const backdrop = { fill: "ocean", padding: 64, radius: 36, shadow: true };
+    const stored = Array.from({ length: 30 }, (_, i) => ({ id: `p${i}`, name: `Preset ${i}`, backdrop }));
+    expect(parseBackdropPresets(stored)).toHaveLength(24);
   });
 });

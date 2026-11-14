@@ -333,6 +333,52 @@ pub struct EditorPreferences {
     /// from the Settings window; the editor's own saves keep it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_backdrop: Option<bool>,
+    /// Backdrops saved by name in the editor's backdrop panel. Set with
+    /// [`SettingsStore::set_backdrop_presets`]; the editor's other saves
+    /// keep them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backdrop_presets: Vec<BackdropPreset>,
+}
+
+/// The most backdrop presets kept; any after these are dropped.
+pub const MAX_BACKDROP_PRESETS: usize = 24;
+
+/// A backdrop saved under a name. Mirrors `BackdropPreset` in
+/// src/settings/api.ts. Names need not be unique; `id` tells presets apart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackdropPreset {
+    pub id: String,
+    pub name: String,
+    /// The backdrop as the editor writes it in a sidecar. Kept as JSON:
+    /// the editor checks each field when it reads it back.
+    pub backdrop: serde_json::Value,
+}
+
+impl BackdropPreset {
+    /// Reads one stored preset: `None` unless it has a text `id` and
+    /// `name` and an object `backdrop`.
+    fn from_stored(value: &serde_json::Value) -> Option<Self> {
+        let text = |key: &str| value.get(key)?.as_str().map(str::to_owned);
+        let backdrop = value
+            .get("backdrop")
+            .filter(|backdrop| backdrop.is_object())?;
+        Some(Self {
+            id: text("id")?,
+            name: text("name")?,
+            backdrop: backdrop.clone(),
+        })
+    }
+
+    /// Presets as they are kept: only those with an object backdrop, and
+    /// at most [`MAX_BACKDROP_PRESETS`].
+    fn keep(presets: Vec<Self>) -> Vec<Self> {
+        presets
+            .into_iter()
+            .filter(|preset| preset.backdrop.is_object())
+            .take(MAX_BACKDROP_PRESETS)
+            .collect()
+    }
 }
 
 impl EditorPreferences {
@@ -372,6 +418,17 @@ impl EditorPreferences {
                 .filter(|backdrop| backdrop.is_object())
                 .cloned(),
             auto_backdrop: flag("autoBackdrop"),
+            backdrop_presets: value
+                .get("backdropPresets")
+                .and_then(serde_json::Value::as_array)
+                .map(|presets| {
+                    presets
+                        .iter()
+                        .filter_map(BackdropPreset::from_stored)
+                        .take(MAX_BACKDROP_PRESETS)
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 }
@@ -937,7 +994,8 @@ impl SettingsStore {
     }
 
     /// Remembers the annotation editor's choices. Auto-apply belongs to the
-    /// Settings window, so the editor's saves never change it.
+    /// Settings window and presets have their own save, so the editor's
+    /// saves never change them.
     pub fn set_editor_preferences(
         &mut self,
         editor: EditorPreferences,
@@ -945,6 +1003,7 @@ impl SettingsStore {
         let next = Settings {
             editor: EditorPreferences {
                 auto_backdrop: self.current.editor.auto_backdrop,
+                backdrop_presets: self.current.editor.backdrop_presets.clone(),
                 ..editor
             },
             ..self.current.clone()
@@ -952,6 +1011,24 @@ impl SettingsStore {
         save(&self.path, &next)?;
         self.current = next;
         Ok(self.current.editor.clone())
+    }
+
+    /// Replaces the saved backdrop presets with `presets`, keeping the rest
+    /// of the editor's choices. Returns the presets as kept.
+    pub fn set_backdrop_presets(
+        &mut self,
+        presets: Vec<BackdropPreset>,
+    ) -> Result<Vec<BackdropPreset>, SettingsError> {
+        let next = Settings {
+            editor: EditorPreferences {
+                backdrop_presets: BackdropPreset::keep(presets),
+                ..self.current.editor.clone()
+            },
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.editor.backdrop_presets.clone())
     }
 
     /// Turns framing new captures with the last backdrop on or off,
@@ -2001,6 +2078,17 @@ mod tests {
                 "fill": "aurora", "padding": 48, "radius": 36, "shadow": true, "aspect": "16:9"
             })),
             auto_backdrop: None,
+            backdrop_presets: Vec::new(),
+        }
+    }
+
+    fn preset(id: &str, name: &str) -> BackdropPreset {
+        BackdropPreset {
+            id: id.into(),
+            name: name.into(),
+            backdrop: serde_json::json!({
+                "fill": "ocean", "padding": 40, "radius": 12, "shadow": true
+            }),
         }
     }
 
@@ -2161,5 +2249,123 @@ mod tests {
             load(&path, defaults(&dir)).unwrap().editor.auto_backdrop,
             Some(false)
         );
+    }
+
+    #[test]
+    fn backdrop_presets_are_read_key_by_key() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r##"{"editor": {"color": "#e5484d", "backdropPresets": [
+                {"id": "p1", "name": "House", "backdrop": {"fill": "ocean", "padding": 40, "radius": 12, "shadow": true}},
+                {"id": "p2", "name": "No backdrop", "backdrop": "ocean"},
+                {"id": 3, "name": "Bad id", "backdrop": {}},
+                {"name": "No id", "backdrop": {}},
+                "junk"
+            ]}}"##,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.editor.backdrop_presets, vec![preset("p1", "House")]);
+        assert_eq!(loaded.editor.color.as_deref(), Some("#e5484d"));
+
+        // A list that is not a list costs only the presets.
+        fs::write(
+            &path,
+            r##"{"editor": {"color": "#e5484d", "backdropPresets": {"id": "p1"}}}"##,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert!(loaded.editor.backdrop_presets.is_empty());
+        assert_eq!(loaded.editor.color.as_deref(), Some("#e5484d"));
+    }
+
+    #[test]
+    fn at_most_24_backdrop_presets_are_read() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let presets: Vec<_> = (0..30)
+            .map(|i| preset(&format!("p{i}"), &format!("Preset {i}")))
+            .collect();
+        let text = serde_json::json!({"editor": {"backdropPresets": presets}}).to_string();
+        fs::write(&path, text).unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.editor.backdrop_presets.len(), MAX_BACKDROP_PRESETS);
+        assert_eq!(loaded.editor.backdrop_presets[0].id, "p0");
+    }
+
+    #[test]
+    fn the_editors_saves_keep_the_backdrop_presets() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        store
+            .set_backdrop_presets(vec![preset("p1", "House")])
+            .unwrap();
+
+        // The editor saves its choices without the presets; they stay.
+        let saved = store.set_editor_preferences(editor_preferences()).unwrap();
+        assert_eq!(saved.backdrop_presets, vec![preset("p1", "House")]);
+        assert_eq!(saved.color, editor_preferences().color);
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.editor.backdrop_presets, vec![preset("p1", "House")]);
+    }
+
+    #[test]
+    fn set_backdrop_presets_replaces_the_whole_list() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        store.set_editor_preferences(editor_preferences()).unwrap();
+        store.set_auto_backdrop(true).unwrap();
+
+        let kept = store
+            .set_backdrop_presets(vec![preset("p1", "House"), preset("p2", "House")])
+            .unwrap();
+        assert_eq!(kept, vec![preset("p1", "House"), preset("p2", "House")]);
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(json["editor"]["backdropPresets"][1]["id"], "p2");
+        assert_eq!(
+            json["editor"]["backdropPresets"][0]["backdrop"]["fill"],
+            "ocean"
+        );
+
+        let kept = store
+            .set_backdrop_presets(vec![preset("p2", "Renamed")])
+            .unwrap();
+        assert_eq!(kept, vec![preset("p2", "Renamed")]);
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(
+            loaded.editor.backdrop_presets,
+            vec![preset("p2", "Renamed")]
+        );
+        // The editor's other choices and auto-apply are kept.
+        assert_eq!(loaded.editor.backdrop, editor_preferences().backdrop);
+        assert_eq!(loaded.editor.auto_backdrop, Some(true));
+
+        // Deleting the last one leaves no key behind.
+        assert!(store.set_backdrop_presets(Vec::new()).unwrap().is_empty());
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(json["editor"].get("backdropPresets"), None);
+    }
+
+    #[test]
+    fn set_backdrop_presets_keeps_at_most_24_with_object_backdrops() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path, defaults(&dir));
+        let mut presets = vec![BackdropPreset {
+            backdrop: serde_json::json!("ocean"),
+            ..preset("bad", "Bad")
+        }];
+        presets.extend((0..30).map(|i| preset(&format!("p{i}"), "Preset")));
+        let kept = store.set_backdrop_presets(presets).unwrap();
+        assert_eq!(kept.len(), MAX_BACKDROP_PRESETS);
+        assert_eq!(kept[0].id, "p0");
     }
 }
