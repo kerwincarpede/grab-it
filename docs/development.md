@@ -78,7 +78,34 @@ The text in each image is read by [ocrs](https://github.com/robertknight/ocrs) i
 
 The OCR models (about 12 MB) are not bundled: they are downloaded into `ocr-models/` in the app data directory the first time a capture needs reading, with progress shown in the Library. If the download fails, the Library offers **Retry**; the next capture also retries. Set `GRAB_IT_OCR_MODELS` to use another models directory.
 
-The search index is a SQLite FTS5 table in `library.db`, kept in step with each capture's tags, notes and text as they change.
+The search index is a SQLite FTS5 table in `library.db`, kept in step with each capture's tags, notes, text and AI description as they change.
+
+### AI descriptions (optional)
+
+Grab-it can ask a vision model to describe each capture: a sentence or two, a category (`code`, `terminal`, `browser`, `chat`, `document`, `design`, `error`, `receipt`, `photo` or `other`) and a few tags. The description and AI tags are searchable, the Library can filter by category, and the tag filter matches AI tags as well as your own. AI tags are stored apart from your tags.
+
+It is **off by default**, and nothing leaves your machine until you turn it on. Any OpenAI-compatible `/chat/completions` endpoint works: [Ollama](https://ollama.com), LM Studio, llama.cpp's server, or a cloud API such as OpenAI or OpenRouter. With Ollama, everything stays local:
+
+```sh
+ollama pull qwen2.5vl:7b   # about 6 GB; any vision model works
+ollama serve               # if it is not already running
+```
+
+Then turn it on under `ai` in `settings.json`. The defaults already point at Ollama:
+
+```json
+"ai": {
+  "enabled": true,
+  "endpoint": "http://localhost:11434/v1",
+  "model": "qwen2.5vl:7b",
+  "apiKey": null,
+  "newCapturesOnly": true
+}
+```
+
+For a cloud API, set `endpoint` (for example `https://api.openai.com/v1`), `model` and `apiKey`. The key is sent as `Authorization: Bearer …` and is stored in plain text in `settings.json`. With `newCapturesOnly`, captures that already existed when you turned describing on are skipped; set it to `false` before turning it on to describe the whole library.
+
+Captures are described in the background, one at a time and newest first, once OCR has read them. Each one is scaled down to at most 1568 px on its long edge and sent with its OCR text, app and window title. A model on a CPU can take a minute or more per capture. If the endpoint cannot be reached or refuses the request, describing pauses. It tries again when you change the settings or ask for a capture to be described again, or when a new capture arrives a minute or more later. Changing the model does not redo old captures: each one records the model that described it, and you can ask for one capture, or all of them, to be described again.
 
 ### Settings
 
@@ -88,7 +115,7 @@ The search index is a SQLite FTS5 table in `library.db`, kept in step with each 
 - macOS: `~/Library/Application Support/com.kerwincarpede.grabit/`
 - Windows: `%APPDATA%\com.kerwincarpede.grabit\`
 
-It holds the save folder (default `~/Pictures/Grab-it/`), the hotkeys, what happens after a capture, and whether captures are copied to the clipboard. Changing the save folder only affects new captures.
+It holds the save folder (default `~/Pictures/Grab-it/`), the hotkeys, what happens after a capture, whether captures are copied to the clipboard, and the [AI description](#ai-descriptions-optional) settings. Changing the save folder only affects new captures.
 
 **Start Grab-it when you sign in** is kept by the operating system rather than in `settings.json`: a login item on macOS, a registry entry on Windows, and an autostart entry on Linux.
 

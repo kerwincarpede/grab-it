@@ -180,7 +180,10 @@ pub fn start(app: &AppHandle, action: Action) {
 /// the user chose in Settings. Runs off the main thread, so creating a
 /// window is safe.
 pub fn finish(app: &AppHandle, image: &RgbaImage, mode: CaptureMode, foreground: &Foreground) {
-    let preferences = lock(&app.state::<SettingsState>()).get().preferences;
+    let preferences = lock(&app.state::<SettingsState>())
+        .get()
+        .preferences
+        .clone();
     match save(app, image, mode, foreground, preferences.copy_to_clipboard) {
         Ok((saved, copied)) => {
             let _ = app.emit(CAPTURE_SAVED_EVENT, &saved);
