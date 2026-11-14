@@ -11,8 +11,9 @@
 //! Once ffmpeg is found, each H.264 encoder it may have is tried in turn by
 //! encoding one frame, hardware encoders first, and the first that works is
 //! kept until Grab-it quits. A recording then pipes raw RGBA frames into
-//! ffmpeg's stdin ([`Video`]), and its microphone's sound, if any, is muxed
-//! in once it stops ([`add_audio`]).
+//! ffmpeg's stdin ([`Video`]), and its sound, if any, is muxed in once it
+//! stops ([`add_audio`]): the microphone, the system sound, or both mixed
+//! into one track.
 
 use std::{
     ffi::OsString,
@@ -621,16 +622,27 @@ const AUDIO_BITRATE: &str = "160k";
 /// Ends the name of the file the sound is muxed into, beside the video.
 const MUXING_SUFFIX: &str = ".muxing.mp4";
 
-/// ffmpeg's arguments to mux the WAV `audio` into the MP4 `video` as AAC
-/// (ffmpeg's own `aac` encoder), writing `output`. The video is copied as
-/// it is. `offset` is when the sound starts against the first frame, in
-/// seconds (see `audio::offset`): sound that started later is delayed with
-/// silence, and sound that started earlier has its start cut. The sound is
-/// padded or cut to `duration`, the video's length.
+/// One WAV muxed into a recording, and when it starts against the first
+/// frame, in seconds (see `audio::offset`).
+#[derive(Debug, Clone, Copy)]
+pub struct AudioTrack<'a> {
+    pub wav: &'a Path,
+    pub offset: f64,
+}
+
+/// The channels and rate each WAV is brought to before two are mixed.
+const MIX_FORMAT: &str = "aformat=sample_rates=48000:channel_layouts=stereo";
+
+/// ffmpeg's arguments to mux the WAVs `tracks` into the MP4 `video` as one
+/// AAC track (ffmpeg's own `aac` encoder), writing `output`. The video is
+/// copied as it is. Each WAV is shifted by its offset: sound that started
+/// later is delayed with silence, and sound that started earlier has its
+/// start cut. Two or more are brought to 48 kHz stereo and mixed with
+/// `amix` at their own levels. The sound is padded or cut to `duration`,
+/// the video's length.
 pub fn mux_args(
     video: &Path,
-    audio: &Path,
-    offset: f64,
+    tracks: &[AudioTrack<'_>],
     duration: Duration,
     output: &Path,
 ) -> Vec<OsString> {
@@ -639,22 +651,61 @@ pub fn mux_args(
         .map(OsString::from)
         .collect();
     args.push(video.as_os_str().to_owned());
-    let mut push = |arg: &str| args.push(OsString::from(arg));
-    let millis = (offset * 1000.0).round() as i64;
-    if millis < 0 {
-        push("-ss");
-        push(&format!("{:.3}", millis.unsigned_abs() as f64 / 1000.0));
+    // Each track's delay, in whole milliseconds.
+    let mut delays = Vec::with_capacity(tracks.len());
+    for track in tracks {
+        let millis = (track.offset * 1000.0).round() as i64;
+        if millis < 0 {
+            args.push("-ss".into());
+            args.push(format!("{:.3}", millis.unsigned_abs() as f64 / 1000.0).into());
+        }
+        args.push("-i".into());
+        args.push(track.wav.as_os_str().to_owned());
+        delays.push(millis.max(0));
     }
-    push("-i");
-    args.push(audio.as_os_str().to_owned());
+    let delay = |millis: i64| {
+        if millis > 0 {
+            format!("adelay=delays={millis}:all=1,")
+        } else {
+            String::new()
+        }
+    };
     let mut push = |arg: &str| args.push(OsString::from(arg));
-    for arg in ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af"] {
-        push(arg);
-    }
-    if millis > 0 {
-        push(&format!("adelay=delays={millis}:all=1,apad"));
+    if let &[millis] = delays.as_slice() {
+        for arg in ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af"] {
+            push(arg);
+        }
+        push(&format!("{}apad", delay(millis)));
     } else {
-        push("apad");
+        let mut graph = String::new();
+        for (index, millis) in delays.iter().enumerate() {
+            graph.push_str(&format!(
+                "[{}:a]{}{MIX_FORMAT}[a{index}];",
+                index + 1,
+                delay(*millis)
+            ));
+        }
+        for index in 0..delays.len() {
+            graph.push_str(&format!("[a{index}]"));
+        }
+        // Not normalised: each keeps its own level rather than being
+        // turned down by the number mixed.
+        graph.push_str(&format!(
+            "amix=inputs={}:duration=longest:dropout_transition=0:normalize=0,apad[mix]",
+            delays.len()
+        ));
+        for arg in [
+            "-filter_complex",
+            graph.as_str(),
+            "-map",
+            "0:v:0",
+            "-map",
+            "[mix]",
+            "-c:v",
+            "copy",
+        ] {
+            push(arg);
+        }
     }
     for arg in ["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-t"] {
         push(arg);
@@ -667,20 +718,19 @@ pub fn mux_args(
     args
 }
 
-/// Muxes the WAV `audio` into the MP4 `video` in place, as [`mux_args`]
+/// Muxes the WAVs `tracks` into the MP4 `video` in place, as [`mux_args`]
 /// says. The video is replaced only once the muxed copy is finished, so
 /// on failure it is left as it was, silent.
 pub fn add_audio(
     ffmpeg: &Path,
     video: &Path,
-    audio: &Path,
-    offset: f64,
+    tracks: &[AudioTrack<'_>],
     duration: Duration,
 ) -> FfmpegResult<()> {
     let output = crate::capture::sidecar_path(video, MUXING_SUFFIX);
     let result = (|| -> FfmpegResult<()> {
         let mut child = command(ffmpeg)
-            .args(mux_args(video, audio, offset, duration, &output))
+            .args(mux_args(video, tracks, duration, &output))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -1121,8 +1171,10 @@ mod tests {
         let args = |offset: f64| {
             mux_args(
                 Path::new("/rec/clip.mp4"),
-                Path::new("/tmp/mic.wav"),
-                offset,
+                &[AudioTrack {
+                    wav: Path::new("/tmp/mic.wav"),
+                    offset,
+                }],
                 Duration::from_millis(12_345),
                 Path::new("/rec/clip.muxing.mp4"),
             )
@@ -1152,6 +1204,57 @@ mod tests {
         let none = args(-0.0004);
         assert!(!none.contains("-ss"), "{none}");
         assert!(none.contains("-af apad -c:a"), "{none}");
+    }
+
+    #[test]
+    fn the_microphone_and_system_sound_are_mixed_into_one_track() {
+        let args = |microphone: f64, system: f64| {
+            mux_args(
+                Path::new("/rec/clip.mp4"),
+                &[
+                    AudioTrack {
+                        wav: Path::new("/tmp/mic.wav"),
+                        offset: microphone,
+                    },
+                    AudioTrack {
+                        wav: Path::new("/tmp/system.wav"),
+                        offset: system,
+                    },
+                ],
+                Duration::from_millis(12_345),
+                Path::new("/rec/clip.muxing.mp4"),
+            )
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect::<Vec<_>>()
+        };
+        // The microphone started 250 ms early and the system sound 120 ms
+        // late: one has its start cut, the other is delayed.
+        assert_eq!(
+            args(-0.25, 0.12).join(" "),
+            "-hide_banner -loglevel error -y -i /rec/clip.mp4 \
+             -ss 0.250 -i /tmp/mic.wav -i /tmp/system.wav \
+             -filter_complex \
+             [1:a]aformat=sample_rates=48000:channel_layouts=stereo[a0];\
+             [2:a]adelay=delays=120:all=1,aformat=sample_rates=48000:channel_layouts=stereo[a1];\
+             [a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,apad[mix] \
+             -map 0:v:0 -map [mix] -c:v copy -c:a aac -b:a 160k -t 12.345 \
+             -movflags +faststart /rec/clip.muxing.mp4"
+        );
+        // The graph is one argument, and there is one sound track.
+        let both = args(0.0, -0.5);
+        let graph = both
+            .iter()
+            .position(|arg| arg == "-filter_complex")
+            .unwrap()
+            + 1;
+        assert!(both[graph].starts_with("[1:a]aformat="), "{}", both[graph]);
+        assert_eq!(both.iter().filter(|arg| *arg == "-map").count(), 2);
+        assert!(!both.iter().any(|arg| arg == "-af"));
+        assert!(
+            both.join(" ")
+                .contains("-i /tmp/mic.wav -ss 0.500 -i /tmp/system.wav")
+        );
     }
 
     #[test]

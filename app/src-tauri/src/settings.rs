@@ -573,6 +573,24 @@ pub enum RecordingAudio {
     None,
     /// The chosen microphone (see audio.rs).
     Microphone,
+    /// What the computer plays (see audio.rs). Not offered on macOS
+    /// before 13.
+    System,
+    /// The chosen microphone and what the computer plays, mixed into one
+    /// track.
+    Both,
+}
+
+impl RecordingAudio {
+    /// Whether the microphone is recorded.
+    pub fn microphone(self) -> bool {
+        matches!(self, Self::Microphone | Self::Both)
+    }
+
+    /// Whether what the computer plays is recorded.
+    pub fn system(self) -> bool {
+        matches!(self, Self::System | Self::Both)
+    }
 }
 
 /// How screen recordings are made. Mirrors `RecordingSettings` in
@@ -1446,7 +1464,7 @@ mod tests {
         // An unknown source or a wrong type keeps its default.
         fs::write(
             &path,
-            r#"{"recording": {"audio": "system", "microphone": 7}}"#,
+            r#"{"recording": {"audio": "speakers", "microphone": 7}}"#,
         )
         .unwrap();
         let loaded = load(&path, defaults(&dir)).unwrap().recording;
@@ -1460,6 +1478,30 @@ mod tests {
         let loaded = load(&path, defaults(&dir)).unwrap().recording;
         assert_eq!(loaded.audio, RecordingAudio::Microphone);
         assert_eq!(loaded.microphone.as_deref(), Some("Mic"));
+    }
+
+    #[test]
+    fn system_sound_is_recorded_alone_or_with_the_microphone() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        for (stored, audio) in [
+            ("system", RecordingAudio::System),
+            ("both", RecordingAudio::Both),
+        ] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(
+                &path,
+                format!(r#"{{"recording": {{"audio": "{stored}"}}}}"#),
+            )
+            .unwrap();
+            assert_eq!(load(&path, defaults(&dir)).unwrap().recording.audio, audio);
+            assert_eq!(serde_json::to_value(audio).unwrap(), stored);
+        }
+        let records = |audio: RecordingAudio| (audio.microphone(), audio.system());
+        assert_eq!(records(RecordingAudio::None), (false, false));
+        assert_eq!(records(RecordingAudio::Microphone), (true, false));
+        assert_eq!(records(RecordingAudio::System), (false, true));
+        assert_eq!(records(RecordingAudio::Both), (true, true));
     }
 
     #[test]

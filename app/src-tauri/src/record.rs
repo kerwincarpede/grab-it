@@ -9,9 +9,10 @@
 //! An MP4 is piped through ffmpeg (see ffmpeg.rs) at a constant 30 or 60
 //! frames a second, with no length limit, and `<name>.cursor.json` beside
 //! it says where the pointer was in each frame. With Audio set to
-//! Microphone, its sound is recorded alongside (see audio.rs) and muxed in
-//! when it stops; a recording whose sound failed is kept silent, and the
-//! card says why. A GIF is silent, encoded here at about ten frames a
+//! Microphone, System or Both, that sound is recorded alongside (see
+//! audio.rs) and muxed in when it stops, the two mixed into one track for
+//! Both; a recording whose sound failed is kept silent, or with only the
+//! sound that worked, and the card says why. A GIF is silent, encoded here at about ten frames a
 //! second, for at most [`MAX_DURATION`]. MP4 is the
 //! default; while ffmpeg is not ready yet, a recording is saved as a GIF
 //! and the card says why. Frames are grabbed as frames.rs says.
@@ -41,14 +42,14 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     actions,
-    audio::{self, Gap, Microphone},
+    audio::{self, Gap, Input, Sound},
     capture::{self, Rect},
     commands::{SettingsState, lock},
     ffmpeg::{self, Video, VideoSpec},
     frames::{self, FrameSource},
     quick::{self, QuickItem},
     screen::MonitorInfo,
-    settings::{RecordingAudio, RecordingFormat, RecordingSettings},
+    settings::{RecordingFormat, RecordingSettings},
 };
 
 pub const RECORDINGS_DIR: &str = "recordings";
@@ -361,11 +362,33 @@ pub fn start(
     };
     // Only an MP4 has sound. macOS asks for the microphone first, the
     // first time; the recording waits for the answer.
-    let microphone =
-        format == RecordingFormat::Mp4 && recording.audio == RecordingAudio::Microphone;
-    let microphone_allowed = microphone && crate::permissions::ensure_microphone(app);
-    if microphone && !microphone_allowed {
-        fallback = Some(no_sound("Grab-it may not use the microphone"));
+    let mp4 = format == RecordingFormat::Mp4;
+    let microphone = mp4 && recording.audio.microphone();
+    let system = mp4 && recording.audio.system();
+    let mut inputs = Vec::new();
+    let mut refused = Vec::new();
+    if microphone {
+        if crate::permissions::ensure_microphone(app) {
+            inputs.push(Input::Microphone(recording.microphone.clone()));
+        } else {
+            refused.push((
+                Input::Microphone(None).what(),
+                "Grab-it may not use the microphone".to_owned(),
+            ));
+        }
+    }
+    if system {
+        if audio::system_available() {
+            inputs.push(Input::System);
+        } else {
+            refused.push((
+                Input::System.what(),
+                "it needs macOS 13 or later".to_owned(),
+            ));
+        }
+    }
+    if fallback.is_none() {
+        fallback = sound_note(!inputs.is_empty(), &refused);
     }
     let started = Local::now();
     let prepared = fs::create_dir_all(&folder)
@@ -418,14 +441,7 @@ pub fn start(
                 Output::Mp4(ready) => {
                     frames::open(&monitor, rect, recording.fps, recording.show_cursor).and_then(
                         |mut source| {
-                            record_mp4(
-                                source.as_mut(),
-                                &path,
-                                &flag,
-                                ready,
-                                &recording,
-                                microphone_allowed,
-                            )
+                            record_mp4(source.as_mut(), &path, &flag, ready, &recording, inputs)
                         },
                     )
                 }
@@ -470,35 +486,52 @@ fn no_sound(why: &str) -> String {
     format!("Saved without sound: {why}.")
 }
 
+/// What the card says about the sound that `failed`, each by what it is
+/// and why: nothing when nothing failed, that there is no sound when
+/// nothing was `kept` either, or which sound is missing.
+fn sound_note(kept: bool, failed: &[(&str, String)]) -> Option<String> {
+    let (what, why) = failed.first()?;
+    Some(if kept {
+        format!("Saved without {what}: {why}.")
+    } else {
+        no_sound(why)
+    })
+}
+
 /// Grabs frames into the MP4 at `path` until `stop` is set, at a constant
 /// frame rate: a frame time that goes by while a grab is under way
 /// repeats the frame before. Saves where the pointer was beside it, and
-/// with `microphone` muxes in its sound. Returns how long the video runs,
-/// and why it has no sound when the microphone failed.
+/// muxes in the sound of `inputs`, mixed into one track when there are
+/// two. Returns how long the video runs, and why it is missing sound when
+/// some failed.
 fn record_mp4(
     source: &mut dyn FrameSource,
     path: &Path,
     stop: &AtomicBool,
     ready: &ffmpeg::Ready,
     recording: &RecordingSettings,
-    microphone: bool,
+    inputs: Vec<Input>,
 ) -> Result<(Duration, Option<String>), String> {
-    let mut note = None;
+    let wanted = !inputs.is_empty();
+    // What failed, and why.
+    let mut failed: Vec<(&str, String)> = Vec::new();
     // Started before the first grab, so the sound covers the first frame;
     // what it heard before that frame is cut when it is muxed in. Dropped
-    // on an early return, which stops it and deletes its WAV.
-    let microphone = if microphone {
-        match Microphone::start(&ready.path, recording.microphone.as_deref()) {
-            Ok(microphone) => Some(microphone),
-            Err(err) => {
-                eprintln!("Grab-it: recording without sound: {err}");
-                note = Some(no_sound(&err));
-                None
+    // on an early return, which stops them and deletes their WAVs.
+    let sounds: Vec<Sound> = inputs
+        .into_iter()
+        .filter_map(|input| {
+            let what = input.what();
+            match Sound::start(&ready.path, input) {
+                Ok(sound) => Some(sound),
+                Err(err) => {
+                    eprintln!("Grab-it: recording without {what}: {err}");
+                    failed.push((what, err));
+                    None
+                }
             }
-        }
-    } else {
-        None
-    };
+        })
+        .collect();
     let first = source.grab()?;
     let (mut frame, mut pointer) = (first.image, first.pointer);
     let input = frame.dimensions();
@@ -549,21 +582,44 @@ fn record_mp4(
         };
     }
     video.finish().map_err(|err| err.to_string())?;
-    if let Some(microphone) = microphone {
-        let muxed = microphone.stop().and_then(|sound| {
+    // Each sound that was heard, and when it starts against the first frame.
+    let mut captured = Vec::new();
+    for sound in sounds {
+        let what = sound.what();
+        let prepared = sound.stop().and_then(|sound| {
             let offset = audio::offset(started, sound.first_sample);
             // The sound runs on through the frame times the video dropped:
             // cut them out of it too, or it would run ahead of the video.
             sound
                 .cut(pacer.gaps(), offset)
                 .map_err(|err| format!("could not cut the sound to the video: {err}"))?;
-            ffmpeg::add_audio(&ready.path, path, &sound.wav, offset, pacer.duration())
-                .map_err(|err| err.to_string())
+            Ok((sound, offset))
         });
+        match prepared {
+            Ok(track) => captured.push(track),
+            Err(err) => {
+                eprintln!("Grab-it: the recording is without {what}: {err}");
+                failed.push((what, err));
+            }
+        }
+    }
+    let mut note = if wanted {
+        sound_note(!captured.is_empty(), &failed)
+    } else {
+        None
+    };
+    if !captured.is_empty() {
+        let tracks: Vec<ffmpeg::AudioTrack<'_>> = captured
+            .iter()
+            .map(|(sound, offset)| ffmpeg::AudioTrack {
+                wav: &sound.wav,
+                offset: *offset,
+            })
+            .collect();
         // The video is kept, silent.
-        if let Err(err) = muxed {
+        if let Err(err) = ffmpeg::add_audio(&ready.path, path, &tracks, pacer.duration()) {
             eprintln!("Grab-it: the recording has no sound: {err}");
-            note = Some(no_sound(&err));
+            note = Some(no_sound(&err.to_string()));
         }
     }
     // The video is fine without it.
@@ -656,6 +712,21 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
     use image::{AnimationDecoder, Rgba, codecs::gif::GifDecoder};
+
+    #[test]
+    fn the_card_says_which_sound_is_missing() {
+        assert_eq!(sound_note(true, &[]), None);
+        assert_eq!(sound_note(false, &[]), None);
+        let mic = [("the microphone", "it was unplugged".to_owned())];
+        assert_eq!(
+            sound_note(true, &mic).as_deref(),
+            Some("Saved without the microphone: it was unplugged.")
+        );
+        assert_eq!(
+            sound_note(false, &mic).as_deref(),
+            Some("Saved without sound: it was unplugged.")
+        );
+    }
 
     #[test]
     fn recordings_are_named_like_captures() {

@@ -45,6 +45,8 @@ interface Backend {
   ffmpegAfterRetry: FfmpegStatus;
   /** What `recording_microphones` answers. */
   microphones: Microphone[];
+  /** What `recording_system_audio` answers. */
+  systemSound: boolean;
   saveFolder: string;
   hotkeys: typeof DEFAULT_HOTKEYS;
   hotkeyWarnings: string[];
@@ -68,6 +70,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     ffmpeg: { state: "ready", encoder: "libopenh264" },
     ffmpegAfterRetry: { state: "downloading", downloaded: 0, total: 0 },
     microphones: [],
+    systemSound: true,
     calls: [],
     ...initial,
   };
@@ -99,6 +102,8 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
         return backend.ffmpeg;
       case "recording_microphones":
         return backend.microphones;
+      case "recording_system_audio":
+        return backend.systemSound;
       case "get_autostart":
         if (backend.autostart === undefined) throw "not supported";
         return backend.autostart;
@@ -909,6 +914,49 @@ describe("SettingsWindow recording", () => {
 
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Microphone" }), "System default (Built-in Audio)");
     await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, audio: "microphone", microphone: null }));
+  });
+
+  it("records system sound alone or mixed with the microphone", async () => {
+    const backend = mockBackend({
+      microphones: [{ id: "alsa_input.pci-analog-stereo", name: "Built-in Audio", isDefault: true }],
+    });
+    render(<SettingsWindow section="recording" />);
+    const audio = await screen.findByRole("combobox", { name: "Audio" });
+    await waitFor(() => expect(audio).toBeEnabled());
+    expect(await screen.findByRole("option", { name: "System sound" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Microphone and system sound" })).toBeInTheDocument();
+    expect(commands(backend)).toContain("recording_system_audio");
+
+    await userEvent.selectOptions(audio, "system");
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, audio: "system", microphone: null }));
+    // System sound alone has no microphone to pick.
+    expect(screen.queryByRole("combobox", { name: "Microphone" })).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Audio" }), "both");
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, audio: "both", microphone: null }));
+    const microphone = await screen.findByRole("combobox", { name: "Microphone" });
+    await waitFor(() => expect(microphone).toBeEnabled());
+    expect(screen.getByRole("option", { name: "System default (Built-in Audio)" })).toBeInTheDocument();
+  });
+
+  it("hides System and Both where system sound cannot be recorded", async () => {
+    mockBackend({ systemSound: false });
+    render(<SettingsWindow section="recording" />);
+    const audio = await screen.findByRole("combobox", { name: "Audio" });
+    await waitFor(() => expect(audio).toBeEnabled());
+    expect(screen.getByRole("option", { name: "Microphone" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "System sound" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Microphone and system sound" })).not.toBeInTheDocument();
+  });
+
+  it("still shows a saved Both where system sound cannot be recorded", async () => {
+    mockBackend({ systemSound: false, recording: { ...DEFAULT_RECORDING, audio: "both" } });
+    render(<SettingsWindow section="recording" />);
+    const audio = await screen.findByRole("combobox", { name: "Audio" });
+    await waitFor(() => expect(audio).toBeEnabled());
+    expect(audio).toHaveValue("both");
+    expect(screen.queryByRole("option", { name: "System sound" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Microphone" })).toBeInTheDocument();
   });
 
   it("disables Audio and the microphone for a GIF", async () => {
