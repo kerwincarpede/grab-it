@@ -569,6 +569,26 @@ describe("EditorWindow", () => {
     expect(pressed("Arrow")).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("does not draw with the click on the canvas that closes the tool wheel", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.keyDown(window, { key: "n" });
+    const canvas = document.querySelector(".editor-canvas") as Element;
+    fireEvent.contextMenu(canvas, { clientX: 300, clientY: 200 });
+    Object.assign(pointerAt, { x: 150, y: 150 });
+    fireEvent.pointerDown(stage());
+    fireEvent.mouseDown(stage());
+    fireEvent.mouseUp(stage());
+    expect(screen.queryByRole("menu", { name: "Tools" })).not.toBeInTheDocument();
+    expect(shapeIds()).toEqual(["a1", "t1", "s1", "s2"]);
+
+    // The next click draws as usual.
+    fireEvent.mouseDown(stage());
+    fireEvent.mouseUp(stage());
+    expect(shapeIds()).toHaveLength(5);
+    await waitFor(() => expect(last(saved)?.shapes[4]).toMatchObject({ type: "step", x: 150, y: 150 }));
+  });
+
   it("copies then closes the window on Ctrl+Enter", async () => {
     const calls: { cmd: string; payload: unknown }[] = [];
     mockWindows("editor-1");

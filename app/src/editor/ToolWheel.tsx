@@ -1,30 +1,16 @@
 import { useEffect, useRef } from "react";
 import { ToolIcon } from "./icons";
 import { TOOLS, type Point, type Tool } from "./model";
+import { ringPosition } from "./tools";
 
-/** Distance from the wheel's centre to the centre of each tool button, in CSS pixels. */
-export const WHEEL_RADIUS = 88;
-/** How far the wheel reaches past its radius (half a button plus a margin). */
-export const WHEEL_REACH = WHEEL_RADIUS + 28;
-
-/** Where the `index`th of `count` buttons sits around the ring, from the top, clockwise. */
-export function ringPosition(index: number, count: number, radius = WHEEL_RADIUS): Point {
-  const angle = -Math.PI / 2 + (index * 2 * Math.PI) / count;
-  return { x: Math.round(radius * Math.cos(angle)), y: Math.round(radius * Math.sin(angle)) };
-}
-
-/** Keeps a wheel opened at `at` inside a canvas of `size`, so no tool lands off screen. */
-export function clampWheel(at: Point, size: { width: number; height: number }): Point {
-  const clamp = (value: number, max: number) => Math.min(Math.max(value, WHEEL_REACH), Math.max(WHEEL_REACH, max - WHEEL_REACH));
-  return { x: clamp(at.x, size.width), y: clamp(at.y, size.height) };
-}
 
 interface ToolWheelProps {
   /** The wheel's centre, in pixels from the canvas's top-left corner. */
   at: Point;
   active: Tool;
   onPick: (tool: Tool) => void;
-  onClose: () => void;
+  /** Called with the pointer down that landed outside the wheel. */
+  onClose: (event: PointerEvent) => void;
 }
 
 /**
@@ -42,7 +28,7 @@ export default function ToolWheel({ at, active, onPick, onClose }: ToolWheelProp
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
-      if (event.target instanceof Node && !ref.current?.contains(event.target)) onClose();
+      if (event.target instanceof Node && !ref.current?.contains(event.target)) onClose(event);
     };
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);

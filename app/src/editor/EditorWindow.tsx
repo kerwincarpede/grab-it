@@ -39,11 +39,12 @@ import {
   type Tool,
 } from "./model";
 import ShapeNode, { SpotlightDim } from "./ShapeNode";
-import ToolWheel, { clampWheel } from "./ToolWheel";
+import ToolWheel from "./ToolWheel";
 import {
   addShape,
   anchorsFor,
   beginShape,
+  clampWheel,
   colorForKey,
   cropFromDrag,
   deleteShape,
@@ -186,6 +187,8 @@ export default function EditorWindow() {
   /** Where the right-click tool wheel is open, in canvas pixels. */
   const [wheelAt, setWheelAt] = useState<Point | null>(null);
   const hold = useRef<ToolHold | null>(null);
+  /** Set when a click on the canvas closed the wheel: that click only dismisses it, it does not draw. */
+  const swallowDown = useRef(false);
   /** A node whose own drag was turned off for a ⌘/⌥ drag, with the value to give back. */
   const suppressedDrag = useRef<{ node: Konva.Node; draggable: boolean } | null>(null);
 
@@ -278,6 +281,10 @@ export default function EditorWindow() {
   };
 
   const onMouseDown = (event: Konva.KonvaEventObject<MouseEvent>) => {
+    if (swallowDown.current) {
+      swallowDown.current = false;
+      return;
+    }
     // Right-click opens the tool wheel (see onContextMenu).
     if (event.evt.button !== 0) return;
     // ⌘-drag draws a rectangle and ⌥-drag an arrow from any tool; Space still pans.
@@ -390,7 +397,12 @@ export default function EditorWindow() {
     if (previous === "crop" || previous === "pan") setSelectedId(null);
   }, []);
 
-  const closeWheel = useCallback(() => setWheelAt(null), []);
+  const closeWheel = useCallback((event: PointerEvent) => {
+    setWheelAt(null);
+    // The stage's mouse down follows this pointer down; it must not draw.
+    const target = event.target;
+    swallowDown.current = target instanceof Node && Boolean(container.current?.contains(target)) && !isTyping(target);
+  }, []);
 
   /** Right-click on the canvas opens the tool wheel there instead of the webview's menu. */
   const onContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
