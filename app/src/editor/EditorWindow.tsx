@@ -7,6 +7,7 @@ import "./editor.css";
 import { backdropImage, chooseBackdropImage, copyImage, editorImage, exportImage, pinImage } from "./api";
 import BackdropPanel from "./BackdropPanel";
 import { copyShotText, hasShotText, textCopied, watchShotText, type ShotText } from "../library/api";
+import { imageEdges, NO_EDGES, orientEdges, type Edges } from "./edges";
 import {
   backdropLayout,
   backdropPaint,
@@ -86,6 +87,8 @@ import ToolWheel from "./ToolWheel";
 import {
   addShape,
   ALL_ANCHORS,
+  ALL_SIDES,
+  anchorSides,
   anchorsFor,
   beginShape,
   bendLine,
@@ -95,15 +98,17 @@ import {
   cropAspectRatio,
   cropBox,
   cropDragRatio,
-  cropFromDrag,
   cropToCapture,
   curveMidpoint,
+  CROP_SNAP_PX,
   deleteShape,
   dragShape,
   duplicateShape,
   finishShape,
   fitCropToRatio,
   hasLineHandles,
+  holdCropSides,
+  MIN_SIZE,
   modifierTool,
   moveCrop,
   moveLineEnd,
@@ -115,6 +120,8 @@ import {
   resizeCrop,
   restyleShape,
   snapAngle,
+  snapCropDrag,
+  snapCropEdges,
   spotlightDim,
   stepNumbers,
   stepStrokeWidth,
@@ -417,8 +424,8 @@ export default function EditorWindow() {
   const [bending, setBending] = useState<LineShape | null>(null);
   /** A selected arrow or line being dragged, so its handles follow it. */
   const [moving, setMoving] = useState<{ id: string; transform: NodeTransform } | null>(null);
-  /** A crop being drawn; `square` is Shift, which squares a Free crop. */
-  const [cropDrag, setCropDrag] = useState<{ start: Point; end: Point; square: boolean } | null>(null);
+  /** A crop being drawn; `square` is Shift, which squares a Free crop, and `snap` is off while ⌥/Alt is held. */
+  const [cropDrag, setCropDrag] = useState<{ start: Point; end: Point; square: boolean; snap: boolean } | null>(null);
   /** The crop shape for this session only; it is never saved. */
   const [cropAspect, setCropAspect] = useState<CropAspect>("free");
   /** The crop mid-move or mid-resize, shown but not yet committed. */
@@ -507,6 +514,16 @@ export default function EditorWindow() {
   );
   /** A crop on show back in capture pixels, for `doc.crop`. */
   const shownToCapture = (shown: Rect): Rect => (imageSize ? cropToCapture(shown, imageSize, orientation) : shown);
+  /** Strong lines in the capture (capture pixels) that crops snap to, found once per image when the Crop tool is first picked. */
+  const [foundEdges, setFoundEdges] = useState<{ image: HTMLImageElement; edges: Edges } | null>(null);
+  // Adjusting state while rendering (not in an effect), so the first crop drag already snaps.
+  if (tool === "crop" && image && foundEdges?.image !== image) setFoundEdges({ image, edges: imageEdges(image) });
+  const captureEdges = foundEdges && foundEdges.image === image ? foundEdges.edges : NO_EDGES;
+  /** The same lines as they show: crops are drawn, moved and resized on show. */
+  const snapLines = useMemo(
+    () => (imageSize ? orientEdges(captureEdges, imageSize, { rotation, flipX, flipY }) : NO_EDGES),
+    [captureEdges, imageSize, rotation, flipX, flipY],
+  );
   const backdrop = backdropDraft ?? doc.backdrop ?? null;
   /** Image pixels per point: the corner radius is in points. Older captures do not say, so the window's density stands in. */
   const captureScale = info?.scaleFactor && info.scaleFactor > 0 ? info.scaleFactor : fallbackScale();
@@ -554,6 +571,13 @@ export default function EditorWindow() {
     return { width: layout.width, height: layout.height };
   }, [imageSize, doc.crop, backdrop, captureScale, rotation, flipX, flipY]);
   const currentView = useMemo(() => view ?? (frame ? fitView(frame.bounds, size) : { scale: 1, x: 0, y: 0 }), [view, frame, size]);
+  /** How near a line, in capture pixels, a crop edge snaps to it: a few screen pixels at the current zoom. */
+  const snapThreshold = CROP_SNAP_PX / currentView.scale;
+  /** The box a crop drag covers on show, snapped to the capture's edges unless ⌥/Alt is held. */
+  const cropDragBox = (drag: { start: Point; end: Point; square: boolean; snap: boolean }, shown: { width: number; height: number }) => {
+    const ratio = cropDragRatio(cropRatio, drag.square);
+    return drag.snap ? snapCropDrag(drag.start, drag.end, shown, ratio, snapLines, snapThreshold) : cropBox(drag.start, drag.end, shown, ratio);
+  };
   const selected = doc.shapes.find((shape) => shape.id === selectedId) ?? null;
   const steps = useMemo(() => stepNumbers(doc.shapes), [doc.shapes]);
   const panning = tool === "pan" || spaceHeld;
@@ -669,8 +693,8 @@ export default function EditorWindow() {
     }
     // Right-click opens the tool wheel (see onContextMenu).
     if (event.evt.button !== 0) return;
-    // ⌘-drag draws a rectangle and ⌥-drag an arrow from any tool; Space still pans.
-    const override = modifierTool(event.evt);
+    // ⌘-drag draws a rectangle and ⌥-drag an arrow from any tool (⌥ with Crop crops unsnapped); Space still pans.
+    const override = modifierTool(event.evt, tool);
     if (spaceHeld || (panning && !override)) return;
     const at = pointer();
     if (!at) return;
@@ -681,7 +705,7 @@ export default function EditorWindow() {
     if (hit.handle) return;
     const drawWith = override ?? tool;
     if (override) {
-      // ⌘/⌥ draws over a shape or the crop rather than moving it.
+      // ⌘/⌥ draws over a shape or the crop rather than moving it (with Crop, ⌥ is no override: it moves the crop unsnapped).
       if (hit.annotation) suppressDrag(hit.annotation);
       else if (hit.crop) suppressDrag(hit.crop);
       else if (panning) suppressDrag(event.target.getStage() ?? event.target);
@@ -704,7 +728,7 @@ export default function EditorWindow() {
     if (drawWith === "crop") {
       // Drawn on show: see `shownSize`.
       const shown = shownPointer() ?? at;
-      setCropDrag({ start: shown, end: shown, square: event.evt.shiftKey });
+      setCropDrag({ start: shown, end: shown, square: event.evt.shiftKey, snap: !event.evt.altKey });
       return;
     }
     const shape = beginShape(drawWith, at, drawStyle(drawWith));
@@ -722,7 +746,7 @@ export default function EditorWindow() {
     if (!at) return;
     // Shift keeps lines to 45° steps and boxes square.
     if (draft) setDraft(dragShape(draft, at, event.evt.shiftKey));
-    if (cropDrag) setCropDrag({ ...cropDrag, end: shownPointer() ?? at, square: event.evt.shiftKey });
+    if (cropDrag) setCropDrag({ ...cropDrag, end: shownPointer() ?? at, square: event.evt.shiftKey, snap: !event.evt.altKey });
   };
 
   const onMouseUp = () => {
@@ -744,8 +768,10 @@ export default function EditorWindow() {
       setDraft(null);
     }
     if (cropDrag && shownSize) {
-      const shown = cropFromDrag(cropDrag.start, cropDrag.end, shownSize, cropDragRatio(cropRatio, cropDrag.square));
-      if (shown) commit({ ...doc, crop: shownToCapture(shown) });
+      // Snapped on show, then saved in capture pixels.
+      const shown = cropDragBox(cropDrag, shownSize);
+      // Anything smaller was a stray click.
+      if (shown.width >= MIN_SIZE && shown.height >= MIN_SIZE) commit({ ...doc, crop: shownToCapture(shown) });
       setCropDrag(null);
     }
   };
@@ -818,13 +844,21 @@ export default function EditorWindow() {
   const onCropDragMove = (event: Konva.KonvaEventObject<DragEvent>) => {
     const from = cropEditRef.current ?? shownCrop;
     if (!from || !shownSize) return;
-    placeCropBox(event.target, moveCrop(from, event.target.position(), shownSize));
+    const moved = moveCrop(from, event.target.position(), shownSize);
+    placeCropBox(event.target, event.evt?.altKey ? moved : snapCropEdges(moved, ALL_SIDES, snapLines, snapThreshold, shownSize));
   };
 
   const onCropTransform = (event: Konva.KonvaEventObject<Event>) => {
     const from = cropEditRef.current ?? shownCrop;
     if (!from || !shownSize) return;
-    placeCropBox(event.target, resizeCrop(from, scaledBox(event.target), shownSize, cropRatio));
+    const node = event.target;
+    const anchor = cropTransformerRef.current?.getActiveAnchor();
+    const sides = anchor ? anchorSides(anchor) : null;
+    const box = scaledBox(node);
+    const resized = resizeCrop(from, sides ? holdCropSides(from, box, sides) : box, shownSize, cropRatio);
+    // ⌥/Alt resizes without snapping (and Konva's centred scaling is undone above).
+    const unsnapped = (event.evt as MouseEvent | undefined)?.altKey;
+    placeCropBox(node, !sides || unsnapped ? resized : snapCropEdges(resized, sides, snapLines, snapThreshold, shownSize, cropRatio));
   };
 
   /** Commits a finished move or resize of the crop, in capture pixels, as one change. */
@@ -1150,7 +1184,7 @@ export default function EditorWindow() {
 
   const error = annotations.error ?? imageError;
   /** The crop as it shows: being drawn (the box that will be committed), mid-edit, or as saved. */
-  const cropShown = (cropDrag && shownSize ? cropBox(cropDrag.start, cropDrag.end, shownSize, cropDragRatio(cropRatio, cropDrag.square)) : null) ?? cropEdit ?? shownCrop;
+  const cropShown = (cropDrag && shownSize ? cropDragBox(cropDrag, shownSize) : null) ?? cropEdit ?? shownCrop;
   /** The same crop in capture pixels, for the dim drawn in the oriented group. */
   const crop = cropShown ? shownToCapture(cropShown) : null;
   const placed = bending ? doc.shapes.map((shape) => (shape.id === bending.id ? bending : shape)) : doc.shapes;

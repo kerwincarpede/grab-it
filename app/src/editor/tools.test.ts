@@ -16,6 +16,8 @@ import {
 import {
   addShape,
   ALL_ANCHORS,
+  ALL_SIDES,
+  anchorSides,
   anchorsFor,
   CORNER_ANCHORS,
   beginShape,
@@ -38,17 +40,21 @@ import {
   hasLineHandles,
   HIGHLIGHTER_WIDTH,
   highlighterWidth,
+  holdCropSides,
   HOLD_MS,
   modifierTool,
   moveCrop,
   moveLineEnd,
   moveShape,
+  nearestLine,
   nudgeDelta,
   releaseRestores,
   replaceShape,
   resizeCrop,
   restyleShape,
   snapAngle,
+  snapCropDrag,
+  snapCropEdges,
   spotlightDim,
   squareCorner,
   stepNumbers,
@@ -126,6 +132,13 @@ describe("quick tool shortcuts", () => {
     expect(modifierTool({ ctrlKey: false, metaKey: false, altKey: true })).toBe("arrow");
     expect(modifierTool({ ctrlKey: true, metaKey: false, altKey: true })).toBe("rect");
     expect(modifierTool({ ctrlKey: false, metaKey: false, altKey: false })).toBeNull();
+  });
+
+  it("keeps ⌥ for unsnapped crops with the Crop tool, and ⌘ still draws a rectangle", () => {
+    expect(modifierTool({ ctrlKey: false, metaKey: false, altKey: true }, "crop")).toBeNull();
+    expect(modifierTool({ ctrlKey: true, metaKey: false, altKey: false }, "crop")).toBe("rect");
+    expect(modifierTool({ ctrlKey: false, metaKey: true, altKey: true }, "crop")).toBe("rect");
+    expect(modifierTool({ ctrlKey: false, metaKey: false, altKey: true }, "select")).toBe("arrow");
   });
 
   it("maps 1–7 to the swatches and ignores other keys", () => {
@@ -657,5 +670,74 @@ describe("curved arrows and lines", () => {
     expect(hasLineHandles({ ...straight, type: "line" })).toBe(true);
     expect(hasLineHandles({ id: "f", type: "freehand", color: "red", strokeWidth: 2, points: [0, 0, 1, 1] })).toBe(false);
     expect(hasLineHandles(null)).toBe(false);
+  });
+});
+
+describe("crop snapping", () => {
+  const image = { width: 400, height: 300 };
+  const lines = { x: [100], y: [80] };
+  const right = { left: false, right: true, top: false, bottom: false };
+  const bottomRight = { left: false, right: true, top: false, bottom: true };
+  const topLeft = { left: true, right: false, top: true, bottom: false };
+
+  it("finds the nearest line within the threshold", () => {
+    expect(nearestLine(97, [0, 100, 400], 6)).toBe(100);
+    expect(nearestLine(3, [0, 100, 400], 6)).toBe(0);
+    expect(nearestLine(50, [0, 100, 400], 6)).toBeNull();
+  });
+
+  it("reads the moving sides from a handle's anchor", () => {
+    expect(anchorSides("top-left")).toEqual(topLeft);
+    expect(anchorSides("middle-right")).toEqual(right);
+    expect(anchorSides("bottom-center")).toEqual({ left: false, right: false, top: false, bottom: true });
+  });
+
+  it("keeps the far side still when the handles scale from the centre", () => {
+    expect(holdCropSides({ x: 10, y: 10, width: 100, height: 50 }, { x: 0, y: 10, width: 120, height: 50 }, right)).toEqual({
+      x: 10,
+      y: 10,
+      width: 110,
+      height: 50,
+    });
+  });
+
+  it("snaps a moving side to a line or the image border within the threshold", () => {
+    expect(snapCropEdges({ x: 10, y: 10, width: 95, height: 50 }, right, lines, 6, image)).toEqual({ x: 10, y: 10, width: 90, height: 50 });
+    expect(snapCropEdges({ x: 10, y: 10, width: 385, height: 50 }, right, lines, 6, image)).toEqual({ x: 10, y: 10, width: 390, height: 50 });
+    expect(snapCropEdges({ x: 97, y: 77, width: 50, height: 50 }, topLeft, lines, 6, image)).toEqual({ x: 100, y: 80, width: 47, height: 47 });
+  });
+
+  it("leaves sides past the threshold, and sides that are not moving, alone", () => {
+    const crop = { x: 10, y: 10, width: 97, height: 72 };
+    expect(snapCropEdges(crop, right, lines, 6, image)).toEqual(crop);
+    // The bottom (82) is near the line at 80, but only the right side moves.
+    expect(snapCropEdges(crop, right, lines, 7, image)).toEqual({ ...crop, width: 90 });
+  });
+
+  it("shifts a moved crop to whichever side is nearer a line, keeping its size", () => {
+    expect(snapCropEdges({ x: 96, y: 40, width: 50, height: 30 }, ALL_SIDES, lines, 6, image)).toEqual({ x: 100, y: 40, width: 50, height: 30 });
+    expect(snapCropEdges({ x: 2, y: 50, width: 95, height: 20 }, ALL_SIDES, lines, 6, image)).toEqual({ x: 0, y: 50, width: 95, height: 20 });
+  });
+
+  it("keeps the ratio: the dragged side snaps and the other follows", () => {
+    expect(snapCropEdges({ x: 10, y: 10, width: 92, height: 46 }, bottomRight, lines, 6, image, 2)).toEqual({ x: 10, y: 10, width: 90, height: 45 });
+    expect(snapCropEdges({ x: 97, y: 150, width: 100, height: 50 }, topLeft, lines, 6, image, 2)).toEqual({ x: 100, y: 151, width: 97, height: 49 });
+  });
+
+  it("takes the nearer snap at a corner, and drops one that would leave the image", () => {
+    expect(snapCropEdges({ x: 20, y: 20, width: 82, height: 57 }, bottomRight, lines, 6, image, 1)).toEqual({ x: 20, y: 20, width: 80, height: 80 });
+    expect(snapCropEdges({ x: 20, y: 20, width: 84, height: 59 }, bottomRight, lines, 6, image, 1)).toEqual({ x: 20, y: 20, width: 60, height: 60 });
+    // Snapping the right side to the border would make it 50 tall, past the bottom.
+    expect(snapCropEdges({ x: 300, y: 255, width: 96, height: 40 }, bottomRight, lines, 6, image, 2)).toEqual({ x: 300, y: 255, width: 90, height: 45 });
+  });
+
+  it("snaps a crop drag's start corner and dragged sides", () => {
+    expect(snapCropDrag({ x: 3, y: 3 }, { x: 97, y: 50 }, image, null, lines, 6)).toEqual({ x: 0, y: 0, width: 100, height: 50 });
+    expect(snapCropDrag({ x: 3, y: 3 }, { x: 95, y: 60 }, image, 1, lines, 6)).toEqual({ x: 0, y: 0, width: 100, height: 100 });
+    expect(snapCropDrag({ x: 20, y: 20 }, { x: 60, y: 50 }, image, null, lines, 6)).toEqual({ x: 20, y: 20, width: 40, height: 30 });
+  });
+
+  it("leaves a stray click near a corner too small to crop", () => {
+    expect(snapCropDrag({ x: 398, y: 298 }, { x: 399, y: 299 }, image, null, lines, 6)).toEqual({ x: 398, y: 298, width: 1, height: 1 });
   });
 });
