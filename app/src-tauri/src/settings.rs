@@ -4,6 +4,7 @@
 //! settings files from other versions still load.
 
 use std::{
+    collections::BTreeMap,
     fmt, fs, io,
     path::{Path, PathBuf},
 };
@@ -146,6 +147,69 @@ impl From<Preferences> for PreferencesUpdate {
     }
 }
 
+/// The annotation editor's remembered choices, saved as they change and
+/// restored when it opens. Every key is optional: the editor uses its own
+/// default for anything missing, and checks each value it reads.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorPreferences {
+    /// The drawing colour, as `#rrggbb`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// The last tool picked, by its frontend name (`arrow`, `rect`…).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// Each tool's own width in pixels: the stroke width, or the font size
+    /// for text and the badge size for steps.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub widths: BTreeMap<String, u32>,
+    /// Rectangles and ellipses are filled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<bool>,
+    /// Text sits on a coloured pill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_background: Option<bool>,
+    /// `pixelate` or `blur`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blur_mode: Option<String>,
+}
+
+impl EditorPreferences {
+    /// Reads the stored `editor` section key by key. A key with the wrong
+    /// type is dropped on its own, so one bad value never costs the rest of
+    /// the settings file.
+    fn from_stored(value: serde_json::Value) -> Self {
+        let text = |key: &str| {
+            value
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        };
+        let flag = |key: &str| value.get(key).and_then(serde_json::Value::as_bool);
+        let widths = value
+            .get("widths")
+            .and_then(serde_json::Value::as_object)
+            .map(|widths| {
+                widths
+                    .iter()
+                    .filter_map(|(tool, width)| {
+                        let width = u32::try_from(width.as_u64()?).ok()?;
+                        Some((tool.clone(), width))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            color: text("color"),
+            tool: text("tool"),
+            widths,
+            fill: flag("fill"),
+            text_background: flag("textBackground"),
+            blur_mode: text("blurMode"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -155,6 +219,8 @@ pub struct Settings {
     pub hotkeys: Hotkeys,
     #[serde(flatten)]
     pub preferences: Preferences,
+    /// The annotation editor's remembered style and tool.
+    pub editor: EditorPreferences,
 }
 
 impl Settings {
@@ -165,6 +231,7 @@ impl Settings {
             save_folder: pictures_dir.join(DEFAULT_FOLDER_NAME),
             hotkeys: Hotkeys::default(),
             preferences: Preferences::default(),
+            editor: EditorPreferences::default(),
         }
     }
 }
@@ -178,6 +245,8 @@ struct StoredSettings {
     after_capture: Option<AfterCapture>,
     copy_to_clipboard: Option<bool>,
     ai: Option<AiSettings>,
+    /// Read leniently by [`EditorPreferences::from_stored`].
+    editor: Option<serde_json::Value>,
 }
 
 /// Hotkeys on disk; a missing or empty one keeps its default.
@@ -226,6 +295,10 @@ impl StoredSettings {
                     .copy_to_clipboard
                     .unwrap_or(defaults.preferences.copy_to_clipboard),
                 ai: self.ai.unwrap_or(defaults.preferences.ai),
+            },
+            editor: match self.editor {
+                Some(stored) => EditorPreferences::from_stored(stored),
+                None => defaults.editor,
             },
         }
     }
@@ -379,6 +452,20 @@ impl SettingsStore {
         Ok(self.current.clone())
     }
 
+    /// Remembers the annotation editor's choices.
+    pub fn set_editor_preferences(
+        &mut self,
+        editor: EditorPreferences,
+    ) -> Result<EditorPreferences, SettingsError> {
+        let next = Settings {
+            editor,
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.editor.clone())
+    }
+
     /// Changes the capture hotkeys after checking them. Registering them is
     /// up to the caller.
     pub fn set_hotkeys(&mut self, hotkeys: &Hotkeys) -> Result<Settings, SettingsError> {
@@ -441,6 +528,10 @@ mod tests {
                     api_key: Some("sk-test".into()),
                     ..AiSettings::default()
                 },
+            },
+            editor: EditorPreferences {
+                color: Some("#0090ff".into()),
+                ..EditorPreferences::default()
             },
         };
         save(&path, &settings).unwrap();
@@ -744,5 +835,128 @@ mod tests {
                 ..AiSettings::default()
             }))
             .unwrap();
+    }
+
+    fn editor_preferences() -> EditorPreferences {
+        EditorPreferences {
+            color: Some("#30a46c".into()),
+            tool: Some("rect".into()),
+            widths: BTreeMap::from([
+                ("arrow".to_owned(), 8),
+                ("text".to_owned(), 48),
+                ("step".to_owned(), 24),
+            ]),
+            fill: Some(true),
+            text_background: Some(false),
+            blur_mode: Some("blur".into()),
+        }
+    }
+
+    #[test]
+    fn editor_preferences_round_trip_beside_the_other_settings() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        store
+            .set_preferences(Preferences {
+                after_capture: AfterCapture::Editor,
+                copy_to_clipboard: false,
+                ..Preferences::default()
+            })
+            .unwrap();
+
+        let saved = store.set_editor_preferences(editor_preferences()).unwrap();
+
+        assert_eq!(saved, editor_preferences());
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.editor, editor_preferences());
+        // The other settings are kept.
+        assert_eq!(loaded.preferences.after_capture, AfterCapture::Editor);
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(json["editor"]["textBackground"], false);
+        assert_eq!(json["editor"]["blurMode"], "blur");
+        assert_eq!(json["editor"]["widths"]["text"], 48);
+    }
+
+    #[test]
+    fn a_file_without_an_editor_section_loads_empty_editor_preferences() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"saveFolder": "/data/shots", "afterCapture": "nothing"}"#,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.editor, EditorPreferences::default());
+        assert_eq!(loaded.preferences.after_capture, AfterCapture::Nothing);
+    }
+
+    #[test]
+    fn empty_editor_preferences_write_an_empty_section() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        save(&path, &defaults(&dir)).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(json["editor"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn partial_and_mistyped_editor_keys_keep_the_rest() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r##"{
+                "hotkeys": {"region": "Ctrl+Shift+R"},
+                "editor": {
+                    "color": "#e5484d",
+                    "fill": "yes",
+                    "widths": {"arrow": 6, "line": -2, "rect": 2.5, "text": "big"},
+                    "backdrop": {"fill": "ocean"}
+                }
+            }"##,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(
+            loaded.editor,
+            EditorPreferences {
+                color: Some("#e5484d".into()),
+                widths: BTreeMap::from([("arrow".to_owned(), 6)]),
+                ..EditorPreferences::default()
+            }
+        );
+        assert_eq!(loaded.hotkeys.region, "Ctrl+Shift+R");
+    }
+
+    #[test]
+    fn an_editor_section_that_is_not_an_object_is_ignored() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"editor": 3, "copyToClipboard": false}"#).unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.editor, EditorPreferences::default());
+        assert!(!loaded.preferences.copy_to_clipboard);
+    }
+
+    #[test]
+    fn changing_other_settings_keeps_the_editor_preferences() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        store.set_editor_preferences(editor_preferences()).unwrap();
+        store
+            .set_save_folder(dir.path().join("Elsewhere").to_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            load(&path, defaults(&dir)).unwrap().editor,
+            editor_preferences()
+        );
     }
 }

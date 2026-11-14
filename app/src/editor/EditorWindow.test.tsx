@@ -3,7 +3,9 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type { ReactNode, Ref } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import EditorWindow from "./EditorWindow";
+import type { EditorPreferences } from "../settings/api";
 import type { Annotations } from "./model";
+import { PREFERENCES_DELAY_MS } from "./preferences";
 import { AUTOSAVE_DELAY_MS } from "./useAnnotations";
 
 /** Where the mocked stage reports the pointer, in capture pixels. */
@@ -63,12 +65,14 @@ vi.mock("react-konva", async () => {
     onMouseDown,
     onMouseMove,
     onMouseUp,
+    onWheel,
   }: {
     ref?: Ref<unknown>;
     children?: ReactNode;
     onMouseDown?: Handler;
     onMouseMove?: Handler;
     onMouseUp?: Handler;
+    onWheel?: Handler;
   }) => {
     const stage = useMemo(() => {
       const self: Record<string, unknown> = {
@@ -99,7 +103,13 @@ vi.mock("react-konva", async () => {
       handler?.({ evt: event.nativeEvent, target: target(event.target) });
     return createElement(
       "div",
-      { "data-konva": "Stage", onMouseDown: forward(onMouseDown), onMouseMove: forward(onMouseMove), onMouseUp: forward(onMouseUp) },
+      {
+        "data-konva": "Stage",
+        onMouseDown: forward(onMouseDown),
+        onMouseMove: forward(onMouseMove),
+        onMouseUp: forward(onMouseUp),
+        onWheel: forward(onWheel),
+      },
       children,
     );
   };
@@ -152,11 +162,30 @@ const sidecar: Annotations = {
   crop: null,
 };
 
+/**
+ * The editor preferences in settings.json: `stored` is what loading gives
+ * (an Error makes it fail), and `saved` collects every write.
+ */
+interface PreferencesMock {
+  stored?: EditorPreferences | Error;
+  saved?: EditorPreferences[];
+}
+
 /** Mocks the editor commands; returns every sidecar written. `calls` records output commands in order. */
-function mockEditor(annotations: Annotations = sidecar, calls: { cmd: string; payload: unknown }[] = []): Annotations[] {
+function mockEditor(
+  annotations: Annotations = sidecar,
+  calls: { cmd: string; payload: unknown }[] = [],
+  preferences: PreferencesMock = {},
+): Annotations[] {
   const saved: Annotations[] = [];
   mockIPC((cmd, payload) => {
     switch (cmd) {
+      case "get_editor_preferences":
+        if (preferences.stored instanceof Error) throw preferences.stored;
+        return preferences.stored ?? {};
+      case "set_editor_preferences":
+        preferences.saved?.push((payload as { preferences: EditorPreferences }).preferences);
+        return (payload as { preferences: EditorPreferences }).preferences;
       case "editor_info":
         return { path: "/p/originals/shot.png", fileName: "shot.png", annotations };
       case "editor_image":
@@ -191,6 +220,9 @@ const shapeIds = () =>
   Array.from(document.querySelectorAll("[data-konva] [data-id]")).map((element) => element.getAttribute("data-id"));
 
 const stage = () => document.querySelector('[data-konva="Stage"]') as Element;
+/** The width button in the top bar, by what it sets ("Width", "Text size" or "Badge size"). */
+const widthButton = (name: string) =>
+  within(screen.getByRole("toolbar", { name: "Style and actions" })).getByRole("button", { name });
 const pressed = (name: string) =>
   within(screen.getByRole("toolbar", { name: "Annotation tools" })).getByRole("button", { name });
 
@@ -394,13 +426,153 @@ describe("EditorWindow", () => {
   it("steps the stroke width with [ and ]", async () => {
     mockEditor();
     await ready();
-    expect(screen.getByRole("button", { name: "Width 4px" })).toHaveAttribute("aria-pressed", "true");
+    expect(widthButton("Width")).toHaveTextContent("4px");
     fireEvent.keyDown(window, { key: "]" });
-    expect(screen.getByRole("button", { name: "Width 6px" })).toHaveAttribute("aria-pressed", "true");
+    expect(widthButton("Width")).toHaveTextContent("6px");
     fireEvent.keyDown(window, { key: "[" });
     fireEvent.keyDown(window, { key: "[" });
     fireEvent.keyDown(window, { key: "[" });
-    expect(screen.getByRole("button", { name: "Width 2px" })).toHaveAttribute("aria-pressed", "true");
+    expect(widthButton("Width")).toHaveTextContent("2px");
+    for (let i = 0; i < 5; i += 1) fireEvent.keyDown(window, { key: "[" });
+    expect(widthButton("Width")).toHaveTextContent("1px");
+  });
+
+  it("picks a width from the popover, with a preview, and draws with it", async () => {
+    const saved = mockEditor();
+    await ready();
+    const toggle = widthButton("Width");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    const panel = within(screen.getByRole("dialog", { name: "Width" }));
+    const slider = panel.getByRole("slider", { name: "Width" });
+    // Nine presets, 1px to 24px; 4px is the fourth.
+    expect(slider).toHaveAttribute("max", "8");
+    expect(slider).toHaveValue("3");
+    expect(panel.getByTestId("width-preview")).toHaveAttribute("data-width", "4");
+
+    fireEvent.change(slider, { target: { value: "8" } });
+    expect(panel.getByTestId("width-preview")).toHaveAttribute("data-width", "24");
+    expect(toggle).toHaveTextContent("24px");
+
+    drag([10, 10], [120, 90]);
+    await waitFor(() => expect(last(saved)?.shapes[4]).toMatchObject({ type: "arrow", strokeWidth: 24 }));
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Width" })).not.toBeInTheDocument();
+  });
+
+  it("closes the width popover on a click away", async () => {
+    mockEditor();
+    await ready();
+    fireEvent.click(widthButton("Width"));
+    expect(screen.getByRole("dialog", { name: "Width" })).toBeInTheDocument();
+    fireEvent.pointerDown(stage());
+    expect(screen.queryByRole("dialog", { name: "Width" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a width for each tool", async () => {
+    mockEditor();
+    await ready();
+    fireEvent.keyDown(window, { key: "]" });
+    expect(widthButton("Width")).toHaveTextContent("6px");
+    fireEvent.keyDown(window, { key: "r" });
+    expect(widthButton("Width")).toHaveTextContent("4px");
+    fireEvent.keyDown(window, { key: "[" });
+    expect(widthButton("Width")).toHaveTextContent("3px");
+    fireEvent.keyDown(window, { key: "a" });
+    expect(widthButton("Width")).toHaveTextContent("6px");
+    // Tools without a width hide the control.
+    fireEvent.keyDown(window, { key: "b" });
+    expect(screen.queryByRole("button", { name: "Width" })).not.toBeInTheDocument();
+  });
+
+  it("changes the width with ⌥-scroll over the canvas instead of zooming", async () => {
+    mockEditor();
+    await ready();
+    const zoom = screen.getByLabelText("Zoom").textContent;
+    fireEvent.wheel(stage(), { deltaY: -100, altKey: true });
+    expect(widthButton("Width")).toHaveTextContent("6px");
+    fireEvent.wheel(stage(), { deltaY: 100, altKey: true });
+    fireEvent.wheel(stage(), { deltaY: 100, altKey: true });
+    expect(widthButton("Width")).toHaveTextContent("3px");
+    expect(screen.getByLabelText("Zoom").textContent).toBe(zoom);
+  });
+
+  it("sizes text and step badges on their own, not from the stroke width", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.keyDown(window, { key: "]" });
+    fireEvent.keyDown(window, { key: "]" });
+    expect(widthButton("Width")).toHaveTextContent("8px");
+
+    fireEvent.keyDown(window, { key: "n" });
+    expect(widthButton("Badge size")).toHaveTextContent("20px");
+    fireEvent.keyDown(window, { key: "]" });
+    expect(widthButton("Badge size")).toHaveTextContent("24px");
+    Object.assign(pointerAt, { x: 200, y: 150 });
+    fireEvent.mouseDown(stage());
+    fireEvent.mouseUp(stage());
+    await waitFor(() => expect(last(saved)?.shapes[4]).toMatchObject({ type: "step", radius: 24 }));
+
+    fireEvent.keyDown(window, { key: "t" });
+    expect(widthButton("Text size")).toHaveTextContent("30px");
+
+    // A selected text shows and changes its own size.
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="t1"]') as Element);
+    expect(widthButton("Text size")).toHaveTextContent("24px");
+    fireEvent.keyDown(window, { key: "]" });
+    await waitFor(() => expect(last(saved)?.shapes.find((shape) => shape.id === "t1")).toMatchObject({ fontSize: 30 }));
+  });
+
+  it("opens with the colour, tool, widths and options saved last time", async () => {
+    mockEditor(sidecar, [], {
+      stored: { color: "#30a46c", tool: "rect", widths: { rect: 12, text: 48 }, fill: true, textBackground: true, blurMode: "blur" },
+    });
+    await ready();
+    await waitFor(() => expect(pressed("Rectangle")).toHaveAttribute("aria-pressed", "true"));
+    expect(screen.getByRole("button", { name: "Colour #30a46c" })).toHaveAttribute("aria-pressed", "true");
+    expect(widthButton("Width")).toHaveTextContent("12px");
+    expect(screen.getByRole("button", { name: "Fill" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.keyDown(window, { key: "t" });
+    expect(widthButton("Text size")).toHaveTextContent("48px");
+    expect(screen.getByRole("button", { name: "Text background" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.keyDown(window, { key: "b" });
+    expect(screen.getByRole("button", { name: "Smooth" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("saves changed preferences once they settle", async () => {
+    const saved: EditorPreferences[] = [];
+    mockEditor(sidecar, [], { stored: {}, saved });
+    await ready();
+    // Loading alone writes nothing.
+    await new Promise((resolve) => setTimeout(resolve, PREFERENCES_DELAY_MS + 100));
+    expect(saved).toEqual([]);
+
+    fireEvent.keyDown(window, { key: "4" });
+    fireEvent.keyDown(window, { key: "]" });
+    fireEvent.keyDown(window, { key: "r" });
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]).toEqual({
+      color: "#0090ff",
+      tool: "rect",
+      widths: { arrow: 6 },
+      fill: false,
+      textBackground: false,
+      blurMode: "pixelate",
+    });
+  });
+
+  it("keeps today's defaults and saves nothing when preferences cannot load", async () => {
+    const saved: EditorPreferences[] = [];
+    mockEditor(sidecar, [], { stored: new Error("no settings"), saved });
+    await ready();
+    expect(pressed("Arrow")).toHaveAttribute("aria-pressed", "true");
+    expect(widthButton("Width")).toHaveTextContent("4px");
+    fireEvent.keyDown(window, { key: "3" });
+    expect(screen.getByRole("button", { name: "Colour #30a46c" })).toHaveAttribute("aria-pressed", "true");
+    await new Promise((resolve) => setTimeout(resolve, PREFERENCES_DELAY_MS + 100));
+    expect(saved).toEqual([]);
   });
 
   it("adds, adjusts and removes a backdrop from its panel", async () => {

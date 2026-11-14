@@ -1,10 +1,14 @@
-import { COLORS, STROKE_WIDTHS, type Annotations, type Point, type Rect, type Shape, type Style, type Tool } from "./model";
+import { COLORS, DEFAULT_STEP_RADIUS, STROKE_WIDTHS, type Annotations, type Point, type Rect, type Shape, type Style, type Tool } from "./model";
 
 /** How far a duplicate lands from its original, in capture pixels. */
 export const DUPLICATE_OFFSET = 12;
 /** Shapes smaller than this many pixels are treated as a stray click. */
 export const MIN_SIZE = 3;
 export const HIGHLIGHTER_WIDTH = 18;
+/** The highlighter is drawn wider than the width picked: three times it, and never thinner than `HIGHLIGHTER_WIDTH`. */
+export function highlighterWidth(strokeWidth: number): number {
+  return Math.max(HIGHLIGHTER_WIDTH, strokeWidth * 3);
+}
 export const DEFAULT_PIXEL_SIZE = 12;
 
 let nextId = 0;
@@ -32,7 +36,7 @@ export function beginShape(tool: Tool, at: Point, style: Style, id = newId()): S
     case "freehand":
       return { id, type: "freehand", color, strokeWidth, points: [at.x, at.y] };
     case "highlighter":
-      return { id, type: "highlighter", color, strokeWidth: Math.max(HIGHLIGHTER_WIDTH, strokeWidth * 3), points: [at.x, at.y] };
+      return { id, type: "highlighter", color, strokeWidth: highlighterWidth(strokeWidth), points: [at.x, at.y] };
     case "rect":
     case "ellipse":
       // Optional fields are written only when set, so plain shapes match old sidecars.
@@ -51,7 +55,7 @@ export function beginShape(tool: Tool, at: Point, style: Style, id = newId()): S
     case "spotlight":
       return { id, type: "spotlight", x: at.x, y: at.y, width: 0, height: 0 };
     case "step":
-      return { id, type: "step", color, x: at.x, y: at.y, radius: 12 + strokeWidth * 2 };
+      return { id, type: "step", color, x: at.x, y: at.y, radius: style.stepRadius ?? DEFAULT_STEP_RADIUS };
     default:
       return null;
   }
@@ -226,8 +230,9 @@ export function stepNumbers(shapes: Shape[]): Map<string, number> {
 
 /**
  * Applies the parts of `style` a shape has: colour (not blur or spotlight),
- * stroke width on stroked shapes, fill on boxes, background on text and the
- * blur mode. A style that changes nothing returns the same shape.
+ * stroke width on stroked shapes (widened for the highlighter), font size
+ * on text, radius on steps, fill on boxes, background on text and the blur
+ * mode. A style that changes nothing returns the same shape.
  */
 export function restyleShape(shape: Shape, style: Partial<Style>): Shape {
   if (shape.type === "spotlight") return shape;
@@ -236,8 +241,15 @@ export function restyleShape(shape: Shape, style: Partial<Style>): Shape {
     return { ...shape, mode: style.blurMode };
   }
   let next: Shape = style.color ? { ...shape, color: style.color } : shape;
-  if (style.strokeWidth && "strokeWidth" in next && next.type !== "highlighter") {
-    next = { ...next, strokeWidth: style.strokeWidth };
+  if (style.strokeWidth && "strokeWidth" in next) {
+    const strokeWidth = next.type === "highlighter" ? highlighterWidth(style.strokeWidth) : style.strokeWidth;
+    if (strokeWidth !== next.strokeWidth) next = { ...next, strokeWidth };
+  }
+  if (style.fontSize && next.type === "text" && style.fontSize !== next.fontSize) {
+    next = { ...next, fontSize: style.fontSize };
+  }
+  if (style.stepRadius && next.type === "step" && style.stepRadius !== next.radius) {
+    next = { ...next, radius: style.stepRadius };
   }
   if (style.fill !== undefined && (next.type === "rect" || next.type === "ellipse")) {
     next = { ...next, fill: style.fill };
@@ -298,10 +310,13 @@ export function colorForKey(key: string): string | null {
   return COLORS[Number(key) - 1] ?? null;
 }
 
-/** The next stroke width down (-1) or up (1) the presets, stopping at the ends. */
-export function stepStrokeWidth(current: number, direction: -1 | 1): number {
-  if (direction > 0) return STROKE_WIDTHS.find((width) => width > current) ?? current;
-  return [...STROKE_WIDTHS].reverse().find((width) => width < current) ?? current;
+/**
+ * The next width down (-1) or up (1) `presets` (the stroke widths unless
+ * given), stopping at the ends.
+ */
+export function stepStrokeWidth(current: number, direction: -1 | 1, presets: number[] = STROKE_WIDTHS): number {
+  if (direction > 0) return presets.find((width) => width > current) ?? current;
+  return [...presets].reverse().find((width) => width < current) ?? current;
 }
 
 /**

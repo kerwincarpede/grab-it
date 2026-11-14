@@ -7,7 +7,7 @@ use tauri::{AppHandle, State};
 
 use crate::{
     hotkeys::{self, Hotkeys},
-    settings::{PreferencesUpdate, Settings, SettingsStore},
+    settings::{EditorPreferences, PreferencesUpdate, Settings, SettingsStore},
 };
 
 pub type SettingsState = Mutex<SettingsStore>;
@@ -54,6 +54,22 @@ pub fn set_preferences(
     // that turning it on for new captures only skips.
     crate::ai::settings_saved(&app, &before, &settings.preferences.ai);
     Ok(settings)
+}
+
+/// The annotation editor's remembered colour, tool, widths and options.
+#[tauri::command]
+pub fn get_editor_preferences(state: State<'_, SettingsState>) -> EditorPreferences {
+    lock(&state).get().editor.clone()
+}
+
+#[tauri::command]
+pub fn set_editor_preferences(
+    preferences: EditorPreferences,
+    state: State<'_, SettingsState>,
+) -> Result<EditorPreferences, String> {
+    lock(&state)
+        .set_editor_preferences(preferences)
+        .map_err(|err| err.to_string())
 }
 
 /// Opens a window or starts a capture by its `--open` name (`region`,

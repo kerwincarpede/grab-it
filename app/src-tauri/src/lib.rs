@@ -59,6 +59,8 @@ pub fn run() {
             commands::set_save_folder,
             commands::set_hotkeys,
             commands::set_preferences,
+            commands::get_editor_preferences,
+            commands::set_editor_preferences,
             commands::open_target,
             commands::get_autostart,
             commands::set_autostart,
