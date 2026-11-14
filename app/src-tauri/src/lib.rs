@@ -107,6 +107,8 @@ pub fn run() {
             library::library_list,
             library::library_thumbnail,
             library::library_set_tags,
+            search::library_sidebar,
+            library::library_remove_ai_tag,
             library::library_set_notes,
             library::library_delete,
             library::library_open,
@@ -122,7 +124,11 @@ pub fn run() {
             ai::ai_clear,
             ai::ai_redescribe_all,
             ai::ai_test_connection,
-            ai::ai_clis
+            ai::ai_clis,
+            update::update_status,
+            update::update_check,
+            update::update_install,
+            update::update_later
         ])
         .setup(move |app| {
             let mut store = open_settings(app)?;

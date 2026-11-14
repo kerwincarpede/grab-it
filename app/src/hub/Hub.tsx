@@ -5,16 +5,20 @@ import "../app/app.css";
 import "./hub.css";
 import Logo from "../app/Logo";
 import {
+  ChevronRightIcon,
   ColourIcon,
-  ChevronDownIcon,
-  GearIcon,
+  OpenIcon,
   RecordIcon,
   RegionIcon,
+  RepeatIcon,
   ScreenIcon,
+  SlidersIcon,
   TextIcon,
+  TimerIcon,
   WindowIcon,
 } from "../app/icons";
-import { openMain, startCapture, checkForUpdates, type CaptureKind } from "../app/api";
+import { openMain, startCapture, type CaptureKind } from "../app/api";
+import { checkForUpdate, onUpdateStatus, pendingUpdate, updateStatus, type UpdateStatus } from "../app/updates";
 import { getSettings, type Hotkeys } from "../settings/api";
 import { shortcutLabel } from "./keys";
 import { formatTime, listShots, openShot, type Shot } from "../library/api";
@@ -25,13 +29,13 @@ const HUB_SHOWN_EVENT = "hub-shown";
 /** How many recent captures the hub shows. */
 const RECENT = 3;
 
-/** The captures under Capture region, each in its own tint. */
-const TOOLS: { kind: CaptureKind; title: string; hotkey?: keyof Hotkeys; tint: string; icon: ReactNode }[] = [
-  { kind: "window", title: "Window", hotkey: "window", tint: "blue", icon: <WindowIcon size={18} /> },
-  { kind: "screen", title: "Screen", hotkey: "screen", tint: "violet", icon: <ScreenIcon size={18} /> },
-  { kind: "record", title: "Record", tint: "red", icon: <RecordIcon size={18} /> },
-  { kind: "text", title: "Text", hotkey: "text", tint: "green", icon: <TextIcon size={18} /> },
-  { kind: "colour", title: "Colour", hotkey: "colour", tint: "amber", icon: <ColourIcon size={18} /> },
+/** The captures under Capture region. */
+const TOOLS: { kind: CaptureKind; title: string; hotkey?: keyof Hotkeys; icon: ReactNode }[] = [
+  { kind: "window", title: "Window", hotkey: "window", icon: <WindowIcon /> },
+  { kind: "screen", title: "Screen", hotkey: "screen", icon: <ScreenIcon /> },
+  { kind: "record", title: "Record GIF", icon: <RecordIcon /> },
+  { kind: "text", title: "Grab text", hotkey: "text", icon: <TextIcon /> },
+  { kind: "colour", title: "Pick colour", hotkey: "colour", icon: <ColourIcon /> },
 ];
 
 const TIMED: { kind: CaptureKind; title: string; seconds: number }[] = [
@@ -79,6 +83,7 @@ function Hub() {
   const [monitors, setMonitors] = useState<HubMonitor[]>([]);
   const [panel, setPanel] = useState<Panel>(null);
   const [error, setError] = useState<string | null>(null);
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
 
   const load = useCallback(() => {
     getSettings()
@@ -90,19 +95,26 @@ function Hub() {
     invoke<HubMonitor[]>("hub_monitors")
       .then((found) => setMonitors(Array.isArray(found) ? found : []))
       .catch(() => {});
+    updateStatus()
+      .then((status) => setUpdate(status?.state ? status : null))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
     load();
     let disposed = false;
-    let unlisten: (() => void) | undefined;
+    const stops: (() => void)[] = [];
+    const keep = (stop: () => void) => (disposed ? stop() : stops.push(stop));
     // Shown again: start from the top, with fresh captures.
     listen(HUB_SHOWN_EVENT, () => {
       setPanel(null);
       setError(null);
       load();
     })
-      .then((stop) => (disposed ? stop() : (unlisten = stop)))
+      .then(keep)
+      .catch(() => {});
+    onUpdateStatus(({ status }) => setUpdate(status))
+      .then(keep)
       .catch(() => {});
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") void invoke("hub_hide");
@@ -110,7 +122,7 @@ function Hub() {
     window.addEventListener("keydown", onKey);
     return () => {
       disposed = true;
-      unlisten?.();
+      stops.forEach((stop) => stop());
       window.removeEventListener("keydown", onKey);
     };
   }, [load]);
@@ -119,95 +131,90 @@ function Hub() {
     action.catch((err: unknown) => setError(errorMessage(err)));
   }
 
-  const keyLabel = (kind: CaptureKind, hotkey?: keyof Hotkeys) =>
-    kind === "record" ? "GIF" : hotkey && hotkeys?.[hotkey] ? shortcutLabel(hotkeys[hotkey]) : "";
-
+  const keyLabel = (hotkey?: keyof Hotkeys) => (hotkey && hotkeys?.[hotkey] ? shortcutLabel(hotkeys[hotkey]) : "");
   const toggle = (next: Panel) => setPanel((current) => (current === next ? null : next));
+  const waiting = pendingUpdate(update);
 
   return (
     <main className="hub">
       <header className="hub-head">
-        <Logo size={28} />
-        <span className="brand-name">Grab-it</span>
-        <button type="button" className="pill hub-open" onClick={() => run(openMain("library"))}>
-          Open Grab-it
+        <Logo size={22} />
+        <span className="hub-name">Grab-it</span>
+        <button type="button" className="hub-icon" aria-label="Open Grab-it" title="Open Grab-it" onClick={() => run(openMain("library"))}>
+          <OpenIcon size={15} />
         </button>
         <button type="button" className="hub-icon" aria-label="Settings" title="Settings" onClick={() => run(openMain("settings"))}>
-          <GearIcon />
+          <SlidersIcon size={15} />
         </button>
       </header>
 
-      <div className="hub-primary">
-        <button type="button" className="cta hub-region" onClick={() => run(startCapture("region"))}>
-          <RegionIcon size={18} />
+      <div className="hub-scroll">
+        <button type="button" className="hub-item is-primary" onClick={() => run(startCapture("region"))}>
+          <RegionIcon />
           Capture region
-          {hotkeys?.region && <kbd className="cta-key">{shortcutLabel(hotkeys.region)}</kbd>}
+          {hotkeys?.region && <kbd className="hub-key">{shortcutLabel(hotkeys.region)}</kbd>}
         </button>
-      </div>
-
-      <div className="hub-tools">
-        {TOOLS.map(({ kind, title, hotkey, tint, icon }) => (
-          <button type="button" key={kind} className="hub-tool" onClick={() => run(startCapture(kind))}>
-            <span className={`hub-tool-icon tint-${tint}`} aria-hidden="true">
-              {icon}
-            </span>
-            {title}{" "}
-            <span className="hub-key" title={keyLabel(kind, hotkey)}>
-              {keyLabel(kind, hotkey) || " "}
-            </span>
+        {TOOLS.map(({ kind, title, hotkey, icon }) => (
+          <button type="button" key={kind} className="hub-item" onClick={() => run(startCapture(kind))}>
+            {icon}
+            {title}
+            {keyLabel(hotkey) && <kbd className="hub-key">{keyLabel(hotkey)}</kbd>}
           </button>
         ))}
-      </div>
 
-      <div className="hub-chips">
-        <button type="button" className="pill" onClick={() => run(startCapture("repeat"))}>
+        <hr className="hub-sep" />
+        <button type="button" className="hub-item" onClick={() => run(startCapture("repeat"))}>
+          <RepeatIcon />
           Repeat last region
         </button>
-        <button type="button" className="pill" aria-expanded={panel === "timed"} onClick={() => toggle("timed")}>
+        <button type="button" className="hub-item" aria-expanded={panel === "timed"} onClick={() => toggle("timed")}>
+          <TimerIcon />
           Timed
-          <ChevronDownIcon size={12} />
+          <ChevronRightIcon size={13} />
         </button>
+        {panel === "timed" && (
+          <div className="hub-sub">
+            {TIMED.map(({ kind, title, seconds }) => (
+              <button type="button" key={title} onClick={() => run(startCapture(kind, { delaySeconds: seconds }))}>
+                {title}
+              </button>
+            ))}
+          </div>
+        )}
         {monitors.length > 1 && (
-          <button type="button" className="pill" aria-expanded={panel === "monitor"} onClick={() => toggle("monitor")}>
+          <button type="button" className="hub-item" aria-expanded={panel === "monitor"} onClick={() => toggle("monitor")}>
+            <ScreenIcon />
             Monitor
-            <ChevronDownIcon size={12} />
+            <ChevronRightIcon size={13} />
           </button>
         )}
-      </div>
-      {panel === "timed" && (
-        <div className="hub-options">
-          {TIMED.map(({ kind, title, seconds }) => (
-            <button type="button" key={title} onClick={() => run(startCapture(kind, { delaySeconds: seconds }))}>
-              {title}
-            </button>
-          ))}
-        </div>
-      )}
-      {panel === "monitor" && (
-        <div className="hub-options">
-          {monitors.map(({ index, label }) => (
-            <button type="button" key={index} onClick={() => run(startCapture("monitor", { monitor: index }))}>
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
+        {panel === "monitor" && (
+          <div className="hub-sub">
+            {monitors.map(({ index, label }) => (
+              <button type="button" key={index} onClick={() => run(startCapture("monitor", { monitor: index }))}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
 
-      <div className="hub-recent-head">
-        <h2>Recent</h2>
-        <button type="button" className="link-button" onClick={() => run(openMain("library"))}>
-          Show all
-        </button>
-      </div>
-      {recent.length > 0 ? (
-        <div className="hub-recent">
-          {recent.map((shot) => (
-            <RecentShot key={shot.id} shot={shot} />
-          ))}
+        <hr className="hub-sep" />
+        <div className="hub-recent-head">
+          <h2>Recent</h2>
+          <button type="button" className="link-button" onClick={() => run(openMain("library"))}>
+            Show all
+          </button>
         </div>
-      ) : (
-        <p className="hub-empty">Your captures will show up here.</p>
-      )}
+        {recent.length > 0 ? (
+          <div className="hub-recent">
+            {recent.map((shot) => (
+              <RecentShot key={shot.id} shot={shot} />
+            ))}
+          </div>
+        ) : (
+          <p className="hub-empty">Your captures will show up here.</p>
+        )}
+      </div>
 
       {error && (
         <p role="alert" className="hub-error">
@@ -215,13 +222,22 @@ function Hub() {
         </p>
       )}
 
+      {waiting && (
+        <button type="button" className="hub-update" onClick={() => run(checkForUpdate())}>
+          {update?.state === "installing" ? `Installing Grab-it ${waiting.version}…` : `Grab-it ${waiting.version} is ready`}
+          {update?.state !== "installing" && <span>Update</span>}
+        </button>
+      )}
+
       <footer className="hub-foot">
         <button type="button" className="link-button" onClick={() => run(openMain("welcome"))}>
           Shortcuts
         </button>
-        <button type="button" className="link-button" onClick={() => run(checkForUpdates())}>
-          Check for updates
-        </button>
+        {!waiting && (
+          <button type="button" className="link-button" onClick={() => run(checkForUpdate())}>
+            Check for updates
+          </button>
+        )}
         <button type="button" className="link-button hub-quit" onClick={() => void invoke("hub_quit")}>
           Quit
         </button>

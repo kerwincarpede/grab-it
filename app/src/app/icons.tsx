@@ -117,3 +117,81 @@ export const FolderIcon = ({ size }: IconProps) => (
     <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
   </Icon>
 );
+
+export const SlidersIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M4 7h9M17 7h3M4 17h3M11 17h9" />
+    <circle cx="15" cy="7" r="2" />
+    <circle cx="9" cy="17" r="2" />
+  </Icon>
+);
+
+export const OpenIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+  </Icon>
+);
+
+export const RepeatIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M4 11a7 7 0 0 1 12.5-4.3L19 9M19 4v5h-5M20 13a7 7 0 0 1-12.5 4.3L5 15M5 20v-5h5" />
+  </Icon>
+);
+
+export const TimerIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <circle cx="12" cy="13" r="7.5" />
+    <path d="M12 9.5V13l2 2M10 2.5h4" />
+  </Icon>
+);
+
+export const CardIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <path d="M13 15h5" />
+  </Icon>
+);
+
+export const PinIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M12 16v5M8.5 3.5h7l-1 5.5 3 3.5h-11l3-3.5z" />
+  </Icon>
+);
+
+export const SearchIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="m20 20-3.5-3.5" />
+  </Icon>
+);
+
+export const CloseIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M6 6l12 12M18 6 6 18" />
+  </Icon>
+);
+
+export const CheckIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="m5 12.5 4.5 4.5L19 7.5" />
+  </Icon>
+);
+
+export const TagIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9z" />
+    <circle cx="8" cy="8" r="1.3" />
+  </Icon>
+);
+
+export const ChevronUpIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="m6 15 6-6 6 6" />
+  </Icon>
+);
+
+export const ChevronRightIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="m9 6 6 6-6 6" />
+  </Icon>
+);

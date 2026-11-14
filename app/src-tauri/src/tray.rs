@@ -231,7 +231,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                     eprintln!("Grab-it: could not open the welcome window: {err}");
                 }
             }
-            MENU_UPDATES => update::check_from_tray(app),
+            MENU_UPDATES => update::user_check(app),
             MENU_LIBRARY => {
                 if let Err(err) = windows::show_library(app) {
                     eprintln!("Grab-it: could not open the Library: {err}");

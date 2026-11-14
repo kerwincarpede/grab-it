@@ -4,7 +4,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { describe, expect, it } from "vitest";
 import Hub from "./Hub";
-import { shortcutLabel } from "./keys";
+import { keyCaps, shortcutLabel } from "./keys";
 import { routeFromHash } from "../routes";
 
 function backend({ monitors = 1, shots = 0 } = {}) {
@@ -48,7 +48,7 @@ describe("Hub", () => {
   it("starts each capture by its kind", async () => {
     const calls = backend();
     render(<Hub />);
-    for (const name of [/^Capture region/, /^Window/, /^Screen/, /^Record GIF/, /^Text/, /^Colour/]) {
+    for (const name of [/^Capture region/, /^Window/, /^Screen/, /^Record GIF/, /^Grab text/, /^Pick colour/]) {
       await userEvent.click(screen.getByRole("button", { name }));
     }
     await userEvent.click(screen.getByRole("button", { name: "Repeat last region" }));
@@ -128,5 +128,12 @@ describe("shortcutLabel", () => {
 
   it("spells keys out elsewhere", () => {
     expect(shortcutLabel("Ctrl+Shift+PrintScreen", false)).toBe("Ctrl+Shift+PrintScreen");
+  });
+});
+
+describe("keyCaps", () => {
+  it("splits a hotkey into symbols on a Mac and words elsewhere", () => {
+    expect(keyCaps("Cmd+Shift+2", true)).toEqual(["⌘", "⇧", "2"]);
+    expect(keyCaps("Ctrl+Shift+PrintScreen", false)).toEqual(["Ctrl", "Shift", "PrintScreen"]);
   });
 });

@@ -161,7 +161,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
           <span className="row-text">
             <span className="row-title">Describe captures with AI</span>
             <span className="row-hint">
-              A vision model writes a short description, picks a category and suggests tags, so you can search
+              A vision model writes a short description, picks a category and adds up to three short tags, so you can search
               for what is in a capture.
             </span>
           </span>

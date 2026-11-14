@@ -153,7 +153,7 @@ pub fn show_main(app: &AppHandle, view: MainView) -> tauri::Result<()> {
         window.set_focus()?;
         return Ok(());
     }
-    let window = WebviewWindowBuilder::new(
+    let builder = WebviewWindowBuilder::new(
         app,
         MAIN_LABEL,
         WebviewUrl::App(format!("index.html#/app/{}", view.as_str()).into()),
@@ -161,8 +161,14 @@ pub fn show_main(app: &AppHandle, view: MainView) -> tauri::Result<()> {
     .title("Grab-it")
     .inner_size(1180.0, 760.0)
     .min_inner_size(720.0, 480.0)
-    .center()
-    .build()?;
+    .center();
+    // On macOS the sidebar runs to the top and holds the window buttons;
+    // the page marks where the window can be dragged.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
+    let window = builder.build()?;
     let handle = app.clone();
     window.on_window_event(move |event| {
         // Closed while recording a hotkey in Settings: give the hotkeys back.

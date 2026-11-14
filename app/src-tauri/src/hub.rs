@@ -24,8 +24,8 @@ pub const LABEL: &str = "hub";
 pub const HUB_SHOWN_EVENT: &str = "hub-shown";
 
 /// The hub's size in logical pixels.
-const WIDTH: f64 = 360.0;
-const HEIGHT: f64 = 500.0;
+const WIDTH: f64 = 320.0;
+const HEIGHT: f64 = 540.0;
 /// The gap between the tray icon and the hub, in logical pixels.
 const GAP: f64 = 6.0;
 /// A capture waits this long after the hub hides, so it is not in the shot.
@@ -237,7 +237,7 @@ pub fn hub_open(view: String, app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn hub_check_updates(app: AppHandle) {
     hide(&app);
-    update::check_from_tray(&app);
+    update::user_check(&app);
 }
 
 #[tauri::command]

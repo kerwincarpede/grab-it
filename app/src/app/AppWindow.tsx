@@ -1,30 +1,38 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { getVersion } from "@tauri-apps/api/app";
 import "./app.css";
-import Logo from "./Logo";
 import {
   ChevronDownIcon,
   ColourIcon,
-  GearIcon,
   GridIcon,
   KeyboardIcon,
-  PenIcon,
   RecordIcon,
   RegionIcon,
   ScreenIcon,
-  SparkleIcon,
+  SlidersIcon,
   TextIcon,
   WindowIcon,
 } from "./icons";
-import { checkForUpdates, onNavigate, startCapture, type CaptureKind, type MainView, type Place } from "./api";
+import { onNavigate, startCapture, type CaptureKind, type MainView } from "./api";
+import Dialog from "./Dialog";
+import SettingsDialog from "./SettingsDialog";
+import UpdateDialog from "./UpdateDialog";
+import {
+  checkForUpdate,
+  currentVersion,
+  installUpdate,
+  onUpdateStatus,
+  pendingUpdate,
+  updateLater,
+  updateStatus,
+  type UpdateStatus,
+} from "./updates";
 import LibraryWindow from "../library/LibraryWindow";
-import SettingsWindow from "../settings/SettingsWindow";
 import WelcomeWindow from "../welcome/WelcomeWindow";
-import { getSettings, SETTINGS_SECTIONS, type SettingsSection } from "../settings/api";
-import { filterOptions, onLibraryChanged } from "../library/api";
+import { getSettings, type SettingsSection } from "../settings/api";
+import { onLibraryChanged, sidebarSummary, type SidebarSummary } from "../library/api";
 import { shortcutLabel } from "../hub/keys";
 
-/** The other captures, under the Capture region button. */
+/** The other captures, under the New capture button. */
 const MORE_CAPTURES: { kind: CaptureKind; title: string; icon: ReactNode }[] = [
   { kind: "window", title: "Capture window", icon: <WindowIcon /> },
   { kind: "screen", title: "Capture screen", icon: <ScreenIcon /> },
@@ -33,37 +41,21 @@ const MORE_CAPTURES: { kind: CaptureKind; title: string; icon: ReactNode }[] = [
   { kind: "colour", title: "Pick a colour", icon: <ColourIcon /> },
 ];
 
-/** Each Settings page's icon and tint in the sidebar. */
-const SECTION_ICONS: Record<SettingsSection, { tint: string; icon: ReactNode }> = {
-  general: { tint: "gray", icon: <GearIcon size={14} /> },
-  capture: { tint: "blue", icon: <RegionIcon size={14} /> },
-  editor: { tint: "pink", icon: <PenIcon size={14} /> },
-  ai: { tint: "purple", icon: <SparkleIcon size={14} /> },
-  hotkeys: { tint: "green", icon: <KeyboardIcon size={14} /> },
-};
+/** Which dialog is over the window, if any. */
+type Open = { kind: "settings"; section: SettingsSection } | { kind: "welcome" } | { kind: "updates" } | null;
 
-/** The tints an app's chip can take; the app's name picks one, so it never changes. */
-const APP_TINTS = ["amber", "orange", "green", "blue", "purple", "pink", "teal", "violet", "red", "gray"];
-
-function appTint(app: string): string {
-  let hash = 0;
-  for (const char of app) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0;
-  return APP_TINTS[hash % APP_TINTS.length];
+/** The library filter the sidebar sets. */
+interface Place {
+  app: string;
+  tag: string;
 }
 
-/** A tinted chip with an icon or a letter, for the sidebar. */
-function Chip({ tint, children }: { tint: string; children: ReactNode }) {
-  return (
-    <span className={`icon-chip tint-${tint}`} aria-hidden="true">
-      {children}
-    </span>
-  );
-}
+const EVERYTHING: Place = { app: "", tag: "" };
 
-function placeFor(view: MainView): Place {
-  if (view === "settings") return { view: "settings", section: "general" };
-  if (view === "welcome") return { view: "welcome" };
-  return { view: "library", app: "" };
+function dialogFor(view: MainView): Open {
+  if (view === "settings") return { kind: "settings", section: "general" };
+  if (view === "welcome") return { kind: "welcome" };
+  return null;
 }
 
 function errorMessage(err: unknown): string {
@@ -73,13 +65,15 @@ function errorMessage(err: unknown): string {
 }
 
 interface NavItemProps {
-  current: boolean;
-  icon?: ReactNode;
+  current?: boolean;
+  icon: ReactNode;
+  count?: number;
+  hint?: string;
   children: ReactNode;
   onClick: () => void;
 }
 
-function NavItem({ current, icon, children, onClick }: NavItemProps) {
+function NavItem({ current = false, icon, count, hint, children, onClick }: NavItemProps) {
   return (
     <button
       type="button"
@@ -89,11 +83,21 @@ function NavItem({ current, icon, children, onClick }: NavItemProps) {
     >
       {icon}
       <span className="nav-label">{children}</span>
+      {count !== undefined && (
+        <span className="nav-count" aria-hidden="true">
+          {count}
+        </span>
+      )}
+      {hint && (
+        <kbd className="nav-count" aria-hidden="true">
+          {hint}
+        </kbd>
+      )}
     </button>
   );
 }
 
-/** The Capture region button and its menu of the other captures. */
+/** The New capture button and its menu of the other captures. */
 function CaptureButton({ hotkey, onError }: { hotkey: string | null; onError: (message: string) => void }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -120,11 +124,11 @@ function CaptureButton({ hotkey, onError }: { hotkey: string | null; onError: (m
 
   return (
     <div className="capture-split" ref={box}>
-      <button type="button" className="capture-main cta" title="Capture a region" onClick={() => capture("region")}>
-        <RegionIcon />
+      <button type="button" className="capture-main" title="Capture a region" onClick={() => capture("region")}>
+        <RegionIcon size={15} />
         New capture
         {hotkey && (
-          <kbd className="cta-key" aria-hidden="true">
+          <kbd className="capture-key" aria-hidden="true">
             {shortcutLabel(hotkey)}
           </kbd>
         )}
@@ -137,7 +141,7 @@ function CaptureButton({ hotkey, onError }: { hotkey: string | null; onError: (m
         aria-expanded={open}
         onClick={() => setOpen((was) => !was)}
       >
-        <ChevronDownIcon size={14} />
+        <ChevronDownIcon size={13} />
       </button>
       {open && (
         <div className="capture-menu" role="menu">
@@ -153,19 +157,65 @@ function CaptureButton({ hotkey, onError }: { hotkey: string | null; onError: (m
   );
 }
 
+/** The version, or the update waiting to be installed. */
+function UpdateSlot({ status, onOpen, onCheck }: { status: UpdateStatus | null; onOpen: () => void; onCheck: () => void }) {
+  const pending = pendingUpdate(status);
+  if (pending && status?.state === "installing") {
+    const percent = status.total ? Math.round((status.downloaded * 100) / status.total) : null;
+    return (
+      <button type="button" className="update-card" onClick={onOpen}>
+        <span className="update-card-text">
+          <b>Installing {pending.version}</b>
+          <small>{percent === null ? "Downloading…" : `${percent}% downloaded`}</small>
+        </span>
+      </button>
+    );
+  }
+  if (pending) {
+    return (
+      <div className="update-card">
+        <span className="update-card-text">
+          <b>Update available</b>
+          <small>Version {pending.version}</small>
+        </span>
+        <button type="button" className="btn btn-primary btn-small" onClick={onOpen}>
+          View
+        </button>
+      </div>
+    );
+  }
+  const version = currentVersion(status);
+  return (
+    <p className="version">
+      <span className="version-dot" aria-hidden="true" />
+      {version && <span>v{version}</span>}
+      {status?.state === "upToDate" ? (
+        <span className="version-note">Up to date</span>
+      ) : (
+        <button type="button" className="link-button version-note" disabled={status?.state === "checking"} onClick={onCheck}>
+          {status?.state === "checking" ? "Checking…" : "Check for updates"}
+        </button>
+      )}
+    </p>
+  );
+}
+
 /**
- * The Grab-it window: one place for the library, Settings and the
- * shortcuts, with the logo and a capture button always in view.
+ * The Grab-it window: the library, with apps and tags down the side, and
+ * Settings, the welcome and updates in dialogs over it.
  */
 function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
-  const [place, setPlace] = useState<Place>(() => placeFor(initialView));
-  const [apps, setApps] = useState<string[]>([]);
-  const [version, setVersion] = useState<string | null>(null);
+  const [place, setPlace] = useState<Place>(EVERYTHING);
+  const [open, setOpen] = useState<Open>(() => dialogFor(initialView));
+  const [summary, setSummary] = useState<SidebarSummary | null>(null);
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [regionHotkey, setRegionHotkey] = useState<string | null>(null);
 
-  // Read again on every move, so a hotkey changed in Settings shows here too.
+  // Read again whenever a dialog closes, so a hotkey changed in Settings shows.
+  const settingsOpen = open?.kind === "settings";
   useEffect(() => {
+    if (settingsOpen) return;
     let cancelled = false;
     getSettings()
       .then((settings) => {
@@ -177,12 +227,12 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
     return () => {
       cancelled = true;
     };
-  }, [place.view]);
+  }, [settingsOpen]);
 
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    onNavigate((view) => setPlace((current) => (current.view === view ? current : placeFor(view))))
+    onNavigate((view) => setOpen(dialogFor(view)))
       .then((stop) => (disposed ? stop() : (unlisten = stop)))
       .catch(() => {
         // Outside Tauri (tests) there is nothing to listen to.
@@ -197,9 +247,9 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     const load = () =>
-      filterOptions()
-        .then((options) => {
-          if (!cancelled && Array.isArray(options?.apps)) setApps(options.apps);
+      sidebarSummary()
+        .then((found) => {
+          if (!cancelled && Array.isArray(found?.apps)) setSummary(found);
         })
         .catch(() => {
           // The sidebar still offers every capture.
@@ -215,81 +265,100 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
   }, []);
 
   useEffect(() => {
-    getVersion()
-      .then((found) => setVersion(typeof found === "string" ? found : null))
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    updateStatus()
+      .then((status) => {
+        if (!cancelled && status?.state) setUpdate(status);
+      })
       .catch(() => {});
+    onUpdateStatus(({ status, show }) => {
+      setUpdate(status);
+      if (show) setOpen({ kind: "updates" });
+    })
+      .then((stop) => (cancelled ? stop() : (unlisten = stop)))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
-  const pickApp = useCallback((app: string) => setPlace({ view: "library", app }), []);
+  // ⌘, opens Settings, as in every Mac app.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "," && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        setOpen({ kind: "settings", section: "general" });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
-  function checkUpdates() {
-    checkForUpdates().catch((err: unknown) => setError(errorMessage(err)));
+  const pickApp = useCallback((app: string) => setPlace((was) => ({ ...was, app })), []);
+  const pickTag = useCallback((tag: string) => setPlace((was) => ({ ...was, tag })), []);
+  const close = useCallback(() => setOpen(null), []);
+
+  function run(action: () => Promise<void>) {
+    action().catch((err: unknown) => setError(errorMessage(err)));
   }
+
+  const apps = summary?.apps ?? [];
+  const tags = summary?.tags ?? [];
+  const everything = place.app === "" && place.tag === "";
+  const title = place.app || (place.tag ? `Tagged ${place.tag}` : "All captures");
 
   return (
     <div className="app-window">
       <nav className="sidebar" aria-label="Grab-it">
-        <div className="brand">
-          <Logo size={32} />
-          <span className="brand-name">Grab-it</span>
-        </div>
-        <CaptureButton hotkey={regionHotkey} onError={setError} />
-
-        <h2 className="nav-heading">Library</h2>
-        <NavItem
-          current={place.view === "library" && place.app === ""}
-          icon={
-            <Chip tint="blue">
-              <GridIcon size={14} />
-            </Chip>
-          }
-          onClick={() => pickApp("")}
-        >
+        <div className="sidebar-top" data-tauri-drag-region />
+        <NavItem current={everything} icon={<GridIcon size={15} />} count={summary?.total} onClick={() => setPlace(EVERYTHING)}>
           All captures
         </NavItem>
+
         {apps.length > 0 && <h2 className="nav-heading">Apps</h2>}
-        {apps.map((app) => (
+        {apps.map(({ name, count }) => (
           <NavItem
-            key={app}
-            current={place.view === "library" && place.app === app}
-            icon={<Chip tint={appTint(app)}>{[...app.trim()][0]?.toUpperCase() ?? "?"}</Chip>}
-            onClick={() => pickApp(app)}
+            key={name}
+            current={place.app === name}
+            icon={
+              <span className="app-letter" aria-hidden="true">
+                {[...name.trim()][0]?.toUpperCase() ?? "?"}
+              </span>
+            }
+            count={count}
+            onClick={() => setPlace({ app: name, tag: "" })}
           >
-            {app}
+            {name}
           </NavItem>
         ))}
 
-        <h2 className="nav-heading">Settings</h2>
-        {SETTINGS_SECTIONS.map(({ id, title }) => (
-          <NavItem
-            key={id}
-            current={place.view === "settings" && place.section === id}
-            icon={<Chip tint={SECTION_ICONS[id].tint}>{SECTION_ICONS[id].icon}</Chip>}
-            onClick={() => setPlace({ view: "settings", section: id })}
-          >
-            {title}
-          </NavItem>
-        ))}
+        {tags.length > 0 && <h2 className="nav-heading">Tags</h2>}
+        {tags.length > 0 && (
+          <div className="tag-cloud">
+            {tags.map(({ name }) => (
+              <button
+                key={name}
+                type="button"
+                className="tag-link"
+                aria-pressed={place.tag.toLowerCase() === name.toLowerCase()}
+                onClick={() => setPlace({ app: "", tag: place.tag === name ? "" : name })}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="sidebar-foot">
-          <NavItem
-            current={place.view === "welcome"}
-            icon={
-              <Chip tint="teal">
-                <KeyboardIcon size={14} />
-              </Chip>
-            }
-            onClick={() => setPlace({ view: "welcome" })}
-          >
+          <NavItem icon={<KeyboardIcon size={15} />} onClick={() => setOpen({ kind: "welcome" })}>
             Shortcuts and tips
           </NavItem>
-          <p className="version">
-            <span className="version-dot" aria-hidden="true" />
-            {version && <span className="mono">v{version}</span>}
-            <button type="button" className="link-button" onClick={checkUpdates}>
-              Check for updates
-            </button>
-          </p>
+          <NavItem icon={<SlidersIcon size={15} />} hint="⌘," onClick={() => setOpen({ kind: "settings", section: "general" })}>
+            Settings
+          </NavItem>
+          <UpdateSlot status={update} onOpen={() => setOpen({ kind: "updates" })} onCheck={() => run(checkForUpdate)} />
         </div>
       </nav>
 
@@ -302,12 +371,36 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
             </button>
           </p>
         )}
-        {place.view === "library" && (
-          <LibraryWindow title={place.app || "All captures"} appFilter={place.app} onAppFilter={pickApp} />
-        )}
-        {place.view === "settings" && <SettingsWindow key={place.section} section={place.section} />}
-        {place.view === "welcome" && <WelcomeWindow />}
+        <LibraryWindow
+          title={title}
+          appFilter={place.app}
+          onAppFilter={pickApp}
+          tagFilter={place.tag}
+          onTagFilter={pickTag}
+          toolbarEnd={<CaptureButton hotkey={regionHotkey} onError={setError} />}
+        />
       </div>
+
+      {open?.kind === "settings" && (
+        <SettingsDialog section={open.section} onSection={(section) => setOpen({ kind: "settings", section })} onClose={close} />
+      )}
+      {open?.kind === "welcome" && (
+        <Dialog title="Welcome to Grab-it" hideTitle className="welcome-dialog" onClose={close}>
+          <WelcomeWindow onClose={close} />
+        </Dialog>
+      )}
+      {open?.kind === "updates" && update && (
+        <UpdateDialog
+          status={update}
+          onClose={close}
+          onCheck={() => run(checkForUpdate)}
+          onInstall={() => run(installUpdate)}
+          onLater={() => {
+            close();
+            run(updateLater);
+          }}
+        />
+      )}
     </div>
   );
 }

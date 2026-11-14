@@ -1,84 +1,91 @@
 /* Shared look for Grab-it's windows. Colours are tokens, redefined for
    dark mode; each window's own stylesheet builds on them. */
+/* Shared look for Grab-it's windows ("Graphite"): one neutral grey family,
+   one periwinkle accent, Instrument Sans throughout. Colours are tokens,
+   redefined for dark mode; each window's own stylesheet builds on them. */
 :root {
-  --bg: #f5f6f8;
-  --surface: #ffffff;
-  --surface-2: #eef0f4;
-  --border: #d5d9e0;
-  --border-strong: #b6bcc7;
-  --text: #1b1f27;
-  --text-muted: #5c6470;
-  --accent: #2f6fed;
-  --accent-hover: #2560d6;
-  --accent-soft: rgb(47 111 237 / 12%);
+  --bg: #ffffff;
+  --surface: #f4f5f7;
+  --surface-2: #ebedf0;
+  --border: #e3e5e9;
+  --border-strong: #cdd1d8;
+  --text: #16181c;
+  --text-muted: #5f6570;
+  --text-faint: #8b9099;
+  --accent: #4b62e3;
+  --accent-hover: #3f55d2;
+  --accent-soft: rgb(75 98 227 / 11%);
+  --accent-edge: rgb(75 98 227 / 28%);
   --on-accent: #ffffff;
-  --success: #1a7f37;
-  --danger: #cf222e;
-  --radius: 8px;
+  --success: #1f8a4c;
+  --danger: #d13b44;
+  --radius: 7px;
   --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 4px 12px rgb(16 24 40 / 6%);
+  --dialog-shadow: 0 24px 60px rgb(16 24 40 / 22%), 0 0 0 1px rgb(16 24 40 / 8%);
+  --scrim: rgb(16 18 24 / 32%);
 
-  /* The "Modern" look: a near-black (or soft grey) window, content on an
-     inset panel, translucent fills for pills and rows. */
-  --chrome: #e9ebef;
+  --chrome: #f6f7f8;
   --panel: #ffffff;
-  --panel-edge: rgb(16 24 40 / 9%);
-  --fill: rgb(16 24 40 / 5%);
-  --fill-hover: rgb(16 24 40 / 8%);
-  --fill-current: #ffffff;
-  --fill-current-shadow: 0 1px 2px rgb(16 24 40 / 10%), 0 0 0 1px rgb(16 24 40 / 5%);
-  --pill-on: #1b1f27;
+  --panel-edge: #e3e5e9;
+  --fill: rgb(16 24 40 / 4.5%);
+  --fill-hover: rgb(16 24 40 / 7%);
+  --fill-current: rgb(16 24 40 / 7%);
+  --fill-current-shadow: none;
+  --pill-on: #16181c;
   --on-pill-on: #ffffff;
-  --group: #f5f6f8;
-  --group-edge: rgb(16 24 40 / 7%);
-  --divider: rgb(16 24 40 / 8%);
-  --hairline: rgb(16 24 40 / 10%);
-  --switch-off: #c9ced7;
-  --switch-on: #2f6fe4;
-  --seg-track: rgb(16 24 40 / 7%);
+  --group: #f6f7f8;
+  --group-edge: #e3e5e9;
+  --divider: #e3e5e9;
+  --hairline: #e3e5e9;
+  --switch-off: #cdd1d8;
+  --switch-on: var(--accent);
+  --seg-track: #f4f5f7;
   --seg-on: #ffffff;
-  --seg-on-shadow: 0 1px 2px rgb(16 24 40 / 18%);
-  --cta: linear-gradient(180deg, #326ce0 0%, #2459c8 100%);
-  --cta-hover: linear-gradient(180deg, #2c63d3 0%, #1f50b8 100%);
-  --on-cta: #ffffff;
-  --cta-glow: 0 1px 0 rgb(255 255 255 / 22%) inset, 0 8px 18px -10px rgb(36 89 200 / 70%);
-  --link: #1f56c4;
+  --seg-on-shadow: 0 0 0 1px #e3e5e9, 0 1px 2px rgb(16 24 40 / 8%);
+  --cta: var(--accent);
+  --cta-hover: var(--accent-hover);
+  --on-cta: var(--on-accent);
+  --cta-glow: none;
+  --link: var(--accent);
   --pop: #ffffff;
-  --pop-edge: rgb(16 24 40 / 10%);
-  --float: rgb(18 20 25 / 86%);
+  --pop-edge: #e3e5e9;
+  --float: rgb(18 20 25 / 88%);
   --on-float: #f1f2f5;
+  --green-dot: #2fb36f;
 
-  /* Tinted chips: a pale fill with a dark ink, each pair at least 4.5:1. */
-  --tint-blue-bg: #dde7ff;
-  --tint-blue-fg: #1f4fb8;
-  --tint-violet-bg: #e6e3ff;
-  --tint-violet-fg: #4b3aa8;
-  --tint-purple-bg: #ece3ff;
-  --tint-purple-fg: #5b3cb0;
-  --tint-pink-bg: #fde0ee;
-  --tint-pink-fg: #a3245f;
-  --tint-red-bg: #fde0e0;
-  --tint-red-fg: #b42323;
-  --tint-orange-bg: #fde3d8;
-  --tint-orange-fg: #9a3a14;
-  --tint-amber-bg: #fbecd2;
-  --tint-amber-fg: #8a5200;
-  --tint-green-bg: #dbf3e4;
-  --tint-green-fg: #17683a;
-  --tint-teal-bg: #d6f1f0;
-  --tint-teal-fg: #0f6461;
-  --tint-gray-bg: #e3e6eb;
-  --tint-gray-fg: #3d4450;
+  /* Tints are kept for the few places that still mark a kind (categories);
+     the window itself uses plain icons. */
+  --tint-blue-bg: var(--fill);
+  --tint-blue-fg: var(--text-muted);
+  --tint-violet-bg: var(--fill);
+  --tint-violet-fg: var(--text-muted);
+  --tint-purple-bg: var(--fill);
+  --tint-purple-fg: var(--text-muted);
+  --tint-pink-bg: var(--fill);
+  --tint-pink-fg: var(--text-muted);
+  --tint-red-bg: var(--fill);
+  --tint-red-fg: var(--text-muted);
+  --tint-orange-bg: var(--fill);
+  --tint-orange-fg: var(--text-muted);
+  --tint-amber-bg: var(--fill);
+  --tint-amber-fg: var(--text-muted);
+  --tint-green-bg: var(--fill);
+  --tint-green-fg: var(--text-muted);
+  --tint-teal-bg: var(--fill);
+  --tint-teal-fg: var(--text-muted);
+  --tint-gray-bg: var(--fill);
+  --tint-gray-fg: var(--text-muted);
 
-  /* Geist for text, Geist Mono for keys, sizes and versions; bundled, so
-     every system shows the same type. */
-  --font-sans: "Geist Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* Instrument Sans for everything; Geist Mono only where digits must
+     line up in a canvas (the overlay's readouts). Both are bundled. */
+  --font-sans: "Instrument Sans Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
   font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 1.5;
-  letter-spacing: -0.006em;
-  font-feature-settings: "ss01", "cv11";
+  font-size: 13.5px;
+  line-height: 1.45;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
   color: var(--text);
   background-color: var(--bg);
   color-scheme: light dark;
@@ -87,66 +94,45 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #14161b;
-    --surface: #1c1f26;
-    --surface-2: #252932;
-    --border: #2f3440;
-    --border-strong: #454c5b;
-    --text: #e8eaf0;
-    --text-muted: #98a1b0;
-    --accent: #4c8dff;
-    --accent-hover: #6a9fff;
-    --accent-soft: rgb(76 141 255 / 16%);
-    --on-accent: #0b1220;
-    --success: #3fb950;
-    --danger: #f85149;
+    --bg: #101113;
+    --surface: #17181b;
+    --surface-2: #1c1e22;
+    --border: #26282d;
+    --border-strong: #34373e;
+    --text: #ecedef;
+    --text-muted: #8d919a;
+    --text-faint: #5f636c;
+    --accent: #8297ff;
+    --accent-hover: #97a9ff;
+    --accent-soft: rgb(130 151 255 / 13%);
+    --accent-edge: rgb(130 151 255 / 26%);
+    --on-accent: #0b0c10;
+    --success: #3fcf8e;
+    --danger: #ec7a80;
     --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 6px 16px rgb(0 0 0 / 28%);
+    --dialog-shadow: 0 24px 60px rgb(0 0 0 / 55%), 0 0 0 1px #26282d;
+    --scrim: rgb(4 5 7 / 62%);
 
-    --chrome: #0b0c0f;
-    --panel: #15171c;
-    --panel-edge: rgb(255 255 255 / 6%);
-    --fill: rgb(255 255 255 / 6%);
-    --fill-hover: rgb(255 255 255 / 9%);
-    --fill-current: rgb(255 255 255 / 7.5%);
-    --fill-current-shadow: none;
-    --pill-on: #eef1f6;
-    --on-pill-on: #0d0f13;
-    --group: rgb(255 255 255 / 3.5%);
-    --group-edge: rgb(255 255 255 / 6%);
-    --divider: rgb(255 255 255 / 6%);
-    --hairline: rgb(255 255 255 / 7%);
-    --switch-off: #3a3e48;
-    --switch-on: #3478f6;
-    --seg-track: rgb(0 0 0 / 35%);
-    --seg-on: #3a3e48;
-    --seg-on-shadow: 0 1px 2px rgb(0 0 0 / 40%);
-    --cta-glow: 0 1px 0 rgb(255 255 255 / 22%) inset, 0 8px 20px -8px rgb(47 111 228 / 75%);
-    --link: #9db8ff;
-    --pop: #1d2027;
-    --pop-edge: rgb(255 255 255 / 9%);
-    --float: rgb(12 13 16 / 86%);
-    --on-float: #f1f2f5;
-
-    --tint-blue-bg: #2a3c66;
-    --tint-blue-fg: #9db8ff;
-    --tint-violet-bg: #2e2a4f;
-    --tint-violet-fg: #b9a6ff;
-    --tint-purple-bg: #3a2d55;
-    --tint-purple-fg: #c4a8ff;
-    --tint-pink-bg: #4a2a3d;
-    --tint-pink-fg: #f59ac6;
-    --tint-red-bg: #4a2326;
-    --tint-red-fg: #ff8a8a;
-    --tint-orange-bg: #4a2a1f;
-    --tint-orange-fg: #f0a07e;
-    --tint-amber-bg: #4a3518;
-    --tint-amber-fg: #f2b860;
-    --tint-green-bg: #1d3d2c;
-    --tint-green-fg: #7fd6a0;
-    --tint-teal-bg: #163b3c;
-    --tint-teal-fg: #6fd3cf;
-    --tint-gray-bg: #2a2f3a;
-    --tint-gray-fg: #c9ccd3;
+    --chrome: #0c0d0f;
+    --panel: #101113;
+    --panel-edge: #24262b;
+    --fill: rgb(255 255 255 / 5%);
+    --fill-hover: rgb(255 255 255 / 8%);
+    --fill-current: #1c1e22;
+    --pill-on: #ecedef;
+    --on-pill-on: #0b0c10;
+    --group: #17181b;
+    --group-edge: #24262b;
+    --divider: #24262b;
+    --hairline: #24262b;
+    --switch-off: #34373e;
+    --seg-track: #17181b;
+    --seg-on: #24262b;
+    --seg-on-shadow: none;
+    --pop: #17181b;
+    --pop-edge: #2a2c31;
+    --float: rgb(12 13 16 / 90%);
+    --green-dot: #3fcf8e;
   }
 }
 
@@ -179,8 +165,9 @@ h2 {
 
 kbd,
 .mono {
-  font-family: var(--font-mono);
-  letter-spacing: 0;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
 }
 
 /* A titled group of settings on its own surface. */
@@ -309,7 +296,7 @@ button.danger {
 .hotkey-row input {
   width: 200px;
   margin-left: auto;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
@@ -424,7 +411,7 @@ button.danger {
 
 .cta-key {
   margin-left: auto;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 11.5px;
   font-weight: 400;
   letter-spacing: 0;
@@ -556,7 +543,7 @@ label.row {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 13px;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -683,7 +670,7 @@ input.switch:disabled {
   height: auto;
   padding: 0;
   color: var(--text);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 13px;
   text-overflow: ellipsis;
   background: none;
@@ -706,4 +693,158 @@ input.switch:disabled {
 
 .row.is-stacked .segmented {
   align-self: flex-start;
+}
+
+/* ── Graphite controls, shared by the Grab-it window, its dialogs and the hub ── */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A quiet button; .btn-primary is the one blue action in a view. */
+.btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.btn:where(:hover:not(:disabled)) {
+  background: var(--fill);
+}
+
+.btn .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.btn-primary {
+  color: var(--on-accent);
+  font-weight: 600;
+  background: var(--accent);
+  border-color: transparent;
+}
+
+.btn-primary:where(:hover:not(:disabled)) {
+  background: var(--accent-hover);
+}
+
+.btn-icon {
+  width: 32px;
+  padding: 0;
+  color: var(--text-muted);
+}
+
+.btn-small {
+  height: 24px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.btn-danger {
+  color: #fff;
+  background: var(--danger);
+  border-color: transparent;
+}
+
+.btn-danger:where(:hover:not(:disabled)) {
+  background: color-mix(in srgb, var(--danger) 88%, #000);
+}
+
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: auto;
+  padding: 0;
+  color: var(--link);
+  font-size: inherit;
+  font-weight: 500;
+  background: none;
+  border: 0;
+  border-radius: 3px;
+}
+
+.link-button:where(:hover:not(:disabled)) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  background: none;
+}
+
+.link-button .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.link-muted {
+  color: var(--text-muted);
+}
+
+.link-danger {
+  color: var(--danger);
+}
+
+.spinner {
+  display: inline-block;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+/* Keys as small caps: ⌘ ⇧ 2. */
+.keys {
+  display: inline-flex;
+  flex: none;
+  gap: 3px;
+}
+
+.keys kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 19px;
+  height: 20px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
