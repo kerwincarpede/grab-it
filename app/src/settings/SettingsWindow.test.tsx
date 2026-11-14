@@ -532,6 +532,25 @@ describe("SettingsWindow AI descriptions", () => {
     expect(screen.getByText(/nothing leaves this computer/)).not.toHaveClass("ai-privacy-cloud");
   });
 
+  it("says the key is kept in the keychain when there is one", async () => {
+    mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, apiKey: "sk-secret", apiKeyStorage: "keychain" } });
+    render(<SettingsWindow />);
+
+    const hint = await screen.findByTestId("ai-api-key-hint");
+    expect(hint).toHaveTextContent("kept in your system keychain, not in Grab-it's settings file");
+    expect(hint).not.toHaveTextContent("plain text");
+    expect(screen.getByLabelText("API key")).toHaveValue("sk-secret");
+  });
+
+  it("says the key is kept in plain text in the settings file without a keychain", async () => {
+    mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, apiKeyStorage: "settingsFile" } });
+    render(<SettingsWindow />);
+
+    const hint = await screen.findByTestId("ai-api-key-hint");
+    expect(hint).toHaveTextContent("no keychain Grab-it can use, so it is kept in plain text in Grab-it's settings file");
+    expect(hint).toHaveTextContent("Only cloud providers need one");
+  });
+
   it("saves an emptied key as none", async () => {
     const backend = mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, apiKey: "sk-old" } });
     render(<SettingsWindow />);

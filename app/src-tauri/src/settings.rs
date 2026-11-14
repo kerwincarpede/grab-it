@@ -11,7 +11,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::hotkeys::Hotkeys;
+use crate::{
+    hotkeys::Hotkeys,
+    keychain::{KeyStore, OsKeyStore},
+};
 
 pub const SETTINGS_FILE: &str = "settings.json";
 pub const DEFAULT_FOLDER_NAME: &str = "Grab-it";
@@ -68,6 +71,18 @@ where
     Ok(value.and_then(|value| serde_json::from_value(value).ok()))
 }
 
+/// Where the endpoint API key is kept. Mirrors `ApiKeyStorage` in
+/// src/settings/api.ts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ApiKeyStorage {
+    /// The OS credential store (see `keychain.rs`); settings.json has no key.
+    Keychain,
+    /// settings.json, because this system has no credential store that works.
+    #[default]
+    SettingsFile,
+}
+
 /// How captures are described by a vision model (see `ai.rs`). Off by
 /// default: nothing leaves the machine until the user turns it on, or
 /// Grab-it turns it on once because Claude Code or Codex is installed (see
@@ -85,13 +100,19 @@ pub struct AiSettings {
     /// An OpenAI-compatible base URL; `/chat/completions` is appended.
     pub endpoint: String,
     pub model: String,
-    /// Sent as `Authorization: Bearer <key>` when set.
+    /// Sent as `Authorization: Bearer <key>` when set. Kept where
+    /// `api_key_storage` says, so settings.json only has it without a
+    /// keychain.
     pub api_key: Option<String>,
     /// Captures that existed when describing was turned on are skipped.
     pub new_captures_only: bool,
     /// Grab-it turned describing on by itself and the Library has not yet
     /// said so. Only Grab-it sets it; dismissing the notice clears it.
     pub notice_pending: bool,
+    /// Where `api_key` is kept. Only the [`SettingsStore`] sets it: the
+    /// frontend's copy is ignored and settings.json never has it.
+    #[serde(skip_deserializing)]
+    pub api_key_storage: ApiKeyStorage,
 }
 
 impl Default for AiSettings {
@@ -104,6 +125,7 @@ impl Default for AiSettings {
             api_key: None,
             new_captures_only: true,
             notice_pending: false,
+            api_key_storage: ApiKeyStorage::default(),
         }
     }
 }
@@ -165,6 +187,7 @@ impl AiSettings {
             api_key,
             new_captures_only: self.new_captures_only,
             notice_pending: self.notice_pending,
+            api_key_storage: self.api_key_storage,
         })
     }
 }
@@ -434,13 +457,76 @@ pub fn load(path: &Path, defaults: Settings) -> Result<Settings, SettingsError> 
     Ok(stored.merge_onto(defaults))
 }
 
+/// The file's shape as it is written: [`Settings`] without where the API
+/// key is kept, and without the key itself when the keychain holds it.
+/// The read side is [`StoredSettings`].
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsOnDisk<'a> {
+    save_folder: &'a Path,
+    hotkeys: &'a Hotkeys,
+    after_capture: AfterCapture,
+    copy_to_clipboard: bool,
+    ai: AiOnDisk<'a>,
+    editor: &'a EditorPreferences,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiOnDisk<'a> {
+    enabled: bool,
+    provider: Option<AiProvider>,
+    endpoint: &'a str,
+    model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    api_key: Option<&'a str>,
+    new_captures_only: bool,
+    notice_pending: bool,
+}
+
+impl<'a> SettingsOnDisk<'a> {
+    fn new(settings: &'a Settings) -> Self {
+        // Every field named, so a new one cannot be left out by mistake.
+        let AiSettings {
+            enabled,
+            provider,
+            endpoint,
+            model,
+            api_key,
+            new_captures_only,
+            notice_pending,
+            api_key_storage,
+        } = &settings.preferences.ai;
+        Self {
+            save_folder: &settings.save_folder,
+            hotkeys: &settings.hotkeys,
+            after_capture: settings.preferences.after_capture,
+            copy_to_clipboard: settings.preferences.copy_to_clipboard,
+            ai: AiOnDisk {
+                enabled: *enabled,
+                provider: *provider,
+                endpoint,
+                model,
+                api_key: match api_key_storage {
+                    ApiKeyStorage::Keychain => None,
+                    ApiKeyStorage::SettingsFile => api_key.as_deref(),
+                },
+                new_captures_only: *new_captures_only,
+                notice_pending: *notice_pending,
+            },
+            editor: &settings.editor,
+        }
+    }
+}
+
 /// Writes settings to `path`, creating its directory. The file is replaced
-/// in one step, so a crash never leaves it half written.
+/// in one step, so a crash never leaves it half written. The API key is
+/// left out when `api_key_storage` says the keychain holds it.
 pub fn save(path: &Path, settings: &Settings) -> Result<(), SettingsError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut json = serde_json::to_string_pretty(settings)?;
+    let mut json = serde_json::to_string_pretty(&SettingsOnDisk::new(settings))?;
     json.push('\n');
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, json)?;
@@ -463,19 +549,31 @@ pub fn validate_save_folder(input: &str) -> Result<PathBuf, SettingsError> {
     Ok(folder)
 }
 
-/// The current settings and the file they live in.
+/// The current settings, the file they live in and the keychain that
+/// holds the API key.
 #[derive(Debug)]
 pub struct SettingsStore {
     path: PathBuf,
     current: Settings,
     /// No settings file existed when the store was opened.
     first_run: bool,
+    keys: Box<dyn KeyStore>,
+    /// The keychain worked when the store was opened, so it may hold a key
+    /// that clearing the key must remove.
+    keychain_worked: bool,
 }
 
 impl SettingsStore {
-    /// Loads settings from `path`. An unreadable file is reported and the
-    /// defaults are used; the file is only overwritten on the next change.
+    /// Loads settings from `path`, with the API key in the OS keychain.
     pub fn open(path: PathBuf, defaults: Settings) -> Self {
+        Self::open_with_keys(path, defaults, Box::new(OsKeyStore))
+    }
+
+    /// Loads settings from `path`, and the API key from `keys`. An
+    /// unreadable file is reported and the defaults are used; the file is
+    /// only overwritten on the next change. A key still in settings.json is
+    /// moved into `keys`; when `keys` does not work it stays in the file.
+    pub fn open_with_keys(path: PathBuf, defaults: Settings, keys: Box<dyn KeyStore>) -> Self {
         let first_run = !path.exists();
         let current = load(&path, defaults.clone()).unwrap_or_else(|err| {
             eprintln!(
@@ -484,10 +582,96 @@ impl SettingsStore {
             );
             defaults
         });
-        Self {
+        let mut store = Self {
             path,
             current,
             first_run,
+            keys,
+            keychain_worked: false,
+        };
+        store.load_api_key();
+        store
+    }
+
+    /// Reads the API key from the keychain, or moves the one settings.json
+    /// has into it. Settings from before the keychain, or from a system
+    /// without one, have the key in the file.
+    fn load_api_key(&mut self) {
+        let stored = match self.keys.get() {
+            Ok(stored) => {
+                self.keychain_worked = true;
+                stored
+            }
+            Err(err) => {
+                eprintln!("Grab-it: keeping the API key in settings.json, no keychain: {err}");
+                self.current.preferences.ai.api_key_storage = ApiKeyStorage::SettingsFile;
+                return;
+            }
+        };
+        let in_file = self
+            .current
+            .preferences
+            .ai
+            .api_key
+            .clone()
+            .filter(|key| !key.trim().is_empty());
+        let Some(key) = in_file else {
+            self.current.preferences.ai.api_key = stored;
+            self.current.preferences.ai.api_key_storage = ApiKeyStorage::Keychain;
+            return;
+        };
+        // The file's key is the newer one: a keychain key beside it is
+        // left from before the keychain stopped working.
+        if stored.as_deref() != Some(key.as_str())
+            && let Err(err) = self.keys.set(&key)
+        {
+            eprintln!("Grab-it: keeping the API key in settings.json, could not move it: {err}");
+            self.current.preferences.ai.api_key_storage = ApiKeyStorage::SettingsFile;
+            return;
+        }
+        self.current.preferences.ai.api_key_storage = ApiKeyStorage::Keychain;
+        // Rewritten without the key. Should that fail, the key is in both
+        // places and the next start tries again.
+        if let Err(err) = save(&self.path, &self.current) {
+            eprintln!("Grab-it: could not remove the API key from settings.json: {err}");
+        }
+    }
+
+    /// Stores `key`, the API key being saved, where `api_key_storage`
+    /// says. Returns where it now is: should the keychain fail to store a
+    /// key, it goes into settings.json instead of being lost.
+    ///
+    /// Clearing the key removes it from the keychain too, even after a
+    /// fallback to settings.json, as the next start would read a key left
+    /// there back. When the keychain worked but cannot remove it now, the
+    /// save fails rather than seeming to clear the key.
+    fn store_api_key(&self, key: Option<&str>) -> Result<ApiKeyStorage, SettingsError> {
+        let current = &self.current.preferences.ai;
+        if current.api_key.as_deref() == key {
+            return Ok(current.api_key_storage);
+        }
+        let Some(key) = key else {
+            return match self.keys.delete() {
+                Ok(()) => Ok(current.api_key_storage),
+                Err(err) if self.keychain_worked => Err(SettingsError::Invalid(format!(
+                    "Could not remove the API key from the keychain: {err}"
+                ))),
+                // Never reached this session: nothing of this session's is
+                // in it to remove.
+                Err(_) => Ok(current.api_key_storage),
+            };
+        };
+        if current.api_key_storage == ApiKeyStorage::SettingsFile {
+            return Ok(ApiKeyStorage::SettingsFile);
+        }
+        match self.keys.set(key) {
+            Ok(()) => Ok(ApiKeyStorage::Keychain),
+            Err(err) => {
+                eprintln!(
+                    "Grab-it: keeping the API key in settings.json, the keychain failed: {err}"
+                );
+                Ok(ApiKeyStorage::SettingsFile)
+            }
         }
     }
 
@@ -534,6 +718,7 @@ impl SettingsStore {
         // The notice belongs to Grab-it: a Settings window opened before it
         // was set, or dismissed, must not bring it back or clear it.
         preferences.ai.notice_pending = self.current.preferences.ai.notice_pending;
+        preferences.ai.api_key_storage = self.store_api_key(preferences.ai.api_key.as_deref())?;
         let next = Settings {
             preferences,
             ..self.current.clone()
@@ -630,7 +815,37 @@ impl SettingsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keychain::MemoryKeyStore;
     use tempfile::TempDir;
+
+    /// A store on a system without a keychain, so the API key stays in
+    /// settings.json as it did before the keychain. The keychain's own
+    /// tests use [`SettingsStore::open_with_keys`].
+    fn open_store(path: PathBuf, defaults: Settings) -> SettingsStore {
+        SettingsStore::open_with_keys(path, defaults, Box::new(MemoryKeyStore::unavailable()))
+    }
+
+    /// The `ai` section of the settings file as written.
+    fn ai_on_disk(path: &Path) -> serde_json::Value {
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        json["ai"].clone()
+    }
+
+    /// Endpoint settings with `api_key`.
+    fn with_key(api_key: Option<&str>) -> Preferences {
+        Preferences {
+            ai: AiSettings {
+                enabled: true,
+                provider: Some(AiProvider::Endpoint),
+                endpoint: "https://api.openai.com/v1".into(),
+                model: "gpt-5-mini".into(),
+                api_key: api_key.map(str::to_owned),
+                ..AiSettings::default()
+            },
+            ..Preferences::default()
+        }
+    }
 
     fn defaults(dir: &TempDir) -> Settings {
         Settings::defaults(&dir.path().join("Pictures"))
@@ -725,7 +940,7 @@ mod tests {
             load(&path, defaults(&dir)),
             Err(SettingsError::Parse(_))
         ));
-        let store = SettingsStore::open(path.clone(), defaults(&dir));
+        let store = open_store(path.clone(), defaults(&dir));
         assert_eq!(store.get(), &defaults(&dir));
         // The unreadable file is left alone until the user changes a setting.
         assert_eq!(fs::read_to_string(&path).unwrap(), "{not json");
@@ -735,7 +950,7 @@ mod tests {
     fn set_save_folder_creates_the_folder_and_persists() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let mut store = open_store(path.clone(), defaults(&dir));
         let folder = dir.path().join("New").join("Captures");
 
         let updated = store.set_save_folder(folder.to_str().unwrap()).unwrap();
@@ -749,7 +964,7 @@ mod tests {
     #[test]
     fn set_save_folder_trims_whitespace() {
         let dir = TempDir::new().unwrap();
-        let mut store = SettingsStore::open(settings_path(&dir), defaults(&dir));
+        let mut store = open_store(settings_path(&dir), defaults(&dir));
         let folder = dir.path().join("Trimmed");
         let input = format!("  {}  ", folder.display());
         assert_eq!(store.set_save_folder(&input).unwrap().save_folder, folder);
@@ -759,7 +974,7 @@ mod tests {
     fn set_save_folder_rejects_empty_and_relative_paths() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let mut store = open_store(path.clone(), defaults(&dir));
 
         for input in ["", "   ", "relative/folder"] {
             assert!(matches!(
@@ -791,7 +1006,7 @@ mod tests {
     fn set_hotkeys_persists_and_keeps_the_folder() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let mut store = open_store(path.clone(), defaults(&dir));
         let hotkeys = Hotkeys {
             screen: " Ctrl+Shift+F ".into(),
             ..Hotkeys::default()
@@ -826,7 +1041,7 @@ mod tests {
     fn set_preferences_persists_beside_the_other_settings() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let mut store = open_store(path.clone(), defaults(&dir));
         let updated = store
             .set_preferences(Preferences {
                 after_capture: AfterCapture::Editor,
@@ -848,14 +1063,14 @@ mod tests {
     fn the_first_run_ends_once_the_file_is_written() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let mut store = open_store(path.clone(), defaults(&dir));
         assert!(store.is_first_run());
         store.finish_first_run().unwrap();
         assert!(!store.is_first_run());
         assert_eq!(load(&path, defaults(&dir)).unwrap(), defaults(&dir));
 
         // The next launch finds the file: not a first run.
-        let again = SettingsStore::open(path, defaults(&dir));
+        let again = open_store(path, defaults(&dir));
         assert!(!again.is_first_run());
     }
 
@@ -863,7 +1078,7 @@ mod tests {
     fn set_hotkeys_rejects_duplicates_without_writing() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let mut store = open_store(path.clone(), defaults(&dir));
         let hotkeys = Hotkeys {
             window: Hotkeys::default().region,
             ..Hotkeys::default()
@@ -926,6 +1141,7 @@ mod tests {
                 "apiKey": null,
                 "newCapturesOnly": true,
                 "noticePending": false,
+                "apiKeyStorage": "settingsFile",
             })
         );
     }
@@ -933,7 +1149,7 @@ mod tests {
     #[test]
     fn set_preferences_without_ai_keeps_the_current_ai_settings() {
         let dir = TempDir::new().unwrap();
-        let mut store = SettingsStore::open(settings_path(&dir), defaults(&dir));
+        let mut store = open_store(settings_path(&dir), defaults(&dir));
         let ai = AiSettings {
             enabled: true,
             model: "llava".into(),
@@ -956,7 +1172,7 @@ mod tests {
     fn ai_settings_are_tidied_and_checked_when_on() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let mut store = open_store(path.clone(), defaults(&dir));
         let with = |ai: AiSettings| Preferences {
             ai,
             ..Preferences::default()
@@ -970,12 +1186,15 @@ mod tests {
                 api_key: Some("  ".into()),
                 new_captures_only: false,
                 notice_pending: false,
+                api_key_storage: ApiKeyStorage::Keychain,
             }))
             .unwrap();
         let ai = &updated.preferences.ai;
         assert_eq!(ai.endpoint, "https://api.example.com/v1");
         assert_eq!(ai.model, "gpt-4o-mini");
         assert_eq!(ai.api_key, None);
+        // Where the key is kept is the store's to say, not the caller's.
+        assert_eq!(ai.api_key_storage, ApiKeyStorage::SettingsFile);
 
         for bad in [
             AiSettings {
@@ -1006,7 +1225,7 @@ mod tests {
     #[test]
     fn the_cli_providers_need_no_endpoint_or_model() {
         let dir = TempDir::new().unwrap();
-        let mut store = SettingsStore::open(settings_path(&dir), defaults(&dir));
+        let mut store = open_store(settings_path(&dir), defaults(&dir));
         let updated = store
             .set_preferences(Preferences {
                 ai: AiSettings {
@@ -1100,7 +1319,7 @@ mod tests {
     fn claude_code_is_turned_on_once_for_new_captures_with_a_notice() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let mut store = open_store(path.clone(), defaults(&dir));
 
         let before = store.enable_cli_provider(AiProvider::ClaudeCode).unwrap();
 
@@ -1138,7 +1357,7 @@ mod tests {
     fn codex_is_turned_on_the_same_way() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let mut store = open_store(path.clone(), defaults(&dir));
 
         let before = store.enable_cli_provider(AiProvider::Codex).unwrap();
 
@@ -1163,7 +1382,7 @@ mod tests {
         let path = settings_path(&dir);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, r#"{"ai": {"enabled": true, "model": "llava"}}"#).unwrap();
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let mut store = open_store(path.clone(), defaults(&dir));
         assert_eq!(
             store.enable_cli_provider(AiProvider::ClaudeCode).unwrap(),
             None
@@ -1179,7 +1398,7 @@ mod tests {
     fn the_notice_is_kept_by_settings_saves_and_cleared_by_dismissing() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let mut store = open_store(path.clone(), defaults(&dir));
         store.enable_cli_provider(AiProvider::ClaudeCode).unwrap();
         let mut stale = store.get().preferences.clone();
         stale.ai.notice_pending = false;
@@ -1214,6 +1433,258 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_api_key_is_saved_in_the_keychain_and_not_the_file() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let keys = MemoryKeyStore::default();
+        let mut store =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+
+        let updated = store.set_preferences(with_key(Some(" sk-1 "))).unwrap();
+
+        assert_eq!(keys.stored().as_deref(), Some("sk-1"));
+        let ai = &updated.preferences.ai;
+        assert_eq!(ai.api_key.as_deref(), Some("sk-1"));
+        assert_eq!(ai.api_key_storage, ApiKeyStorage::Keychain);
+        let on_disk = ai_on_disk(&path);
+        assert_eq!(on_disk.get("apiKey"), None, "{on_disk}");
+        assert_eq!(on_disk.get("apiKeyStorage"), None, "{on_disk}");
+        assert_eq!(on_disk["model"], "gpt-5-mini");
+        // The frontend is told where the key is.
+        let json = serde_json::to_value(&updated).unwrap();
+        assert_eq!(json["ai"]["apiKey"], "sk-1");
+        assert_eq!(json["ai"]["apiKeyStorage"], "keychain");
+
+        // The next start reads it back from the keychain.
+        let again =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+        assert_eq!(again.get(), &updated);
+
+        // Clearing the key removes it from the keychain.
+        let cleared = store.set_preferences(with_key(None)).unwrap();
+        assert_eq!(cleared.preferences.ai.api_key, None);
+        assert_eq!(keys.stored(), None);
+        assert_eq!(ai_on_disk(&path).get("apiKey"), None);
+    }
+
+    #[test]
+    fn saving_other_settings_leaves_the_keychain_alone() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let keys = MemoryKeyStore::default();
+        let mut store =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+        store.set_preferences(with_key(Some("sk-1"))).unwrap();
+        // Saves that keep the key never touch the keychain, so one that
+        // stopped working costs them nothing.
+        keys.set_broken(true);
+        let mut same = with_key(Some("sk-1"));
+        same.after_capture = AfterCapture::Editor;
+        let updated = store.set_preferences(same).unwrap();
+        assert_eq!(
+            updated.preferences.ai.api_key_storage,
+            ApiKeyStorage::Keychain
+        );
+        store
+            .set_save_folder(dir.path().join("Shots").to_str().unwrap())
+            .unwrap();
+        assert_eq!(ai_on_disk(&path).get("apiKey"), None);
+    }
+
+    #[test]
+    fn a_key_in_the_file_moves_into_the_keychain_on_start() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"copyToClipboard": false, "ai": {"enabled": true, "model": "llava", "apiKey": "sk-old"}}"#,
+        )
+        .unwrap();
+        // A key left in the keychain from before is replaced by the file's.
+        let keys = MemoryKeyStore::with_key("sk-stale");
+
+        let store =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+
+        assert_eq!(keys.stored().as_deref(), Some("sk-old"));
+        let ai = &store.get().preferences.ai;
+        assert_eq!(ai.api_key.as_deref(), Some("sk-old"));
+        assert_eq!(ai.api_key_storage, ApiKeyStorage::Keychain);
+        let on_disk = ai_on_disk(&path);
+        assert_eq!(on_disk.get("apiKey"), None, "{on_disk}");
+        // The rest of the file is kept.
+        assert_eq!(on_disk["model"], "llava");
+        assert_eq!(on_disk["enabled"], true);
+        assert!(
+            !load(&path, defaults(&dir))
+                .unwrap()
+                .preferences
+                .copy_to_clipboard
+        );
+        assert!(!store.is_first_run());
+
+        // Started again, the key comes from the keychain alone.
+        let again = SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys));
+        assert_eq!(
+            again.get().preferences.ai.api_key.as_deref(),
+            Some("sk-old")
+        );
+    }
+
+    #[test]
+    fn opening_without_a_key_writes_nothing() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let store = SettingsStore::open_with_keys(
+            path.clone(),
+            defaults(&dir),
+            Box::new(MemoryKeyStore::with_key("sk-1")),
+        );
+        assert!(store.is_first_run());
+        assert!(!path.exists());
+        assert_eq!(store.get().preferences.ai.api_key.as_deref(), Some("sk-1"));
+
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"ai": {"enabled": true, "model": "llava"}}"#).unwrap();
+        SettingsStore::open_with_keys(
+            path.clone(),
+            defaults(&dir),
+            Box::new(MemoryKeyStore::default()),
+        );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            r#"{"ai": {"enabled": true, "model": "llava"}}"#
+        );
+    }
+
+    #[test]
+    fn without_a_keychain_the_key_stays_in_the_file() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let text = r#"{"ai": {"enabled": true, "model": "llava", "apiKey": "sk-old"}}"#;
+        fs::write(&path, text).unwrap();
+        let keys = MemoryKeyStore::unavailable();
+
+        let mut store =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+
+        let ai = &store.get().preferences.ai;
+        assert_eq!(ai.api_key.as_deref(), Some("sk-old"));
+        assert_eq!(ai.api_key_storage, ApiKeyStorage::SettingsFile);
+        // Nothing was moved, so nothing was rewritten.
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+
+        let updated = store.set_preferences(with_key(Some("sk-new"))).unwrap();
+        assert_eq!(
+            updated.preferences.ai.api_key_storage,
+            ApiKeyStorage::SettingsFile
+        );
+        assert_eq!(ai_on_disk(&path)["apiKey"], "sk-new");
+        assert_eq!(ai_on_disk(&path).get("apiKeyStorage"), None);
+        assert_eq!(keys.stored(), None);
+        let json = serde_json::to_value(&updated).unwrap();
+        assert_eq!(json["ai"]["apiKeyStorage"], "settingsFile");
+    }
+
+    #[test]
+    fn a_keychain_that_fails_on_save_keeps_the_key_in_the_file() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let keys = MemoryKeyStore::default();
+        let mut store =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+        assert_eq!(
+            store.get().preferences.ai.api_key_storage,
+            ApiKeyStorage::Keychain
+        );
+        keys.set_broken(true);
+
+        let updated = store.set_preferences(with_key(Some("sk-1"))).unwrap();
+
+        assert_eq!(
+            updated.preferences.ai.api_key_storage,
+            ApiKeyStorage::SettingsFile
+        );
+        assert_eq!(ai_on_disk(&path)["apiKey"], "sk-1");
+        // Working again at the next start, the key moves into it.
+        keys.set_broken(false);
+        let again =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+        assert_eq!(keys.stored().as_deref(), Some("sk-1"));
+        assert_eq!(again.get().preferences.ai.api_key.as_deref(), Some("sk-1"));
+        assert_eq!(ai_on_disk(&path).get("apiKey"), None);
+    }
+
+    #[test]
+    fn a_cleared_key_that_the_keychain_cannot_remove_fails_the_save() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let keys = MemoryKeyStore::default();
+        let mut store =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+        store.set_preferences(with_key(Some("sk-1"))).unwrap();
+        keys.set_broken(true);
+
+        assert!(matches!(
+            store.set_preferences(with_key(None)),
+            Err(SettingsError::Invalid(_))
+        ));
+
+        // Nothing changed, so the key the user still sees is the one used.
+        assert_eq!(store.get().preferences.ai.api_key.as_deref(), Some("sk-1"));
+        assert_eq!(keys.stored().as_deref(), Some("sk-1"));
+        // Working again, clearing removes it and it does not come back.
+        keys.set_broken(false);
+        store.set_preferences(with_key(None)).unwrap();
+        assert_eq!(keys.stored(), None);
+        let again =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+        assert_eq!(again.get().preferences.ai.api_key, None);
+    }
+
+    #[test]
+    fn clearing_a_key_after_a_fallback_removes_the_keychains_copy() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let keys = MemoryKeyStore::default();
+        let mut store =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+        store.set_preferences(with_key(Some("sk-1"))).unwrap();
+        // The keychain fails once: sk-2 goes into the file, sk-1 stays behind.
+        keys.set_broken(true);
+        let fell_back = store.set_preferences(with_key(Some("sk-2"))).unwrap();
+        assert_eq!(
+            fell_back.preferences.ai.api_key_storage,
+            ApiKeyStorage::SettingsFile
+        );
+        keys.set_broken(false);
+
+        store.set_preferences(with_key(None)).unwrap();
+
+        assert_eq!(keys.stored(), None);
+        assert_eq!(ai_on_disk(&path).get("apiKey"), None);
+        let again = SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys));
+        assert_eq!(again.get().preferences.ai.api_key, None);
+    }
+
+    #[test]
+    fn without_a_keychain_the_key_can_still_be_cleared() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = SettingsStore::open_with_keys(
+            path.clone(),
+            defaults(&dir),
+            Box::new(MemoryKeyStore::unavailable()),
+        );
+        store.set_preferences(with_key(Some("sk-1"))).unwrap();
+        let cleared = store.set_preferences(with_key(None)).unwrap();
+        assert_eq!(cleared.preferences.ai.api_key, None);
+        assert_eq!(ai_on_disk(&path).get("apiKey"), None);
+    }
+
     fn editor_preferences() -> EditorPreferences {
         EditorPreferences {
             color: Some("#30a46c".into()),
@@ -1237,7 +1708,7 @@ mod tests {
     fn editor_preferences_round_trip_beside_the_other_settings() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let mut store = open_store(path.clone(), defaults(&dir));
         store
             .set_preferences(Preferences {
                 after_capture: AfterCapture::Editor,
@@ -1334,7 +1805,7 @@ mod tests {
     fn changing_other_settings_keeps_the_editor_preferences() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let mut store = open_store(path.clone(), defaults(&dir));
         store.set_editor_preferences(editor_preferences()).unwrap();
         store
             .set_save_folder(dir.path().join("Elsewhere").to_str().unwrap())
@@ -1361,7 +1832,7 @@ mod tests {
     fn auto_backdrop_is_set_by_settings_and_kept_by_the_editor() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let mut store = open_store(path.clone(), defaults(&dir));
         store.set_editor_preferences(editor_preferences()).unwrap();
 
         let updated = store.set_auto_backdrop(true).unwrap();

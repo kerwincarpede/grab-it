@@ -6,6 +6,7 @@ mod cli;
 mod commands;
 mod editor;
 mod hotkeys;
+mod keychain;
 mod library;
 mod ocr;
 mod overlay;
