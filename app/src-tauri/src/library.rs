@@ -1369,8 +1369,8 @@ pub fn library_shot_id(
 }
 
 /// Copies the text in a shot and returns it. A shot OCR has not read yet,
-/// or could not read, is read now, and what it finds is stored, so it is
-/// searchable and can be described.
+/// or could not read, is read now, with the values of any codes in it, and
+/// what it finds is stored, so it is searchable and can be described.
 #[tauri::command(async)]
 pub fn library_copy_text(id: i64, app: AppHandle) -> Result<String, String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -1385,6 +1385,7 @@ pub fn library_copy_text(id: i64, app: AppHandle) -> Result<String, String> {
                 .into_rgba8();
             let text = crate::ocr::read_now(&app, &image)
                 .map_err(|err| format!("could not read the text: {err}"))?;
+            let text = crate::ocr::with_codes(&text, &crate::codes::decode(&image));
             match library.lock().set_ocr_text(id, &text) {
                 Ok(()) => {
                     let _ = app.emit(LIBRARY_CHANGED_EVENT, ());

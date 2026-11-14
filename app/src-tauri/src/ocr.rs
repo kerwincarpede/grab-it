@@ -5,7 +5,8 @@
 //! needs OCR, with progress shown in the Library. One background thread
 //! then reads the text of every capture waiting for OCR, newest first and
 //! one at a time, and stores it in the library, where the full-text index
-//! picks it up.
+//! picks it up. The values of any QR codes or barcodes in a capture are
+//! stored after its text (see [`with_codes`]), so search finds them too.
 
 use std::{
     fmt, fs,
@@ -25,7 +26,10 @@ use rten::Model;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::library::{LIBRARY_CHANGED_EVENT, LibraryState};
+use crate::{
+    codes::{self, Code},
+    library::{LIBRARY_CHANGED_EVENT, LibraryState},
+};
 
 /// Where the models live, under the app data directory.
 pub const MODELS_DIR: &str = "ocr-models";
@@ -241,9 +245,13 @@ impl Ocr {
         Ok(Self { engine })
     }
 
-    /// The text in an image file, one line of text per line.
-    pub fn read_text(&self, png: &Path) -> OcrResult<String> {
-        self.read_image(&image::open(png)?.into_rgb8())
+    /// The text in a capture file, one line of text per line, followed by
+    /// the values of the codes in it, as the library stores a capture's text.
+    pub fn read_capture(&self, png: &Path) -> OcrResult<String> {
+        let image = image::open(png)?.into_rgba8();
+        let codes = codes::decode(&image);
+        let text = self.read_image(&image::DynamicImage::ImageRgba8(image).into_rgb8())?;
+        Ok(with_codes(&text, &codes))
     }
 
     /// The text in an image already in memory, one line of text per line.
@@ -265,6 +273,21 @@ impl Ocr {
             .collect::<Vec<_>>()
             .join("\n");
         Ok(text)
+    }
+}
+
+/// `text` with the values of `codes` after it, one per line, as the
+/// library stores a capture's text: search then finds a capture by what
+/// its codes hold, and the Library's Copy text includes them. Just the
+/// values when there is no text, and `text` alone when there are no codes.
+pub fn with_codes(text: &str, codes: &[Code]) -> String {
+    let values = codes::values(codes);
+    if values.is_empty() {
+        text.to_owned()
+    } else if text.trim().is_empty() {
+        values
+    } else {
+        format!("{}\n{values}", text.trim_end())
     }
 }
 
@@ -451,7 +474,7 @@ fn run(app: &AppHandle, models: &Path, receiver: &Receiver<()>) {
         set_status(app, OcrStatus::Working { pending });
         // The library is not locked while OCR runs, so the windows stay
         // responsive.
-        let text = ocr.read_text(&job.path);
+        let text = ocr.read_capture(&job.path);
         let saved = match text {
             Ok(text) => library.lock().set_ocr_text(job.id, &text),
             Err(err) => {
@@ -562,7 +585,7 @@ pub(crate) mod tests {
 
     #[test]
     fn ocr_reads_the_fixture_word() {
-        let text = engine().read_text(&fixture_png()).unwrap();
+        let text = engine().read_capture(&fixture_png()).unwrap();
         assert!(
             text.to_lowercase().contains(FIXTURE_WORD),
             "OCR read {text:?}"
@@ -573,20 +596,74 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn code_values_follow_the_text_one_per_line() {
+        let qr = Code::new("QR code", "https://example.com/menu");
+        let bar = Code::new("Code 128", "GRAB-IT 0043");
+        assert_eq!(
+            with_codes("Scan for the menu", &[qr.clone(), bar.clone()]),
+            "Scan for the menu\nhttps://example.com/menu\nGRAB-IT 0043"
+        );
+        assert_eq!(
+            with_codes("Scan for the menu\n", std::slice::from_ref(&qr)),
+            "Scan for the menu\nhttps://example.com/menu"
+        );
+    }
+
+    #[test]
+    fn code_values_alone_when_there_is_no_text() {
+        let codes = [
+            Code::new("QR code", "first"),
+            Code::new("Code 128", "second"),
+        ];
+        assert_eq!(with_codes("", &codes), "first\nsecond");
+        assert_eq!(with_codes(" \n ", &codes), "first\nsecond");
+    }
+
+    #[test]
+    fn text_is_unchanged_without_codes() {
+        assert_eq!(
+            with_codes("Order pineapple today", &[]),
+            "Order pineapple today"
+        );
+        assert_eq!(with_codes("", &[]), "");
+    }
+
+    #[test]
+    fn a_capture_is_read_with_the_values_of_its_codes() {
+        use crate::codes::tests::{canvas, draw};
+        let dir = tempfile::TempDir::new().unwrap();
+        let png = dir.path().join("code.png");
+        let mut image = canvas(400, 400);
+        let qr = draw(
+            "https://example.com/ticket",
+            rxing::BarcodeFormat::QR_CODE,
+            260,
+            260,
+        );
+        image::imageops::overlay(&mut image, &qr, 70, 70);
+        image.save(&png).unwrap();
+        let text = engine().read_capture(&png).unwrap();
+        assert!(
+            text.ends_with("https://example.com/ticket"),
+            "read {text:?}"
+        );
+    }
+
+    #[test]
     fn a_blank_image_has_no_text() {
         let dir = tempfile::TempDir::new().unwrap();
         let blank = dir.path().join("blank.png");
         image::RgbImage::from_pixel(200, 80, image::Rgb([255, 255, 255]))
             .save(&blank)
             .unwrap();
-        assert_eq!(engine().read_text(&blank).unwrap(), "");
+        assert_eq!(engine().read_capture(&blank).unwrap(), "");
     }
 
     #[test]
     fn a_missing_image_is_an_image_error() {
         let missing = Path::new(env!("CARGO_MANIFEST_DIR")).join("no-such-capture.png");
         assert!(matches!(
-            engine().read_text(&missing),
+            engine().read_capture(&missing),
             Err(OcrError::Image(_))
         ));
     }
