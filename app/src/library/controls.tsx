@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { DATE_PRESETS, dateFilterLabel, parseTags } from "./api";
 import { CalendarIcon, CheckIcon, ChevronIcon, CloseIcon } from "./icons";
+import { tagStyle } from "./tagColor";
 
 /** Closes a popover on a click outside `root` while `open`. */
 function useOutsideClick(root: React.RefObject<HTMLElement | null>, open: boolean, close: () => void) {
@@ -311,7 +312,7 @@ export function TagEditor({ tags, onChange, aiTags = [], onRemoveAiTag }: TagEdi
   return (
     <div className="tag-editor" onClick={() => input.current?.focus()}>
       {tags.map((tag) => (
-        <span key={tag} className="tag tag-editable">
+        <span key={tag} className="tag tag-editable" style={tagStyle(tag)}>
           {tag}
           <button
             type="button"
@@ -327,7 +328,7 @@ export function TagEditor({ tags, onChange, aiTags = [], onRemoveAiTag }: TagEdi
         </span>
       ))}
       {added.map((tag) => (
-        <span key={`ai:${tag}`} className="tag tag-editable tag-ai" title="Added by AI">
+        <span key={`ai:${tag}`} className="tag tag-editable tag-ai" title="Added by AI" style={tagStyle(tag)}>
           {tag}
           {onRemoveAiTag && (
             <button

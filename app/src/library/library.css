@@ -780,10 +780,10 @@
 
 .tag {
   padding: 1px 6px;
-  color: var(--text-muted);
+  color: var(--tag-color);
   font-size: 11.5px;
   font-weight: 450;
-  background: var(--surface);
+  background: var(--tag-fill);
   border-radius: 4px;
 }
 
@@ -1205,10 +1205,10 @@
   align-items: center;
   gap: 2px;
   padding: 1px 2px 1px 7px;
-  color: var(--text);
+  color: var(--tag-color);
   font-size: 12px;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--tag-fill);
+  border: 1px solid var(--tag-edge);
   border-radius: 5px;
 }
 
@@ -1225,15 +1225,16 @@
   width: 16px;
   height: 16px;
   padding: 0;
-  color: var(--text-faint);
+  color: inherit;
+  opacity: 0.65;
   background: transparent;
   border: 0;
   border-radius: 4px;
 }
 
 .tag-remove:where(:hover:not(:disabled)) {
-  color: var(--text);
-  background: var(--fill-hover);
+  opacity: 1;
+  background: var(--tag-fill-hover);
 }
 
 .hint {
