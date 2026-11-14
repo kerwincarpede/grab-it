@@ -172,7 +172,12 @@ pub fn start(
 
     // Measured against the frozen frame itself: whether a monitor's
     // reported size is in pixels or points differs between platforms.
-    let corner = quick::corner_clear_of(rect, image_size, monitor.scale_factor);
+    let corner = quick::corner_clear_of(
+        rect,
+        image_size,
+        monitor.scale_factor,
+        quick::preferred_corner(app),
+    );
     quick::show_in(
         app,
         QuickItem::Recording {

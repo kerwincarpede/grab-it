@@ -1,58 +1,147 @@
 //! Updates: Grab-it checks the latest GitHub release shortly after it
-//! starts and then every few hours, and asks before installing a newer
-//! version. The tray's "Check for updates…" checks on demand.
+//! starts and then every few hours. The Grab-it window shows what an update
+//! brings and installs it when asked; the tray's and the hub's "Check for
+//! updates…" check on demand.
 //!
 //! The release workflow publishes `latest.json` next to the installers,
 //! each package signed with the key whose public half is in
 //! `tauri.conf.json`; the updater refuses anything else. Its `changes` list
-//! what each recent version brought, so the prompt can show everything an
+//! what each recent version brought, so the window can show everything an
 //! update brings, however many versions behind this copy is.
+//!
+//! The state lives here as an [`UpdateStatus`]; each change is sent to the
+//! windows as [`UPDATE_STATUS_EVENT`], saying whether the window should open
+//! its Updates dialog (for checks and installs the user started).
 
 use std::{
+    cell::Cell,
     sync::{
-        Mutex,
+        Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use semver::Version;
-use serde::Deserialize;
-use tauri::{AppHandle, Manager};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::quick;
+use crate::{quick, windows};
+
+/// Emitted to every window with an [`UpdateEvent`] whenever the status
+/// changes.
+pub const UPDATE_STATUS_EVENT: &str = "update-status";
 
 /// How long after launch the first check waits, so it never competes with
 /// starting up or with a capture taken right away.
 const FIRST_CHECK_AFTER: Duration = Duration::from_secs(30);
 /// How often a long-running Grab-it checks again.
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
-/// The most changes the prompt lists; the rest are summed up in a line.
-const MAX_CHANGES: usize = 12;
-/// Longer change descriptions are cut short, to keep the prompt readable.
+/// Longer change descriptions are cut short, to keep the list readable.
 const MAX_CHANGE_CHARS: usize = 100;
+/// Download progress is sent at most this often.
+const PROGRESS_EVERY: Duration = Duration::from_millis(100);
 
 #[derive(Default)]
 pub struct UpdateState {
-    /// A check, prompt or install is under way.
+    /// A check is under way.
     busy: AtomicBool,
-    /// The version the user chose "Later" for. Automatic checks do not ask
-    /// about it again until Grab-it restarts; "Check for updates…" does.
+    /// An update is downloading or installing.
+    installing: AtomicBool,
+    /// The version the user chose "Later" for. Automatic checks do not
+    /// point it out again until Grab-it restarts; "Check for updates…" does.
     declined: Mutex<Option<String>>,
+    /// The current status; `None` until the first check, which reads as
+    /// [`UpdateStatus::Idle`].
+    status: Mutex<Option<UpdateStatus>>,
+    /// The update the last check found, ready for [`update_install`].
+    pending: Mutex<Option<Update>>,
 }
 
-/// Who asked for a check. Only a check the user asked for reports that
-/// there is nothing new, or that the check failed.
+/// Who asked for a check. Only a check the user asked for opens the
+/// Updates dialog and reports a failure.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Trigger {
     Automatic,
     User,
 }
 
+/// What one version brought, as `latest.json` lists it. Mirrors
+/// `UpdateChanges` in the frontend.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Changes {
+    version: String,
+    #[serde(default)]
+    items: Vec<String>,
+}
+
+/// An update a check found. Mirrors `UpdateInfo` in the frontend.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfo {
+    /// This copy's version.
+    current: String,
+    /// The update's version.
+    version: String,
+    /// When the update was published, in RFC 3339.
+    date: Option<String>,
+    /// What each version since this one brought, newest first.
+    changes: Vec<Changes>,
+}
+
+/// Where updating stands. Mirrors `UpdateStatus` in the frontend.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(
+    tag = "state",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum UpdateStatus {
+    /// Not checked yet.
+    Idle {
+        current: String,
+    },
+    Checking {
+        current: String,
+    },
+    UpToDate {
+        current: String,
+        /// When, in milliseconds since the Unix epoch.
+        checked_at: u64,
+    },
+    Available {
+        info: UpdateInfo,
+        /// The user chose "Later" for this version.
+        declined: bool,
+    },
+    Installing {
+        info: UpdateInfo,
+        /// Bytes downloaded so far.
+        downloaded: u64,
+        /// The download's size, when the server says.
+        total: Option<u64>,
+    },
+    Failed {
+        current: String,
+        message: String,
+        /// The update that failed to install; `None` when a check failed.
+        info: Option<UpdateInfo>,
+    },
+}
+
+/// The payload of [`UPDATE_STATUS_EVENT`].
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateEvent {
+    status: UpdateStatus,
+    /// The window should open its Updates dialog: the user started this.
+    show: bool,
+}
+
 /// Checks in the background now and then. Development builds only check
-/// from the tray, since their version is rarely the released one.
+/// when asked, since their version is rarely the released one.
 pub fn start(app: &AppHandle) {
     if cfg!(debug_assertions) {
         return;
@@ -67,21 +156,91 @@ pub fn start(app: &AppHandle) {
     });
 }
 
-/// Checks from the tray, off the main thread: the prompts block.
-pub fn check_from_tray(app: &AppHandle) {
+/// A check the user asked for, from the tray, the hub or the Grab-it
+/// window: brings the Grab-it window forward, where the Updates dialog
+/// shows the result, then checks off the main thread.
+pub fn user_check(app: &AppHandle) {
     let app = app.clone();
-    std::thread::spawn(move || check(&app, Trigger::User));
+    // Off the main thread: a window must not be created from inside a
+    // synchronous command, and the check blocks.
+    std::thread::spawn(move || {
+        if let Err(err) = windows::show_library(&app) {
+            eprintln!("Grab-it: could not open the Grab-it window: {err}");
+        }
+        check(&app, Trigger::User);
+    });
 }
 
-/// Looks for a newer release and, if there is one, asks to install it.
-/// Blocks, so it must not run on the main thread.
+/// The current status.
+#[tauri::command]
+pub fn update_status(app: AppHandle) -> UpdateStatus {
+    current_status(&app)
+}
+
+/// Checks for an update, showing the result in the Grab-it window.
+#[tauri::command]
+pub fn update_check(app: AppHandle) {
+    user_check(&app);
+}
+
+/// Installs the update the last check found and restarts Grab-it.
+#[tauri::command]
+pub fn update_install(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<UpdateState>();
+    let Some(update) = lock(&state.pending).clone() else {
+        return Err("There is no update to install.".into());
+    };
+    if state.installing.swap(true, Ordering::SeqCst) {
+        emit(&app, current_status(&app), true);
+        return Ok(());
+    }
+    std::thread::spawn(move || install_and_restart(&app, &update));
+    Ok(())
+}
+
+/// "Later": automatic checks stop pointing out this update.
+#[tauri::command]
+pub fn update_later(app: AppHandle) {
+    let state = app.state::<UpdateState>();
+    if state.installing.load(Ordering::SeqCst) {
+        return;
+    }
+    let Some(update) = lock(&state.pending).clone() else {
+        return;
+    };
+    *lock(&state.declined) = Some(update.version.clone());
+    set_status(
+        &app,
+        UpdateStatus::Available {
+            info: info_of(&update),
+            declined: true,
+        },
+        false,
+    );
+}
+
+/// Looks for a newer release and reports what it finds. Blocks, so it must
+/// not run on the main thread.
 fn check(app: &AppHandle, trigger: Trigger) {
     let state = app.state::<UpdateState>();
-    if state.busy.swap(true, Ordering::SeqCst) {
-        if trigger == Trigger::User {
-            notice(app, "Checking for updates", "Grab-it is already on it.");
+    let show = trigger == Trigger::User;
+    if state.installing.load(Ordering::SeqCst) || state.busy.swap(true, Ordering::SeqCst) {
+        if show {
+            emit(app, current_status(app), true);
         }
         return;
+    }
+    let current = app.package_info().version.to_string();
+    let previous = current_status(app);
+    // A background check leaves an update on show as it is meanwhile.
+    if show || !matches!(previous, UpdateStatus::Available { .. }) {
+        set_status(
+            app,
+            UpdateStatus::Checking {
+                current: current.clone(),
+            },
+            show,
+        );
     }
     let found = tauri::async_runtime::block_on(async {
         app.updater()
@@ -90,74 +249,172 @@ fn check(app: &AppHandle, trigger: Trigger) {
             .await
             .map_err(|err| err.to_string())
     });
+    // An install started meanwhile owns the status now.
+    if state.installing.load(Ordering::SeqCst) {
+        state.busy.store(false, Ordering::SeqCst);
+        return;
+    }
     match found {
-        Ok(Some(update)) => offer(app, &state, update, trigger),
-        Ok(None) => {
-            if trigger == Trigger::User {
+        Ok(Some(update)) => {
+            let declined = lock(&state.declined).clone();
+            let ask = should_ask(trigger, declined.as_deref(), &update.version);
+            let status = UpdateStatus::Available {
+                info: info_of(&update),
+                declined: declined.as_deref() == Some(update.version.as_str()),
+            };
+            let version = update.version.clone();
+            *lock(&state.pending) = Some(update);
+            set_status(app, status, show);
+            if trigger == Trigger::Automatic && ask {
                 notice(
                     app,
-                    "Grab-it is up to date",
-                    &format!(
-                        "You have the latest version, {}.",
-                        app.package_info().version
-                    ),
+                    &format!("Grab-it {version} is available"),
+                    "Open Grab-it to see what's new and install it.",
                 );
             }
         }
+        Ok(None) => {
+            *lock(&state.pending) = None;
+            set_status(
+                app,
+                UpdateStatus::UpToDate {
+                    current,
+                    checked_at: now_ms(),
+                },
+                show,
+            );
+        }
         Err(err) => {
             eprintln!("Grab-it: could not check for updates: {err}");
-            if trigger == Trigger::User {
-                message(
+            if show {
+                set_status(
                     app,
-                    "Could not check for updates",
-                    &format!("{err}\n\nCheck your connection and try again."),
-                    MessageDialogKind::Error,
+                    UpdateStatus::Failed {
+                        current,
+                        message: err,
+                        info: None,
+                    },
+                    true,
                 );
+            } else {
+                // A background failure is not worth reporting: put back
+                // what was there before the check.
+                let restored = match previous {
+                    UpdateStatus::Checking { current } => UpdateStatus::Idle { current },
+                    other => other,
+                };
+                set_status(app, restored, false);
             }
         }
     }
     state.busy.store(false, Ordering::SeqCst);
 }
 
-fn offer(app: &AppHandle, state: &UpdateState, update: Update, trigger: Trigger) {
-    let mut declined = state.declined.lock().unwrap_or_else(|e| e.into_inner());
-    if !should_ask(trigger, declined.as_deref(), &update.version) {
-        return;
+/// Downloads and installs `update`, reporting progress, then restarts.
+/// Blocks, so it must not run on the main thread. The caller has set
+/// [`UpdateState::installing`].
+fn install_and_restart(app: &AppHandle, update: &Update) {
+    let info = info_of(update);
+    let installing = |downloaded: u64, total: Option<u64>| UpdateStatus::Installing {
+        info: info.clone(),
+        downloaded,
+        total,
+    };
+    set_status(app, installing(0, None), true);
+    // A recording in progress is finished first, so its GIF is complete.
+    crate::record::stop_and_wait(app);
+
+    // Shared by the two callbacks: bytes so far, and the download's size.
+    let downloaded = Cell::new(0u64);
+    let total = Cell::new(None::<u64>);
+    let mut sent_at: Option<Instant> = None;
+    let installed = tauri::async_runtime::block_on(update.download_and_install(
+        |chunk, length| {
+            downloaded.set(downloaded.get() + chunk as u64);
+            total.set(length);
+            let done = length.is_some_and(|length| downloaded.get() >= length);
+            if done || sent_at.is_none_or(|at| at.elapsed() >= PROGRESS_EVERY) {
+                sent_at = Some(Instant::now());
+                set_status(app, installing(downloaded.get(), length), true);
+            }
+        },
+        || set_status(app, installing(downloaded.get(), total.get()), true),
+    ));
+    match installed {
+        // On Windows the installer has already closed Grab-it by now.
+        Ok(()) => app.restart(),
+        Err(err) => {
+            eprintln!("Grab-it: could not install the update: {err}");
+            let state = app.state::<UpdateState>();
+            state.installing.store(false, Ordering::SeqCst);
+            set_status(
+                app,
+                UpdateStatus::Failed {
+                    current: update.current_version.clone(),
+                    message: err.to_string(),
+                    info: Some(info),
+                },
+                true,
+            );
+        }
     }
-    let install = app
-        .dialog()
-        .message(prompt_text(
-            &update.current_version,
-            &update.version,
-            &changes_since(&update),
-        ))
-        .title("Update Grab-it")
-        .kind(MessageDialogKind::Info)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Install and Restart".into(),
-            "Later".into(),
-        ))
-        .blocking_show();
-    if !install {
-        *declined = Some(update.version.clone());
-        return;
-    }
-    drop(declined);
-    install_and_restart(app, &update);
 }
 
-/// Whether to ask about `version`: always when the user asked, otherwise
+fn current_status(app: &AppHandle) -> UpdateStatus {
+    lock(&app.state::<UpdateState>().status)
+        .clone()
+        .unwrap_or_else(|| UpdateStatus::Idle {
+            current: app.package_info().version.to_string(),
+        })
+}
+
+/// Records `status` and tells the windows.
+fn set_status(app: &AppHandle, status: UpdateStatus, show: bool) {
+    *lock(&app.state::<UpdateState>().status) = Some(status.clone());
+    emit(app, status, show);
+}
+
+fn emit(app: &AppHandle, status: UpdateStatus, show: bool) {
+    if let Err(err) = app.emit(UPDATE_STATUS_EVENT, UpdateEvent { status, show }) {
+        eprintln!("Grab-it: could not report the update status: {err}");
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_millis() as u64)
+        .unwrap_or_default()
+}
+
+/// What the window shows about `update`.
+fn info_of(update: &Update) -> UpdateInfo {
+    UpdateInfo {
+        current: update.current_version.clone(),
+        version: update.version.clone(),
+        // As `latest.json` has it (RFC 3339), if the updater could read it.
+        date: update
+            .date
+            .and_then(|_| update.raw_json.get("pub_date")?.as_str())
+            .map(str::to_string),
+        changes: changes_since(update)
+            .into_iter()
+            .map(|changes| Changes {
+                items: changes.items.iter().map(|item| shorten(item)).collect(),
+                ..changes
+            })
+            .collect(),
+    }
+}
+
+/// Whether to point out `version`: always when the user asked, otherwise
 /// only if they have not already said "Later" to it.
 fn should_ask(trigger: Trigger, declined: Option<&str>, version: &str) -> bool {
     trigger == Trigger::User || declined != Some(version)
-}
-
-/// What one version brought, as `latest.json` lists it.
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
-struct Changes {
-    version: String,
-    #[serde(default)]
-    items: Vec<String>,
 }
 
 /// The changes between this copy and the update, newest first.
@@ -214,81 +471,12 @@ fn pick_changes(
     picked.into_iter().map(|(_, changes)| changes).collect()
 }
 
-fn prompt_text(current: &str, available: &str, changes: &[Changes]) -> String {
-    let mut text = format!("Grab-it {available} is available. You have {current}.\n\n");
-    text.push_str(&changes_text(changes));
-    text.push_str("\n\nInstall it now? Grab-it restarts when the update is in.");
-    text
-}
-
-/// The changes as a bulleted list, headed by version when there are
-/// several, and cut off after [`MAX_CHANGES`].
-fn changes_text(changes: &[Changes]) -> String {
-    let with_items: Vec<&Changes> = changes.iter().filter(|c| !c.items.is_empty()).collect();
-    if with_items.is_empty() {
-        return "This update brings fixes and small improvements.".to_string();
-    }
-    let total: usize = with_items.iter().map(|c| c.items.len()).sum();
-    let mut lines = Vec::new();
-    let mut shown = 0;
-    for changes in &with_items {
-        if shown == MAX_CHANGES {
-            break;
-        }
-        if with_items.len() > 1 {
-            if !lines.is_empty() {
-                lines.push(String::new());
-            }
-            lines.push(format!("New in {}:", changes.version));
-        } else {
-            lines.push("What's new:".to_string());
-        }
-        for item in changes.items.iter().take(MAX_CHANGES - shown) {
-            lines.push(format!("• {}", shorten(item)));
-            shown += 1;
-        }
-    }
-    if total > shown {
-        let more = total - shown;
-        let changes = if more == 1 { "change" } else { "changes" };
-        lines.push(format!("…and {more} more {changes}."));
-    }
-    lines.join("\n")
-}
-
 fn shorten(item: &str) -> String {
     if item.chars().count() <= MAX_CHANGE_CHARS {
         return item.to_string();
     }
     let cut: String = item.chars().take(MAX_CHANGE_CHARS - 1).collect();
     format!("{}…", cut.trim_end())
-}
-
-fn install_and_restart(app: &AppHandle, update: &Update) {
-    notice(
-        app,
-        &format!("Updating to Grab-it {}", update.version),
-        "Downloading the update. Grab-it restarts when it is done.",
-    );
-    // A recording in progress is finished first, so its GIF is complete.
-    crate::record::stop_and_wait(app);
-    let installed = tauri::async_runtime::block_on(update.download_and_install(|_, _| {}, || {}));
-    match installed {
-        // On Windows the installer has already closed Grab-it by now.
-        Ok(()) => app.restart(),
-        Err(err) => {
-            eprintln!("Grab-it: could not install the update: {err}");
-            message(
-                app,
-                "Could not update Grab-it",
-                &format!(
-                    "{err}\n\nYou can download Grab-it {} from its GitHub releases page instead.",
-                    update.version
-                ),
-                MessageDialogKind::Error,
-            );
-        }
-    }
 }
 
 /// A Quick Access card: for news that needs no answer.
@@ -302,17 +490,10 @@ fn notice(app: &AppHandle, title: &str, message: &str) {
     );
 }
 
-fn message(app: &AppHandle, title: &str, text: &str, kind: MessageDialogKind) {
-    app.dialog()
-        .message(text)
-        .title(title)
-        .kind(kind)
-        .blocking_show();
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn later_silences_automatic_checks_for_that_version_only() {
@@ -327,22 +508,6 @@ mod tests {
             version: version.into(),
             items: items.iter().map(|item| item.to_string()).collect(),
         }
-    }
-
-    #[test]
-    fn the_prompt_names_both_versions_and_the_changes() {
-        let text = prompt_text(
-            "0.3.0",
-            "0.4.0",
-            &[changes("0.4.0", &["Check for updates"])],
-        );
-        assert_eq!(
-            text,
-            "Grab-it 0.4.0 is available. You have 0.3.0.\n\n\
-             What's new:\n\
-             • Check for updates\n\n\
-             Install it now? Grab-it restarts when the update is in."
-        );
     }
 
     #[test]
@@ -371,38 +536,107 @@ mod tests {
     }
 
     #[test]
-    fn several_versions_are_headed_by_version() {
-        let text = changes_text(&[
-            changes("0.5.0", &["Five"]),
-            changes("0.4.1", &[]),
-            changes("0.4.0", &["Four"]),
-        ]);
-        assert_eq!(text, "New in 0.5.0:\n• Five\n\nNew in 0.4.0:\n• Four");
-    }
-
-    #[test]
-    fn long_lists_are_cut_off_with_a_count() {
-        let many: Vec<String> = (1..=15).map(|n| format!("Change {n}")).collect();
-        let many: Vec<&str> = many.iter().map(String::as_str).collect();
-        let text = changes_text(&[changes("0.5.0", &many[..10]), changes("0.4.0", &many[10..])]);
-        assert_eq!(text.matches('•').count(), MAX_CHANGES);
-        assert!(text.contains("New in 0.4.0:\n• Change 11\n• Change 12\n…and 3 more changes."));
-    }
-
-    #[test]
-    fn no_listed_changes_still_says_something() {
-        assert_eq!(
-            changes_text(&[changes("0.4.0", &[])]),
-            "This update brings fixes and small improvements."
-        );
-    }
-
-    #[test]
     fn long_changes_are_shortened() {
         let long = "x".repeat(150);
         let short = shorten(&long);
         assert_eq!(short.chars().count(), MAX_CHANGE_CHARS);
         assert!(short.ends_with('…'));
         assert_eq!(shorten("Short"), "Short");
+    }
+
+    fn info() -> UpdateInfo {
+        UpdateInfo {
+            current: "0.2.0".into(),
+            version: "0.3.0".into(),
+            date: Some("2026-11-01T12:00:00Z".into()),
+            changes: vec![changes("0.3.0", &["One"])],
+        }
+    }
+
+    fn info_json() -> serde_json::Value {
+        json!({
+            "current": "0.2.0",
+            "version": "0.3.0",
+            "date": "2026-11-01T12:00:00Z",
+            "changes": [{ "version": "0.3.0", "items": ["One"] }],
+        })
+    }
+
+    #[test]
+    fn the_status_serializes_as_the_frontend_expects() {
+        let cases = [
+            (
+                UpdateStatus::Idle {
+                    current: "0.2.0".into(),
+                },
+                json!({ "state": "idle", "current": "0.2.0" }),
+            ),
+            (
+                UpdateStatus::Checking {
+                    current: "0.2.0".into(),
+                },
+                json!({ "state": "checking", "current": "0.2.0" }),
+            ),
+            (
+                UpdateStatus::UpToDate {
+                    current: "0.2.0".into(),
+                    checked_at: 1_700_000_000_000,
+                },
+                json!({ "state": "upToDate", "current": "0.2.0", "checkedAt": 1_700_000_000_000u64 }),
+            ),
+            (
+                UpdateStatus::Available {
+                    info: info(),
+                    declined: false,
+                },
+                json!({ "state": "available", "info": info_json(), "declined": false }),
+            ),
+            (
+                UpdateStatus::Installing {
+                    info: info(),
+                    downloaded: 512,
+                    total: None,
+                },
+                json!({ "state": "installing", "info": info_json(), "downloaded": 512, "total": null }),
+            ),
+            (
+                UpdateStatus::Failed {
+                    current: "0.2.0".into(),
+                    message: "offline".into(),
+                    info: None,
+                },
+                json!({ "state": "failed", "current": "0.2.0", "message": "offline", "info": null }),
+            ),
+            (
+                UpdateStatus::Failed {
+                    current: "0.2.0".into(),
+                    message: "bad signature".into(),
+                    info: Some(UpdateInfo {
+                        date: None,
+                        ..info()
+                    }),
+                },
+                json!({
+                    "state": "failed",
+                    "current": "0.2.0",
+                    "message": "bad signature",
+                    "info": { "current": "0.2.0", "version": "0.3.0", "date": null,
+                              "changes": [{ "version": "0.3.0", "items": ["One"] }] },
+                }),
+            ),
+        ];
+        for (status, expected) in cases {
+            assert_eq!(serde_json::to_value(&status).unwrap(), expected);
+        }
+        let event = UpdateEvent {
+            status: UpdateStatus::Idle {
+                current: "0.2.0".into(),
+            },
+            show: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            json!({ "status": { "state": "idle", "current": "0.2.0" }, "show": true })
+        );
     }
 }

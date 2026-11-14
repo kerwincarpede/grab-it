@@ -1,68 +1,102 @@
-/* The Welcome window, built from the shared tokens and cards in App.css. */
-.welcome-header {
-  margin-bottom: 18px;
+/* Welcome: one heading, hotkeys and tips side by side, one blue button. */
+.welcome {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
-.welcome-header h1 {
-  margin-bottom: 6px;
-  font-size: 24px;
+.welcome.window {
+  max-width: 820px;
+  padding: 32px 0 0;
+}
+
+.welcome-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 24px 28px 18px;
+}
+
+.welcome-head h1 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
 }
 
 .welcome-lead {
-  margin: 0;
+  max-width: 60ch;
+  margin: 2px 0 0;
   color: var(--text-muted);
+  font-size: 13px;
 }
 
-.welcome-shortcuts,
-.welcome-tips {
+.welcome-cols {
   display: grid;
-  gap: 10px;
-  margin: 0 0 12px;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 28px;
+  min-height: 0;
+  padding: 0 28px 16px;
+  overflow-y: auto;
+}
+
+.welcome-sec {
+  margin: 0 0 2px;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.welcome-list {
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.welcome-shortcuts li {
+.welcome-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 11px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
 }
 
-.welcome-shortcuts .hint,
-.welcome-tips .hint {
-  display: block;
+.welcome-row:last-child {
+  border-bottom: 0;
 }
 
-.welcome-keys {
-  display: flex;
+.welcome-row > .icon {
   flex: none;
-  gap: 4px;
+  color: var(--text-muted);
 }
 
-.welcome kbd {
-  padding: 2px 8px;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  background: var(--surface-2);
-  border: 1px solid var(--border-strong);
-  border-bottom-width: 2px;
-  border-radius: 6px;
-}
-
-.welcome-tips {
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 12px 20px;
-  margin-bottom: 0;
-}
-
-.welcome-actions {
+.welcome-text {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.welcome-title {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.welcome-detail {
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .welcome .status {
-  margin: 6px 0 10px;
+  margin: 0 28px 10px;
+  font-size: 12.5px;
+}
+
+@media (max-width: 720px) {
+  .welcome-cols {
+    grid-template-columns: 1fr;
+  }
 }

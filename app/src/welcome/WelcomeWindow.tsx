@@ -1,7 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./welcome.css";
-import { acceleratorKeys } from "../settings/accelerator";
+import Logo from "../app/Logo";
+import {
+  CardIcon,
+  ColourIcon,
+  PenIcon,
+  PinIcon,
+  RecordIcon,
+  RegionIcon,
+  ScreenIcon,
+  SearchIcon,
+  SparkleIcon,
+  TextIcon,
+  WindowIcon,
+} from "../app/icons";
+import { keyCaps } from "../hub/keys";
 import { onAiStatus } from "../library/api";
 import { aiProvider, getSettings, type Hotkeys } from "../settings/api";
 
@@ -11,13 +25,22 @@ function openTarget(target: string): Promise<void> {
 }
 
 /** The hotkeys in the order they are listed, with what each one does. */
-const SHORTCUTS: { key: keyof Hotkeys; title: string; detail: string }[] = [
-  { key: "region", title: "Capture a region", detail: "Drag an area, or click a window." },
-  { key: "window", title: "Capture a window", detail: "Hover a window and click it." },
-  { key: "screen", title: "Capture the screen", detail: "Every monitor at once." },
-  { key: "text", title: "Capture text", detail: "Drag over text to copy it." },
-  { key: "colour", title: "Pick a colour", detail: "Click a pixel to copy its hex code." },
+const SHORTCUTS: { key: keyof Hotkeys; title: string; detail: string; icon: ReactNode }[] = [
+  { key: "region", title: "Capture a region", detail: "Drag an area, or click a window.", icon: <RegionIcon /> },
+  { key: "window", title: "Capture a window", detail: "Hover a window and click it.", icon: <WindowIcon /> },
+  { key: "screen", title: "Capture the screen", detail: "Every monitor at once.", icon: <ScreenIcon /> },
+  { key: "text", title: "Capture text", detail: "Drag over text to copy it.", icon: <TextIcon /> },
+  { key: "colour", title: "Pick a colour", detail: "Click a pixel to copy its hex code.", icon: <ColourIcon /> },
 ];
+
+const TIP_ICONS: Record<string, ReactNode> = {
+  "Quick Access": <CardIcon />,
+  Annotate: <PenIcon />,
+  Pin: <PinIcon />,
+  Record: <RecordIcon />,
+  Library: <SearchIcon />,
+  "AI descriptions": <SparkleIcon />,
+};
 
 const TIPS: { title: string; detail: string }[] = [
   {
@@ -29,7 +52,7 @@ const TIPS: { title: string; detail: string }[] = [
     detail: "Arrows, steps, blur and spotlight, plus a backdrop with padding and rounded corners.",
   },
   { title: "Pin", detail: "Keep a capture floating above your other windows while you work." },
-  { title: "Record", detail: "Record a region or a window as a GIF from the tray menu." },
+  { title: "Record", detail: "Record a region or a window as a GIF: click the Grab-it icon, then Record GIF." },
   { title: "Library", detail: "Every capture, searchable by the text inside the image." },
 ];
 
@@ -44,7 +67,7 @@ const CLAUDE_TIP = {
  * Shown once, on the first launch, and from the tray afterwards: a tray app
  * opens no window of its own, so this says where it lives and how to use it.
  */
-function WelcomeWindow() {
+function WelcomeWindow({ onClose }: { onClose?: () => void } = {}) {
   const [hotkeys, setHotkeys] = useState<Hotkeys | null>(null);
   const [claudeDescribes, setClaudeDescribes] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -84,64 +107,86 @@ function WelcomeWindow() {
     openTarget(target).catch((err: unknown) => setError(typeof err === "string" ? err : "Something went wrong."));
   }
 
+  const tips = claudeDescribes ? [...TIPS, CLAUDE_TIP] : TIPS;
   return (
-    <main className="window welcome">
-      <header className="welcome-header">
-        <h1>Welcome to Grab-it</h1>
-        <p className="welcome-lead">
-          Grab-it lives in your system tray. Capture with a hotkey or from the tray menu; everything you capture is
-          saved, copied and searchable.
-        </p>
+    <main className={onClose ? "welcome in-dialog" : "window welcome"}>
+      <header className="welcome-head">
+        <span className="mark" aria-hidden="true">
+          <Logo size={24} />
+        </span>
+        <div>
+          <h1>Welcome to Grab-it</h1>
+          <p className="welcome-lead">
+            Click the Grab-it icon in the menu bar, or use a hotkey. Every capture is saved, copied and searchable
+            here.
+          </p>
+        </div>
       </header>
 
-      {/* Straight under the introduction, so they are in view however short the window is. */}
-      <div className="welcome-actions">
-        <button type="button" onClick={() => open("region")}>
-          Capture a region now
-        </button>
-        <button type="button" className="secondary" onClick={() => open("settings")}>
+      <div className="welcome-cols">
+        <section aria-labelledby="welcome-shortcuts">
+          <h2 className="welcome-sec" id="welcome-shortcuts">
+            Hotkeys
+          </h2>
+          <ul className="welcome-list">
+            {SHORTCUTS.map(({ key, title, detail, icon }) => (
+              <li className="welcome-row" key={key}>
+                {icon}
+                <span className="welcome-text">
+                  <span className="welcome-title">{title}</span>
+                  <span className="welcome-detail">{detail}</span>
+                </span>
+                <span className="keys" aria-label={hotkeys?.[key] ?? undefined}>
+                  {keyCaps(hotkeys?.[key] ?? "").map((part) => (
+                    <kbd key={part}>{part}</kbd>
+                  ))}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section aria-labelledby="welcome-tips">
+          <h2 className="welcome-sec" id="welcome-tips">
+            Worth knowing
+          </h2>
+          <ul className="welcome-list">
+            {tips.map(({ title, detail }) => (
+              <li className="welcome-row" key={title}>
+                {TIP_ICONS[title]}
+                <span className="welcome-text">
+                  <span className="welcome-title">{title}</span>
+                  <span className="welcome-detail">{detail}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      </div>
+
+      {error && (
+        <p className="status status-error" role="status">
+          {error}
+        </p>
+      )}
+
+      <footer className="dialog-foot welcome-foot">
+        <button type="button" className="link-button dialog-foot-note" onClick={() => open("settings")}>
           Open Settings
         </button>
-        <button type="button" className="secondary" onClick={() => open("library")}>
-          Open the Library
+        <button type="button" className="btn" onClick={() => open("region")}>
+          Capture a region now
         </button>
-      </div>
-      <p className="status status-error" role="status">
-        {error}
-      </p>
-
-      <section className="card" aria-labelledby="welcome-shortcuts">
-        <h2 id="welcome-shortcuts">Hotkeys</h2>
-        <ul className="welcome-shortcuts">
-          {SHORTCUTS.map(({ key, title, detail }) => (
-            <li key={key}>
-              <span>
-                <span className="choice-title">{title}</span>
-                <span className="hint">{detail}</span>
-              </span>
-              <span className="welcome-keys" aria-label={hotkeys?.[key] ?? undefined}>
-                {acceleratorKeys(hotkeys?.[key] ?? "").map((part) => (
-                  <kbd key={part}>{part}</kbd>
-                ))}
-              </span>
-            </li>
-          ))}
-        </ul>
-        <p className="hint">Change them in Settings. Timed captures, Repeat last region and Record GIF are in the tray menu.</p>
-      </section>
-
-      <section className="card" aria-labelledby="welcome-tips">
-        <h2 id="welcome-tips">Worth knowing</h2>
-        <ul className="welcome-tips">
-          {(claudeDescribes ? [...TIPS, CLAUDE_TIP] : TIPS).map(({ title, detail }) => (
-            <li key={title}>
-              <span className="choice-title">{title}</span>
-              <span className="hint">{detail}</span>
-            </li>
-          ))}
-        </ul>
-      </section>
-
+        {onClose ? (
+          <button type="button" className="btn btn-primary" data-autofocus onClick={onClose}>
+            Get started
+          </button>
+        ) : (
+          <button type="button" className="btn btn-primary" onClick={() => open("library")}>
+            Open the Library
+          </button>
+        )}
+      </footer>
     </main>
   );
 }

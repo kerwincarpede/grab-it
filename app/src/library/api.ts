@@ -52,6 +52,35 @@ export function setShotTags(id: number, tags: string[]): Promise<Shot> {
   return invoke<Shot>("library_set_tags", { id, tags });
 }
 
+/** A name and how many captures have it. */
+export interface NameCount {
+  name: string;
+  count: number;
+}
+
+/** What the Grab-it window's sidebar lists. Mirrors `SidebarSummary` in src-tauri/src/search.rs. */
+export interface SidebarSummary {
+  total: number;
+  apps: NameCount[];
+  /** The most used tags, yours and the AI's. */
+  tags: NameCount[];
+}
+
+export function sidebarSummary(): Promise<SidebarSummary> {
+  return invoke<SidebarSummary>("library_sidebar");
+}
+
+/** Takes one tag the AI added off a capture. */
+export function removeAiTag(id: number, tag: string): Promise<Shot> {
+  return invoke<Shot>("library_remove_ai_tag", { id, tag });
+}
+
+/** A capture's tags, then the AI's that you haven't also added. */
+export function allTags(shot: Pick<Shot, "tags" | "aiTags">): string[] {
+  const own = new Set(shot.tags.map((tag) => tag.toLowerCase()));
+  return [...shot.tags, ...(shot.aiTags ?? []).filter((tag) => !own.has(tag.toLowerCase()))];
+}
+
 export function setShotNotes(id: number, notes: string): Promise<Shot> {
   return invoke<Shot>("library_set_notes", { id, notes });
 }

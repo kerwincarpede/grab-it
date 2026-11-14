@@ -1,7 +1,17 @@
 /** The view a window shows, picked from its URL hash (`index.html#/settings`). */
-export type Route = "settings" | "overlay" | "editor" | "library" | "quick" | "pin" | "welcome" | "home";
+export type Route =
+  | "app"
+  | "hub"
+  | "settings"
+  | "overlay"
+  | "editor"
+  | "library"
+  | "quick"
+  | "pin"
+  | "welcome"
+  | "home";
 
-const ROUTES: readonly Route[] = ["settings", "overlay", "editor", "library", "quick", "pin", "welcome"];
+const ROUTES: readonly Route[] = ["app", "hub", "settings", "overlay", "editor", "library", "quick", "pin", "welcome"];
 
 /** True when `flag` follows the route in the hash (`#/overlay?instant`). */
 export function routeHasFlag(hash: string, flag: string): boolean {

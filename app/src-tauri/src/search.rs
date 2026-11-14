@@ -98,11 +98,32 @@ pub struct SearchPage {
 #[serde(rename_all = "camelCase")]
 pub struct FilterOptions {
     pub apps: Vec<String>,
-    /// The user's tags.
+    /// Every tag, the user's and the AI's.
     pub tags: Vec<String>,
     /// The AI categories some shot is in.
     pub categories: Vec<String>,
 }
+
+/// A name and how many shots have it, for the sidebar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NameCount {
+    pub name: String,
+    pub count: u32,
+}
+
+/// What the Grab-it window's sidebar lists. Mirrors `SidebarSummary` in
+/// src/library/api.ts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct SidebarSummary {
+    pub total: u32,
+    /// Every app, by name.
+    pub apps: Vec<NameCount>,
+    /// The most used tags, yours and the AI's, most used first.
+    pub tags: Vec<NameCount>,
+}
+
+/// How many tags the sidebar lists.
+const SIDEBAR_TAGS: u32 = 8;
 
 /// Turns typed words into an FTS5 query: every word must match, each as a
 /// prefix, and FTS5 syntax is quoted away. `None` when there is nothing to
@@ -256,8 +277,8 @@ impl Library {
         })
     }
 
-    /// Every app, user tag and AI category in the library, for the filter
-    /// bar.
+    /// Every app, tag (yours and the AI's) and AI category in the library,
+    /// for the filter bar.
     pub fn filter_options(&self) -> LibraryResult<FilterOptions> {
         let conn = self.connection();
         let column = |sql: &str| -> LibraryResult<Vec<String>> {
@@ -273,12 +294,45 @@ impl Library {
                  GROUP BY app ORDER BY app COLLATE NOCASE",
             )?,
             tags: column(
-                "SELECT tag FROM shot_tags GROUP BY tag COLLATE NOCASE ORDER BY tag COLLATE NOCASE",
+                "SELECT tag FROM (SELECT tag FROM shot_tags UNION ALL SELECT tag FROM shot_ai_tags)
+                 GROUP BY tag COLLATE NOCASE ORDER BY tag COLLATE NOCASE",
             )?,
             categories: column(
                 "SELECT ai_category FROM shots WHERE ai_category IS NOT NULL AND ai_category <> ''
                  GROUP BY ai_category ORDER BY ai_category",
             )?,
+        })
+    }
+}
+
+impl Library {
+    /// Every app and the most used tags, each with its count.
+    pub fn sidebar(&self) -> LibraryResult<SidebarSummary> {
+        let conn = self.connection();
+        let counts = |sql: &str| -> LibraryResult<Vec<NameCount>> {
+            let mut stmt = conn.prepare(sql)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(NameCount {
+                        name: row.get(0)?,
+                        count: row.get(1)?,
+                    })
+                })?
+                .collect::<Result<_, _>>()?;
+            Ok(rows)
+        };
+        let total: u32 = conn.query_row("SELECT COUNT(*) FROM shots", [], |row| row.get(0))?;
+        Ok(SidebarSummary {
+            total,
+            apps: counts(
+                "SELECT app, COUNT(*) FROM shots WHERE app IS NOT NULL AND app <> ''
+                 GROUP BY app ORDER BY app COLLATE NOCASE",
+            )?,
+            tags: counts(&format!(
+                "SELECT min(tag), COUNT(DISTINCT shot_id) AS n FROM
+                   (SELECT shot_id, tag FROM shot_tags UNION ALL SELECT shot_id, tag FROM shot_ai_tags)
+                 GROUP BY tag COLLATE NOCASE ORDER BY n DESC, min(tag) COLLATE NOCASE LIMIT {SIDEBAR_TAGS}"
+            ))?,
         })
     }
 }
@@ -297,6 +351,11 @@ pub fn library_search(
 }
 
 #[tauri::command]
+pub fn library_sidebar(state: State<'_, LibraryState>) -> Result<SidebarSummary, String> {
+    state.lock().sidebar().map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 pub fn library_filter_options(state: State<'_, LibraryState>) -> Result<FilterOptions, String> {
     state.lock().filter_options().map_err(|err| err.to_string())
 }
@@ -306,7 +365,7 @@ mod tests {
     use super::*;
     use crate::{
         capture::{CaptureMode, Foreground, ORIGINALS_DIR, save_capture},
-        library::AiDescription,
+        library::{AiDescription, LibraryError},
         ocr::tests::{FIXTURE_WORD, engine, fixture_png},
     };
     use chrono::{DateTime, Local, TimeZone};
@@ -806,8 +865,8 @@ mod tests {
 
         let options = library.filter_options().unwrap();
         assert_eq!(options.categories, vec!["browser", "receipt"]);
-        // The tag list stays the user's own.
-        assert_eq!(options.tags, vec!["Finance"]);
+        // AI tags are offered too, once each whoever added them.
+        assert_eq!(options.tags, vec!["Finance", "pricing", "Saas Plans"]);
         assert_eq!(
             serde_json::to_value(&options).unwrap()["categories"],
             serde_json::json!(["browser", "receipt"])
@@ -877,6 +936,76 @@ mod tests {
         assert_eq!(options.tags.len(), 2);
         assert_eq!(options.tags[0], "bug");
         assert!(options.tags[1].eq_ignore_ascii_case("work"));
+    }
+
+    #[test]
+    fn ai_tags_are_filter_options_and_can_be_removed_one_at_a_time() {
+        let dir = TempDir::new().unwrap();
+        let (mut library, [a, b, _]) = sample(dir.path());
+        library.set_tags(a, &["Rust".into()]).unwrap();
+        library
+            .set_ai_description(
+                b,
+                &AiDescription {
+                    description: "Rust code with a borrow checker error.".into(),
+                    category: "code".into(),
+                    tags: vec!["rust".into(), "cargo".into()],
+                },
+                "qwen3-vl:4b",
+            )
+            .unwrap();
+        let options = library.filter_options().unwrap();
+        assert_eq!(options.tags.len(), 2);
+        assert_eq!(options.tags[0], "cargo");
+        assert!(options.tags[1].eq_ignore_ascii_case("rust"));
+
+        let shot = library.remove_ai_tag(b, "CARGO").unwrap();
+        assert_eq!(shot.ai_tags, vec!["rust"]);
+        assert_eq!(
+            shot.ai_description.as_deref(),
+            Some("Rust code with a borrow checker error.")
+        );
+        assert_eq!(library.search(&words("cargo"), 0, 10).unwrap().total, 0);
+        assert!(matches!(
+            library.remove_ai_tag(999, "rust"),
+            Err(LibraryError::NotFound(999))
+        ));
+    }
+
+    #[test]
+    fn the_sidebar_counts_apps_and_the_most_used_tags() {
+        let dir = TempDir::new().unwrap();
+        let (mut library, [a, b, c]) = sample(dir.path());
+        library.set_tags(a, &["rust".into()]).unwrap();
+        library.set_tags(b, &["Rust".into(), "web".into()]).unwrap();
+        library
+            .set_ai_description(
+                c,
+                &AiDescription {
+                    description: "x".into(),
+                    category: "code".into(),
+                    tags: vec!["rust".into()],
+                },
+                "m",
+            )
+            .unwrap();
+        let summary = library.sidebar().unwrap();
+        assert_eq!(summary.total, 3);
+        let apps: Vec<(&str, u32)> = summary
+            .apps
+            .iter()
+            .map(|app| (app.name.as_str(), app.count))
+            .collect();
+        assert_eq!(apps, vec![("code", 1), ("firefox", 2)]);
+        assert_eq!(summary.tags[0].count, 3);
+        assert!(summary.tags[0].name.eq_ignore_ascii_case("rust"));
+        assert_eq!(
+            summary.tags[1],
+            NameCount {
+                name: "web".into(),
+                count: 1
+            }
+        );
     }
 
     #[test]

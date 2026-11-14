@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   advanceDrag,
+  cutoutPath,
+  hintTop,
   boxFromPoints,
   clampedDelta,
   contains,
@@ -235,5 +237,31 @@ describe("toHex", () => {
   it("writes upper-case, zero-padded hex", () => {
     expect(toHex(26, 43, 60)).toBe("#1A2B3C");
     expect(toHex(0, 0, 255)).toBe("#0000FF");
+  });
+});
+
+describe("cutoutPath", () => {
+  it("covers the screen except a rounded hole for the window", () => {
+    const path = cutoutPath({ x: 100, y: 50, width: 300, height: 200 }, { width: 1440, height: 900 }, 10);
+    expect(path).toBe(
+      'path(evenodd, "M0 0H1440V900H0Z ' +
+        "M110 50H390A10 10 0 0 1 400 60V240A10 10 0 0 1 390 250H110A10 10 0 0 1 100 240V60A10 10 0 0 1 110 50Z\")",
+    );
+  });
+
+  it("keeps the corners no rounder than a small window allows", () => {
+    expect(cutoutPath({ x: 0, y: 0, width: 8, height: 30 }, { width: 100, height: 100 }, 10)).toContain("A4 4");
+  });
+});
+
+describe("hintTop", () => {
+  it("sits just below the menu bar or notch", () => {
+    // A 37-point notch on a 982-point-tall screen.
+    expect(hintTop(37 / 982, 982)).toBe(49);
+    expect(hintTop(0, 900)).toBe(12);
+    // Older backends say nothing; nonsense is ignored.
+    expect(hintTop(undefined, 900)).toBe(12);
+    expect(hintTop(Number.NaN, 900)).toBe(12);
+    expect(hintTop(0.9, 1000)).toBe(212);
   });
 });

@@ -7,6 +7,9 @@ import LibraryWindow from "./library/LibraryWindow";
 import QuickAccess from "./quick/QuickAccess";
 import PinWindow from "./pin/PinWindow";
 import WelcomeWindow from "./welcome/WelcomeWindow";
+import AppWindow from "./app/AppWindow";
+import Hub from "./hub/Hub";
+import { viewFromHash } from "./app/api";
 
 interface AppProps {
   route?: Route;
@@ -14,6 +17,10 @@ interface AppProps {
 
 function App({ route = routeFromHash(window.location.hash) }: AppProps) {
   switch (route) {
+    case "app":
+      return <AppWindow initialView={viewFromHash(window.location.hash)} />;
+    case "hub":
+      return <Hub />;
     case "settings":
       return <SettingsWindow />;
     case "overlay":
@@ -32,7 +39,7 @@ function App({ route = routeFromHash(window.location.hash) }: AppProps) {
       return (
         <main className="window home">
           <h1>Grab-it</h1>
-          <p className="hint">Grab-it runs in the tray. Capture and open Settings from the tray menu.</p>
+          <p className="hint">Grab-it runs in the menu bar. Click its icon to capture or open the Grab-it window.</p>
         </main>
       );
   }

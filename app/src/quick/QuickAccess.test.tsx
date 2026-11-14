@@ -169,7 +169,7 @@ describe("QuickAccess", () => {
     expect(actions(backend)).toEqual([]);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5100);
+      await vi.advanceTimersByTimeAsync(8100);
     });
 
     expect(actions(backend)).toEqual(["close"]);
@@ -189,7 +189,7 @@ describe("QuickAccess", () => {
 
     await userEvent.unhover(screen.getByTestId("quick"));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5100);
+      await vi.advanceTimersByTimeAsync(8100);
     });
     expect(actions(backend)).toEqual(["close"]);
   });
@@ -248,11 +248,14 @@ describe("QuickAccess", () => {
 });
 
 describe("quick helpers", () => {
-  it("gives captures longer than notices, and work no limit", () => {
+  it("stays for the chosen time, longer for errors, and without limit for work", () => {
     expect(dismissAfter(CAPTURE)).toBe(8000);
-    expect(dismissAfter({ kind: "text", text: "x" })).toBe(5000);
+    expect(dismissAfter(CAPTURE, 3)).toBe(3000);
+    expect(dismissAfter({ kind: "text", text: "x" }, 20)).toBe(20000);
     expect(dismissAfter({ kind: "working", message: "…" })).toBeNull();
-    expect(dismissAfter({ kind: "error", message: "x" })).toBe(10000);
+    expect(dismissAfter({ kind: "error", message: "x" }, 3)).toBe(10000);
+    // "Until I close it".
+    expect(dismissAfter(CAPTURE, 0)).toBeNull();
   });
 
   it("formats a clock and a file size", () => {

@@ -738,6 +738,16 @@ impl Library {
         Ok(())
     }
 
+    /// Takes one tag the AI added off a shot, leaving the rest of its
+    /// description alone.
+    pub fn remove_ai_tag(&mut self, id: i64, tag: &str) -> LibraryResult<Shot> {
+        self.conn.execute(
+            "DELETE FROM shot_ai_tags WHERE shot_id = ?1 AND tag = ?2 COLLATE NOCASE",
+            params![id, tag],
+        )?;
+        self.get(id)
+    }
+
     /// Marks a shot that could not be described, so it is not retried
     /// until the user asks. An earlier description is kept.
     pub fn mark_ai_failed(&mut self, id: i64) -> LibraryResult<()> {
@@ -1233,6 +1243,15 @@ pub fn library_set_tags(
     state: State<'_, LibraryState>,
 ) -> Result<Shot, String> {
     state.lock().set_tags(id, &tags).map_err(to_message)
+}
+
+#[tauri::command(async)]
+pub fn library_remove_ai_tag(
+    id: i64,
+    tag: String,
+    state: State<'_, LibraryState>,
+) -> Result<Shot, String> {
+    state.lock().remove_ai_tag(id, &tag).map_err(to_message)
 }
 
 #[tauri::command(async)]

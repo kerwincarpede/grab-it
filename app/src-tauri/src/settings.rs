@@ -99,7 +99,14 @@ pub struct AiSettings {
     pub provider: Option<AiProvider>,
     /// An OpenAI-compatible base URL; `/chat/completions` is appended.
     pub endpoint: String,
+    /// The endpoint's model.
     pub model: String,
+    /// The model Claude Code is asked for: an alias such as `haiku` or a
+    /// full model name. Empty means [`CLAUDE_CODE_MODEL`].
+    pub claude_model: String,
+    /// The model Codex is asked for. Empty means the one configured for
+    /// Codex itself.
+    pub codex_model: String,
     /// Sent as `Authorization: Bearer <key>` when set. Kept where
     /// `api_key_storage` says, so settings.json only has it without a
     /// keychain.
@@ -122,6 +129,8 @@ impl Default for AiSettings {
             provider: None,
             endpoint: DEFAULT_AI_ENDPOINT.into(),
             model: DEFAULT_AI_MODEL.into(),
+            claude_model: CLAUDE_CODE_MODEL.into(),
+            codex_model: String::new(),
             api_key: None,
             new_captures_only: true,
             notice_pending: false,
@@ -130,8 +139,22 @@ impl Default for AiSettings {
     }
 }
 
-/// The model Claude Code is asked for, by its alias.
+/// The model Claude Code is asked for unless the user picks another, by
+/// its alias.
 pub const CLAUDE_CODE_MODEL: &str = "haiku";
+/// The longest model name kept; anything longer is cut.
+const MAX_CLI_MODEL_CHARS: usize = 100;
+
+/// A model name as typed: trimmed, without spaces or quotes, at most
+/// [`MAX_CLI_MODEL_CHARS`] long. Empty when nothing usable is left.
+fn clean_model(model: &str) -> String {
+    model
+        .trim()
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && *ch != '"' && *ch != '\'')
+        .take(MAX_CLI_MODEL_CHARS)
+        .collect()
+}
 
 impl AiSettings {
     /// The provider describing uses: an unset one is the endpoint.
@@ -146,12 +169,31 @@ impl AiSettings {
         self.provider.is_none() && !self.enabled
     }
 
+    /// The model Claude Code is asked for.
+    pub fn claude_model(&self) -> String {
+        let model = clean_model(&self.claude_model);
+        if model.is_empty() {
+            CLAUDE_CODE_MODEL.into()
+        } else {
+            model
+        }
+    }
+
+    /// The model Codex is asked for; None leaves it to Codex's own config.
+    pub fn codex_model(&self) -> Option<String> {
+        Some(clean_model(&self.codex_model)).filter(|model| !model.is_empty())
+    }
+
     /// The model recorded beside each description.
     pub fn model_label(&self) -> String {
         match self.provider() {
-            AiProvider::ClaudeCode => format!("claude-code/{CLAUDE_CODE_MODEL}"),
-            // Codex uses whichever model the user configured for it.
-            AiProvider::Codex => "codex".into(),
+            AiProvider::ClaudeCode => format!("claude-code/{}", self.claude_model()),
+            // Without a model of its own, Codex uses whichever the user
+            // configured for it.
+            AiProvider::Codex => match self.codex_model() {
+                Some(model) => format!("codex/{model}"),
+                None => "codex".into(),
+            },
             AiProvider::Endpoint => self.model.clone(),
         }
     }
@@ -184,6 +226,8 @@ impl AiSettings {
             provider: self.provider,
             endpoint,
             model,
+            claude_model: clean_model(&self.claude_model),
+            codex_model: clean_model(&self.codex_model),
             api_key,
             new_captures_only: self.new_captures_only,
             notice_pending: self.notice_pending,
@@ -321,6 +365,92 @@ impl EditorPreferences {
     }
 }
 
+/// The Grab-it window's text size, as a percentage: it zooms the whole
+/// window, text, buttons and thumbnails alike.
+pub const MIN_TEXT_SCALE: u32 = 85;
+pub const MAX_TEXT_SCALE: u32 = 130;
+/// Slightly larger than the page's own size, which reads small on most
+/// screens.
+pub const DEFAULT_TEXT_SCALE: u32 = 110;
+
+/// `percent` held to what the slider offers.
+fn clamp_text_scale(percent: u32) -> u32 {
+    percent.clamp(MIN_TEXT_SCALE, MAX_TEXT_SCALE)
+}
+
+/// Which corner of the screen the popup after a capture sits in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PopupCorner {
+    #[default]
+    BottomLeft,
+    BottomRight,
+    TopLeft,
+    TopRight,
+}
+
+/// The longest the popup can be asked to stay, in seconds.
+pub const MAX_POPUP_SECONDS: u32 = 60;
+
+/// How Grab-it looks. Mirrors `Appearance` in src/settings/api.ts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Appearance {
+    /// How big the Grab-it window draws everything, in percent.
+    pub text_scale: u32,
+    /// The same for the menu bar hub, whose window grows to match.
+    pub hub_scale: u32,
+    pub popup_corner: PopupCorner,
+    /// How long the popup stays, in seconds; 0 keeps it until it is closed.
+    pub popup_seconds: u32,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            text_scale: DEFAULT_TEXT_SCALE,
+            hub_scale: DEFAULT_TEXT_SCALE,
+            popup_corner: PopupCorner::BottomLeft,
+            popup_seconds: 8,
+        }
+    }
+}
+
+impl Appearance {
+    /// The Grab-it window's zoom.
+    pub fn zoom(&self) -> f64 {
+        f64::from(clamp_text_scale(self.text_scale)) / 100.0
+    }
+
+    /// The menu bar hub's zoom.
+    pub fn hub_zoom(&self) -> f64 {
+        f64::from(clamp_text_scale(self.hub_scale)) / 100.0
+    }
+
+    /// Read from the settings file: anything it cannot use keeps its default.
+    fn from_stored(value: serde_json::Value) -> Self {
+        let defaults = Self::default();
+        let field = |key: &str| value.get(key).cloned();
+        Self {
+            text_scale: field("textScale")
+                .and_then(|v| v.as_u64())
+                .map(|percent| clamp_text_scale(percent.min(u64::from(u32::MAX)) as u32))
+                .unwrap_or(defaults.text_scale),
+            hub_scale: field("hubScale")
+                .and_then(|v| v.as_u64())
+                .map(|percent| clamp_text_scale(percent.min(u64::from(u32::MAX)) as u32))
+                .unwrap_or(defaults.hub_scale),
+            popup_corner: field("popupCorner")
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or(defaults.popup_corner),
+            popup_seconds: field("popupSeconds")
+                .and_then(|v| v.as_u64())
+                .map(|seconds| seconds.min(u64::from(MAX_POPUP_SECONDS)) as u32)
+                .unwrap_or(defaults.popup_seconds),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -332,6 +462,11 @@ pub struct Settings {
     pub preferences: Preferences,
     /// The annotation editor's remembered style and tool.
     pub editor: EditorPreferences,
+    /// macOS: Grab-it has a Dock icon that opens its window. Off, it lives
+    /// in the menu bar only. Other systems ignore it.
+    pub show_in_dock: bool,
+    /// Text size and the popup's place and time on screen.
+    pub appearance: Appearance,
 }
 
 impl Settings {
@@ -343,6 +478,8 @@ impl Settings {
             hotkeys: Hotkeys::default(),
             preferences: Preferences::default(),
             editor: EditorPreferences::default(),
+            show_in_dock: true,
+            appearance: Appearance::default(),
         }
     }
 }
@@ -358,6 +495,9 @@ struct StoredSettings {
     ai: Option<AiSettings>,
     /// Read leniently by [`EditorPreferences::from_stored`].
     editor: Option<serde_json::Value>,
+    show_in_dock: Option<bool>,
+    /// Read leniently by [`Appearance::from_stored`].
+    appearance: Option<serde_json::Value>,
 }
 
 /// Hotkeys on disk; a missing or empty one keeps its default.
@@ -411,6 +551,11 @@ impl StoredSettings {
                 Some(stored) => EditorPreferences::from_stored(stored),
                 None => defaults.editor,
             },
+            show_in_dock: self.show_in_dock.unwrap_or(defaults.show_in_dock),
+            appearance: self
+                .appearance
+                .map(Appearance::from_stored)
+                .unwrap_or(defaults.appearance),
         }
     }
 }
@@ -469,6 +614,8 @@ struct SettingsOnDisk<'a> {
     copy_to_clipboard: bool,
     ai: AiOnDisk<'a>,
     editor: &'a EditorPreferences,
+    show_in_dock: bool,
+    appearance: Appearance,
 }
 
 #[derive(Serialize)]
@@ -478,6 +625,8 @@ struct AiOnDisk<'a> {
     provider: Option<AiProvider>,
     endpoint: &'a str,
     model: &'a str,
+    claude_model: &'a str,
+    codex_model: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     api_key: Option<&'a str>,
     new_captures_only: bool,
@@ -492,6 +641,8 @@ impl<'a> SettingsOnDisk<'a> {
             provider,
             endpoint,
             model,
+            claude_model,
+            codex_model,
             api_key,
             new_captures_only,
             notice_pending,
@@ -507,6 +658,8 @@ impl<'a> SettingsOnDisk<'a> {
                 provider: *provider,
                 endpoint,
                 model,
+                claude_model,
+                codex_model,
                 api_key: match api_key_storage {
                     ApiKeyStorage::Keychain => None,
                     ApiKeyStorage::SettingsFile => api_key.as_deref(),
@@ -515,6 +668,8 @@ impl<'a> SettingsOnDisk<'a> {
                 notice_pending: *notice_pending,
             },
             editor: &settings.editor,
+            show_in_dock: settings.show_in_dock,
+            appearance: settings.appearance,
         }
     }
 }
@@ -798,6 +953,34 @@ impl SettingsStore {
         Ok(self.current.clone())
     }
 
+    /// Changes how Grab-it looks. Applying the text size is up to the
+    /// caller; the popup reads its corner and time when it next shows.
+    pub fn set_appearance(&mut self, appearance: Appearance) -> Result<Settings, SettingsError> {
+        let next = Settings {
+            appearance: Appearance {
+                text_scale: clamp_text_scale(appearance.text_scale),
+                hub_scale: clamp_text_scale(appearance.hub_scale),
+                popup_seconds: appearance.popup_seconds.min(MAX_POPUP_SECONDS),
+                ..appearance
+            },
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
+    /// Shows or hides the Dock icon (macOS). Applying it is up to the caller.
+    pub fn set_show_in_dock(&mut self, enabled: bool) -> Result<Settings, SettingsError> {
+        let next = Settings {
+            show_in_dock: enabled,
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
     /// Changes the capture hotkeys after checking them. Registering them is
     /// up to the caller.
     pub fn set_hotkeys(&mut self, hotkeys: &Hotkeys) -> Result<Settings, SettingsError> {
@@ -895,9 +1078,61 @@ mod tests {
                 color: Some("#0090ff".into()),
                 ..EditorPreferences::default()
             },
+            show_in_dock: false,
+            appearance: Appearance::default(),
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path, defaults(&dir)).unwrap(), settings);
+    }
+
+    #[test]
+    fn dock_icon_is_on_by_default_and_remembered() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        assert!(defaults(&dir).show_in_dock);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        assert!(!store.set_show_in_dock(false).unwrap().show_in_dock);
+        assert!(!load(&path, defaults(&dir)).unwrap().show_in_dock);
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["showInDock"], false);
+    }
+
+    #[test]
+    fn appearance_is_saved_capped_and_read_leniently() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        assert_eq!(store.get().appearance, Appearance::default());
+        let saved = store
+            .set_appearance(Appearance {
+                text_scale: 400,
+                hub_scale: 50,
+                popup_corner: PopupCorner::TopRight,
+                popup_seconds: 500,
+            })
+            .unwrap()
+            .appearance;
+        assert_eq!(saved.popup_seconds, MAX_POPUP_SECONDS);
+        assert_eq!(saved.text_scale, MAX_TEXT_SCALE);
+        assert_eq!(saved.hub_scale, MIN_TEXT_SCALE);
+        assert_eq!(Appearance::default().zoom(), 1.1);
+        assert_eq!(load(&path, defaults(&dir)).unwrap().appearance, saved);
+        assert_eq!(
+            serde_json::to_value(saved).unwrap(),
+            serde_json::json!({"textScale": 130, "hubScale": 85, "popupCorner": "topRight", "popupSeconds": 60})
+        );
+
+        // One bad value keeps its default; the rest still load.
+        fs::write(
+            &path,
+            r#"{"appearance": {"textScale": "huge", "popupCorner": "topLeft", "popupSeconds": -3}}"#,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap().appearance;
+        assert_eq!(loaded.text_scale, DEFAULT_TEXT_SCALE);
+        assert_eq!(loaded.popup_corner, PopupCorner::TopLeft);
+        assert_eq!(loaded.popup_seconds, 8);
     }
 
     #[test]
@@ -1138,6 +1373,8 @@ mod tests {
                 "provider": null,
                 "endpoint": "http://localhost:11434/v1",
                 "model": "qwen3-vl:4b",
+                "claudeModel": "haiku",
+                "codexModel": "",
                 "apiKey": null,
                 "newCapturesOnly": true,
                 "noticePending": false,
@@ -1183,6 +1420,8 @@ mod tests {
                 provider: Some(AiProvider::Endpoint),
                 endpoint: " https://api.example.com/v1/ ".into(),
                 model: " gpt-4o-mini ".into(),
+                claude_model: " claude-sonnet-4-5 ".into(),
+                codex_model: " \"gpt 5\" ".into(),
                 api_key: Some("  ".into()),
                 new_captures_only: false,
                 notice_pending: false,
@@ -1190,6 +1429,9 @@ mod tests {
             }))
             .unwrap();
         let ai = &updated.preferences.ai;
+        // Model names are kept without spaces or quotes.
+        assert_eq!(ai.claude_model, "claude-sonnet-4-5");
+        assert_eq!(ai.codex_model, "gpt5");
         assert_eq!(ai.endpoint, "https://api.example.com/v1");
         assert_eq!(ai.model, "gpt-4o-mini");
         assert_eq!(ai.api_key, None);
@@ -1241,6 +1483,26 @@ mod tests {
         let ai = &updated.preferences.ai;
         assert_eq!(ai.provider(), AiProvider::ClaudeCode);
         assert_eq!(ai.model_label(), "claude-code/haiku");
+        let picked = AiSettings {
+            provider: Some(AiProvider::ClaudeCode),
+            claude_model: "opus".into(),
+            ..AiSettings::default()
+        };
+        assert_eq!(picked.model_label(), "claude-code/opus");
+        let codex = AiSettings {
+            provider: Some(AiProvider::Codex),
+            codex_model: "gpt-5-mini".into(),
+            ..AiSettings::default()
+        };
+        assert_eq!(codex.model_label(), "codex/gpt-5-mini");
+        assert_eq!(
+            AiSettings {
+                claude_model: " ".into(),
+                ..AiSettings::default()
+            }
+            .claude_model(),
+            "haiku"
+        );
         let codex = store
             .set_preferences(Preferences {
                 ai: AiSettings {

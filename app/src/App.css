@@ -1,25 +1,91 @@
 /* Shared look for Grab-it's windows. Colours are tokens, redefined for
    dark mode; each window's own stylesheet builds on them. */
+/* Shared look for Grab-it's windows ("Graphite"): one neutral grey family,
+   one periwinkle accent, Instrument Sans throughout. Colours are tokens,
+   redefined for dark mode; each window's own stylesheet builds on them. */
 :root {
-  --bg: #f5f6f8;
-  --surface: #ffffff;
-  --surface-2: #eef0f4;
-  --border: #d5d9e0;
-  --border-strong: #b6bcc7;
-  --text: #1b1f27;
-  --text-muted: #5c6470;
-  --accent: #2f6fed;
-  --accent-hover: #2560d6;
-  --accent-soft: rgb(47 111 237 / 12%);
+  --bg: #ffffff;
+  --surface: #f4f5f7;
+  --surface-2: #ebedf0;
+  --border: #e3e5e9;
+  --border-strong: #cdd1d8;
+  --text: #16181c;
+  --text-muted: #5f6570;
+  --text-faint: #8b9099;
+  --accent: #4b62e3;
+  --accent-hover: #3f55d2;
+  --accent-soft: rgb(75 98 227 / 11%);
+  --accent-edge: rgb(75 98 227 / 28%);
   --on-accent: #ffffff;
-  --success: #1a7f37;
-  --danger: #cf222e;
-  --radius: 8px;
+  --success: #1f8a4c;
+  --danger: #d13b44;
+  --radius: 7px;
   --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 4px 12px rgb(16 24 40 / 6%);
+  --dialog-shadow: 0 24px 60px rgb(16 24 40 / 22%), 0 0 0 1px rgb(16 24 40 / 8%);
+  --scrim: rgb(16 18 24 / 32%);
 
-  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  font-size: 14px;
+  --chrome: #f6f7f8;
+  --panel: #ffffff;
+  --panel-edge: #e3e5e9;
+  --fill: rgb(16 24 40 / 4.5%);
+  --fill-hover: rgb(16 24 40 / 7%);
+  --fill-current: rgb(16 24 40 / 7%);
+  --fill-current-shadow: none;
+  --pill-on: #16181c;
+  --on-pill-on: #ffffff;
+  --group: #f6f7f8;
+  --group-edge: #e3e5e9;
+  --divider: #e3e5e9;
+  --hairline: #e3e5e9;
+  --switch-off: #cdd1d8;
+  --switch-on: var(--accent);
+  --seg-track: #f4f5f7;
+  --seg-on: #ffffff;
+  --seg-on-shadow: 0 0 0 1px #e3e5e9, 0 1px 2px rgb(16 24 40 / 8%);
+  --cta: var(--accent);
+  --cta-hover: var(--accent-hover);
+  --on-cta: var(--on-accent);
+  --cta-glow: none;
+  --link: var(--accent);
+  --pop: #ffffff;
+  --pop-edge: #e3e5e9;
+  --float: rgb(18 20 25 / 88%);
+  --on-float: #f1f2f5;
+  --green-dot: #2fb36f;
+
+  /* Tints are kept for the few places that still mark a kind (categories);
+     the window itself uses plain icons. */
+  --tint-blue-bg: var(--fill);
+  --tint-blue-fg: var(--text-muted);
+  --tint-violet-bg: var(--fill);
+  --tint-violet-fg: var(--text-muted);
+  --tint-purple-bg: var(--fill);
+  --tint-purple-fg: var(--text-muted);
+  --tint-pink-bg: var(--fill);
+  --tint-pink-fg: var(--text-muted);
+  --tint-red-bg: var(--fill);
+  --tint-red-fg: var(--text-muted);
+  --tint-orange-bg: var(--fill);
+  --tint-orange-fg: var(--text-muted);
+  --tint-amber-bg: var(--fill);
+  --tint-amber-fg: var(--text-muted);
+  --tint-green-bg: var(--fill);
+  --tint-green-fg: var(--text-muted);
+  --tint-teal-bg: var(--fill);
+  --tint-teal-fg: var(--text-muted);
+  --tint-gray-bg: var(--fill);
+  --tint-gray-fg: var(--text-muted);
+
+  /* Instrument Sans for everything; Geist Mono only where digits must
+     line up in a canvas (the overlay's readouts). Both are bundled. */
+  --font-sans: "Instrument Sans Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  font-family: var(--font-sans);
+  font-size: 13.5px;
   line-height: 1.45;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
   color: var(--text);
   background-color: var(--bg);
   color-scheme: light dark;
@@ -28,20 +94,45 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #14161b;
-    --surface: #1c1f26;
-    --surface-2: #252932;
-    --border: #2f3440;
-    --border-strong: #454c5b;
-    --text: #e8eaf0;
-    --text-muted: #98a1b0;
-    --accent: #4c8dff;
-    --accent-hover: #6a9fff;
-    --accent-soft: rgb(76 141 255 / 16%);
-    --on-accent: #0b1220;
-    --success: #3fb950;
-    --danger: #f85149;
+    --bg: #101113;
+    --surface: #17181b;
+    --surface-2: #1c1e22;
+    --border: #26282d;
+    --border-strong: #34373e;
+    --text: #ecedef;
+    --text-muted: #8d919a;
+    --text-faint: #5f636c;
+    --accent: #8297ff;
+    --accent-hover: #97a9ff;
+    --accent-soft: rgb(130 151 255 / 13%);
+    --accent-edge: rgb(130 151 255 / 26%);
+    --on-accent: #0b0c10;
+    --success: #3fcf8e;
+    --danger: #ec7a80;
     --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 6px 16px rgb(0 0 0 / 28%);
+    --dialog-shadow: 0 24px 60px rgb(0 0 0 / 55%), 0 0 0 1px #26282d;
+    --scrim: rgb(4 5 7 / 62%);
+
+    --chrome: #0c0d0f;
+    --panel: #101113;
+    --panel-edge: #24262b;
+    --fill: rgb(255 255 255 / 5%);
+    --fill-hover: rgb(255 255 255 / 8%);
+    --fill-current: #1c1e22;
+    --pill-on: #ecedef;
+    --on-pill-on: #0b0c10;
+    --group: #17181b;
+    --group-edge: #24262b;
+    --divider: #24262b;
+    --hairline: #24262b;
+    --switch-off: #34373e;
+    --seg-track: #17181b;
+    --seg-on: #24262b;
+    --seg-on-shadow: none;
+    --pop: #17181b;
+    --pop-edge: #2a2c31;
+    --float: rgb(12 13 16 / 90%);
+    --green-dot: #3fcf8e;
   }
 }
 
@@ -57,19 +148,26 @@ body {
 }
 
 h1 {
-  margin: 0 0 16px;
-  font-size: 20px;
+  margin: 0 0 20px;
+  font-size: 30px;
   font-weight: 650;
-  letter-spacing: -0.01em;
+  line-height: 1.15;
+  letter-spacing: -0.04em;
 }
 
 h2 {
-  margin: 0 0 10px;
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  text-transform: uppercase;
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--text);
+}
+
+kbd,
+.mono {
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
 }
 
 /* A titled group of settings on its own surface. */
@@ -91,11 +189,6 @@ h2 {
 .field label,
 .field-heading {
   font-weight: 600;
-}
-
-.field-row {
-  display: flex;
-  gap: 8px;
 }
 
 /* An input without a type is a text field too. */
@@ -128,11 +221,6 @@ textarea:focus-visible {
   border-color: var(--accent);
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-.field-row input {
-  flex: 1;
-  min-width: 0;
 }
 
 button {
@@ -183,7 +271,8 @@ button.danger {
 .hint {
   margin: 0;
   color: var(--text-muted);
-  font-size: 12.5px;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .status {
@@ -204,84 +293,18 @@ button.danger {
   margin-top: 0;
 }
 
-.hotkey-row {
-  display: grid;
-  grid-template-columns: 9em 1fr;
-  align-items: center;
-  gap: 8px;
-}
-
 .hotkey-row input {
+  width: 200px;
+  margin-left: auto;
+  font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
-.hotkey-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-/* The "After a capture" choices: one selectable row each. */
-.choices {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.choice {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition:
-    border-color 120ms,
-    background-color 120ms;
-}
-
-.choice:hover {
-  border-color: var(--border-strong);
-}
-
-.choice:has(input:checked) {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-}
-
-.choice:has(input:focus-visible) {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.choice input {
-  margin: 3px 0 0;
-  accent-color: var(--accent);
-}
-
+/* A bold title over its hint. */
 .choice-title {
   display: block;
   font-weight: 600;
-}
-
-.toggle {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin-top: 12px;
-  cursor: pointer;
-}
-
-.toggle.first {
-  margin-top: 0;
-}
-
-.toggle input {
-  margin: 3px 0 0;
-  accent-color: var(--accent);
 }
 
 .home {
@@ -293,17 +316,7 @@ button.danger {
 
 /* Settings: AI descriptions. */
 .ai-settings {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.ai-settings h2 {
-  margin-bottom: 0;
-}
-
-.ai-settings .toggle {
-  margin-top: 0;
+  display: block;
 }
 
 .ai-buttons {
@@ -314,9 +327,10 @@ button.danger {
 }
 
 .ai-privacy {
-  padding: 8px 10px;
-  background: var(--surface-2);
-  border-radius: var(--radius);
+  margin: 0;
+  padding: 8px 12px;
+  background: var(--fill);
+  border-radius: 10px;
 }
 
 .ai-privacy-cloud {
@@ -334,7 +348,10 @@ button.danger {
 }
 
 .ai-result {
+  flex: 1;
+  min-width: 0;
   margin: 0;
+  font-size: 12.5px;
   overflow-wrap: anywhere;
 }
 
@@ -344,4 +361,665 @@ button.danger {
 
 .ai-result-error {
   color: var(--danger);
+}
+
+/* ── Modern controls, shared by the Grab-it window and the hub ────────── */
+
+/* A small rounded square holding an icon or a letter, in one of the tints. */
+.icon-chip {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--chip-fg, var(--tint-gray-fg));
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  background: var(--chip-bg, var(--tint-gray-bg));
+  border-radius: 7px;
+}
+
+.tint-blue { --chip-bg: var(--tint-blue-bg); --chip-fg: var(--tint-blue-fg); }
+.tint-violet { --chip-bg: var(--tint-violet-bg); --chip-fg: var(--tint-violet-fg); }
+.tint-purple { --chip-bg: var(--tint-purple-bg); --chip-fg: var(--tint-purple-fg); }
+.tint-pink { --chip-bg: var(--tint-pink-bg); --chip-fg: var(--tint-pink-fg); }
+.tint-red { --chip-bg: var(--tint-red-bg); --chip-fg: var(--tint-red-fg); }
+.tint-orange { --chip-bg: var(--tint-orange-bg); --chip-fg: var(--tint-orange-fg); }
+.tint-amber { --chip-bg: var(--tint-amber-bg); --chip-fg: var(--tint-amber-fg); }
+.tint-green { --chip-bg: var(--tint-green-bg); --chip-fg: var(--tint-green-fg); }
+.tint-teal { --chip-bg: var(--tint-teal-bg); --chip-fg: var(--tint-teal-fg); }
+.tint-gray { --chip-bg: var(--tint-gray-bg); --chip-fg: var(--tint-gray-fg); }
+
+/* The gradient call to action: New capture, Capture region. */
+.cta {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--on-cta);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  background: var(--cta);
+  border: 0;
+  box-shadow: var(--cta-glow);
+}
+
+.cta:where(:hover:not(:disabled)) {
+  background: var(--cta-hover);
+}
+
+.cta-key {
+  margin-left: auto;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+/* A rounded pill button: filters, Repeat, Change…. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--fill);
+  border: 0;
+  border-radius: 999px;
+}
+
+.pill:where(:hover:not(:disabled)) {
+  background: var(--fill-hover);
+}
+
+.pill[aria-pressed="true"],
+.pill.is-on {
+  color: var(--on-pill-on);
+  background: var(--pill-on);
+}
+
+.pill .icon {
+  flex: none;
+}
+
+/* Settings as grouped rows: label and hint on the left, the control on the right. */
+.settings-title {
+  margin-bottom: 6px;
+}
+
+.settings-lead {
+  margin: 0 0 30px;
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+.group-heading {
+  margin: 0 0 10px 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.group {
+  margin: 0 0 26px;
+  padding: 0;
+  overflow: hidden;
+  background: var(--group);
+  border: 0;
+  border-radius: 14px;
+  box-shadow: 0 0 0 1px var(--group-edge) inset;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-sizing: border-box;
+  min-height: 60px;
+  padding: 12px 18px;
+}
+
+.row + .row {
+  box-shadow: 0 1px 0 var(--divider) inset;
+}
+
+.row.is-stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+label.row {
+  cursor: pointer;
+}
+
+.row-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.row-title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+}
+
+.row-hint {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.row-control {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.row input:not([type]),
+.row input[type="text"],
+.row input[type="password"],
+.row select {
+  height: 34px;
+  padding: 0 12px;
+  background: var(--panel);
+  border-color: var(--group-edge);
+  border-radius: 10px;
+}
+
+.row .mono-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* A switch: a real checkbox with role="switch", drawn as a track and knob. */
+input.switch {
+  position: relative;
+  flex: none;
+  width: 42px;
+  height: 26px;
+  margin: 0;
+  background: var(--switch-off);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 160ms;
+  appearance: none;
+}
+
+input.switch::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  content: "";
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 35%);
+  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+input.switch:checked {
+  background: var(--switch-on);
+}
+
+input.switch:checked::after {
+  transform: translateX(16px);
+}
+
+input.switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input.switch:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* A segmented control: a radio group drawn as one track. */
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 3px;
+  background: var(--seg-track);
+  border: 0;
+  border-radius: 10px;
+}
+
+.segmented label {
+  position: relative;
+  padding: 6px 12px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background-color 140ms,
+    color 140ms;
+}
+
+.segmented label:hover {
+  color: var(--text);
+}
+
+.segmented input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.segmented label:has(input:checked) {
+  color: var(--text);
+  background: var(--seg-on);
+  box-shadow: var(--seg-on-shadow);
+}
+
+.segmented label:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.segmented:disabled label {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* A primary pill: Save, Save hotkeys. */
+.pill.is-primary {
+  color: var(--on-cta);
+  background: var(--cta);
+  box-shadow: var(--cta-glow);
+}
+
+.pill.is-primary:where(:hover:not(:disabled)) {
+  background: var(--cta-hover);
+}
+
+/* A text field or menu on the right of a row. */
+.row .row-field {
+  flex: none;
+  width: 240px;
+}
+
+/* The save folder: a read-only path, set in mono like a value, not a box. */
+.row input.mono-value {
+  width: 100%;
+  height: auto;
+  padding: 0;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+}
+
+.row input.mono-value:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.row .hint {
+  font-size: 12.5px;
+}
+
+.settings .status {
+  margin: 0 4px;
+  font-size: 13px;
+}
+
+.row.is-stacked .segmented {
+  align-self: flex-start;
+}
+
+/* ── Graphite controls, shared by the Grab-it window, its dialogs and the hub ── */
+
+/* Scrollbars: a thin rounded thumb that darkens on hover, no track. */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+  background: transparent;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  background: var(--border-strong);
+  background-clip: padding-box;
+  border: 3.5px solid transparent;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-faint);
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+}
+
+/* Settings → Appearance: a text size slider between a small and a large A. */
+.scale-slider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 6px;
+}
+
+.scale-slider input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  height: 4px;
+  margin: 0;
+  background: linear-gradient(to right, var(--accent) var(--fill, 50%), var(--border-strong) var(--fill, 50%));
+  border-radius: 2px;
+  appearance: none;
+}
+
+.scale-slider input[type="range"]::-webkit-slider-thumb {
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 35%), 0 0 0 1px rgb(0 0 0 / 8%);
+  appearance: none;
+}
+
+.scale-slider input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border: 0;
+  border-radius: 50%;
+}
+
+.scale-slider input[type="range"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 6px;
+}
+
+.scale-slider input[type="range"]:disabled {
+  opacity: 0.5;
+}
+
+.scale-a {
+  flex: none;
+  color: var(--text-muted);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.scale-a-small {
+  font-size: 11px;
+}
+
+.scale-a-large {
+  font-size: 17px;
+}
+
+.scale-value {
+  flex: none;
+  min-width: 44px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Settings → Appearance: where the popup goes, as four tiny screens. */
+.corner-picker {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+  margin: 4px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.corner-picker label {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px 7px;
+  color: var(--text-muted);
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.corner-picker input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.corner-picker label:has(input:checked) {
+  color: var(--text);
+  background: var(--accent-soft);
+  border-color: var(--accent-edge);
+}
+
+.corner-picker label:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.corner-card {
+  position: relative;
+  width: 64px;
+  height: 40px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+}
+
+.corner-card::after {
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 11px;
+  background: var(--text-faint);
+  border-radius: 2px;
+}
+
+label:has(input:checked) .corner-card::after {
+  background: var(--accent);
+}
+
+.corner-topLeft .corner-card::after { top: 4px; left: 4px; }
+.corner-topRight .corner-card::after { top: 4px; right: 4px; }
+.corner-bottomLeft .corner-card::after { bottom: 4px; left: 4px; }
+.corner-bottomRight .corner-card::after { right: 4px; bottom: 4px; }
+
+.corner-picker:disabled label {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A quiet button; .btn-primary is the one blue action in a view. */
+.btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.btn:where(:hover:not(:disabled)) {
+  background: var(--fill);
+}
+
+.btn .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.btn-primary {
+  color: var(--on-accent);
+  font-weight: 600;
+  background: var(--accent);
+  border-color: transparent;
+}
+
+.btn-primary:where(:hover:not(:disabled)) {
+  background: var(--accent-hover);
+}
+
+.btn-icon {
+  width: 32px;
+  padding: 0;
+  color: var(--text-muted);
+}
+
+.btn-small {
+  height: 24px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.btn-danger {
+  color: #fff;
+  background: var(--danger);
+  border-color: transparent;
+}
+
+.btn-danger:where(:hover:not(:disabled)) {
+  background: color-mix(in srgb, var(--danger) 88%, #000);
+}
+
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: auto;
+  padding: 0;
+  color: var(--link);
+  font-size: inherit;
+  font-weight: 500;
+  background: none;
+  border: 0;
+  border-radius: 3px;
+}
+
+.link-button:where(:hover:not(:disabled)) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  background: none;
+}
+
+.link-button .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.link-muted {
+  color: var(--text-muted);
+}
+
+.link-danger {
+  color: var(--danger);
+}
+
+.spinner {
+  display: inline-block;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+/* Keys as small caps: ⌘ ⇧ 2. */
+.keys {
+  display: inline-flex;
+  flex: none;
+  gap: 3px;
+}
+
+.keys kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 19px;
+  height: 20px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

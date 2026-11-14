@@ -36,6 +36,11 @@ export interface OverlayInfo {
   imageWidth?: number;
   /** Front to back. */
   windows: OverlayWindow[];
+  /**
+   * How far down the monitor the menu bar or a camera notch reaches, as a
+   * share of its height. Older backends leave this out.
+   */
+  topInset?: number;
 }
 
 /** Mirrors `START_EVENT` in src-tauri/src/overlay.rs. */

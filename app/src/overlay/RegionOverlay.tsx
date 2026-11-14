@@ -14,6 +14,8 @@ import {
 } from "./api";
 import {
   advanceDrag,
+  cutoutPath,
+  hintTop,
   dragBox,
   imageSize,
   isDrag,
@@ -44,6 +46,8 @@ const HINTS: Record<OverlayIntent, string> = {
   record: "Drag over the area to record, or click a window. Esc cancels.",
 };
 const WINDOW_HINT = "Click a window to capture it. Esc cancels.";
+/** The hovered window's rounded corners, in CSS px. Matches `.overlay-window`. */
+const WINDOW_RADIUS = 10;
 
 function viewport(): Size {
   return { width: window.innerWidth, height: window.innerHeight };
@@ -309,6 +313,18 @@ function RegionOverlay() {
           }}
         />
       )}
+      {/* Around a hovered window the frozen screen is blurred; the window itself stays sharp. */}
+      {imageUrl && hovered && !dragging && (
+        <img
+          className="overlay-image overlay-image-blur"
+          data-testid="overlay-blur"
+          src={imageUrl}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          style={{ clipPath: cutoutPath(hovered.box, view, WINDOW_RADIUS) }}
+        />
+      )}
       {highlight && placement ? (
         <div
           className={dragging ? "overlay-selection" : "overlay-selection overlay-window"}
@@ -347,7 +363,11 @@ function RegionOverlay() {
       {!windowMode && pointer && (
         <Loupe image={image} pointer={pointer} scale={scale} viewport={view} />
       )}
-      <div className="overlay-hint" data-hidden={dragging && !error ? "true" : "false"}>
+      <div
+        className="overlay-hint"
+        data-hidden={dragging && !error ? "true" : "false"}
+        style={{ top: hintTop(info?.topInset, view.height) }}
+      >
         <p className="overlay-hint-text" role="status" data-error={error ? "true" : "false"}>
           {error ?? (windowMode ? WINDOW_HINT : HINTS[intent])}
         </p>

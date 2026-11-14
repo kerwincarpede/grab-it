@@ -29,6 +29,10 @@ export interface AiPreferences {
   endpoint: string;
   /** Only the endpoint provider uses it. */
   model: string;
+  /** The model Claude Code is asked for: an alias (haiku, sonnet, opus) or a full name. Empty means haiku. */
+  claudeModel: string;
+  /** The model Codex is asked for. Empty means the one set up in Codex itself. */
+  codexModel: string;
   /** Only cloud providers need one. */
   apiKey: string | null;
   /** Leave captures from before AI descriptions were turned on alone. */
@@ -45,6 +49,8 @@ export const DEFAULT_AI_PREFERENCES: AiPreferences = {
   provider: null,
   endpoint: "http://localhost:11434/v1",
   model: "qwen3-vl:4b",
+  claudeModel: "haiku",
+  codexModel: "",
   apiKey: null,
   newCapturesOnly: true,
   noticePending: false,
@@ -61,18 +67,25 @@ export const AI_PROVIDERS: { value: AiProvider; title: string; hint: string }[] 
   {
     value: "claudeCode",
     title: "Claude Code",
-    hint: "Uses the claude command you already have and are signed in to, with the Haiku model. Nothing to set up or download.",
+    hint: "Uses the claude command you already have and are signed in to. Nothing to set up or download.",
   },
   {
     value: "codex",
     title: "Codex",
-    hint: "Uses the codex command you already have and are signed in to, with the model you set up for it. Nothing to set up or download.",
+    hint: "Uses the codex command you already have and are signed in to. Nothing to set up or download.",
   },
   {
     value: "endpoint",
     title: "OpenAI-compatible endpoint",
     hint: "Ollama or LM Studio on this computer, or a cloud API such as OpenAI or OpenRouter.",
   },
+];
+
+/** Claude Code's model aliases, offered as suggestions. */
+export const CLAUDE_MODELS: { value: string; hint: string }[] = [
+  { value: "haiku", hint: "Fastest and cheapest" },
+  { value: "sonnet", hint: "More detail" },
+  { value: "opus", hint: "Most capable, slowest" },
 ];
 
 /** An OpenAI-compatible API the endpoint provider can be pointed at in one step. */
@@ -153,6 +166,64 @@ export interface Settings extends Preferences {
   saveFolder: string;
   hotkeys: Hotkeys;
   editor?: EditorPreferences;
+  /** macOS: a Dock icon that opens the Grab-it window. */
+  showInDock?: boolean;
+  appearance?: Appearance;
+}
+
+/** Mirrors `PopupCorner` in src-tauri/src/settings.rs. */
+export type PopupCorner = "bottomLeft" | "bottomRight" | "topLeft" | "topRight";
+
+/** Mirrors `Appearance` in src-tauri/src/settings.rs. */
+export interface Appearance {
+  /** How big the Grab-it window draws everything, in percent. */
+  textScale: number;
+  /** The same for the menu bar hub. */
+  hubScale: number;
+  popupCorner: PopupCorner;
+  /** How long the popup stays, in seconds; 0 keeps it until it is closed. */
+  popupSeconds: number;
+}
+
+export const DEFAULT_APPEARANCE: Appearance = { textScale: 110, hubScale: 110, popupCorner: "bottomLeft", popupSeconds: 8 };
+
+/** The text size sliders, in percent. Mirrors `MIN_TEXT_SCALE` and `MAX_TEXT_SCALE` in src-tauri/src/settings.rs. */
+export const TEXT_SCALE = { min: 85, max: 130, step: 5 };
+
+export const POPUP_CORNERS: { value: PopupCorner; title: string }[] = [
+  { value: "topLeft", title: "Top left" },
+  { value: "topRight", title: "Top right" },
+  { value: "bottomLeft", title: "Bottom left" },
+  { value: "bottomRight", title: "Bottom right" },
+];
+
+/** How long the popup can stay; 0 is "until I close it". */
+export const POPUP_SECONDS = [3, 5, 8, 12, 20, 30, 0];
+
+export function setAppearance(appearance: Appearance): Promise<Settings> {
+  return invoke<Settings>("set_appearance", { appearance });
+}
+
+/** Settings, split into the pages of the Grab-it window's sidebar. */
+export type SettingsSection = "general" | "appearance" | "capture" | "editor" | "ai" | "hotkeys";
+
+export const SETTINGS_SECTIONS: { id: SettingsSection; title: string }[] = [
+  { id: "general", title: "General" },
+  { id: "appearance", title: "Appearance" },
+  { id: "capture", title: "After a capture" },
+  { id: "editor", title: "Editor" },
+  { id: "ai", title: "AI descriptions" },
+  { id: "hotkeys", title: "Hotkeys" },
+];
+
+/** Only macOS has a Dock. */
+export function hasDock(): boolean {
+  return /Mac/.test(navigator.userAgent);
+}
+
+/** Shows or hides the Dock icon; resolves to the settings as saved. */
+export function setShowInDock(enabled: boolean): Promise<Settings> {
+  return invoke<Settings>("set_show_in_dock", { enabled });
 }
 
 /** What each choice after a capture does, in the order Settings lists them. */

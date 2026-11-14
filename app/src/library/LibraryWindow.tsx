@@ -7,10 +7,12 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import "./library.css";
 import {
   CLI_NAMES,
+  DATE_PRESETS,
   FIELD_LABELS,
   NO_FILTERS,
   PAGE_SIZE,
@@ -26,6 +28,7 @@ import {
   filterOptions,
   formatCapturedAt,
   formatTime,
+  allTags,
   groupByDay,
   isSearching,
   listShots,
@@ -42,6 +45,7 @@ import {
   revealShot,
   searchShots,
   setShotNotes,
+  removeAiTag,
   setShotTags,
   type AiStatus,
   type CliProvider,
@@ -51,10 +55,9 @@ import {
   type SearchHit,
   type Shot,
 } from "./api";
-import { ChipSelect, DateChip, TagEditor } from "./controls";
+import { ChipSelect, DateChip, FilterMenu, TagEditor } from "./controls";
 import {
   AppIcon,
-  ClockIcon,
   CloseIcon,
   CopyIcon,
   EditIcon,
@@ -70,6 +73,7 @@ import {
   TrashIcon,
 } from "./icons";
 import { useInView, useThumbnail } from "./thumbnails";
+import { ChevronDownIcon, ChevronUpIcon } from "../app/icons";
 
 function errorMessage(err: unknown): string {
   if (typeof err === "string") return err;
@@ -79,12 +83,6 @@ function errorMessage(err: unknown): string {
 
 const sameTags = (a: string[], b: string[]) =>
   a.length === b.length && a.every((tag, index) => tag === b[index]);
-
-/** Width over height, kept sane so panoramas and slivers still tile nicely. */
-function aspectOf(shot: Shot): number {
-  if (!shot.width || !shot.height) return 4 / 3;
-  return Math.min(2.6, Math.max(0.55, shot.width / shot.height));
-}
 
 /** Cache key for a shot's thumbnail: a re-saved file gets a fresh one. */
 const thumbKey = (shot: Shot) => `${shot.id}:${shot.path}`;
@@ -246,78 +244,144 @@ interface ToolbarProps {
   options: FilterOptions;
   active: boolean;
   rowHeight: number;
-  searchRef: React.RefObject<HTMLInputElement | null>;
-  onText: (text: string) => void;
-  onSubmit: () => void;
   onFilters: (filters: Filters) => void;
   onClear: () => void;
   onRowHeight: (height: number) => void;
+  /** The app filter lives elsewhere (the Grab-it window's sidebar). */
+  hideAppFilter?: boolean;
+  /** What "today" is for the time switch. */
+  now: number;
 }
 
-/** Search, filter chips and the thumbnail size slider. */
-function Toolbar(props: ToolbarProps) {
-  const { text, filters, options, active, rowHeight, searchRef } = props;
-  const set = (change: Partial<Filters>) => props.onFilters({ ...filters, ...change });
+/** The date presets on the time switch, with their short names; the Filter menu has the rest. */
+const QUICK_DATES: { id: string; label: string }[] = [
+  { id: "today", label: "Today" },
+  { id: "week", label: "7 days" },
+  { id: "month", label: "30 days" },
+];
+
+interface SearchFieldProps {
+  text: string;
+  searchRef: React.RefObject<HTMLInputElement | null>;
+  onText: (text: string) => void;
+  onSubmit: () => void;
+}
+
+function SearchField({ text, searchRef, onText, onSubmit }: SearchFieldProps) {
   return (
-    <div className="toolbar" role="search">
-      <div className="search-field">
-        <SearchIcon />
-        <input
-          ref={searchRef}
-          type="search"
-          aria-label="Search captures"
-          placeholder="Search text, tags, notes, apps…"
-          value={text}
-          onChange={(event) => props.onText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") props.onSubmit();
-            if (event.key === "Escape" && text) {
-              event.stopPropagation();
-              props.onText("");
-            }
-          }}
-        />
-        {text ? (
-          <button type="button" className="search-clear" aria-label="Clear search text" onClick={() => props.onText("")}>
-            <CloseIcon size={14} />
+    <div className="search-field" role="search">
+      <SearchIcon />
+      <input
+        ref={searchRef}
+        type="search"
+        aria-label="Search captures"
+        placeholder="Search text, tags, notes"
+        value={text}
+        onChange={(event) => onText(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") onSubmit();
+          if (event.key === "Escape" && text) {
+            event.stopPropagation();
+            onText("");
+          }
+        }}
+      />
+      {text ? (
+        <button type="button" className="search-clear" aria-label="Clear search text" onClick={() => onText("")}>
+          <CloseIcon size={13} />
+        </button>
+      ) : (
+        <kbd aria-hidden="true">/</kbd>
+      )}
+    </div>
+  );
+}
+
+/** The time switch, one Filter menu for the rest, and the thumbnail size. */
+function Toolbar(props: ToolbarProps) {
+  const { filters, options, active, rowHeight, now } = props;
+  const set = (change: Partial<Filters>) => props.onFilters({ ...filters, ...change });
+  const ranges = QUICK_DATES.map((quick) => ({
+    ...quick,
+    range: DATE_PRESETS.find((preset) => preset.id === quick.id)!.range(now),
+  }));
+  const anyTime = !filters.fromDate && !filters.toDate;
+  const quickOn = ranges.some(({ range }) => range.fromDate === filters.fromDate && range.toDate === filters.toDate);
+  const count =
+    (!props.hideAppFilter && filters.app ? 1 : 0) +
+    (filters.tag ? 1 : 0) +
+    (filters.category ? 1 : 0) +
+    (!anyTime && !quickOn ? 1 : 0);
+  return (
+    <div className="toolbar" role="group" aria-label="Filter bar">
+      <div className="segmented-bar">
+        <button type="button" aria-pressed={anyTime} onClick={() => set({ fromDate: "", toDate: "" })}>
+          Any time
+        </button>
+        {ranges.map(({ id, label, range }) => (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={range.fromDate === filters.fromDate && range.toDate === filters.toDate}
+            onClick={() => set(range)}
+          >
+            {label}
           </button>
-        ) : (
-          <kbd aria-hidden="true">/</kbd>
-        )}
+        ))}
       </div>
-      <div className="chips">
-        <ChipSelect
-          label="Filter by app"
-          icon={<AppIcon />}
-          allLabel="All apps"
-          value={filters.app}
-          options={options.apps}
-          onChange={(app) => set({ app })}
-        />
-        <ChipSelect
-          label="Filter by tag"
-          icon={<TagIcon />}
-          allLabel="All tags"
-          value={filters.tag}
-          options={options.tags}
-          onChange={(tag) => set({ tag })}
-        />
-        <ChipSelect
-          label="Filter by category"
-          icon={<LayersIcon />}
-          allLabel="All categories"
-          value={filters.category}
-          options={options.categories ?? []}
-          format={categoryLabel}
-          onChange={(category) => set({ category })}
-        />
-        <DateChip fromDate={filters.fromDate} toDate={filters.toDate} onChange={(range) => set(range)} />
-        {active && (
-          <button type="button" className="chip chip-clear" onClick={props.onClear}>
-            Clear
-          </button>
+      <FilterMenu count={count}>
+        {!props.hideAppFilter && (
+          <div className="filter-row">
+            <span className="filter-label">App</span>
+            <ChipSelect
+              label="Filter by app"
+              icon={<AppIcon />}
+              allLabel="All apps"
+              value={filters.app}
+              options={options.apps}
+              onChange={(app) => set({ app })}
+            />
+          </div>
         )}
-      </div>
+        <div className="filter-row">
+          <span className="filter-label">Tag</span>
+          <ChipSelect
+            label="Filter by tag"
+            icon={<TagIcon />}
+            allLabel="All tags"
+            value={filters.tag}
+            options={options.tags}
+            onChange={(tag) => set({ tag })}
+          />
+        </div>
+        <div className="filter-row">
+          <span className="filter-label">Category</span>
+          <ChipSelect
+            label="Filter by category"
+            icon={<LayersIcon />}
+            allLabel="All categories"
+            value={filters.category}
+            options={options.categories ?? []}
+            format={categoryLabel}
+            onChange={(category) => set({ category })}
+          />
+        </div>
+        <div className="filter-row">
+          <span className="filter-label">Dates</span>
+          <DateChip
+            fromDate={filters.fromDate}
+            toDate={filters.toDate}
+            idleLabel="Any dates"
+            quickPresets={QUICK_DATES.map((preset) => preset.id)}
+            onChange={(range) => set(range)}
+          />
+        </div>
+      </FilterMenu>
+      {active && (
+        <button type="button" className="chip chip-clear" onClick={props.onClear}>
+          Clear
+        </button>
+      )}
       <label className="zoom" title="Thumbnail size">
         <GridSmallIcon />
         <input
@@ -327,7 +391,7 @@ function Toolbar(props: ToolbarProps) {
           max={ROW_HEIGHT.max}
           step={10}
           value={rowHeight}
-          style={{ "--fill": `${((rowHeight - ROW_HEIGHT.min) * 100) / (ROW_HEIGHT.max - ROW_HEIGHT.min)}%` } as CSSProperties}
+          style={{ "--zoom-fill": `${((rowHeight - ROW_HEIGHT.min) * 100) / (ROW_HEIGHT.max - ROW_HEIGHT.min)}%` } as CSSProperties}
           onChange={(event) => props.onRowHeight(Number(event.target.value))}
         />
         <GridLargeIcon />
@@ -348,7 +412,8 @@ interface TileProps {
 
 /** One capture in the grid; actions appear on hover. */
 const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, onAction }: TileProps) {
-  const style = { "--a": aspectOf(shot), "--i": Math.min(index, 18) } as CSSProperties;
+  const style = { "--i": Math.min(index, 18) } as CSSProperties;
+  const tags = allTags(shot);
   return (
     <li className={`tile${selected ? " is-selected" : ""}`} style={style}>
       <button
@@ -361,47 +426,33 @@ const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, 
         onClick={() => onSelect(shot.id)}
         onDoubleClick={() => onOpen(shot.id)}
       >
-        <Thumbnail shot={shot} />
-        <span className="tile-shade" aria-hidden="true" />
-        {shot.aiCategory && (
-          <span className="tile-category">
-            <CategoryChip category={shot.aiCategory} />
-          </span>
-        )}
-        <span className="tile-info">
+        <span className="tile-frame">
+          <Thumbnail shot={shot} />
+        </span>
+        <span className="tile-caption">
+          <span className="tile-title">{shot.windowTitle || shot.fileName}</span>
+          <span className="tile-meta">{[shot.app, formatTime(shot.capturedAt)].filter(Boolean).join(" · ")}</span>
           {hit && <Snippet hit={hit} />}
-          {/* A description match shows as the highlighted snippet instead. */}
-          {shot.aiDescription && hit?.field !== "description" && (
-            <span className="shot-ai-line">
-              <span className="shot-description" title={shot.aiDescription}>
-                {shot.aiDescription}
-              </span>
-            </span>
-          )}
-          {shot.tags.length > 0 && (
+          {tags.length > 0 && (
             <span className="tile-tags">
-              {shot.tags.map((tag) => (
+              {tags.map((tag) => (
                 <span key={tag} className="tag">
                   {tag}
                 </span>
               ))}
             </span>
           )}
-          <span className="tile-caption">
-            <span className="tile-time">{formatTime(shot.capturedAt)}</span>
-            {shot.app && <span className="tile-app">{shot.app}</span>}
-          </span>
         </span>
       </button>
       <span className="tile-actions">
-        <button type="button" className="tile-action" aria-label={`Copy ${shot.fileName}`} title="Copy" onClick={() => onAction(shot, "copy")}>
+        <button type="button" className="tile-action" aria-label={`Copy ${shot.fileName}`} title="Copy to the clipboard" onClick={() => onAction(shot, "copy")}>
           <CopyIcon />
-        </button>
-        <button type="button" className="tile-action" aria-label={`Pin ${shot.fileName}`} title="Pin to screen" onClick={() => onAction(shot, "pin")}>
-          <PinIcon />
         </button>
         <button type="button" className="tile-action" aria-label={`Edit ${shot.fileName}`} title="Open in editor" onClick={() => onOpen(shot.id)}>
           <EditIcon />
+        </button>
+        <button type="button" className="tile-action" aria-label={`Pin ${shot.fileName}`} title="Pin to screen" onClick={() => onAction(shot, "pin")}>
+          <PinIcon />
         </button>
       </span>
     </li>
@@ -417,10 +468,13 @@ interface DetailsProps {
   onError: (message: string) => void;
   onNotice: (message: string) => void;
   onClose: () => void;
+  /** Moves to the capture before (-1) or after (1), when there is one. */
+  onStep: (delta: -1 | 1) => void;
+  canStep: { back: boolean; forward: boolean };
 }
 
 /** The selected shot: open, tag, annotate with notes or delete it. */
-function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onClose }: DetailsProps) {
+function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onClose, onStep, canStep }: DetailsProps) {
   // Local so quick successive edits build on each other before the saves land.
   const [tags, setTags] = useState(shot.tags);
   const [notes, setNotes] = useState(shot.notes);
@@ -476,6 +530,14 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
     }
   }
 
+  async function removeAi(tag: string) {
+    try {
+      onUpdated(await removeAiTag(shot.id, tag));
+    } catch (err) {
+      onError(errorMessage(err));
+    }
+  }
+
   const aiTags = shot.aiTags ?? [];
   const described = !!shot.aiDescription || !!shot.aiCategory || aiTags.length > 0;
 
@@ -491,126 +553,155 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
     }
   }
 
+  const when = formatCapturedAt(shot.capturedAt);
   return (
     <aside className="details" aria-label="Capture details">
-      <div className="details-preview" style={{ "--a": aspectOf(shot) } as CSSProperties}>
-        <Thumbnail shot={shot} />
-        <button type="button" className="details-close" aria-label="Close details" onClick={onClose}>
+      <div className="details-top">
+        <span className="details-heading">Details</span>
+        <button type="button" className="icon-button" aria-label="Previous capture" disabled={!canStep.back} onClick={() => onStep(-1)}>
+          <ChevronUpIcon size={15} />
+        </button>
+        <button type="button" className="icon-button" aria-label="Next capture" disabled={!canStep.forward} onClick={() => onStep(1)}>
+          <ChevronDownIcon size={15} />
+        </button>
+        <button type="button" className="icon-button" aria-label="Close details" onClick={onClose}>
           <CloseIcon size={14} />
         </button>
       </div>
 
-      <div className="details-body">
-        <h2 title={shot.path}>{shot.fileName}</h2>
-        <ul className="details-meta">
-          <li>
-            <ClockIcon />
-            {formatCapturedAt(shot.capturedAt)}
-          </li>
-          {shot.app && (
-            <li title={shot.windowTitle ?? undefined}>
-              <AppIcon />
-              <span className="details-source">
-                {shot.app}
-                {shot.windowTitle && <span className="details-window"> — {shot.windowTitle}</span>}
-              </span>
-            </li>
-          )}
-          <li>
-            <ImageIcon />
-            {shot.width} × {shot.height}
-          </li>
-        </ul>
-
-        <button type="button" className="primary-button" onClick={() => void act(openShot)}>
-          <EditIcon />
-          Open in editor
+      <div className="details-scroll">
+        <button
+          type="button"
+          className="details-preview"
+          title="Open in the editor"
+          tabIndex={-1}
+          aria-hidden="true"
+          onDoubleClick={() => void act(openShot)}
+        >
+          <Thumbnail shot={shot} />
         </button>
-        <div className="details-actions">
-          <button type="button" className="pill-button" onClick={() => void act(copyShot, "Copied to the clipboard")}>
-            <CopyIcon />
-            Copy
-          </button>
-          <button type="button" className="pill-button" onClick={() => void act(pinShot)}>
-            <PinIcon />
-            Pin
-          </button>
-          <button type="button" className="pill-button" onClick={() => void act(revealShot)}>
-            <FolderIcon />
-            Show in folder
-          </button>
-        </div>
 
-        <div className="details-field">
-          <label htmlFor="shot-tags">Tags</label>
-          <TagEditor tags={tags} onChange={saveTags} />
-        </div>
+        <div className="details-body">
+          <div>
+            <h2 title={shot.path}>{shot.windowTitle || shot.fileName}</h2>
+            <p className="details-sub">{[shot.app, when].filter(Boolean).join(" · ")}</p>
+          </div>
 
-        <section className="details-ai" aria-labelledby="shot-ai-heading">
-          <div className="details-ai-heading">
-            <span id="shot-ai-heading">
+          <div className="details-actions">
+            <button type="button" className="btn btn-primary" aria-label="Open in editor" onClick={() => void act(openShot)}>
+              <EditIcon />
+              Edit
+            </button>
+            <button type="button" className="btn" onClick={() => void act(copyShot, "Copied to the clipboard")}>
+              <CopyIcon />
+              Copy
+            </button>
+            <button type="button" className="btn btn-icon" aria-label="Pin" title="Pin to screen" onClick={() => void act(pinShot)}>
+              <PinIcon />
+            </button>
+            <button type="button" className="btn btn-icon" aria-label="Show in folder" title="Show in folder" onClick={() => void act(revealShot)}>
+              <FolderIcon />
+            </button>
+          </div>
+
+          <dl className="details-meta">
+            <dt>File</dt>
+            <dd title={shot.path}>{shot.fileName}</dd>
+            {shot.windowTitle && shot.app && (
+              <>
+                <dt>Window</dt>
+                <dd title={shot.windowTitle}>{shot.windowTitle}</dd>
+              </>
+            )}
+            <dt>Size</dt>
+            <dd>
+              {shot.width} × {shot.height}
+            </dd>
+            {shot.aiCategory && (
+              <>
+                <dt>Category</dt>
+                <dd>
+                  <CategoryChip category={shot.aiCategory} />
+                </dd>
+              </>
+            )}
+          </dl>
+
+          <section className="details-block" aria-label="AI description">
+            <h3 className="details-label">
               <SparkleIcon />
-              AI description
-            </span>
-            {shot.aiCategory && <CategoryChip category={shot.aiCategory} />}
-          </div>
-          {shot.aiDescription ? (
-            <p className="details-ai-text">{shot.aiDescription}</p>
-          ) : (
-            <p className="hint">
-              {aiOff ? "Turn on AI descriptions in Settings to describe captures." : "Not described yet."}
-            </p>
-          )}
-          {aiTags.length > 0 && (
-            <span className="details-ai-tags" aria-label="AI tags">
-              {aiTags.map((tag) => (
-                <span key={tag} className="tag tag-ai" title="Suggested by AI">
-                  {tag}
-                </span>
-              ))}
-            </span>
-          )}
-          <div className="details-ai-actions">
-            <button type="button" className="pill-button" disabled={aiOff} onClick={() => void redescribe()}>
-              Re-describe
-            </button>
-            <button type="button" className="pill-button" disabled={!described} onClick={() => void clearAi()}>
-              Clear AI description
-            </button>
-          </div>
-        </section>
-
-        <div className="details-field">
-          <label htmlFor="shot-notes">Notes</label>
-          <textarea
-            id="shot-notes"
-            rows={4}
-            value={notes}
-            placeholder="What's this capture about?"
-            onChange={(event) => setNotes(event.target.value)}
-            onBlur={() => void saveNotes()}
-          />
-        </div>
-
-        <div className={`details-delete${confirming ? " is-confirming" : ""}`}>
-          {confirming ? (
-            <>
-              <span>Delete this capture and its annotations?</span>
-              <div className="details-delete-buttons">
-                <button type="button" className="danger-button" disabled={busy} onClick={() => void remove()}>
-                  Delete permanently
+              Description
+              <span className="details-label-actions">
+                <button type="button" className="link-button" aria-label="Re-describe" disabled={aiOff} onClick={() => void redescribe()}>
+                  Redo
                 </button>
-                <button type="button" className="pill-button" disabled={busy} onClick={() => setConfirming(false)}>
-                  Cancel
+                <button
+                  type="button"
+                  className="link-button link-muted"
+                  aria-label="Clear AI description"
+                  disabled={!described}
+                  onClick={() => void clearAi()}
+                >
+                  Clear
                 </button>
-              </div>
-            </>
-          ) : (
-            <button type="button" className="ghost-danger" onClick={() => setConfirming(true)}>
-              <TrashIcon />
-              Delete…
-            </button>
-          )}
+              </span>
+            </h3>
+            {shot.aiDescription ? (
+              <p className="details-ai-text">{shot.aiDescription}</p>
+            ) : (
+              <p className="hint">
+                {aiOff ? "Turn on AI descriptions in Settings to describe captures." : "Not described yet."}
+              </p>
+            )}
+          </section>
+
+          <div className="details-block">
+            <label className="details-label" htmlFor="shot-tags">
+              <TagIcon />
+              Tags
+            </label>
+            <TagEditor tags={tags} onChange={saveTags} aiTags={aiTags} onRemoveAiTag={(tag) => void removeAi(tag)} />
+            {aiTags.some((tag) => !tags.some((own) => own.toLowerCase() === tag.toLowerCase())) && (
+              <p className="details-note">
+                <span aria-hidden="true">✦</span> Added by AI. Remove any you don't want.
+              </p>
+            )}
+          </div>
+
+          <div className="details-block">
+            <label className="details-label" htmlFor="shot-notes">
+              Notes
+            </label>
+            <textarea
+              id="shot-notes"
+              rows={3}
+              value={notes}
+              placeholder="Add a note…"
+              onChange={(event) => setNotes(event.target.value)}
+              onBlur={() => void saveNotes()}
+            />
+          </div>
+
+          <div className={`details-delete${confirming ? " is-confirming" : ""}`}>
+            {confirming ? (
+              <>
+                <span>Delete this capture and its annotations?</span>
+                <div className="details-delete-buttons">
+                  <button type="button" className="btn btn-danger" disabled={busy} onClick={() => void remove()}>
+                    Delete permanently
+                  </button>
+                  <button type="button" className="btn" disabled={busy} onClick={() => setConfirming(false)}>
+                    Cancel
+                  </button>
+                </div>
+              </>
+            ) : (
+              <button type="button" className="link-button link-danger" onClick={() => setConfirming(true)}>
+                <TrashIcon />
+                Delete…
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </aside>
@@ -685,7 +776,30 @@ function neighbour(tiles: HTMLElement[], from: HTMLElement, key: string): HTMLEl
   return best;
 }
 
-function LibraryWindow() {
+interface LibraryWindowProps {
+  /** The heading; "Library" by default. */
+  title?: string;
+  /**
+   * Set when the Grab-it window's sidebar picks the app: the filter bar
+   * then leaves it out, and changes to it (Clear) are passed up.
+   */
+  appFilter?: string;
+  onAppFilter?: (app: string) => void;
+  /** As `appFilter`, for the tag the sidebar picks. */
+  tagFilter?: string;
+  onTagFilter?: (tag: string) => void;
+  /** Shown at the end of the title bar (the Grab-it window's New capture button). */
+  toolbarEnd?: ReactNode;
+}
+
+function LibraryWindow({
+  title = "Library",
+  appFilter,
+  onAppFilter,
+  tagFilter,
+  onTagFilter,
+  toolbarEnd,
+}: LibraryWindowProps = {}) {
   const [shots, setShots] = useState<Shot[]>([]);
   const [total, setTotal] = useState(0);
   const [loaded, setLoaded] = useState(false);
@@ -704,7 +818,21 @@ function LibraryWindow() {
   // The search box as typed, and as searched once typing pauses.
   const [text, setText] = useState("");
   const [searchedText, setSearchedText] = useState("");
-  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [ownFilters, setOwnFilters] = useState<Filters>(NO_FILTERS);
+  const filters = useMemo(() => {
+    let merged = ownFilters;
+    if (appFilter !== undefined) merged = { ...merged, app: appFilter };
+    if (tagFilter !== undefined) merged = { ...merged, tag: tagFilter };
+    return merged;
+  }, [ownFilters, appFilter, tagFilter]);
+  const setFilters = useCallback(
+    (next: Filters) => {
+      if (appFilter !== undefined && next.app !== appFilter) onAppFilter?.(next.app);
+      if (tagFilter !== undefined && next.tag !== tagFilter) onTagFilter?.(next.tag);
+      setOwnFilters(next);
+    },
+    [appFilter, onAppFilter, tagFilter, onTagFilter],
+  );
   const [options, setOptions] = useState<FilterOptions>({ apps: [], tags: [], categories: [] });
   // Null until the backend says; the AI actions then stay available.
   const [ai, setAi] = useState<AiStatus | null>(null);
@@ -1018,25 +1146,39 @@ function LibraryWindow() {
     () => (query.text ? [{ day: -1, items: shots }] : groupByDay(shots)),
     [shots, query.text],
   );
-  const selected = shots.find((shot) => shot.id === selectedId) ?? null;
+  const selectedIndex = shots.findIndex((shot) => shot.id === selectedId);
+  const selected = selectedIndex >= 0 ? shots[selectedIndex] : null;
+
+  function step(delta: -1 | 1) {
+    const next = shots[selectedIndex + delta];
+    if (!next) return;
+    setSelectedId(next.id);
+    scroller.current
+      ?.querySelector<HTMLElement>(`[data-shot-id="${next.id}"]`)
+      ?.scrollIntoView?.({ block: "nearest" });
+  }
   let tileIndex = 0;
 
   return (
     <main className="library" style={{ "--row-h": `${rowHeight}px` } as CSSProperties}>
       <header className={`library-top${scrolled ? " is-scrolled" : ""}`}>
-        <div className="library-title">
-          <h1>Library</h1>
-          {loaded && (
-            <span className="count-pill">
-              {searching
-                ? total === 1
-                  ? "1 result"
-                  : `${total} results`
-                : total === 1
-                  ? "1 capture"
-                  : `${total} captures`}
-            </span>
-          )}
+        <div className="library-bar" data-tauri-drag-region>
+          <div className="library-title" data-tauri-drag-region>
+            <h1>{title}</h1>
+            {loaded && (
+              <span className="count-pill">
+                {searching
+                  ? total === 1
+                    ? "1 result"
+                    : `${total} results`
+                  : total === 1
+                    ? "1 capture"
+                    : `${total} captures`}
+              </span>
+            )}
+          </div>
+          <SearchField text={text} searchRef={searchBox} onText={setText} onSubmit={() => setSearchedText(text)} />
+          {toolbarEnd}
         </div>
         <Toolbar
           text={text}
@@ -1044,12 +1186,11 @@ function LibraryWindow() {
           options={options}
           active={searching || text.length > 0}
           rowHeight={rowHeight}
-          searchRef={searchBox}
-          onText={setText}
-          onSubmit={() => setSearchedText(text)}
           onFilters={setFilters}
           onClear={clearSearch}
           onRowHeight={setRowHeight}
+          hideAppFilter={appFilter !== undefined}
+          now={now}
         />
         <OcrBanner status={ocr} onRetry={retry} />
         {aiNotice && (
@@ -1144,6 +1285,8 @@ function LibraryWindow() {
             onError={setError}
             onNotice={(message) => setNotice({ text: message, key: Date.now() })}
             onClose={() => setSelectedId(null)}
+            canStep={{ back: selectedIndex > 0, forward: selectedIndex < shots.length - 1 }}
+            onStep={step}
           />
         )}
       </div>

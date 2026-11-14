@@ -1,0 +1,297 @@
+/* The hub under the tray icon ("Graphite"): a menu, not a dashboard. One
+   highlighted capture, a plain list with shortcuts, the last few captures. */
+html:has(.hub),
+body:has(.hub) {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.hub {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  height: 100vh;
+  padding: 8px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  background: var(--bg);
+  /* The window itself is rounded on macOS (hub.rs); the edge follows it. */
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px var(--border);
+  user-select: none;
+}
+
+.hub-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 8px 6px;
+}
+
+.hub-name {
+  margin-right: auto;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.hub-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.hub-icon:where(:hover) {
+  color: var(--text);
+  background: var(--fill);
+}
+
+.hub-scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.hub-item {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 450;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 7px;
+}
+
+.hub-item > .icon:first-child {
+  color: var(--text-muted);
+}
+
+.hub-item:where(:hover, :focus-visible) {
+  background: var(--fill-hover);
+}
+
+.hub-item > .icon:last-child:not(:first-child) {
+  margin-left: auto;
+  color: var(--text-faint);
+  transition: transform 140ms;
+}
+
+.hub-item[aria-expanded="true"] > .icon:last-child:not(:first-child) {
+  transform: rotate(90deg);
+}
+
+.hub-item.is-primary {
+  color: var(--on-accent);
+  font-weight: 600;
+  background: var(--accent);
+}
+
+.hub-item.is-primary > .icon:first-child,
+.hub-item.is-primary .hub-key {
+  color: var(--on-accent);
+  opacity: 0.75;
+}
+
+.hub-item.is-primary:where(:hover) {
+  background: var(--accent-hover);
+}
+
+.hub-key {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.hub-sep {
+  flex: none;
+  width: calc(100% - 8px);
+  margin: 6px 4px;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.hub-sub {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  margin: 0 0 2px 26px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+
+.hub-sub button {
+  height: 28px;
+  padding: 0 8px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 450;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+}
+
+.hub-sub button:where(:hover, :focus-visible) {
+  color: var(--text);
+  background: var(--fill-hover);
+}
+
+.hub-recent-head {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 2px 8px 6px;
+}
+
+.hub-recent-head h2 {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.hub-recent-head .link-button {
+  font-size: 12px;
+}
+
+.hub-recent {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 0 8px 4px;
+}
+
+.hub-recent-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.hub-recent-shot {
+  display: block;
+  aspect-ratio: 16 / 10;
+  padding: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.hub-recent-shot:where(:hover) {
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
+
+.hub-recent-shot img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top left;
+}
+
+.hub-recent-time {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.hub-empty {
+  margin: 0;
+  padding: 2px 8px 6px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+
+.hub-error {
+  flex: none;
+  margin: 6px 4px 0;
+  padding: 6px 8px;
+  color: var(--danger);
+  font-size: 12px;
+  background: var(--surface);
+  border-radius: 6px;
+}
+
+.hub-update {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 9px;
+  margin: 6px 2px 0;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 450;
+  text-align: left;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-edge);
+  border-radius: 7px;
+}
+
+.hub-update::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+}
+
+.hub-update span {
+  margin-left: auto;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.hub-update:where(:hover) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.hub-foot {
+  display: flex;
+  flex: none;
+  gap: 14px;
+  margin-top: 6px;
+  padding: 8px 8px 2px;
+  border-top: 1px solid var(--border);
+}
+
+.hub-foot .link-button {
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 450;
+}
+
+.hub-foot .link-button:where(:hover) {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.hub-quit {
+  margin-left: auto;
+}

@@ -170,11 +170,15 @@ export function ChipSelect({ label, icon, allLabel, value, options, format = asI
 interface DateChipProps {
   fromDate: string;
   toDate: string;
+  /** What the chip says with no date chosen; "Any time" by default. */
+  idleLabel?: string;
+  /** Presets shown elsewhere as pills: the chip stays idle while one of them is on. */
+  quickPresets?: string[];
   onChange: (range: { fromDate: string; toDate: string }) => void;
 }
 
 /** A pill for the capture date: quick presets or a custom range. */
-export function DateChip({ fromDate, toDate, onChange }: DateChipProps) {
+export function DateChip({ fromDate, toDate, idleLabel = "Any time", quickPresets = [], onChange }: DateChipProps) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -182,7 +186,12 @@ export function DateChip({ fromDate, toDate, onChange }: DateChipProps) {
   useOutsideClick(root, open, close);
   // Presets are relative to when the menu was last opened.
   const [now, setNow] = useState(Date.now);
-  const label = dateFilterLabel(fromDate, toDate, now);
+  const quickOn = DATE_PRESETS.some((preset) => {
+    if (!quickPresets.includes(preset.id)) return false;
+    const range = preset.range(now);
+    return range.fromDate === fromDate && range.toDate === toDate;
+  });
+  const label = quickOn ? null : dateFilterLabel(fromDate, toDate, now);
 
   function pick(range: { fromDate: string; toDate: string }) {
     onChange(range);
@@ -215,7 +224,7 @@ export function DateChip({ fromDate, toDate, onChange }: DateChipProps) {
         }}
       >
         <CalendarIcon />
-        <span className="chip-text">{label ?? "Any time"}</span>
+        <span className="chip-text">{label ?? idleLabel}</span>
         <ChevronIcon />
       </button>
       {open && (
@@ -275,10 +284,15 @@ export function DateChip({ fromDate, toDate, onChange }: DateChipProps) {
 interface TagEditorProps {
   tags: string[];
   onChange: (tags: string[]) => void;
+  /** Tags the AI added; shown after yours, each removable on its own. */
+  aiTags?: string[];
+  onRemoveAiTag?: (tag: string) => void;
 }
 
 /** Tags as removable chips; type and press Enter or comma to add. */
-export function TagEditor({ tags, onChange }: TagEditorProps) {
+export function TagEditor({ tags, onChange, aiTags = [], onRemoveAiTag }: TagEditorProps) {
+  const own = new Set(tags.map((tag) => tag.toLowerCase()));
+  const added = aiTags.filter((tag) => !own.has(tag.toLowerCase()));
   const [draft, setDraft] = useState("");
   const input = useRef<HTMLInputElement>(null);
 
@@ -312,6 +326,24 @@ export function TagEditor({ tags, onChange }: TagEditorProps) {
           </button>
         </span>
       ))}
+      {added.map((tag) => (
+        <span key={`ai:${tag}`} className="tag tag-editable tag-ai" title="Added by AI">
+          {tag}
+          {onRemoveAiTag && (
+            <button
+              type="button"
+              className="tag-remove"
+              aria-label={`Remove AI tag ${tag}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onRemoveAiTag(tag);
+              }}
+            >
+              <CloseIcon size={11} />
+            </button>
+          )}
+        </span>
+      ))}
       <input
         ref={input}
         id="shot-tags"
@@ -333,6 +365,57 @@ export function TagEditor({ tags, onChange }: TagEditorProps) {
         }}
         onBlur={() => commit()}
       />
+    </div>
+  );
+}
+
+interface FilterMenuProps {
+  /** How many filters are set, shown on the button. */
+  count: number;
+  children: ReactNode;
+}
+
+/** One Filter button holding the less used filters, so the bar stays short. */
+export function FilterMenu({ count, children }: FilterMenuProps) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const close = useMemo(() => () => setOpen(false), []);
+  useOutsideClick(root, open, close);
+  return (
+    <div
+      className="filter-menu"
+      ref={root}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && open && !event.defaultPrevented) {
+          event.preventDefault();
+          event.stopPropagation();
+          setOpen(false);
+        }
+      }}
+    >
+      <button
+        type="button"
+        className={`chip${count > 0 ? " chip-on" : ""}`}
+        aria-label="Filters"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen((was) => !was)}
+      >
+        <svg className="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+          <path d="M4 6h16M7 12h10M10 18h4" />
+        </svg>
+        Filter
+        {count > 0 && (
+          <span className="chip-count" aria-hidden="true">
+            {count}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="popover filter-popover" role="dialog" aria-label="Filters">
+          {children}
+        </div>
+      )}
     </div>
   );
 }

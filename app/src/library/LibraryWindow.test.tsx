@@ -170,6 +170,13 @@ function mockBackend(shots: Shot[]): Backend {
         case "ai_redescribe":
           find(args.id as number);
           return null;
+        case "library_remove_ai_tag": {
+          const current = find(args.id as number);
+          const tag = String(args.tag).toLowerCase();
+          const updated = { ...current, aiTags: current.aiTags.filter((item) => item.toLowerCase() !== tag) };
+          backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
+          return updated;
+        }
         case "ai_clear": {
           const updated = { ...find(args.id as number), aiDescription: null, aiCategory: null, aiTags: [] };
           backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
@@ -425,6 +432,27 @@ describe("LibraryWindow search", () => {
     expect(callsTo(backend, "library_list").length).toBeGreaterThan(1);
   });
 
+  it("filters by the date pills", async () => {
+    const now = Date.now();
+    mockBackend([shot(1, { capturedAt: now }), shot(2, { capturedAt: now - 40 * 86_400_000 })]);
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: "Grab-it 2.png" });
+    expect(screen.getByRole("button", { name: "Any time" })).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(screen.getByRole("button", { name: "Today" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Grab-it 2.png" })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Grab-it 1.png" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Today" })).toHaveAttribute("aria-pressed", "true");
+    // The date menu stays idle: the time switch already says which dates are shown.
+    await userEvent.click(screen.getByRole("button", { name: "Filters" }));
+    expect(screen.getByRole("button", { name: "Filter by date" })).toHaveTextContent("Any dates");
+    expect(screen.getByRole("button", { name: "Filters" })).not.toHaveTextContent("1");
+    await userEvent.click(screen.getByRole("button", { name: "Filters" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Any time" }));
+    expect(await screen.findByRole("button", { name: "Grab-it 2.png" })).toBeInTheDocument();
+  });
+
   it("filters by app, tag and date", async () => {
     const backend = mockBackend([
       shot(1, { tags: ["receipts"], capturedAt: new Date(2026, 2, 1, 12).getTime() }),
@@ -435,6 +463,7 @@ describe("LibraryWindow search", () => {
     await screen.findByRole("button", { name: "Grab-it 3.png" });
     await waitFor(() => expect(callsTo(backend, "library_filter_options").length).toBeGreaterThan(0));
 
+    await userEvent.click(screen.getByRole("button", { name: "Filters" }));
     await userEvent.click(screen.getByRole("button", { name: "Filter by app" }));
     const apps = screen.getByRole("listbox", { name: "Filter by app" });
     expect(within(apps).getByRole("option", { name: "code" })).toBeInTheDocument();
@@ -448,8 +477,10 @@ describe("LibraryWindow search", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "Grab-it 3.png" })).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Grab-it 1.png" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Filter by tag" })).toHaveTextContent("receipts");
+    expect(screen.getByRole("button", { name: "Filters" })).toHaveTextContent("2");
 
     await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+    await userEvent.click(screen.getByRole("button", { name: "Filters" }));
     await userEvent.click(screen.getByRole("button", { name: "Filter by date" }));
     fireEvent.change(screen.getByLabelText("Captured from"), { target: { value: "2026-03-05" } });
     fireEvent.change(screen.getByLabelText("Captured to"), { target: { value: "2026-03-05" } });
@@ -519,19 +550,20 @@ describe("LibraryWindow AI descriptions", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-  it("shows a one-line description and category chip on cards", async () => {
+  it("shows AI tags on cards and leaves the description to the details", async () => {
     mockBackend([described(1), shot(2)]);
     render(<LibraryWindow />);
 
     const card = await screen.findByRole("button", { name: "Grab-it 1.png" });
-    const text = within(card).getByText(/A Rust compiler error/);
-    expect(text).toHaveClass("shot-description");
-    expect(text).toHaveAttribute("title", "A Rust compiler error about a borrowed value in main.rs, shown in VS Code");
-    expect(within(card).getByText("Error / dialog")).toHaveClass("category-chip");
-    // AI tags stay in the details, not on the card.
-    expect(within(card).queryByText("rust")).not.toBeInTheDocument();
-    const plain = screen.getByRole("button", { name: "Grab-it 2.png" });
-    expect(plain.querySelector(".shot-ai-line")).toBeNull();
+    // AI tags show on the card like the user's own.
+    expect(within(card).getByText("rust")).toHaveClass("tag");
+    expect(within(card).queryByText(/A Rust compiler error/)).not.toBeInTheDocument();
+    expect(within(card).queryByText("Error / dialog")).not.toBeInTheDocument();
+
+    await userEvent.click(card);
+    const details = screen.getByRole("complementary", { name: "Capture details" });
+    expect(within(details).getByText(/A Rust compiler error/)).toBeInTheDocument();
+    expect(within(details).getByText("Error / dialog")).toHaveClass("category-chip");
   });
 
   it("highlights a match in the description as the snippet", async () => {
@@ -555,6 +587,7 @@ describe("LibraryWindow AI descriptions", () => {
     render(<LibraryWindow />);
     await screen.findByRole("button", { name: "Grab-it 3.png" });
     await waitFor(() => expect(callsTo(backend, "library_filter_options").length).toBeGreaterThan(0));
+    await userEvent.click(screen.getByRole("button", { name: "Filters" }));
     const chip = screen.getByRole("button", { name: "Filter by category" });
     expect(chip).toHaveTextContent("All categories");
     await userEvent.click(chip);
@@ -573,10 +606,11 @@ describe("LibraryWindow AI descriptions", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Clear" }));
     await waitFor(() => expect(screen.getByText("3 captures")).toBeInTheDocument());
-    expect(chip).toHaveTextContent("All categories");
+    await userEvent.click(screen.getByRole("button", { name: "Filters" }));
+    expect(screen.getByRole("button", { name: "Filter by category" })).toHaveTextContent("All categories");
   });
 
-  it("shows the description, category and AI tags apart from the user's tags", async () => {
+  it("shows AI tags with the user's tags, each removable", async () => {
     mockBackend([described(1, { tags: ["work"] })]);
     render(<LibraryWindow />);
     await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
@@ -584,13 +618,17 @@ describe("LibraryWindow AI descriptions", () => {
     const details = screen.getByRole("complementary", { name: "Capture details" });
     const ai = within(details).getByRole("region", { name: "AI description" });
     expect(within(ai).getByText(/A Rust compiler error about a borrowed value/)).toBeInTheDocument();
-    expect(within(ai).getByText("Error / dialog")).toBeInTheDocument();
-    const aiTags = within(ai).getByLabelText("AI tags");
-    expect(within(aiTags).getByText("rust")).toHaveClass("tag", "tag-ai");
-    expect(within(aiTags).getByText("compiler")).toHaveAttribute("title", "Suggested by AI");
-    // User tags stay in their own field.
+    expect(within(details).getByText("Error / dialog")).toBeInTheDocument();
+    expect(within(ai).queryByText("rust")).not.toBeInTheDocument();
+
     expect(within(details).getByRole("button", { name: "Remove tag work" })).toBeInTheDocument();
-    expect(within(ai).queryByText("work")).not.toBeInTheDocument();
+    expect(within(details).getByText("rust")).toHaveClass("tag", "tag-ai");
+    expect(within(details).getByText("compiler")).toHaveAttribute("title", "Added by AI");
+
+    await userEvent.click(within(details).getByRole("button", { name: "Remove AI tag rust" }));
+    await waitFor(() => expect(within(details).queryByText("rust")).not.toBeInTheDocument());
+    expect(within(details).getByText("compiler")).toBeInTheDocument();
+    expect(within(details).getByRole("button", { name: "Remove tag work" })).toBeInTheDocument();
   });
 
   it("re-describes a capture and clears its AI description", async () => {
@@ -776,7 +814,7 @@ describe("LibraryWindow AI descriptions", () => {
     });
 
     const card = screen.getByRole("button", { name: "Grab-it 1.png" });
-    expect(await within(card).findByText(/A Rust compiler error/)).toBeInTheDocument();
+    expect(await within(card).findByText("rust")).toBeInTheDocument();
     expect(screen.queryByText(/Describing/)).not.toBeInTheDocument();
   });
 

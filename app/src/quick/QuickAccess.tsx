@@ -208,7 +208,7 @@ function QuickAccess() {
       });
   }, []);
 
-  const lifetime = item ? dismissAfter(item) : null;
+  const lifetime = item ? dismissAfter(item, current?.seconds ?? 8) : null;
   const paused = hovered || error !== null;
   useEffect(() => {
     if (lifetime === null || paused) return;

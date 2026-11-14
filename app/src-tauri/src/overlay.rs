@@ -615,6 +615,9 @@ pub struct OverlayInfo {
     pub image_width: u32,
     /// Front to back.
     pub windows: Vec<OverlayWindow>,
+    /// How far down the monitor the menu bar or a camera notch reaches, as
+    /// a share of its height (0 to 0.2): the hint goes below it.
+    pub top_inset: f64,
 }
 
 /// Windows that show on `monitor`, moved to the monitor's origin.
@@ -718,7 +721,88 @@ pub fn overlay_info(window: WebviewWindow, state: State<'_, OverlayState>) -> Op
         monitor_height: frame.monitor.height,
         image_width: frame.image.width(),
         windows: windows_on_monitor(&frame.monitor, &session.windows),
+        top_inset: top_inset(&window),
     })
+}
+
+/// How far down `window`'s monitor the menu bar or a notch reaches, as a
+/// share of the monitor's height. The work area leaves out a menu bar that
+/// is showing; a notch is read from macOS, since it stays when the menu bar
+/// hides.
+fn top_inset(window: &WebviewWindow) -> f64 {
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return 0.0;
+    };
+    let height = f64::from(monitor.size().height);
+    if height <= 0.0 {
+        return 0.0;
+    }
+    let menu_bar = f64::from((monitor.work_area().position.y - monitor.position().y).max(0));
+    let notch = notch_height(window) * monitor.scale_factor();
+    (menu_bar.max(notch) / height).clamp(0.0, 0.2)
+}
+
+/// The camera notch's height in points, or 0 without one.
+#[cfg(target_os = "macos")]
+fn notch_height(window: &WebviewWindow) -> f64 {
+    use objc2::{
+        Encode, Encoding,
+        runtime::{AnyObject, Bool},
+    };
+
+    /// `NSEdgeInsets`: top, left, bottom, right.
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct EdgeInsets {
+        top: f64,
+        left: f64,
+        bottom: f64,
+        right: f64,
+    }
+    // SAFETY: four doubles, laid out as AppKit's NSEdgeInsets.
+    unsafe impl Encode for EdgeInsets {
+        const ENCODING: Encoding = Encoding::Struct(
+            "NSEdgeInsets",
+            &[
+                Encoding::Double,
+                Encoding::Double,
+                Encoding::Double,
+                Encoding::Double,
+            ],
+        );
+    }
+
+    let Ok(ns_window) = window.ns_window() else {
+        return 0.0;
+    };
+    let ns_window = ns_window.cast::<AnyObject>();
+    if ns_window.is_null() {
+        return 0.0;
+    }
+    // SAFETY: `ns_window` is this window's live NSWindow. Commands that are
+    // not async run on the main thread, where AppKit may be used.
+    // `safeAreaInsets` (macOS 12) is only asked for when the screen has it.
+    unsafe {
+        let screen: *mut AnyObject = objc2::msg_send![ns_window, screen];
+        if screen.is_null() {
+            return 0.0;
+        }
+        let has: Bool = objc2::msg_send![screen, respondsToSelector: objc2::sel!(safeAreaInsets)];
+        if !has.as_bool() {
+            return 0.0;
+        }
+        let insets: EdgeInsets = objc2::msg_send![screen, safeAreaInsets];
+        if insets.top.is_finite() {
+            insets.top.max(0.0)
+        } else {
+            0.0
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn notch_height(_window: &WebviewWindow) -> f64 {
+    0.0
 }
 
 /// The frozen monitor image as PNG bytes.

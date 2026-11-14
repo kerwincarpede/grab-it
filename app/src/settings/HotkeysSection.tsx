@@ -106,44 +106,47 @@ function HotkeysSection({ saved, disabled, onSave }: HotkeysSectionProps) {
   }
 
   return (
-    <section className="field hotkeys" aria-labelledby="hotkeys-heading">
-      <h2 id="hotkeys-heading">Hotkeys</h2>
-      {FIELDS.map(({ key, label }) => (
-        <div className="hotkey-row" key={key}>
-          <label htmlFor={`hotkey-${key}`}>{label}</label>
-          <input
-            id={`hotkey-${key}`}
-            type="text"
-            readOnly
-            value={current[key]}
-            data-hotkey-field=""
-            onKeyDown={record(key)}
-            onKeyUp={recordPrintScreen(key)}
-            onFocus={pause}
-            onBlur={(event) => {
-              clearPrintScreenDown();
-              resume(event);
-            }}
-            disabled={disabled}
-            aria-describedby="hotkeys-hint"
-          />
+    <section className="hotkeys" aria-labelledby="hotkeys-heading">
+      <h2 className="group-heading" id="hotkeys-heading">
+        Capture hotkeys
+      </h2>
+      <div className="group">
+        {FIELDS.map(({ key, label }) => (
+          <div className="row hotkey-row" key={key}>
+            <label className="row-title" htmlFor={`hotkey-${key}`}>
+              {label}
+            </label>
+            <input
+              id={`hotkey-${key}`}
+              type="text"
+              readOnly
+              value={current[key]}
+              data-hotkey-field=""
+              onKeyDown={record(key)}
+              onKeyUp={recordPrintScreen(key)}
+              onFocus={pause}
+              onBlur={(event) => {
+                clearPrintScreenDown();
+                resume(event);
+              }}
+              disabled={disabled}
+              aria-describedby="hotkeys-hint"
+            />
+          </div>
+        ))}
+        <div className="row">
+          <span className="row-hint" id="hotkeys-hint">
+            Click a field and press the new keys.
+          </span>
+          <span className="row-control">
+            <button type="button" className="pill" onClick={() => setDraft(null)} disabled={busy || !changed}>
+              Revert
+            </button>
+            <button type="button" className="pill is-primary" onClick={save} disabled={disabled || busy || !changed}>
+              Save hotkeys
+            </button>
+          </span>
         </div>
-      ))}
-      <p className="hint" id="hotkeys-hint">
-        Click a field and press the new keys.
-      </p>
-      <div className="hotkey-actions">
-        <button type="button" onClick={save} disabled={disabled || busy || !changed}>
-          Save hotkeys
-        </button>
-        <button
-          type="button"
-          className="secondary"
-          onClick={() => setDraft(null)}
-          disabled={busy || !changed}
-        >
-          Revert
-        </button>
       </div>
     </section>
   );

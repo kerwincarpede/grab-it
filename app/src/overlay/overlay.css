@@ -9,13 +9,6 @@
   initial-value: 0;
 }
 
-/* The green wash on a hovered window, registered so it can fade in. */
-@property --overlay-wash {
-  syntax: "<number>";
-  inherits: false;
-  initial-value: 0.11;
-}
-
 /*
  * A see-through overlay window: the page must not paint a backdrop of its
  * own. The colour scheme is pinned because a dark one makes the browser
@@ -29,7 +22,10 @@
 /* Capture overlay: the frozen monitor fills the window. */
 .overlay {
   --overlay-accent: #2f81f7;
-  --overlay-window: 52 199 89;
+  /* A hovered window's edge: a violet that reads on light and dark apps. */
+  --overlay-window: 167 139 250;
+  /* Around a hovered window: near black, so the window is what you see. */
+  --overlay-around: rgb(8 9 12 / 52%);
   /*
    * A cool slate rather than black: it darkens a light screen and lifts a
    * dark one, so the tint shows on either.
@@ -144,32 +140,38 @@
 }
 
 /*
- * A hovered window keeps half the slate tint under a light green wash, so
- * it stands out from the screen without the screen ever going untinted,
- * however large the window is. A soft green edge, rounded like the windows
- * themselves, and a short glide from one window to the next.
+ * A hovered window is shown as it is: no tint on it at all. Everything
+ * around it steps back, darker and blurred (the blur is a copy of the
+ * frozen screen with the window cut out, `.overlay-image-blur`), and the
+ * window gets a crisp violet edge with a faint glow, rounded like the windows
+ * themselves. A short glide from one window to the next.
  */
 .overlay-window {
-  background:
-    linear-gradient(rgb(var(--overlay-window) / var(--overlay-wash)) 0 0),
-    rgb(var(--overlay-tint) / calc(var(--overlay-dim-alpha) * 0.5));
+  background: none;
   border-radius: 10px;
   box-shadow:
-    0 0 0 1.5px rgb(var(--overlay-window) / 70%),
-    0 0 0 5px rgb(var(--overlay-window) / 14%),
-    0 0 0 100vmax var(--overlay-dim);
+    0 0 0 2px rgb(var(--overlay-window)),
+    0 0 10px rgb(var(--overlay-window) / 16%),
+    0 0 0 100vmax var(--overlay-around);
   transition:
     left 90ms ease-out,
     top 90ms ease-out,
     width 90ms ease-out,
     height 90ms ease-out;
-  animation: overlay-window-in 110ms ease-out;
+  animation: overlay-window-in 120ms ease-out;
 }
 
 @keyframes overlay-window-in {
   from {
-    --overlay-wash: 0;
+    opacity: 0;
   }
+}
+
+/* The frozen screen again, blurred, with the hovered window cut out. */
+.overlay-image-blur {
+  filter: blur(10px) saturate(0.9);
+  transition: clip-path 90ms ease-out;
+  animation: overlay-window-in 120ms ease-out;
 }
 
 /* A hovered window is a suggestion, not a selection: no ticks. */
@@ -264,7 +266,7 @@
   align-items: center;
   justify-content: center;
   height: 46px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   line-height: 15px;
@@ -288,24 +290,30 @@
 }
 
 /* Hint pill, top centre. */
+/*
+ * The hint, in the Grab-it window's look: a quiet dark panel with a hairline
+ * edge, plain text, and keys drawn as small keycaps. It sits just below the
+ * menu bar or camera notch (its `top` comes from the backend).
+ */
 .overlay-hint {
   position: absolute;
-  top: 20px;
+  top: 12px;
   left: 50%;
   display: flex;
-  gap: 14px;
+  gap: 12px;
   align-items: center;
   max-width: calc(100% - 32px);
-  padding: 7px 14px;
+  padding: 7px 8px 7px 14px;
+  color: #ecedef;
+  font-family: "Instrument Sans Variable", system-ui, -apple-system, sans-serif;
   font-size: 13px;
   line-height: 18px;
   white-space: nowrap;
-  background: var(--overlay-panel);
-  border-radius: 999px;
-  box-shadow:
-    0 0 0 1px var(--overlay-panel-edge),
-    0 8px 24px rgb(0 0 0 / 35%);
-  backdrop-filter: blur(14px) saturate(160%);
+  background: rgb(23 24 27 / 92%);
+  border: 1px solid #2a2c31;
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
+  backdrop-filter: blur(16px) saturate(140%);
   transform: translateX(-50%);
   transition: opacity 120ms ease-out;
   pointer-events: none;
@@ -324,18 +332,18 @@
 }
 
 .overlay-hint-text[data-error="true"] {
-  color: #ff9a8f;
+  color: #ec7a80;
 }
 
 .overlay-keys {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   margin: 0;
-  padding: 0 0 0 14px;
+  padding: 0 0 0 12px;
+  color: #8d919a;
   font-size: 12px;
-  color: rgb(255 255 255 / 68%);
   list-style: none;
-  border-left: 1px solid var(--overlay-panel-edge);
+  border-left: 1px solid #2a2c31;
 }
 
 .overlay-keys li {
@@ -345,12 +353,20 @@
 }
 
 .overlay-keys kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 19px;
+  box-sizing: border-box;
   padding: 0 5px;
+  color: #c9ccd2;
   font: inherit;
   font-size: 11px;
-  color: #fff;
-  background: rgb(255 255 255 / 14%);
-  border-radius: 4px;
+  font-weight: 500;
+  background: #1c1e22;
+  border: 1px solid #2e3036;
+  border-bottom-width: 2px;
+  border-radius: 5px;
 }
 
 @media (prefers-reduced-motion: reduce) {

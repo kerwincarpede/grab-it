@@ -36,7 +36,7 @@ use crate::{
     ai_cli,
     commands::{SettingsState, lock},
     library::{AiDescription, AiJob, LIBRARY_CHANGED_EVENT, LibraryError, LibraryState},
-    settings::{AiProvider, AiSettings, CLAUDE_CODE_MODEL},
+    settings::{AiProvider, AiSettings},
 };
 
 /// What a capture can be. Mirrors `CATEGORIES` in src/library/api.ts.
@@ -69,8 +69,11 @@ pub const RETRY_AFTER: Duration = Duration::from_secs(60);
 const MAX_OCR_CHARS: usize = 2000;
 /// How much of the window title goes into the prompt.
 const MAX_TITLE_CHARS: usize = 200;
-const MAX_TAGS: usize = 6;
-const MAX_TAG_CHARS: usize = 32;
+/// AI tags stay few and short, so they read at a glance on a tile.
+const MAX_TAGS: usize = 3;
+const MAX_TAG_CHARS: usize = 20;
+/// A tag of more words than this is a phrase, and is dropped.
+const MAX_TAG_WORDS: usize = 2;
 const MAX_DESCRIPTION_CHARS: usize = 600;
 /// The most of a response that is read.
 const MAX_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
@@ -248,8 +251,9 @@ pub fn prompt(job: &AiJob) -> String {
          - description: one or two sentences on what the screenshot shows and what it is \
          about. Name the app, site, product, error or topic someone might search for.\n\
          - category: exactly one of {}.\n\
-         - tags: up to {MAX_TAGS} short lowercase keywords of one or two words, useful for \
-         searching.\n",
+         - tags: up to {MAX_TAGS} lowercase single-word tags, most specific first, such as \
+         the app, product, language or topic. No phrases, no generic words like \
+         \"screenshot\".\n",
         CATEGORIES.join(", ")
     );
     let app = job
@@ -443,20 +447,24 @@ fn first_object(text: &str) -> Option<&str> {
     None
 }
 
-/// Lowercased, trimmed, `#` and quotes dropped, inner whitespace collapsed.
+/// Lowercased, trimmed, `#` and quotes dropped. Two words are joined with
+/// a hyphen; a longer phrase, or a tag too long to read at a glance,
+/// becomes empty and is dropped.
 fn clean_tag(tag: &str) -> String {
-    tag.trim()
+    let words: Vec<&str> = tag
+        .trim()
         .trim_start_matches('#')
         .trim_matches(|ch: char| ch == '"' || ch == '\'' || ch == '.')
         .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-        .chars()
-        .take(MAX_TAG_CHARS)
-        .collect::<String>()
-        .trim()
-        .to_owned()
+        .collect();
+    if words.len() > MAX_TAG_WORDS {
+        return String::new();
+    }
+    let tag = words.join("-").to_lowercase();
+    if tag.chars().count() > MAX_TAG_CHARS {
+        return String::new();
+    }
+    tag
 }
 
 /// Reads the model's reply into a description. Servers that ignore
@@ -515,13 +523,20 @@ pub fn describe(clients: &Clients, ai: &AiSettings, job: &AiJob) -> Result<AiDes
         AiProvider::ClaudeCode => {
             let claude = clients.claude()?;
             let image = png_base64(&job.path)?;
-            ai_cli::claude_reply(claude, &prompt(job), &image, clients.cli_timeout)?
+            ai_cli::claude_reply(
+                claude,
+                &ai.claude_model(),
+                &prompt(job),
+                &image,
+                clients.cli_timeout,
+            )?
         }
         AiProvider::Codex => {
             let codex = clients.codex()?;
             let image = png_bytes(&job.path)?;
             ai_cli::codex_reply(
                 codex,
+                ai.codex_model().as_deref(),
                 &prompt(job),
                 &image,
                 &description_schema(),
@@ -582,22 +597,30 @@ pub fn test_connection(clients: &Clients, ai: &AiSettings) -> Result<String, AiE
         }
         AiProvider::ClaudeCode => {
             let claude = clients.claude()?;
-            let reply = ai_cli::claude_reply(claude, TEST_PROMPT, &image, clients.cli_timeout)?;
+            let model = ai.claude_model();
+            let reply =
+                ai_cli::claude_reply(claude, &model, TEST_PROMPT, &image, clients.cli_timeout)?;
             (
                 reply,
-                format!("{} ({CLAUDE_CODE_MODEL}) answered.", ai_cli::CLAUDE_NAME),
+                format!("{} ({model}) answered.", ai_cli::CLAUDE_NAME),
             )
         }
         AiProvider::Codex => {
             let codex = clients.codex()?;
+            let model = ai.codex_model();
             let reply = ai_cli::codex_reply(
                 codex,
+                model.as_deref(),
                 TEST_PROMPT,
                 &bytes,
                 &test_schema(),
                 clients.cli_timeout,
             )?;
-            (reply, format!("{} answered.", ai_cli::CODEX_NAME))
+            let name = match &model {
+                Some(model) => format!("{} ({model})", ai_cli::CODEX_NAME),
+                None => ai_cli::CODEX_NAME.to_owned(),
+            };
+            (reply, format!("{name} answered."))
         }
     };
     if reply.trim().is_empty() {
@@ -1031,8 +1054,8 @@ mod tests {
                 category: "error".into(),
                 tags: vec![
                     "rust".into(),
-                    "compiler error".into(),
-                    "borrow checker".into()
+                    "compiler-error".into(),
+                    "borrow-checker".into()
                 ],
             }
         );
@@ -1077,16 +1100,21 @@ mod tests {
     fn tags_are_capped_and_cleaned() {
         let parsed = parse_description(
             r#"{"description": "x", "category": "code",
-                "tags": ["a", "b", "", "c", "d", "e", "f", "g", 5,
-                         "a very long tag that goes on and on and on past the limit"]}"#,
+                "tags": ["a", "", 5, "b", "c", "d", "e"]}"#,
         )
         .unwrap();
-        assert_eq!(parsed.tags, vec!["a", "b", "c", "d", "e", "f"]);
-        let long = parse_description(
-            r#"{"description": "x", "tags": ["a very long tag that goes on and on and on"]}"#,
+        assert_eq!(parsed.tags, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn phrases_and_long_tags_are_dropped() {
+        let parsed = parse_description(
+            r#"{"description": "x",
+                "tags": ["a tag that is a phrase", "supercalifragilisticexpialidocious",
+                         "VS Code", "rust"]}"#,
         )
         .unwrap();
-        assert!(long.tags[0].chars().count() <= MAX_TAG_CHARS);
+        assert_eq!(parsed.tags, vec!["vs-code", "rust"]);
     }
 
     #[test]
@@ -1300,6 +1328,8 @@ mod tests {
             provider: Some(AiProvider::Endpoint),
             endpoint: format!("{}/", server.endpoint),
             model: "test-vision".into(),
+            claude_model: "haiku".into(),
+            codex_model: String::new(),
             api_key: None,
             new_captures_only: false,
             notice_pending: false,

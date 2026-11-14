@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
@@ -28,6 +28,7 @@ interface Backend {
   codexPath: string | null;
   /** The editor section's auto-apply flag. */
   autoBackdrop?: boolean;
+  appearance?: unknown;
   saveFolder: string;
   hotkeys: typeof DEFAULT_HOTKEYS;
   hotkeyWarnings: string[];
@@ -58,11 +59,15 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     copyToClipboard: backend.copyToClipboard,
     ai: backend.ai,
     editor: backend.autoBackdrop === undefined ? {} : { autoBackdrop: backend.autoBackdrop },
+    appearance: backend.appearance,
   });
   mockIPC((cmd, payload) => {
     backend.calls.push({ cmd, payload });
     switch (cmd) {
       case "get_settings":
+        return settings();
+      case "set_appearance":
+        backend.appearance = (payload as { appearance: unknown }).appearance;
         return settings();
       case "get_autostart":
         if (backend.autostart === undefined) throw "not supported";
@@ -174,7 +179,7 @@ describe("SettingsWindow", () => {
     render(<SettingsWindow />);
     const quick = await screen.findByRole("radio", { name: /Show Quick Access/ });
     await waitFor(() => expect(quick).toBeChecked());
-    expect(screen.getByRole("checkbox", { name: /Copy every capture/ })).toBeChecked();
+    expect(screen.getByRole("switch", { name: /Copy every capture/ })).toBeChecked();
 
     await userEvent.click(screen.getByRole("radio", { name: /Open the editor/ }));
 
@@ -189,7 +194,7 @@ describe("SettingsWindow", () => {
   it("turns copying to the clipboard off, keeping the other choice", async () => {
     const backend = mockBackend({ afterCapture: "nothing" });
     render(<SettingsWindow />);
-    const copy = await screen.findByRole("checkbox", { name: /Copy every capture/ });
+    const copy = await screen.findByRole("switch", { name: /Copy every capture/ });
     await waitFor(() => expect(copy).toBeEnabled());
 
     await userEvent.click(copy);
@@ -215,7 +220,7 @@ describe("SettingsWindow", () => {
   it("turns framing new captures with the last backdrop on and off", async () => {
     const backend = mockBackend();
     render(<SettingsWindow />);
-    const toggle = await screen.findByRole("checkbox", { name: /Frame new captures with the last backdrop/ });
+    const toggle = await screen.findByRole("switch", { name: /Frame new captures with the last backdrop/ });
     await waitFor(() => expect(toggle).toBeEnabled());
     expect(toggle).not.toBeChecked();
 
@@ -233,14 +238,14 @@ describe("SettingsWindow", () => {
   it("shows auto-apply as it is saved", async () => {
     mockBackend({ autoBackdrop: true });
     render(<SettingsWindow />);
-    const toggle = await screen.findByRole("checkbox", { name: /Frame new captures with the last backdrop/ });
+    const toggle = await screen.findByRole("switch", { name: /Frame new captures with the last backdrop/ });
     await waitFor(() => expect(toggle).toBeChecked());
   });
 
   it("turns starting at sign-in on", async () => {
     const backend = mockBackend({ autostart: false });
     render(<SettingsWindow />);
-    const toggle = await screen.findByRole("checkbox", { name: /Start Grab-it when you sign in/ });
+    const toggle = await screen.findByRole("switch", { name: /Start Grab-it when you sign in/ });
     expect(toggle).not.toBeChecked();
 
     await userEvent.click(toggle);
@@ -253,7 +258,7 @@ describe("SettingsWindow", () => {
     mockBackend();
     render(<SettingsWindow />);
     await screen.findByDisplayValue("/home/me/Pictures/Grab-it");
-    expect(screen.queryByRole("checkbox", { name: /Start Grab-it/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /Start Grab-it/ })).not.toBeInTheDocument();
   });
 
   it("shows the current hotkeys", async () => {
@@ -405,7 +410,7 @@ describe("SettingsWindow AI descriptions", () => {
     mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, apiKey: "sk-secret" } });
     render(<SettingsWindow />);
 
-    const toggle = await screen.findByRole("checkbox", { name: /Describe captures with AI/ });
+    const toggle = await screen.findByRole("switch", { name: /Describe captures with AI/ });
     expect(toggle).not.toBeChecked();
     expect(screen.getByLabelText("Endpoint URL")).toHaveValue("http://localhost:11434/v1");
     expect(screen.getByLabelText("Model")).toHaveValue("qwen3-vl:4b");
@@ -414,7 +419,7 @@ describe("SettingsWindow AI descriptions", () => {
     expect(key).toHaveAttribute("type", "password");
     expect(key).toHaveValue("sk-secret");
     expect(screen.getByText(/Only cloud providers need one/)).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: /Only describe new captures/ })).toBeChecked();
+    expect(screen.getByRole("switch", { name: /Only describe new captures/ })).toBeChecked();
     expect(screen.getByText(/nothing leaves this computer; a cloud endpoint receives your screenshots/)).toBeInTheDocument();
     // Nothing to re-describe while it is off.
     expect(screen.getByRole("button", { name: "Re-describe all…" })).toBeDisabled();
@@ -423,7 +428,7 @@ describe("SettingsWindow AI descriptions", () => {
   it("saves the toggles at once, keeping the other preferences", async () => {
     const backend = mockBackend({ afterCapture: "editor" });
     render(<SettingsWindow />);
-    const toggle = await screen.findByRole("checkbox", { name: /Describe captures with AI/ });
+    const toggle = await screen.findByRole("switch", { name: /Describe captures with AI/ });
     await waitFor(() => expect(toggle).toBeEnabled());
 
     await userEvent.click(toggle);
@@ -434,7 +439,7 @@ describe("SettingsWindow AI descriptions", () => {
       ai: { ...DEFAULT_AI_PREFERENCES, enabled: true },
     });
 
-    const newOnly = screen.getByRole("checkbox", { name: /Only describe new captures/ });
+    const newOnly = screen.getByRole("switch", { name: /Only describe new captures/ });
     await waitFor(() => expect(newOnly).toBeEnabled());
     await userEvent.click(newOnly);
     await waitFor(() => expect(newOnly).not.toBeChecked());
@@ -475,7 +480,7 @@ describe("SettingsWindow AI descriptions", () => {
     const preset = await screen.findByLabelText("Preset");
     await waitFor(() => expect(preset).toBeEnabled());
     expect(screen.getByRole("option", { name: "Custom" })).toBeInTheDocument();
-    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+    expect(within(preset).getAllByRole("option").map((option) => option.textContent)).toEqual([
       "Custom",
       "Ollama",
       "OpenAI",
@@ -611,9 +616,10 @@ describe("SettingsWindow AI descriptions", () => {
     await waitFor(() => expect(claude).toBeChecked());
     expect(backend.ai).toEqual({ ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "claudeCode" });
     expect(screen.queryByLabelText("Endpoint URL")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Model")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("API key")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    // Its own model instead, saved with Save.
+    expect(screen.getByLabelText("Model")).toHaveValue("haiku");
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(screen.getByText(/Claude Code sends your screenshots.*to Anthropic/)).toHaveClass("ai-privacy-cloud");
     expect(screen.queryByTestId("ai-missing")).not.toBeInTheDocument();
 
@@ -644,6 +650,24 @@ describe("SettingsWindow AI descriptions", () => {
     await waitFor(() => expect(screen.queryByTestId("ai-missing")).not.toBeInTheDocument());
   });
 
+  it("saves another model for Claude Code and Codex", async () => {
+    const backend = mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "claudeCode" } });
+    render(<SettingsWindow />);
+    const model = await screen.findByLabelText("Model");
+    await waitFor(() => expect(model).toBeEnabled());
+    await userEvent.clear(model);
+    await userEvent.type(model, "sonnet");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(backend.ai.claudeModel).toBe("sonnet"));
+    expect(backend.ai.provider).toBe("claudeCode");
+
+    await userEvent.click(screen.getByRole("radio", { name: /^Codex/ }));
+    await waitFor(() => expect(backend.ai.provider).toBe("codex"));
+    await userEvent.type(screen.getByLabelText("Model"), "gpt-5-mini{Enter}");
+    await waitFor(() => expect(backend.ai.codexModel).toBe("gpt-5-mini"));
+    expect(backend.ai.claudeModel).toBe("sonnet");
+  });
+
   it("tests Claude Code without saving anything first", async () => {
     const backend = mockBackend({
       ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "claudeCode" },
@@ -669,7 +693,8 @@ describe("SettingsWindow AI descriptions", () => {
     expect(backend.ai).toEqual({ ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "codex" });
     expect(screen.getByRole("radio", { name: /Claude Code/ })).not.toBeChecked();
     expect(screen.queryByLabelText("Endpoint URL")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Model")).toHaveValue("");
+    expect(screen.getByLabelText("Model")).toHaveAttribute("placeholder", "Codex default");
     expect(screen.getByText(/Codex sends your screenshots.*to OpenAI/)).toHaveClass("ai-privacy-cloud");
     expect(screen.queryByTestId("ai-missing")).not.toBeInTheDocument();
   });
@@ -706,5 +731,42 @@ describe("SettingsWindow AI descriptions", () => {
     expect(isLocalEndpoint("http://[::1]:8080")).toBe(true);
     expect(isLocalEndpoint("https://api.openai.com/v1")).toBe(false);
     expect(isLocalEndpoint("not a url")).toBe(false);
+  });
+});
+
+describe("SettingsWindow appearance", () => {
+  it("saves the text sizes on release, and the popup's corner and time at once", async () => {
+    const backend = mockBackend({ appearance: { textScale: 110, hubScale: 110, popupCorner: "bottomLeft", popupSeconds: 8 } });
+    render(<SettingsWindow section="appearance" />);
+    expect(screen.getByRole("heading", { level: 1, name: "Appearance" })).toBeInTheDocument();
+    const window = await screen.findByRole("slider", { name: "Grab-it window" });
+    await waitFor(() => expect(window).toBeEnabled());
+    expect(window).toHaveValue("110");
+    expect(screen.getByText("110%", { selector: ".scale-value[data-for='text-scale']" })).toBeInTheDocument();
+
+    // Dragging shows the value; letting go saves it.
+    fireEvent.change(window, { target: { value: "125" } });
+    expect(screen.getByText("125%", { selector: ".scale-value[data-for='text-scale']" })).toBeInTheDocument();
+    expect(backend.appearance).toMatchObject({ textScale: 110 });
+    fireEvent.pointerUp(window);
+    await waitFor(() => expect(backend.appearance).toMatchObject({ textScale: 125 }));
+
+    const hub = screen.getByRole("slider", { name: "Menu bar hub" });
+    await waitFor(() => expect(hub).toBeEnabled());
+    fireEvent.change(hub, { target: { value: "95" } });
+    fireEvent.keyUp(hub, { key: "ArrowLeft" });
+    await waitFor(() => expect(backend.appearance).toMatchObject({ hubScale: 95 }));
+
+    const topRight = screen.getByRole("radio", { name: "Top right" });
+    await waitFor(() => expect(topRight).toBeEnabled());
+    await userEvent.click(topRight);
+    await waitFor(() => expect(topRight).toBeChecked());
+    const seconds = screen.getByLabelText("Show it for");
+    await waitFor(() => expect(seconds).toBeEnabled());
+    await userEvent.selectOptions(seconds, "Until I close it");
+
+    await waitFor(() =>
+      expect(backend.appearance).toEqual({ textScale: 125, hubScale: 95, popupCorner: "topRight", popupSeconds: 0 }),
+    );
   });
 });

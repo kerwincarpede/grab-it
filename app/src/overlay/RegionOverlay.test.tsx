@@ -55,6 +55,15 @@ describe("RegionOverlay", () => {
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
   });
 
+  it("keeps the hint below the menu bar or notch", async () => {
+    // 40 of the viewport's 800 px are menu bar.
+    mockOverlay({ topInset: 0.05 });
+    render(<RegionOverlay />);
+    await ready();
+    const hint = screen.getByRole("status").closest(".overlay-hint") as HTMLElement;
+    expect(hint.style.top).toBe("52px");
+  });
+
   it("captures the dragged region in CSS pixels with the viewport width", async () => {
     const calls = mockOverlay();
     render(<RegionOverlay />);
@@ -89,6 +98,11 @@ describe("RegionOverlay", () => {
     await waitFor(() =>
       expect(screen.getByTestId("overlay-selection")).toHaveTextContent("Editor"),
     );
+    expect(screen.getByTestId("overlay-selection")).toHaveClass("overlay-window");
+    // Around it the frozen screen is blurred, with the window cut out.
+    const blur = screen.getByTestId("overlay-blur");
+    expect(blur).toHaveClass("overlay-image-blur");
+    expect(blur.style.clipPath).toContain("M110 100H290");
     fireEvent.mouseDown(overlay, { button: 0, clientX: 150, clientY: 150 });
     fireEvent.mouseUp(overlay, { button: 0, clientX: 151, clientY: 150 });
 

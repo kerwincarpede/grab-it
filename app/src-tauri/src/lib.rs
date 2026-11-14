@@ -6,6 +6,7 @@ mod cli;
 mod commands;
 mod editor;
 mod hotkeys;
+mod hub;
 mod keychain;
 mod library;
 mod ocr;
@@ -60,6 +61,7 @@ pub fn run() {
         .manage(hotkeys::HotkeyState::default())
         .manage(editor::EditorState::default())
         .manage(update::UpdateState::default())
+        .manage(hub::HubState::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
             commands::set_save_folder,
@@ -72,6 +74,14 @@ pub fn run() {
             commands::open_target,
             commands::get_autostart,
             commands::set_autostart,
+            commands::set_show_in_dock,
+            commands::set_appearance,
+            hub::hub_capture,
+            hub::hub_monitors,
+            hub::hub_open,
+            hub::hub_check_updates,
+            hub::hub_quit,
+            hub::hub_hide,
             quick::quick_info,
             quick::quick_thumbnail,
             quick::quick_action,
@@ -99,6 +109,8 @@ pub fn run() {
             library::library_list,
             library::library_thumbnail,
             library::library_set_tags,
+            search::library_sidebar,
+            library::library_remove_ai_tag,
             library::library_set_notes,
             library::library_delete,
             library::library_open,
@@ -114,14 +126,23 @@ pub fn run() {
             ai::ai_clear,
             ai::ai_redescribe_all,
             ai::ai_test_connection,
-            ai::ai_clis
+            ai::ai_clis,
+            update::update_status,
+            update::update_check,
+            update::update_install,
+            update::update_later
         ])
         .setup(move |app| {
-            // A tray app: no Dock icon on macOS.
-            #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-
             let mut store = open_settings(app)?;
+            // macOS: a Dock icon that opens the Grab-it window, unless the
+            // user keeps Grab-it in the menu bar only.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(if store.get().show_in_dock {
+                tauri::ActivationPolicy::Regular
+            } else {
+                tauri::ActivationPolicy::Accessory
+            });
+
             let hotkeys = store.get().hotkeys.clone();
             // A tray app shows nothing when it starts, so the very first
             // launch opens a short welcome with the hotkeys.
@@ -163,14 +184,27 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Grab-it");
 
-    app.run(|_app, event| {
-        // Closing the last window keeps Grab-it running in the tray.
-        // Only an explicit exit (the tray's Quit) carries an exit code.
-        if let RunEvent::ExitRequested {
-            code: None, api, ..
-        } = event
-        {
-            api.prevent_exit();
+    app.run(|app, event| {
+        // Only macOS uses the handle, for the Dock icon below.
+        #[cfg(not(target_os = "macos"))]
+        let _ = app;
+        match event {
+            // Closing the last window keeps Grab-it running in the tray.
+            // Only an explicit exit (the tray's Quit) carries an exit code.
+            RunEvent::ExitRequested {
+                code: None, api, ..
+            } => api.prevent_exit(),
+            // Clicking the Dock icon with no window open shows the Grab-it window.
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } => {
+                if let Err(err) = windows::show_library(app) {
+                    eprintln!("Grab-it: {err}");
+                }
+            }
+            _ => {}
         }
     });
 }

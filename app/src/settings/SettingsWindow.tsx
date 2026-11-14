@@ -1,23 +1,95 @@
 import { useEffect, useState } from "react";
 import AiSection from "./AiSection";
 import HotkeysSection from "./HotkeysSection";
+import { FolderIcon } from "../app/icons";
 import {
   AFTER_CAPTURE_CHOICES,
   DEFAULT_AI_PREFERENCES,
+  DEFAULT_APPEARANCE,
+  POPUP_CORNERS,
+  POPUP_SECONDS,
+  TEXT_SCALE,
+  setAppearance,
+  type Appearance,
   chooseFolder,
   getAutostart,
   getSettings,
+  hasDock,
+  SETTINGS_SECTIONS,
   setAutoBackdrop,
   setAutostart,
   setHotkeys,
   setPreferences,
   setSaveFolder,
+  setShowInDock,
   type AiPreferences,
   type Hotkeys,
   type HotkeysUpdate,
   type Preferences,
   type Settings,
+  type SettingsSection,
 } from "./api";
+
+interface ScaleSliderProps {
+  id: string;
+  label: string;
+  hint: string;
+  value: number;
+  disabled: boolean;
+  onCommit: (percent: number) => void;
+}
+
+/**
+ * A text size slider. It shows the value while dragging but saves only on
+ * release, so the window does not rescale under the pointer mid-drag.
+ */
+function ScaleSlider({ id, label, hint, value, disabled, onCommit }: ScaleSliderProps) {
+  // What is being dragged, tied to the saved value it started from: once a
+  // new value is saved (or comes from elsewhere) the slider shows that.
+  const [dragging, setDragging] = useState<{ from: number; to: number } | null>(null);
+  const draft = dragging && dragging.from === value ? dragging.to : value;
+  const setDraft = (to: number) => setDragging({ from: value, to });
+  const commit = () => {
+    if (draft !== value) onCommit(draft);
+  };
+  const fill = ((draft - TEXT_SCALE.min) * 100) / (TEXT_SCALE.max - TEXT_SCALE.min);
+  return (
+    <div className="row is-stacked">
+      <span className="row-text">
+        <label className="row-title" htmlFor={id}>
+          {label}
+        </label>
+        <span className="row-hint">{hint}</span>
+      </span>
+      <span className="scale-slider">
+        <span className="scale-a scale-a-small" aria-hidden="true">
+          A
+        </span>
+        <input
+          id={id}
+          type="range"
+          min={TEXT_SCALE.min}
+          max={TEXT_SCALE.max}
+          step={TEXT_SCALE.step}
+          value={draft}
+          disabled={disabled}
+          aria-valuetext={`${draft}%`}
+          style={{ "--fill": `${fill}%` } as React.CSSProperties}
+          onChange={(event) => setDraft(Number(event.target.value))}
+          onPointerUp={commit}
+          onKeyUp={commit}
+          onBlur={commit}
+        />
+        <span className="scale-a scale-a-large" aria-hidden="true">
+          A
+        </span>
+        <span className="scale-value" data-for={id} aria-hidden="true">
+          {draft}%
+        </span>
+      </span>
+    </div>
+  );
+}
 
 function errorMessage(err: unknown): string {
   if (typeof err === "string") return err;
@@ -32,7 +104,14 @@ type Status =
   | { kind: "hotkeys-saved"; warnings: string[] }
   | { kind: "error"; message: string };
 
-function SettingsWindow() {
+interface SettingsWindowProps {
+  /** One page of Settings, as the Grab-it window shows it; all of them without. */
+  section?: SettingsSection;
+}
+
+function SettingsWindow({ section }: SettingsWindowProps = {}) {
+  const shows = (page: SettingsSection) => section === undefined || section === page;
+  const title = section === undefined ? "Settings" : SETTINGS_SECTIONS.find((page) => page.id === section)?.title;
   const [settings, setSettings] = useState<Settings | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [busy, setBusy] = useState(false);
@@ -130,6 +209,30 @@ function SettingsWindow() {
     }
   }
 
+  async function changeShowInDock(enabled: boolean) {
+    setBusy(true);
+    try {
+      setSettings(await setShowInDock(enabled));
+      setStatus({ kind: "preferences-saved" });
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function changeAppearance(change: Partial<Appearance>) {
+    setBusy(true);
+    try {
+      setSettings(await setAppearance({ ...(settings?.appearance ?? DEFAULT_APPEARANCE), ...change }));
+      setStatus({ kind: "preferences-saved" });
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveHotkeys(hotkeys: Hotkeys): Promise<HotkeysUpdate | null> {
     try {
       const update = await setHotkeys(hotkeys);
@@ -142,105 +245,238 @@ function SettingsWindow() {
     }
   }
 
+  const afterCapture = AFTER_CAPTURE_CHOICES.find((choice) => choice.value === settings?.afterCapture);
+  const savesAtOnce =
+    section === undefined || section === "general" || section === "appearance" || section === "capture" || section === "editor";
+  const appearance = settings?.appearance ?? DEFAULT_APPEARANCE;
+  const appearanceOff = busy || settings === null;
+  const showsMac = shows("general") && (hasDock() || autostart !== null);
+
   return (
-    <main className="window">
-      <h1>Settings</h1>
-      <section className="card" aria-labelledby="after-capture-heading">
-        <h2 id="after-capture-heading">After a capture</h2>
-        <fieldset className="choices" disabled={busy || settings === null}>
-          {AFTER_CAPTURE_CHOICES.map((choice) => (
-            <label className="choice" key={choice.value}>
-              <input
-                type="radio"
-                name="after-capture"
-                value={choice.value}
-                checked={settings?.afterCapture === choice.value}
-                onChange={() => void changePreferences({ afterCapture: choice.value })}
-              />
-              <span>
-                <span className="choice-title">{choice.title}</span>
-                <span className="hint">{choice.hint}</span>
-              </span>
-            </label>
-          ))}
-        </fieldset>
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={settings?.copyToClipboard ?? true}
-            disabled={busy || settings === null}
-            onChange={(event) => void changePreferences({ copyToClipboard: event.target.checked })}
-          />
-          <span>
-            <span className="choice-title">Copy every capture to the clipboard</span>
-            <span className="hint">Paste it straight into a chat, a document or an issue.</span>
-          </span>
-        </label>
-      </section>
-      <section className="card" aria-labelledby="editor-heading">
-        <h2 id="editor-heading">Editor</h2>
-        <label className="toggle first">
-          <input
-            type="checkbox"
-            checked={settings?.editor?.autoBackdrop ?? false}
-            disabled={busy || settings === null}
-            onChange={(event) => void changeAutoBackdrop(event.target.checked)}
-          />
-          <span>
-            <span className="choice-title">Frame new captures with the last backdrop</span>
-            <span className="hint">
-              The editor adds it when it first opens a capture. The saved capture and its clipboard copy stay unframed.
-            </span>
-          </span>
-        </label>
-      </section>
-      <section className="card field">
-        <h2>
-          <label htmlFor="save-folder">Save folder</label>
-        </h2>
-        <div className="field-row">
-          <input
-            id="save-folder"
-            type="text"
-            readOnly
-            value={settings?.saveFolder ?? ""}
-            placeholder={settings ? "" : "Loading…"}
-          />
-          <button type="button" className="secondary" onClick={changeFolder} disabled={busy || settings === null}>
-            Change…
-          </button>
-        </div>
-        <p className="hint">
-          New captures are saved here. Earlier captures stay where they are and stay in your
-          library.
-        </p>
-      </section>
-      {autostart !== null && (
-        <section className="card" aria-labelledby="startup-heading">
-          <h2 id="startup-heading">Start-up</h2>
-          <label className="toggle first">
-            <input
-              type="checkbox"
-              checked={autostart}
-              disabled={busy}
-              onChange={(event) => void changeAutostart(event.target.checked)}
-            />
-            <span>
-              <span className="choice-title">Start Grab-it when you sign in</span>
-              <span className="hint">It waits in the tray, ready for your hotkeys.</span>
-            </span>
-          </label>
+    <main className={section === undefined ? "window settings" : "window settings settings-page"}>
+      <h1 className="settings-title">{title}</h1>
+      {/* Scrolls on its own, so the heading and the scrollbar never overlap. */}
+      <div className="settings-content">
+      <p className="settings-lead">
+        {savesAtOnce ? "Changes save as you make them." : section === "hotkeys" ? "Press Save to use new hotkeys." : "Switches save at once; endpoint details save with Save."}
+      </p>
+      {showsMac && (
+        <section aria-labelledby="mac-heading">
+          <h2 className="group-heading" id="mac-heading">
+            Grab-it on your Mac
+          </h2>
+          <div className="group">
+            {hasDock() && (
+              <label className="row">
+                <span className="row-text">
+                  <span className="row-title">Show Grab-it in the Dock</span>
+                  <span className="row-hint">Click the Dock icon to open this window. Off, Grab-it lives in the menu bar only.</span>
+                </span>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  className="switch"
+                  checked={settings?.showInDock ?? true}
+                  disabled={busy || settings === null}
+                  onChange={(event) => void changeShowInDock(event.target.checked)}
+                />
+              </label>
+            )}
+            {autostart !== null && (
+              <label className="row">
+                <span className="row-text">
+                  <span className="row-title">Start Grab-it when you sign in</span>
+                  <span className="row-hint">It waits in the menu bar or tray, ready for your hotkeys.</span>
+                </span>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  className="switch"
+                  checked={autostart}
+                  disabled={busy}
+                  onChange={(event) => void changeAutostart(event.target.checked)}
+                />
+              </label>
+            )}
+          </div>
         </section>
       )}
-      {settings && (
-        <div className="card">
-          <AiSection saved={settings.ai ?? DEFAULT_AI_PREFERENCES} disabled={busy} onSave={saveAi} />
-        </div>
+      {shows("capture") && (
+        <section aria-labelledby="after-capture-heading">
+          <h2 className="group-heading" id="after-capture-heading">
+            When a capture is done
+          </h2>
+          <div className="group">
+            <div className="row is-stacked">
+              <fieldset className="segmented" aria-labelledby="after-capture-heading" disabled={busy || settings === null}>
+                {AFTER_CAPTURE_CHOICES.map((choice) => (
+                  <label key={choice.value}>
+                    <input
+                      type="radio"
+                      name="after-capture"
+                      value={choice.value}
+                      checked={settings?.afterCapture === choice.value}
+                      onChange={() => void changePreferences({ afterCapture: choice.value })}
+                    />
+                    {choice.title}
+                  </label>
+                ))}
+              </fieldset>
+              {afterCapture && <span className="row-hint">{afterCapture.hint}</span>}
+            </div>
+            <label className="row">
+              <span className="row-text">
+                <span className="row-title">Copy every capture to the clipboard</span>
+                <span className="row-hint">Paste it straight into a chat, a document or an issue.</span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                className="switch"
+                checked={settings?.copyToClipboard ?? true}
+                disabled={busy || settings === null}
+                onChange={(event) => void changePreferences({ copyToClipboard: event.target.checked })}
+              />
+            </label>
+          </div>
+        </section>
       )}
-      {settings && (
-        <div className="card">
-          <HotkeysSection saved={settings.hotkeys} disabled={busy} onSave={saveHotkeys} />
-        </div>
+      {shows("editor") && (
+        <section aria-labelledby="editor-heading">
+          <h2 className="group-heading" id="editor-heading">
+            New captures
+          </h2>
+          <div className="group">
+            <label className="row">
+              <span className="row-text">
+                <span className="row-title">Frame new captures with the last backdrop</span>
+                <span className="row-hint">
+                  The editor adds it when it first opens a capture. The saved capture and its clipboard copy stay unframed.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                className="switch"
+                checked={settings?.editor?.autoBackdrop ?? false}
+                disabled={busy || settings === null}
+                onChange={(event) => void changeAutoBackdrop(event.target.checked)}
+              />
+            </label>
+          </div>
+        </section>
+      )}
+      {shows("appearance") && (
+        <section aria-labelledby="text-size-heading">
+          <h2 className="group-heading" id="text-size-heading">
+            Text size
+          </h2>
+          <div className="group">
+            <ScaleSlider
+              id="text-scale"
+              label="Grab-it window"
+              hint="Scales the library, Settings and every dialog: text, buttons and thumbnails."
+              value={appearance.textScale}
+              disabled={appearanceOff}
+              onCommit={(textScale) => void changeAppearance({ textScale })}
+            />
+            <ScaleSlider
+              id="hub-scale"
+              label="Menu bar hub"
+              hint="The menu under the Grab-it icon grows with it."
+              value={appearance.hubScale}
+              disabled={appearanceOff}
+              onCommit={(hubScale) => void changeAppearance({ hubScale })}
+            />
+          </div>
+
+          <h2 className="group-heading" id="popup-heading">
+            Popup after a capture
+          </h2>
+          <div className="group">
+            <div className="row is-stacked">
+              <span className="row-text">
+                <span className="row-title" id="popup-corner-heading">
+                  Position
+                </span>
+                <span className="row-hint">Which corner of the screen the popup appears in.</span>
+              </span>
+              <fieldset className="corner-picker" aria-labelledby="popup-corner-heading" disabled={appearanceOff}>
+                {POPUP_CORNERS.map((choice) => (
+                  <label key={choice.value} className={`corner-${choice.value}`}>
+                    <input
+                      type="radio"
+                      name="popup-corner"
+                      value={choice.value}
+                      checked={appearance.popupCorner === choice.value}
+                      onChange={() => void changeAppearance({ popupCorner: choice.value })}
+                    />
+                    <span className="corner-card" aria-hidden="true" />
+                    {choice.title}
+                  </label>
+                ))}
+              </fieldset>
+            </div>
+            <div className="row">
+              <span className="row-text">
+                <label className="row-title" htmlFor="popup-seconds">
+                  Show it for
+                </label>
+                <span className="row-hint">Resting the pointer on it keeps it open. Errors stay at least 10 seconds.</span>
+              </span>
+              <select
+                id="popup-seconds"
+                className="row-field"
+                value={appearance.popupSeconds}
+                disabled={appearanceOff}
+                onChange={(event) => void changeAppearance({ popupSeconds: Number(event.target.value) })}
+              >
+                {POPUP_SECONDS.map((seconds) => (
+                  <option key={seconds} value={seconds}>
+                    {seconds === 0 ? "Until I close it" : `${seconds} seconds`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </section>
+      )}
+      {shows("general") && (
+        <section>
+          <h2 className="group-heading">
+            <label htmlFor="save-folder">Save folder</label>
+          </h2>
+          <div className="group">
+            <div className="row">
+              <span className="icon-chip tint-blue" aria-hidden="true">
+                <FolderIcon size={14} />
+              </span>
+              <span className="row-text">
+                <input
+                  id="save-folder"
+                  className="mono-value"
+                  type="text"
+                  readOnly
+                  value={settings?.saveFolder ?? ""}
+                  placeholder={settings ? "" : "Loading…"}
+                  aria-describedby="save-folder-hint"
+                />
+                <span className="row-hint" id="save-folder-hint">
+                  New captures are saved here. Earlier captures stay where they are and stay in your library.
+                </span>
+              </span>
+              <button type="button" className="pill" onClick={changeFolder} disabled={busy || settings === null}>
+                Change…
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+      {shows("ai") && settings && (
+        <AiSection saved={settings.ai ?? DEFAULT_AI_PREFERENCES} disabled={busy} onSave={saveAi} />
+      )}
+      {shows("hotkeys") && settings && (
+        <HotkeysSection saved={settings.hotkeys} disabled={busy} onSave={saveHotkeys} />
       )}
       <p className={`status status-${status.kind === "preferences-saved" ? "saved" : status.kind}`} role="status">
         {status.kind === "saved" && "Save folder updated."}
@@ -249,6 +485,7 @@ function SettingsWindow() {
           (status.warnings.length > 0 ? status.warnings.join(" ") : "Hotkeys updated.")}
         {status.kind === "error" && status.message}
       </p>
+      </div>
     </main>
   );
 }

@@ -1,5 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import "@fontsource-variable/instrument-sans";
+import "@fontsource-variable/geist-mono";
 import App from "./App";
 import { isInstantOverlay } from "./overlay/api";
 
