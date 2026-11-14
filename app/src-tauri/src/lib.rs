@@ -116,6 +116,8 @@ pub fn run() {
             library::library_delete,
             library::library_open,
             library::library_copy,
+            library::library_text,
+            library::library_copy_text,
             library::library_pin,
             library::library_reveal,
             search::library_search,

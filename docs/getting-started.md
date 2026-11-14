@@ -154,6 +154,7 @@ The search box finds captures by **the text inside the image**, as well as by ta
 - `inv 2026` finds a receipt that says "Invoice 2026-03". Each word matches the start of a word.
 - Narrow things down by **app** in the sidebar, or by **tag** or **date range** in the filter bar.
 - Select a capture to open it in the editor, copy it, pin it, or add **tags** and **notes**.
+- **Copy the text in a capture** with the text button (a "T" in a frame) on its tile or in its details. The details also show all the text Grab-it found, so you can select and copy just part of it. This works for any capture, including full-screen ones, long after you took it.
 
 > [!NOTE]
 > Reading the text in images happens on your computer, never in the cloud. The first time it's needed, Grab-it downloads a small text-recognition model (about 12 MB), and the Library shows the progress.
