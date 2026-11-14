@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import AiSection from "./AiSection";
 import HotkeysSection from "./HotkeysSection";
 import {
   AFTER_CAPTURE_CHOICES,
+  DEFAULT_AI_PREFERENCES,
   chooseFolder,
   getAutostart,
   getSettings,
@@ -9,6 +11,7 @@ import {
   setHotkeys,
   setPreferences,
   setSaveFolder,
+  type AiPreferences,
   type Hotkeys,
   type HotkeysUpdate,
   type Preferences,
@@ -79,23 +82,28 @@ function SettingsWindow() {
   }
 
   /** Saves one changed preference at once; there is no Save button for these. */
-  async function changePreferences(change: Partial<Preferences>) {
-    if (!settings) return;
+  async function changePreferences(change: Partial<Preferences>): Promise<boolean> {
+    if (!settings) return false;
     const next: Preferences = {
       afterCapture: settings.afterCapture,
       copyToClipboard: settings.copyToClipboard,
+      ai: settings.ai ?? DEFAULT_AI_PREFERENCES,
       ...change,
     };
     setBusy(true);
     try {
       setSettings(await setPreferences(next));
       setStatus({ kind: "preferences-saved" });
+      return true;
     } catch (err) {
       setStatus({ kind: "error", message: errorMessage(err) });
+      return false;
     } finally {
       setBusy(false);
     }
   }
+
+  const saveAi = (ai: AiPreferences) => changePreferences({ ai });
 
   async function changeAutostart(enabled: boolean) {
     setBusy(true);
@@ -193,6 +201,11 @@ function SettingsWindow() {
             </span>
           </label>
         </section>
+      )}
+      {settings && (
+        <div className="card">
+          <AiSection saved={settings.ai ?? DEFAULT_AI_PREFERENCES} disabled={busy} onSave={saveAi} />
+        </div>
       )}
       {settings && (
         <div className="card">

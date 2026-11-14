@@ -7,17 +7,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import LibraryWindow from "./LibraryWindow";
 import { resetThumbnails } from "./thumbnails";
 import {
+  AI_STATUS_EVENT,
   LIBRARY_CHANGED_EVENT,
   NO_FILTERS,
   OCR_STATUS_EVENT,
   PAGE_SIZE,
   buildQuery,
+  categoryLabel,
   dateFilterLabel,
   dayLabel,
   dayStart,
   groupByDay,
   isSearching,
   parseTags,
+  type AiStatus,
   type MatchField,
   type OcrStatus,
   type SearchHit,
@@ -39,6 +42,9 @@ function shot(id: number, overrides: Partial<Shot> = {}): Shot {
     height: 600,
     tags: [],
     notes: "",
+    aiDescription: null,
+    aiCategory: null,
+    aiTags: [],
     ...overrides,
   };
 }
@@ -50,6 +56,7 @@ interface Backend {
   /** Text OCR found, by shot id. */
   ocr: Record<number, string>;
   ocrStatus: OcrStatus;
+  aiStatus: AiStatus;
 }
 
 /** A small stand-in for `Library::search`: every word must start a word in some field. */
@@ -58,7 +65,9 @@ function search(backend: Backend, query: SearchQuery): SearchHit[] {
   const hits: SearchHit[] = [];
   for (const item of [...backend.shots].sort((a, b) => b.capturedAt - a.capturedAt)) {
     if (query.app && item.app !== query.app) continue;
-    if (query.tag && !item.tags.some((tag) => tag.toLowerCase() === query.tag?.toLowerCase())) continue;
+    if (query.tag && ![...item.tags, ...item.aiTags].some((tag) => tag.toLowerCase() === query.tag?.toLowerCase()))
+      continue;
+    if (query.category && item.aiCategory !== query.category) continue;
     if (query.from !== null && item.capturedAt < query.from) continue;
     if (query.to !== null && item.capturedAt >= query.to) continue;
     const fields: [MatchField, string][] = [
@@ -67,6 +76,7 @@ function search(backend: Backend, query: SearchQuery): SearchHit[] {
       ["notes", item.notes],
       ["app", item.app ?? ""],
       ["windowTitle", item.windowTitle ?? ""],
+      ["description", item.aiDescription ?? ""],
     ];
     const tokens = fields.map(([, value]) => value.toLowerCase().split(/\W+/));
     if (!words.every((word) => tokens.some((list) => list.some((token) => token.startsWith(word))))) continue;
@@ -86,7 +96,13 @@ function search(backend: Backend, query: SearchQuery): SearchHit[] {
 }
 
 function mockBackend(shots: Shot[]): Backend {
-  const backend: Backend = { shots, calls: [], ocr: {}, ocrStatus: { state: "idle" } };
+  const backend: Backend = {
+    shots,
+    calls: [],
+    ocr: {},
+    ocrStatus: { state: "idle" },
+    aiStatus: { state: "idle", done: 0, total: 0, error: null },
+  };
   const find = (id: number) => {
     const found = backend.shots.find((item) => item.id === id);
     if (!found) throw `no capture with id ${id}`;
@@ -132,11 +148,26 @@ function mockBackend(shots: Shot[]): Backend {
         case "library_filter_options":
           return {
             apps: [...new Set(backend.shots.map((item) => item.app).filter((app): app is string => !!app))].sort(),
-            tags: [...new Set(backend.shots.flatMap((item) => item.tags))].sort(),
+            tags: [...new Set(backend.shots.flatMap((item) => [...item.tags, ...item.aiTags]))].sort(),
+            categories: [
+              ...new Set(backend.shots.map((item) => item.aiCategory).filter((found): found is string => !!found)),
+            ].sort(),
           };
         case "ocr_status":
           return backend.ocrStatus;
         case "ocr_retry":
+          return null;
+        case "ai_status":
+          return backend.aiStatus;
+        case "ai_redescribe":
+          find(args.id as number);
+          return null;
+        case "ai_clear": {
+          const updated = { ...find(args.id as number), aiDescription: null, aiCategory: null, aiTags: [] };
+          backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
+          return null;
+        }
+        case "open_target":
           return null;
         default:
           throw new Error(`unexpected command ${cmd}`);
@@ -453,11 +484,194 @@ describe("LibraryWindow search", () => {
   });
 });
 
+describe("LibraryWindow AI descriptions", () => {
+  const searchesOf = (backend: Backend) =>
+    callsTo(backend, "library_search").map((call) => (call.payload as { query: SearchQuery }).query);
+  const described = (id: number, overrides: Partial<Shot> = {}) =>
+    shot(id, {
+      aiDescription: "A Rust compiler error about a borrowed value in main.rs, shown in VS Code",
+      aiCategory: "error",
+      aiTags: ["rust", "compiler"],
+      ...overrides,
+    });
+  /** Lets the event listeners finish registering. */
+  const settle = () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+  it("shows a one-line description and category chip on cards", async () => {
+    mockBackend([described(1), shot(2)]);
+    render(<LibraryWindow />);
+
+    const card = await screen.findByRole("button", { name: "Grab-it 1.png" });
+    const text = within(card).getByText(/A Rust compiler error/);
+    expect(text).toHaveClass("shot-description");
+    expect(text).toHaveAttribute("title", "A Rust compiler error about a borrowed value in main.rs, shown in VS Code");
+    expect(within(card).getByText("Error / dialog")).toHaveClass("category-chip");
+    // AI tags stay in the details, not on the card.
+    expect(within(card).queryByText("rust")).not.toBeInTheDocument();
+    const plain = screen.getByRole("button", { name: "Grab-it 2.png" });
+    expect(plain.querySelector(".shot-ai-line")).toBeNull();
+  });
+
+  it("highlights a match in the description as the snippet", async () => {
+    const backend = mockBackend([described(1), shot(2)]);
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: "Grab-it 2.png" });
+
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search captures" }), "borrow{Enter}");
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Grab-it 2.png" })).not.toBeInTheDocument());
+    const card = screen.getByRole("button", { name: "Grab-it 1.png" });
+    expect(within(card).getByText("Description:", { exact: false })).toBeInTheDocument();
+    expect(card.querySelector("mark")).toHaveTextContent("borrowed");
+    // Shown once: as the snippet, not also as the plain line.
+    expect(card.querySelector(".shot-description")).toBeNull();
+    expect(searchesOf(backend).pop()?.text).toBe("borrow");
+  });
+
+  it("filters by category with friendly names", async () => {
+    const backend = mockBackend([described(1), described(2, { aiCategory: "receipt" }), shot(3)]);
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: "Grab-it 3.png" });
+    await waitFor(() => expect(callsTo(backend, "library_filter_options").length).toBeGreaterThan(0));
+    const chip = screen.getByRole("button", { name: "Filter by category" });
+    expect(chip).toHaveTextContent("All categories");
+    await userEvent.click(chip);
+    const list = screen.getByRole("listbox", { name: "Filter by category" });
+    expect(within(list).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "All categories",
+      "Error / dialog",
+      "Receipt",
+    ]);
+
+    await userEvent.click(within(list).getByRole("option", { name: "Error / dialog" }));
+
+    await waitFor(() => expect(screen.getByText("1 result")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Grab-it 1.png" })).toBeInTheDocument();
+    expect(searchesOf(backend).pop()).toEqual({ text: "", from: null, to: null, app: null, tag: null, category: "error" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+    await waitFor(() => expect(screen.getByText("3 captures")).toBeInTheDocument());
+    expect(chip).toHaveTextContent("All categories");
+  });
+
+  it("shows the description, category and AI tags apart from the user's tags", async () => {
+    mockBackend([described(1, { tags: ["work"] })]);
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
+
+    const details = screen.getByRole("complementary", { name: "Capture details" });
+    const ai = within(details).getByRole("region", { name: "AI description" });
+    expect(within(ai).getByText(/A Rust compiler error about a borrowed value/)).toBeInTheDocument();
+    expect(within(ai).getByText("Error / dialog")).toBeInTheDocument();
+    const aiTags = within(ai).getByLabelText("AI tags");
+    expect(within(aiTags).getByText("rust")).toHaveClass("tag", "tag-ai");
+    expect(within(aiTags).getByText("compiler")).toHaveAttribute("title", "Suggested by AI");
+    // User tags stay in their own field.
+    expect(within(details).getByRole("button", { name: "Remove tag work" })).toBeInTheDocument();
+    expect(within(ai).queryByText("work")).not.toBeInTheDocument();
+  });
+
+  it("re-describes a capture and clears its AI description", async () => {
+    const backend = mockBackend([described(1)]);
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Re-describe" }));
+    await waitFor(() => expect(callsTo(backend, "ai_redescribe")).toHaveLength(1));
+    expect(callsTo(backend, "ai_redescribe")[0].payload).toEqual({ id: 1 });
+    expect(await screen.findByText(/Describing again/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Clear AI description" }));
+    await waitFor(() => expect(callsTo(backend, "ai_clear")[0]?.payload).toEqual({ id: 1 }));
+    expect(await screen.findByText("Not described yet.")).toBeInTheDocument();
+    const card = screen.getByRole("button", { name: "Grab-it 1.png" });
+    expect(within(card).queryByText(/A Rust compiler error/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear AI description" })).toBeDisabled();
+  });
+
+  it("says to turn AI on when it is off", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.aiStatus = { state: "off", done: 0, total: 0, error: null };
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
+
+    expect(await screen.findByText(/Turn on AI descriptions in Settings/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Re-describe" })).toBeDisabled();
+    expect(screen.queryByText(/Describing/)).not.toBeInTheDocument();
+  });
+
+  it("shows progress from the status event, then the error with a hint", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.aiStatus = { state: "working", done: 2, total: 40, error: null };
+    render(<LibraryWindow />);
+
+    expect(await screen.findByText("Describing 3 of 40…")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Descriptions" })).toHaveAttribute("value", "2");
+    await settle();
+
+    await act(async () => {
+      await emit(AI_STATUS_EVENT, { state: "working", done: 9, total: 40, error: null });
+    });
+    expect(screen.getByText("Describing 10 of 40…")).toBeInTheDocument();
+
+    await act(async () => {
+      await emit(AI_STATUS_EVENT, {
+        state: "error",
+        done: 9,
+        total: 40,
+        error: "could not reach http://localhost:11434/v1",
+      });
+    });
+    expect(screen.queryByText(/Describing \d+ of/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Could not describe captures: could not reach/)).toBeInTheDocument();
+    expect(screen.getByText(/Is Ollama running\?/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    await waitFor(() => expect(callsTo(backend, "open_target")[0]?.payload).toEqual({ target: "settings" }));
+
+    await act(async () => {
+      await emit(AI_STATUS_EVENT, { state: "idle", done: 0, total: 0, error: null });
+    });
+    expect(screen.queryByText(/Could not describe/)).not.toBeInTheDocument();
+  });
+
+  it("reloads when a run finishes, to show the new descriptions", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.aiStatus = { state: "working", done: 0, total: 1, error: null };
+    render(<LibraryWindow />);
+    expect(await screen.findByText("Describing 1 of 1…")).toBeInTheDocument();
+    await settle();
+
+    backend.shots = [described(1)];
+    await act(async () => {
+      await emit(AI_STATUS_EVENT, { state: "idle", done: 1, total: 1, error: null });
+    });
+
+    const card = screen.getByRole("button", { name: "Grab-it 1.png" });
+    expect(await within(card).findByText(/A Rust compiler error/)).toBeInTheDocument();
+    expect(screen.queryByText(/Describing/)).not.toBeInTheDocument();
+  });
+
+  it("names categories", () => {
+    expect(categoryLabel("error")).toBe("Error / dialog");
+    expect(categoryLabel("browser")).toBe("Browser / web page");
+    expect(categoryLabel("spreadsheet")).toBe("Spreadsheet");
+  });
+});
+
 describe("search queries", () => {
   it("turns typed words and filters into a query", () => {
     expect(buildQuery("  invoice ", NO_FILTERS)).toEqual({ text: "invoice", from: null, to: null, app: null, tag: null });
     expect(isSearching(buildQuery(" ", NO_FILTERS))).toBe(false);
-    const query = buildQuery("", { app: "code", tag: "bug", fromDate: "2026-03-01", toDate: "2026-03-31" });
+    const query = buildQuery("", {
+      app: "code",
+      tag: "bug",
+      category: "",
+      fromDate: "2026-03-01",
+      toDate: "2026-03-31",
+    });
     expect(query).toEqual({
       text: "",
       app: "code",

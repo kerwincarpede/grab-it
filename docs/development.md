@@ -1,0 +1,151 @@
+# Developing Grab-it
+
+Grab-it is built with Rust and [Tauri 2](https://tauri.app/), with a React + TypeScript frontend. This page covers building it from source, running the checks, and how releases are made. If you just want to use Grab-it, see [Getting started](getting-started.md).
+
+## Layout
+
+| Path | Contents |
+| --- | --- |
+| `app/` | The Tauri project |
+| `app/src/` | Frontend: React + TypeScript + Vite |
+| `app/src-tauri/` | Backend: Rust |
+| `.github/workflows/ci.yml` | Checks plus installer builds on Linux, Windows and macOS |
+| `.github/workflows/release.yml` | Manually triggered release from `main` |
+| `docs/` | User and developer docs; `docs/assets/demo.svg` is the README animation |
+
+## Setup
+
+1. Install [Node.js 22](https://nodejs.org/) and the stable Rust toolchain via [rustup](https://rustup.rs/) (`rustup component add rustfmt clippy`).
+2. Install the Tauri system dependencies for your OS, see [Tauri prerequisites](https://tauri.app/start/prerequisites/). On Debian/Ubuntu:
+
+   ```sh
+   sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+     librsvg2-dev libxdo-dev libssl-dev patchelf build-essential curl wget file
+   ```
+
+   Screen capture ([xcap](https://github.com/nashaofu/xcap)) also needs these on Debian/Ubuntu:
+
+   ```sh
+   sudo apt-get install -y pkg-config libclang-dev libxcb1-dev libxrandr-dev \
+     libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev
+   ```
+
+3. Install the frontend dependencies:
+
+   ```sh
+   cd app
+   npm ci
+   ```
+
+## Run
+
+```sh
+cd app
+npm run tauri dev
+```
+
+Grab-it starts in the tray with no window open. Closing a window keeps the app running in the tray. The very first launch also opens a short welcome listing the hotkeys; the tray's **Shortcuts and tips…** shows it again.
+
+To open a window or start a capture directly, for example on a desktop without a tray host, pass `--open` with one of `settings`, `library`, `welcome`, `region`, `repeat`, `text`, `colour`, `record`, `editor <file>`, `quick <file>` or `pin <file>`. npm, the Tauri CLI and cargo each consume one `--`, so three are needed:
+
+```sh
+npm run tauri dev -- -- -- --open settings
+npm run tauri dev -- -- -- --open region
+```
+
+A built binary takes the argument directly, for example `src-tauri/target/release/grab-it --open settings`.
+
+Only one Grab-it runs at a time. Starting it again hands the arguments to the running one, so `grab-it --open region` works as a desktop shortcut or from a script; with no arguments it opens the Library.
+
+## How it works
+
+### Captures on disk
+
+Each capture is copied to the clipboard and saved to `<save folder>/originals/` as `Grab-it YYYY-MM-DD HH-MM-SS.png`, with `<name>.meta.json` beside it holding the time, mode, size, foreground app and window title. The PNG is never modified.
+
+Annotations are saved in `<name>.annotations.json` beside the capture. Crop and backdrop are non-destructive and only applied on copy and export. GIF recordings go to `<save folder>/recordings/`.
+
+Region and Window freeze every monitor and show it fullscreen. Each monitor is cropped at its own scale factor, so mixed-DPI setups capture sharp.
+
+### Wayland and macOS
+
+- **Wayland** (`WAYLAND_DISPLAY` set): captures go through the desktop's Screenshot portal, and Pick a colour uses the desktop's colour picker. Hotkeys are offered to the desktop through the GlobalShortcuts portal; where the desktop has no such portal, use the tray menu. Repeat last region and recording are not available, since only the desktop may read the screen there.
+- **macOS**: Grab-it needs *Screen Recording* permission under System Settings → Privacy & Security, and offers to open that page when the permission is missing.
+
+### Search and OCR
+
+The text in each image is read by [ocrs](https://github.com/robertknight/ocrs) in the background, one capture at a time, newest first. Tags, notes, app and window title are searchable straight away.
+
+The OCR models (about 12 MB) are not bundled: they are downloaded into `ocr-models/` in the app data directory the first time a capture needs reading, with progress shown in the Library. If the download fails, the Library offers **Retry**; the next capture also retries. Set `GRAB_IT_OCR_MODELS` to use another models directory.
+
+The search index is a SQLite FTS5 table in `library.db`, kept in step with each capture's tags, notes and text as they change.
+
+### Settings
+
+`settings.json` lives in the app data directory (`com.kerwincarpede.grabit`):
+
+- Linux: `~/.local/share/com.kerwincarpede.grabit/`
+- macOS: `~/Library/Application Support/com.kerwincarpede.grabit/`
+- Windows: `%APPDATA%\com.kerwincarpede.grabit\`
+
+It holds the save folder (default `~/Pictures/Grab-it/`), the hotkeys, what happens after a capture, and whether captures are copied to the clipboard. Changing the save folder only affects new captures.
+
+**Start Grab-it when you sign in** is kept by the operating system rather than in `settings.json`: a login item on macOS, a registry entry on Windows, and an autostart entry on Linux.
+
+## Checks
+
+Run these from `app/`. CI runs the same commands.
+
+```sh
+npm ci
+npm run lint        # eslint + tsc --noEmit
+npm test            # vitest run
+npm run build       # tsc + vite build, also needed before the Rust build
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+The OCR tests download the ocrs models once into `src-tauri/target/ocr-models/`, or into `$GRAB_IT_OCR_MODELS` when set; CI caches that directory. Their fixture, `src-tauri/tests/fixtures/ocr-pineapple.png`, was made with ImageMagick (the command is in `src-tauri/src/ocr.rs`).
+
+To build installers locally, run `npm run tauri build`; they land in `app/src-tauri/target/release/bundle/`.
+
+## CI
+
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04 (caching the ocrs models for the OCR tests) and, in parallel, builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts. It runs on every pull request and push to `main`, and never publishes anything.
+
+## Releases
+
+Releases are cut by hand. Each one publishes a [GitHub release](https://github.com/kerwincarpede/grab-it/releases) of the current `main` with the installers attached: `.msi` and `-setup.exe` for Windows, `.dmg` for macOS (Apple silicon), and `.AppImage`, `.deb` and `.rpm` for Linux.
+
+To release, open **Actions → Release → Run workflow** on GitHub, or from a terminal:
+
+```sh
+gh workflow run release.yml                # bump from the commits (below)
+gh workflow run release.yml -f bump=minor  # or force patch, minor or major
+gh run watch                               # follow it
+```
+
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) only runs from `main`, and refuses a commit that is already released. It runs the whole of `ci.yml` (checks and the three installer builds) as a reusable workflow, so a release gets exactly the checks a pull request does.
+
+Versions come from the `v*` git tags. With the default `auto` bump, [`PaulHatch/semantic-version`](https://github.com/PaulHatch/semantic-version) reads the commits since the last tag and bumps by [Conventional Commits](https://www.conventionalcommits.org/):
+
+| Commit (or squash-merged PR title) | Bump |
+| --- | --- |
+| `feat!: ...`, or `BREAKING CHANGE:` in the message | major |
+| `feat: ...` or `feat(scope): ...` | minor |
+| anything else | patch |
+
+The first release, made before any tag exists, takes the version in `app/src-tauri/tauri.conf.json`. After that the tags are the source of truth: CI writes the release version into `tauri.conf.json` before building, so the version fields in the repository do not need bumping by hand.
+
+A run opens a draft release, builds the installers into it, and publishes it (creating the tag) only when the checks and all three builds pass. A failed run leaves only a hidden draft, which the next release of that version replaces. Each release is named by its version, for example `0.2.1` for the tag `v0.2.1`.
+
+The installers are not signed with a paid certificate. CI ad-hoc signs the macOS app (the `APPLE_SIGNING_IDENTITY` repository secret overrides the `-` identity), so Gatekeeper says it cannot verify the developer rather than calling the app damaged.
+
+## The README animation
+
+[`docs/assets/demo.svg`](assets/demo.svg) is an SVG animated with CSS keyframes, so it plays inside the README on GitHub with no video or GIF, and shows the finished frame to viewers who prefer reduced motion. It is generated by [`docs/assets/demo.py`](assets/demo.py); edit the script, not the SVG, then regenerate it from the repository root:
+
+```sh
+python3 docs/assets/demo.py docs/assets/demo.svg
+```

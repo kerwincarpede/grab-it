@@ -1373,3 +1373,155 @@
     transition-duration: 1ms !important;
   }
 }
+
+/* AI descriptions: a category badge and one-line description on tiles, a
+   section in the details. AI tags are outlined so they read apart from the user's. */
+.ai-status > .icon {
+  color: var(--accent);
+}
+
+.ai-status .hint {
+  font-size: 12px;
+}
+
+.category-chip {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.tile-category {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  max-width: calc(100% - 16px);
+  pointer-events: none;
+  transition: opacity 180ms;
+}
+
+.tile-category .category-chip {
+  display: block;
+  overflow: hidden;
+  color: #fff;
+  text-overflow: ellipsis;
+  background: rgb(15 17 22 / 55%);
+  border-color: rgb(255 255 255 / 14%);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+/* Make room for the hover actions on narrow tiles. */
+.tile:hover .tile-category,
+.tile:focus-within .tile-category {
+  opacity: 0;
+}
+
+.shot-ai-line {
+  display: block;
+  min-width: 0;
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 200ms,
+    transform 220ms var(--lib-ease);
+}
+
+.tile:hover .shot-ai-line,
+.tile:focus-within .shot-ai-line,
+.tile.is-selected .shot-ai-line {
+  opacity: 1;
+  transform: none;
+}
+
+.shot-description {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.35;
+  opacity: 0.9;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.tag-ai {
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+}
+
+.tag-ai::before {
+  content: "✦ ";
+  color: var(--accent);
+}
+
+.details-ai {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--surface-2);
+  border-radius: 12px;
+}
+
+.details-ai-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.details-ai-heading > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.details-ai-heading .icon {
+  color: var(--accent);
+}
+
+.details-ai .category-chip {
+  background: var(--surface);
+}
+
+.details-ai-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.details-ai-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.details-ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.details-ai-actions .pill-button {
+  flex: 1 1 auto;
+  padding: 5px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+  background: var(--surface);
+}
+
+.details-ai-actions .pill-button:where(:hover:not(:disabled)) {
+  background: var(--border);
+}

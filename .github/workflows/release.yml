@@ -1,0 +1,153 @@
+name: Release
+
+# Releases are cut by hand: Actions → Release → Run workflow, or
+#   gh workflow run release.yml                 # version from the commits
+#   gh workflow run release.yml -f bump=minor   # force a bump
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump. "auto" reads the conventional commits since the last tag.
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+
+# One release at a time, never cut short, so each run sees the tag the
+# previous one published.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Work out the next version from the git tags and open a draft release for
+  # it. The draft becomes public, and its tag is created, only once the checks
+  # and every installer build pass (see "publish").
+  version:
+    name: Version
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+      release_id: ${{ steps.draft.outputs.release_id }}
+    steps:
+      - name: Require main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Releases are made from main, not $GITHUB_REF."
+          exit 1
+
+      - uses: actions/checkout@v5
+        with:
+          # The version is computed from the tags and the commits since them.
+          fetch-depth: 0
+
+      # Conventional commits drive the "auto" bump: "feat!:" or
+      # "BREAKING CHANGE:" is major, "feat:" is minor, anything else is patch.
+      - name: Compute the next semantic version
+        id: semver
+        uses: PaulHatch/semantic-version@v6.0.7
+        with:
+          tag_prefix: v
+          search_commit_body: true
+
+      - name: Choose the release version
+        id: next
+        env:
+          BUMP: ${{ inputs.bump }}
+          IS_TAGGED: ${{ steps.semver.outputs.is_tagged }}
+          SEMVER: ${{ steps.semver.outputs.version }}
+          PREVIOUS: ${{ steps.semver.outputs.previous_version }}
+        run: |
+          if [ "$IS_TAGGED" = true ]; then
+            echo "::error::$GITHUB_SHA is already released; push new commits to main first."
+            exit 1
+          fi
+          if ! git tag -l 'v[0-9]*' | grep -q .; then
+            # No release tag yet: the first release takes the app's version.
+            version="$(jq -r .version app/src-tauri/tauri.conf.json)"
+          else
+            IFS=. read -r major minor patch <<< "$PREVIOUS"
+            case "$BUMP" in
+              major) version="$((major + 1)).0.0" ;;
+              minor) version="$major.$((minor + 1)).0" ;;
+              patch) version="$major.$minor.$((patch + 1))" ;;
+              *) version="$SEMVER" ;;
+            esac
+          fi
+          echo "Releasing v$version ($BUMP bump from v$PREVIOUS)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Open a draft release
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.next.outputs.version }}
+          TAG: v${{ steps.next.outputs.version }}
+        run: |
+          # Drop drafts an earlier, unfinished run left for this tag.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq ".[] | select(.draft and .tag_name == \"$TAG\") | .id" |
+            while read -r id; do
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+            done
+
+          body=$(cat <<'BODY'
+          ## Install
+
+          Download the installer for your platform from **Assets** below:
+
+          | Platform | Installer |
+          | --- | --- |
+          | Windows | `.msi` or `-setup.exe` |
+          | macOS (Apple silicon) | `.dmg` |
+          | Linux | `.AppImage`, `.deb` or `.rpm` |
+
+          The installers are not signed with a paid certificate, so Windows SmartScreen and macOS Gatekeeper warn on first launch.
+
+          **macOS:** open the `.dmg`, drag Grab-it to Applications and open it. When macOS says it cannot verify the app, choose **Done**, then go to **System Settings → Privacy & Security** and click **Open Anyway**. Alternatively run `xattr -dr com.apple.quarantine /Applications/Grab-it.app` once.
+          BODY
+          )
+
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="$TAG" \
+            -f target_commitish="$GITHUB_SHA" \
+            -f name="$VERSION" \
+            -f body="$body" \
+            -F draft=true \
+            -F generate_release_notes=true \
+            --jq .id)
+          echo "release_id=$id" >> "$GITHUB_OUTPUT"
+
+  # The same checks and installer builds as every CI run, stamped with the
+  # release version and uploading the installers into the draft.
+  ci:
+    name: CI
+    needs: version
+    permissions:
+      contents: write
+    uses: ./.github/workflows/ci.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      release_id: ${{ needs.version.outputs.release_id }}
+    secrets: inherit
+
+  publish:
+    name: Publish release
+    needs: [version, ci]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      # Publishing the draft creates its tag on the released commit.
+      - name: Publish the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.version.outputs.release_id }}
+        run: |
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            -F draft=false -f make_latest=true \
+            --jq '"Published \(.tag_name): \(.html_url)"'

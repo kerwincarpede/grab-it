@@ -136,3 +136,10 @@ export const SparkleIcon = () => (
     <path d="M19 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" />
   </Icon>
 );
+
+export const LayersIcon = () => (
+  <Icon size={14}>
+    <path d="M12 3.5l8.5 4.5-8.5 4.5L3.5 8z" />
+    <path d="M3.5 12.5l8.5 4.5 8.5-4.5" />
+  </Icon>
+);

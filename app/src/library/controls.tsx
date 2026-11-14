@@ -22,11 +22,15 @@ interface ChipSelectProps {
   allLabel: string;
   value: string;
   options: string[];
+  /** How an option is shown; the value itself by default. */
+  format?: (value: string) => string;
   onChange: (value: string) => void;
 }
 
+const asIs = (value: string) => value;
+
 /** A pill that opens a searchable list; "" means any. */
-export function ChipSelect({ label, icon, allLabel, value, options, onChange }: ChipSelectProps) {
+export function ChipSelect({ label, icon, allLabel, value, options, format = asIs, onChange }: ChipSelectProps) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const [active, setActive] = useState(0);
@@ -42,9 +46,9 @@ export function ChipSelect({ label, icon, allLabel, value, options, onChange }: 
   const all = useMemo(() => (value && !options.includes(value) ? [value, ...options] : options), [value, options]);
   const shown = useMemo(() => {
     const needle = filter.trim().toLowerCase();
-    const matches = needle ? all.filter((option) => option.toLowerCase().includes(needle)) : all;
+    const matches = needle ? all.filter((option) => format(option).toLowerCase().includes(needle)) : all;
     return ["", ...matches];
-  }, [all, filter]);
+  }, [all, filter, format]);
   const searchable = all.length > 7;
 
   function show() {
@@ -113,7 +117,7 @@ export function ChipSelect({ label, icon, allLabel, value, options, onChange }: 
         }}
       >
         {icon}
-        <span className="chip-text">{value || allLabel}</span>
+        <span className="chip-text">{value ? format(value) : allLabel}</span>
         <ChevronIcon />
       </button>
       {open && (
@@ -151,7 +155,7 @@ export function ChipSelect({ label, icon, allLabel, value, options, onChange }: 
                 onMouseEnter={() => setActive(index)}
                 onClick={() => choose(option)}
               >
-                <span className="popover-option-text">{option || allLabel}</span>
+                <span className="popover-option-text">{option ? format(option) : allLabel}</span>
                 {option === value && <CheckIcon />}
               </div>
             ))}
