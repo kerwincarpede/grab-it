@@ -125,6 +125,8 @@ export function useAnnotations() {
   }, [flush]);
 
   const commitDoc = useCallback((doc: Annotations) => dispatch({ type: "commit", doc }), []);
+  /** Starts from `doc` as if it had been loaded (no undo step), and saves it. */
+  const adoptDoc = useCallback((doc: Annotations) => dispatch({ type: "load", doc }), []);
   const undoDoc = useCallback(() => dispatch({ type: "undo" }), []);
   const redoDoc = useCallback(() => dispatch({ type: "redo" }), []);
 
@@ -136,6 +138,7 @@ export function useAnnotations() {
     canUndo: canUndo(history),
     canRedo: canRedo(history),
     commit: commitDoc,
+    adopt: adoptDoc,
     undo: undoDoc,
     redo: redoDoc,
   };

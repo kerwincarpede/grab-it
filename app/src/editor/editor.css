@@ -287,7 +287,9 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  width: 264px;
+  width: 280px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
   padding: 14px;
   border: 1px solid var(--ed-border);
   border-radius: 12px;
@@ -315,6 +317,79 @@
   box-shadow:
     0 0 0 2px var(--ed-raised),
     0 0 0 4px var(--ed-accent);
+}
+
+/* Section headings between the swatch groups. */
+.backdrop-section {
+  margin-bottom: -4px;
+  color: var(--ed-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Transparent: a checkerboard. */
+.editor .backdrop-swatch.transparent,
+.editor .backdrop-swatch.transparent:hover:not(:disabled) {
+  background: repeating-conic-gradient(#c7ccd4 0% 25%, #ffffff 0% 50%) 50% / 10px 10px;
+}
+
+/* Blurred capture: soft colour, as a blurred screen looks. */
+.editor .backdrop-swatch.blurred,
+.editor .backdrop-swatch.blurred:hover:not(:disabled) {
+  background:
+    radial-gradient(circle at 30% 30%, #9fb4d8, transparent 60%),
+    radial-gradient(circle at 75% 70%, #d8b49f, transparent 60%),
+    #8a919c;
+}
+
+/* Image: a small landscape. */
+.editor .backdrop-swatch.image,
+.editor .backdrop-swatch.image:hover:not(:disabled) {
+  background:
+    linear-gradient(135deg, transparent 55%, #4f7d5c 55%),
+    radial-gradient(circle at 70% 30%, #ffd36e 12%, transparent 13%),
+    linear-gradient(#8ec5ff, #d7ecff);
+}
+
+/* The custom gradient's colours and angle. */
+.backdrop-gradient {
+  display: grid;
+  grid-template-columns: 28px 28px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.backdrop-gradient .backdrop-row {
+  grid-template-columns: auto 1fr 36px;
+}
+
+.backdrop-aspects {
+  display: flex;
+  grid-column: span 2;
+}
+
+.editor .backdrop-aspects button {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 0;
+  border-radius: 0;
+  background: var(--ed-bg, transparent);
+  font-size: 12px;
+}
+
+.editor .backdrop-aspects button:first-child {
+  border-radius: var(--ed-radius) 0 0 var(--ed-radius);
+}
+
+.editor .backdrop-aspects button:last-child {
+  border-radius: 0 var(--ed-radius) var(--ed-radius) 0;
+}
+
+.editor .backdrop-aspects button[aria-pressed="true"] {
+  background: var(--ed-accent);
+  color: #ffffff;
 }
 
 /* "No backdrop": an empty tile struck through. */

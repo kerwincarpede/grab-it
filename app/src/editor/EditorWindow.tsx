@@ -4,9 +4,21 @@ import { Image as KonvaImage, Layer, Rect as KonvaRect, Stage, Transformer } fro
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import "./editor.css";
-import { copyImage, editorImage, exportImage, pinImage } from "./api";
+import { backdropImage, chooseBackdropImage, copyImage, editorImage, exportImage, pinImage } from "./api";
 import BackdropPanel from "./BackdropPanel";
-import { backdropLayout, exportTarget, flatten, gradientStops, roundedRectPath, type ExportFormat, type View } from "./flatten";
+import {
+  backdropLayout,
+  backdropPaint,
+  blurredBackdrop,
+  coverCrop,
+  exportTarget,
+  fallbackScale,
+  flatten,
+  roundedRectPath,
+  type ExportFormat,
+  type PaintLayer,
+  type View,
+} from "./flatten";
 import {
   BackdropIcon,
   CopyIcon,
@@ -24,7 +36,7 @@ import {
   ZoomOutIcon,
 } from "./icons";
 import {
-  backdropColors,
+  BACKDROP_FILLS,
   COLORS,
   sameBackdrop,
   TOOLS,
@@ -117,6 +129,88 @@ function useCaptureImage(ready: boolean) {
   return { image, error };
 }
 
+/** Loads the image a backdrop is filled with; null until it loads, or when it cannot. */
+function useBackdropImage(path: string | null) {
+  const [loaded, setLoaded] = useState<{ path: string; image: HTMLImageElement } | null>(null);
+  useEffect(() => {
+    if (!path) return;
+    let url: string | null = null;
+    let cancelled = false;
+    let reading: Promise<ArrayBuffer>;
+    try {
+      reading = backdropImage(path);
+    } catch (err) {
+      reading = Promise.reject(err);
+    }
+    reading
+      .then((bytes) => {
+        if (cancelled) return;
+        url = URL.createObjectURL(new Blob([bytes]));
+        const img = new Image();
+        img.onload = () => !cancelled && setLoaded({ path, image: img });
+        img.src = url;
+      })
+      // A moved or unreadable image leaves the plain underlay showing.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [path]);
+  return loaded && loaded.path === path ? loaded.image : null;
+}
+
+/** One layer of the backdrop preview, painted as the export compose paints it (see `paintBackdrop`). */
+function PaintNode({
+  layer,
+  bounds,
+  blurred,
+  image,
+}: {
+  layer: PaintLayer;
+  bounds: Rect;
+  blurred: { canvas: HTMLCanvasElement; crop: Rect } | null;
+  image: HTMLImageElement | null;
+}) {
+  switch (layer.kind) {
+    case "solid":
+      return <KonvaRect name="backdrop-fill" {...bounds} fill={layer.color} />;
+    case "linear":
+      return (
+        <KonvaRect
+          name="backdrop-fill"
+          {...bounds}
+          fillLinearGradientStartPoint={layer.start}
+          fillLinearGradientEndPoint={layer.end}
+          fillLinearGradientColorStops={layer.stops}
+        />
+      );
+    case "radial":
+      return (
+        <KonvaRect
+          name="backdrop-fill"
+          {...bounds}
+          fillRadialGradientStartPoint={layer.center}
+          fillRadialGradientEndPoint={layer.center}
+          fillRadialGradientStartRadius={0}
+          fillRadialGradientEndRadius={layer.radius}
+          fillRadialGradientColorStops={layer.stops}
+        />
+      );
+    case "blurred":
+      return blurred ? <KonvaImage name="backdrop-blurred" image={blurred.canvas} crop={blurred.crop} {...bounds} /> : null;
+    case "image":
+      return image ? (
+        <KonvaImage
+          name="backdrop-image"
+          image={image}
+          crop={coverCrop({ x: 0, y: 0, width: image.width, height: image.height }, bounds)}
+          {...bounds}
+        />
+      ) : null;
+  }
+}
+
 function useSize(ref: RefObject<HTMLDivElement | null>) {
   const [size, setSize] = useState({ width: 800, height: 600 });
   useEffect(() => {
@@ -169,7 +263,7 @@ interface ToolHold {
 /** The annotation editor: a react-konva stage over the original capture. */
 export default function EditorWindow() {
   const annotations = useAnnotations();
-  const { doc, commit, info, undo: undoDoc, redo: redoDoc } = annotations;
+  const { doc, commit, adopt, info, undo: undoDoc, redo: redoDoc } = annotations;
   const { image, error: imageError } = useCaptureImage(info !== null);
   const container = useRef<HTMLDivElement>(null);
   const size = useSize(container);
@@ -192,6 +286,11 @@ export default function EditorWindow() {
   const [backdropOpen, setBackdropOpen] = useState(false);
   /** A backdrop being adjusted (a slider mid-drag), shown but not yet committed. */
   const [backdropDraft, setBackdropDraft] = useState<Backdrop | null>(null);
+  /** The backdrop last picked, here or in an earlier session: new backdrops start from it. */
+  const [lastBackdrop, setLastBackdrop] = useState<Backdrop | null>(DEFAULT_CHOICES.backdrop);
+  /** The backdrop to frame a capture without annotations with, when Settings asks for that. */
+  const [autoBackdrop, setAutoBackdrop] = useState<Backdrop | null>(null);
+  const autoApplied = useRef(false);
   /** Where the right-click tool wheel is open, in canvas pixels. */
   const [wheelAt, setWheelAt] = useState<Point | null>(null);
   const hold = useRef<ToolHold | null>(null);
@@ -207,9 +306,24 @@ export default function EditorWindow() {
     setTool(choices.tool);
     setStyle(choices.style);
     setWidths(choices.widths);
+    setLastBackdrop(choices.backdrop);
+    if (choices.autoBackdrop && choices.backdrop) setAutoBackdrop(choices.backdrop);
   }, []);
-  const choices = useMemo(() => ({ tool, style, widths }), [tool, style, widths]);
+  const choices = useMemo(() => ({ tool, style, widths, backdrop: lastBackdrop }), [tool, style, widths, lastBackdrop]);
   useEditorPreferences(choices, restoreChoices);
+
+  // With auto-apply on, a capture opened for the first time (no sidecar
+  // yet) gets the last backdrop, as if it had been loaded with it: it is
+  // saved to the sidecar, but is not an undo step. The capture file and
+  // its clipboard copy stay unframed.
+  useEffect(() => {
+    if (autoApplied.current || !autoBackdrop || !info) return;
+    autoApplied.current = true;
+    if (info.annotations !== null && info.annotations !== undefined) return;
+    // Anything done before the preferences arrived wins.
+    if (annotations.canUndo || doc.backdrop) return;
+    adopt({ ...doc, backdrop: autoBackdrop });
+  }, [autoBackdrop, info, annotations.canUndo, doc, adopt]);
 
   /** Everything `drawWith` draws the next shape with: the style plus that tool's own width. */
   const drawStyle = (drawWith: Tool): Style => ({
@@ -221,6 +335,9 @@ export default function EditorWindow() {
 
   const imageSize = useMemo(() => (image ? { width: image.width, height: image.height } : null), [image]);
   const backdrop = backdropDraft ?? doc.backdrop ?? null;
+  /** Image pixels per point: the corner radius is in points. Older captures do not say, so the window's density stands in. */
+  const captureScale = info?.scaleFactor && info.scaleFactor > 0 ? info.scaleFactor : fallbackScale();
+  const backdropImageEl = useBackdropImage(backdrop?.fill === BACKDROP_FILLS.image ? (backdrop.image ?? null) : null);
   /**
    * The backdrop preview: the area that is exported (the crop, or the whole
    * capture), where the backdrop sits around it, and the fit bounds. The
@@ -231,9 +348,18 @@ export default function EditorWindow() {
     const whole = { x: 0, y: 0, ...imageSize };
     if (!backdrop || tool === "crop") return { area: whole, bounds: whole, layout: null };
     const area = doc.crop ?? whole;
-    const layout = backdropLayout(area, backdrop);
+    const layout = backdropLayout(area, backdrop, captureScale);
     return { area, bounds: { x: area.x - layout.x, y: area.y - layout.y, width: layout.width, height: layout.height }, layout };
-  }, [imageSize, backdrop, tool, doc.crop]);
+  }, [imageSize, backdrop, tool, doc.crop, captureScale]);
+  /** The blurred-capture fill for the preview, drawn as the export draws it. */
+  const blurredFill = useMemo(() => {
+    if (!image || !frame?.layout || backdrop?.fill !== BACKDROP_FILLS.blur) return null;
+    try {
+      return blurredBackdrop(image, frame.area, frame.layout);
+    } catch {
+      return null;
+    }
+  }, [image, frame, backdrop?.fill]);
   const currentView = useMemo(() => view ?? (frame ? fitView(frame.bounds, size) : { scale: 1, x: 0, y: 0 }), [view, frame, size]);
   const selected = doc.shapes.find((shape) => shape.id === selectedId) ?? null;
   const steps = useMemo(() => stepNumbers(doc.shapes), [doc.shapes]);
@@ -532,6 +658,8 @@ export default function EditorWindow() {
 
   const commitBackdrop = (next: Backdrop | null) => {
     setBackdropDraft(null);
+    // Remembered for next time; turning the backdrop off keeps the last one.
+    if (next) setLastBackdrop(next);
     // Letting go of a slider that did not move is not an edit.
     if (!sameBackdrop(doc.backdrop, next)) commit({ ...doc, backdrop: next });
   };
@@ -540,9 +668,14 @@ export default function EditorWindow() {
     async (format: ExportFormat) => {
       const layer = contentRef.current;
       if (!layer || !imageSize) throw new Error("The capture has not loaded yet.");
-      return flatten(layer, { crop: doc.crop, backdrop }, imageSize, currentView, format);
+      const area = doc.crop ?? { x: 0, y: 0, ...imageSize };
+      return flatten(layer, { crop: doc.crop, backdrop }, imageSize, currentView, format, {
+        scale: captureScale,
+        capture: image ? { image, area } : null,
+        image: backdropImageEl,
+      });
     },
-    [doc.crop, backdrop, imageSize, currentView],
+    [doc.crop, backdrop, imageSize, currentView, captureScale, image, backdropImageEl],
   );
 
   /** Copies the flattened image; false when it failed (and said so). */
@@ -678,7 +811,7 @@ export default function EditorWindow() {
   const spotlights = shapes.filter((shape) => shape.type === "spotlight");
   const dim = imageSize ? spotlightDim({ x: 0, y: 0, ...imageSize }, spotlights) : [];
   const framed = frame?.layout ? { area: frame.area, bounds: frame.bounds, layout: frame.layout } : null;
-  const backdropFill = backdrop ? backdropColors(backdrop.fill) : [];
+  const paint = framed && backdrop ? backdropPaint(backdrop, framed.layout) : [];
 
   const boxOptions = optionsFor === "rect" || optionsFor === "ellipse";
   const fillOn = selected?.type === "rect" || selected?.type === "ellipse" ? Boolean(selected.fill) : Boolean(style.fill);
@@ -770,7 +903,15 @@ export default function EditorWindow() {
             <BackdropIcon />
             Backdrop
           </button>
-          {backdropOpen && <BackdropPanel backdrop={backdrop} onPreview={setBackdropDraft} onCommit={commitBackdrop} />}
+          {backdropOpen && (
+            <BackdropPanel
+              backdrop={backdrop}
+              start={lastBackdrop}
+              onPreview={setBackdropDraft}
+              onCommit={commitBackdrop}
+              onPickImage={chooseBackdropImage}
+            />
+          )}
           {doc.crop && (
             <button type="button" className="icon-button" onClick={() => commit({ ...doc, crop: null })} aria-label="Reset crop" title="Reset crop">
               <CropResetIcon />
@@ -836,16 +977,9 @@ export default function EditorWindow() {
               <Layer name="backdrop" listening={false}>
                 {framed && (
                   <>
-                    <KonvaRect
-                      {...framed.bounds}
-                      {...(backdropFill.length > 1
-                        ? {
-                            fillLinearGradientStartPoint: { x: 0, y: 0 },
-                            fillLinearGradientEndPoint: { x: framed.bounds.width, y: framed.bounds.height },
-                            fillLinearGradientColorStops: gradientStops(backdropFill),
-                          }
-                        : { fill: backdropFill[0] })}
-                    />
+                    {paint.map((layer, i) => (
+                      <PaintNode key={i} layer={layer} bounds={framed.bounds} blurred={blurredFill} image={backdropImageEl} />
+                    ))}
                     {framed.layout.shadow && (
                       <KonvaRect
                         {...framed.area}

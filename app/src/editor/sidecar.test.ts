@@ -96,4 +96,42 @@ describe("annotations sidecar", () => {
     expect(parseBackdrop("ocean")).toBeNull();
     expect(parseAnnotations({ version: 1, shapes: [], backdrop: { fill: "ocean" } })).toEqual({ version: 1, shapes: [], crop: null });
   });
+
+  it("keeps the newer backdrop fields, each checked on its own", () => {
+    const backdrop = {
+      fill: "custom",
+      padding: 40,
+      radius: 36,
+      radiusUnit: "pt",
+      shadow: true,
+      shadowSize: 70,
+      shadowStrength: 50,
+      aspect: "4:3",
+      gradient: { from: "#112233", to: "#445566", angle: 90 },
+      image: "/home/me/beach.jpg",
+    };
+    expect(parseBackdrop(backdrop)).toEqual(backdrop);
+    expect(
+      parseBackdrop({
+        ...backdrop,
+        radius: 120,
+        radiusUnit: "em",
+        shadowSize: 400,
+        shadowStrength: "strong",
+        aspect: "21:9",
+        gradient: { from: "red", to: "#445566", angle: 90 },
+        image: 3,
+      }),
+    ).toEqual({ fill: "custom", padding: 40, radius: 80, shadow: true, shadowSize: 100 });
+    expect(parseBackdrop({ ...backdrop, gradient: { from: "#112233", to: "#445566", angle: -90 } })?.gradient?.angle).toBe(270);
+  });
+
+  it("loads a backdrop from before the shadow sliders as it was", () => {
+    expect(parseBackdrop({ fill: "ocean", padding: 64, radius: 12, shadow: true })).toEqual({
+      fill: "ocean",
+      padding: 64,
+      radius: 12,
+      shadow: true,
+    });
+  });
 });

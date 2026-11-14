@@ -22,6 +22,8 @@ interface Backend {
   ai: AiPreferences;
   /** What `ai_test_connection` answers; a thrown error when it starts with "error:". */
   testResult: string;
+  /** The editor section's auto-apply flag. */
+  autoBackdrop?: boolean;
   saveFolder: string;
   hotkeys: typeof DEFAULT_HOTKEYS;
   hotkeyWarnings: string[];
@@ -49,6 +51,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     afterCapture: backend.afterCapture,
     copyToClipboard: backend.copyToClipboard,
     ai: backend.ai,
+    editor: backend.autoBackdrop === undefined ? {} : { autoBackdrop: backend.autoBackdrop },
   });
   mockIPC((cmd, payload) => {
     backend.calls.push({ cmd, payload });
@@ -77,6 +80,10 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
         return backend.testResult;
       case "ai_redescribe_all":
         return null;
+      case "set_auto_backdrop":
+        if (backend.setError) throw backend.setError;
+        backend.autoBackdrop = (payload as { enabled: boolean }).enabled;
+        return settings();
       case "plugin:dialog|open":
         return backend.picked;
       case "set_save_folder": {
@@ -195,6 +202,31 @@ describe("SettingsWindow", () => {
 
     expect(await screen.findByText("disk full")).toBeInTheDocument();
     expect(quick).toBeChecked();
+  });
+
+  it("turns framing new captures with the last backdrop on and off", async () => {
+    const backend = mockBackend();
+    render(<SettingsWindow />);
+    const toggle = await screen.findByRole("checkbox", { name: /Frame new captures with the last backdrop/ });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect(toggle).not.toBeChecked();
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(backend.calls[backend.calls.length - 1]).toEqual({ cmd: "set_auto_backdrop", payload: { enabled: true } });
+    expect(screen.getByRole("status")).toHaveTextContent("Saved.");
+
+    await userEvent.click(toggle);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+    expect(backend.autoBackdrop).toBe(false);
+  });
+
+  it("shows auto-apply as it is saved", async () => {
+    mockBackend({ autoBackdrop: true });
+    render(<SettingsWindow />);
+    const toggle = await screen.findByRole("checkbox", { name: /Frame new captures with the last backdrop/ });
+    await waitFor(() => expect(toggle).toBeChecked());
   });
 
   it("turns starting at sign-in on", async () => {

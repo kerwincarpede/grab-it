@@ -172,6 +172,14 @@ pub struct EditorPreferences {
     /// `pixelate` or `blur`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blur_mode: Option<String>,
+    /// The last backdrop picked, as the editor writes it in a sidecar. Kept
+    /// as JSON: the editor checks each field when it reads it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backdrop: Option<serde_json::Value>,
+    /// Frame captures that have no annotations yet with `backdrop`. Set
+    /// from the Settings window; the editor's own saves keep it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_backdrop: Option<bool>,
 }
 
 impl EditorPreferences {
@@ -206,6 +214,11 @@ impl EditorPreferences {
             fill: flag("fill"),
             text_background: flag("textBackground"),
             blur_mode: text("blurMode"),
+            backdrop: value
+                .get("backdrop")
+                .filter(|backdrop| backdrop.is_object())
+                .cloned(),
+            auto_backdrop: flag("autoBackdrop"),
         }
     }
 }
@@ -452,18 +465,37 @@ impl SettingsStore {
         Ok(self.current.clone())
     }
 
-    /// Remembers the annotation editor's choices.
+    /// Remembers the annotation editor's choices. Auto-apply belongs to the
+    /// Settings window, so the editor's saves never change it.
     pub fn set_editor_preferences(
         &mut self,
         editor: EditorPreferences,
     ) -> Result<EditorPreferences, SettingsError> {
         let next = Settings {
-            editor,
+            editor: EditorPreferences {
+                auto_backdrop: self.current.editor.auto_backdrop,
+                ..editor
+            },
             ..self.current.clone()
         };
         save(&self.path, &next)?;
         self.current = next;
         Ok(self.current.editor.clone())
+    }
+
+    /// Turns framing new captures with the last backdrop on or off,
+    /// keeping the rest of the editor's choices.
+    pub fn set_auto_backdrop(&mut self, enabled: bool) -> Result<Settings, SettingsError> {
+        let next = Settings {
+            editor: EditorPreferences {
+                auto_backdrop: Some(enabled),
+                ..self.current.editor.clone()
+            },
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
     }
 
     /// Changes the capture hotkeys after checking them. Registering them is
@@ -849,6 +881,10 @@ mod tests {
             fill: Some(true),
             text_background: Some(false),
             blur_mode: Some("blur".into()),
+            backdrop: Some(serde_json::json!({
+                "fill": "aurora", "padding": 48, "radius": 36, "shadow": true, "aspect": "16:9"
+            })),
+            auto_backdrop: None,
         }
     }
 
@@ -877,6 +913,7 @@ mod tests {
         assert_eq!(json["editor"]["textBackground"], false);
         assert_eq!(json["editor"]["blurMode"], "blur");
         assert_eq!(json["editor"]["widths"]["text"], 48);
+        assert_eq!(json["editor"]["backdrop"]["aspect"], "16:9");
     }
 
     #[test]
@@ -917,7 +954,8 @@ mod tests {
                     "color": "#e5484d",
                     "fill": "yes",
                     "widths": {"arrow": 6, "line": -2, "rect": 2.5, "text": "big"},
-                    "backdrop": {"fill": "ocean"}
+                    "backdrop": {"fill": "ocean"},
+                    "autoBackdrop": "on"
                 }
             }"##,
         )
@@ -928,6 +966,8 @@ mod tests {
             EditorPreferences {
                 color: Some("#e5484d".into()),
                 widths: BTreeMap::from([("arrow".to_owned(), 6)]),
+                // The editor checks the backdrop's fields itself.
+                backdrop: Some(serde_json::json!({"fill": "ocean"})),
                 ..EditorPreferences::default()
             }
         );
@@ -957,6 +997,53 @@ mod tests {
         assert_eq!(
             load(&path, defaults(&dir)).unwrap().editor,
             editor_preferences()
+        );
+    }
+
+    #[test]
+    fn a_backdrop_that_is_not_an_object_is_dropped() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let text = r#"{"editor": {"backdrop": "ocean", "autoBackdrop": true}}"#;
+        fs::write(&path, text).unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.editor.backdrop, None);
+        assert_eq!(loaded.editor.auto_backdrop, Some(true));
+    }
+
+    #[test]
+    fn auto_backdrop_is_set_by_settings_and_kept_by_the_editor() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        store.set_editor_preferences(editor_preferences()).unwrap();
+
+        let updated = store.set_auto_backdrop(true).unwrap();
+        assert_eq!(updated.editor.auto_backdrop, Some(true));
+        // The editor's other choices are kept.
+        assert_eq!(updated.editor.backdrop, editor_preferences().backdrop);
+
+        // The editor saves without the flag; it stays on.
+        let saved = store
+            .set_editor_preferences(EditorPreferences {
+                color: Some("#0090ff".into()),
+                ..editor_preferences()
+            })
+            .unwrap();
+        assert_eq!(saved.auto_backdrop, Some(true));
+        assert_eq!(saved.color.as_deref(), Some("#0090ff"));
+
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.editor.auto_backdrop, Some(true));
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(json["editor"]["autoBackdrop"], true);
+
+        store.set_auto_backdrop(false).unwrap();
+        assert_eq!(
+            load(&path, defaults(&dir)).unwrap().editor.auto_backdrop,
+            Some(false)
         );
     }
 }

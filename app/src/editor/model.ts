@@ -92,16 +92,43 @@ export interface StepShape {
 export type Shape = LineShape | PathShape | BoxShape | BlurShape | SpotlightShape | TextShape | StepShape;
 export type ShapeType = Shape["type"];
 
+/** The output shapes a backdrop can pad the capture to; "auto" pads evenly. */
+export type BackdropAspect = "auto" | "16:9" | "4:3" | "1:1";
+
+/** A two-colour gradient the user mixed, at a CSS angle (0 is bottom to top, 90 left to right). */
+export interface CustomGradient {
+  from: string;
+  to: string;
+  angle: number;
+}
+
 /**
  * A decorative frame around the capture, added on copy/export. `fill` is a
- * `BACKDROP_PRESETS` id or a hex colour; `padding` and `radius` are in
- * capture pixels.
+ * `BACKDROP_PRESETS` or `BACKDROP_MESHES` id, a hex colour, or one of the
+ * `BACKDROP_FILLS`. `padding` is in capture pixels; `radius` is in points,
+ * multiplied by the capture's scale factor, when `radiusUnit` is "pt", and
+ * in capture pixels otherwise (sidecars written before points).
+ *
+ * Every field after `shadow` came later and is optional, so sidecars from
+ * before still load and look as they did.
  */
 export interface Backdrop {
   fill: string;
   padding: number;
   radius: number;
   shadow: boolean;
+  /** "pt" for a radius in points; absent in older sidecars, whose radius is in pixels. */
+  radiusUnit?: "pt";
+  /** How far the shadow spreads, 0–100; `DEFAULT_SHADOW_SIZE` when absent. */
+  shadowSize?: number;
+  /** How dark the shadow is, 0–100; `DEFAULT_SHADOW_STRENGTH` when absent. */
+  shadowStrength?: number;
+  /** "auto" when absent. */
+  aspect?: BackdropAspect;
+  /** The colours and angle of the `custom` fill. */
+  gradient?: CustomGradient;
+  /** The file the `image` fill shows. */
+  image?: string;
 }
 
 /**
@@ -218,7 +245,19 @@ export const TOOLS: { tool: Tool; label: string; key: string; group: number }[] 
 ];
 
 export const BACKDROP_MAX_PADDING = 200;
-export const BACKDROP_MAX_RADIUS = 48;
+/** Corner radius, in points. */
+export const BACKDROP_MAX_RADIUS = 80;
+export const DEFAULT_BACKDROP_RADIUS = 36;
+/** The shadow sliders run 0–100; these defaults give the shadow backdrops always had. */
+export const DEFAULT_SHADOW_SIZE = 50;
+export const DEFAULT_SHADOW_STRENGTH = 35;
+
+export const BACKDROP_ASPECTS: { aspect: BackdropAspect; label: string; ratio: number | null }[] = [
+  { aspect: "auto", label: "Auto", ratio: null },
+  { aspect: "16:9", label: "16:9", ratio: 16 / 9 },
+  { aspect: "4:3", label: "4:3", ratio: 4 / 3 },
+  { aspect: "1:1", label: "1:1", ratio: 1 },
+];
 
 /** Gradient backdrops, drawn corner to corner (top-left to bottom-right). */
 export const BACKDROP_PRESETS: { id: string; label: string; colors: string[] }[] = [
@@ -230,6 +269,82 @@ export const BACKDROP_PRESETS: { id: string; label: string; colors: string[] }[]
   { id: "mint", label: "Mint", colors: ["#c6f6d5", "#7fd8e8"] },
   { id: "dusk", label: "Dusk", colors: ["#2b3a67", "#7a4b94"] },
   { id: "slate", label: "Slate", colors: ["#525c6b", "#22272e"] },
+  { id: "flamingo", label: "Flamingo", colors: ["#ffb199", "#ff6cab", "#7366ff"] },
+  { id: "lagoon", label: "Lagoon", colors: ["#00c6fb", "#3ddc97", "#f9f871"] },
+  { id: "ember", label: "Ember", colors: ["#f9d423", "#ff4e50", "#8e2de2"] },
+  { id: "nebula", label: "Nebula", colors: ["#0f0c29", "#302b63", "#b06ab3"] },
+];
+
+/** A soft blob of colour in a mesh: centred at x, y (0–1 of the output), reaching `radius` of its longer side. */
+export interface MeshBlob {
+  x: number;
+  y: number;
+  radius: number;
+  color: string;
+}
+
+/** Mesh backdrops: soft radial blobs of colour layered over a base colour. */
+export const BACKDROP_MESHES: { id: string; label: string; base: string; blobs: MeshBlob[] }[] = [
+  {
+    id: "mesh-bloom",
+    label: "Bloom",
+    base: "#ffb6c9",
+    blobs: [
+      { x: 0, y: 0, radius: 0.9, color: "#ffd36e" },
+      { x: 1, y: 0.2, radius: 0.8, color: "#ff6ac1" },
+      { x: 0.2, y: 1, radius: 0.8, color: "#8f7bff" },
+    ],
+  },
+  {
+    id: "mesh-lagoon",
+    label: "Tide",
+    base: "#3a7bd5",
+    blobs: [
+      { x: 0, y: 1, radius: 0.9, color: "#00d2a8" },
+      { x: 1, y: 0, radius: 0.9, color: "#6a5cff" },
+      { x: 0.6, y: 0.6, radius: 0.5, color: "#7fe7ff" },
+    ],
+  },
+  {
+    id: "mesh-sorbet",
+    label: "Sorbet",
+    base: "#ffe1c4",
+    blobs: [
+      { x: 0.1, y: 0.2, radius: 0.7, color: "#ff9a8b" },
+      { x: 0.9, y: 0.9, radius: 0.8, color: "#ffd86f" },
+      { x: 0.9, y: 0.1, radius: 0.6, color: "#a0e7ff" },
+    ],
+  },
+  {
+    id: "mesh-midnight",
+    label: "Midnight",
+    base: "#0b1026",
+    blobs: [
+      { x: 0.1, y: 0.1, radius: 0.8, color: "#3b2fa0" },
+      { x: 1, y: 0.8, radius: 0.8, color: "#b0306a" },
+      { x: 0.5, y: 1, radius: 0.5, color: "#1f6feb" },
+    ],
+  },
+  {
+    id: "mesh-meadow",
+    label: "Meadow",
+    base: "#c9f2c7",
+    blobs: [
+      { x: 0, y: 0, radius: 0.8, color: "#7ee8a9" },
+      { x: 1, y: 0.4, radius: 0.8, color: "#fbe37b" },
+      { x: 0.3, y: 1, radius: 0.7, color: "#5fc4e8" },
+    ],
+  },
+  {
+    id: "mesh-ember",
+    label: "Glow",
+    base: "#2a0a18",
+    blobs: [
+      { x: 0, y: 1, radius: 0.9, color: "#ff5e3a" },
+      { x: 1, y: 0, radius: 0.8, color: "#ff2a68" },
+      { x: 0.7, y: 0.8, radius: 0.5, color: "#ffb347" },
+    ],
+  },
 ];
 
 export const BACKDROP_SOLIDS: { fill: string; label: string }[] = [
@@ -237,11 +352,35 @@ export const BACKDROP_SOLIDS: { fill: string; label: string }[] = [
   { fill: "#000000", label: "Black" },
 ];
 
-export const DEFAULT_BACKDROP: Backdrop = { fill: BACKDROP_PRESETS[0].id, padding: 64, radius: 12, shadow: true };
+/** Fills that are not a colour: the user's gradient, the capture blurred, nothing, or a picked image. */
+export const BACKDROP_FILLS = { custom: "custom", blur: "blur", transparent: "transparent", image: "image" } as const;
+
+export const DEFAULT_GRADIENT: CustomGradient = { from: "#4c8dff", to: "#ff6ac1", angle: 135 };
+
+export const DEFAULT_BACKDROP: Backdrop = {
+  fill: BACKDROP_PRESETS[0].id,
+  padding: 64,
+  radius: DEFAULT_BACKDROP_RADIUS,
+  radiusUnit: "pt",
+  shadow: true,
+};
 
 export function sameBackdrop(a: Backdrop | null | undefined, b: Backdrop | null | undefined): boolean {
   if (!a || !b) return !a && !b;
-  return a.fill === b.fill && a.padding === b.padding && a.radius === b.radius && a.shadow === b.shadow;
+  return (
+    a.fill === b.fill &&
+    a.padding === b.padding &&
+    a.radius === b.radius &&
+    a.radiusUnit === b.radiusUnit &&
+    a.shadow === b.shadow &&
+    a.shadowSize === b.shadowSize &&
+    a.shadowStrength === b.shadowStrength &&
+    (a.aspect ?? "auto") === (b.aspect ?? "auto") &&
+    a.gradient?.from === b.gradient?.from &&
+    a.gradient?.to === b.gradient?.to &&
+    a.gradient?.angle === b.gradient?.angle &&
+    a.image === b.image
+  );
 }
 
 /** The colours a backdrop fill paints: one for a solid, several for a gradient. */

@@ -169,11 +169,15 @@ const sidecar: Annotations = {
 interface PreferencesMock {
   stored?: EditorPreferences | Error;
   saved?: EditorPreferences[];
+  /** What the backdrop image picker returns. */
+  picked?: string | null;
+  /** The capture's recorded scale factor. */
+  scaleFactor?: number;
 }
 
 /** Mocks the editor commands; returns every sidecar written. `calls` records output commands in order. */
 function mockEditor(
-  annotations: Annotations = sidecar,
+  annotations: Annotations | null = sidecar,
   calls: { cmd: string; payload: unknown }[] = [],
   preferences: PreferencesMock = {},
 ): Annotations[] {
@@ -187,7 +191,12 @@ function mockEditor(
         preferences.saved?.push((payload as { preferences: EditorPreferences }).preferences);
         return (payload as { preferences: EditorPreferences }).preferences;
       case "editor_info":
-        return { path: "/p/originals/shot.png", fileName: "shot.png", annotations };
+        return { path: "/p/originals/shot.png", fileName: "shot.png", annotations, scaleFactor: preferences.scaleFactor ?? null };
+      case "plugin:dialog|open":
+        return preferences.picked ?? null;
+      case "editor_backdrop_image":
+        calls.push({ cmd, payload });
+        return new ArrayBuffer(4);
       case "editor_image":
         return new ArrayBuffer(8);
       case "editor_save_annotations":
@@ -769,5 +778,160 @@ describe("EditorWindow", () => {
     fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
     await waitFor(() => expect(calls.map((call) => call.cmd)).toEqual(["editor_copy", "plugin:window|close"]));
     expect(bytes(calls[0].payload)).toEqual(Array.from(FLATTENED));
+  });
+
+  const backdropPanel = () => {
+    fireEvent.click(screen.getByRole("button", { name: "Backdrop" }));
+    return within(screen.getByRole("dialog", { name: "Backdrop" }));
+  };
+  const fills = () => document.querySelectorAll('[data-name="backdrop-fill"]').length;
+
+  it("offers gradients, meshes and solids, with a 36pt corner by default", async () => {
+    const saved = mockEditor();
+    await ready();
+    const panel = backdropPanel();
+    expect(panel.getByRole("group", { name: "Gradients" })).toBeInTheDocument();
+    expect(panel.getByRole("group", { name: "Mesh" })).toBeInTheDocument();
+    expect(panel.getByRole("group", { name: "Solids" })).toBeInTheDocument();
+    expect(panel.getByRole("slider", { name: "Shadow size" })).toBeDisabled();
+
+    fireEvent.click(panel.getByRole("button", { name: "Bloom mesh" }));
+    await waitFor(() => expect(last(saved)?.backdrop).toEqual({ fill: "mesh-bloom", padding: 64, radius: 36, radiusUnit: "pt", shadow: true }));
+    expect(panel.getByRole("slider", { name: "Corner radius" })).toHaveValue("36");
+    expect(panel.getByText("36pt")).toBeInTheDocument();
+    // A base colour and three blobs, as the export paints them.
+    expect(fills()).toBe(4);
+
+    fireEvent.click(panel.getByRole("button", { name: "Flamingo gradient" }));
+    await waitFor(() => expect(last(saved)?.backdrop?.fill).toBe("flamingo"));
+    expect(fills()).toBe(1);
+  });
+
+  it("sizes and strengthens the shadow with its sliders", async () => {
+    const saved = mockEditor({ ...sidecar, backdrop: { fill: "ocean", padding: 40, radius: 12, shadow: true } });
+    await ready();
+    const panel = backdropPanel();
+    const size = panel.getByRole("slider", { name: "Shadow size" });
+    const strength = panel.getByRole("slider", { name: "Shadow strength" });
+    // An old sidecar shows the shadow it always had.
+    expect(size).toHaveValue("50");
+    expect(strength).toHaveValue("35");
+
+    fireEvent.change(size, { target: { value: "80" } });
+    fireEvent.pointerUp(size);
+    await waitFor(() => expect(last(saved)?.backdrop).toMatchObject({ shadowSize: 80 }));
+    fireEvent.change(strength, { target: { value: "60" } });
+    fireEvent.pointerUp(strength);
+    await waitFor(() => expect(last(saved)?.backdrop).toMatchObject({ shadowSize: 80, shadowStrength: 60 }));
+
+    fireEvent.click(panel.getByRole("checkbox", { name: "Shadow" }));
+    await waitFor(() => expect(last(saved)?.backdrop).toMatchObject({ shadow: false }));
+    expect(size).toBeDisabled();
+  });
+
+  it("pads the output to the aspect ratio picked", async () => {
+    const saved = mockEditor({ ...sidecar, backdrop: { fill: "ocean", padding: 64, radius: 12, shadow: true } });
+    await ready();
+    const panel = backdropPanel();
+    const aspects = within(panel.getByRole("group", { name: "Aspect ratio" }));
+    expect(aspects.getByRole("button", { name: "Auto" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Output 528×428")).toBeInTheDocument();
+
+    fireEvent.click(aspects.getByRole("button", { name: "1:1" }));
+    await waitFor(() => expect(last(saved)?.backdrop).toMatchObject({ aspect: "1:1" }));
+    expect(screen.getByText("Output 528×528")).toBeInTheDocument();
+    fireEvent.click(aspects.getByRole("button", { name: "16:9" }));
+    expect(screen.getByText("Output 761×428")).toBeInTheDocument();
+  });
+
+  it("mixes a custom gradient from two colours and an angle", async () => {
+    const saved = mockEditor();
+    await ready();
+    const panel = backdropPanel();
+    expect(panel.queryByRole("slider", { name: "Angle" })).not.toBeInTheDocument();
+    fireEvent.click(panel.getByRole("button", { name: "Custom gradient" }));
+    await waitFor(() =>
+      expect(last(saved)?.backdrop).toMatchObject({ fill: "custom", gradient: { from: "#4c8dff", to: "#ff6ac1", angle: 135 } }),
+    );
+
+    const start = panel.getByLabelText("Gradient start colour");
+    fireEvent.change(start, { target: { value: "#00ff00" } });
+    fireEvent.blur(start);
+    await waitFor(() => expect(last(saved)?.backdrop?.gradient).toMatchObject({ from: "#00ff00" }));
+    const angle = panel.getByRole("slider", { name: "Angle" });
+    fireEvent.change(angle, { target: { value: "90" } });
+    fireEvent.pointerUp(angle);
+    await waitFor(() => expect(last(saved)?.backdrop?.gradient).toEqual({ from: "#00ff00", to: "#ff6ac1", angle: 90 }));
+  });
+
+  it("fills the backdrop with the blurred capture or nothing at all", async () => {
+    const saved = mockEditor();
+    await ready();
+    const panel = backdropPanel();
+    fireEvent.click(panel.getByRole("button", { name: "Blurred capture" }));
+    await waitFor(() => expect(last(saved)?.backdrop?.fill).toBe("blur"));
+    fireEvent.click(panel.getByRole("button", { name: "Transparent" }));
+    await waitFor(() => expect(last(saved)?.backdrop?.fill).toBe("transparent"));
+    // Nothing is painted behind the capture.
+    expect(fills()).toBe(0);
+  });
+
+  it("fills the backdrop with a picked image, read through the editor", async () => {
+    const calls: { cmd: string; payload: unknown }[] = [];
+    const saved = mockEditor(sidecar, calls, { picked: "/home/me/Pictures/beach.jpg" });
+    await ready();
+    const panel = backdropPanel();
+    fireEvent.click(panel.getByRole("button", { name: "Image" }));
+    await waitFor(() => expect(last(saved)?.backdrop).toMatchObject({ fill: "image", image: "/home/me/Pictures/beach.jpg" }));
+    await waitFor(() => expect(calls).toContainEqual({ cmd: "editor_backdrop_image", payload: { path: "/home/me/Pictures/beach.jpg" } }));
+    await waitFor(() => expect(document.querySelector('[data-name="backdrop-image"]')).not.toBeNull());
+  });
+
+  it("keeps the backdrop when the image picker is cancelled", async () => {
+    const saved = mockEditor(sidecar, [], { picked: null });
+    await ready();
+    const panel = backdropPanel();
+    fireEvent.click(panel.getByRole("button", { name: "Image" }));
+    await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 100));
+    expect(saved).toEqual([]);
+  });
+
+  it("remembers the last backdrop and starts new ones from it", async () => {
+    const prefs: EditorPreferences[] = [];
+    const remembered = { fill: "dusk", padding: 32, radius: 20, shadow: false, aspect: "4:3" as const };
+    mockEditor(sidecar, [], { stored: { backdrop: remembered }, saved: prefs });
+    await ready();
+    const panel = backdropPanel();
+    // Off, but its sliders show the last backdrop's sizes.
+    expect(panel.getByRole("slider", { name: "Padding" })).toHaveValue("32");
+
+    fireEvent.click(panel.getByRole("button", { name: "Sunset gradient" }));
+    await waitFor(() => expect(last(prefs)?.backdrop).toEqual({ ...remembered, fill: "sunset" }));
+  });
+
+  it("frames a capture opened for the first time with the last backdrop when asked to", async () => {
+    const backdrop = { fill: "aurora", padding: 48, radius: 36, shadow: true };
+    const saved = mockEditor(null, [], { stored: { autoBackdrop: true, backdrop } });
+    await ready();
+    await waitFor(() => expect(last(saved)?.backdrop).toEqual(backdrop));
+    expect(screen.getByText("Output 496×396")).toBeInTheDocument();
+    // It came with the capture, so there is nothing to undo.
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+
+  it("leaves captures with annotations, and captures when auto-apply is off, as they are", async () => {
+    const backdrop = { fill: "aurora", padding: 48, radius: 36, shadow: true };
+    const saved = mockEditor(sidecar, [], { stored: { autoBackdrop: true, backdrop } });
+    await ready();
+    await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 100));
+    expect(saved).toEqual([]);
+    expect(screen.queryByText(/^Output /)).not.toBeInTheDocument();
+  });
+
+  it("does not frame a new capture while auto-apply is off", async () => {
+    const saved = mockEditor(null, [], { stored: { backdrop: { fill: "aurora", padding: 48, radius: 36, shadow: true } } });
+    await ready();
+    await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 100));
+    expect(saved).toEqual([]);
   });
 });

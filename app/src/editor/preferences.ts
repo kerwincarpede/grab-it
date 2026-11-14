@@ -1,5 +1,6 @@
 import type { EditorPreferences } from "../settings/api";
-import { COLORS, TOOLS, widthKind, type BlurMode, type Style, type Tool, type Widths } from "./model";
+import { COLORS, TOOLS, widthKind, type Backdrop, type BlurMode, type Style, type Tool, type Widths } from "./model";
+import { parseBackdrop } from "./sidecar";
 
 /** Wait this long after the last change before saving the editor preferences. */
 export const PREFERENCES_DELAY_MS = 300;
@@ -10,9 +11,16 @@ export interface EditorChoices {
   /** Colour, fill, text background and blur style; widths live in `widths`. */
   style: Pick<Style, "color" | "fill" | "background" | "blurMode">;
   widths: Widths;
+  /** The last backdrop picked: new backdrops start from it. */
+  backdrop: Backdrop | null;
+  /**
+   * Frame captures without annotations with `backdrop`. Read only: the
+   * Settings window sets it, and saving the editor's choices keeps it.
+   */
+  autoBackdrop?: boolean;
 }
 
-export const DEFAULT_CHOICES: EditorChoices = { tool: "arrow", style: { color: COLORS[0] }, widths: {} };
+export const DEFAULT_CHOICES: EditorChoices = { tool: "arrow", style: { color: COLORS[0] }, widths: {}, backdrop: null };
 
 /** The largest width kept from the settings file; anything bigger is a mistake. */
 const MAX_STORED_WIDTH = 200;
@@ -39,10 +47,12 @@ export function fromPreferences(stored: EditorPreferences | null | undefined): E
     if (typeof width !== "number" || !Number.isFinite(width) || width < 1 || width > MAX_STORED_WIDTH) continue;
     widths[entry.tool] = Math.round(width);
   }
-  return { tool, style, widths };
+  const choices: EditorChoices = { tool, style, widths, backdrop: parseBackdrop(prefs.backdrop) };
+  if (prefs.autoBackdrop === true) choices.autoBackdrop = true;
+  return choices;
 }
 
-/** The editor choices as they are stored; options that are off are left out. */
+/** The editor choices as they are stored; options that are off are left out, and so is `autoBackdrop`. */
 export function toPreferences(choices: EditorChoices): EditorPreferences {
   const widths: Record<string, number> = {};
   for (const [tool, width] of Object.entries(choices.widths)) {
@@ -55,5 +65,6 @@ export function toPreferences(choices: EditorChoices): EditorPreferences {
     fill: Boolean(choices.style.fill),
     textBackground: Boolean(choices.style.background),
     blurMode: choices.style.blurMode ?? "pixelate",
+    ...(choices.backdrop ? { backdrop: choices.backdrop } : {}),
   };
 }

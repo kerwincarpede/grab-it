@@ -129,7 +129,8 @@ pub fn start(app: &AppHandle, action: Action) {
                     // OCR is slow: keep it off the async runtime's threads.
                     std::thread::spawn(move || finish_text(&app, &image));
                 }
-                Ok(Some(image)) => finish(&app, &image, mode, &Foreground::default()),
+                // The desktop portal does not say which monitor it captured.
+                Ok(Some(image)) => finish(&app, &image, mode, &Foreground::default(), None),
                 // The user cancelled the desktop's picker.
                 Ok(None) => {}
                 Err(err) => report_failure(&app, &err),
@@ -156,18 +157,21 @@ pub fn start(app: &AppHandle, action: Action) {
             }
             Action::Repeat => {
                 let foreground = screen::foreground();
-                overlay::capture_last_region(&app)
-                    .map(|image| finish(&app, &image, CaptureMode::Region, &foreground))
+                overlay::capture_last_region(&app).map(|(image, scale)| {
+                    finish(&app, &image, CaptureMode::Region, &foreground, Some(scale))
+                })
             }
             Action::Screen => {
                 let foreground = screen::foreground();
+                let scale = monitor_scale(None);
                 screen::capture_all()
-                    .map(|image| finish(&app, &image, CaptureMode::Screen, &foreground))
+                    .map(|image| finish(&app, &image, CaptureMode::Screen, &foreground, scale))
             }
             Action::Monitor(index) => {
                 let foreground = screen::foreground();
+                let scale = monitor_scale(Some(index));
                 screen::capture_monitor(index)
-                    .map(|image| finish(&app, &image, CaptureMode::Monitor, &foreground))
+                    .map(|image| finish(&app, &image, CaptureMode::Monitor, &foreground, scale))
             }
         };
         if let Err(err) = result {
@@ -176,15 +180,42 @@ pub fn start(app: &AppHandle, action: Action) {
     });
 }
 
+/// The pixels per point of monitor `index`, or for `None` of the densest
+/// monitor (which a stitched capture of every screen is drawn at).
+fn monitor_scale(index: Option<usize>) -> Option<f64> {
+    let monitors = screen::monitors().ok()?;
+    match index {
+        Some(index) => monitors.get(index).map(|monitor| monitor.scale_factor),
+        None => monitors
+            .iter()
+            .map(|monitor| monitor.scale_factor)
+            .reduce(f64::max),
+    }
+}
+
 /// Saves a finished capture, copies it to the clipboard and shows it as
-/// the user chose in Settings. Runs off the main thread, so creating a
+/// the user chose in Settings. `scale_factor` is the source monitor's
+/// pixels per point, when known. Runs off the main thread, so creating a
 /// window is safe.
-pub fn finish(app: &AppHandle, image: &RgbaImage, mode: CaptureMode, foreground: &Foreground) {
+pub fn finish(
+    app: &AppHandle,
+    image: &RgbaImage,
+    mode: CaptureMode,
+    foreground: &Foreground,
+    scale_factor: Option<f64>,
+) {
     let preferences = lock(&app.state::<SettingsState>())
         .get()
         .preferences
         .clone();
-    match save(app, image, mode, foreground, preferences.copy_to_clipboard) {
+    match save(
+        app,
+        image,
+        mode,
+        foreground,
+        scale_factor,
+        preferences.copy_to_clipboard,
+    ) {
         Ok((saved, copied)) => {
             let _ = app.emit(CAPTURE_SAVED_EVENT, &saved);
             let item = QuickItem::capture(&saved.path, image.dimensions(), copied);
@@ -210,13 +241,14 @@ fn save(
     image: &RgbaImage,
     mode: CaptureMode,
     foreground: &Foreground,
+    scale_factor: Option<f64>,
     copy: bool,
 ) -> Result<(SavedCapture, bool), String> {
     let folder = lock(&app.state::<SettingsState>())
         .get()
         .save_folder
         .clone();
-    let saved = capture::save_capture(&folder, image, mode, foreground, Local::now())
+    let saved = capture::save_capture(&folder, image, mode, foreground, scale_factor, Local::now())
         .map_err(|err| err.to_string())?;
     crate::library::record_capture(app, &saved.path);
     if !copy {

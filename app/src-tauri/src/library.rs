@@ -1040,8 +1040,7 @@ pub fn ensure_thumbnail(png: &Path, thumb: &Path) -> LibraryResult<()> {
 }
 
 fn read_meta(png: &Path) -> Option<CaptureMeta> {
-    let text = fs::read_to_string(capture::meta_path(png)).ok()?;
-    serde_json::from_str(&text).ok()
+    capture::read_meta(png)
 }
 
 fn modified_millis(path: &Path) -> i64 {
@@ -1348,6 +1347,7 @@ mod tests {
             &image,
             CaptureMode::Region,
             &foreground,
+            None,
             time(second),
         )
         .unwrap()

@@ -1,5 +1,5 @@
 import type { Annotations, Backdrop, Rect, Shape } from "./model";
-import { BACKDROP_MAX_PADDING, BACKDROP_MAX_RADIUS, emptyAnnotations } from "./model";
+import { BACKDROP_ASPECTS, BACKDROP_MAX_PADDING, BACKDROP_MAX_RADIUS, emptyAnnotations } from "./model";
 
 export class SidecarError extends Error {}
 
@@ -56,18 +56,34 @@ export function isShape(value: unknown): value is Shape {
 }
 
 const clamp = (value: number, max: number) => Math.min(max, Math.max(0, value));
+const isHex = (value: unknown): value is string => isStr(value) && /^#[0-9a-f]{6}$/i.test(value);
 
-/** A well-formed backdrop with its sizes in range, or null (no backdrop). */
+/**
+ * A well-formed backdrop with its sizes in range, or null (no backdrop).
+ * The fields added after the first backdrops are each kept only when they
+ * make sense; one that does not is dropped on its own, keeping its default.
+ */
 export function parseBackdrop(value: unknown): Backdrop | null {
   if (typeof value !== "object" || value === null) return null;
   const backdrop = value as Record<string, unknown>;
   if (!isStr(backdrop.fill) || !isNum(backdrop.padding) || !isNum(backdrop.radius) || !isBool(backdrop.shadow)) return null;
-  return {
+  const parsed: Backdrop = {
     fill: backdrop.fill,
     padding: clamp(backdrop.padding, BACKDROP_MAX_PADDING),
     radius: clamp(backdrop.radius, BACKDROP_MAX_RADIUS),
     shadow: backdrop.shadow,
   };
+  if (backdrop.radiusUnit === "pt") parsed.radiusUnit = "pt";
+  if (isNum(backdrop.shadowSize)) parsed.shadowSize = clamp(backdrop.shadowSize, 100);
+  if (isNum(backdrop.shadowStrength)) parsed.shadowStrength = clamp(backdrop.shadowStrength, 100);
+  const aspect = BACKDROP_ASPECTS.find((entry) => entry.aspect === backdrop.aspect);
+  if (aspect) parsed.aspect = aspect.aspect;
+  const gradient = backdrop.gradient as Record<string, unknown> | null | undefined;
+  if (gradient && typeof gradient === "object" && isHex(gradient.from) && isHex(gradient.to) && isNum(gradient.angle)) {
+    parsed.gradient = { from: gradient.from, to: gradient.to, angle: ((gradient.angle % 360) + 360) % 360 };
+  }
+  if (isStr(backdrop.image) && backdrop.image !== "") parsed.image = backdrop.image;
+  return parsed;
 }
 
 /**
