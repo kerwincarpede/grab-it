@@ -226,7 +226,7 @@ Grab-it needs **Screen Recording** permission. Open **System Settings → Privac
 That's normal on Wayland: only the desktop is allowed to read the screen, so captures go through its own screenshot picker. *Repeat last region* and *Record GIF* aren't available there. If your desktop doesn't support global shortcuts for apps, use the tray menu.
 
 **macOS captures show only my wallpaper again after an update.**
-Grab-it isn't signed with a paid developer certificate, so macOS may treat the updated app as a new one. Turn Grab-it off and on again under **System Settings → Privacy & Security → Screen Recording**, then reopen it.
+Updating from an older version can make macOS treat the updated app as a new one, once. Turn Grab-it off and on again under **System Settings → Privacy & Security → Screen Recording** (or remove it with **−** and add it back), then reopen it. Later updates keep the permission.
 
 **Searching doesn't find text in an old capture.**
 Grab-it reads captures one at a time in the background, newest first, so give it a moment. If the text-recognition download failed, the Library shows a **Retry** button.
