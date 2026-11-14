@@ -5,6 +5,7 @@ import Logo from "../app/Logo";
 import {
   CardIcon,
   ColourIcon,
+  GridIcon,
   PenIcon,
   PinIcon,
   RecordIcon,
@@ -31,6 +32,7 @@ const SHORTCUTS: { key: keyof Hotkeys; title: string; detail: string; icon: Reac
   { key: "screen", title: "Capture the screen", detail: "Every monitor at once.", icon: <ScreenIcon /> },
   { key: "text", title: "Capture text", detail: "Drag over text to copy it.", icon: <TextIcon /> },
   { key: "colour", title: "Pick a colour", detail: "Click a pixel to copy its hex code.", icon: <ColourIcon /> },
+  { key: "library", title: "Open the library", detail: "Every capture, searchable, from anywhere.", icon: <GridIcon /> },
 ];
 
 const TIP_ICONS: Record<string, ReactNode> = {

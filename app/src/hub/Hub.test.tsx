@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
@@ -15,7 +15,7 @@ function backend({ monitors = 1, shots = 0 } = {}) {
       case "get_settings":
         return {
           saveFolder: "/tmp",
-          hotkeys: { region: "Ctrl+Shift+R", window: "Alt+PrintScreen", screen: "", text: "", colour: "" },
+          hotkeys: { region: "Ctrl+Shift+R", window: "Alt+PrintScreen", screen: "", text: "", colour: "", library: "Ctrl+Shift+L" },
           afterCapture: "quickAccess",
           copyToClipboard: true,
         };
@@ -96,6 +96,10 @@ describe("Hub", () => {
   it("opens the Grab-it window and Settings", async () => {
     const calls = backend();
     render(<Hub />);
+    // Its tooltip names the library hotkey.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Open Grab-it" })).toHaveAttribute("title", expect.stringMatching(/^Open Grab-it \(.+\)$/)),
+    );
     await userEvent.click(screen.getByRole("button", { name: "Open Grab-it" }));
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     await userEvent.click(screen.getByRole("button", { name: "Shortcuts" }));

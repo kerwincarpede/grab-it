@@ -140,7 +140,7 @@ function Hub() {
       <header className="hub-head">
         <Logo size={22} />
         <span className="hub-name">Grab-it</span>
-        <button type="button" className="hub-icon" aria-label="Open Grab-it" title="Open Grab-it" onClick={() => run(openMain("library"))}>
+        <button type="button" className="hub-icon" aria-label="Open Grab-it" title={hotkeys?.library ? `Open Grab-it (${shortcutLabel(hotkeys.library)})` : "Open Grab-it"} onClick={() => run(openMain("library"))}>
           <OpenIcon size={15} />
         </button>
         <button type="button" className="hub-icon" aria-label="Settings" title="Settings" onClick={() => run(openMain("settings"))}>

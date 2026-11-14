@@ -254,6 +254,8 @@ export interface Hotkeys {
   text: string;
   /** Copies the colour under the pointer. */
   colour: string;
+  /** Opens the Grab-it window on the library. */
+  library: string;
 }
 
 /** Mirrors `HotkeysUpdate` in src-tauri/src/commands.rs. */

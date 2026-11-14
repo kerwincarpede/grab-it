@@ -296,13 +296,15 @@ pub fn hub_open(view: String, app: AppHandle) -> Result<(), String> {
         "welcome" => MainView::Welcome,
         other => return Err(format!("unknown view: {other}")),
     };
-    hide(&app);
     // Off the main thread: a window must not be created from inside a
-    // synchronous command.
+    // synchronous command. The hub hides only once the window is up: hiding
+    // Grab-it's only focused window first lets macOS make another app active,
+    // and from the background Grab-it may not get to bring the window forward.
     std::thread::spawn(move || {
         if let Err(err) = windows::show_main(&app, view) {
             eprintln!("Grab-it: {err}");
         }
+        hide(&app);
     });
     Ok(())
 }

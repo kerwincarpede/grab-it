@@ -19,6 +19,7 @@ describe("App", () => {
         screen: "Ctrl+PrintScreen",
         text: "Shift+PrintScreen",
         colour: "Ctrl+Shift+PrintScreen",
+        library: "Alt+Shift+PrintScreen",
       },
       afterCapture: "quickAccess",
       copyToClipboard: true,

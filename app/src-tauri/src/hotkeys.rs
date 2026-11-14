@@ -1,9 +1,10 @@
-//! Global hotkeys for the captures and the two capture tools.
+//! Global hotkeys for the captures, the two capture tools and the library.
 //!
 //! The defaults are PrintScreen, Alt+PrintScreen and Ctrl+PrintScreen for
-//! region, window and screen, Shift+PrintScreen to capture text and
-//! Ctrl+Shift+PrintScreen to pick a colour; on macOS Cmd+Shift+2,
-//! Cmd+Shift+W, Cmd+Shift+F, Cmd+Shift+1 and Cmd+Shift+9. On Wayland they are bound through the GlobalShortcuts portal
+//! region, window and screen, Shift+PrintScreen to capture text,
+//! Ctrl+Shift+PrintScreen to pick a colour and Alt+Shift+PrintScreen to open
+//! the library; on macOS Cmd+Shift+2, Cmd+Shift+W, Cmd+Shift+F, Cmd+Shift+1,
+//! Cmd+Shift+9 and Cmd+Shift+0. On Wayland they are bound through the GlobalShortcuts portal
 //! (see `portal.rs`), since apps cannot grab keys there themselves.
 
 use std::{
@@ -33,6 +34,32 @@ pub struct Hotkeys {
     pub text: String,
     /// Copies the colour under the pointer.
     pub colour: String,
+    /// Opens the Grab-it window on the library.
+    pub library: String,
+}
+
+/// What a hotkey does: start a capture or capture tool, or open the library.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotkeyAction {
+    Capture(Action),
+    Library,
+}
+
+/// Does what a hotkey press asks. Never blocks the caller.
+pub fn run(app: &AppHandle, action: HotkeyAction) {
+    match action {
+        HotkeyAction::Capture(action) => actions::start(app, action),
+        HotkeyAction::Library => {
+            // Off the calling thread: creating a window from inside an event
+            // handler can deadlock.
+            let app = app.clone();
+            std::thread::spawn(move || {
+                if let Err(err) = crate::windows::show_library(&app) {
+                    eprintln!("Grab-it: {err}");
+                }
+            });
+        }
+    }
 }
 
 impl Default for Hotkeys {
@@ -44,6 +71,7 @@ impl Default for Hotkeys {
                 screen: "Cmd+Shift+F".into(),
                 text: "Cmd+Shift+1".into(),
                 colour: "Cmd+Shift+9".into(),
+                library: "Cmd+Shift+0".into(),
             }
         } else {
             Self {
@@ -52,20 +80,27 @@ impl Default for Hotkeys {
                 screen: "Ctrl+PrintScreen".into(),
                 text: "Shift+PrintScreen".into(),
                 colour: "Ctrl+Shift+PrintScreen".into(),
+                library: "Alt+Shift+PrintScreen".into(),
             }
         }
     }
 }
 
 impl Hotkeys {
-    /// Each hotkey with what it starts and its name in Settings.
-    pub fn entries(&self) -> [(Action, &'static str, &str); 5] {
+    /// Each hotkey with what it does and its name in Settings.
+    pub fn entries(&self) -> [(HotkeyAction, &'static str, &str); 6] {
+        use HotkeyAction::{Capture, Library};
         [
-            (Action::Region, "Region", self.region.as_str()),
-            (Action::Window, "Window", self.window.as_str()),
-            (Action::Screen, "Screen", self.screen.as_str()),
-            (Action::Text, "Capture text", self.text.as_str()),
-            (Action::Colour, "Pick a colour", self.colour.as_str()),
+            (Capture(Action::Region), "Region", self.region.as_str()),
+            (Capture(Action::Window), "Window", self.window.as_str()),
+            (Capture(Action::Screen), "Screen", self.screen.as_str()),
+            (Capture(Action::Text), "Capture text", self.text.as_str()),
+            (
+                Capture(Action::Colour),
+                "Pick a colour",
+                self.colour.as_str(),
+            ),
+            (Library, "Open library", self.library.as_str()),
         ]
     }
 
@@ -77,6 +112,7 @@ impl Hotkeys {
             screen: self.screen.trim().to_owned(),
             text: self.text.trim().to_owned(),
             colour: self.colour.trim().to_owned(),
+            library: self.library.trim().to_owned(),
         };
         let mut seen: Vec<(Shortcut, &str)> = Vec::new();
         for (_, name, accelerator) in trimmed.entries() {
@@ -97,14 +133,14 @@ impl Hotkeys {
 /// The registered hotkeys and what each one starts.
 #[derive(Default)]
 pub struct HotkeyState {
-    bound: Mutex<Vec<(Shortcut, Action)>>,
+    bound: Mutex<Vec<(Shortcut, HotkeyAction)>>,
     /// Set while Settings records a hotkey, so pressing a current hotkey
     /// there records it instead of starting a capture.
     paused: AtomicBool,
 }
 
 impl HotkeyState {
-    fn bound(&self) -> std::sync::MutexGuard<'_, Vec<(Shortcut, Action)>> {
+    fn bound(&self) -> std::sync::MutexGuard<'_, Vec<(Shortcut, HotkeyAction)>> {
         self.bound.lock().unwrap_or_else(|p| p.into_inner())
     }
 }
@@ -181,7 +217,7 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
                     .map(|(_, action)| *action)
             });
             if let Some(action) = action {
-                actions::start(app, action);
+                run(app, action);
             }
         })
         .build()
@@ -234,9 +270,9 @@ pub fn start(app: &AppHandle, hotkeys: &Hotkeys) {
         let handle = app.clone();
         let hotkeys = hotkeys.clone();
         tauri::async_runtime::spawn(async move {
-            let on_press = move |action: Action| {
+            let on_press = move |action: HotkeyAction| {
                 if !is_paused(&handle) {
-                    actions::start(&handle, action);
+                    run(&handle, action);
                 }
             };
             if let Err(err) = crate::portal::run_global_shortcuts(hotkeys, on_press).await {
@@ -267,6 +303,7 @@ mod tests {
             assert_eq!(defaults.screen, "Ctrl+PrintScreen");
             assert_eq!(defaults.text, "Shift+PrintScreen");
             assert_eq!(defaults.colour, "Ctrl+Shift+PrintScreen");
+            assert_eq!(defaults.library, "Alt+Shift+PrintScreen");
         }
     }
 
@@ -311,6 +348,15 @@ mod tests {
         assert_eq!(
             tool_clash.validated(),
             Err("Pick a colour and Capture text use the same hotkey.".into())
+        );
+
+        let library_clash = Hotkeys {
+            library: Hotkeys::default().region,
+            ..Hotkeys::default()
+        };
+        assert_eq!(
+            library_clash.validated(),
+            Err("Open library and Region use the same hotkey.".into())
         );
     }
 }

@@ -10,7 +10,11 @@ use ashpd::desktop::{
 use futures_util::StreamExt;
 use image::RgbaImage;
 
-use crate::{actions::Action, capture::CaptureMode, hotkeys::Hotkeys};
+use crate::{
+    actions::Action,
+    capture::CaptureMode,
+    hotkeys::{HotkeyAction, Hotkeys},
+};
 
 /// True when running in a Wayland session.
 pub fn is_wayland() -> bool {
@@ -101,12 +105,12 @@ pub fn portal_trigger(accelerator: &str) -> String {
 }
 
 /// Binds the hotkeys through the GlobalShortcuts portal and calls
-/// `on_activated` with what each press starts. Runs until the session ends.
+/// `on_activated` with what each press does. Runs until the session ends.
 /// An error means the portal is missing or refused, and only the tray can
 /// start captures.
 pub async fn run_global_shortcuts<F>(hotkeys: Hotkeys, on_activated: F) -> Result<(), String>
 where
-    F: Fn(Action) + Send + 'static,
+    F: Fn(HotkeyAction) + Send + 'static,
 {
     let fail = |err: ashpd::Error| format!("the GlobalShortcuts portal is not available: {err}");
     let portal = GlobalShortcuts::new().await.map_err(fail)?;
@@ -137,39 +141,37 @@ where
 }
 
 /// The id a hotkey is bound under. Monitors have no hotkey.
-fn shortcut_id(action: Action) -> Option<&'static str> {
+fn shortcut_id(action: HotkeyAction) -> Option<&'static str> {
     match action {
-        Action::Region => Some("capture-region"),
-        Action::Window => Some("capture-window"),
-        Action::Screen => Some("capture-screen"),
-        Action::Text => Some("capture-text"),
-        Action::Colour => Some("pick-colour"),
-        Action::Monitor(_) | Action::Repeat | Action::Record => None,
+        HotkeyAction::Capture(Action::Region) => Some("capture-region"),
+        HotkeyAction::Capture(Action::Window) => Some("capture-window"),
+        HotkeyAction::Capture(Action::Screen) => Some("capture-screen"),
+        HotkeyAction::Capture(Action::Text) => Some("capture-text"),
+        HotkeyAction::Capture(Action::Colour) => Some("pick-colour"),
+        HotkeyAction::Capture(Action::Monitor(_) | Action::Repeat | Action::Record) => None,
+        HotkeyAction::Library => Some("open-library"),
     }
 }
 
 /// What the desktop's shortcut settings call each hotkey.
-fn description(action: Action) -> &'static str {
+fn description(action: HotkeyAction) -> &'static str {
     match action {
-        Action::Region | Action::Repeat => "Capture a region",
-        Action::Window => "Capture a window",
-        Action::Screen | Action::Monitor(_) => "Capture the screen",
-        Action::Text => "Capture text",
-        Action::Colour => "Pick a colour",
-        Action::Record => "Record the screen",
+        HotkeyAction::Capture(Action::Region | Action::Repeat) => "Capture a region",
+        HotkeyAction::Capture(Action::Window) => "Capture a window",
+        HotkeyAction::Capture(Action::Screen | Action::Monitor(_)) => "Capture the screen",
+        HotkeyAction::Capture(Action::Text) => "Capture text",
+        HotkeyAction::Capture(Action::Colour) => "Pick a colour",
+        HotkeyAction::Capture(Action::Record) => "Record the screen",
+        HotkeyAction::Library => "Open the Grab-it library",
     }
 }
 
-fn action_for_id(id: &str) -> Option<Action> {
-    [
-        Action::Region,
-        Action::Window,
-        Action::Screen,
-        Action::Text,
-        Action::Colour,
-    ]
-    .into_iter()
-    .find(|action| shortcut_id(*action) == Some(id))
+fn action_for_id(id: &str) -> Option<HotkeyAction> {
+    Hotkeys::default()
+        .entries()
+        .into_iter()
+        .map(|(action, _, _)| action)
+        .find(|action| shortcut_id(*action) == Some(id))
 }
 
 #[cfg(test)]
@@ -199,7 +201,7 @@ mod tests {
             let id = shortcut_id(action).expect("every hotkey has an id");
             assert_eq!(action_for_id(id), Some(action));
         }
-        assert_eq!(shortcut_id(Action::Monitor(0)), None);
+        assert_eq!(shortcut_id(HotkeyAction::Capture(Action::Monitor(0))), None);
         assert_eq!(action_for_id("other"), None);
     }
 }

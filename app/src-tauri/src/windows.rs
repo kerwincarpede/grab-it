@@ -5,7 +5,9 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{
+    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+};
 
 use crate::{actions, cli::OpenTarget, editor::EditorState, hotkeys, pin, quick};
 
@@ -85,10 +87,7 @@ pub fn show_editor(app: &AppHandle, capture: &Path) -> tauri::Result<()> {
         .label_for(capture)
         .and_then(|label| app.get_webview_window(&label))
     {
-        window.unminimize()?;
-        window.show()?;
-        window.set_focus()?;
-        return Ok(());
+        return bring_to_front(&window);
     }
 
     let label = format!(
@@ -121,8 +120,7 @@ pub fn show_editor(app: &AppHandle, capture: &Path) -> tauri::Result<()> {
             app.state::<EditorState>().remove(&label);
         }
     });
-    window.set_focus()?;
-    Ok(())
+    bring_to_front(&window)
 }
 
 /// What the main window shows. Mirrors `MainView` in src/app/api.ts.
@@ -148,10 +146,7 @@ impl MainView {
 pub fn show_main(app: &AppHandle, view: MainView) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(MAIN_LABEL) {
         window.emit(MAIN_NAVIGATE_EVENT, view.as_str())?;
-        window.unminimize()?;
-        window.show()?;
-        window.set_focus()?;
-        return Ok(());
+        return bring_to_front(&window);
     }
     let builder = WebviewWindowBuilder::new(
         app,
@@ -183,8 +178,62 @@ pub fn show_main(app: &AppHandle, view: MainView) -> tauri::Result<()> {
             hotkeys::resume(&handle);
         }
     });
+    bring_to_front(&window)
+}
+
+/// Shows `window` in front of every app's windows, not just Grab-it's, and
+/// makes Grab-it the active app.
+///
+/// Grab-it lives in the menu bar, so it is usually in the background when a
+/// window is asked for. Becoming the active app is what makes macOS, and
+/// window managers that follow focus such as AeroSpace, switch to the space
+/// or workspace the window is on rather than leaving it out of sight there.
+pub fn bring_to_front(window: &WebviewWindow) -> tauri::Result<()> {
+    window.unminimize()?;
+    window.show()?;
     window.set_focus()?;
+    #[cfg(target_os = "macos")]
+    activate(window)?;
     Ok(())
+}
+
+/// macOS: activates Grab-it with all its windows and orders `window` front.
+///
+/// `set_focus` asks to activate only through `NSApp`, which newer macOS may
+/// turn down for an app in the background; asking the app's
+/// `NSRunningApplication` as well, and ordering the window front regardless,
+/// brings it forward even then.
+#[cfg(target_os = "macos")]
+fn activate(window: &WebviewWindow) -> tauri::Result<()> {
+    use objc2::runtime::AnyObject;
+
+    /// `NSApplicationActivateAllWindows | NSApplicationActivateIgnoringOtherApps`.
+    const ACTIVATE_ALL_IGNORING_OTHERS: usize = 1 | 2;
+
+    let target = window.clone();
+    window.run_on_main_thread(move || {
+        let Ok(ns_window) = target.ns_window() else {
+            return;
+        };
+        let ns_window = ns_window.cast::<AnyObject>();
+        if ns_window.is_null() {
+            return;
+        }
+        // SAFETY: on the main thread, with this window's live NSWindow; each
+        // selector is a documented NSRunningApplication or NSWindow method
+        // with the argument and return types given.
+        unsafe {
+            let running: *mut AnyObject =
+                objc2::msg_send![objc2::class!(NSRunningApplication), currentApplication];
+            if !running.is_null() {
+                let _: bool =
+                    objc2::msg_send![running, activateWithOptions: ACTIVATE_ALL_IGNORING_OTHERS];
+            }
+            let none: *mut AnyObject = std::ptr::null_mut();
+            let _: () = objc2::msg_send![ns_window, makeKeyAndOrderFront: none];
+            let _: () = objc2::msg_send![ns_window, orderFrontRegardless];
+        }
+    })
 }
 
 /// Draws the Grab-it window at `zoom` (1.0 is actual size), when it is open.
