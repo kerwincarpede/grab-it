@@ -139,12 +139,64 @@ pub fn write_edits(video: &Path, edits: &Value) -> Result<(), String> {
 /// The frame rate a recording was made at, from its pointer sidecar, else
 /// [`DEFAULT_FPS`].
 pub fn recording_fps(video: &Path) -> u32 {
+    sidecar_fps(video).unwrap_or(DEFAULT_FPS)
+}
+
+/// The frame rate in a recording's pointer sidecar, if it has one.
+fn sidecar_fps(video: &Path) -> Option<u32> {
     fs::read(cursor_path(video))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .and_then(|value| value.get("fps").and_then(Value::as_u64))
         .and_then(|fps| u32::try_from(fps).ok())
         .filter(|fps| (1..=240).contains(fps))
+}
+
+/// The frame rate of the first video stream in what `ffmpeg -i` prints
+/// about a file (`Stream #0:0 ... 60 fps, 60 tbr ...`), rounded.
+pub fn parse_stream_fps(said: &str) -> Option<u32> {
+    said.lines()
+        .filter(|line| line.contains("Stream #") && line.contains("Video:"))
+        .find_map(|line| {
+            let before = line.split(" fps").next()?;
+            let number = before.rsplit([' ', ',']).next()?;
+            let fps: f64 = number.parse().ok()?;
+            (1.0..=240.0).contains(&fps).then(|| fps.round() as u32)
+        })
+}
+
+/// The frame rate an export of `video` is made at: its pointer sidecar's,
+/// else the file's own as ffmpeg reads it (an earlier export has no
+/// sidecar), else [`DEFAULT_FPS`].
+fn export_fps(ffmpeg: &Path, video: &Path) -> u32 {
+    if let Some(fps) = sidecar_fps(video) {
+        return fps;
+    }
+    let probed = ffmpeg::command(ffmpeg)
+        .arg("-hide_banner")
+        .arg("-i")
+        .arg(video)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()
+        .and_then(|mut child| {
+            let reader = child.stderr.take().map(|mut stderr| {
+                thread::spawn(move || {
+                    let mut text = String::new();
+                    let _ = stderr.read_to_string(&mut text);
+                    text
+                })
+            });
+            // ffmpeg exits with an error here (no output named), after
+            // printing what the file holds.
+            ffmpeg::wait_for(&mut child, Duration::from_secs(10));
+            reader.and_then(|reader| reader.join().ok())
+        });
+    probed
+        .as_deref()
+        .and_then(parse_stream_fps)
         .unwrap_or(DEFAULT_FPS)
 }
 
@@ -390,7 +442,7 @@ pub struct ExportPlan {
 impl ExportPlan {
     /// Refuses a plan that could not be encoded or would not fit.
     pub fn check(&self) -> Result<(), String> {
-        let even = |side: u32| side >= 2 && side % 2 == 0 && side <= MAX_EXPORT_SIDE;
+        let even = |side: u32| side >= 2 && side.is_multiple_of(2) && side <= MAX_EXPORT_SIDE;
         if !even(self.width) || !even(self.height) {
             return Err(format!(
                 "the export size {}×{} is not an even size up to {MAX_EXPORT_SIDE}",
@@ -408,10 +460,6 @@ impl ExportPlan {
             return Err("the trimmed recording is too short to export".to_owned());
         }
         Ok(())
-    }
-
-    pub fn duration(&self) -> Duration {
-        Duration::from_millis(self.end_ms - self.start_ms)
     }
 
     /// How many frames the export holds at `fps`.
@@ -650,7 +698,7 @@ fn render(
         let total = plan.frames(fps);
         let frame_len = plan.video_width as usize * plan.video_height as usize * 4;
         let mut buffer = vec![0; frame_len];
-        let mut done = 0;
+        let mut done: u64 = 0;
         let mut last_percent = None;
         let decoded = loop {
             match stdout.read_exact(&mut buffer) {
@@ -774,7 +822,7 @@ fn export(
         output: &output,
         plan,
         layers,
-        fps: recording_fps(original),
+        fps: export_fps(&ready.path, original),
         bits_per_pixel,
     };
     render(ready, job, |progress| {
@@ -889,6 +937,27 @@ mod tests {
         assert_eq!(recording_fps(&video), 60);
         fs::write(dir.path().join("clip.cursor.json"), r#"{"fps":0}"#).unwrap();
         assert_eq!(recording_fps(&video), 30);
+    }
+
+    #[test]
+    fn an_earlier_export_keeps_its_frame_rate() {
+        // What `ffmpeg -i` says about a 60 fps export, which has no sidecar.
+        let said = "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip (edited).mp4':\n  \
+                    Duration: 00:00:08.25, start: 0.000000, bitrate: 4016 kb/s\n  \
+                    Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), \
+                    1080x1920, 3858 kb/s, 60 fps, 60 tbr, 15360 tbn (default)\n  \
+                    Stream #0:1[0x2](und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, mono, fltp, 159 kb/s\n\
+                    At least one output file must be specified\n";
+        assert_eq!(parse_stream_fps(said), Some(60));
+        assert_eq!(
+            parse_stream_fps("  Stream #0:0: Video: h264, yuv420p, 640x480, 29.97 fps, 29.97 tbr"),
+            Some(30)
+        );
+        assert_eq!(
+            parse_stream_fps("  Stream #0:1: Audio: aac, 48000 Hz"),
+            None
+        );
+        assert_eq!(parse_stream_fps(""), None);
     }
 
     #[test]
@@ -1040,7 +1109,6 @@ mod tests {
             .check()
             .is_err()
         );
-        assert_eq!(PLAN.duration(), Duration::from_millis(8250));
         assert_eq!(PLAN.frames(60), 495);
         assert_eq!(
             ExportPlan {
