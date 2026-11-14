@@ -64,7 +64,7 @@ Only one Grab-it runs at a time. Starting it again hands the arguments to the ru
 
 Each capture is copied to the clipboard and saved to `<save folder>/originals/` as `Grab-it YYYY-MM-DD HH-MM-SS.png`, with `<name>.meta.json` beside it holding the time, mode, size, foreground app and window title. The PNG is never modified.
 
-Annotations are saved in `<name>.annotations.json` beside the capture. Crop and backdrop are non-destructive and only applied on copy and export. Recordings go to `<save folder>/recordings/` as `Grab-it YYYY-MM-DD HH-MM-SS.mp4` (or `.gif`).
+Annotations are saved in `<name>.annotations.json` beside the capture. Crop and backdrop are non-destructive and only applied on copy and export. Recordings go to `<save folder>/recordings/` as `Grab-it YYYY-MM-DD HH-MM-SS.mp4` (or `.gif`), with their edits in `<name>.edits.json` (see [Recording editor](#recording-editor)).
 
 Region and Window freeze every monitor and show it fullscreen. Each monitor is cropped at its own scale factor, so mixed-DPI setups capture sharp.
 
@@ -123,6 +123,22 @@ To try MP4 recording without downloading anything, point `GRAB_IT_FFMPEG` at any
 ```sh
 GRAB_IT_FFMPEG=/path/to/ffmpeg npm run tauri dev -- -- -- --open record
 ```
+
+### Recording editor
+
+An MP4's Quick Access card has **Edit**, which opens the recording in a recording editor window (`recording-<n>`, on the `#/recording` route; `windows::show_recording_editor`), or focuses the one already showing it. It plays the recording with a timeline holding a playhead and start and end trim handles (drag them, or focus one and use the arrow keys, Shift for a second at a time), and puts it on a backdrop with the capture editor's **Backdrop** panel and its saved presets. The backdrop's aspect ratio is the export's shape: Auto, 16:9, 4:3, 1:1 or 9:16 (9:16 is offered for captures too). GIF recordings have no editor.
+
+The page plays the recording from the `grab-it-video` URI scheme (`grab-it-video://localhost/<path>`, `http://grab-it-video.localhost/<path>` on Windows, the path URI-encoded; `recording_editor::serve_video`). It serves only `.mp4` files directly in the current save folder's `recordings/`, compared by the files they name so `..` and symlinks reach nothing else, and answers `Range` requests at most 4 MB at a time.
+
+Edits are kept in `<name>.edits.json` beside the MP4, saved as each change is let go and read again when the recording is reopened; the MP4 itself is never changed. A sidecar with a version this build does not know is never written over:
+
+```json
+{ "version": 1, "trim": { "startMs": 1250, "endMs": 9500 }, "backdrop": { "fill": "ocean", "padding": 64, "radius": 36, "radiusUnit": "pt", "shadow": true, "aspect": "9:16" } }
+```
+
+`trim` is absent while the whole recording is kept, and `backdrop` is the capture sidecar's (see `Backdrop` in `src/editor/model.ts`).
+
+**Export** saves `<name> (edited).mp4` beside the original (`(edited 2)` and so on when that is taken) and shows it on the Quick Access card. The page lays the video out on its backdrop as captures are (`recordingLayout` in `src/recording/layout.ts`: padding, then the aspect ratio), scaled so the longer side is at most 1920 px and both sides are even: a 1920×1080 recording at 9:16 exports at 1080×1920. It paints the fill and shadow, and a mask of the video's rounded corners, as PNGs at that size and sends them with the plan (`recording_export`). Rust then has ffmpeg decode the trimmed stretch (`-ss` and `-t` on the input) as raw RGBA at the size the video takes, at the frame rate in `<name>.cursor.json` (30 without one), lays each frame over the backdrop through the mask (`recording_editor::Composer`), and pipes it into the H.264 encoder and quality recordings use. The trimmed sound of the original is added last as AAC (`recording_editor::trim_audio_args`). The editor shows the frames written so far as the export runs. A transparent fill exports as black, since a video has no transparency.
 
 ### Search and OCR
 

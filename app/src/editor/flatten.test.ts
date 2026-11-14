@@ -136,6 +136,8 @@ describe("backdrop shape", () => {
     expect(backdropLayout(size, { ...backdrop, aspect: "16:9" })).toMatchObject({ width: 761, height: 428, x: 181, y: 64 });
     expect(backdropLayout(size, { ...backdrop, aspect: "4:3" })).toMatchObject({ width: 571, height: 428, x: 86, y: 64 });
     expect(backdropLayout(size, { ...backdrop, aspect: "1:1" })).toMatchObject({ width: 528, height: 528, x: 64, y: 114 });
+    // 9:16, for phones, grows a landscape capture downwards.
+    expect(backdropLayout(size, { ...backdrop, aspect: "9:16" })).toMatchObject({ width: 528, height: 939, x: 64, y: 320 });
     // A tall capture grows sideways for 16:9, a wide one grows downwards for 1:1.
     expect(backdropLayout({ width: 100, height: 400 }, { ...backdrop, padding: 0, aspect: "16:9" })).toMatchObject({ width: 711, height: 400, x: 306, y: 0 });
     expect(backdropLayout({ width: 400, height: 100 }, { ...backdrop, padding: 0, aspect: "1:1" })).toMatchObject({ width: 400, height: 400, x: 0, y: 150 });

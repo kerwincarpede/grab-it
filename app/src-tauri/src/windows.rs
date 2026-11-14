@@ -9,7 +9,10 @@ use tauri::{
     AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 
-use crate::{actions, cli::OpenTarget, editor::EditorState, hotkeys, pin, quick};
+use crate::{
+    actions, cli::OpenTarget, editor::EditorState, hotkeys, pin, quick,
+    recording_editor::RecordingEditorState,
+};
 
 /// The Grab-it window: library, Settings, shortcuts and tips.
 pub const MAIN_LABEL: &str = "main";
@@ -17,6 +20,8 @@ pub const MAIN_LABEL: &str = "main";
 pub const MAIN_NAVIGATE_EVENT: &str = "main-navigate";
 /// Editor windows are labelled `editor-<n>`.
 pub const EDITOR_LABEL_PREFIX: &str = "editor-";
+/// Recording editor windows are labelled `recording-<n>`.
+pub const RECORDING_LABEL_PREFIX: &str = "recording-";
 
 /// Shows the window for an `--open` target.
 pub fn open(app: &AppHandle, target: OpenTarget) -> tauri::Result<()> {
@@ -118,6 +123,52 @@ pub fn show_editor(app: &AppHandle, capture: &Path) -> tauri::Result<()> {
     window.on_window_event(move |event| {
         if let WindowEvent::Destroyed = event {
             app.state::<EditorState>().remove(&label);
+        }
+    });
+    bring_to_front(&window)
+}
+
+/// Opens the MP4 `recording` in a recording editor window, or focuses the
+/// one already showing it.
+pub fn show_recording_editor(app: &AppHandle, recording: &Path) -> tauri::Result<()> {
+    static NEXT_RECORDING: AtomicU32 = AtomicU32::new(1);
+
+    let state = app.state::<RecordingEditorState>();
+    if let Some(window) = state
+        .label_for(recording)
+        .and_then(|label| app.get_webview_window(&label))
+    {
+        return bring_to_front(&window);
+    }
+
+    let label = format!(
+        "{RECORDING_LABEL_PREFIX}{}",
+        NEXT_RECORDING.fetch_add(1, Ordering::Relaxed)
+    );
+    // Registered before the page loads so `recording_info` finds it.
+    state.insert(&label, recording.to_path_buf());
+    let file_name = recording
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let window =
+        WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html#/recording".into()))
+            .title(format!("{file_name} - Grab-it Recording Editor"))
+            .inner_size(1100.0, 760.0)
+            .min_inner_size(640.0, 460.0)
+            .center()
+            .build();
+    let window = match window {
+        Ok(window) => window,
+        Err(err) => {
+            state.remove(&label);
+            return Err(err);
+        }
+    };
+    let app = app.clone();
+    window.on_window_event(move |event| {
+        if let WindowEvent::Destroyed = event {
+            app.state::<RecordingEditorState>().remove(&label);
         }
     });
     bring_to_front(&window)

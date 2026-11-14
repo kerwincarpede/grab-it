@@ -5,13 +5,14 @@ export type Route =
   | "settings"
   | "overlay"
   | "editor"
+  | "recording"
   | "library"
   | "quick"
   | "pin"
   | "welcome"
   | "home";
 
-const ROUTES: readonly Route[] = ["app", "hub", "settings", "overlay", "editor", "library", "quick", "pin", "welcome"];
+const ROUTES: readonly Route[] = ["app", "hub", "settings", "overlay", "editor", "recording", "library", "quick", "pin", "welcome"];
 
 /** True when `flag` follows the route in the hash (`#/overlay?instant`). */
 export function routeHasFlag(hash: string, flag: string): boolean {

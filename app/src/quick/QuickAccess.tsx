@@ -406,6 +406,12 @@ function QuickAccess() {
           </p>
           {error && <p className="quick-detail quick-error-text">{error}</p>}
           <div className="quick-inline-actions">
+            {item.format === "mp4" && (
+              <button type="button" onClick={() => run("edit")} title="Trim it and put it on a backdrop">
+                <Icon>{ICONS.edit}</Icon>
+                Edit
+              </button>
+            )}
             <button type="button" onClick={() => run("reveal")}>
               <Icon>{ICONS.folder}</Icon>
               Show in folder

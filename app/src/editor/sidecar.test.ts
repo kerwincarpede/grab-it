@@ -188,6 +188,11 @@ describe("annotations sidecar", () => {
     expect(parseBackdrop({ ...backdrop, gradient: { from: "#112233", to: "#445566", angle: -90 } })?.gradient?.angle).toBe(270);
   });
 
+  it("keeps the 9:16 shape", () => {
+    const backdrop = { fill: "ocean", padding: 64, radius: 12, shadow: true, aspect: "9:16" };
+    expect(parseBackdrop(backdrop)).toEqual(backdrop);
+  });
+
   it("keeps balance only when it is on", () => {
     const backdrop = { fill: "ocean", padding: 64, radius: 12, shadow: true };
     expect(parseBackdrop({ ...backdrop, balance: true })).toEqual({ ...backdrop, balance: true });
