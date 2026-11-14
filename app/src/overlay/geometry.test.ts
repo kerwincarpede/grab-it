@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   advanceDrag,
   cutoutPath,
+  hintTop,
   boxFromPoints,
   clampedDelta,
   contains,
@@ -250,5 +251,17 @@ describe("cutoutPath", () => {
 
   it("keeps the corners no rounder than a small window allows", () => {
     expect(cutoutPath({ x: 0, y: 0, width: 8, height: 30 }, { width: 100, height: 100 }, 10)).toContain("A4 4");
+  });
+});
+
+describe("hintTop", () => {
+  it("sits just below the menu bar or notch", () => {
+    // A 37-point notch on a 982-point-tall screen.
+    expect(hintTop(37 / 982, 982)).toBe(49);
+    expect(hintTop(0, 900)).toBe(12);
+    // Older backends say nothing; nonsense is ignored.
+    expect(hintTop(undefined, 900)).toBe(12);
+    expect(hintTop(Number.NaN, 900)).toBe(12);
+    expect(hintTop(0.9, 1000)).toBe(212);
   });
 });

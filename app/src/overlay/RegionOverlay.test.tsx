@@ -55,6 +55,15 @@ describe("RegionOverlay", () => {
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
   });
 
+  it("keeps the hint below the menu bar or notch", async () => {
+    // 40 of the viewport's 800 px are menu bar.
+    mockOverlay({ topInset: 0.05 });
+    render(<RegionOverlay />);
+    await ready();
+    const hint = screen.getByRole("status").closest(".overlay-hint") as HTMLElement;
+    expect(hint.style.top).toBe("52px");
+  });
+
   it("captures the dragged region in CSS pixels with the viewport width", async () => {
     const calls = mockOverlay();
     render(<RegionOverlay />);

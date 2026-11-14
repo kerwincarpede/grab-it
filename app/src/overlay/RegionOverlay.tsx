@@ -15,6 +15,7 @@ import {
 import {
   advanceDrag,
   cutoutPath,
+  hintTop,
   dragBox,
   imageSize,
   isDrag,
@@ -362,7 +363,11 @@ function RegionOverlay() {
       {!windowMode && pointer && (
         <Loupe image={image} pointer={pointer} scale={scale} viewport={view} />
       )}
-      <div className="overlay-hint" data-hidden={dragging && !error ? "true" : "false"}>
+      <div
+        className="overlay-hint"
+        data-hidden={dragging && !error ? "true" : "false"}
+        style={{ top: hintTop(info?.topInset, view.height) }}
+      >
         <p className="overlay-hint-text" role="status" data-error={error ? "true" : "false"}>
           {error ?? (windowMode ? WINDOW_HINT : HINTS[intent])}
         </p>

@@ -205,3 +205,15 @@ export function cutoutPath(box: Box, viewport: Size, radius: number): string {
     `V${n(y + r)}A${n(r)} ${n(r)} 0 0 1 ${n(x + r)} ${n(y)}Z`;
   return `path(evenodd, "${outer} ${hole}")`;
 }
+
+/** The hint's gap below the menu bar (or the top edge), in CSS px. */
+const HINT_GAP = 12;
+
+/**
+ * Where the hint's top goes, in CSS px: just below the menu bar or camera
+ * notch, given how far down they reach as a share of the screen's height.
+ */
+export function hintTop(topInset: number | undefined, viewHeight: number): number {
+  const share = typeof topInset === "number" && Number.isFinite(topInset) ? Math.min(Math.max(topInset, 0), 0.2) : 0;
+  return Math.round(share * viewHeight) + HINT_GAP;
+}
