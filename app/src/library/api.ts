@@ -395,10 +395,17 @@ export function openSettings(): Promise<void> {
   return invoke<void>("open_target", { target: "settings" });
 }
 
-/** Whether Grab-it turned AI descriptions on by itself and the Library should say so, once. */
+/**
+ * Whether Grab-it turned AI descriptions on by itself and the Library should
+ * say so, once: only while Claude Code still describes captures, since the
+ * user may have turned it off or picked another provider since.
+ */
 export async function aiNoticePending(): Promise<boolean> {
-  const settings = await invoke<{ ai?: { noticePending?: boolean } }>("get_settings");
-  return settings.ai?.noticePending === true;
+  const settings = await invoke<{ ai?: { enabled?: boolean; provider?: string | null; noticePending?: boolean } }>(
+    "get_settings",
+  );
+  const ai = settings.ai;
+  return ai?.noticePending === true && ai.enabled === true && ai.provider === "claudeCode";
 }
 
 /** Stops showing the notice that Grab-it turned AI descriptions on. */

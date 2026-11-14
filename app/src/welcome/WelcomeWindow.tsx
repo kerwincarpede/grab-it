@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./welcome.css";
 import { acceleratorKeys } from "../settings/accelerator";
+import { onAiStatus } from "../library/api";
 import { aiProvider, getSettings, type Hotkeys } from "../settings/api";
 
 /** Opens a window or starts a capture by its `--open` name. */
@@ -50,17 +51,31 @@ function WelcomeWindow() {
 
   useEffect(() => {
     let cancelled = false;
-    getSettings()
-      .then((settings) => {
-        if (cancelled) return;
-        setHotkeys(settings.hotkeys);
-        setClaudeDescribes(settings.ai?.enabled === true && aiProvider(settings.ai) === "claudeCode");
+    let unlisten: (() => void) | null = null;
+    const load = () =>
+      getSettings()
+        .then((settings) => {
+          if (cancelled) return;
+          setHotkeys(settings.hotkeys);
+          setClaudeDescribes(settings.ai?.enabled === true && aiProvider(settings.ai) === "claudeCode");
+        })
+        .catch(() => {
+          // The tips still read well without the hotkeys.
+        });
+    void load();
+    // Grab-it may turn on describing with Claude Code just after this opens;
+    // the queue's first status says so.
+    onAiStatus(() => void load())
+      .then((stop) => {
+        if (cancelled) stop?.();
+        else unlisten = stop;
       })
       .catch(() => {
-        // The tips still read well without the hotkeys.
+        // Then the tip shows the next time this opens.
       });
     return () => {
       cancelled = true;
+      unlisten?.();
     };
   }, []);
 

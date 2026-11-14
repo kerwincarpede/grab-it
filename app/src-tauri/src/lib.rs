@@ -137,10 +137,9 @@ pub fn run() {
             hotkeys::start(handle, &hotkeys);
             // Reads captures waiting for OCR, downloading the models first.
             ocr::start(handle, ocr::models_dir(&data_dir));
-            // With Claude Code installed, describing turns itself on once
-            // for a user who never turned it on.
-            ai::enable_claude_code_once(handle);
-            // Describes captures with a vision model, once turned on.
+            // Describes captures with a vision model, once turned on. With
+            // Claude Code installed, its thread first turns describing on
+            // once for a user who never turned it on.
             ai::start(handle);
             // Picks up captures added while Grab-it was not running.
             library::rescan_in_background(handle, library::current_save_folder(handle));

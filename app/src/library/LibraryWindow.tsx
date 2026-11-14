@@ -827,6 +827,10 @@ function LibraryWindow() {
     };
   }, []);
 
+  // Asked again whenever the AI status changes: Grab-it may turn describing
+  // on just after the Library opens, and Settings may turn it off.
+  const aiState = ai?.state;
+  const aiProvider = ai?.provider;
   useEffect(() => {
     let cancelled = false;
     aiNoticePending()
@@ -839,7 +843,7 @@ function LibraryWindow() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [aiState, aiProvider]);
 
   useEffect(() => {
     let cancelled = false;

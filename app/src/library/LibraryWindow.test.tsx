@@ -59,6 +59,10 @@ interface Backend {
   aiStatus: AiStatus;
   /** Grab-it turned AI descriptions on and the Library has not said so yet. */
   aiNotice: boolean;
+  /** Whether describing is on now; the notice's own flag when unset. */
+  aiEnabled?: boolean;
+  /** The provider now; Claude Code when unset. */
+  aiProvider?: "claudeCode" | "endpoint" | null;
 }
 
 /** A small stand-in for `Library::search`: every word must start a word in some field. */
@@ -173,7 +177,13 @@ function mockBackend(shots: Shot[]): Backend {
         case "open_target":
           return null;
         case "get_settings":
-          return { ai: { enabled: backend.aiNotice, provider: "claudeCode", noticePending: backend.aiNotice } };
+          return {
+            ai: {
+              enabled: backend.aiEnabled ?? backend.aiNotice,
+              provider: backend.aiProvider ?? "claudeCode",
+              noticePending: backend.aiNotice,
+            },
+          };
         case "dismiss_ai_notice":
           backend.aiNotice = false;
           return null;
@@ -690,6 +700,33 @@ describe("LibraryWindow AI descriptions", () => {
     await waitFor(() => expect(callsTo(backend, "open_target")[0]?.payload).toEqual({ target: "settings" }));
     expect(callsTo(backend, "dismiss_ai_notice")).toHaveLength(1);
     expect(screen.queryByText(/Claude Code now describes/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["turned off", { aiEnabled: false }],
+    ["switched to an endpoint", { aiEnabled: true, aiProvider: "endpoint" as const }],
+  ])("shows no notice once describing was %s in Settings", async (_, change) => {
+    const backend = mockBackend([shot(1)]);
+    backend.aiNotice = true;
+    Object.assign(backend, change);
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: "Grab-it 1.png" });
+    await settle();
+    expect(screen.queryByText(/Claude Code now describes/)).not.toBeInTheDocument();
+  });
+
+  it("shows the notice when Grab-it turns AI on after the Library opened", async () => {
+    const backend = mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: "Grab-it 1.png" });
+    await settle();
+    expect(screen.queryByText(/Claude Code now describes/)).not.toBeInTheDocument();
+
+    backend.aiNotice = true;
+    await act(async () => {
+      await emit(AI_STATUS_EVENT, { state: "idle", done: 0, total: 0, error: null, provider: "claudeCode" });
+    });
+    expect(await screen.findByText(/Claude Code now describes your new captures/)).toBeInTheDocument();
   });
 
   it("shows no notice when Grab-it did not turn AI on", async () => {

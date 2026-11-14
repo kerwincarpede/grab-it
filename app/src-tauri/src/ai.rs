@@ -647,15 +647,20 @@ impl AiQueue {
     }
 }
 
-/// Starts the queue's thread. It describes every waiting capture while
-/// describing is on, then sleeps until woken.
+/// Starts the queue's thread. It first turns describing on with Claude
+/// Code if it should (see [`enable_claude_code_once`]), off the main thread
+/// because finding `claude` may wait on the login shell, then describes
+/// every waiting capture while describing is on, and sleeps until woken.
 pub fn start(app: &AppHandle) {
     let (sender, receiver) = mpsc::channel();
     app.manage(AiQueue::new(sender));
     let app = app.clone();
     let spawned = thread::Builder::new()
         .name("grab-it-ai".into())
-        .spawn(move || run(&app, &receiver));
+        .spawn(move || {
+            enable_claude_code_once(&app);
+            run(&app, &receiver);
+        });
     if let Err(err) = spawned {
         eprintln!("Grab-it: could not start describing captures: {err}");
     }
@@ -690,9 +695,11 @@ pub fn settings_saved(app: &AppHandle, before: &AiSettings, after: &AiSettings) 
 }
 
 /// Turns describing on with Claude Code, for new captures only, when the
-/// user never turned it on and `claude` is installed. Runs once at start-up,
-/// before the queue starts; once a provider is set it never does anything
-/// again, so a user who turns describing off keeps it off.
+/// user never turned it on and `claude` is installed. Runs once at start-up
+/// on the queue's thread, before its first step, so no waiting capture is
+/// described before it is skipped. Once a provider is set it never does
+/// anything again, so a user who turns describing off keeps it off. The
+/// queue's first status event then tells open windows to look again.
 pub fn enable_claude_code_once(app: &AppHandle) {
     let state = app.state::<SettingsState>();
     if !lock(&state).get().preferences.ai.never_enabled() {
