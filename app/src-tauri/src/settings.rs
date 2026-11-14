@@ -558,6 +558,9 @@ pub struct SettingsStore {
     /// No settings file existed when the store was opened.
     first_run: bool,
     keys: Box<dyn KeyStore>,
+    /// The keychain worked when the store was opened, so it may hold a key
+    /// that clearing the key must remove.
+    keychain_worked: bool,
 }
 
 impl SettingsStore {
@@ -584,6 +587,7 @@ impl SettingsStore {
             current,
             first_run,
             keys,
+            keychain_worked: false,
         };
         store.load_api_key();
         store
@@ -594,7 +598,10 @@ impl SettingsStore {
     /// without one, have the key in the file.
     fn load_api_key(&mut self) {
         let stored = match self.keys.get() {
-            Ok(stored) => stored,
+            Ok(stored) => {
+                self.keychain_worked = true;
+                stored
+            }
             Err(err) => {
                 eprintln!("Grab-it: keeping the API key in settings.json, no keychain: {err}");
                 self.current.preferences.ai.api_key_storage = ApiKeyStorage::SettingsFile;
@@ -631,26 +638,39 @@ impl SettingsStore {
     }
 
     /// Stores `key`, the API key being saved, where `api_key_storage`
-    /// says. Returns where it now is: should the keychain fail, the key
-    /// goes into settings.json instead of being lost.
-    fn store_api_key(&self, key: Option<&str>) -> ApiKeyStorage {
+    /// says. Returns where it now is: should the keychain fail to store a
+    /// key, it goes into settings.json instead of being lost.
+    ///
+    /// Clearing the key removes it from the keychain too, even after a
+    /// fallback to settings.json, as the next start would read a key left
+    /// there back. When the keychain worked but cannot remove it now, the
+    /// save fails rather than seeming to clear the key.
+    fn store_api_key(&self, key: Option<&str>) -> Result<ApiKeyStorage, SettingsError> {
         let current = &self.current.preferences.ai;
-        if current.api_key_storage == ApiKeyStorage::SettingsFile
-            || current.api_key.as_deref() == key
-        {
-            return current.api_key_storage;
+        if current.api_key.as_deref() == key {
+            return Ok(current.api_key_storage);
         }
-        let stored = match key {
-            Some(key) => self.keys.set(key),
-            None => self.keys.delete(),
+        let Some(key) = key else {
+            return match self.keys.delete() {
+                Ok(()) => Ok(current.api_key_storage),
+                Err(err) if self.keychain_worked => Err(SettingsError::Invalid(format!(
+                    "Could not remove the API key from the keychain: {err}"
+                ))),
+                // Never reached this session: nothing of this session's is
+                // in it to remove.
+                Err(_) => Ok(current.api_key_storage),
+            };
         };
-        match stored {
-            Ok(()) => ApiKeyStorage::Keychain,
+        if current.api_key_storage == ApiKeyStorage::SettingsFile {
+            return Ok(ApiKeyStorage::SettingsFile);
+        }
+        match self.keys.set(key) {
+            Ok(()) => Ok(ApiKeyStorage::Keychain),
             Err(err) => {
                 eprintln!(
                     "Grab-it: keeping the API key in settings.json, the keychain failed: {err}"
                 );
-                ApiKeyStorage::SettingsFile
+                Ok(ApiKeyStorage::SettingsFile)
             }
         }
     }
@@ -698,7 +718,7 @@ impl SettingsStore {
         // The notice belongs to Grab-it: a Settings window opened before it
         // was set, or dismissed, must not bring it back or clear it.
         preferences.ai.notice_pending = self.current.preferences.ai.notice_pending;
-        preferences.ai.api_key_storage = self.store_api_key(preferences.ai.api_key.as_deref());
+        preferences.ai.api_key_storage = self.store_api_key(preferences.ai.api_key.as_deref())?;
         let next = Settings {
             preferences,
             ..self.current.clone()
@@ -1595,6 +1615,73 @@ mod tests {
             SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
         assert_eq!(keys.stored().as_deref(), Some("sk-1"));
         assert_eq!(again.get().preferences.ai.api_key.as_deref(), Some("sk-1"));
+        assert_eq!(ai_on_disk(&path).get("apiKey"), None);
+    }
+
+    #[test]
+    fn a_cleared_key_that_the_keychain_cannot_remove_fails_the_save() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let keys = MemoryKeyStore::default();
+        let mut store =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+        store.set_preferences(with_key(Some("sk-1"))).unwrap();
+        keys.set_broken(true);
+
+        assert!(matches!(
+            store.set_preferences(with_key(None)),
+            Err(SettingsError::Invalid(_))
+        ));
+
+        // Nothing changed, so the key the user still sees is the one used.
+        assert_eq!(store.get().preferences.ai.api_key.as_deref(), Some("sk-1"));
+        assert_eq!(keys.stored().as_deref(), Some("sk-1"));
+        // Working again, clearing removes it and it does not come back.
+        keys.set_broken(false);
+        store.set_preferences(with_key(None)).unwrap();
+        assert_eq!(keys.stored(), None);
+        let again =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+        assert_eq!(again.get().preferences.ai.api_key, None);
+    }
+
+    #[test]
+    fn clearing_a_key_after_a_fallback_removes_the_keychains_copy() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let keys = MemoryKeyStore::default();
+        let mut store =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+        store.set_preferences(with_key(Some("sk-1"))).unwrap();
+        // The keychain fails once: sk-2 goes into the file, sk-1 stays behind.
+        keys.set_broken(true);
+        let fell_back = store.set_preferences(with_key(Some("sk-2"))).unwrap();
+        assert_eq!(
+            fell_back.preferences.ai.api_key_storage,
+            ApiKeyStorage::SettingsFile
+        );
+        keys.set_broken(false);
+
+        store.set_preferences(with_key(None)).unwrap();
+
+        assert_eq!(keys.stored(), None);
+        assert_eq!(ai_on_disk(&path).get("apiKey"), None);
+        let again = SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys));
+        assert_eq!(again.get().preferences.ai.api_key, None);
+    }
+
+    #[test]
+    fn without_a_keychain_the_key_can_still_be_cleared() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = SettingsStore::open_with_keys(
+            path.clone(),
+            defaults(&dir),
+            Box::new(MemoryKeyStore::unavailable()),
+        );
+        store.set_preferences(with_key(Some("sk-1"))).unwrap();
+        let cleared = store.set_preferences(with_key(None)).unwrap();
+        assert_eq!(cleared.preferences.ai.api_key, None);
         assert_eq!(ai_on_disk(&path).get("apiKey"), None);
     }
 
