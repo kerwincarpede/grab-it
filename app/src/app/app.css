@@ -443,10 +443,11 @@ button.update-card {
 }
 
 /* Settings: its pages down the left, one page on the right. */
+/* 30% larger than the first cut (760 × 600), within the window. */
 .settings-dialog {
   flex-direction: row;
-  width: 760px;
-  height: min(600px, calc(100vh - 48px));
+  width: min(988px, calc(100vw - 48px));
+  height: min(780px, calc(100vh - 48px));
 }
 
 .settings-nav {
@@ -467,30 +468,69 @@ button.update-card {
   font-weight: 600;
 }
 
+/* The page scrolls under its heading; the close button stays put. */
 .settings-body {
   position: relative;
+  display: flex;
   flex: 1;
+  flex-direction: column;
   min-width: 0;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .settings-body .window {
+  flex: 1;
   max-width: none;
+  min-height: 0;
   margin: 0;
-  padding: 20px 24px 24px;
+  padding: 0 32px 32px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .settings-body .settings-title {
-  margin: 0 0 2px;
-  font-size: 16px;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: 0 -32px;
+  padding: 22px 64px 12px 32px;
+  font-size: 18px;
   font-weight: 600;
   letter-spacing: -0.01em;
+  background: var(--bg);
+  border-bottom: 1px solid transparent;
+}
+
+/* A hairline under the heading once the page has scrolled beneath it. */
+@supports (animation-timeline: scroll()) {
+  .settings-body .settings-title {
+    animation: heading-edge linear both;
+    animation-timeline: scroll(nearest);
+    animation-range: 0 24px;
+  }
+
+  @keyframes heading-edge {
+    to {
+      border-bottom-color: var(--border);
+    }
+  }
 }
 
 .settings-body .settings-lead {
-  margin: 0 0 18px;
+  margin: 0 0 20px;
   color: var(--text-faint);
   font-size: 12.5px;
+}
+
+/* Above the sticky heading, which would otherwise cover it. */
+.settings-body .dialog-close {
+  top: 18px;
+  right: 18px;
+  z-index: 4;
+}
+
+.settings-nav {
+  overflow-y: auto;
 }
 
 /* Welcome: hotkeys and tips side by side. */

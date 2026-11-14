@@ -56,6 +56,20 @@ pub fn set_preferences(
     Ok(settings)
 }
 
+/// Saves how Grab-it looks and applies the text size to the open window.
+#[tauri::command]
+pub fn set_appearance(
+    appearance: crate::settings::Appearance,
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+) -> Result<Settings, String> {
+    let settings = lock(&state)
+        .set_appearance(appearance)
+        .map_err(|err| err.to_string())?;
+    crate::windows::apply_text_size(&app, settings.appearance.text_size);
+    Ok(settings)
+}
+
 /// Shows or hides the Dock icon (macOS) and remembers the choice.
 #[tauri::command]
 pub fn set_show_in_dock(

@@ -85,10 +85,55 @@ fn create(app: &AppHandle, anchor: Option<Rect>) -> tauri::Result<()> {
             }
         }
     });
+    #[cfg(target_os = "macos")]
+    round_corners(&window)?;
     place(app, &window, anchor);
     window.show()?;
     window.set_focus()?;
     Ok(())
+}
+
+/// The hub's corner radius, in points. Matches `.hub` in src/hub/hub.css.
+#[cfg(target_os = "macos")]
+const CORNER_RADIUS: f64 = 12.0;
+
+/// macOS: rounds the hub like a menu. The window is made see-through and
+/// its content clipped to rounded corners, so this needs no private API;
+/// the shadow is then redrawn to follow the new shape.
+#[cfg(target_os = "macos")]
+fn round_corners(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    use objc2::runtime::AnyObject;
+
+    let target = window.clone();
+    window.run_on_main_thread(move || {
+        let Ok(ns_window) = target.ns_window() else {
+            return;
+        };
+        let ns_window = ns_window.cast::<AnyObject>();
+        if ns_window.is_null() {
+            return;
+        }
+        // SAFETY: `ns_window` is this window's live NSWindow, used on the
+        // main thread. Each selector is a documented NSWindow, NSView,
+        // NSColor or CALayer method with the argument types given.
+        unsafe {
+            let clear: *mut AnyObject = objc2::msg_send![objc2::class!(NSColor), clearColor];
+            let _: () = objc2::msg_send![ns_window, setOpaque: false];
+            let _: () = objc2::msg_send![ns_window, setBackgroundColor: clear];
+            let view: *mut AnyObject = objc2::msg_send![ns_window, contentView];
+            if view.is_null() {
+                return;
+            }
+            let _: () = objc2::msg_send![view, setWantsLayer: true];
+            let layer: *mut AnyObject = objc2::msg_send![view, layer];
+            if layer.is_null() {
+                return;
+            }
+            let _: () = objc2::msg_send![layer, setCornerRadius: CORNER_RADIUS];
+            let _: () = objc2::msg_send![layer, setMasksToBounds: true];
+            let _: () = objc2::msg_send![ns_window, invalidateShadow];
+        }
+    })
 }
 
 fn hide(app: &AppHandle) {

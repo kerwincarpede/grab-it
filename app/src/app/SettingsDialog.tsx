@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
 import Dialog from "./Dialog";
-import { CloseIcon, KeyboardIcon, PenIcon, RegionIcon, SlidersIcon, SparkleIcon } from "./icons";
+import { AppearanceIcon, CloseIcon, KeyboardIcon, PenIcon, RegionIcon, SlidersIcon, SparkleIcon } from "./icons";
 import SettingsWindow from "../settings/SettingsWindow";
 import { SETTINGS_SECTIONS, type SettingsSection } from "../settings/api";
 
 const SECTION_ICONS: Record<SettingsSection, ReactNode> = {
   general: <SlidersIcon />,
+  appearance: <AppearanceIcon />,
   capture: <RegionIcon />,
   editor: <PenIcon />,
   ai: <SparkleIcon />,

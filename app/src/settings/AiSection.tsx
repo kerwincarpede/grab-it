@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   AI_PROVIDERS,
+  CLAUDE_MODELS,
   ENDPOINT_PRESETS,
   aiClis,
   aiProvider,
@@ -32,9 +33,17 @@ interface Draft {
   endpoint: string;
   model: string;
   apiKey: string;
+  claudeModel: string;
+  codexModel: string;
 }
 
-const draftOf = (ai: AiPreferences): Draft => ({ endpoint: ai.endpoint, model: ai.model, apiKey: ai.apiKey ?? "" });
+const draftOf = (ai: AiPreferences): Draft => ({
+  endpoint: ai.endpoint,
+  model: ai.model,
+  apiKey: ai.apiKey ?? "",
+  claudeModel: ai.claudeModel ?? "haiku",
+  codexModel: ai.codexModel ?? "",
+});
 
 /** Where each provider sends screenshots. */
 const PRIVACY: Record<AiProvider, string> = {
@@ -76,11 +85,13 @@ function AiSection({ saved, disabled, onSave }: Props) {
   const provider = aiProvider(saved);
   const usesEndpoint = provider === "endpoint";
   const typedValid = draft.endpoint.trim().length > 0 && draft.model.trim().length > 0;
-  const edited =
-    usesEndpoint &&
-    (draft.endpoint.trim() !== saved.endpoint ||
+  const edited = usesEndpoint
+    ? draft.endpoint.trim() !== saved.endpoint ||
       draft.model.trim() !== saved.model ||
-      (draft.apiKey.trim() || null) !== saved.apiKey);
+      (draft.apiKey.trim() || null) !== saved.apiKey
+    : provider === "claudeCode"
+      ? draft.claudeModel.trim() !== (saved.claudeModel ?? "haiku")
+      : draft.codexModel.trim() !== (saved.codexModel ?? "");
   const valid = !usesEndpoint || typedValid;
   const busy = disabled || testing;
   // The chosen CLI provider's name and command, when Grab-it looked and could not find it.
@@ -100,6 +111,8 @@ function AiSection({ saved, disabled, onSave }: Props) {
       ...(usesEndpoint && typedValid
         ? { endpoint: draft.endpoint.trim(), model: draft.model.trim(), apiKey: draft.apiKey.trim() || null }
         : {}),
+      ...(provider === "claudeCode" ? { claudeModel: draft.claudeModel.trim() } : {}),
+      ...(provider === "codex" ? { codexModel: draft.codexModel.trim() } : {}),
       ...change,
     };
     const ok = await onSave(next);
@@ -222,6 +235,57 @@ function AiSection({ saved, disabled, onSave }: Props) {
           <p className={`hint ai-privacy${local ? "" : " ai-privacy-cloud"}`}>{PRIVACY[provider]}</p>
         </div>
 
+        {provider === "claudeCode" && (
+          <div className="row">
+            <span className="row-text">
+              <label className="row-title" htmlFor="ai-cli-model">
+                Model
+              </label>
+              <span className="row-hint">
+                Haiku is the fastest and cheapest; sonnet and opus write more detail. A full model name works too.
+              </span>
+            </span>
+            <input
+              id="ai-cli-model"
+              className="row-field"
+              type="text"
+              list="ai-claude-models"
+              spellCheck={false}
+              autoComplete="off"
+              value={draft.claudeModel}
+              disabled={busy}
+              placeholder="haiku"
+              onChange={(event) => setDraft({ ...draft, claudeModel: event.target.value })}
+            />
+            <datalist id="ai-claude-models">
+              {CLAUDE_MODELS.map((choice) => (
+                <option key={choice.value} value={choice.value} label={choice.hint} />
+              ))}
+            </datalist>
+          </div>
+        )}
+        {provider === "codex" && (
+          <div className="row">
+            <span className="row-text">
+              <label className="row-title" htmlFor="ai-cli-model">
+                Model
+              </label>
+              <span className="row-hint">Leave it empty to use the model set up in Codex itself.</span>
+            </span>
+            <input
+              id="ai-cli-model"
+              className="row-field"
+              type="text"
+              spellCheck={false}
+              autoComplete="off"
+              value={draft.codexModel}
+              disabled={busy}
+              placeholder="Codex default"
+              onChange={(event) => setDraft({ ...draft, codexModel: event.target.value })}
+            />
+          </div>
+        )}
+
         {usesEndpoint && (
           <>
             <div className="row">
@@ -317,11 +381,9 @@ function AiSection({ saved, disabled, onSave }: Props) {
             <button type="button" className="pill" disabled={busy || !valid} onClick={() => void test()}>
               {testing ? "Testing…" : "Test connection"}
             </button>
-            {usesEndpoint && (
-              <button type="submit" className="pill is-primary" disabled={busy || !edited || !valid}>
-                Save
-              </button>
-            )}
+            <button type="submit" className="pill is-primary" disabled={busy || !edited || !valid}>
+              Save
+            </button>
           </span>
         </div>
       </div>

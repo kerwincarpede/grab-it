@@ -91,13 +91,26 @@ pub enum QuickItem {
     },
 }
 
-/// Which corner of the work area the card sits in.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Corner {
-    #[default]
-    BottomLeft,
-    BottomRight,
-    TopLeft,
+/// Which corner of the work area the card sits in; Settings picks it.
+pub use crate::settings::PopupCorner as Corner;
+
+/// The corner and how long the card stays, as Settings has them now.
+fn chosen(app: &AppHandle) -> (Corner, u32) {
+    app.try_state::<crate::commands::SettingsState>()
+        .map(|state| {
+            let appearance = crate::commands::lock(&state).get().appearance;
+            (appearance.popup_corner, appearance.popup_seconds)
+        })
+        .unwrap_or((
+            Corner::default(),
+            crate::settings::Appearance::default().popup_seconds,
+        ))
+}
+
+/// The corner the user picked, for a caller that may move the card away
+/// from what it shows.
+pub fn preferred_corner(app: &AppHandle) -> Corner {
+    chosen(app).0
 }
 
 impl QuickItem {
@@ -134,6 +147,9 @@ pub struct Shown {
     /// Different for every item the card has shown.
     pub generation: u64,
     pub item: QuickItem,
+    /// How long the card stays, in seconds, as Settings has it; 0 keeps it
+    /// until it is closed.
+    pub seconds: u32,
 }
 
 #[derive(Default)]
@@ -153,7 +169,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// Shows `item` on the card, creating the card when it is not on screen.
 /// Call this off the main thread: it may create a window.
 pub fn show(app: &AppHandle, item: QuickItem) {
-    show_in(app, item, Corner::default());
+    show_in(app, item, preferred_corner(app));
 }
 
 /// Like [`show`], in a chosen corner: a recording keeps the card out of
@@ -170,6 +186,7 @@ pub fn show_in(app: &AppHandle, item: QuickItem, corner: Corner) {
     let shown = Shown {
         generation: state.generations.fetch_add(1, Ordering::Relaxed) + 1,
         item,
+        seconds: chosen(app).1,
     };
     *lock(&state.current) = Some(shown.clone());
 
@@ -288,14 +305,21 @@ pub fn place_in_corner(
         Corner::BottomLeft => PhysicalPosition::new(left, bottom),
         Corner::BottomRight => PhysicalPosition::new(right.max(origin.0), bottom),
         Corner::TopLeft => PhysicalPosition::new(left, top),
+        Corner::TopRight => PhysicalPosition::new(right.max(origin.0), top),
     }
 }
 
-/// The first corner whose card would not cover `region`, a rectangle in a
-/// monitor's image pixels; the bottom-left when the region covers them all.
-/// The card's footprint is padded generously, since the work area (and so
-/// the card's exact place) is only known in screen units.
-pub fn corner_clear_of(region: crate::capture::Rect, image_size: (u32, u32), scale: f64) -> Corner {
+/// The corner whose card would not cover `region`, a rectangle in a
+/// monitor's image pixels: `preferred` when it is clear, else the first
+/// clear one, else `preferred` anyway. The card's footprint is padded
+/// generously, since the work area (and so the card's exact place) is only
+/// known in screen units.
+pub fn corner_clear_of(
+    region: crate::capture::Rect,
+    image_size: (u32, u32),
+    scale: f64,
+    preferred: Corner,
+) -> Corner {
     let scale = if scale.is_finite() && scale > 0.0 {
         scale
     } else {
@@ -314,15 +338,22 @@ pub fn corner_clear_of(region: crate::capture::Rect, image_size: (u32, u32), sca
     let in_right = right > width - reach_x;
     let in_bottom = bottom > height - reach_y;
     let in_top = top < reach_y;
-    if !(in_left && in_bottom) {
-        Corner::BottomLeft
-    } else if !(in_right && in_bottom) {
-        Corner::BottomRight
-    } else if !(in_left && in_top) {
-        Corner::TopLeft
-    } else {
-        Corner::BottomLeft
-    }
+    let covered = |corner: Corner| match corner {
+        Corner::BottomLeft => in_left && in_bottom,
+        Corner::BottomRight => in_right && in_bottom,
+        Corner::TopLeft => in_left && in_top,
+        Corner::TopRight => in_right && in_top,
+    };
+    [
+        preferred,
+        Corner::BottomLeft,
+        Corner::BottomRight,
+        Corner::TopLeft,
+        Corner::TopRight,
+    ]
+    .into_iter()
+    .find(|corner| !covered(*corner))
+    .unwrap_or(preferred)
 }
 
 #[tauri::command]
@@ -498,6 +529,10 @@ mod tests {
     #[test]
     fn the_other_corners_mirror_it() {
         assert_eq!(
+            place_in_corner((0, 0), (1920, 1040), 1.0, Corner::TopRight),
+            PhysicalPosition::new(1920 - 336 - 20, 20)
+        );
+        assert_eq!(
             place_in_corner((0, 0), (1920, 1040), 1.0, Corner::BottomRight),
             PhysicalPosition::new(1920 - 336 - 20, 1040 - 232 - 20)
         );
@@ -519,23 +554,36 @@ mod tests {
         };
         // A region in the middle leaves the usual corner free.
         assert_eq!(
-            corner_clear_of(region(700, 300, 500, 300), screen, 1.0),
+            corner_clear_of(region(700, 300, 500, 300), screen, 1.0, Corner::BottomLeft),
             Corner::BottomLeft
         );
         // Recording the bottom-left moves the card to the right.
         assert_eq!(
-            corner_clear_of(region(0, 600, 600, 480), screen, 1.0),
+            corner_clear_of(region(0, 600, 600, 480), screen, 1.0, Corner::BottomLeft),
             Corner::BottomRight
         );
         // A strip along the whole bottom leaves the top.
         assert_eq!(
-            corner_clear_of(region(0, 800, 1920, 280), screen, 1.0),
+            corner_clear_of(region(0, 800, 1920, 280), screen, 1.0, Corner::BottomLeft),
             Corner::TopLeft
         );
         // The whole screen: nowhere is clear, so the usual corner it is.
         assert_eq!(
-            corner_clear_of(region(0, 0, 1920, 1080), screen, 1.0),
+            corner_clear_of(region(0, 0, 1920, 1080), screen, 1.0, Corner::BottomLeft),
             Corner::BottomLeft
+        );
+        // The chosen corner wins when it is clear, and is kept when nothing is.
+        assert_eq!(
+            corner_clear_of(region(700, 300, 500, 300), screen, 1.0, Corner::TopRight),
+            Corner::TopRight
+        );
+        assert_eq!(
+            corner_clear_of(region(1400, 0, 520, 300), screen, 1.0, Corner::TopRight),
+            Corner::BottomLeft
+        );
+        assert_eq!(
+            corner_clear_of(region(0, 0, 1920, 1080), screen, 1.0, Corner::TopRight),
+            Corner::TopRight
         );
     }
 

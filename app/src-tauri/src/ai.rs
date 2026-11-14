@@ -36,7 +36,7 @@ use crate::{
     ai_cli,
     commands::{SettingsState, lock},
     library::{AiDescription, AiJob, LIBRARY_CHANGED_EVENT, LibraryError, LibraryState},
-    settings::{AiProvider, AiSettings, CLAUDE_CODE_MODEL},
+    settings::{AiProvider, AiSettings},
 };
 
 /// What a capture can be. Mirrors `CATEGORIES` in src/library/api.ts.
@@ -523,13 +523,20 @@ pub fn describe(clients: &Clients, ai: &AiSettings, job: &AiJob) -> Result<AiDes
         AiProvider::ClaudeCode => {
             let claude = clients.claude()?;
             let image = png_base64(&job.path)?;
-            ai_cli::claude_reply(claude, &prompt(job), &image, clients.cli_timeout)?
+            ai_cli::claude_reply(
+                claude,
+                &ai.claude_model(),
+                &prompt(job),
+                &image,
+                clients.cli_timeout,
+            )?
         }
         AiProvider::Codex => {
             let codex = clients.codex()?;
             let image = png_bytes(&job.path)?;
             ai_cli::codex_reply(
                 codex,
+                ai.codex_model().as_deref(),
                 &prompt(job),
                 &image,
                 &description_schema(),
@@ -590,22 +597,30 @@ pub fn test_connection(clients: &Clients, ai: &AiSettings) -> Result<String, AiE
         }
         AiProvider::ClaudeCode => {
             let claude = clients.claude()?;
-            let reply = ai_cli::claude_reply(claude, TEST_PROMPT, &image, clients.cli_timeout)?;
+            let model = ai.claude_model();
+            let reply =
+                ai_cli::claude_reply(claude, &model, TEST_PROMPT, &image, clients.cli_timeout)?;
             (
                 reply,
-                format!("{} ({CLAUDE_CODE_MODEL}) answered.", ai_cli::CLAUDE_NAME),
+                format!("{} ({model}) answered.", ai_cli::CLAUDE_NAME),
             )
         }
         AiProvider::Codex => {
             let codex = clients.codex()?;
+            let model = ai.codex_model();
             let reply = ai_cli::codex_reply(
                 codex,
+                model.as_deref(),
                 TEST_PROMPT,
                 &bytes,
                 &test_schema(),
                 clients.cli_timeout,
             )?;
-            (reply, format!("{} answered.", ai_cli::CODEX_NAME))
+            let name = match &model {
+                Some(model) => format!("{} ({model})", ai_cli::CODEX_NAME),
+                None => ai_cli::CODEX_NAME.to_owned(),
+            };
+            (reply, format!("{name} answered."))
         }
     };
     if reply.trim().is_empty() {
@@ -1313,6 +1328,8 @@ mod tests {
             provider: Some(AiProvider::Endpoint),
             endpoint: format!("{}/", server.endpoint),
             model: "test-vision".into(),
+            claude_model: "haiku".into(),
+            codex_model: String::new(),
             api_key: None,
             new_captures_only: false,
             notice_pending: false,

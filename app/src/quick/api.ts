@@ -20,6 +20,8 @@ export interface QuickShown {
   /** Different for every item the card has shown. */
   generation: number;
   item: QuickItem;
+  /** How long it stays, in seconds, as Settings has it; 0 keeps it until closed. */
+  seconds?: number;
 }
 
 /** Mirrors `QuickAction` in src-tauri/src/quick.rs. */
@@ -57,23 +59,17 @@ export function onQuickChanged(handler: (shown: QuickShown) => void): Promise<Un
 }
 
 /**
- * How long each kind of card stays before it dismisses itself, in ms.
- * `null` stays until something replaces it.
+ * How long a card stays before it dismisses itself, in ms, given the
+ * seconds chosen in Settings. `null` stays until something replaces it.
  */
-export function dismissAfter(item: QuickItem): number | null {
-  switch (item.kind) {
-    case "capture":
-      return 8000;
-    case "recorded":
-      return 12000;
-    case "working":
-    case "recording":
-      return null;
-    case "error":
-      return 10000;
-    default:
-      return 5000;
-  }
+export function dismissAfter(item: QuickItem, seconds = 8): number | null {
+  if (item.kind === "working" || item.kind === "recording") return null;
+  // 0 is the user's "until I close it".
+  if (seconds <= 0) return null;
+  // What needs reading gets a little longer, whatever the setting.
+  if (item.kind === "error") return Math.max(seconds, 10) * 1000;
+  if (item.kind === "recorded") return Math.max(seconds, 12) * 1000;
+  return seconds * 1000;
 }
 
 /** Elapsed time as `m:ss`. */

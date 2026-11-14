@@ -169,6 +169,13 @@ pub fn show_main(app: &AppHandle, view: MainView) -> tauri::Result<()> {
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true);
     let window = builder.build()?;
+    let text_size = app
+        .try_state::<crate::commands::SettingsState>()
+        .map(|state| crate::commands::lock(&state).get().appearance.text_size)
+        .unwrap_or_default();
+    if let Err(err) = window.set_zoom(text_size.zoom()) {
+        eprintln!("Grab-it: could not set the text size: {err}");
+    }
     let handle = app.clone();
     window.on_window_event(move |event| {
         // Closed while recording a hotkey in Settings: give the hotkeys back.
@@ -178,6 +185,15 @@ pub fn show_main(app: &AppHandle, view: MainView) -> tauri::Result<()> {
     });
     window.set_focus()?;
     Ok(())
+}
+
+/// Draws the Grab-it window at `size`, when it is open.
+pub fn apply_text_size(app: &AppHandle, size: crate::settings::TextSize) {
+    if let Some(window) = app.get_webview_window(MAIN_LABEL)
+        && let Err(err) = window.set_zoom(size.zoom())
+    {
+        eprintln!("Grab-it: could not set the text size: {err}");
+    }
 }
 
 /// Shows the Grab-it window on Settings.

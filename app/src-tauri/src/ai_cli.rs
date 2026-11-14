@@ -24,10 +24,7 @@ use std::{
 
 use serde_json::{Value, json};
 
-use crate::{
-    ai::{AiError, SYSTEM_PROMPT, truncate},
-    settings::CLAUDE_CODE_MODEL,
-};
+use crate::ai::{AiError, SYSTEM_PROMPT, truncate};
 
 /// Claude Code's command name.
 pub const CLAUDE: &str = "claude";
@@ -326,11 +323,11 @@ fn run(
 
 /// The arguments that run Claude Code headlessly: one turn on stdin, no
 /// tools, MCP servers, slash commands or saved session.
-pub fn claude_args() -> Vec<OsString> {
+pub fn claude_args(model: &str) -> Vec<OsString> {
     [
         "-p",
         "--model",
-        CLAUDE_CODE_MODEL,
+        model,
         "--tools",
         "",
         "--strict-mcp-config",
@@ -420,6 +417,7 @@ fn claude_answer(output: &Output) -> Result<String, AiError> {
 /// killed once `timeout` has passed.
 pub fn claude_reply(
     program: &Path,
+    model: &str,
     text: &str,
     png_base64: &str,
     timeout: Duration,
@@ -430,7 +428,7 @@ pub fn claude_reply(
         ))
     })?;
     let input = claude_input(text, png_base64).into_bytes();
-    let output = run(program, &claude_args(), Some(input), &dir.0, timeout)?;
+    let output = run(program, &claude_args(model), Some(input), &dir.0, timeout)?;
     claude_answer(&output)
 }
 
@@ -460,11 +458,17 @@ const CODEX_REPLY: &str = "reply.txt";
 
 /// The arguments that run Codex headlessly: one read-only turn on `prompt`
 /// with the image attached, its answer held to the schema and written to
-/// the reply file, with nothing saved. Codex uses the model the user
-/// configured, at low reasoning effort.
-pub fn codex_args(image: &Path, schema: &Path, reply: &Path, prompt: &str) -> Vec<OsString> {
+/// the reply file, with nothing saved, at low reasoning effort. Codex uses
+/// `model`, or without one the model the user configured for it.
+pub fn codex_args(
+    image: &Path,
+    schema: &Path,
+    reply: &Path,
+    prompt: &str,
+    model: Option<&str>,
+) -> Vec<OsString> {
     let flag = OsString::from;
-    vec![
+    let mut args = vec![
         flag("exec"),
         flag("-i"),
         image.as_os_str().to_owned(),
@@ -478,8 +482,12 @@ pub fn codex_args(image: &Path, schema: &Path, reply: &Path, prompt: &str) -> Ve
         reply.as_os_str().to_owned(),
         flag("-c"),
         flag("model_reasoning_effort=\"low\""),
-        flag(prompt),
-    ]
+    ];
+    if let Some(model) = model {
+        args.extend([flag("-m"), flag(model)]);
+    }
+    args.push(flag(prompt));
+    args
 }
 
 /// What Codex is asked: it has no separate system prompt, so the system
@@ -535,6 +543,7 @@ fn codex_answer(output: &Output, reply: &Path) -> Result<String, AiError> {
 /// `timeout` has passed.
 pub fn codex_reply(
     program: &Path,
+    model: Option<&str>,
     text: &str,
     png: &[u8],
     schema: &Value,
@@ -553,7 +562,7 @@ pub fn codex_reply(
         .map_err(|err| {
             AiError::Endpoint(format!("could not give {CODEX_NAME} the capture: {err}"))
         })?;
-    let args = codex_args(&image, &schema_path, &reply, &codex_prompt(text));
+    let args = codex_args(&image, &schema_path, &reply, &codex_prompt(text), model);
     let output = run(program, &args, None, &dir.0, timeout)?;
     codex_answer(&output, &reply)
 }
@@ -686,7 +695,7 @@ pub(crate) mod tests {
 
     #[test]
     fn claude_runs_headless_with_no_tools() {
-        let args: Vec<String> = claude_args()
+        let args: Vec<String> = claude_args("haiku")
             .into_iter()
             .map(|arg| arg.into_string().unwrap())
             .collect();
@@ -786,8 +795,14 @@ pub(crate) mod tests {
         let dir = TempDir::new().unwrap();
         let claude = recording_claude(dir.path(), &success("{\"ok\": true}"), 0);
 
-        let reply =
-            claude_reply(&claude, "Describe it.", "iVBORw0K", Duration::from_secs(10)).unwrap();
+        let reply = claude_reply(
+            &claude,
+            "haiku",
+            "Describe it.",
+            "iVBORw0K",
+            Duration::from_secs(10),
+        )
+        .unwrap();
 
         assert_eq!(reply, "{\"ok\": true}");
         let log = dir.path().join("log");
@@ -822,7 +837,7 @@ pub(crate) mod tests {
             &[result_line("Invalid API key · Please run /login", true)],
             1,
         );
-        let err = claude_reply(&claude, "x", "x", Duration::from_secs(10)).unwrap_err();
+        let err = claude_reply(&claude, "haiku", "x", "x", Duration::from_secs(10)).unwrap_err();
         let AiError::Endpoint(message) = err else {
             panic!("{err:?}");
         };
@@ -833,7 +848,7 @@ pub(crate) mod tests {
         let dir = TempDir::new().unwrap();
         let claude = recording_claude(dir.path(), &[result_line("Usage limit reached", true)], 0);
         assert!(matches!(
-            claude_reply(&claude, "x", "x", Duration::from_secs(10)),
+            claude_reply(&claude, "haiku", "x", "x", Duration::from_secs(10)),
             Err(AiError::Endpoint(message)) if message.contains("Usage limit reached")
         ));
 
@@ -844,7 +859,7 @@ pub(crate) mod tests {
             "cat > /dev/null\necho 'unknown option --tools' >&2\nexit 2",
         );
         assert!(matches!(
-            claude_reply(&claude, "x", "x", Duration::from_secs(10)),
+            claude_reply(&claude, "haiku", "x", "x", Duration::from_secs(10)),
             Err(AiError::Endpoint(message)) if message.contains("unknown option --tools")
         ));
     }
@@ -855,7 +870,7 @@ pub(crate) mod tests {
         let dir = TempDir::new().unwrap();
         let claude = recording_claude(dir.path(), &["not json".to_owned()], 0);
         assert!(matches!(
-            claude_reply(&claude, "x", "x", Duration::from_secs(10)),
+            claude_reply(&claude, "haiku", "x", "x", Duration::from_secs(10)),
             Err(AiError::Response(_))
         ));
     }
@@ -866,7 +881,7 @@ pub(crate) mod tests {
         let dir = TempDir::new().unwrap();
         let claude = fake_claude(dir.path(), "exec sleep 30");
         let started = Instant::now();
-        let err = claude_reply(&claude, "x", "x", Duration::from_millis(300)).unwrap_err();
+        let err = claude_reply(&claude, "haiku", "x", "x", Duration::from_millis(300)).unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(
             matches!(&err, AiError::Endpoint(message) if message.contains("no answer")),
@@ -877,12 +892,40 @@ pub(crate) mod tests {
     // --- Codex -------------------------------------------------------------
 
     #[test]
+    fn codex_is_asked_for_the_chosen_model() {
+        let args: Vec<String> = codex_args(
+            Path::new("/tmp/run/capture.png"),
+            Path::new("/tmp/run/schema.json"),
+            Path::new("/tmp/run/reply.txt"),
+            "Describe it.",
+            Some("gpt-5-mini"),
+        )
+        .into_iter()
+        .map(|arg| arg.into_string().unwrap())
+        .collect();
+        let at = args.iter().position(|arg| arg == "-m").unwrap();
+        assert_eq!(args[at + 1], "gpt-5-mini");
+        assert_eq!(args.last().unwrap(), "Describe it.");
+    }
+
+    #[test]
+    fn claude_is_asked_for_the_chosen_model() {
+        let args: Vec<String> = claude_args("sonnet")
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect();
+        let at = args.iter().position(|arg| arg == "--model").unwrap();
+        assert_eq!(args[at + 1], "sonnet");
+    }
+
+    #[test]
     fn codex_runs_read_only_with_the_image_schema_and_reply_file() {
         let args: Vec<String> = codex_args(
             Path::new("/tmp/run/capture.png"),
             Path::new("/tmp/run/schema.json"),
             Path::new("/tmp/run/reply.txt"),
             "Describe it.",
+            None,
         )
         .into_iter()
         .map(|arg| arg.into_string().unwrap())
@@ -971,6 +1014,7 @@ pub(crate) mod tests {
 
         let reply = codex_reply(
             &codex,
+            None,
             "Describe it.",
             b"png bytes",
             &schema,
@@ -1010,7 +1054,8 @@ pub(crate) mod tests {
             &format!("{progress}ERROR: You are not logged in. Run `codex login`."),
             1,
         );
-        let err = codex_reply(&codex, "x", b"x", &json!({}), Duration::from_secs(10)).unwrap_err();
+        let err =
+            codex_reply(&codex, None, "x", b"x", &json!({}), Duration::from_secs(10)).unwrap_err();
         let AiError::Endpoint(message) = err else {
             panic!("{err:?}");
         };
@@ -1024,7 +1069,7 @@ pub(crate) mod tests {
         let dir = TempDir::new().unwrap();
         let codex = recording_codex(dir.path(), None, "", 0);
         assert!(matches!(
-            codex_reply(&codex, "x", b"x", &json!({}), Duration::from_secs(10)),
+            codex_reply(&codex, None, "x", b"x", &json!({}), Duration::from_secs(10)),
             Err(AiError::Response(message)) if message.starts_with("Codex sent no answer")
         ));
     }
@@ -1036,8 +1081,15 @@ pub(crate) mod tests {
         let codex = dir.path().join("bin").join(CODEX);
         executable(&codex, "exec sleep 30");
         let started = Instant::now();
-        let err =
-            codex_reply(&codex, "x", b"x", &json!({}), Duration::from_millis(300)).unwrap_err();
+        let err = codex_reply(
+            &codex,
+            None,
+            "x",
+            b"x",
+            &json!({}),
+            Duration::from_millis(300),
+        )
+        .unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(
             matches!(&err, AiError::Endpoint(message) if message.starts_with("Codex gave no answer")),
@@ -1048,8 +1100,14 @@ pub(crate) mod tests {
     #[test]
     fn a_missing_program_cannot_start() {
         let dir = TempDir::new().unwrap();
-        let err =
-            claude_reply(&dir.path().join("claude"), "x", "x", Duration::from_secs(1)).unwrap_err();
+        let err = claude_reply(
+            &dir.path().join("claude"),
+            "haiku",
+            "x",
+            "x",
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
         assert!(
             matches!(&err, AiError::Endpoint(message) if message.contains("could not start Claude Code")),
             "{err:?}"

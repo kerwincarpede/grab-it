@@ -29,6 +29,10 @@ export interface AiPreferences {
   endpoint: string;
   /** Only the endpoint provider uses it. */
   model: string;
+  /** The model Claude Code is asked for: an alias (haiku, sonnet, opus) or a full name. Empty means haiku. */
+  claudeModel: string;
+  /** The model Codex is asked for. Empty means the one set up in Codex itself. */
+  codexModel: string;
   /** Only cloud providers need one. */
   apiKey: string | null;
   /** Leave captures from before AI descriptions were turned on alone. */
@@ -45,6 +49,8 @@ export const DEFAULT_AI_PREFERENCES: AiPreferences = {
   provider: null,
   endpoint: "http://localhost:11434/v1",
   model: "qwen3-vl:4b",
+  claudeModel: "haiku",
+  codexModel: "",
   apiKey: null,
   newCapturesOnly: true,
   noticePending: false,
@@ -61,18 +67,25 @@ export const AI_PROVIDERS: { value: AiProvider; title: string; hint: string }[] 
   {
     value: "claudeCode",
     title: "Claude Code",
-    hint: "Uses the claude command you already have and are signed in to, with the Haiku model. Nothing to set up or download.",
+    hint: "Uses the claude command you already have and are signed in to. Nothing to set up or download.",
   },
   {
     value: "codex",
     title: "Codex",
-    hint: "Uses the codex command you already have and are signed in to, with the model you set up for it. Nothing to set up or download.",
+    hint: "Uses the codex command you already have and are signed in to. Nothing to set up or download.",
   },
   {
     value: "endpoint",
     title: "OpenAI-compatible endpoint",
     hint: "Ollama or LM Studio on this computer, or a cloud API such as OpenAI or OpenRouter.",
   },
+];
+
+/** Claude Code's model aliases, offered as suggestions. */
+export const CLAUDE_MODELS: { value: string; hint: string }[] = [
+  { value: "haiku", hint: "Fastest and cheapest" },
+  { value: "sonnet", hint: "More detail" },
+  { value: "opus", hint: "Most capable, slowest" },
 ];
 
 /** An OpenAI-compatible API the endpoint provider can be pointed at in one step. */
@@ -155,13 +168,52 @@ export interface Settings extends Preferences {
   editor?: EditorPreferences;
   /** macOS: a Dock icon that opens the Grab-it window. */
   showInDock?: boolean;
+  appearance?: Appearance;
+}
+
+/** Mirrors `TextSize` in src-tauri/src/settings.rs. */
+export type TextSize = "small" | "default" | "large" | "larger";
+
+/** Mirrors `PopupCorner` in src-tauri/src/settings.rs. */
+export type PopupCorner = "bottomLeft" | "bottomRight" | "topLeft" | "topRight";
+
+/** Mirrors `Appearance` in src-tauri/src/settings.rs. */
+export interface Appearance {
+  textSize: TextSize;
+  popupCorner: PopupCorner;
+  /** How long the popup stays, in seconds; 0 keeps it until it is closed. */
+  popupSeconds: number;
+}
+
+export const DEFAULT_APPEARANCE: Appearance = { textSize: "default", popupCorner: "bottomLeft", popupSeconds: 8 };
+
+export const TEXT_SIZES: { value: TextSize; title: string }[] = [
+  { value: "small", title: "Small" },
+  { value: "default", title: "Default" },
+  { value: "large", title: "Large" },
+  { value: "larger", title: "Larger" },
+];
+
+export const POPUP_CORNERS: { value: PopupCorner; title: string }[] = [
+  { value: "topLeft", title: "Top left" },
+  { value: "topRight", title: "Top right" },
+  { value: "bottomLeft", title: "Bottom left" },
+  { value: "bottomRight", title: "Bottom right" },
+];
+
+/** How long the popup can stay; 0 is "until I close it". */
+export const POPUP_SECONDS = [3, 5, 8, 12, 20, 30, 0];
+
+export function setAppearance(appearance: Appearance): Promise<Settings> {
+  return invoke<Settings>("set_appearance", { appearance });
 }
 
 /** Settings, split into the pages of the Grab-it window's sidebar. */
-export type SettingsSection = "general" | "capture" | "editor" | "ai" | "hotkeys";
+export type SettingsSection = "general" | "appearance" | "capture" | "editor" | "ai" | "hotkeys";
 
 export const SETTINGS_SECTIONS: { id: SettingsSection; title: string }[] = [
   { id: "general", title: "General" },
+  { id: "appearance", title: "Appearance" },
   { id: "capture", title: "After a capture" },
   { id: "editor", title: "Editor" },
   { id: "ai", title: "AI descriptions" },

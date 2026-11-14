@@ -5,6 +5,12 @@ import { FolderIcon } from "../app/icons";
 import {
   AFTER_CAPTURE_CHOICES,
   DEFAULT_AI_PREFERENCES,
+  DEFAULT_APPEARANCE,
+  POPUP_CORNERS,
+  POPUP_SECONDS,
+  TEXT_SIZES,
+  setAppearance,
+  type Appearance,
   chooseFolder,
   getAutostart,
   getSettings,
@@ -154,6 +160,18 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     }
   }
 
+  async function changeAppearance(change: Partial<Appearance>) {
+    setBusy(true);
+    try {
+      setSettings(await setAppearance({ ...(settings?.appearance ?? DEFAULT_APPEARANCE), ...change }));
+      setStatus({ kind: "preferences-saved" });
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveHotkeys(hotkeys: Hotkeys): Promise<HotkeysUpdate | null> {
     try {
       const update = await setHotkeys(hotkeys);
@@ -167,7 +185,10 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   }
 
   const afterCapture = AFTER_CAPTURE_CHOICES.find((choice) => choice.value === settings?.afterCapture);
-  const savesAtOnce = section === undefined || section === "general" || section === "capture" || section === "editor";
+  const savesAtOnce =
+    section === undefined || section === "general" || section === "appearance" || section === "capture" || section === "editor";
+  const appearance = settings?.appearance ?? DEFAULT_APPEARANCE;
+  const appearanceOff = busy || settings === null;
   const showsMac = shows("general") && (hasDock() || autostart !== null);
 
   return (
@@ -279,6 +300,82 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                 onChange={(event) => void changeAutoBackdrop(event.target.checked)}
               />
             </label>
+          </div>
+        </section>
+      )}
+      {shows("appearance") && (
+        <section aria-labelledby="text-size-heading">
+          <h2 className="group-heading" id="text-size-heading">
+            Text size
+          </h2>
+          <div className="group">
+            <div className="row is-stacked">
+              <fieldset className="segmented" aria-labelledby="text-size-heading" disabled={appearanceOff}>
+                {TEXT_SIZES.map((choice) => (
+                  <label key={choice.value}>
+                    <input
+                      type="radio"
+                      name="text-size"
+                      value={choice.value}
+                      checked={appearance.textSize === choice.value}
+                      onChange={() => void changeAppearance({ textSize: choice.value })}
+                    />
+                    {choice.title}
+                  </label>
+                ))}
+              </fieldset>
+              <span className="row-hint">Scales the Grab-it window: text, buttons and thumbnails.</span>
+            </div>
+          </div>
+
+          <h2 className="group-heading" id="popup-heading">
+            Popup after a capture
+          </h2>
+          <div className="group">
+            <div className="row is-stacked">
+              <span className="row-text">
+                <span className="row-title" id="popup-corner-heading">
+                  Position
+                </span>
+                <span className="row-hint">Which corner of the screen the popup appears in.</span>
+              </span>
+              <fieldset className="corner-picker" aria-labelledby="popup-corner-heading" disabled={appearanceOff}>
+                {POPUP_CORNERS.map((choice) => (
+                  <label key={choice.value} className={`corner-${choice.value}`}>
+                    <input
+                      type="radio"
+                      name="popup-corner"
+                      value={choice.value}
+                      checked={appearance.popupCorner === choice.value}
+                      onChange={() => void changeAppearance({ popupCorner: choice.value })}
+                    />
+                    <span className="corner-card" aria-hidden="true" />
+                    {choice.title}
+                  </label>
+                ))}
+              </fieldset>
+            </div>
+            <div className="row">
+              <span className="row-text">
+                <label className="row-title" htmlFor="popup-seconds">
+                  Show it for
+                </label>
+                <span className="row-hint">Resting the pointer on it keeps it open. Errors stay at least 10 seconds.</span>
+              </span>
+              <select
+                id="popup-seconds"
+                className="row-field"
+                value={appearance.popupSeconds}
+                disabled={appearanceOff}
+                onChange={(event) => void changeAppearance({ popupSeconds: Number(event.target.value) })}
+              >
+                {POPUP_SECONDS.map((seconds) => (
+                  <option key={seconds} value={seconds}>
+                    {seconds === 0 ? "Until I close it" : `${seconds} seconds`}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </section>
       )}

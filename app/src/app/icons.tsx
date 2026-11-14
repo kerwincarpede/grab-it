@@ -195,3 +195,10 @@ export const ChevronRightIcon = ({ size }: IconProps) => (
     <path d="m9 6 6 6-6 6" />
   </Icon>
 );
+
+export const AppearanceIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <circle cx="12" cy="12" r="8" />
+    <path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" />
+  </Icon>
+);

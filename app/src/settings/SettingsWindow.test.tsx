@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
@@ -28,6 +28,7 @@ interface Backend {
   codexPath: string | null;
   /** The editor section's auto-apply flag. */
   autoBackdrop?: boolean;
+  appearance?: unknown;
   saveFolder: string;
   hotkeys: typeof DEFAULT_HOTKEYS;
   hotkeyWarnings: string[];
@@ -58,11 +59,15 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     copyToClipboard: backend.copyToClipboard,
     ai: backend.ai,
     editor: backend.autoBackdrop === undefined ? {} : { autoBackdrop: backend.autoBackdrop },
+    appearance: backend.appearance,
   });
   mockIPC((cmd, payload) => {
     backend.calls.push({ cmd, payload });
     switch (cmd) {
       case "get_settings":
+        return settings();
+      case "set_appearance":
+        backend.appearance = (payload as { appearance: unknown }).appearance;
         return settings();
       case "get_autostart":
         if (backend.autostart === undefined) throw "not supported";
@@ -475,7 +480,7 @@ describe("SettingsWindow AI descriptions", () => {
     const preset = await screen.findByLabelText("Preset");
     await waitFor(() => expect(preset).toBeEnabled());
     expect(screen.getByRole("option", { name: "Custom" })).toBeInTheDocument();
-    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+    expect(within(preset).getAllByRole("option").map((option) => option.textContent)).toEqual([
       "Custom",
       "Ollama",
       "OpenAI",
@@ -611,9 +616,10 @@ describe("SettingsWindow AI descriptions", () => {
     await waitFor(() => expect(claude).toBeChecked());
     expect(backend.ai).toEqual({ ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "claudeCode" });
     expect(screen.queryByLabelText("Endpoint URL")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Model")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("API key")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    // Its own model instead, saved with Save.
+    expect(screen.getByLabelText("Model")).toHaveValue("haiku");
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(screen.getByText(/Claude Code sends your screenshots.*to Anthropic/)).toHaveClass("ai-privacy-cloud");
     expect(screen.queryByTestId("ai-missing")).not.toBeInTheDocument();
 
@@ -644,6 +650,24 @@ describe("SettingsWindow AI descriptions", () => {
     await waitFor(() => expect(screen.queryByTestId("ai-missing")).not.toBeInTheDocument());
   });
 
+  it("saves another model for Claude Code and Codex", async () => {
+    const backend = mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "claudeCode" } });
+    render(<SettingsWindow />);
+    const model = await screen.findByLabelText("Model");
+    await waitFor(() => expect(model).toBeEnabled());
+    await userEvent.clear(model);
+    await userEvent.type(model, "sonnet");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(backend.ai.claudeModel).toBe("sonnet"));
+    expect(backend.ai.provider).toBe("claudeCode");
+
+    await userEvent.click(screen.getByRole("radio", { name: /^Codex/ }));
+    await waitFor(() => expect(backend.ai.provider).toBe("codex"));
+    await userEvent.type(screen.getByLabelText("Model"), "gpt-5-mini{Enter}");
+    await waitFor(() => expect(backend.ai.codexModel).toBe("gpt-5-mini"));
+    expect(backend.ai.claudeModel).toBe("sonnet");
+  });
+
   it("tests Claude Code without saving anything first", async () => {
     const backend = mockBackend({
       ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "claudeCode" },
@@ -669,7 +693,8 @@ describe("SettingsWindow AI descriptions", () => {
     expect(backend.ai).toEqual({ ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "codex" });
     expect(screen.getByRole("radio", { name: /Claude Code/ })).not.toBeChecked();
     expect(screen.queryByLabelText("Endpoint URL")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Model")).toHaveValue("");
+    expect(screen.getByLabelText("Model")).toHaveAttribute("placeholder", "Codex default");
     expect(screen.getByText(/Codex sends your screenshots.*to OpenAI/)).toHaveClass("ai-privacy-cloud");
     expect(screen.queryByTestId("ai-missing")).not.toBeInTheDocument();
   });
@@ -706,5 +731,29 @@ describe("SettingsWindow AI descriptions", () => {
     expect(isLocalEndpoint("http://[::1]:8080")).toBe(true);
     expect(isLocalEndpoint("https://api.openai.com/v1")).toBe(false);
     expect(isLocalEndpoint("not a url")).toBe(false);
+  });
+});
+
+describe("SettingsWindow appearance", () => {
+  it("saves the text size, the popup's corner and its time at once", async () => {
+    const backend = mockBackend({ appearance: { textSize: "default", popupCorner: "bottomLeft", popupSeconds: 8 } });
+    render(<SettingsWindow section="appearance" />);
+    expect(screen.getByRole("heading", { level: 1, name: "Appearance" })).toBeInTheDocument();
+    const larger = await screen.findByRole("radio", { name: "Larger" });
+    await waitFor(() => expect(larger).toBeEnabled());
+
+    await userEvent.click(larger);
+    await waitFor(() => expect(larger).toBeChecked());
+    const topRight = screen.getByRole("radio", { name: "Top right" });
+    await waitFor(() => expect(topRight).toBeEnabled());
+    await userEvent.click(topRight);
+    await waitFor(() => expect(topRight).toBeChecked());
+    const seconds = screen.getByLabelText("Show it for");
+    await waitFor(() => expect(seconds).toBeEnabled());
+    await userEvent.selectOptions(seconds, "Until I close it");
+
+    await waitFor(() =>
+      expect(backend.appearance).toEqual({ textSize: "larger", popupCorner: "topRight", popupSeconds: 0 }),
+    );
   });
 });

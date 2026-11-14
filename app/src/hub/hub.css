@@ -17,6 +17,9 @@ body:has(.hub) {
   color: var(--text);
   font-size: 13px;
   background: var(--bg);
+  /* The window itself is rounded on macOS (hub.rs); the edge follows it. */
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px var(--border);
   user-select: none;
 }
 

@@ -74,6 +74,7 @@ pub fn run() {
             commands::get_autostart,
             commands::set_autostart,
             commands::set_show_in_dock,
+            commands::set_appearance,
             hub::hub_capture,
             hub::hub_monitors,
             hub::hub_open,
@@ -179,23 +180,28 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Grab-it");
 
-    app.run(|app, event| match event {
-        // Closing the last window keeps Grab-it running in the tray.
-        // Only an explicit exit (the tray's Quit) carries an exit code.
-        RunEvent::ExitRequested {
-            code: None, api, ..
-        } => api.prevent_exit(),
-        // Clicking the Dock icon with no window open shows the Grab-it window.
-        #[cfg(target_os = "macos")]
-        RunEvent::Reopen {
-            has_visible_windows: false,
-            ..
-        } => {
-            if let Err(err) = windows::show_library(app) {
-                eprintln!("Grab-it: {err}");
+    app.run(|app, event| {
+        // Only macOS uses the handle, for the Dock icon below.
+        #[cfg(not(target_os = "macos"))]
+        let _ = app;
+        match event {
+            // Closing the last window keeps Grab-it running in the tray.
+            // Only an explicit exit (the tray's Quit) carries an exit code.
+            RunEvent::ExitRequested {
+                code: None, api, ..
+            } => api.prevent_exit(),
+            // Clicking the Dock icon with no window open shows the Grab-it window.
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } => {
+                if let Err(err) = windows::show_library(app) {
+                    eprintln!("Grab-it: {err}");
+                }
             }
+            _ => {}
         }
-        _ => {}
     });
 }
 
