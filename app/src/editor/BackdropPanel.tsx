@@ -187,7 +187,12 @@ export default function BackdropPanel({ backdrop, start, onPreview, onCommit, on
           ))}
         </div>
       </div>
-      {slider("Corner radius", current.radius, BACKDROP_MAX_RADIUS, "pt", (radius) => ({ ...current, radius }))}
+      {/* Moving the radius puts it in points; an older backdrop's pixel radius shows as pixels until then. */}
+      {slider("Corner radius", current.radius, BACKDROP_MAX_RADIUS, current.radiusUnit === "pt" ? "pt" : "px", (radius) => ({
+        ...current,
+        radius,
+        radiusUnit: "pt",
+      }))}
       <label className="backdrop-row check">
         <input
           type="checkbox"

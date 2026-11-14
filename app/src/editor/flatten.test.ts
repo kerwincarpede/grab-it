@@ -92,7 +92,7 @@ describe("backdrop", () => {
 });
 
 describe("backdrop shape", () => {
-  const backdrop: Backdrop = { fill: "ocean", padding: 64, radius: 36, shadow: true };
+  const backdrop: Backdrop = { fill: "ocean", padding: 64, radius: 36, radiusUnit: "pt", shadow: true };
   const size = { width: 400, height: 300 };
 
   it("turns the corner radius from points into pixels with the scale factor", () => {
@@ -103,6 +103,12 @@ describe("backdrop shape", () => {
     // A nonsense scale counts as 1.
     expect(backdropLayout(size, backdrop, 0).radius).toBe(36);
     expect(backdropLayout(size, backdrop, Number.NaN).radius).toBe(36);
+  });
+
+  it("keeps an older sidecar's radius in pixels, whatever the scale", () => {
+    const old: Backdrop = { fill: "ocean", padding: 64, radius: 12, shadow: true };
+    expect(backdropLayout(size, old, 2).radius).toBe(12);
+    expect(backdropLayout(size, old, 1).radius).toBe(12);
   });
 
   it("pads one axis further to reach the aspect ratio, keeping the capture centred", () => {

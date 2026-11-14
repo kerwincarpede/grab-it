@@ -102,6 +102,7 @@ describe("annotations sidecar", () => {
       fill: "custom",
       padding: 40,
       radius: 36,
+      radiusUnit: "pt",
       shadow: true,
       shadowSize: 70,
       shadowStrength: 50,
@@ -114,6 +115,7 @@ describe("annotations sidecar", () => {
       parseBackdrop({
         ...backdrop,
         radius: 120,
+        radiusUnit: "em",
         shadowSize: 400,
         shadowStrength: "strong",
         aspect: "21:9",

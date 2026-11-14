@@ -68,8 +68,9 @@ export function aspectRatio(aspect: BackdropAspect | undefined): number | null {
 /**
  * Lays a capture of `size` out on its backdrop: the output grows by the
  * padding on every side, then by more on one axis to reach the aspect
- * ratio, with the capture centred. The radius is in points, so `scale`
- * (image pixels per point) turns it into pixels. Without a backdrop the
+ * ratio, with the capture centred. A radius in points is turned into
+ * pixels by `scale` (image pixels per point); an older radius in pixels
+ * is used as it is. Without a backdrop the
  * capture is the output.
  *
  * The editor's preview and the export compose both lay out with this, so
@@ -91,7 +92,8 @@ export function backdropLayout(
     else if (width / height > ratio) height = Math.round(width / ratio);
   }
   const shorter = Math.min(size.width, size.height);
-  const pixelsPerPoint = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  // Older sidecars saved the radius in capture pixels; only points scale.
+  const pixelsPerPoint = backdrop.radiusUnit === "pt" && Number.isFinite(scale) && scale > 0 ? scale : 1;
   return {
     width,
     height,

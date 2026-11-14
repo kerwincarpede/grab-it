@@ -106,7 +106,8 @@ export interface CustomGradient {
  * A decorative frame around the capture, added on copy/export. `fill` is a
  * `BACKDROP_PRESETS` or `BACKDROP_MESHES` id, a hex colour, or one of the
  * `BACKDROP_FILLS`. `padding` is in capture pixels; `radius` is in points,
- * multiplied by the capture's scale factor.
+ * multiplied by the capture's scale factor, when `radiusUnit` is "pt", and
+ * in capture pixels otherwise (sidecars written before points).
  *
  * Every field after `shadow` came later and is optional, so sidecars from
  * before still load and look as they did.
@@ -116,6 +117,8 @@ export interface Backdrop {
   padding: number;
   radius: number;
   shadow: boolean;
+  /** "pt" for a radius in points; absent in older sidecars, whose radius is in pixels. */
+  radiusUnit?: "pt";
   /** How far the shadow spreads, 0–100; `DEFAULT_SHADOW_SIZE` when absent. */
   shadowSize?: number;
   /** How dark the shadow is, 0–100; `DEFAULT_SHADOW_STRENGTH` when absent. */
@@ -354,7 +357,13 @@ export const BACKDROP_FILLS = { custom: "custom", blur: "blur", transparent: "tr
 
 export const DEFAULT_GRADIENT: CustomGradient = { from: "#4c8dff", to: "#ff6ac1", angle: 135 };
 
-export const DEFAULT_BACKDROP: Backdrop = { fill: BACKDROP_PRESETS[0].id, padding: 64, radius: DEFAULT_BACKDROP_RADIUS, shadow: true };
+export const DEFAULT_BACKDROP: Backdrop = {
+  fill: BACKDROP_PRESETS[0].id,
+  padding: 64,
+  radius: DEFAULT_BACKDROP_RADIUS,
+  radiusUnit: "pt",
+  shadow: true,
+};
 
 export function sameBackdrop(a: Backdrop | null | undefined, b: Backdrop | null | undefined): boolean {
   if (!a || !b) return !a && !b;
@@ -362,6 +371,7 @@ export function sameBackdrop(a: Backdrop | null | undefined, b: Backdrop | null 
     a.fill === b.fill &&
     a.padding === b.padding &&
     a.radius === b.radius &&
+    a.radiusUnit === b.radiusUnit &&
     a.shadow === b.shadow &&
     a.shadowSize === b.shadowSize &&
     a.shadowStrength === b.shadowStrength &&

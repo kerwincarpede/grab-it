@@ -796,7 +796,7 @@ describe("EditorWindow", () => {
     expect(panel.getByRole("slider", { name: "Shadow size" })).toBeDisabled();
 
     fireEvent.click(panel.getByRole("button", { name: "Bloom mesh" }));
-    await waitFor(() => expect(last(saved)?.backdrop).toEqual({ fill: "mesh-bloom", padding: 64, radius: 36, shadow: true }));
+    await waitFor(() => expect(last(saved)?.backdrop).toEqual({ fill: "mesh-bloom", padding: 64, radius: 36, radiusUnit: "pt", shadow: true }));
     expect(panel.getByRole("slider", { name: "Corner radius" })).toHaveValue("36");
     expect(panel.getByText("36pt")).toBeInTheDocument();
     // A base colour and three blobs, as the export paints them.

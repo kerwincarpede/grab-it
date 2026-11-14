@@ -73,6 +73,7 @@ export function parseBackdrop(value: unknown): Backdrop | null {
     radius: clamp(backdrop.radius, BACKDROP_MAX_RADIUS),
     shadow: backdrop.shadow,
   };
+  if (backdrop.radiusUnit === "pt") parsed.radiusUnit = "pt";
   if (isNum(backdrop.shadowSize)) parsed.shadowSize = clamp(backdrop.shadowSize, 100);
   if (isNum(backdrop.shadowStrength)) parsed.shadowStrength = clamp(backdrop.shadowStrength, 100);
   const aspect = BACKDROP_ASPECTS.find((entry) => entry.aspect === backdrop.aspect);
