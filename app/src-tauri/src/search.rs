@@ -365,8 +365,11 @@ mod tests {
     use super::*;
     use crate::{
         capture::{CaptureMode, Foreground, ORIGINALS_DIR, save_capture},
-        library::{AiDescription, LibraryError},
-        ocr::tests::{FIXTURE_WORD, engine, fixture_png},
+        library::{AiDescription, LibraryError, ShotText},
+        ocr::{
+            tests::{FIXTURE_WORD, engine, fixture_png},
+            with_codes,
+        },
     };
     use chrono::{DateTime, Local, TimeZone};
     use image::{Rgba, RgbaImage};
@@ -1040,7 +1043,7 @@ mod tests {
 
         let job = library.next_for_ocr().unwrap().unwrap();
         assert_eq!(job.id, shot.id);
-        let text = engine().read_text(&job.path).unwrap();
+        let (text, _) = engine().read_capture(&job.path).unwrap();
         library.set_ocr_text(job.id, &text).unwrap();
 
         let page = library.search(&words(prefix), 0, 10).unwrap();
@@ -1055,5 +1058,46 @@ mod tests {
             .collect();
         assert_eq!(highlighted, FIXTURE_WORD);
         assert!(library.next_for_ocr().unwrap().is_none());
+    }
+
+    /// A capture holding a QR code and a barcode is found by what they
+    /// hold once its text is stored with their values.
+    #[test]
+    fn a_capture_is_found_by_the_values_of_its_codes() {
+        use crate::codes::{
+            decode,
+            tests::{canvas, draw},
+        };
+        use rxing::BarcodeFormat;
+        let dir = TempDir::new().unwrap();
+        let (mut library, [a, b, _]) = sample(dir.path());
+        let mut image = canvas(1100, 420);
+        let qr = draw(
+            "https://tickets.example.com/zanzibar",
+            BarcodeFormat::QR_CODE,
+            260,
+            260,
+        );
+        let bar = draw("SKU 77123", BarcodeFormat::CODE_128, 440, 140);
+        image::imageops::overlay(&mut image, &qr, 40, 60);
+        image::imageops::overlay(&mut image, &bar, 600, 120);
+        let codes = decode(&image);
+        assert_eq!(codes.len(), 2, "decoded {codes:?}");
+        library
+            .set_ocr_text(a, &with_codes("Scan to board", &codes))
+            .unwrap();
+        library.set_ocr_text(b, "Nothing to scan here").unwrap();
+
+        for typed in ["zanzib", "tickets.example", "77123", "board"] {
+            let page = library.search(&words(typed), 0, 10).unwrap();
+            assert_eq!(ids(&page), vec![a], "searching {typed:?}");
+            assert_eq!(page.hits[0].field, Some(MatchField::Text));
+        }
+        assert_eq!(
+            library.text(a).unwrap(),
+            ShotText::Read {
+                text: "Scan to board\nhttps://tickets.example.com/zanzibar\nSKU 77123".into()
+            }
+        );
     }
 }

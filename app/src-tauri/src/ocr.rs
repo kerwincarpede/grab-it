@@ -5,7 +5,8 @@
 //! needs OCR, with progress shown in the Library. One background thread
 //! then reads the text of every capture waiting for OCR, newest first and
 //! one at a time, and stores it in the library, where the full-text index
-//! picks it up.
+//! picks it up. The values of any QR codes or barcodes in a capture are
+//! stored after its text (see [`with_codes`]), so search finds them too.
 
 use std::{
     fmt, fs,
@@ -25,7 +26,12 @@ use rten::Model;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::library::{LIBRARY_CHANGED_EVENT, LibraryState};
+use image::RgbaImage;
+
+use crate::{
+    codes::{self, Code},
+    library::{LIBRARY_CHANGED_EVENT, LibraryResult, LibraryState},
+};
 
 /// Where the models live, under the app data directory.
 pub const MODELS_DIR: &str = "ocr-models";
@@ -241,9 +247,12 @@ impl Ocr {
         Ok(Self { engine })
     }
 
-    /// The text in an image file, one line of text per line.
-    pub fn read_text(&self, png: &Path) -> OcrResult<String> {
-        self.read_image(&image::open(png)?.into_rgb8())
+    /// The text in a capture file, one line of text per line, and the
+    /// capture itself, for [`store_text`] to decode its codes from.
+    pub fn read_capture(&self, png: &Path) -> OcrResult<(String, RgbaImage)> {
+        let image = image::open(png)?.into_rgba8();
+        let text = self.read_image(&image::DynamicImage::ImageRgba8(image.clone()).into_rgb8())?;
+        Ok((text, image))
     }
 
     /// The text in an image already in memory, one line of text per line.
@@ -266,6 +275,45 @@ impl Ocr {
             .join("\n");
         Ok(text)
     }
+}
+
+/// `text` with the values of `codes` after it, one per line, as the
+/// library stores a capture's text: search then finds a capture by what
+/// its codes hold, and the Library's Copy text includes them. Just the
+/// values when there is no text, and `text` alone when there are no codes.
+pub fn with_codes(text: &str, codes: &[Code]) -> String {
+    let values = codes::values(codes);
+    if values.is_empty() {
+        text.to_owned()
+    } else if text.trim().is_empty() {
+        values
+    } else {
+        format!("{}\n{values}", text.trim_end())
+    }
+}
+
+/// Stores `text`, read from `image`, as the text of shot `id`, then decodes
+/// the codes in `image` and, when it holds any, stores the text again with
+/// their values ([`with_codes`]). Returns what is stored.
+///
+/// The plain text is stored before decoding on purpose: release builds
+/// abort on a panic, so a capture that crashes rxing is by then already
+/// read, and the OCR queue does not pick it up and crash again on every
+/// launch. That capture is only missing its codes.
+pub fn store_text(
+    library: &LibraryState,
+    id: i64,
+    text: &str,
+    image: &RgbaImage,
+) -> LibraryResult<String> {
+    library.lock().set_ocr_text(id, text)?;
+    let codes = codes::decode(image);
+    if codes.is_empty() {
+        return Ok(text.to_owned());
+    }
+    let full = with_codes(text, &codes);
+    library.lock().set_ocr_text(id, &full)?;
+    Ok(full)
 }
 
 /// What the OCR queue is doing. Mirrors `OcrStatus` in src/library/api.ts.
@@ -451,9 +499,9 @@ fn run(app: &AppHandle, models: &Path, receiver: &Receiver<()>) {
         set_status(app, OcrStatus::Working { pending });
         // The library is not locked while OCR runs, so the windows stay
         // responsive.
-        let text = ocr.read_text(&job.path);
-        let saved = match text {
-            Ok(text) => library.lock().set_ocr_text(job.id, &text),
+        let read = ocr.read_capture(&job.path);
+        let saved = match read {
+            Ok((text, image)) => store_text(&library, job.id, &text, &image).map(|_| ()),
             Err(err) => {
                 eprintln!("Grab-it: could not OCR {}: {err}", job.path.display());
                 library.lock().mark_ocr_failed(job.id)
@@ -562,7 +610,7 @@ pub(crate) mod tests {
 
     #[test]
     fn ocr_reads_the_fixture_word() {
-        let text = engine().read_text(&fixture_png()).unwrap();
+        let (text, _) = engine().read_capture(&fixture_png()).unwrap();
         assert!(
             text.to_lowercase().contains(FIXTURE_WORD),
             "OCR read {text:?}"
@@ -573,20 +621,112 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn code_values_follow_the_text_one_per_line() {
+        let qr = Code::new("QR code", "https://example.com/menu");
+        let bar = Code::new("Code 128", "GRAB-IT 0043");
+        assert_eq!(
+            with_codes("Scan for the menu", &[qr.clone(), bar.clone()]),
+            "Scan for the menu\nhttps://example.com/menu\nGRAB-IT 0043"
+        );
+        assert_eq!(
+            with_codes("Scan for the menu\n", std::slice::from_ref(&qr)),
+            "Scan for the menu\nhttps://example.com/menu"
+        );
+    }
+
+    #[test]
+    fn code_values_alone_when_there_is_no_text() {
+        let codes = [
+            Code::new("QR code", "first"),
+            Code::new("Code 128", "second"),
+        ];
+        assert_eq!(with_codes("", &codes), "first\nsecond");
+        assert_eq!(with_codes(" \n ", &codes), "first\nsecond");
+    }
+
+    #[test]
+    fn text_is_unchanged_without_codes() {
+        assert_eq!(
+            with_codes("Order pineapple today", &[]),
+            "Order pineapple today"
+        );
+        assert_eq!(with_codes("", &[]), "");
+    }
+
+    /// A library holding one capture, and its id.
+    fn library_with_a_capture(dir: &Path) -> (LibraryState, i64) {
+        let originals = dir.join(crate::capture::ORIGINALS_DIR);
+        fs::create_dir_all(&originals).unwrap();
+        let png = originals.join("Grab-it 2026-03-07 09-00-00.png");
+        fs::copy(fixture_png(), &png).unwrap();
+        let mut library = crate::library::Library::open_in_memory().unwrap();
+        let id = library.add_capture(&png).unwrap().id;
+        (LibraryState::new(library), id)
+    }
+
+    fn stored(library: &LibraryState, id: i64) -> crate::library::ShotText {
+        library.lock().text(id).unwrap()
+    }
+
+    #[test]
+    fn a_capture_is_stored_with_the_values_of_its_codes() {
+        use crate::codes::tests::{canvas, draw};
+        let dir = tempfile::TempDir::new().unwrap();
+        let (library, id) = library_with_a_capture(dir.path());
+        let mut image = canvas(400, 400);
+        let qr = draw(
+            "https://example.com/ticket",
+            rxing::BarcodeFormat::QR_CODE,
+            260,
+            260,
+        );
+        image::imageops::overlay(&mut image, &qr, 70, 70);
+        let text = store_text(&library, id, "Your ticket", &image).unwrap();
+        assert_eq!(text, "Your ticket\nhttps://example.com/ticket");
+        assert_eq!(
+            stored(&library, id),
+            crate::library::ShotText::Read { text }
+        );
+    }
+
+    #[test]
+    fn a_capture_without_codes_is_stored_with_its_text_alone() {
+        use crate::codes::tests::canvas;
+        let dir = tempfile::TempDir::new().unwrap();
+        let (library, id) = library_with_a_capture(dir.path());
+        let text = store_text(&library, id, "Order pineapple today", &canvas(300, 200)).unwrap();
+        assert_eq!(text, "Order pineapple today");
+        assert_eq!(
+            stored(&library, id),
+            crate::library::ShotText::Read { text }
+        );
+    }
+
+    #[test]
+    fn a_deleted_capture_is_not_decoded() {
+        use crate::codes::tests::canvas;
+        let library = LibraryState::new(crate::library::Library::open_in_memory().unwrap());
+        assert!(matches!(
+            store_text(&library, 42, "gone", &canvas(10, 10)),
+            Err(crate::library::LibraryError::NotFound(42))
+        ));
+    }
+
+    #[test]
     fn a_blank_image_has_no_text() {
         let dir = tempfile::TempDir::new().unwrap();
         let blank = dir.path().join("blank.png");
         image::RgbImage::from_pixel(200, 80, image::Rgb([255, 255, 255]))
             .save(&blank)
             .unwrap();
-        assert_eq!(engine().read_text(&blank).unwrap(), "");
+        assert_eq!(engine().read_capture(&blank).unwrap().0, "");
     }
 
     #[test]
     fn a_missing_image_is_an_image_error() {
         let missing = Path::new(env!("CARGO_MANIFEST_DIR")).join("no-such-capture.png");
         assert!(matches!(
-            engine().read_text(&missing),
+            engine().read_capture(&missing),
             Err(OcrError::Image(_))
         ));
     }
