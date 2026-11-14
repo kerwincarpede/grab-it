@@ -1303,6 +1303,7 @@ mod tests {
             api_key: None,
             new_captures_only: false,
             notice_pending: false,
+            api_key_storage: Default::default(),
         }
     }
 

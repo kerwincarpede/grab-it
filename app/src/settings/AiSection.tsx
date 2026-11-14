@@ -257,7 +257,12 @@ function AiSection({ saved, disabled, onSave }: Props) {
               placeholder="Optional"
               onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })}
             />
-            <p className="hint">Only cloud providers need one. Leave it empty for Ollama.</p>
+            <p className="hint" data-testid="ai-api-key-hint">
+              Only cloud providers need one. Leave it empty for Ollama.{" "}
+              {saved.apiKeyStorage === "keychain"
+                ? "It is kept in your system keychain, not in Grab-it's settings file."
+                : "This computer has no keychain Grab-it can use, so it is kept in plain text in Grab-it's settings file."}
+            </p>
           </div>
         </>
       )}

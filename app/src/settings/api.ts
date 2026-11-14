@@ -14,6 +14,9 @@ export interface Preferences {
 /** Mirrors `AiProvider` in src-tauri/src/settings.rs: who describes captures. */
 export type AiProvider = "claudeCode" | "codex" | "endpoint";
 
+/** Mirrors `ApiKeyStorage` in src-tauri/src/settings.rs: where the endpoint API key is kept. */
+export type ApiKeyStorage = "keychain" | "settingsFile";
+
 /** Mirrors `AiSettings` in src-tauri/src/settings.rs: the vision model that describes captures. */
 export interface AiPreferences {
   enabled: boolean;
@@ -32,6 +35,8 @@ export interface AiPreferences {
   newCapturesOnly: boolean;
   /** Grab-it turned describing on by itself and the Library has not said so yet. Only the backend changes it. */
   noticePending: boolean;
+  /** Where {@link apiKey} is kept: the OS keychain, or settings.json when there is none. Only the backend changes it. */
+  apiKeyStorage: ApiKeyStorage;
 }
 
 /** What the backend starts with. */
@@ -43,6 +48,7 @@ export const DEFAULT_AI_PREFERENCES: AiPreferences = {
   apiKey: null,
   newCapturesOnly: true,
   noticePending: false,
+  apiKeyStorage: "settingsFile",
 };
 
 /** The provider describing uses: an unset one is the endpoint, as in `AiSettings::provider`. */

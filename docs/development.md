@@ -109,12 +109,11 @@ Then pick the endpoint in Settings and choose the **Ollama** preset, or set it u
   "provider": "endpoint",
   "endpoint": "http://localhost:11434/v1",
   "model": "qwen3-vl:4b",
-  "apiKey": null,
   "newCapturesOnly": true
 }
 ```
 
-For a cloud API, set `endpoint`, `model` and `apiKey`. The **Preset** menu in Settings fills in the URL and a vision model for the common ones; you add the key and press Save:
+For a cloud API, set the endpoint, model and API key. The **Preset** menu in Settings fills in the URL and a vision model for the common ones; you add the key and press Save:
 
 | Preset | Endpoint | Model |
 | --- | --- | --- |
@@ -123,7 +122,11 @@ For a cloud API, set `endpoint`, `model` and `apiKey`. The **Preset** menu in Se
 | Anthropic | `https://api.anthropic.com/v1` | `claude-haiku-5-5` |
 | OpenRouter | `https://openrouter.ai/api/v1` | `openai/gpt-5-mini` |
 
-Any other URL or model shows as **Custom**. The key is sent as `Authorization: Bearer …` and is stored in plain text in `settings.json`. With `newCapturesOnly`, captures that already existed when you turned describing on are skipped; set it to `false` before turning it on to describe the whole library. **Test connection** in Settings checks whichever provider is picked.
+Any other URL or model shows as **Custom**. The key is sent as `Authorization: Bearer …`.
+
+The API key is kept in the OS credential store, not in `settings.json`: Keychain on macOS, Credential Manager on Windows and the Secret Service (GNOME Keyring, KWallet) on Linux, under the service `com.kerwincarpede.grabit` and the account `ai-endpoint-api-key`. A key typed into `settings.json` as `"apiKey"`, or left there by an earlier version, is moved into the credential store the next time Grab-it starts, and the file is rewritten without it. Where there is no credential store that works, such as a Linux session without a Secret Service, the key stays in plain text in `settings.json` under `ai.apiKey`; the hint under the API key field in Settings says which. The `keyring` crate talks to the Secret Service over D-Bus in pure Rust, so building needs no extra system packages. Tests use an in-memory key store and never touch the real one.
+
+With `newCapturesOnly`, captures that already existed when you turned describing on are skipped; set it to `false` before turning it on to describe the whole library. **Test connection** in Settings checks whichever provider is picked.
 
 Captures are described in the background, one at a time and newest first, once OCR has read them. Each one is scaled down to at most 1568 px on its long edge and sent with its OCR text, app and window title. A model on a CPU can take a minute or more per capture. If the endpoint cannot be reached or refuses the request, or the CLI fails, describing pauses. It tries again when you change the settings or ask for a capture to be described again, or when a new capture arrives a minute or more later. Changing the model does not redo old captures: each one records the model that described it, and you can ask for one capture, or all of them, to be described again.
 

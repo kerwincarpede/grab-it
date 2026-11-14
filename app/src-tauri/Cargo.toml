@@ -40,6 +40,11 @@ ureq = { version = "3", default-features = false, features = ["rustls"] }
 base64 = "0.23"
 # Already in the tree through the updater; orders versions in its changelog.
 semver = "1"
+# Keeps the endpoint API key in the OS credential store: Keychain on macOS,
+# Credential Manager on Windows, the Secret Service on Linux. Its default
+# `v1` stores are pure Rust there (zbus, as ashpd already uses), so Linux
+# builds need no libdbus or OpenSSL packages.
+keyring = "4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.12", default-features = false, features = ["tokio"] }
