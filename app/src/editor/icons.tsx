@@ -163,3 +163,38 @@ export const CropResetIcon = () => (
     <path d="M15 14l5 5M20 14l-5 5" />
   </Icon>
 );
+
+export const RotateLeftIcon = () => (
+  <Icon>
+    <path d="M4 4v5h5" />
+    <path d="M4.5 9A8 8 0 1112 20" />
+  </Icon>
+);
+
+export const RotateRightIcon = () => (
+  <Icon>
+    <path d="M20 4v5h-5" />
+    <path d="M19.5 9A8 8 0 1012 20" />
+  </Icon>
+);
+
+export const FlipHorizontalIcon = () => (
+  <Icon>
+    <path d="M12 3v18" strokeDasharray="2 2.5" />
+    <path d="M9 6L3 18h6zM15 6l6 12h-6z" />
+  </Icon>
+);
+
+export const FlipVerticalIcon = () => (
+  <Icon>
+    <path d="M3 12h18" strokeDasharray="2 2.5" />
+    <path d="M6 9L18 3v6zM6 15l12 6v-6z" />
+  </Icon>
+);
+
+export const ResizeIcon = () => (
+  <Icon>
+    <rect x="3" y="9" width="12" height="12" rx="2" />
+    <path d="M13 3h8v8M21 3l-8 8" />
+  </Icon>
+);

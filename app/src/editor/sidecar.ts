@@ -1,5 +1,6 @@
 import type { Annotations, Backdrop, Rect, Shape } from "./model";
 import { BACKDROP_ASPECTS, BACKDROP_MAX_PADDING, BACKDROP_MAX_RADIUS, emptyAnnotations } from "./model";
+import { clampScale, normalizeRotation } from "./orient";
 
 export class SidecarError extends Error {}
 
@@ -108,13 +109,39 @@ export function parseAnnotations(value: unknown): Annotations {
     shapes: doc.shapes.filter(isShape),
     crop: crop && typeof crop === "object" && isRect(crop) ? (crop as unknown as Rect) : null,
     ...(backdrop ? { backdrop } : {}),
+    ...orientationFields(doc),
   };
 }
 
 /**
- * The JSON written to `<capture>.annotations.json`. `backdrop` is written
- * only when set, so a capture without one keeps the original layout.
+ * The rotation, flips and scale, each kept only when it is set and makes
+ * sense: a rotation that is not a quarter turn, or a scale that is not a
+ * number, is dropped on its own. The scale is clamped to what Resize offers.
+ */
+function orientationFields(doc: Partial<Record<keyof Annotations, unknown>>): Pick<Annotations, "rotation" | "flipX" | "flipY" | "scale"> {
+  const fields: Pick<Annotations, "rotation" | "flipX" | "flipY" | "scale"> = {};
+  const rotation = isNum(doc.rotation) ? normalizeRotation(doc.rotation) : null;
+  if (rotation) fields.rotation = rotation;
+  if (doc.flipX === true) fields.flipX = true;
+  if (doc.flipY === true) fields.flipY = true;
+  if (isNum(doc.scale) && doc.scale > 0) {
+    const scale = clampScale(doc.scale);
+    if (scale !== 1) fields.scale = scale;
+  }
+  return fields;
+}
+
+/**
+ * The JSON written to `<capture>.annotations.json`. `backdrop`, the
+ * rotation, flips and scale are written only when set, so a capture without
+ * them keeps the original layout.
  */
 export function serializeAnnotations(doc: Annotations): Annotations {
-  return { version: 1, shapes: doc.shapes, crop: doc.crop ?? null, ...(doc.backdrop ? { backdrop: doc.backdrop } : {}) };
+  return {
+    version: 1,
+    shapes: doc.shapes,
+    crop: doc.crop ?? null,
+    ...(doc.backdrop ? { backdrop: doc.backdrop } : {}),
+    ...orientationFields(doc),
+  };
 }

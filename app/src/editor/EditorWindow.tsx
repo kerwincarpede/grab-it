@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
 import type Konva from "konva";
-import { Circle, Image as KonvaImage, Layer, Rect as KonvaRect, Stage, Transformer } from "react-konva";
+import { Circle, Group, Image as KonvaImage, Layer, Rect as KonvaRect, Stage, Transformer } from "react-konva";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import "./editor.css";
@@ -28,8 +28,13 @@ import {
   ExportIcon,
   FillIcon,
   FitIcon,
+  FlipHorizontalIcon,
+  FlipVerticalIcon,
   PinIcon,
   RedoIcon,
+  ResizeIcon,
+  RotateLeftIcon,
+  RotateRightIcon,
   TextBackgroundIcon,
   ToolIcon,
   TrashIcon,
@@ -54,7 +59,25 @@ import {
   type Tool,
   type Widths,
 } from "./model";
+import {
+  displaySize,
+  flip,
+  groupTransform,
+  isIdentity,
+  orientationOf,
+  orientedCanvas,
+  orientRect,
+  rotate,
+  scaledSize,
+  shownTextCorner,
+  textCorner,
+  toCapture,
+  withOrientation,
+  withScale,
+  type Orientation,
+} from "./orient";
 import { DEFAULT_CHOICES, type EditorChoices } from "./preferences";
+import ResizePanel from "./ResizePanel";
 import ShapeNode, { SpotlightDim } from "./ShapeNode";
 import ToolWheel from "./ToolWheel";
 import {
@@ -109,6 +132,7 @@ const errorText = (err: unknown) => String(err instanceof Error ? err.message : 
 interface TextDraft {
   /** Set when editing an existing text shape. */
   id?: string;
+  /** The text's top-left corner as it shows: in display space, not capture pixels. */
   at: Point;
   value: string;
 }
@@ -239,7 +263,7 @@ function useSize(ref: RefObject<HTMLDivElement | null>) {
   return size;
 }
 
-/** Centres `bounds` (capture pixels) in the canvas, shrunk to fit but never enlarged. */
+/** Centres `bounds` (display space: the capture as it shows) in the canvas, shrunk to fit but never enlarged. */
 function fitView(bounds: Rect, size: { width: number; height: number }): View {
   const scale = clampZoom(Math.min(1, (size.width - 32) / bounds.width, (size.height - 32) / bounds.height));
   return {
@@ -356,6 +380,7 @@ export default function EditorWindow() {
   const contentRef = useRef<Konva.Layer>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
+  const resizeRef = useRef<HTMLDivElement>(null);
 
   const [view, setView] = useState<View | null>(null);
   const [tool, setTool] = useState<Tool>(DEFAULT_CHOICES.tool);
@@ -375,6 +400,7 @@ export default function EditorWindow() {
   /** The capture's library id and stored OCR text; null when the library does not know it. */
   const [storedFor, setStoredFor] = useState<{ path: string; id: number; text: ShotText } | null>(null);
   const [backdropOpen, setBackdropOpen] = useState(false);
+  const [resizeOpen, setResizeOpen] = useState(false);
   /** A backdrop being adjusted (a slider mid-drag), shown but not yet committed. */
   const [backdropDraft, setBackdropDraft] = useState<Backdrop | null>(null);
   /** The backdrop last picked, here or in an earlier session: new backdrops start from it. */
@@ -425,6 +451,18 @@ export default function EditorWindow() {
   });
 
   const imageSize = useMemo(() => (image ? { width: image.width, height: image.height } : null), [image]);
+  /**
+   * How the capture is turned and mirrored. Display space is the capture as
+   * it shows, top-left at 0, 0; shapes and the crop stay in capture pixels.
+   */
+  const orientation = useMemo<Orientation>(() => orientationOf(doc), [doc]);
+  const { rotation, flipX, flipY } = orientation;
+  const oriented = !isIdentity(orientation);
+  const groupAttrs = useMemo(
+    () => (imageSize ? groupTransform(imageSize, { rotation, flipX, flipY }) : undefined),
+    [imageSize, rotation, flipX, flipY],
+  );
+  const outputScale = doc.scale ?? 1;
   const backdrop = backdropDraft ?? doc.backdrop ?? null;
   /** Image pixels per point: the corner radius is in points. Older captures do not say, so the window's density stands in. */
   const captureScale = info?.scaleFactor && info.scaleFactor > 0 ? info.scaleFactor : fallbackScale();
@@ -436,21 +474,41 @@ export default function EditorWindow() {
    */
   const frame = useMemo(() => {
     if (!imageSize) return null;
-    const whole = { x: 0, y: 0, ...imageSize };
+    const o = { rotation, flipX, flipY };
+    const whole = { x: 0, y: 0, ...displaySize(imageSize, o) };
     if (!backdrop || tool === "crop") return { area: whole, bounds: whole, layout: null };
-    const area = doc.crop ?? whole;
+    // The exported area as it shows, in display space.
+    const area = doc.crop ? orientRect(doc.crop, imageSize, o) : whole;
     const layout = backdropLayout(area, backdrop, captureScale);
     return { area, bounds: { x: area.x - layout.x, y: area.y - layout.y, width: layout.width, height: layout.height }, layout };
-  }, [imageSize, backdrop, tool, doc.crop, captureScale]);
+  }, [imageSize, backdrop, tool, doc.crop, captureScale, rotation, flipX, flipY]);
+  /** The capture as it shows, for the blurred fill: the image itself when nothing is turned. */
+  const shownCapture = useMemo(() => {
+    if (!image || !imageSize || backdrop?.fill !== BACKDROP_FILLS.blur) return image;
+    const o = { rotation, flipX, flipY };
+    if (isIdentity(o)) return image;
+    try {
+      return orientedCanvas(image, { x: 0, y: 0, ...imageSize }, imageSize, o) ?? image;
+    } catch {
+      return image;
+    }
+  }, [image, imageSize, backdrop?.fill, rotation, flipX, flipY]);
   /** The blurred-capture fill for the preview, drawn as the export draws it. */
   const blurredFill = useMemo(() => {
-    if (!image || !frame?.layout || backdrop?.fill !== BACKDROP_FILLS.blur) return null;
+    if (!shownCapture || !frame?.layout || backdrop?.fill !== BACKDROP_FILLS.blur) return null;
     try {
-      return blurredBackdrop(image, frame.area, frame.layout);
+      return blurredBackdrop(shownCapture, frame.area, frame.layout);
     } catch {
       return null;
     }
-  }, [image, frame, backdrop?.fill]);
+  }, [shownCapture, frame, backdrop?.fill]);
+  /** What copy and export put out before Resize: the crop as it shows, framed by any backdrop. */
+  const outputBase = useMemo(() => {
+    if (!imageSize) return null;
+    const area = orientRect(doc.crop ?? { x: 0, y: 0, ...imageSize }, imageSize, { rotation, flipX, flipY });
+    const layout = backdrop ? backdropLayout(area, backdrop, captureScale) : area;
+    return { width: layout.width, height: layout.height };
+  }, [imageSize, doc.crop, backdrop, captureScale, rotation, flipX, flipY]);
   const currentView = useMemo(() => view ?? (frame ? fitView(frame.bounds, size) : { scale: 1, x: 0, y: 0 }), [view, frame, size]);
   const selected = doc.shapes.find((shape) => shape.id === selectedId) ?? null;
   const steps = useMemo(() => stepNumbers(doc.shapes), [doc.shapes]);
@@ -481,6 +539,16 @@ export default function EditorWindow() {
     return () => window.clearTimeout(timer);
   }, [message]);
 
+  // A click outside the resize panel closes it.
+  useEffect(() => {
+    if (!resizeOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !resizeRef.current?.contains(event.target)) setResizeOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [resizeOpen]);
+
   // A click outside the backdrop panel closes it.
   useEffect(() => {
     if (!backdropOpen) return;
@@ -491,7 +559,13 @@ export default function EditorWindow() {
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [backdropOpen]);
 
-  const pointer = (): Point | null => stageRef.current?.getRelativePointerPosition() ?? null;
+  /** The pointer in display space: the capture as it shows. */
+  const shownPointer = (): Point | null => stageRef.current?.getRelativePointerPosition() ?? null;
+  /** The pointer in capture pixels, where shapes and the crop live. */
+  const pointer = (): Point | null => {
+    const at = shownPointer();
+    return at && imageSize ? toCapture(at, imageSize, orientation) : at;
+  };
 
   /** Where a text click started, until mouse up opens the text box. */
   const textAt = useRef<Point | null>(null);
@@ -502,16 +576,21 @@ export default function EditorWindow() {
     committedDraft.current = textDraft;
     const value = textDraft.value.trim();
     const existing = textDraft.id ? doc.shapes.find((shape) => shape.id === textDraft.id) : undefined;
+    // Upright text keeps the corner it shows at, however long it grows.
+    const corner = (fontSize: number) =>
+      imageSize ? textCorner(textDraft.at, value, fontSize, imageSize, orientation) : textDraft.at;
     if (existing && existing.type === "text") {
-      commit(value ? replaceShape(doc, { ...existing, text: value }) : deleteShape(doc, existing.id));
+      const edited = isIdentity(orientation) ? { ...existing, text: value } : { ...existing, text: value, ...corner(existing.fontSize) };
+      commit(value ? replaceShape(doc, edited) : deleteShape(doc, existing.id));
     } else if (value) {
+      const at = corner(widthFor(widths, "text"));
       commit(
         addShape(doc, {
           id: newId(),
           type: "text",
           color: style.color,
-          x: textDraft.at.x,
-          y: textDraft.at.y,
+          x: at.x,
+          y: at.y,
           text: value,
           fontSize: widthFor(widths, "text"),
           ...(style.background ? { background: true } : {}),
@@ -519,7 +598,7 @@ export default function EditorWindow() {
       );
     }
     setTextDraft(null);
-  }, [textDraft, doc, commit, style, widths]);
+  }, [textDraft, doc, commit, style, widths, imageSize, orientation]);
 
   /** Turns off `node`'s own drag until mouse up, so a ⌘/⌥ drag draws instead of moving it. */
   const suppressDrag = (node: Konva.Node) => {
@@ -561,7 +640,7 @@ export default function EditorWindow() {
     setSelectedId(null);
     if (drawWith === "text") {
       // Opened on mouse up: mouse down's default action would blur it.
-      textAt.current = at;
+      textAt.current = shownPointer() ?? at;
       return;
     }
     if (drawWith === "crop") {
@@ -763,6 +842,23 @@ export default function EditorWindow() {
     [selected, doc, commit],
   );
 
+  /** Turns or mirrors the capture with everything on it: one undo step. */
+  const reorient = useCallback(
+    (next: Orientation) => {
+      commit(withOrientation(doc, next));
+      // A quarter turn swaps the width and height: fit it again.
+      if (next.rotation !== orientation.rotation) setView(null);
+    },
+    [doc, commit, orientation.rotation],
+  );
+  const rotateBy = useCallback((direction: -1 | 1) => reorient(rotate(orientation, direction)), [reorient, orientation]);
+
+  const commitScale = (next: number) => {
+    const resized = withScale(doc, next);
+    // The size it already has is not an edit.
+    if ((resized.scale ?? 1) !== outputScale) commit(resized);
+  };
+
   const commitBackdrop = (next: Backdrop | null) => {
     setBackdropDraft(null);
     // Remembered for next time; turning the backdrop off keeps the last one.
@@ -775,14 +871,18 @@ export default function EditorWindow() {
     async (format: ExportFormat) => {
       const layer = contentRef.current;
       if (!layer || !imageSize) throw new Error("The capture has not loaded yet.");
-      const area = doc.crop ?? { x: 0, y: 0, ...imageSize };
-      return flatten(layer, { crop: doc.crop, backdrop }, imageSize, currentView, format, {
+      const o = { rotation, flipX, flipY };
+      const whole = { x: 0, y: 0, ...imageSize };
+      // The blurred fill blurs the capture as it shows: turned, then cropped.
+      const shown = shownCapture && shownCapture !== image ? shownCapture : null;
+      const area = shown ? orientRect(doc.crop ?? whole, imageSize, o) : (doc.crop ?? whole);
+      return flatten(layer, { crop: doc.crop, backdrop, rotation, flipX, flipY, scale: outputScale }, imageSize, currentView, format, {
         scale: captureScale,
-        capture: image ? { image, area } : null,
+        capture: shown ? { image: shown, area } : image ? { image, area } : null,
         image: backdropImageEl,
       });
     },
-    [doc.crop, backdrop, imageSize, currentView, captureScale, image, backdropImageEl],
+    [doc.crop, backdrop, imageSize, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale],
   );
 
   /** Copies the flattened image; false when it failed (and said so). */
@@ -882,6 +982,10 @@ export default function EditorWindow() {
         // Always prevented: the webview's own Ctrl+D (bookmark) has no place here.
         event.preventDefault();
         duplicateSelected();
+      } else if (mod && !event.altKey && (event.key === "[" || event.key === "]" || event.code === "BracketLeft" || event.code === "BracketRight")) {
+        // Ctrl+[ and Ctrl+] turn the capture; only the bare keys change the width.
+        event.preventDefault();
+        if (image) rotateBy(event.key === "[" || event.code === "BracketLeft" ? -1 : 1);
       } else if (nudge) {
         if (!selectedId) return;
         event.preventDefault();
@@ -893,6 +997,7 @@ export default function EditorWindow() {
         setDraft(null);
         setCropDrag(null);
         setBackdropOpen(false);
+        setResizeOpen(false);
         setWheelAt(null);
       } else if (event.key === " ") {
         event.preventDefault();
@@ -929,7 +1034,7 @@ export default function EditorWindow() {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [undoDoc, redoDoc, copy, copyAndClose, removeSelected, duplicateSelected, nudgeSelected, selectedId, changeStyle, stepWidth, pickTool, restoreTool, tool]);
+  }, [undoDoc, redoDoc, copy, copyAndClose, removeSelected, duplicateSelected, nudgeSelected, selectedId, changeStyle, stepWidth, pickTool, restoreTool, tool, image, rotateBy]);
 
   const error = annotations.error ?? imageError;
   const cropPreview = cropDrag ? normalizeRect({ ...cropDrag.start, width: cropDrag.end.x - cropDrag.start.x, height: cropDrag.end.y - cropDrag.start.y }) : null;
@@ -946,6 +1051,9 @@ export default function EditorWindow() {
   const spotlights = shapes.filter((shape) => shape.type === "spotlight");
   const dim = imageSize ? spotlightDim({ x: 0, y: 0, ...imageSize }, spotlights) : [];
   const framed = frame?.layout ? { area: frame.area, bounds: frame.bounds, layout: frame.layout } : null;
+  /** The crop as it shows, for the status bar. */
+  const shownCrop = doc.crop && imageSize ? orientRect(doc.crop, imageSize, orientation) : null;
+  const output = outputBase ? scaledSize(outputBase, outputScale) : null;
   const paint = framed && backdrop ? backdropPaint(backdrop, framed.layout) : [];
 
   const boxOptions = optionsFor === "rect" || optionsFor === "ellipse";
@@ -1018,6 +1126,58 @@ export default function EditorWindow() {
           <button type="button" className="icon-button" onClick={removeSelected} disabled={!selectedId} aria-label="Delete" title="Delete (Del)">
             <TrashIcon />
           </button>
+        </div>
+        <div className="bar-group" role="group" aria-label="Orientation">
+          <button type="button" className="icon-button" onClick={() => rotateBy(-1)} disabled={!image} aria-label="Rotate left" title="Rotate left (Ctrl+[)">
+            <RotateLeftIcon />
+          </button>
+          <button type="button" className="icon-button" onClick={() => rotateBy(1)} disabled={!image} aria-label="Rotate right" title="Rotate right (Ctrl+])">
+            <RotateRightIcon />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => reorient(flip(orientation, "x"))}
+            disabled={!image}
+            aria-label="Flip horizontal"
+            title="Flip horizontal"
+            aria-pressed={orientation.flipX}
+          >
+            <FlipHorizontalIcon />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => reorient(flip(orientation, "y"))}
+            disabled={!image}
+            aria-label="Flip vertical"
+            title="Flip vertical"
+            aria-pressed={orientation.flipY}
+          >
+            <FlipVerticalIcon />
+          </button>
+        </div>
+        <div
+          className="bar-group resize-anchor"
+          ref={resizeRef}
+          onKeyDown={(event) => {
+            // Escape in a field never reaches the window shortcut (it is typing).
+            if (event.key === "Escape") setResizeOpen(false);
+          }}
+        >
+          <button
+            type="button"
+            className="text-button"
+            aria-haspopup="dialog"
+            aria-expanded={resizeOpen}
+            data-on={outputScale !== 1 ? "true" : undefined}
+            disabled={!image}
+            onClick={() => setResizeOpen(!resizeOpen)}
+          >
+            <ResizeIcon />
+            Resize
+          </button>
+          {resizeOpen && outputBase && <ResizePanel output={outputBase} scale={outputScale} onCommit={commitScale} />}
         </div>
         <div
           className="bar-group backdrop-anchor"
@@ -1140,38 +1300,44 @@ export default function EditorWindow() {
                 // With a backdrop, show the result: only the exported area, corners rounded.
                 clipFunc={framed ? (ctx) => roundedRectPath(ctx, framed.area, framed.layout.radius) : undefined}
               >
-                <KonvaImage name="capture" image={image} listening={tool === "select"} />
-                {/* The shade covers the capture only: every annotation stays bright above it. */}
-                {spotlights.length > 0 && <SpotlightDim dim={dim} />}
-                {shapes.map((shape) => (
-                  <Fragment key={shape.id}>
-                    <ShapeNode
-                      shape={shape}
-                      image={image}
-                      step={steps.get(shape.id)}
-                      editable={editable && shape !== draft}
-                      onSelect={setSelectedId}
-                      onChange={changeShape}
-                      onMove={moveShapeLive}
-                      onEditText={(id) => {
-                        const text = doc.shapes.find((candidate) => candidate.id === id);
-                        if (text?.type === "text") setTextDraft({ id, at: { x: text.x, y: text.y }, value: text.text });
-                      }}
-                    />
-                  </Fragment>
-                ))}
+                {/* Capture pixels inside, turned and mirrored into display space. */}
+                <Group name="oriented" {...groupAttrs}>
+                  <KonvaImage name="capture" image={image} listening={tool === "select"} />
+                  {/* The shade covers the capture only: every annotation stays bright above it. */}
+                  {spotlights.length > 0 && <SpotlightDim dim={dim} />}
+                  {shapes.map((shape) => (
+                    <Fragment key={shape.id}>
+                      <ShapeNode
+                        shape={shape}
+                        image={image}
+                        step={steps.get(shape.id)}
+                        editable={editable && shape !== draft}
+                        orientation={oriented ? orientation : undefined}
+                        onSelect={setSelectedId}
+                        onChange={changeShape}
+                        onMove={moveShapeLive}
+                        onEditText={(id) => {
+                          const text = doc.shapes.find((candidate) => candidate.id === id);
+                          if (text?.type === "text" && imageSize) {
+                            setTextDraft({ id, at: shownTextCorner(text, imageSize, orientation), value: text.text });
+                          }
+                        }}
+                      />
+                    </Fragment>
+                  ))}
+                </Group>
               </Layer>
               <Layer>
                 {/* The backdrop preview already shows only the crop. */}
                 {crop && imageSize && !framed && (
-                  <>
+                  <Group name="oriented-crop" {...groupAttrs}>
                     {/* Dim everything outside the crop; the capture itself is untouched. */}
                     <KonvaRect x={0} y={0} width={imageSize.width} height={crop.y} fill="black" opacity={0.5} listening={false} />
                     <KonvaRect x={0} y={crop.y + crop.height} width={imageSize.width} height={imageSize.height - crop.y - crop.height} fill="black" opacity={0.5} listening={false} />
                     <KonvaRect x={0} y={crop.y} width={crop.x} height={crop.height} fill="black" opacity={0.5} listening={false} />
                     <KonvaRect x={crop.x + crop.width} y={crop.y} width={imageSize.width - crop.x - crop.width} height={crop.height} fill="black" opacity={0.5} listening={false} />
                     <KonvaRect {...crop} stroke="#ffffff" strokeWidth={1 / currentView.scale} dash={[6 / currentView.scale, 4 / currentView.scale]} listening={false} />
-                  </>
+                  </Group>
                 )}
                 <Transformer
                   ref={transformerRef}
@@ -1181,13 +1347,16 @@ export default function EditorWindow() {
                   enabledAnchors={anchorsFor(selected)}
                 />
                 {handleBase && (
-                  <LineHandles
-                    shape={bending?.id === handleBase.id ? bending : handleBase}
-                    base={handleBase}
-                    scale={currentView.scale}
-                    onPreview={setBending}
-                    onCommit={commitLine}
-                  />
+                  // In capture pixels like the line, so a dragged handle's position maps back through the turn and mirror.
+                  <Group name="oriented-handles" {...groupAttrs}>
+                    <LineHandles
+                      shape={bending?.id === handleBase.id ? bending : handleBase}
+                      base={handleBase}
+                      scale={currentView.scale}
+                      onPreview={setBending}
+                      onCommit={commitLine}
+                    />
+                  </Group>
                 )}
               </Layer>
             </Stage>
@@ -1224,12 +1393,12 @@ export default function EditorWindow() {
             {imageSize.width}×{imageSize.height}
           </span>
         )}
-        {doc.crop && <span>
-          Crop {doc.crop.width}×{doc.crop.height}
+        {shownCrop && <span>
+          Crop {Math.round(shownCrop.width)}×{Math.round(shownCrop.height)}
         </span>}
-        {framed && (
+        {output && (framed || outputScale !== 1 || oriented) && (
           <span>
-            Output {framed.layout.width}×{framed.layout.height}
+            Output {output.width}×{output.height}
           </span>
         )}
         <span className="status-message" role="status">

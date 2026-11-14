@@ -93,6 +93,39 @@ describe("annotations sidecar", () => {
     expect(parseAnnotations(JSON.parse(json))).toEqual(styled);
   });
 
+  it("round-trips the rotation, flips and scale", () => {
+    const turned: Annotations = { ...doc, rotation: 270, flipX: true, flipY: true, scale: 0.5 };
+    expect(parseAnnotations(JSON.parse(JSON.stringify(serializeAnnotations(turned))))).toEqual(turned);
+  });
+
+  it("loads a sidecar from before rotation unchanged, and writes none of it back", () => {
+    const parsed = parseAnnotations({ version: 1, shapes: doc.shapes, crop: null });
+    for (const field of ["rotation", "flipX", "flipY", "scale"]) {
+      expect(parsed).not.toHaveProperty(field);
+      expect(serializeAnnotations(parsed)).not.toHaveProperty(field);
+    }
+    // Unchanged values are not written either.
+    const plain = serializeAnnotations({ ...parsed, rotation: 0, flipX: false, flipY: false, scale: 1 });
+    expect(plain).toEqual({ version: 1, shapes: doc.shapes, crop: null });
+  });
+
+  it("drops a malformed rotation, flip or scale on its own and clamps the scale", () => {
+    expect(parseAnnotations({ version: 1, shapes: [], rotation: 45, flipX: "yes", flipY: 1, scale: "big" })).toEqual({
+      version: 1,
+      shapes: [],
+      crop: null,
+    });
+    expect(parseAnnotations({ version: 1, shapes: [], rotation: -90, scale: 20 })).toEqual({
+      version: 1,
+      shapes: [],
+      crop: null,
+      rotation: 270,
+      scale: 4,
+    });
+    expect(parseAnnotations({ version: 1, shapes: [], rotation: 360, scale: 0.01 })).toEqual({ version: 1, shapes: [], crop: null, scale: 0.1 });
+    expect(parseAnnotations({ version: 1, shapes: [], scale: -2 })).not.toHaveProperty("scale");
+  });
+
   it("loads a sidecar written before backdrops, and writes none back", () => {
     const parsed = parseAnnotations({ version: 1, shapes: doc.shapes, crop: null });
     expect(parsed.backdrop ?? null).toBeNull();
