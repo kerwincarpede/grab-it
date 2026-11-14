@@ -11,7 +11,8 @@
 //! Once ffmpeg is found, each H.264 encoder it may have is tried in turn by
 //! encoding one frame, hardware encoders first, and the first that works is
 //! kept until Grab-it quits. A recording then pipes raw RGBA frames into
-//! ffmpeg's stdin ([`Video`]).
+//! ffmpeg's stdin ([`Video`]), and its microphone's sound, if any, is muxed
+//! in once it stops ([`add_audio`]).
 
 use std::{
     ffi::OsString,
@@ -497,7 +498,7 @@ pub fn encode_args(encoder: Encoder, spec: &VideoSpec, output: &Path) -> Vec<OsS
 }
 
 /// A command running `ffmpeg`, without a console window on Windows.
-fn command(ffmpeg: &Path) -> Command {
+pub(crate) fn command(ffmpeg: &Path) -> Command {
     #[allow(unused_mut)]
     let mut command = Command::new(ffmpeg);
     #[cfg(windows)]
@@ -615,13 +616,120 @@ impl Drop for Video {
     }
 }
 
+/// The bitrate of a recording's sound, as AAC.
+const AUDIO_BITRATE: &str = "160k";
+/// Ends the name of the file the sound is muxed into, beside the video.
+const MUXING_SUFFIX: &str = ".muxing.mp4";
+
+/// ffmpeg's arguments to mux the WAV `audio` into the MP4 `video` as AAC
+/// (ffmpeg's own `aac` encoder), writing `output`. The video is copied as
+/// it is. `offset` is when the sound starts against the first frame, in
+/// seconds (see `audio::offset`): sound that started later is delayed with
+/// silence, and sound that started earlier has its start cut. The sound is
+/// padded or cut to `duration`, the video's length.
+pub fn mux_args(
+    video: &Path,
+    audio: &Path,
+    offset: f64,
+    duration: Duration,
+    output: &Path,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = ["-hide_banner", "-loglevel", "error", "-y", "-i"]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+    args.push(video.as_os_str().to_owned());
+    let mut push = |arg: &str| args.push(OsString::from(arg));
+    let millis = (offset * 1000.0).round() as i64;
+    if millis < 0 {
+        push("-ss");
+        push(&format!("{:.3}", millis.unsigned_abs() as f64 / 1000.0));
+    }
+    push("-i");
+    args.push(audio.as_os_str().to_owned());
+    let mut push = |arg: &str| args.push(OsString::from(arg));
+    for arg in ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af"] {
+        push(arg);
+    }
+    if millis > 0 {
+        push(&format!("adelay=delays={millis}:all=1,apad"));
+    } else {
+        push("apad");
+    }
+    for arg in ["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-t"] {
+        push(arg);
+    }
+    push(&format!("{:.3}", duration.as_secs_f64()));
+    for arg in ["-movflags", "+faststart"] {
+        push(arg);
+    }
+    args.push(output.as_os_str().to_owned());
+    args
+}
+
+/// Muxes the WAV `audio` into the MP4 `video` in place, as [`mux_args`]
+/// says. The video is replaced only once the muxed copy is finished, so
+/// on failure it is left as it was, silent.
+pub fn add_audio(
+    ffmpeg: &Path,
+    video: &Path,
+    audio: &Path,
+    offset: f64,
+    duration: Duration,
+) -> FfmpegResult<()> {
+    let output = crate::capture::sidecar_path(video, MUXING_SUFFIX);
+    let result = (|| -> FfmpegResult<()> {
+        let mut child = command(ffmpeg)
+            .args(mux_args(video, audio, offset, duration, &output))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|err| {
+                FfmpegError::Encode(format!("could not start {}: {err}", ffmpeg.display()))
+            })?;
+        let stderr = child.stderr.take().map(|mut stderr| {
+            thread::spawn(move || {
+                let mut text = String::new();
+                let _ = stderr.read_to_string(&mut text);
+                text
+            })
+        });
+        let status = wait_for(&mut child, FINISH_TIMEOUT);
+        let said = stderr
+            .and_then(|reader| reader.join().ok())
+            .unwrap_or_default();
+        match status {
+            Some(status) if status.success() => {}
+            Some(status) => {
+                return Err(FfmpegError::Encode(match last_line(&said) {
+                    Some(line) => line.to_owned(),
+                    None => format!("it exited with {status}"),
+                }));
+            }
+            None => {
+                return Err(FfmpegError::Encode(format!(
+                    "adding the sound did not finish within {} seconds",
+                    FINISH_TIMEOUT.as_secs()
+                )));
+            }
+        }
+        fs::rename(&output, video)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&output);
+    }
+    result
+}
+
 /// The last line ffmpeg printed, if any.
-fn last_line(text: &str) -> Option<&str> {
+pub(crate) fn last_line(text: &str) -> Option<&str> {
     text.lines().map(str::trim).rfind(|line| !line.is_empty())
 }
 
 /// Waits up to `timeout` for `child`, killing it if it has not exited.
-fn wait_for(child: &mut Child, timeout: Duration) -> Option<ExitStatus> {
+pub(crate) fn wait_for(child: &mut Child, timeout: Duration) -> Option<ExitStatus> {
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
@@ -1006,6 +1114,44 @@ mod tests {
             vaapi.contains("-vf format=nv12,hwupload -c:v h264_vaapi"),
             "{vaapi}"
         );
+    }
+
+    #[test]
+    fn sound_is_muxed_as_aac_beside_the_copied_video() {
+        let args = |offset: f64| {
+            mux_args(
+                Path::new("/rec/clip.mp4"),
+                Path::new("/tmp/mic.wav"),
+                offset,
+                Duration::from_millis(12_345),
+                Path::new("/rec/clip.muxing.mp4"),
+            )
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect::<Vec<_>>()
+            .join(" ")
+        };
+        // The sound started 250 ms before the first frame: its start is cut.
+        assert_eq!(
+            args(-0.25),
+            "-hide_banner -loglevel error -y -i /rec/clip.mp4 -ss 0.250 -i /tmp/mic.wav \
+             -map 0:v:0 -map 1:a:0 -c:v copy -af apad -c:a aac -b:a 160k -t 12.345 \
+             -movflags +faststart /rec/clip.muxing.mp4"
+        );
+        // It started 120 ms after: it is delayed by as much.
+        let later = args(0.1204);
+        assert!(
+            later.contains("-i /rec/clip.mp4 -i /tmp/mic.wav"),
+            "{later}"
+        );
+        assert!(
+            later.contains("-af adelay=delays=120:all=1,apad -c:a aac"),
+            "{later}"
+        );
+        // Under half a millisecond either way is no shift at all.
+        let none = args(-0.0004);
+        assert!(!none.contains("-ss"), "{none}");
+        assert!(none.contains("-af apad -c:a"), "{none}");
     }
 
     #[test]

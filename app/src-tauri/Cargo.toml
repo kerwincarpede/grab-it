@@ -89,6 +89,15 @@ dispatch2 = "0.3"
 objc2-av-foundation = { version = "0.3", features = ["objc2-core-media"] }
 objc2-core-media = "0.3"
 objc2-core-video = "0.3"
+# Already in the tree: the handler for the microphone prompt
+# (permissions.rs).
+block2 = "0.6"
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+# The microphone for recordings (audio.rs): Core Audio and WASAPI. Linux
+# records it through ffmpeg's PulseAudio input instead, so its builds need
+# no ALSA headers.
+cpal = "0.18"
 
 [dev-dependencies]
 tempfile = "3"

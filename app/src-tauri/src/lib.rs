@@ -1,6 +1,7 @@
 mod actions;
 mod ai;
 mod ai_cli;
+mod audio;
 mod capture;
 mod cli;
 mod codes;
@@ -103,6 +104,7 @@ pub fn run() {
             record::record_stop,
             ffmpeg::ffmpeg_status,
             ffmpeg::ffmpeg_retry,
+            audio::recording_microphones,
             hotkeys::pause_hotkeys,
             hotkeys::resume_hotkeys,
             overlay::overlay_info,

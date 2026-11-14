@@ -564,9 +564,20 @@ impl RecordingQuality {
 /// The frame rates an MP4 can be recorded at.
 pub const RECORDING_FPS: [u32; 2] = [30, 60];
 
+/// What sound an MP4 records.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordingAudio {
+    /// Silent.
+    #[default]
+    None,
+    /// The chosen microphone (see audio.rs).
+    Microphone,
+}
+
 /// How screen recordings are made. Mirrors `RecordingSettings` in
 /// src/settings/api.ts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RecordingSettings {
     pub format: RecordingFormat,
@@ -577,6 +588,11 @@ pub struct RecordingSettings {
     pub fps: u32,
     /// Whether the pointer is drawn into the recording.
     pub show_cursor: bool,
+    /// MP4 only: a GIF is always silent.
+    pub audio: RecordingAudio,
+    /// The microphone recorded, by the id `audio::microphones` lists it
+    /// with. None records the system's default microphone.
+    pub microphone: Option<String>,
 }
 
 impl Default for RecordingSettings {
@@ -586,6 +602,8 @@ impl Default for RecordingSettings {
             quality: RecordingQuality::default(),
             fps: RECORDING_FPS[0],
             show_cursor: true,
+            audio: RecordingAudio::default(),
+            microphone: None,
         }
     }
 }
@@ -609,6 +627,12 @@ impl RecordingSettings {
             show_cursor: field("showCursor")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(defaults.show_cursor),
+            audio: field("audio")
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or(defaults.audio),
+            microphone: field("microphone")
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .filter(|name| !name.is_empty()),
         }
     }
 }
@@ -789,7 +813,7 @@ struct SettingsOnDisk<'a> {
     editor: &'a EditorPreferences,
     show_in_dock: bool,
     appearance: Appearance,
-    recording: RecordingSettings,
+    recording: &'a RecordingSettings,
 }
 
 #[derive(Serialize)]
@@ -847,7 +871,7 @@ impl<'a> SettingsOnDisk<'a> {
             editor: &settings.editor,
             show_in_dock: settings.show_in_dock,
             appearance: settings.appearance,
-            recording: settings.recording,
+            recording: &settings.recording,
         }
     }
 }
@@ -1181,7 +1205,10 @@ impl SettingsStore {
             )));
         }
         let next = Settings {
-            recording,
+            recording: RecordingSettings {
+                microphone: recording.microphone.filter(|name| !name.is_empty()),
+                ..recording
+            },
             ..self.current.clone()
         };
         save(&self.path, &next)?;
@@ -1304,6 +1331,8 @@ mod tests {
                 quality: RecordingQuality::Low,
                 fps: 60,
                 show_cursor: false,
+                audio: RecordingAudio::Microphone,
+                microphone: Some("USB Microphone".into()),
             },
         };
         save(&path, &settings).unwrap();
@@ -1373,8 +1402,64 @@ mod tests {
         assert_eq!(RecordingQuality::High.bits_per_pixel(), 0.2);
         assert_eq!(
             serde_json::to_value(recording).unwrap(),
-            serde_json::json!({"format": "mp4", "quality": "high", "fps": 30, "showCursor": true})
+            serde_json::json!({
+                "format": "mp4",
+                "quality": "high",
+                "fps": 30,
+                "showCursor": true,
+                "audio": "none",
+                "microphone": null,
+            })
         );
+    }
+
+    #[test]
+    fn recordings_are_silent_by_default_and_remember_the_microphone() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let recording = defaults(&dir).recording;
+        assert_eq!(recording.audio, RecordingAudio::None);
+        assert_eq!(recording.microphone, None);
+
+        let mut store = open_store(path.clone(), defaults(&dir));
+        let chosen = RecordingSettings {
+            audio: RecordingAudio::Microphone,
+            microphone: Some("alsa_input.usb-Blue_Yeti-00.analog-stereo".into()),
+            ..RecordingSettings::default()
+        };
+        assert_eq!(
+            store.set_recording(chosen.clone()).unwrap().recording,
+            chosen
+        );
+        assert_eq!(load(&path, defaults(&dir)).unwrap().recording, chosen);
+
+        // An empty name is the system's default microphone.
+        let blank = RecordingSettings {
+            microphone: Some(String::new()),
+            ..chosen.clone()
+        };
+        assert_eq!(
+            store.set_recording(blank).unwrap().recording.microphone,
+            None
+        );
+
+        // An unknown source or a wrong type keeps its default.
+        fs::write(
+            &path,
+            r#"{"recording": {"audio": "system", "microphone": 7}}"#,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap().recording;
+        assert_eq!(loaded.audio, RecordingAudio::None);
+        assert_eq!(loaded.microphone, None);
+        fs::write(
+            &path,
+            r#"{"recording": {"audio": "microphone", "microphone": "Mic"}}"#,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap().recording;
+        assert_eq!(loaded.audio, RecordingAudio::Microphone);
+        assert_eq!(loaded.microphone.as_deref(), Some("Mic"));
     }
 
     #[test]
@@ -1395,14 +1480,25 @@ mod tests {
             quality: RecordingQuality::Medium,
             fps: 60,
             show_cursor: false,
+            ..RecordingSettings::default()
         };
-        assert_eq!(store.set_recording(chosen).unwrap().recording, chosen);
+        assert_eq!(
+            store.set_recording(chosen.clone()).unwrap().recording,
+            chosen
+        );
         assert_eq!(load(&path, defaults(&dir)).unwrap().recording, chosen);
         let json: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             json["recording"],
-            serde_json::json!({"format": "gif", "quality": "medium", "fps": 60, "showCursor": false})
+            serde_json::json!({
+                "format": "gif",
+                "quality": "medium",
+                "fps": 60,
+                "showCursor": false,
+                "audio": "none",
+                "microphone": null,
+            })
         );
         assert_eq!(json["showInDock"], false);
 

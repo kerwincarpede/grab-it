@@ -113,7 +113,8 @@ pub enum QuickItem {
         bytes: u64,
         /// What it was saved as.
         format: crate::settings::RecordingFormat,
-        /// Why an MP4 recording was saved as a GIF instead.
+        /// Why an MP4 recording was saved as a GIF instead, or without
+        /// the sound it was to have.
         #[serde(skip_serializing_if = "Option::is_none")]
         fallback: Option<String>,
     },

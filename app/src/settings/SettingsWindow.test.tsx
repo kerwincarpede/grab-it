@@ -4,7 +4,15 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { describe, expect, it } from "vitest";
 import SettingsWindow from "./SettingsWindow";
-import { DEFAULT_AI_PREFERENCES, isLocalEndpoint, type AiPreferences, type FfmpegStatus, type RecordingSettings } from "./api";
+import {
+  DEFAULT_AI_PREFERENCES,
+  DEFAULT_RECORDING,
+  isLocalEndpoint,
+  type AiPreferences,
+  type FfmpegStatus,
+  type Microphone,
+  type RecordingSettings,
+} from "./api";
 
 const DEFAULT_HOTKEYS = {
   region: "PrintScreen",
@@ -35,6 +43,8 @@ interface Backend {
   ffmpeg: FfmpegStatus;
   /** What `ffmpeg_retry` answers. */
   ffmpegAfterRetry: FfmpegStatus;
+  /** What `recording_microphones` answers. */
+  microphones: Microphone[];
   saveFolder: string;
   hotkeys: typeof DEFAULT_HOTKEYS;
   hotkeyWarnings: string[];
@@ -57,6 +67,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     hotkeyWarnings: [],
     ffmpeg: { state: "ready", encoder: "libopenh264" },
     ffmpegAfterRetry: { state: "downloading", downloaded: 0, total: 0 },
+    microphones: [],
     calls: [],
     ...initial,
   };
@@ -86,6 +97,8 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
       case "ffmpeg_retry":
         backend.ffmpeg = backend.ffmpegAfterRetry;
         return backend.ffmpeg;
+      case "recording_microphones":
+        return backend.microphones;
       case "get_autostart":
         if (backend.autostart === undefined) throw "not supported";
         return backend.autostart;
@@ -812,11 +825,11 @@ describe("SettingsWindow recording", () => {
     expect(await screen.findByText("Ready. Videos are encoded with libopenh264.")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("radio", { name: "Medium" }));
-    await waitFor(() => expect(backend.recording).toEqual({ format: "mp4", quality: "medium", fps: 30, showCursor: true }));
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, format: "mp4", quality: "medium", fps: 30, showCursor: true }));
 
     // A GIF has no quality to pick and needs no ffmpeg.
     await userEvent.click(screen.getByRole("radio", { name: "GIF" }));
-    await waitFor(() => expect(backend.recording).toEqual({ format: "gif", quality: "medium", fps: 30, showCursor: true }));
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, format: "gif", quality: "medium", fps: 30, showCursor: true }));
     expect(screen.queryByRole("radio", { name: "Medium" })).not.toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "60 fps" })).not.toBeInTheDocument();
     expect(screen.queryByTestId("ffmpeg-status")).not.toBeInTheDocument();
@@ -832,16 +845,16 @@ describe("SettingsWindow recording", () => {
     expect(cursor).toBeChecked();
 
     await userEvent.click(screen.getByRole("radio", { name: "60 fps" }));
-    await waitFor(() => expect(backend.recording).toEqual({ format: "mp4", quality: "high", fps: 60, showCursor: true }));
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, format: "mp4", quality: "high", fps: 60, showCursor: true }));
     expect(screen.getByRole("radio", { name: "60 fps" })).toBeChecked();
 
     await userEvent.click(cursor);
-    await waitFor(() => expect(backend.recording).toEqual({ format: "mp4", quality: "high", fps: 60, showCursor: false }));
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, format: "mp4", quality: "high", fps: 60, showCursor: false }));
     expect(screen.getByRole("switch", { name: /Show cursor/ })).not.toBeChecked();
   });
 
   it("offers Show cursor for a GIF too", async () => {
-    mockBackend({ recording: { format: "gif", quality: "high", fps: 60, showCursor: false } });
+    mockBackend({ recording: { ...DEFAULT_RECORDING, format: "gif", fps: 60, showCursor: false } });
     render(<SettingsWindow section="recording" />);
     const cursor = await screen.findByRole("switch", { name: /Show cursor/ });
     await waitFor(() => expect(cursor).toBeEnabled());
@@ -867,5 +880,56 @@ describe("SettingsWindow recording", () => {
     expect(await screen.findByText("Downloading ffmpeg… 0.0 MB")).toBeInTheDocument();
     expect(commands(backend)).toContain("ffmpeg_retry");
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+  it("records no sound by default and records the system default microphone when Microphone is chosen", async () => {
+    const backend = mockBackend({
+      microphones: [
+        { id: "alsa_input.pci-analog-stereo", name: "Built-in Audio", isDefault: true },
+        { id: "alsa_input.usb-yeti", name: "Yeti Stereo Microphone", isDefault: false },
+      ],
+    });
+    render(<SettingsWindow section="recording" />);
+    const audio = await screen.findByRole("combobox", { name: "Audio" });
+    await waitFor(() => expect(audio).toBeEnabled());
+    expect(audio).toHaveValue("none");
+    expect(screen.queryByRole("combobox", { name: "Microphone" })).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(audio, "microphone");
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, audio: "microphone", microphone: null }));
+    const microphone = await screen.findByRole("combobox", { name: "Microphone" });
+    await waitFor(() => expect(microphone).toBeEnabled());
+    expect(microphone).toHaveValue("");
+    expect(screen.getByRole("option", { name: "System default (Built-in Audio)" })).toBeInTheDocument();
+    expect(commands(backend)).toContain("recording_microphones");
+
+    await userEvent.selectOptions(microphone, "Yeti Stereo Microphone");
+    await waitFor(() =>
+      expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, audio: "microphone", microphone: "alsa_input.usb-yeti" }),
+    );
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Microphone" }), "System default (Built-in Audio)");
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, audio: "microphone", microphone: null }));
+  });
+
+  it("disables Audio and the microphone for a GIF", async () => {
+    mockBackend({ recording: { ...DEFAULT_RECORDING, format: "gif", audio: "microphone", microphone: "Mic" } });
+    render(<SettingsWindow section="recording" />);
+    const audio = await screen.findByRole("combobox", { name: "Audio" });
+    await screen.findByText("GIFs are silent. Choose MP4 video to record sound.");
+    expect(audio).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Microphone" })).toBeDisabled();
+  });
+
+  it("keeps a chosen microphone that is not connected", async () => {
+    mockBackend({
+      recording: { ...DEFAULT_RECORDING, audio: "microphone", microphone: "USB Headset" },
+      microphones: [{ id: "Built-in Microphone", name: "Built-in Microphone", isDefault: true }],
+    });
+    render(<SettingsWindow section="recording" />);
+    const microphone = await screen.findByRole("combobox", { name: "Microphone" });
+    await waitFor(() => expect(microphone).toBeEnabled());
+    expect(microphone).toHaveValue("USB Headset");
+    expect(screen.getByRole("option", { name: "USB Headset (not connected)" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Built-in Microphone" })).toBeInTheDocument();
   });
 });
