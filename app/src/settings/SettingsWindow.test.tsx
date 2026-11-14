@@ -12,6 +12,7 @@ const DEFAULT_HOTKEYS = {
   screen: "Ctrl+PrintScreen",
   text: "Shift+PrintScreen",
   colour: "Ctrl+Shift+PrintScreen",
+  library: "Alt+Shift+PrintScreen",
 };
 
 interface Backend {
@@ -267,6 +268,7 @@ describe("SettingsWindow", () => {
     expect(await screen.findByLabelText("Region")).toHaveValue("PrintScreen");
     expect(screen.getByLabelText("Window")).toHaveValue("Alt+PrintScreen");
     expect(screen.getByLabelText("Screen")).toHaveValue("Ctrl+PrintScreen");
+    expect(screen.getByLabelText("Open library")).toHaveValue("Alt+Shift+PrintScreen");
     expect(screen.getByRole("button", { name: "Save hotkeys" })).toBeDisabled();
   });
 

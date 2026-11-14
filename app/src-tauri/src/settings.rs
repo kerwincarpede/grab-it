@@ -508,6 +508,7 @@ struct StoredHotkeys {
     screen: Option<String>,
     text: Option<String>,
     colour: Option<String>,
+    library: Option<String>,
 }
 
 impl StoredHotkeys {
@@ -523,6 +524,7 @@ impl StoredHotkeys {
             screen: pick(self.screen, defaults.screen),
             text: pick(self.text, defaults.text),
             colour: pick(self.colour, defaults.colour),
+            library: pick(self.library, defaults.library),
         }
     }
 }

@@ -13,6 +13,7 @@ const HOTKEYS = {
   screen: "Ctrl+PrintScreen",
   text: "Shift+PrintScreen",
   colour: "Ctrl+Shift+PrintScreen",
+  library: "Alt+Shift+PrintScreen",
 };
 
 function mockBackend(options: { failSettings?: boolean; failOpen?: string; ai?: object } = {}) {
@@ -45,6 +46,8 @@ describe("WelcomeWindow", () => {
     expect(within(text).getByText("Capture text")).toBeInTheDocument();
     const colour = screen.getByLabelText("Ctrl+Shift+PrintScreen");
     expect(within(colour).getAllByText(/Ctrl|Shift|PrintScreen/)).toHaveLength(3);
+    const library = screen.getByLabelText("Alt+Shift+PrintScreen").closest("li") as HTMLElement;
+    expect(within(library).getByText("Open the library")).toBeInTheDocument();
   });
 
   it("mentions AI descriptions only while Claude Code describes captures", async () => {
