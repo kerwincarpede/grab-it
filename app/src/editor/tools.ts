@@ -12,6 +12,7 @@ import {
   type Style,
   type Tool,
 } from "./model";
+import { toCapture, type Orientation } from "./orient";
 
 /** How far a duplicate lands from its original, in capture pixels. */
 export const DUPLICATE_OFFSET = 12;
@@ -239,6 +240,19 @@ export function resizeCrop(from: Rect, box: Rect, image: Size, ratio: number | n
   const start = { x: leftHeld ? next.x : right, y: topHeld ? next.y : bottom };
   const end = { x: leftHeld ? right : next.x, y: topHeld ? bottom : next.y };
   return cropFromDrag(start, end, image, ratio) ?? from;
+}
+
+/**
+ * A crop drawn on show (display space) back in capture pixels, where
+ * `Annotations.crop` lives: its two corners mapped with `toCapture` and
+ * normalised. The inverse of `orientRect`. `size` is the capture's own size.
+ */
+export function cropToCapture(shown: Rect, size: Size, o: Orientation): Rect {
+  const a = toCapture({ x: shown.x, y: shown.y }, size, o);
+  const b = toCapture({ x: shown.x + shown.width, y: shown.y + shown.height }, size, o);
+  const x = Math.round(Math.min(a.x, b.x));
+  const y = Math.round(Math.min(a.y, b.y));
+  return { x, y, width: Math.round(Math.max(a.x, b.x)) - x, height: Math.round(Math.max(a.y, b.y)) - y };
 }
 
 /**

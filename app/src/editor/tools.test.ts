@@ -27,6 +27,7 @@ import {
   cropBox,
   cropDragRatio,
   cropFromDrag,
+  cropToCapture,
   curveMidpoint,
   curvePoints,
   deleteShape,
@@ -55,6 +56,7 @@ import {
   transformShape,
   withAlpha,
 } from "./tools";
+import { IDENTITY, orientRect } from "./orient";
 
 const style: Style = { color: "#e5484d", strokeWidth: 4 };
 
@@ -338,6 +340,23 @@ describe("crop ratios", () => {
       width: 150,
       height: 75,
     });
+  });
+
+  it("turns a crop drawn on show back into capture pixels", () => {
+    const shown = { x: 10, y: 20, width: 160, height: 90 };
+    // Unturned, the two are the same.
+    expect(cropToCapture(shown, image, IDENTITY)).toEqual(shown);
+    // A quarter turn: the 400×300 capture shows 300×400, and a 16:9 box on show is 9:16 in the capture.
+    const turned = { rotation: 90 as const, flipX: false, flipY: false };
+    expect(cropToCapture(shown, image, turned)).toEqual({ x: 20, y: 130, width: 90, height: 160 });
+    // Every turn and mirror round-trips through orientRect.
+    for (const rotation of [0, 90, 180, 270] as const) {
+      for (const flipX of [false, true]) {
+        const o = { rotation, flipX, flipY: !flipX && rotation === 180 };
+        const crop = cropToCapture(shown, image, o);
+        expect(orientRect(crop, image, o)).toEqual(shown);
+      }
+    }
   });
 
   it("keeps the old crop when a resize would leave almost nothing", () => {

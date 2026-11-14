@@ -96,6 +96,7 @@ import {
   cropBox,
   cropDragRatio,
   cropFromDrag,
+  cropToCapture,
   curveMidpoint,
   deleteShape,
   dragShape,
@@ -108,7 +109,6 @@ import {
   moveLineEnd,
   moveShape,
   newId,
-  normalizeRect,
   nudgeDelta,
   releaseRestores,
   replaceShape,
@@ -493,8 +493,20 @@ export default function EditorWindow() {
     [imageSize, rotation, flipX, flipY],
   );
   const outputScale = doc.scale ?? 1;
-  /** Width over height for the picked crop aspect; null for a Free crop. */
-  const cropRatio = useMemo(() => cropAspectRatio(cropAspect, imageSize), [cropAspect, imageSize]);
+  /**
+   * The capture's size as it shows. Crop ratios, drags, handles and moves all
+   * work on show, so a 16:9 crop looks 16:9 however the capture is turned.
+   */
+  const shownSize = useMemo(() => (imageSize ? displaySize(imageSize, { rotation, flipX, flipY }) : null), [imageSize, rotation, flipX, flipY]);
+  /** Width over height for the picked crop aspect, Original being the capture as it shows; null for a Free crop. */
+  const cropRatio = useMemo(() => cropAspectRatio(cropAspect, shownSize), [cropAspect, shownSize]);
+  /** The saved crop as it shows. */
+  const shownCrop = useMemo(
+    () => (doc.crop && imageSize ? orientRect(doc.crop, imageSize, { rotation, flipX, flipY }) : null),
+    [doc.crop, imageSize, rotation, flipX, flipY],
+  );
+  /** A crop on show back in capture pixels, for `doc.crop`. */
+  const shownToCapture = (shown: Rect): Rect => (imageSize ? cropToCapture(shown, imageSize, orientation) : shown);
   const backdrop = backdropDraft ?? doc.backdrop ?? null;
   /** Image pixels per point: the corner radius is in points. Older captures do not say, so the window's density stands in. */
   const captureScale = info?.scaleFactor && info.scaleFactor > 0 ? info.scaleFactor : fallbackScale();
@@ -690,7 +702,9 @@ export default function EditorWindow() {
       return;
     }
     if (drawWith === "crop") {
-      setCropDrag({ start: at, end: at, square: event.evt.shiftKey });
+      // Drawn on show: see `shownSize`.
+      const shown = shownPointer() ?? at;
+      setCropDrag({ start: shown, end: shown, square: event.evt.shiftKey });
       return;
     }
     const shape = beginShape(drawWith, at, drawStyle(drawWith));
@@ -708,7 +722,7 @@ export default function EditorWindow() {
     if (!at) return;
     // Shift keeps lines to 45° steps and boxes square.
     if (draft) setDraft(dragShape(draft, at, event.evt.shiftKey));
-    if (cropDrag) setCropDrag({ ...cropDrag, end: at, square: event.evt.shiftKey });
+    if (cropDrag) setCropDrag({ ...cropDrag, end: shownPointer() ?? at, square: event.evt.shiftKey });
   };
 
   const onMouseUp = () => {
@@ -729,9 +743,9 @@ export default function EditorWindow() {
       }
       setDraft(null);
     }
-    if (cropDrag && imageSize) {
-      const crop = cropFromDrag(cropDrag.start, cropDrag.end, imageSize, cropDragRatio(cropRatio, cropDrag.square));
-      if (crop) commit({ ...doc, crop });
+    if (cropDrag && shownSize) {
+      const shown = cropFromDrag(cropDrag.start, cropDrag.end, shownSize, cropDragRatio(cropRatio, cropDrag.square));
+      if (shown) commit({ ...doc, crop: shownToCapture(shown) });
       setCropDrag(null);
     }
   };
@@ -781,14 +795,15 @@ export default function EditorWindow() {
   /** Picks a crop aspect; a crop already in place is reshaped to the largest box of that ratio inside it. */
   const pickCropAspect = (aspect: CropAspect) => {
     setCropAspect(aspect);
-    const ratio = cropAspectRatio(aspect, imageSize);
-    if (!doc.crop || !ratio) return;
-    const fitted = fitCropToRatio(doc.crop, ratio);
+    const ratio = cropAspectRatio(aspect, shownSize);
+    if (!doc.crop || !shownCrop || !ratio) return;
+    // Fitted as it shows, then saved in capture pixels.
+    const fitted = shownToCapture(fitCropToRatio(shownCrop, ratio));
     const same = fitted.x === doc.crop.x && fitted.y === doc.crop.y && fitted.width === doc.crop.width && fitted.height === doc.crop.height;
     if (!same) commit({ ...doc, crop: fitted });
   };
 
-  /** Shows a crop mid-edit; the ref lets Konva's handlers read it before React re-renders. */
+  /** Shows a crop mid-edit, on show; the ref lets Konva's handlers read it before React re-renders. */
   const showCropEdit = (next: Rect | null) => {
     cropEditRef.current = next;
     setCropEdit(next);
@@ -801,23 +816,24 @@ export default function EditorWindow() {
   };
 
   const onCropDragMove = (event: Konva.KonvaEventObject<DragEvent>) => {
-    const from = cropEditRef.current ?? doc.crop;
-    if (!from || !imageSize) return;
-    placeCropBox(event.target, moveCrop(from, event.target.position(), imageSize));
+    const from = cropEditRef.current ?? shownCrop;
+    if (!from || !shownSize) return;
+    placeCropBox(event.target, moveCrop(from, event.target.position(), shownSize));
   };
 
   const onCropTransform = (event: Konva.KonvaEventObject<Event>) => {
-    const from = cropEditRef.current ?? doc.crop;
-    if (!from || !imageSize) return;
-    placeCropBox(event.target, resizeCrop(from, scaledBox(event.target), imageSize, cropRatio));
+    const from = cropEditRef.current ?? shownCrop;
+    if (!from || !shownSize) return;
+    placeCropBox(event.target, resizeCrop(from, scaledBox(event.target), shownSize, cropRatio));
   };
 
-  /** Commits a finished move or resize of the crop as one change. */
+  /** Commits a finished move or resize of the crop, in capture pixels, as one change. */
   const commitCropEdit = () => {
-    const next = cropEditRef.current;
+    const edited = cropEditRef.current;
     showCropEdit(null);
     const now = doc.crop;
-    if (!next || !now) return;
+    if (!edited || !now) return;
+    const next = shownToCapture(edited);
     if (next.x !== now.x || next.y !== now.y || next.width !== now.width || next.height !== now.height) commit({ ...doc, crop: next });
   };
 
@@ -1133,12 +1149,10 @@ export default function EditorWindow() {
   }, [undoDoc, redoDoc, copy, copyAndClose, removeSelected, duplicateSelected, nudgeSelected, selectedId, changeStyle, stepWidth, pickTool, restoreTool, tool, image, rotateBy]);
 
   const error = annotations.error ?? imageError;
-  const cropPreview = cropDrag
-    ? imageSize
-      ? cropBox(cropDrag.start, cropDrag.end, imageSize, cropDragRatio(cropRatio, cropDrag.square))
-      : normalizeRect({ ...cropDrag.start, width: cropDrag.end.x - cropDrag.start.x, height: cropDrag.end.y - cropDrag.start.y })
-    : null;
-  const crop = cropPreview ?? cropEdit ?? doc.crop ?? null;
+  /** The crop as it shows: being drawn (the box that will be committed), mid-edit, or as saved. */
+  const cropShown = (cropDrag && shownSize ? cropBox(cropDrag.start, cropDrag.end, shownSize, cropDragRatio(cropRatio, cropDrag.square)) : null) ?? cropEdit ?? shownCrop;
+  /** The same crop in capture pixels, for the dim drawn in the oriented group. */
+  const crop = cropShown ? shownToCapture(cropShown) : null;
   const placed = bending ? doc.shapes.map((shape) => (shape.id === bending.id ? bending : shape)) : doc.shapes;
   const shapes = draft ? [...placed, draft] : placed;
   /** The selected arrow or line as its handles show it: mid-drag, mid-bend, or as saved. */
@@ -1151,8 +1165,6 @@ export default function EditorWindow() {
   const spotlights = shapes.filter((shape) => shape.type === "spotlight");
   const dim = imageSize ? spotlightDim({ x: 0, y: 0, ...imageSize }, spotlights) : [];
   const framed = frame?.layout ? { area: frame.area, bounds: frame.bounds, layout: frame.layout } : null;
-  /** The crop as it shows, for the status bar. */
-  const shownCrop = doc.crop && imageSize ? orientRect(doc.crop, imageSize, orientation) : null;
   const output = outputBase ? scaledSize(outputBase, outputScale) : null;
   const paint = framed && backdrop ? backdropPaint(backdrop, framed.layout) : [];
 
@@ -1441,7 +1453,7 @@ export default function EditorWindow() {
               </Layer>
               <Layer>
                 {/* The backdrop preview already shows only the crop. */}
-                {crop && imageSize && !framed && (
+                {crop && cropShown && imageSize && !framed && (
                   <>
                   <Group name="oriented-crop" {...groupAttrs}>
                     {/* Dim everything outside the crop; the capture itself is untouched. */}
@@ -1449,12 +1461,12 @@ export default function EditorWindow() {
                     <KonvaRect x={0} y={crop.y + crop.height} width={imageSize.width} height={imageSize.height - crop.y - crop.height} fill="black" opacity={0.5} listening={false} />
                     <KonvaRect x={0} y={crop.y} width={crop.x} height={crop.height} fill="black" opacity={0.5} listening={false} />
                     <KonvaRect x={crop.x + crop.width} y={crop.y} width={imageSize.width - crop.x - crop.width} height={crop.height} fill="black" opacity={0.5} listening={false} />
-                    <KonvaRect {...crop} stroke="#ffffff" strokeWidth={1 / currentView.scale} dash={[6 / currentView.scale, 4 / currentView.scale]} listening={false} />
                   </Group>
+                  {/* The outline, its handles and its drag stay upright on show, outside the turned group. */}
                   <KonvaRect
                     ref={cropBoxRef}
                     name={CROP_BOX}
-                    {...crop}
+                    {...cropShown}
                     // A see-through fill, so the whole box (not just its outline) takes the press.
                     fill="rgba(0, 0, 0, 0)"
                     stroke="#ffffff"

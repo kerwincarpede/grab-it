@@ -1372,6 +1372,24 @@ describe("EditorWindow", () => {
     await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 0, y: 0, width: 50, height: 20 }));
   });
 
+  it("crops a turned capture as it shows", async () => {
+    // The 400×300 capture, turned a quarter, shows 300×400; the stage reports the pointer on show.
+    const saved = mockEditor({ ...sidecar, rotation: 90 });
+    await ready();
+    fireEvent.click(pressed("Crop"));
+    fireEvent.click(screen.getByRole("button", { name: "16:9" }));
+    drag([0, 0], [160, 10]);
+    // 16:9 on show is 9:16 in capture pixels.
+    await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 0, y: 140, width: 90, height: 160 }));
+    expect(screen.getByText("Crop 160×90")).toBeInTheDocument();
+    expect(document.querySelector('[data-name="crop-box"]')).toHaveAttribute("data-draggable", "true");
+
+    // Reshaping fits the crop as it shows, too.
+    fireEvent.click(screen.getByRole("button", { name: "1:1" }));
+    await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 0, y: 175, width: 90, height: 90 }));
+    expect(screen.getByText("Crop 90×90")).toBeInTheDocument();
+  });
+
   it("moves the crop on a plain press inside it, and draws over it with Ctrl", async () => {
     const saved = mockEditor({ ...sidecar, crop: { x: 0, y: 0, width: 320, height: 240 } });
     await ready();
