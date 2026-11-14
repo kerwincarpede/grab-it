@@ -290,15 +290,21 @@ const isTyping = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
 
 /**
- * What a pointer went down on: an annotation (its draggable node), a
- * handle (a resize or line handle, or the crop, which moves when dragged), or neither.
+ * What a pointer went down on: an annotation (its draggable node), a resize
+ * or line handle, the crop (which moves when dragged), or none of them.
  */
-function hitTarget(target: Konva.Node): { annotation: Konva.Node | null; handle: boolean } {
+function hitTarget(target: Konva.Node): { annotation: Konva.Node | null; handle: boolean; crop: Konva.Node | null } {
   for (let node: Konva.Node | null = target; node; node = node.getParent()) {
-    if (node.hasName("annotation")) return { annotation: node, handle: false };
-    if (node.getClassName() === "Transformer" || node.hasName(LINE_HANDLE) || node.hasName(CROP_BOX)) return { annotation: null, handle: true };
+    if (node.hasName("annotation")) return { annotation: node, handle: false, crop: null };
+    if (node.getClassName() === "Transformer" || node.hasName(LINE_HANDLE)) return { annotation: null, handle: true, crop: null };
+    if (node.hasName(CROP_BOX)) return { annotation: null, handle: false, crop: node };
   }
-  return { annotation: null, handle: false };
+  return { annotation: null, handle: false, crop: null };
+}
+
+/** The box a node covers in its parent, with the scale a Transformer gave it applied. */
+function scaledBox(node: Konva.Node): Rect {
+  return { x: node.x(), y: node.y(), width: node.width() * node.scaleX(), height: node.height() * node.scaleY() };
 }
 
 /** Names the bend and end handles of a selected arrow or line. */
@@ -488,7 +494,7 @@ export default function EditorWindow() {
   );
   const outputScale = doc.scale ?? 1;
   /** Width over height for the picked crop aspect; null for a Free crop. */
-  const cropRatio = cropAspectRatio(cropAspect, imageSize);
+  const cropRatio = useMemo(() => cropAspectRatio(cropAspect, imageSize), [cropAspect, imageSize]);
   const backdrop = backdropDraft ?? doc.backdrop ?? null;
   /** Image pixels per point: the corner radius is in points. Older captures do not say, so the window's density stands in. */
   const captureScale = info?.scaleFactor && info.scaleFactor > 0 ? info.scaleFactor : fallbackScale();
@@ -663,10 +669,12 @@ export default function EditorWindow() {
     if (hit.handle) return;
     const drawWith = override ?? tool;
     if (override) {
+      // ⌘/⌥ draws over a shape or the crop rather than moving it.
       if (hit.annotation) suppressDrag(hit.annotation);
+      else if (hit.crop) suppressDrag(hit.crop);
       else if (panning) suppressDrag(event.target.getStage() ?? event.target);
-    } else if (hit.annotation) {
-      // The shape selected itself; its own drag moves it.
+    } else if (hit.annotation || hit.crop) {
+      // The shape selected itself, or the crop was grabbed; its own drag moves it.
       return;
     }
     if (drawWith === "select") {
@@ -801,9 +809,7 @@ export default function EditorWindow() {
   const onCropTransform = (event: Konva.KonvaEventObject<Event>) => {
     const from = cropEditRef.current ?? doc.crop;
     if (!from || !imageSize) return;
-    const node = event.target;
-    const box = { x: node.x(), y: node.y(), width: node.width() * node.scaleX(), height: node.height() * node.scaleY() };
-    placeCropBox(node, resizeCrop(from, box, imageSize, cropRatio));
+    placeCropBox(event.target, resizeCrop(from, scaledBox(event.target), imageSize, cropRatio));
   };
 
   /** Commits a finished move or resize of the crop as one change. */

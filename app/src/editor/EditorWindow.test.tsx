@@ -147,6 +147,18 @@ vi.mock("react-konva", async () => {
           draggable: () => true,
         };
       }
+      // The crop rect reports its name, and its drag can be turned off and back on.
+      if (element instanceof Element && element.closest('[data-name="crop-box"]')) {
+        let draggable = true;
+        return {
+          getStage: () => stage,
+          getParent: () => null,
+          getClassName: () => "Rect",
+          hasName: (name: string) => name === "crop-box",
+          name: () => "crop-box",
+          draggable: (value?: boolean) => (value === undefined ? draggable : ((draggable = value), undefined)),
+        };
+      }
       if (!(element instanceof Element) || !element.closest("[data-id]")) return stage;
       return {
         getStage: () => stage,
@@ -1355,6 +1367,32 @@ describe("EditorWindow", () => {
     await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 20, y: 20, width: 100, height: 100 }));
     drag([0, 0], [50, 20]);
     await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 0, y: 0, width: 50, height: 20 }));
+  });
+
+  it("moves the crop on a plain press inside it, and draws over it with Ctrl", async () => {
+    const saved = mockEditor({ ...sidecar, crop: { x: 0, y: 0, width: 320, height: 240 } });
+    await ready();
+    fireEvent.click(pressed("Crop"));
+    const cropBox = document.querySelector('[data-name="crop-box"]') as Element;
+
+    // A plain press is the crop's own drag: no new crop is started.
+    Object.assign(pointerAt, { x: 10, y: 10 });
+    fireEvent.mouseDown(cropBox);
+    Object.assign(pointerAt, { x: 110, y: 60 });
+    fireEvent.mouseMove(stage());
+    fireEvent.mouseUp(stage());
+    expect(screen.getByText("Crop 320×240")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+
+    // Ctrl still draws a rectangle, and the crop stays where it was.
+    Object.assign(pointerAt, { x: 10, y: 10 });
+    fireEvent.mouseDown(cropBox, { ctrlKey: true });
+    Object.assign(pointerAt, { x: 110, y: 60 });
+    fireEvent.mouseMove(stage(), { ctrlKey: true });
+    fireEvent.mouseUp(stage(), { ctrlKey: true });
+    await waitFor(() => expect(last(saved)?.shapes).toHaveLength(5));
+    expect(last(saved)?.shapes[4]).toMatchObject({ type: "rect", x: 10, y: 10, width: 100, height: 50 });
+    expect(last(saved)?.crop).toEqual({ x: 0, y: 0, width: 320, height: 240 });
   });
 
   it("gives the crop move and resize handles with the Crop tool, corners only with a ratio", async () => {
