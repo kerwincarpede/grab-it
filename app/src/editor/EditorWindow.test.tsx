@@ -25,6 +25,12 @@ vi.mock("react-konva", async () => {
       enabledAnchors,
       draggable,
       onMouseDown,
+      x,
+      y,
+      points,
+      bezier,
+      onDragMove,
+      onDragEnd,
     }: {
       children?: ReactNode;
       id?: string;
@@ -33,6 +39,12 @@ vi.mock("react-konva", async () => {
       enabledAnchors?: string[];
       draggable?: boolean;
       onMouseDown?: () => void;
+      x?: number;
+      y?: number;
+      points?: number[];
+      bezier?: boolean;
+      onDragMove?: (event: unknown) => void;
+      onDragEnd?: (event: unknown) => void;
     }) =>
       // Only annotations (which have ids) take clicks; the Stage's handler
       // needs real Konva events.
@@ -45,10 +57,18 @@ vi.mock("react-konva", async () => {
           "data-text": text,
           "data-anchors": enabledAnchors?.join(" "),
           "data-draggable": draggable === undefined ? undefined : String(draggable),
+          "data-x": x,
+          "data-y": y,
+          "data-points": points?.join(" "),
+          "data-bezier": bezier === undefined ? undefined : String(bezier),
           onMouseDown: id ? () => onMouseDown?.() : undefined,
+          // A DOM drag stands in for a Konva drag: the node lands where `pointerAt` says.
+          onDrag: onDragMove ? (event: { nativeEvent: MouseEvent }) => onDragMove(dragEvent(event.nativeEvent)) : undefined,
+          onDragEnd: onDragEnd ? (event: { nativeEvent: MouseEvent }) => onDragEnd(dragEvent(event.nativeEvent)) : undefined,
         },
         children,
       );
+  const dragEvent = (evt: MouseEvent) => ({ evt, cancelBubble: false, target: { position: () => ({ ...pointerAt }) } });
   const LayerNode = node("Layer");
   // The editor needs a layer to flatten (flatten itself is mocked below).
   const Layer = ({ ref, ...props }: { ref?: Ref<unknown>; children?: ReactNode; name?: string }) => {
@@ -89,6 +109,16 @@ vi.mock("react-konva", async () => {
     }, []);
     useImperativeHandle(ref, () => stage, [stage]);
     const target = (element: EventTarget) => {
+      if (element instanceof Element && element.closest('[data-name~="line-handle"]')) {
+        return {
+          getStage: () => stage,
+          getParent: () => null,
+          getClassName: () => "Circle",
+          hasName: (name: string) => name === "line-handle",
+          name: () => "line-handle",
+          draggable: () => true,
+        };
+      }
       if (!(element instanceof Element) || !element.closest("[data-id]")) return stage;
       return {
         getStage: () => stage,
@@ -225,6 +255,16 @@ const last = <T,>(items: T[]): T | undefined => items[items.length - 1];
 
 const anchors = () => document.querySelector('[data-konva="Transformer"]')?.getAttribute("data-anchors")?.split(" ");
 
+/** A selected arrow or line's handle: "start", "end" or "bend". */
+const lineHandle = (which: string) => document.querySelector(`[data-name~="line-handle-${which}"]`) as Element;
+const handleAt = (which: string) => [Number(lineHandle(which).getAttribute("data-x")), Number(lineHandle(which).getAttribute("data-y"))];
+/** Drags a line handle to `to` (capture pixels): live moves, then one drag end. */
+function dragHandle(which: string, to: [number, number]) {
+  Object.assign(pointerAt, { x: to[0], y: to[1] });
+  fireEvent.drag(lineHandle(which));
+  fireEvent.dragEnd(lineHandle(which));
+}
+
 const shapeIds = () =>
   Array.from(document.querySelectorAll("[data-konva] [data-id]")).map((element) => element.getAttribute("data-id"));
 
@@ -358,6 +398,79 @@ describe("EditorWindow", () => {
     expect(anchors()).toEqual(corners);
     fireEvent.mouseDown(document.querySelector('[data-id="s1"]') as Element);
     expect(anchors()).toEqual(corners);
+  });
+
+  it("gives a selected arrow bend and end handles instead of the box", async () => {
+    mockEditor();
+    await ready();
+    expect(lineHandle("bend")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+    expect(handleAt("start")).toEqual([10, 10]);
+    expect(handleAt("end")).toEqual([100, 80]);
+    // The bend handle sits halfway along the (still straight) arrow.
+    expect(handleAt("bend")).toEqual([55, 45]);
+    // Pressing a handle keeps the arrow selected.
+    fireEvent.mouseDown(lineHandle("bend"));
+    expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+    // Other shapes keep the box.
+    fireEvent.mouseDown(document.querySelector('[data-id="t1"]') as Element);
+    expect(lineHandle("bend")).toBeNull();
+  });
+
+  it("bends an arrow from its middle handle, straightens it near the line, and undoes each drag", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+    const arrow = () => document.querySelector('[data-id="a1"]') as Element;
+    const savedArrow = () => last(saved)?.shapes.find((shape) => shape.id === "a1");
+
+    // A live drag previews the curve without saving it.
+    Object.assign(pointerAt, { x: 55, y: 15 });
+    fireEvent.drag(lineHandle("bend"));
+    expect(arrow()).toHaveAttribute("data-bezier", "true");
+    expect(handleAt("bend")).toEqual([55, 15]);
+    fireEvent.dragEnd(lineHandle("bend"));
+    // The curve runs through the handle: control = 2H − (P0 + P2) / 2.
+    await waitFor(() => expect(savedArrow()).toMatchObject({ points: [10, 10, 100, 80], control: [55, -15] }));
+    expect(arrow().getAttribute("data-points")?.split(" ")).toHaveLength(8);
+
+    // Back within a few pixels of the straight line's middle, it goes straight.
+    dragHandle("bend", [57, 47]);
+    await waitFor(() => expect(savedArrow()).not.toHaveProperty("control"));
+    expect(arrow()).toHaveAttribute("data-bezier", "false");
+    expect(handleAt("bend")).toEqual([55, 45]);
+
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(handleAt("bend")).toEqual([55, 15]);
+    expect(arrow()).toHaveAttribute("data-bezier", "true");
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(handleAt("bend")).toEqual([55, 45]);
+    expect(arrow()).toHaveAttribute("data-bezier", "false");
+  });
+
+  it("moves an arrow's end from its handle, keeping the bend, as one undo step", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+    const savedArrow = () => last(saved)?.shapes.find((shape) => shape.id === "a1");
+
+    dragHandle("end", [200, 80]);
+    await waitFor(() => expect(savedArrow()).toMatchObject({ points: [10, 10, 200, 80] }));
+    expect(savedArrow()).not.toHaveProperty("control");
+    expect(handleAt("end")).toEqual([200, 80]);
+
+    dragHandle("bend", [105, 20]);
+    await waitFor(() => expect(savedArrow()).toHaveProperty("control"));
+    dragHandle("start", [10, 80]);
+    await waitFor(() => expect(savedArrow()).toMatchObject({ points: [10, 80, 200, 80] }));
+    expect(savedArrow()).toHaveProperty("control");
+
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(handleAt("start")).toEqual([10, 10]);
+    expect(handleAt("end")).toEqual([200, 80]);
   });
 
   it("shows the options that fit the active tool", async () => {
