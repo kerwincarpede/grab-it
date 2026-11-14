@@ -1222,7 +1222,7 @@ describe("EditorWindow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Pin" }));
     await waitFor(() => expect(calls.map((call) => call.cmd)).toContain("editor_pin"));
-    expect(flattened.calls).toEqual([{ crop: null, backdrop: { ...backdrop, balance: true } }]);
+    expect(flattened.calls).toEqual([{ crop: null, backdrop: { ...backdrop, balance: true }, rotation: 0, flipX: false, flipY: false, scale: 1 }]);
     expect(flattened.options).toEqual([expect.objectContaining({ borders: MEASURED_BORDERS })]);
 
     // Off again drops the field, as older sidecars have it.
