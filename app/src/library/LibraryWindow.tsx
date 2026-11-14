@@ -40,6 +40,7 @@ import {
   openShot,
   pendingAiNotice,
   pinShot,
+  copyShotText,
   redescribeShot,
   retryOcr,
   revealShot,
@@ -47,6 +48,8 @@ import {
   setShotNotes,
   removeAiTag,
   setShotTags,
+  shotText,
+  textCopied,
   type AiStatus,
   type CliProvider,
   type FilterOptions,
@@ -54,6 +57,7 @@ import {
   type OcrStatus,
   type SearchHit,
   type Shot,
+  type ShotText,
 } from "./api";
 import { ChipSelect, DateChip, FilterMenu, TagEditor } from "./controls";
 import {
@@ -70,6 +74,7 @@ import {
   SearchIcon,
   SparkleIcon,
   TagIcon,
+  TextIcon,
   TrashIcon,
 } from "./icons";
 import { useInView, useThumbnail } from "./thumbnails";
@@ -407,7 +412,7 @@ interface TileProps {
   index: number;
   onSelect: (id: number) => void;
   onOpen: (id: number) => void;
-  onAction: (shot: Shot, action: "copy" | "pin") => void;
+  onAction: (shot: Shot, action: TileAction) => void;
 }
 
 /** One capture in the grid; actions appear on hover. */
@@ -448,6 +453,15 @@ const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, 
         <button type="button" className="tile-action" aria-label={`Copy ${shot.fileName}`} title="Copy to the clipboard" onClick={() => onAction(shot, "copy")}>
           <CopyIcon />
         </button>
+        <button
+          type="button"
+          className="tile-action"
+          aria-label={`Copy the text in ${shot.fileName}`}
+          title="Copy the text in this image"
+          onClick={() => onAction(shot, "text")}
+        >
+          <TextIcon />
+        </button>
         <button type="button" className="tile-action" aria-label={`Edit ${shot.fileName}`} title="Open in editor" onClick={() => onOpen(shot.id)}>
           <EditIcon />
         </button>
@@ -458,6 +472,8 @@ const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, 
     </li>
   );
 });
+
+type TileAction = "copy" | "text" | "pin";
 
 interface DetailsProps {
   shot: Shot;
@@ -473,6 +489,29 @@ interface DetailsProps {
   canStep: { back: boolean; forward: boolean };
 }
 
+/**
+ * The text OCR found in `shot`; null while it loads. Asked again whenever
+ * the shot is refreshed, which happens when OCR reads it.
+ */
+function useShotText(shot: Shot): ShotText | null {
+  const [loaded, setLoaded] = useState<{ shot: Shot; text: ShotText } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    shotText(shot.id)
+      .then((text) => {
+        if (!cancelled) setLoaded({ shot, text });
+      })
+      .catch(() => {
+        // Without it the section only offers Copy, which still works.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [shot]);
+  // Text still loading for the previous shot is not this one's.
+  return loaded && loaded.shot.id === shot.id ? loaded.text : null;
+}
+
 /** The selected shot: open, tag, annotate with notes or delete it. */
 function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onClose, onStep, canStep }: DetailsProps) {
   // Local so quick successive edits build on each other before the saves land.
@@ -481,6 +520,19 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const saving = useRef<Promise<unknown>>(Promise.resolve());
+  const text = useShotText(shot);
+  const [copyingText, setCopyingText] = useState(false);
+
+  async function copyText() {
+    setCopyingText(true);
+    try {
+      onNotice(textCopied(await copyShotText(shot.id)));
+    } catch (err) {
+      onError(errorMessage(err));
+    } finally {
+      setCopyingText(false);
+    }
+  }
 
   function saveTags(next: string[]) {
     if (sameTags(next, tags)) return;
@@ -596,6 +648,16 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
               <CopyIcon />
               Copy
             </button>
+            <button
+              type="button"
+              className="btn btn-icon"
+              aria-label="Copy text"
+              title="Copy the text in this image"
+              disabled={copyingText}
+              onClick={() => void copyText()}
+            >
+              <TextIcon />
+            </button>
             <button type="button" className="btn btn-icon" aria-label="Pin" title="Pin to screen" onClick={() => void act(pinShot)}>
               <PinIcon />
             </button>
@@ -626,6 +688,33 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
               </>
             )}
           </dl>
+
+          <section className="details-block" aria-label="Text in image">
+            <h3 className="details-label">
+              <TextIcon />
+              Text in image
+              <span className="details-label-actions">
+                <button
+                  type="button"
+                  className="link-button"
+                  aria-label="Copy the text"
+                  disabled={copyingText || (text?.state === "read" && text.text.trim() === "")}
+                  onClick={() => void copyText()}
+                >
+                  {copyingText ? "Reading…" : "Copy"}
+                </button>
+              </span>
+            </h3>
+            {text?.state === "read" && text.text.trim() !== "" && (
+              // Selectable, to copy just part of it.
+              <pre className="details-text" tabIndex={0} aria-label="Text found in the image">
+                {text.text}
+              </pre>
+            )}
+            {text?.state === "read" && text.text.trim() === "" && <p className="hint">No text found in this image.</p>}
+            {text?.state === "waiting" && <p className="hint">Not read yet. Copy reads it now.</p>}
+            {text?.state === "failed" && <p className="hint">The text could not be read. Copy tries again.</p>}
+          </section>
 
           <section className="details-block" aria-label="AI description">
             <h3 className="details-label">
@@ -1115,13 +1204,12 @@ function LibraryWindow({
     openShot(id).catch((err: unknown) => setError(errorMessage(err)));
   }, []);
 
-  const tileAction = useCallback((shot: Shot, action: "copy" | "pin") => {
-    const run = action === "copy" ? copyShot : pinShot;
-    run(shot.id)
-      .then(() => {
-        if (action === "copy") setNotice({ text: "Copied to the clipboard", key: Date.now() });
-      })
-      .catch((err: unknown) => setError(errorMessage(err)));
+  const tileAction = useCallback((shot: Shot, action: TileAction) => {
+    const notice = (text: string) => setNotice({ text, key: Date.now() });
+    const failed = (err: unknown) => setError(errorMessage(err));
+    if (action === "copy") copyShot(shot.id).then(() => notice("Copied to the clipboard"), failed);
+    else if (action === "text") copyShotText(shot.id).then((text) => notice(textCopied(text)), failed);
+    else pinShot(shot.id).catch(failed);
   }, []);
 
   function onGridKeyDown(event: KeyboardEvent<HTMLDivElement>) {

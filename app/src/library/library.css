@@ -1120,6 +1120,24 @@
   opacity: 0.88;
 }
 
+/* The text OCR found: selectable, so part of it can be copied. */
+.details-text {
+  max-height: 180px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface-2);
+  border-radius: 6px;
+  user-select: text;
+  cursor: text;
+}
+
 .details-note {
   margin: 0;
   color: var(--text-faint);

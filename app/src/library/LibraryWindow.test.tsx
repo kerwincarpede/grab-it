@@ -55,6 +55,8 @@ interface Backend {
   fail?: string;
   /** Text OCR found, by shot id. */
   ocr: Record<number, string>;
+  /** Shots OCR has not read yet, and the text it finds when asked to read one now. */
+  unread?: Record<number, string>;
   ocrStatus: OcrStatus;
   aiStatus: AiStatus;
   /** Grab-it turned AI descriptions on and the Library has not said so yet. */
@@ -143,6 +145,23 @@ function mockBackend(shots: Shot[]): Backend {
           find(args.id as number);
           backend.shots = backend.shots.filter((item) => item.id !== args.id);
           return null;
+        case "library_text": {
+          const id = args.id as number;
+          find(id);
+          if (backend.unread && id in backend.unread) return { state: "waiting" };
+          return { state: "read", text: backend.ocr[id] ?? "" };
+        }
+        case "library_copy_text": {
+          const id = args.id as number;
+          find(id);
+          if (backend.unread && id in backend.unread) {
+            backend.ocr[id] = backend.unread[id];
+            delete backend.unread[id];
+          }
+          const text = backend.ocr[id] ?? "";
+          if (!text.trim()) throw "No text found in this capture.";
+          return text;
+        }
         case "library_open":
         case "library_copy":
         case "library_pin":
@@ -293,6 +312,52 @@ describe("LibraryWindow", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Copy Grab-it 1.png" }));
     await waitFor(() => expect(callsTo(backend, "library_copy")).toHaveLength(1));
     expect(await screen.findByText("Copied to the clipboard")).toBeInTheDocument();
+  });
+
+  it("copies the text in a capture from its tile", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.ocr[1] = "Invoice 2026-03\nTotal due: $12";
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Copy the text in Grab-it 1.png" }));
+    await waitFor(() => expect(callsTo(backend, "library_copy_text")[0]?.payload).toEqual({ id: 1 }));
+    expect(await screen.findByText("Copied 2 lines of text")).toBeInTheDocument();
+  });
+
+  it("shows the text in a capture in its details, selectable, and copies it", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.ocr[1] = "Error 503: upstream timed out";
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
+
+    expect(await screen.findByLabelText("Text found in the image")).toHaveTextContent("Error 503: upstream timed out");
+    await userEvent.click(screen.getByRole("button", { name: "Copy text" }));
+    expect(await screen.findByText("Copied 1 line of text")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Copy the text" }));
+    await waitFor(() => expect(callsTo(backend, "library_copy_text")).toHaveLength(2));
+  });
+
+  it("reads a capture OCR has not got to yet when its text is copied", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.unread = { 1: "Fresh text" };
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
+    expect(await screen.findByText("Not read yet. Copy reads it now.")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy the text" }));
+    expect(await screen.findByText("Copied 1 line of text")).toBeInTheDocument();
+    expect(backend.ocr[1]).toBe("Fresh text");
+  });
+
+  it("says when a capture has no text, and copying it explains why", async () => {
+    const backend = mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
+    expect(await screen.findByText("No text found in this image.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy the text" })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy the text in Grab-it 1.png" }));
+    expect(await screen.findByText("No text found in this capture.")).toBeInTheDocument();
+    expect(callsTo(backend, "library_copy_text")).toHaveLength(1);
   });
 
   it("closes the details with Escape", async () => {

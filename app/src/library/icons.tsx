@@ -81,6 +81,14 @@ export const CopyIcon = () => (
   </Icon>
 );
 
+/** A "T" in a frame: the text in an image. */
+export const TextIcon = () => (
+  <Icon>
+    <path d="M4 7V5.5A1.5 1.5 0 015.5 4H7M17 4h1.5A1.5 1.5 0 0120 5.5V7M20 17v1.5a1.5 1.5 0 01-1.5 1.5H17M7 20H5.5A1.5 1.5 0 014 18.5V17" />
+    <path d="M8.5 9h7M12 9v7" />
+  </Icon>
+);
+
 export const PinIcon = () => (
   <Icon>
     <path d="M9 3.5h6l-1 6 3.5 3.5h-11L10 9.5z" />

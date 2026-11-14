@@ -100,6 +100,22 @@ export function copyShot(id: number): Promise<void> {
   return invoke<void>("library_copy", { id });
 }
 
+/** The text in a shot, as far as OCR has got. Mirrors `ShotText` in src-tauri/src/library.rs. */
+export type ShotText = { state: "waiting" } | { state: "read"; text: string } | { state: "failed" };
+
+/** The text OCR found in the shot, or why there is none yet. */
+export function shotText(id: number): Promise<ShotText> {
+  return invoke<ShotText>("library_text", { id });
+}
+
+/**
+ * Copies the text in the shot and resolves to it. A shot not read yet is
+ * read first, which takes a few seconds. Rejects when there is no text.
+ */
+export function copyShotText(id: number): Promise<string> {
+  return invoke<string>("library_copy_text", { id });
+}
+
 /** Floats the shot above other windows. */
 export function pinShot(id: number): Promise<void> {
   return invoke<void>("library_pin", { id });
@@ -448,4 +464,10 @@ export async function pendingAiNotice(): Promise<CliProvider | null> {
 /** Stops showing the notice that Grab-it turned AI descriptions on. */
 export async function dismissAiNotice(): Promise<void> {
   await invoke("dismiss_ai_notice");
+}
+
+/** "Copied 3 lines of text", for the notice after copying a shot's text. */
+export function textCopied(text: string): string {
+  const lines = text.split("\n").filter((line) => line.trim() !== "").length;
+  return `Copied ${lines} ${lines === 1 ? "line" : "lines"} of text`;
 }

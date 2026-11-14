@@ -283,6 +283,19 @@ pub(crate) const SHOT_COLUMNS: &str = "s.id, s.path, s.thumb_path, s.captured_at
 /// How many columns [`SHOT_COLUMNS`] holds.
 pub(crate) const SHOT_COLUMN_COUNT: usize = 12;
 
+/// The text in a shot, as far as OCR has got. Mirrors `ShotText` in
+/// src/library/api.ts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum ShotText {
+    /// OCR has not read it yet.
+    Waiting,
+    /// OCR read it; `text` is empty when it found none.
+    Read { text: String },
+    /// OCR could not read the image.
+    Failed,
+}
+
 /// One page of shots, newest first. Mirrors `ShotPage` in src/library/api.ts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -641,6 +654,26 @@ impl Library {
             return Err(LibraryError::NotFound(id));
         }
         Ok(())
+    }
+
+    /// The text OCR found in a shot, or why there is none yet.
+    pub fn text(&self, id: i64) -> LibraryResult<ShotText> {
+        let (state, text) = self
+            .conn
+            .query_row(
+                "SELECT ocr_state, ocr_text FROM shots WHERE id = ?1",
+                [id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()?
+            .ok_or(LibraryError::NotFound(id))?;
+        Ok(match state {
+            0 => ShotText::Waiting,
+            1 => ShotText::Read {
+                text: text.unwrap_or_default(),
+            },
+            _ => ShotText::Failed,
+        })
     }
 
     /// Marks a shot whose image OCR could not read, so it is not retried.
@@ -1319,6 +1352,48 @@ pub fn library_copy(id: i64, app: AppHandle) -> Result<(), String> {
     crate::quick::copy_file(&app, &existing_path(&app, id)?)
 }
 
+/// The text in a shot, as far as OCR has got.
+#[tauri::command(async)]
+pub fn library_text(id: i64, state: State<'_, LibraryState>) -> Result<ShotText, String> {
+    state.lock().text(id).map_err(to_message)
+}
+
+/// Copies the text in a shot and returns it. A shot OCR has not read yet,
+/// or could not read, is read now, and what it finds is stored, so it is
+/// searchable and can be described.
+#[tauri::command(async)]
+pub fn library_copy_text(id: i64, app: AppHandle) -> Result<String, String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let library = app.state::<LibraryState>();
+    let known = library.lock().text(id).map_err(to_message)?;
+    let text = match known {
+        ShotText::Read { text } => text,
+        ShotText::Waiting | ShotText::Failed => {
+            let path = existing_path(&app, id)?;
+            let image = image::open(&path)
+                .map_err(|err| format!("could not open {}: {err}", path.display()))?
+                .into_rgba8();
+            let text = crate::ocr::read_now(&app, &image)
+                .map_err(|err| format!("could not read the text: {err}"))?;
+            match library.lock().set_ocr_text(id, &text) {
+                Ok(()) => {
+                    let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
+                    crate::ai::wake(&app);
+                }
+                Err(err) => eprintln!("Grab-it: could not store the text of shot {id}: {err}"),
+            }
+            text
+        }
+    };
+    if text.trim().is_empty() {
+        return Err("No text found in this capture.".into());
+    }
+    app.clipboard()
+        .write_text(text.clone())
+        .map_err(|err| format!("could not copy the text: {err}"))?;
+    Ok(text)
+}
+
 /// Floats a shot above other windows. Async for the same reason as
 /// [`library_open`].
 #[tauri::command]
@@ -1451,6 +1526,42 @@ mod tests {
         let second = library.add_capture(&indirect).unwrap();
         assert_eq!(first.id, second.id);
         assert_eq!(library.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn a_shots_text_waits_for_ocr_then_is_read_or_failed() {
+        let dir = TempDir::new().unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let first = library
+            .add_capture(&shoot(dir.path(), 1, (10, 10)))
+            .unwrap();
+        let second = library
+            .add_capture(&shoot(dir.path(), 2, (10, 10)))
+            .unwrap();
+        assert_eq!(library.text(first.id).unwrap(), ShotText::Waiting);
+
+        library.set_ocr_text(first.id, "Invoice 2026-03").unwrap();
+        assert_eq!(
+            library.text(first.id).unwrap(),
+            ShotText::Read {
+                text: "Invoice 2026-03".into()
+            }
+        );
+        library.mark_ocr_failed(second.id).unwrap();
+        assert_eq!(library.text(second.id).unwrap(), ShotText::Failed);
+        assert!(matches!(
+            library.text(999),
+            Err(LibraryError::NotFound(999))
+        ));
+
+        assert_eq!(
+            serde_json::to_value(library.text(first.id).unwrap()).unwrap(),
+            serde_json::json!({ "state": "read", "text": "Invoice 2026-03" })
+        );
+        assert_eq!(
+            serde_json::to_value(ShotText::Waiting).unwrap(),
+            serde_json::json!({ "state": "waiting" })
+        );
     }
 
     #[test]
