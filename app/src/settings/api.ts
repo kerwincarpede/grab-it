@@ -246,6 +246,10 @@ export interface RecordingSettings {
   fps: RecordingFps;
   /** Draws the pointer into the recording. */
   showCursor: boolean;
+  /** Draws a fading ring where each click lands. */
+  showClicks: boolean;
+  /** Draws the keys pressed as a label at the bottom centre. */
+  showKeystrokes: boolean;
   /** MP4 only; a GIF is silent. */
   audio: RecordingAudio;
   /** The `Microphone.id` recorded; null records the system's default microphone. */
@@ -257,9 +261,21 @@ export const DEFAULT_RECORDING: RecordingSettings = {
   quality: "high",
   fps: 30,
   showCursor: true,
+  showClicks: false,
+  showKeystrokes: false,
   audio: "none",
   microphone: null,
 };
+
+/**
+ * The Show keystrokes hint. Only macOS can tell when a password is being typed
+ * (secure input), so keys typed then are left out; elsewhere they are not.
+ */
+export function keystrokesHint(isMac: boolean): string {
+  return isMac
+    ? "Shows the keys you press at the bottom of the recording, except while you type a password. macOS asks for Input Monitoring the first time."
+    : "Shows the keys you press at the bottom of the recording. Grab-it cannot tell when you type a password here, so turn this off first.";
+}
 
 export const RECORDING_FORMATS: { value: RecordingFormat; title: string; hint: string }[] = [
   { value: "mp4", title: "MP4 video", hint: "Smooth video with no time limit, small enough to share." },

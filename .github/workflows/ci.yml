@@ -33,6 +33,8 @@ env:
   GIT_CONFIG_COUNT: 1
   GIT_CONFIG_KEY_0: init.defaultBranch
   GIT_CONFIG_VALUE_0: main
+  # libx11-dev, libxtst-dev and libxi-dev: rdev's XRecord input hooks, which
+  # show clicks and keystrokes in recordings (src-tauri/src/input.rs).
   LINUX_DEPS: >-
     libwebkit2gtk-4.1-dev
     libayatana-appindicator3-dev
@@ -44,6 +46,9 @@ env:
     curl
     wget
     file
+    libx11-dev
+    libxtst-dev
+    libxi-dev
   # xcap: X11 (xcb, randr), Wayland (wayland, EGL, GBM) and PipeWire capture.
   # Its PipeWire bindings (libspa 0.8) need PipeWire 1.0 headers or newer,
   # which Ubuntu 22.04 does not ship; hence the 24.04 runners below.

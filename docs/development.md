@@ -24,6 +24,12 @@ Grab-it is built with Rust and [Tauri 2](https://tauri.app/), with a React + Typ
      librsvg2-dev libxdo-dev libssl-dev patchelf build-essential curl wget file
    ```
 
+   Showing clicks and keystrokes in recordings ([rdev](https://github.com/Narsil/rdev)'s XRecord hooks) also needs:
+
+   ```sh
+   sudo apt-get install -y libx11-dev libxtst-dev libxi-dev
+   ```
+
    Screen capture ([xcap](https://github.com/nashaofu/xcap)) also needs these on Debian/Ubuntu:
 
    ```sh
@@ -75,11 +81,11 @@ Nothing heavy happens while a selection is on screen. The frozen image is encode
 ### Wayland and macOS
 
 - **Wayland** (`WAYLAND_DISPLAY` set): captures go through the desktop's Screenshot portal, and Pick a colour uses the desktop's colour picker. Hotkeys are offered to the desktop through the GlobalShortcuts portal; where the desktop has no such portal, use the tray menu. Repeat last region and recording are not available, since only the desktop may read the screen there.
-- **macOS**: Grab-it needs *Screen Recording* permission under System Settings → Privacy & Security, and offers to open that page when the permission is missing. Recording with the microphone also needs the *Microphone* permission, asked for the first time (see [Recording](#recording)).
+- **macOS**: Grab-it needs *Screen Recording* permission under System Settings → Privacy & Security, and offers to open that page when the permission is missing. Recording with the microphone also needs the *Microphone* permission, asked for the first time, and recording with Show clicks or Show keystrokes needs *Input Monitoring* (see [Recording](#recording)).
 
 ### Recording
 
-**Settings → Recording** picks what recordings are saved as (`recording` in `settings.json`): `format` is `mp4` (the default) or `gif`; `quality` is `low`, `medium` or `high` (the default) and `fps` is `30` (the default) or `60`, both for MP4 only; `showCursor` (on by default) draws the pointer into MP4s and GIFs alike; and `audio` is `none` (the default) or `microphone`, with `microphone` naming the one to record (`null`, the default, records the system's default microphone). A GIF is always silent, so the page disables **Audio** and **Microphone** for it.
+**Settings → Recording** picks what recordings are saved as (`recording` in `settings.json`): `format` is `mp4` (the default) or `gif`; `quality` is `low`, `medium` or `high` (the default) and `fps` is `30` (the default) or `60`, both for MP4 only; `showCursor` (on by default) draws the pointer into MP4s and GIFs alike; `showClicks` and `showKeystrokes` (both off by default) draw click rings and a keystroke label into them (see [Clicks and keystrokes](#clicks-and-keystrokes)); and `audio` is `none` (the default) or `microphone`, with `microphone` naming the one to record (`null`, the default, records the system's default microphone). A GIF is always silent, so the page disables **Audio** and **Microphone** for it.
 
 An MP4 is recorded at a constant 30 or 60 fps with no time limit (`record::record_mp4`). Each grab of the recorded area is piped into ffmpeg's stdin as raw RGBA (`-f rawvideo -pix_fmt rgba`), and ffmpeg writes H.264 in yuv420p at even dimensions, at most 1920 px wide, with `-movflags +faststart` so it plays while it downloads. A grab that takes longer than a frame repeats the frame before for every frame time that went by (`record::Pacer`), so the video keeps time, but only up to half a second of repeats after each grab, with Stop checked between them. Frame times further behind than that are dropped, so a fresh frame is always grabbed soon: when ffmpeg takes frames in more slowly than the frame rate, or the computer sleeps mid-recording, the video is shorter than the recording. The bitrate is the quality's bits per pixel of each frame: 0.05 for low, 0.1 for medium and 0.2 for high, about 12 Mbit/s for 1080p at high. A GIF is still encoded in Grab-it at about 10 fps, scaled to at most 1280 px wide, and stops after a minute.
 
@@ -107,6 +113,18 @@ Beside each MP4, `<name>.cursor.json` says where the pointer was, whether or not
 ```
 
 `width` and `height` are the video's size, and `positions` holds one entry for every frame of the video, repeated frames included: the pointer's hot spot in the video's pixels from its top-left corner, which lies outside that size when the pointer is outside the recorded area, or `null` where it could not be told. A GIF gets no sidecar.
+
+#### Clicks and keystrokes
+
+With **Show clicks** or **Show keystrokes** on, the mouse and keyboard are watched for as long as the recording runs, and what they did is drawn into each frame after the pointer and before it is encoded (`frame_overlays.rs`), so no window of its own is shown on screen and recorded with it. MP4s and GIFs get them alike.
+
+- **Input** (`input.rs`): [rdev](https://github.com/Narsil/rdev)'s `listen` hooks global input: an event tap on macOS, low-level hooks on Windows and XRecord on X11. Wayland has no such access, and recording is not offered there. `listen` never returns once it runs, so its thread is started by the first recording that wants it and kept for the life of the app; each recording connects to it (`input::Capture`) and disconnects when it stops, and between recordings events go to no one. rdev is taken from its main branch at a fixed commit: its last release looks key names up on the tap's own thread on macOS, which macOS 14 aborts.
+- **Clicks**: each left, right or middle button press becomes a ring where the pointer was in the first frame grabbed after it, in that frame's pixels whatever the platform, growing from 14 to 26 points and fading out over 0.5 s (`frame_overlays::ring_alpha`).
+- **Keystrokes**: each key press, with the modifiers held, becomes a label such as `⌘ ⇧ 4` on macOS or `Ctrl Shift 4` elsewhere, from Grab-it's own key table (`input::KeyStyle`) rather than rdev's layout-dependent names. A modifier pressed on its own shows nothing. The label of the last keys sits at the bottom centre, white on a dark rounded box, shrinking to fit a narrow recording; it stays 1.5 s after the last key and then fades over 0.25 s (`frame_overlays::label_alpha`). Its text is drawn with [ab_glyph](https://github.com/alexheretic/ab-glyph) in `src-tauri/fonts/DejaVuSans-Bold-keys.ttf`, DejaVu Sans Bold cut down to printable ASCII, the arrows and the macOS key symbols (licence beside it).
+- **Passwords**: on macOS no key is kept while secure input is on (`IsSecureEventInputEnabled`), as it is while a password field has the focus. Windows and X11 cannot tell, and the setting's hint says so.
+- **Permission**: on macOS a recording with either toggle on first asks for *Input Monitoring* (`permissions::ensure_input_monitoring`, `CGRequestListenEventAccess`), and once refused offers to open Privacy & Security → Input Monitoring. Without it the recording goes ahead without clicks or keystrokes, and the card says so. If the hooks cannot start (no X RECORD extension, say), the recording goes ahead without them too.
+
+Sizes are in points times the monitor's scale factor, so they look the same on a HiDPI recording.
 
 ffmpeg is not bundled (see [ffmpeg builds](#ffmpeg-builds)). With MP4 chosen, Grab-it gets it ready in the background when it starts, or as soon as MP4 is picked in Settings (`ffmpeg.rs`):
 
@@ -302,6 +320,8 @@ Before publishing, each binary is run on its own OS and must report the LGPL, ha
 ### Licence
 
 Grab-it is MIT, but ffmpeg is licensed under the LGPL and must stay that way: **never add x264, x265, `--enable-gpl` or `--enable-nonfree`** to these builds, or Grab-it could no longer download them. The Linux and Windows builds are under the [GNU LGPL version 3](https://www.gnu.org/licenses/lgpl-3.0.html), because BtbN configures all its LGPL builds with `--enable-version3`. Only the macOS build leaves that flag out, so it is under the [GNU LGPL 2.1 or later](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html). The check above accepts either version. Grab-it runs ffmpeg as a separate program and does not link it. The LGPL asks that the source of the binaries we distribute is available, which is why the source tarball is published beside them; BtbN's builds are made by its public build scripts from the n8.1 branch, and each build's version is listed in the release notes. All three binaries include Cisco's [OpenH264](https://github.com/cisco/openh264) (BSD-2-Clause), built from source.
+
+The keystroke label's font, `src-tauri/fonts/DejaVuSans-Bold-keys.ttf`, is cut down from [DejaVu Sans](https://dejavu-fonts.github.io/) Bold, under the Bitstream Vera licence in `src-tauri/fonts/LICENSE.txt` beside it.
 
 ## The README animation
 
