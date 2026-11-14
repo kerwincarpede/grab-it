@@ -140,6 +140,12 @@ While AI descriptions are on, **Capture text** also asks the same provider to re
 
 Valid JSON is re-indented in Rust token by token, so key order and long numbers are kept exactly. The answer replaces the card's text, and the clipboard's only while it still holds what OCR copied. The card's **Copy as read** copies the OCR text. When OCR finds nothing, the AI's text is the only one. Closing the card, or a newer capture, drops a late answer.
 
+### Reading codes
+
+**Capture text** first looks for QR codes and barcodes in the region (`codes.rs`), with [rxing](https://github.com/rxing-core/rxing), a Rust port of ZXing. Every format rxing reads is tried: QR, Micro QR, Data Matrix, Aztec, PDF417, MaxiCode and the 1D codes (Code 128, Code 39, EAN, UPC, ITF and more), light-on-dark as well as dark-on-light. rxing is built without its default features: Grab-it hands it the region's grey pixels itself, so rxing's own `image` dependency, SVG reading and result parsers stay out of the binary. The tests draw the codes they read with rxing's writers (`encoders`, a dev-dependency feature only), so there are no image fixtures.
+
+When it finds a code, the region is OCR'd as well, and the card (`QuickItem::Code`) shows the values. Every value is copied, one per line, top to bottom. **Copy text** copies what OCR read around them; an OCR failure only leaves that out. Only `http://` and `https://` values count as links. **Open link** opens the first one through `tauri-plugin-opener`, and only from the card's `quick_action`: nothing opens a decoded link by itself. The text is not tidied by AI. When the region holds no code, Capture text works as before.
+
 ### Settings
 
 `settings.json` lives in the app data directory (`com.kerwincarpede.grabit`):

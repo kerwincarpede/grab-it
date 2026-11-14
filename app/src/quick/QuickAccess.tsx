@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import "./quick.css";
 import {
+  codeFormats,
+  describeCodes,
   describeText,
   dismissAfter,
+  firstLink,
   formatBytes,
   formatElapsed,
   formatName,
@@ -78,6 +81,13 @@ const ICONS = {
   ),
   check: <path d="M5 12.5 10 17.5 19 7" />,
   text: <path d="M5 7V5h14v2M12 5v14M9 19h6" />,
+  link: (
+    <>
+      <path d="M14 4h6v6" />
+      <path d="M20 4 11 13" />
+      <path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+    </>
+  ),
 };
 
 /**
@@ -204,7 +214,7 @@ function QuickAccess() {
     if (!target || busy.current) return;
     // Copying and Show in folder leave the card up and may be repeated;
     // the others end it, so a double-click must not run them twice.
-    const ends = action !== "copy" && action !== "copyOriginal" && action !== "reveal";
+    const ends = action !== "copy" && action !== "copyOriginal" && action !== "copyText" && action !== "reveal";
     if (ends) busy.current = true;
     setError(null);
     quickAction(action, target.generation)
@@ -488,6 +498,52 @@ function QuickAccess() {
             )}
           </div>
         )}
+        {close}
+        {timerBar}
+      </main>
+    );
+  }
+
+  if (item.kind === "code") {
+    const link = firstLink(item.codes);
+    const hasText = item.text.trim().length > 0;
+    return (
+      <main className="quick quick-text quick-code" data-testid="quick" {...hover}>
+        <div className="quick-body" role="status">
+          <p className="quick-title">
+            <Icon>{ICONS.check}</Icon> {flash ?? describeCodes(item.codes)}
+          </p>
+          <p className="quick-detail">{codeFormats(item.codes)}</p>
+        </div>
+        <pre className="quick-text-preview is-code" data-testid="quick-codes">
+          {item.codes.map((code) => code.value).join("\n")}
+        </pre>
+        {error && (
+          <p className="quick-detail quick-error-text" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="quick-inline-actions quick-text-actions" role="toolbar" aria-label="Code actions">
+          <button
+            type="button"
+            onClick={() => run("copy", "Copied")}
+            title={item.codes.length === 1 ? "Copy the code's value" : "Copy every code's value, one per line"}
+          >
+            <Icon>{ICONS.copy}</Icon>
+            Copy
+          </button>
+          {hasText && (
+            <button type="button" onClick={() => run("copyText", "Text copied")} title="Copy the text around the code">
+              Copy text
+            </button>
+          )}
+          {link !== null && (
+            <button type="button" onClick={() => run("openLink")} title={`Open ${link} in your browser`}>
+              <Icon>{ICONS.link}</Icon>
+              Open link
+            </button>
+          )}
+        </div>
         {close}
         {timerBar}
       </main>

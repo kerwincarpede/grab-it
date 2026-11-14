@@ -2,7 +2,7 @@
 //! capture, a text capture or a colour pick.
 //!
 //! A capture shows its thumbnail with Copy, Annotate, Pin, Show in folder
-//! and Delete; text and colours show what was copied. The card never takes
+//! and Delete; text, codes and colours show what was copied. The card never takes
 //! the keyboard focus, so it does not interrupt what the user was doing, and
 //! it dismisses itself after a few seconds unless the pointer is over it.
 
@@ -23,7 +23,11 @@ use tauri::{
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
 
-use crate::{library::LibraryState, pin, windows};
+use crate::{
+    codes::{self, Code},
+    library::LibraryState,
+    pin, windows,
+};
 
 pub const LABEL: &str = "quick";
 /// Emitted to the card when it should show something else.
@@ -60,6 +64,14 @@ pub enum QuickItem {
         /// How tidying the text with AI went, when it was asked to.
         #[serde(skip_serializing_if = "Option::is_none")]
         tidy: Option<TextTidy>,
+    },
+    /// QR codes or barcodes read from the screen, their values already on
+    /// the clipboard one per line. `text` is what OCR read around them,
+    /// empty when it read nothing; the card offers it to copy instead, and
+    /// offers to open the first link.
+    Code {
+        codes: Vec<Code>,
+        text: String,
     },
     /// A picked colour as `#RRGGBB`, already on the clipboard.
     Colour {
@@ -460,6 +472,11 @@ pub enum QuickAction {
     Close,
     /// Copies what OCR read, in place of the tidied text.
     CopyOriginal,
+    /// Copies the text read around the codes, in place of their values.
+    CopyText,
+    /// Opens the first code's link in the browser, and dismisses the card.
+    /// Only ever on a click: a decoded link is never opened by itself.
+    OpenLink,
 }
 
 /// Runs a button of the card that showed item `generation`. When the card
@@ -511,6 +528,19 @@ pub async fn quick_action(
                 ..
             },
         ) => copy_text(&app, text)?,
+        (QuickAction::Copy, QuickItem::Code { codes, .. }) => {
+            copy_text(&app, &codes::values(codes))?;
+        }
+        (QuickAction::CopyText, QuickItem::Code { text, .. }) if !text.trim().is_empty() => {
+            copy_text(&app, text)?;
+        }
+        (QuickAction::OpenLink, QuickItem::Code { codes, .. }) => {
+            let url = first_link(codes).ok_or("there is no link on the card")?;
+            app.opener()
+                .open_url(url, None::<&str>)
+                .map_err(|err| format!("could not open the link: {err}"))?;
+            dismiss(&app, generation);
+        }
         (QuickAction::Edit, QuickItem::Capture { path, .. }) => {
             windows::show_editor(&app, path).map_err(|err| err.to_string())?;
             dismiss(&app, generation);
@@ -522,6 +552,15 @@ pub async fn quick_action(
         _ => return Err("there is no capture on the card".to_owned()),
     }
     Ok(())
+}
+
+/// The value of the first code in `codes` that is an http(s) link, for
+/// Open link.
+pub fn first_link(codes: &[Code]) -> Option<&str> {
+    codes
+        .iter()
+        .find(|code| code.is_link)
+        .map(|code| code.value.trim())
 }
 
 /// Puts `text` on the clipboard.
@@ -702,5 +741,47 @@ mod tests {
             working,
             serde_json::json!({ "state": "working", "by": "Codex" })
         );
+    }
+
+    #[test]
+    fn code_items_serialise_their_codes() {
+        let item = QuickItem::Code {
+            codes: vec![
+                Code::new("QR code", "https://example.com"),
+                Code::new("Code 128", "ABC-123"),
+            ],
+            text: "Scan me".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&item).unwrap(),
+            serde_json::json!({
+                "kind": "code",
+                "codes": [
+                    { "format": "QR code", "value": "https://example.com", "isLink": true },
+                    { "format": "Code 128", "value": "ABC-123", "isLink": false },
+                ],
+                "text": "Scan me",
+            })
+        );
+    }
+
+    #[test]
+    fn actions_deserialise_from_camel_case() {
+        let action = |name: &str| serde_json::from_value::<QuickAction>(name.into()).unwrap();
+        assert_eq!(action("copyText"), QuickAction::CopyText);
+        assert_eq!(action("openLink"), QuickAction::OpenLink);
+        assert_eq!(action("copyOriginal"), QuickAction::CopyOriginal);
+    }
+
+    #[test]
+    fn open_link_picks_the_first_link() {
+        let codes = [
+            Code::new("Code 128", "ABC-123"),
+            Code::new("QR code", " https://one.example \n"),
+            Code::new("QR code", "https://two.example"),
+        ];
+        assert_eq!(first_link(&codes), Some("https://one.example"));
+        assert_eq!(first_link(&codes[..1]), None);
+        assert_eq!(first_link(&[]), None);
     }
 }

@@ -176,7 +176,8 @@ Click the Grab-it icon in the menu bar or tray for all of these. On Windows and 
 | | |
 | --- | --- |
 | 📌 **Pin** | Float a capture above everything else as a reference while you work. Drag it around, scroll (or press `+`/`-`) to resize, double-click or `Esc` to close. |
-| 🔤 **Capture text** | Drag over anything on screen, even text in an image or video, and the text is copied, ready to paste. With [AI](#ai-descriptions) on, it's then tidied up: misread characters are fixed, and JSON, code and tables come out properly laid out. |
+| 🔤 **Capture text** | Drag over anything on screen, even text in an image or video, and the text is copied, ready to paste. With [AI](#ai-descriptions) on, it's then tidied up: misread characters are fixed, and JSON, code and tables come out properly laid out. Drag over a QR code or barcode and its contents are copied instead (see below). |
+| 🔳 **Scan a code** | Use **Capture text** on a QR code or barcode, no phone needed. Its contents are copied, one per line when there are several, and the card shows what it found. **Copy text** copies the words around the code instead, and **Open link** opens a web link in your browser. Grab-it never opens a link unless you click. |
 | 🎨 **Pick a colour** | Click any pixel to copy its colour as a hex code like `#4C8DFF`. |
 | 🎞️ **Record GIF** | Record a region or window as an animated GIF, for up to a minute. Click **Stop** on the card (or in the tray) when you're done. |
 | ⏱️ **Timed capture** | Wait 3, 5 or 10 seconds before capturing, so you have time to open a menu or hover a tooltip. |
