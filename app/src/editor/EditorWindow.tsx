@@ -4,7 +4,7 @@ import { Circle, Group, Image as KonvaImage, Layer, Rect as KonvaRect, Stage, Tr
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import "./editor.css";
-import { MAX_BACKDROP_PRESETS, setBackdropPresets } from "../settings/api";
+import { getEditorPreferences, MAX_BACKDROP_PRESETS, setBackdropPresets } from "../settings/api";
 import { backdropImage, chooseBackdropImage, copyImage, editorImage, exportImage, pinImage, saveBackdropPresetImage } from "./api";
 import BackdropPanel from "./BackdropPanel";
 import { copyShotText, hasShotText, textCopied, watchShotText, type ShotText } from "../library/api";
@@ -82,7 +82,7 @@ import {
   withScale,
   type Orientation,
 } from "./orient";
-import { DEFAULT_CHOICES, type EditorChoices, type SavedBackdrop } from "./preferences";
+import { DEFAULT_CHOICES, parseBackdropPresets, type EditorChoices, type SavedBackdrop } from "./preferences";
 import ResizePanel from "./ResizePanel";
 import ShapeNode, { SpotlightDim } from "./ShapeNode";
 import ToolWheel from "./ToolWheel";
@@ -453,6 +453,12 @@ export default function EditorWindow() {
   const [presets, setPresets] = useState<SavedBackdrop[] | null>(null);
   /** `presets` as last set, for a save that finishes after copying its image. */
   const presetsRef = useRef<SavedBackdrop[] | null>(null);
+  /**
+   * Preset reads and writes, one after another. Another editor window may
+   * change the presets too, so each change is made on the list as
+   * settings.json holds it at that moment, never on this window's copy.
+   */
+  const presetsQueue = useRef<Promise<void>>(Promise.resolve());
   const autoApplied = useRef(false);
   /** Where the right-click tool wheel is open, in canvas pixels. */
   const [wheelAt, setWheelAt] = useState<Point | null>(null);
@@ -1033,15 +1039,39 @@ export default function EditorWindow() {
     if (!sameBackdrop(doc.backdrop, next)) commit({ ...doc, backdrop: next });
   };
 
-  /** Keeps the presets and writes the whole list to settings.json straight away. */
-  const changePresets = (next: SavedBackdrop[]) => {
+  const showPresets = (next: SavedBackdrop[]) => {
     presetsRef.current = next;
     setPresets(next);
-    try {
-      setBackdropPresets(next).catch((err: unknown) => setMessage(`Could not save presets: ${errorText(err)}`));
-    } catch {
-      // No Tauri: nothing to save to.
-    }
+  };
+
+  /** Runs `step` after the preset reads and writes already queued; a failure shows in the status bar. */
+  const queuePresets = (step: () => Promise<void>) => {
+    presetsQueue.current = presetsQueue.current
+      .then(step)
+      .catch((err: unknown) => setMessage(`Could not save presets: ${errorText(err)}`));
+  };
+
+  /** The presets as settings.json holds them now, perhaps changed by another editor window. */
+  const storedPresets = async () => parseBackdropPresets((await getEditorPreferences()).backdropPresets);
+
+  /** Shows the presets another editor window may have changed since they were read. */
+  const refreshPresets = () => {
+    if (!presetsRef.current) return;
+    queuePresets(async () => showPresets(await storedPresets()));
+  };
+
+  /**
+   * Changes the presets with `update`: on show straight away, then made
+   * again on the stored list and written whole to settings.json, so a
+   * change in another editor window is never lost.
+   */
+  const changePresets = (update: (presets: SavedBackdrop[]) => SavedBackdrop[]) => {
+    if (!presetsRef.current) return;
+    showPresets(update(presetsRef.current));
+    queuePresets(async () => {
+      const next = update(await storedPresets());
+      showPresets(await setBackdropPresets(next).then(parseBackdropPresets));
+    });
   };
 
   /**
@@ -1061,9 +1091,11 @@ export default function EditorWindow() {
         return;
       }
     }
-    const saved = presetsRef.current;
-    if (!saved || saved.length >= MAX_BACKDROP_PRESETS) return;
-    changePresets([...saved, { id: newId(), name: presetName(saved), backdrop }]);
+    // The same id on show and in the stored list, whatever else is there.
+    const id = newId();
+    changePresets((presets) =>
+      presets.length >= MAX_BACKDROP_PRESETS ? presets : [...presets, { id, name: presetName(presets), backdrop }],
+    );
     if (backdrop !== current) commitBackdrop(backdrop);
   };
 
@@ -1406,7 +1438,11 @@ export default function EditorWindow() {
             aria-haspopup="dialog"
             aria-expanded={backdropOpen}
             data-on={backdrop ? "true" : undefined}
-            onClick={() => setBackdropOpen(!backdropOpen)}
+            onClick={() => {
+              // Opening shows any preset saved in another editor window meanwhile.
+              if (!backdropOpen) refreshPresets();
+              setBackdropOpen(!backdropOpen);
+            }}
           >
             <BackdropIcon />
             Backdrop

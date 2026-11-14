@@ -277,9 +277,13 @@ function mockEditor(
       case "set_editor_preferences":
         preferences.saved?.push((payload as { preferences: EditorPreferences }).preferences);
         return (payload as { preferences: EditorPreferences }).preferences;
-      case "set_backdrop_presets":
-        preferences.presets?.push((payload as { presets: BackdropPreset[] }).presets);
-        return (payload as { presets: BackdropPreset[] }).presets;
+      case "set_backdrop_presets": {
+        // Stored, so the next read sees them, as settings.json would.
+        const presets = (payload as { presets: BackdropPreset[] }).presets;
+        preferences.presets?.push(presets);
+        if (!(preferences.stored instanceof Error)) preferences.stored = { ...preferences.stored, backdropPresets: presets };
+        return presets;
+      }
       case "save_backdrop_preset_image":
         calls.push({ cmd, payload });
         return PRESET_COPY;
@@ -1594,6 +1598,37 @@ describe("EditorWindow", () => {
       await waitFor(() => expect(last(sidecars)?.backdrop).toEqual(ocean));
       expect(panel.getByRole("textbox", { name: "Preset name" })).toHaveValue("Preset 1");
       expect(row.getByRole("button", { name: "Preset 2" })).toHaveAttribute("aria-pressed", "false");
+    });
+
+    it("builds each change on the stored presets, so another window's presets are kept", async () => {
+      const lists: BackdropPreset[][] = [];
+      const prefs: PreferencesMock = { presets: lists };
+      mockEditor({ ...sidecar, backdrop: ocean }, [], prefs);
+      await ready();
+      // Another editor window saves a preset after this one loaded.
+      prefs.stored = { backdropPresets: [saved("other", "House", sunset)] };
+
+      const panel = backdropPanel();
+      // Opening the panel shows it.
+      await waitFor(() => expect(panel.getByRole("button", { name: "House" })).toBeInTheDocument());
+      prefs.stored = { backdropPresets: [saved("other", "House", sunset), saved("late", "Docs", sunset)] };
+
+      fireEvent.click(panel.getByRole("button", { name: "Save as preset" }));
+      await waitFor(() =>
+        expect(last(lists)).toEqual([
+          saved("other", "House", sunset),
+          saved("late", "Docs", sunset),
+          { id: expect.any(String), name: "Preset 3", backdrop: ocean },
+        ]),
+      );
+      await waitFor(() => expect(panel.getByRole("button", { name: "Docs" })).toBeInTheDocument());
+
+      // A rename and a delete keep them too.
+      const name = panel.getByRole("textbox", { name: "Preset name" });
+      fireEvent.change(name, { target: { value: "Ocean" } });
+      await waitFor(() => expect(last(lists)?.map((preset) => preset.name)).toEqual(["House", "Docs", "Ocean"]));
+      fireEvent.click(panel.getByRole("button", { name: "Delete preset" }));
+      await waitFor(() => expect(last(lists)?.map((preset) => preset.name)).toEqual(["House", "Docs"]));
     });
 
     it("applies a preset saved in an earlier session, every setting included", async () => {

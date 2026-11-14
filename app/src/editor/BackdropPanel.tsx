@@ -32,8 +32,8 @@ interface BackdropPanelProps {
   presets: SavedBackdrop[] | null;
   /** Saves the backdrop on show as a new preset. */
   onSavePreset: () => void;
-  /** Keeps a renamed or shortened list of presets. */
-  onPresetsChange: (presets: SavedBackdrop[]) => void;
+  /** Renames or deletes presets: `update` is applied to the list as it is stored. */
+  onPresetsChange: (update: (presets: SavedBackdrop[]) => SavedBackdrop[]) => void;
 }
 
 const isHex = (fill: string) => /^#[0-9a-f]{6}$/i.test(fill);
@@ -176,9 +176,9 @@ export default function BackdropPanel({
   // the newest one when the same backdrop was saved twice.
   const active = backdrop ? [...(presets ?? [])].reverse().find((preset) => sameBackdrop(preset.backdrop, backdrop)) : undefined;
   const rename = (id: string, name: string) =>
-    presets && onPresetsChange(presets.map((preset) => (preset.id === id ? { ...preset, name } : preset)));
+    onPresetsChange((list) => list.map((preset) => (preset.id === id ? { ...preset, name } : preset)));
   // The backdrop stays as it is: only the preset goes.
-  const remove = (id: string) => presets && onPresetsChange(presets.filter((preset) => preset.id !== id));
+  const remove = (id: string) => onPresetsChange((list) => list.filter((preset) => preset.id !== id));
 
   const pickImage = async () => {
     const path = await onPickImage().catch(() => null);
