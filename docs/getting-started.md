@@ -74,6 +74,12 @@ Then launch **Grab-it** from your app menu.
 > [!TIP]
 > Grab-it lives in the system tray. On GNOME, the tray needs the *AppIndicator and KStatusNotifierItem Support* extension. Ubuntu includes it already; on Fedora, install `gnome-shell-extension-appindicator`.
 
+### Updates
+
+Once installed, Grab-it keeps itself up to date. About half a minute after it starts, and every few hours after that, it checks for a new release and asks before installing it, listing what's new since your version. Choose **Install and Restart**, or **Later** to be asked again the next time Grab-it starts. **Check for updates…** in the tray menu checks right away.
+
+Updates install the same kind of package you installed: the `.deb` or `.rpm` asks for your password, like `apt` or `dnf` would.
+
 ---
 
 ## 2. Your first capture
@@ -211,6 +217,9 @@ Grab-it needs **Screen Recording** permission. Open **System Settings → Privac
 
 **On Linux (Wayland), the desktop asks me to pick an area itself.**
 That's normal on Wayland: only the desktop is allowed to read the screen, so captures go through its own screenshot picker. *Repeat last region* and *Record GIF* aren't available there. If your desktop doesn't support global shortcuts for apps, use the tray menu.
+
+**macOS captures show only my wallpaper again after an update.**
+Grab-it isn't signed with a paid developer certificate, so macOS may treat the updated app as a new one. Turn Grab-it off and on again under **System Settings → Privacy & Security → Screen Recording**, then reopen it.
 
 **Searching doesn't find text in an old capture.**
 Grab-it reads captures one at a time in the background, newest first, so give it a moment. If the text-recognition download failed, the Library shows a **Retry** button.
