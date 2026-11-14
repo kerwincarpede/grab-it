@@ -1339,7 +1339,7 @@
   background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
-@media (max-width: 1060px) {
+@media (max-width: 1240px) {
   .toolbar {
     flex-wrap: wrap;
   }
