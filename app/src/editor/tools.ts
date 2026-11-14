@@ -242,6 +242,155 @@ export function resizeCrop(from: Rect, box: Rect, image: Size, ratio: number | n
   return cropFromDrag(start, end, image, ratio) ?? from;
 }
 
+/** Crop edges snap to a line within this many screen pixels (divide by the view scale for capture pixels). */
+export const CROP_SNAP_PX = 6;
+
+/** Lines a crop snaps to, in capture pixels: `x` vertical, `y` horizontal. See `findEdges`. */
+export interface SnapLines {
+  x: number[];
+  y: number[];
+}
+
+/** The sides of a crop that are moving. Both sides of a pair moving moves the crop along that axis. */
+export interface CropSides {
+  left: boolean;
+  right: boolean;
+  top: boolean;
+  bottom: boolean;
+}
+
+/** Every side moving: the crop is being moved whole. */
+export const ALL_SIDES: CropSides = { left: true, right: true, top: true, bottom: true };
+
+/** The sides a crop resize handle moves, from its Konva anchor name ("top-left", "middle-right"…). */
+export function anchorSides(anchor: string): CropSides {
+  return { left: anchor.includes("left"), right: anchor.includes("right"), top: anchor.includes("top"), bottom: anchor.includes("bottom") };
+}
+
+/**
+ * The handle box `box` with the sides that are not `moving` put back where
+ * they were in `from`. Konva scales from the centre while ⌥/Alt is held;
+ * this keeps the far side still regardless.
+ */
+export function holdCropSides(from: Rect, box: Rect, moving: CropSides): Rect {
+  const next = normalizeRect(box);
+  const left = moving.left ? next.x : from.x;
+  const right = moving.right ? next.x + next.width : from.x + from.width;
+  const top = moving.top ? next.y : from.y;
+  const bottom = moving.bottom ? next.y + next.height : from.y + from.height;
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+/** The line in `lines` nearest `value`, if one is within `threshold`; null otherwise. */
+export function nearestLine(value: number, lines: number[], threshold: number): number | null {
+  let best: number | null = null;
+  for (const line of lines) {
+    const distance = Math.abs(line - value);
+    if (distance <= threshold && (best === null || distance < Math.abs(best - value))) best = line;
+  }
+  return best;
+}
+
+/** The lines along one axis a crop snaps to: the image's two borders plus those found in it. */
+function axisLines(found: number[], limit: number): number[] {
+  return [0, ...found.filter((line) => line > 0 && line < limit), limit];
+}
+
+/**
+ * One axis of a free snap: `start` and `size` along it, with either side,
+ * or both (a move), drawn to the nearest line. A snap that would leave the
+ * image or the crop smaller than `MIN_SIZE` is dropped.
+ */
+function snapSpan(start: number, size: number, moveStart: boolean, moveEnd: boolean, lines: number[], threshold: number, limit: number): [number, number] {
+  const end = start + size;
+  if (moveStart && moveEnd) {
+    const toStart = nearestLine(start, lines, threshold);
+    const toEnd = nearestLine(end, lines, threshold);
+    const shifts = [toStart === null ? null : toStart - start, toEnd === null ? null : toEnd - end]
+      .filter((shift): shift is number => shift !== null && start + shift >= 0 && end + shift <= limit)
+      .sort((a, b) => Math.abs(a) - Math.abs(b));
+    return shifts.length ? [start + shifts[0], size] : [start, size];
+  }
+  if (moveStart) {
+    const line = nearestLine(start, lines, threshold);
+    if (line !== null && end - line >= MIN_SIZE) return [line, end - line];
+  } else if (moveEnd) {
+    const line = nearestLine(end, lines, threshold);
+    if (line !== null && line - start >= MIN_SIZE) return [start, line - start];
+  }
+  return [start, size];
+}
+
+/**
+ * The crop with its `moving` sides snapped to the nearest of `lines` or
+ * the image borders within `threshold` capture pixels. A crop being moved
+ * (both sides of an axis) shifts to whichever side is nearer a line. With a
+ * `ratio` (width over height), only the dragged side snaps and the other
+ * follows from the ratio; at a corner the nearer snap wins, and a snap that
+ * would leave the image is dropped. Without a snap the crop is unchanged.
+ */
+export function snapCropEdges(crop: Rect, moving: CropSides, lines: SnapLines, threshold: number, image: Size, ratio: number | null = null): Rect {
+  const xs = axisLines(lines.x, image.width);
+  const ys = axisLines(lines.y, image.height);
+  const moveX = moving.left && moving.right;
+  const moveY = moving.top && moving.bottom;
+  if (!ratio || moveX || moveY) {
+    const [x, width] = snapSpan(crop.x, crop.width, moving.left, moving.right, xs, threshold, image.width);
+    const [y, height] = snapSpan(crop.y, crop.height, moving.top, moving.bottom, ys, threshold, image.height);
+    return { x, y, width, height };
+  }
+  const left = crop.x;
+  const right = crop.x + crop.width;
+  const top = crop.y;
+  const bottom = crop.y + crop.height;
+  // The corner (or side) opposite the dragged one holds still.
+  const place = (width: number, height: number): Rect => ({
+    x: moving.left ? right - width : left,
+    y: moving.top ? bottom - height : top,
+    width,
+    height,
+  });
+  const inside = (rect: Rect) =>
+    rect.width >= MIN_SIZE && rect.height >= MIN_SIZE && rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= image.width && rect.y + rect.height <= image.height;
+  const candidates: { rect: Rect; distance: number }[] = [];
+  if (moving.left || moving.right) {
+    const edge = moving.left ? left : right;
+    const line = nearestLine(edge, xs, threshold);
+    if (line !== null) {
+      const width = moving.left ? right - line : line - left;
+      candidates.push({ rect: place(width, Math.round(width / ratio)), distance: Math.abs(line - edge) });
+    }
+  }
+  if (moving.top || moving.bottom) {
+    const edge = moving.top ? top : bottom;
+    const line = nearestLine(edge, ys, threshold);
+    if (line !== null) {
+      const height = moving.top ? bottom - line : line - top;
+      candidates.push({ rect: place(Math.round(height * ratio), height), distance: Math.abs(line - edge) });
+    }
+  }
+  const best = candidates.filter((candidate) => inside(candidate.rect)).sort((a, b) => a.distance - b.distance)[0];
+  return best ? best.rect : crop;
+}
+
+/**
+ * A crop drag from `start` to `end` (see `cropBox`) snapped to `lines` and
+ * the image borders within `threshold`: the start corner snaps, then the
+ * dragged sides (see `snapCropEdges`). A drag too small to be a crop is
+ * left as it is, so a stray click near a corner stays a stray click.
+ */
+export function snapCropDrag(start: Point, end: Point, image: Size, ratio: number | null, lines: SnapLines, threshold: number): Rect {
+  const raw = cropBox(start, end, image, ratio);
+  if (raw.width < MIN_SIZE || raw.height < MIN_SIZE) return raw;
+  const from = {
+    x: nearestLine(start.x, axisLines(lines.x, image.width), threshold) ?? start.x,
+    y: nearestLine(start.y, axisLines(lines.y, image.height), threshold) ?? start.y,
+  };
+  const box = cropBox(from, end, image, ratio);
+  const sides = { left: end.x < from.x, right: end.x >= from.x, top: end.y < from.y, bottom: end.y >= from.y };
+  return snapCropEdges(box, sides, lines, threshold, image, ratio);
+}
+
 /**
  * A crop drawn on show (display space) back in capture pixels, where
  * `Annotations.crop` lives: its two corners mapped with `toCapture` and
@@ -490,12 +639,13 @@ export function releaseRestores(heldMs: number, used: boolean): boolean {
 }
 
 /**
- * The tool a modified drag draws, whatever tool is active: ⌘ (Ctrl
- * elsewhere) a rectangle, ⌥ (Alt) an arrow. Null for a plain drag.
+ * The tool a modified drag draws over the `active` tool: ⌘ (Ctrl
+ * elsewhere) a rectangle, ⌥ (Alt) an arrow. Null for a plain drag, and for
+ * ⌥ with the Crop tool, where it crops without snapping instead.
  */
-export function modifierTool(event: { ctrlKey: boolean; metaKey: boolean; altKey: boolean }): Tool | null {
+export function modifierTool(event: { ctrlKey: boolean; metaKey: boolean; altKey: boolean }, active?: Tool): Tool | null {
   if (event.ctrlKey || event.metaKey) return "rect";
-  if (event.altKey) return "arrow";
+  if (event.altKey && active !== "crop") return "arrow";
   return null;
 }
 

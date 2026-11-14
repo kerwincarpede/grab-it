@@ -331,7 +331,11 @@ const pressed = (name: string) =>
   within(screen.getByRole("toolbar", { name: "Annotation tools" })).getByRole("button", { name });
 
 /** Drags across the stage from `from` to `to` (capture pixels) with the given modifier keys. */
-function drag(from: [number, number], to: [number, number], keys: { metaKey?: boolean; altKey?: boolean; shiftKey?: boolean } = {}) {
+function drag(
+  from: [number, number],
+  to: [number, number],
+  keys: { metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean } = {},
+) {
   Object.assign(pointerAt, { x: from[0], y: from[1] });
   fireEvent.mouseDown(stage(), keys);
   Object.assign(pointerAt, { x: to[0], y: to[1] });
@@ -1414,6 +1418,51 @@ describe("EditorWindow", () => {
     await waitFor(() => expect(last(saved)?.shapes).toHaveLength(5));
     expect(last(saved)?.shapes[4]).toMatchObject({ type: "rect", x: 10, y: 10, width: 100, height: 50 });
     expect(last(saved)?.crop).toEqual({ x: 0, y: 0, width: 320, height: 240 });
+
+    // ⌥ over the crop is still the crop's own (unsnapped) drag: no arrow, no new crop.
+    Object.assign(pointerAt, { x: 10, y: 10 });
+    fireEvent.mouseDown(cropBox, { altKey: true });
+    Object.assign(pointerAt, { x: 110, y: 60 });
+    fireEvent.mouseMove(stage(), { altKey: true });
+    fireEvent.mouseUp(stage(), { altKey: true });
+    expect(screen.getByText("Crop 320×240")).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 50));
+    expect(last(saved)?.shapes).toHaveLength(5);
+  });
+
+  it("snaps a crop drag to the image borders, and crops without snapping while ⌥ is held", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.click(pressed("Crop"));
+    drag([3, 3], [397, 150]);
+    await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 0, y: 0, width: 400, height: 150 }));
+
+    // ⌥ no longer draws an arrow with the Crop tool.
+    drag([3, 3], [397, 150], { altKey: true });
+    await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 3, y: 3, width: 394, height: 147 }));
+    expect(last(saved)?.shapes).toHaveLength(4);
+    expect(pressed("Crop")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("snaps a crop to the borders as the capture shows when it is turned 90°", async () => {
+    // 400×300 turned right shows 300 wide and 400 tall.
+    const saved = mockEditor({ ...sidecar, rotation: 90 });
+    await ready();
+    fireEvent.click(pressed("Crop"));
+    drag([3, 3], [297, 396]);
+    await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 0, y: 0, width: 400, height: 300 }));
+    drag([3, 3], [297, 396], { altKey: true });
+    await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 3, y: 3, width: 393, height: 294 }));
+  });
+
+  it("still draws a rectangle on Ctrl-drag with the Crop tool, leaving the crop alone", async () => {
+    const saved = mockEditor({ ...sidecar, crop: { x: 0, y: 0, width: 320, height: 240 } });
+    await ready();
+    fireEvent.click(pressed("Crop"));
+    drag([10, 10], [80, 60], { ctrlKey: true });
+    await waitFor(() => expect(last(saved)?.shapes[4]).toMatchObject({ type: "rect", x: 10, y: 10, width: 70, height: 50 }));
+    expect(last(saved)?.crop).toEqual({ x: 0, y: 0, width: 320, height: 240 });
+    expect(pressed("Crop")).toHaveAttribute("aria-pressed", "true");
   });
 
   it("gives the crop move and resize handles with the Crop tool, corners only with a ratio", async () => {

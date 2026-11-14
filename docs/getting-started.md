@@ -139,7 +139,7 @@ Click **Annotate** and the editor opens. Pick a tool from the rail on the left, 
 
 - `Ctrl/⌘ + D` duplicates the selected shape.
 - Arrow keys nudge it (hold `Shift` for bigger steps).
-- With **Crop**, pick a ratio in the top bar to keep the crop to that shape (picking one reshapes a crop you already drew). Drag the crop to move it, or its handles to resize it. Hold `Shift` for a square Free crop.
+- With **Crop**, pick a ratio in the top bar to keep the crop to that shape (picking one reshapes a crop you already drew). Drag the crop to move it, or its handles to resize it. Hold `Shift` for a square Free crop. Crop edges snap to the image borders and to strong edges in the screenshot, such as window borders and panels; hold `Alt/⌥` while you drag to crop without snapping.
 - `[` and `]` make lines thinner or thicker.
 - `Ctrl/⌘ + [` and `Ctrl/⌘ + ]` rotate the screenshot left and right.
 - `Ctrl/⌘ + C` copies the finished image.
