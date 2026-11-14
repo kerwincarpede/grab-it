@@ -193,8 +193,12 @@ struct Sink {
     sample_rate: u32,
     /// When the first sample was heard.
     first_sample: Option<Instant>,
-    /// The sample frames written so far, silence included.
+    /// The sample frames heard so far, silence included.
     frames: u64,
+    /// The stretches of silence that are not written, as sorted `[from,
+    /// to)` sample frames of the sound: they are filled in when it is cut
+    /// to the video, so silence the video skipped is never written.
+    holes: Vec<(u64, u64)>,
     /// Whether a stretch with no chunks is filled with silence.
     fill_gaps: bool,
     /// The first write that failed.
@@ -224,6 +228,7 @@ impl Sink {
             sample_rate,
             first_sample: None,
             frames: 0,
+            holes: Vec::new(),
             fill_gaps,
             error: None,
         })))
@@ -249,12 +254,13 @@ impl Sink {
         let Some(writer) = self.writer.as_mut() else {
             return;
         };
-        let mut written = write_silence(writer, silence, self.channels);
-        if written.is_ok() {
-            written = writer.write(samples);
-        }
-        match written {
-            Ok(()) => self.frames += silence + samples.len() as u64 / channels,
+        match writer.write(samples) {
+            Ok(()) => {
+                if silence > 0 {
+                    self.holes.push((self.frames, self.frames + silence));
+                }
+                self.frames += silence + samples.len() as u64 / channels;
+            }
             Err(err) if self.error.is_none() => {
                 self.error = Some(format!("could not write the sound: {err}"));
             }
@@ -279,8 +285,8 @@ impl Sink {
 
 /// How many sample frames of silence go before a chunk first heard at
 /// `heard`, given that the sound's first sample was heard at `first` and
-/// `written` frames have been written since: none unless the chunk is
-/// more than [`SILENCE_AFTER`] later than they account for.
+/// `written` frames have been heard since: none unless the chunk is more
+/// than [`SILENCE_AFTER`] later than they account for.
 pub fn missing_frames(first: Instant, written: u64, sample_rate: u32, heard: Instant) -> u64 {
     let rate = u64::from(sample_rate.max(1));
     let nanos = u128::from(written) * 1_000_000_000 / u128::from(rate);
@@ -385,20 +391,30 @@ pub struct Captured {
     pub first_sample: Instant,
     channels: u16,
     sample_rate: u32,
+    /// The silence not written to the WAV (see `Sink::holes`).
+    holes: Vec<(u64, u64)>,
 }
 
 impl Captured {
     /// Cuts the stretches the video skipped (`gaps`) out of the sound, so
-    /// what comes after them stays in step. `offset` is when the sound
-    /// starts against the first frame, as [`offset`] says.
+    /// what comes after them stays in step, and writes in the silence not
+    /// yet written that is left. `offset` is when the sound starts against
+    /// the first frame, as [`offset`] says.
     pub fn cut(&self, gaps: &[Gap], offset: f64) -> io::Result<()> {
         let ranges = gap_frames(gaps, offset, self.sample_rate);
-        if ranges.is_empty() {
+        if ranges.is_empty() && self.holes.is_empty() {
             return Ok(());
         }
         let cut = self.wav.with_extension("cut.wav");
-        let result = cut_wav(&self.wav, &cut, self.channels, self.sample_rate, &ranges)
-            .and_then(|()| fs::rename(&cut, &self.wav));
+        let result = cut_wav(
+            &self.wav,
+            &cut,
+            self.channels,
+            self.sample_rate,
+            &ranges,
+            &self.holes,
+        )
+        .and_then(|()| fs::rename(&cut, &self.wav));
         if result.is_err() {
             let _ = fs::remove_file(&cut);
         }
@@ -442,42 +458,84 @@ pub fn gap_frames(gaps: &[Gap], offset: f64, sample_rate: u32) -> Vec<(u64, u64)
 }
 
 /// Copies the 16-bit WAV `from` (as [`WavWriter`] writes it) to `to`,
-/// leaving out the sample frames in `ranges`, which must be sorted and not
-/// overlap, as [`gap_frames`] gives them. One pass over the file, copying
-/// and skipping whole stretches.
+/// along the sound's own frames, which are the file's with the silence in
+/// `holes` put back, leaving out the frames in `ranges`. Both must be
+/// sorted and not overlap, as [`gap_frames`] and `Sink::holes` give them.
+/// Whole stretches are copied, skipped or written as silence.
 fn cut_wav(
     from: &Path,
     to: &Path,
     channels: u16,
     sample_rate: u32,
     ranges: &[(u64, u64)],
+    holes: &[(u64, u64)],
 ) -> io::Result<()> {
     let frame_bytes = u64::from(channels.max(1)) * 2;
     let mut input = BufReader::new(File::open(from)?);
-    input.seek(SeekFrom::Start(u64::from(WAV_HEADER_BYTES)))?;
+    let file_frames = input
+        .get_ref()
+        .metadata()?
+        .len()
+        .saturating_sub(u64::from(WAV_HEADER_BYTES))
+        / frame_bytes;
+    let total = file_frames + holes.iter().map(|(from, to)| to - from).sum::<u64>();
     let mut writer = WavWriter::new(BufWriter::new(File::create(to)?), channels, sample_rate)?;
     let mut buffer = vec![0u8; 64 * 1024];
-    // The sample frame `input` is at.
+    for (start, end) in kept_ranges(ranges, total) {
+        let mut at = start;
+        while at < end {
+            // The first hole not over by `at`, and the frames of those before.
+            let mut before = 0;
+            let mut next = None;
+            for &(hole_start, hole_end) in holes {
+                if hole_end <= at {
+                    before += hole_end - hole_start;
+                } else {
+                    next = Some((hole_start, hole_end));
+                    break;
+                }
+            }
+            match next {
+                Some((hole_start, hole_end)) if hole_start <= at => {
+                    let until = hole_end.min(end);
+                    write_silence(&mut writer, until - at, channels)?;
+                    at = until;
+                }
+                next => {
+                    let until = next.map_or(end, |(hole_start, _)| hole_start.min(end));
+                    input.seek(SeekFrom::Start(
+                        u64::from(WAV_HEADER_BYTES) + (at - before) * frame_bytes,
+                    ))?;
+                    let wanted = (until - at) * frame_bytes;
+                    let copied = copy_bytes(&mut input, &mut writer, wanted, &mut buffer)?;
+                    if copied < wanted {
+                        // The file ended early.
+                        return finish_cut(writer);
+                    }
+                    at = until;
+                }
+            }
+        }
+    }
+    finish_cut(writer)
+}
+
+/// The `[from, to)` ranges of `0..total` outside `ranges`, which must be
+/// sorted and not overlap.
+fn kept_ranges(ranges: &[(u64, u64)], total: u64) -> Vec<(u64, u64)> {
+    let mut kept = Vec::with_capacity(ranges.len() + 1);
     let mut at = 0u64;
     for &(start, end) in ranges {
-        if end <= at {
-            continue;
-        }
+        let start = start.min(total);
         if start > at {
-            let wanted = (start - at) * frame_bytes;
-            let copied = copy_bytes(&mut input, &mut writer, wanted, &mut buffer)?;
-            if copied < wanted {
-                // The sound ended before this gap.
-                return finish_cut(writer);
-            }
-            at = start;
+            kept.push((at, start));
         }
-        let skip = (end - at) * frame_bytes;
-        input.seek_relative(i64::try_from(skip).unwrap_or(i64::MAX))?;
-        at = end;
+        at = at.max(end.min(total));
     }
-    copy_bytes(&mut input, &mut writer, u64::MAX, &mut buffer)?;
-    finish_cut(writer)
+    if total > at {
+        kept.push((at, total));
+    }
+    kept
 }
 
 /// Copies up to `limit` bytes of samples from `input` to `writer`, in
@@ -554,9 +612,10 @@ impl Sound {
             Some(capture) => capture.stop(),
             None => None,
         };
-        let (finished, channels, sample_rate) = {
+        let (finished, channels, sample_rate, holes) = {
             let mut sink = lock(&self.sink);
-            (sink.finish(), sink.channels, sink.sample_rate)
+            let holes = std::mem::take(&mut sink.holes);
+            (sink.finish(), sink.channels, sink.sample_rate, holes)
         };
         // From here the WAV is the result's to delete.
         let wav = std::mem::take(&mut self.wav);
@@ -566,6 +625,7 @@ impl Sound {
                 first_sample,
                 channels,
                 sample_rate,
+                holes,
             }),
             Ok(None) => {
                 let _ = std::fs::remove_file(&wav);
@@ -1186,6 +1246,7 @@ mod tests {
             first_sample: Instant::now(),
             channels: 2,
             sample_rate: 10,
+            holes: Vec::new(),
         };
         let gap = Gap {
             start: Duration::from_millis(500),
@@ -1238,6 +1299,7 @@ mod tests {
             first_sample: Instant::now(),
             channels: 1,
             sample_rate: 100,
+            holes: Vec::new(),
         };
         let ms = Duration::from_millis;
         let gap = |start, length| Gap {
@@ -1370,24 +1432,57 @@ mod tests {
         assert_eq!(missing_frames(first, 1000, 1000, first + ms(3500)), 2500);
 
         let dir = tempfile::tempdir().unwrap();
-        let wav = dir.path().join("system.wav");
-        let sink = Sink::create(&wav, 2, 1000, true).unwrap();
-        // 100 stereo frames, then the next 100 half a second late.
-        lock(&sink).push(&[1; 200], first + ms(100));
-        lock(&sink).push(&[2; 200], first + ms(700));
-        assert_eq!(lock(&sink).finish().unwrap(), Some(first));
-        let bytes = fs::read(&wav).unwrap();
-        let samples: Vec<i16> = bytes[44..]
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|pair| i16::from_le_bytes(*pair))
-            .collect();
-        // 100 frames, 500 of silence, then 100 more.
+        // The sound of a sink pushed `chunks`, cut to the video's `gaps`.
+        let record = |name: &str, chunks: &[(i16, Duration)], gaps: &[Gap]| {
+            let wav = dir.path().join(name);
+            let sink = Sink::create(&wav, 2, 1000, true).unwrap();
+            for &(value, at) in chunks {
+                lock(&sink).push(&[value; 200], first + at);
+            }
+            let mut sink = lock(&sink);
+            assert_eq!(sink.finish().unwrap(), Some(first));
+            // The silence is not written while recording.
+            assert_eq!(
+                fs::metadata(&wav).unwrap().len(),
+                44 + 400 * chunks.len() as u64
+            );
+            let sound = Captured {
+                wav: wav.clone(),
+                first_sample: first,
+                channels: 2,
+                sample_rate: 1000,
+                holes: std::mem::take(&mut sink.holes),
+            };
+            sound.cut(gaps, 0.0).unwrap();
+            let bytes = fs::read(&wav).unwrap();
+            bytes[44..]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| i16::from_le_bytes(*pair))
+                .collect::<Vec<i16>>()
+        };
+        // 100 stereo frames, then the next 100 half a second late: 100
+        // frames, 500 of silence, then 100 more.
+        let samples = record("system.wav", &[(1, ms(100)), (2, ms(700))], &[]);
         assert_eq!(samples.len(), (100 + 500 + 100) * 2);
         assert!(samples[..200].iter().all(|&s| s == 1));
         assert!(samples[200..1200].iter().all(|&s| s == 0));
         assert!(samples[1200..].iter().all(|&s| s == 2));
+
+        // The computer slept for an hour, and the video skipped all but a
+        // second of it: only that second of silence is ever written.
+        let hour = Duration::from_secs(3600);
+        let slept = Gap {
+            start: ms(500),
+            length: hour - ms(1000),
+        };
+        let samples = record("slept.wav", &[(1, ms(100)), (2, hour + ms(100))], &[slept]);
+        // 100 frames, 400 + 500 of silence either side of the gap, 100 more.
+        assert_eq!(samples.len(), (100 + 900 + 100) * 2);
+        assert!(samples[..200].iter().all(|&s| s == 1));
+        assert!(samples[200..2000].iter().all(|&s| s == 0));
+        assert!(samples[2000..].iter().all(|&s| s == 2));
 
         // The microphone is never padded.
         let wav = dir.path().join("mic.wav");

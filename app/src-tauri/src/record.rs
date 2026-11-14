@@ -390,9 +390,9 @@ pub fn start(
             ));
         }
     }
-    if fallback.is_none() {
-        fallback = sound_note(!inputs.is_empty(), &refused);
-    }
+    // What was refused is told on the card with whatever else fails, once
+    // the recording knows what sound it kept (see `record_mp4`).
+
     // Clicks and keys are watched through global input hooks, which macOS
     // only allows with Input Monitoring.
     let wants_input = recording.show_clicks || recording.show_keystrokes;
@@ -472,6 +472,7 @@ pub fn start(
                                 ready,
                                 &recording,
                                 inputs,
+                                refused,
                                 &mut overlays,
                             )
                         },
@@ -532,12 +533,26 @@ fn sound_note(kept: bool, failed: &[(&str, String)]) -> Option<String> {
     })
 }
 
+/// What the card says about a recording's sound once it is muxed in:
+/// every sound in `failed` (refused before the recording, or failed
+/// during it), told against whether any sound was `kept`; and when the
+/// kept sound could not be muxed in, that the video is silent.
+fn final_note(failed: &[(&str, String)], kept: bool, muxed: Result<(), String>) -> Option<String> {
+    match muxed {
+        Err(err) if kept => Some(no_sound(&err)),
+        _ => sound_note(kept, failed),
+    }
+}
+
 /// Grabs frames into the MP4 at `path` until `stop` is set, at a constant
 /// frame rate: a frame time that goes by while a grab is under way
 /// repeats the frame before. Draws `overlays` into each frame grabbed.
 /// Saves where the pointer was beside it, and muxes in the sound of
-/// `inputs`, mixed into one track when there are two. Returns how long the
-/// video runs, and why it is missing sound when some failed.
+/// `inputs`, mixed into one track when there are two. `refused` is the
+/// sound that was not allowed or not available, by what it is and why.
+/// Returns how long the video runs, and why it is missing sound when some
+/// was refused or failed.
+#[allow(clippy::too_many_arguments)]
 fn record_mp4(
     source: &mut dyn FrameSource,
     path: &Path,
@@ -545,11 +560,11 @@ fn record_mp4(
     ready: &ffmpeg::Ready,
     recording: &RecordingSettings,
     inputs: Vec<Input>,
+    refused: Vec<(&'static str, String)>,
     overlays: &mut Overlays,
 ) -> Result<(Duration, Option<String>), String> {
-    let wanted = !inputs.is_empty();
-    // What failed, and why.
-    let mut failed: Vec<(&str, String)> = Vec::new();
+    // What was refused or failed, and why.
+    let mut failed: Vec<(&str, String)> = refused;
     // Started before the first grab, so the sound covers the first frame;
     // what it heard before that frame is cut when it is muxed in. Dropped
     // on an early return, which stops them and deletes their WAVs.
@@ -644,12 +659,8 @@ fn record_mp4(
             }
         }
     }
-    let mut note = if wanted {
-        sound_note(!captured.is_empty(), &failed)
-    } else {
-        None
-    };
-    if !captured.is_empty() {
+    let kept = !captured.is_empty();
+    let muxed = if kept {
         let tracks: Vec<ffmpeg::AudioTrack<'_>> = captured
             .iter()
             .map(|(sound, offset)| ffmpeg::AudioTrack {
@@ -658,11 +669,14 @@ fn record_mp4(
             })
             .collect();
         // The video is kept, silent.
-        if let Err(err) = ffmpeg::add_audio(&ready.path, path, &tracks, pacer.duration()) {
+        ffmpeg::add_audio(&ready.path, path, &tracks, pacer.duration()).map_err(|err| {
             eprintln!("Grab-it: the recording has no sound: {err}");
-            note = Some(no_sound(&err.to_string()));
-        }
-    }
+            err.to_string()
+        })
+    } else {
+        Ok(())
+    };
+    let note = final_note(&failed, kept, muxed);
     // The video is fine without it.
     if let Err(err) = track.save(path) {
         eprintln!("Grab-it: no pointer sidecar: {err}");
@@ -772,6 +786,42 @@ mod tests {
             sound_note(false, &mic).as_deref(),
             Some("Saved without sound: it was unplugged.")
         );
+    }
+
+    #[test]
+    fn a_refused_sound_is_told_with_the_one_that_failed_during_the_recording() {
+        let refused = (
+            "the microphone",
+            "Grab-it may not use the microphone".to_owned(),
+        );
+        let failed = (
+            "the system sound",
+            "the computer played no sound".to_owned(),
+        );
+        // Both are missing: the MP4 is silent, whichever was refused.
+        assert_eq!(
+            final_note(&[refused.clone(), failed.clone()], false, Ok(())).as_deref(),
+            Some("Saved without sound: Grab-it may not use the microphone.")
+        );
+        // Refused, and the other kept.
+        assert_eq!(
+            final_note(std::slice::from_ref(&refused), true, Ok(())).as_deref(),
+            Some("Saved without the microphone: Grab-it may not use the microphone.")
+        );
+        // Refused, and the other could not be muxed in: silent too.
+        assert_eq!(
+            final_note(
+                std::slice::from_ref(&refused),
+                true,
+                Err("it exited with 1".to_owned())
+            )
+            .as_deref(),
+            Some("Saved without sound: it exited with 1.")
+        );
+        // Nothing refused or failed, and the sound is in.
+        assert_eq!(final_note(&[], true, Ok(())), None);
+        // No sound was wanted at all.
+        assert_eq!(final_note(&[], false, Ok(())), None);
     }
 
     #[test]

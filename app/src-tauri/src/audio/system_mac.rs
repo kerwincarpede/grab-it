@@ -199,7 +199,7 @@ impl Stream {
             let config = SCStreamConfiguration::new();
             config.setCapturesAudio(true);
             config.setSampleRate(RATE as isize);
-            config.setChannelCount(isize::from(CHANNELS));
+            config.setChannelCount(CHANNELS as isize);
             config.setExcludesCurrentProcessAudio(true);
             // The picture is thrown away: as little of it as there can be.
             config.setWidth(2);
