@@ -16,6 +16,12 @@ export interface Shot {
   height: number;
   tags: string[];
   notes: string;
+  /** What the AI describer saw in the image; null until it has described it. */
+  aiDescription: string | null;
+  /** One of {@link AI_CATEGORIES}; null until described. */
+  aiCategory: string | null;
+  /** Tags the AI describer suggested, kept apart from the user's own. */
+  aiTags: string[];
 }
 
 /** Mirrors `ShotPage` in src-tauri/src/library.rs. */
@@ -93,7 +99,7 @@ export function formatCapturedAt(ms: number): string {
 }
 
 /** Mirrors `MatchField` in src-tauri/src/search.rs. */
-export type MatchField = "text" | "tags" | "notes" | "app" | "windowTitle";
+export type MatchField = "text" | "tags" | "notes" | "app" | "windowTitle" | "description";
 
 /** How each field a search can match is named in results. */
 export const FIELD_LABELS: Record<MatchField, string> = {
@@ -102,6 +108,7 @@ export const FIELD_LABELS: Record<MatchField, string> = {
   notes: "Notes",
   app: "App",
   windowTitle: "Window",
+  description: "Description",
 };
 
 /** Mirrors `SnippetPart` in src-tauri/src/search.rs. */
@@ -137,24 +144,30 @@ export interface SearchQuery {
   /** Captured before, in ms since the Unix epoch. */
   to: number | null;
   app: string | null;
+  /** Matches the user's tags and the AI's. */
   tag: string | null;
+  /** An AI category, matched exactly; left out for any. */
+  category?: string;
 }
 
 /** Mirrors `FilterOptions` in src-tauri/src/search.rs. */
 export interface FilterOptions {
   apps: string[];
   tags: string[];
+  /** AI categories some capture has. */
+  categories: string[];
 }
 
 /** The filter bar as the user set it; "" means any. Dates are `YYYY-MM-DD`. */
 export interface Filters {
   app: string;
   tag: string;
+  category: string;
   fromDate: string;
   toDate: string;
 }
 
-export const NO_FILTERS: Filters = { app: "", tag: "", fromDate: "", toDate: "" };
+export const NO_FILTERS: Filters = { app: "", tag: "", category: "", fromDate: "", toDate: "" };
 
 /** How long typing must pause before the Library searches. */
 export const SEARCH_DEBOUNCE_MS = 250;
@@ -176,13 +189,19 @@ export function buildQuery(text: string, filters: Filters): SearchQuery {
     to: dayStart(filters.toDate, 1),
     app: filters.app || null,
     tag: filters.tag || null,
+    ...(filters.category ? { category: filters.category } : {}),
   };
 }
 
 /** Whether the query narrows the Library at all. */
 export function isSearching(query: SearchQuery): boolean {
   return (
-    query.text.length > 0 || query.from !== null || query.to !== null || query.app !== null || query.tag !== null
+    query.text.length > 0 ||
+    query.from !== null ||
+    query.to !== null ||
+    query.app !== null ||
+    query.tag !== null ||
+    !!query.category
   );
 }
 
@@ -191,7 +210,7 @@ export function searchShots(query: SearchQuery, offset: number, limit: number): 
   return invoke<SearchPage>("library_search", { query, offset, limit });
 }
 
-/** Every app and tag in the library, for the filter bar. */
+/** Every app, tag and AI category in the library, for the filter bar. */
 export function filterOptions(): Promise<FilterOptions> {
   return invoke<FilterOptions>("library_filter_options");
 }
@@ -218,4 +237,61 @@ export function retryOcr(): Promise<void> {
 /** Calls `handler` whenever the OCR queue changes state. */
 export function onOcrStatus(handler: (status: OcrStatus) => void): Promise<UnlistenFn> {
   return listen<OcrStatus>(OCR_STATUS_EVENT, (event) => handler(event.payload));
+}
+
+/** The categories the AI describer sorts captures into, with how the Library names them. */
+export const AI_CATEGORIES: Record<string, string> = {
+  code: "Code",
+  terminal: "Terminal",
+  browser: "Browser / web page",
+  chat: "Chat",
+  document: "Document",
+  design: "Design",
+  error: "Error / dialog",
+  receipt: "Receipt",
+  photo: "Photo",
+  other: "Other",
+};
+
+/** A category's friendly name; an unknown one is shown capitalised. */
+export function categoryLabel(category: string): string {
+  return AI_CATEGORIES[category] ?? category.charAt(0).toUpperCase() + category.slice(1);
+}
+
+/** Mirrors `AiStatus` in src-tauri: the AI describer's queue. */
+export interface AiStatus {
+  /** "off" when AI descriptions are turned off in Settings. */
+  state: "off" | "idle" | "working" | "error";
+  /** Captures described so far in this run. */
+  done: number;
+  /** Captures in this run. */
+  total: number;
+  error: string | null;
+}
+
+/** Mirrors the AI status event in src-tauri. */
+export const AI_STATUS_EVENT = "ai-status";
+
+export function aiStatus(): Promise<AiStatus> {
+  return invoke<AiStatus>("ai_status");
+}
+
+/** Queues the shot to be described again; the result arrives as a library change. */
+export function redescribeShot(id: number): Promise<void> {
+  return invoke<void>("ai_redescribe", { id });
+}
+
+/** Forgets the shot's AI description, category and tags. */
+export function clearAiDescription(id: number): Promise<void> {
+  return invoke<void>("ai_clear", { id });
+}
+
+/** Calls `handler` whenever the AI describer's queue changes. */
+export function onAiStatus(handler: (status: AiStatus) => void): Promise<UnlistenFn> {
+  return listen<AiStatus>(AI_STATUS_EVENT, (event) => handler(event.payload));
+}
+
+/** Opens the Settings window. */
+export function openSettings(): Promise<void> {
+  return invoke<void>("open_target", { target: "settings" });
 }

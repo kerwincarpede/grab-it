@@ -5,7 +5,10 @@ import {
   NO_FILTERS,
   PAGE_SIZE,
   SEARCH_DEBOUNCE_MS,
+  aiStatus,
   buildQuery,
+  categoryLabel,
+  clearAiDescription,
   copyShot,
   deleteShot,
   filterOptions,
@@ -13,17 +16,21 @@ import {
   isSearching,
   listShots,
   ocrStatus,
+  onAiStatus,
   onLibraryChanged,
   onOcrStatus,
+  openSettings,
   openShot,
   parseTags,
   pinShot,
+  redescribeShot,
   retryOcr,
   revealShot,
   searchShots,
   setShotNotes,
   setShotTags,
   shotThumbnail,
+  type AiStatus,
   type FilterOptions,
   type Filters,
   type OcrStatus,
@@ -111,6 +118,40 @@ function OcrBanner({ status, onRetry }: { status: OcrStatus; onRetry: () => void
   }
 }
 
+/** The AI describer's progress, or why it stopped, while there is something to say. */
+function AiBanner({ status, onSettings }: { status: AiStatus; onSettings: () => void }) {
+  if (status.state === "working") {
+    const current = Math.min(status.done + 1, status.total);
+    return (
+      <div className="ocr-status ai-status" role="status">
+        <span className="ai-status-chip">
+          {status.total > 0 ? `Describing ${current} of ${status.total}…` : "Describing captures…"}
+        </span>
+        {status.total > 0 && <progress aria-label="Descriptions" max={status.total} value={status.done} />}
+      </div>
+    );
+  }
+  if (status.state === "error") {
+    return (
+      <div className="ocr-status ocr-status-error ai-status" role="status">
+        <span className="ai-status-chip">
+          Could not describe captures{status.error ? `: ${status.error}` : "."}
+        </span>
+        <span className="hint">Is Ollama running? Check the endpoint and model in Settings.</span>
+        <button type="button" className="secondary" onClick={onSettings}>
+          Open Settings
+        </button>
+      </div>
+    );
+  }
+  return null;
+}
+
+/** The capture's AI category as a small chip. */
+function CategoryChip({ category }: { category: string }) {
+  return <span className="category-chip">{categoryLabel(category)}</span>;
+}
+
 /** Keeps the current choice listed even if no capture has it any more. */
 function withCurrent(values: string[], current: string): string[] {
   return current && !values.includes(current) ? [current, ...values] : values;
@@ -160,6 +201,18 @@ function SearchBar({ text, filters, options, active, onText, onSubmit, onFilters
             </option>
           ))}
         </select>
+        <select
+          aria-label="Filter by category"
+          value={filters.category}
+          onChange={(event) => set({ category: event.target.value })}
+        >
+          <option value="">All categories</option>
+          {withCurrent(options.categories ?? [], filters.category).map((category) => (
+            <option key={category} value={category}>
+              {categoryLabel(category)}
+            </option>
+          ))}
+        </select>
         <label className="library-date">
           From
           <input
@@ -192,13 +245,15 @@ function SearchBar({ text, filters, options, active, onText, onSubmit, onFilters
 
 interface DetailsProps {
   shot: Shot;
+  /** AI descriptions are turned off in Settings. */
+  aiOff: boolean;
   onUpdated: (shot: Shot) => void;
   onDeleted: (id: number) => void;
   onError: (message: string) => void;
 }
 
 /** The selected shot: open, tag, annotate with notes or delete it. */
-function ShotDetails({ shot, onUpdated, onDeleted, onError }: DetailsProps) {
+function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError }: DetailsProps) {
   const [tagsText, setTagsText] = useState(shot.tags.join(", "));
   const [notes, setNotes] = useState(shot.notes);
   const [confirming, setConfirming] = useState(false);
@@ -245,6 +300,26 @@ function ShotDetails({ shot, onUpdated, onDeleted, onError }: DetailsProps) {
     }
   }
 
+  async function redescribe() {
+    setNotice(null);
+    try {
+      await redescribeShot(shot.id);
+      setNotice("Describing again. The new description shows up here when it is ready.");
+    } catch (err) {
+      onError(errorMessage(err));
+    }
+  }
+
+  async function clearAi() {
+    setNotice(null);
+    try {
+      await clearAiDescription(shot.id);
+      onUpdated({ ...shot, aiDescription: null, aiCategory: null, aiTags: [] });
+    } catch (err) {
+      onError(errorMessage(err));
+    }
+  }
+
   async function remove() {
     setBusy(true);
     try {
@@ -263,6 +338,8 @@ function ShotDetails({ shot, onUpdated, onDeleted, onError }: DetailsProps) {
   }
 
   const source = [shot.app, shot.windowTitle].filter(Boolean).join(" — ");
+  const aiTags = shot.aiTags ?? [];
+  const described = !!shot.aiDescription || !!shot.aiCategory || aiTags.length > 0;
 
   return (
     <aside className="shot-details" aria-label="Capture details">
@@ -310,6 +387,39 @@ function ShotDetails({ shot, onUpdated, onDeleted, onError }: DetailsProps) {
         />
         <p className="hint">Separate tags with commas. Press Enter to save.</p>
       </form>
+
+      <section className="shot-ai" aria-labelledby="shot-ai-heading">
+        <div className="shot-ai-heading">
+          <span id="shot-ai-heading" className="field-heading">
+            AI description
+          </span>
+          {shot.aiCategory && <CategoryChip category={shot.aiCategory} />}
+        </div>
+        {shot.aiDescription ? (
+          <p className="shot-ai-text">{shot.aiDescription}</p>
+        ) : (
+          <p className="hint">
+            {aiOff ? "Turn on AI descriptions in Settings to describe captures." : "Not described yet."}
+          </p>
+        )}
+        {aiTags.length > 0 && (
+          <span className="shot-tags" aria-label="AI tags">
+            {aiTags.map((tag) => (
+              <span key={tag} className="tag tag-ai" title="Suggested by AI">
+                {tag}
+              </span>
+            ))}
+          </span>
+        )}
+        <div className="shot-ai-actions">
+          <button type="button" className="secondary" disabled={aiOff} onClick={() => void redescribe()}>
+            Re-describe
+          </button>
+          <button type="button" className="secondary" disabled={!described} onClick={() => void clearAi()}>
+            Clear AI description
+          </button>
+        </div>
+      </section>
 
       <div className="field">
         <label htmlFor="shot-notes">Notes</label>
@@ -363,11 +473,13 @@ function LibraryWindow() {
   const [text, setText] = useState("");
   const [searchedText, setSearchedText] = useState("");
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
-  const [options, setOptions] = useState<FilterOptions>({ apps: [], tags: [] });
+  const [options, setOptions] = useState<FilterOptions>({ apps: [], tags: [], categories: [] });
   const [optionReloads, setOptionReloads] = useState(0);
   // Where each result matched, by shot id; empty when not searching.
   const [hits, setHits] = useState<Record<number, SearchHit>>({});
   const [ocr, setOcr] = useState<OcrStatus>({ state: "idle" });
+  // Null until the backend says; the AI actions then stay available.
+  const [ai, setAi] = useState<AiStatus | null>(null);
   const query = useMemo(() => buildQuery(searchedText, filters), [searchedText, filters]);
   const searching = isSearching(query);
   const lastQuery = useRef("");
@@ -441,6 +553,38 @@ function LibraryWindow() {
       })
       .catch(() => {
         // As above: no live OCR progress.
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    let previous: AiStatus["state"] | null = null;
+    aiStatus()
+      .then((status) => {
+        if (cancelled) return;
+        previous ??= status.state;
+        setAi(status);
+      })
+      .catch(() => {
+        // Without a status the Library just shows no AI progress.
+      });
+    onAiStatus((status) => {
+      // A finished run may have described shots on screen; show the new descriptions.
+      if (previous === "working" && status.state !== "working") setReloads((count) => count + 1);
+      previous = status.state;
+      setAi(status);
+    })
+      .then((stop) => {
+        if (cancelled) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {
+        // As above: no live AI progress.
       });
     return () => {
       cancelled = true;
@@ -547,6 +691,12 @@ function LibraryWindow() {
         onClear={clearSearch}
       />
       <OcrBanner status={ocr} onRetry={retry} />
+      {ai && (
+        <AiBanner
+          status={ai}
+          onSettings={() => openSettings().catch((err: unknown) => setError(errorMessage(err)))}
+        />
+      )}
       {error && (
         <p role="alert" className="status status-error">
           {error}
@@ -578,6 +728,17 @@ function LibraryWindow() {
                     <span className="shot-date">{formatCapturedAt(shot.capturedAt)}</span>
                     {shot.app && <span className="shot-app">{shot.app}</span>}
                   </span>
+                  {(shot.aiCategory || shot.aiDescription) && (
+                    <span className="shot-ai-line">
+                      {shot.aiCategory && <CategoryChip category={shot.aiCategory} />}
+                      {/* A description match shows as the highlighted snippet instead. */}
+                      {shot.aiDescription && hits[shot.id]?.field !== "description" && (
+                        <span className="shot-description" title={shot.aiDescription}>
+                          {shot.aiDescription}
+                        </span>
+                      )}
+                    </span>
+                  )}
                   {hits[shot.id] && <Snippet hit={hits[shot.id]} />}
                   {shot.tags.length > 0 && (
                     <span className="shot-tags">
@@ -602,6 +763,7 @@ function LibraryWindow() {
           <ShotDetails
             key={selected.id}
             shot={selected}
+            aiOff={ai?.state === "off"}
             onUpdated={updated}
             onDeleted={deleted}
             onError={setError}

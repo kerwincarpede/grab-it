@@ -4,6 +4,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { describe, expect, it } from "vitest";
 import SettingsWindow from "./SettingsWindow";
+import { DEFAULT_AI_PREFERENCES, isLocalEndpoint, type AiPreferences } from "./api";
 
 const DEFAULT_HOTKEYS = {
   region: "PrintScreen",
@@ -18,6 +19,9 @@ interface Backend {
   autostart?: boolean;
   afterCapture: string;
   copyToClipboard: boolean;
+  ai: AiPreferences;
+  /** What `ai_test_connection` answers; a thrown error when it starts with "error:". */
+  testResult: string;
   saveFolder: string;
   hotkeys: typeof DEFAULT_HOTKEYS;
   hotkeyWarnings: string[];
@@ -30,6 +34,8 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
   const backend: Backend = {
     afterCapture: "quickAccess",
     copyToClipboard: true,
+    ai: { ...DEFAULT_AI_PREFERENCES },
+    testResult: "qwen2.5vl:7b (7.6B, Q4_K_M)",
     saveFolder: "/home/me/Pictures/Grab-it",
     picked: "/data/Shots",
     hotkeys: { ...DEFAULT_HOTKEYS },
@@ -42,6 +48,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     hotkeys: backend.hotkeys,
     afterCapture: backend.afterCapture,
     copyToClipboard: backend.copyToClipboard,
+    ai: backend.ai,
   });
   mockIPC((cmd, payload) => {
     backend.calls.push({ cmd, payload });
@@ -57,11 +64,19 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
         return backend.autostart;
       case "set_preferences": {
         if (backend.setError) throw backend.setError;
-        const { preferences } = payload as { preferences: { afterCapture: string; copyToClipboard: boolean } };
+        const { preferences } = payload as {
+          preferences: { afterCapture: string; copyToClipboard: boolean; ai: AiPreferences };
+        };
         backend.afterCapture = preferences.afterCapture;
         backend.copyToClipboard = preferences.copyToClipboard;
+        backend.ai = preferences.ai;
         return settings();
       }
+      case "ai_test_connection":
+        if (backend.testResult.startsWith("error:")) throw backend.testResult.slice(6).trim();
+        return backend.testResult;
+      case "ai_redescribe_all":
+        return null;
       case "plugin:dialog|open":
         return backend.picked;
       case "set_save_folder": {
@@ -152,7 +167,7 @@ describe("SettingsWindow", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Saved.");
     expect(backend.calls[backend.calls.length - 1]).toEqual({
       cmd: "set_preferences",
-      payload: { preferences: { afterCapture: "editor", copyToClipboard: true } },
+      payload: { preferences: { afterCapture: "editor", copyToClipboard: true, ai: DEFAULT_AI_PREFERENCES } },
     });
   });
 
@@ -166,7 +181,7 @@ describe("SettingsWindow", () => {
 
     await waitFor(() => expect(copy).not.toBeChecked());
     expect(backend.calls[backend.calls.length - 1].payload).toEqual({
-      preferences: { afterCapture: "nothing", copyToClipboard: false },
+      preferences: { afterCapture: "nothing", copyToClipboard: false, ai: DEFAULT_AI_PREFERENCES },
     });
   });
 
@@ -338,5 +353,133 @@ describe("SettingsWindow", () => {
     unmount();
 
     await waitFor(() => expect(commands(backend)).toContain("resume_hotkeys"));
+  });
+});
+
+describe("SettingsWindow AI descriptions", () => {
+  const lastPreferences = (backend: Backend) =>
+    (backend.calls.filter((call) => call.cmd === "set_preferences").pop()?.payload as { preferences: unknown })
+      ?.preferences;
+
+  it("shows the saved AI settings with the privacy note", async () => {
+    mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, apiKey: "sk-secret" } });
+    render(<SettingsWindow />);
+
+    const toggle = await screen.findByRole("checkbox", { name: /Describe captures with AI/ });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByLabelText("Endpoint URL")).toHaveValue("http://localhost:11434/v1");
+    expect(screen.getByLabelText("Model")).toHaveValue("qwen2.5vl:7b");
+    const key = screen.getByLabelText("API key");
+    expect(key).toHaveAttribute("type", "password");
+    expect(key).toHaveValue("sk-secret");
+    expect(screen.getByText(/Only cloud providers need one/)).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /Only describe new captures/ })).toBeChecked();
+    expect(screen.getByText(/nothing leaves this computer; a cloud endpoint receives your screenshots/)).toBeInTheDocument();
+    // Nothing to re-describe while it is off.
+    expect(screen.getByRole("button", { name: "Re-describe all…" })).toBeDisabled();
+  });
+
+  it("saves the toggles at once, keeping the other preferences", async () => {
+    const backend = mockBackend({ afterCapture: "editor" });
+    render(<SettingsWindow />);
+    const toggle = await screen.findByRole("checkbox", { name: /Describe captures with AI/ });
+    await waitFor(() => expect(toggle).toBeEnabled());
+
+    await userEvent.click(toggle);
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(lastPreferences(backend)).toEqual({
+      afterCapture: "editor",
+      copyToClipboard: true,
+      ai: { ...DEFAULT_AI_PREFERENCES, enabled: true },
+    });
+
+    const newOnly = screen.getByRole("checkbox", { name: /Only describe new captures/ });
+    await waitFor(() => expect(newOnly).toBeEnabled());
+    await userEvent.click(newOnly);
+    await waitFor(() => expect(newOnly).not.toBeChecked());
+    expect(backend.ai).toEqual({ ...DEFAULT_AI_PREFERENCES, enabled: true, newCapturesOnly: false });
+    expect(screen.getByRole("status")).toHaveTextContent("Saved.");
+  });
+
+  it("saves a cloud endpoint, model and key", async () => {
+    const backend = mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true } });
+    render(<SettingsWindow />);
+    const endpoint = await screen.findByLabelText("Endpoint URL");
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+
+    await userEvent.clear(endpoint);
+    await userEvent.type(endpoint, " https://api.openai.com/v1 ");
+    await userEvent.clear(screen.getByLabelText("Model"));
+    await userEvent.type(screen.getByLabelText("Model"), "gpt-4o-mini");
+    await userEvent.type(screen.getByLabelText("API key"), "sk-123");
+    await userEvent.click(save);
+
+    await waitFor(() =>
+      expect(backend.ai).toEqual({
+        ...DEFAULT_AI_PREFERENCES,
+        enabled: true,
+        endpoint: "https://api.openai.com/v1",
+        model: "gpt-4o-mini",
+        apiKey: "sk-123",
+      }),
+    );
+    await waitFor(() => expect(save).toBeDisabled());
+    expect(endpoint).toHaveValue("https://api.openai.com/v1");
+  });
+
+  it("saves an emptied key as none", async () => {
+    const backend = mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, apiKey: "sk-old" } });
+    render(<SettingsWindow />);
+    await userEvent.clear(await screen.findByLabelText("API key"));
+    await userEvent.type(screen.getByLabelText("Model"), "{Enter}");
+    await waitFor(() => expect(backend.ai.apiKey).toBeNull());
+  });
+
+  it("tests the connection, saving what was typed first", async () => {
+    const backend = mockBackend();
+    render(<SettingsWindow />);
+    const model = await screen.findByLabelText("Model");
+    await userEvent.clear(model);
+    await userEvent.type(model, "llava:13b");
+
+    await userEvent.click(screen.getByRole("button", { name: "Test connection" }));
+
+    expect(await screen.findByText("Connected: qwen2.5vl:7b (7.6B, Q4_K_M)")).toBeInTheDocument();
+    const order = commands(backend).filter((cmd) => cmd === "set_preferences" || cmd === "ai_test_connection");
+    expect(order).toEqual(["set_preferences", "ai_test_connection"]);
+    expect(backend.ai.model).toBe("llava:13b");
+  });
+
+  it("shows why the connection test failed", async () => {
+    const backend = mockBackend({ testResult: "error: could not connect to http://localhost:11434/v1" });
+    render(<SettingsWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Test connection" }));
+
+    expect(await screen.findByText(/could not connect to http:\/\/localhost:11434/)).toHaveClass("ai-result-error");
+    // Nothing was typed, so nothing was saved.
+    expect(commands(backend)).not.toContain("set_preferences");
+  });
+
+  it("re-describes every capture after confirmation", async () => {
+    const backend = mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true } });
+    render(<SettingsWindow />);
+    const start = await screen.findByRole("button", { name: "Re-describe all…" });
+    await waitFor(() => expect(start).toBeEnabled());
+
+    await userEvent.click(start);
+    expect(commands(backend)).not.toContain("ai_redescribe_all");
+    await userEvent.click(screen.getByRole("button", { name: "Re-describe all" }));
+
+    await waitFor(() => expect(commands(backend)).toContain("ai_redescribe_all"));
+    expect(await screen.findByText(/Describing every capture again/)).toBeInTheDocument();
+  });
+
+  it("tells local endpoints from cloud ones", () => {
+    expect(isLocalEndpoint("http://localhost:11434/v1")).toBe(true);
+    expect(isLocalEndpoint("http://127.0.0.1:1234/v1")).toBe(true);
+    expect(isLocalEndpoint("http://[::1]:8080")).toBe(true);
+    expect(isLocalEndpoint("https://api.openai.com/v1")).toBe(false);
+    expect(isLocalEndpoint("not a url")).toBe(false);
   });
 });

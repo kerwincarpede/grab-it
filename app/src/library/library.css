@@ -263,3 +263,97 @@
     background: #6e5a00;
   }
 }
+
+/* AI descriptions: a category chip, a one-line description on cards and the
+   details section. AI tags are outlined so they read apart from the user's. */
+.ai-status-chip {
+  padding: 2px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.ocr-status-error .ai-status-chip {
+  border-color: currentColor;
+}
+
+.ai-status .hint {
+  font-size: 12px;
+}
+
+.shot-ai-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 2px;
+  font-size: 12px;
+}
+
+.shot-description {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.category-chip {
+  flex-shrink: 0;
+  padding: 0 7px;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.tag-ai {
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+}
+
+.tag-ai::before {
+  content: "✦ ";
+  color: var(--accent);
+}
+
+.shot-ai {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.shot-ai-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.shot-ai-text {
+  margin: 0;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.shot-ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.shot-ai-actions button {
+  padding: 4px 8px;
+  flex: 1 1 auto;
+  font-size: 12px;
+  white-space: nowrap;
+}
