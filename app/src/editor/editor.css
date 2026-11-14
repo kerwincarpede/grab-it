@@ -1,71 +1,343 @@
+/* The editor is always dark, whatever the system theme: the capture is the
+   only bright thing on screen. */
 .editor {
+  --ed-bg: #16181d;
+  --ed-surface: #1e2128;
+  --ed-raised: #272b34;
+  --ed-hover: #2f343f;
+  --ed-pressed: #383e4b;
+  --ed-border: #2c313b;
+  --ed-text: #e6e8ec;
+  --ed-muted: #9097a3;
+  --ed-accent: #4c8dff;
+  --ed-accent-hover: #6aa0ff;
+  --ed-accent-soft: rgba(76, 141, 255, 0.18);
+  --ed-danger: #ff6b6b;
+  --ed-canvas: #111317;
+  --ed-canvas-dot: #262a33;
+  --ed-radius: 8px;
+  --ed-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+
   display: flex;
   flex-direction: column;
   height: 100vh;
+  background: var(--ed-bg);
+  color: var(--ed-text);
+  color-scheme: dark;
+  accent-color: var(--ed-accent);
+  font-size: 13px;
+  user-select: none;
 }
 
-.editor-toolbar {
-  display: flex;
-  flex-wrap: wrap;
+/* Buttons: quiet until hovered; the app-wide button style is reset here. */
+.editor button {
+  display: inline-flex;
   align-items: center;
-  gap: 8px 16px;
-  padding: 8px 12px;
-  border-bottom: 1px solid #d0d7de;
-}
-
-.tool-group {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.tool-group.end {
-  margin-left: auto;
-}
-
-.editor-toolbar button {
-  padding: 4px 8px;
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--ed-radius);
   background: transparent;
-  color: inherit;
+  color: var(--ed-text);
   font: inherit;
   cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
 }
 
-.editor-toolbar button[aria-pressed="true"] {
-  border-color: #0969da;
-  background: #ddf4ff;
-  color: #0969da;
+.editor button:hover:not(:disabled) {
+  background: var(--ed-hover);
 }
 
-.editor-toolbar button:disabled {
-  opacity: 0.5;
+.editor button:active:not(:disabled) {
+  background: var(--ed-pressed);
+}
+
+.editor button[aria-pressed="true"],
+.editor button[aria-expanded="true"] {
+  background: var(--ed-accent-soft);
+  color: var(--ed-accent-hover);
+}
+
+/* Hovering must not hide which toggle is on. */
+.editor button[aria-pressed="true"]:hover:not(:disabled),
+.editor button[aria-expanded="true"]:hover:not(:disabled) {
+  background: var(--ed-accent-soft);
+}
+
+.editor button:disabled {
+  opacity: 0.35;
   cursor: default;
 }
 
-.editor-toolbar button.primary {
-  border-color: #0969da;
-  background: #0969da;
-  color: #ffffff;
+.editor button:focus-visible,
+.editor input:focus-visible {
+  outline: 2px solid var(--ed-accent);
+  outline-offset: 2px;
 }
 
-.editor-toolbar .swatch {
-  width: 20px;
-  height: 20px;
+.editor .icon {
+  flex: none;
+}
+
+.editor .icon-button {
+  width: 32px;
   padding: 0;
 }
 
-.editor-toolbar .zoom {
-  min-width: 48px;
+.editor button.primary {
+  background: var(--ed-accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.editor button.primary:hover:not(:disabled) {
+  background: var(--ed-accent-hover);
+}
+
+/* A dot on the Backdrop button while a backdrop is on. */
+.editor button[data-on="true"]::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ed-accent);
+}
+
+/* Top bar: style on the left, output actions on the right. */
+.editor-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-height: 48px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--ed-border);
+  background: var(--ed-surface);
+}
+
+.bar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.bar-group + .bar-group {
+  padding-left: 10px;
+  border-left: 1px solid var(--ed-border);
+}
+
+.bar-group.end {
+  gap: 6px;
+  margin-left: auto;
+  border-left: none;
+}
+
+.bar-group.segmented {
+  gap: 0;
+}
+
+.bar-group.segmented button {
+  min-width: 32px;
+  border-radius: 0;
+  background: var(--ed-raised);
+}
+
+.bar-group.segmented button:first-child {
+  border-radius: var(--ed-radius) 0 0 var(--ed-radius);
+}
+
+.bar-group.segmented button:last-child {
+  border-radius: 0 var(--ed-radius) var(--ed-radius) 0;
+}
+
+.bar-group.segmented button:hover:not(:disabled) {
+  background: var(--ed-hover);
+}
+
+.bar-group.segmented button[aria-pressed="true"],
+.bar-group.segmented button[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--ed-accent);
+  color: #ffffff;
+}
+
+.width-line {
+  width: 14px;
+  border-radius: 4px;
+  background: currentColor;
+}
+
+.editor .swatch {
+  width: 20px;
+  height: 20px;
+  margin: 0 3px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.editor .swatch:hover:not(:disabled) {
+  transform: scale(1.12);
+}
+
+/* The colour itself is the background, so the ring marks the choice. */
+.editor .swatch[aria-pressed="true"] {
+  box-shadow:
+    0 0 0 2px var(--ed-surface),
+    0 0 0 4px var(--ed-accent);
+}
+
+.editor input[type="color"] {
+  overflow: hidden;
+  background: none;
+  appearance: none;
+}
+
+.editor input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.editor input[type="color"]::-webkit-color-swatch {
+  border: none;
+}
+
+.editor .zoom {
+  min-width: 46px;
+  color: var(--ed-muted);
+  font-variant-numeric: tabular-nums;
   text-align: center;
+}
+
+/* Backdrop popover, hung under its button. */
+.backdrop-anchor {
+  position: relative;
+}
+
+.backdrop-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 264px;
+  padding: 14px;
+  border: 1px solid var(--ed-border);
+  border-radius: 12px;
+  background: var(--ed-raised);
+  box-shadow: var(--ed-shadow);
+}
+
+.backdrop-swatches {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+}
+
+.editor .backdrop-swatch {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--ed-radius);
+  cursor: pointer;
+}
+
+.editor .backdrop-swatch[aria-pressed="true"] {
+  box-shadow:
+    0 0 0 2px var(--ed-raised),
+    0 0 0 4px var(--ed-accent);
+}
+
+/* "No backdrop": an empty tile struck through. */
+.editor .backdrop-swatch.none,
+.editor .backdrop-swatch.none:hover:not(:disabled) {
+  background: linear-gradient(to top right, transparent calc(50% - 1px), var(--ed-danger) 50%, transparent calc(50% + 1px));
+}
+
+.backdrop-row {
+  display: grid;
+  grid-template-columns: 92px 1fr 44px;
+  align-items: center;
+  gap: 8px;
+  color: var(--ed-muted);
+}
+
+.backdrop-row output {
+  color: var(--ed-text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.backdrop-row.check {
+  display: flex;
+  color: var(--ed-text);
+}
+
+.backdrop-row input[type="range"] {
+  width: 100%;
+  margin: 0;
+}
+
+/* Tool rail on the left, canvas beside it. */
+.editor-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.editor-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 48px;
+  padding: 8px 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--ed-border);
+  background: var(--ed-surface);
+}
+
+.editor .editor-rail button {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  color: var(--ed-muted);
+}
+
+.editor .editor-rail button:hover:not(:disabled) {
+  color: var(--ed-text);
+}
+
+.editor .editor-rail button[aria-pressed="true"],
+.editor .editor-rail button[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--ed-accent);
+  color: #ffffff;
+}
+
+.rail-separator {
+  flex: none;
+  width: 22px;
+  height: 1px;
+  margin: 5px 0;
+  background: var(--ed-border);
 }
 
 .editor-canvas {
   position: relative;
   flex: 1;
+  min-width: 0;
   overflow: hidden;
-  background: #8c959f;
+  background-color: var(--ed-canvas);
+  background-image: radial-gradient(var(--ed-canvas-dot) 1px, transparent 1px);
+  background-size: 18px 18px;
   cursor: crosshair;
 }
 
@@ -80,36 +352,67 @@
 .editor-canvas .text-draft {
   position: absolute;
   min-width: 160px;
-  border: 1px dashed #0969da;
-  background: rgba(255, 255, 255, 0.85);
+  padding: 2px 6px;
+  border: 1px dashed var(--ed-accent);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.9);
   font: bold 16px system-ui, sans-serif;
+  /* The annotation is drawn on the (usually light) capture, not the dark chrome. */
+  color-scheme: light;
+  user-select: text;
 }
 
 .editor-error {
   margin: 16px;
-  color: #cf222e;
+  color: var(--ed-danger);
 }
 
 .editor-status {
   display: flex;
+  align-items: center;
   gap: 16px;
-  padding: 4px 12px;
-  border-top: 1px solid #d0d7de;
+  height: 26px;
+  padding: 0 12px;
+  border-top: 1px solid var(--ed-border);
+  background: var(--ed-surface);
+  color: var(--ed-muted);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
-@media (prefers-color-scheme: dark) {
-  .editor-toolbar,
-  .editor-status {
-    border-color: #30363d;
+.editor-status .status-message {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor button {
+    transition: none;
   }
 
-  .editor-toolbar button {
-    border-color: #30363d;
+  .editor .swatch:hover:not(:disabled) {
+    transform: none;
   }
+}
 
-  .editor-toolbar button[aria-pressed="true"] {
-    background: #0c2d6b;
-    color: #58a6ff;
-  }
+/* Zoom controls at the right end of the status bar. */
+.status-zoom {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  padding-left: 10px;
+  border-left: 1px solid var(--ed-border);
+}
+
+.editor-status .icon-button {
+  width: 22px;
+  height: 22px;
+}
+
+.editor-status .icon-button svg {
+  width: 15px;
+  height: 15px;
 }

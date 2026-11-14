@@ -15,14 +15,28 @@ pub enum OpenTarget {
     Editor(PathBuf),
     /// The Library window.
     Library,
+    /// The Welcome window: what Grab-it does and its hotkeys.
+    Welcome,
+    /// Starts a text capture: drag over text to copy it.
+    Text,
+    /// Starts the colour picker.
+    Colour,
+    /// Captures the last dragged region again.
+    Repeat,
+    /// Starts a GIF recording, or stops the one under way.
+    Record,
+    /// Shows a capture on the Quick Access card: `--open quick <file>`.
+    Quick(PathBuf),
+    /// Pins an image above other windows: `--open pin <file>`.
+    Pin(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArgsError {
     MissingTarget,
     UnknownTarget(String),
-    /// `--open editor` without the capture to open.
-    MissingFile,
+    /// `--open editor`, `quick` or `pin` without the file to open.
+    MissingFile(String),
 }
 
 impl fmt::Display for ArgsError {
@@ -34,13 +48,13 @@ impl fmt::Display for ArgsError {
             Self::UnknownTarget(name) => {
                 write!(
                     f,
-                    "unknown --open target `{name}`; expected `settings`, `region`, `editor <file>` or `library`"
+                    "unknown --open target `{name}`; expected `settings`, `library`, `welcome`, `region`, `repeat`, `record`, `text`, `colour`, `editor <file>`, `quick <file>` or `pin <file>`"
                 )
             }
-            Self::MissingFile => {
+            Self::MissingFile(target) => {
                 write!(
                     f,
-                    "--open editor needs a capture, for example `--open editor shot.png`"
+                    "--open {target} needs a capture, for example `--open {target} shot.png`"
                 )
             }
         }
@@ -78,11 +92,21 @@ where
             "settings" => Ok(Some(OpenTarget::Settings)),
             "region" => Ok(Some(OpenTarget::Region)),
             "library" => Ok(Some(OpenTarget::Library)),
-            "editor" => match args.next() {
+            "welcome" => Ok(Some(OpenTarget::Welcome)),
+            "text" => Ok(Some(OpenTarget::Text)),
+            "colour" | "color" => Ok(Some(OpenTarget::Colour)),
+            "repeat" => Ok(Some(OpenTarget::Repeat)),
+            "record" => Ok(Some(OpenTarget::Record)),
+            "editor" | "quick" | "pin" => match args.next() {
                 Some(file) if !file.as_ref().is_empty() => {
-                    Ok(Some(OpenTarget::Editor(PathBuf::from(file.as_ref()))))
+                    let file = PathBuf::from(file.as_ref());
+                    Ok(Some(match name.as_str() {
+                        "editor" => OpenTarget::Editor(file),
+                        "quick" => OpenTarget::Quick(file),
+                        _ => OpenTarget::Pin(file),
+                    }))
                 }
-                _ => Err(ArgsError::MissingFile),
+                _ => Err(ArgsError::MissingFile(name)),
             },
             _ => Err(ArgsError::UnknownTarget(name)),
         };
@@ -126,6 +150,7 @@ mod tests {
     fn open_library() {
         assert_eq!(parse(&["--open", "library"]), Ok(Some(OpenTarget::Library)));
         assert_eq!(parse(&["--open=library"]), Ok(Some(OpenTarget::Library)));
+        assert_eq!(parse(&["--open", "welcome"]), Ok(Some(OpenTarget::Welcome)));
     }
 
     #[test]
@@ -142,10 +167,38 @@ mod tests {
 
     #[test]
     fn open_editor_without_a_file_is_an_error() {
-        assert_eq!(parse(&["--open", "editor"]), Err(ArgsError::MissingFile));
+        assert_eq!(
+            parse(&["--open", "editor"]),
+            Err(ArgsError::MissingFile("editor".into()))
+        );
         assert_eq!(
             parse(&["--open", "editor", ""]),
-            Err(ArgsError::MissingFile)
+            Err(ArgsError::MissingFile("editor".into()))
+        );
+        assert_eq!(
+            parse(&["--open", "pin"]),
+            Err(ArgsError::MissingFile("pin".into()))
+        );
+    }
+
+    #[test]
+    fn open_text_and_colour() {
+        assert_eq!(parse(&["--open", "text"]), Ok(Some(OpenTarget::Text)));
+        assert_eq!(parse(&["--open", "colour"]), Ok(Some(OpenTarget::Colour)));
+        assert_eq!(parse(&["--open=color"]), Ok(Some(OpenTarget::Colour)));
+        assert_eq!(parse(&["--open", "repeat"]), Ok(Some(OpenTarget::Repeat)));
+        assert_eq!(parse(&["--open", "record"]), Ok(Some(OpenTarget::Record)));
+    }
+
+    #[test]
+    fn open_quick_and_pin_with_a_file() {
+        assert_eq!(
+            parse(&["--open", "quick", "/tmp/shot.png"]),
+            Ok(Some(OpenTarget::Quick(PathBuf::from("/tmp/shot.png"))))
+        );
+        assert_eq!(
+            parse(&["--open=pin", "shot.png"]),
+            Ok(Some(OpenTarget::Pin(PathBuf::from("shot.png"))))
         );
     }
 

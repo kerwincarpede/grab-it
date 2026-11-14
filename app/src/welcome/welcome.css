@@ -1,0 +1,68 @@
+/* The Welcome window, built from the shared tokens and cards in App.css. */
+.welcome-header {
+  margin-bottom: 18px;
+}
+
+.welcome-header h1 {
+  margin-bottom: 6px;
+  font-size: 24px;
+}
+
+.welcome-lead {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.welcome-shortcuts,
+.welcome-tips {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.welcome-shortcuts li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.welcome-shortcuts .hint,
+.welcome-tips .hint {
+  display: block;
+}
+
+.welcome-keys {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.welcome kbd {
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+}
+
+.welcome-tips {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px 20px;
+  margin-bottom: 0;
+}
+
+.welcome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.welcome .status {
+  margin: 6px 0 10px;
+}

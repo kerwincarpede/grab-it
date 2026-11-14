@@ -14,9 +14,17 @@ export interface OverlayWindow {
   height: number;
 }
 
+/**
+ * What the selection is for: a screenshot, text recognition over the dragged
+ * area, the colour of one pixel, or the area to record as a GIF.
+ */
+export type OverlayIntent = "capture" | "text" | "color" | "record";
+
 /** Mirrors `OverlayInfo` in src-tauri/src/overlay.rs. */
 export interface OverlayInfo {
   mode: CaptureMode;
+  /** Older backends leave this out; treat that as "capture". */
+  intent?: OverlayIntent;
   monitorWidth: number;
   monitorHeight: number;
   /** Front to back. */
@@ -25,7 +33,9 @@ export interface OverlayInfo {
 
 export type Selection =
   | { kind: "region"; rect: Box; viewportWidth: number }
-  | { kind: "window"; id: number };
+  | { kind: "window"; id: number }
+  /** One point in CSS pixels, scaled by the backend like a region is. */
+  | { kind: "point"; x: number; y: number; viewportWidth: number };
 
 export function overlayInfo(): Promise<OverlayInfo> {
   return invoke<OverlayInfo>("overlay_info");

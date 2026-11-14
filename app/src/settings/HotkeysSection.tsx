@@ -6,6 +6,8 @@ const FIELDS: { key: keyof Hotkeys; label: string }[] = [
   { key: "region", label: "Region" },
   { key: "window", label: "Window" },
   { key: "screen", label: "Screen" },
+  { key: "text", label: "Capture text" },
+  { key: "colour", label: "Pick a colour" },
 ];
 
 interface HotkeysSectionProps {
@@ -105,9 +107,7 @@ function HotkeysSection({ saved, disabled, onSave }: HotkeysSectionProps) {
 
   return (
     <section className="field hotkeys" aria-labelledby="hotkeys-heading">
-      <span id="hotkeys-heading" className="field-heading">
-        Hotkeys
-      </span>
+      <h2 id="hotkeys-heading">Hotkeys</h2>
       {FIELDS.map(({ key, label }) => (
         <div className="hotkey-row" key={key}>
           <label htmlFor={`hotkey-${key}`}>{label}</label>

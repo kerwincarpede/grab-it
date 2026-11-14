@@ -1,17 +1,49 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
+/** Mirrors `AfterCapture` in src-tauri/src/settings.rs. */
+export type AfterCapture = "quickAccess" | "editor" | "nothing";
+
+/** Mirrors `Preferences` in src-tauri/src/settings.rs. */
+export interface Preferences {
+  afterCapture: AfterCapture;
+  copyToClipboard: boolean;
+}
+
 /** Mirrors `Settings` in src-tauri/src/settings.rs. */
-export interface Settings {
+export interface Settings extends Preferences {
   saveFolder: string;
   hotkeys: Hotkeys;
 }
+
+/** What each choice after a capture does, in the order Settings lists them. */
+export const AFTER_CAPTURE_CHOICES: { value: AfterCapture; title: string; hint: string }[] = [
+  {
+    value: "quickAccess",
+    title: "Show Quick Access",
+    hint: "A small preview in the corner with Copy, Annotate, Pin and more. It goes away by itself.",
+  },
+  {
+    value: "editor",
+    title: "Open the editor",
+    hint: "Go straight to annotating every capture.",
+  },
+  {
+    value: "nothing",
+    title: "Do nothing",
+    hint: "Save quietly. Find the capture in the Library or the tray's Show last capture.",
+  },
+];
 
 /** Mirrors `Hotkeys` in src-tauri/src/hotkeys.rs: accelerator strings. */
 export interface Hotkeys {
   region: string;
   window: string;
   screen: string;
+  /** Reads the text in a region and copies it. */
+  text: string;
+  /** Copies the colour under the pointer. */
+  colour: string;
 }
 
 /** Mirrors `HotkeysUpdate` in src-tauri/src/commands.rs. */
@@ -27,6 +59,20 @@ export function getSettings(): Promise<Settings> {
 
 export function setSaveFolder(path: string): Promise<Settings> {
   return invoke<Settings>("set_save_folder", { path });
+}
+
+export function setPreferences(preferences: Preferences): Promise<Settings> {
+  return invoke<Settings>("set_preferences", { preferences });
+}
+
+/** Whether Grab-it starts when the user signs in; the system holds this. */
+export function getAutostart(): Promise<boolean> {
+  return invoke<boolean>("get_autostart");
+}
+
+/** Turns starting at sign-in on or off; resolves to the setting as it now is. */
+export function setAutostart(enabled: boolean): Promise<boolean> {
+  return invoke<boolean>("set_autostart", { enabled });
 }
 
 export function setHotkeys(hotkeys: Hotkeys): Promise<HotkeysUpdate> {

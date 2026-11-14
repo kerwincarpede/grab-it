@@ -13,7 +13,15 @@ describe("App", () => {
   it("renders the Settings window for the settings route", async () => {
     mockIPC(() => ({
       saveFolder: "/home/me/Pictures/Grab-it",
-      hotkeys: { region: "PrintScreen", window: "Alt+PrintScreen", screen: "Ctrl+PrintScreen" },
+      hotkeys: {
+        region: "PrintScreen",
+        window: "Alt+PrintScreen",
+        screen: "Ctrl+PrintScreen",
+        text: "Shift+PrintScreen",
+        colour: "Ctrl+Shift+PrintScreen",
+      },
+      afterCapture: "quickAccess",
+      copyToClipboard: true,
     }));
     render(<App route="settings" />);
     expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
@@ -27,6 +35,9 @@ describe("routeFromHash", () => {
     ["#/overlay", "overlay"],
     ["#/editor", "editor"],
     ["#/library", "library"],
+    ["#/quick", "quick"],
+    ["#/pin", "pin"],
+    ["#/welcome", "welcome"],
     ["#settings", "settings"],
     ["#/settings?tab=general", "settings"],
     ["", "home"],

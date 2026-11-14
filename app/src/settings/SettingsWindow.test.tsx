@@ -9,9 +9,15 @@ const DEFAULT_HOTKEYS = {
   region: "PrintScreen",
   window: "Alt+PrintScreen",
   screen: "Ctrl+PrintScreen",
+  text: "Shift+PrintScreen",
+  colour: "Ctrl+Shift+PrintScreen",
 };
 
 interface Backend {
+  /** Undefined: the system cannot say, and `get_autostart` fails. */
+  autostart?: boolean;
+  afterCapture: string;
+  copyToClipboard: boolean;
   saveFolder: string;
   hotkeys: typeof DEFAULT_HOTKEYS;
   hotkeyWarnings: string[];
@@ -22,6 +28,8 @@ interface Backend {
 
 function mockBackend(initial: Partial<Backend> = {}): Backend {
   const backend: Backend = {
+    afterCapture: "quickAccess",
+    copyToClipboard: true,
     saveFolder: "/home/me/Pictures/Grab-it",
     picked: "/data/Shots",
     hotkeys: { ...DEFAULT_HOTKEYS },
@@ -29,23 +37,43 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     calls: [],
     ...initial,
   };
+  const settings = () => ({
+    saveFolder: backend.saveFolder,
+    hotkeys: backend.hotkeys,
+    afterCapture: backend.afterCapture,
+    copyToClipboard: backend.copyToClipboard,
+  });
   mockIPC((cmd, payload) => {
     backend.calls.push({ cmd, payload });
     switch (cmd) {
       case "get_settings":
-        return { saveFolder: backend.saveFolder, hotkeys: backend.hotkeys };
+        return settings();
+      case "get_autostart":
+        if (backend.autostart === undefined) throw "not supported";
+        return backend.autostart;
+      case "set_autostart":
+        if (backend.setError) throw backend.setError;
+        backend.autostart = (payload as { enabled: boolean }).enabled;
+        return backend.autostart;
+      case "set_preferences": {
+        if (backend.setError) throw backend.setError;
+        const { preferences } = payload as { preferences: { afterCapture: string; copyToClipboard: boolean } };
+        backend.afterCapture = preferences.afterCapture;
+        backend.copyToClipboard = preferences.copyToClipboard;
+        return settings();
+      }
       case "plugin:dialog|open":
         return backend.picked;
       case "set_save_folder": {
         if (backend.setError) throw backend.setError;
         backend.saveFolder = (payload as { path: string }).path;
-        return { saveFolder: backend.saveFolder, hotkeys: backend.hotkeys };
+        return settings();
       }
       case "set_hotkeys": {
         if (backend.setError) throw backend.setError;
         backend.hotkeys = (payload as { hotkeys: typeof DEFAULT_HOTKEYS }).hotkeys;
         return {
-          settings: { saveFolder: backend.saveFolder, hotkeys: backend.hotkeys },
+          settings: settings(),
           warnings: backend.hotkeyWarnings,
         };
       }
@@ -109,6 +137,68 @@ describe("SettingsWindow", () => {
       screen.getByRole("status"),
     );
     expect(screen.getByDisplayValue("/home/me/Pictures/Grab-it")).toBeInTheDocument();
+  });
+
+  it("shows what happens after a capture and saves a new choice at once", async () => {
+    const backend = mockBackend();
+    render(<SettingsWindow />);
+    const quick = await screen.findByRole("radio", { name: /Show Quick Access/ });
+    await waitFor(() => expect(quick).toBeChecked());
+    expect(screen.getByRole("checkbox", { name: /Copy every capture/ })).toBeChecked();
+
+    await userEvent.click(screen.getByRole("radio", { name: /Open the editor/ }));
+
+    await waitFor(() => expect(screen.getByRole("radio", { name: /Open the editor/ })).toBeChecked());
+    expect(screen.getByRole("status")).toHaveTextContent("Saved.");
+    expect(backend.calls[backend.calls.length - 1]).toEqual({
+      cmd: "set_preferences",
+      payload: { preferences: { afterCapture: "editor", copyToClipboard: true } },
+    });
+  });
+
+  it("turns copying to the clipboard off, keeping the other choice", async () => {
+    const backend = mockBackend({ afterCapture: "nothing" });
+    render(<SettingsWindow />);
+    const copy = await screen.findByRole("checkbox", { name: /Copy every capture/ });
+    await waitFor(() => expect(copy).toBeEnabled());
+
+    await userEvent.click(copy);
+
+    await waitFor(() => expect(copy).not.toBeChecked());
+    expect(backend.calls[backend.calls.length - 1].payload).toEqual({
+      preferences: { afterCapture: "nothing", copyToClipboard: false },
+    });
+  });
+
+  it("keeps the choice and says why when a preference cannot be saved", async () => {
+    mockBackend({ setError: "disk full" });
+    render(<SettingsWindow />);
+    const quick = await screen.findByRole("radio", { name: /Show Quick Access/ });
+    await waitFor(() => expect(quick).toBeChecked());
+
+    await userEvent.click(screen.getByRole("radio", { name: /Do nothing/ }));
+
+    expect(await screen.findByText("disk full")).toBeInTheDocument();
+    expect(quick).toBeChecked();
+  });
+
+  it("turns starting at sign-in on", async () => {
+    const backend = mockBackend({ autostart: false });
+    render(<SettingsWindow />);
+    const toggle = await screen.findByRole("checkbox", { name: /Start Grab-it when you sign in/ });
+    expect(toggle).not.toBeChecked();
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(backend.calls[backend.calls.length - 1]).toEqual({ cmd: "set_autostart", payload: { enabled: true } });
+  });
+
+  it("leaves the start-up toggle out where the system cannot say", async () => {
+    mockBackend();
+    render(<SettingsWindow />);
+    await screen.findByDisplayValue("/home/me/Pictures/Grab-it");
+    expect(screen.queryByRole("checkbox", { name: /Start Grab-it/ })).not.toBeInTheDocument();
   });
 
   it("shows the current hotkeys", async () => {

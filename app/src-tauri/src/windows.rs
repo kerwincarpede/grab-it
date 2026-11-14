@@ -7,10 +7,11 @@ use std::{
 
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-use crate::{actions, cli::OpenTarget, editor::EditorState, hotkeys};
+use crate::{actions, cli::OpenTarget, editor::EditorState, hotkeys, pin, quick};
 
 pub const SETTINGS_LABEL: &str = "settings";
 pub const LIBRARY_LABEL: &str = "library";
+pub const WELCOME_LABEL: &str = "welcome";
 /// Editor windows are labelled `editor-<n>`.
 pub const EDITOR_LABEL_PREFIX: &str = "editor-";
 
@@ -19,17 +20,58 @@ pub fn open(app: &AppHandle, target: OpenTarget) -> tauri::Result<()> {
     match target {
         OpenTarget::Settings => show_settings(app),
         OpenTarget::Library => show_library(app),
+        OpenTarget::Welcome => show_welcome(app),
         OpenTarget::Region => {
             actions::start(app, actions::Action::Region);
             Ok(())
         }
-        OpenTarget::Editor(path) => match std::fs::canonicalize(&path) {
-            Ok(path) if path.is_file() => show_editor(app, &path),
-            _ => {
-                eprintln!("Grab-it: no capture at {}", path.display());
-                Ok(())
-            }
+        OpenTarget::Text => {
+            actions::start(app, actions::Action::Text);
+            Ok(())
+        }
+        OpenTarget::Colour => {
+            actions::start(app, actions::Action::Colour);
+            Ok(())
+        }
+        OpenTarget::Repeat => {
+            actions::start(app, actions::Action::Repeat);
+            Ok(())
+        }
+        OpenTarget::Record => {
+            actions::start(app, actions::Action::Record);
+            Ok(())
+        }
+        OpenTarget::Editor(path) => match existing_file(&path) {
+            Some(path) => show_editor(app, &path),
+            None => Ok(()),
         },
+        OpenTarget::Quick(path) => {
+            if let Some(path) = existing_file(&path) {
+                let size = image::image_dimensions(&path).unwrap_or_default();
+                quick::show(app, quick::QuickItem::capture(&path, size, false));
+            }
+            Ok(())
+        }
+        OpenTarget::Pin(path) => {
+            if let Some(path) = existing_file(&path)
+                && let Err(err) = pin::open(app, &path, false)
+            {
+                eprintln!("Grab-it: {err}");
+            }
+            Ok(())
+        }
+    }
+}
+
+/// The full path of a file named on the command line, or `None` (after
+/// saying so) when there is no such file.
+fn existing_file(path: &Path) -> Option<std::path::PathBuf> {
+    match std::fs::canonicalize(path) {
+        Ok(path) if path.is_file() => Some(path),
+        _ => {
+            eprintln!("Grab-it: no capture at {}", path.display());
+            None
+        }
     }
 }
 
@@ -96,8 +138,8 @@ pub fn show_settings(app: &AppHandle) -> tauri::Result<()> {
         WebviewUrl::App("index.html#/settings".into()),
     )
     .title("Grab-it Settings")
-    .inner_size(600.0, 520.0)
-    .min_inner_size(460.0, 440.0)
+    .inner_size(640.0, 720.0)
+    .min_inner_size(480.0, 480.0)
     .center()
     .build()?;
     let handle = app.clone();
@@ -126,6 +168,28 @@ pub fn show_library(app: &AppHandle) -> tauri::Result<()> {
     .title("Grab-it Library")
     .inner_size(1100.0, 720.0)
     .min_inner_size(560.0, 400.0)
+    .center()
+    .build()?;
+    Ok(())
+}
+
+/// Shows the Welcome window: what Grab-it does and its hotkeys. Opened by
+/// itself on the first launch, and from the tray afterwards.
+pub fn show_welcome(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(WELCOME_LABEL) {
+        window.unminimize()?;
+        window.show()?;
+        window.set_focus()?;
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(
+        app,
+        WELCOME_LABEL,
+        WebviewUrl::App("index.html#/welcome".into()),
+    )
+    .title("Welcome to Grab-it")
+    .inner_size(620.0, 720.0)
+    .min_inner_size(480.0, 480.0)
     .center()
     .build()?;
     Ok(())

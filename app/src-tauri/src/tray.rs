@@ -1,23 +1,50 @@
 //! The tray icon and its menu.
 
+use std::time::Duration;
+
 use tauri::{
-    AppHandle,
+    AppHandle, Manager,
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
 };
 
 use crate::{
     actions::{self, Action},
-    screen, windows,
+    quick, screen, windows,
 };
 
 const TRAY_ID: &str = "main";
+const RECORD_LABEL: &str = "Record GIF";
+const STOP_LABEL: &str = "Stop recording";
+
+/// The menu items whose text changes while Grab-it runs.
+pub struct TrayItems {
+    record: MenuItem<tauri::Wry>,
+}
+
+/// Makes the record item say what choosing it does now: start, or stop.
+pub fn set_recording(app: &AppHandle, recording: bool) {
+    if let Some(items) = app.try_state::<TrayItems>() {
+        let label = if recording { STOP_LABEL } else { RECORD_LABEL };
+        if let Err(err) = items.record.set_text(label) {
+            eprintln!("Grab-it: could not update the tray menu: {err}");
+        }
+    }
+}
 const MENU_REGION: &str = "capture-region";
 const MENU_WINDOW: &str = "capture-window";
 const MENU_SCREEN: &str = "capture-screen";
 const MENU_MONITOR_PREFIX: &str = "capture-monitor-";
+const MENU_REPEAT: &str = "capture-repeat";
+const MENU_RECORD: &str = "record-gif";
+const MENU_TEXT: &str = "capture-text";
+const MENU_COLOUR: &str = "pick-colour";
+/// Timed captures are `timed-<region|screen>-<seconds>`.
+const MENU_TIMED_PREFIX: &str = "timed-";
+const MENU_LAST: &str = "last-capture";
 const MENU_LIBRARY: &str = "library";
 const MENU_SETTINGS: &str = "settings";
+const MENU_WELCOME: &str = "welcome";
 const MENU_QUIT: &str = "quit";
 
 /// The capture a menu item starts, if any.
@@ -26,11 +53,47 @@ fn action_for(id: &str) -> Option<Action> {
         MENU_REGION => Some(Action::Region),
         MENU_WINDOW => Some(Action::Window),
         MENU_SCREEN => Some(Action::Screen),
+        MENU_REPEAT => Some(Action::Repeat),
+        MENU_RECORD => Some(Action::Record),
+        MENU_TEXT => Some(Action::Text),
+        MENU_COLOUR => Some(Action::Colour),
         _ => id
             .strip_prefix(MENU_MONITOR_PREFIX)
             .and_then(|index| index.parse().ok())
             .map(Action::Monitor),
     }
+}
+
+/// The capture and delay a Timed capture item starts, if `id` is one.
+fn timed_action_for(id: &str) -> Option<(Action, Duration)> {
+    let (what, seconds) = id.strip_prefix(MENU_TIMED_PREFIX)?.split_once('-')?;
+    let action = match what {
+        "region" => Action::Region,
+        "screen" => Action::Screen,
+        _ => return None,
+    };
+    let seconds: u64 = seconds.parse().ok()?;
+    Some((action, Duration::from_secs(seconds)))
+}
+
+fn timed_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
+    let submenu = Submenu::new(app, "Timed capture", true)?;
+    for (what, label, seconds) in [
+        ("region", "Region", 3),
+        ("region", "Region", 5),
+        ("region", "Region", 10),
+        ("screen", "Screen", 5),
+    ] {
+        let item = MenuItem::with_id(
+            app,
+            format!("{MENU_TIMED_PREFIX}{what}-{seconds}"),
+            format!("{label} in {seconds} seconds"),
+            true,
+            None::<&str>,
+        )?;
+        submenu.append(&item)?;
+    }
+    Ok(submenu)
 }
 
 /// The Monitor submenu's label for one monitor.
@@ -74,19 +137,31 @@ fn monitor_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
 }
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
-    let region = MenuItem::with_id(app, MENU_REGION, "Region", true, None::<&str>)?;
-    let window = MenuItem::with_id(app, MENU_WINDOW, "Window", true, None::<&str>)?;
+    let region = MenuItem::with_id(app, MENU_REGION, "Capture region", true, None::<&str>)?;
+    let window = MenuItem::with_id(app, MENU_WINDOW, "Capture window", true, None::<&str>)?;
     let screen_item = MenuItem::with_id(
         app,
         MENU_SCREEN,
-        "Screen (all monitors)",
+        "Capture screen (all monitors)",
         true,
         None::<&str>,
     )?;
     let monitors = monitor_submenu(app)?;
+    let repeat = MenuItem::with_id(app, MENU_REPEAT, "Repeat last region", true, None::<&str>)?;
+    let timed = timed_submenu(app)?;
+    let tools_separator = PredefinedMenuItem::separator(app)?;
+    // One item for both: choosing it during a recording stops the recording.
+    let record = MenuItem::with_id(app, MENU_RECORD, RECORD_LABEL, true, None::<&str>)?;
+    app.manage(TrayItems {
+        record: record.clone(),
+    });
+    let text = MenuItem::with_id(app, MENU_TEXT, "Capture text", true, None::<&str>)?;
+    let colour = MenuItem::with_id(app, MENU_COLOUR, "Pick a colour", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
+    let last = MenuItem::with_id(app, MENU_LAST, "Show last capture", true, None::<&str>)?;
     let library = MenuItem::with_id(app, MENU_LIBRARY, "Library…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
+    let welcome = MenuItem::with_id(app, MENU_WELCOME, "Shortcuts and tips…", true, None::<&str>)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit Grab-it", true, None::<&str>)?;
     let menu = Menu::with_items(
@@ -96,9 +171,17 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             &window,
             &screen_item,
             &monitors,
+            &repeat,
+            &timed,
+            &tools_separator,
+            &record,
+            &text,
+            &colour,
             &separator,
+            &last,
             &library,
             &settings,
+            &welcome,
             &separator2,
             &quit,
         ],
@@ -114,14 +197,43 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                     eprintln!("Grab-it: could not open Settings: {err}");
                 }
             }
+            MENU_WELCOME => {
+                if let Err(err) = windows::show_welcome(app) {
+                    eprintln!("Grab-it: could not open the welcome window: {err}");
+                }
+            }
             MENU_LIBRARY => {
                 if let Err(err) = windows::show_library(app) {
                     eprintln!("Grab-it: could not open the Library: {err}");
                 }
             }
-            MENU_QUIT => app.exit(0),
+            MENU_LAST => {
+                // Off the main thread: the card may need a new window.
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    if !quick::show_last(&app) {
+                        quick::show(
+                            &app,
+                            quick::QuickItem::Notice {
+                                title: "No capture yet".into(),
+                                message: "Your next capture will show up here.".into(),
+                            },
+                        );
+                    }
+                });
+            }
+            MENU_QUIT => {
+                // A recording is finished first, so its GIF is complete.
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    crate::record::stop_and_wait(&app);
+                    app.exit(0);
+                });
+            }
             id => {
-                if let Some(action) = action_for(id) {
+                if let Some((action, delay)) = timed_action_for(id) {
+                    actions::start_after(app, action, delay);
+                } else if let Some(action) = action_for(id) {
                     actions::start(app, action);
                 }
             }
@@ -146,6 +258,28 @@ mod tests {
         assert_eq!(action_for("capture-monitor-x"), None);
         assert_eq!(action_for(MENU_SETTINGS), None);
         assert_eq!(action_for(MENU_LIBRARY), None);
+        assert_eq!(action_for(MENU_REPEAT), Some(Action::Repeat));
+        assert_eq!(action_for(MENU_RECORD), Some(Action::Record));
+        assert_eq!(action_for(MENU_TEXT), Some(Action::Text));
+        assert_eq!(action_for(MENU_COLOUR), Some(Action::Colour));
+        assert_eq!(action_for(MENU_LAST), None);
+    }
+
+    #[test]
+    fn timed_ids_carry_the_capture_and_the_delay() {
+        assert_eq!(
+            timed_action_for("timed-region-3"),
+            Some((Action::Region, Duration::from_secs(3)))
+        );
+        assert_eq!(
+            timed_action_for("timed-screen-5"),
+            Some((Action::Screen, Duration::from_secs(5)))
+        );
+        assert_eq!(timed_action_for("timed-window-5"), None);
+        assert_eq!(timed_action_for("timed-region-soon"), None);
+        assert_eq!(timed_action_for(MENU_REGION), None);
+        // A timed item is not also an immediate capture.
+        assert_eq!(action_for("timed-region-3"), None);
     }
 
     #[test]

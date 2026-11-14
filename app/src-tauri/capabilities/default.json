@@ -2,7 +2,15 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the Grab-it windows",
-  "windows": ["settings", "overlay-*", "editor-*", "library"],
+  "windows": [
+    "settings",
+    "overlay-*",
+    "editor-*",
+    "library",
+    "quick",
+    "pin-*",
+    "welcome"
+  ],
   "permissions": [
     "core:default",
     "dialog:allow-open",

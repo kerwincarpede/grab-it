@@ -29,6 +29,11 @@ export function copyImage(png: Uint8Array): Promise<void> {
   return invoke<void>("editor_copy", png);
 }
 
+/** Floats a flattened PNG in an always-on-top window. */
+export function pinImage(png: Uint8Array): Promise<void> {
+  return invoke<void>("editor_pin", png);
+}
+
 /** Writes a flattened PNG or JPEG to `path`. */
 export function exportImage(path: string, bytes: Uint8Array): Promise<void> {
   return invoke<void>("editor_export", bytes, {

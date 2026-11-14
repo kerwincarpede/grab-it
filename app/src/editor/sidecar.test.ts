@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Annotations } from "./model";
-import { parseAnnotations, serializeAnnotations, SidecarError } from "./sidecar";
+import { parseAnnotations, parseBackdrop, serializeAnnotations, SidecarError } from "./sidecar";
 
 const doc: Annotations = {
   version: 1,
@@ -46,5 +46,54 @@ describe("annotations sidecar", () => {
       crop: { x: "bad" },
     });
     expect(parsed).toEqual({ version: 1, shapes: [doc.shapes[0]], crop: null });
+  });
+
+  it("round-trips the newer optional fields and the backdrop", () => {
+    const styled: Annotations = {
+      version: 1,
+      shapes: [
+        { id: "r", type: "rect", color: "#30a46c", strokeWidth: 4, x: 5, y: 6, width: 7, height: 8, fill: true },
+        { id: "b", type: "blur", x: 10, y: 10, width: 40, height: 20, pixelSize: 12, mode: "blur" },
+        { id: "t", type: "text", color: "#1f2328", x: 3, y: 4, text: "Look here", fontSize: 30, background: true },
+        { id: "s", type: "spotlight", x: 10, y: 10, width: 40, height: 20 },
+      ],
+      crop: null,
+      backdrop: { fill: "ocean", padding: 64, radius: 12, shadow: true },
+    };
+    const json = JSON.stringify(serializeAnnotations(styled));
+    expect(parseAnnotations(JSON.parse(json))).toEqual(styled);
+  });
+
+  it("loads a sidecar written before backdrops, and writes none back", () => {
+    const parsed = parseAnnotations({ version: 1, shapes: doc.shapes, crop: null });
+    expect(parsed.backdrop ?? null).toBeNull();
+    expect(serializeAnnotations(parsed)).not.toHaveProperty("backdrop");
+    expect(serializeAnnotations({ ...parsed, backdrop: null })).not.toHaveProperty("backdrop");
+  });
+
+  it("skips shapes whose optional fields are malformed", () => {
+    const parsed = parseAnnotations({
+      version: 1,
+      shapes: [
+        { id: "r", type: "rect", color: "#30a46c", strokeWidth: 4, x: 5, y: 6, width: 7, height: 8, fill: "yes" },
+        { id: "b", type: "blur", x: 10, y: 10, width: 40, height: 20, pixelSize: 12, mode: "smear" },
+        { id: "t", type: "text", color: "#1f2328", x: 3, y: 4, text: "Look", fontSize: 30, background: 1 },
+        { id: "s", type: "spotlight", x: 10, y: 10, width: "wide", height: 20 },
+      ],
+    });
+    expect(parsed.shapes).toEqual([]);
+  });
+
+  it("keeps a backdrop's sizes in range and drops a malformed one", () => {
+    expect(parseBackdrop({ fill: "#ffffff", padding: 999, radius: -5, shadow: false })).toEqual({
+      fill: "#ffffff",
+      padding: 200,
+      radius: 0,
+      shadow: false,
+    });
+    expect(parseBackdrop({ fill: "ocean", padding: 10, radius: 4 })).toBeNull();
+    expect(parseBackdrop({ fill: 7, padding: 10, radius: 4, shadow: true })).toBeNull();
+    expect(parseBackdrop("ocean")).toBeNull();
+    expect(parseAnnotations({ version: 1, shapes: [], backdrop: { fill: "ocean" } })).toEqual({ version: 1, shapes: [], crop: null });
   });
 });

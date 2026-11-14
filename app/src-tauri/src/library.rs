@@ -374,6 +374,26 @@ impl Library {
         })
     }
 
+    /// The id of the shot stored for `png`, however the path is spelled.
+    pub fn id_for_path(&self, png: &Path) -> LibraryResult<Option<i64>> {
+        let lookup = |path: &Path| {
+            self.conn
+                .query_row(
+                    "SELECT id FROM shots WHERE path = ?1",
+                    [path_text(path)],
+                    |row| row.get(0),
+                )
+                .optional()
+        };
+        if let Some(id) = lookup(png)? {
+            return Ok(Some(id));
+        }
+        match fs::canonicalize(png) {
+            Ok(canonical) if canonical != png => Ok(lookup(&canonical)?),
+            _ => Ok(None),
+        }
+    }
+
     pub fn get(&self, id: i64) -> LibraryResult<Shot> {
         let mut shot = self
             .conn
@@ -976,6 +996,42 @@ pub async fn library_open(id: i64, app: AppHandle) -> Result<(), String> {
         return Err(format!("{} no longer exists", path.display()));
     }
     windows::show_editor(&app, &path).map_err(|err| err.to_string())
+}
+
+/// The path of a shot that is still on disk.
+fn existing_path(app: &AppHandle, id: i64) -> Result<PathBuf, String> {
+    let path = app
+        .state::<LibraryState>()
+        .lock()
+        .get(id)
+        .map_err(to_message)?
+        .path;
+    if !path.is_file() {
+        return Err(format!("{} no longer exists", path.display()));
+    }
+    Ok(path)
+}
+
+/// Copies a shot's original image to the clipboard.
+#[tauri::command(async)]
+pub fn library_copy(id: i64, app: AppHandle) -> Result<(), String> {
+    crate::quick::copy_file(&app, &existing_path(&app, id)?)
+}
+
+/// Floats a shot above other windows. Async for the same reason as
+/// [`library_open`].
+#[tauri::command]
+pub async fn library_pin(id: i64, app: AppHandle) -> Result<(), String> {
+    crate::pin::open(&app, &existing_path(&app, id)?, false)
+}
+
+/// Shows a shot's file in the system file manager.
+#[tauri::command(async)]
+pub fn library_reveal(id: i64, app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .reveal_item_in_dir(existing_path(&app, id)?)
+        .map_err(|err| format!("could not show the capture in its folder: {err}"))
 }
 
 /// The current save folder, for the startup rescan.
