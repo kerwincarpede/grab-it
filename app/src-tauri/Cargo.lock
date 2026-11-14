@@ -2113,6 +2113,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "ureq",
+ "webkit2gtk",
  "windows 0.61.3",
  "x11rb",
  "xcap",

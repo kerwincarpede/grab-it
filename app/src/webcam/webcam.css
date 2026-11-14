@@ -1,0 +1,54 @@
+/*
+ * The webcam window is see-through: the page paints nothing outside the
+ * bubble, so only the round or rounded camera shows over the screen. The
+ * colour scheme is pinned because a dark one makes the browser fill the
+ * page behind the root.
+ */
+:root.webcam-clear,
+:root.webcam-clear body {
+  color-scheme: light;
+  background: transparent;
+}
+
+/* The camera fills the window, clipped to the chosen shape. */
+.webcam {
+  position: fixed;
+  inset: 2px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: #101113;
+  /* Marks the bubble's edge against whatever is behind it. */
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 85%);
+  cursor: grab;
+  user-select: none;
+}
+
+.webcam:active {
+  cursor: grabbing;
+}
+
+.webcam-round {
+  border-radius: 50%;
+}
+
+.webcam-rounded {
+  border-radius: 22%;
+}
+
+.webcam-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+
+.webcam-problem {
+  position: absolute;
+  margin: 0;
+  padding: 0 16%;
+  color: #ecedef;
+  font: 600 12px/1.3 "Instrument Sans Variable", system-ui, sans-serif;
+  text-align: center;
+  pointer-events: none;
+}

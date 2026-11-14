@@ -30,6 +30,7 @@ mod settings;
 mod tidy;
 mod tray;
 mod update;
+mod webcam;
 mod windows;
 mod zoom;
 

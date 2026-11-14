@@ -569,7 +569,7 @@ fn settle(app: &AppHandle, id: u64) {
 /// xcap and Tauri may report positions in different units (macOS uses
 /// points in xcap), so the Tauri monitor is matched by name, then by
 /// physical or logical position, and finally by xcap's own numbers.
-fn placement_for(
+pub(crate) fn placement_for(
     monitor: &MonitorInfo,
     placements: &[tauri::Monitor],
 ) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
