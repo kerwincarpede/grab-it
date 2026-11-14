@@ -73,6 +73,7 @@ import {
   TrashIcon,
 } from "./icons";
 import { useInView, useThumbnail } from "./thumbnails";
+import { tagStyle } from "./tagColor";
 import { ChevronDownIcon, ChevronUpIcon } from "../app/icons";
 
 function errorMessage(err: unknown): string {
@@ -436,7 +437,7 @@ const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, 
           {tags.length > 0 && (
             <span className="tile-tags">
               {tags.map((tag) => (
-                <span key={tag} className="tag">
+                <span key={tag} className="tag" style={tagStyle(tag)}>
                   {tag}
                 </span>
               ))}

@@ -121,22 +121,21 @@ kbd.nav-count {
 
 .tag-link {
   padding: 2px 7px;
-  color: var(--text-muted);
+  color: var(--tag-color);
   font-size: 12px;
   font-weight: 450;
-  background: var(--surface);
+  background: var(--tag-fill);
   border: 0;
   border-radius: 5px;
 }
 
 .tag-link:where(:hover) {
-  color: var(--text);
-  background: var(--fill-hover);
+  background: var(--tag-fill-hover);
 }
 
 .tag-link[aria-pressed="true"] {
-  color: var(--on-accent);
-  background: var(--accent);
+  color: var(--bg);
+  background: var(--tag-color);
 }
 
 .sidebar-foot {

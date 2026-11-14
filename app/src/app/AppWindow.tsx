@@ -30,6 +30,7 @@ import LibraryWindow from "../library/LibraryWindow";
 import WelcomeWindow from "../welcome/WelcomeWindow";
 import { getSettings, type SettingsSection } from "../settings/api";
 import { onLibraryChanged, sidebarSummary, type SidebarSummary } from "../library/api";
+import { tagStyle } from "../library/tagColor";
 import { shortcutLabel } from "../hub/keys";
 
 /** The other captures, under the New capture button. */
@@ -342,6 +343,7 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
                 key={name}
                 type="button"
                 className="tag-link"
+                style={tagStyle(name)}
                 aria-pressed={place.tag.toLowerCase() === name.toLowerCase()}
                 onClick={() => setPlace({ app: "", tag: place.tag === name ? "" : name })}
               >

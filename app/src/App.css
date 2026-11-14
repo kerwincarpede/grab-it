@@ -18,6 +18,9 @@
   --accent-edge: rgb(75 98 227 / 28%);
   --on-accent: #ffffff;
   --success: #1f8a4c;
+  /* Tag tints: each tag sets --tag-hue; these set how light its ink is. */
+  --tag-sat: 58%;
+  --tag-ink: 38%;
   --danger: #d13b44;
   --radius: 7px;
   --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 4px 12px rgb(16 24 40 / 6%);
@@ -108,6 +111,8 @@
     --accent-edge: rgb(130 151 255 / 26%);
     --on-accent: #0b0c10;
     --success: #3fcf8e;
+    --tag-sat: 75%;
+    --tag-ink: 76%;
     --danger: #ec7a80;
     --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 6px 16px rgb(0 0 0 / 28%);
     --dialog-shadow: 0 24px 60px rgb(0 0 0 / 55%), 0 0 0 1px #26282d;
@@ -1022,4 +1027,15 @@ label:has(input:checked) .corner-card::after {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Tag chips, in every window: tinted by their own --tag-hue (see tagColor.ts).
+   Declared here, on the chip, so each resolves its own hue. */
+.tag,
+.tag-link {
+  /* The tag's ink, and its fill and edge as translucent washes of the same hue. */
+  --tag-color: hsl(var(--tag-hue, 220) var(--tag-sat) var(--tag-ink));
+  --tag-fill: hsl(var(--tag-hue, 220) var(--tag-sat) var(--tag-ink) / 13%);
+  --tag-fill-hover: hsl(var(--tag-hue, 220) var(--tag-sat) var(--tag-ink) / 22%);
+  --tag-edge: hsl(var(--tag-hue, 220) var(--tag-sat) var(--tag-ink) / 28%);
 }
