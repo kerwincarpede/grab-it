@@ -19,8 +19,8 @@ use std::{
 
 use serde::Serialize;
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-    WindowEvent, ipc::InvokeBody,
+    AppHandle, LogicalPosition, LogicalSize, Manager, State, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, WindowEvent, ipc::InvokeBody,
 };
 
 use crate::{quick, tray, windows};
@@ -87,10 +87,7 @@ impl PinState {
 /// Where a pin at `current` lands after moving by `delta`, in logical
 /// pixels, rounded to whole pixels so repeated nudges do not drift.
 pub fn nudged_position(current: (f64, f64), delta: (f64, f64)) -> (f64, f64) {
-    (
-        (current.0 + delta.0).round(),
-        (current.1 + delta.1).round(),
-    )
+    ((current.0 + delta.0).round(), (current.1 + delta.1).round())
 }
 
 /// The size a pin opens at, in logical pixels: the image at the monitor's
