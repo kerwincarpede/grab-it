@@ -1164,27 +1164,30 @@ export default function EditorWindow() {
   return (
     <main className="editor" data-testid="editor" data-ready={image ? "true" : "false"}>
       <div className="editor-topbar" role="toolbar" aria-label="Style and actions">
-        <div className="bar-group" role="group" aria-label="Colour">
-          {COLORS.map((color) => (
-            <button
-              key={color}
-              type="button"
-              className="swatch"
-              style={{ background: color }}
-              aria-label={`Colour ${color}`}
-              aria-pressed={style.color === color}
-              onClick={() => changeStyle({ color })}
+        {/* Crop has no colour; its ratio picker takes the space instead, so the bar stays on one line. */}
+        {optionsFor !== "crop" && (
+          <div className="bar-group" role="group" aria-label="Colour">
+            {COLORS.map((color) => (
+              <button
+                key={color}
+                type="button"
+                className="swatch"
+                style={{ background: color }}
+                aria-label={`Colour ${color}`}
+                aria-pressed={style.color === color}
+                onClick={() => changeStyle({ color })}
+              />
+            ))}
+            <input
+              className="swatch custom"
+              aria-label="Custom colour"
+              title="Custom colour"
+              type="color"
+              value={style.color}
+              onChange={(event) => changeStyle({ color: event.target.value })}
             />
-          ))}
-          <input
-            className="swatch custom"
-            aria-label="Custom colour"
-            title="Custom colour"
-            type="color"
-            value={style.color}
-            onChange={(event) => changeStyle({ color: event.target.value })}
-          />
-        </div>
+          </div>
+        )}
         {width && <WidthControl kind={width} value={shownWidth} color={selected && "color" in selected ? selected.color : style.color} onChange={changeWidth} />}
         {boxOptions && (
           <div className="bar-group">

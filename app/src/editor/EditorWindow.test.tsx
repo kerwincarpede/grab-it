@@ -1326,6 +1326,8 @@ describe("EditorWindow", () => {
     const ratios = within(screen.getByRole("group", { name: "Crop ratio" }));
     expect(ratios.getAllByRole("button").map((button) => button.textContent)).toEqual(["Free", "Original", "16:9", "4:3", "1:1", "9:16"]);
     expect(ratios.getByRole("button", { name: "Free" })).toHaveAttribute("aria-pressed", "true");
+    // Crop has no colour: the picker takes the swatches' place.
+    expect(screen.queryByRole("group", { name: "Colour" })).not.toBeInTheDocument();
 
     // The largest 16:9 box inside the crop, centred.
     fireEvent.click(ratios.getByRole("button", { name: "16:9" }));
@@ -1347,6 +1349,7 @@ describe("EditorWindow", () => {
     expect(screen.getByText("Crop 320×240")).toBeInTheDocument();
     fireEvent.click(pressed("Arrow"));
     expect(screen.queryByRole("group", { name: "Crop ratio" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Colour" })).toBeInTheDocument();
   });
 
   it("holds a crop drag to the picked ratio, and Shift squares a Free crop", async () => {
