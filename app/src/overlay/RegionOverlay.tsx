@@ -14,6 +14,7 @@ import {
 } from "./api";
 import {
   advanceDrag,
+  cutoutPath,
   dragBox,
   imageSize,
   isDrag,
@@ -44,6 +45,8 @@ const HINTS: Record<OverlayIntent, string> = {
   record: "Drag over the area to record, or click a window. Esc cancels.",
 };
 const WINDOW_HINT = "Click a window to capture it. Esc cancels.";
+/** The hovered window's rounded corners, in CSS px. Matches `.overlay-window`. */
+const WINDOW_RADIUS = 10;
 
 function viewport(): Size {
   return { width: window.innerWidth, height: window.innerHeight };
@@ -307,6 +310,18 @@ function RegionOverlay() {
             const decoded = typeof img.decode === "function" ? img.decode() : Promise.resolve();
             decoded.catch(() => {}).finally(() => setImage(img));
           }}
+        />
+      )}
+      {/* Around a hovered window the frozen screen is blurred; the window itself stays sharp. */}
+      {imageUrl && hovered && !dragging && (
+        <img
+          className="overlay-image overlay-image-blur"
+          data-testid="overlay-blur"
+          src={imageUrl}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          style={{ clipPath: cutoutPath(hovered.box, view, WINDOW_RADIUS) }}
         />
       )}
       {highlight && placement ? (

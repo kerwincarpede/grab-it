@@ -9,13 +9,6 @@
   initial-value: 0;
 }
 
-/* The green wash on a hovered window, registered so it can fade in. */
-@property --overlay-wash {
-  syntax: "<number>";
-  inherits: false;
-  initial-value: 0.11;
-}
-
 /*
  * A see-through overlay window: the page must not paint a backdrop of its
  * own. The colour scheme is pinned because a dark one makes the browser
@@ -29,7 +22,10 @@
 /* Capture overlay: the frozen monitor fills the window. */
 .overlay {
   --overlay-accent: #2f81f7;
-  --overlay-window: 52 199 89;
+  /* A hovered window's edge: a violet that reads on light and dark apps. */
+  --overlay-window: 167 139 250;
+  /* Around a hovered window: near black, so the window is what you see. */
+  --overlay-around: rgb(8 9 12 / 52%);
   /*
    * A cool slate rather than black: it darkens a light screen and lifts a
    * dark one, so the tint shows on either.
@@ -144,32 +140,39 @@
 }
 
 /*
- * A hovered window keeps half the slate tint under a light green wash, so
- * it stands out from the screen without the screen ever going untinted,
- * however large the window is. A soft green edge, rounded like the windows
- * themselves, and a short glide from one window to the next.
+ * A hovered window is shown as it is: no tint on it at all. Everything
+ * around it steps back, darker and blurred (the blur is a copy of the
+ * frozen screen with the window cut out, `.overlay-image-blur`), and the
+ * window gets a violet edge with a soft glow, rounded like the windows
+ * themselves. A short glide from one window to the next.
  */
 .overlay-window {
-  background:
-    linear-gradient(rgb(var(--overlay-window) / var(--overlay-wash)) 0 0),
-    rgb(var(--overlay-tint) / calc(var(--overlay-dim-alpha) * 0.5));
+  background: none;
   border-radius: 10px;
   box-shadow:
-    0 0 0 1.5px rgb(var(--overlay-window) / 70%),
-    0 0 0 5px rgb(var(--overlay-window) / 14%),
-    0 0 0 100vmax var(--overlay-dim);
+    0 0 0 2px rgb(var(--overlay-window)),
+    0 0 0 6px rgb(var(--overlay-window) / 22%),
+    0 0 28px 6px rgb(var(--overlay-window) / 30%),
+    0 0 0 100vmax var(--overlay-around);
   transition:
     left 90ms ease-out,
     top 90ms ease-out,
     width 90ms ease-out,
     height 90ms ease-out;
-  animation: overlay-window-in 110ms ease-out;
+  animation: overlay-window-in 120ms ease-out;
 }
 
 @keyframes overlay-window-in {
   from {
-    --overlay-wash: 0;
+    opacity: 0;
   }
+}
+
+/* The frozen screen again, blurred, with the hovered window cut out. */
+.overlay-image-blur {
+  filter: blur(10px) saturate(0.9);
+  transition: clip-path 90ms ease-out;
+  animation: overlay-window-in 120ms ease-out;
 }
 
 /* A hovered window is a suggestion, not a selection: no ticks. */

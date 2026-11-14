@@ -186,3 +186,22 @@ export function toHex(red: number, green: number, blue: number): string {
       .padStart(2, "0");
   return `#${channel(red)}${channel(green)}${channel(blue)}`.toUpperCase();
 }
+
+/**
+ * A CSS `clip-path` covering the whole `viewport` except `box`, cut out with
+ * rounded corners of `radius`: the blurred screen around a hovered window.
+ * The path keeps the same commands for every box, so the browser can
+ * animate from one window to the next.
+ */
+export function cutoutPath(box: Box, viewport: Size, radius: number): string {
+  const r = Math.max(0, Math.min(radius, box.width / 2, box.height / 2));
+  const { x, y, width: w, height: h } = box;
+  const n = (value: number) => Number(value.toFixed(2));
+  const outer = `M0 0H${n(viewport.width)}V${n(viewport.height)}H0Z`;
+  const hole =
+    `M${n(x + r)} ${n(y)}H${n(x + w - r)}A${n(r)} ${n(r)} 0 0 1 ${n(x + w)} ${n(y + r)}` +
+    `V${n(y + h - r)}A${n(r)} ${n(r)} 0 0 1 ${n(x + w - r)} ${n(y + h)}` +
+    `H${n(x + r)}A${n(r)} ${n(r)} 0 0 1 ${n(x)} ${n(y + h - r)}` +
+    `V${n(y + r)}A${n(r)} ${n(r)} 0 0 1 ${n(x + r)} ${n(y)}Z`;
+  return `path(evenodd, "${outer} ${hole}")`;
+}
