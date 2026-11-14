@@ -1,7 +1,24 @@
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./pin.css";
-import { pinClose, pinCopy, pinEdit, pinImage, pinInfo, pinZoom, wheelFactor, ZOOM_STEP, type PinInfo } from "./api";
+import { nudgeDelta } from "../editor/tools";
+import {
+  clampOpacity,
+  MIN_OPACITY,
+  OPACITY_STEP,
+  pinClose,
+  pinCopy,
+  pinEdit,
+  pinImage,
+  pinInfo,
+  pinLock,
+  pinNudge,
+  pinZoom,
+  wheelFactor,
+  wheelOpacity,
+  ZOOM_STEP,
+  type PinInfo,
+} from "./api";
 
 function errorMessage(err: unknown): string {
   if (typeof err === "string") return err;
@@ -12,12 +29,14 @@ function errorMessage(err: unknown): string {
 /**
  * A pinned capture: the image fills a borderless window that stays above
  * every other one. Drag it anywhere, scroll (or + and -) to resize,
- * Esc or double-click to close.
+ * Ctrl/⌘ + scroll (or the slider) to fade it, the arrow keys to nudge it,
+ * Lock to make it click-through, Esc or double-click to close.
  */
 function PinWindow() {
   const [info, setInfo] = useState<PinInfo | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [opacity, setOpacity] = useState(1);
   const closed = useRef(false);
 
   useEffect(() => {
@@ -66,6 +85,20 @@ function PinWindow() {
     pinZoom(factor).catch((err: unknown) => setMessage(errorMessage(err)));
   }
 
+  function fade(deltaY: number) {
+    setOpacity((current) => wheelOpacity(current, deltaY));
+  }
+
+  function nudge(dx: number, dy: number) {
+    pinNudge(dx, dy).catch((err: unknown) => setMessage(errorMessage(err)));
+  }
+
+  function lock() {
+    pinLock()
+      .then(() => setMessage("Locked. Unlock it from the tray menu."))
+      .catch((err: unknown) => setMessage(errorMessage(err)));
+  }
+
   function copy() {
     pinCopy()
       .then(() => setMessage("Copied"))
@@ -78,9 +111,9 @@ function PinWindow() {
 
   // The handlers read the latest closures through refs, so the listeners
   // are attached once.
-  const actions = useRef({ close, zoom, copy });
+  const actions = useRef({ close, zoom, copy, fade, nudge });
   useEffect(() => {
-    actions.current = { close, zoom, copy };
+    actions.current = { close, zoom, copy, fade, nudge };
   });
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -89,12 +122,19 @@ function PinWindow() {
       else if (mod && event.key.toLowerCase() === "c") actions.current.copy();
       else if (event.key === "+" || event.key === "=") actions.current.zoom(ZOOM_STEP);
       else if (event.key === "-") actions.current.zoom(1 / ZOOM_STEP);
-      else return;
+      else {
+        // The opacity slider takes its own arrow keys.
+        if (event.target instanceof HTMLInputElement) return;
+        const delta = mod || event.altKey ? null : nudgeDelta(event.key, event.shiftKey);
+        if (!delta) return;
+        actions.current.nudge(delta.x, delta.y);
+      }
       event.preventDefault();
     }
     function onWheel(event: WheelEvent) {
       event.preventDefault();
-      actions.current.zoom(wheelFactor(event.deltaY));
+      if (event.ctrlKey || event.metaKey) actions.current.fade(event.deltaY);
+      else actions.current.zoom(wheelFactor(event.deltaY));
     }
     window.addEventListener("keydown", onKeyDown);
     // Not passive: the wheel must not scroll or pinch-zoom the page.
@@ -122,6 +162,8 @@ function PinWindow() {
       className="pin"
       data-testid="pin"
       data-ready={imageUrl ? "true" : "false"}
+      // Fades the image and the backdrop; the toolbar stays solid.
+      style={{ "--pin-opacity": opacity } as CSSProperties}
       onMouseDown={onMouseDown}
       onDoubleClick={close}
       onContextMenu={(event) => event.preventDefault()}
@@ -135,6 +177,18 @@ function PinWindow() {
         onMouseDown={(event) => event.stopPropagation()}
         onDoubleClick={(event) => event.stopPropagation()}
       >
+        <input
+          type="range"
+          className="pin-opacity"
+          aria-label="Opacity"
+          title="Opacity (Ctrl/⌘ + scroll)"
+          min={MIN_OPACITY * 100}
+          max={100}
+          step={OPACITY_STEP * 100}
+          value={Math.round(opacity * 100)}
+          aria-valuetext={`${Math.round(opacity * 100)}%`}
+          onChange={(event) => setOpacity(clampOpacity(Number(event.target.value) / 100))}
+        />
         <button type="button" onClick={copy} title="Copy (Ctrl+C)">
           Copy
         </button>
@@ -148,6 +202,9 @@ function PinWindow() {
         </button>
         <button type="button" onClick={() => zoom(ZOOM_STEP)} aria-label="Larger" title="Larger (+)">
           +
+        </button>
+        <button type="button" onClick={lock} title="Lock: clicks pass through until you unlock it from the tray menu">
+          Lock
         </button>
         <button type="button" onClick={close} aria-label="Close" title="Close (Esc)">
           ✕

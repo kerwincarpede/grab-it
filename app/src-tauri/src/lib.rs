@@ -88,6 +88,8 @@ pub fn run() {
             pin::pin_info,
             pin::pin_image,
             pin::pin_zoom,
+            pin::pin_lock,
+            pin::pin_nudge,
             pin::pin_copy,
             pin::pin_edit,
             pin::pin_close,
