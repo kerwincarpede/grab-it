@@ -94,10 +94,14 @@ fn try_open(
         (size.width, size.height),
     );
     let (position, side) = place(area_origin, area_size, monitor.scale_factor);
+    let logical_side = logical(side, monitor.scale_factor);
 
     let builder =
         WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App(page_url(recording).into()))
             .title("Grab-it webcam")
+            // Built at its size: GTK keeps a window that may not be resized at the
+            // size it was built with, and ignores a later set_size.
+            .inner_size(logical_side, logical_side)
             .decorations(false)
             // See-through, so only the round or rounded bubble shows.
             .transparent(true)
@@ -111,12 +115,23 @@ fn try_open(
             .visible(false);
     let window = allow_camera(builder).build()?;
     enable_media_streams(&window)?;
-    // Sized before it is placed: macOS resizes a window around its
-    // bottom-left corner (see overlay.rs).
+    // Sized again in physical pixels, for a monitor whose scale differs
+    // from the one the window was built on, and before it is placed:
+    // macOS resizes a window around its bottom-left corner (see overlay.rs).
     window.set_size(PhysicalSize::new(side, side))?;
     window.set_position(position)?;
     window.show()?;
     Ok(())
+}
+
+/// `side` physical pixels in logical pixels at `scale`.
+fn logical(side: u32, scale: f64) -> f64 {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    f64::from(side) / scale
 }
 
 /// Closes the bubble, if it is open.
@@ -262,6 +277,17 @@ mod tests {
         let (position, side) = place((5, 5), (60, 40), 1.0);
         assert_eq!(side, 40);
         assert_eq!(position, PhysicalPosition::new(5 + 60 - 40, 5));
+    }
+
+    #[test]
+    fn is_built_at_its_side_in_logical_pixels() {
+        let (_, side) = place((0, 0), (2560, 1440), 2.0);
+        assert_eq!(logical(side, 2.0), 200.0);
+        let (_, side) = place((460, 80), (920, 560), 1.0);
+        assert_eq!(logical(side, 1.0), 200.0);
+        assert_eq!(logical(150, 1.5), 100.0);
+        assert_eq!(logical(200, f64::NAN), 200.0);
+        assert_eq!(logical(200, 0.0), 200.0);
     }
 
     #[test]
