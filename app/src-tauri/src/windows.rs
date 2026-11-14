@@ -5,13 +5,14 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use crate::{actions, cli::OpenTarget, editor::EditorState, hotkeys, pin, quick};
 
-pub const SETTINGS_LABEL: &str = "settings";
-pub const LIBRARY_LABEL: &str = "library";
-pub const WELCOME_LABEL: &str = "welcome";
+/// The Grab-it window: library, Settings, shortcuts and tips.
+pub const MAIN_LABEL: &str = "main";
+/// Emitted to the Grab-it window, with a [`MainView`] name, to switch views.
+pub const MAIN_NAVIGATE_EVENT: &str = "main-navigate";
 /// Editor windows are labelled `editor-<n>`.
 pub const EDITOR_LABEL_PREFIX: &str = "editor-";
 
@@ -124,9 +125,29 @@ pub fn show_editor(app: &AppHandle, capture: &Path) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Shows the Settings window, creating it on first use.
-pub fn show_settings(app: &AppHandle) -> tauri::Result<()> {
-    if let Some(window) = app.get_webview_window(SETTINGS_LABEL) {
+/// What the main window shows. Mirrors `MainView` in src/app/api.ts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainView {
+    Library,
+    Settings,
+    Welcome,
+}
+
+impl MainView {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Library => "library",
+            Self::Settings => "settings",
+            Self::Welcome => "welcome",
+        }
+    }
+}
+
+/// Shows the Grab-it window on `view`, creating it on first use. It holds
+/// the library, Settings and the shortcuts, so there is one window to find.
+pub fn show_main(app: &AppHandle, view: MainView) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(MAIN_LABEL) {
+        window.emit(MAIN_NAVIGATE_EVENT, view.as_str())?;
         window.unminimize()?;
         window.show()?;
         window.set_focus()?;
@@ -134,63 +155,54 @@ pub fn show_settings(app: &AppHandle) -> tauri::Result<()> {
     }
     let window = WebviewWindowBuilder::new(
         app,
-        SETTINGS_LABEL,
-        WebviewUrl::App("index.html#/settings".into()),
+        MAIN_LABEL,
+        WebviewUrl::App(format!("index.html#/app/{}", view.as_str()).into()),
     )
-    .title("Grab-it Settings")
-    .inner_size(640.0, 720.0)
-    .min_inner_size(480.0, 480.0)
+    .title("Grab-it")
+    .inner_size(1180.0, 760.0)
+    .min_inner_size(720.0, 480.0)
     .center()
     .build()?;
     let handle = app.clone();
     window.on_window_event(move |event| {
-        // Closed while recording a hotkey: give the hotkeys back.
+        // Closed while recording a hotkey in Settings: give the hotkeys back.
         if matches!(event, WindowEvent::Destroyed) {
             hotkeys::resume(&handle);
         }
     });
+    window.set_focus()?;
     Ok(())
 }
 
-/// Shows the Library window, creating it on first use.
+/// Shows the Grab-it window on Settings.
+pub fn show_settings(app: &AppHandle) -> tauri::Result<()> {
+    show_main(app, MainView::Settings)
+}
+
+/// Shows the Grab-it window on the library.
 pub fn show_library(app: &AppHandle) -> tauri::Result<()> {
-    if let Some(window) = app.get_webview_window(LIBRARY_LABEL) {
-        window.unminimize()?;
-        window.show()?;
-        window.set_focus()?;
-        return Ok(());
-    }
-    WebviewWindowBuilder::new(
-        app,
-        LIBRARY_LABEL,
-        WebviewUrl::App("index.html#/library".into()),
-    )
-    .title("Grab-it Library")
-    .inner_size(1100.0, 720.0)
-    .min_inner_size(560.0, 400.0)
-    .center()
-    .build()?;
-    Ok(())
+    show_main(app, MainView::Library)
 }
 
-/// Shows the Welcome window: what Grab-it does and its hotkeys. Opened by
-/// itself on the first launch, and from the tray afterwards.
+/// Shows the Grab-it window on the shortcuts and tips. Opened by itself on
+/// the first launch, and from the tray afterwards.
 pub fn show_welcome(app: &AppHandle) -> tauri::Result<()> {
-    if let Some(window) = app.get_webview_window(WELCOME_LABEL) {
-        window.unminimize()?;
-        window.show()?;
-        window.set_focus()?;
-        return Ok(());
+    show_main(app, MainView::Welcome)
+}
+
+/// Gives Grab-it a Dock icon, or takes it away (macOS only).
+pub fn apply_dock_icon(app: &AppHandle, show: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let policy = if show {
+            tauri::ActivationPolicy::Regular
+        } else {
+            tauri::ActivationPolicy::Accessory
+        };
+        if let Err(err) = app.set_activation_policy(policy) {
+            eprintln!("Grab-it: could not change the Dock icon: {err}");
+        }
     }
-    WebviewWindowBuilder::new(
-        app,
-        WELCOME_LABEL,
-        WebviewUrl::App("index.html#/welcome".into()),
-    )
-    .title("Welcome to Grab-it")
-    .inner_size(620.0, 720.0)
-    .min_inner_size(480.0, 480.0)
-    .center()
-    .build()?;
-    Ok(())
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, show);
 }

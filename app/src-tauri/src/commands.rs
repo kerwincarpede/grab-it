@@ -56,6 +56,20 @@ pub fn set_preferences(
     Ok(settings)
 }
 
+/// Shows or hides the Dock icon (macOS) and remembers the choice.
+#[tauri::command]
+pub fn set_show_in_dock(
+    enabled: bool,
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+) -> Result<Settings, String> {
+    let settings = lock(&state)
+        .set_show_in_dock(enabled)
+        .map_err(|err| err.to_string())?;
+    crate::windows::apply_dock_icon(&app, enabled);
+    Ok(settings)
+}
+
 /// The annotation editor's remembered colour, tool, widths and options.
 #[tauri::command]
 pub fn get_editor_preferences(state: State<'_, SettingsState>) -> EditorPreferences {

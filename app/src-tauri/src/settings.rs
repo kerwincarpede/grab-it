@@ -332,6 +332,9 @@ pub struct Settings {
     pub preferences: Preferences,
     /// The annotation editor's remembered style and tool.
     pub editor: EditorPreferences,
+    /// macOS: Grab-it has a Dock icon that opens its window. Off, it lives
+    /// in the menu bar only. Other systems ignore it.
+    pub show_in_dock: bool,
 }
 
 impl Settings {
@@ -343,6 +346,7 @@ impl Settings {
             hotkeys: Hotkeys::default(),
             preferences: Preferences::default(),
             editor: EditorPreferences::default(),
+            show_in_dock: true,
         }
     }
 }
@@ -358,6 +362,7 @@ struct StoredSettings {
     ai: Option<AiSettings>,
     /// Read leniently by [`EditorPreferences::from_stored`].
     editor: Option<serde_json::Value>,
+    show_in_dock: Option<bool>,
 }
 
 /// Hotkeys on disk; a missing or empty one keeps its default.
@@ -411,6 +416,7 @@ impl StoredSettings {
                 Some(stored) => EditorPreferences::from_stored(stored),
                 None => defaults.editor,
             },
+            show_in_dock: self.show_in_dock.unwrap_or(defaults.show_in_dock),
         }
     }
 }
@@ -469,6 +475,7 @@ struct SettingsOnDisk<'a> {
     copy_to_clipboard: bool,
     ai: AiOnDisk<'a>,
     editor: &'a EditorPreferences,
+    show_in_dock: bool,
 }
 
 #[derive(Serialize)]
@@ -515,6 +522,7 @@ impl<'a> SettingsOnDisk<'a> {
                 notice_pending: *notice_pending,
             },
             editor: &settings.editor,
+            show_in_dock: settings.show_in_dock,
         }
     }
 }
@@ -798,6 +806,17 @@ impl SettingsStore {
         Ok(self.current.clone())
     }
 
+    /// Shows or hides the Dock icon (macOS). Applying it is up to the caller.
+    pub fn set_show_in_dock(&mut self, enabled: bool) -> Result<Settings, SettingsError> {
+        let next = Settings {
+            show_in_dock: enabled,
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
     /// Changes the capture hotkeys after checking them. Registering them is
     /// up to the caller.
     pub fn set_hotkeys(&mut self, hotkeys: &Hotkeys) -> Result<Settings, SettingsError> {
@@ -895,9 +914,23 @@ mod tests {
                 color: Some("#0090ff".into()),
                 ..EditorPreferences::default()
             },
+            show_in_dock: false,
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path, defaults(&dir)).unwrap(), settings);
+    }
+
+    #[test]
+    fn dock_icon_is_on_by_default_and_remembered() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        assert!(defaults(&dir).show_in_dock);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        assert!(!store.set_show_in_dock(false).unwrap().show_in_dock);
+        assert!(!load(&path, defaults(&dir)).unwrap().show_in_dock);
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["showInDock"], false);
     }
 
     #[test]

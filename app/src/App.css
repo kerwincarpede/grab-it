@@ -17,9 +17,16 @@
   --radius: 8px;
   --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 4px 12px rgb(16 24 40 / 6%);
 
-  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* Geist for text, Geist Mono for keys, sizes and versions; bundled, so
+     every system shows the same type. */
+  --font-sans: "Geist Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.45;
+  line-height: 1.5;
+  letter-spacing: -0.006em;
+  font-feature-settings: "ss01", "cv11";
   color: var(--text);
   background-color: var(--bg);
   color-scheme: light dark;
@@ -57,19 +64,25 @@ body {
 }
 
 h1 {
-  margin: 0 0 16px;
-  font-size: 20px;
+  margin: 0 0 20px;
+  font-size: 30px;
   font-weight: 650;
-  letter-spacing: -0.01em;
+  line-height: 1.15;
+  letter-spacing: -0.04em;
 }
 
 h2 {
-  margin: 0 0 10px;
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  text-transform: uppercase;
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--text);
+}
+
+kbd,
+.mono {
+  font-family: var(--font-mono);
+  letter-spacing: 0;
 }
 
 /* A titled group of settings on its own surface. */
@@ -183,7 +196,8 @@ button.danger {
 .hint {
   margin: 0;
   color: var(--text-muted);
-  font-size: 12.5px;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .status {
@@ -212,6 +226,7 @@ button.danger {
 }
 
 .hotkey-row input {
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
 

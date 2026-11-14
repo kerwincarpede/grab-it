@@ -220,7 +220,7 @@
   align-items: center;
   justify-content: center;
   height: 46px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   line-height: 15px;

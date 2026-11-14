@@ -147,12 +147,12 @@ When you're done, **Copy** it, **Export…** it to a file, or **Pin** it. Your e
 
 ## 4. Find it again later
 
-Open the **Library** from the tray (**Library…**) to see every capture, newest first.
+Click the Grab-it icon in the menu bar or tray and choose **Open Grab-it** (or click its Dock icon on a Mac) to see every capture, newest first. The sidebar lists the apps you've captured from; pick one to see only its captures.
 
 The search box finds captures by **the text inside the image**, as well as by tags, notes, the app you captured, and its window title. Remember a word that was in that error message or receipt? Type it:
 
 - `inv 2026` finds a receipt that says "Invoice 2026-03". Each word matches the start of a word.
-- Narrow things down with the filter bar: by **app**, **tag**, or **date range**.
+- Narrow things down by **app** in the sidebar, or by **tag** or **date range** in the filter bar.
 - Select a capture to open it in the editor, copy it, pin it, or add **tags** and **notes**.
 
 > [!NOTE]
@@ -168,7 +168,7 @@ To turn it off, or use another provider such as a local [Ollama](https://ollama.
 
 ## More tricks
 
-Everything below is in the tray menu.
+Click the Grab-it icon in the menu bar or tray for all of these. On Windows and macOS the click opens a small panel with a button for each capture, your latest captures, and links to the Grab-it window and Settings; right-click for the full menu. On Linux the click opens the menu.
 
 | | |
 | --- | --- |
@@ -194,13 +194,13 @@ Everything below is in the tray menu.
 
 Don't like these? Change them in **Settings**: click a shortcut and press the keys you want. If another app already uses a shortcut, Settings tells you, and the tray menu always works.
 
-The tray's **Shortcuts and tips…** shows your current shortcuts at any time.
+**Shortcuts and tips** in the Grab-it window's sidebar shows your current shortcuts at any time.
 
 ---
 
 ## Settings
 
-Open **Settings…** from the tray to change:
+Open **Settings** from the gear in the Grab-it panel, or from the Grab-it window's sidebar, to change:
 
 - **Hotkeys**: any shortcut you like.
 - **After a capture**: show the Quick Access card (the default), jump straight into the editor, or do nothing.
@@ -208,13 +208,14 @@ Open **Settings…** from the tray to change:
 - **Save folder**: where captures go (default `Pictures/Grab-it`). Earlier captures stay where they are and stay in your Library.
 - **Start Grab-it when you sign in**: so it's always ready.
 - **AI descriptions**: on or off, and who describes your captures: Claude Code, Codex or an OpenAI-compatible endpoint. **Test connection** checks it works.
+- **Show Grab-it in the Dock** (macOS): on by default; turn it off to keep Grab-it in the menu bar only.
 
 ---
 
 ## Troubleshooting
 
 **I can't see Grab-it anywhere.**
-It runs in the system tray, not as a normal window. Look for its icon near the clock (on Windows, check the **^** overflow arrow). Opening Grab-it again from your app menu opens the Library.
+It runs in the menu bar or system tray. Look for its icon near the clock (on Windows, check the **^** overflow arrow). On a Mac it's also in the Dock unless you turned that off. Opening Grab-it again from your app menu opens the Grab-it window.
 
 **My PrintScreen key opens a different screenshot tool.**
 Another app (or the operating system) has claimed that key. Either pick a different shortcut in Grab-it's **Settings**, or turn off the other tool's shortcut. On Windows 11, turn off the *Print screen key* option (it opens the Snipping Tool) under **Settings → Accessibility → Keyboard**.

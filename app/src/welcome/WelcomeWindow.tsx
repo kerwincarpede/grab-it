@@ -29,7 +29,7 @@ const TIPS: { title: string; detail: string }[] = [
     detail: "Arrows, steps, blur and spotlight, plus a backdrop with padding and rounded corners.",
   },
   { title: "Pin", detail: "Keep a capture floating above your other windows while you work." },
-  { title: "Record", detail: "Record a region or a window as a GIF from the tray menu." },
+  { title: "Record", detail: "Record a region or a window as a GIF: click the Grab-it icon, then Record GIF." },
   { title: "Library", detail: "Every capture, searchable by the text inside the image." },
 ];
 
@@ -89,8 +89,8 @@ function WelcomeWindow() {
       <header className="welcome-header">
         <h1>Welcome to Grab-it</h1>
         <p className="welcome-lead">
-          Grab-it lives in your system tray. Capture with a hotkey or from the tray menu; everything you capture is
-          saved, copied and searchable.
+          Click the Grab-it icon in the menu bar or tray to capture, or use a hotkey. Everything you capture is
+          saved, copied and searchable in this window.
         </p>
       </header>
 
@@ -127,7 +127,7 @@ function WelcomeWindow() {
             </li>
           ))}
         </ul>
-        <p className="hint">Change them in Settings. Timed captures, Repeat last region and Record GIF are in the tray menu.</p>
+        <p className="hint">Change them in Settings. Timed captures, Repeat last region and Record GIF are a click on the Grab-it icon away.</p>
       </section>
 
       <section className="card" aria-labelledby="welcome-tips">

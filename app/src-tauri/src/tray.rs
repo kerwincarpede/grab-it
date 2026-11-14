@@ -5,12 +5,12 @@ use std::time::Duration;
 use tauri::{
     AppHandle, Manager,
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
-    tray::TrayIconBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 
 use crate::{
     actions::{self, Action},
-    quick, screen, update, windows,
+    hub, quick, screen, update, windows,
 };
 
 const TRAY_ID: &str = "main";
@@ -98,7 +98,7 @@ fn timed_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
 }
 
 /// The Monitor submenu's label for one monitor.
-fn monitor_label(monitor: &screen::MonitorInfo) -> String {
+pub fn monitor_label(monitor: &screen::MonitorInfo) -> String {
     let primary = if monitor.is_primary { ", primary" } else { "" };
     format!(
         "{}. {} ({}×{}{primary})",
@@ -137,6 +137,19 @@ fn monitor_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
     Ok(submenu)
 }
 
+/// Quits Grab-it, finishing a recording first so its GIF is complete.
+pub fn quit(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        crate::record::stop_and_wait(&app);
+        app.exit(0);
+    });
+}
+
+/// Whether a left click on the icon opens the hub. Linux trays do not
+/// report clicks, so there the click opens the menu.
+const CLICK_OPENS_HUB: bool = cfg!(not(target_os = "linux"));
+
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let region = MenuItem::with_id(app, MENU_REGION, "Capture region", true, None::<&str>)?;
     let window = MenuItem::with_id(app, MENU_WINDOW, "Capture window", true, None::<&str>)?;
@@ -160,7 +173,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let colour = MenuItem::with_id(app, MENU_COLOUR, "Pick a colour", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let last = MenuItem::with_id(app, MENU_LAST, "Show last capture", true, None::<&str>)?;
-    let library = MenuItem::with_id(app, MENU_LIBRARY, "Library…", true, None::<&str>)?;
+    let library = MenuItem::with_id(app, MENU_LIBRARY, "Open Grab-it…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
     let welcome = MenuItem::with_id(app, MENU_WELCOME, "Shortcuts and tips…", true, None::<&str>)?;
     let updates = MenuItem::with_id(app, MENU_UPDATES, "Check for updates…", true, None::<&str>)?;
@@ -193,7 +206,20 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("Grab-it")
         .menu(&menu)
-        .show_menu_on_left_click(true)
+        // The click opens the hub; a right-click opens this menu.
+        .show_menu_on_left_click(!CLICK_OPENS_HUB)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                rect,
+                ..
+            } = event
+                && CLICK_OPENS_HUB
+            {
+                hub::toggle(tray.app_handle(), Some(rect));
+            }
+        })
         .on_menu_event(|app, event| match event.id.as_ref() {
             MENU_SETTINGS => {
                 if let Err(err) = windows::show_settings(app) {
@@ -226,14 +252,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                     }
                 });
             }
-            MENU_QUIT => {
-                // A recording is finished first, so its GIF is complete.
-                let app = app.clone();
-                std::thread::spawn(move || {
-                    crate::record::stop_and_wait(&app);
-                    app.exit(0);
-                });
-            }
+            MENU_QUIT => self::quit(app),
             id => {
                 if let Some((action, delay)) = timed_action_for(id) {
                     actions::start_after(app, action, delay);

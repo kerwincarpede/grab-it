@@ -3,13 +3,12 @@
   "identifier": "default",
   "description": "Capability for the Grab-it windows",
   "windows": [
-    "settings",
+    "main",
+    "hub",
     "overlay-*",
     "editor-*",
-    "library",
     "quick",
-    "pin-*",
-    "welcome"
+    "pin-*"
   ],
   "permissions": [
     "core:default",

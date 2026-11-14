@@ -153,6 +153,29 @@ export interface Settings extends Preferences {
   saveFolder: string;
   hotkeys: Hotkeys;
   editor?: EditorPreferences;
+  /** macOS: a Dock icon that opens the Grab-it window. */
+  showInDock?: boolean;
+}
+
+/** Settings, split into the pages of the Grab-it window's sidebar. */
+export type SettingsSection = "general" | "capture" | "editor" | "ai" | "hotkeys";
+
+export const SETTINGS_SECTIONS: { id: SettingsSection; title: string }[] = [
+  { id: "general", title: "General" },
+  { id: "capture", title: "After a capture" },
+  { id: "editor", title: "Editor" },
+  { id: "ai", title: "AI descriptions" },
+  { id: "hotkeys", title: "Hotkeys" },
+];
+
+/** Only macOS has a Dock. */
+export function hasDock(): boolean {
+  return /Mac/.test(navigator.userAgent);
+}
+
+/** Shows or hides the Dock icon; resolves to the settings as saved. */
+export function setShowInDock(enabled: boolean): Promise<Settings> {
+  return invoke<Settings>("set_show_in_dock", { enabled });
 }
 
 /** What each choice after a capture does, in the order Settings lists them. */

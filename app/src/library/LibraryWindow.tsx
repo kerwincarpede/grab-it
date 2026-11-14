@@ -252,6 +252,8 @@ interface ToolbarProps {
   onFilters: (filters: Filters) => void;
   onClear: () => void;
   onRowHeight: (height: number) => void;
+  /** The app filter lives elsewhere (the Grab-it window's sidebar). */
+  hideAppFilter?: boolean;
 }
 
 /** Search, filter chips and the thumbnail size slider. */
@@ -286,14 +288,16 @@ function Toolbar(props: ToolbarProps) {
         )}
       </div>
       <div className="chips">
-        <ChipSelect
-          label="Filter by app"
-          icon={<AppIcon />}
-          allLabel="All apps"
-          value={filters.app}
-          options={options.apps}
-          onChange={(app) => set({ app })}
-        />
+        {!props.hideAppFilter && (
+          <ChipSelect
+            label="Filter by app"
+            icon={<AppIcon />}
+            allLabel="All apps"
+            value={filters.app}
+            options={options.apps}
+            onChange={(app) => set({ app })}
+          />
+        )}
         <ChipSelect
           label="Filter by tag"
           icon={<TagIcon />}
@@ -685,7 +689,18 @@ function neighbour(tiles: HTMLElement[], from: HTMLElement, key: string): HTMLEl
   return best;
 }
 
-function LibraryWindow() {
+interface LibraryWindowProps {
+  /** The heading; "Library" by default. */
+  title?: string;
+  /**
+   * Set when the Grab-it window's sidebar picks the app: the filter bar
+   * then leaves it out, and changes to it (Clear) are passed up.
+   */
+  appFilter?: string;
+  onAppFilter?: (app: string) => void;
+}
+
+function LibraryWindow({ title = "Library", appFilter, onAppFilter }: LibraryWindowProps = {}) {
   const [shots, setShots] = useState<Shot[]>([]);
   const [total, setTotal] = useState(0);
   const [loaded, setLoaded] = useState(false);
@@ -704,7 +719,18 @@ function LibraryWindow() {
   // The search box as typed, and as searched once typing pauses.
   const [text, setText] = useState("");
   const [searchedText, setSearchedText] = useState("");
-  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [ownFilters, setOwnFilters] = useState<Filters>(NO_FILTERS);
+  const filters = useMemo(
+    () => (appFilter === undefined ? ownFilters : { ...ownFilters, app: appFilter }),
+    [ownFilters, appFilter],
+  );
+  const setFilters = useCallback(
+    (next: Filters) => {
+      if (appFilter !== undefined && next.app !== appFilter) onAppFilter?.(next.app);
+      setOwnFilters(next);
+    },
+    [appFilter, onAppFilter],
+  );
   const [options, setOptions] = useState<FilterOptions>({ apps: [], tags: [], categories: [] });
   // Null until the backend says; the AI actions then stay available.
   const [ai, setAi] = useState<AiStatus | null>(null);
@@ -1025,7 +1051,7 @@ function LibraryWindow() {
     <main className="library" style={{ "--row-h": `${rowHeight}px` } as CSSProperties}>
       <header className={`library-top${scrolled ? " is-scrolled" : ""}`}>
         <div className="library-title">
-          <h1>Library</h1>
+          <h1>{title}</h1>
           {loaded && (
             <span className="count-pill">
               {searching
@@ -1050,6 +1076,7 @@ function LibraryWindow() {
           onFilters={setFilters}
           onClear={clearSearch}
           onRowHeight={setRowHeight}
+          hideAppFilter={appFilter !== undefined}
         />
         <OcrBanner status={ocr} onRetry={retry} />
         {aiNotice && (

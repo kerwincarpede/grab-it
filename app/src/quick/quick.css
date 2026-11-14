@@ -188,7 +188,7 @@
 }
 
 .quick-colour .quick-title {
-  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 22px;
 }
 
@@ -228,7 +228,7 @@
   padding: 10px 12px;
   overflow: auto;
   color: var(--q-text);
-  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;

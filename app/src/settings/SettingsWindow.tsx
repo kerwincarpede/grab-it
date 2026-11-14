@@ -7,16 +7,20 @@ import {
   chooseFolder,
   getAutostart,
   getSettings,
+  hasDock,
+  SETTINGS_SECTIONS,
   setAutoBackdrop,
   setAutostart,
   setHotkeys,
   setPreferences,
   setSaveFolder,
+  setShowInDock,
   type AiPreferences,
   type Hotkeys,
   type HotkeysUpdate,
   type Preferences,
   type Settings,
+  type SettingsSection,
 } from "./api";
 
 function errorMessage(err: unknown): string {
@@ -32,7 +36,14 @@ type Status =
   | { kind: "hotkeys-saved"; warnings: string[] }
   | { kind: "error"; message: string };
 
-function SettingsWindow() {
+interface SettingsWindowProps {
+  /** One page of Settings, as the Grab-it window shows it; all of them without. */
+  section?: SettingsSection;
+}
+
+function SettingsWindow({ section }: SettingsWindowProps = {}) {
+  const shows = (page: SettingsSection) => section === undefined || section === page;
+  const title = section === undefined ? "Settings" : SETTINGS_SECTIONS.find((page) => page.id === section)?.title;
   const [settings, setSettings] = useState<Settings | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [busy, setBusy] = useState(false);
@@ -130,6 +141,18 @@ function SettingsWindow() {
     }
   }
 
+  async function changeShowInDock(enabled: boolean) {
+    setBusy(true);
+    try {
+      setSettings(await setShowInDock(enabled));
+      setStatus({ kind: "preferences-saved" });
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveHotkeys(hotkeys: Hotkeys): Promise<HotkeysUpdate | null> {
     try {
       const update = await setHotkeys(hotkeys);
@@ -143,79 +166,102 @@ function SettingsWindow() {
   }
 
   return (
-    <main className="window">
-      <h1>Settings</h1>
-      <section className="card" aria-labelledby="after-capture-heading">
-        <h2 id="after-capture-heading">After a capture</h2>
-        <fieldset className="choices" disabled={busy || settings === null}>
-          {AFTER_CAPTURE_CHOICES.map((choice) => (
-            <label className="choice" key={choice.value}>
-              <input
-                type="radio"
-                name="after-capture"
-                value={choice.value}
-                checked={settings?.afterCapture === choice.value}
-                onChange={() => void changePreferences({ afterCapture: choice.value })}
-              />
-              <span>
-                <span className="choice-title">{choice.title}</span>
-                <span className="hint">{choice.hint}</span>
-              </span>
-            </label>
-          ))}
-        </fieldset>
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={settings?.copyToClipboard ?? true}
-            disabled={busy || settings === null}
-            onChange={(event) => void changePreferences({ copyToClipboard: event.target.checked })}
-          />
-          <span>
-            <span className="choice-title">Copy every capture to the clipboard</span>
-            <span className="hint">Paste it straight into a chat, a document or an issue.</span>
-          </span>
-        </label>
-      </section>
-      <section className="card" aria-labelledby="editor-heading">
-        <h2 id="editor-heading">Editor</h2>
-        <label className="toggle first">
-          <input
-            type="checkbox"
-            checked={settings?.editor?.autoBackdrop ?? false}
-            disabled={busy || settings === null}
-            onChange={(event) => void changeAutoBackdrop(event.target.checked)}
-          />
-          <span>
-            <span className="choice-title">Frame new captures with the last backdrop</span>
-            <span className="hint">
-              The editor adds it when it first opens a capture. The saved capture and its clipboard copy stay unframed.
+    <main className={section === undefined ? "window" : "window settings-page"}>
+      <h1>{title}</h1>
+      {shows("general") && hasDock() && (
+        <section className="card" aria-labelledby="dock-heading">
+          <h2 id="dock-heading">Where Grab-it lives</h2>
+          <label className="toggle first">
+            <input
+              type="checkbox"
+              checked={settings?.showInDock ?? true}
+              disabled={busy || settings === null}
+              onChange={(event) => void changeShowInDock(event.target.checked)}
+            />
+            <span>
+              <span className="choice-title">Show Grab-it in the Dock</span>
+              <span className="hint">Click the Dock icon to open this window. Off, Grab-it lives in the menu bar only.</span>
             </span>
-          </span>
-        </label>
-      </section>
-      <section className="card field">
-        <h2>
-          <label htmlFor="save-folder">Save folder</label>
-        </h2>
-        <div className="field-row">
-          <input
-            id="save-folder"
-            type="text"
-            readOnly
-            value={settings?.saveFolder ?? ""}
-            placeholder={settings ? "" : "Loading…"}
-          />
-          <button type="button" className="secondary" onClick={changeFolder} disabled={busy || settings === null}>
-            Change…
-          </button>
-        </div>
-        <p className="hint">
-          New captures are saved here. Earlier captures stay where they are and stay in your
-          library.
-        </p>
-      </section>
-      {autostart !== null && (
+          </label>
+        </section>
+      )}
+      {shows("capture") && (
+        <section className="card" aria-labelledby="after-capture-heading">
+          <h2 id="after-capture-heading">After a capture</h2>
+          <fieldset className="choices" disabled={busy || settings === null}>
+            {AFTER_CAPTURE_CHOICES.map((choice) => (
+              <label className="choice" key={choice.value}>
+                <input
+                  type="radio"
+                  name="after-capture"
+                  value={choice.value}
+                  checked={settings?.afterCapture === choice.value}
+                  onChange={() => void changePreferences({ afterCapture: choice.value })}
+                />
+                <span>
+                  <span className="choice-title">{choice.title}</span>
+                  <span className="hint">{choice.hint}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={settings?.copyToClipboard ?? true}
+              disabled={busy || settings === null}
+              onChange={(event) => void changePreferences({ copyToClipboard: event.target.checked })}
+            />
+            <span>
+              <span className="choice-title">Copy every capture to the clipboard</span>
+              <span className="hint">Paste it straight into a chat, a document or an issue.</span>
+            </span>
+          </label>
+        </section>
+      )}
+      {shows("editor") && (
+        <section className="card" aria-labelledby="editor-heading">
+          <h2 id="editor-heading">Editor</h2>
+          <label className="toggle first">
+            <input
+              type="checkbox"
+              checked={settings?.editor?.autoBackdrop ?? false}
+              disabled={busy || settings === null}
+              onChange={(event) => void changeAutoBackdrop(event.target.checked)}
+            />
+            <span>
+              <span className="choice-title">Frame new captures with the last backdrop</span>
+              <span className="hint">
+                The editor adds it when it first opens a capture. The saved capture and its clipboard copy stay unframed.
+              </span>
+            </span>
+          </label>
+        </section>
+      )}
+      {shows("general") && (
+        <section className="card field">
+          <h2>
+            <label htmlFor="save-folder">Save folder</label>
+          </h2>
+          <div className="field-row">
+            <input
+              id="save-folder"
+              type="text"
+              readOnly
+              value={settings?.saveFolder ?? ""}
+              placeholder={settings ? "" : "Loading…"}
+            />
+            <button type="button" className="secondary" onClick={changeFolder} disabled={busy || settings === null}>
+              Change…
+            </button>
+          </div>
+          <p className="hint">
+            New captures are saved here. Earlier captures stay where they are and stay in your
+            library.
+          </p>
+        </section>
+      )}
+      {shows("general") && autostart !== null && (
         <section className="card" aria-labelledby="startup-heading">
           <h2 id="startup-heading">Start-up</h2>
           <label className="toggle first">
@@ -227,17 +273,17 @@ function SettingsWindow() {
             />
             <span>
               <span className="choice-title">Start Grab-it when you sign in</span>
-              <span className="hint">It waits in the tray, ready for your hotkeys.</span>
+              <span className="hint">It waits in the menu bar or tray, ready for your hotkeys.</span>
             </span>
           </label>
         </section>
       )}
-      {settings && (
+      {shows("ai") && settings && (
         <div className="card">
           <AiSection saved={settings.ai ?? DEFAULT_AI_PREFERENCES} disabled={busy} onSave={saveAi} />
         </div>
       )}
-      {settings && (
+      {shows("hotkeys") && settings && (
         <div className="card">
           <HotkeysSection saved={settings.hotkeys} disabled={busy} onSave={saveHotkeys} />
         </div>
