@@ -319,9 +319,12 @@
 }
 
 .popover-dates {
+  right: 0;
+  left: auto;
   width: 260px;
   max-width: none;
   padding: 10px;
+  transform-origin: top right;
 }
 
 .preset-grid {
