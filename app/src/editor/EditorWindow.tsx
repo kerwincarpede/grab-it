@@ -6,6 +6,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import "./editor.css";
 import { backdropImage, chooseBackdropImage, copyImage, editorImage, exportImage, pinImage } from "./api";
 import BackdropPanel from "./BackdropPanel";
+import { copyShotText, hasShotText, textCopied, watchShotText, type ShotText } from "../library/api";
 import {
   backdropLayout,
   backdropPaint,
@@ -22,6 +23,7 @@ import {
 import {
   BackdropIcon,
   CopyIcon,
+  CopyTextIcon,
   CropResetIcon,
   ExportIcon,
   FillIcon,
@@ -370,6 +372,8 @@ export default function EditorWindow() {
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  /** The capture's library id and stored OCR text; null when the library does not know it. */
+  const [storedFor, setStoredFor] = useState<{ path: string; id: number; text: ShotText } | null>(null);
   const [backdropOpen, setBackdropOpen] = useState(false);
   /** A backdrop being adjusted (a slider mid-drag), shown but not yet committed. */
   const [backdropDraft, setBackdropDraft] = useState<Backdrop | null>(null);
@@ -802,6 +806,26 @@ export default function EditorWindow() {
     }
   }, [copy]);
 
+  // The original capture's stored text: crop and annotations do not change it.
+  const capturePath = info?.path ?? null;
+  useEffect(() => {
+    if (!capturePath) return;
+    return watchShotText(capturePath, (id, text) =>
+      setStoredFor(id !== null && text ? { path: capturePath, id, text } : null),
+    );
+  }, [capturePath]);
+  // Kept with the path it is for, so another capture never shows this one's text.
+  const stored = storedFor !== null && storedFor.path === capturePath ? storedFor : null;
+
+  const copyText = async () => {
+    if (!stored) return;
+    try {
+      setMessage(`${textCopied(await copyShotText(stored.id))}.`);
+    } catch (err) {
+      setMessage(`Copy text failed: ${errorText(err)}`);
+    }
+  };
+
   const pin = async () => {
     try {
       await pinImage(await render("png"));
@@ -1038,6 +1062,12 @@ export default function EditorWindow() {
             <CopyIcon />
             Copy
           </button>
+          {stored && hasShotText(stored.text) && (
+            <button type="button" className="text-button" onClick={() => void copyText()} title="Copy the text in the capture">
+              <CopyTextIcon />
+              Copy text
+            </button>
+          )}
           <button type="button" className="text-button primary" onClick={() => void exportAs()} disabled={!image}>
             <ExportIcon />
             Export…

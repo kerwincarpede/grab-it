@@ -1358,6 +1358,16 @@ pub fn library_text(id: i64, state: State<'_, LibraryState>) -> Result<ShotText,
     state.lock().text(id).map_err(to_message)
 }
 
+/// The library id of the capture at `path`, or None when the library does
+/// not know it, so windows that only have a path can use the id commands.
+#[tauri::command(async)]
+pub fn library_shot_id(
+    path: PathBuf,
+    state: State<'_, LibraryState>,
+) -> Result<Option<i64>, String> {
+    state.lock().id_for_path(&path).map_err(to_message)
+}
+
 /// Copies the text in a shot and returns it. A shot OCR has not read yet,
 /// or could not read, is read now, and what it finds is stored, so it is
 /// searchable and can be described.
@@ -1526,6 +1536,32 @@ mod tests {
         let second = library.add_capture(&indirect).unwrap();
         assert_eq!(first.id, second.id);
         assert_eq!(library.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn a_shots_id_is_found_from_its_path_and_unknown_paths_have_none() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (10, 10));
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        assert_eq!(library.id_for_path(&png).unwrap(), Some(shot.id));
+        // The same file through a different spelling of its path.
+        let indirect = png
+            .parent()
+            .unwrap()
+            .join("..")
+            .join(ORIGINALS_DIR)
+            .join(png.file_name().unwrap());
+        assert_eq!(library.id_for_path(&indirect).unwrap(), Some(shot.id));
+
+        let unknown = shoot(dir.path(), 2, (10, 10));
+        assert_eq!(library.id_for_path(&unknown).unwrap(), None);
+        assert_eq!(
+            library
+                .id_for_path(&dir.path().join("missing.png"))
+                .unwrap(),
+            None
+        );
     }
 
     #[test]

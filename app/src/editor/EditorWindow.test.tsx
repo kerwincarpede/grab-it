@@ -4,6 +4,7 @@ import type { ReactNode, Ref } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import EditorWindow from "./EditorWindow";
 import type { EditorPreferences } from "../settings/api";
+import type { ShotText } from "../library/api";
 import type { Annotations } from "./model";
 import { PREFERENCES_DELAY_MS } from "./preferences";
 import { AUTOSAVE_DELAY_MS } from "./useAnnotations";
@@ -221,7 +222,12 @@ interface PreferencesMock {
   picked?: string | null;
   /** The capture's recorded scale factor. */
   scaleFactor?: number;
+  /** What `library_text` answers for the capture; it is not in the library when unset. */
+  shotText?: ShotText;
 }
+
+/** The capture's id in the mocked library. */
+const SHOT_ID = 7;
 
 /** Mocks the editor commands; returns every sidecar written. `calls` records output commands in order. */
 function mockEditor(
@@ -250,6 +256,16 @@ function mockEditor(
       case "editor_save_annotations":
         saved.push((payload as { annotations: Annotations }).annotations);
         return null;
+      case "library_shot_id":
+        return preferences.shotText ? SHOT_ID : null;
+      case "library_text":
+        return preferences.shotText;
+      case "library_copy_text":
+        calls.push({ cmd, payload });
+        return preferences.shotText?.state === "read" ? preferences.shotText.text : "";
+      case "plugin:event|listen":
+      case "plugin:event|unlisten":
+        return 1;
       case "editor_pin":
       case "editor_copy":
       case "plugin:window|close":
@@ -940,6 +956,35 @@ describe("EditorWindow", () => {
     fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
     await waitFor(() => expect(calls.map((call) => call.cmd)).toEqual(["editor_copy", "plugin:window|close"]));
     expect(bytes(calls[0].payload)).toEqual(Array.from(FLATTENED));
+  });
+
+  it("copies the capture's stored text from Copy text, beside Copy", async () => {
+    const calls: { cmd: string; payload: unknown }[] = [];
+    mockEditor(sidecar, calls, { shotText: { state: "read", text: "Invoice 2026-031" } });
+    await ready();
+    const bar = within(screen.getByRole("toolbar", { name: "Style and actions" }));
+    const copyText = await bar.findByRole("button", { name: "Copy text" });
+    expect(copyText.previousElementSibling).toBe(bar.getByRole("button", { name: "Copy" }));
+
+    fireEvent.click(copyText);
+
+    await waitFor(() => expect(calls.map((call) => call.cmd)).toEqual(["library_copy_text"]));
+    expect(calls[0].payload).toEqual({ id: SHOT_ID });
+    expect(await screen.findByText("Copied 1 line of text.")).toBeInTheDocument();
+  });
+
+  it.each<[string, ShotText | undefined]>([
+    ["not in the library", undefined],
+    ["still waiting for OCR", { state: "waiting" }],
+    ["OCR could not read", { state: "failed" }],
+    ["without text", { state: "read", text: "  " }],
+  ])("offers no Copy text for a capture %s", async (_, shotText) => {
+    mockEditor(sidecar, [], { shotText });
+    await ready();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument());
+    // Give the text lookup time to answer.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByRole("button", { name: "Copy text" })).not.toBeInTheDocument();
   });
 
   const backdropPanel = () => {
