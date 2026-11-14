@@ -1,0 +1,492 @@
+diff --git a/app/src-tauri/src/lib.rs b/app/src-tauri/src/lib.rs
+index 0fb5f47..a20502b 100644
+--- a/app/src-tauri/src/lib.rs
++++ b/app/src-tauri/src/lib.rs
+@@ -102,6 +102,9 @@ pub fn run() {
+             hotkeys::resume_hotkeys,
+             overlay::overlay_info,
+             overlay::overlay_image,
++            overlay::overlay_bench_config,
++            overlay::overlay_bench_log,
++            overlay::overlay_bench_opaque,
+             overlay::overlay_ready,
+             overlay::overlay_finish,
+             overlay::overlay_cancel,
+diff --git a/app/src-tauri/src/overlay.rs b/app/src-tauri/src/overlay.rs
+index b7cb69e..5d71b7e 100644
+--- a/app/src-tauri/src/overlay.rs
++++ b/app/src-tauri/src/overlay.rs
+@@ -444,7 +444,9 @@ fn encode_later(image: &Arc<RgbaImage>, started: Instant) -> Encoded {
+ /// and the hover blur have nothing to draw until then) and under 30 ms as
+ /// a BMP. Elsewhere a PNG, until the BMP has been tried in those webviews.
+ fn encode_for_page(image: &RgbaImage) -> Result<Vec<u8>, String> {
+-    if cfg!(target_os = "macos") {
++    // BENCH: `png` sends a PNG on macOS too, for an A/B.
++    let png = std::env::var("GRAB_IT_OVERLAY_BENCH").is_ok_and(|v| v.contains("png"));
++    if cfg!(target_os = "macos") && !png {
+         encode_bmp(image)
+     } else {
+         encode_png(image)
+@@ -617,8 +619,11 @@ fn create_window(
+     let window = builder.build()?;
+     #[cfg(target_os = "macos")]
+     raise_above_menu_bar(&window)?;
++    // BENCH: `cap60` keeps WebKit's 60 fps default, for an A/B.
+     #[cfg(target_os = "macos")]
+-    render_at_display_rate(&window)?;
++    if !std::env::var("GRAB_IT_OVERLAY_BENCH").is_ok_and(|v| v.contains("cap60")) {
++        render_at_display_rate(&window)?;
++    }
+     // Placed after the level change, so the window keeps the monitor's
+     // full size, menu bar area included, and the region scale (image width
+     // over viewport width) holds vertically too.
+@@ -1369,3 +1374,69 @@ mod tests {
+         assert_eq!(find_monitor(&wanted, &[]), None);
+     }
+ }
++
++// LOCAL BENCH HARNESS - NOT FOR COMMIT.
++#[tauri::command]
++pub fn overlay_bench_config() -> Option<String> {
++    std::env::var("GRAB_IT_OVERLAY_BENCH").ok()
++}
++
++// Async: off the main thread, which `ps` would otherwise hold up for tens of
++// milliseconds, right as the next phase starts.
++#[tauri::command(async)]
++pub fn overlay_bench_log(line: String) {
++    eprintln!("BENCH {line}");
++    // Cumulative CPU seconds of WindowServer and of the WebKit GPU processes
++    // no older than this app, so each phase can be costed on its own.
++    let Ok(out) = std::process::Command::new("ps")
++        .args(["-axo", "pid=,etime=,time=,comm="])
++        .output()
++    else {
++        return;
++    };
++    let secs = |t: &str| {
++        t.replace('-', ":")
++            .split(':')
++            .fold(0.0, |v, x| v * 60.0 + x.parse::<f64>().unwrap_or(0.0))
++    };
++    let text = String::from_utf8_lossy(&out.stdout);
++    let rows: Vec<(u32, f64, f64, String)> = text
++        .lines()
++        .filter_map(|l| {
++            let mut f = l.split_whitespace();
++            let pid = f.next()?.parse().ok()?;
++            let etime = secs(f.next()?);
++            let time = secs(f.next()?);
++            Some((pid, etime, time, f.collect::<Vec<_>>().join(" ")))
++        })
++        .collect();
++    let mine = rows
++        .iter()
++        .find(|r| r.0 == std::process::id())
++        .map_or(f64::MAX, |r| r.1);
++    let ws: f64 = rows.iter().filter(|r| r.3.ends_with("WindowServer")).map(|r| r.2).sum();
++    let gpu: f64 = rows
++        .iter()
++        .filter(|r| r.3.contains("WebKit.GPU") && r.1 <= mine + 1.0)
++        .map(|r| r.2)
++        .sum();
++    let app: f64 = rows.iter().filter(|r| r.0 == std::process::id()).map(|r| r.2).sum();
++    eprintln!("BENCHCPU ws={ws:.2} gpu={gpu:.2} app={app:.2}");
++}
++
++#[tauri::command]
++pub fn overlay_bench_opaque(window: WebviewWindow) {
++    #[cfg(target_os = "macos")]
++    {
++        use objc2::runtime::{AnyClass, AnyObject};
++        let Ok(ns_window) = window.ns_window() else { return };
++        let ns_window = ns_window.cast::<AnyObject>();
++        unsafe {
++            let black: *mut AnyObject =
++                objc2::msg_send![AnyClass::get(c"NSColor").unwrap(), blackColor];
++            let _: () = objc2::msg_send![ns_window, setBackgroundColor: black];
++            let _: () = objc2::msg_send![ns_window, setOpaque: true];
++        }
++        eprintln!("BENCH opaque set");
++    }
++}
+diff --git a/app/src/overlay/Loupe.tsx b/app/src/overlay/Loupe.tsx
+index 1089805..17d39d4 100644
+--- a/app/src/overlay/Loupe.tsx
++++ b/app/src/overlay/Loupe.tsx
+@@ -1,4 +1,5 @@
+ import { useEffect, useRef } from "react";
++import { benchOff } from "./bench";
+ import { floatingPosition, imagePixelAt, toHex, type Point, type Size } from "./geometry";
+ 
+ /** Image pixels across the loupe; odd, so one pixel sits exactly in the centre. */
+@@ -70,7 +71,7 @@ function Loupe({ image, pointer, scale, viewport }: LoupeProps) {
+   const position = floatingPosition(pointer, PANEL, viewport, OFFSET);
+ 
+   useEffect(() => {
+-    if (!canvas.current || !image) return;
++    if (!canvas.current || !image || benchOff("nolensdraw")) return;
+     const hex = drawLens(canvas.current, image, { x: pixel.x, y: pixel.y });
+     // Written straight to the DOM: the colour is only known after drawing, and
+     // putting it in state would render the overlay twice per pointer move.
+diff --git a/app/src/overlay/RegionOverlay.tsx b/app/src/overlay/RegionOverlay.tsx
+index b258b4f..57ba2d1 100644
+--- a/app/src/overlay/RegionOverlay.tsx
++++ b/app/src/overlay/RegionOverlay.tsx
+@@ -38,6 +38,7 @@ import {
+ } from "./geometry";
+ import { drawBackdrop } from "./backdrop";
+ import Loupe from "./Loupe";
++import { benchInvoke, benchMark, benchOff, runBench, setupBench } from "./bench";
+ import "./overlay.css";
+ 
+ interface PickableWindow {
+@@ -160,12 +161,15 @@ function RegionOverlay() {
+     // backend says one has started, so this runs once on load and again on
+     // that event, whichever finds the selection first.
+     function start() {
++      benchMark("start");
+       overlayInfo()
+         .then((loaded) => {
+           if (cancelled || started || !loaded) return;
+           started = true;
++          benchMark("info");
+           setInfo(loaded);
+           return overlayImage().then((bytes) => {
++            benchMark("bytes");
+             if (cancelled) return;
+             url = toImageUrl(bytes);
+             setImageUrl(url);
+@@ -253,11 +257,27 @@ function RegionOverlay() {
+   }, []);
+ 
+   const view = viewport();
++  const root = useRef<HTMLDivElement>(null);
++  const benched = useRef(false);
++  useEffect(() => {
++    if (!image || benched.current || !root.current) return;
++    benched.current = true;
++    const el = root.current;
++    void setupBench().then((on) => {
++      if (on) requestAnimationFrame(() => {
++        benchMark("painted");
++        if (benchOff("opaque")) void benchInvoke("overlay_bench_opaque");
++        void runBench(el);
++      });
++    });
++  }, [image]);
+ 
+   // Blurred once per image (and viewport size), not on every hover.
+   useEffect(() => {
+     if (!image || !backdrop.current) return;
++    const t0 = performance.now();
+     setBackdropReady(drawBackdrop(backdrop.current, image, view.width, view.height));
++    window.__benchMarks = { ...(window.__benchMarks ?? {}), backdropMs: (window.__benchMarks?.start ?? 0) + performance.now() - t0 };
+   }, [image, view.width, view.height]);
+   const pickable = useMemo<PickableWindow[]>(() => {
+     if (!info) return [];
+@@ -326,7 +346,8 @@ function RegionOverlay() {
+     // Drawn before this event returns. React would otherwise render a pointer
+     // move in a task of its own, and a frame that goes out in between shows
+     // the selection where the pointer was a move ago.
+-    flushSync(follow);
++    if (benchOff("lazy")) follow();
++    else flushSync(follow);
+   }
+ 
+   function onMouseUp(event: MouseEvent) {
+@@ -358,6 +379,7 @@ function RegionOverlay() {
+ 
+   return (
+     <div
++      ref={root}
+       className="overlay"
+       data-testid="overlay"
+       data-ready={info ? "true" : "false"}
+@@ -385,7 +407,8 @@ function RegionOverlay() {
+             // Decoded before it counts as painted, so showing the window
+             // never catches it half drawn.
+             const decoded = typeof img.decode === "function" ? img.decode() : Promise.resolve();
+-            decoded.catch(() => {}).finally(() => setImage(img));
++            benchMark("loaded");
++            decoded.catch(() => {}).finally(() => { benchMark("decoded"); setImage(img); });
+           }}
+         />
+       )}
+@@ -464,7 +487,7 @@ function RegionOverlay() {
+           />
+         </>
+       )}
+-      {!windowMode && pointer && (
++      {!windowMode && pointer && !benchOff("noloupe") && (
+         <Loupe image={image} pointer={pointer} scale={scale} viewport={view} />
+       )}
+       <div
+diff --git a/app/src/overlay/bench.ts b/app/src/overlay/bench.ts
+new file mode 100644
+index 0000000..10c70ce
+--- /dev/null
++++ b/app/src/overlay/bench.ts
+@@ -0,0 +1,262 @@
++// LOCAL BENCH HARNESS - NOT FOR COMMIT.
++// Replays a 120 Hz hover sweep and drag inside the real overlay webview and
++// reports frame timing through `overlay_bench_log`.
++import { invoke } from "@tauri-apps/api/core";
++import { flushSync } from "react-dom";
++
++declare global {
++  interface Window {
++    __benchOff?: Set<string>;
++    __benchMarks?: Record<string, number>;
++  }
++}
++
++export function benchOff(flag: string): boolean {
++  return window.__benchOff?.has(flag) ?? false;
++}
++
++export function benchInvoke(cmd: string) {
++  return invoke(cmd).catch(() => {});
++}
++
++export function benchMark(name: string) {
++  (window.__benchMarks ??= {})[name] = performance.now();
++}
++
++let config: Promise<string | null> | null = null;
++export function benchConfig(): Promise<string | null> {
++  config ??= invoke<string | null>("overlay_bench_config").catch(() => null);
++  return config;
++}
++
++const CSS: Record<string, string> = {
++  noblend: ".overlay-guide{mix-blend-mode:normal!important}",
++  noguides: ".overlay-guide{display:none!important}",
++  noselection: ".overlay-frame,.overlay-window{display:none!important}",
++  nodim: ".overlay-dim{display:none!important}",
++  // Puts back the 0.01ms transition App.css used to give every element
++  // under Reduce Motion, to cost it on its own.
++  leak: ".overlay,.overlay *{transition:all 0.01ms!important}",
++  nowillchange:
++    ".overlay-dim-piece,.overlay-frame-edge,.overlay-frame-tick,.overlay-frame .overlay-label{will-change:auto!important}",
++  nobackdrop: ".overlay-backdrop{display:none!important}",
++  nohint: ".overlay-hint{display:none!important}",
++  noimage: ".overlay-image{display:none!important}",
++};
++
++export async function setupBench(): Promise<boolean> {
++  const cfg = await benchConfig();
++  if (cfg === null) return false;
++  window.__benchOff = new Set(cfg.split(",").filter(Boolean));
++  const css = [...window.__benchOff].map((f) => CSS[f] ?? "").join("\n");
++  if (css) {
++    const style = document.createElement("style");
++    style.textContent = css;
++    document.head.appendChild(style);
++  }
++  return true;
++}
++
++function pct(sorted: number[], p: number) {
++  if (!sorted.length) return 0;
++  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
++}
++const r1 = (v: number) => Math.round(v * 10) / 10;
++
++interface PhaseStats {
++  phase: string;
++  ms: number;
++  moves: number;
++  frames: number;
++  fps: number;
++  frameP50: number;
++  frameP95: number;
++  frameMax: number;
++  /** Frames longer than 1.5 vsyncs at 120 Hz. */
++  missed: number;
++  /** Mean JS per pointer move (handler + React render + commit + effects). */
++  scriptPerMove: number;
++  scriptP95: number;
++  /** Mean rendering work per frame: rAF callback to the next task (style, layout, paint). */
++  renderPerFrame: number;
++  renderP95: number;
++}
++
++/**
++ * Where each piece that follows the pointer is about to be painted, as the
++ * x it should share with the pointer (old markup and new). Read from the
++ * computed style, so a transition holding a piece back shows up.
++ */
++const PROBES: Record<string, (el: HTMLElement) => number> = {
++  ".overlay-guide-y": (el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).e,
++  ".overlay-selection:not(.overlay-window)": (el) => {
++    const style = getComputedStyle(el);
++    return parseFloat(style.left) + parseFloat(style.width);
++  },
++  ".overlay-frame-edge:nth-child(4)": (el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).e,
++  ".overlay-dim-piece:nth-child(4)": (el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).e,
++};
++
++async function runPhase(
++  phase: string,
++  target: Element,
++  ms: number,
++  path: (t: number) => { x: number; y: number },
++  buttons: number,
++): Promise<PhaseStats> {
++  // `probe`: of the frames drawn, how many painted each piece somewhere
++  // other than at the latest pointer position. Costs a style read per frame,
++  // so not on by default.
++  const probing = benchOff("probe");
++  // `raw`: moves are dispatched as the browser dispatches them, leaving it
++  // to the page when it renders. Otherwise each is flushed at once.
++  const raw = benchOff("raw");
++  let lastX: number | null = null;
++  const behind: Record<string, [number, number]> = {};
++  const frameTimes: number[] = [];
++  const renders: number[] = [];
++  const scripts: number[] = [];
++  let running = true;
++  const channel = new MessageChannel();
++  let rafAt = 0;
++  channel.port1.onmessage = () => renders.push(performance.now() - rafAt);
++  const onFrame = (ts: number) => {
++    if (!running) return;
++    frameTimes.push(ts);
++    if (probing && lastX !== null) {
++      for (const [selector, paintedX] of Object.entries(PROBES)) {
++        // The tint only ends at the pointer while a region is dragged.
++        if (buttons === 0 && selector.startsWith(".overlay-dim")) continue;
++        const el = document.querySelector<HTMLElement>(selector);
++        if (!el) continue;
++        const seen = (behind[selector] ??= [0, 0]);
++        seen[1]++;
++        if (Math.abs(paintedX(el) - lastX) > 0.5) seen[0]++;
++      }
++    }
++    rafAt = performance.now();
++    channel.port2.postMessage(0);
++    requestAnimationFrame(onFrame);
++  };
++  requestAnimationFrame(onFrame);
++
++  const start = performance.now();
++  let moves = 0;
++  // Transitions and animations running halfway through: none should be.
++  let anims: Animation[] = [];
++  setTimeout(() => {
++    anims = document.getAnimations();
++  }, ms / 2);
++  await new Promise<void>((resolve) => {
++    const step = () => {
++      const now = performance.now();
++      const t = now - start;
++      if (t >= ms) return resolve();
++      const p = path(t / ms);
++      const ev = new MouseEvent("mousemove", {
++        clientX: p.x,
++        clientY: p.y,
++        buttons,
++        bubbles: true,
++      });
++      const s0 = performance.now();
++      lastX = ev.clientX;
++      if (raw) target.dispatchEvent(ev);
++      else flushSync(() => target.dispatchEvent(ev));
++      scripts.push(performance.now() - s0);
++      moves++;
++      // Next 120 Hz slot from the start, as a pointer would deliver it.
++      const next = Math.ceil((performance.now() - start + 0.01) / 8.333) * 8.333;
++      setTimeout(step, Math.max(0, start + next - performance.now()));
++    };
++    step();
++  });
++  running = false;
++  const elapsed = performance.now() - start;
++  channel.port1.close();
++
++  const intervals = frameTimes.slice(1).map((t, i) => t - frameTimes[i]).sort((a, b) => a - b);
++  const sortedScripts = [...scripts].sort((a, b) => a - b);
++  const sortedRenders = renders.slice(1).sort((a, b) => a - b);
++  const mean = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
++  return {
++    phase,
++    ms: Math.round(elapsed),
++    moves,
++    frames: frameTimes.length,
++    fps: r1((intervals.length / (frameTimes[frameTimes.length - 1] - frameTimes[0])) * 1000),
++    frameP50: r1(pct(intervals, 0.5)),
++    frameP95: r1(pct(intervals, 0.95)),
++    frameMax: r1(intervals[intervals.length - 1] ?? 0),
++    missed: intervals.filter((i) => i > 12.5).length,
++    scriptPerMove: r1(mean(scripts)),
++    scriptP95: r1(pct(sortedScripts, 0.95)),
++    renderPerFrame: r1(mean(sortedRenders)),
++    renderP95: r1(pct(sortedRenders, 0.95)),
++    // When the longest frame was, in ms into the phase, and the worst
++    // single move and style pass: says what a hitch was made of.
++    maxAt: (() => {
++      let at = 0;
++      for (let i = 1; i < frameTimes.length; i++) {
++        if (frameTimes[i] - frameTimes[i - 1] > frameTimes[at + 1] - frameTimes[at]) at = i - 1;
++      }
++      return Math.round(frameTimes[at] - frameTimes[0]);
++    })(),
++    scriptMax: r1(sortedScripts[sortedScripts.length - 1] ?? 0),
++    renderMax: r1(sortedRenders[sortedRenders.length - 1] ?? 0),
++    anims: anims.length,
++    behind: Object.fromEntries(
++      Object.entries(behind).map(([k, [late, all]]) => [k, `${late}/${all}`]),
++    ),
++  } as PhaseStats;
++}
++
++export async function runBench(target: Element) {
++  const marks = { ...(window.__benchMarks ?? {}) };
++  const w = window.innerWidth;
++  const h = window.innerHeight;
++  const log = (line: unknown) =>
++    invoke("overlay_bench_log", { line: JSON.stringify(line) }).catch(() => {});
++  const base = marks.start ?? 0;
++  log({
++    open: Object.fromEntries(Object.entries(marks).map(([k, v]) => [k, r1(v - base)])),
++    viewport: [w, h, window.devicePixelRatio],
++    off: [...(window.__benchOff ?? [])],
++  });
++  await new Promise((r) => setTimeout(r, 400));
++  // Hover: a zig-zag sweep over the whole screen, crossing many windows.
++  const hover = await runPhase(
++    "hover",
++    target,
++    2500,
++    (t) => {
++      const rows = 5;
++      const row = Math.min(rows - 1, Math.floor(t * rows));
++      const f = t * rows - row;
++      const x = row % 2 === 0 ? f : 1 - f;
++      return { x: 40 + x * (w - 80), y: 60 + ((row + 0.5) / rows) * (h - 120) };
++    },
++    0,
++  );
++  log(hover);
++  // Drag: press near the top left, then sweep the corner around the screen.
++  const anchor = { x: 150, y: 150 };
++  target.dispatchEvent(
++    new MouseEvent("mousedown", { clientX: anchor.x, clientY: anchor.y, button: 0, buttons: 1, bubbles: true }),
++  );
++  const drag = await runPhase(
++    "drag",
++    target,
++    3000,
++    (t) => {
++      const a = t * Math.PI * 4;
++      return {
++        x: anchor.x + 40 + (w - anchor.x - 120) * (0.5 + 0.5 * Math.sin(a)),
++        y: anchor.y + 40 + (h - anchor.y - 120) * (0.5 + 0.5 * Math.sin(a * 0.75 + 1)),
++      };
++    },
++    1,
++  );
++  log(drag);
++  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
++}

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useReducer, useRef, useState, type MouseEvent } from "react";
+import { flushSync } from "react-dom";
 import {
   cancelOverlay,
   finishOverlay,
+  imageType,
   isInstantOverlay,
   onOverlayStart,
   overlayImage,
@@ -17,16 +19,24 @@ import {
   cutoutPath,
   hintTop,
   dragBox,
+  frameParts,
+  holeCorners,
   imageSize,
   isDrag,
   labelPlacement,
+  labelTransform,
   monitorToCss,
+  moveTo,
+  stretch,
+  surround,
   topmostAt,
   type Box,
   type Drag,
+  type LabelPlacement,
   type Point,
   type Size,
 } from "./geometry";
+import { drawBackdrop } from "./backdrop";
 import Loupe from "./Loupe";
 import "./overlay.css";
 
@@ -46,7 +56,10 @@ const HINTS: Record<OverlayIntent, string> = {
   record: "Drag over the area to record, or click a window. Esc cancels.",
 };
 const WINDOW_HINT = "Click a window to capture it. Esc cancels.";
-/** The hovered window's rounded corners, in CSS px. Matches `.overlay-window`. */
+/**
+ * The hovered window's rounded corners, in CSS px. Matches `.overlay-window`
+ * and `.overlay-dim-corner`.
+ */
 const WINDOW_RADIUS = 10;
 
 function viewport(): Size {
@@ -57,10 +70,53 @@ function pointOf(event: MouseEvent): Point {
   return { x: event.clientX, y: event.clientY };
 }
 
-/** Turns the PNG bytes into a URL the <img> can show. */
+/** Turns the image bytes into a URL the <img> can show. */
 function toImageUrl(bytes: ArrayBuffer): string | null {
   if (typeof URL.createObjectURL !== "function") return null;
-  return URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+  return URL.createObjectURL(new Blob([bytes], { type: imageType(bytes) }));
+}
+
+/** The corners of a box, in the order `holeCorners` and `frameParts` give them. */
+const CORNERS = ["top-left", "top-right", "bottom-left", "bottom-right"] as const;
+
+interface SelectionFrameProps {
+  box: Box;
+  label: string | undefined;
+  placement: LabelPlacement;
+}
+
+/**
+ * The region being dragged: a border just outside it, a tick at each corner
+ * and its size beside it.
+ *
+ * Every piece is placed by a transform. As one element the size of the
+ * selection, the border was laid out and painted again, a layer that large,
+ * on every pointer move.
+ */
+function SelectionFrame({ box, label, placement }: SelectionFrameProps) {
+  const { edges, ticks } = frameParts(box);
+  return (
+    <div className="overlay-frame" data-testid="overlay-selection">
+      {edges.map((edge, at) => (
+        <span key={at} className="overlay-frame-edge" style={{ transform: stretch(edge) }} />
+      ))}
+      {ticks.map((tick, at) => (
+        <span
+          key={at}
+          className="overlay-frame-tick"
+          data-corner={CORNERS[at]}
+          style={{ transform: moveTo(tick), width: tick.width, height: tick.height }}
+        />
+      ))}
+      <span
+        className="overlay-label"
+        data-testid="overlay-size"
+        style={{ transform: labelTransform(box, placement) }}
+      >
+        {label}
+      </span>
+    </div>
+  );
 }
 
 /**
@@ -88,6 +144,11 @@ function RegionOverlay() {
   const [, resized] = useReducer((count: number) => count + 1, 0);
   const done = useRef(false);
   const reported = useRef(false);
+  const backdrop = useRef<HTMLCanvasElement>(null);
+  // The blurred screen around a hovered window has been drawn.
+  const [backdropReady, setBackdropReady] = useState(false);
+  // The last window hovered, so the blur keeps its hole while it fades out.
+  const [lastHovered, setLastHovered] = useState<Box | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -192,6 +253,12 @@ function RegionOverlay() {
   }, []);
 
   const view = viewport();
+
+  // Blurred once per image (and viewport size), not on every hover.
+  useEffect(() => {
+    if (!image || !backdrop.current) return;
+    setBackdropReady(drawBackdrop(backdrop.current, image, view.width, view.height));
+  }, [image, view.width, view.height]);
   const pickable = useMemo<PickableWindow[]>(() => {
     if (!info) return [];
     const monitor = { width: info.monitorWidth, height: info.monitorHeight };
@@ -218,6 +285,9 @@ function RegionOverlay() {
   const hovered =
     canPickWindow && !dragging && pointer ? topmostAt(pickable, pointer) : undefined;
   const highlight = dragging ? selection : (hovered?.box ?? null);
+  // Boxes are memoized with the windows, so this settles in one extra render.
+  if (hovered && hovered.box !== lastHovered) setLastHovered(hovered.box);
+  const blurHole = hovered && !dragging ? hovered.box : lastHovered;
 
   function cancel() {
     if (done.current) return;
@@ -244,13 +314,19 @@ function RegionOverlay() {
 
   function onMouseMove(event: MouseEvent) {
     const point = pointOf(event);
-    if (drag) {
-      const options = { move: moving, square: event.shiftKey, bounds: view };
-      setDrag(advanceDrag(drag, pointer ?? point, point, options));
-    }
-    setPointer(point);
-    // The event knows best: Shift may have changed while we were not focused.
-    setSquare(event.shiftKey);
+    const follow = () => {
+      if (drag) {
+        const options = { move: moving, square: event.shiftKey, bounds: view };
+        setDrag(advanceDrag(drag, pointer ?? point, point, options));
+      }
+      setPointer(point);
+      // The event knows best: Shift may have changed while we were not focused.
+      setSquare(event.shiftKey);
+    };
+    // Drawn before this event returns. React would otherwise render a pointer
+    // move in a task of its own, and a frame that goes out in between shows
+    // the selection where the pointer was a move ago.
+    flushSync(follow);
   }
 
   function onMouseUp(event: MouseEvent) {
@@ -313,36 +389,64 @@ function RegionOverlay() {
           }}
         />
       )}
+      {/*
+        The tint, in four pieces around the selection or the hovered window.
+        Each is a solid colour stretched into place by a transform, so a drag
+        moves them without anything being laid out or painted again.
+      */}
+      {intent !== "color" && (
+        // Colours have to be judged as they are, so the colour picker never dims.
+        <div
+          // A hole that appears or goes does so at once; only a move from
+          // one window to the next glides.
+          key={highlight ? "hole" : "whole"}
+          className="overlay-dim"
+          data-testid="overlay-dim"
+        >
+          {surround(highlight, view).map((piece, at) => (
+            <span key={at} className="overlay-dim-piece" style={{ transform: stretch(piece) }} />
+          ))}
+          {highlight &&
+            !dragging &&
+            holeCorners(highlight, WINDOW_RADIUS).map((corner, at) => (
+              <span
+                key={at}
+                className="overlay-dim-corner"
+                data-corner={CORNERS[at]}
+                style={{ transform: moveTo(corner) }}
+              />
+            ))}
+        </div>
+      )}
       {/* Around a hovered window the frozen screen is blurred; the window itself stays sharp. */}
-      {imageUrl && hovered && !dragging && (
-        <img
-          className="overlay-image overlay-image-blur"
+      {canPickWindow && (
+        <canvas
+          ref={backdrop}
+          className="overlay-backdrop"
           data-testid="overlay-blur"
-          src={imageUrl}
-          alt=""
+          data-active={backdropReady && hovered && !dragging ? "true" : "false"}
           aria-hidden="true"
-          draggable={false}
-          style={{ clipPath: cutoutPath(hovered.box, view, WINDOW_RADIUS) }}
+          style={blurHole ? { clipPath: cutoutPath(blurHole, view, WINDOW_RADIUS) } : undefined}
         />
       )}
-      {highlight && placement ? (
+      {selection && dragging && placement && (
+        <SelectionFrame box={selection} label={label} placement={placement} />
+      )}
+      {hovered && !dragging && placement && (
         <div
-          className={dragging ? "overlay-selection" : "overlay-selection overlay-window"}
+          className="overlay-window"
           data-testid="overlay-selection"
           style={{
-            left: highlight.x,
-            top: highlight.y,
-            width: highlight.width,
-            height: highlight.height,
+            left: hovered.box.x,
+            top: hovered.box.y,
+            width: hovered.box.width,
+            height: hovered.box.height,
           }}
         >
           <span className="overlay-label" data-side={placement.side} data-align={placement.align}>
             {label}
           </span>
         </div>
-      ) : (
-        // Colours have to be judged as they are, so the colour picker never dims.
-        intent !== "color" && <div className="overlay-dim" />
       )}
       {canDrag && pointer && !dragging && (
         <>

@@ -206,6 +206,126 @@ export function cutoutPath(box: Box, viewport: Size, radius: number): string {
   return `path(evenodd, "${outer} ${hole}")`;
 }
 
+/**
+ * A CSS transform that stretches a 1 px square at the origin over `box`.
+ *
+ * The pieces that follow a drag (the tint around the selection and its
+ * border) are solid colours placed this way, so moving them is a change of
+ * transform alone: no layout, nothing repainted and no layer the size of the
+ * selection to draw again on every pointer move.
+ */
+export function stretch(box: Box): string {
+  const n = (value: number) => Number(value.toFixed(2));
+  return `translate(${n(box.x)}px, ${n(box.y)}px) scale(${n(box.width)}, ${n(box.height)})`;
+}
+
+/** A CSS transform that moves an element at the origin to `point`. */
+export function moveTo(point: Point): string {
+  const n = (value: number) => Number(value.toFixed(2));
+  return `translate(${n(point.x)}px, ${n(point.y)}px)`;
+}
+
+/**
+ * The four rectangles that cover `viewport` around `hole`: above it, below
+ * it, and left and right of it. Without a hole the first covers everything.
+ */
+export function surround(hole: Box | null, viewport: Size): [Box, Box, Box, Box] {
+  const { width, height } = viewport;
+  if (!hole) {
+    const none = { x: 0, y: 0, width: 0, height: 0 };
+    return [{ x: 0, y: 0, width, height }, none, none, none];
+  }
+  const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), max);
+  const left = clamp(hole.x, width);
+  const right = clamp(hole.x + hole.width, width);
+  const top = clamp(hole.y, height);
+  const bottom = clamp(hole.y + hole.height, height);
+  return [
+    { x: 0, y: 0, width, height: top },
+    { x: 0, y: bottom, width, height: height - bottom },
+    { x: 0, y: top, width: left, height: bottom - top },
+    { x: right, y: top, width: width - right, height: bottom - top },
+  ];
+}
+
+/** Where the piece that rounds off each corner of `hole` goes: its top-left. */
+export function holeCorners(hole: Box, radius: number): [Point, Point, Point, Point] {
+  const right = hole.x + hole.width - radius;
+  const bottom = hole.y + hole.height - radius;
+  return [
+    { x: hole.x, y: hole.y },
+    { x: right, y: hole.y },
+    { x: hole.x, y: bottom },
+    { x: right, y: bottom },
+  ];
+}
+
+/** The border's thickness, just outside the selection. */
+const FRAME_EDGE = 1;
+/** How far the corner ticks reach outside the selection, and their length. */
+const TICK_OUTSET = 3;
+const TICK_LENGTH = 12;
+
+/**
+ * The selection's border as rectangles: four edges just outside `box`, so
+ * the selected pixels stay untouched, and the squares the corner ticks are
+ * drawn in (top left, top right, bottom left, bottom right). A selection
+ * shorter than a tick gets shorter ticks.
+ */
+export function frameParts(box: Box): { edges: [Box, Box, Box, Box]; ticks: [Box, Box, Box, Box] } {
+  const { x, y, width, height } = box;
+  const e = FRAME_EDGE;
+  const outer = {
+    x: x - TICK_OUTSET,
+    y: y - TICK_OUTSET,
+    width: width + TICK_OUTSET * 2,
+    height: height + TICK_OUTSET * 2,
+  };
+  const tick = {
+    width: Math.min(TICK_LENGTH, outer.width),
+    height: Math.min(TICK_LENGTH, outer.height),
+  };
+  const farX = outer.x + outer.width - tick.width;
+  const farY = outer.y + outer.height - tick.height;
+  return {
+    edges: [
+      { x: x - e, y: y - e, width: width + e * 2, height: e },
+      { x: x - e, y: y + height, width: width + e * 2, height: e },
+      { x: x - e, y, width: e, height },
+      { x: x + width, y, width: e, height },
+    ],
+    ticks: [
+      { x: outer.x, y: outer.y, ...tick },
+      { x: farX, y: outer.y, ...tick },
+      { x: outer.x, y: farY, ...tick },
+      { x: farX, y: farY, ...tick },
+    ],
+  };
+}
+
+/** The gap between a selection and its label, in CSS px. */
+const LABEL_GAP = 8;
+
+/**
+ * A CSS transform that puts a label at the origin where `placement` says,
+ * beside `box`. The label's own size is not known here, so the browser
+ * shifts it by its own width or height where it hangs from its far edge.
+ */
+export function labelTransform(box: Box, placement: LabelPlacement): string {
+  const inside = placement.side === "inside";
+  const end = placement.align === "end";
+  const inset = inside ? LABEL_GAP : 0;
+  const x = end ? box.x + box.width - inset : box.x + inset;
+  const y =
+    placement.side === "above"
+      ? box.y - LABEL_GAP
+      : placement.side === "below"
+        ? box.y + box.height + LABEL_GAP
+        : box.y + LABEL_GAP;
+  const shift = `translate(${end ? "-100%" : "0"}, ${placement.side === "above" ? "-100%" : "0"})`;
+  return `${moveTo({ x, y })} ${shift}`;
+}
+
 /** The hint's gap below the menu bar (or the top edge), in CSS px. */
 const HINT_GAP = 12;
 

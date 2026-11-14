@@ -8,12 +8,18 @@ import {
   contains,
   dragBox,
   floatingPosition,
+  frameParts,
+  holeCorners,
   imagePixelAt,
   imageSize,
   isDrag,
   labelPlacement,
+  labelTransform,
   monitorToCss,
+  moveTo,
   squareHead,
+  stretch,
+  surround,
   toHex,
   topmostAt,
 } from "./geometry";
@@ -251,6 +257,120 @@ describe("cutoutPath", () => {
 
   it("keeps the corners no rounder than a small window allows", () => {
     expect(cutoutPath({ x: 0, y: 0, width: 8, height: 30 }, { width: 100, height: 100 }, 10)).toContain("A4 4");
+  });
+});
+
+describe("stretch", () => {
+  it("places a 1px square over a box with a transform alone", () => {
+    expect(stretch({ x: 10, y: 20, width: 300, height: 40 })).toBe(
+      "translate(10px, 20px) scale(300, 40)",
+    );
+    expect(stretch({ x: 0.125, y: 0, width: 0, height: 33.3333 })).toBe(
+      "translate(0.13px, 0px) scale(0, 33.33)",
+    );
+  });
+
+  it("moves a piece that keeps its size", () => {
+    expect(moveTo({ x: 12.5, y: -3 })).toBe("translate(12.5px, -3px)");
+  });
+});
+
+describe("surround", () => {
+  const viewport = { width: 1000, height: 800 };
+  const area = (boxes: { width: number; height: number }[]) =>
+    boxes.reduce((sum, box) => sum + box.width * box.height, 0);
+
+  it("covers everything around the hole and nothing of it", () => {
+    const hole = { x: 100, y: 50, width: 300, height: 200 };
+    expect(surround(hole, viewport)).toEqual([
+      { x: 0, y: 0, width: 1000, height: 50 },
+      { x: 0, y: 250, width: 1000, height: 550 },
+      { x: 0, y: 50, width: 100, height: 200 },
+      { x: 400, y: 50, width: 600, height: 200 },
+    ]);
+    expect(area(surround(hole, viewport))).toBe(1000 * 800 - 300 * 200);
+  });
+
+  it("covers the whole screen without a hole", () => {
+    expect(surround(null, viewport)[0]).toEqual({ x: 0, y: 0, width: 1000, height: 800 });
+    expect(area(surround(null, viewport))).toBe(1000 * 800);
+  });
+
+  it("keeps to the screen around a window that spills off it", () => {
+    const pieces = surround({ x: -50, y: 700, width: 200, height: 300 }, viewport);
+    expect(pieces).toEqual([
+      { x: 0, y: 0, width: 1000, height: 700 },
+      { x: 0, y: 800, width: 1000, height: 0 },
+      { x: 0, y: 700, width: 0, height: 100 },
+      { x: 150, y: 700, width: 850, height: 100 },
+    ]);
+  });
+});
+
+describe("holeCorners", () => {
+  it("puts a rounding piece inside each corner of the hole", () => {
+    expect(holeCorners({ x: 100, y: 50, width: 300, height: 200 }, 10)).toEqual([
+      { x: 100, y: 50 },
+      { x: 390, y: 50 },
+      { x: 100, y: 240 },
+      { x: 390, y: 240 },
+    ]);
+  });
+});
+
+describe("frameParts", () => {
+  it("draws the border just outside the selection", () => {
+    const { edges } = frameParts({ x: 100, y: 50, width: 300, height: 200 });
+    expect(edges).toEqual([
+      { x: 99, y: 49, width: 302, height: 1 },
+      { x: 99, y: 250, width: 302, height: 1 },
+      { x: 99, y: 50, width: 1, height: 200 },
+      { x: 400, y: 50, width: 1, height: 200 },
+    ]);
+  });
+
+  it("hangs a tick on the outside of each corner", () => {
+    const { ticks } = frameParts({ x: 100, y: 50, width: 300, height: 200 });
+    expect(ticks).toEqual([
+      { x: 97, y: 47, width: 12, height: 12 },
+      { x: 391, y: 47, width: 12, height: 12 },
+      { x: 97, y: 241, width: 12, height: 12 },
+      { x: 391, y: 241, width: 12, height: 12 },
+    ]);
+  });
+
+  it("shortens the ticks of a selection thinner than one", () => {
+    const { ticks } = frameParts({ x: 100, y: 50, width: 300, height: 2 });
+    expect(ticks[0]).toEqual({ x: 97, y: 47, width: 12, height: 8 });
+    expect(ticks[2]).toEqual({ x: 97, y: 47, width: 12, height: 8 });
+  });
+});
+
+describe("labelTransform", () => {
+  const box = { x: 100, y: 50, width: 300, height: 200 };
+
+  it("hangs the label above or below the selection, by its own height", () => {
+    expect(labelTransform(box, { side: "above", align: "start" })).toBe(
+      "translate(100px, 42px) translate(0, -100%)",
+    );
+    expect(labelTransform(box, { side: "below", align: "start" })).toBe(
+      "translate(100px, 258px) translate(0, 0)",
+    );
+  });
+
+  it("lines the label up with the far edge near the right of the screen", () => {
+    expect(labelTransform(box, { side: "above", align: "end" })).toBe(
+      "translate(400px, 42px) translate(-100%, -100%)",
+    );
+  });
+
+  it("tucks the label inside a selection as tall as the screen", () => {
+    expect(labelTransform(box, { side: "inside", align: "start" })).toBe(
+      "translate(108px, 58px) translate(0, 0)",
+    );
+    expect(labelTransform(box, { side: "inside", align: "end" })).toBe(
+      "translate(392px, 58px) translate(-100%, 0)",
+    );
   });
 });
 

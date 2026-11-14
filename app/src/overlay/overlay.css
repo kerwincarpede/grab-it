@@ -24,8 +24,6 @@
   --overlay-accent: #2f81f7;
   /* A hovered window's edge: a violet that reads on light and dark apps. */
   --overlay-window: 167 139 250;
-  /* Around a hovered window: near black, so the window is what you see. */
-  --overlay-around: rgb(8 9 12 / 52%);
   /*
    * A cool slate rather than black: it darkens a light screen and lifts a
    * dark one, so the tint shows on either.
@@ -76,11 +74,61 @@
   pointer-events: none;
 }
 
+/*
+ * The tint, in four pieces that leave the selection or the hovered window
+ * clear. Each is a 1px square of solid colour that the page stretches into
+ * place with a transform, so nothing is painted while the hole follows a
+ * drag, and it glides from window to window in the compositor.
+ */
 .overlay-dim {
   position: absolute;
   inset: 0;
-  background: var(--overlay-dim);
   pointer-events: none;
+}
+
+.overlay-dim-piece,
+.overlay-dim-corner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.overlay-dim-piece {
+  width: 1px;
+  height: 1px;
+  background: var(--overlay-dim);
+}
+
+/* Rounds off a corner of the hole around a hovered window. 10px: its radius. */
+.overlay-dim-corner {
+  --at: 0 0;
+
+  width: 10px;
+  height: 10px;
+  background: radial-gradient(
+    circle at var(--at),
+    transparent 9.5px,
+    var(--overlay-dim) 10.5px
+  );
+}
+
+.overlay-dim-corner[data-corner="top-left"] {
+  --at: 100% 100%;
+}
+
+.overlay-dim-corner[data-corner="top-right"] {
+  --at: 0 100%;
+}
+
+.overlay-dim-corner[data-corner="bottom-left"] {
+  --at: 100% 0;
+}
+
+.overlay[data-dragging="false"] .overlay-dim-piece,
+.overlay[data-dragging="false"] .overlay-dim-corner {
+  transition: transform 90ms ease-out;
 }
 
 /* Guide lines through the cursor; moved with transforms, so no layout. */
@@ -106,53 +154,72 @@
   height: 100%;
 }
 
-.overlay-selection {
+/*
+ * The region being dragged. Its border, corner ticks and size label are
+ * separate small pieces, each placed by a transform from the page: an
+ * element the size of the selection would be laid out and painted again,
+ * whole, on every pointer move.
+ */
+.overlay-frame {
   position: absolute;
-  /*
-   * Both drawn as shadows so the selected pixels stay untouched: a crisp 1px
-   * border just outside the selection, then the dim over everything else.
-   */
-  box-shadow:
-    0 0 0 1px var(--overlay-accent),
-    0 0 0 100vmax var(--overlay-dim);
+  inset: 0;
   pointer-events: none;
 }
 
-/* Corner ticks: two short bars per corner, hugging the outside of the border. */
-.overlay-selection::after {
-  --tick: linear-gradient(var(--overlay-accent) 0 0);
-  --tick-long: 12px;
-  --tick-thick: 3px;
-
+.overlay-frame-edge,
+.overlay-frame-tick,
+.overlay-frame .overlay-label {
   position: absolute;
-  inset: -3px;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* A crisp 1px border just outside, so the selected pixels stay untouched. */
+.overlay-frame-edge {
+  width: 1px;
+  height: 1px;
+  background: var(--overlay-accent);
+}
+
+/* Corner ticks: two short bars per corner, hugging the outside of the border. */
+.overlay-frame-tick {
+  --tick: linear-gradient(var(--overlay-accent) 0 0);
+  --corner: top left;
+
   background:
-    var(--tick) top left / var(--tick-long) var(--tick-thick),
-    var(--tick) top left / var(--tick-thick) var(--tick-long),
-    var(--tick) top right / var(--tick-long) var(--tick-thick),
-    var(--tick) top right / var(--tick-thick) var(--tick-long),
-    var(--tick) bottom left / var(--tick-long) var(--tick-thick),
-    var(--tick) bottom left / var(--tick-thick) var(--tick-long),
-    var(--tick) bottom right / var(--tick-long) var(--tick-thick),
-    var(--tick) bottom right / var(--tick-thick) var(--tick-long);
+    var(--tick) var(--corner) / 12px 3px,
+    var(--tick) var(--corner) / 3px 12px;
   background-repeat: no-repeat;
-  content: "";
+}
+
+.overlay-frame-tick[data-corner="top-right"] {
+  --corner: top right;
+}
+
+.overlay-frame-tick[data-corner="bottom-left"] {
+  --corner: bottom left;
+}
+
+.overlay-frame-tick[data-corner="bottom-right"] {
+  --corner: bottom right;
 }
 
 /*
  * A hovered window is shown as it is: no tint on it at all. Everything
- * around it steps back, darker and blurred (the blur is a copy of the
- * frozen screen with the window cut out, `.overlay-image-blur`), and the
- * window gets a crisp violet edge with a faint glow, rounded like the windows
- * themselves. A short glide from one window to the next.
+ * around it steps back, darker and blurred (`.overlay-backdrop`, with the
+ * window cut out), and the window gets a crisp violet edge with a faint
+ * glow, rounded like the windows themselves. A short glide from one window
+ * to the next.
  */
 .overlay-window {
-  background: none;
+  position: absolute;
   border-radius: 10px;
   box-shadow:
     0 0 0 2px rgb(var(--overlay-window)),
-    0 0 10px rgb(var(--overlay-window) / 16%),
-    0 0 0 100vmax var(--overlay-around);
+    0 0 10px rgb(var(--overlay-window) / 16%);
+  pointer-events: none;
   transition:
     left 90ms ease-out,
     top 90ms ease-out,
@@ -167,16 +234,26 @@
   }
 }
 
-/* The frozen screen again, blurred, with the hovered window cut out. */
-.overlay-image-blur {
-  filter: blur(10px) saturate(0.9);
-  transition: clip-path 90ms ease-out;
-  animation: overlay-window-in 120ms ease-out;
+/*
+ * The frozen screen again, blurred and darkened ahead of time into a small
+ * canvas (backdrop.ts) that is stretched over the screen, with the hovered
+ * window cut out. Nothing is blurred while the pointer moves.
+ */
+.overlay-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 120ms ease-out,
+    clip-path 90ms ease-out;
+  will-change: opacity, clip-path;
 }
 
-/* A hovered window is a suggestion, not a selection: no ticks. */
-.overlay-window::after {
-  content: none;
+.overlay-backdrop[data-active="true"] {
+  opacity: 1;
 }
 
 .overlay-label {
@@ -194,25 +271,26 @@
   box-shadow: 0 0 0 1px var(--overlay-panel-edge);
 }
 
-.overlay-label[data-side="above"] {
+/* A window's title hangs off the window; a drag's size is placed by the page. */
+.overlay-window > .overlay-label[data-side="above"] {
   bottom: calc(100% + 8px);
 }
 
-.overlay-label[data-side="below"] {
+.overlay-window > .overlay-label[data-side="below"] {
   top: calc(100% + 8px);
 }
 
 /* The selection spans the full height: the only room left is inside it. */
-.overlay-label[data-side="inside"] {
+.overlay-window > .overlay-label[data-side="inside"] {
   top: 8px;
   margin-inline: 8px;
 }
 
-.overlay-label[data-align="start"] {
+.overlay-window > .overlay-label[data-align="start"] {
   left: 0;
 }
 
-.overlay-label[data-align="end"] {
+.overlay-window > .overlay-label[data-align="end"] {
   right: 0;
 }
 
@@ -372,7 +450,10 @@
 @media (prefers-reduced-motion: reduce) {
   .overlay,
   .overlay-window,
-  .overlay-hint {
+  .overlay-hint,
+  .overlay-backdrop,
+  .overlay[data-dragging="false"] .overlay-dim-piece,
+  .overlay[data-dragging="false"] .overlay-dim-corner {
     transition: none;
     animation: none;
   }

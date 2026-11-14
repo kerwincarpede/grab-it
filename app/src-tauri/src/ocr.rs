@@ -361,6 +361,9 @@ impl OcrState {
     }
 }
 
+/// How often a waiting OCR job checks whether the capture overlay closed.
+const OVERLAY_POLL: Duration = Duration::from_millis(100);
+
 /// Starts the OCR thread. It reads every capture waiting for OCR, then
 /// sleeps until [`wake`] is called.
 pub fn start(app: &AppHandle, models: PathBuf) {
@@ -494,6 +497,11 @@ fn run(app: &AppHandle, models: &Path, receiver: &Receiver<()>) {
         let Some(ocr) = engine.as_ref() else {
             continue;
         };
+        // A capture overlay is up: reading text would take the processor
+        // from it while the user is selecting, so wait until it closes.
+        while crate::overlay::is_open(app) {
+            thread::sleep(OVERLAY_POLL);
+        }
 
         let pending = library.lock().pending_ocr_count().unwrap_or(1);
         set_status(app, OcrStatus::Working { pending });

@@ -78,9 +78,15 @@ export function onOverlayStart(handler: () => void): Promise<() => void> {
   return listen(START_EVENT, () => handler());
 }
 
-/** The frozen monitor as PNG bytes. */
+/** The frozen monitor: an uncompressed BMP on macOS, a PNG elsewhere. */
 export function overlayImage(): Promise<ArrayBuffer> {
   return invoke<ArrayBuffer>("overlay_image");
+}
+
+/** The type of `overlayImage`'s bytes, from their first two: "BM" is a BMP. */
+export function imageType(bytes: ArrayBuffer): string {
+  const head = new Uint8Array(bytes, 0, Math.min(2, bytes.byteLength));
+  return head[0] === 0x42 && head[1] === 0x4d ? "image/bmp" : "image/png";
 }
 
 /** The frozen image is on screen: the backend may show this overlay now. */
