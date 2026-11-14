@@ -26,7 +26,9 @@ use tauri_plugin_opener::OpenerExt;
 use crate::{
     codes::{self, Code},
     library::LibraryState,
-    pin, windows,
+    pin,
+    settings::RecordingFormat,
+    windows,
 };
 
 pub const LABEL: &str = "quick";
@@ -514,7 +516,8 @@ pub async fn quick_action(
     match (action, &item) {
         (QuickAction::Close, _) => dismiss(&app, generation),
         // A recording is a file but not a capture: it can be shown in its
-        // folder and deleted, not annotated, pinned or copied as an image.
+        // folder, deleted and (an MP4) edited, not annotated, pinned or
+        // copied as an image.
         (
             QuickAction::Reveal,
             QuickItem::Capture { path, .. } | QuickItem::Recorded { path, .. },
@@ -524,8 +527,18 @@ pub async fn quick_action(
                 .map_err(|err| format!("could not show the file in its folder: {err}"))?;
         }
         (QuickAction::Delete, QuickItem::Recorded { path, .. }) => {
-            fs::remove_file(path)
-                .map_err(|err| format!("could not delete the recording: {err}"))?;
+            delete_recording(&app, path)?;
+            dismiss(&app, generation);
+        }
+        (
+            QuickAction::Edit,
+            QuickItem::Recorded {
+                path,
+                format: RecordingFormat::Mp4,
+                ..
+            },
+        ) => {
+            windows::show_recording_editor(&app, path).map_err(|err| err.to_string())?;
             dismiss(&app, generation);
         }
         (QuickAction::Delete, QuickItem::Capture { path, .. }) => {
@@ -593,6 +606,21 @@ pub fn copy_file(app: &AppHandle, path: &Path) -> Result<(), String> {
     app.clipboard()
         .write_image(&clip)
         .map_err(|err| format!("could not copy to the clipboard: {err}"))
+}
+
+/// Deletes a recording with its sidecars, closing its editor first.
+fn delete_recording(app: &AppHandle, path: &Path) -> Result<(), String> {
+    if let Some(window) = app
+        .state::<crate::recording_editor::RecordingEditorState>()
+        .label_for(path)
+        .and_then(|label| app.get_webview_window(&label))
+    {
+        let _ = window.destroy();
+    }
+    fs::remove_file(path).map_err(|err| format!("could not delete the recording: {err}"))?;
+    let _ = fs::remove_file(crate::record::cursor_path(path));
+    let _ = fs::remove_file(crate::recording_editor::edits_path(path));
+    Ok(())
 }
 
 /// Deletes a capture with its sidecars, through the library when it knows

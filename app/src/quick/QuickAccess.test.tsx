@@ -372,6 +372,7 @@ describe("QuickAccess", () => {
     render(<QuickAccess />);
     expect(await screen.findByText("GIF saved")).toBeInTheDocument();
     expect(screen.getByText("0:06 · 704 KB")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Show in folder" }));
     await waitFor(() => expect(actions(backend)).toEqual(["reveal"]));
@@ -401,6 +402,20 @@ describe("QuickAccess", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Show in folder" }));
     await waitFor(() => expect(actions(backend)).toEqual(["reveal"]));
+  });
+
+  it("offers to edit an MP4 recording, not a GIF", async () => {
+    const backend = mockBackend({
+      kind: "recorded",
+      path: "/shots/recordings/Grab-it 2026-03-07 09-05-01.mp4",
+      fileName: "Grab-it 2026-03-07 09-05-01.mp4",
+      durationMs: 12_000,
+      bytes: 2_000_000,
+      format: "mp4",
+    });
+    render(<QuickAccess />);
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    await waitFor(() => expect(actions(backend)).toEqual(["edit"]));
   });
 
   it("says why an MP4 recording was saved as a GIF", async () => {

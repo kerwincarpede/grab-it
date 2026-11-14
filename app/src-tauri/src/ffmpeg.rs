@@ -617,7 +617,7 @@ impl Drop for Video {
 }
 
 /// The bitrate of a recording's sound, as AAC.
-const AUDIO_BITRATE: &str = "160k";
+pub(crate) const AUDIO_BITRATE: &str = "160k";
 /// Ends the name of the file the sound is muxed into, beside the video.
 const MUXING_SUFFIX: &str = ".muxing.mp4";
 
@@ -678,49 +678,52 @@ pub fn add_audio(
     duration: Duration,
 ) -> FfmpegResult<()> {
     let output = crate::capture::sidecar_path(video, MUXING_SUFFIX);
-    let result = (|| -> FfmpegResult<()> {
-        let mut child = command(ffmpeg)
-            .args(mux_args(video, audio, offset, duration, &output))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|err| {
-                FfmpegError::Encode(format!("could not start {}: {err}", ffmpeg.display()))
-            })?;
-        let stderr = child.stderr.take().map(|mut stderr| {
-            thread::spawn(move || {
-                let mut text = String::new();
-                let _ = stderr.read_to_string(&mut text);
-                text
-            })
-        });
-        let status = wait_for(&mut child, FINISH_TIMEOUT);
-        let said = stderr
-            .and_then(|reader| reader.join().ok())
-            .unwrap_or_default();
-        match status {
-            Some(status) if status.success() => {}
-            Some(status) => {
-                return Err(FfmpegError::Encode(match last_line(&said) {
-                    Some(line) => line.to_owned(),
-                    None => format!("it exited with {status}"),
-                }));
-            }
-            None => {
-                return Err(FfmpegError::Encode(format!(
-                    "adding the sound did not finish within {} seconds",
-                    FINISH_TIMEOUT.as_secs()
-                )));
-            }
-        }
-        fs::rename(&output, video)?;
-        Ok(())
-    })();
+    let result = run(
+        ffmpeg,
+        mux_args(video, audio, offset, duration, &output),
+        FINISH_TIMEOUT,
+    )
+    .and_then(|()| fs::rename(&output, video).map_err(FfmpegError::from));
     if result.is_err() {
         let _ = fs::remove_file(&output);
     }
     result
+}
+
+/// Runs `ffmpeg` with `args` to the end, for up to `timeout`. Fails with
+/// the last line it printed when it fails.
+pub(crate) fn run(ffmpeg: &Path, args: Vec<OsString>, timeout: Duration) -> FfmpegResult<()> {
+    let mut child = command(ffmpeg)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| {
+            FfmpegError::Encode(format!("could not start {}: {err}", ffmpeg.display()))
+        })?;
+    let stderr = child.stderr.take().map(|mut stderr| {
+        thread::spawn(move || {
+            let mut text = String::new();
+            let _ = stderr.read_to_string(&mut text);
+            text
+        })
+    });
+    let status = wait_for(&mut child, timeout);
+    let said = stderr
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    match status {
+        Some(status) if status.success() => Ok(()),
+        Some(status) => Err(FfmpegError::Encode(match last_line(&said) {
+            Some(line) => line.to_owned(),
+            None => format!("it exited with {status}"),
+        })),
+        None => Err(FfmpegError::Encode(format!(
+            "it did not finish within {} seconds",
+            timeout.as_secs()
+        ))),
+    }
 }
 
 /// The last line ffmpeg printed, if any.
