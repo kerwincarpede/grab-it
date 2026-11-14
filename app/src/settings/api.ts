@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
 /** Mirrors `AfterCapture` in src-tauri/src/settings.rs. */
@@ -188,6 +189,7 @@ export interface Settings extends Preferences {
   /** macOS: a Dock icon that opens the Grab-it window. */
   showInDock?: boolean;
   appearance?: Appearance;
+  recording?: RecordingSettings;
 }
 
 /** Mirrors `PopupCorner` in src-tauri/src/settings.rs. */
@@ -223,14 +225,70 @@ export function setAppearance(appearance: Appearance): Promise<Settings> {
   return invoke<Settings>("set_appearance", { appearance });
 }
 
+/** Mirrors `RecordingFormat` in src-tauri/src/settings.rs. */
+export type RecordingFormat = "gif" | "mp4";
+
+/** Mirrors `RecordingQuality` in src-tauri/src/settings.rs. */
+export type RecordingQuality = "low" | "medium" | "high";
+
+/** Mirrors `RecordingSettings` in src-tauri/src/settings.rs. */
+export interface RecordingSettings {
+  format: RecordingFormat;
+  /** MP4 only. */
+  quality: RecordingQuality;
+}
+
+export const DEFAULT_RECORDING: RecordingSettings = { format: "mp4", quality: "high" };
+
+export const RECORDING_FORMATS: { value: RecordingFormat; title: string; hint: string }[] = [
+  { value: "mp4", title: "MP4 video", hint: "Smooth 30 fps video with no time limit, small enough to share." },
+  { value: "gif", title: "GIF", hint: "Plays anywhere an image does. Silent, about 10 fps, and at most a minute." },
+];
+
+export const RECORDING_QUALITIES: { value: RecordingQuality; title: string }[] = [
+  { value: "low", title: "Low" },
+  { value: "medium", title: "Medium" },
+  { value: "high", title: "High" },
+];
+
+export function setRecording(recording: RecordingSettings): Promise<Settings> {
+  return invoke<Settings>("set_recording", { recording });
+}
+
+/** Mirrors `FfmpegStatus` in src-tauri/src/ffmpeg.rs: whether MP4 can be recorded yet. */
+export type FfmpegStatus =
+  | { state: "missing" }
+  /** `total` is 0 until the server says. */
+  | { state: "downloading"; downloaded: number; total: number }
+  | { state: "checking" }
+  | { state: "ready"; encoder: string }
+  | { state: "failed"; message: string };
+
+/** Mirrors `FFMPEG_STATUS_EVENT` in src-tauri/src/ffmpeg.rs. */
+export const FFMPEG_STATUS_EVENT = "ffmpeg-status";
+
+export function ffmpegStatus(): Promise<FfmpegStatus> {
+  return invoke<FfmpegStatus>("ffmpeg_status");
+}
+
+/** Tries again to download ffmpeg or find an encoder; resolves to the status as it starts. */
+export function retryFfmpeg(): Promise<FfmpegStatus> {
+  return invoke<FfmpegStatus>("ffmpeg_retry");
+}
+
+export function onFfmpegStatus(handler: (status: FfmpegStatus) => void): Promise<UnlistenFn> {
+  return listen<FfmpegStatus>(FFMPEG_STATUS_EVENT, (event) => handler(event.payload));
+}
+
 /** Settings, split into the pages of the Grab-it window's sidebar. */
-export type SettingsSection = "general" | "appearance" | "capture" | "editor" | "ai" | "hotkeys";
+export type SettingsSection = "general" | "appearance" | "capture" | "editor" | "recording" | "ai" | "hotkeys";
 
 export const SETTINGS_SECTIONS: { id: SettingsSection; title: string }[] = [
   { id: "general", title: "General" },
   { id: "appearance", title: "Appearance" },
   { id: "capture", title: "After a capture" },
   { id: "editor", title: "Editor" },
+  { id: "recording", title: "Recording" },
   { id: "ai", title: "AI descriptions" },
   { id: "hotkeys", title: "Hotkeys" },
 ];

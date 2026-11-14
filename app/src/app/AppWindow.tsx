@@ -37,7 +37,7 @@ import { shortcutLabel } from "../hub/keys";
 const MORE_CAPTURES: { kind: CaptureKind; title: string; icon: ReactNode }[] = [
   { kind: "window", title: "Capture window", icon: <WindowIcon /> },
   { kind: "screen", title: "Capture screen", icon: <ScreenIcon /> },
-  { kind: "record", title: "Record GIF", icon: <RecordIcon /> },
+  { kind: "record", title: "Record", icon: <RecordIcon /> },
   { kind: "text", title: "Capture text", icon: <TextIcon /> },
   { kind: "colour", title: "Pick a colour", icon: <ColourIcon /> },
 ];

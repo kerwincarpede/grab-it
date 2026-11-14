@@ -43,8 +43,18 @@ export type QuickItem =
   | { kind: "working"; message: string }
   | { kind: "notice"; title: string; message: string }
   | { kind: "error"; message: string }
-  | { kind: "recording"; startedAt: number; maxSeconds: number }
-  | { kind: "recorded"; path: string; fileName: string; durationMs: number; bytes: number };
+  /** `maxSeconds` is how long a GIF may run; an MP4 has no limit. */
+  | { kind: "recording"; startedAt: number; maxSeconds?: number }
+  /** `fallback` says why an MP4 recording was saved as a GIF instead. */
+  | {
+      kind: "recorded";
+      path: string;
+      fileName: string;
+      durationMs: number;
+      bytes: number;
+      format: "gif" | "mp4";
+      fallback?: string;
+    };
 
 /**
  * What is on the card, numbered so an action can say which card it was

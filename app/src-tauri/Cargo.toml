@@ -39,6 +39,9 @@ rten = { version = "0.24", default-features = false, features = ["onnx_format"] 
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 # Already in the tree through ureq; encodes captures for vision models.
 base64 = "0.23"
+# Already in the tree: unpack and check the ffmpeg download (ffmpeg.rs).
+flate2 = "1"
+sha2 = "0.10"
 # Already in the tree through the updater; orders versions in its changelog.
 semver = "1"
 # Keeps the endpoint API key in the OS credential store: Keychain on macOS,

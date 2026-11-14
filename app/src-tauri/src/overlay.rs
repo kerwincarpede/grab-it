@@ -89,7 +89,7 @@ pub enum Intent {
     /// Copy the colour of the clicked pixel.
     #[serde(rename = "color")]
     Colour,
-    /// Record the selection as an animated GIF.
+    /// Record the selection as an MP4 or an animated GIF.
     Record,
 }
 

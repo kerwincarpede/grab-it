@@ -33,7 +33,7 @@ const RECENT = 3;
 const TOOLS: { kind: CaptureKind; title: string; hotkey?: keyof Hotkeys; icon: ReactNode }[] = [
   { kind: "window", title: "Window", hotkey: "window", icon: <WindowIcon /> },
   { kind: "screen", title: "Screen", hotkey: "screen", icon: <ScreenIcon /> },
-  { kind: "record", title: "Record GIF", icon: <RecordIcon /> },
+  { kind: "record", title: "Record", icon: <RecordIcon /> },
   { kind: "text", title: "Grab text", hotkey: "text", icon: <TextIcon /> },
   { kind: "colour", title: "Pick colour", hotkey: "colour", icon: <ColourIcon /> },
 ];

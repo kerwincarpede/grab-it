@@ -14,7 +14,7 @@ use crate::{
 };
 
 const TRAY_ID: &str = "main";
-const RECORD_LABEL: &str = "Record GIF";
+const RECORD_LABEL: &str = "Record";
 const STOP_LABEL: &str = "Stop recording";
 
 /// The menu items whose text or state changes while Grab-it runs.
@@ -147,7 +147,7 @@ fn monitor_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
     Ok(submenu)
 }
 
-/// Quits Grab-it, finishing a recording first so its GIF is complete.
+/// Quits Grab-it, finishing a recording first so its file is complete.
 pub fn quit(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {

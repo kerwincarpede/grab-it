@@ -1,10 +1,15 @@
-//! Screen recording to an animated GIF.
+//! Screen recording to an MP4 or an animated GIF.
 //!
 //! The user drags a region (or clicks a window) on the usual overlay; that
-//! area of that monitor is then grabbed about ten times a second and written
-//! straight into a GIF in `<save folder>/recordings/`, so memory use does
-//! not grow with the length of the recording. The Quick Access card shows
-//! the elapsed time and a Stop button, and moves out of the recorded area.
+//! area of that monitor is then grabbed over and over and written straight
+//! into a file in `<save folder>/recordings/`, so memory use does not grow
+//! with the length of the recording. The Quick Access card shows the
+//! elapsed time and a Stop button, and moves out of the recorded area.
+//!
+//! An MP4 is piped through ffmpeg (see ffmpeg.rs) at a constant 30 frames a
+//! second, with no length limit. A GIF is encoded here, about ten frames a
+//! second, for at most [`MAX_DURATION`]. MP4 is the default; while ffmpeg
+//! is not ready yet, a recording is saved as a GIF and the card says why.
 //!
 //! Recording needs to read the screen freely, so it is not offered on
 //! Wayland, where only the desktop's own portal may do that.
@@ -32,18 +37,23 @@ use crate::{
     actions,
     capture::{self, Rect},
     commands::{SettingsState, lock},
+    ffmpeg::{self, Video, VideoSpec},
     quick::{self, QuickItem},
     screen::{self, MonitorInfo},
+    settings::{RecordingFormat, RecordingQuality},
 };
 
 pub const RECORDINGS_DIR: &str = "recordings";
-/// The time between frames: ten frames a second.
+/// The time between GIF frames: ten frames a second.
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
+/// An MP4's frame rate.
+pub const VIDEO_FPS: u32 = 30;
 /// How long the desktop gets to repaint after the overlay closes.
 const SETTLE_DELAY: Duration = Duration::from_millis(200);
-/// How long quitting waits for a recording to write its last frames.
-const STOP_TIMEOUT: Duration = Duration::from_secs(3);
-/// A recording stops by itself after this long.
+/// How long quitting waits for a recording to write its last frames. An
+/// MP4 is finished by moving its index to the front, which rewrites it.
+const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+/// A GIF recording stops by itself after this long.
 pub const MAX_DURATION: Duration = Duration::from_secs(60);
 /// Frames wider than this are scaled down, which keeps HiDPI recordings a
 /// sensible size and the encoder fast enough to hold the frame rate.
@@ -102,19 +112,24 @@ pub fn record_stop(app: AppHandle) {
 }
 
 /// The file name for a recording started at `time`, without a folder.
-pub fn recording_file_name(time: &DateTime<Local>, counter: u32) -> String {
+pub fn recording_file_name(
+    time: &DateTime<Local>,
+    counter: u32,
+    format: RecordingFormat,
+) -> String {
     let stamp = time.format("%Y-%m-%d %H-%M-%S");
+    let extension = format.extension();
     if counter <= 1 {
-        format!("Grab-it {stamp}.gif")
+        format!("Grab-it {stamp}.{extension}")
     } else {
-        format!("Grab-it {stamp} ({counter}).gif")
+        format!("Grab-it {stamp} ({counter}).{extension}")
     }
 }
 
-fn unique_recording_path(dir: &Path, time: &DateTime<Local>) -> PathBuf {
+fn unique_recording_path(dir: &Path, time: &DateTime<Local>, format: RecordingFormat) -> PathBuf {
     let mut counter = 1;
     loop {
-        let path = dir.join(recording_file_name(time, counter));
+        let path = dir.join(recording_file_name(time, counter, format));
         if !path.exists() {
             return path;
         }
@@ -133,9 +148,83 @@ pub fn frame_size(region: (u32, u32)) -> (u32, u32) {
     (MAX_WIDTH, scaled.max(1))
 }
 
+/// Keeps an MP4 at a constant frame rate: says when the next frame is due,
+/// and how many times to repeat the last one when a grab took so long that
+/// frame times went by without one.
+///
+/// At most half a second of repeats follows each grab. Frame times further
+/// behind than that (ffmpeg taking frames in more slowly than the frame
+/// rate, or the computer sleeping mid-recording) are dropped, so a new
+/// frame is always grabbed soon and the video keeps moving.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pacer {
+    fps: u64,
+    /// Frames written so far, repeats included.
+    frames: u64,
+    /// Frame times dropped because the recording fell too far behind.
+    dropped: u64,
+}
+
+const NANOS_PER_SECOND: u128 = 1_000_000_000;
+
+impl Pacer {
+    pub fn new(fps: u32) -> Self {
+        Self {
+            fps: u64::from(fps.max(1)),
+            frames: 0,
+            dropped: 0,
+        }
+    }
+
+    /// The most repeats written after one grab: half a second.
+    pub fn max_repeats(&self) -> u64 {
+        (self.fps / 2).max(1)
+    }
+
+    /// Counts a frame just written, `elapsed` after the recording started.
+    /// Returns how many more times to write it, each counted with
+    /// [`Pacer::repeated`]: once for each frame time that has fully gone by
+    /// since, up to [`Pacer::max_repeats`].
+    pub fn wrote_frame(&mut self, elapsed: Duration) -> u64 {
+        self.frames += 1;
+        // The frame time under way now, which the next grab fills.
+        let current = (elapsed.as_nanos() * u128::from(self.fps) / NANOS_PER_SECOND) as u64;
+        let behind = current.saturating_sub(self.frames + self.dropped);
+        let repeats = behind.min(self.max_repeats());
+        self.dropped += behind - repeats;
+        repeats
+    }
+
+    /// Counts one repeat of the last frame.
+    pub fn repeated(&mut self) {
+        self.frames += 1;
+    }
+
+    /// When the next frame should be grabbed, from the recording's start.
+    pub fn next_frame_at(&self) -> Duration {
+        self.at(self.frames + self.dropped)
+    }
+
+    /// How long the frames written so far play for.
+    pub fn duration(&self) -> Duration {
+        self.at(self.frames)
+    }
+
+    fn at(&self, frames: u64) -> Duration {
+        let nanos = u128::from(frames) * NANOS_PER_SECOND / u128::from(self.fps);
+        Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
+    }
+}
+
+/// What a recording is written as.
+enum Output {
+    Gif,
+    Mp4(ffmpeg::Ready, RecordingQuality),
+}
+
 /// Starts recording `rect` of `monitor`. `rect` is in the pixels of the
-/// monitor's image, whose size is `image_size`. Runs until [`stop`] or
-/// [`MAX_DURATION`]. Call this off the main thread.
+/// monitor's image, whose size is `image_size`. Runs until [`stop`], or for
+/// a GIF [`MAX_DURATION`]. Call this off the main thread.
 pub fn start(
     app: &AppHandle,
     monitor: &MonitorInfo,
@@ -153,13 +242,36 @@ pub fn start(
     }
     crate::tray::set_recording(app, true);
 
-    let folder = lock(&app.state::<SettingsState>())
-        .get()
-        .save_folder
-        .join(RECORDINGS_DIR);
+    let (folder, recording) = {
+        let state = app.state::<SettingsState>();
+        let store = lock(&state);
+        let settings = store.get();
+        (
+            settings.save_folder.join(RECORDINGS_DIR),
+            settings.recording,
+        )
+    };
+    // MP4 needs ffmpeg; until it is ready, the recording is a GIF.
+    let mut fallback = None;
+    let output = match recording.format {
+        RecordingFormat::Gif => Output::Gif,
+        RecordingFormat::Mp4 => match ffmpeg::ready(app) {
+            Some(ready) => Output::Mp4(ready, recording.quality),
+            None => {
+                fallback = Some(ffmpeg::fallback_reason(&ffmpeg::status(app)));
+                // Not asked for yet, or failed earlier: try again for next time.
+                ffmpeg::prepare_in_background(app);
+                Output::Gif
+            }
+        },
+    };
+    let format = match output {
+        Output::Gif => RecordingFormat::Gif,
+        Output::Mp4(..) => RecordingFormat::Mp4,
+    };
     let started = Local::now();
     let prepared = fs::create_dir_all(&folder)
-        .map(|()| unique_recording_path(&folder, &started))
+        .map(|()| unique_recording_path(&folder, &started, format))
         .map_err(|err| format!("could not create {}: {err}", folder.display()));
     let path = match prepared {
         Ok(path) => path,
@@ -185,7 +297,10 @@ pub fn start(
                 .duration_since(UNIX_EPOCH)
                 .map(|elapsed| elapsed.as_millis() as u64)
                 .unwrap_or_default(),
-            max_seconds: MAX_DURATION.as_secs(),
+            max_seconds: match format {
+                RecordingFormat::Gif => Some(MAX_DURATION.as_secs()),
+                RecordingFormat::Mp4 => None,
+            },
         },
         corner,
     );
@@ -198,7 +313,12 @@ pub fn start(
             // The overlay was closed a moment ago; give the desktop time to
             // repaint so the first frame shows the screen, not the overlay.
             std::thread::sleep(SETTLE_DELAY);
-            let result = record(index, rect, &path, &flag);
+            let result = match &output {
+                Output::Gif => record_gif(index, rect, &path, &flag),
+                Output::Mp4(ready, quality) => {
+                    record_mp4(index, rect, &path, &flag, ready, *quality)
+                }
+            };
             *handle.state::<RecordState>().lock() = None;
             crate::tray::set_recording(&handle, false);
             match result {
@@ -214,6 +334,8 @@ pub fn start(
                             path,
                             duration_ms: duration.as_millis() as u64,
                             bytes,
+                            format,
+                            fallback,
                         },
                     );
                 }
@@ -231,9 +353,74 @@ pub fn start(
     Ok(())
 }
 
+/// Grabs frames into the MP4 at `path` until `stop` is set, at a constant
+/// [`VIDEO_FPS`]: a frame time that goes by while a grab is under way
+/// repeats the frame before. Returns how long the video runs.
+fn record_mp4(
+    monitor: usize,
+    rect: Rect,
+    path: &Path,
+    stop: &AtomicBool,
+    ready: &ffmpeg::Ready,
+    quality: RecordingQuality,
+) -> Result<Duration, String> {
+    let mut frame = grab_region(monitor, rect)?;
+    let input = frame.dimensions();
+    let spec = VideoSpec {
+        input,
+        output: ffmpeg::video_size(input),
+        fps: VIDEO_FPS,
+        bits_per_pixel: quality.bits_per_pixel(),
+    };
+    let mut video =
+        Video::start(&ready.path, ready.encoder, &spec, path).map_err(|err| err.to_string())?;
+    let started = Instant::now();
+    let mut pacer = Pacer::new(VIDEO_FPS);
+    loop {
+        video.write(&frame).map_err(|err| err.to_string())?;
+        // Stop is checked between repeats, so it is never kept waiting.
+        for _ in 0..pacer.wrote_frame(started.elapsed()) {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            video.write(&frame).map_err(|err| err.to_string())?;
+            pacer.repeated();
+        }
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+        let due = started + pacer.next_frame_at();
+        let now = Instant::now();
+        if due > now {
+            std::thread::sleep(due - now);
+        }
+        frame = match grab_region(monitor, rect) {
+            Ok(next) if next.dimensions() == input => next,
+            // The monitor changed resolution: keep what was recorded.
+            Ok(_) => {
+                eprintln!("Grab-it: recording ended early: the recorded area changed size");
+                break;
+            }
+            // The screen went away mid-recording (a monitor unplugged,
+            // say): keep what was recorded rather than throw it away.
+            Err(err) => {
+                eprintln!("Grab-it: recording ended early: {err}");
+                break;
+            }
+        };
+    }
+    video.finish().map_err(|err| err.to_string())?;
+    Ok(pacer.duration())
+}
+
 /// Grabs frames into the GIF at `path` until `stop` is set or the time is
 /// up. Returns how long the recording runs.
-fn record(monitor: usize, rect: Rect, path: &Path, stop: &AtomicBool) -> Result<Duration, String> {
+fn record_gif(
+    monitor: usize,
+    rect: Rect,
+    path: &Path,
+    stop: &AtomicBool,
+) -> Result<Duration, String> {
     let file = File::create(path).map_err(|err| format!("could not create the file: {err}"))?;
     let mut encoder = GifEncoder::new_with_speed(BufWriter::new(file), QUANTISER_SPEED);
     encoder
@@ -279,9 +466,15 @@ fn record(monitor: usize, rect: Rect, path: &Path, stop: &AtomicBool) -> Result<
     Ok(total)
 }
 
-fn grab(monitor: usize, rect: Rect) -> Result<RgbaImage, String> {
+/// The recorded area of the monitor, at its own size.
+fn grab_region(monitor: usize, rect: Rect) -> Result<RgbaImage, String> {
     let image = screen::capture_monitor(monitor)?;
-    let cropped = capture::crop(&image, rect).ok_or("the recorded area is off screen")?;
+    capture::crop(&image, rect).ok_or_else(|| "the recorded area is off screen".to_owned())
+}
+
+/// The recorded area, scaled down for a GIF.
+fn grab(monitor: usize, rect: Rect) -> Result<RgbaImage, String> {
+    let cropped = grab_region(monitor, rect)?;
     let size = frame_size(cropped.dimensions());
     Ok(if size == cropped.dimensions() {
         cropped
@@ -315,13 +508,123 @@ mod tests {
     fn recordings_are_named_like_captures() {
         let time = Local.with_ymd_and_hms(2026, 3, 7, 9, 5, 1).unwrap();
         assert_eq!(
-            recording_file_name(&time, 1),
+            recording_file_name(&time, 1, RecordingFormat::Gif),
             "Grab-it 2026-03-07 09-05-01.gif"
         );
         assert_eq!(
-            recording_file_name(&time, 2),
+            recording_file_name(&time, 2, RecordingFormat::Gif),
             "Grab-it 2026-03-07 09-05-01 (2).gif"
         );
+    }
+
+    #[test]
+    fn mp4_recordings_end_in_mp4_and_never_overwrite_one() {
+        let time = Local.with_ymd_and_hms(2026, 3, 7, 9, 5, 1).unwrap();
+        assert_eq!(
+            recording_file_name(&time, 1, RecordingFormat::Mp4),
+            "Grab-it 2026-03-07 09-05-01.mp4"
+        );
+        assert_eq!(
+            recording_file_name(&time, 3, RecordingFormat::Mp4),
+            "Grab-it 2026-03-07 09-05-01 (3).mp4"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let first = unique_recording_path(dir.path(), &time, RecordingFormat::Mp4);
+        fs::write(&first, b"video").unwrap();
+        assert_eq!(
+            unique_recording_path(dir.path(), &time, RecordingFormat::Mp4),
+            dir.path().join("Grab-it 2026-03-07 09-05-01 (2).mp4")
+        );
+        // A GIF of the same second does not take the MP4's name.
+        assert_eq!(
+            unique_recording_path(dir.path(), &time, RecordingFormat::Gif),
+            dir.path().join("Grab-it 2026-03-07 09-05-01.gif")
+        );
+    }
+
+    #[test]
+    fn frames_on_time_are_written_once() {
+        let mut pacer = Pacer::new(30);
+        let ms = Duration::from_millis;
+        // Each grab finishes inside its own frame time.
+        assert_eq!(pacer.wrote_frame(ms(5)), 0);
+        assert_eq!(pacer.next_frame_at(), Duration::from_secs(1) / 30);
+        assert_eq!(pacer.wrote_frame(ms(40)), 0);
+        assert_eq!(pacer.wrote_frame(ms(70)), 0);
+        assert_eq!(pacer.duration(), Duration::from_secs(1) / 10);
+    }
+
+    #[test]
+    fn a_late_grab_repeats_the_last_frame_to_keep_time() {
+        let mut pacer = Pacer::new(10);
+        let ms = Duration::from_millis;
+        assert_eq!(pacer.wrote_frame(ms(10)), 0);
+        assert_eq!(pacer.next_frame_at(), ms(100));
+        // The second grab, due at 100 ms, took until 450 ms: the frame
+        // times at 200 and 300 ms went by, so it fills those too, and the
+        // grab for 400 ms starts at once.
+        assert_eq!(pacer.wrote_frame(ms(450)), 2);
+        pacer.repeated();
+        pacer.repeated();
+        assert_eq!(pacer.next_frame_at(), ms(400));
+        assert_eq!(pacer.wrote_frame(ms(460)), 0);
+        assert_eq!(pacer.next_frame_at(), ms(500));
+        // Five frames at 10 fps: the video is as long as the recording.
+        assert_eq!(pacer.duration(), ms(500));
+    }
+
+    #[test]
+    fn a_slow_encoder_still_gets_new_frames() {
+        // Every write, repeats included, takes 50 ms: longer than a frame
+        // time at 30 fps. Repeats stay capped, so grabs keep coming.
+        let mut pacer = Pacer::new(30);
+        let write = Duration::from_millis(50);
+        let mut now = Duration::ZERO;
+        let mut most = 0;
+        for _ in 0..200 {
+            now += write;
+            let repeats = pacer.wrote_frame(now);
+            most = most.max(repeats);
+            for _ in 0..repeats {
+                now += write;
+                pacer.repeated();
+            }
+            now = now.max(pacer.next_frame_at());
+        }
+        assert!(most <= pacer.max_repeats(), "{most} repeats after one grab");
+        assert_eq!(pacer.max_repeats(), 15);
+        // The next grab is due no later than now: nothing waits on the past.
+        assert!(pacer.next_frame_at() <= now + Duration::from_secs(1) / 30);
+    }
+
+    #[test]
+    fn a_long_stall_writes_half_a_second_of_repeats_not_thousands() {
+        let mut pacer = Pacer::new(30);
+        assert_eq!(pacer.wrote_frame(Duration::ZERO), 0);
+        // The computer slept for an hour mid-recording.
+        assert_eq!(pacer.wrote_frame(Duration::from_secs(3600)), 15);
+        for _ in 0..15 {
+            pacer.repeated();
+        }
+        assert_eq!(pacer.next_frame_at(), Duration::from_secs(3600));
+        // The video holds what was written, not the hour.
+        assert_eq!(pacer.duration(), Duration::from_secs(17) / 30);
+    }
+
+    #[test]
+    fn sixty_seconds_at_thirty_fps_is_1800_frames_and_a_minute_long() {
+        let mut pacer = Pacer::new(VIDEO_FPS);
+        let mut written = 0;
+        while pacer.next_frame_at() < Duration::from_secs(60) {
+            let at = pacer.next_frame_at() + Duration::from_millis(1);
+            written += 1;
+            for _ in 0..pacer.wrote_frame(at) {
+                pacer.repeated();
+                written += 1;
+            }
+        }
+        assert_eq!(written, 1800);
+        assert_eq!(pacer.duration().as_secs(), 60);
     }
 
     #[test]

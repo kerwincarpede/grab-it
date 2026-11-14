@@ -685,3 +685,13 @@ button.update-card {
 .logo-frame {
   stroke: var(--text);
 }
+
+/* Settings → Recording: getting ffmpeg ready for MP4. */
+[data-testid="ffmpeg-status"] progress {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.ffmpeg-failed {
+  color: var(--danger);
+}

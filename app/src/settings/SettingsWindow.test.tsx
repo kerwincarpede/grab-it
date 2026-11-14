@@ -4,7 +4,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { describe, expect, it } from "vitest";
 import SettingsWindow from "./SettingsWindow";
-import { DEFAULT_AI_PREFERENCES, isLocalEndpoint, type AiPreferences } from "./api";
+import { DEFAULT_AI_PREFERENCES, isLocalEndpoint, type AiPreferences, type FfmpegStatus, type RecordingSettings } from "./api";
 
 const DEFAULT_HOTKEYS = {
   region: "PrintScreen",
@@ -30,6 +30,11 @@ interface Backend {
   /** The editor section's auto-apply flag. */
   autoBackdrop?: boolean;
   appearance?: unknown;
+  recording?: RecordingSettings;
+  /** What `ffmpeg_status` answers. */
+  ffmpeg: FfmpegStatus;
+  /** What `ffmpeg_retry` answers. */
+  ffmpegAfterRetry: FfmpegStatus;
   saveFolder: string;
   hotkeys: typeof DEFAULT_HOTKEYS;
   hotkeyWarnings: string[];
@@ -50,6 +55,8 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     picked: "/data/Shots",
     hotkeys: { ...DEFAULT_HOTKEYS },
     hotkeyWarnings: [],
+    ffmpeg: { state: "ready", encoder: "libopenh264" },
+    ffmpegAfterRetry: { state: "downloading", downloaded: 0, total: 0 },
     calls: [],
     ...initial,
   };
@@ -61,6 +68,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     ai: backend.ai,
     editor: backend.autoBackdrop === undefined ? {} : { autoBackdrop: backend.autoBackdrop },
     appearance: backend.appearance,
+    recording: backend.recording,
   });
   mockIPC((cmd, payload) => {
     backend.calls.push({ cmd, payload });
@@ -70,6 +78,14 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
       case "set_appearance":
         backend.appearance = (payload as { appearance: unknown }).appearance;
         return settings();
+      case "set_recording":
+        backend.recording = (payload as { recording: RecordingSettings }).recording;
+        return settings();
+      case "ffmpeg_status":
+        return backend.ffmpeg;
+      case "ffmpeg_retry":
+        backend.ffmpeg = backend.ffmpegAfterRetry;
+        return backend.ffmpeg;
       case "get_autostart":
         if (backend.autostart === undefined) throw "not supported";
         return backend.autostart;
@@ -780,5 +796,48 @@ describe("SettingsWindow appearance", () => {
     await waitFor(() =>
       expect(backend.appearance).toEqual({ textScale: 125, hubScale: 95, popupCorner: "topRight", popupSeconds: 0 }),
     );
+  });
+});
+
+describe("SettingsWindow recording", () => {
+  it("records MP4 at high quality by default and saves a change at once", async () => {
+    const backend = mockBackend();
+    render(<SettingsWindow section="recording" />);
+    expect(screen.getByRole("heading", { level: 1, name: "Recording" })).toBeInTheDocument();
+    expect(screen.getByText("Changes save as you make them.")).toBeInTheDocument();
+    const mp4 = await screen.findByRole("radio", { name: "MP4 video" });
+    await waitFor(() => expect(mp4).toBeEnabled());
+    expect(mp4).toBeChecked();
+    expect(screen.getByRole("radio", { name: "High" })).toBeChecked();
+    expect(await screen.findByText("Ready. Videos are encoded with libopenh264.")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("radio", { name: "Medium" }));
+    await waitFor(() => expect(backend.recording).toEqual({ format: "mp4", quality: "medium" }));
+
+    // A GIF has no quality to pick and needs no ffmpeg.
+    await userEvent.click(screen.getByRole("radio", { name: "GIF" }));
+    await waitFor(() => expect(backend.recording).toEqual({ format: "gif", quality: "medium" }));
+    expect(screen.queryByRole("radio", { name: "Medium" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ffmpeg-status")).not.toBeInTheDocument();
+  });
+
+  it("shows the ffmpeg download's progress", async () => {
+    mockBackend({ ffmpeg: { state: "downloading", downloaded: 25, total: 100 } });
+    render(<SettingsWindow section="recording" />);
+    expect(await screen.findByText("Downloading ffmpeg… 25%")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "ffmpeg download" })).toHaveAttribute("value", "25");
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
+  it("offers Retry when ffmpeg could not be set up", async () => {
+    const backend = mockBackend({ ffmpeg: { state: "failed", message: "could not download ffmpeg: offline" } });
+    render(<SettingsWindow section="recording" />);
+    expect(await screen.findByText(/Could not set up ffmpeg: could not download ffmpeg: offline/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByText("Downloading ffmpeg… 0.0 MB")).toBeInTheDocument();
+    expect(commands(backend)).toContain("ffmpeg_retry");
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
   });
 });

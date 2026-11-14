@@ -6,6 +6,7 @@ mod cli;
 mod codes;
 mod commands;
 mod editor;
+mod ffmpeg;
 mod hotkeys;
 mod hub;
 mod keychain;
@@ -79,6 +80,7 @@ pub fn run() {
             commands::set_autostart,
             commands::set_show_in_dock,
             commands::set_appearance,
+            commands::set_recording,
             hub::hub_capture,
             hub::hub_monitors,
             hub::hub_open,
@@ -98,6 +100,8 @@ pub fn run() {
             pin::pin_close,
             pin::editor_pin,
             record::record_stop,
+            ffmpeg::ffmpeg_status,
+            ffmpeg::ffmpeg_retry,
             hotkeys::pause_hotkeys,
             hotkeys::resume_hotkeys,
             overlay::overlay_info,
@@ -153,6 +157,7 @@ pub fn run() {
             });
 
             let hotkeys = store.get().hotkeys.clone();
+            let records_mp4 = store.get().recording.format == settings::RecordingFormat::Mp4;
             // A tray app shows nothing when it starts, so the very first
             // launch opens a short welcome with the hotkeys.
             let first_run = store.is_first_run();
@@ -170,6 +175,8 @@ pub fn run() {
             hotkeys::start(handle, &hotkeys);
             // Reads captures waiting for OCR, downloading the models first.
             ocr::start(handle, ocr::models_dir(&data_dir));
+            // Has ffmpeg ready to record MP4, downloading it the first time.
+            ffmpeg::start(handle, data_dir.clone(), records_mp4);
             // Describes captures with a vision model, once turned on. With
             // Claude Code or Codex installed, its thread first turns
             // describing on once for a user who never turned it on.

@@ -6,7 +6,16 @@ import {
   AFTER_CAPTURE_CHOICES,
   DEFAULT_AI_PREFERENCES,
   DEFAULT_APPEARANCE,
+  DEFAULT_RECORDING,
   POPUP_CORNERS,
+  RECORDING_FORMATS,
+  RECORDING_QUALITIES,
+  ffmpegStatus,
+  onFfmpegStatus,
+  retryFfmpeg,
+  setRecording,
+  type FfmpegStatus,
+  type RecordingSettings,
   POPUP_SECONDS,
   TEXT_SCALE,
   setAppearance,
@@ -91,6 +100,56 @@ function ScaleSlider({ id, label, hint, value, disabled, onCommit }: ScaleSlider
   );
 }
 
+/** Whether MP4 can be recorded yet, with Retry when getting ffmpeg failed. */
+function FfmpegRow({ status, onRetry }: { status: FfmpegStatus | null; onRetry: () => void }) {
+  let detail: string;
+  let failed = false;
+  let progress: { value: number; max: number } | null = null;
+  switch (status?.state) {
+    case undefined:
+      detail = "Checking…";
+      break;
+    case "missing":
+      detail = "ffmpeg is downloaded the first time you record an MP4.";
+      break;
+    case "downloading": {
+      const megabytes = (bytes: number) => (bytes / 1_048_576).toFixed(1);
+      detail =
+        status.total > 0
+          ? `Downloading ffmpeg… ${Math.floor((status.downloaded * 100) / status.total)}%`
+          : `Downloading ffmpeg… ${megabytes(status.downloaded)} MB`;
+      if (status.total > 0) progress = { value: status.downloaded, max: status.total };
+      break;
+    }
+    case "checking":
+      detail = "Finding the best video encoder…";
+      break;
+    case "ready":
+      detail = `Ready. Videos are encoded with ${status.encoder}.`;
+      break;
+    case "failed":
+      detail = `Could not set up ffmpeg: ${status.message}. Until it works, recordings are saved as GIFs.`;
+      failed = true;
+      break;
+  }
+  return (
+    <div className="row" data-testid="ffmpeg-status">
+      <span className="row-text">
+        <span className="row-title">Video encoder</span>
+        <span className={failed ? "row-hint ffmpeg-failed" : "row-hint"} aria-live="polite">
+          {detail}
+        </span>
+        {progress && <progress aria-label="ffmpeg download" max={progress.max} value={progress.value} />}
+      </span>
+      {failed && (
+        <button type="button" className="pill" onClick={onRetry}>
+          Retry
+        </button>
+      )}
+    </div>
+  );
+}
+
 function errorMessage(err: unknown): string {
   if (typeof err === "string") return err;
   if (err instanceof Error) return err.message;
@@ -115,6 +174,9 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [busy, setBusy] = useState(false);
+  /** Null until the backend has said; only the Recording page asks. */
+  const [ffmpeg, setFfmpeg] = useState<FfmpegStatus | null>(null);
+  const showsRecording = shows("recording");
   // Null until the system has answered, or when it cannot say: the toggle
   // is then left out rather than shown in a state that may be wrong.
   const [autostart, setAutostartState] = useState<boolean | null>(null);
@@ -146,6 +208,54 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!showsRecording) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    onFfmpegStatus((status) => {
+      if (!cancelled) setFfmpeg(status);
+    })
+      .then((stop) => {
+        if (cancelled) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {
+        // Without events the page still shows the status it read.
+      });
+    ffmpegStatus()
+      .then((status) => {
+        if (!cancelled) setFfmpeg(status);
+      })
+      .catch(() => {
+        // Settings works without the status line.
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [showsRecording]);
+
+  async function changeRecording(change: Partial<RecordingSettings>) {
+    setBusy(true);
+    try {
+      const saved = await setRecording({ ...(settings?.recording ?? DEFAULT_RECORDING), ...change });
+      setSettings(saved);
+      setStatus({ kind: "preferences-saved" });
+      // Choosing MP4 starts getting ffmpeg ready.
+      if (saved.recording?.format === "mp4") setFfmpeg(await ffmpegStatus());
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function retry() {
+    retryFfmpeg()
+      .then(setFfmpeg)
+      .catch((err: unknown) => setStatus({ kind: "error", message: errorMessage(err) }));
+  }
 
   async function changeFolder() {
     setBusy(true);
@@ -247,7 +357,14 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
 
   const afterCapture = AFTER_CAPTURE_CHOICES.find((choice) => choice.value === settings?.afterCapture);
   const savesAtOnce =
-    section === undefined || section === "general" || section === "appearance" || section === "capture" || section === "editor";
+    section === undefined ||
+    section === "general" ||
+    section === "appearance" ||
+    section === "capture" ||
+    section === "editor" ||
+    section === "recording";
+  const recording = settings?.recording ?? DEFAULT_RECORDING;
+  const recordingFormat = RECORDING_FORMATS.find((choice) => choice.value === recording.format);
   const appearance = settings?.appearance ?? DEFAULT_APPEARANCE;
   const appearanceOff = busy || settings === null;
   const showsMac = shows("general") && (hasDock() || autostart !== null);
@@ -363,6 +480,59 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                 onChange={(event) => void changeAutoBackdrop(event.target.checked)}
               />
             </label>
+          </div>
+        </section>
+      )}
+      {showsRecording && (
+        <section aria-labelledby="recording-format-heading">
+          <h2 className="group-heading" id="recording-format-heading">
+            Save recordings as
+          </h2>
+          <div className="group">
+            <div className="row is-stacked">
+              <fieldset className="segmented" aria-labelledby="recording-format-heading" disabled={busy || settings === null}>
+                {RECORDING_FORMATS.map((choice) => (
+                  <label key={choice.value}>
+                    <input
+                      type="radio"
+                      name="recording-format"
+                      value={choice.value}
+                      checked={recording.format === choice.value}
+                      onChange={() => void changeRecording({ format: choice.value })}
+                    />
+                    {choice.title}
+                  </label>
+                ))}
+              </fieldset>
+              {recordingFormat && <span className="row-hint">{recordingFormat.hint}</span>}
+            </div>
+            {recording.format === "mp4" && (
+              <>
+                <div className="row is-stacked">
+                  <span className="row-text">
+                    <span className="row-title" id="recording-quality-heading">
+                      Quality
+                    </span>
+                    <span className="row-hint">Higher quality looks sharper and makes bigger files.</span>
+                  </span>
+                  <fieldset className="segmented" aria-labelledby="recording-quality-heading" disabled={busy || settings === null}>
+                    {RECORDING_QUALITIES.map((choice) => (
+                      <label key={choice.value}>
+                        <input
+                          type="radio"
+                          name="recording-quality"
+                          value={choice.value}
+                          checked={recording.quality === choice.value}
+                          onChange={() => void changeRecording({ quality: choice.value })}
+                        />
+                        {choice.title}
+                      </label>
+                    ))}
+                  </fieldset>
+                </div>
+                <FfmpegRow status={ffmpeg} onRetry={retry} />
+              </>
+            )}
           </div>
         </section>
       )}

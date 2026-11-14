@@ -71,6 +71,23 @@ pub fn set_appearance(
     Ok(settings)
 }
 
+/// Saves how screen recordings are made. Choosing MP4 gets ffmpeg ready
+/// in the background, downloading it the first time.
+#[tauri::command]
+pub fn set_recording(
+    recording: crate::settings::RecordingSettings,
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+) -> Result<Settings, String> {
+    let settings = lock(&state)
+        .set_recording(recording)
+        .map_err(|err| err.to_string())?;
+    if settings.recording.format == crate::settings::RecordingFormat::Mp4 {
+        crate::ffmpeg::prepare_in_background(&app);
+    }
+    Ok(settings)
+}
+
 /// Shows or hides the Dock icon (macOS) and remembers the choice.
 #[tauri::command]
 pub fn set_show_in_dock(
