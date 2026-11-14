@@ -190,12 +190,15 @@ vi.mock("react-konva", async () => {
 });
 
 const FLATTENED = new Uint8Array([1, 2, 3]);
-const flattened = vi.hoisted(() => ({ calls: [] as unknown[], options: [] as unknown[] }));
+const flattened = vi.hoisted(() => ({ calls: [] as unknown[], options: [] as unknown[], measured: [] as unknown[][] }));
 /** The capture's plain border as measured: an empty 80px margin on the right (jsdom cannot read pixels). */
 const MEASURED_BORDERS = vi.hoisted(() => ({ top: 0, right: 80, bottom: 0, left: 0 }));
 vi.mock("./flatten", async (original) => ({
   ...(await original<typeof import("./flatten")>()),
-  measureBorders: () => MEASURED_BORDERS,
+  measureBorders: (...args: unknown[]) => {
+    flattened.measured.push(args);
+    return MEASURED_BORDERS;
+  },
   flatten: async (_layer: unknown, doc: unknown, _image: unknown, _view: unknown, _format: unknown, options: unknown) => {
     flattened.calls.push(doc);
     flattened.options.push(options);
@@ -345,6 +348,7 @@ describe("EditorWindow", () => {
   beforeEach(() => {
     flattened.calls = [];
     flattened.options = [];
+    flattened.measured = [];
     vi.stubGlobal("Image", LoadedImage);
     URL.createObjectURL = vi.fn(() => "blob:capture");
     URL.revokeObjectURL = vi.fn();
@@ -1229,6 +1233,32 @@ describe("EditorWindow", () => {
     fireEvent.click(balance);
     await waitFor(() => expect(last(saved)?.backdrop).toEqual(backdrop));
     expect(screen.getByText("Output 440×340")).toBeInTheDocument();
+  });
+
+  it("measures Balance's borders on the crop as it is turned and mirrored", async () => {
+    const crop = { x: 10, y: 20, width: 200, height: 100 };
+    const backdrop = { fill: "ocean", padding: 20, radius: 12, shadow: true, balance: true };
+    mockEditor({ ...sidecar, crop, backdrop });
+    await ready();
+    const size = { width: 400, height: 300 };
+    const measuredWith = () => last(flattened.measured)?.slice(1);
+    await waitFor(() => expect(measuredWith()).toEqual([crop, size, { rotation: 0, flipX: false, flipY: false }]));
+    expect(last(flattened.measured)?.[0]).toBeInstanceOf(LoadedImage);
+    // The 80px margin cannot fit in 20px a side: 200 + 80 by 100 + 40.
+    expect(screen.getByText("Output 280×140")).toBeInTheDocument();
+
+    const bar = within(screen.getByRole("toolbar", { name: "Style and actions" }));
+    let count = flattened.measured.length;
+    fireEvent.click(bar.getByRole("button", { name: "Rotate right" }));
+    await waitFor(() => expect(measuredWith()).toEqual([crop, size, { rotation: 90, flipX: false, flipY: false }]));
+    expect(flattened.measured.length).toBeGreaterThan(count);
+    // Turned, the crop shows 100 by 200, and the margin is measured on its new right side.
+    expect(screen.getByText("Output 180×240")).toBeInTheDocument();
+
+    count = flattened.measured.length;
+    fireEvent.click(bar.getByRole("button", { name: "Flip horizontal" }));
+    await waitFor(() => expect(measuredWith()).toEqual([crop, size, { rotation: 90, flipX: true, flipY: false }]));
+    expect(flattened.measured.length).toBeGreaterThan(count);
   });
 
   it("disables Balance while the backdrop is off", async () => {
