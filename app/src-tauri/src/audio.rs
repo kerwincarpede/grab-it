@@ -79,7 +79,12 @@ impl<W: Write + Seek> WavWriter<W> {
             .iter()
             .flat_map(|sample| sample.to_le_bytes())
             .collect();
-        self.out.write_all(&bytes)?;
+        self.write_bytes(&bytes)
+    }
+
+    /// Writes samples already in the WAV's little-endian 16-bit form.
+    pub fn write_bytes(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.out.write_all(bytes)?;
         self.data_bytes = self
             .data_bytes
             .saturating_add(u32::try_from(bytes.len()).unwrap_or(u32::MAX));
@@ -236,8 +241,8 @@ pub struct Gap {
     pub length: Duration,
 }
 
-/// The sample frames of the sound that fall in `gaps`, as sorted
-/// `[from, to)` ranges, given that the sound starts `offset` seconds after
+/// The sample frames of the sound that fall in `gaps`, as sorted `[from,
+/// to)` ranges, merged where they touch or overlap, given that the sound starts `offset` seconds after
 /// the first frame. Sound before the first frame is not counted here: the
 /// mux cuts it.
 pub fn gap_frames(gaps: &[Gap], offset: f64, sample_rate: u32) -> Vec<(u64, u64)> {
@@ -252,11 +257,21 @@ pub fn gap_frames(gaps: &[Gap], offset: f64, sample_rate: u32) -> Vec<(u64, u64)
         })
         .collect();
     ranges.sort_unstable();
-    ranges
+    // Touching or overlapping ranges become one.
+    let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
+    for (from, to) in ranges {
+        match merged.last_mut() {
+            Some(last) if from <= last.1 => last.1 = last.1.max(to),
+            _ => merged.push((from, to)),
+        }
+    }
+    merged
 }
 
 /// Copies the 16-bit WAV `from` (as [`WavWriter`] writes it) to `to`,
-/// leaving out the sample frames in `ranges`.
+/// leaving out the sample frames in `ranges`, which must be sorted and not
+/// overlap, as [`gap_frames`] gives them. One pass over the file, copying
+/// and skipping whole stretches.
 fn cut_wav(
     from: &Path,
     to: &Path,
@@ -264,37 +279,60 @@ fn cut_wav(
     sample_rate: u32,
     ranges: &[(u64, u64)],
 ) -> io::Result<()> {
+    let frame_bytes = u64::from(channels.max(1)) * 2;
     let mut input = BufReader::new(File::open(from)?);
     input.seek(SeekFrom::Start(u64::from(WAV_HEADER_BYTES)))?;
     let mut writer = WavWriter::new(BufWriter::new(File::create(to)?), channels, sample_rate)?;
-    let mut frame = vec![0u8; usize::from(channels.max(1)) * 2];
-    let mut kept: Vec<i16> = Vec::with_capacity(8 * 1024);
-    let mut index = 0u64;
-    loop {
-        match input.read_exact(&mut frame) {
-            Ok(()) => {}
-            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break,
-            Err(err) => return Err(err),
+    let mut buffer = vec![0u8; 64 * 1024];
+    // The sample frame `input` is at.
+    let mut at = 0u64;
+    for &(start, end) in ranges {
+        if end <= at {
+            continue;
         }
-        if !ranges
-            .iter()
-            .any(|&(start, end)| (start..end).contains(&index))
-        {
-            kept.extend(
-                frame
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|pair| i16::from_le_bytes(*pair)),
-            );
-            if kept.len() >= 8 * 1024 {
-                writer.write(&kept)?;
-                kept.clear();
+        if start > at {
+            let wanted = (start - at) * frame_bytes;
+            let copied = copy_bytes(&mut input, &mut writer, wanted, &mut buffer)?;
+            if copied < wanted {
+                // The sound ended before this gap.
+                return finish_cut(writer);
             }
+            at = start;
         }
-        index += 1;
+        let skip = (end - at) * frame_bytes;
+        input.seek_relative(i64::try_from(skip).unwrap_or(i64::MAX))?;
+        at = end;
     }
-    writer.write(&kept)?;
+    copy_bytes(&mut input, &mut writer, u64::MAX, &mut buffer)?;
+    finish_cut(writer)
+}
+
+/// Copies up to `limit` bytes of samples from `input` to `writer`, in
+/// `buffer`-sized pieces. Returns how many there were.
+fn copy_bytes<R: Read, W: Write + Seek>(
+    input: &mut R,
+    writer: &mut WavWriter<W>,
+    limit: u64,
+    buffer: &mut [u8],
+) -> io::Result<u64> {
+    let mut copied = 0u64;
+    while copied < limit {
+        let want = usize::try_from(limit - copied)
+            .unwrap_or(usize::MAX)
+            .min(buffer.len());
+        let read = match input.read(&mut buffer[..want]) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        };
+        writer.write_bytes(&buffer[..read])?;
+        copied += read as u64;
+    }
+    Ok(copied)
+}
+
+fn finish_cut<W: Write + Seek>(writer: WavWriter<W>) -> io::Result<()> {
     writer.finish()?;
     Ok(())
 }
@@ -925,6 +963,68 @@ mod tests {
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
         drop(sound);
         assert!(!wav.exists());
+    }
+
+    #[test]
+    fn touching_and_overlapping_gaps_are_merged() {
+        let ms = Duration::from_millis;
+        let gap = |start, length| Gap {
+            start: ms(start),
+            length: ms(length),
+        };
+        let gaps = [gap(500, 100), gap(100, 100), gap(200, 100), gap(550, 200)];
+        assert_eq!(gap_frames(&gaps, 0.0, 1000), vec![(100, 300), (500, 750)]);
+    }
+
+    #[test]
+    fn several_gaps_are_cut_in_one_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("mic.wav");
+        // Mono at 100 Hz: sample n is n.
+        let mut writer =
+            WavWriter::new(BufWriter::new(File::create(&wav).unwrap()), 1, 100).unwrap();
+        let samples: Vec<i16> = (0..300).collect();
+        writer.write(&samples).unwrap();
+        writer.finish().unwrap();
+        let sound = Captured {
+            wav: wav.clone(),
+            first_sample: Instant::now(),
+            channels: 1,
+            sample_rate: 100,
+        };
+        let ms = Duration::from_millis;
+        let gap = |start, length| Gap {
+            start: ms(start),
+            length: ms(length),
+        };
+        // Frames 10-20 and 20-30 touch; 0-5 starts the sound; 250-400
+        // runs past its end.
+        let gaps = [
+            gap(200, 100),
+            gap(100, 100),
+            gap(0, 50),
+            gap(1000, 10),
+            gap(2500, 1500),
+        ];
+        sound.cut(&gaps, 0.0).unwrap();
+
+        let bytes = fs::read(&wav).unwrap();
+        let kept: Vec<i16> = bytes[44..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| i16::from_le_bytes(*pair))
+            .collect();
+        let expected: Vec<i16> = (5..10).chain(30..100).chain(101..250).collect();
+        assert_eq!(kept, expected);
+        assert_eq!(
+            u32::from_le_bytes(bytes[40..44].try_into().unwrap()),
+            (expected.len() * 2) as u32
+        );
+        assert_eq!(
+            u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
+            36 + (expected.len() * 2) as u32
+        );
     }
 
     #[test]
