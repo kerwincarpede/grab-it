@@ -22,7 +22,7 @@ Grab-it lives in the system tray. Capture a region, a window, every monitor or o
 | `app/` | The Tauri project |
 | `app/src/` | Frontend: React + TypeScript + Vite |
 | `app/src-tauri/` | Backend: Rust |
-| `.github/workflows/ci.yml` | Checks plus installer builds on Linux, Windows and macOS |
+| `.github/workflows/ci.yml` | Checks plus installer builds on Linux, Windows and macOS; releases from `main` |
 
 ## Setup
 
@@ -171,6 +171,22 @@ To build installers locally, run `npm run tauri build`; they land in `app/src-ta
 ## CI
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the checks on Ubuntu 24.04 (caching the ocrs models for the OCR tests) and, in parallel, builds unsigned installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts.
+
+## Releases
+
+Every push to `main` publishes a [GitHub release](https://github.com/kerwincarpede/grab-it/releases) with the installers attached: `.msi` and `-setup.exe` for Windows, `.dmg` for macOS (Apple silicon), and `.AppImage`, `.deb` and `.rpm` for Linux.
+
+Versions come from the `v*` git tags. [`PaulHatch/semantic-version`](https://github.com/PaulHatch/semantic-version) reads the commits since the last tag and bumps by [Conventional Commits](https://www.conventionalcommits.org/):
+
+| Commit (or squash-merged PR title) | Bump |
+| --- | --- |
+| `feat!: ...`, or `BREAKING CHANGE:` in the message | major |
+| `feat: ...` or `feat(scope): ...` | minor |
+| anything else | patch |
+
+The first release, made before any tag exists, takes the version in `app/src-tauri/tauri.conf.json`. After that the tags are the source of truth: CI writes the release version into `tauri.conf.json` before building, so the version fields in the repository do not need bumping by hand.
+
+A run opens a draft release, builds the installers into it, and publishes it (creating the tag) only when the checks and all three builds pass. A failed run leaves only a hidden draft, which the next run replaces.
 
 ## License
 
