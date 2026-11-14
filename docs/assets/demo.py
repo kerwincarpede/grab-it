@@ -1,4 +1,5 @@
-"""Generate docs/assets/demo.svg, the animated Grab-it demo in the README.
+"""Generate docs/assets/demo.svg, the animated Grab-it demo. The README shows
+docs/assets/demo.gif, which docs/assets/demo_gif.py renders from this SVG.
 
 Run from the repository root:  python3 docs/assets/demo.py docs/assets/demo.svg
 

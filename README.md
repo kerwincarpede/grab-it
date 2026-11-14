@@ -18,7 +18,7 @@ One key to capture, a few clicks to explain, and it's already on your clipboard.
 
 <br><br>
 
-<img src="docs/assets/demo.svg" alt="Animation: press PrtSc, drag over part of the screen, add an arrow, a box, numbered steps, a blur and a note, drop it on a gradient backdrop, and copy it, all in a few seconds." width="100%">
+<img src="docs/assets/demo.gif" alt="Animation: press PrtSc, drag over part of the screen, add an arrow, a box, numbered steps, a blur and a note, drop it on a gradient backdrop, and copy it, all in a few seconds." width="100%">
 
 **[Get started in 2 minutes →](docs/getting-started.md)**
 
