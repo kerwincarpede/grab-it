@@ -1,9 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RegionOverlay from "./RegionOverlay";
-import type { OverlayInfo } from "./api";
+import { START_EVENT, type OverlayInfo } from "./api";
 
 interface Call {
   cmd: string;
@@ -35,7 +36,7 @@ function mockOverlay(info: Partial<OverlayInfo> = {}): Call[] {
       default:
         throw new Error(`unexpected command ${cmd}`);
     }
-  });
+  }, { shouldMockEvents: true });
   return calls;
 }
 
@@ -400,6 +401,87 @@ describe("RegionOverlay", () => {
           selection: { kind: "point", x: 400, y: 400, viewportWidth: 1000 },
         }),
       );
+    });
+  });
+
+  describe("as a spare, loaded before any selection", () => {
+    it("draws nothing until a selection starts on it, then loads it once", async () => {
+      let selecting = false;
+      const calls: string[] = [];
+      mockIPC(
+        (cmd) => {
+          calls.push(cmd);
+          if (cmd === "overlay_info") {
+            return selecting
+              ? { mode: "region", monitorWidth: 1000, monitorHeight: 800, windows: [] }
+              : null;
+          }
+          if (cmd === "overlay_image") return new ArrayBuffer(8);
+          return null;
+        },
+        { shouldMockEvents: true },
+      );
+      render(<RegionOverlay />);
+      const overlay = screen.getByTestId("overlay");
+
+      await waitFor(() => expect(calls).toContain("overlay_info"));
+      expect(overlay).toHaveAttribute("data-ready", "false");
+      expect(overlay).toHaveAttribute("data-shown", "false");
+      expect(screen.getByRole("status")).toHaveAttribute("data-error", "false");
+      expect(calls).not.toContain("overlay_image");
+
+      selecting = true;
+      await emit(START_EVENT);
+
+      await waitFor(() => expect(overlay).toHaveAttribute("data-ready", "true"));
+      await waitFor(() => expect(calls).toContain("overlay_image"));
+      expect(calls.filter((cmd) => cmd === "overlay_image")).toHaveLength(1);
+    });
+  });
+
+  describe("in a see-through window, on screen ahead of its image", () => {
+    beforeEach(() => {
+      window.location.hash = "#/overlay?instant";
+    });
+
+    afterEach(() => {
+      window.location.hash = "";
+    });
+
+    it("dims as soon as the selection is known, without waiting for the image", async () => {
+      // No object URLs in jsdom: the image never loads here.
+      mockOverlay();
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      expect(overlay).toHaveAttribute("data-shown", "true");
+    });
+
+    it("stays undimmed while it is a spare", async () => {
+      const calls: string[] = [];
+      mockIPC(
+        (cmd) => {
+          calls.push(cmd);
+          return null;
+        },
+        { shouldMockEvents: true },
+      );
+      render(<RegionOverlay />);
+
+      await waitFor(() => expect(calls).toContain("overlay_info"));
+      expect(screen.getByTestId("overlay")).toHaveAttribute("data-shown", "false");
+      expect(calls).not.toContain("overlay_ready");
+    });
+
+    it("labels the selection in image pixels before the image arrives", async () => {
+      mockOverlay({ imageWidth: 2000 });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      fireEvent.mouseDown(overlay, { button: 0, clientX: 300, clientY: 250 });
+      fireEvent.mouseMove(overlay, { clientX: 100, clientY: 50 });
+
+      expect(screen.getByTestId("overlay-selection")).toHaveTextContent("400 × 400");
     });
   });
 

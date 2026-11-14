@@ -1,6 +1,7 @@
 /*
- * Registered so it can be transitioned: the dim fades in once the window is
- * shown, instead of the whole screen darkening in one frame.
+ * Registered so it can be transitioned: the tint fades in once the window is
+ * shown, instead of the whole screen changing in one frame, and deepens as a
+ * drag starts.
  */
 @property --overlay-dim-alpha {
   syntax: "<number>";
@@ -8,11 +9,34 @@
   initial-value: 0;
 }
 
+/* The green wash on a hovered window, registered so it can fade in. */
+@property --overlay-wash {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0.11;
+}
+
+/*
+ * A see-through overlay window: the page must not paint a backdrop of its
+ * own. The colour scheme is pinned because a dark one makes the browser
+ * fill the page behind the root.
+ */
+:root.overlay-clear {
+  color-scheme: light;
+  background: transparent;
+}
+
 /* Capture overlay: the frozen monitor fills the window. */
 .overlay {
   --overlay-accent: #2f81f7;
+  --overlay-window: 52 199 89;
+  /*
+   * A cool slate rather than black: it darkens a light screen and lifts a
+   * dark one, so the tint shows on either.
+   */
+  --overlay-tint: 58 68 92;
   --overlay-dim-alpha: 0;
-  --overlay-dim: rgb(0 0 0 / var(--overlay-dim-alpha));
+  --overlay-dim: rgb(var(--overlay-tint) / var(--overlay-dim-alpha));
   --overlay-panel: rgb(22 22 24 / 82%);
   --overlay-panel-edge: rgb(255 255 255 / 16%);
 
@@ -23,11 +47,20 @@
   cursor: crosshair;
   user-select: none;
   background: #000;
-  transition: --overlay-dim-alpha 160ms ease-out;
+  transition: --overlay-dim-alpha 120ms ease-out;
+}
+
+.overlay-clear .overlay {
+  background: transparent;
 }
 
 .overlay[data-shown="true"] {
-  --overlay-dim-alpha: 0.32;
+  --overlay-dim-alpha: 0.3;
+}
+
+/* A region is being drawn: everything outside it steps further back. */
+.overlay[data-shown="true"][data-dragging="true"] {
+  --overlay-dim-alpha: 0.46;
 }
 
 .overlay[data-mode="window"] {
@@ -111,21 +144,32 @@
 }
 
 /*
- * A hovered window is lit by the dim around it rather than painted over: a
- * soft light ring, rounded like the windows themselves, and a short glide
- * from one window to the next.
+ * A hovered window keeps half the slate tint under a light green wash, so
+ * it stands out from the screen without the screen ever going untinted,
+ * however large the window is. A soft green edge, rounded like the windows
+ * themselves, and a short glide from one window to the next.
  */
 .overlay-window {
+  background:
+    linear-gradient(rgb(var(--overlay-window) / var(--overlay-wash)) 0 0),
+    rgb(var(--overlay-tint) / calc(var(--overlay-dim-alpha) * 0.5));
   border-radius: 10px;
   box-shadow:
-    0 0 0 1px rgb(255 255 255 / 55%),
-    inset 0 0 0 1px rgb(0 0 0 / 12%),
+    0 0 0 1.5px rgb(var(--overlay-window) / 70%),
+    0 0 0 5px rgb(var(--overlay-window) / 14%),
     0 0 0 100vmax var(--overlay-dim);
   transition:
     left 90ms ease-out,
     top 90ms ease-out,
     width 90ms ease-out,
     height 90ms ease-out;
+  animation: overlay-window-in 110ms ease-out;
+}
+
+@keyframes overlay-window-in {
+  from {
+    --overlay-wash: 0;
+  }
 }
 
 /* A hovered window is a suggestion, not a selection: no ticks. */
@@ -314,5 +358,6 @@
   .overlay-window,
   .overlay-hint {
     transition: none;
+    animation: none;
   }
 }

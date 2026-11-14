@@ -7,9 +7,19 @@
 //! pixels-per-CSS-pixel, so monitors with different scale factors each crop
 //! correctly.
 //!
-//! An overlay stays hidden until its page has the frozen image on screen
-//! ([`overlay_ready`]), so it replaces the live desktop with an identical
-//! picture instead of flashing an empty webview first.
+//! A selection has to appear the moment it is asked for, so nothing the
+//! user waits on is left to do then:
+//!
+//! - A spare overlay per monitor is kept hidden with its page loaded
+//!   ([`prewarm_later`]), so starting a selection creates no window and
+//!   loads no page. Monitors without a spare get a window made on the spot.
+//! - On macOS the overlay is see-through and is shown as soon as the
+//!   monitors are frozen. The frozen image is still being sent to the page
+//!   then, and slides in under the dim unnoticed, being the same picture as
+//!   the desktop behind it.
+//! - Elsewhere an overlay stays hidden until its page has the frozen image
+//!   on screen ([`overlay_ready`]), so it replaces the live desktop with an
+//!   identical picture instead of flashing an empty webview first.
 
 use std::{
     collections::HashMap,
@@ -23,7 +33,7 @@ use std::{
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl, WebviewWindow,
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, WindowEvent,
 };
 
@@ -33,11 +43,30 @@ use crate::{
     screen::{self, MonitorInfo, WindowInfo},
 };
 
+/// Overlay windows are labelled `overlay-<n>`.
 pub const LABEL_PREFIX: &str = "overlay-";
+
+/// Emitted to a spare overlay when a selection starts on it. Mirrors
+/// `START_EVENT` in src/overlay/api.ts.
+const START_EVENT: &str = "overlay-start";
+
+/// Whether overlays are see-through and shown the moment the monitors are
+/// frozen, ahead of their frozen image.
+const INSTANT: bool = cfg!(target_os = "macos");
+
+/// The overlay's page. It learns from the address whether its window is
+/// see-through, before it paints anything.
+const PAGE: &str = if INSTANT {
+    "index.html#/overlay?instant"
+} else {
+    "index.html#/overlay"
+};
 
 struct Frame {
     monitor: MonitorInfo,
     image: RgbaImage,
+    /// The overlay's page has asked what to show, so it is alive.
+    responded: bool,
 }
 
 /// What the overlay's selection is for. Mirrors `Intent` in
@@ -58,8 +87,7 @@ pub enum Intent {
 }
 
 struct Session {
-    /// Tells this session's windows apart from a later session's, which
-    /// reuse the same labels.
+    /// Tells this session apart from a later one.
     id: u64,
     mode: CaptureMode,
     intent: Intent,
@@ -143,6 +171,106 @@ pub fn capture_last_region(app: &AppHandle) -> Result<(RgbaImage, f64), String> 
 }
 
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+static NEXT_WINDOW: AtomicU64 = AtomicU64::new(1);
+
+/// A label no overlay has had, so a window on its way out is never
+/// mistaken for the one that replaced it.
+fn next_label() -> String {
+    format!(
+        "{LABEL_PREFIX}{}",
+        NEXT_WINDOW.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// A hidden overlay with its page already loaded, in place on a monitor
+/// and waiting for the next selection.
+struct Spare {
+    label: String,
+    position: PhysicalPosition<i32>,
+    size: PhysicalSize<u32>,
+}
+
+#[derive(Default)]
+pub struct SpareState(Mutex<Vec<Spare>>);
+
+impl SpareState {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Spare>> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
+/// How long after startup or a selection the spares are made, so making
+/// them does not compete with what the user is waiting for.
+const PREWARM_DELAY: Duration = Duration::from_millis(400);
+
+/// Gets a spare overlay ready on every monitor, shortly and off this
+/// thread. Call at startup and whenever a selection has used the spares.
+pub fn prewarm_later(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(PREWARM_DELAY);
+        prewarm(&app);
+    });
+}
+
+fn prewarm(app: &AppHandle) {
+    static PREWARMING: Mutex<()> = Mutex::new(());
+
+    // On Wayland the desktop's own portal picks the area; no overlay shows.
+    #[cfg(target_os = "linux")]
+    if crate::portal::is_wayland() {
+        return;
+    }
+    let _one_at_a_time = PREWARMING.lock().unwrap_or_else(|p| p.into_inner());
+    // Not under a selection: loading a page would make it stutter, and the
+    // selection asks for new spares when it ends.
+    if is_open(app) {
+        return;
+    }
+    let Ok(monitors) = app.available_monitors() else {
+        return;
+    };
+    let wanted: Vec<_> = monitors
+        .iter()
+        .map(|monitor| (*monitor.position(), *monitor.size()))
+        .collect();
+
+    // A monitor that was unplugged or changed leaves its spare misplaced.
+    let stale: Vec<Spare> = {
+        let state = app.state::<SpareState>();
+        let mut spares = state.lock();
+        let (keep, stale) = std::mem::take(&mut *spares)
+            .into_iter()
+            .partition(|spare| wanted.contains(&(spare.position, spare.size)));
+        *spares = keep;
+        stale
+    };
+    for spare in stale {
+        if let Some(window) = app.get_webview_window(&spare.label) {
+            let _ = window.destroy();
+        }
+    }
+
+    for (position, size) in wanted {
+        let have = app
+            .state::<SpareState>()
+            .lock()
+            .iter()
+            .any(|spare| spare.position == position && spare.size == size);
+        if have {
+            continue;
+        }
+        let label = next_label();
+        match create_window(app, &label, position, size) {
+            Ok(_) => app.state::<SpareState>().lock().push(Spare {
+                label,
+                position,
+                size,
+            }),
+            Err(err) => eprintln!("Grab-it: could not prepare the capture overlay: {err}"),
+        }
+    }
+}
 
 /// True while a selection is starting or on screen.
 pub fn is_open(app: &AppHandle) -> bool {
@@ -176,8 +304,10 @@ fn abandon(app: &AppHandle) {
 /// Freezes every monitor and shows an overlay on each. Expects a claim
 /// from [`begin`], and releases it when the overlay cannot be shown.
 pub fn open(app: &AppHandle, mode: CaptureMode, intent: Intent) -> Result<(), String> {
-    let foreground = screen::foreground();
-    let windows = screen::windows();
+    // The windows are listed beside the capture, not ahead of it, so the
+    // overlay waits only for the slower of the two. Both are done before an
+    // overlay takes the focus from the window the user was in.
+    let listing = std::thread::spawn(|| (screen::foreground(), screen::windows()));
     let frames = match screen::capture_monitors() {
         Ok(frames) => frames,
         Err(err) => {
@@ -185,6 +315,7 @@ pub fn open(app: &AppHandle, mode: CaptureMode, intent: Intent) -> Result<(), St
             return Err(err);
         }
     };
+    let (foreground, windows) = listing.join().unwrap_or_default();
     let placements = app.available_monitors().unwrap_or_default();
 
     let id = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
@@ -196,33 +327,77 @@ pub fn open(app: &AppHandle, mode: CaptureMode, intent: Intent) -> Result<(), St
         frames: HashMap::new(),
         windows,
     };
-    let mut labels = Vec::new();
+    let mut spares = std::mem::take(&mut *app.state::<SpareState>().lock());
+    let mut warm = Vec::new();
+    let mut cold = Vec::new();
     for (monitor, image) in frames {
-        let label = format!("{LABEL_PREFIX}{}", monitor.index);
-        let placement = placement_for(&monitor, &placements);
-        labels.push((label.clone(), placement));
-        session.frames.insert(label, Frame { monitor, image });
+        let (position, size) = placement_for(&monitor, &placements);
+        let spare = spares
+            .iter()
+            .position(|spare| spare.position == position && spare.size == size)
+            .map(|at| spares.swap_remove(at))
+            .and_then(|spare| app.get_webview_window(&spare.label));
+        let label = match spare {
+            Some(window) => {
+                let label = window.label().to_owned();
+                warm.push(window);
+                label
+            }
+            None => {
+                let label = next_label();
+                cold.push((label.clone(), position, size));
+                label
+            }
+        };
+        session.frames.insert(
+            label,
+            Frame {
+                monitor,
+                image,
+                responded: false,
+            },
+        );
     }
     *app.state::<OverlayState>().lock() = Phase::Open(session);
 
-    for (label, (position, size)) in labels {
-        if let Err(err) = create_window(app, id, &label, position, size) {
-            close(app);
-            return Err(format!("could not show the capture overlay: {err}"));
+    // Spares left over sit where no monitor is any more.
+    for spare in spares {
+        if let Some(window) = app.get_webview_window(&spare.label) {
+            let _ = window.destroy();
         }
     }
 
-    // A page that never reports ready (a script error, a stalled image) must
-    // not leave the capture invisible and holding the claim.
+    let shown = (|| -> tauri::Result<()> {
+        for window in &warm {
+            if INSTANT {
+                reveal(window)?;
+            }
+            // Its page has been waiting for this. One that is still loading
+            // misses it, and asks for the selection itself once it is up.
+            window.emit_to(window.label(), START_EVENT, ())?;
+        }
+        for (label, position, size) in &cold {
+            let window = create_window(app, label, *position, *size)?;
+            if INSTANT {
+                reveal(&window)?;
+            }
+        }
+        Ok(())
+    })();
+    if let Err(err) = shown {
+        close(app);
+        return Err(format!("could not show the capture overlay: {err}"));
+    }
+
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(READY_TIMEOUT);
-        reveal_session(&app, id);
+        settle(&app, id);
     });
     Ok(())
 }
 
-/// How long an overlay may stay hidden waiting for its page.
+/// How long an overlay's page may take to respond.
 const READY_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// Shows and focuses an overlay that is still hidden.
@@ -234,16 +409,31 @@ fn reveal(window: &WebviewWindow) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Shows every overlay of session `id` that is still hidden.
-fn reveal_session(app: &AppHandle, id: u64) {
-    let labels: Vec<String> = {
+/// Deals with a session `id` whose pages have had their time (a script
+/// error, a stalled image), so it is not left holding the claim.
+///
+/// Overlays still hidden are shown. A see-through one is on screen already,
+/// and if its page never came up it is an invisible sheet swallowing every
+/// click with no way to dismiss it, so the selection is ended instead.
+fn settle(app: &AppHandle, id: u64) {
+    let (labels, responded): (Vec<String>, bool) = {
         let state = app.state::<OverlayState>();
         let phase = state.lock();
         match &*phase {
-            Phase::Open(session) if session.id == id => session.frames.keys().cloned().collect(),
+            Phase::Open(session) if session.id == id => (
+                session.frames.keys().cloned().collect(),
+                session.frames.values().all(|frame| frame.responded),
+            ),
             _ => return,
         }
     };
+    if INSTANT {
+        if !responded {
+            close(app);
+            actions::report_failure(app, "The capture overlay did not respond. Try again.");
+        }
+        return;
+    }
     for label in labels {
         if let Some(window) = app.get_webview_window(&label) {
             let _ = reveal(&window);
@@ -281,42 +471,63 @@ fn placement_for(
     }
 }
 
+/// Makes a hidden overlay covering a monitor and starts loading its page.
 fn create_window(
     app: &AppHandle,
-    session: u64,
     label: &str,
     position: PhysicalPosition<i32>,
     size: PhysicalSize<u32>,
-) -> tauri::Result<()> {
-    let window =
-        WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html#/overlay".into()))
-            .title("Grab-it capture")
-            .decorations(false)
-            .resizable(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .shadow(false)
-            .visible(false)
-            .focused(true)
-            .build()?;
+) -> tauri::Result<WebviewWindow> {
+    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(PAGE.into()))
+        .title("Grab-it capture")
+        .decorations(false)
+        .resizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .shadow(false)
+        .visible(false)
+        .focused(true);
+    // See-through, so it can be on screen before its page has anything to
+    // paint. Matches `INSTANT`.
+    #[cfg(target_os = "macos")]
+    let builder = builder.transparent(true);
+    let window = builder.build()?;
     #[cfg(target_os = "macos")]
     raise_above_menu_bar(&window)?;
     // Placed after the level change, so the window keeps the monitor's
     // full size, menu bar area included, and the region scale (image width
     // over viewport width) holds vertically too.
-    window.set_position(position)?;
+    //
+    // Sized before it is placed: macOS resizes a window around its
+    // bottom-left corner, so resizing after placing it would push its top
+    // edge off the screen by the difference in height.
     window.set_size(size)?;
-    // Shown by `overlay_ready` once the page has painted the frozen image.
+    window.set_position(position)?;
 
     let app = app.clone();
+    let label = label.to_owned();
     window.on_window_event(move |event| {
-        // An overlay closed some other way (Alt+F4) ends its selection,
-        // but not a later one that reuses the window labels.
         if matches!(event, WindowEvent::Destroyed) {
-            close_session(&app, session);
+            forget(&app, &label);
         }
     });
-    Ok(())
+    Ok(window)
+}
+
+/// An overlay is gone. Closed some other way than by its selection ending
+/// (Alt+F4), it ends that selection; a spare is just no longer one.
+fn forget(app: &AppHandle, label: &str) {
+    app.state::<SpareState>()
+        .lock()
+        .retain(|spare| spare.label != label);
+    let current = {
+        let state = app.state::<OverlayState>();
+        let phase = state.lock();
+        matches!(&*phase, Phase::Open(session) if session.frames.contains_key(label))
+    };
+    if current {
+        close(app);
+    }
 }
 
 /// macOS: `always_on_top` puts the overlay at the floating level, under the
@@ -354,18 +565,6 @@ pub fn close(app: &AppHandle) {
     let _ = take_session(app);
 }
 
-/// Like [`close`], but only while session `id` is the one on screen.
-fn close_session(app: &AppHandle, id: u64) {
-    let current = {
-        let state = app.state::<OverlayState>();
-        let phase = state.lock();
-        matches!(&*phase, Phase::Open(session) if session.id == id)
-    };
-    if current {
-        close(app);
-    }
-}
-
 fn take_session(app: &AppHandle) -> Option<Session> {
     // Taken before the windows go, so their `Destroyed` events find nothing.
     let session = {
@@ -385,6 +584,8 @@ fn take_session(app: &AppHandle) -> Option<Session> {
             let _ = window.destroy();
         }
     }
+    // A page is not reused, so the next selection starts from a clean one.
+    prewarm_later(app);
     Some(session)
 }
 
@@ -409,6 +610,9 @@ pub struct OverlayInfo {
     pub intent: Intent,
     pub monitor_width: u32,
     pub monitor_height: u32,
+    /// The frozen image's width in its own pixels, for sizes shown before
+    /// the image itself has arrived.
+    pub image_width: u32,
     /// Front to back.
     pub windows: Vec<OverlayWindow>,
 }
@@ -497,24 +701,22 @@ pub fn css_to_image_point(
     Some((clamp(x, image_size.0), clamp(y, image_size.1)))
 }
 
+/// What this overlay is to show, or `None` for a spare with no selection
+/// yet: its page then waits for [`START_EVENT`].
 #[tauri::command]
-pub fn overlay_info(
-    window: WebviewWindow,
-    state: State<'_, OverlayState>,
-) -> Result<OverlayInfo, String> {
-    let guard = state.lock();
-    let Phase::Open(session) = &*guard else {
-        return Err("no capture in progress".into());
+pub fn overlay_info(window: WebviewWindow, state: State<'_, OverlayState>) -> Option<OverlayInfo> {
+    let mut guard = state.lock();
+    let Phase::Open(session) = &mut *guard else {
+        return None;
     };
-    let frame = session
-        .frames
-        .get(window.label())
-        .ok_or("this window is not a capture overlay")?;
-    Ok(OverlayInfo {
+    let frame = session.frames.get_mut(window.label())?;
+    frame.responded = true;
+    Some(OverlayInfo {
         mode: session.mode,
         intent: session.intent,
         monitor_width: frame.monitor.width,
         monitor_height: frame.monitor.height,
+        image_width: frame.image.width(),
         windows: windows_on_monitor(&frame.monitor, &session.windows),
     })
 }
@@ -536,6 +738,7 @@ pub fn overlay_image(
             .ok_or("this window is not a capture overlay")?;
         frame.image.clone()
     };
+
     let mut png = Vec::new();
     let encoder = image::codecs::png::PngEncoder::new_with_quality(
         &mut png,
@@ -766,6 +969,7 @@ mod tests {
         let frame = Frame {
             monitor: monitor(100, 0, 4, 4),
             image: RgbaImage::from_fn(4, 4, |x, y| image::Rgba([x as u8, y as u8, 0, 255])),
+            responded: false,
         };
         let image = window_image(&frame, &window(1, 101, 2, 2, 2)).unwrap();
         assert_eq!(image.dimensions(), (2, 2));
