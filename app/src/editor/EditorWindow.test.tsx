@@ -32,6 +32,9 @@ vi.mock("react-konva", async () => {
       y,
       points,
       bezier,
+      rotation,
+      scaleX,
+      scaleY,
       onDragMove,
       onDragEnd,
     }: {
@@ -46,6 +49,9 @@ vi.mock("react-konva", async () => {
       y?: number;
       points?: number[];
       bezier?: boolean;
+      rotation?: number;
+      scaleX?: number;
+      scaleY?: number;
       onDragMove?: (event: unknown) => void;
       onDragEnd?: (event: unknown) => void;
     }) =>
@@ -64,6 +70,9 @@ vi.mock("react-konva", async () => {
           "data-y": y,
           "data-points": points?.join(" "),
           "data-bezier": bezier === undefined ? undefined : String(bezier),
+          "data-rotation": rotation,
+          "data-scale-x": scaleX,
+          "data-scale-y": scaleY,
           onMouseDown: id ? () => onMouseDown?.() : undefined,
           // A DOM drag stands in for a Konva drag: the node lands where `pointerAt` says.
           onDrag: onDragMove ? (event: { nativeEvent: MouseEvent }) => onDragMove(dragEvent(event.nativeEvent)) : undefined,
@@ -450,6 +459,38 @@ describe("EditorWindow", () => {
     // Other shapes keep the box.
     fireEvent.mouseDown(document.querySelector('[data-id="t1"]') as Element);
     expect(lineHandle("bend")).toBeNull();
+  });
+
+  it("turns and mirrors the line handles with the capture, and bends in capture pixels", async () => {
+    const saved = mockEditor();
+    await ready();
+    const transform = (name: string) => {
+      const group = document.querySelector(`[data-konva="Group"][data-name="${name}"]`) as Element;
+      return ["data-x", "data-y", "data-rotation", "data-scale-x", "data-scale-y"].map((attr) => group.getAttribute(attr));
+    };
+    const savedArrow = () => last(saved)?.shapes.find((shape) => shape.id === "a1");
+    fireEvent.click(screen.getByRole("button", { name: "Rotate right" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+    // The 400×300 capture turned right: shifted 300 across, a quarter turn.
+    expect(transform("oriented")).toEqual(["300", "0", "90", "1", "1"]);
+    expect(transform("oriented-handles")).toEqual(transform("oriented"));
+    // The handles stay in capture pixels; the group turns them onto the line.
+    expect(handleAt("bend")).toEqual([55, 45]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Flip horizontal" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+    expect(transform("oriented-handles")).toEqual(transform("oriented"));
+    expect(transform("oriented")).toEqual(["0", "0", "270", "-1", "1"]);
+
+    // A dragged handle reports where it is in its group: capture pixels.
+    const writes = saved.length;
+    dragHandle("bend", [55, 15]);
+    await waitFor(() => expect(savedArrow()).toMatchObject({ points: [10, 10, 100, 80], control: [55, -15] }));
+    expect(saved).toHaveLength(writes + 1);
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(savedArrow()).not.toHaveProperty("control"));
+    expect(last(saved)).toMatchObject({ rotation: 90, flipX: true });
   });
 
   it("bends an arrow from its middle handle, straightens it near the line, and undoes each drag", async () => {
