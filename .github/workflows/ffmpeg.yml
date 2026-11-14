@@ -199,7 +199,8 @@ jobs:
         run: |
           tar -xf "ffmpeg-$FFMPEG_VERSION.tar.xz"
           cd "ffmpeg-$FFMPEG_VERSION"
-          # No --enable-gpl, --enable-nonfree or --enable-version3: LGPL 2.1+.
+          # No --enable-gpl or --enable-nonfree. Unlike BtbN's builds (LGPL v3),
+          # this one also leaves out --enable-version3, so it is LGPL 2.1+.
           # OpenH264 is C++, hence libc++.
           PKG_CONFIG_PATH="$RUNNER_TEMP/deps/lib/pkgconfig" ./configure \
             --prefix="$RUNNER_TEMP/ffmpeg" \
@@ -282,7 +283,7 @@ jobs:
               echo "| \`$name.gz\` | $(paste -sd ';' "artifacts/$name.version" | sed 's/;/<br>/') |"
             done
             echo
-            echo "FFmpeg is licensed under the [GNU LGPL 2.1 or later](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html); none of these builds enables GPL or non-free components. \`ffmpeg-$FFMPEG_VERSION.tar.xz\` is FFmpeg's own source tarball, as signed by FFmpeg. The Linux and Windows builds come from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), whose scripts build them; the macOS build is made by [\`.github/workflows/ffmpeg.yml\`](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/.github/workflows/ffmpeg.yml). All three include [OpenH264](https://github.com/cisco/openh264) (BSD-2-Clause)."
+            echo "None of these builds enables GPL or non-free components. The Linux and Windows builds are configured with \`--enable-version3\`, as all of BtbN's LGPL builds are, so they are licensed under the [GNU LGPL version 3](https://www.gnu.org/licenses/lgpl-3.0.html). The macOS build leaves it out and is under the [GNU LGPL 2.1 or later](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html). \`ffmpeg-$FFMPEG_VERSION.tar.xz\` is FFmpeg's own source tarball, as signed by FFmpeg. The Linux and Windows builds come from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), whose scripts build them; the macOS build is made by [\`.github/workflows/ffmpeg.yml\`](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/.github/workflows/ffmpeg.yml). All three include [OpenH264](https://github.com/cisco/openh264) (BSD-2-Clause)."
           } > notes.md
           cat notes.md
           ls -l release
