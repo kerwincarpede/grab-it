@@ -472,6 +472,15 @@
   color: var(--danger);
 }
 
+/* The one-time notice that Claude Code describes new captures. */
+.ai-notice {
+  color: var(--text);
+}
+
+.ai-notice .error-dismiss:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
 .spinner {
   width: 12px;
   height: 12px;

@@ -34,12 +34,40 @@ pub const DEFAULT_AI_ENDPOINT: &str = "http://localhost:11434/v1";
 /// The default vision model, as Ollama names it.
 pub const DEFAULT_AI_MODEL: &str = "qwen2.5vl:7b";
 
+/// Who describes captures. Mirrors `AiProvider` in src/settings/api.ts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AiProvider {
+    /// The user's own `claude` CLI, run headlessly (see `ai_cli.rs`).
+    ClaudeCode,
+    /// An OpenAI-compatible `/chat/completions` endpoint.
+    Endpoint,
+}
+
+/// Reads a stored provider leniently: one this version does not know, from
+/// a newer Grab-it, is read as none rather than costing the settings file.
+fn lenient_provider<'de, D>(deserializer: D) -> Result<Option<AiProvider>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
+}
+
 /// How captures are described by a vision model (see `ai.rs`). Off by
-/// default: nothing leaves the machine until the user turns it on.
+/// default: nothing leaves the machine until the user turns it on, or
+/// Grab-it turns it on once because Claude Code is installed (see
+/// [`SettingsStore::enable_claude_code`]). Mirrors `AiPreferences` in
+/// src/settings/api.ts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AiSettings {
     pub enabled: bool,
+    /// Who describes captures. None until a provider was picked or Grab-it
+    /// picked one; it then works as [`AiProvider::Endpoint`], which is what
+    /// settings from before providers existed used.
+    #[serde(deserialize_with = "lenient_provider")]
+    pub provider: Option<AiProvider>,
     /// An OpenAI-compatible base URL; `/chat/completions` is appended.
     pub endpoint: String,
     pub model: String,
@@ -47,23 +75,52 @@ pub struct AiSettings {
     pub api_key: Option<String>,
     /// Captures that existed when describing was turned on are skipped.
     pub new_captures_only: bool,
+    /// Grab-it turned describing on by itself and the Library has not yet
+    /// said so. Only Grab-it sets it; dismissing the notice clears it.
+    pub notice_pending: bool,
 }
 
 impl Default for AiSettings {
     fn default() -> Self {
         Self {
             enabled: false,
+            provider: None,
             endpoint: DEFAULT_AI_ENDPOINT.into(),
             model: DEFAULT_AI_MODEL.into(),
             api_key: None,
             new_captures_only: true,
+            notice_pending: false,
         }
     }
 }
 
+/// The model Claude Code is asked for, by its alias.
+pub const CLAUDE_CODE_MODEL: &str = "haiku";
+
 impl AiSettings {
+    /// The provider describing uses: an unset one is the endpoint.
+    pub fn provider(&self) -> AiProvider {
+        self.provider.unwrap_or(AiProvider::Endpoint)
+    }
+
+    /// Whether the user never turned describing on: no provider was ever
+    /// picked and it is off. Settings with describing on but no provider
+    /// are an endpoint user's from before providers existed.
+    pub fn never_enabled(&self) -> bool {
+        self.provider.is_none() && !self.enabled
+    }
+
+    /// The model recorded beside each description.
+    pub fn model_label(&self) -> String {
+        match self.provider() {
+            AiProvider::ClaudeCode => format!("claude-code/{CLAUDE_CODE_MODEL}"),
+            AiProvider::Endpoint => self.model.clone(),
+        }
+    }
+
     /// Trims the fields, drops a trailing `/` from the endpoint and an empty
-    /// key. Turned on, the endpoint must be an http(s) URL and the model set.
+    /// key. Turned on with an endpoint, the endpoint must be an http(s) URL
+    /// and the model set; the CLI providers use neither.
     pub fn validated(&self) -> Result<Self, SettingsError> {
         let endpoint = self.endpoint.trim().trim_end_matches('/').to_owned();
         let model = self.model.trim().to_owned();
@@ -73,7 +130,7 @@ impl AiSettings {
             .map(str::trim)
             .filter(|key| !key.is_empty())
             .map(str::to_owned);
-        if self.enabled {
+        if self.enabled && self.provider() == AiProvider::Endpoint {
             let lower = endpoint.to_ascii_lowercase();
             if !(lower.starts_with("http://") || lower.starts_with("https://")) {
                 return Err(SettingsError::Invalid(format!(
@@ -86,10 +143,12 @@ impl AiSettings {
         }
         Ok(Self {
             enabled: self.enabled,
+            provider: self.provider,
             endpoint,
             model,
             api_key,
             new_captures_only: self.new_captures_only,
+            notice_pending: self.notice_pending,
         })
     }
 }
@@ -456,12 +515,49 @@ impl SettingsStore {
     ) -> Result<Settings, SettingsError> {
         let mut preferences = update.into().apply_to(&self.current.preferences);
         preferences.ai = preferences.ai.validated()?;
+        // The notice belongs to Grab-it: a Settings window opened before it
+        // was set, or dismissed, must not bring it back or clear it.
+        preferences.ai.notice_pending = self.current.preferences.ai.notice_pending;
         let next = Settings {
             preferences,
             ..self.current.clone()
         };
         save(&self.path, &next)?;
         self.current = next;
+        Ok(self.current.clone())
+    }
+
+    /// Turns describing on with Claude Code, for new captures only, and
+    /// asks for the one-time notice, when the user never turned describing
+    /// on. Finding `claude` is up to the caller. Returns the AI settings
+    /// from before, when they changed; once a provider is set this never
+    /// changes anything again.
+    pub fn enable_claude_code(&mut self) -> Result<Option<AiSettings>, SettingsError> {
+        let before = self.current.preferences.ai.clone();
+        if !before.never_enabled() {
+            return Ok(None);
+        }
+        let mut next = self.current.clone();
+        next.preferences.ai = AiSettings {
+            enabled: true,
+            provider: Some(AiProvider::ClaudeCode),
+            new_captures_only: true,
+            notice_pending: true,
+            ..before.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(Some(before))
+    }
+
+    /// Clears the one-time notice that describing was turned on.
+    pub fn dismiss_ai_notice(&mut self) -> Result<Settings, SettingsError> {
+        if self.current.preferences.ai.notice_pending {
+            let mut next = self.current.clone();
+            next.preferences.ai.notice_pending = false;
+            save(&self.path, &next)?;
+            self.current = next;
+        }
         Ok(self.current.clone())
     }
 
@@ -790,10 +886,12 @@ mod tests {
             json["ai"],
             serde_json::json!({
                 "enabled": false,
+                "provider": null,
                 "endpoint": "http://localhost:11434/v1",
                 "model": "qwen2.5vl:7b",
                 "apiKey": null,
                 "newCapturesOnly": true,
+                "noticePending": false,
             })
         );
     }
@@ -832,10 +930,12 @@ mod tests {
         let updated = store
             .set_preferences(with(AiSettings {
                 enabled: true,
+                provider: Some(AiProvider::Endpoint),
                 endpoint: " https://api.example.com/v1/ ".into(),
                 model: " gpt-4o-mini ".into(),
                 api_key: Some("  ".into()),
                 new_captures_only: false,
+                notice_pending: false,
             }))
             .unwrap();
         let ai = &updated.preferences.ai;
@@ -867,6 +967,173 @@ mod tests {
                 ..AiSettings::default()
             }))
             .unwrap();
+    }
+
+    #[test]
+    fn the_cli_providers_need_no_endpoint_or_model() {
+        let dir = TempDir::new().unwrap();
+        let mut store = SettingsStore::open(settings_path(&dir), defaults(&dir));
+        let updated = store
+            .set_preferences(Preferences {
+                ai: AiSettings {
+                    enabled: true,
+                    provider: Some(AiProvider::ClaudeCode),
+                    endpoint: String::new(),
+                    model: " ".into(),
+                    ..AiSettings::default()
+                },
+                ..Preferences::default()
+            })
+            .unwrap();
+        let ai = &updated.preferences.ai;
+        assert_eq!(ai.provider(), AiProvider::ClaudeCode);
+        assert_eq!(ai.model_label(), "claude-code/haiku");
+        // The same fields are refused for an endpoint.
+        assert!(matches!(
+            store.set_preferences(Preferences {
+                ai: AiSettings {
+                    provider: Some(AiProvider::Endpoint),
+                    ..ai.clone()
+                },
+                ..Preferences::default()
+            }),
+            Err(SettingsError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn providers_are_read_leniently_and_default_to_the_endpoint() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let read = |text: &str| {
+            fs::write(&path, text).unwrap();
+            load(&path, defaults(&dir)).unwrap().preferences.ai
+        };
+        let claude = read(r#"{"ai": {"enabled": true, "provider": "claudeCode"}}"#);
+        assert_eq!(claude.provider, Some(AiProvider::ClaudeCode));
+        let old = read(r#"{"ai": {"enabled": true, "model": "llava"}}"#);
+        assert_eq!(old.provider, None);
+        assert_eq!(old.provider(), AiProvider::Endpoint);
+        assert_eq!(old.model_label(), "llava");
+        // A provider from a newer Grab-it costs neither the file nor the rest.
+        let newer = read(r#"{"ai": {"enabled": true, "provider": "someday", "model": "x"}}"#);
+        assert_eq!(newer.provider, None);
+        assert_eq!(newer.model, "x");
+        assert!(newer.enabled);
+    }
+
+    #[test]
+    fn never_enabled_means_no_provider_and_off() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let never = |text: &str| {
+            fs::write(&path, text).unwrap();
+            load(&path, defaults(&dir))
+                .unwrap()
+                .preferences
+                .ai
+                .never_enabled()
+        };
+        assert!(defaults(&dir).preferences.ai.never_enabled());
+        assert!(never(r#"{"copyToClipboard": true}"#));
+        assert!(never(r#"{"ai": {"enabled": false, "model": "llava"}}"#));
+        // An endpoint user from before providers existed is left alone.
+        assert!(!never(r#"{"ai": {"enabled": true}}"#));
+        // So is anyone who picked a provider, on or off.
+        assert!(!never(
+            r#"{"ai": {"enabled": false, "provider": "endpoint"}}"#
+        ));
+        assert!(!never(
+            r#"{"ai": {"enabled": false, "provider": "claudeCode"}}"#
+        ));
+    }
+
+    #[test]
+    fn claude_code_is_turned_on_once_for_new_captures_with_a_notice() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+
+        let before = store.enable_claude_code().unwrap();
+
+        assert_eq!(before, Some(AiSettings::default()));
+        let ai = load(&path, defaults(&dir)).unwrap().preferences.ai;
+        assert!(ai.enabled);
+        assert_eq!(ai.provider, Some(AiProvider::ClaudeCode));
+        assert!(ai.new_captures_only);
+        assert!(ai.notice_pending);
+        // The endpoint fields are kept for whoever switches back.
+        assert_eq!(ai.endpoint, DEFAULT_AI_ENDPOINT);
+        assert_eq!(store.enable_claude_code().unwrap(), None);
+
+        // Turned off afterwards, it stays off.
+        store
+            .set_preferences(Preferences {
+                ai: AiSettings {
+                    enabled: false,
+                    ..ai.clone()
+                },
+                ..Preferences::default()
+            })
+            .unwrap();
+        assert_eq!(store.enable_claude_code().unwrap(), None);
+        assert!(!store.get().preferences.ai.enabled);
+    }
+
+    #[test]
+    fn an_existing_endpoint_user_is_not_switched() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"ai": {"enabled": true, "model": "llava"}}"#).unwrap();
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        assert_eq!(store.enable_claude_code().unwrap(), None);
+        assert_eq!(store.get().preferences.ai.provider, None);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            r#"{"ai": {"enabled": true, "model": "llava"}}"#
+        );
+    }
+
+    #[test]
+    fn the_notice_is_kept_by_settings_saves_and_cleared_by_dismissing() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        store.enable_claude_code().unwrap();
+        let mut stale = store.get().preferences.clone();
+        stale.ai.notice_pending = false;
+        stale.after_capture = AfterCapture::Editor;
+        assert!(
+            store
+                .set_preferences(stale)
+                .unwrap()
+                .preferences
+                .ai
+                .notice_pending
+        );
+
+        let dismissed = store.dismiss_ai_notice().unwrap();
+        assert!(!dismissed.preferences.ai.notice_pending);
+        assert!(
+            !load(&path, defaults(&dir))
+                .unwrap()
+                .preferences
+                .ai
+                .notice_pending
+        );
+        let mut stale = store.get().preferences.clone();
+        stale.ai.notice_pending = true;
+        assert!(
+            !store
+                .set_preferences(stale)
+                .unwrap()
+                .preferences
+                .ai
+                .notice_pending
+        );
     }
 
     fn editor_preferences() -> EditorPreferences {

@@ -11,26 +11,73 @@ export interface Preferences {
   ai: AiPreferences;
 }
 
-/** Mirrors `AiPreferences` in src-tauri/src/settings.rs: the vision model that describes captures. */
+/** Mirrors `AiProvider` in src-tauri/src/settings.rs: who describes captures. */
+export type AiProvider = "claudeCode" | "endpoint";
+
+/** Mirrors `AiSettings` in src-tauri/src/settings.rs: the vision model that describes captures. */
 export interface AiPreferences {
   enabled: boolean;
-  /** An OpenAI-compatible API base URL, such as Ollama's. */
+  /**
+   * Null until a provider was picked, or Grab-it picked Claude Code because
+   * it is installed; it then works as "endpoint" (see {@link aiProvider}).
+   */
+  provider: AiProvider | null;
+  /** An OpenAI-compatible API base URL, such as Ollama's. Only the endpoint provider uses it. */
   endpoint: string;
+  /** Only the endpoint provider uses it. */
   model: string;
   /** Only cloud providers need one. */
   apiKey: string | null;
   /** Leave captures from before AI descriptions were turned on alone. */
   newCapturesOnly: boolean;
+  /** Grab-it turned describing on by itself and the Library has not said so yet. Only the backend changes it. */
+  noticePending: boolean;
 }
 
 /** What the backend starts with. */
 export const DEFAULT_AI_PREFERENCES: AiPreferences = {
   enabled: false,
+  provider: null,
   endpoint: "http://localhost:11434/v1",
   model: "qwen2.5vl:7b",
   apiKey: null,
   newCapturesOnly: true,
+  noticePending: false,
 };
+
+/** The provider describing uses: an unset one is the endpoint, as in `AiSettings::provider`. */
+export function aiProvider(ai: Pick<AiPreferences, "provider"> | null | undefined): AiProvider {
+  return ai?.provider ?? "endpoint";
+}
+
+/** The providers in the order Settings lists them. */
+export const AI_PROVIDERS: { value: AiProvider; title: string; hint: string }[] = [
+  {
+    value: "claudeCode",
+    title: "Claude Code",
+    hint: "Uses the claude command you already have and are signed in to, with the Haiku model. Nothing to set up or download.",
+  },
+  {
+    value: "endpoint",
+    title: "OpenAI-compatible endpoint",
+    hint: "Ollama or LM Studio on this computer, or a cloud API such as OpenAI or OpenRouter.",
+  },
+];
+
+/** A provider's name as messages show it. */
+export function providerName(provider: AiProvider): string {
+  return provider === "claudeCode" ? "Claude Code" : "the AI endpoint";
+}
+
+/** Mirrors `AiClis` in src-tauri/src/ai.rs: where each AI CLI was found, or null when it is not installed. */
+export interface AiClis {
+  claudeCode: string | null;
+}
+
+/** Looks for the AI CLIs Grab-it can run. */
+export function aiClis(): Promise<AiClis> {
+  return invoke<AiClis>("ai_clis");
+}
 
 /** Whether an endpoint URL points at this computer, so screenshots stay on it. */
 export function isLocalEndpoint(endpoint: string): boolean {
@@ -171,7 +218,7 @@ export async function chooseFolder(defaultPath?: string): Promise<string | null>
   return typeof picked === "string" ? picked : null;
 }
 
-/** Asks the AI endpoint about the saved model; resolves to what it says, or rejects with why not. */
+/** Asks the saved provider's model to answer; resolves to what it says, or rejects with why not. */
 export function testAiConnection(): Promise<string> {
   return invoke<string>("ai_test_connection");
 }

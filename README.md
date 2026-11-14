@@ -73,6 +73,8 @@ One click puts your screenshot on a gradient with padding, rounded corners and a
 ### 🔍 Find any screenshot again
 Search every capture by the words *inside* the image, or by app, tag and date. Text recognition runs on your computer, never in the cloud.
 
+With [Claude Code](https://claude.com/claude-code) installed, Grab-it also writes a short description, category and tags for each new capture, so you can search for what it shows. No setup; turn it off or pick a local model in Settings.
+
 </td>
 <td valign="top">
 

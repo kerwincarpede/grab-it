@@ -14,6 +14,7 @@ import {
   NO_FILTERS,
   PAGE_SIZE,
   SEARCH_DEBOUNCE_MS,
+  aiNoticePending,
   aiStatus,
   buildQuery,
   categoryLabel,
@@ -21,6 +22,7 @@ import {
   copyShot,
   dayLabel,
   deleteShot,
+  dismissAiNotice,
   filterOptions,
   formatCapturedAt,
   formatTime,
@@ -181,7 +183,11 @@ function AiBanner({ status, onSettings }: { status: AiStatus; onSettings: () => 
     return (
       <div className="ocr-status ocr-status-error ai-status" role="status">
         <span>Could not describe captures{status.error ? `: ${status.error}` : "."}</span>
-        <span className="hint">Is Ollama running? Check the endpoint and model in Settings.</span>
+        <span className="hint">
+          {status.provider === "claudeCode"
+            ? "Is Claude Code installed and signed in? Run claude in a terminal to check, or choose another provider in Settings."
+            : "Is the AI endpoint running? Check its URL and model in Settings."}
+        </span>
         <button type="button" className="pill-button" onClick={onSettings}>
           Open Settings
         </button>
@@ -189,6 +195,25 @@ function AiBanner({ status, onSettings }: { status: AiStatus; onSettings: () => 
     );
   }
   return null;
+}
+
+/** Says once that Grab-it turned on AI descriptions with Claude Code, until dismissed. */
+function AiNotice({ onSettings, onDismiss }: { onSettings: () => void; onDismiss: () => void }) {
+  return (
+    <div className="ocr-status ai-status ai-notice" role="status">
+      <SparkleIcon />
+      <span>
+        Claude Code now describes your new captures, so you can search for what they show. Their screenshots go to
+        Anthropic under your Claude account.
+      </span>
+      <button type="button" className="pill-button" onClick={onSettings}>
+        Open Settings
+      </button>
+      <button type="button" className="error-dismiss" aria-label="Dismiss AI notice" onClick={onDismiss}>
+        <CloseIcon size={12} />
+      </button>
+    </div>
+  );
 }
 
 /** The capture's AI category as a small chip. */
@@ -664,6 +689,8 @@ function LibraryWindow() {
   const [options, setOptions] = useState<FilterOptions>({ apps: [], tags: [], categories: [] });
   // Null until the backend says; the AI actions then stay available.
   const [ai, setAi] = useState<AiStatus | null>(null);
+  // Grab-it turned AI descriptions on by itself and has not said so yet.
+  const [aiNotice, setAiNotice] = useState(false);
   const [optionReloads, setOptionReloads] = useState(0);
   // Where each result matched, by shot id; empty when not searching.
   const [hits, setHits] = useState<Record<number, SearchHit>>({});
@@ -800,6 +827,24 @@ function LibraryWindow() {
     };
   }, []);
 
+  // Asked again whenever the AI status changes: Grab-it may turn describing
+  // on just after the Library opens, and Settings may turn it off.
+  const aiState = ai?.state;
+  const aiProvider = ai?.provider;
+  useEffect(() => {
+    let cancelled = false;
+    aiNoticePending()
+      .then((pending) => {
+        if (!cancelled) setAiNotice(pending);
+      })
+      .catch(() => {
+        // Without the settings there is just no notice.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [aiState, aiProvider]);
+
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
@@ -891,6 +936,15 @@ function LibraryWindow() {
     setOptionReloads((count) => count + 1);
   }
 
+  function dismissNotice() {
+    setAiNotice(false);
+    dismissAiNotice().catch((err: unknown) => setError(errorMessage(err)));
+  }
+
+  function showSettings() {
+    openSettings().catch((err: unknown) => setError(errorMessage(err)));
+  }
+
   function retry() {
     setOcr({ state: "idle" });
     retryOcr().catch((err: unknown) => setError(errorMessage(err)));
@@ -979,12 +1033,16 @@ function LibraryWindow() {
           onRowHeight={setRowHeight}
         />
         <OcrBanner status={ocr} onRetry={retry} />
-        {ai && (
-          <AiBanner
-            status={ai}
-            onSettings={() => openSettings().catch((err: unknown) => setError(errorMessage(err)))}
+        {aiNotice && (
+          <AiNotice
+            onSettings={() => {
+              dismissNotice();
+              showSettings();
+            }}
+            onDismiss={dismissNotice}
           />
         )}
+        {ai && <AiBanner status={ai} onSettings={showSettings} />}
         {error && (
           <p role="alert" className="error-pill">
             {error}

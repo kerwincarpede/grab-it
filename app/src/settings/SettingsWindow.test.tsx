@@ -22,6 +22,8 @@ interface Backend {
   ai: AiPreferences;
   /** What `ai_test_connection` answers; a thrown error when it starts with "error:". */
   testResult: string;
+  /** Where `ai_clis` finds Claude Code; null when it is not installed. */
+  claudePath: string | null;
   /** The editor section's auto-apply flag. */
   autoBackdrop?: boolean;
   saveFolder: string;
@@ -38,6 +40,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     copyToClipboard: true,
     ai: { ...DEFAULT_AI_PREFERENCES },
     testResult: "qwen2.5vl:7b (7.6B, Q4_K_M)",
+    claudePath: "/usr/local/bin/claude",
     saveFolder: "/home/me/Pictures/Grab-it",
     picked: "/data/Shots",
     hotkeys: { ...DEFAULT_HOTKEYS },
@@ -80,6 +83,8 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
         return backend.testResult;
       case "ai_redescribe_all":
         return null;
+      case "ai_clis":
+        return { claudeCode: backend.claudePath };
       case "set_auto_backdrop":
         if (backend.setError) throw backend.setError;
         backend.autoBackdrop = (payload as { enabled: boolean }).enabled;
@@ -505,6 +510,65 @@ describe("SettingsWindow AI descriptions", () => {
 
     await waitFor(() => expect(commands(backend)).toContain("ai_redescribe_all"));
     expect(await screen.findByText(/Describing every capture again/)).toBeInTheDocument();
+  });
+
+  it("picks Claude Code at once, hiding the endpoint's fields", async () => {
+    const backend = mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true } });
+    render(<SettingsWindow />);
+    const claude = await screen.findByRole("radio", { name: /Claude Code/ });
+    expect(screen.getByRole("radio", { name: /OpenAI-compatible endpoint/ })).toBeChecked();
+    expect(screen.getByLabelText("Endpoint URL")).toBeInTheDocument();
+    await waitFor(() => expect(claude).toBeEnabled());
+
+    await userEvent.click(claude);
+
+    await waitFor(() => expect(claude).toBeChecked());
+    expect(backend.ai).toEqual({ ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "claudeCode" });
+    expect(screen.queryByLabelText("Endpoint URL")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Model")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("API key")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Claude Code sends your screenshots.*to Anthropic/)).toHaveClass("ai-privacy-cloud");
+    expect(screen.queryByTestId("ai-missing")).not.toBeInTheDocument();
+
+    // Back to the endpoint, with what it had.
+    await userEvent.click(screen.getByRole("radio", { name: /OpenAI-compatible endpoint/ }));
+    await waitFor(() => expect(backend.ai.provider).toBe("endpoint"));
+    expect(await screen.findByLabelText("Endpoint URL")).toHaveValue("http://localhost:11434/v1");
+  });
+
+  it("shows a stored endpoint user without a provider as using the endpoint", async () => {
+    mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: null } });
+    render(<SettingsWindow />);
+    expect(await screen.findByRole("radio", { name: /OpenAI-compatible endpoint/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Claude Code/ })).not.toBeChecked();
+  });
+
+  it("says when Claude Code is chosen but not installed", async () => {
+    const backend = mockBackend({
+      ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "claudeCode" },
+      claudePath: null,
+    });
+    render(<SettingsWindow />);
+    expect(await screen.findByTestId("ai-missing")).toHaveTextContent(/cannot find Claude Code/);
+    expect(commands(backend)).toContain("ai_clis");
+
+    // Not a worry for someone using an endpoint.
+    await userEvent.click(screen.getByRole("radio", { name: /OpenAI-compatible endpoint/ }));
+    await waitFor(() => expect(screen.queryByTestId("ai-missing")).not.toBeInTheDocument());
+  });
+
+  it("tests Claude Code without saving anything first", async () => {
+    const backend = mockBackend({
+      ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "claudeCode" },
+      testResult: "Claude Code (haiku) answered.",
+    });
+    render(<SettingsWindow />);
+    const test = await screen.findByRole("button", { name: "Test connection" });
+    await waitFor(() => expect(test).toBeEnabled());
+    await userEvent.click(test);
+    expect(await screen.findByText("Connected: Claude Code (haiku) answered.")).toBeInTheDocument();
+    expect(commands(backend)).not.toContain("set_preferences");
   });
 
   it("tells local endpoints from cloud ones", () => {

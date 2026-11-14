@@ -1,5 +1,6 @@
 mod actions;
 mod ai;
+mod ai_cli;
 mod capture;
 mod cli;
 mod commands;
@@ -65,6 +66,7 @@ pub fn run() {
             commands::get_editor_preferences,
             commands::set_editor_preferences,
             commands::set_auto_backdrop,
+            commands::dismiss_ai_notice,
             commands::open_target,
             commands::get_autostart,
             commands::set_autostart,
@@ -109,7 +111,8 @@ pub fn run() {
             ai::ai_redescribe,
             ai::ai_clear,
             ai::ai_redescribe_all,
-            ai::ai_test_connection
+            ai::ai_test_connection,
+            ai::ai_clis
         ])
         .setup(move |app| {
             // A tray app: no Dock icon on macOS.
@@ -135,7 +138,9 @@ pub fn run() {
             hotkeys::start(handle, &hotkeys);
             // Reads captures waiting for OCR, downloading the models first.
             ocr::start(handle, ocr::models_dir(&data_dir));
-            // Describes captures with a vision model, once turned on.
+            // Describes captures with a vision model, once turned on. With
+            // Claude Code installed, its thread first turns describing on
+            // once for a user who never turned it on.
             ai::start(handle);
             // Picks up captures added while Grab-it was not running.
             library::rescan_in_background(handle, library::current_save_folder(handle));
