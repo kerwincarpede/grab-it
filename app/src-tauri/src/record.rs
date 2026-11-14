@@ -6,10 +6,12 @@
 //! with the length of the recording. The Quick Access card shows the
 //! elapsed time and a Stop button, and moves out of the recorded area.
 //!
-//! An MP4 is piped through ffmpeg (see ffmpeg.rs) at a constant 30 frames a
-//! second, with no length limit. A GIF is encoded here, about ten frames a
-//! second, for at most [`MAX_DURATION`]. MP4 is the default; while ffmpeg
-//! is not ready yet, a recording is saved as a GIF and the card says why.
+//! An MP4 is piped through ffmpeg (see ffmpeg.rs) at a constant 30 or 60
+//! frames a second, with no length limit, and `<name>.cursor.json` beside
+//! it says where the pointer was in each frame. A GIF is encoded here,
+//! about ten frames a second, for at most [`MAX_DURATION`]. MP4 is the
+//! default; while ffmpeg is not ready yet, a recording is saved as a GIF
+//! and the card says why. Frames are grabbed as frames.rs says.
 //!
 //! Recording needs to read the screen freely, so it is not offered on
 //! Wayland, where only the desktop's own portal may do that.
@@ -31,6 +33,7 @@ use image::{
     codecs::gif::{GifEncoder, Repeat},
     imageops::{self, FilterType},
 };
+use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::{
@@ -38,16 +41,19 @@ use crate::{
     capture::{self, Rect},
     commands::{SettingsState, lock},
     ffmpeg::{self, Video, VideoSpec},
+    frames::{self, FrameSource},
     quick::{self, QuickItem},
-    screen::{self, MonitorInfo},
-    settings::{RecordingFormat, RecordingQuality},
+    screen::MonitorInfo,
+    settings::{RecordingFormat, RecordingSettings},
 };
 
 pub const RECORDINGS_DIR: &str = "recordings";
 /// The time between GIF frames: ten frames a second.
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
-/// An MP4's frame rate.
-pub const VIDEO_FPS: u32 = 30;
+/// A GIF's frame rate, as [`FRAME_INTERVAL`] says.
+const GIF_FPS: u32 = 10;
+/// Ends the name of the pointer sidecar beside an MP4.
+pub const CURSOR_SUFFIX: &str = ".cursor.json";
 /// How long the desktop gets to repaint after the overlay closes.
 const SETTLE_DELAY: Duration = Duration::from_millis(200);
 /// How long quitting waits for a recording to write its last frames. An
@@ -216,10 +222,71 @@ impl Pacer {
     }
 }
 
+/// Where the pointer was in each frame of an MP4, saved beside it as
+/// `<name>.cursor.json` for later edits such as zooming in on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorTrack {
+    pub version: u32,
+    /// The video's size: positions are in its pixels.
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+    /// One entry a frame, repeats included: the pointer's hot spot as
+    /// `[x, y]` from the frame's top-left corner, which may lie outside
+    /// it, or null where it could not be told.
+    pub positions: Vec<Option<[i32; 2]>>,
+    /// The grabbed frames' size, which the video may be scaled from.
+    #[serde(skip)]
+    grabbed: (u32, u32),
+}
+
+impl CursorTrack {
+    pub fn new(spec: &VideoSpec) -> Self {
+        Self {
+            version: 1,
+            width: spec.output.0,
+            height: spec.output.1,
+            fps: spec.fps,
+            positions: Vec::new(),
+            grabbed: spec.input,
+        }
+    }
+
+    /// Adds `count` frames with the pointer at `pointer`, in the pixels of
+    /// the grabbed frame.
+    pub fn push(&mut self, pointer: Option<(i32, i32)>, count: u64) {
+        let scale = |value: i32, from: u32, to: u32| {
+            (f64::from(value) * f64::from(to) / f64::from(from.max(1))).round() as i32
+        };
+        let position = pointer.map(|(x, y)| {
+            [
+                scale(x, self.grabbed.0, self.width),
+                scale(y, self.grabbed.1, self.height),
+            ]
+        });
+        for _ in 0..count {
+            self.positions.push(position);
+        }
+    }
+
+    pub fn save(&self, video: &Path) -> Result<(), String> {
+        let path = cursor_path(video);
+        let json = serde_json::to_vec(self).map_err(|err| err.to_string())?;
+        fs::write(&path, json).map_err(|err| format!("could not write {}: {err}", path.display()))
+    }
+}
+
+/// The pointer sidecar of a recording: `<name>.mp4` gives
+/// `<name>.cursor.json`.
+pub fn cursor_path(video: &Path) -> PathBuf {
+    capture::sidecar_path(video, CURSOR_SUFFIX)
+}
+
 /// What a recording is written as.
 enum Output {
     Gif,
-    Mp4(ffmpeg::Ready, RecordingQuality),
+    Mp4(ffmpeg::Ready),
 }
 
 /// Starts recording `rect` of `monitor`. `rect` is in the pixels of the
@@ -256,7 +323,7 @@ pub fn start(
     let output = match recording.format {
         RecordingFormat::Gif => Output::Gif,
         RecordingFormat::Mp4 => match ffmpeg::ready(app) {
-            Some(ready) => Output::Mp4(ready, recording.quality),
+            Some(ready) => Output::Mp4(ready),
             None => {
                 fallback = Some(ffmpeg::fallback_reason(&ffmpeg::status(app)));
                 // Not asked for yet, or failed earlier: try again for next time.
@@ -306,7 +373,7 @@ pub fn start(
     );
 
     let handle = app.clone();
-    let index = monitor.index;
+    let monitor = monitor.clone();
     let spawned = std::thread::Builder::new()
         .name("grab-it-record".into())
         .spawn(move || {
@@ -314,9 +381,12 @@ pub fn start(
             // repaint so the first frame shows the screen, not the overlay.
             std::thread::sleep(SETTLE_DELAY);
             let result = match &output {
-                Output::Gif => record_gif(index, rect, &path, &flag),
-                Output::Mp4(ready, quality) => {
-                    record_mp4(index, rect, &path, &flag, ready, *quality)
+                Output::Gif => frames::open(&monitor, rect, GIF_FPS, recording.show_cursor)
+                    .and_then(|mut source| record_gif(source.as_mut(), &path, &flag)),
+                Output::Mp4(ready) => {
+                    frames::open(&monitor, rect, recording.fps, recording.show_cursor).and_then(
+                        |mut source| record_mp4(source.as_mut(), &path, &flag, ready, &recording),
+                    )
                 }
             };
             *handle.state::<RecordState>().lock() = None;
@@ -341,6 +411,7 @@ pub fn start(
                 }
                 Err(err) => {
                     let _ = fs::remove_file(&path);
+                    let _ = fs::remove_file(cursor_path(&path));
                     actions::report_failure(&handle, &format!("the recording failed: {err}"));
                 }
             }
@@ -354,30 +425,33 @@ pub fn start(
 }
 
 /// Grabs frames into the MP4 at `path` until `stop` is set, at a constant
-/// [`VIDEO_FPS`]: a frame time that goes by while a grab is under way
-/// repeats the frame before. Returns how long the video runs.
+/// frame rate: a frame time that goes by while a grab is under way
+/// repeats the frame before. Saves where the pointer was beside it.
+/// Returns how long the video runs.
 fn record_mp4(
-    monitor: usize,
-    rect: Rect,
+    source: &mut dyn FrameSource,
     path: &Path,
     stop: &AtomicBool,
     ready: &ffmpeg::Ready,
-    quality: RecordingQuality,
+    recording: &RecordingSettings,
 ) -> Result<Duration, String> {
-    let mut frame = grab_region(monitor, rect)?;
+    let first = source.grab()?;
+    let (mut frame, mut pointer) = (first.image, first.pointer);
     let input = frame.dimensions();
     let spec = VideoSpec {
         input,
         output: ffmpeg::video_size(input),
-        fps: VIDEO_FPS,
-        bits_per_pixel: quality.bits_per_pixel(),
+        fps: recording.fps,
+        bits_per_pixel: recording.quality.bits_per_pixel(),
     };
     let mut video =
         Video::start(&ready.path, ready.encoder, &spec, path).map_err(|err| err.to_string())?;
+    let mut track = CursorTrack::new(&spec);
     let started = Instant::now();
-    let mut pacer = Pacer::new(VIDEO_FPS);
+    let mut pacer = Pacer::new(spec.fps);
     loop {
         video.write(&frame).map_err(|err| err.to_string())?;
+        track.push(pointer, 1);
         // Stop is checked between repeats, so it is never kept waiting.
         for _ in 0..pacer.wrote_frame(started.elapsed()) {
             if stop.load(Ordering::SeqCst) {
@@ -385,6 +459,7 @@ fn record_mp4(
             }
             video.write(&frame).map_err(|err| err.to_string())?;
             pacer.repeated();
+            track.push(pointer, 1);
         }
         if stop.load(Ordering::SeqCst) {
             break;
@@ -394,8 +469,8 @@ fn record_mp4(
         if due > now {
             std::thread::sleep(due - now);
         }
-        frame = match grab_region(monitor, rect) {
-            Ok(next) if next.dimensions() == input => next,
+        (frame, pointer) = match source.grab() {
+            Ok(next) if next.image.dimensions() == input => (next.image, next.pointer),
             // The monitor changed resolution: keep what was recorded.
             Ok(_) => {
                 eprintln!("Grab-it: recording ended early: the recorded area changed size");
@@ -410,14 +485,17 @@ fn record_mp4(
         };
     }
     video.finish().map_err(|err| err.to_string())?;
+    // The video is fine without it.
+    if let Err(err) = track.save(path) {
+        eprintln!("Grab-it: no pointer sidecar: {err}");
+    }
     Ok(pacer.duration())
 }
 
 /// Grabs frames into the GIF at `path` until `stop` is set or the time is
 /// up. Returns how long the recording runs.
 fn record_gif(
-    monitor: usize,
-    rect: Rect,
+    source: &mut dyn FrameSource,
     path: &Path,
     stop: &AtomicBool,
 ) -> Result<Duration, String> {
@@ -434,7 +512,7 @@ fn record_gif(
     let mut total = Duration::ZERO;
     loop {
         let grabbed_at = Instant::now();
-        let frame = match grab(monitor, rect) {
+        let frame = match grab(source) {
             Ok(frame) => frame,
             // Nothing recorded yet: the recording failed outright.
             Err(err) if pending.is_none() => return Err(err),
@@ -466,15 +544,9 @@ fn record_gif(
     Ok(total)
 }
 
-/// The recorded area of the monitor, at its own size.
-fn grab_region(monitor: usize, rect: Rect) -> Result<RgbaImage, String> {
-    let image = screen::capture_monitor(monitor)?;
-    capture::crop(&image, rect).ok_or_else(|| "the recorded area is off screen".to_owned())
-}
-
 /// The recorded area, scaled down for a GIF.
-fn grab(monitor: usize, rect: Rect) -> Result<RgbaImage, String> {
-    let cropped = grab_region(monitor, rect)?;
+fn grab(source: &mut dyn FrameSource) -> Result<RgbaImage, String> {
+    let cropped = source.grab()?.image;
     let size = frame_size(cropped.dimensions());
     Ok(if size == cropped.dimensions() {
         cropped
@@ -613,7 +685,7 @@ mod tests {
 
     #[test]
     fn sixty_seconds_at_thirty_fps_is_1800_frames_and_a_minute_long() {
-        let mut pacer = Pacer::new(VIDEO_FPS);
+        let mut pacer = Pacer::new(30);
         let mut written = 0;
         while pacer.next_frame_at() < Duration::from_secs(60) {
             let at = pacer.next_frame_at() + Duration::from_millis(1);
@@ -625,6 +697,66 @@ mod tests {
         }
         assert_eq!(written, 1800);
         assert_eq!(pacer.duration().as_secs(), 60);
+    }
+
+    #[test]
+    fn the_pointer_sidecar_sits_beside_the_video() {
+        assert_eq!(
+            cursor_path(Path::new(
+                "/shots/recordings/Grab-it 2026-03-07 09-05-01.mp4"
+            )),
+            PathBuf::from("/shots/recordings/Grab-it 2026-03-07 09-05-01.cursor.json")
+        );
+    }
+
+    #[test]
+    fn the_pointer_is_saved_for_every_frame_in_video_pixels() {
+        // Grabbed at 1001×600, so the video is 1000×600.
+        let spec = VideoSpec {
+            input: (1001, 600),
+            output: ffmpeg::video_size((1001, 600)),
+            fps: 60,
+            bits_per_pixel: 0.2,
+        };
+        let mut track = CursorTrack::new(&spec);
+        track.push(Some((10, 20)), 1);
+        // A late grab: the frame and its repeat share the place.
+        track.push(None, 2);
+        track.push(Some((1001, -5)), 1);
+        assert_eq!(
+            track.positions,
+            vec![Some([10, 20]), None, None, Some([1000, -5])]
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let video = dir.path().join("clip.mp4");
+        track.save(&video).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.path().join("clip.cursor.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "version": 1,
+                "width": 1000,
+                "height": 600,
+                "fps": 60,
+                "positions": [[10, 20], null, null, [1000, -5]],
+            })
+        );
+    }
+
+    #[test]
+    fn sixty_fps_keeps_time_too() {
+        let mut pacer = Pacer::new(60);
+        let mut written = 0;
+        while pacer.next_frame_at() < Duration::from_secs(2) {
+            // Each grab ends a little after its frame time, before the next.
+            let at = pacer.next_frame_at() + Duration::from_millis(20);
+            written += 1 + pacer.wrote_frame(at);
+        }
+        assert_eq!(written, 120);
+        assert_eq!(pacer.duration(), Duration::from_secs(2));
     }
 
     #[test]

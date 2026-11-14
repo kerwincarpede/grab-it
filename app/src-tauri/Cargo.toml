@@ -63,6 +63,17 @@ rxing = { version = "0.9", default-features = false, features = [
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.12", default-features = false, features = ["tokio"] }
 futures-util = "0.3"
+# Already in the tree: the pointer's place and image for recordings on
+# X11 (frames.rs). Pure Rust, so no libxcb-xfixes headers are needed.
+x11rb = { version = "0.13", features = ["xfixes"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# The version xcap uses: draws the pointer into recordings (frames.rs).
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
@@ -71,6 +82,13 @@ objc2-app-kit = "0.3"
 objc2-core-foundation = "0.3"
 objc2-core-graphics = "0.3"
 objc2-foundation = "0.3"
+# Recording's own AVCaptureScreenInput session (frames.rs): the same
+# bindings xcap uses.
+dispatch2 = "0.3"
+# `objc2-core-media`: the screen input's minFrameDuration.
+objc2-av-foundation = { version = "0.3", features = ["objc2-core-media"] }
+objc2-core-media = "0.3"
+objc2-core-video = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

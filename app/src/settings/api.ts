@@ -232,16 +232,23 @@ export type RecordingFormat = "gif" | "mp4";
 export type RecordingQuality = "low" | "medium" | "high";
 
 /** Mirrors `RecordingSettings` in src-tauri/src/settings.rs. */
+/** Mirrors `RecordingSettings::fps` in src-tauri/src/settings.rs: an MP4's frames a second. */
+export type RecordingFps = 30 | 60;
+
 export interface RecordingSettings {
   format: RecordingFormat;
   /** MP4 only. */
   quality: RecordingQuality;
+  /** MP4 only; a GIF is about 10 fps. */
+  fps: RecordingFps;
+  /** Draws the pointer into the recording. */
+  showCursor: boolean;
 }
 
-export const DEFAULT_RECORDING: RecordingSettings = { format: "mp4", quality: "high" };
+export const DEFAULT_RECORDING: RecordingSettings = { format: "mp4", quality: "high", fps: 30, showCursor: true };
 
 export const RECORDING_FORMATS: { value: RecordingFormat; title: string; hint: string }[] = [
-  { value: "mp4", title: "MP4 video", hint: "Smooth 30 fps video with no time limit, small enough to share." },
+  { value: "mp4", title: "MP4 video", hint: "Smooth video with no time limit, small enough to share." },
   { value: "gif", title: "GIF", hint: "Plays anywhere an image does. Silent, about 10 fps, and at most a minute." },
 ];
 
@@ -249,6 +256,11 @@ export const RECORDING_QUALITIES: { value: RecordingQuality; title: string }[] =
   { value: "low", title: "Low" },
   { value: "medium", title: "Medium" },
   { value: "high", title: "High" },
+];
+
+export const RECORDING_FPS: { value: RecordingFps; title: string }[] = [
+  { value: 30, title: "30 fps" },
+  { value: 60, title: "60 fps" },
 ];
 
 export function setRecording(recording: RecordingSettings): Promise<Settings> {

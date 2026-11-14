@@ -9,6 +9,7 @@ import {
   DEFAULT_RECORDING,
   POPUP_CORNERS,
   RECORDING_FORMATS,
+  RECORDING_FPS,
   RECORDING_QUALITIES,
   ffmpegStatus,
   onFfmpegStatus,
@@ -530,9 +531,45 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                     ))}
                   </fieldset>
                 </div>
+                <div className="row is-stacked">
+                  <span className="row-text">
+                    <span className="row-title" id="recording-fps-heading">
+                      Frame rate
+                    </span>
+                    <span className="row-hint">60 fps makes scrolling and pointer movement smoother, and files bigger.</span>
+                  </span>
+                  <fieldset className="segmented" aria-labelledby="recording-fps-heading" disabled={busy || settings === null}>
+                    {RECORDING_FPS.map((choice) => (
+                      <label key={choice.value}>
+                        <input
+                          type="radio"
+                          name="recording-fps"
+                          value={choice.value}
+                          checked={recording.fps === choice.value}
+                          onChange={() => void changeRecording({ fps: choice.value })}
+                        />
+                        {choice.title}
+                      </label>
+                    ))}
+                  </fieldset>
+                </div>
                 <FfmpegRow status={ffmpeg} onRetry={retry} />
               </>
             )}
+            <label className="row">
+              <span className="row-text">
+                <span className="row-title">Show cursor</span>
+                <span className="row-hint">Draws the pointer into the recording.</span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                className="switch"
+                checked={recording.showCursor}
+                disabled={busy || settings === null}
+                onChange={(event) => void changeRecording({ showCursor: event.target.checked })}
+              />
+            </label>
           </div>
         </section>
       )}

@@ -812,13 +812,41 @@ describe("SettingsWindow recording", () => {
     expect(await screen.findByText("Ready. Videos are encoded with libopenh264.")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("radio", { name: "Medium" }));
-    await waitFor(() => expect(backend.recording).toEqual({ format: "mp4", quality: "medium" }));
+    await waitFor(() => expect(backend.recording).toEqual({ format: "mp4", quality: "medium", fps: 30, showCursor: true }));
 
     // A GIF has no quality to pick and needs no ffmpeg.
     await userEvent.click(screen.getByRole("radio", { name: "GIF" }));
-    await waitFor(() => expect(backend.recording).toEqual({ format: "gif", quality: "medium" }));
+    await waitFor(() => expect(backend.recording).toEqual({ format: "gif", quality: "medium", fps: 30, showCursor: true }));
     expect(screen.queryByRole("radio", { name: "Medium" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "60 fps" })).not.toBeInTheDocument();
     expect(screen.queryByTestId("ffmpeg-status")).not.toBeInTheDocument();
+  });
+
+  it("records at 30 fps with the cursor by default and saves frame rate and cursor at once", async () => {
+    const backend = mockBackend();
+    render(<SettingsWindow section="recording" />);
+    const thirty = await screen.findByRole("radio", { name: "30 fps" });
+    await waitFor(() => expect(thirty).toBeEnabled());
+    expect(thirty).toBeChecked();
+    const cursor = screen.getByRole("switch", { name: /Show cursor/ });
+    expect(cursor).toBeChecked();
+
+    await userEvent.click(screen.getByRole("radio", { name: "60 fps" }));
+    await waitFor(() => expect(backend.recording).toEqual({ format: "mp4", quality: "high", fps: 60, showCursor: true }));
+    expect(screen.getByRole("radio", { name: "60 fps" })).toBeChecked();
+
+    await userEvent.click(cursor);
+    await waitFor(() => expect(backend.recording).toEqual({ format: "mp4", quality: "high", fps: 60, showCursor: false }));
+    expect(screen.getByRole("switch", { name: /Show cursor/ })).not.toBeChecked();
+  });
+
+  it("offers Show cursor for a GIF too", async () => {
+    mockBackend({ recording: { format: "gif", quality: "high", fps: 60, showCursor: false } });
+    render(<SettingsWindow section="recording" />);
+    const cursor = await screen.findByRole("switch", { name: /Show cursor/ });
+    await waitFor(() => expect(cursor).toBeEnabled());
+    expect(cursor).not.toBeChecked();
+    expect(screen.queryByRole("radio", { name: "60 fps" })).not.toBeInTheDocument();
   });
 
   it("shows the ffmpeg download's progress", async () => {

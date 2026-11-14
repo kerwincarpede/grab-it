@@ -207,7 +207,8 @@ pub fn annotations_path(png: &Path) -> PathBuf {
     sidecar_path(png, ANNOTATIONS_SUFFIX)
 }
 
-fn sidecar_path(png: &Path, suffix: &str) -> PathBuf {
+/// `<name>.<ext>` gives `<name><suffix>`.
+pub(crate) fn sidecar_path(png: &Path, suffix: &str) -> PathBuf {
     let stem = png
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
