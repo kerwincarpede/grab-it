@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+} from "react";
 import "./library.css";
 import {
   FIELD_LABELS,
@@ -10,9 +19,12 @@ import {
   categoryLabel,
   clearAiDescription,
   copyShot,
+  dayLabel,
   deleteShot,
   filterOptions,
   formatCapturedAt,
+  formatTime,
+  groupByDay,
   isSearching,
   listShots,
   ocrStatus,
@@ -21,7 +33,6 @@ import {
   onOcrStatus,
   openSettings,
   openShot,
-  parseTags,
   pinShot,
   redescribeShot,
   retryOcr,
@@ -29,7 +40,6 @@ import {
   searchShots,
   setShotNotes,
   setShotTags,
-  shotThumbnail,
   type AiStatus,
   type FilterOptions,
   type Filters,
@@ -37,6 +47,25 @@ import {
   type SearchHit,
   type Shot,
 } from "./api";
+import { ChipSelect, DateChip, TagEditor } from "./controls";
+import {
+  AppIcon,
+  ClockIcon,
+  CloseIcon,
+  CopyIcon,
+  EditIcon,
+  FolderIcon,
+  GridLargeIcon,
+  GridSmallIcon,
+  ImageIcon,
+  PinIcon,
+  LayersIcon,
+  SearchIcon,
+  SparkleIcon,
+  TagIcon,
+  TrashIcon,
+} from "./icons";
+import { useInView, useThumbnail } from "./thumbnails";
 
 function errorMessage(err: unknown): string {
   if (typeof err === "string") return err;
@@ -47,38 +76,54 @@ function errorMessage(err: unknown): string {
 const sameTags = (a: string[], b: string[]) =>
   a.length === b.length && a.every((tag, index) => tag === b[index]);
 
-/** A shot's thumbnail, fetched as bytes and shown through a blob URL. */
-function Thumbnail({ id }: { id: number }) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    let created: string | null = null;
-    shotThumbnail(id)
-      .then((bytes) => {
-        if (cancelled || typeof URL.createObjectURL !== "function") return;
-        created = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
-        setUrl(created);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
-    return () => {
-      cancelled = true;
-      if (created) URL.revokeObjectURL(created);
-    };
-  }, [id]);
+/** Width over height, kept sane so panoramas and slivers still tile nicely. */
+function aspectOf(shot: Shot): number {
+  if (!shot.width || !shot.height) return 4 / 3;
+  return Math.min(2.6, Math.max(0.55, shot.width / shot.height));
+}
 
-  if (url) return <img className="shot-thumb" src={url} alt="" draggable={false} />;
-  return <div className="shot-thumb shot-thumb-empty">{failed ? "No preview" : ""}</div>;
+/** Cache key for a shot's thumbnail: a re-saved file gets a fresh one. */
+const thumbKey = (shot: Shot) => `${shot.id}:${shot.path}`;
+
+const ROW_HEIGHT_KEY = "grab-it.library.rowHeight";
+const ROW_HEIGHT = { min: 120, max: 340, initial: 200 };
+
+function readRowHeight(): number {
+  try {
+    const saved = Number(localStorage.getItem(ROW_HEIGHT_KEY));
+    if (saved >= ROW_HEIGHT.min && saved <= ROW_HEIGHT.max) return saved;
+  } catch {
+    // Storage may be unavailable; use the default.
+  }
+  return ROW_HEIGHT.initial;
+}
+
+/** A shot's thumbnail, fetched only once it nears the viewport. */
+function Thumbnail({ shot, className = "" }: { shot: Shot; className?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const near = useInView(ref);
+  const { url, failed } = useThumbnail(shot.id, thumbKey(shot), near);
+  const [shown, setShown] = useState(false);
+  return (
+    <div ref={ref} className={`thumb ${className}${url && shown ? " is-loaded" : ""}`}>
+      {url ? (
+        <img src={url} alt="" draggable={false} decoding="async" onLoad={() => setShown(true)} />
+      ) : failed ? (
+        <span className="thumb-failed">
+          <ImageIcon />
+          No preview
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 /** Where the search words were found in a result, matches highlighted. */
 function Snippet({ hit }: { hit: SearchHit }) {
   if (!hit.field || hit.snippet.length === 0) return null;
   return (
-    <span className="shot-snippet">
-      <span className="shot-snippet-field">{FIELD_LABELS[hit.field]}: </span>
+    <span className="tile-snippet">
+      <span className="tile-snippet-field">{FIELD_LABELS[hit.field]}: </span>
       {hit.snippet.map((part, index) =>
         part.hit ? <mark key={index}>{part.text}</mark> : <span key={index}>{part.text}</span>,
       )}
@@ -93,6 +138,7 @@ function OcrBanner({ status, onRetry }: { status: OcrStatus; onRetry: () => void
       const percent = status.total > 0 ? Math.floor((status.downloaded * 100) / status.total) : 0;
       return (
         <div className="ocr-status" role="status">
+          <span className="spinner" aria-hidden="true" />
           <span>Downloading text recognition models… {percent}%</span>
           <progress aria-label="Model download" max={status.total} value={status.downloaded} />
         </div>
@@ -101,6 +147,7 @@ function OcrBanner({ status, onRetry }: { status: OcrStatus; onRetry: () => void
     case "working":
       return (
         <div className="ocr-status" role="status">
+          <span className="spinner" aria-hidden="true" />
           Reading text in {status.pending === 1 ? "1 capture" : `${status.pending} captures`}…
         </div>
       );
@@ -108,7 +155,7 @@ function OcrBanner({ status, onRetry }: { status: OcrStatus; onRetry: () => void
       return (
         <div className="ocr-status ocr-status-error" role="status">
           <span>{status.message}</span>
-          <button type="button" className="secondary" onClick={onRetry}>
+          <button type="button" className="pill-button" onClick={onRetry}>
             Retry
           </button>
         </div>
@@ -124,9 +171,8 @@ function AiBanner({ status, onSettings }: { status: AiStatus; onSettings: () => 
     const current = Math.min(status.done + 1, status.total);
     return (
       <div className="ocr-status ai-status" role="status">
-        <span className="ai-status-chip">
-          {status.total > 0 ? `Describing ${current} of ${status.total}…` : "Describing captures…"}
-        </span>
+        <SparkleIcon />
+        <span>{status.total > 0 ? `Describing ${current} of ${status.total}…` : "Describing captures…"}</span>
         {status.total > 0 && <progress aria-label="Descriptions" max={status.total} value={status.done} />}
       </div>
     );
@@ -134,11 +180,9 @@ function AiBanner({ status, onSettings }: { status: AiStatus; onSettings: () => 
   if (status.state === "error") {
     return (
       <div className="ocr-status ocr-status-error ai-status" role="status">
-        <span className="ai-status-chip">
-          Could not describe captures{status.error ? `: ${status.error}` : "."}
-        </span>
+        <span>Could not describe captures{status.error ? `: ${status.error}` : "."}</span>
         <span className="hint">Is Ollama running? Check the endpoint and model in Settings.</span>
-        <button type="button" className="secondary" onClick={onSettings}>
+        <button type="button" className="pill-button" onClick={onSettings}>
           Open Settings
         </button>
       </div>
@@ -152,96 +196,173 @@ function CategoryChip({ category }: { category: string }) {
   return <span className="category-chip">{categoryLabel(category)}</span>;
 }
 
-/** Keeps the current choice listed even if no capture has it any more. */
-function withCurrent(values: string[], current: string): string[] {
-  return current && !values.includes(current) ? [current, ...values] : values;
-}
-
-interface SearchBarProps {
+interface ToolbarProps {
   text: string;
   filters: Filters;
   options: FilterOptions;
   active: boolean;
+  rowHeight: number;
+  searchRef: React.RefObject<HTMLInputElement | null>;
   onText: (text: string) => void;
   onSubmit: () => void;
   onFilters: (filters: Filters) => void;
   onClear: () => void;
+  onRowHeight: (height: number) => void;
 }
 
-/** The search box and filter bar. */
-function SearchBar({ text, filters, options, active, onText, onSubmit, onFilters, onClear }: SearchBarProps) {
-  const set = (change: Partial<Filters>) => onFilters({ ...filters, ...change });
+/** Search, filter chips and the thumbnail size slider. */
+function Toolbar(props: ToolbarProps) {
+  const { text, filters, options, active, rowHeight, searchRef } = props;
+  const set = (change: Partial<Filters>) => props.onFilters({ ...filters, ...change });
   return (
-    <div className="library-search" role="search">
-      <input
-        type="search"
-        className="library-search-box"
-        aria-label="Search captures"
-        placeholder="Search text in images, tags, notes, apps and windows"
-        value={text}
-        onChange={(event) => onText(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") onSubmit();
-        }}
-      />
-      <div className="library-filters">
-        <select aria-label="Filter by app" value={filters.app} onChange={(event) => set({ app: event.target.value })}>
-          <option value="">All apps</option>
-          {withCurrent(options.apps, filters.app).map((app) => (
-            <option key={app} value={app}>
-              {app}
-            </option>
-          ))}
-        </select>
-        <select aria-label="Filter by tag" value={filters.tag} onChange={(event) => set({ tag: event.target.value })}>
-          <option value="">All tags</option>
-          {withCurrent(options.tags, filters.tag).map((tag) => (
-            <option key={tag} value={tag}>
-              {tag}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="Filter by category"
+    <div className="toolbar" role="search">
+      <div className="search-field">
+        <SearchIcon />
+        <input
+          ref={searchRef}
+          type="search"
+          aria-label="Search captures"
+          placeholder="Search text, tags, notes, apps…"
+          value={text}
+          onChange={(event) => props.onText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") props.onSubmit();
+            if (event.key === "Escape" && text) {
+              event.stopPropagation();
+              props.onText("");
+            }
+          }}
+        />
+        {text ? (
+          <button type="button" className="search-clear" aria-label="Clear search text" onClick={() => props.onText("")}>
+            <CloseIcon size={14} />
+          </button>
+        ) : (
+          <kbd aria-hidden="true">/</kbd>
+        )}
+      </div>
+      <div className="chips">
+        <ChipSelect
+          label="Filter by app"
+          icon={<AppIcon />}
+          allLabel="All apps"
+          value={filters.app}
+          options={options.apps}
+          onChange={(app) => set({ app })}
+        />
+        <ChipSelect
+          label="Filter by tag"
+          icon={<TagIcon />}
+          allLabel="All tags"
+          value={filters.tag}
+          options={options.tags}
+          onChange={(tag) => set({ tag })}
+        />
+        <ChipSelect
+          label="Filter by category"
+          icon={<LayersIcon />}
+          allLabel="All categories"
           value={filters.category}
-          onChange={(event) => set({ category: event.target.value })}
-        >
-          <option value="">All categories</option>
-          {withCurrent(options.categories ?? [], filters.category).map((category) => (
-            <option key={category} value={category}>
-              {categoryLabel(category)}
-            </option>
-          ))}
-        </select>
-        <label className="library-date">
-          From
-          <input
-            type="date"
-            aria-label="Captured from"
-            value={filters.fromDate}
-            max={filters.toDate || undefined}
-            onChange={(event) => set({ fromDate: event.target.value })}
-          />
-        </label>
-        <label className="library-date">
-          To
-          <input
-            type="date"
-            aria-label="Captured to"
-            value={filters.toDate}
-            min={filters.fromDate || undefined}
-            onChange={(event) => set({ toDate: event.target.value })}
-          />
-        </label>
+          options={options.categories ?? []}
+          format={categoryLabel}
+          onChange={(category) => set({ category })}
+        />
+        <DateChip fromDate={filters.fromDate} toDate={filters.toDate} onChange={(range) => set(range)} />
         {active && (
-          <button type="button" className="secondary" onClick={onClear}>
+          <button type="button" className="chip chip-clear" onClick={props.onClear}>
             Clear
           </button>
         )}
       </div>
+      <label className="zoom" title="Thumbnail size">
+        <GridSmallIcon />
+        <input
+          type="range"
+          aria-label="Thumbnail size"
+          min={ROW_HEIGHT.min}
+          max={ROW_HEIGHT.max}
+          step={10}
+          value={rowHeight}
+          style={{ "--fill": `${((rowHeight - ROW_HEIGHT.min) * 100) / (ROW_HEIGHT.max - ROW_HEIGHT.min)}%` } as CSSProperties}
+          onChange={(event) => props.onRowHeight(Number(event.target.value))}
+        />
+        <GridLargeIcon />
+      </label>
     </div>
   );
 }
+
+interface TileProps {
+  shot: Shot;
+  hit: SearchHit | undefined;
+  selected: boolean;
+  index: number;
+  onSelect: (id: number) => void;
+  onOpen: (id: number) => void;
+  onAction: (shot: Shot, action: "copy" | "pin") => void;
+}
+
+/** One capture in the grid; actions appear on hover. */
+const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, onAction }: TileProps) {
+  const style = { "--a": aspectOf(shot), "--i": Math.min(index, 18) } as CSSProperties;
+  return (
+    <li className={`tile${selected ? " is-selected" : ""}`} style={style}>
+      <button
+        type="button"
+        className="tile-main"
+        data-shot-id={shot.id}
+        aria-pressed={selected}
+        aria-label={shot.fileName}
+        title="Double-click to open in the editor"
+        onClick={() => onSelect(shot.id)}
+        onDoubleClick={() => onOpen(shot.id)}
+      >
+        <Thumbnail shot={shot} />
+        <span className="tile-shade" aria-hidden="true" />
+        {shot.aiCategory && (
+          <span className="tile-category">
+            <CategoryChip category={shot.aiCategory} />
+          </span>
+        )}
+        <span className="tile-info">
+          {hit && <Snippet hit={hit} />}
+          {/* A description match shows as the highlighted snippet instead. */}
+          {shot.aiDescription && hit?.field !== "description" && (
+            <span className="shot-ai-line">
+              <span className="shot-description" title={shot.aiDescription}>
+                {shot.aiDescription}
+              </span>
+            </span>
+          )}
+          {shot.tags.length > 0 && (
+            <span className="tile-tags">
+              {shot.tags.map((tag) => (
+                <span key={tag} className="tag">
+                  {tag}
+                </span>
+              ))}
+            </span>
+          )}
+          <span className="tile-caption">
+            <span className="tile-time">{formatTime(shot.capturedAt)}</span>
+            {shot.app && <span className="tile-app">{shot.app}</span>}
+          </span>
+        </span>
+      </button>
+      <span className="tile-actions">
+        <button type="button" className="tile-action" aria-label={`Copy ${shot.fileName}`} title="Copy" onClick={() => onAction(shot, "copy")}>
+          <CopyIcon />
+        </button>
+        <button type="button" className="tile-action" aria-label={`Pin ${shot.fileName}`} title="Pin to screen" onClick={() => onAction(shot, "pin")}>
+          <PinIcon />
+        </button>
+        <button type="button" className="tile-action" aria-label={`Edit ${shot.fileName}`} title="Open in editor" onClick={() => onOpen(shot.id)}>
+          <EditIcon />
+        </button>
+      </span>
+    </li>
+  );
+});
 
 interface DetailsProps {
   shot: Shot;
@@ -250,26 +371,28 @@ interface DetailsProps {
   onUpdated: (shot: Shot) => void;
   onDeleted: (id: number) => void;
   onError: (message: string) => void;
+  onNotice: (message: string) => void;
+  onClose: () => void;
 }
 
 /** The selected shot: open, tag, annotate with notes or delete it. */
-function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError }: DetailsProps) {
-  const [tagsText, setTagsText] = useState(shot.tags.join(", "));
+function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onClose }: DetailsProps) {
+  // Local so quick successive edits build on each other before the saves land.
+  const [tags, setTags] = useState(shot.tags);
   const [notes, setNotes] = useState(shot.notes);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const saving = useRef<Promise<unknown>>(Promise.resolve());
 
-  async function saveTags() {
-    const tags = parseTags(tagsText);
-    if (sameTags(tags, shot.tags)) return;
-    try {
-      const updated = await setShotTags(shot.id, tags);
-      onUpdated(updated);
-      setTagsText(updated.tags.join(", "));
-    } catch (err) {
-      onError(errorMessage(err));
-    }
+  function saveTags(next: string[]) {
+    if (sameTags(next, tags)) return;
+    setTags(next);
+    // One save at a time, in order.
+    saving.current = saving.current.then(() =>
+      setShotTags(shot.id, next)
+        .then(onUpdated)
+        .catch((err: unknown) => onError(errorMessage(err))),
+    );
   }
 
   async function saveNotes() {
@@ -281,37 +404,26 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError }: DetailsProp
     }
   }
 
-  async function open() {
-    try {
-      await openShot(shot.id);
-    } catch (err) {
-      onError(errorMessage(err));
-    }
-  }
-
   /** Runs a one-click action, saying so briefly when it leaves nothing to see. */
   async function act(action: (id: number) => Promise<void>, done?: string) {
-    setNotice(null);
     try {
       await action(shot.id);
-      if (done) setNotice(done);
+      if (done) onNotice(done);
     } catch (err) {
       onError(errorMessage(err));
     }
   }
 
   async function redescribe() {
-    setNotice(null);
     try {
       await redescribeShot(shot.id);
-      setNotice("Describing again. The new description shows up here when it is ready.");
+      onNotice("Describing again. The new description shows up here when it is ready.");
     } catch (err) {
       onError(errorMessage(err));
     }
   }
 
   async function clearAi() {
-    setNotice(null);
     try {
       await clearAiDescription(shot.id);
       onUpdated({ ...shot, aiDescription: null, aiCategory: null, aiTags: [] });
@@ -319,6 +431,9 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError }: DetailsProp
       onError(errorMessage(err));
     }
   }
+
+  const aiTags = shot.aiTags ?? [];
+  const described = !!shot.aiDescription || !!shot.aiCategory || aiTags.length > 0;
 
   async function remove() {
     setBusy(true);
@@ -332,124 +447,166 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError }: DetailsProp
     }
   }
 
-  function submitTags(event: FormEvent) {
-    event.preventDefault();
-    void saveTags();
-  }
-
-  const source = [shot.app, shot.windowTitle].filter(Boolean).join(" — ");
-  const aiTags = shot.aiTags ?? [];
-  const described = !!shot.aiDescription || !!shot.aiCategory || aiTags.length > 0;
-
   return (
-    <aside className="shot-details" aria-label="Capture details">
-      <h2 title={shot.path}>{shot.fileName}</h2>
-      <dl>
-        <dt>Captured</dt>
-        <dd>{formatCapturedAt(shot.capturedAt)}</dd>
-        {source && (
-          <>
-            <dt>From</dt>
-            <dd>{source}</dd>
-          </>
-        )}
-        <dt>Size</dt>
-        <dd>
-          {shot.width} × {shot.height}
-        </dd>
-      </dl>
-      <div className="shot-actions">
-        <button type="button" className="wide" onClick={() => void open()}>
+    <aside className="details" aria-label="Capture details">
+      <div className="details-preview" style={{ "--a": aspectOf(shot) } as CSSProperties}>
+        <Thumbnail shot={shot} />
+        <button type="button" className="details-close" aria-label="Close details" onClick={onClose}>
+          <CloseIcon size={14} />
+        </button>
+      </div>
+
+      <div className="details-body">
+        <h2 title={shot.path}>{shot.fileName}</h2>
+        <ul className="details-meta">
+          <li>
+            <ClockIcon />
+            {formatCapturedAt(shot.capturedAt)}
+          </li>
+          {shot.app && (
+            <li title={shot.windowTitle ?? undefined}>
+              <AppIcon />
+              <span className="details-source">
+                {shot.app}
+                {shot.windowTitle && <span className="details-window"> — {shot.windowTitle}</span>}
+              </span>
+            </li>
+          )}
+          <li>
+            <ImageIcon />
+            {shot.width} × {shot.height}
+          </li>
+        </ul>
+
+        <button type="button" className="primary-button" onClick={() => void act(openShot)}>
+          <EditIcon />
           Open in editor
         </button>
-        <button type="button" className="secondary" onClick={() => void act(copyShot, "Copied to the clipboard.")}>
-          Copy
-        </button>
-        <button type="button" className="secondary" onClick={() => void act(pinShot)}>
-          Pin
-        </button>
-        <button type="button" className="secondary wide" onClick={() => void act(revealShot)}>
-          Show in folder
-        </button>
-      </div>
-      <p className="hint" role="status">
-        {notice}
-      </p>
-
-      <form className="field" onSubmit={submitTags}>
-        <label htmlFor="shot-tags">Tags</label>
-        <input
-          id="shot-tags"
-          value={tagsText}
-          placeholder="bug, design, receipts"
-          onChange={(event) => setTagsText(event.target.value)}
-          onBlur={() => void saveTags()}
-        />
-        <p className="hint">Separate tags with commas. Press Enter to save.</p>
-      </form>
-
-      <section className="shot-ai" aria-labelledby="shot-ai-heading">
-        <div className="shot-ai-heading">
-          <span id="shot-ai-heading" className="field-heading">
-            AI description
-          </span>
-          {shot.aiCategory && <CategoryChip category={shot.aiCategory} />}
-        </div>
-        {shot.aiDescription ? (
-          <p className="shot-ai-text">{shot.aiDescription}</p>
-        ) : (
-          <p className="hint">
-            {aiOff ? "Turn on AI descriptions in Settings to describe captures." : "Not described yet."}
-          </p>
-        )}
-        {aiTags.length > 0 && (
-          <span className="shot-tags" aria-label="AI tags">
-            {aiTags.map((tag) => (
-              <span key={tag} className="tag tag-ai" title="Suggested by AI">
-                {tag}
-              </span>
-            ))}
-          </span>
-        )}
-        <div className="shot-ai-actions">
-          <button type="button" className="secondary" disabled={aiOff} onClick={() => void redescribe()}>
-            Re-describe
+        <div className="details-actions">
+          <button type="button" className="pill-button" onClick={() => void act(copyShot, "Copied to the clipboard")}>
+            <CopyIcon />
+            Copy
           </button>
-          <button type="button" className="secondary" disabled={!described} onClick={() => void clearAi()}>
-            Clear AI description
+          <button type="button" className="pill-button" onClick={() => void act(pinShot)}>
+            <PinIcon />
+            Pin
+          </button>
+          <button type="button" className="pill-button" onClick={() => void act(revealShot)}>
+            <FolderIcon />
+            Show in folder
           </button>
         </div>
-      </section>
 
-      <div className="field">
-        <label htmlFor="shot-notes">Notes</label>
-        <textarea
-          id="shot-notes"
-          rows={4}
-          value={notes}
-          onChange={(event) => setNotes(event.target.value)}
-          onBlur={() => void saveNotes()}
-        />
-      </div>
+        <div className="details-field">
+          <label htmlFor="shot-tags">Tags</label>
+          <TagEditor tags={tags} onChange={saveTags} />
+        </div>
 
-      <div className="shot-delete">
-        {confirming ? (
-          <>
-            <span>Delete this capture and its annotations?</span>
-            <button type="button" className="danger" disabled={busy} onClick={() => void remove()}>
-              Delete permanently
+        <section className="details-ai" aria-labelledby="shot-ai-heading">
+          <div className="details-ai-heading">
+            <span id="shot-ai-heading">
+              <SparkleIcon />
+              AI description
+            </span>
+            {shot.aiCategory && <CategoryChip category={shot.aiCategory} />}
+          </div>
+          {shot.aiDescription ? (
+            <p className="details-ai-text">{shot.aiDescription}</p>
+          ) : (
+            <p className="hint">
+              {aiOff ? "Turn on AI descriptions in Settings to describe captures." : "Not described yet."}
+            </p>
+          )}
+          {aiTags.length > 0 && (
+            <span className="details-ai-tags" aria-label="AI tags">
+              {aiTags.map((tag) => (
+                <span key={tag} className="tag tag-ai" title="Suggested by AI">
+                  {tag}
+                </span>
+              ))}
+            </span>
+          )}
+          <div className="details-ai-actions">
+            <button type="button" className="pill-button" disabled={aiOff} onClick={() => void redescribe()}>
+              Re-describe
             </button>
-            <button type="button" className="secondary" disabled={busy} onClick={() => setConfirming(false)}>
-              Cancel
+            <button type="button" className="pill-button" disabled={!described} onClick={() => void clearAi()}>
+              Clear AI description
             </button>
-          </>
-        ) : (
-          <button type="button" className="secondary" onClick={() => setConfirming(true)}>
-            Delete…
-          </button>
-        )}
+          </div>
+        </section>
+
+        <div className="details-field">
+          <label htmlFor="shot-notes">Notes</label>
+          <textarea
+            id="shot-notes"
+            rows={4}
+            value={notes}
+            placeholder="What's this capture about?"
+            onChange={(event) => setNotes(event.target.value)}
+            onBlur={() => void saveNotes()}
+          />
+        </div>
+
+        <div className={`details-delete${confirming ? " is-confirming" : ""}`}>
+          {confirming ? (
+            <>
+              <span>Delete this capture and its annotations?</span>
+              <div className="details-delete-buttons">
+                <button type="button" className="danger-button" disabled={busy} onClick={() => void remove()}>
+                  Delete permanently
+                </button>
+                <button type="button" className="pill-button" disabled={busy} onClick={() => setConfirming(false)}>
+                  Cancel
+                </button>
+              </div>
+            </>
+          ) : (
+            <button type="button" className="ghost-danger" onClick={() => setConfirming(true)}>
+              <TrashIcon />
+              Delete…
+            </button>
+          )}
+        </div>
       </div>
     </aside>
+  );
+}
+
+/** Shimmering placeholders while the first page loads. */
+function Skeleton() {
+  const aspects = [1.6, 1.2, 1.9, 0.9, 1.4, 1.7, 1.1, 2.1, 1.3, 1.5];
+  return (
+    <div className="day" aria-hidden="true">
+      <div className="day-header">
+        <span className="skeleton-line" />
+      </div>
+      <ul className="grid">
+        {aspects.map((aspect, index) => (
+          <li key={index} className="tile tile-skeleton" style={{ "--a": aspect } as CSSProperties}>
+            <span className="thumb" />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function EmptyState({ searching }: { searching: boolean }) {
+  return (
+    <div className="empty">
+      <div className="empty-art" aria-hidden="true">
+        <span className="empty-card empty-card-1" />
+        <span className="empty-card empty-card-2" />
+        <span className="empty-card empty-card-3">{searching ? <SearchIcon /> : <SparkleIcon />}</span>
+      </div>
+      <p className="empty-title">{searching ? "Nothing matches" : "Your library is empty"}</p>
+      <p className="empty-text">
+        {searching
+          ? "No captures match. Try fewer words or other filters."
+          : "No captures yet. Capture with a hotkey or from the tray menu."}
+      </p>
+    </div>
   );
 }
 
@@ -459,30 +616,64 @@ function byShot(hits: SearchHit[]): Record<number, SearchHit> {
   return found;
 }
 
+/** The tile to move to from `from` with an arrow key, by on-screen position. */
+function neighbour(tiles: HTMLElement[], from: HTMLElement, key: string): HTMLElement | null {
+  const index = tiles.indexOf(from);
+  if (key === "ArrowLeft") return tiles[index - 1] ?? null;
+  if (key === "ArrowRight") return tiles[index + 1] ?? null;
+  const box = from.getBoundingClientRect();
+  const centre = box.left + box.width / 2;
+  const down = key === "ArrowDown";
+  let best: HTMLElement | null = null;
+  let bestRow = Infinity;
+  let bestDistance = Infinity;
+  for (const tile of tiles) {
+    const rect = tile.getBoundingClientRect();
+    const rowGap = down ? rect.top - box.bottom : box.top - rect.bottom;
+    if (rowGap < -2) continue;
+    const distance = Math.abs(rect.left + rect.width / 2 - centre);
+    if (rowGap < bestRow - 2 || (Math.abs(rowGap - bestRow) <= 2 && distance < bestDistance)) {
+      best = tile;
+      bestRow = rowGap;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
 function LibraryWindow() {
   const [shots, setShots] = useState<Shot[]>([]);
   const [total, setTotal] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; key: number } | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [reloads, setReloads] = useState(0);
+  const [rowHeight, setRowHeight] = useState(readRowHeight);
+  const [scrolled, setScrolled] = useState(false);
+  // "Today" and "Yesterday" are relative to when the list last loaded.
+  const [now, setNow] = useState(Date.now);
   // How many shots are shown, so a reload keeps every loaded page.
   const shownCount = useRef(PAGE_SIZE);
+  const loadingMoreRef = useRef(false);
   // The search box as typed, and as searched once typing pauses.
   const [text, setText] = useState("");
   const [searchedText, setSearchedText] = useState("");
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [options, setOptions] = useState<FilterOptions>({ apps: [], tags: [], categories: [] });
+  // Null until the backend says; the AI actions then stay available.
+  const [ai, setAi] = useState<AiStatus | null>(null);
   const [optionReloads, setOptionReloads] = useState(0);
   // Where each result matched, by shot id; empty when not searching.
   const [hits, setHits] = useState<Record<number, SearchHit>>({});
   const [ocr, setOcr] = useState<OcrStatus>({ state: "idle" });
-  // Null until the backend says; the AI actions then stay available.
-  const [ai, setAi] = useState<AiStatus | null>(null);
   const query = useMemo(() => buildQuery(searchedText, filters), [searchedText, filters]);
   const searching = isSearching(query);
   const lastQuery = useRef("");
+  const scroller = useRef<HTMLDivElement>(null);
+  const sentinel = useRef<HTMLDivElement>(null);
+  const searchBox = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setSearchedText(text), SEARCH_DEBOUNCE_MS);
@@ -490,10 +681,25 @@ function LibraryWindow() {
   }, [text]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(ROW_HEIGHT_KEY, String(rowHeight));
+    } catch {
+      // Not remembered; fine.
+    }
+  }, [rowHeight]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), 2200);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
+  useEffect(() => {
     let cancelled = false;
     // A new search starts again from one page; a reload keeps what is shown.
     const key = JSON.stringify(query);
-    if (lastQuery.current !== key) {
+    const isNew = lastQuery.current !== key;
+    if (isNew) {
       lastQuery.current = key;
       shownCount.current = PAGE_SIZE;
     }
@@ -513,6 +719,8 @@ function LibraryWindow() {
         setTotal(page.total);
         setHits(byShot(page.hits));
         setLoaded(true);
+        setNow(Date.now());
+        if (isNew) scroller.current?.scrollTo?.({ top: 0 });
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(errorMessage(err));
@@ -609,17 +817,20 @@ function LibraryWindow() {
     };
   }, []);
 
-  async function loadMore() {
+  const loadMore = useCallback(async () => {
+    if (loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
     setLoadingMore(true);
     try {
+      const offset = shots.length;
       const page = searching
-        ? await searchShots(query, shots.length, PAGE_SIZE).then((found) => ({
+        ? await searchShots(query, offset, PAGE_SIZE).then((found) => ({
             shots: found.hits.map((hit) => hit.shot),
             total: found.total,
             hits: found.hits,
           }))
-        : await listShots(shots.length, PAGE_SIZE).then((found) => ({ ...found, hits: [] as SearchHit[] }));
-      shownCount.current = Math.max(PAGE_SIZE, shots.length + page.shots.length);
+        : await listShots(offset, PAGE_SIZE).then((found) => ({ ...found, hits: [] as SearchHit[] }));
+      shownCount.current = Math.max(PAGE_SIZE, offset + page.shots.length);
       setShots((current) => {
         const known = new Set(current.map((shot) => shot.id));
         return [...current, ...page.shots.filter((shot) => !known.has(shot.id))];
@@ -629,9 +840,49 @@ function LibraryWindow() {
     } catch (err) {
       setError(errorMessage(err));
     } finally {
+      loadingMoreRef.current = false;
       setLoadingMore(false);
     }
-  }
+  }, [shots.length, searching, query]);
+
+  const hasMore = loaded && shots.length < total;
+  const latestLoadMore = useRef(loadMore);
+  const canLoadMore = useRef(false);
+  useEffect(() => {
+    latestLoadMore.current = loadMore;
+    canLoadMore.current = hasMore && !error;
+  });
+
+  // Infinite scroll: fetch the next page well before the end comes into view.
+  // Re-observing after each page re-checks, so a tall window keeps filling.
+  useEffect(() => {
+    const element = sentinel.current;
+    if (!element || typeof IntersectionObserver !== "function") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (canLoadMore.current && entries.some((entry) => entry.isIntersecting)) void latestLoadMore.current();
+      },
+      { root: scroller.current, rootMargin: "1200px 0px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [shots.length, hasMore]);
+
+  // "/" jumps to search; Escape closes the details.
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing = target?.closest("input, textarea, select, [contenteditable]");
+      if (event.key === "/" && !typing) {
+        event.preventDefault();
+        searchBox.current?.focus();
+      } else if (event.key === "Escape" && !event.defaultPrevented) {
+        setSelectedId(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   function updated(shot: Shot) {
     setError(null);
@@ -656,109 +907,155 @@ function LibraryWindow() {
     setShots((current) => current.filter((shot) => shot.id !== id));
     setTotal((count) => Math.max(0, count - 1));
     setSelectedId(null);
+    setNotice({ text: "Capture deleted", key: Date.now() });
   }
 
-  function open(id: number) {
+  const open = useCallback((id: number) => {
     openShot(id).catch((err: unknown) => setError(errorMessage(err)));
+  }, []);
+
+  const tileAction = useCallback((shot: Shot, action: "copy" | "pin") => {
+    const run = action === "copy" ? copyShot : pinShot;
+    run(shot.id)
+      .then(() => {
+        if (action === "copy") setNotice({ text: "Copied to the clipboard", key: Date.now() });
+      })
+      .catch((err: unknown) => setError(errorMessage(err)));
+  }, []);
+
+  function onGridKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const from = (event.target as HTMLElement).closest<HTMLElement>(".tile-main");
+    if (!from || !scroller.current) return;
+    if (event.key === "Enter" && event.metaKey) {
+      open(Number(from.dataset.shotId));
+      return;
+    }
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+    const tiles = [...scroller.current.querySelectorAll<HTMLElement>(".tile-main")];
+    const next = neighbour(tiles, from, event.key);
+    if (!next) return;
+    event.preventDefault();
+    next.focus();
+    next.scrollIntoView?.({ block: "nearest" });
+    setSelectedId(Number(next.dataset.shotId));
   }
 
+  // Text searches are ranked by relevance, so they stay in one run; otherwise by day.
+  const groups = useMemo(
+    () => (query.text ? [{ day: -1, items: shots }] : groupByDay(shots)),
+    [shots, query.text],
+  );
   const selected = shots.find((shot) => shot.id === selectedId) ?? null;
+  let tileIndex = 0;
 
   return (
-    <main className="library">
-      <header className="library-header">
-        <h1>Library</h1>
-        {loaded && (
-          <span className="hint">
-            {searching
-              ? total === 1
-                ? "1 result"
-                : `${total} results`
-              : total === 1
-                ? "1 capture"
-                : `${total} captures`}
-          </span>
+    <main className="library" style={{ "--row-h": `${rowHeight}px` } as CSSProperties}>
+      <header className={`library-top${scrolled ? " is-scrolled" : ""}`}>
+        <div className="library-title">
+          <h1>Library</h1>
+          {loaded && (
+            <span className="count-pill">
+              {searching
+                ? total === 1
+                  ? "1 result"
+                  : `${total} results`
+                : total === 1
+                  ? "1 capture"
+                  : `${total} captures`}
+            </span>
+          )}
+        </div>
+        <Toolbar
+          text={text}
+          filters={filters}
+          options={options}
+          active={searching || text.length > 0}
+          rowHeight={rowHeight}
+          searchRef={searchBox}
+          onText={setText}
+          onSubmit={() => setSearchedText(text)}
+          onFilters={setFilters}
+          onClear={clearSearch}
+          onRowHeight={setRowHeight}
+        />
+        <OcrBanner status={ocr} onRetry={retry} />
+        {ai && (
+          <AiBanner
+            status={ai}
+            onSettings={() => openSettings().catch((err: unknown) => setError(errorMessage(err)))}
+          />
+        )}
+        {error && (
+          <p role="alert" className="error-pill">
+            {error}
+            <button type="button" className="error-dismiss" aria-label="Dismiss error" onClick={() => setError(null)}>
+              <CloseIcon size={12} />
+            </button>
+          </p>
         )}
       </header>
-      <SearchBar
-        text={text}
-        filters={filters}
-        options={options}
-        active={searching || text.length > 0}
-        onText={setText}
-        onSubmit={() => setSearchedText(text)}
-        onFilters={setFilters}
-        onClear={clearSearch}
-      />
-      <OcrBanner status={ocr} onRetry={retry} />
-      {ai && (
-        <AiBanner
-          status={ai}
-          onSettings={() => openSettings().catch((err: unknown) => setError(errorMessage(err)))}
-        />
-      )}
-      {error && (
-        <p role="alert" className="status status-error">
-          {error}
-        </p>
-      )}
+
       <div className="library-body">
-        <section className="library-grid-area" aria-label="Captures">
-          {loaded && shots.length === 0 && (
-            <p className="library-empty">
-              {searching
-                ? "No captures match. Try fewer words or other filters."
-                : "No captures yet. Capture with a hotkey or from the tray menu."}
-            </p>
-          )}
-          <ul className="library-grid">
-            {shots.map((shot) => (
-              <li key={`${shot.id}:${shot.path}`}>
-                <button
-                  type="button"
-                  className="shot-card"
-                  aria-pressed={shot.id === selectedId}
-                  aria-label={shot.fileName}
-                  title="Double-click to open in the editor"
-                  onClick={() => setSelectedId(shot.id)}
-                  onDoubleClick={() => open(shot.id)}
-                >
-                  <Thumbnail id={shot.id} />
-                  <span className="shot-caption">
-                    <span className="shot-date">{formatCapturedAt(shot.capturedAt)}</span>
-                    {shot.app && <span className="shot-app">{shot.app}</span>}
-                  </span>
-                  {(shot.aiCategory || shot.aiDescription) && (
-                    <span className="shot-ai-line">
-                      {shot.aiCategory && <CategoryChip category={shot.aiCategory} />}
-                      {/* A description match shows as the highlighted snippet instead. */}
-                      {shot.aiDescription && hits[shot.id]?.field !== "description" && (
-                        <span className="shot-description" title={shot.aiDescription}>
-                          {shot.aiDescription}
-                        </span>
-                      )}
-                    </span>
-                  )}
-                  {hits[shot.id] && <Snippet hit={hits[shot.id]} />}
-                  {shot.tags.length > 0 && (
-                    <span className="shot-tags">
-                      {shot.tags.map((tag) => (
-                        <span key={tag} className="tag">
-                          {tag}
-                        </span>
-                      ))}
-                    </span>
-                  )}
-                </button>
-              </li>
-            ))}
-          </ul>
-          {shots.length < total && (
-            <button type="button" className="secondary library-more" disabled={loadingMore} onClick={() => void loadMore()}>
-              {loadingMore ? "Loading…" : "Load more"}
-            </button>
-          )}
+        <div className="library-main">
+        <section
+          className="library-scroll"
+          aria-label="Captures"
+          ref={scroller}
+          onKeyDown={onGridKeyDown}
+          onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 4)}
+        >
+          {!loaded && !error && <Skeleton />}
+          {loaded && shots.length === 0 && <EmptyState searching={searching} />}
+          {groups.map((group) => {
+            const label = group.day < 0 ? { title: "Best matches", subtitle: null } : dayLabel(group.day, now);
+            return (
+              <section key={group.day} className="day" aria-label={label.title}>
+                <h2 className="day-header">
+                  <span className="day-title">{label.title}</span>
+                  {label.subtitle && <span className="day-subtitle">{label.subtitle}</span>}
+                  <span className="day-count">{group.items.length}</span>
+                </h2>
+                <ul className="grid">
+                  {group.items.map((shot) => (
+                    <Tile
+                      key={thumbKey(shot)}
+                      shot={shot}
+                      hit={hits[shot.id]}
+                      selected={shot.id === selectedId}
+                      index={tileIndex++}
+                      onSelect={setSelectedId}
+                      onOpen={open}
+                      onAction={tileAction}
+                    />
+                  ))}
+                </ul>
+              </section>
+            );
+          })}
+          <div ref={sentinel} className="library-end">
+            {hasMore && (
+              <button type="button" className="pill-button" disabled={loadingMore} onClick={() => void loadMore()}>
+                {loadingMore ? "Loading…" : "Load more"}
+              </button>
+            )}
+            {loaded && !hasMore && shots.length > PAGE_SIZE / 2 && (
+              <span className="library-fin">
+                <SparkleIcon /> That's everything
+              </span>
+            )}
+          </div>
         </section>
+        {scrolled && (
+          <button
+            type="button"
+            className="to-top"
+            aria-label="Back to top"
+            onClick={() => scroller.current?.scrollTo({ top: 0, behavior: "smooth" })}
+          >
+            ↑
+          </button>
+        )}
+        </div>
         {selected && (
           <ShotDetails
             key={selected.id}
@@ -767,9 +1064,16 @@ function LibraryWindow() {
             onUpdated={updated}
             onDeleted={deleted}
             onError={setError}
+            onNotice={(message) => setNotice({ text: message, key: Date.now() })}
+            onClose={() => setSelectedId(null)}
           />
         )}
       </div>
+      {notice && (
+        <div key={notice.key} className="toast" role="status">
+          {notice.text}
+        </div>
+      )}
     </main>
   );
 }

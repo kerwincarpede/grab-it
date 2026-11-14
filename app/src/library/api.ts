@@ -239,6 +239,103 @@ export function onOcrStatus(handler: (status: OcrStatus) => void): Promise<Unlis
   return listen<OcrStatus>(OCR_STATUS_EVENT, (event) => handler(event.payload));
 }
 
+/** A capture's time of day, e.g. "5:36 AM". */
+export function formatTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+/** Local midnight at the start of the day `ms` falls on. */
+export function startOfDay(ms: number): number {
+  const day = new Date(ms);
+  return new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime();
+}
+
+/** The local `YYYY-MM-DD` of `ms`, as date inputs and filters use it. */
+export function isoDay(ms: number): string {
+  const day = new Date(ms);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
+}
+
+/** Whole local days between two day starts (DST-safe). */
+function daysBetween(earlier: number, later: number): number {
+  return Math.round((later - earlier) / 86_400_000);
+}
+
+/** A day's heading and its full date beneath it, relative to `now`. */
+export function dayLabel(dayMs: number, now = Date.now()): { title: string; subtitle: string | null } {
+  const ago = daysBetween(dayMs, startOfDay(now));
+  const date = new Date(dayMs);
+  const sameYear = date.getFullYear() === new Date(now).getFullYear();
+  const full = date.toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+  if (ago === 0) return { title: "Today", subtitle: full };
+  if (ago === 1) return { title: "Yesterday", subtitle: full };
+  if (ago > 1 && ago < 7) {
+    const monthDay = date.toLocaleDateString(undefined, { month: "long", day: "numeric" });
+    return { title: date.toLocaleDateString(undefined, { weekday: "long" }), subtitle: monthDay };
+  }
+  return { title: full, subtitle: null };
+}
+
+export interface DayGroup<T> {
+  /** Local midnight of the day. */
+  day: number;
+  items: T[];
+}
+
+/** Splits newest-first shots into runs captured on the same local day. */
+export function groupByDay<T extends { capturedAt: number }>(items: T[]): DayGroup<T>[] {
+  const groups: DayGroup<T>[] = [];
+  for (const item of items) {
+    const day = startOfDay(item.capturedAt);
+    const last = groups[groups.length - 1];
+    if (last && last.day === day) last.items.push(item);
+    else groups.push({ day, items: [item] });
+  }
+  return groups;
+}
+
+export interface DatePreset {
+  id: string;
+  label: string;
+  /** `fromDate`/`toDate` for the preset, relative to `now`. */
+  range: (now: number) => { fromDate: string; toDate: string };
+}
+
+const daysAgo = (now: number, days: number) => isoDay(new Date(startOfDay(now)).setDate(new Date(now).getDate() - days));
+
+export const DATE_PRESETS: DatePreset[] = [
+  { id: "today", label: "Today", range: (now) => ({ fromDate: isoDay(now), toDate: isoDay(now) }) },
+  { id: "week", label: "Past 7 days", range: (now) => ({ fromDate: daysAgo(now, 6), toDate: isoDay(now) }) },
+  { id: "month", label: "Past 30 days", range: (now) => ({ fromDate: daysAgo(now, 29), toDate: isoDay(now) }) },
+  {
+    id: "year",
+    label: "This year",
+    range: (now) => ({ fromDate: `${new Date(now).getFullYear()}-01-01`, toDate: isoDay(now) }),
+  },
+];
+
+/** How the date filter reads on its chip, e.g. "Past 7 days" or "Mar 1 – Mar 5". */
+export function dateFilterLabel(fromDate: string, toDate: string, now = Date.now()): string | null {
+  if (!fromDate && !toDate) return null;
+  const preset = DATE_PRESETS.find((item) => {
+    const range = item.range(now);
+    return range.fromDate === fromDate && range.toDate === toDate;
+  });
+  if (preset) return preset.label;
+  const short = (date: string) => {
+    const ms = dayStart(date);
+    return ms === null ? date : new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  };
+  if (fromDate && toDate) return fromDate === toDate ? short(fromDate) : `${short(fromDate)} – ${short(toDate)}`;
+  return fromDate ? `Since ${short(fromDate)}` : `Until ${short(toDate)}`;
+}
+
 /** The categories the AI describer sorts captures into, with how the Library names them. */
 export const AI_CATEGORIES: Record<string, string> = {
   code: "Code",

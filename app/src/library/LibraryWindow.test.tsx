@@ -5,6 +5,7 @@ import { emit } from "@tauri-apps/api/event";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import LibraryWindow from "./LibraryWindow";
+import { resetThumbnails } from "./thumbnails";
 import {
   AI_STATUS_EVENT,
   LIBRARY_CHANGED_EVENT,
@@ -13,7 +14,10 @@ import {
   PAGE_SIZE,
   buildQuery,
   categoryLabel,
+  dateFilterLabel,
+  dayLabel,
   dayStart,
+  groupByDay,
   isSearching,
   parseTags,
   type AiStatus,
@@ -132,6 +136,8 @@ function mockBackend(shots: Shot[]): Backend {
           backend.shots = backend.shots.filter((item) => item.id !== args.id);
           return null;
         case "library_open":
+        case "library_copy":
+        case "library_pin":
           find(args.id as number);
           return null;
         case "library_search": {
@@ -177,6 +183,7 @@ const callsTo = (backend: Backend, cmd: string) => backend.calls.filter((call) =
 beforeEach(() => {
   URL.createObjectURL = vi.fn(() => "blob:thumb");
   URL.revokeObjectURL = vi.fn();
+  resetThumbnails();
 });
 
 describe("LibraryWindow", () => {
@@ -204,22 +211,71 @@ describe("LibraryWindow", () => {
     expect(screen.getByText("0 captures")).toBeInTheDocument();
   });
 
-  it("edits a capture's tags", async () => {
+  it("edits a capture's tags as chips", async () => {
     const backend = mockBackend([shot(1, { tags: ["old"] })]);
     render(<LibraryWindow />);
     await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
 
+    await userEvent.click(screen.getByRole("button", { name: "Remove tag old" }));
     const input = screen.getByLabelText("Tags");
-    expect(input).toHaveValue("old");
-    await userEvent.clear(input);
     await userEvent.type(input, " bug, , design {Enter}");
 
-    await waitFor(() => expect(callsTo(backend, "library_set_tags")).toHaveLength(1));
-    expect(callsTo(backend, "library_set_tags")[0].payload).toEqual({ id: 1, tags: ["bug", "design"] });
+    await waitFor(() => expect(callsTo(backend, "library_set_tags")).toHaveLength(3));
+    expect(callsTo(backend, "library_set_tags").map((call) => call.payload)).toEqual([
+      { id: 1, tags: [] },
+      { id: 1, tags: ["bug"] },
+      { id: 1, tags: ["bug", "design"] },
+    ]);
     const card = screen.getByRole("button", { name: "Grab-it 1.png" });
     expect(await within(card).findByText("design")).toBeInTheDocument();
     expect(within(card).queryByText("old")).not.toBeInTheDocument();
-    expect(input).toHaveValue("bug, design");
+    expect(input).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Remove tag design" })).toBeInTheDocument();
+  });
+
+  it("does not add a tag twice", async () => {
+    const backend = mockBackend([shot(1, { tags: ["bug"] })]);
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
+    await userEvent.type(screen.getByLabelText("Tags"), "BUG{Enter}");
+    expect(callsTo(backend, "library_set_tags")).toHaveLength(0);
+  });
+
+  it("groups captures by the day they were taken", async () => {
+    mockBackend([
+      shot(1, { capturedAt: new Date(2026, 2, 1, 9).getTime() }),
+      shot(2, { capturedAt: new Date(2026, 2, 1, 17).getTime() }),
+      shot(3, { capturedAt: new Date(2026, 2, 4, 12).getTime() }),
+    ]);
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: "Grab-it 3.png" });
+
+    const days = screen.getAllByRole("region").filter((region) => region.classList.contains("day"));
+    expect(days).toHaveLength(2);
+    expect(within(days[0]).getAllByRole("button", { name: /^Grab-it \d\.png$/ }).map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Grab-it 3.png",
+    ]);
+    expect(within(days[1]).getAllByRole("button", { name: /^Grab-it \d\.png$/ }).map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Grab-it 2.png",
+      "Grab-it 1.png",
+    ]);
+  });
+
+  it("copies from a tile's hover actions and says so", async () => {
+    const backend = mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Copy Grab-it 1.png" }));
+    await waitFor(() => expect(callsTo(backend, "library_copy")).toHaveLength(1));
+    expect(await screen.findByText("Copied to the clipboard")).toBeInTheDocument();
+  });
+
+  it("closes the details with Escape", async () => {
+    mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
+    expect(screen.getByLabelText("Capture details")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByLabelText("Capture details")).not.toBeInTheDocument();
   });
 
   it("saves notes when the field loses focus", async () => {
@@ -358,18 +414,24 @@ describe("LibraryWindow search", () => {
     ]);
     render(<LibraryWindow />);
     await screen.findByRole("button", { name: "Grab-it 3.png" });
-    const app = screen.getByRole("combobox", { name: "Filter by app" });
-    await waitFor(() => expect(within(app).getByRole("option", { name: "code" })).toBeInTheDocument());
+    await waitFor(() => expect(callsTo(backend, "library_filter_options").length).toBeGreaterThan(0));
 
-    await userEvent.selectOptions(app, "firefox");
+    await userEvent.click(screen.getByRole("button", { name: "Filter by app" }));
+    const apps = screen.getByRole("listbox", { name: "Filter by app" });
+    expect(within(apps).getByRole("option", { name: "code" })).toBeInTheDocument();
+    await userEvent.click(within(apps).getByRole("option", { name: "firefox" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Grab-it 2.png" })).not.toBeInTheDocument());
     expect(screen.getByText("2 results")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Filter by app" })).toHaveTextContent("firefox");
 
-    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Filter by tag" }), "receipts");
+    await userEvent.click(screen.getByRole("button", { name: "Filter by tag" }));
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
     await waitFor(() => expect(screen.queryByRole("button", { name: "Grab-it 3.png" })).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Grab-it 1.png" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Filter by tag" })).toHaveTextContent("receipts");
 
     await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+    await userEvent.click(screen.getByRole("button", { name: "Filter by date" }));
     fireEvent.change(screen.getByLabelText("Captured from"), { target: { value: "2026-03-05" } });
     fireEvent.change(screen.getByLabelText("Captured to"), { target: { value: "2026-03-05" } });
     await waitFor(() => expect(screen.getByText("1 result")).toBeInTheDocument());
@@ -473,16 +535,18 @@ describe("LibraryWindow AI descriptions", () => {
     const backend = mockBackend([described(1), described(2, { aiCategory: "receipt" }), shot(3)]);
     render(<LibraryWindow />);
     await screen.findByRole("button", { name: "Grab-it 3.png" });
-    const select = screen.getByRole("combobox", { name: "Filter by category" });
-    expect(within(select).getByRole("option", { name: "All categories" })).toBeInTheDocument();
-    await waitFor(() => expect(within(select).getByRole("option", { name: "Error / dialog" })).toBeInTheDocument());
-    expect(within(select).getAllByRole("option").map((option) => option.getAttribute("value"))).toEqual([
-      "",
-      "error",
-      "receipt",
+    await waitFor(() => expect(callsTo(backend, "library_filter_options").length).toBeGreaterThan(0));
+    const chip = screen.getByRole("button", { name: "Filter by category" });
+    expect(chip).toHaveTextContent("All categories");
+    await userEvent.click(chip);
+    const list = screen.getByRole("listbox", { name: "Filter by category" });
+    expect(within(list).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "All categories",
+      "Error / dialog",
+      "Receipt",
     ]);
 
-    await userEvent.selectOptions(select, "Error / dialog");
+    await userEvent.click(within(list).getByRole("option", { name: "Error / dialog" }));
 
     await waitFor(() => expect(screen.getByText("1 result")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Grab-it 1.png" })).toBeInTheDocument();
@@ -490,7 +554,7 @@ describe("LibraryWindow AI descriptions", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Clear" }));
     await waitFor(() => expect(screen.getByText("3 captures")).toBeInTheDocument());
-    expect(select).toHaveValue("");
+    expect(chip).toHaveTextContent("All categories");
   });
 
   it("shows the description, category and AI tags apart from the user's tags", async () => {
@@ -506,7 +570,8 @@ describe("LibraryWindow AI descriptions", () => {
     expect(within(aiTags).getByText("rust")).toHaveClass("tag", "tag-ai");
     expect(within(aiTags).getByText("compiler")).toHaveAttribute("title", "Suggested by AI");
     // User tags stay in their own field.
-    expect(within(details).getByLabelText("Tags")).toHaveValue("work");
+    expect(within(details).getByRole("button", { name: "Remove tag work" })).toBeInTheDocument();
+    expect(within(ai).queryByText("work")).not.toBeInTheDocument();
   });
 
   it("re-describes a capture and clears its AI description", async () => {
@@ -621,6 +686,36 @@ describe("search queries", () => {
     expect(dayStart("")).toBeNull();
     expect(dayStart("March 1")).toBeNull();
     expect(dayStart("2026-12-31", 1)).toBe(new Date(2027, 0, 1).getTime());
+  });
+});
+
+describe("dates", () => {
+  const now = new Date(2026, 10, 14, 15).getTime();
+
+  it("names recent days relatively and older ones by date", () => {
+    expect(dayLabel(new Date(2026, 10, 14).getTime(), now).title).toBe("Today");
+    expect(dayLabel(new Date(2026, 10, 13).getTime(), now).title).toBe("Yesterday");
+    const older = dayLabel(new Date(2026, 9, 1).getTime(), now);
+    expect(older.subtitle).toBeNull();
+    expect(older.title).toContain("1");
+    expect(dayLabel(new Date(2025, 9, 1).getTime(), now).title).toContain("2025");
+  });
+
+  it("groups newest-first shots into local days", () => {
+    const groups = groupByDay([
+      { capturedAt: new Date(2026, 10, 14, 23).getTime() },
+      { capturedAt: new Date(2026, 10, 14, 0, 5).getTime() },
+      { capturedAt: new Date(2026, 10, 13, 23, 59).getTime() },
+    ]);
+    expect(groups.map((group) => group.items.length)).toEqual([2, 1]);
+    expect(groups[0].day).toBe(new Date(2026, 10, 14).getTime());
+  });
+
+  it("labels the date filter with its preset or range", () => {
+    expect(dateFilterLabel("", "", now)).toBeNull();
+    expect(dateFilterLabel("2026-11-14", "2026-11-14", now)).toBe("Today");
+    expect(dateFilterLabel("2026-11-08", "2026-11-14", now)).toBe("Past 7 days");
+    expect(dateFilterLabel("2026-03-01", "2026-03-05", now)).toMatch(/–/);
   });
 });
 
