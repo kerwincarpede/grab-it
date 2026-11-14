@@ -79,7 +79,7 @@ With [Claude Code](https://claude.com/claude-code) installed, Grab-it also write
 <td valign="top">
 
 ### 📌 Pin it, read it, record it
-Float a screenshot above your windows as a reference. Copy text straight off the screen. Pick any colour. Record a quick GIF.
+Float a screenshot above your windows as a reference. Copy text straight off the screen, with JSON and code tidied up by AI. Pick any colour. Record a quick GIF.
 
 </td>
 </tr>

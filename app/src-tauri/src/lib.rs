@@ -20,6 +20,7 @@ mod record;
 mod screen;
 mod search;
 mod settings;
+mod tidy;
 mod tray;
 mod update;
 mod windows;

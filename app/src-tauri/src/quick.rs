@@ -54,6 +54,12 @@ pub enum QuickItem {
     /// Text read from the screen, already on the clipboard.
     Text {
         text: String,
+        /// What OCR read, when the AI's tidied text took its place.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        original: Option<String>,
+        /// How tidying the text with AI went, when it was asked to.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tidy: Option<TextTidy>,
     },
     /// A picked colour as `#RRGGBB`, already on the clipboard.
     Colour {
@@ -91,6 +97,29 @@ pub enum QuickItem {
     },
 }
 
+/// How tidying a text capture with AI is going (see `tidy.rs`). `by` is
+/// who tidies it, as the card names them. Mirrors `TextTidy` in
+/// src/quick/api.ts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum TextTidy {
+    /// The AI is reading the text again.
+    Working { by: String },
+    /// The AI's text is on the card. `format` is one of `tidy::FORMATS`;
+    /// `changed` is false when it matched what OCR read, and `copied` says
+    /// whether it is on the clipboard: not when the user copied something
+    /// else while the AI was reading.
+    Done {
+        by: String,
+        format: String,
+        language: Option<String>,
+        changed: bool,
+        copied: bool,
+    },
+    /// The AI could not tidy it; the card keeps what OCR read.
+    Failed { by: String, message: String },
+}
+
 /// Which corner of the work area the card sits in; Settings picks it.
 pub use crate::settings::PopupCorner as Corner;
 
@@ -124,6 +153,15 @@ impl QuickItem {
             width: size.0,
             height: size.1,
             copied,
+        }
+    }
+
+    /// Text that OCR read, with nothing tidied.
+    pub fn text(text: String) -> Self {
+        Self::Text {
+            text,
+            original: None,
+            tidy: None,
         }
     }
 
@@ -166,10 +204,11 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Shows `item` on the card, creating the card when it is not on screen.
-/// Call this off the main thread: it may create a window.
-pub fn show(app: &AppHandle, item: QuickItem) {
-    show_in(app, item, preferred_corner(app));
+/// Shows `item` on the card, creating the card when it is not on screen,
+/// and returns its generation. Call this off the main thread: it may create
+/// a window.
+pub fn show(app: &AppHandle, item: QuickItem) -> u64 {
+    show_in(app, item, preferred_corner(app))
 }
 
 /// Like [`show`], in a chosen corner: a recording keeps the card out of
@@ -178,7 +217,7 @@ pub fn show(app: &AppHandle, item: QuickItem) {
 /// An existing card window is told about the item by event; a card still
 /// loading reads it with `quick_info` once it is up, and reads it again
 /// after subscribing, so an item set in between is not missed.
-pub fn show_in(app: &AppHandle, item: QuickItem, corner: Corner) {
+pub fn show_in(app: &AppHandle, item: QuickItem, corner: Corner) -> u64 {
     let state = app.state::<QuickState>();
     if matches!(item, QuickItem::Capture { .. }) {
         *lock(&state.last_capture) = Some(item.clone());
@@ -196,11 +235,35 @@ pub fn show_in(app: &AppHandle, item: QuickItem, corner: Corner) {
         }
         let _ = window.emit(QUICK_CHANGED_EVENT, &shown);
         let _ = window.show();
-        return;
+        return shown.generation;
     }
     if let Err(err) = create_window(app, corner) {
         eprintln!("Grab-it: could not show Quick Access: {err}");
     }
+    shown.generation
+}
+
+/// Shows `item` in place of item `generation`, where it is: for news about
+/// what the card shows, such as tidied text. Returns the new generation, or
+/// None, changing nothing, when the card was dismissed or has moved on.
+pub fn replace(app: &AppHandle, generation: u64, item: QuickItem) -> Option<u64> {
+    let state = app.state::<QuickState>();
+    // Held while the card is told, so a newer item shown meanwhile is
+    // always told after this one and stays.
+    let mut current = lock(&state.current);
+    if current.as_ref().map(|shown| shown.generation) != Some(generation) {
+        return None;
+    }
+    let shown = Shown {
+        generation: state.generations.fetch_add(1, Ordering::Relaxed) + 1,
+        item,
+        seconds: chosen(app).1,
+    };
+    *current = Some(shown.clone());
+    if let Some(window) = app.get_webview_window(LABEL) {
+        let _ = window.emit(QUICK_CHANGED_EVENT, &shown);
+    }
+    Some(shown.generation)
 }
 
 /// Records a capture as the newest without showing the card, for when the
@@ -395,6 +458,8 @@ pub enum QuickAction {
     Reveal,
     Delete,
     Close,
+    /// Copies what OCR read, in place of the tidied text.
+    CopyOriginal,
 }
 
 /// Runs a button of the card that showed item `generation`. When the card
@@ -438,6 +503,14 @@ pub async fn quick_action(
             dismiss(&app, generation);
         }
         (QuickAction::Copy, QuickItem::Capture { path, .. }) => copy_file(&app, path)?,
+        (QuickAction::Copy, QuickItem::Text { text, .. })
+        | (
+            QuickAction::CopyOriginal,
+            QuickItem::Text {
+                original: Some(text),
+                ..
+            },
+        ) => copy_text(&app, text)?,
         (QuickAction::Edit, QuickItem::Capture { path, .. }) => {
             windows::show_editor(&app, path).map_err(|err| err.to_string())?;
             dismiss(&app, generation);
@@ -449,6 +522,13 @@ pub async fn quick_action(
         _ => return Err("there is no capture on the card".to_owned()),
     }
     Ok(())
+}
+
+/// Puts `text` on the clipboard.
+fn copy_text(app: &AppHandle, text: &str) -> Result<(), String> {
+    app.clipboard()
+        .write_text(text.to_owned())
+        .map_err(|err| format!("could not copy the text: {err}"))
 }
 
 /// Puts the image in `path` on the clipboard.
@@ -595,7 +675,32 @@ mod tests {
         assert_eq!(json["fileName"], "shot.png");
         assert_eq!(json["width"], 30);
         assert_eq!(json["copied"], true);
-        let text = serde_json::to_value(QuickItem::Text { text: "hi".into() }).unwrap();
-        assert_eq!(text["kind"], "text");
+        let text = serde_json::to_value(QuickItem::text("hi".into())).unwrap();
+        assert_eq!(text, serde_json::json!({ "kind": "text", "text": "hi" }));
+        let tidied = serde_json::to_value(QuickItem::Text {
+            text: "{\n  \"a\": 1\n}".into(),
+            original: Some("{a: 1}".into()),
+            tidy: Some(TextTidy::Done {
+                by: "Claude Code".into(),
+                format: "json".into(),
+                language: None,
+                changed: true,
+                copied: true,
+            }),
+        })
+        .unwrap();
+        assert_eq!(tidied["original"], "{a: 1}");
+        assert_eq!(
+            tidied["tidy"],
+            serde_json::json!({
+                "state": "done", "by": "Claude Code", "format": "json", "language": null,
+                "changed": true, "copied": true,
+            })
+        );
+        let working = serde_json::to_value(TextTidy::Working { by: "Codex".into() }).unwrap();
+        assert_eq!(
+            working,
+            serde_json::json!({ "state": "working", "by": "Codex" })
+        );
     }
 }

@@ -5,6 +5,8 @@ import {
   dismissAfter,
   formatBytes,
   formatElapsed,
+  formatName,
+  isStructured,
   onQuickChanged,
   quickAction,
   quickInfo,
@@ -182,9 +184,9 @@ function QuickAccess() {
   const run = useCallback((action: QuickAction, done?: string) => {
     const target = latest.current;
     if (!target || busy.current) return;
-    // Copy and Show in folder leave the card up and may be repeated; the
-    // others end it, so a double-click must not run them twice.
-    const ends = action !== "copy" && action !== "reveal";
+    // Copying and Show in folder leave the card up and may be repeated;
+    // the others end it, so a double-click must not run them twice.
+    const ends = action !== "copy" && action !== "copyOriginal" && action !== "reveal";
     if (ends) busy.current = true;
     setError(null);
     quickAction(action, target.generation)
@@ -373,15 +375,67 @@ function QuickAccess() {
   }
 
   if (item.kind === "text") {
+    const tidy = item.tidy;
+    const done = tidy?.state === "done" ? tidy : null;
+    // Something else was copied while the AI was reading: the tidied text waits for Copy.
+    const waiting = done !== null && !done.copied;
+    const format = done ? formatName(done.format, done.language) : null;
+    const showActions = item.original !== undefined || waiting || flash !== null;
     return (
       <main className="quick quick-text" data-testid="quick" {...hover}>
         <div className="quick-body" role="status">
           <p className="quick-title">
-            <Icon>{ICONS.check}</Icon> Text copied
+            {waiting && flash === null ? (
+              "Text tidied"
+            ) : (
+              <>
+                <Icon>{ICONS.check}</Icon> {flash ?? "Text copied"}
+              </>
+            )}
           </p>
-          <p className="quick-detail">{describeText(item.text)}</p>
+          {/* The AI's progress takes the count's place, leaving the preview room. */}
+          {!tidy && <p className="quick-detail">{describeText(item.text)}</p>}
+          {tidy?.state === "working" && (
+            <p className="quick-detail quick-tidy" data-testid="quick-tidy">
+              <span className="quick-spinner is-small" aria-hidden="true" />
+              {tidy.by} is tidying it up…
+            </p>
+          )}
+          {done && (
+            <p className="quick-detail quick-tidy" data-testid="quick-tidy" title={describeText(item.text)}>
+              {done.changed ? `Tidied by ${done.by}` : `Checked by ${done.by}`}
+              {format && ` · ${format}`}
+            </p>
+          )}
+          {tidy?.state === "failed" && (
+            <p className="quick-detail quick-tidy quick-error-text" data-testid="quick-tidy" title={tidy.message}>
+              {tidy.by} could not tidy it up
+            </p>
+          )}
         </div>
-        <pre className="quick-text-preview">{item.text}</pre>
+        <pre className={`quick-text-preview${isStructured(done?.format) ? " is-code" : ""}`}>{item.text}</pre>
+        {error && (
+          <p className="quick-detail quick-error-text" role="alert">
+            {error}
+          </p>
+        )}
+        {showActions && (
+          <div className="quick-inline-actions quick-text-actions" role="toolbar" aria-label="Text actions">
+            <button type="button" onClick={() => run("copy", "Copied")} title="Copy this text">
+              <Icon>{ICONS.copy}</Icon>
+              Copy
+            </button>
+            {item.original !== undefined && (
+              <button
+                type="button"
+                onClick={() => run("copyOriginal", "Copied as read")}
+                title="Copy the text as OCR read it, before tidying"
+              >
+                Copy as read
+              </button>
+            )}
+          </div>
+        )}
         {close}
         {timerBar}
       </main>

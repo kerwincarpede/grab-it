@@ -201,6 +201,23 @@ function AiSection({ saved, disabled, onSave }: Props) {
             onChange={(event) => void save({ newCapturesOnly: event.target.checked })}
           />
         </label>
+        <label className="row">
+          <span className="row-text">
+            <span className="row-title">Tidy up captured text</span>
+            <span className="row-hint">
+              After Capture text, the AI reads the text again from the image, fixes what was misread, and lays out JSON,
+              code and tables properly. The tidied text replaces what was copied.
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            role="switch"
+            className="switch"
+            checked={saved.tidyText}
+            disabled={busy || !saved.enabled}
+            onChange={(event) => void save({ tidyText: event.target.checked })}
+          />
+        </label>
       </div>
 
       <h2 className="group-heading" id="ai-provider-heading">

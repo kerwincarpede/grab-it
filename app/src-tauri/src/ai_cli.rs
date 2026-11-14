@@ -24,7 +24,7 @@ use std::{
 
 use serde_json::{Value, json};
 
-use crate::ai::{AiError, SYSTEM_PROMPT, truncate};
+use crate::ai::{AiError, truncate};
 
 /// Claude Code's command name.
 pub const CLAUDE: &str = "claude";
@@ -321,9 +321,10 @@ fn run(
     })
 }
 
-/// The arguments that run Claude Code headlessly: one turn on stdin, no
-/// tools, MCP servers, slash commands or saved session.
-pub fn claude_args(model: &str) -> Vec<OsString> {
+/// The arguments that run Claude Code headlessly with `system` as its
+/// system prompt: one turn on stdin, no tools, MCP servers, slash commands
+/// or saved session.
+pub fn claude_args(model: &str, system: &str) -> Vec<OsString> {
     [
         "-p",
         "--model",
@@ -334,7 +335,7 @@ pub fn claude_args(model: &str) -> Vec<OsString> {
         "--no-session-persistence",
         "--disable-slash-commands",
         "--system-prompt",
-        SYSTEM_PROMPT,
+        system,
         "--input-format",
         "stream-json",
         "--output-format",
@@ -412,12 +413,13 @@ fn claude_answer(output: &Output) -> Result<String, AiError> {
     })
 }
 
-/// Asks Claude Code at `program` about one PNG, given as base64, and
-/// returns its reply. It runs in an empty temporary directory and is
-/// killed once `timeout` has passed.
+/// Asks Claude Code at `program` about one PNG, given as base64, with
+/// `system` as its system prompt, and returns its reply. It runs in an
+/// empty temporary directory and is killed once `timeout` has passed.
 pub fn claude_reply(
     program: &Path,
     model: &str,
+    system: &str,
     text: &str,
     png_base64: &str,
     timeout: Duration,
@@ -428,7 +430,13 @@ pub fn claude_reply(
         ))
     })?;
     let input = claude_input(text, png_base64).into_bytes();
-    let output = run(program, &claude_args(model), Some(input), &dir.0, timeout)?;
+    let output = run(
+        program,
+        &claude_args(model, system),
+        Some(input),
+        &dir.0,
+        timeout,
+    )?;
     claude_answer(&output)
 }
 
@@ -490,10 +498,10 @@ pub fn codex_args(
     args
 }
 
-/// What Codex is asked: it has no separate system prompt, so the system
-/// prompt leads.
-pub fn codex_prompt(text: &str) -> String {
-    format!("{SYSTEM_PROMPT}\n\n{text}")
+/// What Codex is asked: it has no separate system prompt, so `system`
+/// leads.
+pub fn codex_prompt(system: &str, text: &str) -> String {
+    format!("{system}\n\n{text}")
 }
 
 /// At most the last `max` characters of `text`, with `…` when cut: Codex
@@ -537,13 +545,14 @@ fn codex_answer(output: &Output, reply: &Path) -> Result<String, AiError> {
     Ok(text.to_owned())
 }
 
-/// Asks Codex at `program` about one PNG, holding its answer to `schema`,
-/// and returns its reply. It runs in an empty temporary directory, holding
+/// Asks Codex at `program` about one PNG, with `system` leading the
+/// prompt and its answer held to `schema`, and returns its reply. It runs in an empty temporary directory, holding
 /// only the image and the schema, with stdin closed, and is killed once
 /// `timeout` has passed.
 pub fn codex_reply(
     program: &Path,
     model: Option<&str>,
+    system: &str,
     text: &str,
     png: &[u8],
     schema: &Value,
@@ -562,7 +571,13 @@ pub fn codex_reply(
         .map_err(|err| {
             AiError::Endpoint(format!("could not give {CODEX_NAME} the capture: {err}"))
         })?;
-    let args = codex_args(&image, &schema_path, &reply, &codex_prompt(text), model);
+    let args = codex_args(
+        &image,
+        &schema_path,
+        &reply,
+        &codex_prompt(system, text),
+        model,
+    );
     let output = run(program, &args, None, &dir.0, timeout)?;
     codex_answer(&output, &reply)
 }
@@ -570,6 +585,7 @@ pub fn codex_reply(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::ai::SYSTEM_PROMPT;
     use std::cell::Cell;
     use tempfile::TempDir;
 
@@ -695,7 +711,7 @@ pub(crate) mod tests {
 
     #[test]
     fn claude_runs_headless_with_no_tools() {
-        let args: Vec<String> = claude_args("haiku")
+        let args: Vec<String> = claude_args("haiku", SYSTEM_PROMPT)
             .into_iter()
             .map(|arg| arg.into_string().unwrap())
             .collect();
@@ -798,6 +814,7 @@ pub(crate) mod tests {
         let reply = claude_reply(
             &claude,
             "haiku",
+            SYSTEM_PROMPT,
             "Describe it.",
             "iVBORw0K",
             Duration::from_secs(10),
@@ -837,7 +854,15 @@ pub(crate) mod tests {
             &[result_line("Invalid API key · Please run /login", true)],
             1,
         );
-        let err = claude_reply(&claude, "haiku", "x", "x", Duration::from_secs(10)).unwrap_err();
+        let err = claude_reply(
+            &claude,
+            "haiku",
+            SYSTEM_PROMPT,
+            "x",
+            "x",
+            Duration::from_secs(10),
+        )
+        .unwrap_err();
         let AiError::Endpoint(message) = err else {
             panic!("{err:?}");
         };
@@ -848,7 +873,7 @@ pub(crate) mod tests {
         let dir = TempDir::new().unwrap();
         let claude = recording_claude(dir.path(), &[result_line("Usage limit reached", true)], 0);
         assert!(matches!(
-            claude_reply(&claude, "haiku", "x", "x", Duration::from_secs(10)),
+            claude_reply(&claude, "haiku", SYSTEM_PROMPT, "x", "x", Duration::from_secs(10)),
             Err(AiError::Endpoint(message)) if message.contains("Usage limit reached")
         ));
 
@@ -859,7 +884,7 @@ pub(crate) mod tests {
             "cat > /dev/null\necho 'unknown option --tools' >&2\nexit 2",
         );
         assert!(matches!(
-            claude_reply(&claude, "haiku", "x", "x", Duration::from_secs(10)),
+            claude_reply(&claude, "haiku", SYSTEM_PROMPT, "x", "x", Duration::from_secs(10)),
             Err(AiError::Endpoint(message)) if message.contains("unknown option --tools")
         ));
     }
@@ -870,7 +895,14 @@ pub(crate) mod tests {
         let dir = TempDir::new().unwrap();
         let claude = recording_claude(dir.path(), &["not json".to_owned()], 0);
         assert!(matches!(
-            claude_reply(&claude, "haiku", "x", "x", Duration::from_secs(10)),
+            claude_reply(
+                &claude,
+                "haiku",
+                SYSTEM_PROMPT,
+                "x",
+                "x",
+                Duration::from_secs(10)
+            ),
             Err(AiError::Response(_))
         ));
     }
@@ -881,7 +913,15 @@ pub(crate) mod tests {
         let dir = TempDir::new().unwrap();
         let claude = fake_claude(dir.path(), "exec sleep 30");
         let started = Instant::now();
-        let err = claude_reply(&claude, "haiku", "x", "x", Duration::from_millis(300)).unwrap_err();
+        let err = claude_reply(
+            &claude,
+            "haiku",
+            SYSTEM_PROMPT,
+            "x",
+            "x",
+            Duration::from_millis(300),
+        )
+        .unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(
             matches!(&err, AiError::Endpoint(message) if message.contains("no answer")),
@@ -910,7 +950,7 @@ pub(crate) mod tests {
 
     #[test]
     fn claude_is_asked_for_the_chosen_model() {
-        let args: Vec<String> = claude_args("sonnet")
+        let args: Vec<String> = claude_args("sonnet", SYSTEM_PROMPT)
             .into_iter()
             .map(|arg| arg.into_string().unwrap())
             .collect();
@@ -949,7 +989,7 @@ pub(crate) mod tests {
                 "Describe it.",
             ]
         );
-        let prompt = codex_prompt("Describe it.");
+        let prompt = codex_prompt(SYSTEM_PROMPT, "Describe it.");
         assert!(prompt.starts_with(SYSTEM_PROMPT), "{prompt}");
         assert!(prompt.ends_with("\n\nDescribe it."), "{prompt}");
     }
@@ -1015,6 +1055,7 @@ pub(crate) mod tests {
         let reply = codex_reply(
             &codex,
             None,
+            SYSTEM_PROMPT,
             "Describe it.",
             b"png bytes",
             &schema,
@@ -1054,8 +1095,16 @@ pub(crate) mod tests {
             &format!("{progress}ERROR: You are not logged in. Run `codex login`."),
             1,
         );
-        let err =
-            codex_reply(&codex, None, "x", b"x", &json!({}), Duration::from_secs(10)).unwrap_err();
+        let err = codex_reply(
+            &codex,
+            None,
+            SYSTEM_PROMPT,
+            "x",
+            b"x",
+            &json!({}),
+            Duration::from_secs(10),
+        )
+        .unwrap_err();
         let AiError::Endpoint(message) = err else {
             panic!("{err:?}");
         };
@@ -1069,7 +1118,7 @@ pub(crate) mod tests {
         let dir = TempDir::new().unwrap();
         let codex = recording_codex(dir.path(), None, "", 0);
         assert!(matches!(
-            codex_reply(&codex, None, "x", b"x", &json!({}), Duration::from_secs(10)),
+            codex_reply(&codex, None, SYSTEM_PROMPT, "x", b"x", &json!({}), Duration::from_secs(10)),
             Err(AiError::Response(message)) if message.starts_with("Codex sent no answer")
         ));
     }
@@ -1084,6 +1133,7 @@ pub(crate) mod tests {
         let err = codex_reply(
             &codex,
             None,
+            SYSTEM_PROMPT,
             "x",
             b"x",
             &json!({}),
@@ -1103,6 +1153,7 @@ pub(crate) mod tests {
         let err = claude_reply(
             &dir.path().join("claude"),
             "haiku",
+            SYSTEM_PROMPT,
             "x",
             "x",
             Duration::from_secs(1),

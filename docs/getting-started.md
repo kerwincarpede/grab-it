@@ -162,6 +162,8 @@ The search box finds captures by **the text inside the image**, as well as by ta
 
 If you have [Claude Code](https://claude.com/claude-code) installed, Grab-it uses it to describe each new capture: a sentence or two, a category and a few tags, so you can search for what a screenshot *shows* and filter by category. It turns this on by itself the first time it finds Claude Code, and the Library says so once. Those screenshots go to Anthropic under your Claude account.
 
+The same AI tidies up **Capture text**. The text is copied the moment it's read, then the AI reads it again from the image. It fixes what was misread, and lays out JSON (valid and indented), code (with its indentation) and tables (as Markdown). The tidied text replaces what was copied, unless you've copied something else since. **Copy as read** on the card gets the original back. Turn it off under **Tidy up captured text**.
+
 To turn it off, or use another provider such as a local [Ollama](https://ollama.com) model that keeps everything on your computer, open **Settings** → **AI descriptions**. Without Claude Code but with [Codex](https://developers.openai.com/codex/cli) installed, Grab-it uses Codex the same way, and those screenshots go to OpenAI under your ChatGPT or OpenAI account. With neither, describing stays off until you turn it on there.
 
 ---
@@ -173,7 +175,7 @@ Click the Grab-it icon in the menu bar or tray for all of these. On Windows and 
 | | |
 | --- | --- |
 | 📌 **Pin** | Float a capture above everything else as a reference while you work. Drag it around, scroll (or press `+`/`-`) to resize, double-click or `Esc` to close. |
-| 🔤 **Capture text** | Drag over anything on screen, even text in an image or video, and the text is copied, ready to paste. |
+| 🔤 **Capture text** | Drag over anything on screen, even text in an image or video, and the text is copied, ready to paste. With [AI](#ai-descriptions) on, it's then tidied up: misread characters are fixed, and JSON, code and tables come out properly laid out. |
 | 🎨 **Pick a colour** | Click any pixel to copy its colour as a hex code like `#4C8DFF`. |
 | 🎞️ **Record GIF** | Record a region or window as an animated GIF, for up to a minute. Click **Stop** on the card (or in the tray) when you're done. |
 | ⏱️ **Timed capture** | Wait 3, 5 or 10 seconds before capturing, so you have time to open a menu or hover a tooltip. |

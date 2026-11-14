@@ -113,6 +113,10 @@ pub struct AiSettings {
     pub api_key: Option<String>,
     /// Captures that existed when describing was turned on are skipped.
     pub new_captures_only: bool,
+    /// Text captures are read again by the same model, which fixes what
+    /// OCR misread and lays out JSON, code and tables (see `tidy.rs`).
+    /// Only while describing is on: that is when captures may be sent.
+    pub tidy_text: bool,
     /// Grab-it turned describing on by itself and the Library has not yet
     /// said so. Only Grab-it sets it; dismissing the notice clears it.
     pub notice_pending: bool,
@@ -133,6 +137,7 @@ impl Default for AiSettings {
             codex_model: String::new(),
             api_key: None,
             new_captures_only: true,
+            tidy_text: true,
             notice_pending: false,
             api_key_storage: ApiKeyStorage::default(),
         }
@@ -157,6 +162,11 @@ fn clean_model(model: &str) -> String {
 }
 
 impl AiSettings {
+    /// Whether text captures are tidied up by the model.
+    pub fn tidies_text(&self) -> bool {
+        self.enabled && self.tidy_text
+    }
+
     /// The provider describing uses: an unset one is the endpoint.
     pub fn provider(&self) -> AiProvider {
         self.provider.unwrap_or(AiProvider::Endpoint)
@@ -230,6 +240,7 @@ impl AiSettings {
             codex_model: clean_model(&self.codex_model),
             api_key,
             new_captures_only: self.new_captures_only,
+            tidy_text: self.tidy_text,
             notice_pending: self.notice_pending,
             api_key_storage: self.api_key_storage,
         })
@@ -630,6 +641,7 @@ struct AiOnDisk<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     api_key: Option<&'a str>,
     new_captures_only: bool,
+    tidy_text: bool,
     notice_pending: bool,
 }
 
@@ -645,6 +657,7 @@ impl<'a> SettingsOnDisk<'a> {
             codex_model,
             api_key,
             new_captures_only,
+            tidy_text,
             notice_pending,
             api_key_storage,
         } = &settings.preferences.ai;
@@ -665,6 +678,7 @@ impl<'a> SettingsOnDisk<'a> {
                     ApiKeyStorage::SettingsFile => api_key.as_deref(),
                 },
                 new_captures_only: *new_captures_only,
+                tidy_text: *tidy_text,
                 notice_pending: *notice_pending,
             },
             editor: &settings.editor,
@@ -1330,6 +1344,16 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let ai = defaults(&dir).preferences.ai;
         assert!(!ai.enabled);
+        // Tidying text is on, but only works once AI is.
+        assert!(ai.tidy_text);
+        assert!(!ai.tidies_text());
+        assert!(
+            AiSettings {
+                enabled: true,
+                ..ai.clone()
+            }
+            .tidies_text()
+        );
         assert_eq!(ai.endpoint, "http://localhost:11434/v1");
         assert_eq!(ai.model, "qwen3-vl:4b");
         assert_eq!(ai.api_key, None);
@@ -1377,6 +1401,7 @@ mod tests {
                 "codexModel": "",
                 "apiKey": null,
                 "newCapturesOnly": true,
+                "tidyText": true,
                 "noticePending": false,
                 "apiKeyStorage": "settingsFile",
             })
@@ -1424,6 +1449,7 @@ mod tests {
                 codex_model: " \"gpt 5\" ".into(),
                 api_key: Some("  ".into()),
                 new_captures_only: false,
+                tidy_text: false,
                 notice_pending: false,
                 api_key_storage: ApiKeyStorage::Keychain,
             }))
@@ -1437,6 +1463,16 @@ mod tests {
         assert_eq!(ai.api_key, None);
         // Where the key is kept is the store's to say, not the caller's.
         assert_eq!(ai.api_key_storage, ApiKeyStorage::SettingsFile);
+        // Turning tidying off is kept, and saved.
+        assert!(!ai.tidy_text);
+        assert!(!ai.tidies_text());
+        assert!(
+            !load(&path, defaults(&dir))
+                .unwrap()
+                .preferences
+                .ai
+                .tidy_text
+        );
 
         for bad in [
             AiSettings {
