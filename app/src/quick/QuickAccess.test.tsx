@@ -4,7 +4,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import QuickAccess from "./QuickAccess";
-import { describeText, dismissAfter, formatBytes, formatElapsed, type QuickItem } from "./api";
+import { describeText, dismissAfter, formatBytes, formatElapsed, formatName, type QuickItem } from "./api";
 
 const CAPTURE: QuickItem = {
   kind: "capture",
@@ -148,6 +148,66 @@ describe("QuickAccess", () => {
     expect(screen.getByText(/Invoice 2026-03/)).toBeInTheDocument();
   });
 
+  it("says the AI is tidying the text, and stays until it is done", async () => {
+    mockBackend({ kind: "text", text: "{a: l}", tidy: { state: "working", by: "Claude Code" } });
+    render(<QuickAccess />);
+    expect(await screen.findByText("Text copied")).toBeInTheDocument();
+    expect(screen.getByTestId("quick-tidy")).toHaveTextContent("Claude Code is tidying it up…");
+    expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+  });
+
+  it("shows tidied JSON with both copies on offer", async () => {
+    const backend = mockBackend({
+      kind: "text",
+      text: '{\n  "a": 1\n}',
+      original: "{a: l}",
+      tidy: { state: "done", by: "Claude Code", format: "json", language: null, changed: true, copied: true },
+    });
+    render(<QuickAccess />);
+    expect(await screen.findByTestId("quick-tidy")).toHaveTextContent("Tidied by Claude Code · JSON");
+    expect(screen.getByText("Text copied")).toBeInTheDocument();
+    expect(screen.getByText(/"a": 1/)).toHaveClass("is-code");
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy as read" }));
+    await waitFor(() => expect(actions(backend)).toEqual(["copyOriginal"]));
+    expect(await screen.findByText("Copied as read")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(actions(backend)).toEqual(["copyOriginal", "copy"]));
+  });
+
+  it("leaves tidied text for Copy when something else was copied meanwhile", async () => {
+    mockBackend({
+      kind: "text",
+      text: "def f():\n    return 1",
+      original: "def f():\nreturn l",
+      tidy: { state: "done", by: "Codex", format: "code", language: "python", changed: true, copied: false },
+    });
+    render(<QuickAccess />);
+    expect(await screen.findByText("Text tidied")).toBeInTheDocument();
+    expect(screen.queryByText("Text copied")).not.toBeInTheDocument();
+    expect(screen.getByTestId("quick-tidy")).toHaveTextContent("Tidied by Codex · Python");
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+  });
+
+  it("says when the AI found nothing to change or could not tidy", async () => {
+    mockBackend({
+      kind: "text",
+      text: "Hello",
+      tidy: { state: "done", by: "Claude Code", format: "plain", language: null, changed: false, copied: true },
+    });
+    const { unmount } = render(<QuickAccess />);
+    expect(await screen.findByTestId("quick-tidy")).toHaveTextContent(/^Checked by Claude Code$/);
+    expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+    unmount();
+
+    mockBackend({ kind: "text", text: "Hello", tidy: { state: "failed", by: "Claude Code", message: "not signed in" } });
+    render(<QuickAccess />);
+    const failed = await screen.findByTestId("quick-tidy");
+    expect(failed).toHaveTextContent("Claude Code could not tidy it up");
+    expect(failed).toHaveAttribute("title", "not signed in");
+    expect(screen.getByText("Text copied")).toBeInTheDocument();
+  });
+
   it("shows a picked colour", async () => {
     mockBackend({ kind: "colour", hex: "#EF4444", rgb: "rgb(239, 68, 68)" });
     render(<QuickAccess />);
@@ -253,6 +313,10 @@ describe("quick helpers", () => {
     expect(dismissAfter(CAPTURE, 3)).toBe(3000);
     expect(dismissAfter({ kind: "text", text: "x" }, 20)).toBe(20000);
     expect(dismissAfter({ kind: "working", message: "…" })).toBeNull();
+    expect(dismissAfter({ kind: "text", text: "x", tidy: { state: "working", by: "Codex" } }, 20)).toBeNull();
+    expect(
+      dismissAfter({ kind: "text", text: "x", tidy: { state: "failed", by: "Codex", message: "x" } }, 20),
+    ).toBe(20000);
     expect(dismissAfter({ kind: "error", message: "x" }, 3)).toBe(10000);
     // "Until I close it".
     expect(dismissAfter(CAPTURE, 0)).toBeNull();
@@ -266,6 +330,15 @@ describe("quick helpers", () => {
     expect(formatBytes(512)).toBe("512 B");
     expect(formatBytes(2048)).toBe("2 KB");
     expect(formatBytes(2_816_389)).toBe("2.7 MB");
+  });
+
+  it("names what tidied text was laid out as", () => {
+    expect(formatName("json", null)).toBe("JSON");
+    expect(formatName("table", null)).toBe("Table");
+    expect(formatName("code", "python")).toBe("Python");
+    expect(formatName("code", "typescript")).toBe("TypeScript");
+    expect(formatName("code", null)).toBe("Code");
+    expect(formatName("plain", null)).toBeNull();
   });
 
   it("counts lines and characters", () => {

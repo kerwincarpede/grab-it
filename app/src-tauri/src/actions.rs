@@ -3,7 +3,8 @@
 //! clipboard and show the capture in Quick Access or the editor.
 //!
 //! Two more actions reuse the region overlay without saving a capture:
-//! reading the text in a region, and picking a colour.
+//! reading the text in a region, and picking a colour. Read text can be
+//! tidied up by AI afterwards (see `tidy.rs`).
 
 use std::time::Duration;
 
@@ -13,14 +14,16 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::{
+    ai::{self, AiError},
     capture::{self, CaptureMode, Foreground, SavedCapture},
     commands::{SettingsState, lock},
     ocr, overlay,
     overlay::Intent,
     permissions,
-    quick::{self, QuickItem},
+    quick::{self, QuickItem, TextTidy},
     record, screen,
     settings::AfterCapture,
+    tidy::{self, Tidied},
     windows,
 };
 
@@ -220,7 +223,9 @@ pub fn finish(
             let _ = app.emit(CAPTURE_SAVED_EVENT, &saved);
             let item = QuickItem::capture(&saved.path, image.dimensions(), copied);
             match preferences.after_capture {
-                AfterCapture::QuickAccess => quick::show(app, item),
+                AfterCapture::QuickAccess => {
+                    quick::show(app, item);
+                }
                 AfterCapture::Editor => {
                     quick::remember(app, item);
                     if let Err(err) = windows::show_editor(app, &saved.path) {
@@ -269,37 +274,168 @@ fn save(
 /// Reads the text in `image` and copies it. Nothing is saved. Slow the
 /// first time (the OCR models are downloaded and loaded), so Quick Access
 /// says what is happening meanwhile.
+///
+/// With tidying on, the text OCR read is copied straight away and the AI
+/// then reads the image again: its text takes the place of OCR's on the
+/// card, and on the clipboard unless something else was copied meanwhile.
+/// When OCR found nothing, the AI's text is the only one.
 pub fn finish_text(app: &AppHandle, image: &RgbaImage) {
-    quick::show(
+    let working = quick::show(
         app,
         QuickItem::Working {
             message: "Reading text…".into(),
         },
     );
-    let text = match ocr::read_now(app, image) {
+    let ai = ai::current_settings(app);
+    let tidies = ai.tidies_text();
+    let read = match ocr::read_now(app, image) {
         Ok(text) => text,
+        // The AI may still read it.
+        Err(err) if tidies => {
+            eprintln!("Grab-it: OCR could not read the text, asking AI: {err}");
+            String::new()
+        }
         Err(err) => return report_failure(app, &format!("could not read the text: {err}")),
     };
-    if text.trim().is_empty() {
-        quick::show(
-            app,
-            QuickItem::Notice {
-                title: "No text found".into(),
-                message: "Try a larger region, or zoom in on small text first.".into(),
-            },
-        );
+    if !tidies {
+        if read.trim().is_empty() {
+            quick::show(app, no_text_found());
+            return;
+        }
+        match app.clipboard().write_text(read.clone()) {
+            Ok(()) => {
+                quick::show(app, QuickItem::text(read));
+            }
+            Err(err) => report_failure(app, &format!("could not copy the text: {err}")),
+        }
         return;
     }
-    match app.clipboard().write_text(text.clone()) {
-        Ok(()) => quick::show(app, QuickItem::Text { text }),
-        Err(err) => report_failure(app, &format!("could not copy the text: {err}")),
+
+    let by = tidy::tidier_name(&ai);
+    let shown = if read.trim().is_empty() {
+        // Nothing to copy yet. Closing this card cancels.
+        quick::replace(
+            app,
+            working,
+            QuickItem::Working {
+                message: format!("Reading text with {by}…"),
+            },
+        )
+    } else {
+        if let Err(err) = app.clipboard().write_text(read.clone()) {
+            return report_failure(app, &format!("could not copy the text: {err}"));
+        }
+        Some(quick::show(
+            app,
+            QuickItem::Text {
+                text: read.clone(),
+                original: None,
+                tidy: Some(TextTidy::Working { by: by.clone() }),
+            },
+        ))
+    };
+    let Some(generation) = shown else {
+        return;
+    };
+    let clients = ai::Clients::new(tidy::TIDY_TIMEOUT);
+    let tidied = tidy::tidy(&clients, &ai, image, &read);
+    let clipboard = app.clipboard().read_text().ok();
+    let outcome = tidied_outcome(&read, clipboard.as_deref(), &by, tidied);
+    // The user may have closed the card, or captured again, meanwhile.
+    if quick::replace(app, generation, outcome.item).is_none() {
+        return;
+    }
+    if let Some(text) = outcome.copy
+        && let Err(err) = app.clipboard().write_text(text)
+    {
+        eprintln!("Grab-it: could not copy the tidied text: {err}");
+    }
+}
+
+fn no_text_found() -> QuickItem {
+    QuickItem::Notice {
+        title: "No text found".into(),
+        message: "Try a larger region, or zoom in on small text first.".into(),
+    }
+}
+
+/// What tidying a text capture ends with: the card's item, and the text to
+/// put on the clipboard.
+#[derive(Debug, PartialEq, Eq)]
+struct TidyOutcome {
+    item: QuickItem,
+    copy: Option<String>,
+}
+
+/// What the card shows once the AI answered about the text OCR `read`, and
+/// what is copied. `clipboard` is the clipboard's text now: the AI's text
+/// only replaces OCR's there when the user has not copied something else
+/// since.
+fn tidied_outcome(
+    read: &str,
+    clipboard: Option<&str>,
+    by: &str,
+    tidied: Result<Tidied, AiError>,
+) -> TidyOutcome {
+    let read_nothing = read.trim().is_empty();
+    let kept = |message: String| TidyOutcome {
+        item: QuickItem::Text {
+            text: read.to_owned(),
+            original: None,
+            tidy: Some(TextTidy::Failed {
+                by: by.to_owned(),
+                message,
+            }),
+        },
+        copy: None,
+    };
+    match tidied {
+        Err(err) if read_nothing => TidyOutcome {
+            item: QuickItem::Notice {
+                title: "Could not read the text".into(),
+                message: err.to_string(),
+            },
+            copy: None,
+        },
+        Err(err) => kept(err.to_string()),
+        Ok(tidied) if tidied.text.trim().is_empty() => {
+            if read_nothing {
+                TidyOutcome {
+                    item: no_text_found(),
+                    copy: None,
+                }
+            } else {
+                kept("it found no text in the image".into())
+            }
+        }
+        Ok(tidied) => {
+            let changed = tidied.text != read.trim();
+            let ours = read_nothing || clipboard == Some(read);
+            let copy = (changed && ours).then(|| tidied.text.clone());
+            TidyOutcome {
+                item: QuickItem::Text {
+                    original: (changed && !read_nothing).then(|| read.to_owned()),
+                    tidy: Some(TextTidy::Done {
+                        by: by.to_owned(),
+                        format: tidied.format,
+                        language: tidied.language,
+                        changed,
+                        copied: ours,
+                    }),
+                    text: tidied.text,
+                },
+                copy,
+            }
+        }
     }
 }
 
 /// Copies a picked colour as `#RRGGBB`.
 pub fn finish_colour(app: &AppHandle, rgb: [u8; 3]) {
     match app.clipboard().write_text(quick::hex_colour(rgb)) {
-        Ok(()) => quick::show(app, QuickItem::colour(rgb)),
+        Ok(()) => {
+            quick::show(app, QuickItem::colour(rgb));
+        }
         Err(err) => report_failure(app, &format!("could not copy the colour: {err}")),
     }
 }
@@ -340,5 +476,119 @@ mod tests {
         assert_eq!(Action::Record.intent(), Intent::Record);
         assert_eq!(Action::Region.intent(), Intent::Capture);
         assert_eq!(Action::Window.intent(), Intent::Capture);
+    }
+
+    fn tidied(text: &str, format: &str) -> Result<Tidied, AiError> {
+        Ok(Tidied {
+            text: text.into(),
+            format: format.into(),
+            language: None,
+        })
+    }
+
+    #[test]
+    fn tidied_text_replaces_what_ocr_copied() {
+        let outcome = tidied_outcome(
+            "{a: 1}",
+            Some("{a: 1}"),
+            "Claude Code",
+            tidied("{\n  \"a\": 1\n}", "json"),
+        );
+        assert_eq!(outcome.copy.as_deref(), Some("{\n  \"a\": 1\n}"));
+        assert_eq!(
+            outcome.item,
+            QuickItem::Text {
+                text: "{\n  \"a\": 1\n}".into(),
+                original: Some("{a: 1}".into()),
+                tidy: Some(TextTidy::Done {
+                    by: "Claude Code".into(),
+                    format: "json".into(),
+                    language: None,
+                    changed: true,
+                    copied: true,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn something_copied_meanwhile_stays_on_the_clipboard() {
+        let outcome = tidied_outcome("helo", Some("other"), "Codex", tidied("hello", "plain"));
+        assert_eq!(outcome.copy, None);
+        let QuickItem::Text {
+            text,
+            original,
+            tidy: Some(TextTidy::Done { copied, .. }),
+        } = outcome.item
+        else {
+            panic!("{:?}", outcome.item);
+        };
+        assert_eq!(text, "hello");
+        assert_eq!(original.as_deref(), Some("helo"));
+        assert!(!copied);
+    }
+
+    #[test]
+    fn unchanged_text_copies_nothing_again() {
+        let outcome = tidied_outcome("same\n", Some("same\n"), "Codex", tidied("same", "plain"));
+        assert_eq!(outcome.copy, None);
+        assert!(matches!(
+            outcome.item,
+            QuickItem::Text {
+                original: None,
+                tidy: Some(TextTidy::Done {
+                    changed: false,
+                    copied: true,
+                    ..
+                }),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn when_ocr_read_nothing_the_ai_text_is_copied() {
+        let outcome = tidied_outcome("", Some("older"), "Claude Code", tidied("found", "plain"));
+        assert_eq!(outcome.copy.as_deref(), Some("found"));
+        assert!(matches!(
+            outcome.item,
+            QuickItem::Text { original: None, .. }
+        ));
+        let nothing = tidied_outcome(" ", None, "Claude Code", tidied("", "plain"));
+        assert_eq!(nothing.item, no_text_found());
+        assert_eq!(nothing.copy, None);
+    }
+
+    #[test]
+    fn a_failure_keeps_what_ocr_read() {
+        let failed = Err(AiError::Endpoint(
+            "Claude Code failed: not signed in".into(),
+        ));
+        let outcome = tidied_outcome("text", Some("text"), "Claude Code", failed.clone());
+        assert_eq!(outcome.copy, None);
+        assert_eq!(
+            outcome.item,
+            QuickItem::Text {
+                text: "text".into(),
+                original: None,
+                tidy: Some(TextTidy::Failed {
+                    by: "Claude Code".into(),
+                    message: "Claude Code failed: not signed in".into(),
+                }),
+            }
+        );
+        let nothing = tidied_outcome("", None, "Claude Code", failed);
+        assert!(matches!(
+            nothing.item,
+            QuickItem::Notice { title, .. } if title == "Could not read the text"
+        ));
+        let empty = tidied_outcome("text", Some("text"), "Codex", tidied(" ", "plain"));
+        assert!(matches!(
+            empty.item,
+            QuickItem::Text {
+                tidy: Some(TextTidy::Failed { .. }),
+                ..
+            }
+        ));
     }
 }

@@ -239,6 +239,24 @@
   user-select: text;
 }
 
+/* Code, JSON and tables keep their columns. */
+.quick-text-preview.is-code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.quick-text-actions {
+  margin-top: 0;
+}
+
+.quick-spinner.is-small {
+  width: 11px;
+  height: 11px;
+  border-width: 2px;
+}
+
 .quick-error .quick-title {
   color: #ff8589;
 }

@@ -132,6 +132,12 @@ With `newCapturesOnly`, captures that already existed when you turned describing
 
 Captures are described in the background, one at a time and newest first, once OCR has read them. Each one is scaled down to at most 1568 px on its long edge and sent with its OCR text, app and window title. A model on a CPU can take a minute or more per capture. If the endpoint cannot be reached or refuses the request, or the CLI fails, describing pauses. It tries again when you change the settings or ask for a capture to be described again, or when a new capture arrives a minute or more later. Changing the model does not redo old captures: each one records the model that described it, and you can ask for one capture, or all of them, to be described again.
 
+### Tidying captured text
+
+While AI descriptions are on, **Capture text** also asks the same provider to read the text again (`tidy.rs`), unless `ai.tidyText` is `false`. The local OCR text is copied at once and the card says the AI is working. The region then goes to the provider with the OCR text as a hint, and the model answers `{"text", "format", "language"}`. `format` is one of `plain`, `json`, `yaml`, `xml`, `sql`, `code` or `table`.
+
+Valid JSON is re-indented in Rust token by token, so key order and long numbers are kept exactly. The answer replaces the card's text, and the clipboard's only while it still holds what OCR copied. The card's **Copy as read** copies the OCR text. When OCR finds nothing, the AI's text is the only one. Closing the card, or a newer capture, drops a late answer.
+
 ### Settings
 
 `settings.json` lives in the app data directory (`com.kerwincarpede.grabit`):

@@ -37,6 +37,8 @@ export interface AiPreferences {
   apiKey: string | null;
   /** Leave captures from before AI descriptions were turned on alone. */
   newCapturesOnly: boolean;
+  /** Text captures are read again by the same AI, which fixes OCR mistakes and lays out JSON, code and tables. Only while {@link enabled}. */
+  tidyText: boolean;
   /** Grab-it turned describing on by itself and the Library has not said so yet. Only the backend changes it. */
   noticePending: boolean;
   /** Where {@link apiKey} is kept: the OS keychain, or settings.json when there is none. Only the backend changes it. */
@@ -53,6 +55,7 @@ export const DEFAULT_AI_PREFERENCES: AiPreferences = {
   codexModel: "",
   apiKey: null,
   newCapturesOnly: true,
+  tidyText: true,
   noticePending: false,
   apiKeyStorage: "settingsFile",
 };

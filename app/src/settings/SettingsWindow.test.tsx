@@ -422,6 +422,10 @@ describe("SettingsWindow AI descriptions", () => {
     expect(key).toHaveValue("sk-secret");
     expect(screen.getByText(/Only cloud providers need one/)).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: /Only describe new captures/ })).toBeChecked();
+    // Tidying text is on, but waits for AI to be turned on.
+    const tidy = screen.getByRole("switch", { name: /Tidy up captured text/ });
+    expect(tidy).toBeChecked();
+    expect(tidy).toBeDisabled();
     expect(screen.getByText(/nothing leaves this computer; a cloud endpoint receives your screenshots/)).toBeInTheDocument();
     // Nothing to re-describe while it is off.
     expect(screen.getByRole("button", { name: "Re-describe all…" })).toBeDisabled();
@@ -447,6 +451,12 @@ describe("SettingsWindow AI descriptions", () => {
     await waitFor(() => expect(newOnly).not.toBeChecked());
     expect(backend.ai).toEqual({ ...DEFAULT_AI_PREFERENCES, enabled: true, newCapturesOnly: false });
     expect(screen.getByRole("status")).toHaveTextContent("Saved.");
+
+    const tidy = screen.getByRole("switch", { name: /Tidy up captured text/ });
+    await waitFor(() => expect(tidy).toBeEnabled());
+    await userEvent.click(tidy);
+    await waitFor(() => expect(tidy).not.toBeChecked());
+    expect(backend.ai).toEqual({ ...DEFAULT_AI_PREFERENCES, enabled: true, newCapturesOnly: false, tidyText: false });
   });
 
   it("saves a cloud endpoint, model and key", async () => {

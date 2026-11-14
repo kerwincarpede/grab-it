@@ -205,19 +205,14 @@ impl Clients {
     }
 }
 
-/// The capture as a PNG `data:` URL, scaled down to fit [`MAX_IMAGE_EDGE`].
-pub fn image_data_url(png: &Path) -> Result<String, AiError> {
-    Ok(format!("data:image/png;base64,{}", png_base64(png)?))
-}
-
-/// The capture as base64 PNG bytes, scaled down to fit [`MAX_IMAGE_EDGE`].
-pub fn png_base64(png: &Path) -> Result<String, AiError> {
-    Ok(BASE64_STANDARD.encode(png_bytes(png)?))
-}
-
 /// The capture as PNG bytes, scaled down to fit [`MAX_IMAGE_EDGE`].
 pub fn png_bytes(png: &Path) -> Result<Vec<u8>, AiError> {
     let image = image::open(png).map_err(|err| AiError::Image(err.to_string()))?;
+    fit_png(image)
+}
+
+/// `image` as PNG bytes, scaled down to fit [`MAX_IMAGE_EDGE`].
+pub fn fit_png(image: image::DynamicImage) -> Result<Vec<u8>, AiError> {
     let image = if image.width().max(image.height()) > MAX_IMAGE_EDGE {
         image.resize(
             MAX_IMAGE_EDGE,
@@ -292,9 +287,15 @@ pub fn prompt(job: &AiJob) -> String {
     prompt
 }
 
-/// A chat completion request for `model` with one user message: `text`,
-/// after an image when there is one.
-fn request_body(model: &str, text: &str, image: Option<&str>, max_tokens: u32) -> Value {
+/// A chat completion request for `model` with `system` as the system
+/// prompt and one user message: `text`, after an image when there is one.
+fn request_body(
+    model: &str,
+    system: &str,
+    text: &str,
+    image: Option<&str>,
+    max_tokens: u32,
+) -> Value {
     let mut content = Vec::new();
     if let Some(url) = image {
         content.push(json!({ "type": "image_url", "image_url": { "url": url } }));
@@ -303,7 +304,7 @@ fn request_body(model: &str, text: &str, image: Option<&str>, max_tokens: u32) -
     json!({
         "model": model,
         "messages": [
-            { "role": "system", "content": SYSTEM_PROMPT },
+            { "role": "system", "content": system },
             { "role": "user", "content": content },
         ],
         "stream": false,
@@ -417,7 +418,7 @@ fn complete(agent: &ureq::Agent, ai: &AiSettings, mut body: Value) -> Result<Str
 
 /// The first JSON object in `text`: code fences and chatter around it are
 /// ignored.
-fn first_object(text: &str) -> Option<&str> {
+pub(crate) fn first_object(text: &str) -> Option<&str> {
     let start = text.find('{')?;
     let mut depth = 0usize;
     let mut in_string = false;
@@ -512,38 +513,72 @@ pub fn parse_description(reply: &str) -> Result<AiDescription, AiError> {
     })
 }
 
+/// One question about one image, for whichever provider is chosen.
+pub struct Ask<'a> {
+    /// The system prompt; Codex gets it ahead of the prompt.
+    pub system: &'a str,
+    /// The instructions, after the image.
+    pub prompt: &'a str,
+    /// The image as PNG bytes, already scaled down.
+    pub png: &'a [u8],
+    /// The JSON schema the answer follows, for providers that hold their
+    /// answer to one.
+    pub schema: &'a Value,
+    /// The longest answer an endpoint may give, in tokens.
+    pub max_tokens: u32,
+}
+
+/// Asks the provider's model `question` and returns its reply as sent.
+pub fn ask(clients: &Clients, ai: &AiSettings, question: &Ask) -> Result<String, AiError> {
+    match ai.provider() {
+        AiProvider::Endpoint => {
+            let url = format!(
+                "data:image/png;base64,{}",
+                BASE64_STANDARD.encode(question.png)
+            );
+            let body = request_body(
+                &ai.model,
+                question.system,
+                question.prompt,
+                Some(&url),
+                question.max_tokens,
+            );
+            complete(&clients.http, ai, body)
+        }
+        AiProvider::ClaudeCode => ai_cli::claude_reply(
+            clients.claude()?,
+            &ai.claude_model(),
+            question.system,
+            question.prompt,
+            &BASE64_STANDARD.encode(question.png),
+            clients.cli_timeout,
+        ),
+        AiProvider::Codex => ai_cli::codex_reply(
+            clients.codex()?,
+            ai.codex_model().as_deref(),
+            question.system,
+            question.prompt,
+            question.png,
+            question.schema,
+            clients.cli_timeout,
+        ),
+    }
+}
+
 /// Asks the provider's model about one capture.
 pub fn describe(clients: &Clients, ai: &AiSettings, job: &AiJob) -> Result<AiDescription, AiError> {
-    let reply = match ai.provider() {
-        AiProvider::Endpoint => {
-            let image = image_data_url(&job.path)?;
-            let body = request_body(&ai.model, &prompt(job), Some(&image), 400);
-            complete(&clients.http, ai, body)?
-        }
-        AiProvider::ClaudeCode => {
-            let claude = clients.claude()?;
-            let image = png_base64(&job.path)?;
-            ai_cli::claude_reply(
-                claude,
-                &ai.claude_model(),
-                &prompt(job),
-                &image,
-                clients.cli_timeout,
-            )?
-        }
-        AiProvider::Codex => {
-            let codex = clients.codex()?;
-            let image = png_bytes(&job.path)?;
-            ai_cli::codex_reply(
-                codex,
-                ai.codex_model().as_deref(),
-                &prompt(job),
-                &image,
-                &description_schema(),
-                clients.cli_timeout,
-            )?
-        }
-    };
+    let png = png_bytes(&job.path)?;
+    let reply = ask(
+        clients,
+        ai,
+        &Ask {
+            system: SYSTEM_PROMPT,
+            prompt: &prompt(job),
+            png: &png,
+            schema: &description_schema(),
+            max_tokens: 400,
+        },
+    )?;
     parse_description(&reply)
 }
 
@@ -587,41 +622,26 @@ pub fn test_connection(clients: &Clients, ai: &AiSettings) -> Result<String, AiE
     ))
     .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
     .map_err(|err| AiError::Image(err.to_string()))?;
-    let image = BASE64_STANDARD.encode(&bytes);
-    let (reply, answered) = match ai.provider() {
-        AiProvider::Endpoint => {
-            let url = format!("data:image/png;base64,{image}");
-            let body = request_body(&ai.model, TEST_PROMPT, Some(&url), 20);
-            let reply = complete(&clients.http, ai, body)?;
-            (reply, format!("{} at {} answered.", ai.model, ai.endpoint))
-        }
+    let reply = ask(
+        clients,
+        ai,
+        &Ask {
+            system: SYSTEM_PROMPT,
+            prompt: TEST_PROMPT,
+            png: &bytes,
+            schema: &test_schema(),
+            max_tokens: 20,
+        },
+    )?;
+    let answered = match ai.provider() {
+        AiProvider::Endpoint => format!("{} at {} answered.", ai.model, ai.endpoint),
         AiProvider::ClaudeCode => {
-            let claude = clients.claude()?;
-            let model = ai.claude_model();
-            let reply =
-                ai_cli::claude_reply(claude, &model, TEST_PROMPT, &image, clients.cli_timeout)?;
-            (
-                reply,
-                format!("{} ({model}) answered.", ai_cli::CLAUDE_NAME),
-            )
+            format!("{} ({}) answered.", ai_cli::CLAUDE_NAME, ai.claude_model())
         }
-        AiProvider::Codex => {
-            let codex = clients.codex()?;
-            let model = ai.codex_model();
-            let reply = ai_cli::codex_reply(
-                codex,
-                model.as_deref(),
-                TEST_PROMPT,
-                &bytes,
-                &test_schema(),
-                clients.cli_timeout,
-            )?;
-            let name = match &model {
-                Some(model) => format!("{} ({model})", ai_cli::CODEX_NAME),
-                None => ai_cli::CODEX_NAME.to_owned(),
-            };
-            (reply, format!("{name} answered."))
-        }
+        AiProvider::Codex => match ai.codex_model() {
+            Some(model) => format!("{} ({model}) answered.", ai_cli::CODEX_NAME),
+            None => format!("{} answered.", ai_cli::CODEX_NAME),
+        },
     };
     if reply.trim().is_empty() {
         return Err(AiError::Response("the model sent an empty reply".into()));
@@ -879,7 +899,7 @@ fn wait_to_retry(receiver: &Receiver<Wake>) -> bool {
     true
 }
 
-fn current_settings(app: &AppHandle) -> AiSettings {
+pub(crate) fn current_settings(app: &AppHandle) -> AiSettings {
     lock(&app.state::<SettingsState>())
         .get()
         .preferences
@@ -1167,14 +1187,11 @@ mod tests {
         RgbaImage::from_pixel(3200, 1000, Rgba([1, 2, 3, 255]))
             .save(&png)
             .unwrap();
-        let url = image_data_url(&png).unwrap();
-        let bytes = BASE64_STANDARD
-            .decode(url.strip_prefix("data:image/png;base64,").unwrap())
-            .unwrap();
+        let bytes = png_bytes(&png).unwrap();
         let image = image::load_from_memory(&bytes).unwrap();
         assert_eq!((image.width(), image.height()), (MAX_IMAGE_EDGE, 490));
         assert!(matches!(
-            image_data_url(&dir.path().join("missing.png")),
+            png_bytes(&dir.path().join("missing.png")),
             Err(AiError::Image(_))
         ));
     }
@@ -1332,6 +1349,7 @@ mod tests {
             codex_model: String::new(),
             api_key: None,
             new_captures_only: false,
+            tidy_text: true,
             notice_pending: false,
             api_key_storage: Default::default(),
         }
