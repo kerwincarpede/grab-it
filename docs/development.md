@@ -78,7 +78,7 @@ The overlay has to appear the moment it is asked for, so a spare overlay window 
 
 The text in each image is read by [ocrs](https://github.com/robertknight/ocrs) in the background, one capture at a time, newest first. Tags, notes, app and window title are searchable straight away.
 
-The same pass decodes any QR codes and barcodes in the image (`codes::decode`, as Capture text does) and appends their values to the stored text, one per line (`ocr::with_codes`), so search finds a capture by what its codes hold and **Copy text** includes them. Captures read before this was added are not read again.
+The same pass decodes any QR codes and barcodes in the image (`codes::decode`, as Capture text does) and appends their values to the stored text, one per line (`ocr::with_codes`), so search finds a capture by what its codes hold and **Copy text** includes them. The plain text is stored before decoding (`ocr::store_text`): release builds abort on a panic, so a capture that crashes the decoder is already read and is not retried on every launch. Captures read before this was added are not read again.
 
 The OCR models (about 12 MB) are not bundled: they are downloaded into `ocr-models/` in the app data directory the first time a capture needs reading, with progress shown in the Library. If the download fails, the Library offers **Retry**; the next capture also retries. Set `GRAB_IT_OCR_MODELS` to use another models directory.
 

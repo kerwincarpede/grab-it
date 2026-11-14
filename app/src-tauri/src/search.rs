@@ -1043,7 +1043,7 @@ mod tests {
 
         let job = library.next_for_ocr().unwrap().unwrap();
         assert_eq!(job.id, shot.id);
-        let text = engine().read_capture(&job.path).unwrap();
+        let (text, _) = engine().read_capture(&job.path).unwrap();
         library.set_ocr_text(job.id, &text).unwrap();
 
         let page = library.search(&words(prefix), 0, 10).unwrap();

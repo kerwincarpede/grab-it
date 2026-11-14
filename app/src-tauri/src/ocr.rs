@@ -26,9 +26,11 @@ use rten::Model;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use image::RgbaImage;
+
 use crate::{
     codes::{self, Code},
-    library::{LIBRARY_CHANGED_EVENT, LibraryState},
+    library::{LIBRARY_CHANGED_EVENT, LibraryResult, LibraryState},
 };
 
 /// Where the models live, under the app data directory.
@@ -245,13 +247,12 @@ impl Ocr {
         Ok(Self { engine })
     }
 
-    /// The text in a capture file, one line of text per line, followed by
-    /// the values of the codes in it, as the library stores a capture's text.
-    pub fn read_capture(&self, png: &Path) -> OcrResult<String> {
+    /// The text in a capture file, one line of text per line, and the
+    /// capture itself, for [`store_text`] to decode its codes from.
+    pub fn read_capture(&self, png: &Path) -> OcrResult<(String, RgbaImage)> {
         let image = image::open(png)?.into_rgba8();
-        let codes = codes::decode(&image);
-        let text = self.read_image(&image::DynamicImage::ImageRgba8(image).into_rgb8())?;
-        Ok(with_codes(&text, &codes))
+        let text = self.read_image(&image::DynamicImage::ImageRgba8(image.clone()).into_rgb8())?;
+        Ok((text, image))
     }
 
     /// The text in an image already in memory, one line of text per line.
@@ -289,6 +290,30 @@ pub fn with_codes(text: &str, codes: &[Code]) -> String {
     } else {
         format!("{}\n{values}", text.trim_end())
     }
+}
+
+/// Stores `text`, read from `image`, as the text of shot `id`, then decodes
+/// the codes in `image` and, when it holds any, stores the text again with
+/// their values ([`with_codes`]). Returns what is stored.
+///
+/// The plain text is stored before decoding on purpose: release builds
+/// abort on a panic, so a capture that crashes rxing is by then already
+/// read, and the OCR queue does not pick it up and crash again on every
+/// launch. That capture is only missing its codes.
+pub fn store_text(
+    library: &LibraryState,
+    id: i64,
+    text: &str,
+    image: &RgbaImage,
+) -> LibraryResult<String> {
+    library.lock().set_ocr_text(id, text)?;
+    let codes = codes::decode(image);
+    if codes.is_empty() {
+        return Ok(text.to_owned());
+    }
+    let full = with_codes(text, &codes);
+    library.lock().set_ocr_text(id, &full)?;
+    Ok(full)
 }
 
 /// What the OCR queue is doing. Mirrors `OcrStatus` in src/library/api.ts.
@@ -474,9 +499,9 @@ fn run(app: &AppHandle, models: &Path, receiver: &Receiver<()>) {
         set_status(app, OcrStatus::Working { pending });
         // The library is not locked while OCR runs, so the windows stay
         // responsive.
-        let text = ocr.read_capture(&job.path);
-        let saved = match text {
-            Ok(text) => library.lock().set_ocr_text(job.id, &text),
+        let read = ocr.read_capture(&job.path);
+        let saved = match read {
+            Ok((text, image)) => store_text(&library, job.id, &text, &image).map(|_| ()),
             Err(err) => {
                 eprintln!("Grab-it: could not OCR {}: {err}", job.path.display());
                 library.lock().mark_ocr_failed(job.id)
@@ -585,7 +610,7 @@ pub(crate) mod tests {
 
     #[test]
     fn ocr_reads_the_fixture_word() {
-        let text = engine().read_capture(&fixture_png()).unwrap();
+        let (text, _) = engine().read_capture(&fixture_png()).unwrap();
         assert!(
             text.to_lowercase().contains(FIXTURE_WORD),
             "OCR read {text:?}"
@@ -628,11 +653,26 @@ pub(crate) mod tests {
         assert_eq!(with_codes("", &[]), "");
     }
 
+    /// A library holding one capture, and its id.
+    fn library_with_a_capture(dir: &Path) -> (LibraryState, i64) {
+        let originals = dir.join(crate::capture::ORIGINALS_DIR);
+        fs::create_dir_all(&originals).unwrap();
+        let png = originals.join("Grab-it 2026-03-07 09-00-00.png");
+        fs::copy(fixture_png(), &png).unwrap();
+        let mut library = crate::library::Library::open_in_memory().unwrap();
+        let id = library.add_capture(&png).unwrap().id;
+        (LibraryState::new(library), id)
+    }
+
+    fn stored(library: &LibraryState, id: i64) -> crate::library::ShotText {
+        library.lock().text(id).unwrap()
+    }
+
     #[test]
-    fn a_capture_is_read_with_the_values_of_its_codes() {
+    fn a_capture_is_stored_with_the_values_of_its_codes() {
         use crate::codes::tests::{canvas, draw};
         let dir = tempfile::TempDir::new().unwrap();
-        let png = dir.path().join("code.png");
+        let (library, id) = library_with_a_capture(dir.path());
         let mut image = canvas(400, 400);
         let qr = draw(
             "https://example.com/ticket",
@@ -641,12 +681,35 @@ pub(crate) mod tests {
             260,
         );
         image::imageops::overlay(&mut image, &qr, 70, 70);
-        image.save(&png).unwrap();
-        let text = engine().read_capture(&png).unwrap();
-        assert!(
-            text.ends_with("https://example.com/ticket"),
-            "read {text:?}"
+        let text = store_text(&library, id, "Your ticket", &image).unwrap();
+        assert_eq!(text, "Your ticket\nhttps://example.com/ticket");
+        assert_eq!(
+            stored(&library, id),
+            crate::library::ShotText::Read { text }
         );
+    }
+
+    #[test]
+    fn a_capture_without_codes_is_stored_with_its_text_alone() {
+        use crate::codes::tests::canvas;
+        let dir = tempfile::TempDir::new().unwrap();
+        let (library, id) = library_with_a_capture(dir.path());
+        let text = store_text(&library, id, "Order pineapple today", &canvas(300, 200)).unwrap();
+        assert_eq!(text, "Order pineapple today");
+        assert_eq!(
+            stored(&library, id),
+            crate::library::ShotText::Read { text }
+        );
+    }
+
+    #[test]
+    fn a_deleted_capture_is_not_decoded() {
+        use crate::codes::tests::canvas;
+        let library = LibraryState::new(crate::library::Library::open_in_memory().unwrap());
+        assert!(matches!(
+            store_text(&library, 42, "gone", &canvas(10, 10)),
+            Err(crate::library::LibraryError::NotFound(42))
+        ));
     }
 
     #[test]
@@ -656,7 +719,7 @@ pub(crate) mod tests {
         image::RgbImage::from_pixel(200, 80, image::Rgb([255, 255, 255]))
             .save(&blank)
             .unwrap();
-        assert_eq!(engine().read_capture(&blank).unwrap(), "");
+        assert_eq!(engine().read_capture(&blank).unwrap().0, "");
     }
 
     #[test]

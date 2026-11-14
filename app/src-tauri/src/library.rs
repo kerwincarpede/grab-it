@@ -1385,15 +1385,18 @@ pub fn library_copy_text(id: i64, app: AppHandle) -> Result<String, String> {
                 .into_rgba8();
             let text = crate::ocr::read_now(&app, &image)
                 .map_err(|err| format!("could not read the text: {err}"))?;
-            let text = crate::ocr::with_codes(&text, &crate::codes::decode(&image));
-            match library.lock().set_ocr_text(id, &text) {
-                Ok(()) => {
+            // Stored before its codes are decoded, as the OCR queue does.
+            match crate::ocr::store_text(&library, id, &text, &image) {
+                Ok(stored) => {
                     let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
                     crate::ai::wake(&app);
+                    stored
                 }
-                Err(err) => eprintln!("Grab-it: could not store the text of shot {id}: {err}"),
+                Err(err) => {
+                    eprintln!("Grab-it: could not store the text of shot {id}: {err}");
+                    text
+                }
             }
-            text
         }
     };
     if text.trim().is_empty() {
