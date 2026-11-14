@@ -1,18 +1,19 @@
 diff --git a/app/src-tauri/src/lib.rs b/app/src-tauri/src/lib.rs
-index 0fb5f47..921b28e 100644
+index 0fb5f47..a20502b 100644
 --- a/app/src-tauri/src/lib.rs
 +++ b/app/src-tauri/src/lib.rs
-@@ -102,6 +102,8 @@ pub fn run() {
+@@ -102,6 +102,9 @@ pub fn run() {
              hotkeys::resume_hotkeys,
              overlay::overlay_info,
              overlay::overlay_image,
 +            overlay::overlay_bench_config,
 +            overlay::overlay_bench_log,
++            overlay::overlay_bench_opaque,
              overlay::overlay_ready,
              overlay::overlay_finish,
              overlay::overlay_cancel,
 diff --git a/app/src-tauri/src/overlay.rs b/app/src-tauri/src/overlay.rs
-index b7cb69e..dcacc61 100644
+index b7cb69e..5d71b7e 100644
 --- a/app/src-tauri/src/overlay.rs
 +++ b/app/src-tauri/src/overlay.rs
 @@ -444,7 +444,9 @@ fn encode_later(image: &Arc<RgbaImage>, started: Instant) -> Encoded {
@@ -39,7 +40,7 @@ index b7cb69e..dcacc61 100644
      // Placed after the level change, so the window keeps the monitor's
      // full size, menu bar area included, and the region scale (image width
      // over viewport width) holds vertically too.
-@@ -1369,3 +1374,14 @@ mod tests {
+@@ -1369,3 +1374,69 @@ mod tests {
          assert_eq!(find_monitor(&wanted, &[]), None);
      }
  }
@@ -50,9 +51,64 @@ index b7cb69e..dcacc61 100644
 +    std::env::var("GRAB_IT_OVERLAY_BENCH").ok()
 +}
 +
-+#[tauri::command]
++// Async: off the main thread, which `ps` would otherwise hold up for tens of
++// milliseconds, right as the next phase starts.
++#[tauri::command(async)]
 +pub fn overlay_bench_log(line: String) {
 +    eprintln!("BENCH {line}");
++    // Cumulative CPU seconds of WindowServer and of the WebKit GPU processes
++    // no older than this app, so each phase can be costed on its own.
++    let Ok(out) = std::process::Command::new("ps")
++        .args(["-axo", "pid=,etime=,time=,comm="])
++        .output()
++    else {
++        return;
++    };
++    let secs = |t: &str| {
++        t.replace('-', ":")
++            .split(':')
++            .fold(0.0, |v, x| v * 60.0 + x.parse::<f64>().unwrap_or(0.0))
++    };
++    let text = String::from_utf8_lossy(&out.stdout);
++    let rows: Vec<(u32, f64, f64, String)> = text
++        .lines()
++        .filter_map(|l| {
++            let mut f = l.split_whitespace();
++            let pid = f.next()?.parse().ok()?;
++            let etime = secs(f.next()?);
++            let time = secs(f.next()?);
++            Some((pid, etime, time, f.collect::<Vec<_>>().join(" ")))
++        })
++        .collect();
++    let mine = rows
++        .iter()
++        .find(|r| r.0 == std::process::id())
++        .map_or(f64::MAX, |r| r.1);
++    let ws: f64 = rows.iter().filter(|r| r.3.ends_with("WindowServer")).map(|r| r.2).sum();
++    let gpu: f64 = rows
++        .iter()
++        .filter(|r| r.3.contains("WebKit.GPU") && r.1 <= mine + 1.0)
++        .map(|r| r.2)
++        .sum();
++    let app: f64 = rows.iter().filter(|r| r.0 == std::process::id()).map(|r| r.2).sum();
++    eprintln!("BENCHCPU ws={ws:.2} gpu={gpu:.2} app={app:.2}");
++}
++
++#[tauri::command]
++pub fn overlay_bench_opaque(window: WebviewWindow) {
++    #[cfg(target_os = "macos")]
++    {
++        use objc2::runtime::{AnyClass, AnyObject};
++        let Ok(ns_window) = window.ns_window() else { return };
++        let ns_window = ns_window.cast::<AnyObject>();
++        unsafe {
++            let black: *mut AnyObject =
++                objc2::msg_send![AnyClass::get(c"NSColor").unwrap(), blackColor];
++            let _: () = objc2::msg_send![ns_window, setBackgroundColor: black];
++            let _: () = objc2::msg_send![ns_window, setOpaque: true];
++        }
++        eprintln!("BENCH opaque set");
++    }
 +}
 diff --git a/app/src/overlay/Loupe.tsx b/app/src/overlay/Loupe.tsx
 index 1089805..17d39d4 100644
@@ -74,18 +130,18 @@ index 1089805..17d39d4 100644
      // Written straight to the DOM: the colour is only known after drawing, and
      // putting it in state would render the overlay twice per pointer move.
 diff --git a/app/src/overlay/RegionOverlay.tsx b/app/src/overlay/RegionOverlay.tsx
-index c42b19f..b602489 100644
+index b258b4f..57ba2d1 100644
 --- a/app/src/overlay/RegionOverlay.tsx
 +++ b/app/src/overlay/RegionOverlay.tsx
-@@ -30,6 +30,7 @@ import {
+@@ -38,6 +38,7 @@ import {
  } from "./geometry";
  import { drawBackdrop } from "./backdrop";
  import Loupe from "./Loupe";
-+import { benchMark, benchOff, runBench, setupBench } from "./bench";
++import { benchInvoke, benchMark, benchOff, runBench, setupBench } from "./bench";
  import "./overlay.css";
  
  interface PickableWindow {
-@@ -106,12 +107,15 @@ function RegionOverlay() {
+@@ -160,12 +161,15 @@ function RegionOverlay() {
      // backend says one has started, so this runs once on load and again on
      // that event, whichever finds the selection first.
      function start() {
@@ -101,7 +157,7 @@ index c42b19f..b602489 100644
              if (cancelled) return;
              url = toImageUrl(bytes);
              setImageUrl(url);
-@@ -199,6 +203,16 @@ function RegionOverlay() {
+@@ -253,11 +257,27 @@ function RegionOverlay() {
    }, []);
  
    const view = viewport();
@@ -112,13 +168,34 @@ index c42b19f..b602489 100644
 +    benched.current = true;
 +    const el = root.current;
 +    void setupBench().then((on) => {
-+      if (on) requestAnimationFrame(() => { benchMark("painted"); void runBench(el); });
++      if (on) requestAnimationFrame(() => {
++        benchMark("painted");
++        if (benchOff("opaque")) void benchInvoke("overlay_bench_opaque");
++        void runBench(el);
++      });
 +    });
 +  }, [image]);
  
    // Blurred once per image (and viewport size), not on every hover.
    useEffect(() => {
-@@ -298,6 +312,7 @@ function RegionOverlay() {
+     if (!image || !backdrop.current) return;
++    const t0 = performance.now();
+     setBackdropReady(drawBackdrop(backdrop.current, image, view.width, view.height));
++    window.__benchMarks = { ...(window.__benchMarks ?? {}), backdropMs: (window.__benchMarks?.start ?? 0) + performance.now() - t0 };
+   }, [image, view.width, view.height]);
+   const pickable = useMemo<PickableWindow[]>(() => {
+     if (!info) return [];
+@@ -326,7 +346,8 @@ function RegionOverlay() {
+     // Drawn before this event returns. React would otherwise render a pointer
+     // move in a task of its own, and a frame that goes out in between shows
+     // the selection where the pointer was a move ago.
+-    flushSync(follow);
++    if (benchOff("lazy")) follow();
++    else flushSync(follow);
+   }
+ 
+   function onMouseUp(event: MouseEvent) {
+@@ -358,6 +379,7 @@ function RegionOverlay() {
  
    return (
      <div
@@ -126,7 +203,7 @@ index c42b19f..b602489 100644
        className="overlay"
        data-testid="overlay"
        data-ready={info ? "true" : "false"}
-@@ -325,7 +340,8 @@ function RegionOverlay() {
+@@ -385,7 +407,8 @@ function RegionOverlay() {
              // Decoded before it counts as painted, so showing the window
              // never catches it half drawn.
              const decoded = typeof img.decode === "function" ? img.decode() : Promise.resolve();
@@ -136,7 +213,7 @@ index c42b19f..b602489 100644
            }}
          />
        )}
-@@ -389,7 +405,7 @@ function RegionOverlay() {
+@@ -464,7 +487,7 @@ function RegionOverlay() {
            />
          </>
        )}
@@ -147,10 +224,10 @@ index c42b19f..b602489 100644
        <div
 diff --git a/app/src/overlay/bench.ts b/app/src/overlay/bench.ts
 new file mode 100644
-index 0000000..81e0e18
+index 0000000..10c70ce
 --- /dev/null
 +++ b/app/src/overlay/bench.ts
-@@ -0,0 +1,196 @@
+@@ -0,0 +1,262 @@
 +// LOCAL BENCH HARNESS - NOT FOR COMMIT.
 +// Replays a 120 Hz hover sweep and drag inside the real overlay webview and
 +// reports frame timing through `overlay_bench_log`.
@@ -168,6 +245,10 @@ index 0000000..81e0e18
 +  return window.__benchOff?.has(flag) ?? false;
 +}
 +
++export function benchInvoke(cmd: string) {
++  return invoke(cmd).catch(() => {});
++}
++
 +export function benchMark(name: string) {
 +  (window.__benchMarks ??= {})[name] = performance.now();
 +}
@@ -181,8 +262,13 @@ index 0000000..81e0e18
 +const CSS: Record<string, string> = {
 +  noblend: ".overlay-guide{mix-blend-mode:normal!important}",
 +  noguides: ".overlay-guide{display:none!important}",
-+  noselection: ".overlay-selection{display:none!important}",
++  noselection: ".overlay-frame,.overlay-window{display:none!important}",
 +  nodim: ".overlay-dim{display:none!important}",
++  // Puts back the 0.01ms transition App.css used to give every element
++  // under Reduce Motion, to cost it on its own.
++  leak: ".overlay,.overlay *{transition:all 0.01ms!important}",
++  nowillchange:
++    ".overlay-dim-piece,.overlay-frame-edge,.overlay-frame-tick,.overlay-frame .overlay-label{will-change:auto!important}",
 +  nobackdrop: ".overlay-backdrop{display:none!important}",
 +  nohint: ".overlay-hint{display:none!important}",
 +  noimage: ".overlay-image{display:none!important}",
@@ -226,6 +312,21 @@ index 0000000..81e0e18
 +  renderP95: number;
 +}
 +
++/**
++ * Where each piece that follows the pointer is about to be painted, as the
++ * x it should share with the pointer (old markup and new). Read from the
++ * computed style, so a transition holding a piece back shows up.
++ */
++const PROBES: Record<string, (el: HTMLElement) => number> = {
++  ".overlay-guide-y": (el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).e,
++  ".overlay-selection:not(.overlay-window)": (el) => {
++    const style = getComputedStyle(el);
++    return parseFloat(style.left) + parseFloat(style.width);
++  },
++  ".overlay-frame-edge:nth-child(4)": (el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).e,
++  ".overlay-dim-piece:nth-child(4)": (el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).e,
++};
++
 +async function runPhase(
 +  phase: string,
 +  target: Element,
@@ -233,6 +334,15 @@ index 0000000..81e0e18
 +  path: (t: number) => { x: number; y: number },
 +  buttons: number,
 +): Promise<PhaseStats> {
++  // `probe`: of the frames drawn, how many painted each piece somewhere
++  // other than at the latest pointer position. Costs a style read per frame,
++  // so not on by default.
++  const probing = benchOff("probe");
++  // `raw`: moves are dispatched as the browser dispatches them, leaving it
++  // to the page when it renders. Otherwise each is flushed at once.
++  const raw = benchOff("raw");
++  let lastX: number | null = null;
++  const behind: Record<string, [number, number]> = {};
 +  const frameTimes: number[] = [];
 +  const renders: number[] = [];
 +  const scripts: number[] = [];
@@ -243,6 +353,17 @@ index 0000000..81e0e18
 +  const onFrame = (ts: number) => {
 +    if (!running) return;
 +    frameTimes.push(ts);
++    if (probing && lastX !== null) {
++      for (const [selector, paintedX] of Object.entries(PROBES)) {
++        // The tint only ends at the pointer while a region is dragged.
++        if (buttons === 0 && selector.startsWith(".overlay-dim")) continue;
++        const el = document.querySelector<HTMLElement>(selector);
++        if (!el) continue;
++        const seen = (behind[selector] ??= [0, 0]);
++        seen[1]++;
++        if (Math.abs(paintedX(el) - lastX) > 0.5) seen[0]++;
++      }
++    }
 +    rafAt = performance.now();
 +    channel.port2.postMessage(0);
 +    requestAnimationFrame(onFrame);
@@ -251,6 +372,11 @@ index 0000000..81e0e18
 +
 +  const start = performance.now();
 +  let moves = 0;
++  // Transitions and animations running halfway through: none should be.
++  let anims: Animation[] = [];
++  setTimeout(() => {
++    anims = document.getAnimations();
++  }, ms / 2);
 +  await new Promise<void>((resolve) => {
 +    const step = () => {
 +      const now = performance.now();
@@ -264,7 +390,9 @@ index 0000000..81e0e18
 +        bubbles: true,
 +      });
 +      const s0 = performance.now();
-+      flushSync(() => target.dispatchEvent(ev));
++      lastX = ev.clientX;
++      if (raw) target.dispatchEvent(ev);
++      else flushSync(() => target.dispatchEvent(ev));
 +      scripts.push(performance.now() - s0);
 +      moves++;
 +      // Next 120 Hz slot from the start, as a pointer would deliver it.
@@ -295,7 +423,22 @@ index 0000000..81e0e18
 +    scriptP95: r1(pct(sortedScripts, 0.95)),
 +    renderPerFrame: r1(mean(sortedRenders)),
 +    renderP95: r1(pct(sortedRenders, 0.95)),
-+  };
++    // When the longest frame was, in ms into the phase, and the worst
++    // single move and style pass: says what a hitch was made of.
++    maxAt: (() => {
++      let at = 0;
++      for (let i = 1; i < frameTimes.length; i++) {
++        if (frameTimes[i] - frameTimes[i - 1] > frameTimes[at + 1] - frameTimes[at]) at = i - 1;
++      }
++      return Math.round(frameTimes[at] - frameTimes[0]);
++    })(),
++    scriptMax: r1(sortedScripts[sortedScripts.length - 1] ?? 0),
++    renderMax: r1(sortedRenders[sortedRenders.length - 1] ?? 0),
++    anims: anims.length,
++    behind: Object.fromEntries(
++      Object.entries(behind).map(([k, [late, all]]) => [k, `${late}/${all}`]),
++    ),
++  } as PhaseStats;
 +}
 +
 +export async function runBench(target: Element) {

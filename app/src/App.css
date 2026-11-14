@@ -1025,7 +1025,13 @@ label:has(input:checked) .corner-card::after {
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    /*
+     * None, rather than a very short one. With any duration at all, every
+     * element transitions every property it changes, having `all` as its
+     * default: whatever follows the pointer (a selection, a crop handle) was
+     * drawn a frame behind it, each move starting a transition of its own.
+     */
+    transition: none !important;
   }
 }
 

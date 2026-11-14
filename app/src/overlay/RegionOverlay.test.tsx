@@ -42,6 +42,10 @@ function mockOverlay(info: Partial<OverlayInfo> = {}): Call[] {
 
 const last = (calls: Call[]) => calls[calls.length - 1];
 
+/** The transforms that place the pieces matching `selector` inside `root`. */
+const pieces = (root: HTMLElement, selector: string) =>
+  [...root.querySelectorAll<HTMLElement>(selector)].map((piece) => piece.style.transform);
+
 /** Waits until overlay_info has loaded. */
 async function ready() {
   const overlay = screen.getByTestId("overlay");
@@ -88,6 +92,49 @@ describe("RegionOverlay", () => {
     );
   });
 
+  it("follows a drag by moving pieces, with nothing resized or cut out", async () => {
+    mockOverlay();
+    render(<RegionOverlay />);
+    const overlay = await ready();
+
+    // Nothing selected: the tint is one piece over the whole screen.
+    expect(pieces(screen.getByTestId("overlay-dim"), ".overlay-dim-piece")[0]).toBe(
+      "translate(0px, 0px) scale(1000, 800)",
+    );
+
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 500, clientY: 400 });
+    fireEvent.mouseMove(overlay, { clientX: 700, clientY: 500 });
+    const dim = screen.getByTestId("overlay-dim");
+    expect(pieces(dim, ".overlay-dim-piece")).toEqual([
+      "translate(0px, 0px) scale(1000, 400)",
+      "translate(0px, 500px) scale(1000, 300)",
+      "translate(0px, 400px) scale(500, 100)",
+      "translate(700px, 400px) scale(300, 100)",
+    ]);
+    // A dragged region has square corners.
+    expect(dim.querySelector(".overlay-dim-corner")).not.toBeInTheDocument();
+
+    const frame = screen.getByTestId("overlay-selection");
+    expect(frame).toHaveClass("overlay-frame");
+    expect(frame.style.width).toBe("");
+    expect(pieces(frame, ".overlay-frame-edge")).toEqual([
+      "translate(499px, 399px) scale(202, 1)",
+      "translate(499px, 500px) scale(202, 1)",
+      "translate(499px, 400px) scale(1, 100)",
+      "translate(700px, 400px) scale(1, 100)",
+    ]);
+    expect(pieces(frame, ".overlay-frame-tick")).toEqual([
+      "translate(497px, 397px)",
+      "translate(691px, 397px)",
+      "translate(497px, 491px)",
+      "translate(691px, 491px)",
+    ]);
+    expect(screen.getByTestId("overlay-size")).toHaveTextContent("200 × 100");
+    expect(screen.getByTestId("overlay-size").style.transform).toBe(
+      "translate(500px, 392px) translate(0, -100%)",
+    );
+  });
+
   it("highlights the window under the cursor and captures it on click", async () => {
     const calls = mockOverlay();
     render(<RegionOverlay />);
@@ -103,7 +150,21 @@ describe("RegionOverlay", () => {
     const blur = screen.getByTestId("overlay-blur");
     expect(blur).toHaveClass("overlay-backdrop");
     expect(blur.style.clipPath).toContain("M110 100H290");
-    expect(screen.getByTestId("overlay-dim").style.clipPath).toContain("M110 100H290");
+    // The tint leaves the window clear too: four pieces around it, and one
+    // rounding off each corner.
+    const dim = screen.getByTestId("overlay-dim");
+    expect(pieces(dim, ".overlay-dim-piece")).toEqual([
+      "translate(0px, 0px) scale(1000, 100)",
+      "translate(0px, 250px) scale(1000, 550)",
+      "translate(0px, 100px) scale(100, 150)",
+      "translate(300px, 100px) scale(700, 150)",
+    ]);
+    expect(pieces(dim, ".overlay-dim-corner")).toEqual([
+      "translate(100px, 100px)",
+      "translate(290px, 100px)",
+      "translate(100px, 240px)",
+      "translate(290px, 240px)",
+    ]);
     fireEvent.mouseDown(overlay, { button: 0, clientX: 150, clientY: 150 });
     fireEvent.mouseUp(overlay, { button: 0, clientX: 151, clientY: 150 });
 
@@ -283,8 +344,8 @@ describe("RegionOverlay", () => {
     fireEvent.mouseMove(overlay, { clientX: 1000, clientY: 100 });
 
     const label = screen.getByText("100 × 100");
-    expect(label).toHaveAttribute("data-side", "below");
-    expect(label).toHaveAttribute("data-align", "end");
+    // Below the selection, hanging from its right edge by its own width.
+    expect(label.style.transform).toBe("translate(1000px, 108px) translate(-100%, 0)");
   });
 
   it("shows the key tips next to the hint", async () => {

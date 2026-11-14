@@ -26,6 +26,88 @@ and where the remaining cost is, with the tooling to reproduce every number.
   and the screen freeze (about 45 to 65 ms) is the floor of the startup
   pause. See [Open opportunities](#open-opportunities).
 
+## Round two: the selection was drawn a frame behind the pointer
+
+Branch `fix/leaner-capture-overlay`, on top of PR #72. Same machine, which
+has **Reduce Motion switched on** (System Settings, Accessibility, Display).
+That setting turned out to be the cause.
+
+- **Every piece that follows the pointer was painted where the pointer had
+  been a frame earlier.** `App.css` answered `prefers-reduced-motion` by
+  giving every element `transition-duration: 0.01ms`. An element that asks
+  for no transition has `transition-property: all`, so with any duration at
+  all it transitions every property it changes. Each pointer move started a
+  transition on the selection's `left`, `top`, `width` and `height`, on the
+  loupe's and guide lines' `transform` and on the loupe's swatch, and a
+  transition shows its old value in the frame it starts in. The tint's
+  cut-out was exempt (the overlay's own reduced-motion rule), so the hole
+  kept up while its border trailed it. Fixed at the root: the rule is now
+  `transition: none`. Nothing in the app waits for a `transitionend`.
+- **A drag no longer lays out or paints anything the size of the
+  selection.** The border was one element resized on every move, so a layer
+  as large as the selection was painted again each time, and the tint was a
+  screen-sized layer with a new `clip-path` each time. Both are now small
+  solid pieces placed by `transform` alone (`stretch`, `surround` and
+  `frameParts` in `geometry.ts`).
+- **A pointer move is rendered before its event returns** (`flushSync` in
+  `onMouseMove`). React renders a `mousemove` in a task of its own, and a
+  frame that goes out in between shows the old position.
+- **The blur is not the problem.** Switched off, it changes neither frame
+  rate nor lag. Its one cost is at the start: see open opportunity 3.
+
+Measured with the bench, medians, Reduce Motion on:
+
+| | Before (480c7e6) | After |
+|---|---|---|
+| Drag frames in which the selection was painted away from the pointer | 348 to 350 of 357 | 0 of 358 |
+| Hover frames in which the guide lines were | 287 to 297 of 300 | 0 of 300 (39 of 301 in one run of eight, unexplained) |
+| The same, new code without `flushSync` (`raw,lazy`) | n/a | hover 50 to 60 of 300; drag 0 to 70 of 359 |
+| Transitions running mid-drag | 4 | 0 |
+| GPU process CPU per 3 s drag | 625 ms | 490 ms |
+| WindowServer CPU per 3 s drag | 1220 ms | 1310 to 1380 ms |
+| App process CPU per 3 s drag | 215 ms | 210 to 240 ms |
+| Script per move, render and commit included | not measured (see below) | 0.4 to 0.8 ms |
+| Longest drag frame, median of runs | 18 ms | 12 ms |
+
+Frames reaching the screen, with the transitions left in both builds so the
+count compares like with like (`leak` puts them back): a drag went from
+about 110 a second (92 to 120 per 250 ms bucket, 6 runs) to 120 in every
+bucket (2 runs).
+
+What this round got wrong at first, so the next one does not:
+
+- **`scriptPerMove` in round one never included React's render.** The bench
+  wrapped `dispatchEvent` in `flushSync`, but React gives a `mousemove` its
+  own priority inside the dispatch, so the render ran in a later task,
+  outside the timed window. The "0.1 ms per move" above is the handler
+  alone. The page now flushes in its own handler, so the figure is real.
+- **Frames on screen (`presented.sh`) counts commits, not pictures.** With
+  the 0.01 ms transitions every move made two commits (start, then finish),
+  so every frame "changed" even while showing a stale position. Without
+  them, a frame in which the bench's timer delivered no new move has
+  nothing to commit, and a phase reads 100 to 112 or 120 depending on how
+  its timer falls against vsync. Compare builds with the same transitions
+  (`leak`), and trust the `probe` figures for lag.
+- **A bench command that blocks the main thread shows up as a hitch.**
+  `overlay_bench_log` shelling out to `ps` synchronously cost 40 to 50 ms at
+  the start of the next phase. It is async now.
+- Reading the loupe's pixels straight from the BMP bytes instead of
+  `drawImage` plus `getImageData` was tried and dropped: no change in the
+  GPU process's CPU or in script time.
+- An opaque window once the image is painted (`opaque`) cut WindowServer's
+  CPU by 15 to 20% in two runs. Not built: it needs a signal that the image
+  is really on screen, or the window flashes black.
+
+New bench switches: `probe` (per frame, is each piece painted at the latest
+pointer position), `raw` (dispatch moves without flushing them), `lazy`
+(the page does not flush either: React's default), `leak` (the 0.01 ms
+transitions back), `opaque`. `run.sh` now also prints each phase with the
+CPU spent in it (`phases.py`).
+
+Still not done: **nobody has felt this with a hand on a trackpad**, and the
+bench only ever ran with Reduce Motion on. With it off the transitions were
+never there, so expect the smaller gain: the layers and the flush.
+
 ## Constraints for any change
 
 Keep these behaviours (the user relies on them):
@@ -65,7 +147,8 @@ driven. Instead:
 
    Events are dispatched at 120 Hz slots on the `.overlay` element inside
    `flushSync`, so the measured time per move includes the handler, React's
-   render and commit, and passive effects (the loupe redraw). It reports
+   render and commit, and passive effects (the loupe redraw). (It did not
+   until round two: see above.) It reports
    through a bench-only `overlay_bench_log` command to stderr:
    - `fps`, `frameP50/P95/Max`: intervals between `requestAnimationFrame`
      callbacks;
@@ -311,8 +394,9 @@ Ranked by likely payoff. Each says how to measure it with the bench.
 - [`capture-overlay-bench/bench.patch`](capture-overlay-bench/bench.patch): the harness
   (`src/overlay/bench.ts`, hooks in `RegionOverlay.tsx` and `Loupe.tsx`,
   bench commands in `overlay.rs` and `lib.rs`, the `cap60` and `png`
-  switches). Applies to d0be414.
+  switches). Applies to this branch.
 - [`capture-overlay-bench/run.sh`](capture-overlay-bench/run.sh): runs the bench and prints medians.
 - [`capture-overlay-bench/presented.sh`](capture-overlay-bench/presented.sh),
   [`presented.swift`](capture-overlay-bench/presented.swift): frames on screen.
 - [`capture-overlay-bench/cpu.py`](capture-overlay-bench/cpu.py): CPU time per process.
+- [`capture-overlay-bench/phases.py`](capture-overlay-bench/phases.py): each phase with its CPU.

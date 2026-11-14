@@ -4,7 +4,8 @@
 #
 # Usage: run.sh <label> <switches> [runs]
 #   switches: comma-separated, "" for none. cap60, png, noloupe, nolensdraw,
-#             nodim, noguides, noblend, nobackdrop, noselection, noimage, nohint
+#             nodim, noguides, noblend, nobackdrop, noselection, noimage, nohint,
+#             opaque, leak, lazy, raw, probe (see the write-up)
 # Logs go to $BENCH_OUT (default: $TMPDIR/grab-it-bench).
 set -u
 # A running Grab-it Dev shares the bench's identifier: it would take the
@@ -59,3 +60,6 @@ if cpu: print(f"{label:14s} cpu/run {cpu}")
 if opens:
     print(f"{label:14s} open  " + " ".join(f"{k}={med([o.get(k, 0) for o in opens])}" for k in opens[0]))
 PY
+# Each phase on its own, with the CPU WindowServer, the GPU process and the
+# app spent in it.
+python3 "$HERE/phases.py" "$LOG"
