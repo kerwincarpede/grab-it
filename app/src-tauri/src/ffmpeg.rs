@@ -802,12 +802,10 @@ fn prepare(app: &AppHandle, source: Source) -> FfmpegResult<Ready> {
         Source::Download { asset, to } => {
             let mut last_percent = None;
             download(asset, &to, |downloaded, total| {
-                let step = if total > 0 {
-                    downloaded * 100 / total
-                } else {
-                    // Unknown size: report every megabyte.
-                    downloaded >> 20
-                };
+                // Every percent, or every megabyte while the size is unknown.
+                let step = (downloaded * 100)
+                    .checked_div(total)
+                    .unwrap_or(downloaded >> 20);
                 if last_percent != Some(step) {
                     last_percent = Some(step);
                     set_status(app, FfmpegStatus::Downloading { downloaded, total });
