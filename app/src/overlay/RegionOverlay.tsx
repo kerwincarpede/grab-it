@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState, type MouseEvent } from "react";
 import {
   cancelOverlay,
   finishOverlay,
+  isInstantOverlay,
+  onOverlayStart,
   overlayImage,
   overlayInfo,
   overlayReady,
@@ -63,6 +65,9 @@ function toImageUrl(bytes: ArrayBuffer): string | null {
  * clicks windows), "text" only drags, and "color" picks the pixel under a
  * click. While dragging, Shift keeps the selection square and Space moves it.
  * Esc or right-click cancels.
+ *
+ * The page is usually loaded ahead of time in a hidden spare window, and
+ * draws nothing until a selection starts on it.
  */
 function RegionOverlay() {
   const [info, setInfo] = useState<OverlayInfo | null>(null);
@@ -73,40 +78,68 @@ function RegionOverlay() {
   const [pointer, setPointer] = useState<Point | null>(null);
   const [square, setSquare] = useState(false);
   const [moving, setMoving] = useState(false);
-  // The window is on screen; until then it is hidden and nothing is dimmed.
-  const [shown, setShown] = useState(false);
+  // A hidden window was shown once the frozen image was painted.
+  const [revealed, setRevealed] = useState(false);
+  // The window may be given its size after the page has loaded.
+  const [, resized] = useReducer((count: number) => count + 1, 0);
   const done = useRef(false);
   const reported = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
+    let started = false;
     let url: string | null = null;
-    overlayInfo()
-      .then((loaded) => {
-        if (!cancelled) setInfo(loaded);
+    let unlisten: (() => void) | null = null;
+
+    // Asks for the selection on this window. A spare has none until the
+    // backend says one has started, so this runs once on load and again on
+    // that event, whichever finds the selection first.
+    function start() {
+      overlayInfo()
+        .then((loaded) => {
+          if (cancelled || started || !loaded) return;
+          started = true;
+          setInfo(loaded);
+          return overlayImage().then((bytes) => {
+            if (cancelled) return;
+            url = toImageUrl(bytes);
+            setImageUrl(url);
+          });
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) setError(String(err));
+        });
+    }
+
+    // Listening before the first ask, so a selection that starts in
+    // between is not missed.
+    onOverlayStart(start)
+      .then((stop) => {
+        if (cancelled) stop();
+        else unlisten = stop;
       })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(String(err));
-      });
-    overlayImage()
-      .then((bytes) => {
-        if (cancelled) return;
-        url = toImageUrl(bytes);
-        setImageUrl(url);
+      .catch(() => {
+        // Without events, a window made for a selection still finds it.
       })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(String(err));
-      });
+      .finally(start);
     return () => {
       cancelled = true;
+      unlisten?.();
       if (url) URL.revokeObjectURL(url);
     };
   }, []);
 
-  // The window starts hidden and is shown once the frozen image is painted,
-  // so it swaps in for the live desktop without a blank frame. An error is
-  // reported too, or it would never be seen.
-  const painted = (info !== null && image !== null) || error !== null;
+  useEffect(() => {
+    window.addEventListener("resize", resized);
+    return () => window.removeEventListener("resize", resized);
+  }, []);
+
+  // A see-through window is on screen from the start, ahead of its image.
+  const instant = isInstantOverlay();
+  // A hidden window is shown once the frozen image is painted, so it swaps
+  // in for the live desktop without a blank frame. An error is reported
+  // too, or it would never be seen.
+  const painted = (info !== null && (image !== null || instant)) || error !== null;
   useEffect(() => {
     if (!painted || reported.current) return;
     reported.current = true;
@@ -114,8 +147,10 @@ function RegionOverlay() {
       .catch(() => {
         // The backend shows the window after a timeout regardless.
       })
-      .finally(() => setShown(true));
+      .finally(() => setRevealed(true));
   }, [painted]);
+  // On screen with a selection to draw; until then nothing is dimmed.
+  const shown = revealed || (instant && info !== null);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -152,11 +187,13 @@ function RegionOverlay() {
     };
   }, []);
 
+  const view = viewport();
   const pickable = useMemo<PickableWindow[]>(() => {
     if (!info) return [];
     const monitor = { width: info.monitorWidth, height: info.monitorHeight };
-    return info.windows.map((win) => ({ window: win, box: monitorToCss(win, monitor, viewport()) }));
-  }, [info]);
+    const size = { width: view.width, height: view.height };
+    return info.windows.map((win) => ({ window: win, box: monitorToCss(win, monitor, size) }));
+  }, [info, view.width, view.height]);
 
   const intent = info?.intent ?? "capture";
   // Only screenshots can be of a window; text and colour ignore window mode.
@@ -166,10 +203,11 @@ function RegionOverlay() {
   const canDrag = intent === "text" || (picksArea && !windowMode);
   const canPickWindow = picksArea;
 
-  const view = viewport();
-  // Image pixels per CSS pixel, the same ratio the backend crops with. Until
-  // the image has loaded there is nothing to measure, so sizes read in CSS px.
-  const scale = image && image.naturalWidth > 0 ? image.naturalWidth / view.width : 1;
+  // Image pixels per CSS pixel, the same ratio the backend crops with. The
+  // image's width is known before the image has loaded; without either
+  // there is nothing to measure, so sizes read in CSS px.
+  const imageWidth = image?.naturalWidth || info?.imageWidth || 0;
+  const scale = imageWidth > 0 && view.width > 0 ? imageWidth / view.width : 1;
 
   const selection = drag && canDrag ? dragBox(drag, square, view) : null;
   const dragging = selection !== null && isDrag(selection);
@@ -245,6 +283,7 @@ function RegionOverlay() {
       data-ready={info ? "true" : "false"}
       data-intent={intent}
       data-mode={windowMode ? "window" : "region"}
+      data-dragging={dragging ? "true" : "false"}
       data-moving={dragging && moving ? "true" : "false"}
       data-shown={shown ? "true" : "false"}
       onMouseDown={onMouseDown}

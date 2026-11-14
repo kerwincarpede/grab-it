@@ -67,6 +67,8 @@ Annotations are saved in `<name>.annotations.json` beside the capture. Crop and 
 
 Region and Window freeze every monitor and show it fullscreen. Each monitor is cropped at its own scale factor, so mixed-DPI setups capture sharp.
 
+The overlay has to appear the moment it is asked for, so a spare overlay window per monitor is kept hidden with its page already loaded, and replaced after each selection. On macOS the overlay is a see-through window (hence `macOSPrivateApi` in `tauri.conf.json`), shown as soon as the monitors are frozen; the frozen image reaches the page a moment later and slots in underneath. On Windows and X11 the overlay stays hidden until the frozen image is painted.
+
 ### Wayland and macOS
 
 - **Wayland** (`WAYLAND_DISPLAY` set): captures go through the desktop's Screenshot portal, and Pick a colour uses the desktop's colour picker. Hotkeys are offered to the desktop through the GlobalShortcuts portal; where the desktop has no such portal, use the tray menu. Repeat last region and recording are not available, since only the desktop may read the screen there.
