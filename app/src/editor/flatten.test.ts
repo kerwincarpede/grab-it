@@ -1,3 +1,4 @@
+import Konva from "konva";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   angleLine,
@@ -13,7 +14,8 @@ import {
   paintBackdrop,
   type PaintLayer,
 } from "./flatten";
-import { backdropColors, sameBackdrop, type Backdrop } from "./model";
+import { backdropColors, sameBackdrop, type Backdrop, type LineShape } from "./model";
+import { curvePoints } from "./tools";
 
 describe("flatten", () => {
   it("maps the crop to stage pixels at capture resolution", () => {
@@ -299,5 +301,71 @@ describe("backdrop compose", () => {
     ], { width: 10, height: 5 }, {});
     expect(calls.map((call) => call[0])).toEqual(["fillRect", "linear", "fillRect"]);
     expect(calls[1]).toEqual(["linear", 0, 0, 10, 0, [0, "#000000", 1, "#ffffff"]]);
+  });
+});
+
+/**
+ * Exports render the content layer as ShapeNode draws it, so a curved arrow
+ * exports as Konva draws it from `curvePoints`: one bezier segment, its head
+ * turned along the curve's end rather than from start to end.
+ */
+describe("curved arrows in exports", () => {
+  function drawArrow(shape: LineShape) {
+    const calls: unknown[][] = [];
+    const record = (name: string) => (...args: unknown[]) => calls.push([name, ...args]);
+    const ctx = {
+      beginPath: record("beginPath"),
+      moveTo: record("moveTo"),
+      lineTo: record("lineTo"),
+      bezierCurveTo: record("bezierCurveTo"),
+      closePath: record("closePath"),
+      save: record("save"),
+      restore: record("restore"),
+      translate: record("translate"),
+      rotate: record("rotate"),
+      setLineDash: record("setLineDash"),
+      strokeShape: record("strokeShape"),
+      fillStrokeShape: record("fillStrokeShape"),
+    };
+    // jsdom has no 2D canvas; Konva probes one for its hit colours when a shape is made.
+    const probe = {
+      clearRect: () => undefined,
+      fillRect: () => undefined,
+      getImageData: () => ({ data: new Uint8ClampedArray(400).map((_, i) => (i % 4 === 3 ? 255 : 40)) }),
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(probe as unknown as CanvasRenderingContext2D);
+    const arrow = new Konva.Arrow({
+      points: curvePoints(shape),
+      bezier: Boolean(shape.control),
+      stroke: shape.color,
+      fill: shape.color,
+      strokeWidth: shape.strokeWidth,
+      pointerLength: 10,
+      pointerWidth: 10,
+    });
+    (arrow as unknown as { _sceneFunc: (context: unknown) => void })._sceneFunc(ctx);
+    return calls;
+  }
+
+  const arrow: LineShape = { id: "a", type: "arrow", color: "#e5484d", strokeWidth: 4, points: [0, 0, 100, 0] };
+
+  it("draws a curved arrow as one bezier with its head along the end tangent", () => {
+    const calls = drawArrow({ ...arrow, control: [50, -60] });
+    const curves = calls.filter((call) => call[0] === "bezierCurveTo");
+    expect(curves).toHaveLength(1);
+    expect(curves[0].slice(5)).toEqual([100, 0]);
+    expect(calls).toContainEqual(["translate", 100, 0]);
+    const angle = calls.find((call) => call[0] === "rotate")?.[1] as number;
+    // The quadratic's end tangent runs from the control (50, -60) to the end (100, 0).
+    const tangent = (Math.atan2(60, 50) + Math.PI * 2) % (Math.PI * 2);
+    expect(angle).toBeCloseTo(tangent);
+    expect(angle).not.toBeCloseTo(0);
+  });
+
+  it("draws a straight arrow as before", () => {
+    const calls = drawArrow(arrow);
+    expect(calls.filter((call) => call[0] === "bezierCurveTo")).toEqual([]);
+    expect(calls).toContainEqual(["lineTo", 100, 0]);
+    expect(calls.find((call) => call[0] === "rotate")?.[1]).toBeCloseTo(0);
   });
 });

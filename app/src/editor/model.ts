@@ -33,10 +33,15 @@ interface Stroked {
   strokeWidth: number;
 }
 
-/** Two points: `[x1, y1, x2, y2]`. */
+/**
+ * Two points: `[x1, y1, x2, y2]`. With `control`, a quadratic curve bent
+ * towards that point; without it (every sidecar from before curves), straight.
+ */
 export interface LineShape extends Stroked {
   type: "arrow" | "line";
   points: number[];
+  /** The quadratic curve's control point, `[cx, cy]`. */
+  control?: [number, number];
 }
 
 /** A drawn path: `[x1, y1, x2, y2, ...]`. */

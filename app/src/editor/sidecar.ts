@@ -24,7 +24,11 @@ export function isShape(value: unknown): value is Shape {
   switch (shape.type) {
     case "arrow":
     case "line":
-      return stroked && isPoints(shape.points, 4);
+      return (
+        stroked &&
+        isPoints(shape.points, 4) &&
+        isOptional(shape.control, (control) => isPoints(control, 2) && control.length === 2)
+      );
     case "freehand":
     case "highlighter":
       return stroked && isPoints(shape.points, 2);

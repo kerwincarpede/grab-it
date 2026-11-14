@@ -48,6 +48,35 @@ describe("annotations sidecar", () => {
     expect(parsed).toEqual({ version: 1, shapes: [doc.shapes[0]], crop: null });
   });
 
+  it("round-trips a curved arrow and line, and loads straight ones from before curves", () => {
+    const curved: Annotations = {
+      version: 1,
+      shapes: [
+        { id: "a", type: "arrow", color: "#e5484d", strokeWidth: 4, points: [0, 0, 100, 0], control: [50, -40] },
+        { id: "l", type: "line", color: "#e5484d", strokeWidth: 2, points: [0, 0, 100, 0], control: [50, 40] },
+      ],
+      crop: null,
+    };
+    expect(parseAnnotations(JSON.parse(JSON.stringify(serializeAnnotations(curved))))).toEqual(curved);
+    expect(parseAnnotations({ version: 1, shapes: [doc.shapes[0]] }).shapes[0]).not.toHaveProperty("control");
+  });
+
+  it("skips a line whose control point is malformed", () => {
+    const arrow = { id: "a", type: "arrow", color: "#e5484d", strokeWidth: 4, points: [0, 0, 100, 0] };
+    const parsed = parseAnnotations({
+      version: 1,
+      shapes: [
+        { ...arrow, id: "short", control: [50] },
+        { ...arrow, id: "long", control: [50, 40, 60, 70] },
+        { ...arrow, id: "text", control: ["50", 40] },
+        { ...arrow, id: "object", control: { x: 50, y: 40 } },
+        { ...arrow, id: "nan", control: [Number.NaN, 40] },
+        { ...arrow, id: "good", control: [50, 40] },
+      ],
+    });
+    expect(parsed.shapes.map((shape) => shape.id)).toEqual(["good"]);
+  });
+
   it("round-trips the newer optional fields and the backdrop", () => {
     const styled: Annotations = {
       version: 1,

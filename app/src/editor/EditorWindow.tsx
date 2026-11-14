@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
 import type Konva from "konva";
-import { Image as KonvaImage, Layer, Rect as KonvaRect, Stage, Transformer } from "react-konva";
+import { Circle, Image as KonvaImage, Layer, Rect as KonvaRect, Stage, Transformer } from "react-konva";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import "./editor.css";
@@ -44,6 +44,7 @@ import {
   widthKind,
   type Backdrop,
   type BlurMode,
+  type LineShape,
   type Point,
   type Rect,
   type Shape,
@@ -58,14 +59,18 @@ import {
   addShape,
   anchorsFor,
   beginShape,
+  bendLine,
   clampWheel,
   colorForKey,
   cropFromDrag,
+  curveMidpoint,
   deleteShape,
   dragShape,
   duplicateShape,
   finishShape,
+  hasLineHandles,
   modifierTool,
+  moveLineEnd,
   moveShape,
   newId,
   normalizeRect,
@@ -73,9 +78,11 @@ import {
   releaseRestores,
   replaceShape,
   restyleShape,
+  snapAngle,
   spotlightDim,
   stepNumbers,
   stepStrokeWidth,
+  STRAIGHTEN_SNAP,
   transformShape,
   type NodeTransform,
 } from "./tools";
@@ -243,13 +250,89 @@ function fitView(bounds: Rect, size: { width: number; height: number }): View {
 const isTyping = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
 
-/** What a pointer went down on: an annotation (its draggable node), a resize handle, or neither. */
+/** What a pointer went down on: an annotation (its draggable node), a resize or line handle, or neither. */
 function hitTarget(target: Konva.Node): { annotation: Konva.Node | null; handle: boolean } {
   for (let node: Konva.Node | null = target; node; node = node.getParent()) {
     if (node.hasName("annotation")) return { annotation: node, handle: false };
-    if (node.getClassName() === "Transformer") return { annotation: null, handle: true };
+    if (node.getClassName() === "Transformer" || node.hasName(LINE_HANDLE)) return { annotation: null, handle: true };
   }
   return { annotation: null, handle: false };
+}
+
+/** Names the bend and end handles of a selected arrow or line. */
+const LINE_HANDLE = "line-handle";
+/** Line handle radius, in screen pixels. */
+const LINE_HANDLE_RADIUS = 6;
+/** The Transformer's own anchor colour, so line handles look like the box handles. */
+const HANDLE_COLOR = "rgb(0, 161, 255)";
+
+/**
+ * A selected arrow or line's handles: one on the curve's midpoint that bends
+ * it, and one on each end. `shape` is what is shown (a drag in progress
+ * included); `base` is the shape the drag started from. A drag previews
+ * live and commits once, when it ends.
+ */
+function LineHandles({
+  shape,
+  base,
+  scale,
+  onPreview,
+  onCommit,
+}: {
+  shape: LineShape;
+  base: LineShape;
+  scale: number;
+  onPreview: (shape: LineShape) => void;
+  onCommit: (shape: LineShape) => void;
+}) {
+  /** Where each handle sits on a line: its ends, and the curve's midpoint. */
+  const places: Record<string, (line: LineShape) => Point> = {
+    start: (line) => ({ x: line.points[0], y: line.points[1] }),
+    end: (line) => ({ x: line.points[2], y: line.points[3] }),
+    bend: curveMidpoint,
+  };
+  const handle = (key: string, fill: string, update: (to: Point, shift: boolean) => LineShape) => {
+    const at = places[key](shape);
+    /**
+     * Konva leaves a dragged node under the pointer, and react-konva only
+     * re-applies x/y when they change, so a snapped result (Shift, or the
+     * straighten snap) would leave the handle off the line: put it where
+     * the line puts it.
+     */
+    const apply = (event: Konva.KonvaEventObject<DragEvent>) => {
+      const next = update(event.target.position(), event.evt.shiftKey);
+      event.target.position(places[key](next));
+      return next;
+    };
+    return (
+      <Circle
+        key={key}
+        name={`${LINE_HANDLE} ${LINE_HANDLE}-${key}`}
+        x={at.x}
+        y={at.y}
+        radius={LINE_HANDLE_RADIUS / scale}
+        fill={fill}
+        stroke={HANDLE_COLOR}
+        strokeWidth={1.5 / scale}
+        draggable
+        onDragMove={(event: Konva.KonvaEventObject<DragEvent>) => onPreview(apply(event))}
+        onDragEnd={(event: Konva.KonvaEventObject<DragEvent>) => {
+          event.cancelBubble = true;
+          onCommit(apply(event));
+        }}
+      />
+    );
+  };
+  const otherEnd = (end: 0 | 1): Point => (end === 0 ? { x: base.points[2], y: base.points[3] } : { x: base.points[0], y: base.points[1] });
+  // Shift holds a dragged end to 45° steps from the other end, as when drawing.
+  const moveEnd = (end: 0 | 1) => (to: Point, shift: boolean) => moveLineEnd(base, end, shift ? snapAngle(otherEnd(end), to) : to);
+  return (
+    <>
+      {handle("start", "#ffffff", moveEnd(0))}
+      {handle("end", "#ffffff", moveEnd(1))}
+      {handle("bend", HANDLE_COLOR, (to) => bendLine(base, to, STRAIGHTEN_SNAP / scale))}
+    </>
+  );
 }
 
 /** A tool key being held: the tool it replaced, when it went down, and whether it drew anything. */
@@ -279,6 +362,10 @@ export default function EditorWindow() {
   const [widths, setWidths] = useState<Widths>(DEFAULT_CHOICES.widths);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Shape | null>(null);
+  /** An arrow or line while one of its handles is dragged: shown, not yet committed. */
+  const [bending, setBending] = useState<LineShape | null>(null);
+  /** A selected arrow or line being dragged, so its handles follow it. */
+  const [moving, setMoving] = useState<{ id: string; transform: NodeTransform } | null>(null);
   const [cropDrag, setCropDrag] = useState<{ start: Point; end: Point } | null>(null);
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
@@ -371,14 +458,17 @@ export default function EditorWindow() {
    */
   const editable = !panning && tool !== "crop";
 
+  /** Arrows and lines get their own bend and end handles (LineHandles) instead of the box. */
+  const lineSelected = hasLineHandles(selected);
+
   // Attach the resize handles to the selected node.
   useEffect(() => {
     const transformer = transformerRef.current;
     if (!transformer) return;
-    const node = selectedId && editable ? contentRef.current?.findOne(`#${selectedId}`) : null;
+    const node = selectedId && editable && !lineSelected ? contentRef.current?.findOne(`#${selectedId}`) : null;
     transformer.nodes(node ? [node] : []);
     transformer.getLayer()?.batchDraw();
-  }, [selectedId, editable, doc]);
+  }, [selectedId, editable, lineSelected, doc]);
 
   // Notes about an action give way to the save status again.
   useEffect(() => {
@@ -560,8 +650,21 @@ export default function EditorWindow() {
   };
 
   const changeShape = (id: string, transform: NodeTransform) => {
+    setMoving(null);
     const shape = doc.shapes.find((candidate) => candidate.id === id);
     if (shape) commit(replaceShape(doc, transformShape(shape, transform)));
+  };
+
+  /** Follows a selected arrow or line as it is dragged, so its handles move with it. */
+  const moveShapeLive = (id: string, transform: NodeTransform) => {
+    if (id === selectedId && lineSelected) setMoving({ id, transform });
+  };
+
+  /** Ends a bend or end-handle drag: one undo step, unless nothing changed. */
+  const commitLine = (shape: LineShape) => {
+    setBending(null);
+    const old = doc.shapes.find((candidate) => candidate.id === shape.id);
+    if (old && JSON.stringify(old) !== JSON.stringify(shape)) commit(replaceShape(doc, shape));
   };
 
   /** Applies what fits of `next` to the selected shape. */
@@ -807,7 +910,15 @@ export default function EditorWindow() {
   const error = annotations.error ?? imageError;
   const cropPreview = cropDrag ? normalizeRect({ ...cropDrag.start, width: cropDrag.end.x - cropDrag.start.x, height: cropDrag.end.y - cropDrag.start.y }) : null;
   const crop = cropPreview ?? doc.crop ?? null;
-  const shapes = draft ? [...doc.shapes, draft] : doc.shapes;
+  const placed = bending ? doc.shapes.map((shape) => (shape.id === bending.id ? bending : shape)) : doc.shapes;
+  const shapes = draft ? [...placed, draft] : placed;
+  /** The selected arrow or line as its handles show it: mid-drag, mid-bend, or as saved. */
+  const handleBase =
+    hasLineHandles(selected) && editable
+      ? moving?.id === selected.id
+        ? (transformShape(selected, moving.transform) as LineShape)
+        : selected
+      : null;
   const spotlights = shapes.filter((shape) => shape.type === "spotlight");
   const dim = imageSize ? spotlightDim({ x: 0, y: 0, ...imageSize }, spotlights) : [];
   const framed = frame?.layout ? { area: frame.area, bounds: frame.bounds, layout: frame.layout } : null;
@@ -1011,6 +1122,7 @@ export default function EditorWindow() {
                       editable={editable && shape !== draft}
                       onSelect={setSelectedId}
                       onChange={changeShape}
+                      onMove={moveShapeLive}
                       onEditText={(id) => {
                         const text = doc.shapes.find((candidate) => candidate.id === id);
                         if (text?.type === "text") setTextDraft({ id, at: { x: text.x, y: text.y }, value: text.text });
@@ -1038,6 +1150,15 @@ export default function EditorWindow() {
                   keepRatio={selected?.type === "text" || selected?.type === "step"}
                   enabledAnchors={anchorsFor(selected)}
                 />
+                {handleBase && (
+                  <LineHandles
+                    shape={bending?.id === handleBase.id ? bending : handleBase}
+                    base={handleBase}
+                    scale={currentView.scale}
+                    onPreview={setBending}
+                    onCommit={commitLine}
+                  />
+                )}
               </Layer>
             </Stage>
           )}

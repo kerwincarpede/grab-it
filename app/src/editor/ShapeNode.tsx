@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import Konva from "konva";
 import { Arrow, Circle, Ellipse, Group, Image as KonvaImage, Label, Line, Rect, Shape as KonvaShape, Tag, Text } from "react-konva";
 import { FILL_OPACITY, SPOTLIGHT_DIM, type BlurShape, type Rect as Box, type Shape } from "./model";
-import { contrastColor, normalizeRect, withAlpha, type NodeTransform } from "./tools";
+import { contrastColor, curvePoints, normalizeRect, withAlpha, type NodeTransform } from "./tools";
 
 interface ShapeNodeProps {
   shape: Shape;
@@ -13,6 +13,8 @@ interface ShapeNodeProps {
   editable: boolean;
   onSelect: (id: string) => void;
   onChange: (id: string, transform: NodeTransform) => void;
+  /** Reports a drag in progress, so handles drawn elsewhere can follow the shape. */
+  onMove?: (id: string, transform: NodeTransform) => void;
   onEditText: (id: string) => void;
 }
 
@@ -77,7 +79,7 @@ export function SpotlightDim({ dim }: { dim: Box[] }) {
 }
 
 /** One annotation as a Konva node, named by its id so the transformer can find it. */
-export default function ShapeNode({ shape, image, step, editable, onSelect, onChange, onEditText }: ShapeNodeProps) {
+export default function ShapeNode({ shape, image, step, editable, onSelect, onChange, onMove, onEditText }: ShapeNodeProps) {
   const common = {
     id: shape.id,
     name: "annotation",
@@ -85,6 +87,10 @@ export default function ShapeNode({ shape, image, step, editable, onSelect, onCh
     listening: editable,
     onMouseDown: () => onSelect(shape.id),
     onTap: () => onSelect(shape.id),
+    onDragMove: (event: Konva.KonvaEventObject<DragEvent>) => {
+      const node = event.target;
+      onMove?.(shape.id, { x: node.x(), y: node.y(), scaleX: 1, scaleY: 1 });
+    },
     onDragEnd: (event: Konva.KonvaEventObject<DragEvent>) => {
       event.cancelBubble = true;
       onChange(shape.id, takeTransform(event.target, shape));
@@ -94,10 +100,12 @@ export default function ShapeNode({ shape, image, step, editable, onSelect, onCh
 
   switch (shape.type) {
     case "arrow":
+      // A curve is one cubic segment; Konva aims the head along its last control point, the end tangent.
       return (
         <Arrow
           {...common}
-          points={shape.points}
+          points={curvePoints(shape)}
+          bezier={Boolean(shape.control)}
           stroke={shape.color}
           fill={shape.color}
           strokeWidth={shape.strokeWidth}
@@ -109,6 +117,18 @@ export default function ShapeNode({ shape, image, step, editable, onSelect, onCh
         />
       );
     case "line":
+      return (
+        <Line
+          {...common}
+          points={curvePoints(shape)}
+          bezier={Boolean(shape.control)}
+          stroke={shape.color}
+          strokeWidth={shape.strokeWidth}
+          lineCap="round"
+          lineJoin="round"
+          hitStrokeWidth={Math.max(12, shape.strokeWidth)}
+        />
+      );
     case "freehand":
       return (
         <Line
@@ -118,7 +138,7 @@ export default function ShapeNode({ shape, image, step, editable, onSelect, onCh
           strokeWidth={shape.strokeWidth}
           lineCap="round"
           lineJoin="round"
-          tension={shape.type === "freehand" ? 0.4 : 0}
+          tension={0.4}
           hitStrokeWidth={Math.max(12, shape.strokeWidth)}
         />
       );

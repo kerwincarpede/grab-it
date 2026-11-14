@@ -9,6 +9,7 @@ import {
   STROKE_WIDTHS,
   widthFor,
   widthKind,
+  type LineShape,
   type Shape,
   type Style,
 } from "./model";
@@ -18,17 +19,23 @@ import {
   anchorsFor,
   CORNER_ANCHORS,
   beginShape,
+  bendLine,
   colorForKey,
   contrastColor,
+  controlFromHandle,
   cropFromDrag,
+  curveMidpoint,
+  curvePoints,
   deleteShape,
   dragShape,
   duplicateShape,
   finishShape,
+  hasLineHandles,
   HIGHLIGHTER_WIDTH,
   highlighterWidth,
   HOLD_MS,
   modifierTool,
+  moveLineEnd,
   moveShape,
   nudgeDelta,
   releaseRestores,
@@ -451,5 +458,75 @@ describe("per-tool widths", () => {
   it("draws badges at the style's size, not from the stroke width", () => {
     expect(beginShape("step", { x: 0, y: 0 }, { ...style, strokeWidth: 24 }, "s")).toMatchObject({ radius: DEFAULT_STEP_RADIUS });
     expect(beginShape("step", { x: 0, y: 0 }, { ...style, stepRadius: 36 }, "s")).toMatchObject({ radius: 36 });
+  });
+});
+
+describe("curved arrows and lines", () => {
+  const straight: LineShape = { id: "a", type: "arrow", color: "red", strokeWidth: 2, points: [0, 0, 100, 0] };
+  const curved: LineShape = { ...straight, control: [50, -40] };
+
+  it("puts the bend handle on the curve's midpoint, or the chord's when straight", () => {
+    expect(curveMidpoint(straight)).toEqual({ x: 50, y: 0 });
+    expect(curveMidpoint(curved)).toEqual({ x: 50, y: -20 });
+  });
+
+  it("finds the control point that runs the curve through the handle", () => {
+    expect(controlFromHandle({ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 50, y: -20 })).toEqual([50, -40]);
+    // A handle off to one side gives a lopsided curve that still passes through it.
+    const control = controlFromHandle({ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 70, y: 30 });
+    expect(curveMidpoint({ ...straight, control })).toEqual({ x: 70, y: 30 });
+  });
+
+  it("bends a straight line and straightens it within the snap distance", () => {
+    const bent = bendLine(straight, { x: 50, y: -20 }, 6);
+    expect(bent.control).toEqual([50, -40]);
+    const back = bendLine(bent, { x: 52, y: 3 }, 6);
+    expect(back).not.toHaveProperty("control");
+    expect(back).toEqual(straight);
+    // Just past the snap it stays curved.
+    expect(bendLine(bent, { x: 50, y: 7 }, 6).control).toEqual([50, 14]);
+  });
+
+  it("draws a curve as one cubic segment ending along the end tangent", () => {
+    expect(curvePoints(straight)).toEqual([0, 0, 100, 0]);
+    const points = curvePoints({ ...straight, control: [60, -30] });
+    expect(points).toHaveLength(8);
+    expect(points.slice(0, 2)).toEqual([0, 0]);
+    expect(points.slice(6)).toEqual([100, 0]);
+    expect(points[2]).toBeCloseTo(40);
+    expect(points[3]).toBeCloseTo(-20);
+    expect(points[4]).toBeCloseTo(73.333, 2);
+    expect(points[5]).toBeCloseTo(-20);
+    // The last control point lies on the line from the end to the quadratic's control: the end tangent.
+    const tangent = Math.atan2(0 - -30, 100 - 60);
+    expect(Math.atan2(points[7] - points[5], points[6] - points[4])).toBeCloseTo(tangent);
+  });
+
+  it("keeps the bend when an end moves", () => {
+    expect(moveLineEnd(straight, 1, { x: 200, y: 0 })).toEqual({ ...straight, points: [0, 0, 200, 0] });
+    const stretched = moveLineEnd(curved, 1, { x: 200, y: 0 });
+    expect(stretched.points).toEqual([0, 0, 200, 0]);
+    // The bend scales with the line: twice as long, twice as deep.
+    expect(curveMidpoint(stretched).x).toBeCloseTo(100);
+    expect(curveMidpoint(stretched).y).toBeCloseTo(-40);
+    const turned = moveLineEnd(curved, 0, { x: 100, y: 100 });
+    expect(turned.points).toEqual([100, 100, 100, 0]);
+    // The bend turns with the line, staying on the same side of it.
+    expect(curveMidpoint(turned).x).toBeCloseTo(80);
+    expect(curveMidpoint(turned).y).toBeCloseTo(50);
+  });
+
+  it("moves, resizes and duplicates the control point with the line", () => {
+    expect(moveShape(curved, 5, 10)).toEqual({ ...curved, points: [5, 10, 105, 10], control: [55, -30] });
+    expect(transformShape(curved, { x: 0, y: 0, scaleX: 2, scaleY: 0.5 })).toMatchObject({ points: [0, 0, 200, 0], control: [100, -20] });
+    expect(duplicateShape(curved, "copy")).toEqual({ ...curved, id: "copy", points: [12, 12, 112, 12], control: [62, -28] });
+    expect(moveShape(straight, 5, 10)).not.toHaveProperty("control");
+  });
+
+  it("gives arrows and lines their own handles instead of the box", () => {
+    expect(hasLineHandles(straight)).toBe(true);
+    expect(hasLineHandles({ ...straight, type: "line" })).toBe(true);
+    expect(hasLineHandles({ id: "f", type: "freehand", color: "red", strokeWidth: 2, points: [0, 0, 1, 1] })).toBe(false);
+    expect(hasLineHandles(null)).toBe(false);
   });
 });

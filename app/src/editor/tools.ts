@@ -1,4 +1,15 @@
-import { COLORS, DEFAULT_STEP_RADIUS, STROKE_WIDTHS, type Annotations, type Point, type Rect, type Shape, type Style, type Tool } from "./model";
+import {
+  COLORS,
+  DEFAULT_STEP_RADIUS,
+  STROKE_WIDTHS,
+  type Annotations,
+  type LineShape,
+  type Point,
+  type Rect,
+  type Shape,
+  type Style,
+  type Tool,
+} from "./model";
 
 /** How far a duplicate lands from its original, in capture pixels. */
 export const DUPLICATE_OFFSET = 12;
@@ -191,7 +202,12 @@ function uniformScale(t: NodeTransform): number {
 export function transformShape(shape: Shape, t: NodeTransform): Shape {
   switch (shape.type) {
     case "arrow":
-    case "line":
+    case "line": {
+      const points = shape.points.map((value, i) => (i % 2 === 0 ? t.x + value * t.scaleX : t.y + value * t.scaleY));
+      if (!shape.control) return { ...shape, points };
+      const [cx, cy] = shape.control;
+      return { ...shape, points, control: [t.x + cx * t.scaleX, t.y + cy * t.scaleY] };
+    }
     case "freehand":
     case "highlighter":
       return {
@@ -211,6 +227,93 @@ export function transformShape(shape: Shape, t: NodeTransform): Shape {
     case "step":
       return { ...shape, x: t.x, y: t.y, radius: Math.max(6, shape.radius * uniformScale(t)) };
   }
+}
+
+/* Curved arrows and lines: a quadratic curve from the start, bent towards `control`, to the end. */
+
+/** How close to the straight line, in screen pixels, a bend handle snaps the line straight. */
+export const STRAIGHTEN_SNAP = 6;
+
+/** Arrows and lines are edited with their own bend and end handles instead of the box Transformer. */
+export function hasLineHandles(shape: Shape | null): shape is LineShape {
+  return shape?.type === "arrow" || shape?.type === "line";
+}
+
+const lineEnds = (shape: LineShape): [Point, Point] => [
+  { x: shape.points[0], y: shape.points[1] },
+  { x: shape.points[2], y: shape.points[3] },
+];
+
+/** The point halfway along the curve (t = 0.5), where its bend handle sits: the chord's midpoint when straight. */
+export function curveMidpoint(shape: LineShape): Point {
+  const [start, end] = lineEnds(shape);
+  const chord = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+  if (!shape.control) return chord;
+  const [cx, cy] = shape.control;
+  return { x: chord.x / 2 + cx / 2, y: chord.y / 2 + cy / 2 };
+}
+
+/** The control point that puts the curve's midpoint at `handle`: C = 2H − (P0 + P2) / 2. */
+export function controlFromHandle(start: Point, end: Point, handle: Point): [number, number] {
+  return [2 * handle.x - (start.x + end.x) / 2, 2 * handle.y - (start.y + end.y) / 2];
+}
+
+/**
+ * Bends a line so its midpoint passes through `handle`. Within `snap`
+ * (capture pixels) of the straight line's midpoint, the line goes straight
+ * again and loses its control point.
+ */
+export function bendLine(shape: LineShape, handle: Point, snap: number): LineShape {
+  const [start, end] = lineEnds(shape);
+  const chord = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+  if (Math.hypot(handle.x - chord.x, handle.y - chord.y) <= snap) {
+    const straight = { ...shape };
+    delete straight.control;
+    return straight;
+  }
+  return { ...shape, control: controlFromHandle(start, end, handle) };
+}
+
+/**
+ * Moves one end of a line (0 the start, 1 the end) to `to`, keeping the
+ * bend: the curve's midpoint keeps its place relative to the chord, so the
+ * curve stretches with the line rather than flipping.
+ */
+export function moveLineEnd(shape: LineShape, end: 0 | 1, to: Point): LineShape {
+  const points = end === 0 ? [to.x, to.y, shape.points[2], shape.points[3]] : [shape.points[0], shape.points[1], to.x, to.y];
+  if (!shape.control) return { ...shape, points };
+  const [oldStart, oldEnd] = lineEnds(shape);
+  const moved = { ...shape, points };
+  const [newStart, newEnd] = lineEnds(moved);
+  // The bend as an offset in the chord's own frame (along, across), carried over to the new chord.
+  const mid = curveMidpoint(shape);
+  const oldChord = { x: oldEnd.x - oldStart.x, y: oldEnd.y - oldStart.y };
+  const newChord = { x: newEnd.x - newStart.x, y: newEnd.y - newStart.y };
+  const oldLength = Math.hypot(oldChord.x, oldChord.y);
+  const newLength = Math.hypot(newChord.x, newChord.y);
+  if (oldLength === 0 || newLength === 0) return moved;
+  const rel = { x: mid.x - (oldStart.x + oldEnd.x) / 2, y: mid.y - (oldStart.y + oldEnd.y) / 2 };
+  const along = (rel.x * oldChord.x + rel.y * oldChord.y) / oldLength / oldLength;
+  const across = (rel.y * oldChord.x - rel.x * oldChord.y) / oldLength / oldLength;
+  const handle = {
+    x: (newStart.x + newEnd.x) / 2 + along * newChord.x - across * newChord.y,
+    y: (newStart.y + newEnd.y) / 2 + along * newChord.y + across * newChord.x,
+  };
+  return { ...moved, control: controlFromHandle(newStart, newEnd, handle) };
+}
+
+/**
+ * The points Konva draws a line with: the two ends when straight, or the
+ * quadratic as one cubic bezier segment (P0, P0 + 2/3(C − P0), P2 + 2/3(C − P2), P2)
+ * when curved. Konva aims an arrowhead from the last control point to the
+ * end, which is the curve's end tangent.
+ */
+export function curvePoints(shape: LineShape): number[] {
+  if (!shape.control) return shape.points;
+  const [x0, y0, x2, y2] = shape.points;
+  const [cx, cy] = shape.control;
+  const third = 2 / 3;
+  return [x0, y0, x0 + third * (cx - x0), y0 + third * (cy - y0), x2 + third * (cx - x2), y2 + third * (cy - y2), x2, y2];
 }
 
 /** Moves a shape by dx, dy. */
