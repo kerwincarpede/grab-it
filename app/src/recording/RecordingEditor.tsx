@@ -10,7 +10,7 @@ import { presetName } from "../editor/preferences";
 import { newId } from "../editor/tools";
 import { useBackdropImage } from "../editor/useBackdropImage";
 import type { BackdropSources } from "../editor/flatten";
-import { exportRecording, onExportProgress, recordingInfo, saveEdits, videoSrc, type ExportProgress, type RecordingInfo } from "./api";
+import { exportRecording, fetchRecording, onExportProgress, playsFromBlob, recordingInfo, saveEdits, videoSrc, type ExportProgress, type RecordingInfo } from "./api";
 import { clampTrim, emptyEdits, formatTime, isWhole, parseEdits, serializeEdits, trimOf, type RecordingEdits, type Trim } from "./edits";
 import { exportLayers, paintUnderlay, recordingLayout } from "./layout";
 import { useBackdropPresets } from "./useBackdropPresets";
@@ -38,6 +38,35 @@ const PauseIcon = () => (
 function isTyping(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return target.matches("input, textarea, select, button, [role='slider']") || target.isContentEditable;
+}
+
+/**
+ * The URL the video plays `path` from: the grab-it-video scheme itself, or
+ * on Linux a blob of the file fetched from it, revoked when the path
+ * changes or the editor closes. Null while the blob is on its way.
+ */
+function usePlayableSrc(path: string | null, onError: (message: string) => void): string | null {
+  const blob = playsFromBlob();
+  const [loaded, setLoaded] = useState<{ path: string; url: string } | null>(null);
+  useEffect(() => {
+    if (!path || !blob) return;
+    let url: string | null = null;
+    let cancelled = false;
+    fetchRecording(videoSrc(path))
+      .then((data) => {
+        if (cancelled) return;
+        url = URL.createObjectURL(data);
+        setLoaded({ path, url });
+      })
+      .catch((err: unknown) => !cancelled && onError(`The recording cannot be played: ${errorText(err)}`));
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [path, blob, onError]);
+  if (!path) return null;
+  if (!blob) return videoSrc(path);
+  return loaded && loaded.path === path ? loaded.url : null;
 }
 
 function saveText(status: SaveStatus): string {
@@ -86,6 +115,7 @@ export default function RecordingEditor() {
   const exporting = progress !== null;
 
   const presets = useBackdropPresets(setMessage);
+  const src = usePlayableSrc(info?.path ?? null, setMessage);
 
   useEffect(() => {
     let cancelled = false;
@@ -395,11 +425,11 @@ export default function RecordingEditor() {
           style={layout ? ({ aspectRatio: `${layout.width} / ${layout.height}`, "--stage-ratio": layout.width / layout.height } as CSSProperties) : undefined}
         >
           {backdrop && <canvas ref={canvasRef} className="recording-backdrop" aria-hidden="true" />}
-          {info && (
+          {src && (
             <video
               ref={videoRef}
               className="recording-video"
-              src={videoSrc(info.path)}
+              src={src}
               crossOrigin="anonymous"
               preload="auto"
               playsInline

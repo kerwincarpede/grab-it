@@ -379,8 +379,13 @@ pub fn video_response(path: &Path, range: Option<&str>) -> Response<Vec<u8>> {
         .header(header::CONTENT_TYPE, "video/mp4")
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CONTENT_LENGTH, bytes.len())
-        // The page draws frames into a canvas for the blurred backdrop.
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+        // The page draws frames into a canvas for the blurred backdrop, and
+        // on Linux fetches the file a range at a time (see src/recording/api.ts).
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(
+            header::ACCESS_CONTROL_EXPOSE_HEADERS,
+            "Content-Range, Content-Length, Accept-Ranges",
+        );
     let builder = match span {
         Some((from, to)) => builder
             .status(StatusCode::PARTIAL_CONTENT)
@@ -403,6 +408,10 @@ pub fn requested_path(uri_path: &str) -> Option<PathBuf> {
 /// Serves a `grab-it-video` request: MP4s in the current save folder's
 /// recordings only.
 pub fn serve_video(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
+    // A fetch with a Range header from the page's origin asks first.
+    if request.method() == tauri::http::Method::OPTIONS {
+        return preflight();
+    }
     let recordings = app
         .try_state::<SettingsState>()
         .map(|state| lock(&state).get().save_folder.join(RECORDINGS_DIR));
@@ -415,6 +424,17 @@ pub fn serve_video(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<
         .get(header::RANGE)
         .and_then(|value| value.to_str().ok());
     video_response(&path, range)
+}
+
+/// The answer to a CORS preflight: any origin may GET with a `Range`.
+pub fn preflight() -> Response<Vec<u8>> {
+    Response::builder()
+        .status(StatusCode::NO_CONTENT)
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(header::ACCESS_CONTROL_ALLOW_METHODS, "GET, HEAD, OPTIONS")
+        .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "Range")
+        .body(Vec::new())
+        .unwrap_or_default()
 }
 
 // --- Exporting -------------------------------------------------------------
@@ -1067,6 +1087,20 @@ mod tests {
         let whole = video_response(&clip, None);
         assert_eq!(whole.status(), StatusCode::OK);
         assert_eq!(whole.body(), b"0123456789");
+
+        // The page reads Content-Range when it fetches the file in parts.
+        assert!(
+            part.headers()[header::ACCESS_CONTROL_EXPOSE_HEADERS]
+                .to_str()
+                .unwrap()
+                .contains("Content-Range")
+        );
+        let asked = preflight();
+        assert_eq!(asked.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            asked.headers()[header::ACCESS_CONTROL_ALLOW_HEADERS],
+            "Range"
+        );
 
         let past = video_response(&clip, Some("bytes=20-"));
         assert_eq!(past.status(), StatusCode::RANGE_NOT_SATISFIABLE);

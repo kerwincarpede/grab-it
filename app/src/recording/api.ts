@@ -53,6 +53,41 @@ export function videoSrc(path: string): string {
   return convertFileSrc(path, VIDEO_SCHEME);
 }
 
+/**
+ * Whether the page runs in WebKitGTK, whose media player only loads http,
+ * https and blob URLs: there the recording is fetched and played from a
+ * blob (see `fetchRecording`).
+ */
+export function playsFromBlob(userAgent: string = typeof navigator === "undefined" ? "" : navigator.userAgent): boolean {
+  return /\bLinux\b/.test(userAgent) && !/\bAndroid\b/.test(userAgent);
+}
+
+/** `bytes <from>-<to>/<total>` from a Content-Range header. */
+function contentRange(header: string | null): { from: number; to: number; total: number } | null {
+  const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(header?.trim() ?? "");
+  return match ? { from: Number(match[1]), to: Number(match[2]), total: Number(match[3]) } : null;
+}
+
+/**
+ * The whole recording at `url`, as a video/mp4 blob. The scheme answers at
+ * most a few megabytes a request, so it is fetched a range at a time until
+ * Content-Range's total is reached.
+ */
+export async function fetchRecording(url: string, fetcher: typeof fetch = fetch): Promise<Blob> {
+  const parts: ArrayBuffer[] = [];
+  let from = 0;
+  for (;;) {
+    const response = await fetcher(url, { headers: { Range: `bytes=${from}-` } });
+    if (response.status === 200 && from === 0) return new Blob([await response.arrayBuffer()], { type: "video/mp4" });
+    if (response.status !== 206) throw new Error(`could not read the recording (${response.status})`);
+    const range = contentRange(response.headers.get("Content-Range"));
+    if (!range || range.from !== from || range.to < from) throw new Error("the recording came back in the wrong pieces");
+    parts.push(await response.arrayBuffer());
+    from = range.to + 1;
+    if (from >= range.total) return new Blob(parts, { type: "video/mp4" });
+  }
+}
+
 export function saveEdits(edits: RecordingEdits): Promise<void> {
   return invoke<void>("recording_save_edits", { edits });
 }

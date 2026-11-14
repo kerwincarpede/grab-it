@@ -207,4 +207,35 @@ describe("RecordingEditor", () => {
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Export failed: ffmpeg is not ready yet"));
     expect(screen.getByRole("button", { name: "Export" })).toBeEnabled();
   });
+
+  it("on Linux plays a blob of the whole file, fetched in ranges, and lets it go on close", async () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko)");
+    const file = new Uint8Array(10).fill(7);
+    const fetcher = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const from = Number(/bytes=(\d+)-/.exec(new Headers(init?.headers).get("Range") ?? "")?.[1]);
+      const to = Math.min(file.length, from + 6) - 1;
+      return new Response(file.slice(from, to + 1), { status: 206, headers: { "Content-Range": `bytes ${from}-${to}/${file.length}` } });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const created: Blob[] = [];
+    const createObjectURL = vi.fn((blob: Blob) => {
+      created.push(blob);
+      return "blob:tauri://localhost/recording-1";
+    });
+    const revokeObjectURL = vi.fn();
+    Object.assign(URL, { createObjectURL, revokeObjectURL });
+    mockBackend();
+    const { unmount } = render(<RecordingEditor />);
+    const video = await loadVideo();
+    expect(video.getAttribute("src")).toBe("blob:tauri://localhost/recording-1");
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      `grab-it-video://localhost/${encodeURIComponent(PATH)}`,
+      `grab-it-video://localhost/${encodeURIComponent(PATH)}`,
+    ]);
+    expect(created[0].size).toBe(10);
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    unmount();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:tauri://localhost/recording-1");
+    vi.unstubAllGlobals();
+  });
 });
