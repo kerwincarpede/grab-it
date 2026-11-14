@@ -119,6 +119,10 @@ export interface Annotations {
 export interface Style {
   color: string;
   strokeWidth: number;
+  /** Text font size; `DEFAULT_FONT_SIZE` when absent. */
+  fontSize?: number;
+  /** Step badge radius; `DEFAULT_STEP_RADIUS` when absent. */
+  stepRadius?: number;
   /** Rectangles and ellipses are filled. */
   fill?: boolean;
   /** Text sits on a pill. */
@@ -127,8 +131,69 @@ export interface Style {
 }
 
 export const COLORS = ["#e5484d", "#f5a524", "#30a46c", "#0090ff", "#8e4ec6", "#1f2328", "#ffffff"];
-export const STROKE_WIDTHS = [2, 4, 6, 10];
-export const DEFAULT_STYLE: Style = { color: COLORS[0], strokeWidth: 4 };
+export const STROKE_WIDTHS = [1, 2, 3, 4, 6, 8, 12, 16, 24];
+export const DEFAULT_STROKE_WIDTH = 4;
+/** Text sizes; the default matches what the old default width gave text. */
+export const FONT_SIZES = [12, 16, 20, 24, 30, 36, 48, 64, 96];
+export const DEFAULT_FONT_SIZE = 30;
+/** Step badge radii; the default matches what the old default width gave badges. */
+export const STEP_RADII = [10, 12, 14, 16, 20, 24, 30, 36, 48];
+export const DEFAULT_STEP_RADIUS = 20;
+export const DEFAULT_STYLE: Style = { color: COLORS[0], strokeWidth: DEFAULT_STROKE_WIDTH };
+
+/**
+ * Each tool's own width, by tool: the stroke width for stroked tools, the
+ * font size for text and the badge radius for steps. A missing tool uses
+ * its default.
+ */
+export type Widths = Partial<Record<Tool, number>>;
+
+/** What a tool's width sets, and the choices offered for it. */
+export interface WidthKind {
+  /** Names the control: "Width" for strokes, "Size" for text and badges. */
+  label: string;
+  /** What the width popover previews: a line, a line of text or a badge. */
+  preview: "stroke" | "text" | "step";
+  presets: number[];
+  fallback: number;
+}
+
+const STROKE_KIND: WidthKind = { label: "Width", preview: "stroke", presets: STROKE_WIDTHS, fallback: DEFAULT_STROKE_WIDTH };
+const FONT_KIND: WidthKind = { label: "Text size", preview: "text", presets: FONT_SIZES, fallback: DEFAULT_FONT_SIZE };
+const STEP_KIND: WidthKind = { label: "Badge size", preview: "step", presets: STEP_RADII, fallback: DEFAULT_STEP_RADIUS };
+
+/** The width a tool (or a shape of that type) takes, or null when it has none (blur, crop…). */
+export function widthKind(tool: Tool | ShapeType): WidthKind | null {
+  switch (tool) {
+    case "arrow":
+    case "line":
+    case "rect":
+    case "ellipse":
+    case "freehand":
+    case "highlighter":
+      return STROKE_KIND;
+    case "text":
+      return FONT_KIND;
+    case "step":
+      return STEP_KIND;
+    default:
+      return null;
+  }
+}
+
+/** The width `tool` draws with: its remembered one, else its default. */
+export function widthFor(widths: Widths, tool: Tool | ShapeType): number {
+  return widths[tool] ?? widthKind(tool)?.fallback ?? DEFAULT_STROKE_WIDTH;
+}
+
+/** The index of the preset closest to `value`, for a slider over the presets. */
+export function nearestPreset(presets: number[], value: number): number {
+  let best = 0;
+  presets.forEach((preset, i) => {
+    if (Math.abs(preset - value) < Math.abs(presets[best] - value)) best = i;
+  });
+  return best;
+}
 
 /** Opacity of a filled rectangle or ellipse. */
 export const FILL_OPACITY = 0.25;

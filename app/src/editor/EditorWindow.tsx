@@ -26,10 +26,10 @@ import {
 import {
   backdropColors,
   COLORS,
-  DEFAULT_STYLE,
   sameBackdrop,
-  STROKE_WIDTHS,
   TOOLS,
+  widthFor,
+  widthKind,
   type Backdrop,
   type BlurMode,
   type Point,
@@ -37,7 +37,9 @@ import {
   type Shape,
   type Style,
   type Tool,
+  type Widths,
 } from "./model";
+import { DEFAULT_CHOICES, type EditorChoices } from "./preferences";
 import ShapeNode, { SpotlightDim } from "./ShapeNode";
 import ToolWheel from "./ToolWheel";
 import {
@@ -66,6 +68,8 @@ import {
   type NodeTransform,
 } from "./tools";
 import { useAnnotations } from "./useAnnotations";
+import { useEditorPreferences } from "./useEditorPreferences";
+import WidthControl from "./WidthControl";
 
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 16;
@@ -77,6 +81,8 @@ const BLUR_MODES: { mode: BlurMode; label: string }[] = [
   { mode: "pixelate", label: "Pixelate" },
   { mode: "blur", label: "Smooth" },
 ];
+/** How much ⌥-scroll moves one width step: about one mouse-wheel notch, or a short trackpad swipe. */
+const WIDTH_SCROLL_STEP = 40;
 const errorText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
 interface TextDraft {
@@ -173,8 +179,10 @@ export default function EditorWindow() {
   const backdropRef = useRef<HTMLDivElement>(null);
 
   const [view, setView] = useState<View | null>(null);
-  const [tool, setTool] = useState<Tool>("arrow");
-  const [style, setStyle] = useState<Style>(DEFAULT_STYLE);
+  const [tool, setTool] = useState<Tool>(DEFAULT_CHOICES.tool);
+  /** Colour and options for the next shape; each tool's width is in `widths`. */
+  const [style, setStyle] = useState<EditorChoices["style"]>(DEFAULT_CHOICES.style);
+  const [widths, setWidths] = useState<Widths>(DEFAULT_CHOICES.widths);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Shape | null>(null);
   const [cropDrag, setCropDrag] = useState<{ start: Point; end: Point } | null>(null);
@@ -191,6 +199,25 @@ export default function EditorWindow() {
   const swallowDown = useRef(false);
   /** A node whose own drag was turned off for a ⌘/⌥ drag, with the value to give back. */
   const suppressedDrag = useRef<{ node: Konva.Node; draggable: boolean } | null>(null);
+  /** ⌥-scroll travelled since the last width step. */
+  const widthScroll = useRef(0);
+
+  // The colour, tool, widths and options come back from last time, and are saved as they change.
+  const restoreChoices = useCallback((choices: EditorChoices) => {
+    setTool(choices.tool);
+    setStyle(choices.style);
+    setWidths(choices.widths);
+  }, []);
+  const choices = useMemo(() => ({ tool, style, widths }), [tool, style, widths]);
+  useEditorPreferences(choices, restoreChoices);
+
+  /** Everything `drawWith` draws the next shape with: the style plus that tool's own width. */
+  const drawStyle = (drawWith: Tool): Style => ({
+    ...style,
+    strokeWidth: widthFor(widths, drawWith),
+    fontSize: widthFor(widths, "text"),
+    stepRadius: widthFor(widths, "step"),
+  });
 
   const imageSize = useMemo(() => (image ? { width: image.width, height: image.height } : null), [image]);
   const backdrop = backdropDraft ?? doc.backdrop ?? null;
@@ -266,13 +293,13 @@ export default function EditorWindow() {
           x: textDraft.at.x,
           y: textDraft.at.y,
           text: value,
-          fontSize: 14 + style.strokeWidth * 4,
+          fontSize: widthFor(widths, "text"),
           ...(style.background ? { background: true } : {}),
         }),
       );
     }
     setTextDraft(null);
-  }, [textDraft, doc, commit, style]);
+  }, [textDraft, doc, commit, style, widths]);
 
   /** Turns off `node`'s own drag until mouse up, so a ⌘/⌥ drag draws instead of moving it. */
   const suppressDrag = (node: Konva.Node) => {
@@ -321,7 +348,7 @@ export default function EditorWindow() {
       setCropDrag({ start: at, end: at });
       return;
     }
-    const shape = beginShape(drawWith, at, style);
+    const shape = beginShape(drawWith, at, drawStyle(drawWith));
     if (shape?.type === "step") {
       commit(addShape(doc, shape));
       setSelectedId(shape.id);
@@ -362,16 +389,6 @@ export default function EditorWindow() {
       if (crop) commit({ ...doc, crop });
       setCropDrag(null);
     }
-  };
-
-  const onWheel = (event: Konva.KonvaEventObject<WheelEvent>) => {
-    event.evt.preventDefault();
-    const stage = stageRef.current;
-    const screen = stage?.getPointerPosition();
-    if (!screen) return;
-    const scale = clampZoom(event.evt.deltaY < 0 ? currentView.scale * ZOOM_STEP : currentView.scale / ZOOM_STEP);
-    const anchor = { x: (screen.x - currentView.x) / currentView.scale, y: (screen.y - currentView.y) / currentView.scale };
-    setView({ scale, x: screen.x - anchor.x * scale, y: screen.y - anchor.y * scale });
   };
 
   const zoomBy = (factor: number) => {
@@ -421,10 +438,9 @@ export default function EditorWindow() {
     if (shape) commit(replaceShape(doc, transformShape(shape, transform)));
   };
 
-  /** Sets the style for the next shape and applies what fits to the selected one. */
-  const changeStyle = useCallback(
+  /** Applies what fits of `next` to the selected shape. */
+  const restyleSelected = useCallback(
     (next: Partial<Style>) => {
-      setStyle((now) => ({ ...now, ...next }));
       if (!selected) return;
       const restyled = restyleShape(selected, next);
       // A style the shape does not have (a colour for a blur) is not an edit.
@@ -432,6 +448,67 @@ export default function EditorWindow() {
     },
     [selected, doc, commit],
   );
+
+  /** Sets the colour or an option for the next shape and applies it to the selected one. */
+  const changeStyle = useCallback(
+    (next: Pick<Style, "color" | "fill" | "background" | "blurMode">) => {
+      setStyle((now) => ({ ...now, ...next }));
+      restyleSelected(next);
+    },
+    [restyleSelected],
+  );
+
+  // Options for the active tool, or for the selected shape when there is one.
+  const optionsFor = selected?.type ?? tool;
+  /** What the width control sets: a stroke width, a font size, a badge size, or nothing. */
+  const width = widthKind(optionsFor);
+  /** The width on show: the selected shape's own, else the tool's remembered one. */
+  const shownWidth = Math.round(
+    selected?.type === "text"
+      ? selected.fontSize
+      : selected?.type === "step"
+        ? selected.radius
+        : selected && "strokeWidth" in selected && selected.type !== "highlighter"
+          ? selected.strokeWidth
+          : widthFor(widths, optionsFor),
+  );
+
+  /** Remembers `next` as this tool's (or shape type's) width and resizes the selected shape. */
+  const changeWidth = useCallback(
+    (next: number) => {
+      if (!width) return;
+      setWidths((now) => ({ ...now, [optionsFor]: next }));
+      restyleSelected(width.preview === "text" ? { fontSize: next } : width.preview === "step" ? { stepRadius: next } : { strokeWidth: next });
+    },
+    [width, optionsFor, restyleSelected],
+  );
+
+  /** One width preset thinner (-1) or wider (1): `[`, `]` and ⌥-scroll. */
+  const stepWidth = useCallback(
+    (direction: -1 | 1) => {
+      if (width) changeWidth(stepStrokeWidth(shownWidth, direction, width.presets));
+    },
+    [width, shownWidth, changeWidth],
+  );
+
+  const onWheel = (event: Konva.KonvaEventObject<WheelEvent>) => {
+    event.evt.preventDefault();
+    // ⌥-scroll changes the width; a plain scroll zooms.
+    if (event.evt.altKey) {
+      widthScroll.current += event.evt.deltaY;
+      if (Math.abs(widthScroll.current) < WIDTH_SCROLL_STEP) return;
+      // Scrolling up (away from you) widens.
+      stepWidth(widthScroll.current < 0 ? 1 : -1);
+      widthScroll.current = 0;
+      return;
+    }
+    const stage = stageRef.current;
+    const screen = stage?.getPointerPosition();
+    if (!screen) return;
+    const scale = clampZoom(event.evt.deltaY < 0 ? currentView.scale * ZOOM_STEP : currentView.scale / ZOOM_STEP);
+    const anchor = { x: (screen.x - currentView.x) / currentView.scale, y: (screen.y - currentView.y) / currentView.scale };
+    setView({ scale, x: screen.x - anchor.x * scale, y: screen.y - anchor.y * scale });
+  };
 
   const removeSelected = useCallback(() => {
     if (!selectedId) return;
@@ -561,7 +638,7 @@ export default function EditorWindow() {
         event.preventDefault();
         setSpaceHeld(true);
       } else if (!mod && !event.altKey && (event.key === "[" || event.key === "]")) {
-        changeStyle({ strokeWidth: stepStrokeWidth(style.strokeWidth, event.key === "[" ? -1 : 1) });
+        stepWidth(event.key === "[" ? -1 : 1);
       } else if (swatch) {
         changeStyle({ color: swatch });
       } else if (!mod && !event.altKey) {
@@ -592,7 +669,7 @@ export default function EditorWindow() {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [undoDoc, redoDoc, copy, copyAndClose, removeSelected, duplicateSelected, nudgeSelected, selectedId, changeStyle, style.strokeWidth, pickTool, restoreTool, tool]);
+  }, [undoDoc, redoDoc, copy, copyAndClose, removeSelected, duplicateSelected, nudgeSelected, selectedId, changeStyle, stepWidth, pickTool, restoreTool, tool]);
 
   const error = annotations.error ?? imageError;
   const cropPreview = cropDrag ? normalizeRect({ ...cropDrag.start, width: cropDrag.end.x - cropDrag.start.x, height: cropDrag.end.y - cropDrag.start.y }) : null;
@@ -603,8 +680,6 @@ export default function EditorWindow() {
   const framed = frame?.layout ? { area: frame.area, bounds: frame.bounds, layout: frame.layout } : null;
   const backdropFill = backdrop ? backdropColors(backdrop.fill) : [];
 
-  // Options for the active tool, or for the selected shape when there is one.
-  const optionsFor = selected?.type ?? tool;
   const boxOptions = optionsFor === "rect" || optionsFor === "ellipse";
   const fillOn = selected?.type === "rect" || selected?.type === "ellipse" ? Boolean(selected.fill) : Boolean(style.fill);
   const backgroundOn = selected?.type === "text" ? Boolean(selected.background) : Boolean(style.background);
@@ -634,20 +709,7 @@ export default function EditorWindow() {
             onChange={(event) => changeStyle({ color: event.target.value })}
           />
         </div>
-        <div className="bar-group segmented" role="group" aria-label="Stroke width">
-          {STROKE_WIDTHS.map((width) => (
-            <button
-              key={width}
-              type="button"
-              aria-label={`Width ${width}px`}
-              title={`${width}px ([ and ])`}
-              aria-pressed={style.strokeWidth === width}
-              onClick={() => changeStyle({ strokeWidth: width })}
-            >
-              <span className="width-line" style={{ height: Math.min(width, 8) }} />
-            </button>
-          ))}
-        </div>
+        {width && <WidthControl kind={width} value={shownWidth} color={selected && "color" in selected ? selected.color : style.color} onChange={changeWidth} />}
         {boxOptions && (
           <div className="bar-group">
             <button type="button" className="icon-button" aria-label="Fill" title="Fill the shape" aria-pressed={fillOn} onClick={() => changeStyle({ fill: !fillOn })}>

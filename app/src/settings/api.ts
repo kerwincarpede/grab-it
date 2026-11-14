@@ -42,10 +42,29 @@ export function isLocalEndpoint(endpoint: string): boolean {
   }
 }
 
+/**
+ * Mirrors `EditorPreferences` in src-tauri/src/settings.rs: the annotation
+ * editor's remembered choices. Any key may be missing; the editor checks
+ * each value and uses its own default otherwise.
+ */
+export interface EditorPreferences {
+  /** `#rrggbb`. */
+  color?: string;
+  /** The last tool picked (`Tool` in editor/model.ts). */
+  tool?: string;
+  /** Each tool's own width in pixels: stroke width, text font size or step badge size. */
+  widths?: Record<string, number>;
+  fill?: boolean;
+  textBackground?: boolean;
+  /** `BlurMode` in editor/model.ts. */
+  blurMode?: string;
+}
+
 /** Mirrors `Settings` in src-tauri/src/settings.rs. */
 export interface Settings extends Preferences {
   saveFolder: string;
   hotkeys: Hotkeys;
+  editor?: EditorPreferences;
 }
 
 /** What each choice after a capture does, in the order Settings lists them. */
@@ -95,6 +114,14 @@ export function setSaveFolder(path: string): Promise<Settings> {
 
 export function setPreferences(preferences: Preferences): Promise<Settings> {
   return invoke<Settings>("set_preferences", { preferences });
+}
+
+export function getEditorPreferences(): Promise<EditorPreferences> {
+  return invoke<EditorPreferences>("get_editor_preferences");
+}
+
+export function setEditorPreferences(preferences: EditorPreferences): Promise<EditorPreferences> {
+  return invoke<EditorPreferences>("set_editor_preferences", { preferences });
 }
 
 /** Whether Grab-it starts when the user signs in; the system holds this. */
