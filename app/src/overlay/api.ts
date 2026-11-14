@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { routeFromHash, routeHasFlag } from "../routes";
 import type { Box } from "./geometry";
 
 export type CaptureMode = "region" | "window" | "screen" | "monitor";
@@ -27,8 +29,26 @@ export interface OverlayInfo {
   intent?: OverlayIntent;
   monitorWidth: number;
   monitorHeight: number;
+  /**
+   * The frozen image's width in its own pixels, known before the image
+   * itself arrives. Older backends leave this out.
+   */
+  imageWidth?: number;
   /** Front to back. */
   windows: OverlayWindow[];
+}
+
+/** Mirrors `START_EVENT` in src-tauri/src/overlay.rs. */
+export const START_EVENT = "overlay-start";
+
+/**
+ * True in an overlay whose window is see-through and on screen from the
+ * start, ahead of its frozen image; the backend says so in the window's URL
+ * (`#/overlay?instant`). Any other overlay is hidden until the image is
+ * painted.
+ */
+export function isInstantOverlay(hash: string = window.location.hash): boolean {
+  return routeFromHash(hash) === "overlay" && routeHasFlag(hash, "instant");
 }
 
 export type Selection =
@@ -37,8 +57,20 @@ export type Selection =
   /** One point in CSS pixels, scaled by the backend like a region is. */
   | { kind: "point"; x: number; y: number; viewportWidth: number };
 
-export function overlayInfo(): Promise<OverlayInfo> {
-  return invoke<OverlayInfo>("overlay_info");
+/**
+ * What this overlay is to show. Null in a spare overlay, loaded ahead of
+ * time with no selection yet: `onOverlayStart` says when to ask again.
+ */
+export function overlayInfo(): Promise<OverlayInfo | null> {
+  return invoke<OverlayInfo | null>("overlay_info");
+}
+
+/**
+ * Calls `handler` when a selection starts on a spare overlay. Resolves to a
+ * function that stops listening.
+ */
+export function onOverlayStart(handler: () => void): Promise<() => void> {
+  return listen(START_EVENT, () => handler());
 }
 
 /** The frozen monitor as PNG bytes. */

@@ -52,6 +52,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(overlay::OverlayState::default())
+        .manage(overlay::SpareState::default())
         .manage(overlay::LastRegionState::default())
         .manage(quick::QuickState::default())
         .manage(pin::PinState::default())
@@ -149,6 +150,9 @@ pub fn run() {
             tray::create(handle)?;
             // Offers newer releases from GitHub.
             update::start(handle);
+            // Has a capture overlay loaded and waiting, so the first
+            // selection appears as fast as any other.
+            overlay::prewarm_later(handle);
             if let Some(target) = open_target {
                 windows::open(handle, target)?;
             } else if first_run {
