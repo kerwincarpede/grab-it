@@ -86,13 +86,13 @@ const ICONS = {
  * for a capture the library does not know.
  */
 function useStoredText(path: string | null): { id: number; text: ShotText } | null {
-  const [stored, setStored] = useState<{ id: number; text: ShotText } | null>(null);
+  // Kept with the path it is for, so a new capture never shows the last one's text.
+  const [stored, setStored] = useState<{ path: string; id: number; text: ShotText } | null>(null);
   useEffect(() => {
-    setStored(null);
     if (!path) return;
-    return watchShotText(path, (id, text) => setStored(id !== null && text ? { id, text } : null));
+    return watchShotText(path, (id, text) => setStored(id !== null && text ? { path, id, text } : null));
   }, [path]);
-  return stored;
+  return stored !== null && stored.path === path ? stored : null;
 }
 
 function useThumbnail(item: QuickItem | null): string | null {

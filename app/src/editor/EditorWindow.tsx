@@ -286,7 +286,7 @@ export default function EditorWindow() {
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   /** The capture's library id and stored OCR text; null when the library does not know it. */
-  const [stored, setStored] = useState<{ id: number; text: ShotText } | null>(null);
+  const [storedFor, setStoredFor] = useState<{ path: string; id: number; text: ShotText } | null>(null);
   const [backdropOpen, setBackdropOpen] = useState(false);
   /** A backdrop being adjusted (a slider mid-drag), shown but not yet committed. */
   const [backdropDraft, setBackdropDraft] = useState<Backdrop | null>(null);
@@ -706,10 +706,13 @@ export default function EditorWindow() {
   // The original capture's stored text: crop and annotations do not change it.
   const capturePath = info?.path ?? null;
   useEffect(() => {
-    setStored(null);
     if (!capturePath) return;
-    return watchShotText(capturePath, (id, text) => setStored(id !== null && text ? { id, text } : null));
+    return watchShotText(capturePath, (id, text) =>
+      setStoredFor(id !== null && text ? { path: capturePath, id, text } : null),
+    );
   }, [capturePath]);
+  // Kept with the path it is for, so another capture never shows this one's text.
+  const stored = storedFor !== null && storedFor.path === capturePath ? storedFor : null;
 
   const copyText = async () => {
     if (!stored) return;
