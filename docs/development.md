@@ -133,12 +133,30 @@ The page plays the recording from the `grab-it-video` URI scheme (`grab-it-video
 Edits are kept in `<name>.edits.json` beside the MP4, saved as each change is let go and read again when the recording is reopened; the MP4 itself is never changed. A sidecar with a version this build does not know is never written over:
 
 ```json
-{ "version": 1, "trim": { "startMs": 1250, "endMs": 9500 }, "backdrop": { "fill": "ocean", "padding": 64, "radius": 36, "radiusUnit": "pt", "shadow": true, "aspect": "9:16" } }
+{
+  "version": 1,
+  "trim": { "startMs": 1250, "endMs": 9500 },
+  "backdrop": { "fill": "ocean", "padding": 64, "radius": 36, "radiusUnit": "pt", "shadow": true, "aspect": "9:16" },
+  "zooms": [
+    { "id": "z1", "startMs": 2000, "endMs": 4500, "scale": 2, "focus": { "kind": "area", "x": 0.25, "y": 0.4 } },
+    { "id": "z2", "startMs": 6000, "endMs": 8000, "scale": 1.5, "focus": { "kind": "cursor" } }
+  ]
+}
 ```
 
-`trim` is absent while the whole recording is kept, and `backdrop` is the capture sidecar's (see `Backdrop` in `src/editor/model.ts`).
+`trim` is absent while the whole recording is kept, `backdrop` is the capture sidecar's (see `Backdrop` in `src/editor/model.ts`), and `zooms` is absent without any (see [Zooms](#zooms)).
 
 **Export** saves `<name> (edited).mp4` beside the original (`(edited 2)` and so on when that is taken) and shows it on the Quick Access card. The page lays the video out on its backdrop as captures are (`recordingLayout` in `src/recording/layout.ts`: padding, then the aspect ratio), scaled so the longer side is at most 1920 px and both sides are even: a 1920×1080 recording at 9:16 exports at 1080×1920. It paints the fill and shadow, and a mask of the video's rounded corners, as PNGs at that size and sends them with the plan (`recording_export`). Rust then has ffmpeg decode the trimmed stretch (`-ss` and `-t` on the input) as raw RGBA at the size the video takes, at the frame rate in `<name>.cursor.json` (30 without one), lays each frame over the backdrop through the mask (`recording_editor::Composer`), and pipes it into the H.264 encoder and quality recordings use. The trimmed sound of the original is added last as AAC (`recording_editor::trim_audio_args`). The editor shows the frames written so far as the export runs. A transparent fill exports as black, since a video has no transparency.
+
+#### Zooms
+
+A zoom shows a stretch of the recording larger, 1.25× to 4× in quarter steps, centred on a chosen area or following the pointer. Zooms sit on a row under the timeline (`src/recording/ZoomTrack.tsx`): **Zoom** in the top bar, or a double-click on an empty stretch of the row, adds a 2-second 2× area zoom there (shorter when the next zoom or the end is closer; at least half a second). Drag a zoom to move it and its edges to resize it; zooms never overlap. A selected zoom shows its controls in the top bar: **Area** or **Follow cursor**, **Scale**, and Delete (also the Delete key; the arrow keys move it). While an area zoom is selected and the recording is paused, the preview shows the whole frame with the zoomed area on it: press or drag to centre the area, or nudge it with the arrow keys. Edits are saved in `zooms` in the sidecar; times are in the recording, not the trimmed clip.
+
+**Follow cursor** needs `<name>.cursor.json` and is disabled without it. Rust reads and smooths the pointer path once (`zoom::CursorPath::load`): each position is held inside the frame and made a fraction of it, a frame where the pointer was unknown keeps the last known point, and the path goes through an exponential filter with a 0.25 s time constant forward and then backward, so it neither lags nor leads. The page gets the smoothed path with the recording (`RecordingInfo.cursor`) and the export uses the same one, reading it between frames.
+
+The view at each moment is worked out the same way in the page (`viewAt` in `src/recording/zooms.ts`) and in Rust (`zoom::view_at`); keep the two in step. A zoom eases in over its first 0.3 s and out over its last (half its length each when it is shorter than 0.6 s) along a smoothstep, its scale growing as `scale ^ strength`. The view's centre is the area's or the pointer's, moved just far enough that the zoomed view stays inside the frame. The preview shows it with a CSS transform on the video, inside the video's rounded box.
+
+On export the plan carries the zooms and the recording's size. Frames are then decoded larger than the place the video takes, as large as the deepest zoom needs up to the recording's own size (`ExportPlan::decode_size`), and each is cut to its view and scaled to that place (`zoom::draw_view`: bilinear, averaging up to 4×4 samples a pixel when shrinking) before it is laid over the backdrop.
 
 ### Search and OCR
 

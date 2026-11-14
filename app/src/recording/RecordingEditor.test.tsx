@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
@@ -14,7 +14,7 @@ interface Backend {
   exported?: { resolve: (path: string) => void; reject: (err: string) => void };
 }
 
-function mockBackend(edits: unknown = null): Backend {
+function mockBackend(edits: unknown = null, cursor: unknown = null): Backend {
   const backend: Backend = { calls: [] };
   mockConvertFileSrc("linux");
   mockIPC(
@@ -22,7 +22,7 @@ function mockBackend(edits: unknown = null): Backend {
       backend.calls.push({ cmd, payload });
       switch (cmd) {
       case "recording_info":
-        return { path: PATH, fileName: "Grab-it 2026-03-07 09-05-01.mp4", edits, fps: 60 };
+        return { path: PATH, fileName: "Grab-it 2026-03-07 09-05-01.mp4", edits, fps: 60, cursor };
       case "get_editor_preferences":
         return {};
       case "recording_save_edits":
@@ -82,6 +82,7 @@ afterEach(() => {
 });
 
 const saved = (backend: Backend) => backend.calls.filter((call) => call.cmd === "recording_save_edits").map((call) => (call.payload as { edits: unknown }).edits);
+const lastSaved = (backend: Backend) => saved(backend)[saved(backend).length - 1];
 
 /** Loads a 12-second 1920×1080 recording into the page's video. */
 async function loadVideo(): Promise<HTMLVideoElement> {
@@ -97,6 +98,13 @@ async function loadVideo(): Promise<HTMLVideoElement> {
   await waitFor(() => expect(screen.getByRole("slider", { name: "Trim end" })).toHaveAttribute("aria-valuemax", "12000"));
   return video;
 }
+
+/** Gives `element` a box on screen, as jsdom lays nothing out. */
+function placeAt(element: Element, width: number, height: number) {
+  vi.spyOn(element, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, x: 0, y: 0, width, height, right: width, bottom: height, toJSON: () => ({}) } as DOMRect);
+}
+
+const AREA_ZOOM = { id: "z1", startMs: 2000, endMs: 4000, scale: 2, focus: { kind: "area", x: 0.5, y: 0.5 } };
 
 describe("RecordingEditor", () => {
   it("plays the recording from the grab-it-video scheme", async () => {
@@ -166,7 +174,7 @@ describe("RecordingEditor", () => {
     await loadVideo();
     await userEvent.click(screen.getByRole("button", { name: "Export" }));
     const { plan, body } = await exportCall(backend);
-    expect(plan).toEqual({ startMs: 1500, endMs: 6000, width: 1920, height: 1080, x: 0, y: 0, videoWidth: 1920, videoHeight: 1080, backdropBytes: 0 });
+    expect(plan).toEqual({ startMs: 1500, endMs: 6000, width: 1920, height: 1080, x: 0, y: 0, videoWidth: 1920, videoHeight: 1080, backdropBytes: 0, zooms: [], sourceWidth: 1920, sourceHeight: 1080 });
     expect(body).toEqual([]);
 
     await emit("recording-export-progress", { done: 135, total: 270 });
@@ -193,7 +201,7 @@ describe("RecordingEditor", () => {
     await loadVideo();
     await userEvent.click(screen.getByRole("button", { name: "Export" }));
     const { plan, body } = await exportCall(backend);
-    expect(plan).toEqual({ startMs: 2000, endMs: 9500, width: 1080, height: 1920, x: 34, y: 676, videoWidth: 1012, videoHeight: 570, backdropBytes: 3 });
+    expect(plan).toEqual({ startMs: 2000, endMs: 9500, width: 1080, height: 1920, x: 34, y: 676, videoWidth: 1012, videoHeight: 570, backdropBytes: 3, zooms: [], sourceWidth: 1920, sourceHeight: 1080 });
     expect(body).toEqual([1, 2, 3, 9, 9]);
   });
 
@@ -237,5 +245,77 @@ describe("RecordingEditor", () => {
     unmount();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:tauri://localhost/recording-1");
     vi.unstubAllGlobals();
+  });
+
+  it("adds an area zoom at the playhead and picks its area on the preview", async () => {
+    const backend = mockBackend();
+    render(<RecordingEditor />);
+    await loadVideo();
+    await userEvent.click(screen.getByRole("button", { name: "Zoom" }));
+    const added = { id: expect.any(String), startMs: 0, endMs: 2000, scale: 2, focus: { kind: "area", x: 0.5, y: 0.5 } };
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, zooms: [added] }));
+    expect(screen.getByRole("button", { name: /^Area zoom 2×, 0:00.0 to 0:02.0/ })).toBeInTheDocument();
+    // Paused with an area zoom chosen: the whole frame shows, with the area on it.
+    const picker = screen.getByTestId("zoom-picker");
+    placeAt(picker, 400, 200);
+    fireEvent.pointerDown(picker, { clientX: 390, clientY: 20 });
+    fireEvent.pointerUp(picker, { clientX: 390, clientY: 20 });
+    // Kept inside the frame: the top-right quarter.
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, zooms: [{ ...added, focus: { kind: "area", x: 0.75, y: 0.25 } }] }));
+    expect(screen.getByTestId("zoom-area")).toHaveStyle({ left: "50%", top: "0%", width: "50%", height: "50%" });
+  });
+
+  it("moves, resizes and deletes a zoom on the timeline", async () => {
+    const backend = mockBackend({ version: 1, zooms: [AREA_ZOOM] });
+    render(<RecordingEditor />);
+    await loadVideo();
+    // 100 ms a pixel.
+    placeAt(screen.getByTestId("zoom-track"), 120, 26);
+    const segment = screen.getByTestId("zoom-segment");
+    fireEvent.pointerDown(segment, { clientX: 25 });
+    fireEvent.pointerMove(segment, { clientX: 45 });
+    fireEvent.pointerUp(segment, { clientX: 45 });
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, zooms: [{ ...AREA_ZOOM, startMs: 4000, endMs: 6000 }] }));
+
+    const end = screen.getByTestId("zoom-edge-end");
+    fireEvent.pointerDown(end, { clientX: 60 });
+    fireEvent.pointerMove(end, { clientX: 90 });
+    fireEvent.pointerUp(end, { clientX: 90 });
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, zooms: [{ ...AREA_ZOOM, startMs: 4000, endMs: 9000 }] }));
+
+    fireEvent.keyDown(screen.getByTestId("zoom-segment"), { key: "Delete" });
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1 }));
+    expect(screen.queryByTestId("zoom-segment")).not.toBeInTheDocument();
+  });
+
+  it("follows the cursor only when the recording has a pointer track", async () => {
+    const backend = mockBackend({ version: 1, zooms: [AREA_ZOOM] }, { fps: 60, points: [[0.2, 0.3]] });
+    render(<RecordingEditor />);
+    await loadVideo();
+    act(() => screen.getByTestId("zoom-segment").focus());
+    await userEvent.click(screen.getByRole("button", { name: "Follow cursor" }));
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, zooms: [{ ...AREA_ZOOM, focus: { kind: "cursor" } }] }));
+    expect(screen.queryByTestId("zoom-picker")).not.toBeInTheDocument();
+    // Back to an area: it starts where the pointer was.
+    await userEvent.click(screen.getByRole("button", { name: "Area" }));
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, zooms: [{ ...AREA_ZOOM, focus: { kind: "area", x: 0.25, y: 0.3 } }] }));
+  });
+
+  it("offers no cursor zoom without a pointer track", async () => {
+    mockBackend({ version: 1, zooms: [AREA_ZOOM] });
+    render(<RecordingEditor />);
+    await loadVideo();
+    act(() => screen.getByTestId("zoom-segment").focus());
+    expect(screen.getByRole("button", { name: "Follow cursor" })).toBeDisabled();
+  });
+
+  it("shows the zoom in the preview at its time", async () => {
+    mockBackend({ version: 1, zooms: [AREA_ZOOM] });
+    render(<RecordingEditor />);
+    const video = await loadVideo();
+    expect(video.style.transform).toBe("none");
+    Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 3 });
+    fireEvent.timeUpdate(video);
+    await waitFor(() => expect(video.style.transform).toContain("scale(2)"));
   });
 });

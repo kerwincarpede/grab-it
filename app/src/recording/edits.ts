@@ -1,5 +1,6 @@
 import type { Backdrop } from "../editor/model";
 import { parseBackdrop } from "../editor/sidecar";
+import { parseZooms, type Zoom } from "./zooms";
 
 /** The stretch of the recording kept, in milliseconds from its start. */
 export interface Trim {
@@ -18,6 +19,8 @@ export interface RecordingEdits {
   trim?: Trim | null;
   /** The same backdrop captures have; its aspect is the export's shape. */
   backdrop?: Backdrop | null;
+  /** Zoom segments, sorted and never overlapping; absent or empty for none. */
+  zooms?: Zoom[];
 }
 
 /** The shortest a trimmed recording may be. */
@@ -33,8 +36,8 @@ export function emptyEdits(): RecordingEdits {
 
 /**
  * Reads a sidecar. `null` or `undefined` (no sidecar yet) gives no edits.
- * An unknown version throws, so it is never overwritten; a trim or backdrop
- * that is not understood is dropped on its own.
+ * An unknown version throws, so it is never overwritten; a trim, backdrop
+ * or zoom that is not understood is dropped on its own.
  */
 export function parseEdits(value: unknown): RecordingEdits {
   if (value === null || value === undefined) return emptyEdits();
@@ -48,6 +51,8 @@ export function parseEdits(value: unknown): RecordingEdits {
   }
   const backdrop = parseBackdrop(doc.backdrop);
   if (backdrop) edits.backdrop = backdrop;
+  const zooms = parseZooms(doc.zooms);
+  if (zooms.length > 0) edits.zooms = zooms;
   return edits;
 }
 
@@ -57,6 +62,17 @@ export function serializeEdits(edits: RecordingEdits): RecordingEdits {
     version: 1,
     ...(edits.trim ? { trim: { startMs: Math.round(edits.trim.startMs), endMs: Math.round(edits.trim.endMs) } } : {}),
     ...(edits.backdrop ? { backdrop: edits.backdrop } : {}),
+    ...(edits.zooms && edits.zooms.length > 0
+      ? {
+          zooms: edits.zooms.map((zoom) => ({
+            id: zoom.id,
+            startMs: Math.round(zoom.startMs),
+            endMs: Math.round(zoom.endMs),
+            scale: zoom.scale,
+            focus: zoom.focus.kind === "area" ? { kind: "area" as const, x: zoom.focus.x, y: zoom.focus.y } : { kind: "cursor" as const },
+          })),
+        }
+      : {}),
   };
 }
 

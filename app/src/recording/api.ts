@@ -1,6 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { RecordingEdits } from "./edits";
+import type { CursorPath, Zoom } from "./zooms";
 
 /** Mirrors `RecordingInfo` in src-tauri/src/recording_editor.rs. */
 export interface RecordingInfo {
@@ -10,6 +11,8 @@ export interface RecordingInfo {
   edits: unknown;
   /** The frame rate it was recorded at. */
   fps: number;
+  /** The pointer's smoothed path, which follow-the-pointer zooms centre on; null without `<recording>.cursor.json`. */
+  cursor: CursorPath | null;
 }
 
 /** Mirrors `VIDEO_SCHEME` in src-tauri/src/recording_editor.rs. */
@@ -36,6 +39,11 @@ export interface ExportPlan {
   videoHeight: number;
   /** How many bytes of the body are the backdrop PNG; the rest is the mask. 0 without a backdrop. */
   backdropBytes: number;
+  /** The zooms, in the recording's time; the export cuts each frame to its view. */
+  zooms: Zoom[];
+  /** The recording's own size, which zoomed frames are cut from. */
+  sourceWidth: number;
+  sourceHeight: number;
 }
 
 /** Mirrors `ExportProgress` in src-tauri/src/recording_editor.rs: frames written so far. */

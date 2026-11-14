@@ -29,6 +29,7 @@ mod tidy;
 mod tray;
 mod update;
 mod windows;
+mod zoom;
 
 use std::{path::PathBuf, sync::Mutex};
 

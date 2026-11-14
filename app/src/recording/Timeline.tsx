@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { clampTrim, formatTime, type Trim } from "./edits";
 
 interface TimelineProps {
@@ -12,6 +12,8 @@ interface TimelineProps {
   onTrimPreview: (trim: Trim) => void;
   /** Keeps a trim: saved to the sidecar. */
   onTrimCommit: (trim: Trim) => void;
+  /** Rows under the track, lined up with it, such as the zooms. */
+  children?: ReactNode;
 }
 
 type Edge = "start" | "end";
@@ -27,7 +29,7 @@ const percent = (ms: number, durationMs: number) => `${durationMs > 0 ? (ms / du
  * dimmed. Handles move with the pointer or the arrow keys, and keep their
  * trim when let go.
  */
-export default function Timeline({ durationMs, trim, currentMs, onSeek, onTrimPreview, onTrimCommit }: TimelineProps) {
+export default function Timeline({ durationMs, trim, currentMs, onSeek, onTrimPreview, onTrimCommit, children }: TimelineProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<Edge | "seek" | null>(null);
   /** The trim as last previewed, committed when the handle is let go. */
@@ -144,6 +146,7 @@ export default function Timeline({ durationMs, trim, currentMs, onSeek, onTrimPr
         {handle("start")}
         {handle("end")}
       </div>
+      {children}
     </div>
   );
 }
