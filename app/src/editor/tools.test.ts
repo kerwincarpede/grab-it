@@ -441,7 +441,9 @@ describe("per-tool widths", () => {
 
   it("finds the preset nearest a width", () => {
     expect(nearestPreset(STROKE_WIDTHS, 4)).toBe(3);
-    expect(nearestPreset(STROKE_WIDTHS, 10)).toBe(6);
+    expect(nearestPreset(STROKE_WIDTHS, 11)).toBe(6);
+    // A tie keeps the thinner preset.
+    expect(nearestPreset(STROKE_WIDTHS, 10)).toBe(5);
     expect(nearestPreset(STROKE_WIDTHS, 100)).toBe(8);
     expect(nearestPreset(STROKE_WIDTHS, 0)).toBe(0);
   });

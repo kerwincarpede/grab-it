@@ -451,7 +451,7 @@ export default function EditorWindow() {
 
   /** Sets the colour or an option for the next shape and applies it to the selected one. */
   const changeStyle = useCallback(
-    (next: Pick<Style, "color" | "fill" | "background" | "blurMode">) => {
+    (next: Partial<Pick<Style, "color" | "fill" | "background" | "blurMode">>) => {
       setStyle((now) => ({ ...now, ...next }));
       restyleSelected(next);
     },
