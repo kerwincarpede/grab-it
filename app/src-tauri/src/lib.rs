@@ -7,6 +7,7 @@ mod codes;
 mod commands;
 mod editor;
 mod ffmpeg;
+mod frames;
 mod hotkeys;
 mod hub;
 mod keychain;

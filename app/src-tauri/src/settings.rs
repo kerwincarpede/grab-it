@@ -561,14 +561,33 @@ impl RecordingQuality {
     }
 }
 
+/// The frame rates an MP4 can be recorded at.
+pub const RECORDING_FPS: [u32; 2] = [30, 60];
+
 /// How screen recordings are made. Mirrors `RecordingSettings` in
 /// src/settings/api.ts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RecordingSettings {
     pub format: RecordingFormat,
     /// MP4 only.
     pub quality: RecordingQuality,
+    /// An MP4's frames a second: one of [`RECORDING_FPS`]. A GIF is about
+    /// ten frames a second whatever this says.
+    pub fps: u32,
+    /// Whether the pointer is drawn into the recording.
+    pub show_cursor: bool,
+}
+
+impl Default for RecordingSettings {
+    fn default() -> Self {
+        Self {
+            format: RecordingFormat::default(),
+            quality: RecordingQuality::default(),
+            fps: RECORDING_FPS[0],
+            show_cursor: true,
+        }
+    }
 }
 
 impl RecordingSettings {
@@ -583,6 +602,13 @@ impl RecordingSettings {
             quality: field("quality")
                 .and_then(|v| serde_json::from_value(v).ok())
                 .unwrap_or(defaults.quality),
+            fps: field("fps")
+                .and_then(|v| serde_json::from_value::<u32>(v).ok())
+                .filter(|fps| RECORDING_FPS.contains(fps))
+                .unwrap_or(defaults.fps),
+            show_cursor: field("showCursor")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(defaults.show_cursor),
         }
     }
 }
@@ -1148,6 +1174,12 @@ impl SettingsStore {
         &mut self,
         recording: RecordingSettings,
     ) -> Result<Settings, SettingsError> {
+        if !RECORDING_FPS.contains(&recording.fps) {
+            return Err(SettingsError::Invalid(format!(
+                "recordings can be 30 or 60 fps, not {}",
+                recording.fps
+            )));
+        }
         let next = Settings {
             recording,
             ..self.current.clone()
@@ -1270,6 +1302,8 @@ mod tests {
             recording: RecordingSettings {
                 format: RecordingFormat::Gif,
                 quality: RecordingQuality::Low,
+                fps: 60,
+                show_cursor: false,
             },
         };
         save(&path, &settings).unwrap();
@@ -1339,7 +1373,7 @@ mod tests {
         assert_eq!(RecordingQuality::High.bits_per_pixel(), 0.2);
         assert_eq!(
             serde_json::to_value(recording).unwrap(),
-            serde_json::json!({"format": "mp4", "quality": "high"})
+            serde_json::json!({"format": "mp4", "quality": "high", "fps": 30, "showCursor": true})
         );
     }
 
@@ -1359,6 +1393,8 @@ mod tests {
         let chosen = RecordingSettings {
             format: RecordingFormat::Gif,
             quality: RecordingQuality::Medium,
+            fps: 60,
+            show_cursor: false,
         };
         assert_eq!(store.set_recording(chosen).unwrap().recording, chosen);
         assert_eq!(load(&path, defaults(&dir)).unwrap().recording, chosen);
@@ -1366,7 +1402,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             json["recording"],
-            serde_json::json!({"format": "gif", "quality": "medium"})
+            serde_json::json!({"format": "gif", "quality": "medium", "fps": 60, "showCursor": false})
         );
         assert_eq!(json["showInDock"], false);
 
@@ -1379,6 +1415,30 @@ mod tests {
         let loaded = load(&path, defaults(&dir)).unwrap().recording;
         assert_eq!(loaded.format, RecordingFormat::Mp4);
         assert_eq!(loaded.quality, RecordingQuality::Low);
+        assert_eq!(loaded.fps, 30);
+        assert!(loaded.show_cursor);
+    }
+
+    #[test]
+    fn recording_frame_rate_is_30_or_60() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // An unknown rate or a wrong type keeps its default.
+        fs::write(&path, r#"{"recording": {"fps": 24, "showCursor": "no"}}"#).unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap().recording;
+        assert_eq!(loaded.fps, 30);
+        assert!(loaded.show_cursor);
+        fs::write(&path, r#"{"recording": {"fps": 60}}"#).unwrap();
+        assert_eq!(load(&path, defaults(&dir)).unwrap().recording.fps, 60);
+
+        let mut store = open_store(path.clone(), defaults(&dir));
+        let odd = RecordingSettings {
+            fps: 25,
+            ..RecordingSettings::default()
+        };
+        assert!(store.set_recording(odd).is_err());
+        assert_eq!(load(&path, defaults(&dir)).unwrap().recording.fps, 60);
     }
 
     #[test]

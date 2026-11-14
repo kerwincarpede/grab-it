@@ -79,9 +79,23 @@ Nothing heavy happens while a selection is on screen. The frozen image is encode
 
 ### Recording
 
-**Settings → Recording** picks what recordings are saved as (`recording` in `settings.json`): `format` is `mp4` (the default) or `gif`, and `quality` is `low`, `medium` or `high` (the default), for MP4 only.
+**Settings → Recording** picks what recordings are saved as (`recording` in `settings.json`): `format` is `mp4` (the default) or `gif`; `quality` is `low`, `medium` or `high` (the default) and `fps` is `30` (the default) or `60`, both for MP4 only; and `showCursor` (on by default) draws the pointer into MP4s and GIFs alike.
 
-An MP4 is recorded at a constant 30 fps with no time limit (`record::record_mp4`). Each grab of the recorded area is piped into ffmpeg's stdin as raw RGBA (`-f rawvideo -pix_fmt rgba`), and ffmpeg writes H.264 in yuv420p at even dimensions, at most 1920 px wide, with `-movflags +faststart` so it plays while it downloads. A grab that takes longer than a frame repeats the frame before for every frame time that went by (`record::Pacer`), so the video keeps time, but only up to half a second of repeats after each grab, with Stop checked between them. Frame times further behind than that are dropped, so a fresh frame is always grabbed soon: when ffmpeg takes frames in more slowly than 30 fps, or the computer sleeps mid-recording, the video is shorter than the recording. The bitrate is the quality's bits per pixel of each frame: 0.05 for low, 0.1 for medium and 0.2 for high, about 12 Mbit/s for 1080p at high. A GIF is still encoded in Grab-it at about 10 fps, scaled to at most 1280 px wide, and stops after a minute.
+An MP4 is recorded at a constant 30 or 60 fps with no time limit (`record::record_mp4`). Each grab of the recorded area is piped into ffmpeg's stdin as raw RGBA (`-f rawvideo -pix_fmt rgba`), and ffmpeg writes H.264 in yuv420p at even dimensions, at most 1920 px wide, with `-movflags +faststart` so it plays while it downloads. A grab that takes longer than a frame repeats the frame before for every frame time that went by (`record::Pacer`), so the video keeps time, but only up to half a second of repeats after each grab, with Stop checked between them. Frame times further behind than that are dropped, so a fresh frame is always grabbed soon: when ffmpeg takes frames in more slowly than the frame rate, or the computer sleeps mid-recording, the video is shorter than the recording. The bitrate is the quality's bits per pixel of each frame: 0.05 for low, 0.1 for medium and 0.2 for high, about 12 Mbit/s for 1080p at high. A GIF is still encoded in Grab-it at about 10 fps, scaled to at most 1280 px wide, and stops after a minute.
+
+Frames are grabbed in the fastest way each platform has (`frames.rs`), so 60 fps holds:
+
+- **X11**: only the recorded area is read (`Monitor::capture_region`), not the whole monitor. The pointer is drawn in from the XFixes cursor image, through x11rb's pure-Rust connection, so no extra system libraries are needed.
+- **Windows**: DXGI desktop duplication (xcap's `Monitor::video_recorder`), cropped to the area. Duplication only sends a frame when the screen changes, so the newest one is reused until then, and GDI grabs stand in until the first arrives or when duplication cannot start (over Remote Desktop, say). The pointer is drawn with `GetCursorInfo` and `DrawIconEx`, which also gets inverting pointers such as the I-beam right.
+- **macOS**: Grab-it's own `AVCaptureScreenInput` session, cropped to the area (`cropRect`) and limited to the frame rate (`minFrameDuration`). It draws the pointer itself when `capturesCursor` is set from Show cursor; xcap's own recorder cannot leave it out. If the session cannot start, the whole monitor is grabbed and cropped as before, without the pointer.
+
+Beside each MP4, `<name>.cursor.json` says where the pointer was, whether or not it was drawn, for later edits such as zooming in on it:
+
+```json
+{ "version": 1, "width": 1920, "height": 1080, "fps": 60, "positions": [[812, 433], [815, 431], null] }
+```
+
+`width` and `height` are the video's size, and `positions` holds one entry for every frame of the video, repeated frames included: the pointer's hot spot in the video's pixels from its top-left corner, which lies outside that size when the pointer is outside the recorded area, or `null` where it could not be told. A GIF gets no sidecar.
 
 ffmpeg is not bundled (see [ffmpeg builds](#ffmpeg-builds)). With MP4 chosen, Grab-it gets it ready in the background when it starts, or as soon as MP4 is picked in Settings (`ffmpeg.rs`):
 
