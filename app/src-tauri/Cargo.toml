@@ -85,7 +85,8 @@ objc2-foundation = "0.3"
 # Recording's own AVCaptureScreenInput session (frames.rs): the same
 # bindings xcap uses.
 dispatch2 = "0.3"
-objc2-av-foundation = "0.3"
+# `objc2-core-media`: the screen input's minFrameDuration.
+objc2-av-foundation = { version = "0.3", features = ["objc2-core-media"] }
 objc2-core-media = "0.3"
 objc2-core-video = "0.3"
 

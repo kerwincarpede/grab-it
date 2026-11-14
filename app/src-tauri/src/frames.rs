@@ -472,25 +472,130 @@ mod win {
         sync::{
             Arc, Mutex,
             atomic::{AtomicBool, Ordering},
+            mpsc::{self, RecvTimeoutError, Sender},
         },
         time::Duration,
     };
 
-    use xcap::{Frame, VideoRecorder};
+    use xcap::{Frame, Monitor};
 
     use super::{FrameSource, Grabbed, RegionSource, crop_rows, pointer_in_frame};
     use crate::{capture::Rect, screen::MonitorInfo};
 
-    /// How long a frame may take to arrive before the drain thread checks
-    /// whether the recording is over.
+    /// How long the duplication thread waits for a frame before it looks
+    /// for a Start or Stop.
     const POLL: Duration = Duration::from_millis(100);
+    /// How long opening a monitor's duplication may take.
+    const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// One monitor's desktop duplication, opened once and kept for the
+    /// life of the app: xcap's duplication thread never ends, so opening
+    /// one per recording would leave a live duplication behind each time,
+    /// until DXGI refused to open more. Recordings start and stop it.
+    struct Duplicator {
+        monitor: u32,
+        commands: Mutex<Sender<bool>>,
+        /// The newest frame of the whole monitor while started.
+        latest: Arc<Mutex<Option<Frame>>>,
+        /// False once xcap's thread has ended (the duplication was lost,
+        /// say to a mode change), so the next recording opens a new one.
+        alive: Arc<AtomicBool>,
+    }
+
+    /// The duplications opened so far, one a monitor.
+    static DUPLICATORS: Mutex<Vec<Arc<Duplicator>>> = Mutex::new(Vec::new());
+
+    impl Duplicator {
+        /// The monitor's duplication, opened the first time it is asked
+        /// for or after the last one was lost.
+        fn get(monitor: u32) -> Result<Arc<Self>, String> {
+            let mut all = DUPLICATORS.lock().unwrap_or_else(|p| p.into_inner());
+            all.retain(|known| known.alive.load(Ordering::SeqCst));
+            if let Some(known) = all.iter().find(|known| known.monitor == monitor) {
+                return Ok(Arc::clone(known));
+            }
+            let opened = Arc::new(Self::open(monitor)?);
+            all.push(Arc::clone(&opened));
+            Ok(opened)
+        }
+
+        /// Opens the duplication on a thread of its own, which keeps xcap's
+        /// recorder (not `Send`) and copies its frames into `latest`.
+        fn open(monitor: u32) -> Result<Self, String> {
+            let (commands, received) = mpsc::channel::<bool>();
+            let (ready, opened) = mpsc::channel::<Result<(), String>>();
+            let latest = Arc::new(Mutex::new(None));
+            let alive = Arc::new(AtomicBool::new(true));
+            let (slot, living) = (Arc::clone(&latest), Arc::clone(&alive));
+            std::thread::Builder::new()
+                .name("grab-it-duplication".into())
+                .spawn(move || {
+                    let recorder = Monitor::all()
+                        .map_err(|err| err.to_string())
+                        .and_then(|monitors| {
+                            monitors
+                                .into_iter()
+                                .find(|candidate| candidate.id().ok() == Some(monitor))
+                                .ok_or_else(|| "the monitor is no longer connected".to_owned())
+                        })
+                        .and_then(|found| found.video_recorder().map_err(|err| err.to_string()));
+                    let (recorder, frames) = match recorder {
+                        Ok(opened) => opened,
+                        Err(err) => {
+                            living.store(false, Ordering::SeqCst);
+                            let _ = ready.send(Err(err));
+                            return;
+                        }
+                    };
+                    let _ = ready.send(Ok(()));
+                    loop {
+                        while let Ok(start) = received.try_recv() {
+                            // Each recording waits for a fresh frame rather
+                            // than take one left from the last.
+                            *slot.lock().unwrap_or_else(|p| p.into_inner()) = None;
+                            let changed = if start {
+                                recorder.start()
+                            } else {
+                                recorder.stop()
+                            };
+                            if let Err(err) = changed {
+                                eprintln!("Grab-it: desktop duplication: {err}");
+                            }
+                        }
+                        match frames.recv_timeout(POLL) {
+                            Ok(frame) => {
+                                *slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(frame);
+                            }
+                            Err(RecvTimeoutError::Timeout) => {}
+                            // xcap's thread ended: the duplication is gone.
+                            Err(RecvTimeoutError::Disconnected) => break,
+                        }
+                    }
+                    living.store(false, Ordering::SeqCst);
+                })
+                .map_err(|err| err.to_string())?;
+            opened
+                .recv_timeout(OPEN_TIMEOUT)
+                .map_err(|_| "desktop duplication did not open".to_owned())??;
+            Ok(Self {
+                monitor,
+                commands: Mutex::new(commands),
+                latest,
+                alive,
+            })
+        }
+
+        fn send(&self, start: bool) {
+            let _ = self
+                .commands
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .send(start);
+        }
+    }
 
     pub struct Duplication {
-        recorder: VideoRecorder,
-        /// The newest frame of the whole monitor. Duplication only sends a
-        /// frame when the screen changes, so it is reused until then.
-        latest: Arc<Mutex<Option<Frame>>>,
-        done: Arc<AtomicBool>,
+        duplicator: Arc<Duplicator>,
         /// Grabs frames until duplication has sent one, and places the
         /// pointer.
         fallback: RegionSource,
@@ -499,32 +604,11 @@ mod win {
     impl Duplication {
         pub fn open(info: &MonitorInfo, rect: Rect, show_cursor: bool) -> Result<Self, String> {
             let fallback = RegionSource::open(info, rect, show_cursor)?;
-            let (recorder, frames) = fallback
-                .monitor
-                .video_recorder()
-                .map_err(|err| err.to_string())?;
-            let latest = Arc::new(Mutex::new(None));
-            let done = Arc::new(AtomicBool::new(false));
-            let (slot, stop) = (Arc::clone(&latest), Arc::clone(&done));
-            std::thread::Builder::new()
-                .name("grab-it-duplication".into())
-                .spawn(move || {
-                    while !stop.load(Ordering::SeqCst) {
-                        match frames.recv_timeout(POLL) {
-                            Ok(frame) => {
-                                *slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(frame);
-                            }
-                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                        }
-                    }
-                })
-                .map_err(|err| err.to_string())?;
-            recorder.start().map_err(|err| err.to_string())?;
+            let monitor = fallback.monitor.id().map_err(|err| err.to_string())?;
+            let duplicator = Duplicator::get(monitor)?;
+            duplicator.send(true);
             Ok(Self {
-                recorder,
-                latest,
-                done,
+                duplicator,
                 fallback,
             })
         }
@@ -533,7 +617,11 @@ mod win {
     impl FrameSource for Duplication {
         fn grab(&mut self) -> Result<Grabbed, String> {
             let cropped = {
-                let latest = self.latest.lock().unwrap_or_else(|p| p.into_inner());
+                let latest = self
+                    .duplicator
+                    .latest
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
                 latest.as_ref().and_then(|frame| {
                     let pitch = frame.raw.len() / frame.height.max(1) as usize;
                     crop_rows(
@@ -564,8 +652,7 @@ mod win {
 
     impl Drop for Duplication {
         fn drop(&mut self) {
-            let _ = self.recorder.stop();
-            self.done.store(true, Ordering::SeqCst);
+            self.duplicator.send(false);
         }
     }
 }
