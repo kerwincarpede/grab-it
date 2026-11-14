@@ -57,6 +57,8 @@ interface Backend {
   ocr: Record<number, string>;
   ocrStatus: OcrStatus;
   aiStatus: AiStatus;
+  /** Grab-it turned AI descriptions on and the Library has not said so yet. */
+  aiNotice: boolean;
 }
 
 /** A small stand-in for `Library::search`: every word must start a word in some field. */
@@ -102,6 +104,7 @@ function mockBackend(shots: Shot[]): Backend {
     ocr: {},
     ocrStatus: { state: "idle" },
     aiStatus: { state: "idle", done: 0, total: 0, error: null },
+    aiNotice: false,
   };
   const find = (id: number) => {
     const found = backend.shots.find((item) => item.id === id);
@@ -168,6 +171,11 @@ function mockBackend(shots: Shot[]): Backend {
           return null;
         }
         case "open_target":
+          return null;
+        case "get_settings":
+          return { ai: { enabled: backend.aiNotice, provider: "claudeCode", noticePending: backend.aiNotice } };
+        case "dismiss_ai_notice":
+          backend.aiNotice = false;
           return null;
         default:
           throw new Error(`unexpected command ${cmd}`);
@@ -627,7 +635,8 @@ describe("LibraryWindow AI descriptions", () => {
     });
     expect(screen.queryByText(/Describing \d+ of/)).not.toBeInTheDocument();
     expect(screen.getByText(/Could not describe captures: could not reach/)).toBeInTheDocument();
-    expect(screen.getByText(/Is Ollama running\?/)).toBeInTheDocument();
+    expect(screen.getByText(/Is the AI endpoint running\?/)).toBeInTheDocument();
+    expect(screen.queryByText(/Ollama/)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Open Settings" }));
     await waitFor(() => expect(callsTo(backend, "open_target")[0]?.payload).toEqual({ target: "settings" }));
 
@@ -635,6 +644,60 @@ describe("LibraryWindow AI descriptions", () => {
       await emit(AI_STATUS_EVENT, { state: "idle", done: 0, total: 0, error: null });
     });
     expect(screen.queryByText(/Could not describe/)).not.toBeInTheDocument();
+  });
+
+  it("names Claude Code in the error hint when it describes captures", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.aiStatus = {
+      state: "error",
+      done: 0,
+      total: 1,
+      error: "Claude Code failed: Not logged in · Please run /login",
+      provider: "claudeCode",
+    };
+    render(<LibraryWindow />);
+    expect(await screen.findByText(/Could not describe captures: Claude Code failed/)).toBeInTheDocument();
+    expect(screen.getByText(/Is Claude Code installed and signed in\?/)).toBeInTheDocument();
+  });
+
+  it("says once that Claude Code now describes captures, until dismissed", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.aiNotice = true;
+    const { unmount } = render(<LibraryWindow />);
+    expect(await screen.findByText(/Claude Code now describes your new captures/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss AI notice" }));
+
+    expect(screen.queryByText(/Claude Code now describes/)).not.toBeInTheDocument();
+    await waitFor(() => expect(callsTo(backend, "dismiss_ai_notice")).toHaveLength(1));
+    unmount();
+
+    // The next time the Library opens it is gone.
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: "Grab-it 1.png" });
+    await settle();
+    expect(screen.queryByText(/Claude Code now describes/)).not.toBeInTheDocument();
+  });
+
+  it("opens Settings from the notice, which dismisses it", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.aiNotice = true;
+    render(<LibraryWindow />);
+    await screen.findByText(/Claude Code now describes your new captures/);
+
+    await userEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+
+    await waitFor(() => expect(callsTo(backend, "open_target")[0]?.payload).toEqual({ target: "settings" }));
+    expect(callsTo(backend, "dismiss_ai_notice")).toHaveLength(1);
+    expect(screen.queryByText(/Claude Code now describes/)).not.toBeInTheDocument();
+  });
+
+  it("shows no notice when Grab-it did not turn AI on", async () => {
+    mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: "Grab-it 1.png" });
+    await settle();
+    expect(screen.queryByText(/Claude Code now describes/)).not.toBeInTheDocument();
   });
 
   it("reloads when a run finishes, to show the new descriptions", async () => {

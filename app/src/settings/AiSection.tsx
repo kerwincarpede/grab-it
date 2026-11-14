@@ -1,5 +1,14 @@
-import { useState, type FormEvent } from "react";
-import { isLocalEndpoint, redescribeAll, testAiConnection, type AiPreferences } from "./api";
+import { useEffect, useState, type FormEvent } from "react";
+import {
+  AI_PROVIDERS,
+  aiClis,
+  aiProvider,
+  isLocalEndpoint,
+  redescribeAll,
+  testAiConnection,
+  type AiClis,
+  type AiPreferences,
+} from "./api";
 
 function errorMessage(err: unknown): string {
   if (typeof err === "string") return err;
@@ -25,27 +34,49 @@ interface Draft {
 const draftOf = (ai: AiPreferences): Draft => ({ endpoint: ai.endpoint, model: ai.model, apiKey: ai.apiKey ?? "" });
 
 /**
- * The vision model that describes and sorts captures. The toggles save at
- * once; the text fields save with Save, or before a connection test.
+ * Who describes and sorts captures. The toggles and the provider save at
+ * once; the endpoint's text fields save with Save, or before a connection
+ * test.
  */
 function AiSection({ saved, disabled, onSave }: Props) {
   const [draft, setDraft] = useState<Draft>(() => draftOf(saved));
   const [result, setResult] = useState<Result>(null);
   const [testing, setTesting] = useState(false);
   const [confirmingAll, setConfirmingAll] = useState(false);
+  // Null until the backend has looked, or when it cannot say.
+  const [clis, setClis] = useState<AiClis | null>(null);
 
+  useEffect(() => {
+    let cancelled = false;
+    aiClis()
+      .then((found) => {
+        if (!cancelled) setClis(found);
+      })
+      .catch(() => {
+        // Without it Settings just cannot warn that a CLI is missing.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const provider = aiProvider(saved);
+  const usesEndpoint = provider === "endpoint";
+  const typedValid = draft.endpoint.trim().length > 0 && draft.model.trim().length > 0;
   const edited =
-    draft.endpoint.trim() !== saved.endpoint ||
-    draft.model.trim() !== saved.model ||
-    (draft.apiKey.trim() || null) !== saved.apiKey;
-  const valid = draft.endpoint.trim().length > 0 && draft.model.trim().length > 0;
+    usesEndpoint &&
+    (draft.endpoint.trim() !== saved.endpoint ||
+      draft.model.trim() !== saved.model ||
+      (draft.apiKey.trim() || null) !== saved.apiKey);
+  const valid = !usesEndpoint || typedValid;
   const busy = disabled || testing;
+  const claudeMissing = provider === "claudeCode" && clis !== null && clis.claudeCode === null;
 
   /** Saves the typed fields along with `change`. */
   async function save(change: Partial<AiPreferences> = {}): Promise<boolean> {
     const next: AiPreferences = {
       ...saved,
-      ...(valid
+      ...(usesEndpoint && typedValid
         ? { endpoint: draft.endpoint.trim(), model: draft.model.trim(), apiKey: draft.apiKey.trim() || null }
         : {}),
       ...change,
@@ -86,7 +117,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
     }
   }
 
-  const local = isLocalEndpoint(draft.endpoint.trim());
+  const local = usesEndpoint && isLocalEndpoint(draft.endpoint.trim());
 
   return (
     <form className="ai-settings" aria-labelledby="ai-heading" onSubmit={submit}>
@@ -106,55 +137,91 @@ function AiSection({ saved, disabled, onSave }: Props) {
           </span>
         </span>
       </label>
+
+      <fieldset className="choices ai-providers" disabled={busy}>
+        <legend className="choice-title">Described by</legend>
+        {AI_PROVIDERS.map((choice) => (
+          <label className="choice" key={choice.value}>
+            <input
+              type="radio"
+              name="ai-provider"
+              value={choice.value}
+              checked={provider === choice.value}
+              onChange={() => {
+                setResult(null);
+                void save({ provider: choice.value });
+              }}
+            />
+            <span>
+              <span className="choice-title">{choice.title}</span>
+              <span className="hint">{choice.hint}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      {claudeMissing && (
+        <p className="hint ai-missing" data-testid="ai-missing">
+          Grab-it cannot find Claude Code: there is no claude command on this computer. Install Claude Code and sign
+          in, then reopen Settings, or choose an endpoint instead.
+        </p>
+      )}
+
       <p className={`hint ai-privacy${local ? "" : " ai-privacy-cloud"}`}>
-        With a local endpoint such as Ollama nothing leaves this computer; a cloud endpoint receives your
-        screenshots.
+        {provider === "claudeCode"
+          ? "Claude Code sends your screenshots, with their text, app and window title, to Anthropic under your Claude account."
+          : "With a local endpoint such as Ollama nothing leaves this computer; a cloud endpoint receives your screenshots."}
       </p>
 
-      <div className="field">
-        <label htmlFor="ai-endpoint">Endpoint URL</label>
-        <input
-          id="ai-endpoint"
-          type="text"
-          inputMode="url"
-          spellCheck={false}
-          value={draft.endpoint}
-          disabled={busy}
-          placeholder="http://localhost:11434/v1"
-          onChange={(event) => setDraft({ ...draft, endpoint: event.target.value })}
-        />
-        <p className="hint">Any OpenAI-compatible API, such as Ollama, LM Studio or a cloud provider.</p>
-      </div>
-      <div className="field">
-        <label htmlFor="ai-model">Model</label>
-        <input
-          id="ai-model"
-          type="text"
-          spellCheck={false}
-          value={draft.model}
-          disabled={busy}
-          placeholder="qwen2.5vl:7b"
-          onChange={(event) => setDraft({ ...draft, model: event.target.value })}
-        />
-        <p className="hint">It must accept images.</p>
-      </div>
-      <div className="field">
-        <label htmlFor="ai-api-key">API key</label>
-        <input
-          id="ai-api-key"
-          type="password"
-          autoComplete="off"
-          value={draft.apiKey}
-          disabled={busy}
-          placeholder="Optional"
-          onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })}
-        />
-        <p className="hint">Only cloud providers need one. Leave it empty for Ollama.</p>
-      </div>
+      {usesEndpoint && (
+        <>
+          <div className="field">
+            <label htmlFor="ai-endpoint">Endpoint URL</label>
+            <input
+              id="ai-endpoint"
+              type="text"
+              inputMode="url"
+              spellCheck={false}
+              value={draft.endpoint}
+              disabled={busy}
+              placeholder="http://localhost:11434/v1"
+              onChange={(event) => setDraft({ ...draft, endpoint: event.target.value })}
+            />
+            <p className="hint">Any OpenAI-compatible API, such as Ollama, LM Studio or a cloud provider.</p>
+          </div>
+          <div className="field">
+            <label htmlFor="ai-model">Model</label>
+            <input
+              id="ai-model"
+              type="text"
+              spellCheck={false}
+              value={draft.model}
+              disabled={busy}
+              placeholder="qwen2.5vl:7b"
+              onChange={(event) => setDraft({ ...draft, model: event.target.value })}
+            />
+            <p className="hint">It must accept images.</p>
+          </div>
+          <div className="field">
+            <label htmlFor="ai-api-key">API key</label>
+            <input
+              id="ai-api-key"
+              type="password"
+              autoComplete="off"
+              value={draft.apiKey}
+              disabled={busy}
+              placeholder="Optional"
+              onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })}
+            />
+            <p className="hint">Only cloud providers need one. Leave it empty for Ollama.</p>
+          </div>
+        </>
+      )}
       <div className="ai-buttons">
-        <button type="submit" disabled={busy || !edited || !valid}>
-          Save
-        </button>
+        {usesEndpoint && (
+          <button type="submit" disabled={busy || !edited || !valid}>
+            Save
+          </button>
+        )}
         <button type="button" className="secondary" disabled={busy || !valid} onClick={() => void test()}>
           {testing ? "Testing…" : "Test connection"}
         </button>

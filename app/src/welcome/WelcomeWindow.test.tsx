@@ -14,13 +14,19 @@ const HOTKEYS = {
   colour: "Ctrl+Shift+PrintScreen",
 };
 
-function mockBackend(options: { failSettings?: boolean; failOpen?: string } = {}) {
+function mockBackend(options: { failSettings?: boolean; failOpen?: string; ai?: object } = {}) {
   const calls: { cmd: string; payload?: InvokeArgs }[] = [];
   mockIPC((cmd, payload) => {
     calls.push({ cmd, payload });
     if (cmd === "get_settings") {
       if (options.failSettings) throw "no settings";
-      return { saveFolder: "/shots", hotkeys: HOTKEYS, afterCapture: "quickAccess", copyToClipboard: true };
+      return {
+        saveFolder: "/shots",
+        hotkeys: HOTKEYS,
+        afterCapture: "quickAccess",
+        copyToClipboard: true,
+        ...(options.ai ? { ai: options.ai } : {}),
+      };
     }
     if (cmd === "open_target" && options.failOpen) throw options.failOpen;
     return null;
@@ -38,6 +44,21 @@ describe("WelcomeWindow", () => {
     expect(within(text).getByText("Capture text")).toBeInTheDocument();
     const colour = screen.getByLabelText("Ctrl+Shift+PrintScreen");
     expect(within(colour).getAllByText(/Ctrl|Shift|PrintScreen/)).toHaveLength(3);
+  });
+
+  it("mentions AI descriptions only while Claude Code describes captures", async () => {
+    mockBackend({ ai: { enabled: true, provider: "claudeCode" } });
+    const { unmount } = render(<WelcomeWindow />);
+    expect(await screen.findByText(/Claude Code describes each new capture/)).toBeInTheDocument();
+    unmount();
+
+    for (const ai of [{ enabled: false, provider: "claudeCode" }, { enabled: true, provider: null }, undefined]) {
+      mockBackend({ ai });
+      const view = render(<WelcomeWindow />);
+      await screen.findByLabelText("Shift+PrintScreen");
+      expect(screen.queryByText(/Claude Code describes/)).not.toBeInTheDocument();
+      view.unmount();
+    }
   });
 
   it("still explains itself when the hotkeys cannot be read", async () => {

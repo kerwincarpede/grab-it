@@ -364,6 +364,8 @@ export interface AiStatus {
   /** Captures in this run. */
   total: number;
   error: string | null;
+  /** Who describes captures (`AiProvider` in src-tauri/src/settings.rs), so an error can say whom to check. */
+  provider?: "claudeCode" | "endpoint";
 }
 
 /** Mirrors the AI status event in src-tauri. */
@@ -391,4 +393,15 @@ export function onAiStatus(handler: (status: AiStatus) => void): Promise<Unliste
 /** Opens the Settings window. */
 export function openSettings(): Promise<void> {
   return invoke<void>("open_target", { target: "settings" });
+}
+
+/** Whether Grab-it turned AI descriptions on by itself and the Library should say so, once. */
+export async function aiNoticePending(): Promise<boolean> {
+  const settings = await invoke<{ ai?: { noticePending?: boolean } }>("get_settings");
+  return settings.ai?.noticePending === true;
+}
+
+/** Stops showing the notice that Grab-it turned AI descriptions on. */
+export async function dismissAiNotice(): Promise<void> {
+  await invoke("dismiss_ai_notice");
 }

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./welcome.css";
 import { acceleratorKeys } from "../settings/accelerator";
-import { getSettings, type Hotkeys } from "../settings/api";
+import { aiProvider, getSettings, type Hotkeys } from "../settings/api";
 
 /** Opens a window or starts a capture by its `--open` name. */
 function openTarget(target: string): Promise<void> {
@@ -32,19 +32,29 @@ const TIPS: { title: string; detail: string }[] = [
   { title: "Library", detail: "Every capture, searchable by the text inside the image." },
 ];
 
+/** Added to the tips while Claude Code describes captures. */
+const CLAUDE_TIP = {
+  title: "AI descriptions",
+  detail:
+    "Claude Code describes each new capture, so you can search for what it shows. Change or turn it off in Settings.",
+};
+
 /**
  * Shown once, on the first launch, and from the tray afterwards: a tray app
  * opens no window of its own, so this says where it lives and how to use it.
  */
 function WelcomeWindow() {
   const [hotkeys, setHotkeys] = useState<Hotkeys | null>(null);
+  const [claudeDescribes, setClaudeDescribes] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     getSettings()
       .then((settings) => {
-        if (!cancelled) setHotkeys(settings.hotkeys);
+        if (cancelled) return;
+        setHotkeys(settings.hotkeys);
+        setClaudeDescribes(settings.ai?.enabled === true && aiProvider(settings.ai) === "claudeCode");
       })
       .catch(() => {
         // The tips still read well without the hotkeys.
@@ -108,7 +118,7 @@ function WelcomeWindow() {
       <section className="card" aria-labelledby="welcome-tips">
         <h2 id="welcome-tips">Worth knowing</h2>
         <ul className="welcome-tips">
-          {TIPS.map(({ title, detail }) => (
+          {(claudeDescribes ? [...TIPS, CLAUDE_TIP] : TIPS).map(({ title, detail }) => (
             <li key={title}>
               <span className="choice-title">{title}</span>
               <span className="hint">{detail}</span>

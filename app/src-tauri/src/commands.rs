@@ -83,6 +83,14 @@ pub fn set_auto_backdrop(
         .map_err(|err| err.to_string())
 }
 
+/// Clears the one-time notice that Grab-it turned describing on.
+#[tauri::command]
+pub fn dismiss_ai_notice(state: State<'_, SettingsState>) -> Result<Settings, String> {
+    lock(&state)
+        .dismiss_ai_notice()
+        .map_err(|err| err.to_string())
+}
+
 /// Opens a window or starts a capture by its `--open` name (`region`,
 /// `settings`, `library`…), for the Welcome window's buttons.
 #[tauri::command]

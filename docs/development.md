@@ -84,18 +84,28 @@ The search index is a SQLite FTS5 table in `library.db`, kept in step with each 
 
 Grab-it can ask a vision model to describe each capture: a sentence or two, a category (`code`, `terminal`, `browser`, `chat`, `document`, `design`, `error`, `receipt`, `photo` or `other`) and a few tags. The description and AI tags are searchable, the Library can filter by category, and the tag filter matches AI tags as well as your own. AI tags are stored apart from your tags.
 
-It is **off by default**, and nothing leaves your machine until you turn it on. Any OpenAI-compatible `/chat/completions` endpoint works: [Ollama](https://ollama.com), LM Studio, llama.cpp's server, or a cloud API such as OpenAI or OpenRouter. With Ollama, everything stays local:
+Who describes captures is picked under **AI descriptions** in Settings (`ai.provider` in `settings.json`):
+
+- **Claude Code** (`claudeCode`): Grab-it runs the `claude` CLI you already have installed and signed in to, headlessly, with the `haiku` model, no tools, no MCP servers and no saved session, in an empty temporary folder (see `ai_cli.rs`). Nothing else to set up or download. Screenshots go to Anthropic under your Claude account. Each description records `claude-code/haiku` as its model.
+- **OpenAI-compatible endpoint** (`endpoint`): any `/chat/completions` API: [Ollama](https://ollama.com), LM Studio, llama.cpp's server, or a cloud API such as OpenAI or OpenRouter.
+
+Describing is otherwise **off by default**. When Grab-it starts and finds `claude`, it turns describing on with Claude Code, for new captures only, **once**, for a user who never turned it on: no `ai` in `settings.json`, or an `ai` with no `provider` and `enabled: false`. The Library then shows a one-time notice, and the welcome window mentions it. An `ai` with `enabled: true` and no `provider` is an endpoint user from before providers existed and is left alone. Once a provider is set, Grab-it never changes it again, so turning describing off keeps it off.
+
+Grab-it looks for `claude` on its own PATH, then on your login shell's PATH (an app started from Finder or a launcher does not have it), then in `~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin` and `/usr/local/bin`. Installing or signing in to Claude Code is up to you: if it is missing, not signed in or fails, describing pauses and the Library shows its message. A run that takes longer than five minutes is stopped.
+
+With Ollama as the endpoint, everything stays local:
 
 ```sh
 ollama pull qwen2.5vl:7b   # about 6 GB; any vision model works
 ollama serve               # if it is not already running
 ```
 
-Then turn it on under `ai` in `settings.json`. The defaults already point at Ollama:
+Then pick the endpoint in Settings, or set it under `ai` in `settings.json`. The defaults already point at Ollama:
 
 ```json
 "ai": {
   "enabled": true,
+  "provider": "endpoint",
   "endpoint": "http://localhost:11434/v1",
   "model": "qwen2.5vl:7b",
   "apiKey": null,
@@ -103,9 +113,9 @@ Then turn it on under `ai` in `settings.json`. The defaults already point at Oll
 }
 ```
 
-For a cloud API, set `endpoint` (for example `https://api.openai.com/v1`), `model` and `apiKey`. The key is sent as `Authorization: Bearer …` and is stored in plain text in `settings.json`. With `newCapturesOnly`, captures that already existed when you turned describing on are skipped; set it to `false` before turning it on to describe the whole library.
+For a cloud API, set `endpoint` (for example `https://api.openai.com/v1`), `model` and `apiKey`. The key is sent as `Authorization: Bearer …` and is stored in plain text in `settings.json`. With `newCapturesOnly`, captures that already existed when you turned describing on are skipped; set it to `false` before turning it on to describe the whole library. **Test connection** in Settings checks whichever provider is picked.
 
-Captures are described in the background, one at a time and newest first, once OCR has read them. Each one is scaled down to at most 1568 px on its long edge and sent with its OCR text, app and window title. A model on a CPU can take a minute or more per capture. If the endpoint cannot be reached or refuses the request, describing pauses. It tries again when you change the settings or ask for a capture to be described again, or when a new capture arrives a minute or more later. Changing the model does not redo old captures: each one records the model that described it, and you can ask for one capture, or all of them, to be described again.
+Captures are described in the background, one at a time and newest first, once OCR has read them. Each one is scaled down to at most 1568 px on its long edge and sent with its OCR text, app and window title. A model on a CPU can take a minute or more per capture. If the endpoint cannot be reached or refuses the request, or the CLI fails, describing pauses. It tries again when you change the settings or ask for a capture to be described again, or when a new capture arrives a minute or more later. Changing the model does not redo old captures: each one records the model that described it, and you can ask for one capture, or all of them, to be described again.
 
 ### Settings
 

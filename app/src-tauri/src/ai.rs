@@ -4,16 +4,20 @@
 //! Off by default: nothing is sent anywhere until the user turns it on in
 //! Settings. Then, like the OCR queue in `ocr.rs`, one background thread
 //! describes every capture waiting for it, newest first and one at a time,
-//! once OCR has finished with it. Each capture goes, downscaled, to an
-//! OpenAI-compatible `/chat/completions` endpoint (Ollama, LM Studio,
-//! llama.cpp's server, OpenAI, OpenRouter…) with its OCR text, app and
-//! window title, and the model answers with a description, a category and
-//! a few tags.
+//! once OCR has finished with it. Each capture goes, downscaled, with its
+//! OCR text, app and window title, to the provider picked in Settings: the
+//! user's own Claude Code CLI (see `ai_cli.rs`), or an OpenAI-compatible
+//! `/chat/completions` endpoint (Ollama, LM Studio, llama.cpp's server,
+//! OpenAI, OpenRouter…). The model answers with a description, a category
+//! and a few tags.
+//!
+//! Describing turns itself on once, with Claude Code, for a user who never
+//! turned it on and has `claude` installed (see [`enable_claude_code_once`]).
 
 use std::{
     fmt,
     io::Cursor,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Mutex,
         mpsc::{self, Receiver, Sender},
@@ -28,9 +32,10 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::{
+    ai_cli,
     commands::{SettingsState, lock},
     library::{AiDescription, AiJob, LIBRARY_CHANGED_EVENT, LibraryError, LibraryState},
-    settings::AiSettings,
+    settings::{AiProvider, AiSettings, CLAUDE_CODE_MODEL},
 };
 
 /// What a capture can be. Mirrors `CATEGORIES` in src/library/api.ts.
@@ -55,7 +60,7 @@ pub const TEST_TIMEOUT: Duration = Duration::from_secs(90);
 /// before they are sent: enough to read screen text, and the most that
 /// several vision APIs use anyway.
 pub const MAX_IMAGE_EDGE: u32 = 1568;
-/// After the endpoint fails, a new capture retries it no sooner than this.
+/// After the provider fails, a new capture retries it no sooner than this.
 /// Changing the settings or asking for a description retries at once.
 pub const RETRY_AFTER: Duration = Duration::from_secs(60);
 
@@ -72,7 +77,8 @@ const MAX_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 /// and the request sent again.
 const OPTIONAL_FIELDS: [&str; 3] = ["response_format", "max_tokens", "temperature"];
 
-const SYSTEM_PROMPT: &str = "You describe screenshots for a personal screenshot library, so \
+/// Sent as the system prompt to every provider.
+pub(crate) const SYSTEM_PROMPT: &str = "You describe screenshots for a personal screenshot library, so \
      they can be found again by searching. You reply with a single JSON object and nothing else.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,7 +89,8 @@ pub enum AiError {
     /// fails.
     Response(String),
     /// The endpoint could not be reached, timed out or refused the
-    /// request. The queue stops, and the capture waits, until it is retried.
+    /// request, or the CLI is missing, failed or timed out. The queue
+    /// stops, and the capture waits, until it is retried.
     Endpoint(String),
 }
 
@@ -108,8 +115,10 @@ pub struct AiStatus {
     pub done: u32,
     /// Captures that are not skipped.
     pub total: u32,
-    /// Why the endpoint failed, in the `error` state.
+    /// Why the provider failed, in the `error` state.
     pub error: Option<String>,
+    /// Who describes captures, so a failure can say whom to check.
+    pub provider: AiProvider,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -121,18 +130,24 @@ pub enum AiState {
     Idle,
     /// A capture is being described.
     Working,
-    /// The endpoint failed; waiting captures are described once it is
+    /// The provider failed; waiting captures are described once it is
     /// retried.
     Error,
 }
 
 impl AiStatus {
-    fn new(state: AiState, counts: crate::library::AiCounts, error: Option<String>) -> Self {
+    fn new(
+        state: AiState,
+        counts: crate::library::AiCounts,
+        error: Option<String>,
+        provider: AiProvider,
+    ) -> Self {
         Self {
             state,
             done: counts.done,
             total: counts.total,
             error,
+            provider,
         }
     }
 }
@@ -155,8 +170,37 @@ pub fn agent(stall: Duration) -> ureq::Agent {
         .new_agent()
 }
 
+/// What describing runs with: an HTTP agent for endpoints, and the
+/// `claude` CLI, when it was found, with how long it may take.
+#[derive(Clone)]
+pub struct Clients {
+    pub http: ureq::Agent,
+    pub claude: Option<PathBuf>,
+    pub cli_timeout: Duration,
+}
+
+impl Clients {
+    /// Clients that give up after `stall`, with `claude` looked up now.
+    pub fn new(stall: Duration) -> Self {
+        Self {
+            http: agent(stall),
+            claude: ai_cli::find_claude(),
+            cli_timeout: stall,
+        }
+    }
+
+    fn claude(&self) -> Result<&Path, AiError> {
+        self.claude.as_deref().ok_or_else(ai_cli::claude_missing)
+    }
+}
+
 /// The capture as a PNG `data:` URL, scaled down to fit [`MAX_IMAGE_EDGE`].
 pub fn image_data_url(png: &Path) -> Result<String, AiError> {
+    Ok(format!("data:image/png;base64,{}", png_base64(png)?))
+}
+
+/// The capture as base64 PNG bytes, scaled down to fit [`MAX_IMAGE_EDGE`].
+pub fn png_base64(png: &Path) -> Result<String, AiError> {
     let image = image::open(png).map_err(|err| AiError::Image(err.to_string()))?;
     let image = if image.width().max(image.height()) > MAX_IMAGE_EDGE {
         image.resize(
@@ -171,14 +215,11 @@ pub fn image_data_url(png: &Path) -> Result<String, AiError> {
     image::DynamicImage::ImageRgb8(image.into_rgb8())
         .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
         .map_err(|err| AiError::Image(err.to_string()))?;
-    Ok(format!(
-        "data:image/png;base64,{}",
-        BASE64_STANDARD.encode(bytes)
-    ))
+    Ok(BASE64_STANDARD.encode(bytes))
 }
 
 /// At most `max` characters of `text`, with `…` when cut.
-fn truncate(text: &str, max: usize) -> String {
+pub(crate) fn truncate(text: &str, max: usize) -> String {
     let text = text.trim();
     match text.char_indices().nth(max) {
         Some((end, _)) => format!("{}…", text[..end].trim_end()),
@@ -450,20 +491,28 @@ pub fn parse_description(reply: &str) -> Result<AiDescription, AiError> {
     })
 }
 
-/// Asks the model about one capture.
-pub fn describe(
-    agent: &ureq::Agent,
-    ai: &AiSettings,
-    job: &AiJob,
-) -> Result<AiDescription, AiError> {
-    let image = image_data_url(&job.path)?;
-    let body = request_body(&ai.model, &prompt(job), Some(&image), 400);
-    parse_description(&complete(agent, ai, body)?)
+/// Asks the provider's model about one capture.
+pub fn describe(clients: &Clients, ai: &AiSettings, job: &AiJob) -> Result<AiDescription, AiError> {
+    let reply = match ai.provider() {
+        AiProvider::Endpoint => {
+            let image = image_data_url(&job.path)?;
+            let body = request_body(&ai.model, &prompt(job), Some(&image), 400);
+            complete(&clients.http, ai, body)?
+        }
+        AiProvider::ClaudeCode => {
+            let claude = clients.claude()?;
+            let image = png_base64(&job.path)?;
+            ai_cli::claude_reply(claude, &prompt(job), &image, clients.cli_timeout)?
+        }
+    };
+    parse_description(&reply)
 }
 
-/// Sends a tiny image and checks the model answers, for Settings' "Test
-/// connection".
-pub fn test_connection(agent: &ureq::Agent, ai: &AiSettings) -> Result<String, AiError> {
+const TEST_PROMPT: &str = "This is a connection test. Reply with {\"ok\": true}.";
+
+/// Sends a tiny image and checks the provider's model answers, for
+/// Settings' "Test connection".
+pub fn test_connection(clients: &Clients, ai: &AiSettings) -> Result<String, AiError> {
     let mut bytes = Vec::new();
     image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
         16,
@@ -472,18 +521,27 @@ pub fn test_connection(agent: &ureq::Agent, ai: &AiSettings) -> Result<String, A
     ))
     .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
     .map_err(|err| AiError::Image(err.to_string()))?;
-    let image = format!("data:image/png;base64,{}", BASE64_STANDARD.encode(bytes));
-    let body = request_body(
-        &ai.model,
-        "This is a connection test. Reply with {\"ok\": true}.",
-        Some(&image),
-        20,
-    );
-    let reply = complete(agent, ai, body)?;
+    let image = BASE64_STANDARD.encode(bytes);
+    let (reply, answered) = match ai.provider() {
+        AiProvider::Endpoint => {
+            let url = format!("data:image/png;base64,{image}");
+            let body = request_body(&ai.model, TEST_PROMPT, Some(&url), 20);
+            let reply = complete(&clients.http, ai, body)?;
+            (reply, format!("{} at {} answered.", ai.model, ai.endpoint))
+        }
+        AiProvider::ClaudeCode => {
+            let claude = clients.claude()?;
+            let reply = ai_cli::claude_reply(claude, TEST_PROMPT, &image, clients.cli_timeout)?;
+            (
+                reply,
+                format!("{} ({CLAUDE_CODE_MODEL}) answered.", ai_cli::CLAUDE_NAME),
+            )
+        }
+    };
     if reply.trim().is_empty() {
         return Err(AiError::Response("the model sent an empty reply".into()));
     }
-    Ok(format!("{} at {} answered.", ai.model, ai.endpoint))
+    Ok(answered)
 }
 
 /// What one turn of the queue did.
@@ -499,7 +557,7 @@ pub enum Step {
     Failed(i64),
     /// The capture was deleted while it was described.
     Gone(i64),
-    /// The endpoint failed; the capture still waits.
+    /// The provider failed; the capture still waits.
     Stopped(String),
 }
 
@@ -509,7 +567,7 @@ pub enum Step {
 pub fn step(
     library: &LibraryState,
     ai: &AiSettings,
-    agent: &ureq::Agent,
+    clients: &Clients,
     working: impl FnOnce(),
 ) -> Result<Step, LibraryError> {
     if !ai.enabled {
@@ -519,10 +577,10 @@ pub fn step(
         return Ok(Step::Empty);
     };
     working();
-    let saved = match describe(agent, ai, &job) {
+    let saved = match describe(clients, ai, &job) {
         Ok(description) => library
             .lock()
-            .set_ai_description(job.id, &description, &ai.model)
+            .set_ai_description(job.id, &description, &ai.model_label())
             .map(|()| Step::Described(job.id)),
         Err(AiError::Endpoint(message)) => return Ok(Step::Stopped(message)),
         Err(err) => {
@@ -550,7 +608,7 @@ pub fn skips_existing(before: &AiSettings, after: &AiSettings) -> bool {
 enum Wake {
     /// A capture was added or read by OCR.
     Kick,
-    /// The user changed something: retry a failed endpoint at once.
+    /// The user changed something: retry a failed provider at once.
     Retry,
 }
 
@@ -564,7 +622,12 @@ impl AiQueue {
     fn new(wake: Sender<Wake>) -> Self {
         Self {
             wake: Mutex::new(wake),
-            status: Mutex::new(AiStatus::new(AiState::Off, Default::default(), None)),
+            status: Mutex::new(AiStatus::new(
+                AiState::Off,
+                Default::default(),
+                None,
+                AiProvider::Endpoint,
+            )),
         }
     }
 
@@ -605,7 +668,7 @@ pub fn wake(app: &AppHandle) {
     }
 }
 
-/// Tells the queue the user changed something, retrying a failed endpoint.
+/// Tells the queue the user changed something, retrying a failed provider.
 pub fn retry(app: &AppHandle) {
     if let Some(queue) = app.try_state::<AiQueue>() {
         queue.send(Wake::Retry);
@@ -626,7 +689,33 @@ pub fn settings_saved(app: &AppHandle, before: &AiSettings, after: &AiSettings) 
     }
 }
 
-fn set_status(app: &AppHandle, state: AiState, error: Option<String>) {
+/// Turns describing on with Claude Code, for new captures only, when the
+/// user never turned it on and `claude` is installed. Runs once at start-up,
+/// before the queue starts; once a provider is set it never does anything
+/// again, so a user who turns describing off keeps it off.
+pub fn enable_claude_code_once(app: &AppHandle) {
+    let state = app.state::<SettingsState>();
+    if !lock(&state).get().preferences.ai.never_enabled() {
+        return;
+    }
+    // Unlocked: the lookup may ask the login shell for its PATH.
+    if ai_cli::find_claude().is_none() {
+        return;
+    }
+    let mut store = lock(&state);
+    match store.enable_claude_code() {
+        Ok(Some(before)) => {
+            let after = store.get().preferences.ai.clone();
+            // Still locked, as when Settings saves: existing captures are
+            // skipped before the queue can start on them.
+            settings_saved(app, &before, &after);
+        }
+        Ok(None) => {}
+        Err(err) => eprintln!("Grab-it: could not turn on describing with Claude Code: {err}"),
+    }
+}
+
+fn set_status(app: &AppHandle, state: AiState, provider: AiProvider, error: Option<String>) {
     let Some(queue) = app.try_state::<AiQueue>() else {
         return;
     };
@@ -635,7 +724,7 @@ fn set_status(app: &AppHandle, state: AiState, error: Option<String>) {
         .lock()
         .ai_counts()
         .unwrap_or_default();
-    let status = AiStatus::new(state, counts, error);
+    let status = AiStatus::new(state, counts, error, provider);
     {
         let mut current = queue
             .status
@@ -659,7 +748,7 @@ fn wait(receiver: &Receiver<Wake>) -> bool {
     true
 }
 
-/// Blocks after the endpoint failed, until the user retries or a capture
+/// Blocks after the provider failed, until the user retries or a capture
 /// arrives at least [`RETRY_AFTER`] later. False once nothing can wake it.
 fn wait_to_retry(receiver: &Receiver<Wake>) -> bool {
     let failed = Instant::now();
@@ -684,37 +773,46 @@ fn current_settings(app: &AppHandle) -> AiSettings {
 }
 
 fn run(app: &AppHandle, receiver: &Receiver<Wake>) {
-    let agent = agent(AI_STALL_TIMEOUT);
+    let mut clients = Clients {
+        http: agent(AI_STALL_TIMEOUT),
+        claude: None,
+        cli_timeout: AI_STALL_TIMEOUT,
+    };
     loop {
         let ai = current_settings(app);
+        let provider = ai.provider();
+        if ai.enabled && provider == AiProvider::ClaudeCode {
+            // Looked up each time, so installing it later needs no restart.
+            clients.claude = ai_cli::find_claude();
+        }
         let library = app.state::<LibraryState>();
-        let result = step(&library, &ai, &agent, || {
-            set_status(app, AiState::Working, None);
+        let result = step(&library, &ai, &clients, || {
+            set_status(app, AiState::Working, provider, None);
         });
         let keep_going = match result {
             Ok(Step::Described(_) | Step::Failed(_)) => {
-                set_status(app, AiState::Working, None);
+                set_status(app, AiState::Working, provider, None);
                 let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
                 true
             }
             Ok(Step::Gone(_)) => true,
             Ok(Step::Off) => {
-                set_status(app, AiState::Off, None);
+                set_status(app, AiState::Off, provider, None);
                 wait(receiver)
             }
             Ok(Step::Empty) => {
-                set_status(app, AiState::Idle, None);
+                set_status(app, AiState::Idle, provider, None);
                 wait(receiver)
             }
             Ok(Step::Stopped(message)) => {
                 eprintln!("Grab-it: describing captures stopped: {message}");
-                set_status(app, AiState::Error, Some(message));
+                set_status(app, AiState::Error, provider, Some(message));
                 wait_to_retry(receiver)
             }
             Err(err) => {
                 // Do not spin on a database that refuses writes.
                 eprintln!("Grab-it: could not store a description: {err}");
-                set_status(app, AiState::Idle, None);
+                set_status(app, AiState::Idle, provider, None);
                 wait(receiver)
             }
         };
@@ -767,7 +865,7 @@ pub fn ai_redescribe_all(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Checks that the saved endpoint and model answer, whether or not
+/// Checks that the saved provider and model answer, whether or not
 /// describing is on.
 #[tauri::command(async)]
 pub fn ai_test_connection(app: AppHandle) -> Result<String, String> {
@@ -777,10 +875,28 @@ pub fn ai_test_connection(app: AppHandle) -> Result<String, String> {
     }
     .validated()
     .map_err(|err| err.to_string())?;
-    let message = test_connection(&agent(TEST_TIMEOUT), &ai).map_err(|err| err.to_string())?;
+    let message =
+        test_connection(&Clients::new(TEST_TIMEOUT), &ai).map_err(|err| err.to_string())?;
     // It works now: a queue stopped by an earlier failure can go on.
     retry(&app);
     Ok(message)
+}
+
+/// Which AI CLIs are installed, by where they were found. Mirrors
+/// `AiClis` in src/settings/api.ts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiClis {
+    pub claude_code: Option<PathBuf>,
+}
+
+/// Looks for the AI CLIs, for Settings to say when the chosen one is
+/// missing. Async: the lookup may ask the login shell for its PATH.
+#[tauri::command(async)]
+pub fn ai_clis() -> AiClis {
+    AiClis {
+        claude_code: ai_cli::find_claude(),
+    }
 }
 
 #[cfg(test)]
@@ -944,10 +1060,13 @@ mod tests {
             done: 1,
             total: 3,
             error: None,
+            provider: AiProvider::ClaudeCode,
         };
         assert_eq!(
             serde_json::to_value(status).unwrap(),
-            json!({ "state": "working", "done": 1, "total": 3, "error": null })
+            json!({
+                "state": "working", "done": 1, "total": 3, "error": null, "provider": "claudeCode"
+            })
         );
         assert_eq!(serde_json::to_value(AiState::Off).unwrap(), json!("off"));
         assert_eq!(
@@ -1080,10 +1199,12 @@ mod tests {
     fn settings(server: &FakeServer) -> AiSettings {
         AiSettings {
             enabled: true,
+            provider: Some(AiProvider::Endpoint),
             endpoint: format!("{}/", server.endpoint),
             model: "test-vision".into(),
             api_key: None,
             new_captures_only: false,
+            notice_pending: false,
         }
     }
 
@@ -1108,8 +1229,13 @@ mod tests {
         (LibraryState::new(library), id)
     }
 
-    fn fast() -> ureq::Agent {
-        agent(Duration::from_millis(500))
+    /// Clients that give up fast, with no `claude`.
+    fn fast() -> Clients {
+        Clients {
+            http: agent(Duration::from_millis(500)),
+            claude: None,
+            cli_timeout: Duration::from_secs(10),
+        }
     }
 
     const GOOD_REPLY: &str = "```json\n{\"description\": \"An unpaid invoice from Acme in a \
@@ -1294,7 +1420,10 @@ mod tests {
         let step = step(
             &library,
             &settings(&server),
-            &agent(Duration::from_millis(300)),
+            &Clients {
+                http: agent(Duration::from_millis(300)),
+                ..fast()
+            },
             || {},
         )
         .unwrap();
@@ -1374,5 +1503,122 @@ mod tests {
             guard.clear_ai(id + 1),
             Err(LibraryError::NotFound(_))
         ));
+    }
+
+    // --- The queue with Claude Code --------------------------------------
+
+    fn claude_settings() -> AiSettings {
+        AiSettings {
+            enabled: true,
+            provider: Some(AiProvider::ClaudeCode),
+            new_captures_only: false,
+            ..AiSettings::default()
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_code_describes_a_capture_and_is_recorded_as_the_model() {
+        use crate::ai_cli::tests::{recording_claude, success};
+        let dir = TempDir::new().unwrap();
+        let (library, id) = library_with_shot(dir.path(), Some("Invoice 42 total due"));
+        let cli = TempDir::new().unwrap();
+        let claude = recording_claude(cli.path(), &success(GOOD_REPLY), 0);
+        let clients = Clients {
+            claude: Some(claude),
+            ..fast()
+        };
+
+        assert_eq!(
+            step(&library, &claude_settings(), &clients, || {}).unwrap(),
+            Step::Described(id)
+        );
+
+        let guard = library.lock();
+        let shot = guard.get(id).unwrap();
+        assert_eq!(shot.ai_category.as_deref(), Some("receipt"));
+        assert_eq!(shot.ai_tags, vec!["acme", "billing", "invoice"]);
+        assert_eq!(
+            guard.ai_model(id).unwrap().as_deref(),
+            Some("claude-code/haiku")
+        );
+        // The prompt and the scaled-down capture went in on stdin.
+        let stdin: Value = serde_json::from_str(
+            &std::fs::read_to_string(cli.path().join("log").join("stdin")).unwrap(),
+        )
+        .unwrap();
+        let content = &stdin["message"]["content"];
+        let sent = image::load_from_memory(
+            &BASE64_STANDARD
+                .decode(content[0]["source"]["data"].as_str().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(sent.width(), MAX_IMAGE_EDGE);
+        let text = content[1]["text"].as_str().unwrap();
+        assert!(text.contains("Invoice 42 total due"), "{text}");
+        assert!(text.contains("App: firefox"), "{text}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_claude_stops_the_queue_with_its_message() {
+        use crate::ai_cli::tests::fake_claude;
+        let dir = TempDir::new().unwrap();
+        let (library, id) = library_with_shot(dir.path(), Some("x"));
+        let cli = TempDir::new().unwrap();
+        let result = json!({
+            "type": "result", "subtype": "success", "is_error": true,
+            "result": "Not logged in · Please run /login",
+        });
+        let claude = fake_claude(
+            cli.path(),
+            &format!("cat > /dev/null\nprintf '%s\\n' '{result}'\nexit 1"),
+        );
+        let clients = Clients {
+            claude: Some(claude),
+            ..fast()
+        };
+        let Step::Stopped(message) = step(&library, &claude_settings(), &clients, || {}).unwrap()
+        else {
+            panic!("the queue should stop");
+        };
+        assert!(message.contains("Please run /login"), "{message}");
+        assert_eq!(library.lock().ai_state(id).unwrap(), AI_WAITING);
+    }
+
+    #[test]
+    fn a_missing_claude_stops_the_queue_and_the_capture_waits() {
+        let dir = TempDir::new().unwrap();
+        let (library, id) = library_with_shot(dir.path(), Some("x"));
+        let mut worked = false;
+        let Step::Stopped(message) =
+            step(&library, &claude_settings(), &fast(), || worked = true).unwrap()
+        else {
+            panic!("the queue should stop");
+        };
+        assert!(worked);
+        assert!(
+            message.contains("Claude Code is not installed"),
+            "{message}"
+        );
+        assert_eq!(library.lock().ai_state(id).unwrap(), AI_WAITING);
+        assert!(test_connection(&fast(), &claude_settings()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_connection_test_runs_claude_code() {
+        use crate::ai_cli::tests::{recording_claude, success};
+        let cli = TempDir::new().unwrap();
+        let claude = recording_claude(cli.path(), &success("{\"ok\": true}"), 0);
+        let clients = Clients {
+            claude: Some(claude),
+            ..fast()
+        };
+        let message = test_connection(&clients, &claude_settings()).unwrap();
+        assert_eq!(message, "Claude Code (haiku) answered.");
+        let stdin = std::fs::read_to_string(cli.path().join("log").join("stdin")).unwrap();
+        assert!(stdin.contains("connection test"), "{stdin}");
     }
 }

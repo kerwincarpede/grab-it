@@ -324,6 +324,15 @@ button.danger {
   border-left: 3px solid var(--danger);
 }
 
+.ai-providers legend {
+  margin-bottom: 8px;
+  padding: 0;
+}
+
+.ai-missing {
+  color: var(--danger);
+}
+
 .ai-result {
   margin: 0;
   overflow-wrap: anywhere;
