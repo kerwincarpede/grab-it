@@ -3,7 +3,7 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type { ReactNode, Ref } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import EditorWindow from "./EditorWindow";
-import type { EditorPreferences } from "../settings/api";
+import type { BackdropPreset, EditorPreferences } from "../settings/api";
 import type { ShotText } from "../library/api";
 import type { Annotations } from "./model";
 import { PREFERENCES_DELAY_MS } from "./preferences";
@@ -252,10 +252,15 @@ interface PreferencesMock {
   scaleFactor?: number;
   /** What `library_text` answers for the capture; it is not in the library when unset. */
   shotText?: ShotText;
+  /** Collects every list of backdrop presets written. */
+  presets?: BackdropPreset[][];
 }
 
 /** The capture's id in the mocked library. */
 const SHOT_ID = 7;
+
+/** Where the mocked backend keeps a preset's copy of its image. */
+const PRESET_COPY = "/data/grab-it/backdrop-presets/beach-1700000000000.jpg";
 
 /** Mocks the editor commands; returns every sidecar written. `calls` records output commands in order. */
 function mockEditor(
@@ -272,6 +277,16 @@ function mockEditor(
       case "set_editor_preferences":
         preferences.saved?.push((payload as { preferences: EditorPreferences }).preferences);
         return (payload as { preferences: EditorPreferences }).preferences;
+      case "set_backdrop_presets": {
+        // Stored, so the next read sees them, as settings.json would.
+        const presets = (payload as { presets: BackdropPreset[] }).presets;
+        preferences.presets?.push(presets);
+        if (!(preferences.stored instanceof Error)) preferences.stored = { ...preferences.stored, backdropPresets: presets };
+        return presets;
+      }
+      case "save_backdrop_preset_image":
+        calls.push({ cmd, payload });
+        return PRESET_COPY;
       case "editor_info":
         return { path: "/p/originals/shot.png", fileName: "shot.png", annotations, scaleFactor: preferences.scaleFactor ?? null };
       case "plugin:dialog|open":
@@ -1550,5 +1565,153 @@ describe("EditorWindow", () => {
 
     fireEvent.click(pressed("Arrow"));
     expect(cropHandles()).not.toBeInTheDocument();
+  });
+
+  describe("backdrop presets", () => {
+    const ocean = { fill: "ocean", padding: 40, radius: 12, shadow: true };
+    const sunset = { fill: "sunset", padding: 64, radius: 36, radiusUnit: "pt" as const, shadow: false, aspect: "16:9" as const };
+    const saved = (id: string, name: string, backdrop: object) => ({ id, name, backdrop });
+
+    it("saves the backdrop on show as a preset, then applies it again", async () => {
+      const lists: BackdropPreset[][] = [];
+      const sidecars = mockEditor({ ...sidecar, backdrop: ocean }, [], { presets: lists });
+      await ready();
+      const panel = backdropPanel();
+      const row = within(panel.getByRole("group", { name: "Saved" }));
+      expect(row.getAllByRole("button")).toHaveLength(1);
+      expect(panel.queryByRole("textbox", { name: "Preset name" })).not.toBeInTheDocument();
+
+      fireEvent.click(row.getByRole("button", { name: "Save as preset" }));
+      await waitFor(() => expect(last(lists)).toEqual([{ id: expect.any(String), name: "Preset 1", backdrop: ocean }]));
+      // The new preset is the one in use: its name and Delete show.
+      expect(row.getByRole("button", { name: "Preset 1" })).toHaveAttribute("aria-pressed", "true");
+      expect(panel.getByRole("textbox", { name: "Preset name" })).toHaveValue("Preset 1");
+      expect(panel.getByRole("button", { name: "Delete preset" })).toBeInTheDocument();
+
+      fireEvent.click(panel.getByRole("button", { name: "Sunset gradient" }));
+      await waitFor(() => expect(last(sidecars)?.backdrop?.fill).toBe("sunset"));
+      expect(panel.queryByRole("textbox", { name: "Preset name" })).not.toBeInTheDocument();
+      fireEvent.click(row.getByRole("button", { name: "Save as preset" }));
+      await waitFor(() => expect(last(lists)?.map((preset) => preset.name)).toEqual(["Preset 1", "Preset 2"]));
+
+      fireEvent.click(row.getByRole("button", { name: "Preset 1" }));
+      await waitFor(() => expect(last(sidecars)?.backdrop).toEqual(ocean));
+      expect(panel.getByRole("textbox", { name: "Preset name" })).toHaveValue("Preset 1");
+      expect(row.getByRole("button", { name: "Preset 2" })).toHaveAttribute("aria-pressed", "false");
+    });
+
+    it("builds each change on the stored presets, so another window's presets are kept", async () => {
+      const lists: BackdropPreset[][] = [];
+      const prefs: PreferencesMock = { presets: lists };
+      mockEditor({ ...sidecar, backdrop: ocean }, [], prefs);
+      await ready();
+      // Another editor window saves a preset after this one loaded.
+      prefs.stored = { backdropPresets: [saved("other", "House", sunset)] };
+
+      const panel = backdropPanel();
+      // Opening the panel shows it.
+      await waitFor(() => expect(panel.getByRole("button", { name: "House" })).toBeInTheDocument());
+      prefs.stored = { backdropPresets: [saved("other", "House", sunset), saved("late", "Docs", sunset)] };
+
+      fireEvent.click(panel.getByRole("button", { name: "Save as preset" }));
+      await waitFor(() =>
+        expect(last(lists)).toEqual([
+          saved("other", "House", sunset),
+          saved("late", "Docs", sunset),
+          { id: expect.any(String), name: "Preset 3", backdrop: ocean },
+        ]),
+      );
+      await waitFor(() => expect(panel.getByRole("button", { name: "Docs" })).toBeInTheDocument());
+
+      // A rename and a delete keep them too.
+      const name = panel.getByRole("textbox", { name: "Preset name" });
+      fireEvent.change(name, { target: { value: "Ocean" } });
+      await waitFor(() => expect(last(lists)?.map((preset) => preset.name)).toEqual(["House", "Docs", "Ocean"]));
+      fireEvent.click(panel.getByRole("button", { name: "Delete preset" }));
+      await waitFor(() => expect(last(lists)?.map((preset) => preset.name)).toEqual(["House", "Docs"]));
+    });
+
+    it("applies a preset saved in an earlier session, every setting included", async () => {
+      const sidecars = mockEditor(sidecar, [], { stored: { backdropPresets: [saved("p1", "House", sunset)] } });
+      await ready();
+      const panel = backdropPanel();
+      fireEvent.click(panel.getByRole("button", { name: "House" }));
+      await waitFor(() => expect(last(sidecars)?.backdrop).toEqual(sunset));
+      expect(screen.getByText("Output 761×428")).toBeInTheDocument();
+    });
+
+    it("keeps its own copy of an image fill", async () => {
+      const calls: { cmd: string; payload: unknown }[] = [];
+      const lists: BackdropPreset[][] = [];
+      const image = { ...ocean, fill: "image", image: "/home/me/Pictures/beach.jpg" };
+      const sidecars = mockEditor({ ...sidecar, backdrop: image }, calls, { presets: lists });
+      await ready();
+      const panel = backdropPanel();
+      fireEvent.click(panel.getByRole("button", { name: "Save as preset" }));
+      await waitFor(() => expect(last(lists)?.[0]?.backdrop).toEqual({ ...image, image: PRESET_COPY }));
+      expect(calls).toContainEqual({ cmd: "save_backdrop_preset_image", payload: { path: "/home/me/Pictures/beach.jpg" } });
+      // The capture moves to the copy too, so the preset shows as in use.
+      await waitFor(() => expect(last(sidecars)?.backdrop).toEqual({ ...image, image: PRESET_COPY }));
+      expect(panel.getByRole("textbox", { name: "Preset name" })).toHaveValue("Preset 1");
+    });
+
+    it("renames the preset in use, and puts a cleared name back", async () => {
+      const lists: BackdropPreset[][] = [];
+      mockEditor({ ...sidecar, backdrop: ocean }, [], {
+        stored: { backdropPresets: [saved("p1", "Sunset", sunset), saved("p2", "Preset 2", ocean)] },
+        presets: lists,
+      });
+      await ready();
+      const panel = backdropPanel();
+      const name = panel.getByRole("textbox", { name: "Preset name" });
+      expect(name).toHaveValue("Preset 2");
+
+      fireEvent.change(name, { target: { value: "Docs" } });
+      await waitFor(() => expect(last(lists)?.map((preset) => preset.name)).toEqual(["Sunset", "Docs"]));
+      expect(panel.getByRole("button", { name: "Docs" })).toHaveAttribute("aria-pressed", "true");
+
+      fireEvent.change(name, { target: { value: "  " } });
+      expect(lists).toHaveLength(1);
+      fireEvent.blur(name);
+      expect(name).toHaveValue("Docs");
+    });
+
+    it("deletes the preset in use and keeps the backdrop", async () => {
+      const lists: BackdropPreset[][] = [];
+      const sidecars = mockEditor({ ...sidecar, backdrop: ocean }, [], {
+        stored: { backdropPresets: [saved("p1", "Sunset", sunset), saved("p2", "Ocean", ocean)] },
+        presets: lists,
+      });
+      await ready();
+      const panel = backdropPanel();
+      fireEvent.click(panel.getByRole("button", { name: "Delete preset" }));
+      await waitFor(() => expect(last(lists)).toEqual([saved("p1", "Sunset", sunset)]));
+      expect(panel.queryByRole("button", { name: "Ocean" })).not.toBeInTheDocument();
+      expect(panel.queryByRole("textbox", { name: "Preset name" })).not.toBeInTheDocument();
+      // The capture keeps its backdrop.
+      await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 100));
+      expect(sidecars).toEqual([]);
+    });
+
+    it("saves only while a backdrop is on", async () => {
+      mockEditor(sidecar, [], { stored: { backdropPresets: [saved("p1", "House", ocean)] } });
+      await ready();
+      expect(backdropPanel().getByRole("button", { name: "Save as preset" })).toBeDisabled();
+    });
+
+    it("hides Save as preset once 24 are saved", async () => {
+      const full = Array.from({ length: 24 }, (_, i) => saved(`p${i}`, `Preset ${i + 1}`, ocean));
+      mockEditor({ ...sidecar, backdrop: ocean }, [], { stored: { backdropPresets: full } });
+      await ready();
+      const panel = backdropPanel();
+      expect(within(panel.getByRole("group", { name: "Saved" })).getAllByRole("button")).toHaveLength(24);
+      expect(panel.queryByRole("button", { name: "Save as preset" })).not.toBeInTheDocument();
+    });
+
+    it("hides the saved presets when settings could not be read", async () => {
+      mockEditor({ ...sidecar, backdrop: ocean }, [], { stored: new Error("unreadable") });
+      await ready();
+      expect(backdropPanel().queryByRole("group", { name: "Saved" })).not.toBeInTheDocument();
+    });
   });
 });
