@@ -170,7 +170,7 @@ To build installers locally, run `npm run tauri build`; they land in `app/src-ta
 
 ## CI
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the checks on Ubuntu 24.04 (caching the ocrs models for the OCR tests) and, in parallel, builds unsigned installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the checks on Ubuntu 24.04 (caching the ocrs models for the OCR tests) and, in parallel, builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts.
 
 ## Releases
 
@@ -186,7 +186,9 @@ Versions come from the `v*` git tags. [`PaulHatch/semantic-version`](https://git
 
 The first release, made before any tag exists, takes the version in `app/src-tauri/tauri.conf.json`. After that the tags are the source of truth: CI writes the release version into `tauri.conf.json` before building, so the version fields in the repository do not need bumping by hand.
 
-A run opens a draft release, builds the installers into it, and publishes it (creating the tag) only when the checks and all three builds pass. A failed run leaves only a hidden draft, which the next run replaces.
+A run opens a draft release, builds the installers into it, and publishes it (creating the tag) only when the checks and all three builds pass. A failed run leaves only a hidden draft, which the next run replaces. Each release is named after its tag, for example `v0.2.1`.
+
+The installers are not signed with a paid certificate. The macOS app is ad-hoc signed, so Gatekeeper says it cannot verify the developer rather than calling the app damaged: after the first attempt to open it, click **Open Anyway** under System Settings → Privacy & Security (or run `xattr -dr com.apple.quarantine /Applications/Grab-it.app`).
 
 ## License
 

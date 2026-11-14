@@ -161,14 +161,16 @@ jobs:
           | macOS (Apple silicon) | `.dmg` |
           | Linux | `.AppImage`, `.deb` or `.rpm` |
 
-          The installers are unsigned, so Windows SmartScreen and macOS Gatekeeper warn on first launch.
+          The installers are not signed with a paid certificate, so Windows SmartScreen and macOS Gatekeeper warn on first launch.
+
+          **macOS:** open the `.dmg`, drag Grab-it to Applications and open it. When macOS says it cannot verify the app, choose **Done**, then go to **System Settings → Privacy & Security** and click **Open Anyway**. Alternatively run `xattr -dr com.apple.quarantine /Applications/Grab-it.app` once.
           BODY
           )
 
           id=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
             -f tag_name="$TAG" \
             -f target_commitish="$GITHUB_SHA" \
-            -f name="Grab-it $TAG" \
+            -f name="$TAG" \
             -f body="$body" \
             -F draft=true \
             -F generate_release_notes=true \
@@ -226,9 +228,12 @@ jobs:
             fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
           '
 
+      # macOS builds are ad-hoc signed (bundle.macOS.signingIdentity "-" in
+      # tauri.conf.json). Without any signature, Apple silicon reports a
+      # downloaded app as "damaged" and refuses to open it.
       # With a release id (main only) the installers are also uploaded to the
       # draft release; without one, tauri-action only builds.
-      - name: Build unsigned installers
+      - name: Build installers
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
