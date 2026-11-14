@@ -1,8 +1,8 @@
 import "./App.css";
+import { lazy, Suspense } from "react";
 import { routeFromHash, type Route } from "./routes";
 import RegionOverlay from "./overlay/RegionOverlay";
 import SettingsWindow from "./settings/SettingsWindow";
-import EditorWindow from "./editor/EditorWindow";
 import LibraryWindow from "./library/LibraryWindow";
 import QuickAccess from "./quick/QuickAccess";
 import PinWindow from "./pin/PinWindow";
@@ -10,6 +10,10 @@ import WelcomeWindow from "./welcome/WelcomeWindow";
 import AppWindow from "./app/AppWindow";
 import Hub from "./hub/Hub";
 import { viewFromHash } from "./app/api";
+
+// The editor brings Konva, most of the bundle, so it loads only in the
+// editor window; the overlay and the other windows open without it.
+const EditorWindow = lazy(() => import("./editor/EditorWindow"));
 
 interface AppProps {
   route?: Route;
@@ -26,7 +30,11 @@ function App({ route = routeFromHash(window.location.hash) }: AppProps) {
     case "overlay":
       return <RegionOverlay />;
     case "editor":
-      return <EditorWindow />;
+      return (
+        <Suspense fallback={null}>
+          <EditorWindow />
+        </Suspense>
+      );
     case "library":
       return <LibraryWindow />;
     case "quick":
