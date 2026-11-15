@@ -5,6 +5,7 @@ import { emit } from "@tauri-apps/api/event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RegionOverlay from "./RegionOverlay";
 import { CHOICE_EVENT, START_EVENT, type OverlayInfo } from "./api";
+import type { Box } from "./geometry";
 
 interface Call {
   cmd: string;
@@ -526,6 +527,9 @@ describe("RegionOverlay", () => {
       fireEvent.mouseDown(overlay, { button: 0, clientX: 300, clientY: 250 });
       fireEvent.mouseMove(overlay, { clientX: 100, clientY: 50 });
       fireEvent.mouseUp(overlay, { button: 0, clientX: 100, clientY: 50 });
+      // Held for adjusting until Enter.
+      expect(calls.map((c) => c.cmd)).not.toContain("overlay_finish");
+      fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
 
       await waitFor(() =>
         expect(last(calls)).toEqual({
@@ -608,6 +612,7 @@ describe("RegionOverlay", () => {
       fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 50 });
       fireEvent.mouseMove(overlay, { clientX: 300, clientY: 90 });
       fireEvent.mouseUp(overlay, { button: 0, clientX: 300, clientY: 90 });
+      fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
       await waitFor(() =>
         expect(last(calls).payload).toEqual({
           selection: {
@@ -701,6 +706,7 @@ describe("RegionOverlay", () => {
       fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 50 });
       fireEvent.mouseMove(overlay, { clientX: 300, clientY: 90 });
       fireEvent.mouseUp(overlay, { button: 0, clientX: 300, clientY: 90 });
+      fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
       await waitFor(() =>
         expect(last(calls).payload).toMatchObject({
           choice: { intent: "record", mode: "region", delaySeconds: 0 },
@@ -749,6 +755,7 @@ describe("RegionOverlay", () => {
       fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 50 });
       fireEvent.mouseMove(overlay, { clientX: 300, clientY: 90 });
       fireEvent.mouseUp(overlay, { button: 0, clientX: 300, clientY: 90 });
+      fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
       await waitFor(() =>
         expect(last(calls).payload).toMatchObject({
           choice: { intent: "text", mode: "region", delaySeconds: 0 },
@@ -802,6 +809,289 @@ describe("RegionOverlay", () => {
       fireEvent.mouseDown(overlay, { button: 0, clientX: 300, clientY: 250 });
       fireEvent.mouseMove(overlay, { clientX: 100, clientY: 50 });
       expect(toolbar).toHaveAttribute("data-hidden", "true");
+    });
+  });
+
+  describe("all-in-one's adjustable selection", () => {
+    /** Drags from `from` to `to` and lets go. */
+    function dragOver(overlay: HTMLElement, from: [number, number], to: [number, number]) {
+      fireEvent.mouseDown(overlay, { button: 0, clientX: from[0], clientY: from[1] });
+      fireEvent.mouseMove(overlay, { clientX: to[0], clientY: to[1] });
+      fireEvent.mouseUp(overlay, { button: 0, clientX: to[0], clientY: to[1] });
+    }
+
+    const sizeOf = () => [
+      (screen.getByTestId("overlay-size-width") as HTMLInputElement).value,
+      (screen.getByTestId("overlay-size-height") as HTMLInputElement).value,
+    ];
+
+    const finishes = (calls: Call[]) => calls.filter((c) => c.cmd === "overlay_finish");
+
+    it("keeps a released drag with eight handles and its size, and captures it on Enter", async () => {
+      const calls = mockOverlay({ allInOne: true });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      dragOver(overlay, [300, 250], [100, 50]);
+      expect(finishes(calls)).toHaveLength(0);
+      expect(overlay).toHaveAttribute("data-selected", "true");
+      expect(overlay).toHaveAttribute("data-dragging", "false");
+      const frame = screen.getByTestId("overlay-selection");
+      expect(frame.querySelectorAll(".overlay-handle")).toHaveLength(8);
+      expect(screen.getByTestId("overlay-handle-se").style.transform).toBe(
+        "translate(300px, 250px) translate(-50%, -50%)",
+      );
+      expect(sizeOf()).toEqual(["200", "200"]);
+      expect(screen.getByRole("status")).toHaveTextContent("Drag the handles to adjust");
+      expect(screen.getByRole("list", { name: "Keyboard shortcuts" })).toHaveTextContent("Enter Capture");
+      // The toolbar is back once the drag is over.
+      expect(screen.getByRole("toolbar")).toHaveAttribute("data-hidden", "false");
+
+      fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
+      await waitFor(() =>
+        expect(last(calls).payload).toEqual({
+          selection: {
+            kind: "region",
+            rect: { x: 100, y: 50, width: 200, height: 200 },
+            viewportWidth: 1000,
+          },
+          choice: { intent: "capture", mode: "region", delaySeconds: 0 },
+        }),
+      );
+    });
+
+    it("resizes by a handle, moves from inside, and captures with the button", async () => {
+      const calls = mockOverlay({ allInOne: true });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+      dragOver(overlay, [100, 100], [300, 200]);
+
+      fireEvent.mouseDown(screen.getByTestId("overlay-handle-se"), {
+        button: 0,
+        clientX: 300,
+        clientY: 200,
+      });
+      fireEvent.mouseMove(overlay, { clientX: 400, clientY: 260 });
+      // Following the pointer like a drag: the deeper tint, no glide.
+      expect(overlay).toHaveAttribute("data-dragging", "true");
+      fireEvent.mouseUp(overlay, { button: 0, clientX: 400, clientY: 260 });
+      expect(sizeOf()).toEqual(["300", "160"]);
+
+      // The left edge only moves the left edge.
+      fireEvent.mouseDown(screen.getByTestId("overlay-handle-w"), {
+        button: 0,
+        clientX: 100,
+        clientY: 180,
+      });
+      fireEvent.mouseMove(overlay, { clientX: 120, clientY: 500 });
+      fireEvent.mouseUp(overlay, { button: 0, clientX: 120, clientY: 500 });
+      expect(sizeOf()).toEqual(["280", "160"]);
+
+      // From inside, the selection moves and keeps its size.
+      fireEvent.mouseMove(overlay, { clientX: 200, clientY: 150 });
+      expect(overlay).toHaveAttribute("data-over", "selection");
+      dragOver(overlay, [200, 150], [230, 170]);
+      expect(sizeOf()).toEqual(["280", "160"]);
+      expect(finishes(calls)).toHaveLength(0);
+
+      fireEvent.click(screen.getByRole("button", { name: "Capture" }));
+      await waitFor(() =>
+        expect(last(calls).payload).toMatchObject({
+          selection: { kind: "region", rect: { x: 150, y: 120, width: 280, height: 160 } },
+        }),
+      );
+    });
+
+    it("takes an exact size in image pixels, without capturing on the field's Enter", async () => {
+      // 2000 image px over 1000 CSS px: two image px per CSS px.
+      const calls = mockOverlay({ allInOne: true, imageWidth: 2000 });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+      dragOver(overlay, [100, 100], [300, 200]);
+      expect(sizeOf()).toEqual(["400", "200"]);
+
+      const width = screen.getByRole("textbox", { name: "Width" });
+      const height = screen.getByRole("textbox", { name: "Height" });
+      fireEvent.change(width, { target: { value: "1280" } });
+      fireEvent.change(height, { target: { value: "720" } });
+      // Number keys typed in the field are digits, not modes.
+      fireEvent.keyDown(height, { key: "2", code: "Digit2" });
+      expect(overlay).toHaveAttribute("data-mode", "region");
+      fireEvent.keyDown(height, { key: "Enter", code: "Enter" });
+      expect(sizeOf()).toEqual(["1280", "720"]);
+      expect(finishes(calls)).toHaveLength(0);
+
+      // Nonsense is ignored.
+      fireEvent.change(width, { target: { value: "wide" } });
+      fireEvent.blur(width);
+      expect(sizeOf()).toEqual(["1280", "720"]);
+
+      fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
+      await waitFor(() => expect(finishes(calls)).toHaveLength(1));
+      const sent = last(calls).payload as unknown as { selection: { rect: Box } };
+      // The corner stays; the box covers exactly 1280 by 720 image pixels.
+      expect(sent.selection.rect.x).toBeCloseTo(100, 2);
+      expect(sent.selection.rect.y).toBeCloseTo(100, 2);
+      expect(sent.selection.rect.width).toBeCloseTo(640, 2);
+      expect(sent.selection.rect.height).toBeCloseTo(360, 2);
+    });
+
+    it("keeps a size that would run off the screen on it", async () => {
+      mockOverlay({ allInOne: true, imageWidth: 2000 });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+      dragOver(overlay, [800, 700], [900, 750]);
+
+      fireEvent.change(screen.getByRole("textbox", { name: "Width" }), { target: { value: "5000" } });
+      fireEvent.keyDown(screen.getByRole("textbox", { name: "Width" }), { key: "Enter" });
+      // As wide as the 2000 px image, moved back to its left edge.
+      expect(sizeOf()).toEqual(["2000", "100"]);
+      expect(screen.getByTestId("overlay-handle-nw").style.transform).toMatch(/^translate\(0px, 700px\)/);
+    });
+
+    it("locks a ratio for the selection and for the next drag", async () => {
+      mockOverlay({ allInOne: true });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+      dragOver(overlay, [100, 100], [420, 200]);
+
+      const ratios = screen.getByRole("group", { name: "Aspect ratio" });
+      expect(
+        within(ratios)
+          .getAllByRole("button")
+          .map((button) => button.textContent),
+      ).toEqual(["Free", "16:9", "4:3", "1:1"]);
+      expect(within(ratios).getByRole("button", { name: "Free" })).toHaveAttribute("aria-pressed", "true");
+
+      fireEvent.click(within(ratios).getByRole("button", { name: "16:9" }));
+      expect(within(ratios).getByRole("button", { name: "16:9" })).toHaveAttribute("aria-pressed", "true");
+      expect(sizeOf()).toEqual(["320", "180"]);
+
+      // A handle keeps the shape.
+      fireEvent.mouseDown(screen.getByTestId("overlay-handle-se"), {
+        button: 0,
+        clientX: 420,
+        clientY: 240,
+      });
+      fireEvent.mouseMove(overlay, { clientX: 580, clientY: 250 });
+      fireEvent.mouseUp(overlay, { button: 0, clientX: 580, clientY: 250 });
+      expect(sizeOf()).toEqual(["480", "270"]);
+
+      // A new drag outside replaces it, in the same shape.
+      dragOver(overlay, [700, 500], [860, 510]);
+      expect(sizeOf()).toEqual(["160", "90"]);
+
+      fireEvent.click(within(ratios).getByRole("button", { name: "1:1" }));
+      expect(sizeOf()).toEqual(["160", "160"]);
+
+      // A typed size has its own shape: back to Free.
+      const width = screen.getByRole("textbox", { name: "Width" });
+      fireEvent.change(width, { target: { value: "100" } });
+      fireEvent.keyDown(width, { key: "Enter" });
+      expect(sizeOf()).toEqual(["100", "160"]);
+      expect(
+        within(screen.getByRole("group", { name: "Aspect ratio" })).getByRole("button", { name: "Free" }),
+      ).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("starts from the last region, in image pixels, and captures it on Enter", async () => {
+      const calls = mockOverlay({
+        allInOne: true,
+        imageWidth: 2000,
+        lastRegion: { x: 200, y: 100, width: 1280, height: 720 },
+      });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      expect(overlay).toHaveAttribute("data-selected", "true");
+      expect(sizeOf()).toEqual(["1280", "720"]);
+      expect(screen.getAllByTestId(/^overlay-handle-/)).toHaveLength(8);
+
+      fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
+      await waitFor(() => expect(finishes(calls)).toHaveLength(1));
+      const sent = last(calls).payload as unknown as { selection: { rect: Box }; choice: unknown };
+      expect(sent.selection.rect.x).toBeCloseTo(100, 2);
+      expect(sent.selection.rect.y).toBeCloseTo(50, 2);
+      expect(sent.selection.rect.width).toBeCloseTo(640, 2);
+      expect(sent.selection.rect.height).toBeCloseTo(360, 2);
+      expect(sent.choice).toEqual({ intent: "capture", mode: "region", delaySeconds: 0 });
+    });
+
+    it("replaces the last region with a drag elsewhere", async () => {
+      mockOverlay({
+        allInOne: true,
+        imageWidth: 2000,
+        lastRegion: { x: 200, y: 100, width: 400, height: 200 },
+      });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      dragOver(overlay, [800, 600], [900, 650]);
+      expect(sizeOf()).toEqual(["200", "100"]);
+      expect(screen.getAllByTestId("overlay-selection")).toHaveLength(1);
+    });
+
+    it("lets the selection go on a click away, so a window can be picked", async () => {
+      const calls = mockOverlay({
+        allInOne: true,
+        lastRegion: { x: 600, y: 500, width: 200, height: 150 },
+      });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      fireEvent.mouseMove(overlay, { clientX: 150, clientY: 150 });
+      // The held selection is what is highlighted, not the window under the cursor.
+      expect(screen.getAllByTestId("overlay-selection")).toHaveLength(1);
+      expect(screen.getByTestId("overlay-selection")).toHaveClass("overlay-frame");
+
+      fireEvent.mouseDown(overlay, { button: 0, clientX: 150, clientY: 150 });
+      fireEvent.mouseUp(overlay, { button: 0, clientX: 150, clientY: 150 });
+      expect(finishes(calls)).toHaveLength(0);
+      expect(overlay).toHaveAttribute("data-selected", "false");
+      expect(screen.queryByTestId("overlay-size-panel")).not.toBeInTheDocument();
+      // Enter has nothing to capture now.
+      fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
+      expect(finishes(calls)).toHaveLength(0);
+
+      fireEvent.mouseMove(overlay, { clientX: 151, clientY: 150 });
+      fireEvent.mouseDown(overlay, { button: 0, clientX: 151, clientY: 150 });
+      fireEvent.mouseUp(overlay, { button: 0, clientX: 151, clientY: 150 });
+      await waitFor(() =>
+        expect(last(calls).payload).toMatchObject({ selection: { kind: "window", id: 7 } }),
+      );
+    });
+
+    it("hides the selection in Window mode and keeps it for the next region", async () => {
+      mockOverlay({ allInOne: true, lastRegion: { x: 600, y: 500, width: 200, height: 150 } });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      fireEvent.keyDown(window, { key: "2", code: "Digit2" });
+      expect(overlay).toHaveAttribute("data-selected", "false");
+      expect(screen.queryByTestId("overlay-size-panel")).not.toBeInTheDocument();
+      fireEvent.keyDown(window, { key: "4", code: "Digit4" });
+      expect(overlay).toHaveAttribute("data-selected", "true");
+      expect(screen.getByRole("button", { name: "Copy text" })).toBeInTheDocument();
+    });
+
+    it("is not offered by an overlay opened for one mode", async () => {
+      const calls = mockOverlay({ lastRegion: { x: 600, y: 500, width: 200, height: 150 } });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      expect(overlay).toHaveAttribute("data-selected", "false");
+      expect(screen.queryByTestId("overlay-size-panel")).not.toBeInTheDocument();
+      dragOver(overlay, [300, 250], [100, 50]);
+      await waitFor(() =>
+        expect(last(calls).payload).toEqual({
+          selection: {
+            kind: "region",
+            rect: { x: 100, y: 50, width: 200, height: 200 },
+            viewportWidth: 1000,
+          },
+        }),
+      );
+      expect(screen.queryAllByTestId(/^overlay-handle-/)).toHaveLength(0);
     });
   });
 

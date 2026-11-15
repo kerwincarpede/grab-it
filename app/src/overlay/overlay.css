@@ -207,6 +207,119 @@
 }
 
 /*
+ * All-in-one's held selection: a handle on each corner and edge, placed by
+ * a transform (moved onto its point, then centred on it). Never a
+ * transition: the handles follow the pointer while the selection is resized.
+ */
+.overlay-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1px solid var(--overlay-accent);
+  border-radius: 2px;
+  pointer-events: auto;
+  will-change: transform;
+}
+
+.overlay-handle[data-handle="nw"],
+.overlay-handle[data-handle="se"] {
+  cursor: nwse-resize;
+}
+
+.overlay-handle[data-handle="ne"],
+.overlay-handle[data-handle="sw"] {
+  cursor: nesw-resize;
+}
+
+.overlay-handle[data-handle="n"],
+.overlay-handle[data-handle="s"] {
+  cursor: ns-resize;
+}
+
+.overlay-handle[data-handle="w"],
+.overlay-handle[data-handle="e"] {
+  cursor: ew-resize;
+}
+
+/* Inside a held selection the pointer moves it. */
+.overlay[data-over="selection"] {
+  cursor: move;
+}
+
+/* A held selection's tint follows its handles exactly, with no glide. */
+.overlay[data-selected="true"] .overlay-dim-piece {
+  transition: none;
+}
+
+/*
+ * The size field, ratio presets and confirm button beside a held
+ * selection, in the toolbar's look. Placed by a transform from the page.
+ */
+.overlay-size-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 4px;
+  color: #ecedef;
+  font-family: "Instrument Sans Variable", system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+  background: rgb(23 24 27 / 92%);
+  border: 1px solid #2a2c31;
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
+  cursor: default;
+  pointer-events: auto;
+  will-change: transform;
+}
+
+.overlay-size-input {
+  width: 56px;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 6px;
+  color: #fff;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  background: #1c1e22;
+  border: 1px solid #2e3036;
+  border-radius: 6px;
+}
+
+.overlay-size-input:focus {
+  outline: 2px solid var(--overlay-accent);
+  outline-offset: -1px;
+}
+
+.overlay-size-unit {
+  color: #8d919a;
+  font-size: 12px;
+}
+
+.overlay-ratios {
+  display: flex;
+  gap: 2px;
+}
+
+.overlay-ratio {
+  height: 28px;
+  padding: 0 8px;
+}
+
+.overlay-confirm {
+  height: 28px;
+}
+
+/*
  * A hovered window is shown as it is: no tint on it at all. Everything
  * around it steps back, darker and blurred (`.overlay-backdrop`, with the
  * window cut out), and the window gets a crisp violet edge with a faint

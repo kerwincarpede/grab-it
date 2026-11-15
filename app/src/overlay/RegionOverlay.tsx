@@ -28,22 +28,33 @@ import {
 } from "./api";
 import {
   advanceDrag,
+  clampedDelta,
+  contains,
   cutoutPath,
   hintTop,
   dragBox,
   frameParts,
+  fromImagePixels,
+  handlePoint,
   holeCorners,
+  HANDLES,
   imageSize,
   isDrag,
   labelPlacement,
   labelTransform,
   monitorToCss,
   moveTo,
+  resizeBox,
+  snapToImage,
   stretch,
   surround,
   topmostAt,
+  translate,
+  withRatio,
+  withSize,
   type Box,
   type Drag,
+  type Handle,
   type LabelPlacement,
   type Point,
   type Size,
@@ -77,6 +88,10 @@ const HINTS: Record<OverlayIntent, string> = {
   record: "Drag over the area to record, or click a window. Esc cancels.",
 };
 const WINDOW_HINT = "Click a window to capture it. Esc cancels.";
+/** All-in-one, once a region is selected and waits to be confirmed. */
+const ADJUST_HINT = "Drag the handles to adjust, then press Enter. Esc cancels.";
+/** Room the size field and ratio presets take beside a selection; an estimate. */
+const SIZE_PANEL: Size = { width: 470, height: 46 };
 /**
  * The hovered window's rounded corners, in CSS px. Matches `.overlay-window`
  * and `.overlay-dim-corner`.
@@ -103,6 +118,38 @@ const TIMER_STEPS = [0, 3, 5, 10];
 const TIMER_KEY = TOOLS.length + 1;
 /** Room the toolbar takes above the hint, gap included, in CSS px. */
 const TOOLBAR_ROOM = 52;
+
+/** All-in-one's aspect ratio presets: width over height, or none. */
+type RatioId = "free" | "16:9" | "4:3" | "1:1";
+const RATIOS: { id: RatioId; label: string; value: number | null }[] = [
+  { id: "free", label: "Free", value: null },
+  { id: "16:9", label: "16:9", value: 16 / 9 },
+  { id: "4:3", label: "4:3", value: 4 / 3 },
+  { id: "1:1", label: "1:1", value: 1 },
+];
+
+/** What confirms each kind of selection, on the button beside it. */
+const CONFIRM_LABELS: Record<OverlayIntent, string> = {
+  capture: "Capture",
+  text: "Copy text",
+  color: "Capture",
+  record: "Start recording",
+};
+
+/**
+ * An adjustable selection being changed: by a handle, or moved as a whole
+ * from inside it. `box` is the selection when the pointer went down.
+ */
+interface Grab {
+  handle: Handle | "move";
+  from: Point;
+  box: Box;
+}
+
+/** Keys typed into a field are the field's, not the overlay's shortcuts. */
+function isField(target: EventTarget | null): boolean {
+  return target instanceof HTMLInputElement;
+}
 
 function toolIntent(tool: Tool): OverlayIntent {
   return tool === "text" || tool === "color" || tool === "record" ? tool : "capture";
@@ -144,8 +191,11 @@ const CORNERS = ["top-left", "top-right", "bottom-left", "bottom-right"] as cons
 
 interface SelectionFrameProps {
   box: Box;
-  label: string | undefined;
+  /** Left out for an adjustable selection, which has the size field instead. */
+  label?: string;
   placement: LabelPlacement;
+  /** All-in-one's adjustable selection: a handle on each corner and edge. */
+  handles?: boolean;
 }
 
 /**
@@ -156,7 +206,7 @@ interface SelectionFrameProps {
  * selection, the border was laid out and painted again, a layer that large,
  * on every pointer move.
  */
-function SelectionFrame({ box, label, placement }: SelectionFrameProps) {
+function SelectionFrame({ box, label, placement, handles = false }: SelectionFrameProps) {
   const { edges, ticks } = frameParts(box);
   return (
     <div className="overlay-frame" data-testid="overlay-selection">
@@ -171,13 +221,137 @@ function SelectionFrame({ box, label, placement }: SelectionFrameProps) {
           style={{ transform: moveTo(tick), width: tick.width, height: tick.height }}
         />
       ))}
-      <span
-        className="overlay-label"
-        data-testid="overlay-size"
-        style={{ transform: labelTransform(box, placement) }}
+      {handles &&
+        HANDLES.map((handle) => (
+          <span
+            key={handle}
+            className="overlay-handle"
+            data-handle={handle}
+            data-testid={`overlay-handle-${handle}`}
+            style={{ transform: `${moveTo(handlePoint(box, handle))} translate(-50%, -50%)` }}
+          />
+        ))}
+      {label !== undefined && (
+        <span
+          className="overlay-label"
+          data-testid="overlay-size"
+          style={{ transform: labelTransform(box, placement) }}
+        >
+          {label}
+        </span>
+      )}
+    </div>
+  );
+}
+
+interface SizePanelProps {
+  /** The selection's size in image pixels. */
+  size: Size;
+  ratio: RatioId;
+  confirmLabel: string;
+  canConfirm: boolean;
+  transform: string;
+  onSize: (size: Size) => void;
+  onRatio: (ratio: RatioId) => void;
+  onConfirm: () => void;
+}
+
+/** A typed size: a whole number of image pixels, at least one. */
+function parseLength(text: string): number | null {
+  const value = Number(text.trim());
+  return Number.isInteger(value) && value >= 1 ? value : null;
+}
+
+/**
+ * Beside All-in-one's adjustable selection: its width and height in image
+ * pixels, which take an exact size, the ratio presets, and the button that
+ * confirms it. Placed by a transform, as it follows the selection.
+ */
+function SizePanel({
+  size,
+  ratio,
+  confirmLabel,
+  canConfirm,
+  transform,
+  onSize,
+  onRatio,
+  onConfirm,
+}: SizePanelProps) {
+  // What is being typed, until Enter or leaving the field applies it.
+  const [draft, setDraft] = useState<{ width: string; height: string } | null>(null);
+  const shown = draft ?? { width: String(size.width), height: String(size.height) };
+
+  function apply() {
+    if (!draft) return;
+    setDraft(null);
+    const width = parseLength(draft.width);
+    const height = parseLength(draft.height);
+    if (width === null || height === null) return;
+    if (width !== size.width || height !== size.height) onSize({ width, height });
+  }
+
+  function field(side: "width" | "height", label: string) {
+    return (
+      <input
+        className="overlay-size-input"
+        type="text"
+        inputMode="numeric"
+        aria-label={label}
+        data-testid={`overlay-size-${side}`}
+        value={shown[side]}
+        onChange={(event) => setDraft({ ...shown, [side]: event.target.value })}
+        onBlur={apply}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter") return;
+          // Enter here sets the size; it only captures from outside the field.
+          event.preventDefault();
+          event.stopPropagation();
+          apply();
+        }}
+      />
+    );
+  }
+
+  return (
+    <div
+      className="overlay-size-panel"
+      data-testid="overlay-size-panel"
+      style={{ transform }}
+      // A click on a button leaves the focus where it was, so Enter never
+      // presses it again; the fields take the focus as fields do.
+      onMouseDown={(event) => {
+        if ((event.target as HTMLElement).closest("button")) event.preventDefault();
+      }}
+    >
+      {field("width", "Width")}
+      <span aria-hidden="true">×</span>
+      {field("height", "Height")}
+      <span className="overlay-size-unit">px</span>
+      <span className="overlay-toolbar-gap" aria-hidden="true" />
+      <div className="overlay-ratios" role="group" aria-label="Aspect ratio">
+        {RATIOS.map(({ id, label }) => (
+          <button
+            key={id}
+            type="button"
+            className="overlay-tool overlay-ratio"
+            aria-pressed={id === ratio}
+            onClick={() => onRatio(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <span className="overlay-toolbar-gap" aria-hidden="true" />
+      <button
+        type="button"
+        className="overlay-tool overlay-confirm"
+        data-testid="overlay-confirm"
+        disabled={!canConfirm}
+        onClick={onConfirm}
       >
-        {label}
-      </span>
+        <span>{confirmLabel}</span>
+        <kbd aria-hidden="true">Enter</kbd>
+      </button>
     </div>
   );
 }
@@ -254,6 +428,12 @@ function Toolbar({ tool, timer, hidden, top, onTool, onTimer }: ToolbarProps) {
  * picked. With the Timer on, the overlay closes on the selection and the
  * backend captures the same area live once the time is up.
  *
+ * In All-in-one a released drag stays selected, with handles that resize
+ * it, room inside to move it, a size field for an exact size in image
+ * pixels and ratio presets; Enter or the button beside it confirms. The
+ * last region starts out selected when it was on this monitor, and a drag
+ * elsewhere replaces it.
+ *
  * The page is usually loaded ahead of time in a hidden spare window, and
  * draws nothing until a selection starts on it.
  */
@@ -281,6 +461,12 @@ function RegionOverlay() {
   const [tool, setTool] = useState<Tool>("region");
   const [timer, setTimer] = useState(0);
   const toolbar = useRef<HTMLDivElement>(null);
+  // All-in-one's adjustable selection. Undefined until the user changes it,
+  // so the last region (`info.lastRegion`) is shown at the current scale.
+  const [picked, setPicked] = useState<Box | null | undefined>(undefined);
+  const [grab, setGrab] = useState<Grab | null>(null);
+  const [ratio, setRatio] = useState<RatioId>("free");
+  const sizePanel = useRef<HTMLDivElement>(null);
 
   /** Takes on a choice another monitor's toolbar made. */
   const follow = useEffectEvent((choice: OverlayChoice) => {
@@ -369,7 +555,7 @@ function RegionOverlay() {
         // Tracked here as well as on mouse events so the selection snaps to a
         // square the moment Shift goes down, before the cursor moves again.
         setSquare(true);
-      } else if (event.code === "Space" || event.key === " ") {
+      } else if ((event.code === "Space" || event.key === " ") && !isField(event.target)) {
         event.preventDefault();
         setMoving(true);
       }
@@ -382,6 +568,7 @@ function RegionOverlay() {
     function onBlur() {
       setSquare(false);
       setMoving(false);
+      setGrab(null);
     }
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
@@ -424,11 +611,21 @@ function RegionOverlay() {
   const imageWidth = image?.naturalWidth || info?.imageWidth || 0;
   const scale = imageWidth > 0 && view.width > 0 ? imageWidth / view.width : 1;
 
-  const selection = drag && canDrag ? dragBox(drag, square, view) : null;
+  // All-in-one keeps a dragged region selected until it is confirmed.
+  const adjustable = allInOne && canDrag;
+  const ratioValue = adjustable ? (RATIOS.find((each) => each.id === ratio)?.value ?? null) : null;
+  const preset = allInOne && info?.lastRegion ? fromImagePixels(info.lastRegion, scale) : null;
+  const held = adjustable ? (picked === undefined ? preset : picked) : null;
+
+  const selection = drag && canDrag ? dragBox(drag, square, view, ratioValue) : null;
   const dragging = selection !== null && isDrag(selection);
+  // A held selection being resized or moved follows the pointer as a drag does.
+  const grabbing = grab !== null && held !== null;
+  const active = dragging || grabbing;
+  const framed = dragging ? selection : held;
   const hovered =
-    canPickWindow && !dragging && pointer ? topmostAt(pickable, pointer) : undefined;
-  const highlight = dragging ? selection : (hovered?.box ?? null);
+    canPickWindow && !dragging && !held && pointer ? topmostAt(pickable, pointer) : undefined;
+  const highlight = framed ?? hovered?.box ?? null;
   // Boxes are memoized with the windows, so this settles in one extra render.
   if (hovered && hovered.box !== lastHovered) setLastHovered(hovered.box);
   const blurHole = hovered && !dragging ? hovered.box : lastHovered;
@@ -476,9 +673,34 @@ function RegionOverlay() {
       finish({ kind: "screen" });
       return;
     }
+    // A held selection stays for the next mode that drags one.
     setTool(next);
     setDrag(null);
     share(next, timer);
+    setGrab(null);
+  }
+
+  /** Captures, reads or records the held selection: Enter or its button. */
+  function confirmHeld() {
+    if (!held || !isDrag(held)) return;
+    finish({ kind: "region", rect: held, viewportWidth: view.width });
+  }
+
+  /** The held selection at an exact size in image pixels, its corner kept. */
+  function applySize(size: Size) {
+    if (!held) return;
+    // A typed size has a shape of its own.
+    setRatio("free");
+    const corner = { x: Math.round(held.x * scale), y: Math.round(held.y * scale) };
+    const image = { width: Math.round(view.width * scale), height: Math.round(view.height * scale) };
+    const pixels = withSize({ ...corner, width: 0, height: 0 }, size, image);
+    setPicked(fromImagePixels(pixels, scale));
+  }
+
+  function chooseRatio(next: RatioId) {
+    setRatio(next);
+    const value = RATIOS.find((each) => each.id === next)?.value;
+    if (held && value) setPicked(snapToImage(withRatio(held, value, view), scale));
   }
 
   function stepTimer() {
@@ -511,6 +733,13 @@ function RegionOverlay() {
 
   const onToolKey = useEffectEvent((event: KeyboardEvent) => {
     if (!allInOne || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+    if (isField(event.target)) return;
+    if (event.key === "Enter") {
+      if (!held) return;
+      event.preventDefault();
+      confirmHeld();
+      return;
+    }
     const digit = digitOf(event);
     if (digit === null || digit > TIMER_KEY) return;
     event.preventDefault();
@@ -523,24 +752,51 @@ function RegionOverlay() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  /** The toolbar takes its own clicks; they never start or end a selection. */
+  /**
+   * The toolbar and the size field take their own clicks; they never start
+   * or end a selection.
+   */
   function onToolbar(event: MouseEvent): boolean {
-    return toolbar.current?.contains(event.target as Node) ?? false;
+    const target = event.target as Node;
+    return (
+      (toolbar.current?.contains(target) ?? false) || (sizePanel.current?.contains(target) ?? false)
+    );
   }
 
   function onMouseDown(event: MouseEvent) {
     if (event.button !== 0 || onToolbar(event)) return;
     const point = pointOf(event);
-    setDrag({ anchor: point, head: point });
     setPointer(point);
     setSquare(event.shiftKey);
+    if (held) {
+      // On a handle it resizes, inside it moves; anywhere else starts anew.
+      const handle = (event.target as HTMLElement).dataset?.handle as Handle | undefined;
+      if (handle || contains(held, point)) {
+        setGrab({ handle: handle ?? "move", from: point, box: held });
+        return;
+      }
+    }
+    setDrag({ anchor: point, head: point });
+  }
+
+  /** The held selection as `grab` leaves it with the pointer at `point`. */
+  function grabbed(current: Grab, point: Point, shift: boolean): Box {
+    const delta = { x: point.x - current.from.x, y: point.y - current.from.y };
+    if (current.handle === "move") {
+      return translate(current.box, clampedDelta(current.box, delta, view));
+    }
+    return resizeBox(current.box, current.handle, delta, {
+      bounds: view,
+      ratio: shift ? 1 : ratioValue,
+    });
   }
 
   function onMouseMove(event: MouseEvent) {
     const point = pointOf(event);
     const follow = () => {
+      if (grab) setPicked(grabbed(grab, point, event.shiftKey));
       if (drag) {
-        const options = { move: moving, square: event.shiftKey, bounds: view };
+        const options = { move: moving, square: event.shiftKey, bounds: view, ratio: ratioValue };
         setDrag(advanceDrag(drag, pointer ?? point, point, options));
       }
       setPointer(point);
@@ -554,21 +810,39 @@ function RegionOverlay() {
   }
 
   function onMouseUp(event: MouseEvent) {
-    if (event.button !== 0 || !drag) return;
+    if (event.button !== 0) return;
+    if (grab) {
+      setPicked(grabbed(grab, pointOf(event), event.shiftKey));
+      setGrab(null);
+      return;
+    }
+    if (!drag) return;
     const end = pointOf(event);
-    const options = { move: moving, square: event.shiftKey, bounds: view };
-    const box = dragBox(advanceDrag(drag, pointer ?? end, end, options), event.shiftKey, view);
+    const options = { move: moving, square: event.shiftKey, bounds: view, ratio: ratioValue };
+    const box = dragBox(
+      advanceDrag(drag, pointer ?? end, end, options),
+      event.shiftKey,
+      view,
+      ratioValue,
+    );
     setDrag(null);
     if (intent === "color") {
       finish({ kind: "point", x: end.x, y: end.y, viewportWidth: view.width });
       return;
     }
     if (canDrag && isDrag(box)) {
-      finish({ kind: "region", rect: box, viewportWidth: view.width });
+      // All-in-one holds it for adjusting; elsewhere a drag captures at once.
+      if (adjustable) setPicked(box);
+      else finish({ kind: "region", rect: box, viewportWidth: view.width });
       return;
     }
-    const picked = canPickWindow ? topmostAt(pickable, end) : undefined;
-    if (picked) finish({ kind: "window", id: picked.window.id });
+    if (held) {
+      // A click away from the selection lets it go, and windows can be picked again.
+      setPicked(null);
+      return;
+    }
+    const under = canPickWindow ? topmostAt(pickable, end) : undefined;
+    if (under) finish({ kind: "window", id: under.window.id });
   }
 
   // A drag is labelled with the size it will be captured at, in image pixels.
@@ -577,8 +851,9 @@ function RegionOverlay() {
     ? `${captured.width} × ${captured.height}`
     : hovered?.window.title || hovered?.window.appName;
   const placement = highlight
-    ? labelPlacement(highlight, dragging ? SIZE_LABEL : TITLE_LABEL, view)
+    ? labelPlacement(highlight, dragging ? SIZE_LABEL : held ? SIZE_PANEL : TITLE_LABEL, view)
     : null;
+  const heldSize = held ? imageSize(held, scale) : null;
 
   return (
     <div
@@ -587,8 +862,12 @@ function RegionOverlay() {
       data-ready={info ? "true" : "false"}
       data-intent={intent}
       data-mode={windowMode ? "window" : "region"}
-      data-dragging={dragging ? "true" : "false"}
-      data-moving={dragging && moving ? "true" : "false"}
+      data-dragging={active ? "true" : "false"}
+      data-moving={(dragging && moving) || grab?.handle === "move" ? "true" : "false"}
+      data-selected={held && !dragging ? "true" : "false"}
+      data-over={
+        held && !dragging && pointer && contains(held, pointer) ? "selection" : undefined
+      }
       data-shown={shown ? "true" : "false"}
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
@@ -631,7 +910,7 @@ function RegionOverlay() {
             <span key={at} className="overlay-dim-piece" style={{ transform: stretch(piece) }} />
           ))}
           {highlight &&
-            !dragging &&
+            !framed &&
             holeCorners(highlight, WINDOW_RADIUS).map((corner, at) => (
               <span
                 key={at}
@@ -648,15 +927,32 @@ function RegionOverlay() {
           ref={backdrop}
           className="overlay-backdrop"
           data-testid="overlay-blur"
-          data-active={backdropReady && hovered && !dragging ? "true" : "false"}
+          data-active={backdropReady && hovered && !framed ? "true" : "false"}
           aria-hidden="true"
           style={blurHole ? { clipPath: cutoutPath(blurHole, view, WINDOW_RADIUS) } : undefined}
         />
       )}
       {selection && dragging && placement && (
-        <SelectionFrame box={selection} label={label} placement={placement} />
+        <SelectionFrame box={selection} label={label ?? ""} placement={placement} />
       )}
-      {hovered && !dragging && placement && (
+      {held && !dragging && placement && (
+        <SelectionFrame box={held} placement={placement} handles />
+      )}
+      {held && !dragging && placement && heldSize && (
+        <div ref={sizePanel}>
+          <SizePanel
+            size={heldSize}
+            ratio={ratio}
+            confirmLabel={CONFIRM_LABELS[intent]}
+            canConfirm={isDrag(held)}
+            transform={labelTransform(held, placement)}
+            onSize={applySize}
+            onRatio={chooseRatio}
+            onConfirm={confirmHeld}
+          />
+        </div>
+      )}
+      {hovered && !framed && placement && (
         <div
           className="overlay-window"
           data-testid="overlay-selection"
@@ -672,7 +968,7 @@ function RegionOverlay() {
           </span>
         </div>
       )}
-      {canDrag && pointer && !dragging && (
+      {canDrag && pointer && !active && (
         <>
           <div
             className="overlay-guide overlay-guide-x"
@@ -696,7 +992,7 @@ function RegionOverlay() {
           <Toolbar
             tool={tool}
             timer={timer}
-            hidden={dragging}
+            hidden={active}
             top={hintTop(info?.topInset, view.height)}
             onTool={chooseTool}
             onTimer={stepTimer}
@@ -705,11 +1001,11 @@ function RegionOverlay() {
       )}
       <div
         className="overlay-hint"
-        data-hidden={dragging && !error ? "true" : "false"}
+        data-hidden={active && !error ? "true" : "false"}
         style={{ top: hintTop(info?.topInset, view.height) + (allInOne ? TOOLBAR_ROOM : 0) }}
       >
         <p className="overlay-hint-text" role="status" data-error={error ? "true" : "false"}>
-          {error ?? (windowMode ? WINDOW_HINT : HINTS[intent])}
+          {error ?? (windowMode ? WINDOW_HINT : held ? ADJUST_HINT : HINTS[intent])}
         </p>
         <ul className="overlay-keys" aria-label="Keyboard shortcuts">
           <li>
@@ -718,6 +1014,11 @@ function RegionOverlay() {
           {allInOne && (
             <li>
               <kbd>1</kbd>–<kbd>{TIMER_KEY}</kbd> Mode
+            </li>
+          )}
+          {held && (
+            <li>
+              <kbd>Enter</kbd> {CONFIRM_LABELS[intent]}
             </li>
           )}
           {canDrag && (
