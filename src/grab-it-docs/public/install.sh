@@ -185,6 +185,9 @@ install_linux_native() {
   [ "$(id -u)" -eq 0 ] || say "Installing the package needs sudo."
   case "$kind" in
     deb)
+      # Refresh the package lists first: the .deb needs libraries (WebKitGTK,
+      # GTK) that a missing or stale index cannot find.
+      as_root apt-get update
       as_root apt-get install -y "$pkg"
       bin=$(dpkg-deb -c "$pkg" | awk '{print $NF}' | sed -n 's|^\./usr/bin/|/usr/bin/|p' | head -n 1)
       ;;
