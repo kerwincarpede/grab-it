@@ -79,6 +79,7 @@ import {
 } from "./icons";
 import { useInView, useThumbnail } from "./thumbnails";
 import { tagStyle } from "./tagColor";
+import { DETAILS_WIDTH, clampDetailsWidth } from "./detailsWidth";
 import { ChevronDownIcon, ChevronUpIcon } from "../app/icons";
 
 function errorMessage(err: unknown): string {
@@ -104,6 +105,77 @@ function readRowHeight(): number {
     // Storage may be unavailable; use the default.
   }
   return ROW_HEIGHT.initial;
+}
+
+const DETAILS_WIDTH_KEY = "grab-it.library.detailsWidth";
+function readDetailsWidth(): number {
+  try {
+    const saved = Number(localStorage.getItem(DETAILS_WIDTH_KEY));
+    if (saved >= DETAILS_WIDTH.min && saved <= DETAILS_WIDTH.max) return saved;
+  } catch {
+    // Storage may be unavailable; use the default.
+  }
+  return DETAILS_WIDTH.initial;
+}
+
+/** The grab line on the details' left edge: drag, arrow keys, or double-click to reset. */
+function DetailsResizer({ width, onWidth }: { width: number; onWidth: (width: number) => void }) {
+  const drag = useRef<{ x: number; width: number; room: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  /** The width the details and grid share: the details' parent. */
+  const roomOf = (element: Element) => element.closest(".library-body")?.clientWidth || Infinity;
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize details"
+      aria-valuemin={DETAILS_WIDTH.min}
+      aria-valuemax={DETAILS_WIDTH.max}
+      aria-valuenow={width}
+      tabIndex={0}
+      title="Drag to resize · double-click to reset"
+      className={`details-resizer${dragging ? " is-dragging" : ""}`}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        drag.current = { x: event.clientX, width, room: roomOf(event.currentTarget) };
+        setDragging(true);
+      }}
+      onPointerMove={(event) => {
+        const start = drag.current;
+        if (!start) return;
+        // The handle sits on the left edge, so dragging left widens.
+        onWidth(clampDetailsWidth(start.width + start.x - event.clientX, start.room));
+      }}
+      onPointerUp={() => {
+        drag.current = null;
+        setDragging(false);
+      }}
+      onPointerCancel={() => {
+        drag.current = null;
+        setDragging(false);
+      }}
+      onDoubleClick={(event) => onWidth(clampDetailsWidth(DETAILS_WIDTH.initial, roomOf(event.currentTarget)))}
+      onKeyDown={(event) => {
+        const step = event.shiftKey ? 64 : 16;
+        const room = roomOf(event.currentTarget);
+        let next: number | null = null;
+        if (event.key === "ArrowLeft") next = width + step;
+        else if (event.key === "ArrowRight") next = width - step;
+        else if (event.key === "Home") next = DETAILS_WIDTH.min;
+        else if (event.key === "End") next = DETAILS_WIDTH.max;
+        if (next === null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onWidth(clampDetailsWidth(next, room));
+      }}
+    >
+      <span className="details-grip" aria-hidden="true" />
+    </div>
+  );
 }
 
 /** A shot's thumbnail, fetched only once it nears the viewport. */
@@ -488,6 +560,9 @@ interface DetailsProps {
   /** Moves to the capture before (-1) or after (1), when there is one. */
   onStep: (delta: -1 | 1) => void;
   canStep: { back: boolean; forward: boolean };
+  /** The pane's width in pixels, set by dragging its left edge. */
+  width: number;
+  onWidth: (width: number) => void;
 }
 
 /**
@@ -514,7 +589,7 @@ function useShotText(shot: Shot): ShotText | null {
 }
 
 /** The selected shot: open, tag, annotate with notes or delete it. */
-function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onClose, onStep, canStep }: DetailsProps) {
+function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onClose, onStep, canStep, width, onWidth }: DetailsProps) {
   // Local so quick successive edits build on each other before the saves land.
   const [tags, setTags] = useState(shot.tags);
   const [notes, setNotes] = useState(shot.notes);
@@ -608,7 +683,8 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
 
   const when = formatCapturedAt(shot.capturedAt);
   return (
-    <aside className="details" aria-label="Capture details">
+    <aside className="details" aria-label="Capture details" style={{ width }}>
+      <DetailsResizer width={width} onWidth={onWidth} />
       <div className="details-top">
         <span className="details-heading">Details</span>
         <button type="button" className="icon-button" aria-label="Previous capture" disabled={!canStep.back} onClick={() => onStep(-1)}>
@@ -899,6 +975,7 @@ function LibraryWindow({
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [reloads, setReloads] = useState(0);
   const [rowHeight, setRowHeight] = useState(readRowHeight);
+  const [detailsWidth, setDetailsWidth] = useState(readDetailsWidth);
   const [scrolled, setScrolled] = useState(false);
   // "Today" and "Yesterday" are relative to when the list last loaded.
   const [now, setNow] = useState(Date.now);
@@ -951,6 +1028,14 @@ function LibraryWindow({
       // Not remembered; fine.
     }
   }, [rowHeight]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DETAILS_WIDTH_KEY, String(detailsWidth));
+    } catch {
+      // Not remembered; fine.
+    }
+  }, [detailsWidth]);
 
   useEffect(() => {
     if (!notice) return;
@@ -1376,6 +1461,8 @@ function LibraryWindow({
             onClose={() => setSelectedId(null)}
             canStep={{ back: selectedIndex > 0, forward: selectedIndex < shots.length - 1 }}
             onStep={step}
+            width={detailsWidth}
+            onWidth={setDetailsWidth}
           />
         )}
       </div>

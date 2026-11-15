@@ -5,6 +5,7 @@ import { emit } from "@tauri-apps/api/event";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import LibraryWindow from "./LibraryWindow";
+import { DETAILS_WIDTH, clampDetailsWidth } from "./detailsWidth";
 import { resetThumbnails } from "./thumbnails";
 import {
   AI_STATUS_EVENT,
@@ -367,6 +368,38 @@ describe("LibraryWindow", () => {
     expect(screen.getByLabelText("Capture details")).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByLabelText("Capture details")).not.toBeInTheDocument();
+  });
+
+  it("resizes the details from the keyboard and remembers the width", async () => {
+    localStorage.removeItem("grab-it.library.detailsWidth");
+    mockBackend([shot(1)]);
+    const { unmount } = render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
+    const details = screen.getByLabelText("Capture details");
+    expect(details).toHaveStyle({ width: `${DETAILS_WIDTH.initial}px` });
+
+    const handle = screen.getByRole("separator", { name: "Resize details" });
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    expect(details).toHaveStyle({ width: `${DETAILS_WIDTH.initial + 16}px` });
+    fireEvent.keyDown(handle, { key: "End" });
+    expect(handle).toHaveAttribute("aria-valuenow", String(DETAILS_WIDTH.max));
+    fireEvent.keyDown(handle, { key: "Home" });
+    expect(handle).toHaveAttribute("aria-valuenow", String(DETAILS_WIDTH.min));
+
+    unmount();
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
+    expect(screen.getByLabelText("Capture details")).toHaveStyle({ width: `${DETAILS_WIDTH.min}px` });
+  });
+
+  it("keeps the details between their minimum and maximum, leaving the grid room", () => {
+    expect(clampDetailsWidth(100)).toBe(DETAILS_WIDTH.min);
+    expect(clampDetailsWidth(5000)).toBe(DETAILS_WIDTH.max);
+    expect(clampDetailsWidth(450.4)).toBe(450);
+    // A 900px body leaves the grid 360px, so the details stop at 540px.
+    expect(clampDetailsWidth(600, 900)).toBe(540);
+    // Never below the minimum, however narrow the window.
+    expect(clampDetailsWidth(600, 500)).toBe(DETAILS_WIDTH.min);
   });
 
   it("saves notes when the field loses focus", async () => {
