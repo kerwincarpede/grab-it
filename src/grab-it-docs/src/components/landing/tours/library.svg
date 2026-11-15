@@ -1,0 +1,256 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 450" width="720" height="450" role="img" aria-labelledby="title desc" data-loop="15.0" data-poster="5.5">
+<title id="title">The Library and AI</title>
+<desc id="desc">A new capture is described by AI and gets its tags. Searching for invoice finds a receipt by the text inside it. Its details show the AI description, category and tags; a tag is added and its text is copied. Then the Recordings filter shows the recordings, with Play and Edit on hover.</desc>
+<style>
+.t{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,"Helvetica Neue",Arial,sans-serif}
+.b{font-weight:700}
+@media (prefers-reduced-motion:reduce){*{animation-delay:-5.5s!important;animation-play-state:paused!important}}
+@keyframes shim{0.000%{opacity:1}10.000%{opacity:1}11.333%{opacity:0}100.000%{opacity:0}}
+#shim{animation:shim 15.0s infinite both}
+#ai0{transform-origin:166px 256px}
+@keyframes ai0{0.000%{opacity:0;transform:scale(.6)}11.000%{opacity:0;transform:scale(.6)}12.333%{opacity:1;transform:scale(1.06)}13.000%{opacity:1;transform:scale(1)}100.000%{opacity:1;transform:scale(1)}}
+#ai0{animation:ai0 15.0s infinite both}
+@keyframes st0{0.000%{opacity:1}10.667%{opacity:1}11.333%{opacity:0}100.000%{opacity:0}}
+#st0{animation:st0 15.0s infinite both}
+@keyframes st1{0.000%{opacity:0}11.333%{opacity:0}12.000%{opacity:1}21.333%{opacity:1}22.000%{opacity:0}100.000%{opacity:0}}
+#st1{animation:st1 15.0s infinite both}
+#rp0{transform-origin:440.0px 30.0px}
+@keyframes rp0{0.000%{opacity:0;transform:scale(.3)}15.200%{opacity:0;transform:scale(.3)}15.600%{opacity:.95;transform:scale(.4)}19.333%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp0{animation:rp0 15.0s infinite both}
+@keyframes sfocus{0.000%{opacity:0}15.333%{opacity:0}16.000%{opacity:1}64.333%{opacity:1}65.000%{opacity:0}100.000%{opacity:0}}
+#sfocus{animation:sfocus 15.0s infinite both}
+@keyframes ph{0.000%{opacity:1}16.660%{opacity:1}16.667%{opacity:0}64.993%{opacity:0}65.000%{opacity:1}100.000%{opacity:1}}
+#ph{animation:ph 15.0s infinite both}
+@keyframes q0{0.000%{opacity:0}16.660%{opacity:0}16.667%{opacity:1}17.393%{opacity:1}17.400%{opacity:0}100.000%{opacity:0}}
+#q0{animation:q0 15.0s infinite both}
+@keyframes q1{0.000%{opacity:0}17.393%{opacity:0}17.400%{opacity:1}18.127%{opacity:1}18.133%{opacity:0}100.000%{opacity:0}}
+#q1{animation:q1 15.0s infinite both}
+@keyframes q2{0.000%{opacity:0}18.127%{opacity:0}18.133%{opacity:1}18.860%{opacity:1}18.867%{opacity:0}100.000%{opacity:0}}
+#q2{animation:q2 15.0s infinite both}
+@keyframes q3{0.000%{opacity:0}18.860%{opacity:0}18.867%{opacity:1}19.593%{opacity:1}19.600%{opacity:0}100.000%{opacity:0}}
+#q3{animation:q3 15.0s infinite both}
+@keyframes q4{0.000%{opacity:0}19.593%{opacity:0}19.600%{opacity:1}20.327%{opacity:1}20.333%{opacity:0}100.000%{opacity:0}}
+#q4{animation:q4 15.0s infinite both}
+@keyframes q5{0.000%{opacity:0}20.327%{opacity:0}20.333%{opacity:1}21.060%{opacity:1}21.067%{opacity:0}100.000%{opacity:0}}
+#q5{animation:q5 15.0s infinite both}
+@keyframes q6{0.000%{opacity:0}21.060%{opacity:0}21.067%{opacity:1}64.993%{opacity:1}65.000%{opacity:0}100.000%{opacity:0}}
+#q6{animation:q6 15.0s infinite both}
+@keyframes hd0{0.000%{opacity:1}70.660%{opacity:1}70.667%{opacity:0}100.000%{opacity:0}}
+#hd0{animation:hd0 15.0s infinite both}
+@keyframes hd1{0.000%{opacity:0}70.660%{opacity:0}70.667%{opacity:1}100.000%{opacity:1}}
+#hd1{animation:hd1 15.0s infinite both}
+@keyframes n0{0.000%{opacity:1}22.793%{opacity:1}22.800%{opacity:0}64.993%{opacity:0}65.000%{opacity:1}70.660%{opacity:1}70.667%{opacity:0}100.000%{opacity:0}}
+#n0{animation:n0 15.0s infinite both}
+@keyframes n1{0.000%{opacity:0}22.793%{opacity:0}22.800%{opacity:1}64.993%{opacity:1}65.000%{opacity:0}100.000%{opacity:0}}
+#n1{animation:n1 15.0s infinite both}
+@keyframes n2{0.000%{opacity:0}70.660%{opacity:0}70.667%{opacity:1}100.000%{opacity:1}}
+#n2{animation:n2 15.0s infinite both}
+@keyframes sec0{0.000%{opacity:1}22.793%{opacity:1}22.800%{opacity:0}64.993%{opacity:0}65.000%{opacity:1}100.000%{opacity:1}}
+#sec0{animation:sec0 15.0s infinite both}
+@keyframes sec1{0.000%{opacity:0}22.793%{opacity:0}22.800%{opacity:1}64.993%{opacity:1}65.000%{opacity:0}100.000%{opacity:0}}
+#sec1{animation:sec1 15.0s infinite both}
+@keyframes selAll{0.000%{opacity:1}70.660%{opacity:1}70.667%{opacity:0}100.000%{opacity:0}}
+#selAll{animation:selAll 15.0s infinite both}
+@keyframes selRec{0.000%{opacity:0}70.660%{opacity:0}70.667%{opacity:1}100.000%{opacity:1}}
+#selRec{animation:selRec 15.0s infinite both}
+#tile0{transform-origin:252.0px 161.0px}
+@keyframes tile0{0.000%{opacity:1;transform:scale(1)}22.800%{opacity:1;transform:scale(1)}24.467%{opacity:0;transform:scale(.92)}65.667%{opacity:0;transform:scale(.92)}67.667%{opacity:1;transform:scale(1)}70.667%{opacity:1;transform:scale(1)}72.333%{opacity:0;transform:scale(.92)}100.000%{opacity:0;transform:scale(.92)}}
+#tile0{animation:tile0 15.0s infinite both;animation-timing-function:ease-in-out}
+#tile1{transform-origin:436.0px 161.0px}
+@keyframes tile1{0.000%{opacity:1;transform:scale(1)}22.800%{opacity:1;transform:scale(1)}24.467%{opacity:0;transform:scale(.92)}65.667%{opacity:0;transform:scale(.92)}67.667%{opacity:1;transform:scale(1)}71.667%{opacity:1;transform:scale(1)}74.000%{opacity:1;transform:translate(-184px,0px)}100.000%{opacity:1;transform:translate(-184px,0px)}}
+#tile1{animation:tile1 15.0s infinite both;animation-timing-function:ease-in-out}
+#tile2{transform-origin:620.0px 161.0px}
+@keyframes tile2{0.000%{opacity:1;transform:scale(1)}23.067%{opacity:1;transform:scale(1)}24.733%{opacity:0;transform:scale(.92)}65.667%{opacity:0;transform:scale(.92)}67.667%{opacity:1;transform:scale(1)}70.667%{opacity:1;transform:scale(1)}72.333%{opacity:0;transform:scale(.92)}100.000%{opacity:0;transform:scale(.92)}}
+#tile2{animation:tile2 15.0s infinite both;animation-timing-function:ease-in-out}
+#tile3{transform-origin:252.0px 321.0px}
+@keyframes tile3{0.000%{opacity:1;transform:scale(1)}24.133%{opacity:1;transform:scale(1)}26.467%{opacity:1;transform:translate(0px,-160px)}65.000%{opacity:1;transform:translate(0px,-160px)}67.333%{opacity:1;transform:scale(1)}70.667%{opacity:1;transform:scale(1)}72.333%{opacity:0;transform:scale(.92)}100.000%{opacity:0;transform:scale(.92)}}
+#tile3{animation:tile3 15.0s infinite both;animation-timing-function:cubic-bezier(.3,1.1,.5,1)}
+#tile4{transform-origin:436.0px 321.0px}
+@keyframes tile4{0.000%{opacity:1;transform:scale(1)}23.333%{opacity:1;transform:scale(1)}25.000%{opacity:0;transform:scale(.92)}65.667%{opacity:0;transform:scale(.92)}67.667%{opacity:1;transform:scale(1)}70.667%{opacity:1;transform:scale(1)}72.333%{opacity:0;transform:scale(.92)}100.000%{opacity:0;transform:scale(.92)}}
+#tile4{animation:tile4 15.0s infinite both;animation-timing-function:ease-in-out}
+#tile5{transform-origin:620.0px 321.0px}
+@keyframes tile5{0.000%{opacity:1;transform:scale(1)}23.467%{opacity:1;transform:scale(1)}25.133%{opacity:0;transform:scale(.92)}65.667%{opacity:0;transform:scale(.92)}67.667%{opacity:1;transform:scale(1)}70.667%{opacity:1;transform:scale(1)}72.333%{opacity:0;transform:scale(.92)}100.000%{opacity:0;transform:scale(.92)}}
+#tile5{animation:tile5 15.0s infinite both;animation-timing-function:ease-in-out}
+@keyframes metam{0.000%{opacity:1}24.800%{opacity:1}25.467%{opacity:0}65.000%{opacity:0}65.667%{opacity:1}100.000%{opacity:1}}
+#meta3{animation:metam 15.0s infinite both}
+@keyframes snip{0.000%{opacity:0}25.800%{opacity:0}27.133%{opacity:1}63.667%{opacity:1}65.000%{opacity:0}100.000%{opacity:0}}
+#snip{animation:snip 15.0s infinite both}
+@keyframes hover{0.000%{opacity:0}75.333%{opacity:0}76.333%{opacity:1}100.000%{opacity:1}}
+#hover{animation:hover 15.0s infinite both}
+#rp1{transform-origin:252.0px 161.0px}
+@keyframes rp1{0.000%{opacity:0;transform:scale(.3)}29.533%{opacity:0;transform:scale(.3)}29.933%{opacity:.95;transform:scale(.4)}33.667%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp1{animation:rp1 15.0s infinite both}
+@keyframes panel{0.000%{transform:translateX(300px)}30.333%{transform:translateX(300px)}32.667%{transform:translateX(0)}64.667%{transform:translateX(0)}67.000%{transform:translateX(300px)}100.000%{transform:translateX(300px)}}
+#panel{animation:panel 15.0s infinite both;animation-timing-function:cubic-bezier(.2,.9,.3,1)}
+#rp2{transform-origin:604.0px 372.0px}
+@keyframes rp2{0.000%{opacity:0;transform:scale(.3)}37.867%{opacity:0;transform:scale(.3)}38.267%{opacity:.95;transform:scale(.4)}42.000%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp2{animation:rp2 15.0s infinite both}
+@keyframes taginput{0.000%{opacity:0}38.000%{opacity:0}38.533%{opacity:1}45.267%{opacity:1}45.800%{opacity:0}100.000%{opacity:0}}
+#taginput{animation:taginput 15.0s infinite both}
+@keyframes g0{0.000%{opacity:0}39.327%{opacity:0}39.333%{opacity:1}39.927%{opacity:1}39.933%{opacity:0}100.000%{opacity:0}}
+#g0{animation:g0 15.0s infinite both}
+@keyframes g1{0.000%{opacity:0}39.927%{opacity:0}39.933%{opacity:1}40.527%{opacity:1}40.533%{opacity:0}100.000%{opacity:0}}
+#g1{animation:g1 15.0s infinite both}
+@keyframes g2{0.000%{opacity:0}40.527%{opacity:0}40.533%{opacity:1}41.127%{opacity:1}41.133%{opacity:0}100.000%{opacity:0}}
+#g2{animation:g2 15.0s infinite both}
+@keyframes g3{0.000%{opacity:0}41.127%{opacity:0}41.133%{opacity:1}41.727%{opacity:1}41.733%{opacity:0}100.000%{opacity:0}}
+#g3{animation:g3 15.0s infinite both}
+@keyframes g4{0.000%{opacity:0}41.727%{opacity:0}41.733%{opacity:1}42.327%{opacity:1}42.333%{opacity:0}100.000%{opacity:0}}
+#g4{animation:g4 15.0s infinite both}
+@keyframes g5{0.000%{opacity:0}42.327%{opacity:0}42.333%{opacity:1}42.927%{opacity:1}42.933%{opacity:0}100.000%{opacity:0}}
+#g5{animation:g5 15.0s infinite both}
+@keyframes g6{0.000%{opacity:0}42.927%{opacity:0}42.933%{opacity:1}43.527%{opacity:1}43.533%{opacity:0}100.000%{opacity:0}}
+#g6{animation:g6 15.0s infinite both}
+@keyframes g7{0.000%{opacity:0}43.527%{opacity:0}43.533%{opacity:1}45.793%{opacity:1}45.800%{opacity:0}100.000%{opacity:0}}
+#g7{animation:g7 15.0s infinite both}
+#kenter{transform-origin:604px 340px}
+@keyframes kenter{0.000%{opacity:0;transform:scale(.6)}44.467%{opacity:0;transform:scale(.6)}45.800%{opacity:1;transform:scale(1.08)}46.600%{opacity:1;transform:scale(.94)}49.467%{opacity:1;transform:scale(1)}50.800%{opacity:0;transform:scale(1.1)}100.000%{opacity:0;transform:scale(1.1)}}
+#kenter{animation:kenter 15.0s infinite both}
+#newtag{transform-origin:590px 372px}
+@keyframes newtag{0.000%{opacity:0;transform:scale(.6)}45.800%{opacity:0;transform:scale(.6)}47.000%{opacity:1;transform:scale(1.08)}47.800%{opacity:1;transform:scale(1)}100.000%{opacity:1;transform:scale(1)}}
+#newtag{animation:newtag 15.0s infinite both}
+#rp3{transform-origin:580.0px 243.0px}
+@keyframes rp3{0.000%{opacity:0;transform:scale(.3)}51.533%{opacity:0;transform:scale(.3)}51.933%{opacity:.95;transform:scale(.4)}55.667%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp3{animation:rp3 15.0s infinite both}
+@keyframes ctbtn{0.000%{opacity:1;fill:#2a2f39}51.333%{opacity:1;fill:#2a2f39}52.000%{opacity:1;fill:#4c8dff}53.333%{opacity:1;fill:#4c8dff}54.000%{opacity:1;fill:#2a2f39}100.000%{opacity:1;fill:#2a2f39}}
+#ctbtn{animation:ctbtn 15.0s infinite both}
+@keyframes toast{0.000%{opacity:0;transform:translateY(16px)}52.000%{opacity:0;transform:translateY(16px)}53.667%{opacity:1;transform:translateY(0)}61.333%{opacity:1;transform:translateY(0)}63.000%{opacity:0;transform:translateY(0)}100.000%{opacity:0;transform:translateY(0)}}
+#toast{animation:toast 15.0s infinite both;animation-timing-function:cubic-bezier(.2,1.3,.4,1)}
+#kesc{transform-origin:600px 88px}
+@keyframes kesc{0.000%{opacity:0;transform:scale(.6)}63.000%{opacity:0;transform:scale(.6)}64.333%{opacity:1;transform:scale(1.08)}65.133%{opacity:1;transform:scale(.94)}68.000%{opacity:1;transform:scale(1)}69.333%{opacity:0;transform:scale(1.1)}100.000%{opacity:0;transform:scale(1.1)}}
+#kesc{animation:kesc 15.0s infinite both}
+#rp4{transform-origin:60.0px 80.0px}
+@keyframes rp4{0.000%{opacity:0;transform:scale(.3)}70.200%{opacity:0;transform:scale(.3)}70.600%{opacity:.95;transform:scale(.4)}74.333%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp4{animation:rp4 15.0s infinite both}
+@keyframes cur{0.000%{opacity:1;transform:translate(560.0px,300.0px)}12.667%{opacity:1;transform:translate(560.0px,300.0px)}15.000%{opacity:1;transform:translate(440.0px,30.0px)}17.333%{opacity:1;transform:translate(440.0px,30.0px)}20.000%{opacity:1;transform:translate(520.0px,90.0px)}27.000%{opacity:1;transform:translate(520.0px,90.0px)}29.333%{opacity:1;transform:translate(252.0px,161.0px)}32.333%{opacity:1;transform:translate(252.0px,161.0px)}37.000%{opacity:1;transform:translate(604.0px,372.0px)}45.333%{opacity:1;transform:translate(604.0px,372.0px)}51.000%{opacity:1;transform:translate(580.0px,243.0px)}56.000%{opacity:1;transform:translate(580.0px,243.0px)}60.000%{opacity:1;transform:translate(360.0px,300.0px)}67.667%{opacity:1;transform:translate(360.0px,300.0px)}70.000%{opacity:1;transform:translate(60.0px,80.0px)}72.667%{opacity:1;transform:translate(60.0px,80.0px)}74.667%{opacity:1;transform:translate(226.0px,162.0px)}96.000%{opacity:1;transform:translate(226.0px,162.0px)}100.000%{opacity:1;transform:translate(226.0px,162.0px)}}
+#cur{animation:cur 15.0s infinite both;animation-timing-function:cubic-bezier(.45,0,.3,1)}
+@keyframes reset{0.000%{opacity:1}2.000%{opacity:0}96.000%{opacity:0}100.000%{opacity:1}}
+#reset{animation:reset 15.0s infinite both}</style>
+<defs>
+  <linearGradient id="wall" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2b3a67"/><stop offset="1" stop-color="#7a4b94"/></linearGradient>
+  <linearGradient id="bd" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4c8dff"/><stop offset=".55" stop-color="#7b5cff"/><stop offset="1" stop-color="#ff6ac1"/></linearGradient>
+  <linearGradient id="bd2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3ddc97"/><stop offset=".5" stop-color="#4c8dff"/><stop offset="1" stop-color="#7b5cff"/></linearGradient>
+  <linearGradient id="bd3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff9a5a"/><stop offset="1" stop-color="#ff5e7e"/></linearGradient>
+  <linearGradient id="bd4" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#0f766e"/><stop offset="1" stop-color="#5eead4"/></linearGradient>
+  <linearGradient id="bd5" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1e293b"/><stop offset="1" stop-color="#475569"/></linearGradient>
+  <linearGradient id="scangrad" x1="0" x2="1"><stop offset="0" stop-color="#4c8dff" stop-opacity="0"/><stop offset=".85" stop-color="#4c8dff" stop-opacity=".45"/><stop offset="1" stop-color="#9cc0ff" stop-opacity=".95"/></linearGradient>
+  <radialGradient id="face" cx=".5" cy=".38" r=".7"><stop offset="0" stop-color="#f3c7a4"/><stop offset="1" stop-color="#c98d6b"/></radialGradient>
+  <pattern id="dots" width="16" height="16" patternUnits="userSpaceOnUse"><circle cx="8" cy="8" r="1" fill="#2a2e37"/></pattern>
+  <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="36"/></filter>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="12"/></filter><clipPath id="tc0"><rect x="166" y="112" width="172" height="98" rx="6"/></clipPath><clipPath id="tc1"><rect x="350" y="112" width="172" height="98" rx="6"/></clipPath><clipPath id="tc2"><rect x="534" y="112" width="172" height="98" rx="6"/></clipPath><clipPath id="tc3"><rect x="166" y="272" width="172" height="98" rx="6"/></clipPath><clipPath id="tc4"><rect x="350" y="272" width="172" height="98" rx="6"/></clipPath><clipPath id="tc5"><rect x="534" y="272" width="172" height="98" rx="6"/></clipPath><clipPath id="pclip"><rect x="436" y="102" width="268" height="120" rx="6"/></clipPath>
+<g id="dash">
+  <rect x="140" y="58" width="684" height="404" rx="12" fill="#ffffff"/>
+  <path d="M152 58h660a12 12 0 0 1 12 12v22H140V70a12 12 0 0 1 12-12z" fill="#eef0f5"/>
+  <circle cx="160" cy="75" r="5.5" fill="#ff5f57"/><circle cx="178" cy="75" r="5.5" fill="#febc2e"/><circle cx="196" cy="75" r="5.5" fill="#28c840"/>
+  <text x="482" y="80" class="t" font-size="12" fill="#6b7280" text-anchor="middle">Launch HQ</text>
+  <rect x="140" y="92" width="100" height="370" fill="#f6f7fb"/>
+  <rect x="156" y="112" width="56" height="8" rx="4" fill="#4c8dff"/>
+  <rect x="156" y="136" width="66" height="8" rx="4" fill="#d6dae3"/>
+  <rect x="156" y="160" width="48" height="8" rx="4" fill="#d6dae3"/>
+  <rect x="156" y="184" width="60" height="8" rx="4" fill="#d6dae3"/>
+  <text x="262" y="124" class="t b" font-size="17" fill="#1f2328">Launch dashboard</text>
+  <rect x="262" y="150" width="280" height="230" rx="10" fill="#fff" stroke="#e4e7ee"/>
+  <text x="280" y="178" class="t" font-size="12" fill="#6b7280">Weekly signups</text>
+  <text x="280" y="218" class="t b" font-size="30" fill="#1f2328">12,480</text>
+  <rect x="392" y="198" width="48" height="22" rx="11" fill="#dcfce7"/>
+  <text x="416" y="213" class="t b" font-size="11.5" fill="#15803d" text-anchor="middle">+38%</text>
+  <rect x="286" y="314" width="22" height="52" rx="4" fill="#c9d6f2"/><rect x="320" y="296" width="22" height="70" rx="4" fill="#c9d6f2"/><rect x="354" y="305" width="22" height="61" rx="4" fill="#c9d6f2"/><rect x="388" y="278" width="22" height="88" rx="4" fill="#c9d6f2"/><rect x="422" y="287" width="22" height="79" rx="4" fill="#c9d6f2"/><rect x="456" y="254" width="22" height="112" rx="4" fill="#c9d6f2"/><rect x="490" y="216" width="22" height="150" rx="4" fill="#4c8dff"/>
+  <rect x="556" y="150" width="244" height="230" rx="10" fill="#fff" stroke="#e4e7ee"/>
+  <text x="574" y="178" class="t b" font-size="14" fill="#1f2328">Release v2.0</text>
+  <text x="574" y="206" class="t" font-size="11" fill="#6b7280">Notify</text>
+  <rect x="574" y="214" width="208" height="28" rx="6" fill="#f9fafb" stroke="#d6dae3"/>
+  <text x="584" y="233" class="t" font-size="12.5" fill="#1f2328">sam.rivera@acme.co</text>
+  <rect x="574" y="256" width="150" height="7" rx="3.5" fill="#e4e7ee"/>
+  <rect x="574" y="272" width="120" height="7" rx="3.5" fill="#e4e7ee"/>
+  <rect x="574" y="318" width="106" height="32" rx="8" fill="#1f2328"/>
+  <text x="627" y="339" class="t b" font-size="13" fill="#fff" text-anchor="middle">Ship it</text>
+  <rect x="140" y="400" width="684" height="1" fill="#eef0f5"/>
+  <text x="262" y="432" class="t" font-size="11.5" fill="#9aa3b2">Last deploy 12 minutes ago · all checks passed</text>
+</g></defs>
+<rect width="720" height="450" fill="#0d1016"/>
+
+<g id="lib">
+  <rect width="720" height="450" fill="#111317"/>
+  <rect width="150" height="450" fill="#16181d"/><rect x="149" width="1" height="450" fill="#2c313b"/>
+  <circle cx="16" cy="16" r="4.5" fill="#ff5f57"/><circle cx="30" cy="16" r="4.5" fill="#febc2e"/><circle cx="44" cy="16" r="4.5" fill="#28c840"/>
+  <rect id="selAll" x="8" y="38" width="134" height="24" rx="6" fill="#23262d"/>
+  <rect id="selRec" x="8" y="64" width="134" height="24" rx="6" fill="#23262d"/>
+  <g><circle cx="22" cy="53" r="4.5" fill="#4c8dff"/><text x="34" y="57" class="t" font-size="11.5" fill="#e6e8ee">All captures</text><text x="138" y="57" class="t" font-size="10.5" fill="#6b7280" text-anchor="end">248</text></g><g><circle cx="22" cy="79" r="4.5" fill="#e5484d"/><text x="34" y="83" class="t" font-size="11.5" fill="#e6e8ee">Recordings</text><text x="138" y="83" class="t" font-size="10.5" fill="#6b7280" text-anchor="end">12</text></g>
+  <text x="14" y="114" class="t b" font-size="9.5" fill="#6b7280" letter-spacing=".6">APPS</text>
+  <g><circle cx="22" cy="135" r="4.5" fill="#f5a524"/><text x="34" y="139" class="t" font-size="11.5" fill="#e6e8ee">Chrome</text><text x="138" y="139" class="t" font-size="10.5" fill="#6b7280" text-anchor="end">96</text></g><g><circle cx="22" cy="157" r="4.5" fill="#a56bff"/><text x="34" y="161" class="t" font-size="11.5" fill="#e6e8ee">Figma</text><text x="138" y="161" class="t" font-size="10.5" fill="#6b7280" text-anchor="end">41</text></g><g><circle cx="22" cy="179" r="4.5" fill="#9aa3b2"/><text x="34" y="183" class="t" font-size="11.5" fill="#e6e8ee">Terminal</text><text x="138" y="183" class="t" font-size="10.5" fill="#6b7280" text-anchor="end">37</text></g>
+  <text x="14" y="214" class="t b" font-size="9.5" fill="#6b7280" letter-spacing=".6">TAGS</text>
+  <g><circle cx="22" cy="235" r="4.5" fill="#4c8dff"/><text x="34" y="239" class="t" font-size="11.5" fill="#e6e8ee">release</text><text x="138" y="239" class="t" font-size="10.5" fill="#6b7280" text-anchor="end">31</text></g><g><circle cx="22" cy="257" r="4.5" fill="#e5484d"/><text x="34" y="261" class="t" font-size="11.5" fill="#e6e8ee">bug</text><text x="138" y="261" class="t" font-size="10.5" fill="#6b7280" text-anchor="end">18</text></g><g><circle cx="22" cy="279" r="4.5" fill="#30a46c"/><text x="34" y="283" class="t" font-size="11.5" fill="#e6e8ee">receipt ✦</text><text x="138" y="283" class="t" font-size="10.5" fill="#6b7280" text-anchor="end">9</text></g>
+  <rect x="8" y="410" width="134" height="1" fill="#2c313b"/>
+  <text x="14" y="432" class="t" font-size="11" fill="#9aa3b2">Settings</text>
+  <text id="hd0" x="166" y="36" class="t b" font-size="16" fill="#f3f4f7">All captures</text>
+  <text id="hd1" x="166" y="36" class="t b" font-size="16" fill="#f3f4f7">Recordings</text>
+  <text id="n0" x="268" y="36" class="t" font-size="11.5" fill="#6b7280">248</text>
+  <text id="n1" x="268" y="36" class="t" font-size="11.5" fill="#6b7280">1 result</text>
+  <text id="n2" x="258" y="36" class="t" font-size="11.5" fill="#6b7280">12</text>
+  <rect x="326" y="16" width="230" height="28" rx="7" fill="#1b1e25" stroke="#2c313b"/>
+  <rect id="sfocus" x="326" y="16" width="230" height="28" rx="7" fill="none" stroke="#4c8dff" stroke-width="1.5"/>
+  <g fill="none" stroke="#8b93a1" stroke-width="1.4" stroke-linecap="round"><circle cx="339" cy="29" r="4.5"/><path d="M342.5 32.5l3.5 3.5"/></g>
+  <text id="ph" x="350" y="35" class="t" font-size="12" fill="#6b7280">Search text, tags, notes</text>
+  <text id="q0" x="350" y="35" class="t" font-size="12" fill="#f3f4f7">i</text><text id="q1" x="350" y="35" class="t" font-size="12" fill="#f3f4f7">in</text><text id="q2" x="350" y="35" class="t" font-size="12" fill="#f3f4f7">inv</text><text id="q3" x="350" y="35" class="t" font-size="12" fill="#f3f4f7">invo</text><text id="q4" x="350" y="35" class="t" font-size="12" fill="#f3f4f7">invoi</text><text id="q5" x="350" y="35" class="t" font-size="12" fill="#f3f4f7">invoic</text><text id="q6" x="350" y="35" class="t" font-size="12" fill="#f3f4f7">invoice</text>
+  <rect x="566" y="16" width="140" height="28" rx="7" fill="#5b7cfa"/>
+  <path d="M579 26v-4h4M591 22h4v4M595 32v4h-4M583 36h-4v-4" fill="none" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/>
+  <text x="603" y="34" class="t b" font-size="11.5" fill="#fff">New capture</text>
+  <g class="t" font-size="11" text-anchor="middle">
+    <rect x="166" y="56" width="240" height="24" rx="7" fill="#16181d" stroke="#2c313b"/>
+    <rect x="169" y="59" width="60" height="18" rx="5" fill="#2a2f39"/><text x="199" y="72" fill="#f3f4f7">Any time</text>
+    <text x="256" y="72" fill="#9aa3b2">Today</text><text x="306" y="72" fill="#9aa3b2">7 days</text><text x="362" y="72" fill="#9aa3b2">30 days</text>
+  </g>
+  <text id="sec0" x="166" y="102" class="t b" font-size="12" fill="#c9ceda">Today</text>
+  <text id="sec1" x="166" y="102" class="t b" font-size="12" fill="#c9ceda">Best matches</text>
+  <g id="st0"><text x="706" y="102" class="t" font-size="10.5" fill="#c4b5ff" text-anchor="end">✦ Describing 1 of 1…</text></g>
+  <g id="st1"><text x="706" y="102" class="t" font-size="10.5" fill="#7ee2b0" text-anchor="end">✦ Every capture is described</text></g>
+  <g id="tile0"><g clip-path="url(#tc0)"><rect x="166" y="112" width="172" height="98" rx="6" fill="#e9edf5"/><g clip-path="url(#tc0)"><g transform="translate(166 110.2) scale(0.2515) translate(-140 -58)"><use href="#dash"/></g></g></g>
+  <rect x="166" y="112" width="172" height="98" rx="6" fill="none" stroke="#2c313b"/>
+  <text x="166" y="226" class="t b" font-size="11.5" fill="#e6e8ee">Launch dashboard</text>
+  <text id="meta0" x="166" y="240" class="t" font-size="10" fill="#8b93a1">Chrome · 9:41</text><g id="shim"><rect x="166" y="112" width="172" height="98" rx="6" fill="#0b0d12" opacity=".55"/><rect x="202.0" y="150.0" width="100" height="22" rx="11" fill="#16181d"/><text x="252.0" y="165.0" class="t" font-size="10.5" fill="#d4bfff" text-anchor="middle">✦ Describing…</text></g><g id="ai0"><rect x="166" y="248" width="72" height="16" rx="8" fill="#4c8dff" opacity=".22"/><text x="202.1" y="259.5" class="t" font-size="10" fill="#9cc0ff" text-anchor="middle">dashboard ✦</text><rect x="243.15" y="248" width="54" height="16" rx="8" fill="#a56bff" opacity=".22"/><text x="270.1" y="259.5" class="t" font-size="10" fill="#d4bfff" text-anchor="middle">launch ✦</text></g></g><g id="tile1"><g clip-path="url(#tc1)"><rect x="350" y="112" width="172" height="98" rx="6" fill="#e9edf5"/><g clip-path="url(#tc1)"><g transform="translate(350 110.2) scale(0.2515) translate(-140 -58)"><use href="#dash"/></g></g><rect x="350" y="112" width="172" height="98" rx="6" fill="#000" opacity=".35"/><circle cx="436.0" cy="161.0" r="15" fill="#fff" opacity=".92"/><path d="M432.0 154.0v14l11-7z" fill="#1f2328"/><rect x="482" y="188" width="32" height="15" rx="5" fill="#000" opacity=".7"/><text x="498" y="199" class="t b" font-size="9.5" fill="#fff" text-anchor="middle">0:04</text></g>
+  <rect x="350" y="112" width="172" height="98" rx="6" fill="none" stroke="#2c313b"/>
+  <text x="350" y="226" class="t b" font-size="11.5" fill="#e6e8ee">Recording</text>
+  <text id="meta1" x="350" y="240" class="t" font-size="10" fill="#8b93a1">Grab-it · 9:43</text><g id="hover"><rect x="350" y="112" width="172" height="98" rx="6" fill="#000" opacity=".25"/><rect x="358" y="180" width="48" height="22" rx="6" fill="#16181d" opacity=".95"/><text x="382" y="195" class="t b" font-size="10" fill="#e6e8ee" text-anchor="middle">Play</text><rect x="410" y="180" width="48" height="22" rx="6" fill="#16181d" opacity=".95"/><text x="434" y="195" class="t b" font-size="10" fill="#e6e8ee" text-anchor="middle">Edit</text><rect x="462" y="180" width="48" height="22" rx="6" fill="#16181d" opacity=".95"/><text x="486" y="195" class="t b" font-size="10" fill="#e6e8ee" text-anchor="middle">Folder</text></g></g><g id="tile2"><g clip-path="url(#tc2)"><rect x="534" y="112" width="172" height="98" rx="6" fill="#1e1f24"/><rect x="534" y="112" width="31" height="98" rx="6" fill="#18191d"/><rect x="575" y="124" width="30" height="5" rx="2" fill="#6a9955"/><rect x="583" y="135" width="23" height="5" rx="2" fill="#6a9955"/><rect x="591" y="146" width="32" height="5" rx="2" fill="#6a9955"/><rect x="627" y="146" width="14" height="5" rx="2" fill="#6a9955"/><rect x="575" y="157" width="27" height="5" rx="2" fill="#ce9178"/><rect x="583" y="168" width="19" height="5" rx="2" fill="#9cdcfe"/><rect x="606" y="168" width="34" height="5" rx="2" fill="#dcdcaa"/><rect x="644" y="168" width="29" height="5" rx="2" fill="#6a9955"/><rect x="591" y="179" width="24" height="5" rx="2" fill="#9cdcfe"/><rect x="619" y="179" width="19" height="5" rx="2" fill="#9cdcfe"/><rect x="575" y="190" width="24" height="5" rx="2" fill="#c586c0"/><rect x="603" y="190" width="33" height="5" rx="2" fill="#c586c0"/><rect x="640" y="190" width="17" height="5" rx="2" fill="#6a9955"/><rect x="583" y="201" width="21" height="5" rx="2" fill="#c586c0"/></g>
+  <rect x="534" y="112" width="172" height="98" rx="6" fill="none" stroke="#2c313b"/>
+  <text x="534" y="226" class="t b" font-size="11.5" fill="#e6e8ee">release.ts</text>
+  <text id="meta2" x="534" y="240" class="t" font-size="10" fill="#8b93a1">Code · 9:30</text></g><g id="tile3"><g clip-path="url(#tc3)"><g clip-path="url(#tc3)"><rect x="166" y="272" width="172" height="98" rx="6" fill="#e8ebf0"/><rect x="200.4" y="280.4" width="103.2" height="89.6" rx="2.1" fill="#fff"/><text x="208.8" y="295.1" class="t b" font-size="8.9" fill="#1f2328">INVOICE</text><text x="295.2" y="295.1" class="t b" font-size="6.3" fill="#4c8dff" text-anchor="end">ACME Cloud</text><text x="208.8" y="304.5" class="t" font-size="5.2" fill="#6b7280">INV-2026-0312 · March 2026</text><text x="208.8" y="318.1" class="t" font-size="5.5" fill="#4b5563">Compute</text><text x="295.2" y="318.1" class="t" font-size="5.5" fill="#4b5563" text-anchor="end">$860.00</text><text x="208.8" y="328.6" class="t" font-size="5.5" fill="#4b5563">Storage</text><text x="295.2" y="328.6" class="t" font-size="5.5" fill="#4b5563" text-anchor="end">$312.00</text><text x="208.8" y="339.1" class="t" font-size="5.5" fill="#4b5563">Support</text><text x="295.2" y="339.1" class="t" font-size="5.5" fill="#4b5563" text-anchor="end">$112.00</text><rect x="208.8" y="350.7" width="86.4" height="0.8" fill="#d6dae3"/><text x="208.8" y="362.2" class="t b" font-size="6.3" fill="#1f2328">Total</text><text x="295.2" y="362.2" class="t b" font-size="6.3" fill="#1f2328" text-anchor="end">$1,284.00</text></g></g>
+  <rect x="166" y="272" width="172" height="98" rx="6" fill="none" stroke="#2c313b"/>
+  <text x="166" y="386" class="t b" font-size="11.5" fill="#e6e8ee">Billing · ACME Cloud</text>
+  <text id="meta3" x="166" y="400" class="t" font-size="10" fill="#8b93a1">Chrome · Yesterday</text><g id="snip"><text x="166" y="400" class="t" font-size="10" fill="#8b93a1">Text in image:</text><rect x="233" y="390" width="38" height="14" rx="3" fill="#4c8dff" opacity=".35"/><text x="235" y="400" class="t" font-size="10" fill="#e6e8ee">Invoice INV-2026-0312</text><rect x="166" y="408" width="54" height="16" rx="8" fill="#30a46c" opacity=".22"/><text x="193.2" y="419.5" class="t" font-size="10" fill="#7ee2b0" text-anchor="middle">receipt ✦</text><rect x="225.35" y="408" width="49" height="16" rx="8" fill="#4c8dff" opacity=".22"/><text x="249.7" y="419.5" class="t" font-size="10" fill="#9cc0ff" text-anchor="middle">acme ✦</text></g></g><g id="tile4"><g clip-path="url(#tc4)"><rect x="350" y="272" width="172" height="98" rx="6" fill="#0b0d10"/><text x="360" y="290" font-family="JetBrains Mono,SF Mono,Menlo,Consolas,monospace" font-size="8.5" fill="#e6e8ee">$ npm run build</text><text x="360" y="305" font-family="JetBrains Mono,SF Mono,Menlo,Consolas,monospace" font-size="8.5" fill="#8b93a1">vite v6.2 building…</text><text x="360" y="320" font-family="JetBrains Mono,SF Mono,Menlo,Consolas,monospace" font-size="8.5" fill="#3ddc97">✓ 412 modules</text><text x="360" y="335" font-family="JetBrains Mono,SF Mono,Menlo,Consolas,monospace" font-size="8.5" fill="#8b93a1">dist/index.js  84 kB</text><text x="360" y="350" font-family="JetBrains Mono,SF Mono,Menlo,Consolas,monospace" font-size="8.5" fill="#3ddc97">built in 1.9s</text></g>
+  <rect x="350" y="272" width="172" height="98" rx="6" fill="none" stroke="#2c313b"/>
+  <text x="350" y="386" class="t b" font-size="11.5" fill="#e6e8ee">npm run build</text>
+  <text id="meta4" x="350" y="400" class="t" font-size="10" fill="#8b93a1">Terminal · Yesterday</text></g><g id="tile5"><g clip-path="url(#tc5)"><rect x="534" y="272" width="172" height="98" rx="6" fill="#2c2c2c"/><rect x="564" y="286" width="112" height="70" rx="3" fill="#fff"/><rect x="574" y="296" width="44" height="8" rx="3" fill="#1f2328"/><rect x="574" y="310" width="84" height="5" rx="2" fill="#d6dae3"/><rect x="574" y="319" width="64" height="5" rx="2" fill="#d6dae3"/><rect x="574" y="334" width="50" height="14" rx="7" fill="#7b5cff"/><rect x="562" y="284" width="116" height="74" rx="3" fill="none" stroke="#0d99ff" stroke-width="1.2"/></g>
+  <rect x="534" y="272" width="172" height="98" rx="6" fill="none" stroke="#2c313b"/>
+  <text x="534" y="386" class="t b" font-size="11.5" fill="#e6e8ee">Onboarding flow</text>
+  <text id="meta5" x="534" y="400" class="t" font-size="10" fill="#8b93a1">Figma · Monday</text></g>
+  <g id="panel">
+  <rect x="420" y="52" width="300" height="398" fill="#16181d"/><rect x="420" y="52" width="1" height="398" fill="#2c313b"/>
+  <text x="436" y="76" class="t b" font-size="13" fill="#f3f4f7">Billing · ACME Cloud</text>
+  <text x="436" y="92" class="t" font-size="10" fill="#8b93a1">Chrome · Yesterday at 16:02 · 1440 × 900</text>
+  <path d="M694 66l9 9M703 66l-9 9" stroke="#8b93a1" stroke-width="1.5" stroke-linecap="round"/>
+  <g clip-path="url(#pclip)"><g clip-path="url(#pclip)"><rect x="436" y="102" width="268" height="120" rx="6" fill="#e8ebf0"/><rect x="489.6" y="115.1" width="160.8" height="106.9" rx="3.3" fill="#fff"/><text x="502.7" y="138.0" class="t b" font-size="13.9" fill="#1f2328">INVOICE</text><text x="637.3" y="138.0" class="t b" font-size="9.8" fill="#4c8dff" text-anchor="end">ACME Cloud</text><text x="502.7" y="152.7" class="t" font-size="8.2" fill="#6b7280">INV-2026-0312 · March 2026</text><text x="502.7" y="173.9" class="t" font-size="8.5" fill="#4b5563">Compute</text><text x="637.3" y="173.9" class="t" font-size="8.5" fill="#4b5563" text-anchor="end">$860.00</text><text x="502.7" y="190.2" class="t" font-size="8.5" fill="#4b5563">Storage</text><text x="637.3" y="190.2" class="t" font-size="8.5" fill="#4b5563" text-anchor="end">$312.00</text><text x="502.7" y="206.6" class="t" font-size="8.5" fill="#4b5563">Support</text><text x="637.3" y="206.6" class="t" font-size="8.5" fill="#4b5563" text-anchor="end">$112.00</text><rect x="502.7" y="224.6" width="134.7" height="1.3" fill="#d6dae3"/><text x="502.7" y="242.5" class="t b" font-size="9.8" fill="#1f2328">Total</text><text x="637.3" y="242.5" class="t b" font-size="9.8" fill="#1f2328" text-anchor="end">$1,284.00</text></g></g>
+  <g class="t b" font-size="10.5" text-anchor="middle">
+    <rect x="436" y="232" width="48" height="22" rx="6" fill="#0090ff"/><text x="460" y="247" fill="#fff">Edit</text>
+    <rect x="489" y="232" width="50" height="22" rx="6" fill="#2a2f39"/><text x="514" y="247" fill="#e6e8ee">Copy</text>
+    <rect id="ctbtn" x="544" y="232" width="72" height="22" rx="6" fill="#2a2f39"/><text x="580" y="247" fill="#e6e8ee">Copy text</text>
+    <rect x="621" y="232" width="40" height="22" rx="6" fill="#2a2f39"/><text x="641" y="247" fill="#e6e8ee">Pin</text>
+  </g>
+  <text x="436" y="276" class="t" font-size="10" fill="#8b93a1">Category</text>
+  <text x="506" y="276" class="t b" font-size="10.5" fill="#e6e8ee">Receipt</text>
+  <text x="436" y="298" class="t" font-size="10" fill="#8b93a1">Description <tspan fill="#c4b5ff">✦</tspan></text>
+  <text x="436" y="315" class="t" font-size="11" fill="#e6e8ee">An ACME Cloud invoice for March 2026 with</text>
+  <text x="436" y="330" class="t" font-size="11" fill="#e6e8ee">three line items, $1,284.00 in total.</text>
+  <text x="436" y="354" class="t" font-size="10" fill="#8b93a1">Tags</text>
+  <rect x="436" y="364" width="54" height="16" rx="8" fill="#30a46c" opacity=".22"/><text x="463.2" y="375.5" class="t" font-size="10" fill="#7ee2b0" text-anchor="middle">receipt ✦</text><rect x="495.35" y="364" width="49" height="16" rx="8" fill="#4c8dff" opacity=".22"/><text x="519.7" y="375.5" class="t" font-size="10" fill="#9cc0ff" text-anchor="middle">acme ✦</text>
+  <g id="newtag"><rect x="560" y="364" width="60" height="16" rx="8" fill="#f5a524" opacity=".22"/><text x="590.0" y="375.5" class="t" font-size="10" fill="#ffd38a" text-anchor="middle">expenses</text></g>
+  <rect id="taginput" x="556" y="362" width="96" height="20" rx="5" fill="none" stroke="#4c8dff"/>
+  <text id="g0" x="562" y="376" class="t" font-size="11" fill="#f3f4f7">e</text><text id="g1" x="562" y="376" class="t" font-size="11" fill="#f3f4f7">ex</text><text id="g2" x="562" y="376" class="t" font-size="11" fill="#f3f4f7">exp</text><text id="g3" x="562" y="376" class="t" font-size="11" fill="#f3f4f7">expe</text><text id="g4" x="562" y="376" class="t" font-size="11" fill="#f3f4f7">expen</text><text id="g5" x="562" y="376" class="t" font-size="11" fill="#f3f4f7">expens</text><text id="g6" x="562" y="376" class="t" font-size="11" fill="#f3f4f7">expense</text><text id="g7" x="562" y="376" class="t" font-size="11" fill="#f3f4f7">expenses</text>
+  <text x="436" y="404" class="t" font-size="10" fill="#8b93a1">Notes</text>
+  <rect x="436" y="412" width="268" height="26" rx="6" fill="#1f2228" stroke="#2c313b"/>
+  <text x="444" y="429" class="t" font-size="11" fill="#6b7280">Add a note</text>
+</g>
+</g><g id="kenter"><rect x="578.047" y="322" width="51.906" height="36" rx="8" fill="#f4f5f8"/><rect x="578.047" y="322" width="51.906" height="32" rx="8" fill="#fff"/><text x="604" y="343" class="t b" font-size="14" fill="#1f2328" text-anchor="middle">Enter</text></g><g id="toast"><rect x="213.0" y="396" width="160" height="30" rx="15" fill="#1f2328" stroke="#3a404c"/>
+  <circle cx="233.0" cy="411" r="8.5" fill="#30a46c"/><path d="M229.0 411l2.8 2.8 4.8-5.6" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><text x="249.0" y="415.5" class="t b" font-size="11.5" fill="#fff">Text copied</text></g><g id="kesc"><rect x="578.716" y="70" width="42.568" height="36" rx="8" fill="#f4f5f8"/><rect x="578.716" y="70" width="42.568" height="32" rx="8" fill="#fff"/><text x="600" y="91" class="t b" font-size="14" fill="#1f2328" text-anchor="middle">Esc</text></g><rect id="reset" width="720" height="450" fill="#111317"/>
+<circle id="rp0" cx="440.0" cy="30.0" r="18" fill="none" stroke="#4c8dff" stroke-width="3"/><circle id="rp1" cx="252.0" cy="161.0" r="18" fill="none" stroke="#fff" stroke-width="3"/><circle id="rp2" cx="604.0" cy="372.0" r="18" fill="none" stroke="#4c8dff" stroke-width="3"/><circle id="rp3" cx="580.0" cy="243.0" r="18" fill="none" stroke="#fff" stroke-width="3"/><circle id="rp4" cx="60.0" cy="80.0" r="18" fill="none" stroke="#fff" stroke-width="3"/>
+<g id="cur"><path d="M0 0v21l5.2-5 3.6 8.4 3.8-1.6-3.6-8.2H16z" fill="#fff" stroke="#111" stroke-width="1.4" stroke-linejoin="round"/></g>
+</svg>

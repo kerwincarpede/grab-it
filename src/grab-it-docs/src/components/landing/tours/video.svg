@@ -1,0 +1,303 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 450" width="720" height="450" role="img" aria-labelledby="title desc" data-loop="19.0" data-poster="13.0">
+<title id="title">Recording and the video editor</title>
+<desc id="desc">Record mode is picked on the All-in-one toolbar, a window is chosen with the webcam, clicks and keys on, and a countdown starts the recording. Clicks show as rings and a shortcut as a key label. In the video editor the start is trimmed, a zoom is added and set to follow the cursor, playback zooms in on each click, and Export saves a new MP4.</desc>
+<style>
+.t{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,"Helvetica Neue",Arial,sans-serif}
+.b{font-weight:700}
+@media (prefers-reduced-motion:reduce){*{animation-delay:-13.0s!important;animation-play-state:paused!important}}
+#keys{transform-origin:360px 210px}
+@keyframes keys{0.000%{opacity:0;transform:scale(.7)}1.053%{opacity:0;transform:scale(.7)}2.368%{opacity:1;transform:scale(1.04)}3.053%{opacity:1;transform:scale(1)}5.263%{opacity:1;transform:scale(1)}6.579%{opacity:0;transform:scale(1.15)}100.000%{opacity:0;transform:scale(1.15)}}
+#keys{animation:keys 19.0s infinite both}
+@keyframes keysp{0.000%{transform:translateY(0)}3.684%{transform:translateY(0)}4.105%{transform:translateY(4px)}5.000%{transform:translateY(0)}100.000%{transform:translateY(0)}}
+#keys .cap{animation:keysp 19.0s infinite both}
+@keyframes dim{0.000%{opacity:0}5.789%{opacity:0}6.579%{opacity:.5}16.316%{opacity:.5}17.105%{opacity:0}100.000%{opacity:0}}
+#dim{animation:dim 19.0s infinite both}
+@keyframes winhl{0.000%{opacity:0}12.368%{opacity:0}13.000%{opacity:1}16.474%{opacity:1}17.105%{opacity:0}100.000%{opacity:0}}
+#winhl{animation:winhl 19.0s infinite both}
+@keyframes setup{0.000%{opacity:0;transform:translateY(-14px)}7.105%{opacity:0;transform:translateY(-14px)}8.421%{opacity:1;transform:translateY(0)}16.053%{opacity:1;transform:translateY(0)}17.105%{opacity:0;transform:translateY(0)}100.000%{opacity:0;transform:translateY(0)}}
+#setup{animation:setup 19.0s infinite both;animation-timing-function:ease-out}
+@keyframes segsel0{0.000%{opacity:1}9.995%{opacity:1}10.000%{opacity:0}100.000%{opacity:0}}
+#segsel0{animation:segsel0 19.0s infinite both}
+@keyframes segsel1{0.000%{opacity:0}9.995%{opacity:0}10.000%{opacity:1}100.000%{opacity:1}}
+#segsel1{animation:segsel1 19.0s infinite both}
+@keyframes aio{0.000%{opacity:0;transform:translateY(-50px)}5.789%{opacity:0;transform:translateY(-50px)}7.368%{opacity:1;transform:translateY(0)}16.053%{opacity:1;transform:translateY(0)}17.105%{opacity:0;transform:translateY(0)}100.000%{opacity:0;transform:translateY(0)}}
+#aio{animation:aio 19.0s infinite both;animation-timing-function:cubic-bezier(.2,.9,.3,1.1)}
+@keyframes hlRecord{0.000%{opacity:0}7.632%{opacity:0}8.263%{opacity:1}100.000%{opacity:1}}
+#hlRecord{animation:hlRecord 19.0s infinite both}
+#k6{transform-origin:532.0px 104px}
+@keyframes k6{0.000%{opacity:0;transform:scale(.6)}6.316%{opacity:0;transform:scale(.6)}7.368%{opacity:1;transform:scale(1.08)}8.000%{opacity:1;transform:scale(.94)}10.263%{opacity:1;transform:scale(1)}11.316%{opacity:0;transform:scale(1.1)}100.000%{opacity:0;transform:scale(1.1)}}
+#k6{animation:k6 19.0s infinite both}
+#cd0{transform-origin:360.14px 221.84px}
+@keyframes cd0{0.000%{opacity:0;transform:scale(.6)}17.632%{opacity:0;transform:scale(.6)}18.158%{opacity:1;transform:scale(1)}19.842%{opacity:1;transform:scale(1)}20.263%{opacity:0;transform:scale(1.2)}100.000%{opacity:0;transform:scale(1.2)}}
+#cd0{animation:cd0 19.0s infinite both}
+#cd1{transform-origin:360.14px 221.84px}
+@keyframes cd1{0.000%{opacity:0;transform:scale(.6)}20.263%{opacity:0;transform:scale(.6)}20.789%{opacity:1;transform:scale(1)}22.474%{opacity:1;transform:scale(1)}22.895%{opacity:0;transform:scale(1.2)}100.000%{opacity:0;transform:scale(1.2)}}
+#cd1{animation:cd1 19.0s infinite both}
+#cd2{transform-origin:360.14px 221.84px}
+@keyframes cd2{0.000%{opacity:0;transform:scale(.6)}22.895%{opacity:0;transform:scale(.6)}23.421%{opacity:1;transform:scale(1)}25.105%{opacity:1;transform:scale(1)}25.526%{opacity:0;transform:scale(1.2)}100.000%{opacity:0;transform:scale(1.2)}}
+#cd2{animation:cd2 19.0s infinite both}
+@keyframes recframe{0.000%{opacity:0}24.474%{opacity:0}25.263%{opacity:1}41.316%{opacity:1}42.105%{opacity:0}100.000%{opacity:0}}
+#recframe{animation:recframe 19.0s infinite both}
+@keyframes cam{0.000%{opacity:0}25.526%{opacity:0}26.579%{opacity:1}41.053%{opacity:1}42.105%{opacity:0}100.000%{opacity:0}}
+#cam{animation:cam 19.0s infinite both}
+@keyframes keys2{0.000%{opacity:0}33.158%{opacity:0}33.947%{opacity:1}36.579%{opacity:1}37.368%{opacity:0}100.000%{opacity:0}}
+#keys2{animation:keys2 19.0s infinite both}
+@keyframes recbar{0.000%{opacity:0;transform:translateY(30px)}24.474%{opacity:0;transform:translateY(30px)}26.053%{opacity:1;transform:translateY(0)}41.053%{opacity:1;transform:translateY(0)}42.105%{opacity:0;transform:translateY(0)}100.000%{opacity:0;transform:translateY(0)}}
+#recbar{animation:recbar 19.0s infinite both;animation-timing-function:ease-out}
+@keyframes rt0{0.000%{opacity:1}30.784%{opacity:1}30.789%{opacity:0}100.000%{opacity:0}}
+#rt0{animation:rt0 19.0s infinite both}
+@keyframes rt1{0.000%{opacity:0}30.784%{opacity:0}30.789%{opacity:1}36.047%{opacity:1}36.053%{opacity:0}100.000%{opacity:0}}
+#rt1{animation:rt1 19.0s infinite both}
+@keyframes rt2{0.000%{opacity:0}36.047%{opacity:0}36.053%{opacity:1}41.311%{opacity:1}41.316%{opacity:0}100.000%{opacity:0}}
+#rt2{animation:rt2 19.0s infinite both}
+@keyframes rt3{0.000%{opacity:0}41.311%{opacity:0}41.316%{opacity:1}100.000%{opacity:1}}
+#rt3{animation:rt3 19.0s infinite both}
+#rp0{transform-origin:379.5px 212.6px}
+@keyframes rp0{0.000%{opacity:0;transform:scale(.3)}29.632%{opacity:0;transform:scale(.3)}29.947%{opacity:.95;transform:scale(.4)}32.895%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp0{animation:rp0 19.0s infinite both}
+#rp1{transform-origin:493.5px 289.9px}
+@keyframes rp1{0.000%{opacity:0;transform:scale(.3)}37.000%{opacity:0;transform:scale(.3)}37.316%{opacity:.95;transform:scale(.4)}40.263%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp1{animation:rp1 19.0s infinite both}
+#rp2{transform-origin:447.0px 431.0px}
+@keyframes rp2{0.000%{opacity:0;transform:scale(.3)}40.684%{opacity:0;transform:scale(.3)}41.000%{opacity:.95;transform:scale(.4)}43.947%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp2{animation:rp2 19.0s infinite both}
+@keyframes qa{0.000%{opacity:0;transform:translateX(-300px)}42.368%{opacity:0;transform:translateX(-300px)}42.632%{opacity:1;transform:translateX(-300px)}44.737%{opacity:1;transform:translateX(0)}48.158%{opacity:1;transform:translateX(0)}49.474%{opacity:0;transform:translateX(0)}100.000%{opacity:0;transform:translateX(0)}}
+#qa{animation:qa 19.0s infinite both;animation-timing-function:cubic-bezier(.2,.9,.3,1.15)}
+#rp3{transform-origin:54.0px 392.0px}
+@keyframes rp3{0.000%{opacity:0;transform:scale(.3)}47.000%{opacity:0;transform:scale(.3)}47.316%{opacity:.95;transform:scale(.4)}50.263%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp3{animation:rp3 19.0s infinite both}
+@keyframes ve{0.000%{opacity:0}48.158%{opacity:0}49.474%{opacity:1}100.000%{opacity:1}}
+#ve{animation:ve 19.0s infinite both}
+@keyframes lh{0.000%{transform:translateX(0)}51.316%{transform:translateX(0)}53.421%{transform:translateX(42px)}100.000%{transform:translateX(42px)}}
+#lh{animation:lh 19.0s infinite both;animation-timing-function:ease-in-out}
+#trimdim{transform-origin:150px 0}
+@keyframes trimdim{0.000%{transform:scaleX(0)}51.316%{transform:scaleX(0)}53.421%{transform:scaleX(1)}100.000%{transform:scaleX(1)}}
+#trimdim{animation:trimdim 19.0s infinite both;animation-timing-function:ease-in-out}
+@keyframes playhead{0.000%{transform:translateX(150px)}51.316%{transform:translateX(150px)}53.421%{transform:translateX(192px)}55.000%{transform:translateX(192px)}55.263%{transform:translateX(330px)}60.263%{transform:translateX(330px)}60.526%{transform:translateX(196px)}61.842%{transform:translateX(196px)}77.632%{transform:translateX(700px)}100.000%{transform:translateX(700px)}}
+#playhead{animation:playhead 19.0s infinite both;animation-timing-function:linear}
+#zseg{transform-origin:330px 389px}
+@keyframes zseg{0.000%{opacity:0;transform:scaleX(.2)}57.105%{opacity:0;transform:scaleX(.2)}58.421%{opacity:1;transform:scaleX(1)}100.000%{opacity:1;transform:scaleX(1)}}
+#zseg{animation:zseg 19.0s infinite both;animation-timing-function:cubic-bezier(.2,1.3,.4,1)}
+@keyframes zctl{0.000%{opacity:0}57.105%{opacity:0}57.737%{opacity:1}59.895%{opacity:1}60.526%{opacity:0}100.000%{opacity:0}}
+#zctl{animation:zctl 19.0s infinite both}
+@keyframes zarea{0.000%{opacity:1}59.205%{opacity:1}59.211%{opacity:0}100.000%{opacity:0}}
+#zarea{animation:zarea 19.0s infinite both}
+@keyframes zfollow{0.000%{opacity:0}59.205%{opacity:0}59.211%{opacity:1}100.000%{opacity:1}}
+#zfollow{animation:zfollow 19.0s infinite both}
+@keyframes zl0{0.000%{opacity:1}59.205%{opacity:1}59.211%{opacity:0}100.000%{opacity:0}}
+#zl0{animation:zl0 19.0s infinite both}
+@keyframes zl1{0.000%{opacity:0}59.205%{opacity:0}59.211%{opacity:1}100.000%{opacity:1}}
+#zl1{animation:zl1 19.0s infinite both}
+@keyframes cl0{0.000%{opacity:1}53.416%{opacity:1}53.421%{opacity:0}100.000%{opacity:0}}
+#cl0{animation:cl0 19.0s infinite both}
+@keyframes cl1{0.000%{opacity:0}53.416%{opacity:0}53.421%{opacity:1}100.000%{opacity:1}}
+#cl1{animation:cl1 19.0s infinite both}
+@keyframes vt0{0.000%{opacity:1}63.942%{opacity:1}63.947%{opacity:0}100.000%{opacity:0}}
+#vt0{animation:vt0 19.0s infinite both}
+@keyframes vt1{0.000%{opacity:0}63.942%{opacity:0}63.947%{opacity:1}67.100%{opacity:1}67.105%{opacity:0}100.000%{opacity:0}}
+#vt1{animation:vt1 19.0s infinite both}
+@keyframes vt2{0.000%{opacity:0}67.100%{opacity:0}67.105%{opacity:1}70.258%{opacity:1}70.263%{opacity:0}100.000%{opacity:0}}
+#vt2{animation:vt2 19.0s infinite both}
+@keyframes vt3{0.000%{opacity:0}70.258%{opacity:0}70.263%{opacity:1}73.416%{opacity:1}73.421%{opacity:0}100.000%{opacity:0}}
+#vt3{animation:vt3 19.0s infinite both}
+@keyframes vt4{0.000%{opacity:0}73.416%{opacity:0}73.421%{opacity:1}77.626%{opacity:1}77.632%{opacity:0}100.000%{opacity:0}}
+#vt4{animation:vt4 19.0s infinite both}
+@keyframes vt5{0.000%{opacity:0}77.626%{opacity:0}77.632%{opacity:1}100.000%{opacity:1}}
+#vt5{animation:vt5 19.0s infinite both}
+@keyframes playico{0.000%{opacity:1}61.837%{opacity:1}61.842%{opacity:0}77.626%{opacity:0}77.632%{opacity:1}100.000%{opacity:1}}
+#playico{animation:playico 19.0s infinite both}
+@keyframes pauseico{0.000%{opacity:0}61.837%{opacity:0}61.842%{opacity:1}77.626%{opacity:1}77.632%{opacity:0}100.000%{opacity:0}}
+#pauseico{animation:pauseico 19.0s infinite both}
+@keyframes vzoom{0.000%{transform:scale(1);transform-origin:331.1px 220.4px}66.040%{transform:scale(1);transform-origin:331.1px 220.4px}67.619%{transform:scale(2)}71.353%{transform:scale(2)}72.932%{transform:scale(1)}100.000%{transform:scale(1)}}
+#vzoom{animation:vzoom 19.0s infinite both;animation-timing-function:ease-in-out}
+@keyframes vzoomo{0.000%{transform-origin:331.1px 220.4px}61.842%{transform-origin:331.1px 220.4px}66.830%{transform-origin:371.7px 192.7px}68.935%{transform-origin:371.7px 192.7px}71.353%{transform-origin:440.6px 239.3px}77.632%{transform-origin:440.6px 239.3px}100.000%{transform-origin:440.6px 239.3px}}
+#vzoom{animation:vzoom 19.0s infinite both ease-in-out,vzoomo 19.0s infinite both cubic-bezier(.45,0,.3,1)}
+@keyframes vcur{0.000%{transform:translate(430.0px,300.0px)}61.842%{transform:translate(430.0px,300.0px)}66.830%{transform:translate(503.0px,250.0px)}68.935%{transform:translate(503.0px,250.0px)}71.353%{transform:translate(627.0px,334.0px)}77.632%{transform:translate(627.0px,334.0px)}100.000%{transform:translate(627.0px,334.0px)}}
+#vcur{animation:vcur 19.0s infinite both;animation-timing-function:cubic-bezier(.45,0,.3,1)}
+#vr0{transform-origin:503px 250px}
+@keyframes vr0{0.000%{opacity:0;transform:scale(.4)}68.040%{opacity:0;transform:scale(.4)}68.356%{opacity:1;transform:scale(.5)}71.040%{opacity:0;transform:scale(1.6)}100.000%{opacity:0;transform:scale(1.6)}}
+#vr0{animation:vr0 19.0s infinite both}
+#vr1{transform-origin:627px 334px}
+@keyframes vr1{0.000%{opacity:0;transform:scale(.4)}71.774%{opacity:0;transform:scale(.4)}72.090%{opacity:1;transform:scale(.5)}74.774%{opacity:0;transform:scale(1.6)}100.000%{opacity:0;transform:scale(1.6)}}
+#vr1{animation:vr1 19.0s infinite both}
+@keyframes vkeys{0.000%{opacity:0}69.248%{opacity:0}69.774%{opacity:1}71.880%{opacity:1}72.406%{opacity:0}100.000%{opacity:0}}
+#vkeys{animation:vkeys 19.0s infinite both}
+#rp4{transform-origin:106.0px 40.0px}
+@keyframes rp4{0.000%{opacity:0;transform:scale(.3)}56.737%{opacity:0;transform:scale(.3)}57.053%{opacity:.95;transform:scale(.4)}60.000%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp4{animation:rp4 19.0s infinite both}
+#rp5{transform-origin:300.0px 40.0px}
+@keyframes rp5{0.000%{opacity:0;transform:scale(.3)}58.842%{opacity:0;transform:scale(.3)}59.158%{opacity:.95;transform:scale(.4)}62.105%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp5{animation:rp5 19.0s infinite both}
+#rp6{transform-origin:196.0px 362.0px}
+@keyframes rp6{0.000%{opacity:0;transform:scale(.3)}60.158%{opacity:0;transform:scale(.3)}60.474%{opacity:.95;transform:scale(.4)}63.421%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp6{animation:rp6 19.0s infinite both}
+#rp7{transform-origin:24.0px 362.0px}
+@keyframes rp7{0.000%{opacity:0;transform:scale(.3)}61.474%{opacity:0;transform:scale(.3)}61.789%{opacity:.95;transform:scale(.4)}64.737%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp7{animation:rp7 19.0s infinite both}
+#rp8{transform-origin:680.0px 40.0px}
+@keyframes rp8{0.000%{opacity:0;transform:scale(.3)}79.368%{opacity:0;transform:scale(.3)}79.684%{opacity:.95;transform:scale(.4)}82.632%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp8{animation:rp8 19.0s infinite both}
+#exprog{transform-origin:150px 0}
+@keyframes exprog{0.000%{opacity:1;transform:scaleX(0)}79.737%{opacity:1;transform:scaleX(0)}82.895%{opacity:1;transform:scaleX(1)}83.421%{opacity:0;transform:scaleX(1)}100.000%{opacity:0;transform:scaleX(1)}}
+#exprog{animation:exprog 19.0s infinite both;animation-timing-function:ease-in-out}
+@keyframes es0{0.000%{opacity:1}79.732%{opacity:1}79.737%{opacity:0}100.000%{opacity:0}}
+#es0{animation:es0 19.0s infinite both}
+@keyframes es1{0.000%{opacity:0}79.732%{opacity:0}79.737%{opacity:1}82.889%{opacity:1}82.895%{opacity:0}100.000%{opacity:0}}
+#es1{animation:es1 19.0s infinite both}
+@keyframes es2{0.000%{opacity:0}82.889%{opacity:0}82.895%{opacity:1}100.000%{opacity:1}}
+#es2{animation:es2 19.0s infinite both}
+@keyframes cur{0.000%{opacity:0;transform:translate(520.0px,300.0px)}8.421%{opacity:0;transform:translate(520.0px,300.0px)}8.684%{opacity:1;transform:translate(520.0px,300.0px)}9.737%{opacity:1;transform:translate(138.0px,62.0px)}10.526%{opacity:1;transform:translate(138.0px,62.0px)}12.895%{opacity:1;transform:translate(330.0px,240.0px)}13.684%{opacity:1;transform:translate(330.0px,240.0px)}15.526%{opacity:1;transform:translate(625.0px,62.0px)}16.579%{opacity:1;transform:translate(625.0px,62.0px)}17.368%{opacity:1;transform:translate(330.0px,260.0px)}26.842%{opacity:1;transform:translate(330.0px,260.0px)}29.211%{opacity:1;transform:translate(379.5px,212.6px)}33.684%{opacity:1;transform:translate(379.5px,212.6px)}36.579%{opacity:1;transform:translate(493.5px,289.9px)}37.632%{opacity:1;transform:translate(493.5px,289.9px)}40.263%{opacity:1;transform:translate(447.0px,431.0px)}43.684%{opacity:1;transform:translate(447.0px,431.0px)}46.579%{opacity:1;transform:translate(54.0px,392.0px)}48.421%{opacity:1;transform:translate(54.0px,392.0px)}50.526%{opacity:1;transform:translate(154.0px,362.0px)}51.316%{opacity:1;transform:translate(154.0px,362.0px)}53.421%{opacity:1;transform:translate(196.0px,362.0px)}55.000%{opacity:1;transform:translate(330.0px,362.0px)}55.526%{opacity:1;transform:translate(330.0px,362.0px)}56.579%{opacity:1;transform:translate(106.0px,40.0px)}57.368%{opacity:1;transform:translate(106.0px,40.0px)}58.684%{opacity:1;transform:translate(300.0px,40.0px)}59.474%{opacity:1;transform:translate(300.0px,40.0px)}60.105%{opacity:1;transform:translate(196.0px,362.0px)}60.526%{opacity:1;transform:translate(196.0px,362.0px)}61.316%{opacity:1;transform:translate(24.0px,362.0px)}62.895%{opacity:1;transform:translate(24.0px,362.0px)}64.737%{opacity:1;transform:translate(60.0px,400.0px)}77.368%{opacity:1;transform:translate(60.0px,400.0px)}79.211%{opacity:1;transform:translate(680.0px,40.0px)}95.789%{opacity:1;transform:translate(680.0px,40.0px)}100.000%{opacity:1;transform:translate(680.0px,40.0px)}}
+#cur{animation:cur 19.0s infinite both;animation-timing-function:cubic-bezier(.45,0,.3,1)}
+#rp9{transform-origin:138.0px 62.0px}
+@keyframes rp9{0.000%{opacity:0;transform:scale(.3)}9.895%{opacity:0;transform:scale(.3)}10.211%{opacity:.95;transform:scale(.4)}13.158%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp9{animation:rp9 19.0s infinite both}
+#rp10{transform-origin:330.0px 240.0px}
+@keyframes rp10{0.000%{opacity:0;transform:scale(.3)}13.316%{opacity:0;transform:scale(.3)}13.632%{opacity:.95;transform:scale(.4)}16.579%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp10{animation:rp10 19.0s infinite both}
+#rp11{transform-origin:625.0px 62.0px}
+@keyframes rp11{0.000%{opacity:0;transform:scale(.3)}16.211%{opacity:0;transform:scale(.3)}16.526%{opacity:.95;transform:scale(.4)}19.474%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
+#rp11{animation:rp11 19.0s infinite both}
+@keyframes reset{0.000%{opacity:1}1.579%{opacity:0}96.842%{opacity:0}100.000%{opacity:1}}
+#reset{animation:reset 19.0s infinite both}</style>
+<defs>
+  <linearGradient id="wall" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2b3a67"/><stop offset="1" stop-color="#7a4b94"/></linearGradient>
+  <linearGradient id="bd" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4c8dff"/><stop offset=".55" stop-color="#7b5cff"/><stop offset="1" stop-color="#ff6ac1"/></linearGradient>
+  <linearGradient id="bd2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3ddc97"/><stop offset=".5" stop-color="#4c8dff"/><stop offset="1" stop-color="#7b5cff"/></linearGradient>
+  <linearGradient id="bd3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff9a5a"/><stop offset="1" stop-color="#ff5e7e"/></linearGradient>
+  <linearGradient id="bd4" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#0f766e"/><stop offset="1" stop-color="#5eead4"/></linearGradient>
+  <linearGradient id="bd5" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1e293b"/><stop offset="1" stop-color="#475569"/></linearGradient>
+  <linearGradient id="scangrad" x1="0" x2="1"><stop offset="0" stop-color="#4c8dff" stop-opacity="0"/><stop offset=".85" stop-color="#4c8dff" stop-opacity=".45"/><stop offset="1" stop-color="#9cc0ff" stop-opacity=".95"/></linearGradient>
+  <radialGradient id="face" cx=".5" cy=".38" r=".7"><stop offset="0" stop-color="#f3c7a4"/><stop offset="1" stop-color="#c98d6b"/></radialGradient>
+  <pattern id="dots" width="16" height="16" patternUnits="userSpaceOnUse"><circle cx="8" cy="8" r="1" fill="#2a2e37"/></pattern>
+  <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="36"/></filter>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="12"/></filter><clipPath id="vclip"><rect x="170" y="86" width="380" height="224.4" rx="8"/></clipPath><clipPath id="qaclip"><rect x="28" y="312" width="96" height="57" rx="5"/></clipPath>
+<g id="dash">
+  <rect x="140" y="58" width="684" height="404" rx="12" fill="#ffffff"/>
+  <path d="M152 58h660a12 12 0 0 1 12 12v22H140V70a12 12 0 0 1 12-12z" fill="#eef0f5"/>
+  <circle cx="160" cy="75" r="5.5" fill="#ff5f57"/><circle cx="178" cy="75" r="5.5" fill="#febc2e"/><circle cx="196" cy="75" r="5.5" fill="#28c840"/>
+  <text x="482" y="80" class="t" font-size="12" fill="#6b7280" text-anchor="middle">Launch HQ</text>
+  <rect x="140" y="92" width="100" height="370" fill="#f6f7fb"/>
+  <rect x="156" y="112" width="56" height="8" rx="4" fill="#4c8dff"/>
+  <rect x="156" y="136" width="66" height="8" rx="4" fill="#d6dae3"/>
+  <rect x="156" y="160" width="48" height="8" rx="4" fill="#d6dae3"/>
+  <rect x="156" y="184" width="60" height="8" rx="4" fill="#d6dae3"/>
+  <text x="262" y="124" class="t b" font-size="17" fill="#1f2328">Launch dashboard</text>
+  <rect x="262" y="150" width="280" height="230" rx="10" fill="#fff" stroke="#e4e7ee"/>
+  <text x="280" y="178" class="t" font-size="12" fill="#6b7280">Weekly signups</text>
+  <text x="280" y="218" class="t b" font-size="30" fill="#1f2328">12,480</text>
+  <rect x="392" y="198" width="48" height="22" rx="11" fill="#dcfce7"/>
+  <text x="416" y="213" class="t b" font-size="11.5" fill="#15803d" text-anchor="middle">+38%</text>
+  <rect x="286" y="314" width="22" height="52" rx="4" fill="#c9d6f2"/><rect x="320" y="296" width="22" height="70" rx="4" fill="#c9d6f2"/><rect x="354" y="305" width="22" height="61" rx="4" fill="#c9d6f2"/><rect x="388" y="278" width="22" height="88" rx="4" fill="#c9d6f2"/><rect x="422" y="287" width="22" height="79" rx="4" fill="#c9d6f2"/><rect x="456" y="254" width="22" height="112" rx="4" fill="#c9d6f2"/><rect x="490" y="216" width="22" height="150" rx="4" fill="#4c8dff"/>
+  <rect x="556" y="150" width="244" height="230" rx="10" fill="#fff" stroke="#e4e7ee"/>
+  <text x="574" y="178" class="t b" font-size="14" fill="#1f2328">Release v2.0</text>
+  <text x="574" y="206" class="t" font-size="11" fill="#6b7280">Notify</text>
+  <rect x="574" y="214" width="208" height="28" rx="6" fill="#f9fafb" stroke="#d6dae3"/>
+  <text x="584" y="233" class="t" font-size="12.5" fill="#1f2328">sam.rivera@acme.co</text>
+  <rect x="574" y="256" width="150" height="7" rx="3.5" fill="#e4e7ee"/>
+  <rect x="574" y="272" width="120" height="7" rx="3.5" fill="#e4e7ee"/>
+  <rect x="574" y="318" width="106" height="32" rx="8" fill="#1f2328"/>
+  <text x="627" y="339" class="t b" font-size="13" fill="#fff" text-anchor="middle">Ship it</text>
+  <rect x="140" y="400" width="684" height="1" fill="#eef0f5"/>
+  <text x="262" y="432" class="t" font-size="11.5" fill="#9aa3b2">Last deploy 12 minutes ago · all checks passed</text>
+</g></defs>
+<rect width="720" height="450" fill="#0d1016"/>
+
+<g id="desk">
+  <rect width="720" height="450" fill="url(#wall)"/>
+  <circle cx="90" cy="400" r="150" fill="#ff6ac1" opacity=".18" filter="url(#soft)"/>
+  <circle cx="650" cy="60" r="170" fill="#3ddc97" opacity=".14" filter="url(#soft)"/>
+  <rect x="45.5" y="41.0" width="629.28" height="371.68" rx="11" fill="#000" opacity=".35" filter="url(#shadow)"/>
+  <g transform="translate(45.5 36) scale(0.92) translate(-140 -58)"><use href="#dash"/></g>
+  
+  <rect y="424" width="720" height="26" fill="#0b0d12" opacity=".72"/>
+  <text x="702" y="441" class="t" font-size="11" fill="#e6e8ee" text-anchor="end">9:41</text>
+  <circle cx="632" cy="437" r="3.5" fill="#9aa3b2"/><circle cx="648" cy="437" r="3.5" fill="#9aa3b2"/>
+  <g transform="translate(612 437) scale(0.62)" fill="none" stroke="#e6e8ee" stroke-width="2.4" stroke-linecap="round">
+<path d="M-8 -3v-5h5M3 -8h5v5M8 3v5h-5M-3 8h-5v-5"/><circle r="2.6" fill="#e6e8ee" stroke="none"/></g>
+</g><g id="keys"><g transform="translate(360 210)">
+  <rect x="-134" y="-44" width="268" height="108" rx="18" fill="#0b0d12" opacity=".6"/>
+  <g class="cap"><rect x="-130.0" y="-27" width="66" height="52" rx="11" fill="#f4f5f8"/><rect x="-130.0" y="-27" width="66" height="47" rx="11" fill="#fff"/><text x="-97.0" y="2" class="t b" font-size="17" fill="#1f2328" text-anchor="middle">Ctrl</text></g><text x="-51.0" y="2" class="t b" font-size="18" fill="#fff" text-anchor="middle">+</text><g class="cap"><rect x="-38.0" y="-27" width="56" height="52" rx="11" fill="#f4f5f8"/><rect x="-38.0" y="-27" width="56" height="47" rx="11" fill="#fff"/><text x="-10.0" y="2" class="t b" font-size="17" fill="#1f2328" text-anchor="middle">Alt</text></g><text x="31.0" y="2" class="t b" font-size="18" fill="#fff" text-anchor="middle">+</text><g class="cap"><rect x="44.0" y="-27" width="86" height="52" rx="11" fill="#f4f5f8"/><rect x="44.0" y="-27" width="86" height="47" rx="11" fill="#fff"/><text x="87.0" y="2" class="t b" font-size="17" fill="#1f2328" text-anchor="middle">PrtSc</text></g>
+  <text y="47" class="t" font-size="11" fill="#c9ceda" text-anchor="middle">All-in-one  ·  ⌘ ⇧ A on a Mac</text></g></g><rect id="dim" width="720" height="450" fill="#05070c"/><rect id="winhl" x="45.5" y="36.0" width="629.28" height="371.68" rx="11" fill="#4c8dff" fill-opacity=".14" stroke="#4c8dff" stroke-width="2.5"/><g id="setup"><rect x="30.0" y="46" width="660" height="32" rx="16" fill="#16181d" stroke="#2c313b"/><rect id="segsel0" x="35.0" y="50" width="66" height="24" rx="12" fill="#4c8dff"/><rect id="segsel1" x="103.0" y="50" width="70" height="24" rx="12" fill="#4c8dff"/><text x="68.0" y="66" class="t" font-size="11" fill="#e6e8ee" text-anchor="middle">Region</text><text x="138.0" y="66" class="t" font-size="11" fill="#e6e8ee" text-anchor="middle">Window</text><text x="208.0" y="66" class="t" font-size="11" fill="#e6e8ee" text-anchor="middle">Screen</text><text x="299.0" y="66" class="t" font-size="11" fill="#e6e8ee" text-anchor="middle">MP4 · 30 fps ▾</text><text x="395.0" y="66" class="t" font-size="11" fill="#e6e8ee" text-anchor="middle">Default mic ▾</text><path fill="none" stroke="#e6e8ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M458.0 59h3l4-3v12l-4-3h-3zM468.0 59a4 4 0 0 1 0 6"/><rect x="477.0" y="50" width="24" height="24" rx="7" fill="#4c8dff" fill-opacity=".28"/><rect fill="none" stroke="#e6e8ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" x="482.0" y="57" width="10" height="10" rx="2"/><path fill="none" stroke="#e6e8ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M492.0 60l4-2v8l-4-2"/><rect x="503.0" y="50" width="24" height="24" rx="7" fill="#4c8dff" fill-opacity=".28"/><path fill="none" stroke="#e6e8ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M509.0 56l8 4-3 1-1 3zM517.0 66l3 3"/><rect x="529.0" y="50" width="24" height="24" rx="7" fill="#4c8dff" fill-opacity=".28"/><rect fill="none" stroke="#e6e8ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" x="533.0" y="57" width="14" height="10" rx="2"/><path fill="none" stroke="#e6e8ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M536.0 60h1M540.0 60h1M544.0 60h1M537.0 64h6"/><circle fill="none" stroke="#e6e8ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" cx="564.0" cy="62" r="5"/><path fill="none" stroke="#e6e8ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M564.0 59v3h2"/><text x="573.0" y="66" class="t" font-size="10.5" fill="#e6e8ee">3 s</text><rect x="589.0" y="50" width="72" height="24" rx="12" fill="#ff4b4b"/><circle cx="602.0" cy="62" r="4" fill="#fff"/><text x="611.0" y="66" class="t b" font-size="11" fill="#fff">Record</text><path d="M672.0 58l8 8M680.0 58l-8 8" stroke="#9aa3b2" stroke-width="1.5" stroke-linecap="round"/><rect x="242.4615" y="84" width="235.077" height="22" rx="7" fill="#16181d" opacity=".94"/><text x="360.0" y="99" class="t" font-size="11" fill="#e6e8ee" text-anchor="middle">Click a window to record it. Enter records.</text></g><g id="aio"><rect x="38.5" y="8" width="643" height="32" rx="10" fill="#16181d" stroke="#2c313b"/><rect id="hlRecord" x="487.5" y="12" width="89" height="24" rx="7" fill="#0090ff"/><g transform="translate(56.5 24) scale(.85) translate(-56.5 -24)"><path fill="none" stroke="#e6e8ee" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M50.5 22v-4h4M58.5 18h4v4M62.5 26v4h-4M54.5 30h-4v-4"/></g><text x="67.5" y="28" class="t" font-size="11.5" fill="#f3f4f7">Region</text><rect x="111.5" y="17" width="14" height="14" rx="3.5" fill="#fff" opacity=".14"/><text x="118.5" y="27.5" class="t" font-size="9.5" fill="#c9ceda" text-anchor="middle">1</text><g transform="translate(147.5 24) scale(.85) translate(-147.5 -24)"><rect fill="none" stroke="#e6e8ee" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" x="140.5" y="18.5" width="14" height="11" rx="2"/><path fill="none" stroke="#e6e8ee" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M140.5 22h14"/></g><text x="158.5" y="28" class="t" font-size="11.5" fill="#f3f4f7">Window</text><rect x="207.5" y="17" width="14" height="14" rx="3.5" fill="#fff" opacity=".14"/><text x="214.5" y="27.5" class="t" font-size="9.5" fill="#c9ceda" text-anchor="middle">2</text><g transform="translate(243.5 24) scale(.85) translate(-243.5 -24)"><rect fill="none" stroke="#e6e8ee" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" x="236.5" y="18" width="14" height="9.5" rx="1.5"/><path fill="none" stroke="#e6e8ee" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M240.5 30.5h6M243.5 27.5v3"/></g><text x="254.5" y="28" class="t" font-size="11.5" fill="#f3f4f7">Screen</text><rect x="298.5" y="17" width="14" height="14" rx="3.5" fill="#fff" opacity=".14"/><text x="305.5" y="27.5" class="t" font-size="9.5" fill="#c9ceda" text-anchor="middle">3</text><g transform="translate(334.5 24) scale(.85) translate(-334.5 -24)"><path fill="none" stroke="#e6e8ee" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M328.5 19h12M334.5 19v11"/></g><text x="345.5" y="28" class="t" font-size="11.5" fill="#f3f4f7">Text</text><rect x="375.5" y="17" width="14" height="14" rx="3.5" fill="#fff" opacity=".14"/><text x="382.5" y="27.5" class="t" font-size="9.5" fill="#c9ceda" text-anchor="middle">4</text><g transform="translate(411.5 24) scale(.85) translate(-411.5 -24)"><path fill="none" stroke="#e6e8ee" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M406.5 30l1-4 7-7 3 3-7 7z"/></g><text x="422.5" y="28" class="t" font-size="11.5" fill="#f3f4f7">Colour</text><rect x="464.5" y="17" width="14" height="14" rx="3.5" fill="#fff" opacity=".14"/><text x="471.5" y="27.5" class="t" font-size="9.5" fill="#c9ceda" text-anchor="middle">5</text><g transform="translate(500.5 24) scale(.85) translate(-500.5 -24)"><circle fill="none" stroke="#e6e8ee" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" cx="500.5" cy="24" r="6"/></g><text x="511.5" y="28" class="t" font-size="11.5" fill="#f3f4f7">Record</text><rect x="556.5" y="17" width="14" height="14" rx="3.5" fill="#fff" opacity=".14"/><text x="563.5" y="27.5" class="t" font-size="9.5" fill="#c9ceda" text-anchor="middle">6</text><g transform="translate(592.5 24) scale(.85) translate(-592.5 -24)"><circle fill="none" stroke="#e6e8ee" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" cx="592.5" cy="25" r="6"/><path fill="none" stroke="#e6e8ee" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M592.5 22v3M590.5 17h4"/></g><text x="603.5" y="28" class="t" font-size="11.5" fill="#f3f4f7">Timer off</text><rect x="656.5" y="17" width="14" height="14" rx="3.5" fill="#fff" opacity=".14"/><text x="663.5" y="27.5" class="t" font-size="9.5" fill="#c9ceda" text-anchor="middle">7</text></g><g id="k6"><rect x="517.0" y="86" width="30" height="36" rx="8" fill="#f4f5f8"/><rect x="517.0" y="86" width="30" height="32" rx="8" fill="#fff"/><text x="532.0" y="107" class="t b" font-size="14" fill="#1f2328" text-anchor="middle">6</text></g><g id="cd0"><circle cx="360.14" cy="221.84" r="46" fill="#0b0d12" opacity=".7"/><text x="360.14" y="238.84" class="t b" font-size="48" fill="#fff" text-anchor="middle">3</text></g><g id="cd1"><circle cx="360.14" cy="221.84" r="46" fill="#0b0d12" opacity=".7"/><text x="360.14" y="238.84" class="t b" font-size="48" fill="#fff" text-anchor="middle">2</text></g><g id="cd2"><circle cx="360.14" cy="221.84" r="46" fill="#0b0d12" opacity=".7"/><text x="360.14" y="238.84" class="t b" font-size="48" fill="#fff" text-anchor="middle">1</text></g><g id="recframe" fill="none" stroke="#e5484d">
+  <rect x="40.5" y="31.0" width="639.28" height="381.68" rx="14" stroke-width="1.5" stroke-dasharray="6 4"/></g><g id="cam"><g transform="translate(45.5 36) scale(0.92) translate(-140 -58)"><circle cx="760" cy="400" r="40" fill="#3a4152" stroke="#fff" stroke-width="4"/><clipPath id="camclip"><circle cx="760" cy="400" r="38"/></clipPath><g clip-path="url(#camclip)"><rect x="720" y="360" width="80" height="80" fill="#5b6b8c"/><ellipse cx="760" cy="440" rx="30" ry="22" fill="#2f3a52"/><circle cx="760" cy="396" r="15" fill="url(#face)"/><path d="M744 392q2-16 16-16t16 14q-6-6-16-6t-16 8z" fill="#3b2a20"/></g></g></g><g id="keys2"><rect x="330.14" y="297.84000000000003" width="60" height="28" rx="8" fill="#0b0d12" opacity=".78"/><text x="360.14" y="316.84000000000003" class="t b" font-size="14" fill="#fff" text-anchor="middle">⌘ S</text></g><g id="recbar">
+  <rect x="235.0" y="416" width="250" height="30" rx="15" fill="#111317" stroke="#2c313b"/>
+  <circle id="recdot" cx="263.0" cy="431" r="5.5" fill="#ff4b4b"/>
+  <g fill="#5c6370"><circle cx="247.0" cy="427" r="1.2"/><circle cx="247.0" cy="431" r="1.2"/><circle cx="247.0" cy="435" r="1.2"/>
+  <circle cx="251.0" cy="427" r="1.2"/><circle cx="251.0" cy="431" r="1.2"/><circle cx="251.0" cy="435" r="1.2"/></g>
+  <text id="rt0" x="279.0" y="436" font-family="JetBrains Mono,SF Mono,Menlo,Consolas,monospace" font-size="13" font-weight="700" fill="#f3f4f7">0:00</text><text id="rt1" x="279.0" y="436" font-family="JetBrains Mono,SF Mono,Menlo,Consolas,monospace" font-size="13" font-weight="700" fill="#f3f4f7">0:01</text><text id="rt2" x="279.0" y="436" font-family="JetBrains Mono,SF Mono,Menlo,Consolas,monospace" font-size="13" font-weight="700" fill="#f3f4f7">0:02</text><text id="rt3" x="279.0" y="436" font-family="JetBrains Mono,SF Mono,Menlo,Consolas,monospace" font-size="13" font-weight="700" fill="#f3f4f7">0:03</text>
+  <rect x="319.0" y="424" width="1" height="14" fill="#3a404c"/>
+  <g fill="#e6e8ee"><rect x="331.0" y="426" width="3" height="10" rx="1"/><rect x="336.0" y="426" width="3" height="10" rx="1"/></g>
+  <text x="345.0" y="435.5" class="t" font-size="11.5" fill="#e6e8ee">Pause</text>
+  <text x="391.0" y="435.5" class="t b" font-size="12" fill="#9aa3b2">···</text>
+  <rect x="415.0" y="419" width="64" height="24" rx="12" fill="#ff4b4b"/>
+  <rect x="425.0" y="427" width="8" height="8" rx="1.5" fill="#fff"/>
+  <text x="438.0" y="435.5" class="t b" font-size="11.5" fill="#fff">Stop</text>
+</g><g id="qa"><rect x="16" y="304" width="230" height="114" rx="13" fill="#000" opacity=".35" filter="url(#shadow)"/><rect x="16" y="300" width="230" height="114" rx="13" fill="#1b1e25" stroke="#2c313b"/>
+  <g clip-path="url(#qaclip)"><g transform="translate(28 312) scale(0.2573) translate(-140 -58)"><use href="#dash"/><circle cx="760" cy="400" r="40" fill="#3a4152" stroke="#fff" stroke-width="4"/><clipPath id="camclip"><circle cx="760" cy="400" r="38"/></clipPath><g clip-path="url(#camclip)"><rect x="720" y="360" width="80" height="80" fill="#5b6b8c"/><ellipse cx="760" cy="440" rx="30" ry="22" fill="#2f3a52"/><circle cx="760" cy="396" r="15" fill="url(#face)"/><path d="M744 392q2-16 16-16t16 14q-6-6-16-6t-16 8z" fill="#3b2a20"/></g></g>
+  <rect x="28" y="312" width="96" height="57" fill="#000" opacity=".3"/></g>
+  <circle cx="76" cy="340" r="13" fill="#fff" opacity=".92"/><path d="M72 334v12l10-6z" fill="#1f2328"/>
+  <text x="134" y="328" class="t b" font-size="11.5" fill="#f3f4f7">Recording</text>
+  <text x="134" y="344" class="t" font-size="10" fill="#8b93a1">0:04 · 3.1 MB · MP4</text>
+  <g class="t b" font-size="10.5" text-anchor="middle">
+    <rect x="28" y="380" width="52" height="24" rx="6" fill="#0090ff"/><text x="54" y="396" fill="#fff">Edit</text>
+    <rect x="86" y="380" width="98" height="24" rx="6" fill="#2a2f39"/><text x="135" y="396" fill="#e6e8ee">Show in folder</text>
+  </g></g>
+<g id="ve">
+  <rect width="720" height="450" fill="#0f1115"/>
+  <rect width="720" height="24" fill="#1b1e25"/>
+  <circle cx="14" cy="12" r="4.5" fill="#ff5f57"/><circle cx="28" cy="12" r="4.5" fill="#febc2e"/><circle cx="42" cy="12" r="4.5" fill="#28c840"/>
+  <text x="360.0" y="16" class="t b" font-size="10.5" fill="#9aa3b2" text-anchor="middle">Grab-it 2026-11-15 09-41-12.mp4 – Grab-it Recording Editor</text>
+  <rect y="24" width="720" height="32" fill="#16181d"/><rect y="55" width="720" height="1" fill="#2c313b"/>
+  <rect fill="none" stroke="#e6e8ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" x="14" y="34" width="12" height="11" rx="2.5"/><rect fill="none" stroke="#e6e8ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" x="17" y="37" width="6" height="5" rx="1"/>
+  <text x="32" y="44" class="t" font-size="11.5" fill="#e6e8ee">Backdrop</text><circle cx="86" cy="40" r="2.5" fill="#4c8dff"/>
+  <rect x="94" y="30" width="1" height="20" fill="#2c313b"/>
+  <g fill="none" stroke="#e6e8ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="110" cy="39" r="4.5"/><path d="M113.5 42.5l3.5 3.5M108 39h4M110 37v4"/></g>
+  <text x="122" y="44" class="t" font-size="11.5" fill="#e6e8ee">Zoom</text>
+  <g id="zctl">
+    <rect x="160" y="30" width="1" height="20" fill="#2c313b"/>
+    <rect x="172" y="30" width="186" height="20" rx="6" fill="#23262d"/>
+    <rect id="zarea" x="174" y="32" width="50" height="16" rx="5" fill="#6e56cf"/>
+    <rect id="zfollow" x="226" y="32" width="130" height="16" rx="5" fill="#6e56cf"/>
+    <text x="199" y="44" class="t" font-size="10.5" fill="#e6e8ee" text-anchor="middle">Area</text>
+    <text x="291" y="44" class="t" font-size="10.5" fill="#e6e8ee" text-anchor="middle">Follow cursor</text>
+    <text x="370" y="44" class="t" font-size="10.5" fill="#9aa3b2">Scale</text>
+    <rect x="404" y="38" width="70" height="4" rx="2" fill="#2f3440"/><rect x="404" y="38" width="24" height="4" rx="2" fill="#6e56cf"/>
+    <circle cx="428" cy="40" r="5.5" fill="#fff"/><text x="482" y="44" class="t b" font-size="10.5" fill="#e6e8ee">2×</text>
+  </g>
+  <rect x="648" y="29" width="62" height="22" rx="6" fill="#4c8dff"/>
+  <text x="679" y="44" class="t b" font-size="11.5" fill="#fff" text-anchor="middle">Export</text>
+  <rect x="146" y="62" width="428" height="272.4" rx="3" fill="url(#bd2)"/>
+  <rect x="170" y="92" width="380" height="224.4" rx="8" fill="#000" opacity=".45" filter="url(#shadow)"/>
+  <g clip-path="url(#vclip)"><g id="vzoom"><g transform="translate(170 86) scale(0.5556) translate(-140 -58)">
+    <use href="#dash"/><circle cx="760" cy="400" r="40" fill="#3a4152" stroke="#fff" stroke-width="4"/><clipPath id="camclip"><circle cx="760" cy="400" r="38"/></clipPath><g clip-path="url(#camclip)"><rect x="720" y="360" width="80" height="80" fill="#5b6b8c"/><ellipse cx="760" cy="440" rx="30" ry="22" fill="#2f3a52"/><circle cx="760" cy="396" r="15" fill="url(#face)"/><path d="M744 392q2-16 16-16t16 14q-6-6-16-6t-16 8z" fill="#3b2a20"/></g>
+    <g id="vkeys"><rect x="452" y="344" width="60" height="28" rx="8" fill="#0b0d12" opacity=".78"/><text x="482" y="363" class="t b" font-size="14" fill="#fff" text-anchor="middle">⌘ S</text></g>
+    <circle id="vr0" cx="503" cy="250" r="22" fill="none" stroke="#f5a524" stroke-width="4"/>
+    <circle id="vr1" cx="627" cy="334" r="22" fill="none" stroke="#f5a524" stroke-width="4"/>
+    <g id="vcur"><path d="M0 0v21l5.2-5 3.6 8.4 3.8-1.6-3.6-8.2H16z" fill="#fff" stroke="#111" stroke-width="1.4" stroke-linejoin="round"/></g>
+  </g></g></g>
+  <rect y="340" width="720" height="86" fill="#14161b"/><rect y="340" width="720" height="1" fill="#2c313b"/>
+  <circle cx="24" cy="362" r="11" fill="#23262d"/>
+  <path id="playico" d="M20.5 357v10l8.5-5z" fill="#e6e8ee"/>
+  <g id="pauseico" fill="#e6e8ee"><rect x="19.5" y="357" width="3" height="10" rx="1"/><rect x="25.5" y="357" width="3" height="10" rx="1"/></g>
+  <text id="vt0" x="42" y="366" font-family="JetBrains Mono,SF Mono,Menlo,Consolas,monospace" font-size="10.5" fill="#c9ceda">0:00.3<tspan fill="#6b7280"> / 0:04.0</tspan></text><text id="vt1" x="42" y="366" font-family="JetBrains Mono,SF Mono,Menlo,Consolas,monospace" font-size="10.5" fill="#c9ceda">0:00.9<tspan fill="#6b7280"> / 0:04.0</tspan></text><text id="vt2" x="42" y="366" font-family="JetBrains Mono,SF Mono,Menlo,Consolas,monospace" font-size="10.5" fill="#c9ceda">0:01.7<tspan fill="#6b7280"> / 0:04.0</tspan></text><text id="vt3" x="42" y="366" font-family="JetBrains Mono,SF Mono,Menlo,Consolas,monospace" font-size="10.5" fill="#c9ceda">0:02.5<tspan fill="#6b7280"> / 0:04.0</tspan></text><text id="vt4" x="42" y="366" font-family="JetBrains Mono,SF Mono,Menlo,Consolas,monospace" font-size="10.5" fill="#c9ceda">0:03.3<tspan fill="#6b7280"> / 0:04.0</tspan></text><text id="vt5" x="42" y="366" font-family="JetBrains Mono,SF Mono,Menlo,Consolas,monospace" font-size="10.5" fill="#c9ceda">0:04.0<tspan fill="#6b7280"> / 0:04.0</tspan></text>
+  <rect x="150" y="352" width="550" height="20" rx="5" fill="#262c3b" stroke="#4c8dff" stroke-width="1.4"/>
+  <g fill="#3a4560"><rect x="174" y="359" width="2" height="6" rx="1"/><rect x="204" y="359" width="2" height="6" rx="1"/><rect x="234" y="359" width="2" height="6" rx="1"/><rect x="264" y="359" width="2" height="6" rx="1"/><rect x="294" y="359" width="2" height="6" rx="1"/><rect x="324" y="359" width="2" height="6" rx="1"/><rect x="354" y="359" width="2" height="6" rx="1"/><rect x="384" y="359" width="2" height="6" rx="1"/><rect x="414" y="359" width="2" height="6" rx="1"/><rect x="444" y="359" width="2" height="6" rx="1"/><rect x="474" y="359" width="2" height="6" rx="1"/><rect x="504" y="359" width="2" height="6" rx="1"/><rect x="534" y="359" width="2" height="6" rx="1"/><rect x="564" y="359" width="2" height="6" rx="1"/><rect x="594" y="359" width="2" height="6" rx="1"/><rect x="624" y="359" width="2" height="6" rx="1"/><rect x="654" y="359" width="2" height="6" rx="1"/><rect x="684" y="359" width="2" height="6" rx="1"/></g>
+  <rect id="trimdim" x="150" y="352" width="42" height="20" rx="5" fill="#05070c" opacity=".7"/>
+  <g id="lh"><rect x="150" y="350" width="8" height="24" rx="3" fill="#4c8dff"/><rect x="153" y="358" width="2" height="8" rx="1" fill="#fff"/></g>
+  <rect x="692" y="350" width="8" height="24" rx="3" fill="#4c8dff"/><rect x="695" y="358" width="2" height="8" rx="1" fill="#fff"/>
+  <g id="zseg"><rect x="330" y="380" width="220.0" height="18" rx="5" fill="#6e56cf"/>
+    <text id="zl0" x="440.0" y="393" class="t b" font-size="10" fill="#fff" text-anchor="middle">2× Area</text>
+    <text id="zl1" x="440.0" y="393" class="t b" font-size="10" fill="#fff" text-anchor="middle">2× Cursor</text></g>
+  <rect id="playhead" x="-1" y="346" width="2" height="32" rx="1" fill="#fff"/>
+  <rect id="exprog" x="150" y="406" width="550" height="3" rx="1.5" fill="#4c8dff"/>
+  <rect y="426" width="720" height="24" fill="#1b1e25"/>
+  <text x="12" y="442" class="t" font-size="10.5" fill="#9aa3b2">Grab-it 2026-11-15 09-41-12.mp4</text>
+  <text id="cl0" x="204" y="442" class="t" font-size="10.5" fill="#9aa3b2">Clip 0:04.0</text>
+  <text id="cl1" x="204" y="442" class="t" font-size="10.5" fill="#9aa3b2">Clip 0:03.7</text>
+  <text x="276" y="442" class="t" font-size="10.5" fill="#9aa3b2">Output 1920×1080</text>
+  <text id="es0" x="708" y="442" class="t" font-size="10.5" fill="#9aa3b2" text-anchor="end">Edits saved</text>
+  <text id="es1" x="708" y="442" class="t" font-size="10.5" fill="#9aa3b2" text-anchor="end">Exporting… 58%</text>
+  <text id="es2" x="708" y="442" class="t b" font-size="10.5" fill="#3ddc97" text-anchor="end">Exported  ·  Grab-it 2026-11-15 09-41-12 (edited).mp4</text>
+</g><rect id="reset" width="720" height="450" fill="#0d1016"/>
+<circle id="rp0" cx="379.5" cy="212.6" r="18" fill="none" stroke="#f5a524" stroke-width="3"/><circle id="rp1" cx="493.5" cy="289.9" r="18" fill="none" stroke="#f5a524" stroke-width="3"/><circle id="rp2" cx="447.0" cy="431.0" r="18" fill="none" stroke="#fff" stroke-width="3"/><circle id="rp3" cx="54.0" cy="392.0" r="18" fill="none" stroke="#fff" stroke-width="3"/><circle id="rp4" cx="106.0" cy="40.0" r="18" fill="none" stroke="#fff" stroke-width="3"/><circle id="rp5" cx="300.0" cy="40.0" r="18" fill="none" stroke="#fff" stroke-width="3"/><circle id="rp6" cx="196.0" cy="362.0" r="18" fill="none" stroke="#fff" stroke-width="3"/><circle id="rp7" cx="24.0" cy="362.0" r="18" fill="none" stroke="#fff" stroke-width="3"/><circle id="rp8" cx="680.0" cy="40.0" r="18" fill="none" stroke="#fff" stroke-width="3"/><circle id="rp9" cx="138.0" cy="62.0" r="18" fill="none" stroke="#fff" stroke-width="3"/><circle id="rp10" cx="330.0" cy="240.0" r="18" fill="none" stroke="#fff" stroke-width="3"/><circle id="rp11" cx="625.0" cy="62.0" r="18" fill="none" stroke="#fff" stroke-width="3"/>
+<g id="cur"><path d="M0 0v21l5.2-5 3.6 8.4 3.8-1.6-3.6-8.2H16z" fill="#fff" stroke="#111" stroke-width="1.4" stroke-linejoin="round"/></g>
+</svg>
