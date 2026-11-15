@@ -211,6 +211,39 @@ export const DEFAULT_APPEARANCE: Appearance = { textScale: 110, hubScale: 110, p
 /** The text size sliders, in percent. Mirrors `MIN_TEXT_SCALE` and `MAX_TEXT_SCALE` in src-tauri/src/settings.rs. */
 export const TEXT_SCALE = { min: 85, max: 130, step: 5 };
 
+/** Mirrors `TextSizeStep` in src-tauri/src/settings.rs: ⌘+, ⌘− and ⌘0. */
+export type TextSizeStep = "bigger" | "smaller" | "reset";
+
+/** The text size step a key press asks for, if any: ⌘+ (or ⌘=), ⌘− and ⌘0, with Ctrl off macOS. */
+export function textSizeStep(event: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean }): TextSizeStep | null {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey) return null;
+  switch (event.key) {
+    case "+":
+    case "=":
+      return "bigger";
+    case "-":
+    case "_":
+      return "smaller";
+    case "0":
+      return "reset";
+    default:
+      return null;
+  }
+}
+
+/** Saves the Grab-it window's text size a step bigger, smaller or back to the default, easing the window to it. */
+export function stepTextSize(step: TextSizeStep): Promise<Settings> {
+  return invoke<Settings>("step_text_size", { step });
+}
+
+/** Mirrors `APPEARANCE_CHANGED_EVENT` in src-tauri/src/commands.rs. */
+export const APPEARANCE_CHANGED_EVENT = "appearance-changed";
+
+/** Called when a keyboard shortcut changes the text size. */
+export function onAppearanceChanged(handler: (appearance: Appearance) => void): Promise<UnlistenFn> {
+  return listen<Appearance>(APPEARANCE_CHANGED_EVENT, (event) => handler(event.payload));
+}
+
 export const POPUP_CORNERS: { value: PopupCorner; title: string }[] = [
   { value: "topLeft", title: "Top left" },
   { value: "topRight", title: "Top right" },

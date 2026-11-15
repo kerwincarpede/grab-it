@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -156,7 +157,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
       default:
         throw new Error(`unexpected command ${cmd}`);
     }
-  });
+  }, { shouldMockEvents: true });
   return backend;
 }
 
@@ -817,6 +818,20 @@ describe("SettingsWindow appearance", () => {
     await waitFor(() =>
       expect(backend.appearance).toEqual({ textScale: 125, hubScale: 95, popupCorner: "topRight", popupSeconds: 0 }),
     );
+  });
+});
+
+describe("SettingsWindow text size shortcuts", () => {
+  it("moves the slider when a keyboard shortcut changes the text size", async () => {
+    mockBackend({ appearance: { textScale: 110, hubScale: 110, popupCorner: "bottomLeft", popupSeconds: 8 } });
+    render(<SettingsWindow section="appearance" />);
+    const window = await screen.findByRole("slider", { name: "Grab-it window" });
+    await waitFor(() => expect(window).toBeEnabled());
+    expect(window).toHaveValue("110");
+    expect(screen.getByText(/⌘\+, ⌘− and ⌘0 change it too|Ctrl\+\+, Ctrl\+− and Ctrl\+0 change it too/)).toBeInTheDocument();
+    await emit("appearance-changed", { textScale: 115, hubScale: 110, popupCorner: "bottomLeft", popupSeconds: 8 });
+    await waitFor(() => expect(window).toHaveValue("115"));
+    expect(screen.getByText("115%", { selector: ".scale-value[data-for='text-scale']" })).toBeInTheDocument();
   });
 });
 

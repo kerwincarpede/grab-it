@@ -3,7 +3,7 @@
 use std::sync::{Mutex, MutexGuard};
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::{
     hotkeys::{self, Hotkeys},
@@ -68,6 +68,33 @@ pub fn set_appearance(
         .map_err(|err| err.to_string())?;
     crate::windows::apply_zoom(&app, settings.appearance.zoom());
     crate::hub::resize(&app);
+    Ok(settings)
+}
+
+/// Emitted with the saved [`crate::settings::Appearance`] when a keyboard
+/// shortcut changes the text size, so an open Settings shows it.
+/// Mirrors `APPEARANCE_CHANGED_EVENT` in src/settings/api.ts.
+pub const APPEARANCE_CHANGED_EVENT: &str = "appearance-changed";
+
+/// ⌘+, ⌘− and ⌘0 in the Grab-it window: saves the text size one step
+/// bigger or smaller, or back to the default, and eases the window to it.
+#[tauri::command]
+pub fn step_text_size(
+    step: crate::settings::TextSizeStep,
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+) -> Result<Settings, String> {
+    let settings = {
+        let mut store = lock(&state);
+        let appearance = store.get().appearance;
+        let next = appearance.stepped(step);
+        if next == appearance {
+            return Ok(store.get().clone());
+        }
+        store.set_appearance(next).map_err(|err| err.to_string())?
+    };
+    crate::windows::apply_zoom(&app, settings.appearance.zoom());
+    let _ = app.emit(APPEARANCE_CHANGED_EVENT, settings.appearance);
     Ok(settings)
 }
 

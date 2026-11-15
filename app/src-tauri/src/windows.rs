@@ -2,7 +2,11 @@
 
 use std::{
     path::Path,
-    sync::atomic::{AtomicU32, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicU32, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use tauri::{
@@ -224,9 +228,7 @@ pub fn show_main(app: &AppHandle, view: MainView) -> tauri::Result<()> {
         .try_state::<crate::commands::SettingsState>()
         .map(|state| crate::commands::lock(&state).get().appearance.zoom())
         .unwrap_or_else(|| crate::settings::Appearance::default().zoom());
-    if let Err(err) = window.set_zoom(zoom) {
-        eprintln!("Grab-it: could not set the text size: {err}");
-    }
+    set_zoom_now(&window, zoom);
     let handle = app.clone();
     window.on_window_event(move |event| {
         // Closed while recording a hotkey in Settings: give the hotkeys back.
@@ -294,11 +296,85 @@ fn activate(window: &WebviewWindow) -> tauri::Result<()> {
 
 /// Draws the Grab-it window at `zoom` (1.0 is actual size), when it is open.
 pub fn apply_zoom(app: &AppHandle, zoom: f64) {
-    if let Some(window) = app.get_webview_window(MAIN_LABEL)
-        && let Err(err) = window.set_zoom(zoom)
-    {
-        eprintln!("Grab-it: could not set the text size: {err}");
+    let Some(window) = app.get_webview_window(MAIN_LABEL) else {
+        return;
+    };
+    let (from, generation) = {
+        let mut shown = lock_zoom();
+        shown.generation += 1;
+        (shown.zoom, shown.generation)
+    };
+    if from.is_none_or(|from| (from - zoom).abs() < 1e-3) {
+        set_zoom_now(&window, zoom);
+        return;
     }
+    let from = from.unwrap_or(zoom);
+    // Each frame is a message to the main thread, so the steps run here.
+    std::thread::spawn(move || {
+        let start = Instant::now();
+        loop {
+            let progress = (start.elapsed().as_secs_f64() / ZOOM_EASE.as_secs_f64()).min(1.0);
+            let step = eased_zoom(from, zoom, progress);
+            {
+                let mut shown = lock_zoom();
+                // A newer size took over from here.
+                if shown.generation != generation {
+                    return;
+                }
+                // Set under the lock, so an older step cannot land after a newer one.
+                if let Err(err) = window.set_zoom(step) {
+                    eprintln!("Grab-it: could not set the text size: {err}");
+                    return;
+                }
+                shown.zoom = Some(step);
+            }
+            if progress >= 1.0 {
+                return;
+            }
+            std::thread::sleep(ZOOM_FRAME);
+        }
+    });
+}
+
+/// How long the Grab-it window takes to ease to a new text size.
+const ZOOM_EASE: Duration = Duration::from_millis(180);
+/// About one frame of a 60 Hz screen.
+const ZOOM_FRAME: Duration = Duration::from_millis(16);
+
+/// The zoom the Grab-it window shows, so the next ease starts from where the
+/// last one got to, and which ease is the current one.
+struct ShownZoom {
+    zoom: Option<f64>,
+    generation: u64,
+}
+
+static SHOWN_ZOOM: Mutex<ShownZoom> = Mutex::new(ShownZoom {
+    zoom: None,
+    generation: 0,
+});
+
+fn lock_zoom() -> std::sync::MutexGuard<'static, ShownZoom> {
+    SHOWN_ZOOM
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Sets the Grab-it window's zoom at once, stopping any ease under way.
+fn set_zoom_now(window: &WebviewWindow, zoom: f64) {
+    let mut shown = lock_zoom();
+    shown.generation += 1;
+    match window.set_zoom(zoom) {
+        Ok(()) => shown.zoom = Some(zoom),
+        Err(err) => eprintln!("Grab-it: could not set the text size: {err}"),
+    }
+}
+
+/// The zoom `progress` (0 to 1) of the way from `from` to `to`, easing out:
+/// quick at first, settling gently on the new size.
+fn eased_zoom(from: f64, to: f64, progress: f64) -> f64 {
+    let progress = progress.clamp(0.0, 1.0);
+    let eased = 1.0 - (1.0 - progress).powi(3);
+    from + (to - from) * eased
 }
 
 /// Shows the Grab-it window on Settings.
@@ -372,4 +448,21 @@ pub fn round_corners(window: &WebviewWindow, radius: f64) -> tauri::Result<()> {
             let _: () = objc2::msg_send![ns_window, invalidateShadow];
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::eased_zoom;
+
+    #[test]
+    fn the_zoom_eases_out_from_the_old_size_to_the_new() {
+        assert_eq!(eased_zoom(1.1, 1.2, 0.0), 1.1);
+        assert_eq!(eased_zoom(1.1, 1.2, 1.0), 1.2);
+        // Most of the way there by half time, and never past it.
+        let half = eased_zoom(1.0, 2.0, 0.5);
+        assert!((half - 1.875).abs() < 1e-9, "{half}");
+        assert_eq!(eased_zoom(1.0, 2.0, 1.5), 2.0);
+        // Smaller works the same way down.
+        assert!(eased_zoom(1.2, 1.1, 0.5) < 1.2 && eased_zoom(1.2, 1.1, 0.5) > 1.1);
+    }
 }

@@ -441,6 +441,19 @@ pub const MAX_TEXT_SCALE: u32 = 130;
 /// screens.
 pub const DEFAULT_TEXT_SCALE: u32 = 110;
 
+/// How far one ⌘+ or ⌘− moves the text size, as the slider's own step.
+pub const TEXT_SCALE_STEP: u32 = 5;
+
+/// A text size keyboard shortcut: ⌘+, ⌘− or ⌘0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextSizeStep {
+    Bigger,
+    Smaller,
+    /// Back to [`DEFAULT_TEXT_SCALE`].
+    Reset,
+}
+
 /// `percent` held to what the slider offers.
 fn clamp_text_scale(percent: u32) -> u32 {
     percent.clamp(MIN_TEXT_SCALE, MAX_TEXT_SCALE)
@@ -488,6 +501,23 @@ impl Appearance {
     /// The Grab-it window's zoom.
     pub fn zoom(&self) -> f64 {
         f64::from(clamp_text_scale(self.text_scale)) / 100.0
+    }
+
+    /// The Grab-it window's text size after `step`. A size off the slider's
+    /// steps, from an edited settings file, moves to the next step along.
+    pub fn stepped(self, step: TextSizeStep) -> Self {
+        let scale = clamp_text_scale(self.text_scale);
+        let text_scale = match step {
+            TextSizeStep::Bigger => (scale / TEXT_SCALE_STEP + 1) * TEXT_SCALE_STEP,
+            TextSizeStep::Smaller => {
+                scale.div_ceil(TEXT_SCALE_STEP).saturating_sub(1) * TEXT_SCALE_STEP
+            }
+            TextSizeStep::Reset => DEFAULT_TEXT_SCALE,
+        };
+        Self {
+            text_scale: clamp_text_scale(text_scale),
+            ..self
+        }
     }
 
     /// The menu bar hub's zoom.
@@ -1463,6 +1493,39 @@ mod tests {
         assert_eq!(loaded.text_scale, DEFAULT_TEXT_SCALE);
         assert_eq!(loaded.popup_corner, PopupCorner::TopLeft);
         assert_eq!(loaded.popup_seconds, 8);
+    }
+
+    #[test]
+    fn text_size_steps_by_the_slider_step_within_its_range() {
+        let at = |text_scale| Appearance {
+            text_scale,
+            ..Appearance::default()
+        };
+        let step = |text_scale, step| at(text_scale).stepped(step).text_scale;
+        assert_eq!(step(110, TextSizeStep::Bigger), 115);
+        assert_eq!(step(110, TextSizeStep::Smaller), 105);
+        assert_eq!(step(MAX_TEXT_SCALE, TextSizeStep::Bigger), MAX_TEXT_SCALE);
+        assert_eq!(step(MIN_TEXT_SCALE, TextSizeStep::Smaller), MIN_TEXT_SCALE);
+        assert_eq!(
+            step(MIN_TEXT_SCALE, TextSizeStep::Reset),
+            DEFAULT_TEXT_SCALE
+        );
+        // Off the steps: on to the next one, not a full step past it.
+        assert_eq!(step(112, TextSizeStep::Bigger), 115);
+        assert_eq!(step(112, TextSizeStep::Smaller), 110);
+        // Only the text size changes.
+        let hub = Appearance {
+            hub_scale: 90,
+            popup_seconds: 3,
+            ..Appearance::default()
+        };
+        assert_eq!(
+            hub.stepped(TextSizeStep::Bigger),
+            Appearance {
+                text_scale: 115,
+                ..hub
+            }
+        );
     }
 
     #[test]
