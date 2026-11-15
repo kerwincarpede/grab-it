@@ -3,7 +3,7 @@
 Run from the repository root:  python3 docs/assets/demo_gif.py docs/assets/demo.svg docs/assets/demo.gif
 
 Needs Chrome (or Chromium or Edge) and ffmpeg. Set CHROME to the browser binary
-if it is not found. Takes about a minute. Each frame is the SVG paused at one moment of its loop and
+if it is not found. Takes a couple of minutes. Each frame is the SVG paused at one moment of its loop and
 screenshotted by headless Chrome; ffmpeg joins the frames into a GIF that
 repeats forever.
 """
