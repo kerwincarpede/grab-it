@@ -11,6 +11,8 @@ pub enum OpenTarget {
     Settings,
     /// Starts a region capture, showing the overlay.
     Region,
+    /// Opens the overlay with its toolbar of every capture mode.
+    AllInOne,
     /// Opens a capture in the annotation editor: `--open editor <file>`.
     Editor(PathBuf),
     /// The Library window.
@@ -48,7 +50,7 @@ impl fmt::Display for ArgsError {
             Self::UnknownTarget(name) => {
                 write!(
                     f,
-                    "unknown --open target `{name}`; expected `settings`, `library`, `welcome`, `region`, `repeat`, `record`, `text`, `colour`, `editor <file>`, `quick <file>` or `pin <file>`"
+                    "unknown --open target `{name}`; expected `settings`, `library`, `welcome`, `region`, `all-in-one`, `repeat`, `record`, `text`, `colour`, `editor <file>`, `quick <file>` or `pin <file>`"
                 )
             }
             Self::MissingFile(target) => {
@@ -91,6 +93,7 @@ where
         return match name.as_str() {
             "settings" => Ok(Some(OpenTarget::Settings)),
             "region" => Ok(Some(OpenTarget::Region)),
+            "all-in-one" => Ok(Some(OpenTarget::AllInOne)),
             "library" => Ok(Some(OpenTarget::Library)),
             "welcome" => Ok(Some(OpenTarget::Welcome)),
             "text" => Ok(Some(OpenTarget::Text)),
@@ -144,6 +147,18 @@ mod tests {
     fn open_region() {
         assert_eq!(parse(&["--open", "region"]), Ok(Some(OpenTarget::Region)));
         assert_eq!(parse(&["--open=region"]), Ok(Some(OpenTarget::Region)));
+    }
+
+    #[test]
+    fn open_all_in_one() {
+        assert_eq!(
+            parse(&["--open", "all-in-one"]),
+            Ok(Some(OpenTarget::AllInOne))
+        );
+        assert_eq!(
+            parse(&["--open=all-in-one"]),
+            Ok(Some(OpenTarget::AllInOne))
+        );
     }
 
     #[test]

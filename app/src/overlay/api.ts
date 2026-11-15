@@ -27,6 +27,11 @@ export interface OverlayInfo {
   mode: CaptureMode;
   /** Older backends leave this out; treat that as "capture". */
   intent?: OverlayIntent;
+  /**
+   * Opened by All-in-one: the overlay shows its mode toolbar. Older
+   * backends leave this out.
+   */
+  allInOne?: boolean;
   monitorWidth: number;
   monitorHeight: number;
   /**
@@ -60,7 +65,9 @@ export type Selection =
   | { kind: "region"; rect: Box; viewportWidth: number }
   | { kind: "window"; id: number }
   /** One point in CSS pixels, scaled by the backend like a region is. */
-  | { kind: "point"; x: number; y: number; viewportWidth: number };
+  | { kind: "point"; x: number; y: number; viewportWidth: number }
+  /** Every frozen monitor, stitched: All-in-one's Screen. */
+  | { kind: "screen" };
 
 /**
  * What this overlay is to show. Null in a spare overlay, loaded ahead of
@@ -94,8 +101,20 @@ export function overlayReady(): Promise<void> {
   return invoke<void>("overlay_ready");
 }
 
-export function finishOverlay(selection: Selection): Promise<void> {
-  return invoke<void>("overlay_finish", { selection });
+/** Mirrors `Choice` in src-tauri/src/overlay.rs: what All-in-one's toolbar chose. */
+export interface OverlayChoice {
+  intent: OverlayIntent;
+  mode: "region" | "window" | "screen";
+  /** The Timer: seconds to wait, with the overlay closed, before capturing live. */
+  delaySeconds: number;
+}
+
+/**
+ * Ends the selection. An All-in-one overlay sends what its toolbar chose
+ * with it; any other overlay sends the selection alone.
+ */
+export function finishOverlay(selection: Selection, choice?: OverlayChoice): Promise<void> {
+  return invoke<void>("overlay_finish", choice ? { selection, choice } : { selection });
 }
 
 export function cancelOverlay(): Promise<void> {

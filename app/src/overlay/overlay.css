@@ -413,6 +413,93 @@
   color: #ec7a80;
 }
 
+/* All-in-one's mode toolbar, above the hint. */
+.overlay-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  max-width: calc(100% - 32px);
+  padding: 4px;
+  color: #ecedef;
+  font-family: "Instrument Sans Variable", system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+  background: rgb(23 24 27 / 92%);
+  border: 1px solid #2a2c31;
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
+  backdrop-filter: blur(16px) saturate(140%);
+  cursor: default;
+  transform: translateX(-50%);
+  transition: opacity 120ms ease-out;
+}
+
+.overlay-toolbar[data-hidden="true"],
+.overlay[data-shown="false"] .overlay-toolbar {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.overlay-tool {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  height: 32px;
+  padding: 0 8px 0 10px;
+  color: inherit;
+  font: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.overlay-tool:hover:not(:disabled) {
+  background: rgb(255 255 255 / 8%);
+}
+
+.overlay-tool[aria-pressed="true"],
+.overlay-tool[data-active="true"] {
+  color: #fff;
+  background: var(--overlay-accent);
+}
+
+.overlay-tool:disabled {
+  color: #5d6068;
+  cursor: default;
+}
+
+.overlay-tool:focus-visible {
+  outline: 2px solid var(--overlay-accent);
+  outline-offset: 1px;
+}
+
+.overlay-tool kbd {
+  min-width: 16px;
+  color: #8d919a;
+  font: 500 11px/16px ui-monospace, "SF Mono", Menlo, monospace;
+  text-align: center;
+  background: rgb(255 255 255 / 6%);
+  border-radius: 4px;
+}
+
+.overlay-tool[aria-pressed="true"] kbd,
+.overlay-tool[data-active="true"] kbd {
+  color: #fff;
+  background: rgb(255 255 255 / 18%);
+}
+
+.overlay-toolbar-gap {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: #2a2c31;
+}
+
 .overlay-keys {
   display: flex;
   gap: 10px;
@@ -451,6 +538,7 @@
   .overlay,
   .overlay-window,
   .overlay-hint,
+  .overlay-toolbar,
   .overlay-backdrop,
   .overlay[data-dragging="false"] .overlay-dim-piece,
   .overlay[data-dragging="false"] .overlay-dim-corner {

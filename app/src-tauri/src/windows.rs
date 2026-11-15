@@ -33,6 +33,10 @@ pub fn open(app: &AppHandle, target: OpenTarget) -> tauri::Result<()> {
             actions::start(app, actions::Action::Region);
             Ok(())
         }
+        OpenTarget::AllInOne => {
+            actions::start(app, actions::Action::AllInOne);
+            Ok(())
+        }
         OpenTarget::Text => {
             actions::start(app, actions::Action::Text);
             Ok(())

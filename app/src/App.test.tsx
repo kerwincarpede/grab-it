@@ -14,6 +14,7 @@ describe("App", () => {
     mockIPC(() => ({
       saveFolder: "/home/me/Pictures/Grab-it",
       hotkeys: {
+        allInOne: "Ctrl+Alt+PrintScreen",
         region: "PrintScreen",
         window: "Alt+PrintScreen",
         screen: "Ctrl+PrintScreen",

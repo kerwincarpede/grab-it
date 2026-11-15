@@ -188,6 +188,7 @@ Click the Grab-it icon in the menu bar or tray for all of these. On Windows and 
 | ⏱️ **Timed capture** | Wait 3, 5 or 10 seconds before capturing, so you have time to open a menu or hover a tooltip. |
 | 🔁 **Repeat last region** | Capture the exact same area again, without dragging. |
 | 🖥️ **Capture screen / Monitor** | Grab every monitor at once, or just one. |
+| 🧰 **All-in-one** | One shortcut for everything: the screen freezes with a toolbar at the top for **Region**, **Window**, **Screen**, **Text**, **Colour**, **Record** and a **Timer** (off, 3, 5 or 10 seconds). Click one or press its number, `1` to `7`. Screen captures straight away; with the Timer on, the overlay closes and Grab-it captures the area you picked once the time is up. On Wayland your desktop's own picker shows instead, as for a region. |
 
 ---
 
@@ -200,6 +201,7 @@ Click the Grab-it icon in the menu bar or tray for all of these. On Windows and 
 | Capture every monitor | `Ctrl + PrintScreen` | `⌘ ⇧ F` |
 | Capture text | `Shift + PrintScreen` | `⌘ ⇧ 1` |
 | Pick a colour | `Ctrl + Shift + PrintScreen` | `⌘ ⇧ 9` |
+| All-in-one: pick any mode from a toolbar | `Ctrl + Alt + PrintScreen` | `⌘ ⇧ A` |
 
 Don't like these? Change them in **Settings**: click a shortcut and press the keys you want. If another app already uses a shortcut, Settings tells you, and the tray menu always works.
 

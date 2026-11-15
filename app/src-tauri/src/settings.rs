@@ -764,6 +764,8 @@ struct StoredSettings {
 /// Hotkeys on disk; a missing or empty one keeps its default.
 #[derive(Debug, Default, Deserialize)]
 struct StoredHotkeys {
+    #[serde(rename = "allInOne")]
+    all_in_one: Option<String>,
     region: Option<String>,
     window: Option<String>,
     screen: Option<String>,
@@ -780,6 +782,7 @@ impl StoredHotkeys {
                 .unwrap_or(default)
         };
         Hotkeys {
+            all_in_one: pick(self.all_in_one, defaults.all_in_one),
             region: pick(self.region, defaults.region),
             window: pick(self.window, defaults.window),
             screen: pick(self.screen, defaults.screen),
@@ -1802,6 +1805,20 @@ mod tests {
         assert_eq!(loaded.hotkeys.region, "Ctrl+Shift+R");
         assert_eq!(loaded.hotkeys.window, Hotkeys::default().window);
         assert_eq!(loaded.hotkeys.screen, Hotkeys::default().screen);
+        // Settings from before All-in-one get its default.
+        assert_eq!(loaded.hotkeys.all_in_one, Hotkeys::default().all_in_one);
+    }
+
+    #[test]
+    fn the_all_in_one_hotkey_is_read_and_written_as_all_in_one() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"hotkeys": {"allInOne": "Ctrl+Shift+A"}}"#).unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.hotkeys.all_in_one, "Ctrl+Shift+A");
+        let value = serde_json::to_value(&loaded.hotkeys).unwrap();
+        assert_eq!(value["allInOne"], "Ctrl+Shift+A");
     }
 
     #[test]
