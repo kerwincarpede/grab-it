@@ -118,7 +118,7 @@ Keep these behaviours (the user relies on them):
 - Esc and right-click cancel.
 
 Read the "Capture overlay" part of [development.md](../development.md) and
-the comments in `app/src/overlay/` and `app/src-tauri/src/overlay.rs` first.
+the comments in `src/grab-it/src/overlay/` and `src/grab-it/src-tauri/src/overlay.rs` first.
 
 ## Machine
 
@@ -182,9 +182,9 @@ From the repository root, on a Mac:
 
 ```sh
 git apply docs/analysis/capture-overlay-bench/bench.patch
-cd app && npm run tauri build -- --no-bundle \
+cd src/grab-it && npm run tauri build -- --no-bundle \
   --config '{"productName":"Grab-it Dev","identifier":"com.kerwincarpede.grabit.dev"}'
-cd ..
+cd ../..
 docs/analysis/capture-overlay-bench/run.sh base "" 3        # 120 Hz, BMP
 docs/analysis/capture-overlay-bench/run.sh cap60 cap60 3    # WebKit default
 docs/analysis/capture-overlay-bench/run.sh noloupe noloupe 3

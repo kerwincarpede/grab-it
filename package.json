@@ -1,0 +1,7 @@
+{
+  "name": "grab-it-workspace",
+  "private": true,
+  "workspaces": [
+    "src/*"
+  ]
+}

@@ -1,7 +1,7 @@
-diff --git a/app/src-tauri/src/lib.rs b/app/src-tauri/src/lib.rs
+diff --git a/src/grab-it/src-tauri/src/lib.rs b/src/grab-it/src-tauri/src/lib.rs
 index 0fb5f47..a20502b 100644
---- a/app/src-tauri/src/lib.rs
-+++ b/app/src-tauri/src/lib.rs
+--- a/src/grab-it/src-tauri/src/lib.rs
++++ b/src/grab-it/src-tauri/src/lib.rs
 @@ -102,6 +102,9 @@ pub fn run() {
              hotkeys::resume_hotkeys,
              overlay::overlay_info,
@@ -12,10 +12,10 @@ index 0fb5f47..a20502b 100644
              overlay::overlay_ready,
              overlay::overlay_finish,
              overlay::overlay_cancel,
-diff --git a/app/src-tauri/src/overlay.rs b/app/src-tauri/src/overlay.rs
+diff --git a/src/grab-it/src-tauri/src/overlay.rs b/src/grab-it/src-tauri/src/overlay.rs
 index b7cb69e..5d71b7e 100644
---- a/app/src-tauri/src/overlay.rs
-+++ b/app/src-tauri/src/overlay.rs
+--- a/src/grab-it/src-tauri/src/overlay.rs
++++ b/src/grab-it/src-tauri/src/overlay.rs
 @@ -444,7 +444,9 @@ fn encode_later(image: &Arc<RgbaImage>, started: Instant) -> Encoded {
  /// and the hover blur have nothing to draw until then) and under 30 ms as
  /// a BMP. Elsewhere a PNG, until the BMP has been tried in those webviews.
@@ -110,10 +110,10 @@ index b7cb69e..5d71b7e 100644
 +        eprintln!("BENCH opaque set");
 +    }
 +}
-diff --git a/app/src/overlay/Loupe.tsx b/app/src/overlay/Loupe.tsx
+diff --git a/src/grab-it/src/overlay/Loupe.tsx b/src/grab-it/src/overlay/Loupe.tsx
 index 1089805..17d39d4 100644
---- a/app/src/overlay/Loupe.tsx
-+++ b/app/src/overlay/Loupe.tsx
+--- a/src/grab-it/src/overlay/Loupe.tsx
++++ b/src/grab-it/src/overlay/Loupe.tsx
 @@ -1,4 +1,5 @@
  import { useEffect, useRef } from "react";
 +import { benchOff } from "./bench";
@@ -129,10 +129,10 @@ index 1089805..17d39d4 100644
      const hex = drawLens(canvas.current, image, { x: pixel.x, y: pixel.y });
      // Written straight to the DOM: the colour is only known after drawing, and
      // putting it in state would render the overlay twice per pointer move.
-diff --git a/app/src/overlay/RegionOverlay.tsx b/app/src/overlay/RegionOverlay.tsx
+diff --git a/src/grab-it/src/overlay/RegionOverlay.tsx b/src/grab-it/src/overlay/RegionOverlay.tsx
 index b258b4f..57ba2d1 100644
---- a/app/src/overlay/RegionOverlay.tsx
-+++ b/app/src/overlay/RegionOverlay.tsx
+--- a/src/grab-it/src/overlay/RegionOverlay.tsx
++++ b/src/grab-it/src/overlay/RegionOverlay.tsx
 @@ -38,6 +38,7 @@ import {
  } from "./geometry";
  import { drawBackdrop } from "./backdrop";
@@ -222,11 +222,11 @@ index b258b4f..57ba2d1 100644
          <Loupe image={image} pointer={pointer} scale={scale} viewport={view} />
        )}
        <div
-diff --git a/app/src/overlay/bench.ts b/app/src/overlay/bench.ts
+diff --git a/src/grab-it/src/overlay/bench.ts b/src/grab-it/src/overlay/bench.ts
 new file mode 100644
 index 0000000..10c70ce
 --- /dev/null
-+++ b/app/src/overlay/bench.ts
++++ b/src/grab-it/src/overlay/bench.ts
 @@ -0,0 +1,262 @@
 +// LOCAL BENCH HARNESS - NOT FOR COMMIT.
 +// Replays a 120 Hz hover sweep and drag inside the real overlay webview and

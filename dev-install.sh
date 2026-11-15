@@ -50,7 +50,7 @@ if [[ "$(uname)" != "Darwin" ]]; then
 fi
 
 root="$(cd "$(dirname "$0")" && pwd)"
-cd "$root/app"
+cd "$root/src/grab-it"
 
 # A shell that did not load your profile may not have Rust on its PATH.
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -141,11 +141,12 @@ fi
 echo "==> Signing as: ${identity}"
 
 echo "==> Building ${APP_NAME} ${version} from $(git -C "$root" rev-parse --abbrev-ref HEAD) ($(git -C "$root" rev-parse --short HEAD))"
-[[ -d node_modules ]] || npm ci
+# The root package.json is an npm workspace over src/*, so dependencies install there.
+[[ -d "$root/node_modules" ]] || (cd "$root" && npm ci)
 APPLE_SIGNING_IDENTITY="$identity" npm run tauri build -- --bundles app --config \
   "{\"productName\":\"${APP_NAME}\",\"version\":\"${version}\",\"identifier\":\"${IDENTIFIER}\"}"
 
-bundle="$root/app/src-tauri/target/release/bundle/macos/${APP_NAME}.app"
+bundle="$root/src/grab-it/src-tauri/target/release/bundle/macos/${APP_NAME}.app"
 [[ -d "$bundle" ]] || { echo "The build did not produce ${bundle}." >&2; exit 1; }
 
 # Ad-hoc would mean granting Screen Recording again after every reinstall.
