@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import AiSection from "./AiSection";
 import HotkeysSection from "./HotkeysSection";
+import StorageSection from "./StorageSection";
 import { isMacPlatform } from "./accelerator";
 import { FolderIcon } from "../app/icons";
 import {
@@ -8,6 +9,7 @@ import {
   DEFAULT_AI_PREFERENCES,
   DEFAULT_APPEARANCE,
   DEFAULT_RECORDING,
+  DEFAULT_RETENTION,
   POPUP_CORNERS,
   RECORDING_AUDIO,
   RECORDING_COUNTDOWNS,
@@ -25,11 +27,13 @@ import {
   systemSoundAvailable,
   retryFfmpeg,
   setRecording,
+  setRetention,
   type FfmpegStatus,
   type Camera,
   type Microphone,
   type RecordingAudio,
   type RecordingSettings,
+  type Retention,
   type WebcamShape,
   POPUP_SECONDS,
   TEXT_SCALE,
@@ -359,6 +363,20 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     }
   }
 
+  async function saveRetention(retention: Retention): Promise<boolean> {
+    setBusy(true);
+    try {
+      setSettings(await setRetention(retention));
+      setStatus({ kind: "preferences-saved" });
+      return true;
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function retry() {
     retryFfmpeg()
       .then(setFfmpeg)
@@ -470,7 +488,8 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     section === "appearance" ||
     section === "capture" ||
     section === "editor" ||
-    section === "recording";
+    section === "recording" ||
+    section === "storage";
   const recording: RecordingSettings = { ...DEFAULT_RECORDING, ...settings?.recording };
   const recordingOff = busy || settings === null;
   const silent = recording.format === "gif";
@@ -960,6 +979,9 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
             </div>
           </div>
         </section>
+      )}
+      {shows("storage") && settings && (
+        <StorageSection saved={{ ...DEFAULT_RETENTION, ...settings.retention }} disabled={busy} onSave={saveRetention} />
       )}
       {shows("ai") && settings && (
         <AiSection saved={settings.ai ?? DEFAULT_AI_PREFERENCES} disabled={busy} onSave={saveAi} />

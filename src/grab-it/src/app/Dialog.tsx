@@ -28,6 +28,9 @@ function Dialog({ title, hideTitle = false, className = "", onClose, children }:
     const first = box.current?.querySelector<HTMLElement>("[data-autofocus]") ?? box.current;
     first?.focus();
     const onKey = (event: KeyboardEvent) => {
+      // A dialog opened inside this one, such as a confirmation over a
+      // Settings page, has Escape and Tab while it is open.
+      if (box.current?.querySelector('[aria-modal="true"]')) return;
       if (event.key === "Escape" && !event.defaultPrevented) {
         event.preventDefault();
         event.stopPropagation();

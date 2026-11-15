@@ -273,6 +273,14 @@ export const RestartIcon = ({ size }: IconProps) => (
   </Icon>
 );
 
+export const StorageIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <ellipse cx="12" cy="6" rx="7.5" ry="3" />
+    <path d="M4.5 6v12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6" />
+    <path d="M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3" />
+  </Icon>
+);
+
 export const TrashIcon = ({ size }: IconProps) => (
   <Icon size={size}>
     <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />

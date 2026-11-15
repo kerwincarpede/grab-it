@@ -10,6 +10,8 @@ import { resetThumbnails } from "./thumbnails";
 import {
   AI_STATUS_EVENT,
   LIBRARY_CHANGED_EVENT,
+  LIBRARY_CLEANED_EVENT,
+  cleanedText,
   NO_FILTERS,
   OCR_STATUS_EVENT,
   PAGE_SIZE,
@@ -154,6 +156,11 @@ function mockBackend(shots: Shot[]): Backend {
         }
         case "library_set_notes": {
           const updated = { ...find(args.id as number), notes: args.notes as string };
+          backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
+          return updated;
+        }
+        case "library_set_keep": {
+          const updated = { ...find(args.id as number), keep: args.keep as boolean };
           backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
           return updated;
         }
@@ -499,6 +506,59 @@ describe("LibraryWindow", () => {
     });
 
     expect(await screen.findByRole("button", { name: "Grab-it 2.png" })).toBeInTheDocument();
+  });
+
+  it("stars a capture Keep forever from its tile, and unstars it", async () => {
+    const backend = mockBackend([shot(1), shot(2, { keep: true })]);
+    render(<LibraryWindow />);
+    const star = await screen.findByRole("button", { name: "Keep Grab-it 1.png forever" });
+    expect(star).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Keep Grab-it 2.png forever" })).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(star);
+
+    await waitFor(() => expect(star).toHaveAttribute("aria-pressed", "true"));
+    expect(callsTo(backend, "library_set_keep")[0].payload).toEqual({ id: 1, keep: true });
+
+    await userEvent.click(star);
+
+    await waitFor(() => expect(star).toHaveAttribute("aria-pressed", "false"));
+    expect(callsTo(backend, "library_set_keep")[1].payload).toEqual({ id: 1, keep: false });
+  });
+
+  it("stars a capture Keep forever from its details", async () => {
+    const backend = mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
+    const details = screen.getByLabelText("Capture details");
+    const star = within(details).getByRole("button", { name: "Keep forever" });
+    expect(star).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(star);
+
+    await waitFor(() => expect(star).toHaveAttribute("aria-pressed", "true"));
+    expect(callsTo(backend, "library_set_keep")[0].payload).toEqual({ id: 1, keep: true });
+    expect(screen.getByRole("button", { name: "Keep Grab-it 1.png forever" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("says what an automatic cleanup removed", async () => {
+    mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: "Grab-it 1.png" });
+    // Let the event listener finish registering.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      await emit(LIBRARY_CLEANED_EVENT, { count: 12, bytes: 340 * 1024 * 1024 });
+    });
+
+    expect(await screen.findByText("Cleanup removed 12 old items (340 MB)")).toBeInTheDocument();
+  });
+
+  it("words the cleanup notice for one item", () => {
+    expect(cleanedText({ count: 1, bytes: 4_404_019 })).toBe("Cleanup removed 1 old item (4.2 MB)");
   });
 
   it("shows backend errors", async () => {

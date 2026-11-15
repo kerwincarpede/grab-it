@@ -767,6 +767,61 @@ impl RecordingSettings {
     }
 }
 
+/// How cleanup removes items older than their Keep setting. Mirrors
+/// `Removal` in src/settings/api.ts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Removal {
+    /// To the system Trash, where they can be restored.
+    #[default]
+    Trash,
+    /// Deleted for good.
+    Permanent,
+}
+
+/// How long each kind of item is kept, in days; `None` keeps it forever.
+/// Mirrors `Retention` in src/settings/api.ts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Retention {
+    pub image: Option<u32>,
+    pub gif: Option<u32>,
+    pub video: Option<u32>,
+    pub removal: Removal,
+}
+
+impl Retention {
+    /// How many days items of `kind` are kept; `None` is forever.
+    pub fn days(&self, kind: crate::library::ShotKind) -> Option<u32> {
+        match kind {
+            crate::library::ShotKind::Image => self.image,
+            crate::library::ShotKind::Gif => self.gif,
+            crate::library::ShotKind::Video => self.video,
+        }
+    }
+
+    /// Read from the settings file: anything it cannot use keeps its
+    /// default, and zero days, which would remove everything, is forever.
+    fn from_stored(value: serde_json::Value) -> Self {
+        let defaults = Self::default();
+        let days = |key: &str| {
+            value
+                .get(key)
+                .and_then(|v| serde_json::from_value::<u32>(v.clone()).ok())
+                .filter(|days| *days > 0)
+        };
+        Self {
+            image: days("image"),
+            gif: days("gif"),
+            video: days("video"),
+            removal: value
+                .get("removal")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or(defaults.removal),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -785,6 +840,9 @@ pub struct Settings {
     pub appearance: Appearance,
     /// What screen recordings are saved as.
     pub recording: RecordingSettings,
+    /// How long items are kept and how cleanup removes them.
+    #[serde(default)]
+    pub retention: Retention,
 }
 
 impl Settings {
@@ -799,6 +857,7 @@ impl Settings {
             show_in_dock: true,
             appearance: Appearance::default(),
             recording: RecordingSettings::default(),
+            retention: Retention::default(),
         }
     }
 }
@@ -819,6 +878,8 @@ struct StoredSettings {
     appearance: Option<serde_json::Value>,
     /// Read leniently by [`RecordingSettings::from_stored`].
     recording: Option<serde_json::Value>,
+    /// Read leniently by [`Retention::from_stored`].
+    retention: Option<serde_json::Value>,
 }
 
 /// Hotkeys on disk; a missing or empty one keeps its default.
@@ -886,6 +947,10 @@ impl StoredSettings {
                 .recording
                 .map(RecordingSettings::from_stored)
                 .unwrap_or(defaults.recording),
+            retention: self
+                .retention
+                .map(Retention::from_stored)
+                .unwrap_or(defaults.retention),
         }
     }
 }
@@ -947,6 +1012,7 @@ struct SettingsOnDisk<'a> {
     show_in_dock: bool,
     appearance: Appearance,
     recording: &'a RecordingSettings,
+    retention: Retention,
 }
 
 #[derive(Serialize)]
@@ -1005,6 +1071,7 @@ impl<'a> SettingsOnDisk<'a> {
             show_in_dock: settings.show_in_dock,
             appearance: settings.appearance,
             recording: &settings.recording,
+            retention: settings.retention,
         }
     }
 }
@@ -1356,6 +1423,23 @@ impl SettingsStore {
         Ok(self.current.clone())
     }
 
+    /// Changes how long each kind of item is kept and how cleanup removes
+    /// them. Running cleanup is up to the caller.
+    pub fn set_retention(&mut self, retention: Retention) -> Result<Settings, SettingsError> {
+        if [retention.image, retention.gif, retention.video].contains(&Some(0)) {
+            return Err(SettingsError::Invalid(
+                "items are kept for at least a day".into(),
+            ));
+        }
+        let next = Settings {
+            retention,
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
     /// Shows or hides the Dock icon (macOS). Applying it is up to the caller.
     pub fn set_show_in_dock(&mut self, enabled: bool) -> Result<Settings, SettingsError> {
         let next = Settings {
@@ -1480,6 +1564,12 @@ mod tests {
                 webcam_shape: WebcamShape::Rounded,
                 countdown: 5,
                 source: RecordingSource::Screen,
+            },
+            retention: Retention {
+                image: None,
+                gif: Some(90),
+                video: Some(30),
+                removal: Removal::Permanent,
             },
         };
         save(&path, &settings).unwrap();
@@ -1860,6 +1950,84 @@ mod tests {
         };
         assert!(store.set_recording(odd).is_err());
         assert_eq!(load(&path, defaults(&dir)).unwrap().recording.fps, 60);
+    }
+
+    #[test]
+    fn retention_keeps_everything_forever_in_the_trash_by_default() {
+        let dir = TempDir::new().unwrap();
+        let retention = defaults(&dir).retention;
+        assert_eq!(
+            retention,
+            Retention {
+                image: None,
+                gif: None,
+                video: None,
+                removal: Removal::Trash,
+            }
+        );
+    }
+
+    #[test]
+    fn an_older_settings_file_without_retention_keeps_everything() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"showInDock": false, "recording": {"fps": 60}}"#).unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.retention, Retention::default());
+        assert!(!loaded.show_in_dock);
+    }
+
+    #[test]
+    fn retention_is_read_leniently() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"retention": {"image": 0, "gif": "soon", "video": 30, "removal": "shred"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load(&path, defaults(&dir)).unwrap().retention,
+            Retention {
+                video: Some(30),
+                ..Retention::default()
+            }
+        );
+    }
+
+    #[test]
+    fn retention_is_saved_and_kept_whole() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        let chosen = Retention {
+            image: Some(365),
+            gif: Some(90),
+            video: Some(7),
+            removal: Removal::Permanent,
+        };
+        assert_eq!(store.set_retention(chosen).unwrap().retention, chosen);
+        assert_eq!(load(&path, defaults(&dir)).unwrap().retention, chosen);
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            json["retention"],
+            serde_json::json!({ "image": 365, "gif": 90, "video": 7, "removal": "permanent" })
+        );
+    }
+
+    #[test]
+    fn retention_of_zero_days_is_refused() {
+        let dir = TempDir::new().unwrap();
+        let mut store = open_store(settings_path(&dir), defaults(&dir));
+        let zero = Retention {
+            gif: Some(0),
+            ..Retention::default()
+        };
+        assert!(store.set_retention(zero).is_err());
+        assert_eq!(store.get().retention, Retention::default());
     }
 
     #[test]

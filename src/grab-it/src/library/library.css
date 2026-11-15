@@ -71,20 +71,14 @@
 }
 
 /* Storage: the pill in the title bar and its popover. Each kind keeps one
-   colour, in light and dark. */
+   colour, in light and dark (App.css, so Settings' Storage page has them). */
 :root {
-  --kind-image: #2a78d6;
-  --kind-gif: #eb6834;
-  --kind-video: #1baf7a;
   --storage-track: #e8eaee;
   --storage-other: var(--border-strong);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --kind-image: #3987e5;
-    --kind-gif: #d95926;
-    --kind-video: #199e70;
     --storage-track: #22252a;
   }
 }
@@ -1639,4 +1633,54 @@
   .zoom {
     display: none;
   }
+}
+
+/* Keep forever: a star on the tile's top-left corner, shown on hover and
+   always once it is on, and in the details bar. */
+:root {
+  --star: #e5a50a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --star: #f5c211;
+  }
+}
+
+.tile-star {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-muted);
+  background: var(--pop);
+  border: 1px solid var(--pop-edge);
+  border-radius: 7px;
+  box-shadow: 0 4px 12px -6px rgb(0 0 0 / 40%);
+  opacity: 0;
+  transition: opacity 120ms;
+}
+
+.tile-star .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.tile:hover .tile-star,
+.tile:focus-within .tile-star,
+.tile-star.is-on {
+  opacity: 1;
+}
+
+.tile-star:where(:hover) {
+  color: var(--text);
+}
+
+.tile-star.is-on,
+.details-star.is-on {
+  color: var(--star);
 }

@@ -116,6 +116,7 @@ pub fn run() {
             commands::set_appearance,
             commands::step_text_size,
             commands::set_recording,
+            commands::set_retention,
             hub::hub_capture,
             hub::hub_monitors,
             hub::hub_open,
@@ -173,6 +174,7 @@ pub fn run() {
             search::library_sidebar,
             library::library_remove_ai_tag,
             library::library_set_notes,
+            library::library_set_keep,
             library::library_delete,
             library::library_open,
             library::library_copy,
@@ -234,8 +236,9 @@ pub fn run() {
             // Claude Code or Codex installed, its thread first turns
             // describing on once for a user who never turned it on.
             ai::start(handle);
-            // Picks up captures added while Grab-it was not running.
-            library::rescan_in_background(handle, library::current_save_folder(handle));
+            // Picks up captures added while Grab-it was not running, then
+            // removes items older than their Keep setting, and again daily.
+            storage::start(handle, library::current_save_folder(handle));
             pin::clear_stale(handle);
             tray::create(handle)?;
             // Offers newer releases from GitHub.

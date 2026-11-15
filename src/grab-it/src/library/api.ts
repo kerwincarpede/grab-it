@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Retention } from "../settings/api";
 
 /** Mirrors `Shot` in src-tauri/src/library.rs. */
 /** What a library item is. Mirrors `ShotKind` in src-tauri/src/library.rs. */
@@ -31,6 +32,13 @@ export interface Shot {
   durationMs?: number | null;
   /** The main file's size (the PNG's or the recording's), once known. */
   bytes?: number | null;
+  /** Starred Keep forever: cleanup never removes it. Older backends leave it out. */
+  keep?: boolean;
+}
+
+/** Stars or unstars the shot Keep forever. */
+export function setShotKeep(id: number, keep: boolean): Promise<Shot> {
+  return invoke<Shot>("library_set_keep", { id, keep });
 }
 
 /** Whether the shot is a recording rather than a capture. */
@@ -64,6 +72,13 @@ export interface DiskSpace {
   total: number;
 }
 
+/** Each kind's count and size. Mirrors `Usage` in src-tauri/src/storage.rs. */
+export interface Usage {
+  image: KindUsage;
+  gif: KindUsage;
+  video: KindUsage;
+}
+
 /** The library's size by kind and the save folder's disk. Mirrors `LibraryStorage` in src-tauri/src/storage.rs. */
 export interface LibraryStorage {
   image: KindUsage;
@@ -71,6 +86,8 @@ export interface LibraryStorage {
   video: KindUsage;
   /** Null when the disk could not be read. */
   disk: DiskSpace | null;
+  /** What the next cleanup removes, by kind: older than its Keep setting and not protected. Older backends leave it out. */
+  due?: Usage;
 }
 
 /** The kinds the Storage popover shows, in its order. */
@@ -80,8 +97,33 @@ export const STORAGE_KINDS: { kind: ShotKind; name: string; one: string; many: s
   { kind: "video", name: "Videos", one: "video", many: "videos" },
 ];
 
-export function libraryStorage(): Promise<LibraryStorage> {
-  return invoke<LibraryStorage>("library_storage");
+/**
+ * The library's size by kind and the save folder's disk. `due` counts what
+ * cleanup removes under the saved Keep settings, or under `candidate` when
+ * one is given, as Settings asks before saving a shorter one.
+ */
+export function libraryStorage(candidate?: Retention): Promise<LibraryStorage> {
+  return candidate ? invoke<LibraryStorage>("library_storage", { candidate }) : invoke<LibraryStorage>("library_storage");
+}
+
+/** What a cleanup removed. Mirrors `Cleaned` in src-tauri/src/storage.rs. */
+export interface Cleaned {
+  count: number;
+  bytes: number;
+}
+
+/** Mirrors `LIBRARY_CLEANED_EVENT` in src-tauri/src/storage.rs: an automatic cleanup removed something. */
+export const LIBRARY_CLEANED_EVENT = "library-cleaned";
+
+/** "Cleanup removed 12 old items (340 MB)", for the notice after an automatic cleanup. */
+export function cleanedText(cleaned: Cleaned): string {
+  const items = cleaned.count === 1 ? "1 old item" : `${cleaned.count.toLocaleString()} old items`;
+  return `Cleanup removed ${items} (${formatSize(cleaned.bytes)})`;
+}
+
+/** Calls `handler` with what went whenever an automatic cleanup removes items. */
+export function onLibraryCleaned(handler: (cleaned: Cleaned) => void): Promise<UnlistenFn> {
+  return listen<Cleaned>(LIBRARY_CLEANED_EVENT, (event) => handler(event.payload));
 }
 
 /** Every item's size added up. */

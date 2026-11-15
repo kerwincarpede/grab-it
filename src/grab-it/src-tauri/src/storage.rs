@@ -2,13 +2,35 @@
 //! `bytes` the library records for every item, and the free and total space
 //! on the save folder's disk. The Library's storage pill and its Storage
 //! popover show them.
+//!
+//! Cleanup removes items older than their kind's Keep setting, by when
+//! they were captured, to the Trash or for good. Protected items are never
+//! removed: starred Keep forever, tagged by the user, with notes, or with
+//! annotations or recording edits. It runs when Grab-it starts and once a
+//! day, one cleanup at a time.
 
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::library::{Library, LibraryResult, LibraryState, ShotKind, current_save_folder};
+use crate::commands::{SettingsState, lock};
+use crate::library::{
+    LIBRARY_CHANGED_EVENT, Library, LibraryError, LibraryResult, LibraryState, SHOT_COLUMNS, Shot,
+    ShotKind, current_save_folder, extra_files, remove_if_present, shot_from_row,
+};
+use crate::settings::{Removal, Retention};
+
+/// Emitted with a [`Cleaned`] when an automatic cleanup removed something.
+pub const LIBRARY_CLEANED_EVENT: &str = "library-cleaned";
+
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+/// How often the cleanup thread checks whether a day has passed. Short, so
+/// a computer that slept through the day still cleans up soon after.
+const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
 
 /// How many items of one kind the library holds and their total size.
 /// Mirrors `KindUsage` in src/library/api.ts.
@@ -49,6 +71,9 @@ pub struct LibraryStorage {
     pub video: KindUsage,
     /// The save folder's disk; `None` when it cannot be read.
     pub disk: Option<DiskSpace>,
+    /// The items of each kind older than its Keep setting and not
+    /// protected: what the next cleanup removes.
+    pub due: Usage,
 }
 
 /// Counts and sizes the library's items by kind.
@@ -89,19 +114,335 @@ pub fn disk_space(folder: &Path) -> Option<DiskSpace> {
     })
 }
 
-/// The library's size by kind and the save folder's disk.
+/// Whether cleanup must leave `shot` alone: starred Keep forever, tagged by
+/// the user (AI tags do not count), with notes, or with annotations or
+/// recording edits saved beside it.
+pub fn is_protected(shot: &Shot) -> bool {
+    shot.keep || !shot.tags.is_empty() || !shot.notes.trim().is_empty() || has_edits(shot)
+}
+
+fn has_edits(shot: &Shot) -> bool {
+    crate::capture::annotations_path(&shot.path).exists()
+        || (shot.kind.is_recording() && crate::recording_editor::edits_path(&shot.path).exists())
+}
+
+/// The items older than their kind's Keep setting at `now_ms` and not
+/// protected, oldest first.
+pub fn due(library: &Library, retention: &Retention, now_ms: i64) -> LibraryResult<Vec<Shot>> {
+    let mut stmt = library.connection().prepare(&format!(
+        "SELECT {SHOT_COLUMNS} FROM shots s
+         WHERE s.kind = ?1 AND s.captured_at < ?2 AND s.keep = 0
+           AND trim(s.notes) = ''
+           AND NOT EXISTS (SELECT 1 FROM shot_tags t WHERE t.shot_id = s.id)
+         ORDER BY s.captured_at, s.id"
+    ))?;
+    let mut due = Vec::new();
+    for kind in [ShotKind::Image, ShotKind::Gif, ShotKind::Video] {
+        let Some(days) = retention.days(kind) else {
+            continue;
+        };
+        let cutoff = now_ms.saturating_sub(i64::from(days) * DAY_MS);
+        let shots = stmt
+            .query_map(rusqlite::params![kind.as_str(), cutoff], shot_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        due.extend(shots.into_iter().filter(|shot| !has_edits(shot)));
+    }
+    Ok(due)
+}
+
+/// The count and size by kind of what [`due`] finds.
+pub fn due_usage(library: &Library, retention: &Retention, now_ms: i64) -> LibraryResult<Usage> {
+    let mut usage = Usage::default();
+    for shot in due(library, retention, now_ms)? {
+        let slot = match shot.kind {
+            ShotKind::Image => &mut usage.image,
+            ShotKind::Gif => &mut usage.gif,
+            ShotKind::Video => &mut usage.video,
+        };
+        slot.count += 1;
+        slot.bytes += shot.bytes.unwrap_or(0);
+    }
+    Ok(usage)
+}
+
+/// Milliseconds since the Unix epoch, as `captured_at` counts them.
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// What a cleanup removed. Mirrors `Cleaned` in src/library/api.ts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Cleaned {
+    pub count: u32,
+    pub bytes: u64,
+}
+
+/// How far a cleanup has got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Progress {
+    /// Items looked at so far, removed or not.
+    pub done: u32,
+    pub total: u32,
+    /// What the items removed so far took up.
+    pub bytes: u64,
+}
+
+/// Removes an item's files: its main file first, then its sidecars. Fails
+/// only when the main file could not be removed. Faked in tests.
+pub type RemoveFiles = dyn Fn(&[PathBuf], Removal) -> io::Result<()> + Sync;
+
+/// Moves `files` to the system Trash or deletes them. The first is the
+/// item's main file; the rest are its sidecars, whose failures are logged.
+/// Files already gone are skipped.
+pub fn remove_files(files: &[PathBuf], removal: Removal) -> io::Result<()> {
+    let Some((main, sidecars)) = files.split_first() else {
+        return Ok(());
+    };
+    match removal {
+        Removal::Trash => {
+            if main.exists() {
+                trash::delete(main).map_err(io::Error::other)?;
+            }
+            for sidecar in sidecars.iter().filter(|path| path.exists()) {
+                if let Err(err) = trash::delete(sidecar) {
+                    eprintln!(
+                        "Grab-it: could not move {} to the Trash: {err}",
+                        sidecar.display()
+                    );
+                }
+            }
+        }
+        Removal::Permanent => {
+            remove_if_present(main)?;
+            for sidecar in sidecars {
+                if let Err(err) = remove_if_present(sidecar) {
+                    eprintln!("Grab-it: could not delete {}: {err}", sidecar.display());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Lets one cleanup run at a time.
+#[derive(Debug, Default)]
+pub struct CleanupLock(AtomicBool);
+
+impl CleanupLock {
+    /// `None` while another cleanup runs.
+    fn try_begin(&self) -> Option<CleanupGuard<'_>> {
+        self.0
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| CleanupGuard(&self.0))
+    }
+
+    #[cfg(test)]
+    fn is_running(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+struct CleanupGuard<'a>(&'a AtomicBool);
+
+impl Drop for CleanupGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+#[derive(Debug)]
+pub enum CleanupError {
+    /// Another cleanup is running.
+    Busy,
+    Library(LibraryError),
+}
+
+impl std::fmt::Display for CleanupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Busy => f.write_str("a cleanup is already running"),
+            Self::Library(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl From<LibraryError> for CleanupError {
+    fn from(err: LibraryError) -> Self {
+        Self::Library(err)
+    }
+}
+
+/// Removes the items [`due`] finds at `now_ms`, oldest first, with
+/// `remove`, telling `progress` after each one. Stops before the next item
+/// once `stop` is set. An item starred, tagged or edited since the list was
+/// made is spared, and one whose file cannot be removed stays in the
+/// library. The library is locked one item at a time, so the windows keep
+/// working while it runs.
+#[allow(clippy::too_many_arguments)]
+pub fn cleanup(
+    running: &CleanupLock,
+    library: &LibraryState,
+    retention: &Retention,
+    removal: Removal,
+    now_ms: i64,
+    remove: &RemoveFiles,
+    progress: &mut dyn FnMut(Progress),
+    stop: &AtomicBool,
+) -> Result<Cleaned, CleanupError> {
+    let _guard = running.try_begin().ok_or(CleanupError::Busy)?;
+    let items = due(&library.lock(), retention, now_ms)?;
+    let total = items.len() as u32;
+    let mut cleaned = Cleaned::default();
+    for (index, item) in items.into_iter().enumerate() {
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
+        let shot = match library.lock().get(item.id) {
+            Ok(shot) => Some(shot),
+            Err(LibraryError::NotFound(_)) => None,
+            Err(err) => return Err(err.into()),
+        };
+        if let Some(shot) = shot.filter(|shot| !is_protected(shot)) {
+            // The thumbnail is Grab-it's own, made again if the item comes
+            // back, so it is deleted rather than put in the Trash.
+            let mut files = vec![shot.path.clone()];
+            files.extend(
+                extra_files(&shot)
+                    .into_iter()
+                    .filter(|path| *path != shot.thumb_path),
+            );
+            match remove(&files, removal) {
+                Ok(()) => {
+                    if let Err(err) = remove_if_present(&shot.thumb_path) {
+                        eprintln!(
+                            "Grab-it: could not delete {}: {err}",
+                            shot.thumb_path.display()
+                        );
+                    }
+                    library.lock().forget(shot.id)?;
+                    cleaned.count += 1;
+                    cleaned.bytes += shot.bytes.unwrap_or(0);
+                }
+                Err(err) => eprintln!(
+                    "Grab-it: cleanup could not remove {}: {err}",
+                    shot.path.display()
+                ),
+            }
+        }
+        progress(Progress {
+            done: index as u32 + 1,
+            total,
+            bytes: cleaned.bytes,
+        });
+    }
+    Ok(cleaned)
+}
+
+/// Rescans the save folder, then cleans up, and again whenever a day has
+/// passed since, on a thread of its own.
+pub fn start(app: &AppHandle, save_folder: PathBuf) {
+    app.manage(CleanupLock::default());
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("grab-it-cleanup".into())
+        .spawn(move || {
+            crate::library::rescan_now(&app, &save_folder);
+            let mut last = now_ms();
+            clean_up_automatically(&app);
+            loop {
+                std::thread::sleep(CHECK_EVERY);
+                if now_ms() - last >= DAY_MS {
+                    last = now_ms();
+                    clean_up_automatically(&app);
+                }
+            }
+        });
+    if let Err(err) = spawned {
+        eprintln!("Grab-it: could not start cleanup: {err}");
+    }
+}
+
+/// Removes what the Keep settings say is due, the way Settings says, and
+/// tells the windows what went.
+pub fn clean_up_automatically(app: &AppHandle) {
+    let retention = lock(&app.state::<SettingsState>()).get().retention;
+    if retention.image.is_none() && retention.gif.is_none() && retention.video.is_none() {
+        return;
+    }
+    let (Some(running), Some(library)) = (
+        app.try_state::<CleanupLock>(),
+        app.try_state::<LibraryState>(),
+    ) else {
+        return;
+    };
+    let remove = |files: &[PathBuf], removal: Removal| -> io::Result<()> {
+        // An item open in an editor may have unsaved changes; it waits for
+        // the next cleanup.
+        if let Some(main) = files.first()
+            && is_open_in_editor(app, main)
+        {
+            return Err(io::Error::other("it is open in an editor"));
+        }
+        remove_files(files, removal)
+    };
+    let result = cleanup(
+        &running,
+        &library,
+        &retention,
+        retention.removal,
+        now_ms(),
+        &remove,
+        &mut |_| {},
+        &AtomicBool::new(false),
+    );
+    match result {
+        Ok(cleaned) if cleaned.count > 0 => {
+            let _ = app.emit(LIBRARY_CLEANED_EVENT, cleaned);
+            let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
+        }
+        Ok(_) | Err(CleanupError::Busy) => {}
+        Err(err) => eprintln!("Grab-it: cleanup failed: {err}"),
+    }
+}
+
+fn is_open_in_editor(app: &AppHandle, path: &Path) -> bool {
+    app.try_state::<crate::editor::EditorState>()
+        .is_some_and(|editors| editors.label_for(path).is_some())
+        || app
+            .try_state::<crate::recording_editor::RecordingEditorState>()
+            .is_some_and(|editors| editors.label_for(path).is_some())
+}
+
+/// The library's size by kind, the save folder's disk, and what cleanup
+/// would remove: under the saved Keep settings, or under `candidate` when
+/// Settings asks before saving a shorter one.
 #[tauri::command(async)]
 pub fn library_storage(
+    candidate: Option<Retention>,
     app: AppHandle,
     state: State<'_, LibraryState>,
+    settings: State<'_, SettingsState>,
 ) -> Result<LibraryStorage, String> {
-    let usage = usage(&state.lock()).map_err(|err| err.to_string())?;
+    let retention = candidate.unwrap_or_else(|| lock(&settings).get().retention);
+    let (usage, due) = {
+        let library = state.lock();
+        let usage = usage(&library).map_err(|err| err.to_string())?;
+        let due = due_usage(&library, &retention, now_ms()).map_err(|err| err.to_string())?;
+        (usage, due)
+    };
     let disk = disk_space(&current_save_folder(&app));
     Ok(LibraryStorage {
         image: usage.image,
         gif: usage.gif,
         video: usage.video,
         disk,
+        due,
     })
 }
 
@@ -190,6 +531,13 @@ mod tests {
                 free: 5,
                 total: 100,
             }),
+            due: Usage {
+                gif: KindUsage {
+                    count: 1,
+                    bytes: 10,
+                },
+                ..Usage::default()
+            },
         };
         assert_eq!(
             serde_json::to_value(storage).unwrap(),
@@ -198,7 +546,362 @@ mod tests {
                 "gif": { "count": 0, "bytes": 0 },
                 "video": { "count": 0, "bytes": 0 },
                 "disk": { "free": 5, "total": 100 },
+                "due": {
+                    "image": { "count": 0, "bytes": 0 },
+                    "gif": { "count": 1, "bytes": 10 },
+                    "video": { "count": 0, "bytes": 0 },
+                },
             })
+        );
+    }
+
+    const NOW: i64 = 1_000 * DAY_MS;
+
+    /// A library item of `kind` captured `days_old` days before [`NOW`],
+    /// with its file and thumbnail on disk in `dir`.
+    fn aged(
+        library: &mut Library,
+        dir: &Path,
+        kind: ShotKind,
+        name: &str,
+        days_old: i64,
+    ) -> Shot {
+        let path = dir.join(name);
+        std::fs::write(&path, b"item").unwrap();
+        let thumb_path = dir.join(format!("{name}.thumb.png"));
+        std::fs::write(&thumb_path, b"thumb").unwrap();
+        library
+            .insert(&PreparedShot {
+                kind,
+                path,
+                thumb_path,
+                captured_at: NOW - days_old * DAY_MS,
+                mode: None,
+                app: None,
+                window_title: None,
+                width: 10,
+                height: 10,
+                duration_ms: None,
+                bytes: Some(100),
+            })
+            .unwrap()
+    }
+
+    fn keep(image: Option<u32>, gif: Option<u32>, video: Option<u32>) -> Retention {
+        Retention {
+            image,
+            gif,
+            video,
+            removal: Removal::Trash,
+        }
+    }
+
+    fn ids(shots: &[Shot]) -> Vec<i64> {
+        shots.iter().map(|shot| shot.id).collect()
+    }
+
+    #[test]
+    fn items_older_than_their_kinds_keep_setting_are_due() {
+        let dir = TempDir::new().unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let old_image = aged(&mut library, dir.path(), ShotKind::Image, "a.png", 40);
+        let _new_image = aged(&mut library, dir.path(), ShotKind::Image, "b.png", 20);
+        let old_gif = aged(&mut library, dir.path(), ShotKind::Gif, "c.gif", 8);
+        let _new_gif = aged(&mut library, dir.path(), ShotKind::Gif, "d.gif", 6);
+        // Videos are kept forever.
+        let _old_video = aged(&mut library, dir.path(), ShotKind::Video, "e.mp4", 900);
+
+        let retention = keep(Some(30), Some(7), None);
+        assert_eq!(
+            ids(&due(&library, &retention, NOW).unwrap()),
+            vec![old_image.id, old_gif.id]
+        );
+        assert_eq!(
+            due_usage(&library, &retention, NOW).unwrap(),
+            Usage {
+                image: KindUsage {
+                    count: 1,
+                    bytes: 100,
+                },
+                gif: KindUsage {
+                    count: 1,
+                    bytes: 100,
+                },
+                video: KindUsage::default(),
+            }
+        );
+    }
+
+    #[test]
+    fn nothing_is_due_when_everything_is_kept_forever() {
+        let dir = TempDir::new().unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        aged(&mut library, dir.path(), ShotKind::Image, "a.png", 5_000);
+        aged(&mut library, dir.path(), ShotKind::Video, "b.mp4", 5_000);
+        assert!(due(&library, &Retention::default(), NOW).unwrap().is_empty());
+    }
+
+    #[test]
+    fn starred_tagged_noted_and_edited_items_are_never_due() {
+        let dir = TempDir::new().unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let starred = aged(&mut library, dir.path(), ShotKind::Image, "star.png", 90);
+        library.set_keep(starred.id, true).unwrap();
+        let tagged = aged(&mut library, dir.path(), ShotKind::Image, "tag.png", 90);
+        library.set_tags(tagged.id, &["receipts".into()]).unwrap();
+        let noted = aged(&mut library, dir.path(), ShotKind::Image, "note.png", 90);
+        library.set_notes(noted.id, "the invoice").unwrap();
+        let annotated = aged(&mut library, dir.path(), ShotKind::Image, "ann.png", 90);
+        std::fs::write(crate::capture::annotations_path(&annotated.path), "{}").unwrap();
+        let edited = aged(&mut library, dir.path(), ShotKind::Video, "cut.mp4", 90);
+        std::fs::write(crate::recording_editor::edits_path(&edited.path), "{}").unwrap();
+        // Blank notes and AI tags do not protect an item.
+        let blank = aged(&mut library, dir.path(), ShotKind::Image, "blank.png", 90);
+        library.set_notes(blank.id, "   ").unwrap();
+        let plain = aged(&mut library, dir.path(), ShotKind::Video, "plain.mp4", 90);
+
+        let retention = keep(Some(30), Some(30), Some(30));
+        assert_eq!(
+            ids(&due(&library, &retention, NOW).unwrap()),
+            vec![blank.id, plain.id]
+        );
+        for id in [starred.id, tagged.id, noted.id] {
+            assert!(is_protected(&library.get(id).unwrap()));
+        }
+        assert!(is_protected(&library.get(annotated.id).unwrap()));
+        assert!(is_protected(&library.get(edited.id).unwrap()));
+        assert!(!is_protected(&library.get(plain.id).unwrap()));
+    }
+
+    #[test]
+    fn unstarring_makes_an_item_due_again() {
+        let dir = TempDir::new().unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = aged(&mut library, dir.path(), ShotKind::Gif, "a.gif", 90);
+        assert!(library.set_keep(shot.id, true).unwrap().keep);
+        let retention = keep(None, Some(30), None);
+        assert!(due(&library, &retention, NOW).unwrap().is_empty());
+        assert!(!library.set_keep(shot.id, false).unwrap().keep);
+        assert_eq!(ids(&due(&library, &retention, NOW).unwrap()), vec![shot.id]);
+    }
+
+    /// Runs a cleanup with a remover that records what it was asked to do
+    /// and deletes the files.
+    fn clean(
+        library: &LibraryState,
+        retention: &Retention,
+        removal: Removal,
+    ) -> (Cleaned, Vec<(Vec<PathBuf>, Removal)>, Vec<Progress>) {
+        let calls = std::sync::Mutex::new(Vec::new());
+        let remove = |files: &[PathBuf], removal: Removal| -> io::Result<()> {
+            calls.lock().unwrap().push((files.to_vec(), removal));
+            remove_files(files, Removal::Permanent)
+        };
+        let mut seen = Vec::new();
+        let cleaned = cleanup(
+            &CleanupLock::default(),
+            library,
+            retention,
+            removal,
+            NOW,
+            &remove,
+            &mut |progress| seen.push(progress),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        (cleaned, calls.into_inner().unwrap(), seen)
+    }
+
+    #[test]
+    fn cleanup_moves_due_items_to_the_trash_and_forgets_them() {
+        let dir = TempDir::new().unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let old = aged(&mut library, dir.path(), ShotKind::Video, "old.mp4", 60);
+        let cursor = crate::record::cursor_path(&old.path);
+        std::fs::write(&cursor, "[]").unwrap();
+        let kept = aged(&mut library, dir.path(), ShotKind::Video, "new.mp4", 10);
+        let state = LibraryState::new(library);
+
+        let (cleaned, calls, progress) =
+            clean(&state, &keep(None, None, Some(30)), Removal::Trash);
+
+        assert_eq!(
+            cleaned,
+            Cleaned {
+                count: 1,
+                bytes: 100,
+            }
+        );
+        assert_eq!(calls.len(), 1);
+        let (files, removal) = &calls[0];
+        assert_eq!(removal, &Removal::Trash);
+        assert_eq!(files[0], old.path, "the main file goes first");
+        assert!(files.contains(&cursor));
+        assert!(
+            !files.contains(&old.thumb_path),
+            "the thumbnail is not put in the Trash"
+        );
+        assert!(!old.thumb_path.exists(), "the thumbnail is deleted");
+        assert_eq!(
+            progress,
+            vec![Progress {
+                done: 1,
+                total: 1,
+                bytes: 100,
+            }]
+        );
+        let library = state.lock();
+        assert!(matches!(library.get(old.id), Err(LibraryError::NotFound(_))));
+        assert!(library.get(kept.id).is_ok());
+        assert!(kept.path.exists());
+    }
+
+    #[test]
+    fn cleanup_can_delete_permanently() {
+        let dir = TempDir::new().unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let old = aged(&mut library, dir.path(), ShotKind::Image, "old.png", 400);
+        let meta = crate::capture::meta_path(&old.path);
+        std::fs::write(&meta, "{}").unwrap();
+        let state = LibraryState::new(library);
+
+        let (cleaned, calls, _) = clean(&state, &keep(Some(365), None, None), Removal::Permanent);
+
+        assert_eq!(cleaned.count, 1);
+        assert_eq!(calls[0].1, Removal::Permanent);
+        assert!(!old.path.exists());
+        assert!(!meta.exists());
+        assert_eq!(state.lock().count().unwrap(), 0);
+    }
+
+    #[test]
+    fn remove_files_deletes_permanently_and_skips_missing_files() {
+        let dir = TempDir::new().unwrap();
+        let main = dir.path().join("a.png");
+        std::fs::write(&main, b"x").unwrap();
+        let missing = dir.path().join("a.meta.json");
+        remove_files(&[main.clone(), missing], Removal::Permanent).unwrap();
+        assert!(!main.exists());
+        // An item whose files are already gone is nothing to remove.
+        remove_files(&[dir.path().join("gone.png")], Removal::Trash).unwrap();
+    }
+
+    #[test]
+    fn an_item_whose_file_cannot_be_removed_stays() {
+        let dir = TempDir::new().unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let old = aged(&mut library, dir.path(), ShotKind::Gif, "old.gif", 60);
+        let state = LibraryState::new(library);
+        let refuse = |_: &[PathBuf], _: Removal| -> io::Result<()> {
+            Err(io::Error::other("in use"))
+        };
+        let cleaned = cleanup(
+            &CleanupLock::default(),
+            &state,
+            &keep(None, Some(30), None),
+            Removal::Trash,
+            NOW,
+            &refuse,
+            &mut |_| {},
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(cleaned, Cleaned::default());
+        assert!(state.lock().get(old.id).is_ok());
+        assert!(old.thumb_path.exists());
+    }
+
+    #[test]
+    fn an_item_starred_after_the_list_was_made_is_spared() {
+        let dir = TempDir::new().unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let first = aged(&mut library, dir.path(), ShotKind::Image, "a.png", 60);
+        let second = aged(&mut library, dir.path(), ShotKind::Image, "b.png", 50);
+        let state = LibraryState::new(library);
+        // Starring the second while the first is removed.
+        let remove = |files: &[PathBuf], removal: Removal| -> io::Result<()> {
+            if files[0] == first.path {
+                state.lock().set_keep(second.id, true).unwrap();
+            }
+            remove_files(files, removal)
+        };
+        let cleaned = cleanup(
+            &CleanupLock::default(),
+            &state,
+            &keep(Some(30), None, None),
+            Removal::Permanent,
+            NOW,
+            &remove,
+            &mut |_| {},
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(cleaned.count, 1);
+        assert!(state.lock().get(second.id).is_ok());
+        assert!(second.path.exists());
+    }
+
+    #[test]
+    fn stop_ends_a_cleanup_before_the_next_item() {
+        let dir = TempDir::new().unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        for name in ["a.png", "b.png", "c.png"] {
+            aged(&mut library, dir.path(), ShotKind::Image, name, 60);
+        }
+        let state = LibraryState::new(library);
+        let stop = AtomicBool::new(false);
+        let mut seen = Vec::new();
+        let cleaned = cleanup(
+            &CleanupLock::default(),
+            &state,
+            &keep(Some(30), None, None),
+            Removal::Permanent,
+            NOW,
+            &remove_files,
+            &mut |progress| {
+                seen.push(progress);
+                stop.store(true, Ordering::Release);
+            },
+            &stop,
+        )
+        .unwrap();
+        assert_eq!(cleaned.count, 1);
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].total, 3);
+        assert_eq!(state.lock().count().unwrap(), 2);
+    }
+
+    #[test]
+    fn one_cleanup_runs_at_a_time() {
+        let state = LibraryState::new(Library::open_in_memory().unwrap());
+        let running = CleanupLock::default();
+        let held = running.try_begin().expect("the first cleanup starts");
+        assert!(running.is_running());
+        let busy = cleanup(
+            &running,
+            &state,
+            &Retention::default(),
+            Removal::Trash,
+            NOW,
+            &remove_files,
+            &mut |_| {},
+            &AtomicBool::new(false),
+        );
+        assert!(matches!(busy, Err(CleanupError::Busy)));
+        drop(held);
+        assert!(!running.is_running());
+        assert!(
+            cleanup(
+                &running,
+                &state,
+                &Retention::default(),
+                Removal::Trash,
+                NOW,
+                &remove_files,
+                &mut |_| {},
+                &AtomicBool::new(false),
+            )
+            .is_ok()
         );
     }
 

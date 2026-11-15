@@ -164,3 +164,13 @@ export const FilmIcon = ({ size }: { size?: number }) => (
     <path d="M7 5v14M17 5v14M3 9.5h4M3 14.5h4M17 9.5h4M17 14.5h4" />
   </Icon>
 );
+
+/** Keep forever: outlined, or filled once starred. */
+export const StarIcon = ({ filled = false, size }: { filled?: boolean; size?: number }) => (
+  <Icon size={size}>
+    <path
+      d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"
+      fill={filled ? "currentColor" : "none"}
+    />
+  </Icon>
+);

@@ -1045,3 +1045,56 @@ label:has(input:checked) .corner-card::after {
   --tag-fill-hover: hsl(var(--tag-hue, 220) var(--tag-sat) var(--tag-ink) / 22%);
   --tag-edge: hsl(var(--tag-hue, 220) var(--tag-sat) var(--tag-ink) / 28%);
 }
+
+/* Each kind of library item keeps one colour, in light and dark: the
+   Library's storage popover and Settings' Storage page use them. */
+:root {
+  --kind-image: #2a78d6;
+  --kind-gif: #eb6834;
+  --kind-video: #1baf7a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --kind-image: #3987e5;
+    --kind-gif: #d95926;
+    --kind-video: #199e70;
+  }
+}
+
+/* Settings › Storage: a swatch of the kind's colour beside its name. */
+.storage-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.storage-swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.storage-due {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* A short confirmation over the page, e.g. before a shorter Keep setting. */
+.confirm-dialog {
+  width: 360px;
+}
+
+.confirm-dialog .dialog-title {
+  padding: 18px 20px 0;
+  font-size: 15px;
+}
+
+.confirm-body {
+  margin: 0;
+  padding: 8px 20px 18px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
