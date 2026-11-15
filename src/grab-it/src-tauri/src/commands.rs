@@ -115,6 +115,18 @@ pub fn set_recording(
     Ok(settings)
 }
 
+/// Saves how long each kind of item is kept and how cleanup removes them.
+/// The next cleanup, at startup, daily or from the Library, uses them.
+#[tauri::command]
+pub fn set_retention(
+    retention: crate::settings::Retention,
+    state: State<'_, SettingsState>,
+) -> Result<Settings, String> {
+    lock(&state)
+        .set_retention(retention)
+        .map_err(|err| err.to_string())
+}
+
 /// Shows or hides the Dock icon (macOS) and remembers the choice.
 #[tauri::command]
 pub fn set_show_in_dock(

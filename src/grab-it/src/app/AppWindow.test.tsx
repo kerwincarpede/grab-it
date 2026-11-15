@@ -35,7 +35,10 @@ const UPDATE = {
 };
 
 /** A backend with two apps and no captures; records every call. */
-function backend({ update = { state: "idle", current: "0.2.1" } as unknown } = {}) {
+function backend({
+  update = { state: "idle", current: "0.2.1" } as unknown,
+  storage = null as unknown,
+} = {}) {
   const calls: { cmd: string; payload?: InvokeArgs }[] = [];
   mockIPC(
     (cmd, payload) => {
@@ -55,6 +58,8 @@ function backend({ update = { state: "idle", current: "0.2.1" } as unknown } = {
           };
         case "update_status":
           return update;
+        case "library_storage":
+          return storage;
       case "library_filter_options":
         return { apps: ["Chrome", "Ghostty"], tags: [], categories: [] };
       case "library_list":
@@ -148,6 +153,49 @@ describe("AppWindow", () => {
     expect(within(dialog).getByRole("heading", { level: 1, name: "Hotkeys" })).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Close Settings" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("closes only the Keep confirmation with Escape, leaving Settings open", async () => {
+    const usage = { count: 86, bytes: 4_000_000_000 };
+    const calls = backend({
+      storage: {
+        image: usage,
+        gif: usage,
+        video: usage,
+        disk: null,
+        due: { image: usage, gif: usage, video: { count: 72, bytes: 3_900_000_000 } },
+      },
+    });
+    render(<AppWindow />);
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    const settings = screen.getByRole("dialog", { name: "Settings" });
+    await userEvent.click(within(settings).getByRole("button", { name: "Storage" }));
+    const videos = await within(settings).findByLabelText("Videos");
+    await waitFor(() => expect(videos).toBeEnabled());
+
+    await userEvent.selectOptions(videos, "For 1 week");
+    await screen.findByRole("dialog", { name: "Keep videos for 1 week?" });
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Keep videos for 1 week?" })).not.toBeInTheDocument());
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeInTheDocument();
+    expect(within(settings).getByRole("heading", { level: 1, name: "Storage" })).toBeInTheDocument();
+    expect(calls.map((call) => call.cmd)).not.toContain("set_retention");
+  });
+
+  it("opens Settings on its Storage page from the Library's storage popover", async () => {
+    const none = { count: 0, bytes: 0 };
+    backend({
+      storage: { image: none, gif: none, video: none, disk: null, due: { image: none, gif: none, video: none } },
+    });
+    render(<AppWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: /0 captures/ }));
+    const popover = screen.getByRole("dialog", { name: "Storage" });
+    await userEvent.click(within(popover).getByRole("button", { name: "Storage settings…" }));
+
+    expect(screen.queryByRole("dialog", { name: "Storage" })).not.toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Settings" });
+    expect(within(dialog).getByRole("heading", { level: 1, name: "Storage" })).toBeInTheDocument();
   });
 
   it("opens Settings with Cmd+comma and closes it with Escape", async () => {

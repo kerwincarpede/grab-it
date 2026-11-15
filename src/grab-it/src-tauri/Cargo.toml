@@ -64,6 +64,13 @@ rxing = { version = "0.9", default-features = false, features = [
     "full_barcode_format_support",
     "encoding_rs",
 ] }
+# Free and total space on the save folder's disk, for the Library's
+# Storage popover (storage.rs). Pure Rust: rustix on Unix, windows-sys on
+# Windows, both already in the tree.
+fs4 = "1"
+# Moves items cleanup removes to the system Trash (storage.rs): the Recycle
+# Bin on Windows, Finder's Trash on macOS, the freedesktop trash on Linux.
+trash = "5"
 # Draws the keystroke overlay's label into recordings (frame_overlays.rs), in
 # the cut-down DejaVu Sans Bold in fonts/.
 ab_glyph = "0.2"

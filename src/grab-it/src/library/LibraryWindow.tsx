@@ -12,6 +12,7 @@ import {
 import "./library.css";
 import {
   CLI_NAMES,
+  cleanedText,
   DATE_PRESETS,
   FIELD_LABELS,
   NO_FILTERS,
@@ -36,6 +37,7 @@ import {
   ocrStatus,
   onAiStatus,
   onLibraryChanged,
+  onLibraryCleaned,
   onOcrStatus,
   openSettings,
   openShot,
@@ -47,6 +49,7 @@ import {
   retryOcr,
   revealShot,
   searchShots,
+  setShotKeep,
   setShotNotes,
   removeAiTag,
   setShotTags,
@@ -78,6 +81,7 @@ import {
   LayersIcon,
   SearchIcon,
   SparkleIcon,
+  StarIcon,
   TagIcon,
   TextIcon,
   TrashIcon,
@@ -85,6 +89,8 @@ import {
 import { useInView, useThumbnail } from "./thumbnails";
 import { tagStyle } from "./tagColor";
 import { DETAILS_WIDTH, clampDetailsWidth } from "./detailsWidth";
+import { CleanUpDialog, StoragePill } from "./storage";
+import type { SettingsSection } from "../settings/api";
 import { ChevronDownIcon, ChevronUpIcon } from "../app/icons";
 import { formatBytes, formatElapsed } from "../quick/api";
 
@@ -545,10 +551,15 @@ interface TileProps {
   onSelect: (id: number) => void;
   onOpen: (id: number) => void;
   onAction: (shot: Shot, action: TileAction) => void;
+  /** Stars or unstars the shot Keep forever. */
+  onKeep: (shot: Shot) => void;
 }
 
-/** One capture in the grid; actions appear on hover. */
-const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, onAction }: TileProps) {
+/** "Keep forever" or "Starred: kept forever", for the star's tooltip. */
+const keepTitle = (shot: Shot) => (shot.keep ? "Kept forever: cleanup never removes it" : "Keep forever");
+
+/** One capture in the grid; actions appear on hover, the star too until it is on. */
+const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, onAction, onKeep }: TileProps) {
   const style = { "--i": Math.min(index, 18) } as CSSProperties;
   const tags = allTags(shot);
   const recording = isRecording(shot);
@@ -583,6 +594,16 @@ const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, 
             </span>
           )}
         </span>
+      </button>
+      <button
+        type="button"
+        className={`tile-star${shot.keep ? " is-on" : ""}`}
+        aria-label={`Keep ${shot.fileName} forever`}
+        aria-pressed={shot.keep === true}
+        title={keepTitle(shot)}
+        onClick={() => onKeep(shot)}
+      >
+        <StarIcon filled={shot.keep === true} />
       </button>
       {recording ? (
         <span className="tile-actions">
@@ -718,6 +739,14 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
     }
   }
 
+  async function toggleKeep() {
+    try {
+      onUpdated(await setShotKeep(shot.id, !shot.keep));
+    } catch (err) {
+      onError(errorMessage(err));
+    }
+  }
+
   async function redescribe() {
     try {
       await redescribeShot(shot.id);
@@ -767,6 +796,16 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
       <DetailsResizer width={width} onWidth={onWidth} />
       <div className="details-top">
         <span className="details-heading">Details</span>
+        <button
+          type="button"
+          className={`icon-button details-star${shot.keep ? " is-on" : ""}`}
+          aria-label="Keep forever"
+          aria-pressed={shot.keep === true}
+          title={keepTitle(shot)}
+          onClick={() => void toggleKeep()}
+        >
+          <StarIcon filled={shot.keep === true} size={15} />
+        </button>
         <button type="button" className="icon-button" aria-label="Previous capture" disabled={!canStep.back} onClick={() => onStep(-1)}>
           <ChevronUpIcon size={15} />
         </button>
@@ -1078,6 +1117,11 @@ interface LibraryWindowProps {
   onKindFilter?: (kind: KindFilter | "") => void;
   /** Shown at the end of the title bar (the Grab-it window's New capture button). */
   toolbarEnd?: ReactNode;
+  /**
+   * Opens Settings on a page, as the Grab-it window does in its own dialog;
+   * without it the Settings window opens.
+   */
+  onOpenSettings?: (section: SettingsSection) => void;
 }
 
 function LibraryWindow({
@@ -1089,8 +1133,11 @@ function LibraryWindow({
   kindFilter,
   onKindFilter,
   toolbarEnd,
+  onOpenSettings,
 }: LibraryWindowProps = {}) {
   const [shots, setShots] = useState<Shot[]>([]);
+  /** Whether the Clean up dialog is open. */
+  const [cleaning, setCleaning] = useState(false);
   const [total, setTotal] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -1293,6 +1340,25 @@ function LibraryWindow({
     };
   }, [aiState, aiProvider]);
 
+  // An automatic cleanup says what it removed; the list reloads on the
+  // library change that follows.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    onLibraryCleaned((cleaned) => setNotice({ text: cleanedText(cleaned), key: Date.now() }))
+      .then((stop) => {
+        if (cancelled) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {
+        // Without events the Library just does not say what cleanup removed.
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
@@ -1393,6 +1459,11 @@ function LibraryWindow({
     openSettings().catch((err: unknown) => setError(errorMessage(err)));
   }
 
+  function showStorageSettings() {
+    if (onOpenSettings) onOpenSettings("storage");
+    else showSettings();
+  }
+
   function retry() {
     setOcr({ state: "idle" });
     retryOcr().catch((err: unknown) => setError(errorMessage(err)));
@@ -1415,6 +1486,13 @@ function LibraryWindow({
 
   const open = useCallback((id: number) => {
     openShot(id).catch((err: unknown) => setError(errorMessage(err)));
+  }, []);
+
+  const toggleKeep = useCallback((shot: Shot) => {
+    setShotKeep(shot.id, !shot.keep).then(
+      (saved) => setShots((current) => current.map((item) => (item.id === saved.id ? saved : item))),
+      (err: unknown) => setError(errorMessage(err)),
+    );
   }, []);
 
   const tileAction = useCallback((shot: Shot, action: TileAction) => {
@@ -1468,17 +1546,17 @@ function LibraryWindow({
         <div className="library-bar" data-tauri-drag-region>
           <div className="library-title" data-tauri-drag-region>
             <h1>{title}</h1>
-            {loaded && (
-              <span className="count-pill">
-                {searching
-                  ? total === 1
-                    ? "1 result"
-                    : `${total} results`
-                  : total === 1
-                    ? "1 capture"
-                    : `${total} captures`}
-              </span>
-            )}
+            {loaded &&
+              (searching ? (
+                <span className="count-pill">{total === 1 ? "1 result" : `${total} results`}</span>
+              ) : (
+                <StoragePill
+                  count={total}
+                  version={reloads}
+                  onCleanUp={() => setCleaning(true)}
+                  onOpenSettings={showStorageSettings}
+                />
+              ))}
           </div>
           <SearchField text={text} searchRef={searchBox} onText={setText} onSubmit={() => setSearchedText(text)} />
           {toolbarEnd}
@@ -1549,6 +1627,7 @@ function LibraryWindow({
                       onSelect={setSelectedId}
                       onOpen={open}
                       onAction={tileAction}
+                      onKeep={toggleKeep}
                     />
                   ))}
                 </ul>
@@ -1601,6 +1680,7 @@ function LibraryWindow({
           {notice.text}
         </div>
       )}
+      {cleaning && <CleanUpDialog onClose={() => setCleaning(false)} />}
     </main>
   );
 }

@@ -313,6 +313,7 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
   const pickTag = useCallback((tag: string) => setPlace((was) => ({ ...was, tag })), []);
   const pickKind = useCallback((kind: KindFilter | "") => setPlace((was) => ({ ...was, kind })), []);
   const close = useCallback(() => setOpen(null), []);
+  const openSettingsOn = useCallback((section: SettingsSection) => setOpen({ kind: "settings", section }), []);
 
   function run(action: () => Promise<void>) {
     action().catch((err: unknown) => setError(errorMessage(err)));
@@ -399,6 +400,7 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
           kindFilter={place.kind}
           onKindFilter={pickKind}
           toolbarEnd={<CaptureButton hotkey={regionHotkey} onError={setError} />}
+          onOpenSettings={openSettingsOn}
         />
       </div>
 

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Removal, Retention } from "../settings/api";
 
 /** Mirrors `Shot` in src-tauri/src/library.rs. */
 /** What a library item is. Mirrors `ShotKind` in src-tauri/src/library.rs. */
@@ -29,8 +30,15 @@ export interface Shot {
   aiTags: string[];
   /** How long a recording runs, once known. */
   durationMs?: number | null;
-  /** A recording's file size, once known. */
+  /** The main file's size (the PNG's or the recording's), once known. */
   bytes?: number | null;
+  /** Starred Keep forever: cleanup never removes it. Older backends leave it out. */
+  keep?: boolean;
+}
+
+/** Stars or unstars the shot Keep forever. */
+export function setShotKeep(id: number, keep: boolean): Promise<Shot> {
+  return invoke<Shot>("library_set_keep", { id, keep });
 }
 
 /** Whether the shot is a recording rather than a capture. */
@@ -49,6 +57,143 @@ export interface ShotPage {
   offset: number;
   /** Every shot in the library. */
   total: number;
+}
+
+/** How many items of one kind the library holds and their size. Mirrors `KindUsage` in src-tauri/src/storage.rs. */
+export interface KindUsage {
+  count: number;
+  bytes: number;
+}
+
+/** Space on a disk, in bytes. Mirrors `DiskSpace` in src-tauri/src/storage.rs. */
+export interface DiskSpace {
+  /** What Grab-it may still write. */
+  free: number;
+  total: number;
+}
+
+/** Each kind's count and size. Mirrors `Usage` in src-tauri/src/storage.rs. */
+export interface Usage {
+  image: KindUsage;
+  gif: KindUsage;
+  video: KindUsage;
+}
+
+/** The library's size by kind and the save folder's disk. Mirrors `LibraryStorage` in src-tauri/src/storage.rs. */
+export interface LibraryStorage {
+  image: KindUsage;
+  gif: KindUsage;
+  video: KindUsage;
+  /** Null when the disk could not be read. */
+  disk: DiskSpace | null;
+  /** What the next cleanup removes, by kind: older than its Keep setting and not protected. Older backends leave it out. */
+  due?: Usage;
+}
+
+/** The kinds the Storage popover shows, in its order. */
+export const STORAGE_KINDS: { kind: ShotKind; name: string; one: string; many: string }[] = [
+  { kind: "image", name: "Screenshots", one: "screenshot", many: "screenshots" },
+  { kind: "gif", name: "GIFs", one: "GIF", many: "GIFs" },
+  { kind: "video", name: "Videos", one: "video", many: "videos" },
+];
+
+/**
+ * The library's size by kind and the save folder's disk. `due` counts what
+ * cleanup removes under the saved Keep settings, or under `candidate` when
+ * one is given, as Settings asks before saving a shorter one.
+ */
+export function libraryStorage(candidate?: Retention): Promise<LibraryStorage> {
+  return candidate ? invoke<LibraryStorage>("library_storage", { candidate }) : invoke<LibraryStorage>("library_storage");
+}
+
+/** What a cleanup removed. Mirrors `Cleaned` in src-tauri/src/storage.rs. */
+export interface Cleaned {
+  count: number;
+  bytes: number;
+}
+
+/** Mirrors `LIBRARY_CLEANED_EVENT` in src-tauri/src/storage.rs: an automatic cleanup removed something. */
+export const LIBRARY_CLEANED_EVENT = "library-cleaned";
+
+/** "Cleanup removed 12 old items (340 MB)", for the notice after an automatic cleanup. */
+export function cleanedText(cleaned: Cleaned): string {
+  const items = cleaned.count === 1 ? "1 old item" : `${cleaned.count.toLocaleString()} old items`;
+  return `Cleanup removed ${items} (${formatSize(cleaned.bytes)})`;
+}
+
+/** Calls `handler` with what went whenever an automatic cleanup removes items. */
+export function onLibraryCleaned(handler: (cleaned: Cleaned) => void): Promise<UnlistenFn> {
+  return listen<Cleaned>(LIBRARY_CLEANED_EVENT, (event) => handler(event.payload));
+}
+
+/** How far a cleanup has got. Mirrors `Progress` in src-tauri/src/storage.rs. */
+export interface CleanupProgress {
+  /** Items looked at so far, removed or not. */
+  done: number;
+  total: number;
+  /** What the items removed so far took up. */
+  bytes: number;
+}
+
+/** Mirrors `CLEANUP_PROGRESS_EVENT` in src-tauri/src/storage.rs: sent after each item any cleanup looks at. */
+export const CLEANUP_PROGRESS_EVENT = "cleanup-progress";
+
+/** Mirrors `CLEANUP_DONE_EVENT` in src-tauri/src/storage.rs: a cleanup ended, done, stopped or failed. */
+export const CLEANUP_DONE_EVENT = "cleanup-done";
+
+/**
+ * Removes what the saved Keep settings say is due, to the Trash or for good,
+ * and resolves to what went once it is done or stopped. `confirmed` is what
+ * the user agreed to remove: when more is due now, nothing is removed and it
+ * rejects. It also rejects while another cleanup runs.
+ */
+export function cleanUp(removal: Removal, confirmed: KindUsage): Promise<Cleaned> {
+  return invoke<Cleaned>("library_clean_up", { removal, confirmed });
+}
+
+/** Stops the running cleanup before its next item. */
+export function stopCleanUp(): Promise<void> {
+  return invoke<void>("library_stop_clean_up");
+}
+
+/** Calls `handler` after each item a cleanup, automatic or not, looks at. */
+export function onCleanupProgress(handler: (progress: CleanupProgress) => void): Promise<UnlistenFn> {
+  return listen<CleanupProgress>(CLEANUP_PROGRESS_EVENT, (event) => handler(event.payload));
+}
+
+/** Calls `handler` whenever a cleanup ends. */
+export function onCleanupDone(handler: () => void): Promise<UnlistenFn> {
+  return listen(CLEANUP_DONE_EVENT, () => handler());
+}
+
+/** What the next cleanup removes, all kinds together; null when the backend does not say. */
+export function dueTotal(storage: LibraryStorage): KindUsage | null {
+  const { due } = storage;
+  if (!due) return null;
+  return {
+    count: due.image.count + due.gif.count + due.video.count,
+    bytes: due.image.bytes + due.gif.bytes + due.video.bytes,
+  };
+}
+
+/** Every item's size added up. */
+export function storageTotal(storage: LibraryStorage): number {
+  return storage.image.bytes + storage.gif.bytes + storage.video.bytes;
+}
+
+/** "412 KB", "4.7 MB", "57 MB", "6.3 GB": a size for the storage pill and popover. */
+export function formatSize(bytes: number): string {
+  const units = ["KB", "MB", "GB", "TB"];
+  if (bytes < 1024) return `${Math.max(0, Math.round(bytes))} B`;
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  // Whole kilobytes; one decimal below 10 MB, and always for GB and TB.
+  const digits = unit === 0 || (unit === 1 && value >= 10) ? 0 : 1;
+  return `${value.toFixed(digits)} ${units[unit]}`;
 }
 
 /** Mirrors `LIBRARY_CHANGED_EVENT` in src-tauri/src/library.rs. */

@@ -1,6 +1,16 @@
 import type { ReactNode } from "react";
 import Dialog from "./Dialog";
-import { AppearanceIcon, CloseIcon, KeyboardIcon, PenIcon, RecordIcon, RegionIcon, SlidersIcon, SparkleIcon } from "./icons";
+import {
+  AppearanceIcon,
+  CloseIcon,
+  KeyboardIcon,
+  PenIcon,
+  RecordIcon,
+  RegionIcon,
+  SlidersIcon,
+  SparkleIcon,
+  StorageIcon,
+} from "./icons";
 import SettingsWindow from "../settings/SettingsWindow";
 import { SETTINGS_SECTIONS, type SettingsSection } from "../settings/api";
 
@@ -10,6 +20,7 @@ const SECTION_ICONS: Record<SettingsSection, ReactNode> = {
   capture: <RegionIcon />,
   editor: <PenIcon />,
   recording: <RecordIcon />,
+  storage: <StorageIcon />,
   ai: <SparkleIcon />,
   hotkeys: <KeyboardIcon />,
 };

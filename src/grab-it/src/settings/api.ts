@@ -190,6 +190,61 @@ export interface Settings extends Preferences {
   showInDock?: boolean;
   appearance?: Appearance;
   recording?: RecordingSettings;
+  /** Older backends leave it out: everything is kept forever. */
+  retention?: Retention;
+}
+
+/** Mirrors `Removal` in src-tauri/src/settings.rs: how cleanup removes items. */
+export type Removal = "trash" | "permanent";
+
+/** Mirrors `Retention` in src-tauri/src/settings.rs: days each kind is kept, null for forever. */
+export interface Retention {
+  image: number | null;
+  gif: number | null;
+  video: number | null;
+  removal: Removal;
+}
+
+/** The kinds a Keep setting is for. */
+export type RetentionKind = "image" | "gif" | "video";
+
+export const DEFAULT_RETENTION: Retention = { image: null, gif: null, video: null, removal: "trash" };
+
+/** The Keep choices, shortest last, as the Storage page lists them. */
+export const KEEP_CHOICES: { days: number | null; title: string; phrase: string }[] = [
+  { days: null, title: "Forever", phrase: "forever" },
+  { days: 365, title: "For 1 year", phrase: "1 year" },
+  { days: 90, title: "For 90 days", phrase: "90 days" },
+  { days: 30, title: "For 30 days", phrase: "30 days" },
+  { days: 7, title: "For 1 week", phrase: "1 week" },
+];
+
+/** "1 week", "90 days": how long a Keep setting keeps items, in a sentence. */
+export function keepPhrase(days: number): string {
+  return KEEP_CHOICES.find((choice) => choice.days === days)?.phrase ?? `${days} ${days === 1 ? "day" : "days"}`;
+}
+
+/** Whether keeping for `next` days removes items `previous` kept: it is shorter. */
+export function keepsLess(previous: number | null, next: number | null): boolean {
+  return next !== null && (previous === null || next < previous);
+}
+
+export const REMOVALS: { value: Removal; title: string; hint: string }[] = [
+  {
+    value: "trash",
+    title: "Moving to the Trash",
+    hint: "You can restore items from the Trash. Their space is freed when you empty it. Clean up in the Library asks each time.",
+  },
+  {
+    value: "permanent",
+    title: "Deleting permanently",
+    hint: "Items are gone for good and their space is freed at once. Clean up in the Library asks each time.",
+  },
+];
+
+/** Saves how long each kind is kept and how items are removed; resolves to the settings as saved. */
+export function setRetention(retention: Retention): Promise<Settings> {
+  return invoke<Settings>("set_retention", { retention });
 }
 
 /** Mirrors `PopupCorner` in src-tauri/src/settings.rs. */
@@ -461,7 +516,15 @@ export function onFfmpegStatus(handler: (status: FfmpegStatus) => void): Promise
 }
 
 /** Settings, split into the pages of the Grab-it window's sidebar. */
-export type SettingsSection = "general" | "appearance" | "capture" | "editor" | "recording" | "ai" | "hotkeys";
+export type SettingsSection =
+  | "general"
+  | "appearance"
+  | "capture"
+  | "editor"
+  | "recording"
+  | "storage"
+  | "ai"
+  | "hotkeys";
 
 export const SETTINGS_SECTIONS: { id: SettingsSection; title: string }[] = [
   { id: "general", title: "General" },
@@ -469,6 +532,7 @@ export const SETTINGS_SECTIONS: { id: SettingsSection; title: string }[] = [
   { id: "capture", title: "After a capture" },
   { id: "editor", title: "Editor" },
   { id: "recording", title: "Recording" },
+  { id: "storage", title: "Storage" },
   { id: "ai", title: "AI descriptions" },
   { id: "hotkeys", title: "Hotkeys" },
 ];

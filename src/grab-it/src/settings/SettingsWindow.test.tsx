@@ -9,6 +9,7 @@ import { camera, fakeMedia, type FakeMedia } from "../webcam/testMedia";
 import {
   DEFAULT_AI_PREFERENCES,
   DEFAULT_RECORDING,
+  DEFAULT_RETENTION,
   isLocalEndpoint,
   keystrokesHint,
   listCameras,
@@ -16,7 +17,13 @@ import {
   type FfmpegStatus,
   type Microphone,
   type RecordingSettings,
+  type Retention,
 } from "./api";
+
+const MB = 1024 * 1024;
+const GB = 1024 * MB;
+
+type KindName = "image" | "gif" | "video";
 
 const DEFAULT_HOTKEYS = {
   allInOne: "Ctrl+Alt+PrintScreen",
@@ -44,6 +51,13 @@ interface Backend {
   autoBackdrop?: boolean;
   appearance?: unknown;
   recording?: RecordingSettings;
+  retention: Retention;
+  /** Each kind's count and size, as `library_storage` reads them. */
+  usage: Record<KindName, { count: number; bytes: number }>;
+  /** What is older than any Keep setting and not protected, by kind; `library_storage` counts it as due when the kind is not kept forever. */
+  older: Record<KindName, { count: number; bytes: number }>;
+  /** `library_storage` fails, as an older backend without it would. */
+  storageFails?: boolean;
   /** What `ffmpeg_status` answers. */
   ffmpeg: FfmpegStatus;
   /** What `ffmpeg_retry` answers. */
@@ -76,6 +90,17 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     ffmpegAfterRetry: { state: "downloading", downloaded: 0, total: 0 },
     microphones: [],
     systemSound: true,
+    retention: { ...DEFAULT_RETENTION },
+    usage: {
+      image: { count: 1102, bytes: 412 * MB },
+      gif: { count: 96, bytes: 1.1 * GB },
+      video: { count: 86, bytes: 4.7 * GB },
+    },
+    older: {
+      image: { count: 0, bytes: 0 },
+      gif: { count: 12, bytes: 255 * MB },
+      video: { count: 72, bytes: 3.7 * GB },
+    },
     calls: [],
     ...initial,
   };
@@ -88,6 +113,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     editor: backend.autoBackdrop === undefined ? {} : { autoBackdrop: backend.autoBackdrop },
     appearance: backend.appearance,
     recording: backend.recording,
+    retention: backend.retention,
   });
   mockIPC((cmd, payload) => {
     backend.calls.push({ cmd, payload });
@@ -100,6 +126,20 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
       case "set_recording":
         backend.recording = (payload as { recording: RecordingSettings }).recording;
         return settings();
+      case "set_retention":
+        if (backend.setError) throw backend.setError;
+        backend.retention = (payload as { retention: Retention }).retention;
+        return settings();
+      case "library_storage": {
+        if (backend.storageFails) throw new Error("unexpected command library_storage");
+        const retention = (payload as { candidate?: Retention } | undefined)?.candidate ?? backend.retention;
+        const due = (kind: KindName) => (retention[kind] === null ? { count: 0, bytes: 0 } : backend.older[kind]);
+        return {
+          ...backend.usage,
+          disk: { free: 100 * GB, total: 500 * GB },
+          due: { image: due("image"), gif: due("gif"), video: due("video") },
+        };
+      }
       case "ffmpeg_status":
         return backend.ffmpeg;
       case "ffmpeg_retry":
@@ -1163,5 +1203,134 @@ describe("listCameras", () => {
 
   it("is empty where the window has no media devices", async () => {
     expect(await listCameras(true)).toEqual([]);
+  });
+});
+
+describe("SettingsWindow storage", () => {
+  const kept: Retention = { image: null, gif: 90, video: 30, removal: "trash" };
+
+  it("shows each kind's Keep setting with its count, size and what is due", async () => {
+    mockBackend({ retention: kept });
+    render(<SettingsWindow section="storage" />);
+    expect(screen.getByRole("heading", { level: 1, name: "Storage" })).toBeInTheDocument();
+    expect(screen.getByText("Changes save as you make them.")).toBeInTheDocument();
+
+    const screenshots = await screen.findByLabelText("Screenshots");
+    expect(screenshots).toHaveValue("");
+    expect(screen.getByLabelText("GIFs")).toHaveValue("90");
+    expect(screen.getByLabelText("Videos")).toHaveValue("30");
+    expect(await screen.findByTestId("keep-image-hint")).toHaveTextContent("1,102 screenshots · 412 MB · never removed");
+    expect(screen.getByTestId("keep-gif-hint")).toHaveTextContent("96 GIFs · 1.1 GB · 255 MB older than 90 days");
+    expect(screen.getByTestId("keep-video-hint")).toHaveTextContent("86 videos · 4.7 GB · 3.7 GB older than 30 days");
+    expect(within(screenshots).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Forever",
+      "For 1 year",
+      "For 90 days",
+      "For 30 days",
+      "For 1 week",
+    ]);
+    expect(screen.getByLabelText("Remove items by")).toHaveValue("trash");
+    expect(screen.getByText(/Starred, tagged, noted and annotated items are never removed/)).toBeInTheDocument();
+  });
+
+  it("keeps everything forever in the Trash when the settings say nothing", async () => {
+    mockBackend();
+    render(<SettingsWindow section="storage" />);
+    expect(await screen.findByLabelText("Videos")).toHaveValue("");
+    expect(screen.getByLabelText("Remove items by")).toHaveValue("trash");
+  });
+
+  it("saves a longer Keep setting at once", async () => {
+    const backend = mockBackend({ retention: kept });
+    render(<SettingsWindow section="storage" />);
+    const gifs = await screen.findByLabelText("GIFs");
+    await waitFor(() => expect(gifs).toBeEnabled());
+
+    await userEvent.selectOptions(gifs, "Forever");
+
+    await waitFor(() => expect(backend.retention).toEqual({ ...kept, gif: null }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("keep-gif-hint")).toHaveTextContent("never removed"));
+  });
+
+  it("asks before a shorter Keep setting removes items, then saves it", async () => {
+    const backend = mockBackend({ retention: kept });
+    render(<SettingsWindow section="storage" />);
+    const videos = await screen.findByLabelText("Videos");
+    await waitFor(() => expect(videos).toBeEnabled());
+
+    await userEvent.selectOptions(videos, "For 1 week");
+
+    const dialog = await screen.findByRole("dialog", { name: "Keep videos for 1 week?" });
+    expect(dialog).toHaveTextContent("72 videos (3.7 GB) are older and will be moved to the Trash at the next cleanup.");
+    expect(commands(backend)).not.toContain("set_retention");
+    const asked = backend.calls.filter((call) => call.cmd === "library_storage").pop();
+    expect(asked?.payload).toEqual({ candidate: { ...kept, video: 7 } });
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Keep for 1 week" }));
+
+    await waitFor(() => expect(backend.retention).toEqual({ ...kept, video: 7 }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("Videos")).toHaveValue("7"));
+  });
+
+  it("says a permanent delete in the confirmation", async () => {
+    mockBackend({ retention: { ...kept, removal: "permanent" } });
+    render(<SettingsWindow section="storage" />);
+    const gifs = await screen.findByLabelText("GIFs");
+    await waitFor(() => expect(gifs).toBeEnabled());
+
+    await userEvent.selectOptions(gifs, "For 30 days");
+
+    const dialog = await screen.findByRole("dialog", { name: "Keep GIFs for 30 days?" });
+    expect(dialog).toHaveTextContent("12 GIFs (255 MB) are older and will be deleted permanently at the next cleanup.");
+  });
+
+  it("keeps the setting when the confirmation is cancelled", async () => {
+    const backend = mockBackend({ retention: kept });
+    render(<SettingsWindow section="storage" />);
+    const videos = await screen.findByLabelText("Videos");
+    await waitFor(() => expect(videos).toBeEnabled());
+
+    await userEvent.selectOptions(videos, "For 1 week");
+    const dialog = await screen.findByRole("dialog", { name: "Keep videos for 1 week?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(commands(backend)).not.toContain("set_retention");
+    expect(screen.getByLabelText("Videos")).toHaveValue("30");
+  });
+
+  it("saves a shorter Keep setting at once when it removes nothing", async () => {
+    const backend = mockBackend();
+    render(<SettingsWindow section="storage" />);
+    const screenshots = await screen.findByLabelText("Screenshots");
+    await waitFor(() => expect(screenshots).toBeEnabled());
+
+    await userEvent.selectOptions(screenshots, "For 1 year");
+
+    await waitFor(() => expect(backend.retention).toEqual({ ...DEFAULT_RETENTION, image: 365 }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("keep-image-hint")).toHaveTextContent("nothing older than 1 year"));
+  });
+
+  it("saves how items are removed", async () => {
+    const backend = mockBackend({ retention: kept });
+    render(<SettingsWindow section="storage" />);
+    const removal = await screen.findByLabelText("Remove items by");
+    await waitFor(() => expect(removal).toBeEnabled());
+
+    await userEvent.selectOptions(removal, "Deleting permanently");
+
+    await waitFor(() => expect(backend.retention).toEqual({ ...kept, removal: "permanent" }));
+    expect(await screen.findByText(/gone for good/)).toBeInTheDocument();
+  });
+
+  it("still sets Keep when sizes cannot be read", async () => {
+    mockBackend({ storageFails: true });
+    render(<SettingsWindow section="storage" />);
+    const gifs = await screen.findByLabelText("GIFs");
+    await waitFor(() => expect(gifs).toBeEnabled());
+    expect(screen.queryByTestId("keep-gif-hint")).not.toBeInTheDocument();
   });
 });
