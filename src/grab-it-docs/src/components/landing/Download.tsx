@@ -9,7 +9,7 @@ const release = 'https://github.com/kerwincarpede/grab-it/releases/latest';
 
 const systems: { id: DesktopOs; name: string; files: string }[] = [
 	{ id: 'windows', name: 'Windows', files: 'Setup (.exe) or .msi · Windows 10 and 11' },
-	{ id: 'macos', name: 'macOS', files: 'Disk image (.dmg) · Apple silicon (M1 or later)' },
+	{ id: 'macos', name: 'macOS', files: 'Disk image (.dmg) · Apple silicon or Intel' },
 	{ id: 'linux', name: 'Linux', files: '.deb, .rpm and AppImage' },
 ];
 
