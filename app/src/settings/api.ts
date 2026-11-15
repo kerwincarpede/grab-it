@@ -273,6 +273,12 @@ export type RecordingFps = 30 | 60;
  */
 export type RecordingAudio = "none" | "microphone" | "system" | "both";
 
+/**
+ * Mirrors `RecordingSource` in src-tauri/src/settings.rs: what the Record overlay records, a dragged region, a
+ * picked window's area or a whole display.
+ */
+export type RecordingSource = "region" | "window" | "screen";
+
 /** Mirrors `RecordingSettings` in src-tauri/src/settings.rs. */
 export interface RecordingSettings {
   format: RecordingFormat;
@@ -298,6 +304,8 @@ export interface RecordingSettings {
   webcamShape: WebcamShape;
   /** Seconds counted down on the recording toolbar before it starts: one of `RECORDING_COUNTDOWNS`. */
   countdown: number;
+  /** The source the Record overlay opens on: the one used last. */
+  source: RecordingSource;
 }
 
 /** Mirrors `RECORDING_COUNTDOWNS` in src-tauri/src/settings.rs; 0 starts at once. */
@@ -316,6 +324,7 @@ export const DEFAULT_RECORDING: RecordingSettings = {
   camera: null,
   webcamShape: "round",
   countdown: 0,
+  source: "region",
 };
 
 /**

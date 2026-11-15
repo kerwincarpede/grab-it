@@ -21,6 +21,7 @@
   --rb-accent: #8297ff;
   --rb-rec: #ff4d4f;
   --rb-danger: #ec7a80;
+  --rb-paused: #f5b13d;
 
   position: fixed;
   inset: 0;
@@ -92,15 +93,24 @@
 }
 
 .recordbar-dot[data-paused="true"] {
-  background: var(--rb-muted);
-  box-shadow: 0 0 0 4px rgb(141 145 154 / 18%);
+  background: var(--rb-paused);
+  box-shadow: 0 0 0 4px rgb(245 177 61 / 20%);
   animation: none;
+}
+
+.recordbar-paused {
+  padding: 0 4px 0 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--rb-paused);
 }
 
 .recordbar-time {
   padding: 0 4px 0 6px;
   font-family: var(--font-mono);
   font-size: 13px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
 }
@@ -141,19 +151,74 @@
   outline-offset: 1px;
 }
 
+/* A muted input reads as struck through, in soft red. */
 .recordbar-tool.recordbar-off {
-  color: var(--rb-muted);
+  color: var(--rb-danger);
 }
 
+/* Pause and Stop say what they do: an icon and a word. */
+.recordbar-labelled {
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  height: 30px;
+  padding: 0 12px 0 10px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.recordbar-labelled:focus-visible,
+.recordbar-cancel:focus-visible {
+  outline: 2px solid var(--rb-accent);
+  outline-offset: 1px;
+}
+
+.recordbar .recordbar-pause:hover {
+  background: var(--rb-fill-hover);
+}
+
+.recordbar .recordbar-pause:active {
+  background: var(--rb-fill-pressed);
+}
+
+/* The same size and glow as the setup toolbar's Record, so the two read as a pair. */
 .recordbar .recordbar-stop {
-  width: 34px;
-  margin-left: 2px;
+  height: 36px;
+  margin-left: 4px;
+  padding: 0 14px 0 12px;
   color: #fff;
+  font-weight: 600;
   background: var(--rb-rec);
+  box-shadow:
+    0 0 0 3px rgb(255 77 79 / 28%),
+    0 0 18px rgb(255 77 79 / 45%);
 }
 
-.recordbar .recordbar-stop:hover:not(:disabled) {
-  background: #ff6668;
+.recordbar .recordbar-stop:hover {
+  background: #ff6163;
+}
+
+.recordbar .recordbar-stop:focus-visible {
+  outline-color: #fff;
+  outline-offset: 2px;
+}
+
+.recordbar .recordbar-more[aria-expanded="true"] {
+  background: var(--rb-fill-pressed);
+}
+
+.recordbar .recordbar-cancel {
+  height: 26px;
+  margin-left: 2px;
+  padding: 0 12px;
+  background: var(--rb-fill-pressed);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.recordbar .recordbar-cancel:hover {
+  background: rgb(255 255 255 / 20%);
 }
 
 .recordbar-meter {

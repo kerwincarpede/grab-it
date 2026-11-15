@@ -9,6 +9,7 @@ import PinWindow from "./pin/PinWindow";
 import WelcomeWindow from "./welcome/WelcomeWindow";
 import WebcamBubble from "./webcam/WebcamBubble";
 import RecordBar from "./recordbar/RecordBar";
+import RecordFrame from "./recordframe/RecordFrame";
 import AppWindow from "./app/AppWindow";
 import Hub from "./hub/Hub";
 import { viewFromHash } from "./app/api";
@@ -56,6 +57,8 @@ function App({ route = routeFromHash(window.location.hash) }: AppProps) {
       return <WebcamBubble />;
     case "recordbar":
       return <RecordBar />;
+    case "recordframe":
+      return <RecordFrame />;
     default:
       return (
         <main className="window home">

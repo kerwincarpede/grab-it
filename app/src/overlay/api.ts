@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { routeFromHash, routeHasFlag } from "../routes";
-import type { Box } from "./geometry";
+import type { Box, Point } from "./geometry";
 
 export type CaptureMode = "region" | "window" | "screen" | "monitor";
 
@@ -57,6 +57,19 @@ export interface OverlayInfo {
    * overlay is sent one, and older backends leave it out.
    */
   lastRegion?: Box | null;
+  /**
+   * The pointer is on this monitor: the Record overlay's setup toolbar
+   * shows here, and Screen starts picked here. Older backends leave it out.
+   */
+  pointerHere?: boolean;
+  /**
+   * Where the recording toolbar opens on this monitor, as the centre of its
+   * pill in CSS px: the setup toolbar opens centred on it. Null when it
+   * cannot be told; older backends leave it out.
+   */
+  barCentre?: Point | null;
+  /** The monitor's name, shown when Screen records it. */
+  monitorName?: string;
 }
 
 /** Mirrors `START_EVENT` in src-tauri/src/overlay.rs. */
@@ -149,4 +162,13 @@ export function onOverlayChoice(handler: (choice: OverlayChoice) => void): Promi
 
 export function cancelOverlay(): Promise<void> {
   return invoke<void>("overlay_cancel");
+}
+
+/**
+ * Remembers where the setup toolbar was dragged to, its centre in this
+ * overlay's CSS px, as the spot the recording toolbar opens at on this
+ * display (`record_bar_remember`).
+ */
+export function rememberSetupSpot(centre: Point): Promise<void> {
+  return invoke<void>("record_bar_remember", { centre });
 }

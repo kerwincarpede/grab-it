@@ -24,6 +24,7 @@ mod portal;
 mod quick;
 mod record;
 mod record_bar;
+mod record_frame;
 mod recording_editor;
 mod screen;
 mod search;
@@ -142,6 +143,7 @@ pub fn run() {
             record::record_bar_level,
             record_bar::record_bar_fit,
             record_bar::record_bar_reset,
+            record_bar::record_bar_remember,
             ffmpeg::ffmpeg_status,
             ffmpeg::ffmpeg_retry,
             audio::recording_microphones,

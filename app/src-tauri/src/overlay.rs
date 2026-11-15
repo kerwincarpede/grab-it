@@ -842,6 +842,15 @@ pub struct OverlayInfo {
     /// when it was on this monitor. Only an All-in-one overlay gets one: it
     /// starts with the region selected.
     pub last_region: Option<Rect>,
+    /// The pointer was on this monitor when the page asked: the Record
+    /// overlay's setup toolbar shows here, and Screen starts picked here.
+    pub pointer_here: bool,
+    /// Where the recording toolbar would open on this monitor, as the
+    /// centre of its pill in the page's CSS pixels: the setup toolbar opens
+    /// centred on it. `None` when the monitor cannot be told.
+    pub bar_centre: Option<crate::record_bar::CssPoint>,
+    /// The monitor's name, shown when Screen records it.
+    pub monitor_name: String,
 }
 
 /// The last region as a starting selection for an overlay on `monitor`
@@ -1025,6 +1034,7 @@ pub fn css_to_image_point(
 /// yet: its page then waits for [`START_EVENT`].
 #[tauri::command]
 pub fn overlay_info(
+    app: AppHandle,
     window: WebviewWindow,
     state: State<'_, OverlayState>,
     last: State<'_, LastRegionState>,
@@ -1061,6 +1071,9 @@ pub fn overlay_info(
         } else {
             None
         },
+        pointer_here: crate::record_bar::pointer_on(&app, &frame.monitor),
+        bar_centre: crate::record_bar::bar_centre_on(&app, &frame.monitor),
+        monitor_name: frame.monitor.name.clone(),
     })
 }
 
@@ -1685,6 +1698,9 @@ mod tests {
             windows: Vec::new(),
             top_inset: 0.0,
             last_region: None,
+            pointer_here: true,
+            bar_centre: None,
+            monitor_name: "eDP-1".into(),
         };
         let value = serde_json::to_value(&info).unwrap();
         assert_eq!(value["allInOne"], true);
@@ -1831,6 +1847,9 @@ mod tests {
                 width: 3,
                 height: 4,
             }),
+            pointer_here: false,
+            bar_centre: Some(crate::record_bar::CssPoint { x: 960.0, y: 42.0 }),
+            monitor_name: "DELL U2720Q".into(),
         };
         let value = serde_json::to_value(&info).unwrap();
         assert_eq!(
@@ -1843,6 +1862,17 @@ mod tests {
             ..info
         };
         assert!(serde_json::to_value(&none).unwrap()["lastRegion"].is_null());
+        assert_eq!(value["pointerHere"], false);
+        assert_eq!(
+            value["barCentre"],
+            serde_json::json!({ "x": 960.0, "y": 42.0 })
+        );
+        assert_eq!(value["monitorName"], "DELL U2720Q");
+        let unknown = OverlayInfo {
+            bar_centre: None,
+            ..none
+        };
+        assert!(serde_json::to_value(&unknown).unwrap()["barCentre"].is_null());
     }
 
     #[test]

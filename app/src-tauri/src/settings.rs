@@ -648,6 +648,18 @@ impl WebcamShape {
     }
 }
 
+/// What the Record overlay's setup toolbar records: a dragged region, a
+/// picked window's area or a whole display. Mirrors `RecordingSource` in
+/// src/settings/api.ts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordingSource {
+    #[default]
+    Region,
+    Window,
+    Screen,
+}
+
 /// How screen recordings are made. Mirrors `RecordingSettings` in
 /// src/settings/api.ts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -680,6 +692,8 @@ pub struct RecordingSettings {
     /// Seconds counted down on the recording toolbar before the first
     /// frame: one of [`RECORDING_COUNTDOWNS`].
     pub countdown: u32,
+    /// The source the Record overlay opens on: the one used last.
+    pub source: RecordingSource,
 }
 
 impl Default for RecordingSettings {
@@ -697,6 +711,7 @@ impl Default for RecordingSettings {
             camera: None,
             webcam_shape: WebcamShape::default(),
             countdown: 0,
+            source: RecordingSource::default(),
         }
     }
 }
@@ -745,6 +760,9 @@ impl RecordingSettings {
                 .and_then(|v| serde_json::from_value::<u32>(v).ok())
                 .filter(|seconds| RECORDING_COUNTDOWNS.contains(seconds))
                 .unwrap_or(defaults.countdown),
+            source: field("source")
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or(defaults.source),
         }
     }
 }
@@ -1461,6 +1479,7 @@ mod tests {
                 camera: Some("3f9a1c".into()),
                 webcam_shape: WebcamShape::Rounded,
                 countdown: 5,
+                source: RecordingSource::Screen,
             },
         };
         save(&path, &settings).unwrap();
@@ -1576,6 +1595,7 @@ mod tests {
                 "camera": null,
                 "webcamShape": "round",
                 "countdown": 0,
+                "source": "region",
             })
         );
     }
@@ -1696,6 +1716,7 @@ mod tests {
                 "camera": null,
                 "webcamShape": "round",
                 "countdown": 0,
+                "source": "region",
             })
         );
         assert_eq!(json["showInDock"], false);
@@ -1786,6 +1807,37 @@ mod tests {
         assert!(store.set_recording(odd).is_err());
         fs::write(&path, r#"{"recording": {"countdown": 4}}"#).unwrap();
         assert_eq!(load(&path, defaults(&dir)).unwrap().recording.countdown, 0);
+    }
+
+    #[test]
+    fn the_record_source_starts_on_region_and_remembers_the_last_one() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        assert_eq!(defaults(&dir).recording.source, RecordingSource::Region);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        let window = RecordingSettings {
+            source: RecordingSource::Window,
+            ..RecordingSettings::default()
+        };
+        assert_eq!(
+            store.set_recording(window).unwrap().recording.source,
+            RecordingSource::Window
+        );
+        assert_eq!(
+            load(&path, defaults(&dir)).unwrap().recording.source,
+            RecordingSource::Window
+        );
+        fs::write(&path, r#"{"recording": {"source": "screen"}}"#).unwrap();
+        assert_eq!(
+            load(&path, defaults(&dir)).unwrap().recording.source,
+            RecordingSource::Screen
+        );
+        // An unknown source keeps the default.
+        fs::write(&path, r#"{"recording": {"source": "tab"}}"#).unwrap();
+        assert_eq!(
+            load(&path, defaults(&dir)).unwrap().recording.source,
+            RecordingSource::Region
+        );
     }
 
     #[test]

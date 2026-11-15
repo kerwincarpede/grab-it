@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import {
   CameraIcon,
   ChevronDownIcon,
   ClickIcon,
+  CloseIcon,
+  GripIcon,
   KeyboardIcon,
   MicIcon,
   MicOffIcon,
@@ -10,17 +12,13 @@ import {
   TimerIcon,
 } from "../app/icons";
 import {
-  DEFAULT_RECORDING,
-  getSettings,
-  listMicrophones,
   recordsMicrophone,
   recordsSystemSound,
-  setRecording,
-  systemSoundAvailable,
-  type Microphone,
   type RecordingSettings,
+  type RecordingSource,
 } from "../settings/api";
 import { microphoneLabel, nextCountdown, withMicrophone, withSystemSound } from "./recordOptions";
+import { SOURCES, type RecordingOptions } from "./recordSources";
 
 type FormatChoice = "mp4-30" | "mp4-60" | "gif";
 
@@ -101,174 +99,235 @@ function ChipMenu({ label, icon, title, disabled, up, options }: ChipMenuProps) 
   );
 }
 
-interface ToggleChipProps {
+interface IconToggleProps {
   label: string;
   icon: ReactNode;
   on: boolean;
   disabled?: boolean;
+  /** The tooltip, when it says more than the label. */
   title?: string;
   onToggle: () => void;
 }
 
-function ToggleChip({ label, icon, on, disabled, title, onToggle }: ToggleChipProps) {
+/** An option as an icon, tinted when on; its tooltip names it. */
+function IconToggle({ label, icon, on, disabled, title, onToggle }: IconToggleProps) {
   return (
     <button
       type="button"
-      className="overlay-tool overlay-chip"
+      className="overlay-tool overlay-setup-icon"
       aria-pressed={on}
+      aria-label={label}
       disabled={disabled}
-      title={title ?? label}
+      title={title ?? `${label} · ${on ? "on" : "off"}`}
       onClick={onToggle}
     >
       {icon}
-      <span>{label}</span>
     </button>
   );
 }
 
 interface RecordSetupProps {
-  /** Lists open above their chips. */
+  options: RecordingOptions;
+  /** What is being recorded; the source buttons switch it. */
+  source: RecordingSource;
+  /** Number keys 1 to 3 switch the source; All-in-one keeps them for its modes. */
+  numbered: boolean;
+  /** Something is picked, so Record can start. */
+  canRecord: boolean;
+  /** Lists open above their chips, for a toolbar in the lower half. */
   up: boolean;
+  /** Places the toolbar; it follows the grip by this alone. */
+  transform: string;
+  /** Left out where the toolbar cannot be moved. */
+  onGrip?: (event: MouseEvent) => void;
+  onSource: (source: RecordingSource) => void;
+  onRecord: () => void;
+  onCancel: () => void;
 }
 
 /**
- * How to record, beside a held recording area: the format, the
- * microphone, the system sound, the webcam, clicks, keys and a countdown.
- * Each choice is saved to Settings → Recording as it is made, so the next
- * recording starts with it.
+ * The Record overlay's setup toolbar, in the recording toolbar's look: a
+ * grip to move it, what to record (Region, Window or Screen), the format,
+ * the microphone, the system sound, webcam, clicks and keys as icons, the
+ * countdown, Record and Cancel.
  */
-function RecordSetup({ up }: RecordSetupProps) {
-  const [recording, setLocal] = useState<RecordingSettings | null>(null);
-  const [microphones, setMicrophones] = useState<Microphone[]>([]);
-  const [system, setSystem] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+function RecordSetup({
+  options,
+  source,
+  numbered,
+  canRecord,
+  up,
+  transform,
+  onGrip,
+  onSource,
+  onRecord,
+  onCancel,
+}: RecordSetupProps) {
+  const { recording, microphones, system, error, save } = options;
 
-  useEffect(() => {
-    let cancelled = false;
-    getSettings()
-      .then((settings) => {
-        if (!cancelled) setLocal({ ...DEFAULT_RECORDING, ...settings.recording });
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(String(err));
-      });
-    listMicrophones()
-      .then((listed) => {
-        if (!cancelled) setMicrophones(listed);
-      })
-      .catch(() => {
-        // The default microphone is still offered.
-      });
-    systemSoundAvailable()
-      .then((available) => {
-        if (!cancelled) setSystem(available);
-      })
-      .catch(() => {
-        // Then system sound is not offered.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const sources = (
+    <div className="overlay-setup-sources" role="group" aria-label="What to record">
+      {SOURCES.map(({ source: each, label, icon }, at) => (
+        <button
+          key={each}
+          type="button"
+          className="overlay-tool"
+          aria-pressed={each === source}
+          title={numbered ? `${label} (${at + 1})` : label}
+          onClick={() => onSource(each)}
+        >
+          {icon}
+          <span>{label}</span>
+          {numbered && <kbd aria-hidden="true">{at + 1}</kbd>}
+        </button>
+      ))}
+    </div>
+  );
 
+  let settings: ReactNode;
   if (!recording) {
-    return (
-      <div className="overlay-record-setup" data-testid="overlay-record-setup">
-        <span className="overlay-record-note">{error ?? "Loading recording options…"}</span>
+    settings = <span className="overlay-record-note">{error ?? "Loading recording options…"}</span>;
+  } else {
+    const gif = recording.format === "gif";
+    const silent = gif ? "A GIF is silent" : undefined;
+    const micOn = recordsMicrophone(recording.audio);
+    const micOptions = [
+      { key: "none", title: "No microphone", selected: !micOn, onPick: () => save(withMicrophone(recording, { kind: "none" })) },
+      {
+        key: "default",
+        title: "Default microphone",
+        selected: micOn && recording.microphone === null,
+        onPick: () => save(withMicrophone(recording, { kind: "default" })),
+      },
+      ...microphones.map((mic) => ({
+        key: mic.id,
+        title: mic.name,
+        selected: micOn && recording.microphone === mic.id,
+        onPick: () => save(withMicrophone(recording, { kind: "device", id: mic.id })),
+      })),
+    ];
+    settings = (
+      <div className="overlay-record-setup" data-testid="overlay-record-setup" role="group" aria-label="Recording options">
+        <ChipMenu
+          title="Format"
+          up={up}
+          label={FORMAT_CHOICES.find((choice) => choice.value === formatChoice(recording))?.title}
+          options={FORMAT_CHOICES.map((choice) => ({
+            key: choice.value,
+            title: choice.title,
+            selected: choice.value === formatChoice(recording),
+            onPick: () => save(withFormat(recording, choice.value)),
+          }))}
+        />
+        <ChipMenu
+          title="Microphone"
+          up={up}
+          disabled={gif}
+          icon={micOn && !gif ? <MicIcon size={14} /> : <MicOffIcon size={14} />}
+          label={gif ? "No sound" : microphoneLabel(recording, microphones)}
+          options={micOptions}
+        />
+        <span className="overlay-toolbar-gap" aria-hidden="true" />
+        {system && (
+          <IconToggle
+            label="System sound"
+            icon={<SpeakerIcon size={16} />}
+            on={!gif && recordsSystemSound(recording.audio)}
+            disabled={gif}
+            title={silent}
+            onToggle={() => save(withSystemSound(recording, !recordsSystemSound(recording.audio)))}
+          />
+        )}
+        <IconToggle
+          label="Webcam"
+          icon={<CameraIcon size={16} />}
+          on={recording.showWebcam}
+          onToggle={() => save({ ...recording, showWebcam: !recording.showWebcam })}
+        />
+        <IconToggle
+          label="Clicks"
+          icon={<ClickIcon size={16} />}
+          on={recording.showClicks}
+          onToggle={() => save({ ...recording, showClicks: !recording.showClicks })}
+        />
+        <IconToggle
+          label="Keys"
+          icon={<KeyboardIcon size={16} />}
+          on={recording.showKeystrokes}
+          onToggle={() => save({ ...recording, showKeystrokes: !recording.showKeystrokes })}
+        />
+        <button
+          type="button"
+          className="overlay-tool overlay-setup-countdown"
+          aria-pressed={recording.countdown > 0}
+          aria-label={recording.countdown === 0 ? "No countdown" : `Countdown ${recording.countdown} s`}
+          title="Countdown before recording: off, 3, 5 or 10 s"
+          onClick={() => save({ ...recording, countdown: nextCountdown(recording.countdown) })}
+        >
+          <TimerIcon size={16} />
+          <span>{recording.countdown === 0 ? "Off" : `${recording.countdown} s`}</span>
+        </button>
+        {error && (
+          <span className="overlay-record-note overlay-record-error" role="alert">
+            {error}
+          </span>
+        )}
       </div>
     );
   }
 
-  function save(next: RecordingSettings) {
-    const before = recording;
-    setLocal(next);
-    setError(null);
-    setRecording(next).catch((err: unknown) => {
-      setLocal(before);
-      setError(String(err));
-    });
-  }
-
-  const gif = recording.format === "gif";
-  const silent = gif ? "A GIF is silent" : undefined;
-  const micOn = recordsMicrophone(recording.audio);
-  const micOptions = [
-    { key: "none", title: "No microphone", selected: !micOn, onPick: () => save(withMicrophone(recording, { kind: "none" })) },
-    {
-      key: "default",
-      title: "Default microphone",
-      selected: micOn && recording.microphone === null,
-      onPick: () => save(withMicrophone(recording, { kind: "default" })),
-    },
-    ...microphones.map((mic) => ({
-      key: mic.id,
-      title: mic.name,
-      selected: micOn && recording.microphone === mic.id,
-      onPick: () => save(withMicrophone(recording, { kind: "device", id: mic.id })),
-    })),
-  ];
-
   return (
-    <div className="overlay-record-setup" data-testid="overlay-record-setup" role="group" aria-label="Recording options">
-      <ChipMenu
-        title="Format"
-        up={up}
-        label={FORMAT_CHOICES.find((choice) => choice.value === formatChoice(recording))?.title}
-        options={FORMAT_CHOICES.map((choice) => ({
-          key: choice.value,
-          title: choice.title,
-          selected: choice.value === formatChoice(recording),
-          onPick: () => save(withFormat(recording, choice.value)),
-        }))}
-      />
-      <ChipMenu
-        title="Microphone"
-        up={up}
-        disabled={gif}
-        icon={micOn && !gif ? <MicIcon size={14} /> : <MicOffIcon size={14} />}
-        label={gif ? "No sound" : microphoneLabel(recording, microphones)}
-        options={micOptions}
-      />
-      {system && (
-        <ToggleChip
-          label="System sound"
-          icon={<SpeakerIcon size={14} />}
-          on={!gif && recordsSystemSound(recording.audio)}
-          disabled={gif}
-          title={silent}
-          onToggle={() => save(withSystemSound(recording, !recordsSystemSound(recording.audio)))}
-        />
-      )}
-      <ToggleChip
-        label="Webcam"
-        icon={<CameraIcon size={14} />}
-        on={recording.showWebcam}
-        onToggle={() => save({ ...recording, showWebcam: !recording.showWebcam })}
-      />
-      <ToggleChip
-        label="Clicks"
-        icon={<ClickIcon size={14} />}
-        on={recording.showClicks}
-        onToggle={() => save({ ...recording, showClicks: !recording.showClicks })}
-      />
-      <ToggleChip
-        label="Keys"
-        icon={<KeyboardIcon size={14} />}
-        on={recording.showKeystrokes}
-        onToggle={() => save({ ...recording, showKeystrokes: !recording.showKeystrokes })}
-      />
-      <ToggleChip
-        label={recording.countdown === 0 ? "No countdown" : `${recording.countdown} s`}
-        icon={<TimerIcon size={14} />}
-        on={recording.countdown > 0}
-        title="Countdown before recording"
-        onToggle={() => save({ ...recording, countdown: nextCountdown(recording.countdown) })}
-      />
-      {error && (
-        <span className="overlay-record-note overlay-record-error" role="alert">
-          {error}
+    <div
+      className="overlay-setup"
+      data-testid="overlay-setup"
+      role="toolbar"
+      aria-label="Record"
+      style={{ transform }}
+      // A click on a button leaves the focus where it was, so Enter never
+      // presses it again.
+      onMouseDown={(event) => {
+        if ((event.target as HTMLElement).closest("button")) event.preventDefault();
+      }}
+    >
+      {onGrip && (
+        <span
+          className="overlay-setup-grip"
+          data-testid="overlay-setup-grip"
+          title="Drag to move"
+          aria-hidden="true"
+          onMouseDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            onGrip(event);
+          }}
+        >
+          <GripIcon size={14} />
         </span>
       )}
+      {sources}
+      <span className="overlay-toolbar-gap" aria-hidden="true" />
+      {settings}
+      <button
+        type="button"
+        className="overlay-setup-record"
+        data-testid="overlay-record"
+        disabled={!canRecord}
+        title="Record (Enter)"
+        onClick={onRecord}
+      >
+        <span className="overlay-setup-dot" aria-hidden="true" />
+        <span>Record</span>
+        <kbd aria-hidden="true">↵</kbd>
+      </button>
+      <button
+        type="button"
+        className="overlay-tool overlay-setup-icon"
+        aria-label="Cancel"
+        title="Cancel (Esc)"
+        onClick={onCancel}
+      >
+        <CloseIcon size={14} />
+      </button>
     </div>
   );
 }

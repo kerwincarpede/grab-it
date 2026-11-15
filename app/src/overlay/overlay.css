@@ -697,15 +697,14 @@
   display: flex;
   gap: 4px;
   align-items: center;
-  padding-top: 6px;
-  border-top: 1px solid #2a2c31;
 }
 
 .overlay-chip-menu {
   position: relative;
 }
 
-.overlay-size-panel .overlay-chip {
+.overlay-size-panel .overlay-chip,
+.overlay-setup .overlay-chip {
   display: inline-flex;
   gap: 6px;
   align-items: center;
@@ -719,13 +718,15 @@
 }
 
 .overlay-size-panel .overlay-chip[aria-pressed="true"],
-.overlay-size-panel .overlay-chip[aria-haspopup="menu"]:not(:disabled) {
+.overlay-size-panel .overlay-chip[aria-haspopup="menu"]:not(:disabled),
+.overlay-setup .overlay-chip[aria-haspopup="menu"]:not(:disabled) {
   color: #ecedef;
   background: rgb(255 255 255 / 6%);
   box-shadow: none;
 }
 
-.overlay-size-panel .overlay-chip:disabled {
+.overlay-size-panel .overlay-chip:disabled,
+.overlay-setup .overlay-chip:disabled {
   opacity: 0.55;
 }
 
@@ -784,4 +785,191 @@
 .overlay-record-error {
   color: #ec7a80;
   white-space: normal;
+}
+
+/*
+ * The Record overlay's setup toolbar: the recording toolbar's pill and
+ * palette (src/recordbar/recordbar.css), so the two read as one control.
+ * Centred on its point by a transform from the page; it follows the grip
+ * by that transform alone, without a transition.
+ */
+.overlay-setup {
+  --setup-bg: #101113;
+  --setup-border: #2a2c31;
+  --setup-rec: #ff4d4f;
+
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  box-sizing: border-box;
+  height: 46px;
+  padding: 6px;
+  color: #ecedef;
+  font-family: "Instrument Sans Variable", system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+  background: var(--setup-bg);
+  border-radius: 999px;
+  box-shadow:
+    inset 0 0 0 1px var(--setup-border),
+    0 12px 32px rgb(0 0 0 / 40%);
+  cursor: default;
+  pointer-events: auto;
+  will-change: transform;
+}
+
+[data-hidden="true"] > .overlay-setup,
+.overlay[data-shown="false"] .overlay-setup {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.overlay-setup .overlay-tool {
+  height: 34px;
+  border-radius: 999px;
+}
+
+.overlay-setup-grip {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 30px;
+  color: #8d919a;
+  cursor: grab;
+}
+
+.overlay-setup-grip:active {
+  cursor: grabbing;
+}
+
+.overlay-setup-sources {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.overlay-setup .overlay-chip {
+  border-radius: 999px;
+}
+
+.overlay-setup-icon {
+  justify-content: center;
+  width: 34px;
+  padding: 0;
+  color: #8d919a;
+}
+
+/* An option that is on is tinted, not filled: the source is the one filled. */
+.overlay-setup .overlay-setup-icon[aria-pressed="true"],
+.overlay-setup .overlay-setup-countdown[aria-pressed="true"] {
+  color: #c3cbff;
+  background: rgb(130 151 255 / 16%);
+}
+
+.overlay-setup-countdown {
+  padding: 0 10px;
+  color: #8d919a;
+}
+
+.overlay-setup-record {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  height: 36px;
+  margin-left: 4px;
+  padding: 0 10px 0 14px;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  background: var(--setup-rec);
+  border: 0;
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px rgb(255 77 79 / 28%), 0 0 18px rgb(255 77 79 / 45%);
+  cursor: pointer;
+}
+
+.overlay-setup-record:hover:not(:disabled) {
+  background: #ff6163;
+}
+
+.overlay-setup-record:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+/* Dimmed until there is something to record. */
+.overlay-setup-record:disabled {
+  color: rgb(255 255 255 / 55%);
+  background: rgb(255 77 79 / 32%);
+  box-shadow: none;
+  cursor: default;
+}
+
+.overlay-setup-dot {
+  width: 9px;
+  height: 9px;
+  background: currentcolor;
+  border-radius: 50%;
+}
+
+.overlay-setup-record kbd {
+  min-width: 16px;
+  padding: 0 3px;
+  font: 500 11px/16px ui-monospace, "SF Mono", Menlo, monospace;
+  text-align: center;
+  background: rgb(255 255 255 / 22%);
+  border-radius: 4px;
+}
+
+/* Window picks a window in violet, hovered and held. */
+.overlay[data-source="window"] {
+  --overlay-accent: #a78bfa;
+  --overlay-window: 167 139 250;
+}
+
+/* The picked window's or display's name, beside its outline. */
+.overlay-name-tag {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 12px 5px 10px;
+  color: #ecedef;
+  font-family: "Instrument Sans Variable", system-ui, -apple-system, sans-serif;
+  font-size: 12.5px;
+  line-height: 18px;
+  white-space: nowrap;
+  background: rgb(16 17 19 / 94%);
+  border: 1px solid #2a2c31;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.overlay-name-tag::before {
+  width: 8px;
+  height: 8px;
+  background: var(--overlay-accent);
+  border-radius: 50%;
+  content: "";
+}
+
+/* A whole display picked: outlined just inside its edge. */
+.overlay-screen-frame {
+  position: absolute;
+  inset: 0;
+  border: 3px solid var(--overlay-accent);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay-setup {
+    transition: none;
+  }
 }
