@@ -136,6 +136,25 @@ describe("AppWindow", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("steps the text size with Cmd+plus, Cmd+minus and Cmd+0", async () => {
+    const calls = backend();
+    render(<AppWindow />);
+    await userEvent.keyboard("{Meta>}={/Meta}");
+    await userEvent.keyboard("{Meta>}{Shift>}+{/Shift}{/Meta}");
+    await userEvent.keyboard("{Control>}-{/Control}");
+    await userEvent.keyboard("{Meta>}0{/Meta}");
+    // Without the modifier the keys are just typing.
+    await userEvent.keyboard("=-0");
+    await waitFor(() =>
+      expect(calls.filter((call) => call.cmd === "step_text_size").map((call) => call.payload)).toEqual([
+        { step: "bigger" },
+        { step: "bigger" },
+        { step: "smaller" },
+        { step: "reset" },
+      ]),
+    );
+  });
+
   it("starts with the welcome the tray asked for, over the library", async () => {
     backend();
     render(<AppWindow initialView="welcome" />);

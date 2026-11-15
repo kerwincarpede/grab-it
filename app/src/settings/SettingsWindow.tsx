@@ -37,6 +37,7 @@ import {
   chooseFolder,
   getAutostart,
   getSettings,
+  onAppearanceChanged,
   hasDock,
   SETTINGS_SECTIONS,
   setAutoBackdrop,
@@ -216,6 +217,23 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
       });
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  // ⌘+, ⌘− and ⌘0 change the text size while Settings is open.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    onAppearanceChanged((appearance) => {
+      if (!cancelled) setSettings((was) => (was ? { ...was, appearance } : was));
+    })
+      .then((stop) => (cancelled ? stop() : (unlisten = stop)))
+      .catch(() => {
+        // Without events the slider shows the size it read.
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
     };
   }, []);
 
@@ -445,6 +463,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   const recordingOff = busy || settings === null;
   const silent = recording.format === "gif";
   const keystrokesHint = keystrokesHintFor(isMacPlatform());
+  const textSizeKeys = isMacPlatform() ? "⌘+, ⌘− and ⌘0" : "Ctrl++, Ctrl+− and Ctrl+0";
   // System and Both are offered only where system sound can be recorded,
   // but a saved choice is still shown as it is.
   const audioChoices = RECORDING_AUDIO.filter(
@@ -812,7 +831,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
             <ScaleSlider
               id="text-scale"
               label="Grab-it window"
-              hint="Scales the library, Settings and every dialog: text, buttons and thumbnails."
+              hint={`Scales the library, Settings and every dialog: text, buttons and thumbnails. ${textSizeKeys} change it too.`}
               value={appearance.textScale}
               disabled={appearanceOff}
               onCommit={(textScale) => void changeAppearance({ textScale })}

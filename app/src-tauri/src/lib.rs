@@ -98,6 +98,7 @@ pub fn run() {
             commands::set_autostart,
             commands::set_show_in_dock,
             commands::set_appearance,
+            commands::step_text_size,
             commands::set_recording,
             hub::hub_capture,
             hub::hub_monitors,

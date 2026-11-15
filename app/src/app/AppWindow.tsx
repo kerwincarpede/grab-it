@@ -28,7 +28,7 @@ import {
 } from "./updates";
 import LibraryWindow from "../library/LibraryWindow";
 import WelcomeWindow from "../welcome/WelcomeWindow";
-import { getSettings, type SettingsSection } from "../settings/api";
+import { getSettings, stepTextSize, textSizeStep, type SettingsSection } from "../settings/api";
 import { onLibraryChanged, sidebarSummary, type SidebarSummary } from "../library/api";
 import { tagStyle } from "../library/tagColor";
 import { shortcutLabel } from "../hub/keys";
@@ -285,12 +285,21 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
     };
   }, []);
 
-  // ⌘, opens Settings, as in every Mac app.
+  // ⌘, opens Settings, as in every Mac app; ⌘+, ⌘− and ⌘0 change the
+  // text size as Settings → Appearance does.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "," && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
         setOpen({ kind: "settings", section: "general" });
+        return;
+      }
+      // A hotkey field recording the keys has them already.
+      if (event.defaultPrevented) return;
+      const step = textSizeStep(event);
+      if (step) {
+        event.preventDefault();
+        stepTextSize(step).catch((err: unknown) => setError(errorMessage(err)));
       }
     };
     window.addEventListener("keydown", onKey);
