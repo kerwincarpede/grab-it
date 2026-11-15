@@ -65,11 +65,11 @@
 #recframe{animation:recframe 32.0s infinite both}
 @keyframes recbar{0.000%{opacity:0;transform:translateY(40px)}51.875%{opacity:0;transform:translateY(40px)}52.969%{opacity:1;transform:translateY(0)}59.688%{opacity:1;transform:translateY(0)}60.469%{opacity:0;transform:translateY(0)}100.000%{opacity:0;transform:translateY(0)}}
 #recbar{animation:recbar 32.0s infinite both;animation-timing-function:cubic-bezier(.2,.9,.3,1.15)}
-@keyframes rt0{0.000%{opacity:1}55.781%{opacity:1}55.844%{opacity:0}100.000%{opacity:0}}
+@keyframes rt0{0.000%{opacity:1}55.778%{opacity:1}55.781%{opacity:0}100.000%{opacity:0}}
 #rt0{animation:rt0 32.0s infinite both}
-@keyframes rt1{0.000%{opacity:0}55.719%{opacity:0}55.781%{opacity:1}58.906%{opacity:1}58.969%{opacity:0}100.000%{opacity:0}}
+@keyframes rt1{0.000%{opacity:0}55.778%{opacity:0}55.781%{opacity:1}58.903%{opacity:1}58.906%{opacity:0}100.000%{opacity:0}}
 #rt1{animation:rt1 32.0s infinite both}
-@keyframes rt2{0.000%{opacity:0}58.844%{opacity:0}58.906%{opacity:1}100.000%{opacity:1}}
+@keyframes rt2{0.000%{opacity:0}58.903%{opacity:0}58.906%{opacity:1}100.000%{opacity:1}}
 #rt2{animation:rt2 32.0s infinite both}
 @keyframes recdot{0.000%{opacity:1}53.125%{opacity:1}54.375%{opacity:.25}55.625%{opacity:1}56.875%{opacity:.25}58.125%{opacity:1}59.375%{opacity:.25}100.000%{opacity:.25}}
 #recdot{animation:recdot 32.0s infinite both;animation-timing-function:ease-in-out}
@@ -120,21 +120,21 @@
 #ve{animation:ve 32.0s infinite both}
 @keyframes zoomctl{0.000%{opacity:0}66.154%{opacity:0}66.623%{opacity:1}69.849%{opacity:1}70.318%{opacity:0}100.000%{opacity:0}}
 #zoomctl{animation:zoomctl 32.0s infinite both}
-@keyframes vt0{0.000%{opacity:1}65.156%{opacity:1}65.219%{opacity:0}100.000%{opacity:0}}
+@keyframes vt0{0.000%{opacity:1}65.153%{opacity:1}65.156%{opacity:0}100.000%{opacity:0}}
 #vt0{animation:vt0 32.0s infinite both}
-@keyframes vt1{0.000%{opacity:0}65.094%{opacity:0}65.156%{opacity:1}66.719%{opacity:1}66.781%{opacity:0}100.000%{opacity:0}}
+@keyframes vt1{0.000%{opacity:0}65.153%{opacity:0}65.156%{opacity:1}66.716%{opacity:1}66.719%{opacity:0}100.000%{opacity:0}}
 #vt1{animation:vt1 32.0s infinite both}
-@keyframes vt2{0.000%{opacity:0}66.656%{opacity:0}66.719%{opacity:1}68.281%{opacity:1}68.344%{opacity:0}100.000%{opacity:0}}
+@keyframes vt2{0.000%{opacity:0}66.716%{opacity:0}66.719%{opacity:1}68.278%{opacity:1}68.281%{opacity:0}100.000%{opacity:0}}
 #vt2{animation:vt2 32.0s infinite both}
-@keyframes vt3{0.000%{opacity:0}68.219%{opacity:0}68.281%{opacity:1}69.844%{opacity:1}69.906%{opacity:0}100.000%{opacity:0}}
+@keyframes vt3{0.000%{opacity:0}68.278%{opacity:0}68.281%{opacity:1}69.841%{opacity:1}69.844%{opacity:0}100.000%{opacity:0}}
 #vt3{animation:vt3 32.0s infinite both}
-@keyframes vt4{0.000%{opacity:0}69.781%{opacity:0}69.844%{opacity:1}71.094%{opacity:1}71.156%{opacity:0}100.000%{opacity:0}}
+@keyframes vt4{0.000%{opacity:0}69.841%{opacity:0}69.844%{opacity:1}71.091%{opacity:1}71.094%{opacity:0}100.000%{opacity:0}}
 #vt4{animation:vt4 32.0s infinite both}
-@keyframes vt5{0.000%{opacity:0}71.031%{opacity:0}71.094%{opacity:1}100.000%{opacity:1}}
+@keyframes vt5{0.000%{opacity:0}71.091%{opacity:0}71.094%{opacity:1}100.000%{opacity:1}}
 #vt5{animation:vt5 32.0s infinite both}
-@keyframes playico{0.000%{opacity:1}64.219%{opacity:1}64.281%{opacity:0}71.031%{opacity:0}71.094%{opacity:1}100.000%{opacity:1}}
+@keyframes playico{0.000%{opacity:1}64.216%{opacity:1}64.219%{opacity:0}71.091%{opacity:0}71.094%{opacity:1}100.000%{opacity:1}}
 #playico{animation:playico 32.0s infinite both}
-@keyframes pauseico{0.000%{opacity:0}64.156%{opacity:0}64.219%{opacity:1}71.094%{opacity:1}71.156%{opacity:0}100.000%{opacity:0}}
+@keyframes pauseico{0.000%{opacity:0}64.216%{opacity:0}64.219%{opacity:1}71.091%{opacity:1}71.094%{opacity:0}100.000%{opacity:0}}
 #pauseico{animation:pauseico 32.0s infinite both}
 @keyframes lhandle{0.000%{transform:translateX(-58px)}62.031%{transform:translateX(-58px)}63.281%{transform:translateX(0)}100.000%{transform:translateX(0)}}
 #lhandle{animation:lhandle 32.0s infinite both;animation-timing-function:ease-in-out}
@@ -143,9 +143,9 @@
 #trimdim{animation:trimdim 32.0s infinite both;animation-timing-function:ease-in-out}
 @keyframes playhead{0.000%{transform:translateX(-58px)}62.031%{transform:translateX(-58px)}63.281%{transform:translateX(0)}64.219%{transform:translateX(0)}71.094%{transform:translateX(682px)}100.000%{transform:translateX(682px)}}
 #playhead{animation:playhead 32.0s infinite both;animation-timing-function:linear}
-@keyframes clip0{0.000%{opacity:1}63.281%{opacity:1}63.344%{opacity:0}100.000%{opacity:0}}
+@keyframes clip0{0.000%{opacity:1}63.278%{opacity:1}63.281%{opacity:0}100.000%{opacity:0}}
 #clip0{animation:clip0 32.0s infinite both}
-@keyframes clip1{0.000%{opacity:0}63.219%{opacity:0}63.281%{opacity:1}100.000%{opacity:1}}
+@keyframes clip1{0.000%{opacity:0}63.278%{opacity:0}63.281%{opacity:1}100.000%{opacity:1}}
 #clip1{animation:clip1 32.0s infinite both}
 #vzoom{transform-origin:580.1px 294.5px}
 @keyframes vzoom{0.000%{transform:scale(1)}66.154%{transform:scale(1)}67.248%{transform:scale(2)}68.286%{transform:scale(2)}69.380%{transform:scale(1)}100.000%{transform:scale(1)}}
@@ -164,42 +164,42 @@
 #exprog{transform-origin:190px 0}
 @keyframes exprog{0.000%{opacity:1;transform:scaleX(0)}72.188%{opacity:1;transform:scaleX(0)}73.438%{opacity:1;transform:scaleX(1)}73.750%{opacity:0;transform:scaleX(1)}100.000%{opacity:0;transform:scaleX(1)}}
 #exprog{animation:exprog 32.0s infinite both;animation-timing-function:ease-in-out}
-@keyframes st0{0.000%{opacity:1}72.188%{opacity:1}72.250%{opacity:0}100.000%{opacity:0}}
+@keyframes st0{0.000%{opacity:1}72.184%{opacity:1}72.188%{opacity:0}100.000%{opacity:0}}
 #st0{animation:st0 32.0s infinite both}
-@keyframes st1{0.000%{opacity:0}72.125%{opacity:0}72.188%{opacity:1}73.438%{opacity:1}73.500%{opacity:0}100.000%{opacity:0}}
+@keyframes st1{0.000%{opacity:0}72.184%{opacity:0}72.188%{opacity:1}73.434%{opacity:1}73.438%{opacity:0}100.000%{opacity:0}}
 #st1{animation:st1 32.0s infinite both}
-@keyframes st2{0.000%{opacity:0}73.281%{opacity:0}73.438%{opacity:1}100.000%{opacity:1}}
+@keyframes st2{0.000%{opacity:0}73.434%{opacity:0}73.438%{opacity:1}100.000%{opacity:1}}
 #st2{animation:st2 32.0s infinite both}
 @keyframes lib{0.000%{opacity:0}74.375%{opacity:0}75.000%{opacity:1}94.500%{opacity:1}94.531%{opacity:0}100.000%{opacity:0}}
 #lib{animation:lib 32.0s infinite both}
-@keyframes ph{0.000%{opacity:1}76.875%{opacity:1}76.938%{opacity:0}100.000%{opacity:0}}
+@keyframes ph{0.000%{opacity:1}76.872%{opacity:1}76.875%{opacity:0}100.000%{opacity:0}}
 #ph{animation:ph 32.0s infinite both}
-@keyframes q0{0.000%{opacity:0}76.812%{opacity:0}76.875%{opacity:1}77.250%{opacity:1}77.312%{opacity:0}100.000%{opacity:0}}
+@keyframes q0{0.000%{opacity:0}76.872%{opacity:0}76.875%{opacity:1}77.247%{opacity:1}77.250%{opacity:0}100.000%{opacity:0}}
 #q0{animation:q0 32.0s infinite both}
-@keyframes q1{0.000%{opacity:0}77.188%{opacity:0}77.250%{opacity:1}77.625%{opacity:1}77.688%{opacity:0}100.000%{opacity:0}}
+@keyframes q1{0.000%{opacity:0}77.247%{opacity:0}77.250%{opacity:1}77.622%{opacity:1}77.625%{opacity:0}100.000%{opacity:0}}
 #q1{animation:q1 32.0s infinite both}
-@keyframes q2{0.000%{opacity:0}77.562%{opacity:0}77.625%{opacity:1}78.000%{opacity:1}78.062%{opacity:0}100.000%{opacity:0}}
+@keyframes q2{0.000%{opacity:0}77.622%{opacity:0}77.625%{opacity:1}77.997%{opacity:1}78.000%{opacity:0}100.000%{opacity:0}}
 #q2{animation:q2 32.0s infinite both}
-@keyframes q3{0.000%{opacity:0}77.938%{opacity:0}78.000%{opacity:1}78.375%{opacity:1}78.438%{opacity:0}100.000%{opacity:0}}
+@keyframes q3{0.000%{opacity:0}77.997%{opacity:0}78.000%{opacity:1}78.372%{opacity:1}78.375%{opacity:0}100.000%{opacity:0}}
 #q3{animation:q3 32.0s infinite both}
-@keyframes q4{0.000%{opacity:0}78.312%{opacity:0}78.375%{opacity:1}78.750%{opacity:1}78.813%{opacity:0}100.000%{opacity:0}}
+@keyframes q4{0.000%{opacity:0}78.372%{opacity:0}78.375%{opacity:1}78.747%{opacity:1}78.750%{opacity:0}100.000%{opacity:0}}
 #q4{animation:q4 32.0s infinite both}
-@keyframes q5{0.000%{opacity:0}78.688%{opacity:0}78.750%{opacity:1}79.125%{opacity:1}79.188%{opacity:0}100.000%{opacity:0}}
+@keyframes q5{0.000%{opacity:0}78.747%{opacity:0}78.750%{opacity:1}79.122%{opacity:1}79.125%{opacity:0}100.000%{opacity:0}}
 #q5{animation:q5 32.0s infinite both}
-@keyframes q6{0.000%{opacity:0}79.062%{opacity:0}79.125%{opacity:1}100.000%{opacity:1}}
+@keyframes q6{0.000%{opacity:0}79.122%{opacity:0}79.125%{opacity:1}100.000%{opacity:1}}
 #q6{animation:q6 32.0s infinite both}
 #rp6{transform-origin:600.0px 37.0px}
 @keyframes rp6{0.000%{opacity:0;transform:scale(.3)}76.188%{opacity:0;transform:scale(.3)}76.375%{opacity:.95;transform:scale(.4)}78.125%{opacity:0;transform:scale(2.1)}100.000%{opacity:0;transform:scale(2.1)}}
 #rp6{animation:rp6 32.0s infinite both}
 @keyframes searchfocus{0.000%{opacity:0}76.250%{opacity:0}76.562%{opacity:1}100.000%{opacity:1}}
 #searchfocus{animation:searchfocus 32.0s infinite both}
-@keyframes cnt0{0.000%{opacity:1}79.813%{opacity:1}79.969%{opacity:0}100.000%{opacity:0}}
+@keyframes cnt0{0.000%{opacity:1}79.809%{opacity:1}79.813%{opacity:0}100.000%{opacity:0}}
 #cnt0{animation:cnt0 32.0s infinite both}
-@keyframes cnt1{0.000%{opacity:0}79.656%{opacity:0}79.813%{opacity:1}100.000%{opacity:1}}
+@keyframes cnt1{0.000%{opacity:0}79.809%{opacity:0}79.813%{opacity:1}100.000%{opacity:1}}
 #cnt1{animation:cnt1 32.0s infinite both}
-@keyframes sec0{0.000%{opacity:1}79.813%{opacity:1}79.969%{opacity:0}100.000%{opacity:0}}
+@keyframes sec0{0.000%{opacity:1}79.809%{opacity:1}79.813%{opacity:0}100.000%{opacity:0}}
 #sec0{animation:sec0 32.0s infinite both}
-@keyframes sec1{0.000%{opacity:0}79.656%{opacity:0}79.813%{opacity:1}100.000%{opacity:1}}
+@keyframes sec1{0.000%{opacity:0}79.809%{opacity:0}79.813%{opacity:1}100.000%{opacity:1}}
 #sec1{animation:sec1 32.0s infinite both}
 #tile0{transform-origin:306.0px 188.0px}
 @keyframes tile0{0.000%{opacity:1;transform:scale(1)}79.813%{opacity:1;transform:scale(1)}80.750%{opacity:0;transform:scale(.9)}100.000%{opacity:0;transform:scale(.9)}}
