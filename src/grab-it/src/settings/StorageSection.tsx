@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import Dialog from "../app/Dialog";
+import { CleanUpDialog } from "../library/storage";
 import {
   STORAGE_KINDS,
   formatSize,
@@ -42,13 +43,15 @@ const keepValue = (days: number | null) => (days === null ? "" : String(days));
 /**
  * Settings › Storage: how long each kind of item is kept, with what it holds
  * and what is due, and how cleanup removes items. A shorter Keep setting
- * that would remove items asks first.
+ * that would remove items asks first. Purge now removes items at once,
+ * whatever the Keep settings say.
  */
 function StorageSection({ saved, disabled, onSave }: Props) {
   /** Null until read, or when sizes cannot be read: the rows then leave them out. */
   const [storage, setStorage] = useState<LibraryStorage | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [asking, setAsking] = useState(false);
+  const [purging, setPurging] = useState(false);
   const savedKey = JSON.stringify(saved);
 
   useEffect(() => {
@@ -104,7 +107,7 @@ function StorageSection({ saved, disabled, onSave }: Props) {
     await onSave(next);
   }
 
-  const off = disabled || asking || pending !== null;
+  const off = disabled || asking || pending !== null || purging;
   const pendingKind = pending && STORAGE_KINDS.find((item) => item.kind === pending.kind);
   const removal = REMOVALS.find((choice) => choice.value === saved.removal) ?? REMOVALS[0];
 
@@ -196,8 +199,20 @@ function StorageSection({ saved, disabled, onSave }: Props) {
               </span>
             </span>
           </div>
+          <div className="row">
+            <span className="row-text">
+              <span className="row-title">Purge now</span>
+              <span className="row-hint">
+                Removes every unprotected screenshot, GIF or video you pick right away, whatever the Keep settings say.
+              </span>
+            </span>
+            <button type="button" className="btn" disabled={off} onClick={() => setPurging(true)}>
+              Purge…
+            </button>
+          </div>
         </div>
       </section>
+      {purging && <CleanUpDialog purge onClose={() => setPurging(false)} />}
       {pending && pendingKind && (
         <Dialog
           title={`Keep ${pendingKind.many} for ${keepPhrase(pending.days)}?`}

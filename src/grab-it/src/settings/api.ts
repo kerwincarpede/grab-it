@@ -210,13 +210,13 @@ export type RetentionKind = "image" | "gif" | "video";
 
 export const DEFAULT_RETENTION: Retention = { image: null, gif: null, video: null, removal: "trash" };
 
-/** The Keep choices, shortest last, as the Storage page lists them. */
+/** The Keep choices, shortest first, as the Storage page lists them. */
 export const KEEP_CHOICES: { days: number | null; title: string; phrase: string }[] = [
-  { days: null, title: "Forever", phrase: "forever" },
-  { days: 365, title: "For 1 year", phrase: "1 year" },
-  { days: 90, title: "For 90 days", phrase: "90 days" },
-  { days: 30, title: "For 30 days", phrase: "30 days" },
   { days: 7, title: "For 1 week", phrase: "1 week" },
+  { days: 30, title: "For 30 days", phrase: "30 days" },
+  { days: 90, title: "For 90 days", phrase: "90 days" },
+  { days: 365, title: "For 1 year", phrase: "1 year" },
+  { days: null, title: "Forever", phrase: "forever" },
 ];
 
 /** "1 week", "90 days": how long a Keep setting keeps items, in a sentence. */

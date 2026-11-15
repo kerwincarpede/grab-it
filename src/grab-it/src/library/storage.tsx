@@ -17,7 +17,7 @@ import {
 } from "./api";
 import { useOutsideClick } from "./useOutsideClick";
 import Dialog from "../app/Dialog";
-import { getSettings, type Removal } from "../settings/api";
+import { getSettings, type Removal, type Retention } from "../settings/api";
 
 const kindColor = (kind: ShotKind) => `var(--kind-${kind})`;
 
@@ -424,19 +424,46 @@ function errorMessage(err: unknown): string {
 
 interface CleanUpDialogProps {
   onClose: () => void;
+  /**
+   * Purge now: removes every unprotected item of the kinds the user ticks,
+   * whatever the Keep settings say, instead of only what they say is due.
+   */
+  purge?: boolean;
 }
 
 const NOTHING_DUE = { count: 0, bytes: 0 };
 
+type Picks = Record<ShotKind, boolean>;
+
+/** Zero days for each picked kind: every unprotected item of it is due. Unpicked kinds are kept. */
+function purgeRetention(picks: Picks): Retention {
+  const days = (kind: ShotKind) => (picks[kind] ? 0 : null);
+  return { image: days("image"), gif: days("gif"), video: days("video"), removal: "trash" };
+}
+
+const ALL_KINDS: Picks = { image: true, gif: true, video: true };
+
 /**
  * Clean up: asks whether to move what is due to the Trash or delete it for
  * good (Settings' choice first), asks again before deleting for good, then
- * shows progress with Stop, and what went.
+ * shows progress with Stop, and what went. With `purge` it offers every
+ * unprotected item, by kind, instead of what is due.
  */
-export function CleanUpDialog({ onClose }: CleanUpDialogProps) {
+export function CleanUpDialog({ onClose, purge = false }: CleanUpDialogProps) {
   /** What is due, read when the dialog opens and again after a failed run; null until read. */
   const [storage, setStorage] = useState<LibraryStorage | null>(null);
-  const due = (storage && dueTotal(storage)) ?? NOTHING_DUE;
+  const [picks, setPicks] = useState<Picks>(ALL_KINDS);
+  const shown = (kind: ShotKind) => (!purge || picks[kind] ? (storage?.due?.[kind] ?? NOTHING_DUE) : NOTHING_DUE);
+  const due = !storage
+    ? NOTHING_DUE
+    : purge
+      ? STORAGE_KINDS.reduce(
+          (sum, { kind }) => ({ count: sum.count + shown(kind).count, bytes: sum.bytes + shown(kind).bytes }),
+          NOTHING_DUE,
+        )
+      : (dueTotal(storage) ?? NOTHING_DUE);
+  /** What is measured: under the saved Keep settings, or everything for Purge now. */
+  const measured = purge ? purgeRetention(ALL_KINDS) : undefined;
   const [saved, setSaved] = useState<Removal | null>(null);
   const [picked, setPicked] = useState<Removal | null>(null);
   const [step, setStep] = useState<Step>("choose");
@@ -458,7 +485,7 @@ export function CleanUpDialog({ onClose }: CleanUpDialogProps) {
   /** Reads what is due again, after a run that failed or found more due than shown. */
   async function measure() {
     try {
-      const found = await libraryStorage();
+      const found = await libraryStorage(measured);
       if (alive.current) setStorage(found);
     } catch (err) {
       if (alive.current) setError(errorMessage(err));
@@ -467,7 +494,7 @@ export function CleanUpDialog({ onClose }: CleanUpDialogProps) {
 
   useEffect(() => {
     alive.current = true;
-    libraryStorage()
+    libraryStorage(purge ? purgeRetention(ALL_KINDS) : undefined)
       .then((found) => {
         if (alive.current) setStorage(found);
       })
@@ -484,7 +511,7 @@ export function CleanUpDialog({ onClose }: CleanUpDialogProps) {
     return () => {
       alive.current = false;
     };
-  }, []);
+  }, [purge]);
 
   // Each step puts focus on its own first action.
   useEffect(() => {
@@ -500,7 +527,7 @@ export function CleanUpDialog({ onClose }: CleanUpDialogProps) {
     latest.current = null;
     try {
       // The backend removes nothing when more is due than this.
-      const cleaned = await cleanUp(how, due);
+      const cleaned = await cleanUp(how, due, purge ? purgeRetention(picks) : undefined);
       if (!alive.current) return;
       // Set by progress events while it ran, which TypeScript cannot see.
       const last = latest.current as CleanupProgress | null;
@@ -526,7 +553,9 @@ export function CleanUpDialog({ onClose }: CleanUpDialogProps) {
   const progress = live ?? { done: 0, total: due.count, bytes: 0 };
   const title =
     step === "choose"
-      ? "Clean up storage"
+      ? purge
+        ? "Purge now"
+        : "Clean up storage"
       : step === "confirm"
         ? `Delete ${items} permanently?`
         : step === "running"
@@ -548,19 +577,48 @@ export function CleanUpDialog({ onClose }: CleanUpDialogProps) {
         {step === "choose" && (
           <>
             <p className="clean-up-text">
-              {storage
-                ? `${items} (${formatSize(due.bytes)}) ${due.count === 1 ? "is" : "are"} older than your Keep settings.`
-                : "Checking what is older than your Keep settings…"}
+              {purge
+                ? storage
+                  ? `Removes ${items} (${formatSize(due.bytes)}) now, whatever your Keep settings say. Starred, tagged, noted and annotated items stay.`
+                  : "Checking what can be removed…"
+                : storage
+                  ? `${items} (${formatSize(due.bytes)}) ${due.count === 1 ? "is" : "are"} older than your Keep settings.`
+                  : "Checking what is older than your Keep settings…"}
             </p>
-            <ul className="clean-up-kinds" aria-label="Due for cleanup">
-              {STORAGE_KINDS.filter(({ kind }) => (storage?.due?.[kind].count ?? 0) > 0).map(({ kind, one, many }) => (
-                <li key={kind}>
-                  <i className="storage-dot" style={{ background: kindColor(kind) }} aria-hidden="true" />
-                  <span>{plural(storage?.due?.[kind].count ?? 0, one, many)}</span>
-                  <span className="clean-up-kind-size">{formatSize(storage?.due?.[kind].bytes ?? 0)}</span>
-                </li>
-              ))}
-            </ul>
+            {purge ? (
+              <ul className="clean-up-kinds" aria-label="Kinds to purge">
+                {STORAGE_KINDS.map(({ kind, name, one, many }) => {
+                  const found = storage?.due?.[kind] ?? NOTHING_DUE;
+                  return (
+                    <li key={kind}>
+                      <label className="clean-up-kind-pick">
+                        <input
+                          type="checkbox"
+                          checked={picks[kind]}
+                          disabled={found.count === 0}
+                          onChange={(event) => setPicks((now) => ({ ...now, [kind]: event.target.checked }))}
+                        />
+                        <i className="storage-dot" style={{ background: kindColor(kind) }} aria-hidden="true" />
+                        <span>{name}</span>
+                      </label>
+                      <span className="clean-up-kind-size">
+                        {plural(found.count, one, many)} · {formatSize(found.bytes)}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <ul className="clean-up-kinds" aria-label="Due for cleanup">
+                {STORAGE_KINDS.filter(({ kind }) => (storage?.due?.[kind].count ?? 0) > 0).map(({ kind, one, many }) => (
+                  <li key={kind}>
+                    <i className="storage-dot" style={{ background: kindColor(kind) }} aria-hidden="true" />
+                    <span>{plural(storage?.due?.[kind].count ?? 0, one, many)}</span>
+                    <span className="clean-up-kind-size">{formatSize(storage?.due?.[kind].bytes ?? 0)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
             <fieldset className="clean-up-choices">
               <legend className="visually-hidden">How to remove them</legend>
               {REMOVAL_CHOICES.map((choice) => (

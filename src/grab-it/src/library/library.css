@@ -1839,6 +1839,16 @@
   font-size: 12.5px;
 }
 
+.clean-up-kind-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.clean-up-kind-pick input {
+  margin: 0;
+}
+
 .clean-up-kind-size {
   margin-left: auto;
   color: var(--text-muted);
