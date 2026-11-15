@@ -2079,10 +2079,10 @@ dependencies = [
  "chrono",
  "cpal",
  "dispatch2",
- "flate2",
  "futures-util",
  "image",
  "keyring",
+ "lzma-rust2",
  "objc2",
  "objc2-app-kit",
  "objc2-av-foundation",
@@ -2102,6 +2102,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
@@ -2117,6 +2118,7 @@ dependencies = [
  "windows 0.61.3",
  "x11rb",
  "xcap",
+ "zip",
 ]
 
 [[package]]
@@ -3046,6 +3048,15 @@ name = "log"
 version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
+
+[[package]]
+name = "lzma-rust2"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef1d73c59a56771343712b22ea5615092c612c16ba291c0979e3105dfeec4890"
+dependencies = [
+ "sha2 0.11.1",
+]
 
 [[package]]
 name = "mach2"
@@ -7699,6 +7710,7 @@ checksum = "e3476fd497ac8af5b1ec7b51acab7bef380f7e8dd8e0487595bafd839417a302"
 dependencies = [
  "constant_time_eq",
  "crc32fast",
+ "flate2",
  "getrandom 0.4.3",
  "indexmap 2.14.2",
  "libc",

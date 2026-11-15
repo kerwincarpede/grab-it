@@ -11,7 +11,6 @@ Grab-it is built with Rust and [Tauri 2](https://tauri.app/), with a React + Typ
 | `app/src-tauri/` | Backend: Rust |
 | `.github/workflows/ci.yml` | Checks plus installer builds on Linux, Windows and macOS |
 | `.github/workflows/release.yml` | Manually triggered release from `main` |
-| `.github/workflows/ffmpeg.yml` | Manually triggered release of the LGPL ffmpeg used to record MP4 |
 | `docs/` | User and developer docs; `docs/assets/demo.gif` is the README animation |
 
 ## Setup
@@ -147,15 +146,16 @@ With **Show webcam** on, the camera is shown in a bubble on screen for as long a
 
 ffmpeg is not bundled (see [ffmpeg builds](#ffmpeg-builds)). With MP4 chosen, Grab-it gets it ready in the background when it starts, or as soon as MP4 is picked in Settings (`ffmpeg.rs`):
 
-1. `GRAB_IT_FFMPEG`, when set, names the ffmpeg to use, and nothing is downloaded.
-2. Otherwise the copy in `ffmpeg/` in the app data directory is used.
-3. Otherwise this platform's asset is downloaded there from the `ffmpeg-n8.1` release, checked against its `.sha256`, unpacked and only then moved into place. Linux x64, Windows x64 and Apple-silicon Macs have one; elsewhere, set `GRAB_IT_FFMPEG`.
+1. `GRAB_IT_FFMPEG`, when set, names the ffmpeg to use, and nothing else is tried.
+2. Otherwise each ffmpeg already on the computer is tried, in order (`ffmpeg::system_dirs`): every directory on `PATH`, then where package managers put it, since an app opened from the Dock, Finder or Start menu often lacks those on its `PATH`, and one installed after Grab-it started never has them. That is Homebrew (`/opt/homebrew/bin`, `/usr/local/bin`) and MacPorts (`/opt/local/bin`) on macOS; winget's links, Chocolatey and Scoop on Windows; and `/usr/local/bin`, `/usr/bin`, Linuxbrew and `~/.local/bin` on Linux. A directory linked to one already searched, such as `/bin`, finds the same ffmpeg only once.
+3. Then the copy Grab-it downloaded earlier to `ffmpeg/` in the app data directory.
+4. When none of those can encode H.264, this platform's [FFmpeg-Builds](#ffmpeg-builds) build is downloaded, checked against the SHA-256 compiled into `ffmpeg.rs`, and its `bin/ffmpeg` is taken out and moved there. Linux and Windows, x64 and arm64, have one. macOS has none: the Recording page says to install it with `brew install ffmpeg` and press **Retry**.
 
-The Recording page shows the download's progress, and **Retry** when it failed. Then each H.264 encoder is tried by encoding one frame, in this order, and the first that works is kept until Grab-it quits: `h264_videotoolbox` on macOS; `h264_nvenc`, `h264_qsv`, `h264_amf` and `h264_mf` on Windows; `h264_nvenc` and `h264_vaapi` (on `/dev/dri/renderD128`) on Linux; then `libopenh264` everywhere. The page names the one chosen. A copy downloaded on an earlier run that no encoder works with is deleted, so Retry downloads it again.
+The Recording page shows the download's progress, and **Retry** when ffmpeg is not installed or could not be set up. Each ffmpeg's H.264 encoders are tried by encoding one frame, in this order, and the first ffmpeg with one that works is kept with it until Grab-it quits: `h264_videotoolbox` on macOS; `h264_nvenc`, `h264_qsv`, `h264_amf` and `h264_mf` on Windows; `h264_nvenc` and `h264_vaapi` (on `/dev/dri/renderD128`) on Linux; then `libx264`, which package managers' ffmpegs usually have, and `libopenh264`, which the downloaded builds have, everywhere. The page names the ffmpeg and the encoder chosen. A copy downloaded on an earlier run that no encoder works with is deleted, so it is downloaded again.
 
-A recording started while ffmpeg is not ready yet (still downloading, or failed) is saved as a GIF, and the card after it says why. When MP4 is ready the card counts up with no limit and says **Video saved** when done.
+A recording started while ffmpeg is not ready yet (still downloading, not installed, or failed) is saved as a GIF, and the card after it says why. When MP4 is ready the card counts up with no limit and says **Video saved** when done.
 
-To try MP4 recording without downloading anything, point `GRAB_IT_FFMPEG` at any LGPL ffmpeg with `libopenh264`, such as a BtbN `lgpl` build:
+To try MP4 recording with a particular ffmpeg, point `GRAB_IT_FFMPEG` at it:
 
 ```sh
 GRAB_IT_FFMPEG=/path/to/ffmpeg npm run tauri dev -- -- -- --open record
@@ -347,32 +347,31 @@ The certificate was made once with [`.github/scripts/make_macos_signing_cert.sh`
 
 ## ffmpeg builds
 
-MP4 recording encodes through ffmpeg, which is not bundled: Grab-it downloads the one for its platform from the [`ffmpeg-n8.1`](https://github.com/kerwincarpede/grab-it/releases/tag/ffmpeg-n8.1) release the first time it is needed. That release holds:
+MP4 recording encodes through ffmpeg, which is not bundled. Grab-it uses one already installed, and otherwise downloads a static LGPL build of ffmpeg 8.1 from [FFmpeg-Builds](https://github.com/FFmpeg-Builds/FFmpeg-Builds) (BtbN's) the first time it is needed. Grab-it does not host or repackage ffmpeg.
 
-| Asset | Platform | Made by |
-| --- | --- | --- |
-| `ffmpeg-linux-x64.gz` | Linux x64 | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds)' static `linux64-lgpl-8.1` build, repackaged |
-| `ffmpeg-windows-x64.exe.gz` | Windows x64 | BtbN's static `win64-lgpl-8.1` build, repackaged |
-| `ffmpeg-macos-arm64.gz` | macOS (Apple silicon) | Built in the workflow with VideoToolbox, AudioToolbox and OpenH264 |
-| `ffmpeg-8.1.tar.xz` | | FFmpeg's source tarball, checked against FFmpeg's signature |
+| Platform | Build |
+| --- | --- |
+| Linux x64 | `linux64-lgpl-8.1` (`.tar.xz`) |
+| Linux arm64 | `linuxarm64-lgpl-8.1` (`.tar.xz`) |
+| Windows x64 | `win64-lgpl-8.1` (`.zip`) |
+| Windows arm64 | `winarm64-lgpl-8.1` (`.zip`) |
+| macOS | None: Homebrew's (`brew install ffmpeg`) |
 
-Each asset has a `<asset>.sha256` beside it, in `sha256sum`'s format, which the download is checked against. The release is a prerelease so that it never becomes the repository's latest release, which installed copies read `latest.json` from.
+They come from one release, `ffmpeg::RELEASE_URL`, and each archive's SHA-256 is compiled in (`ffmpeg::build_for`), so the download is checked without trusting anything fetched beside it. The release is a month-end autobuild: FFmpeg-Builds keeps those for about two years, but its daily ones for only about two weeks. The `pinned_builds_are_still_published` test checks that the release still lists every pinned archive with its checksum, so CI, and with it a release, fails once it is gone.
 
-The release is published by [`.github/workflows/ffmpeg.yml`](../.github/workflows/ffmpeg.yml), run by hand once per ffmpeg version:
+To move to a newer build, pick a month-end `autobuild-…` release, and copy each archive's name and checksum from its `checksums.sha256` into `ffmpeg.rs`:
 
 ```sh
-gh workflow run ffmpeg.yml                              # BtbN's "latest" n8.1 builds
-gh workflow run ffmpeg.yml -f btbn_release=autobuild-…  # or a dated BtbN release
-gh run watch
+gh release list -R FFmpeg-Builds/FFmpeg-Builds
+curl -sL https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/<tag>/checksums.sha256 \
+  | grep -E 'n8\.1.*-(linux64|linuxarm64|win64|winarm64)-lgpl-8\.1\.'
 ```
 
-It builds and checks every binary on any branch but publishes only from `main`, and refuses to touch a release that already exists unless run with `-f replace=true`. Installed copies check downloads against the published checksums, so replace a release only to fix a broken build. A new ffmpeg version is a new release: change `RELEASE_TAG` and `FFMPEG_VERSION` in the workflow, and the tag Grab-it downloads from.
-
-Before publishing, each binary is run on its own OS and must report the LGPL, have no `--enable-gpl`, `--enable-nonfree`, x264 or x265 in its configuration, and have the native `aac` encoder, `libopenh264` and the platform's hardware H.264 encoders (`h264_nvenc` and `h264_vaapi` on Linux; `h264_nvenc`, `h264_qsv`, `h264_amf` and `h264_mf` on Windows; `h264_videotoolbox` on macOS). The macOS build autodetects nothing and must link only libraries and frameworks macOS ships, so nothing from Homebrew on the runner sneaks in.
+Only `bin/ffmpeg` (`bin/ffmpeg.exe`) is taken out of the archive. `bin/ffmpeg` comes first in the `.tar.xz`, so the rest is barely decompressed.
 
 ### Licence
 
-Grab-it is MIT, but ffmpeg is licensed under the LGPL and must stay that way: **never add x264, x265, `--enable-gpl` or `--enable-nonfree`** to these builds, or Grab-it could no longer download them. The Linux and Windows builds are under the [GNU LGPL version 3](https://www.gnu.org/licenses/lgpl-3.0.html), because BtbN configures all its LGPL builds with `--enable-version3`. Only the macOS build leaves that flag out, so it is under the [GNU LGPL 2.1 or later](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html). The check above accepts either version. Grab-it runs ffmpeg as a separate program and does not link it. The LGPL asks that the source of the binaries we distribute is available, which is why the source tarball is published beside them; BtbN's builds are made by its public build scripts from the n8.1 branch, and each build's version is listed in the release notes. All three binaries include Cisco's [OpenH264](https://github.com/cisco/openh264) (BSD-2-Clause), built from source.
+Grab-it is MIT and runs ffmpeg as a separate program; it does not link it. It downloads FFmpeg-Builds' LGPL builds, not their GPL ones, but it does not distribute ffmpeg itself: the download comes straight from FFmpeg-Builds, whose build scripts and the source they build from are public. An ffmpeg the user installed, under whatever licence, is only run. That is why `libx264` is tried when it is there.
 
 The keystroke label's font, `src-tauri/fonts/DejaVuSans-Bold-keys.ttf`, is cut down from [DejaVu Sans](https://dejavu-fonts.github.io/) Bold, under the Bitstream Vera licence in `src-tauri/fonts/LICENSE.txt` beside it.
 
