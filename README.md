@@ -20,7 +20,7 @@ One key to capture, a few clicks to explain, and it's already on your clipboard.
 
 <img src="docs/assets/demo.gif" alt="Animation: press PrtSc, drag over part of the screen, add an arrow, a box, numbered steps, a blur and a note, drop it on a gradient backdrop, and copy it, all in a few seconds." width="100%">
 
-**[Get started in 2 minutes →](docs/getting-started.md)**
+**[Get started in 2 minutes →](https://kerwincarpede.github.io/grab-it/get-started/)**
 
 </div>
 
@@ -90,13 +90,13 @@ Float a screenshot above your windows as a reference. Copy text straight off the
 Grab-it is free and open source.
 
 1. Download the installer for your computer from the **[latest release](https://github.com/kerwincarpede/grab-it/releases/latest)**.
-2. Follow the **[Getting started guide](docs/getting-started.md)**. It covers installing on Windows, macOS and Linux, your first capture, and every shortcut.
+2. Follow the **[Grab-it guide](https://kerwincarpede.github.io/grab-it/)**. It covers installing on Windows, macOS and Linux, your first capture, editing screenshots and recordings, and every shortcut.
 
 | | |
 | --- | --- |
-| 📘 [Getting started](docs/getting-started.md) | Install Grab-it and take your first annotated screenshot |
-| ⌨️ [Keyboard shortcuts](docs/getting-started.md#keyboard-shortcuts) | Every hotkey, on every platform |
-| 🛟 [Troubleshooting](docs/getting-started.md#troubleshooting) | Fixes for the most common hiccups |
+| 📘 [Getting started](https://kerwincarpede.github.io/grab-it/get-started/) | Install Grab-it and take your first annotated screenshot |
+| ⌨️ [Keyboard shortcuts](https://kerwincarpede.github.io/grab-it/reference/keyboard-shortcuts/) | Every hotkey, on every platform |
+| 🛟 [Troubleshooting](https://kerwincarpede.github.io/grab-it/reference/troubleshooting/) | Fixes for the most common hiccups |
 | 🛠️ [Developing Grab-it](docs/development.md) | Build from source, run the checks, and contribute |
 
 ## Contributing

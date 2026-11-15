@@ -1,0 +1,77 @@
+---
+title: Install
+description: Download and install Grab-it on Windows, macOS or Linux.
+sidebar:
+  order: 1
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Grab the installer for your computer from the **[latest release](https://github.com/kerwincarpede/grab-it/releases/latest)** (scroll down to *Assets*).
+
+| Your computer | Download | |
+| --- | --- | --- |
+| **Windows** 10 or 11 | `Grab-it_<version>_x64-setup.exe` | Recommended. The `.msi` works too. |
+| **macOS** on Apple silicon (M1 or later) | `Grab-it_<version>_aarch64.dmg` | |
+| **Linux**: Ubuntu, Debian, Mint, Pop!_OS | `Grab-it_<version>_amd64.deb` | |
+| **Linux**: Fedora, openSUSE, RHEL | `Grab-it-<version>-1.x86_64.rpm` | |
+| **Linux**: anything else | `Grab-it_<version>_amd64.AppImage` | Runs without installing. |
+
+:::note
+Grab-it isn't signed with a paid developer certificate yet, so Windows and macOS warn you the first time you open it. That's expected. The steps below get you past it.
+:::
+
+<Tabs syncKey="os">
+<TabItem label="Windows" icon="seti:windows">
+
+1. Double-click `Grab-it_<version>_x64-setup.exe`.
+2. If Windows shows **"Windows protected your PC"**, click **More info**, then **Run anyway**.
+3. Follow the installer. Grab-it starts when it finishes.
+
+</TabItem>
+<TabItem label="macOS" icon="apple">
+
+1. Open the `.dmg` and drag **Grab-it** into **Applications**.
+2. Open Grab-it from Applications. macOS says it can't verify the developer: click **Done**.
+3. Open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to Grab-it. Confirm, and Grab-it opens.
+
+   *Comfortable with Terminal?* This does the same thing in one line:
+
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/Grab-it.app
+   ```
+
+4. The first time you capture, macOS asks for **Screen Recording** permission. Grab-it offers to open the right page in System Settings. Turn it on for Grab-it, then quit and reopen Grab-it.
+
+</TabItem>
+<TabItem label="Linux" icon="linux">
+
+**Debian / Ubuntu:**
+
+```sh
+sudo apt install ./Grab-it_*_amd64.deb
+```
+
+**Fedora / openSUSE:**
+
+```sh
+sudo dnf install ./Grab-it-*.x86_64.rpm      # or: sudo zypper install ./Grab-it-*.rpm
+```
+
+**AppImage:**
+
+```sh
+chmod +x Grab-it_*_amd64.AppImage
+./Grab-it_*_amd64.AppImage
+```
+
+Then launch **Grab-it** from your app menu.
+
+:::tip
+Grab-it lives in the system tray. On GNOME, the tray needs the *AppIndicator and KStatusNotifierItem Support* extension. Ubuntu includes it already; on Fedora, install `gnome-shell-extension-appindicator`.
+:::
+
+</TabItem>
+</Tabs>
+
+Installed? [Take your first capture](/grab-it/capture/first-capture/).

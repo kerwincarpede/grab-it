@@ -1,0 +1,76 @@
+name: Docs
+
+# Builds the Starlight site in src/grab-it-docs on pull requests that touch it,
+# and deploys it to GitHub Pages (https://kerwincarpede.github.io/grab-it/)
+# when such a change reaches main. Pages must use "GitHub Actions" as its
+# source:
+#   gh api -X POST repos/kerwincarpede/grab-it/pages -f build_type=workflow
+on:
+  pull_request:
+    paths:
+      - src/grab-it-docs/**
+      - package-lock.json
+      - .github/workflows/docs.yml
+  push:
+    branches: [main]
+    paths:
+      - src/grab-it-docs/**
+      - package-lock.json
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+
+# A newer push supersedes an older build, but a deployment is never cut short.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # actions/checkout runs `git init`; naming the initial branch keeps git from
+  # printing its hint about the default branch name.
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # Only the docs workspace's dependencies; the app's are not needed here.
+      - name: Install dependencies
+        run: npm ci --workspace grab-it-docs
+
+      - name: Build
+        working-directory: src/grab-it-docs
+        run: npm run build
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: src/grab-it-docs/dist
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
