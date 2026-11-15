@@ -47,10 +47,10 @@ def kf(name, frames, sel=None, ease=None):
 def show(sel, name, wins, fade=.3, off="opacity:0", on="opacity:1", ease=None):
     """Visible during each (start, end) window, fading over `fade` seconds at each edge."""
     fr = []
-    swap = fade <= .05  # a quick swap: be fully shown at a and until b, so no frame shows neither
+    swap = fade <= .05  # a quick swap: shown from exactly a until exactly b, so no moment shows two or none
     for a, b in wins:
-        fr += [(0, on)] if a <= 0 else [(a - fade, off), (a, on)] if swap else [(a, off), (a + fade, on)]
-        fr += [(T, on)] if b >= T else [(b, on), (b + fade, off)] if swap else [(b - fade, on), (b, off)]
+        fr += [(0, on)] if a <= 0 else [(a - .001, off), (a, on)] if swap else [(a, off), (a + fade, on)]
+        fr += [(T, on)] if b >= T else [(b - .001, on), (b, off)] if swap else [(b - fade, on), (b, off)]
     kf(name, fr, sel, ease)
 
 
