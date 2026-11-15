@@ -1315,6 +1315,15 @@ describe("RegionOverlay", () => {
   });
 
   describe("a recording's area", () => {
+    // Node's own object URLs refuse jsdom's Blob, and the error would replace the hint.
+    beforeEach(() => {
+      Object.assign(URL, { createObjectURL: () => "blob:frozen", revokeObjectURL: () => {} });
+    });
+    afterEach(() => {
+      Reflect.deleteProperty(URL, "createObjectURL");
+      Reflect.deleteProperty(URL, "revokeObjectURL");
+    });
+
     function dragOver(overlay: HTMLElement, from: [number, number], to: [number, number]) {
       fireEvent.mouseDown(overlay, { button: 0, clientX: from[0], clientY: from[1] });
       fireEvent.mouseMove(overlay, { clientX: to[0], clientY: to[1] });
@@ -1385,6 +1394,24 @@ describe("RegionOverlay", () => {
       expect(finishes(calls)[0].payload).toEqual({
         selection: { kind: "region", rect: { x: 100, y: 50, width: 200, height: 200 }, viewportWidth: 1000 },
       });
+    });
+
+    it("ends a handle grab released over the size chip", async () => {
+      mockOverlay({ intent: "record" });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+      await screen.findByRole("group", { name: "Recording options" });
+
+      dragOver(overlay, [100, 50], [300, 250]);
+      const chip = screen.getByTestId("overlay-size-panel");
+      fireEvent.mouseDown(screen.getByTestId("overlay-handle-se"), { button: 0, clientX: 300, clientY: 250 });
+      fireEvent.mouseMove(overlay, { clientX: 400, clientY: 300 });
+      fireEvent.mouseUp(chip, { button: 0, clientX: 400, clientY: 300 });
+      expect(overlay).toHaveAttribute("data-dragging", "false");
+      // With the button up, the pointer no longer resizes it.
+      fireEvent.mouseMove(overlay, { clientX: 600, clientY: 600 });
+      expect(screen.getByTestId("overlay-size-width")).toHaveValue("300");
+      expect(screen.getByTestId("overlay-size-height")).toHaveValue("250");
     });
 
     it("still holds a clicked window's area in Region", async () => {

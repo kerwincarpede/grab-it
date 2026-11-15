@@ -72,7 +72,8 @@ import {
   WindowIcon,
 } from "../app/icons";
 import Loupe from "./Loupe";
-import RecordSetup, { SOURCES, useRecordingOptions } from "./RecordSetup";
+import RecordSetup from "./RecordSetup";
+import { SOURCES, useRecordingOptions } from "./recordSources";
 import type { RecordingSource } from "../settings/api";
 import "./overlay.css";
 
@@ -915,7 +916,8 @@ function RegionOverlay() {
       });
       return;
     }
-    if (onToolbar(event)) return;
+    // A click on a toolbar picks nothing; a grab released over one still ends below.
+    if ((source === "window" || source === "screen") && onToolbar(event)) return;
     if (source === "window") {
       // A click picks the window under it, or lets the picked one go.
       setDrag(null);
