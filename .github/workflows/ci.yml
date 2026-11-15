@@ -149,9 +149,15 @@ jobs:
         with:
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
+      # rust-cache does not re-save a cache whose key matched exactly, so a
+      # key that ignores the targets kept restoring the single-architecture
+      # cache from before the universal build, and macOS compiled every crate
+      # for both architectures on each run. Naming the targets in the key
+      # gives the universal build a cache of its own.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/grab-it/src-tauri
+          key: ${{ runner.os == 'macOS' && 'universal-apple-darwin' || '' }}
 
       - name: Install frontend dependencies
         run: npm ci
