@@ -12,13 +12,15 @@ When Grab-it starts it **doesn't open a big window**. It sits quietly in your sy
    - Or just **click a window** to grab the whole window.
    - Hold **Shift** for a perfect square, or **Space** to move the selection around.
    - **Esc** or right-click cancels.
-3. **Let go.** That's it! 🎉
+3. **Let go.** That's it!
 
 Your capture is now:
 
 - **on your clipboard**, ready to paste into Slack, an email, a doc or a ticket,
-- **saved** as a PNG in `Pictures/Grab-it`, and
+- **saved** as a PNG in `Pictures/Grab-it`, named after the moment you took it (`Grab-it 2026-11-15 14-05-09.png`), and
 - shown on a **Quick Access** card in the corner of your screen.
+
+See [Region](/grab-it/capture/region/) for everything the overlay can do.
 
 ## The Quick Access card
 
@@ -27,10 +29,10 @@ The card offers what you most likely want next:
 | Button | What it does |
 | --- | --- |
 | **Copy** | Copies the capture again |
-| **Annotate** | Opens it in the [editor](/grab-it/image-editor/mark-it-up/) (clicking the preview does too) |
+| **Annotate** | Opens it in the [editor](/grab-it/image-editor/) (clicking the preview does too) |
 | **Pin** | Floats it above your other windows |
 | 📁 / 🗑 | Shows it in its folder, or deletes it |
 
 The card fades away on its own after a few seconds. Rest your pointer on it to keep it around. Missed it? The tray's **Show last capture** brings it back.
 
-Want something other than the card after each capture? Change **After a capture** in [Settings](/grab-it/reference/settings/).
+Want something other than the card after each capture? **After a capture** in [Settings](/grab-it/reference/settings/) can open the editor straight away instead, or do nothing at all (the capture is still saved, and copied unless you turned that off).
