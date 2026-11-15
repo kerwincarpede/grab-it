@@ -1,5 +1,6 @@
 /*
- * Landing page base styles, hover lifts and the hero and demo animations.
+ * Landing page base styles, hover lifts, the hero animation and the tour
+ * animations' controls.
  * Colours come from tokens.css. Every animation stops under
  * prefers-reduced-motion.
  */
@@ -76,61 +77,33 @@ a {
 	}
 }
 
-/* Demo buttons */
-.gi-chip {
-	font: inherit;
-	font-size: 13.5px;
-	font-weight: 600;
-	border-radius: 9px;
-	min-height: 44px;
+/* The tour animations' pause and play button */
+.gi-tour-toggle {
+	position: absolute;
+	right: 10px;
+	bottom: 10px;
+	width: 44px;
+	height: 44px;
+	border-radius: 50%;
+	border: 1px solid rgb(255 255 255 / 18%);
+	background: rgb(13 16 22 / 72%);
+	color: #f3f4f7;
 	cursor: pointer;
 	display: inline-flex;
 	align-items: center;
-	gap: 8px;
-	background: transparent;
-	color: var(--gi-muted);
-	border: 1px solid transparent;
-	transition: background 0.2s ease, color 0.2s ease;
+	justify-content: center;
+	backdrop-filter: blur(6px);
+	-webkit-backdrop-filter: blur(6px);
+	transition: background 0.2s ease;
 }
 
-.gi-chip:hover {
-	color: var(--gi-text);
+.gi-tour-toggle:hover {
+	background: rgb(13 16 22 / 90%);
 }
 
-.gi-chip[aria-pressed='true'] {
-	background: var(--gi-accent-soft);
-	color: var(--gi-accent);
-	border-color: var(--gi-accent-soft);
-	box-shadow: inset 0 0 0 1px var(--gi-accent-soft);
-}
-
-.gi-chip--editor[aria-pressed='true'] {
-	background: rgb(255 138 122 / 14%);
-	color: var(--gi-hue-editor);
-	border-color: rgb(255 138 122 / 24%);
-	box-shadow: none;
-}
-
-.gi-chip-key {
-	font-family: var(--gi-font-mono);
-	font-size: 10.5px;
-	opacity: 0.65;
-}
-
-.gi-search:focus-within {
-	border-color: var(--gi-hue-library) !important;
-}
-
-/* The image editor demo: drawing surface */
-.gi-stage {
-	touch-action: none;
-	user-select: none;
-	-webkit-user-select: none;
-}
-
-.gi-stage:focus-visible {
-	outline: 3px solid #ffffff;
-	outline-offset: 3px;
+.gi-tour-toggle:focus-visible {
+	outline: 3px solid var(--gi-accent);
+	outline-offset: 2px;
 }
 
 a{color:inherit}
@@ -145,8 +118,6 @@ a{color:inherit}
 @keyframes gi-box{0%,44%{opacity:0;transform:scale(.92)}52%,88%{opacity:1;transform:none}100%{opacity:0}}
 @keyframes gi-blur{0%,54%{opacity:0}62%,88%{opacity:1}100%{opacity:0}}
 @keyframes gi-toast{0%,66%{opacity:0;transform:translateY(18px) scale(.96)}72%,92%{opacity:1;transform:none}100%{opacity:0;transform:translateY(8px)}}
-@keyframes gi-play{0%{left:12%}100%{left:84%}}
-@keyframes gi-zoom{0%,30%{transform:scale(1)}45%,62%{transform:scale(1.7)}78%,100%{transform:scale(1)}}
 @keyframes gi-pulse{0%,100%{opacity:.55}50%{opacity:1}}
 .gi-sel{animation:gi-sel 7s ease-in-out infinite}
 .gi-cur{animation:gi-cur 7s cubic-bezier(.6,0,.3,1) infinite}
@@ -154,17 +125,13 @@ a{color:inherit}
 .gi-box{animation:gi-box 7s ease-out infinite}
 .gi-blur{animation:gi-blur 7s ease-out infinite}
 .gi-toast{animation:gi-toast 7s ease-out infinite}
-.gi-head{animation:gi-play 6s linear infinite}
-/* Ease-in-out between keyframes, so the zoom eases in and out like the video editor's. */
-.gi-zoom{animation:gi-zoom 6s ease-in-out infinite;transform-origin:72% 38%}
 .gi-pulse{animation:gi-pulse 2.4s ease-in-out infinite}
-@media (prefers-reduced-motion: reduce){.gi-sel,.gi-cur,.gi-arrow,.gi-box,.gi-blur,.gi-toast,.gi-head,.gi-zoom,.gi-pulse{animation:none !important}.gi-lift,.gi-cta{transition:none}}
+@media (prefers-reduced-motion: reduce){.gi-sel,.gi-cur,.gi-arrow,.gi-box,.gi-blur,.gi-toast,.gi-pulse{animation:none !important}.gi-lift,.gi-cta{transition:none}}
 
 @media (prefers-reduced-motion: reduce) {
 	html {
 		scroll-behavior: auto;
 	}
-	.gi-chip,
 	.gi-lift:hover,
 	.gi-cta:hover {
 		transition: none;

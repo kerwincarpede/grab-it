@@ -1,10 +1,12 @@
 ---
 // The feature tour: one large panel per feature, each with its own colour
-// glow, a short explanation, links to its docs section and a live demo.
-import CaptureDemo from './CaptureDemo';
-import EditorDemo from './EditorDemo';
-import VideoDemo from './VideoDemo';
-import LibraryDemo from './LibraryDemo';
+// glow, a short explanation, links to its docs section and an animation of
+// the app at work. The animations are made by docs/assets/tours.py.
+import TourAnimation from './TourAnimation';
+import captureSvg from './tours/capture.svg?url';
+import editorSvg from './tours/editor.svg?url';
+import videoSvg from './tours/video.svg?url';
+import librarySvg from './tours/library.svg?url';
 
 // A panel's glow in one corner, over a gradient hairline border.
 const panel = (glow: string, corner: string) =>
@@ -23,23 +25,23 @@ const panel = (glow: string, corner: string) =>
 <p style="margin: 0; display: inline-flex; align-items: center; gap: 8px; font-family: var(--gi-font-mono); font-size: 12.5px; color: var(--gi-hue-capture)"><span class="gi-pulse" style="width: 7px; height: 7px; border-radius: 50%; background: var(--gi-hue-capture); box-shadow: 0 0 12px var(--gi-hue-capture)"></span>01 · CAPTURE</p>
 <h3 id="t-capture" style="margin: 14px 0 0; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 650">One shortcut for every capture</h3>
 <p style="margin: 16px 0 0; color: var(--gi-muted)">All-in-one freezes the screen and puts every mode on one toolbar: a region, a window, a whole screen, some text or a colour, a recording or a timer.</p>
-<p style="margin: 12px 0 0; color: var(--gi-muted); font-size: 14.5px">Try it: pick a mode, or press its number.</p>
+<p style="margin: 12px 0 0; color: var(--gi-muted)">Set an exact size or lock a ratio, read the text or the link in a QR code, and pick any colour off the screen.</p>
 <a class="gi-link" href="/grab-it/capture/" style="display: inline-flex; align-items: center; gap: 6px; margin-top: 20px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-capture)">Capture guide <span aria-hidden="true" style="color: var(--gi-hue-capture)">→</span></a>
 </div>
 <div style="flex: 1.5 1 480px; min-width: 0">
-<CaptureDemo client:visible />
+<TourAnimation client:visible src={captureSvg} alt="The All-in-one toolbar opens over a frozen screen. A region is dragged around a card, locked to 4:3 and captured to the Quick Access card. Then Text mode reads the link in a QR code, and Colour mode picks the blue of a chart bar with a magnifying loupe." />
 </div>
 </section>
 
 <section aria-labelledby="t-editor" style={`${panel('--gi-ed-a', '100% 0%')} border-radius: 26px; border: 1px solid transparent; padding: clamp(24px, 4vw, 48px); display: flex; flex-wrap: wrap-reverse; gap: 40px; align-items: center`}>
 <div style="flex: 1.5 1 480px; min-width: 0">
-<EditorDemo client:visible />
+<TourAnimation client:visible src={editorSvg} alt="In the image editor, tools are picked by their keys: an arrow, a box, numbered steps, a highlight, a blur over an email address, a spotlight on one card and a note. The Backdrop panel puts the screenshot on a gradient with more padding, and Copy copies it." />
 </div>
 <div style="flex: 1 1 300px; min-width: 0; max-width: 380px">
 <p style="margin: 0; display: inline-flex; align-items: center; gap: 8px; font-family: var(--gi-font-mono); font-size: 12.5px; color: var(--gi-hue-editor)"><span class="gi-pulse" style="width: 7px; height: 7px; border-radius: 50%; background: var(--gi-hue-editor); box-shadow: 0 0 12px var(--gi-hue-editor)"></span>02 · IMAGE EDITOR</p>
 <h3 id="t-editor" style="margin: 14px 0 0; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 650">Explain it in seconds</h3>
 <p style="margin: 16px 0 0; color: var(--gi-muted)">Arrows, boxes, numbered steps, text and highlights, each one keystroke away. Blur the private bits, crop the rest, and drop it on a backdrop.</p>
-<p style="margin: 12px 0 0; color: var(--gi-muted); font-size: 14.5px">Try it: pick a tool and drag on the picture.</p>
+<p style="margin: 12px 0 0; color: var(--gi-muted)">Your original is never changed, so you can come back and move that arrow weeks later.</p>
 <a class="gi-link" href="/grab-it/image-editor/" style="display: inline-flex; align-items: center; gap: 6px; margin-top: 20px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-editor)">Image editor guide <span aria-hidden="true" style="color: var(--gi-hue-editor)">→</span></a>
 </div>
 </section>
@@ -48,26 +50,26 @@ const panel = (glow: string, corner: string) =>
 <div style="flex: 1 1 300px; min-width: 0; max-width: 380px">
 <p style="margin: 0; display: inline-flex; align-items: center; gap: 8px; font-family: var(--gi-font-mono); font-size: 12.5px; color: var(--gi-hue-video)"><span class="gi-pulse" style="width: 7px; height: 7px; border-radius: 50%; background: var(--gi-hue-video); box-shadow: 0 0 12px var(--gi-hue-video)"></span>03 · RECORDING AND VIDEO</p>
 <h3 id="t-video" style="margin: 14px 0 0; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 650">Record it, then make it look good</h3>
-<p style="margin: 16px 0 0; color: var(--gi-muted)">Record a region, a window or a display as an MP4 or a GIF. Trim the ends, zoom in on what matters with smooth easing, and export a new MP4.</p>
+<p style="margin: 16px 0 0; color: var(--gi-muted)">Record a region, a window or a display as an MP4 or a GIF, with your microphone, your webcam, and your clicks and keys shown. Trim the ends, zoom in on an area or follow the pointer, and export a new MP4.</p>
 <div style="display: flex; flex-wrap: wrap; gap: 4px 22px; margin-top: 20px">
 <a class="gi-link" href="/grab-it/recording/" style="display: inline-flex; align-items: center; gap: 6px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-video)">Recording guide <span aria-hidden="true" style="color: var(--gi-hue-video)">→</span></a>
 <a class="gi-link" href="/grab-it/video-editor/" style="display: inline-flex; align-items: center; gap: 6px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-video)">Video editor guide <span aria-hidden="true" style="color: var(--gi-hue-video)">→</span></a>
 </div>
 </div>
 <div style="flex: 1.5 1 480px; min-width: 0">
-<VideoDemo client:visible />
+<TourAnimation client:visible src={videoSvg} alt="Record mode is picked on the All-in-one toolbar and a window is chosen, with the webcam, clicks and keys on. After a countdown it records, showing a ring for each click and a label for a shortcut. In the video editor the start is trimmed, a zoom is added that follows the cursor, playback zooms in on each click, and Export saves a new MP4." />
 </div>
 </section>
 
 <section aria-labelledby="t-library" style={`${panel('--gi-lib-a', '100% 100%')} border-radius: 26px; border: 1px solid transparent; padding: clamp(24px, 4vw, 48px); display: flex; flex-wrap: wrap-reverse; gap: 40px; align-items: center`}>
 <div style="flex: 1.5 1 480px; min-width: 0">
-<LibraryDemo client:visible />
+<TourAnimation client:visible src={librarySvg} alt="In the Library, a new capture is described by AI and gets tags. Searching for invoice finds a receipt by the text inside it. Its details show the AI description, category and tags; a tag is added and its text is copied. Then the Recordings filter shows a recording with Play and Edit on hover." />
 </div>
 <div style="flex: 1 1 300px; min-width: 0; max-width: 380px">
 <p style="margin: 0; display: inline-flex; align-items: center; gap: 8px; font-family: var(--gi-font-mono); font-size: 12.5px; color: var(--gi-hue-library)"><span class="gi-pulse" style="width: 7px; height: 7px; border-radius: 50%; background: var(--gi-hue-library); box-shadow: 0 0 12px var(--gi-hue-library)"></span>04 · LIBRARY AND AI</p>
 <h3 id="t-library" style="margin: 14px 0 0; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 650">Find any screenshot again</h3>
 <p style="margin: 16px 0 0; color: var(--gi-muted)">Search every capture by the words inside the image, or by app, tag and date. Text recognition runs on your computer. Add AI descriptions and tags from Claude Code, Codex or a local model.</p>
-<p style="margin: 12px 0 0; color: var(--gi-muted); font-size: 14.5px">Try it: search for “error” or “invoice”.</p>
+
 <div style="display: flex; flex-wrap: wrap; gap: 4px 22px; margin-top: 20px">
 <a class="gi-link" href="/grab-it/library/" style="display: inline-flex; align-items: center; gap: 6px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-library)">Library guide <span aria-hidden="true" style="color: var(--gi-hue-library)">→</span></a>
 <a class="gi-link" href="/grab-it/ai/" style="display: inline-flex; align-items: center; gap: 6px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-library)">AI guide <span aria-hidden="true" style="color: var(--gi-hue-library)">→</span></a>
