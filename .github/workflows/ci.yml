@@ -16,11 +16,12 @@ on:
         type: string
         default: ''
 
-# A newer push supersedes an older run. Called from release.yml, github.workflow
-# is "Release", so a release never shares a group with ordinary CI runs.
+# On a pull request a newer push supersedes an older run. Called from
+# release.yml, each release gets a group of its own and is never cancelled,
+# so every merge into main is built and released.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow == 'Release' && format('release-{0}', github.run_id) || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: ${{ github.workflow != 'Release' }}
 
 permissions:
   contents: read
