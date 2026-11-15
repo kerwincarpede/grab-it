@@ -2,15 +2,15 @@ import { useEffect, useState } from 'react';
 import { detectOs, type DesktopOs } from './os';
 import { sx } from './sx';
 
-// The download panel. Every card links to the latest release; the card for
+// The download panel. Each card's file line matches get-started/install.mdx. Every card links to the latest release; the card for
 // the visitor's OS gets the gradient border and a "Your computer" badge once
 // the page has loaded and detected it.
 const release = 'https://github.com/kerwincarpede/grab-it/releases/latest';
 
 const systems: { id: DesktopOs; name: string; files: string }[] = [
-	{ id: 'windows', name: 'Windows', files: 'Installer (.exe) and MSI · Windows 10 and 11' },
-	{ id: 'macos', name: 'macOS', files: 'Disk image (.dmg) · Apple silicon and Intel' },
-	{ id: 'linux', name: 'Linux', files: 'AppImage, .deb and .rpm · X11 and Wayland' },
+	{ id: 'windows', name: 'Windows', files: 'Setup (.exe) or .msi · Windows 10 and 11' },
+	{ id: 'macos', name: 'macOS', files: 'Disk image (.dmg) · Apple silicon (M1 or later)' },
+	{ id: 'linux', name: 'Linux', files: '.deb, .rpm and AppImage' },
 ];
 
 const detectedCard = sx('color: var(--gi-text); border: 1px solid transparent; background: linear-gradient(var(--gi-panel-2), var(--gi-panel-2)) padding-box, linear-gradient(160deg, var(--gi-h1a), var(--gi-h1b), var(--gi-h1c)) border-box; box-shadow: 0 20px 50px var(--gi-glow)');
