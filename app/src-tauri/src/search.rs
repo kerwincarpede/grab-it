@@ -35,6 +35,8 @@ pub struct SearchQuery {
     pub tag: Option<String>,
     /// The AI put it in exactly this category (see `ai::CATEGORIES`).
     pub category: Option<String>,
+    /// Only captures (`"image"`) or only recordings (`"recording"`).
+    pub kind: Option<String>,
 }
 
 /// The `shots_fts` columns, in index order. Mirrors `MatchField` in
@@ -116,6 +118,8 @@ pub struct NameCount {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct SidebarSummary {
     pub total: u32,
+    /// How many of them are recordings.
+    pub recordings: u32,
     /// Every app, by name.
     pub apps: Vec<NameCount>,
     /// The most used tags, yours and the AI's, most used first.
@@ -188,6 +192,11 @@ fn filter_clause(query: &SearchQuery, params: &mut Vec<Value>) -> String {
     if let Some(category) = query.category.as_ref().filter(|value| !value.is_empty()) {
         clauses.push("s.ai_category = ?");
         params.push(Value::Text(category.clone()));
+    }
+    match query.kind.as_deref() {
+        Some("image") => clauses.push("s.kind = 'image'"),
+        Some("recording") => clauses.push("s.kind <> 'image'"),
+        _ => {}
     }
     clauses
         .iter()
@@ -322,8 +331,14 @@ impl Library {
             Ok(rows)
         };
         let total: u32 = conn.query_row("SELECT COUNT(*) FROM shots", [], |row| row.get(0))?;
+        let recordings: u32 = conn.query_row(
+            "SELECT COUNT(*) FROM shots WHERE kind <> 'image'",
+            [],
+            |row| row.get(0),
+        )?;
         Ok(SidebarSummary {
             total,
+            recordings,
             apps: counts(
                 "SELECT app, COUNT(*) FROM shots WHERE app IS NOT NULL AND app <> ''
                  GROUP BY app ORDER BY app COLLATE NOCASE",
@@ -422,6 +437,33 @@ mod tests {
             .unwrap()
             .id;
         (library, [a, b, c])
+    }
+
+    #[test]
+    fn search_narrows_to_captures_or_recordings_and_the_sidebar_counts_them() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let recordings = dir.path().join(crate::record::RECORDINGS_DIR);
+        std::fs::create_dir_all(&recordings).unwrap();
+        std::fs::write(recordings.join("a.mp4"), b"x").unwrap();
+        std::fs::write(recordings.join("b.mp4"), b"y").unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        library.rescan(dir.path()).unwrap();
+        let png = dir.path().join("shot.png");
+        image::RgbaImage::new(4, 4).save(&png).unwrap();
+        library.add_capture(&png).unwrap();
+
+        let count = |kind: Option<&str>| {
+            let query = SearchQuery {
+                kind: kind.map(str::to_owned),
+                ..SearchQuery::default()
+            };
+            library.search(&query, 0, 10).unwrap().total
+        };
+        assert_eq!(count(None), 3);
+        assert_eq!(count(Some("image")), 1);
+        assert_eq!(count(Some("recording")), 2);
+        let sidebar = library.sidebar().unwrap();
+        assert_eq!((sidebar.total, sidebar.recordings), (3, 2));
     }
 
     #[test]
@@ -549,6 +591,7 @@ mod tests {
             from: Some(day(1).timestamp_millis()),
             to: None,
             category: None,
+            kind: None,
         };
         let page = library.search(&combined, 0, 10).unwrap();
         assert_eq!((ids(&page), page.total), (vec![a], 1));

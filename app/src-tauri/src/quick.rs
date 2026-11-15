@@ -391,18 +391,39 @@ pub fn quick_info(state: State<'_, QuickState>) -> Option<Shown> {
     lock(&state.current).clone()
 }
 
-/// The capture on the card as a small PNG.
+/// The capture on the card as a small PNG, or a frame of the recording on
+/// it: a GIF's first, an MP4's from a moment in (with ffmpeg, once ready).
 #[tauri::command(async)]
-pub fn quick_thumbnail(state: State<'_, QuickState>) -> Result<tauri::ipc::Response, String> {
-    let path = match &*lock(&state.current) {
-        Some(Shown {
-            item: QuickItem::Capture { path, .. },
+pub fn quick_thumbnail(
+    app: AppHandle,
+    state: State<'_, QuickState>,
+) -> Result<tauri::ipc::Response, String> {
+    let item = match &*lock(&state.current) {
+        Some(Shown { item, .. }) => item.clone(),
+        None => return Err("there is nothing on the card".to_owned()),
+    };
+    let image = match item {
+        QuickItem::Capture { path, .. }
+        | QuickItem::Recorded {
+            path,
+            format: RecordingFormat::Gif,
             ..
-        }) => path.clone(),
+        } => {
+            image::open(&path).map_err(|err| format!("could not open {}: {err}", path.display()))?
+        }
+        QuickItem::Recorded {
+            path, duration_ms, ..
+        } => {
+            let ready = crate::ffmpeg::ready(&app).ok_or("ffmpeg is not ready")?;
+            crate::ffmpeg::video_frame(
+                &ready.path,
+                &path,
+                crate::ffmpeg::preview_at_ms(Some(duration_ms)),
+                THUMB_MAX,
+            )?
+        }
         _ => return Err("there is no capture on the card".to_owned()),
     };
-    let image =
-        image::open(&path).map_err(|err| format!("could not open {}: {err}", path.display()))?;
     let small = if image.width() > THUMB_MAX || image.height() > THUMB_MAX {
         image.resize(THUMB_MAX, THUMB_MAX, FilterType::Triangle)
     } else {
@@ -423,6 +444,8 @@ pub enum QuickAction {
     Edit,
     Pin,
     Reveal,
+    /// Opens a recording in the app that plays it.
+    Open,
     Delete,
     Close,
     /// Copies what OCR read, in place of the tidied text.
@@ -454,8 +477,8 @@ pub async fn quick_action(
     };
     match (action, &item) {
         (QuickAction::Close, _) => dismiss(&app, generation),
-        // A recording is a file but not a capture: it can be shown in its
-        // folder, deleted and (an MP4) edited, not annotated, pinned or
+        // A recording is a file but not a capture: it can be played, shown in
+        // its folder, deleted and (an MP4) edited, not annotated, pinned or
         // copied as an image.
         (
             QuickAction::Reveal,
@@ -464,6 +487,12 @@ pub async fn quick_action(
             app.opener()
                 .reveal_item_in_dir(path)
                 .map_err(|err| format!("could not show the file in its folder: {err}"))?;
+        }
+        (QuickAction::Open, QuickItem::Recorded { path, .. }) => {
+            app.opener()
+                .open_path(path.to_string_lossy(), None::<&str>)
+                .map_err(|err| format!("could not open the recording: {err}"))?;
+            dismiss(&app, generation);
         }
         (QuickAction::Delete, QuickItem::Recorded { path, .. }) => {
             delete_recording(&app, path)?;
@@ -555,6 +584,17 @@ fn delete_recording(app: &AppHandle, path: &Path) -> Result<(), String> {
         .and_then(|label| app.get_webview_window(&label))
     {
         let _ = window.destroy();
+    }
+    // The library deletes its row with the files, thumbnail included.
+    let library = app.state::<LibraryState>();
+    let known = library
+        .lock()
+        .id_for_path(path)
+        .map_err(|err| err.to_string())?;
+    if let Some(id) = known {
+        library.lock().delete(id).map_err(|err| err.to_string())?;
+        let _ = app.emit(crate::library::LIBRARY_CHANGED_EVENT, ());
+        return Ok(());
     }
     fs::remove_file(path).map_err(|err| format!("could not delete the recording: {err}"))?;
     let _ = fs::remove_file(crate::record::cursor_path(path));

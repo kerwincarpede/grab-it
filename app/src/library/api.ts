@@ -2,8 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** Mirrors `Shot` in src-tauri/src/library.rs. */
+/** What a library item is. Mirrors `ShotKind` in src-tauri/src/library.rs. */
+export type ShotKind = "image" | "video" | "gif";
+
 export interface Shot {
   id: number;
+  /** A capture, or an MP4 or GIF recording. Older backends leave it out: an image. */
+  kind?: ShotKind;
   path: string;
   fileName: string;
   thumbPath: string;
@@ -22,6 +27,20 @@ export interface Shot {
   aiCategory: string | null;
   /** Tags the AI describer suggested, kept apart from the user's own. */
   aiTags: string[];
+  /** How long a recording runs, once known. */
+  durationMs?: number | null;
+  /** A recording's file size, once known. */
+  bytes?: number | null;
+}
+
+/** Whether the shot is a recording rather than a capture. */
+export function isRecording(shot: Pick<Shot, "kind">): boolean {
+  return shot.kind === "video" || shot.kind === "gif";
+}
+
+/** Plays a recording in the app that plays its kind of file. */
+export function playShot(id: number): Promise<void> {
+  return invoke<void>("library_play", { id });
 }
 
 /** Mirrors `ShotPage` in src-tauri/src/library.rs. */
@@ -61,6 +80,8 @@ export interface NameCount {
 /** What the Grab-it window's sidebar lists. Mirrors `SidebarSummary` in src-tauri/src/search.rs. */
 export interface SidebarSummary {
   total: number;
+  /** How many of them are recordings. */
+  recordings?: number;
   apps: NameCount[];
   /** The most used tags, yours and the AI's. */
   tags: NameCount[];
@@ -85,12 +106,12 @@ export function setShotNotes(id: number, notes: string): Promise<Shot> {
   return invoke<Shot>("library_set_notes", { id, notes });
 }
 
-/** Deletes the PNG, its sidecars and its thumbnail. */
+/** Deletes the PNG or recording, its sidecars and its thumbnail. */
 export function deleteShot(id: number): Promise<void> {
   return invoke<void>("library_delete", { id });
 }
 
-/** Opens the shot in the annotation editor. */
+/** Opens the shot in its editor: a capture in the annotation editor, an MP4 in the recording editor; a GIF plays. */
 export function openShot(id: number): Promise<void> {
   return invoke<void>("library_open", { id });
 }
@@ -234,7 +255,12 @@ export interface SearchQuery {
   tag: string | null;
   /** An AI category, matched exactly; left out for any. */
   category?: string;
+  /** Only captures or only recordings; left out for both. */
+  kind?: KindFilter;
 }
+
+/** Narrows the Library to captures or to recordings. */
+export type KindFilter = "image" | "recording";
 
 /** Mirrors `FilterOptions` in src-tauri/src/search.rs. */
 export interface FilterOptions {
@@ -246,6 +272,8 @@ export interface FilterOptions {
 
 /** The filter bar as the user set it; "" means any. Dates are `YYYY-MM-DD`. */
 export interface Filters {
+  /** "" for captures and recordings alike. */
+  kind?: KindFilter | "";
   app: string;
   tag: string;
   category: string;
@@ -276,6 +304,7 @@ export function buildQuery(text: string, filters: Filters): SearchQuery {
     app: filters.app || null,
     tag: filters.tag || null,
     ...(filters.category ? { category: filters.category } : {}),
+    ...(filters.kind ? { kind: filters.kind } : {}),
   };
 }
 
@@ -287,7 +316,8 @@ export function isSearching(query: SearchQuery): boolean {
     query.to !== null ||
     query.app !== null ||
     query.tag !== null ||
-    !!query.category
+    !!query.category ||
+    !!query.kind
   );
 }
 

@@ -51,6 +51,7 @@ function backend({ update = { state: "idle", current: "0.2.1" } as unknown } = {
               { name: "Ghostty", count: 1 },
             ],
             tags: [{ name: "rust", count: 2 }],
+            recordings: 1,
           };
         case "update_status":
           return update;
@@ -113,6 +114,27 @@ describe("AppWindow", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "All captures" }));
     expect(screen.getByRole("button", { name: "rust" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("shows only recordings from the sidebar", async () => {
+    const calls = backend();
+    render(<AppWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Recordings" }));
+    expect(screen.getByRole("heading", { name: "Recordings" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Recordings" })).toHaveAttribute("aria-current", "page");
+    await waitFor(() =>
+      expect(
+        calls.some(({ cmd, payload }) => cmd === "library_search" && JSON.stringify(payload).includes('"kind":"recording"')),
+      ).toBe(true),
+    );
+    // The filter menu leaves the type to the sidebar.
+    await userEvent.click(screen.getByRole("button", { name: "Filters" }));
+    expect(screen.queryByRole("button", { name: "Filter by type" })).not.toBeInTheDocument();
+
+    // Picking an app shows its captures and recordings alike.
+    await userEvent.click(screen.getByRole("button", { name: "Filters" }));
+    await userEvent.click(screen.getByRole("button", { name: "Chrome" }));
+    expect(screen.getByRole("button", { name: "Recordings" })).not.toHaveAttribute("aria-current");
   });
 
   it("opens Settings in a dialog, a page at a time", async () => {

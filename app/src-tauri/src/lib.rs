@@ -178,6 +178,7 @@ pub fn run() {
             library::library_copy_text,
             library::library_pin,
             library::library_reveal,
+            library::library_play,
             search::library_search,
             search::library_filter_options,
             ocr::ocr_status,

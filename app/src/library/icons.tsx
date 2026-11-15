@@ -151,3 +151,16 @@ export const LayersIcon = () => (
     <path d="M3.5 12.5l8.5 4.5 8.5-4.5" />
   </Icon>
 );
+
+export const PlayIcon = ({ size }: { size?: number }) => (
+  <Icon size={size}>
+    <path d="M8 5.5v13l11-6.5Z" fill="currentColor" />
+  </Icon>
+);
+
+export const FilmIcon = ({ size }: { size?: number }) => (
+  <Icon size={size}>
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <path d="M7 5v14M17 5v14M3 9.5h4M3 14.5h4M17 9.5h4M17 14.5h4" />
+  </Icon>
+);

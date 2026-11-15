@@ -79,6 +79,13 @@ const ICONS = {
     </>
   ),
   check: <path d="M5 12.5 10 17.5 19 7" />,
+  play: <path d="M8 5.5v13l11-6.5Z" fill="currentColor" />,
+  warning: (
+    <>
+      <path d="M12 4 2.5 20h19Z" />
+      <path d="M12 10v4M12 17h.01" />
+    </>
+  ),
   text: <path d="M5 7V5h14v2M12 5v14M9 19h6" />,
   link: (
     <>
@@ -106,7 +113,7 @@ function useStoredText(path: string | null): { id: number; text: ShotText } | nu
 
 function useThumbnail(item: QuickItem | null): string | null {
   const [loaded, setLoaded] = useState<{ path: string; url: string } | null>(null);
-  const path = item?.kind === "capture" ? item.path : null;
+  const path = item?.kind === "capture" || item?.kind === "recorded" ? item.path : null;
   useEffect(() => {
     if (!path) return;
     let cancelled = false;
@@ -349,38 +356,65 @@ function QuickAccess() {
   }
 
   if (item.kind === "recorded") {
+    const video = item.format === "mp4";
+    const what = video ? "Video" : "GIF";
     return (
-      <main className="quick quick-message quick-recorded" data-testid="quick" {...hover}>
-        <div className="quick-body" role="status">
-          <p className="quick-title">
-            <Icon>{ICONS.check}</Icon> {item.format === "mp4" ? "Video saved" : "GIF saved"}
+      <main className="quick quick-capture quick-recorded" data-testid="quick" {...hover}>
+        <div className="quick-stage">
+          <button
+            type="button"
+            className="quick-preview"
+            aria-label={`Play ${item.fileName}`}
+            title={item.path}
+            onClick={() => run("open")}
+          >
+            {thumbnail && <img src={thumbnail} alt="" draggable={false} />}
+            <span className="quick-play" aria-hidden="true">
+              <Icon>{ICONS.play}</Icon>
+            </span>
+            <span className="quick-size">
+              {formatElapsed(item.durationMs)} · {formatBytes(item.bytes)}
+            </span>
+          </button>
+        </div>
+        <span className="quick-badge" role="status">
+          <Icon>{ICONS.check}</Icon>
+          {what} saved
+        </span>
+        {close}
+        {item.fallback && (
+          <p className="quick-note" title={item.fallback}>
+            <Icon>{ICONS.warning}</Icon>
+            <span>{item.fallback}</span>
           </p>
-          {item.fallback && <p className="quick-detail quick-fallback">{item.fallback}</p>}
-          <p className="quick-detail">
-            {formatElapsed(item.durationMs)} · {formatBytes(item.bytes)}
+        )}
+        {error ? (
+          <p className="quick-error" role="alert">
+            {error}
           </p>
-          <p className="quick-detail quick-file" title={item.path}>
-            {item.fileName}
-          </p>
-          {error && <p className="quick-detail quick-error-text">{error}</p>}
-          <div className="quick-inline-actions">
-            {item.format === "mp4" && (
+        ) : (
+          <div className="quick-actions" role="toolbar" aria-label="Recording actions">
+            {video && (
               <button type="button" onClick={() => run("edit")} title="Trim it and put it on a backdrop">
                 <Icon>{ICONS.edit}</Icon>
                 Edit
               </button>
             )}
-            <button type="button" onClick={() => run("reveal")}>
+            <button type="button" onClick={() => run("reveal")} title={item.fileName}>
               <Icon>{ICONS.folder}</Icon>
               Show in folder
             </button>
-            <button type="button" className="danger" onClick={() => run("delete")}>
+            <button
+              type="button"
+              className="icon-only danger"
+              aria-label="Delete"
+              title={`Delete this ${video ? "video" : "GIF"}`}
+              onClick={() => run("delete")}
+            >
               <Icon>{ICONS.trash}</Icon>
-              Delete
             </button>
           </div>
-        </div>
-        {close}
+        )}
         {timerBar}
       </main>
     );

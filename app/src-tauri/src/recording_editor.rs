@@ -922,6 +922,7 @@ fn export(
             progress,
         );
     })?;
+    crate::library::record_recording(app, &output, duration_ms);
     let bytes = fs::metadata(&output).map(|meta| meta.len()).unwrap_or(0);
     quick::show(
         app,

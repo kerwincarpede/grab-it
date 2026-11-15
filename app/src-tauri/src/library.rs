@@ -6,6 +6,10 @@
 //! the source of truth: rows are added for new files when a save folder is
 //! scanned, and a row is dropped only when its file is gone. Changing the
 //! save folder leaves older captures (and their rows) where they are.
+//!
+//! Recordings (MP4s and GIFs in the save folder's `recordings/`) are rows
+//! too, with `kind` saying which. They are never read by OCR or described,
+//! and their thumbnail is a frame ffmpeg decodes (a GIF's first, without it).
 
 use std::{
     collections::HashSet,
@@ -27,6 +31,7 @@ use crate::{
     capture::{self, CaptureMeta, ORIGINALS_DIR},
     commands::{SettingsState, lock},
     editor::EditorState,
+    record::RECORDINGS_DIR,
     windows,
 };
 
@@ -192,6 +197,13 @@ pub(crate) const MIGRATIONS: &[&str] = &[
                s.notes, coalesce(s.app, ''), coalesce(s.window_title, ''), '', ''
         FROM shots s;"
     ),
+    // 4: recordings. `kind` is 'image' for a capture, 'video' for an MP4
+    // and 'gif' for a GIF recording; recordings know how long they run and
+    // their file size.
+    "ALTER TABLE shots ADD COLUMN kind TEXT NOT NULL DEFAULT 'image';
+    ALTER TABLE shots ADD COLUMN duration_ms INTEGER;
+    ALTER TABLE shots ADD COLUMN bytes INTEGER;
+    CREATE INDEX shots_kind ON shots (kind, captured_at DESC, id DESC);",
 ];
 
 /// `ai_state` values, for tests; the queries spell them out.
@@ -211,6 +223,8 @@ pub enum LibraryError {
     Image(image::ImageError),
     /// No shot has this id.
     NotFound(i64),
+    /// A recording's preview needs ffmpeg, which is not ready.
+    NoPreview,
     /// The database was written by a newer Grab-it.
     TooNew(i64),
 }
@@ -222,6 +236,10 @@ impl fmt::Display for LibraryError {
             Self::Io(err) => write!(f, "{err}"),
             Self::Image(err) => write!(f, "could not read the capture: {err}"),
             Self::NotFound(id) => write!(f, "no capture with id {id} in the library"),
+            Self::NoPreview => write!(
+                f,
+                "the recording's preview needs ffmpeg, which is not ready"
+            ),
             Self::TooNew(version) => write!(
                 f,
                 "the library was created by a newer Grab-it (schema {version})"
@@ -252,11 +270,59 @@ impl From<image::ImageError> for LibraryError {
 
 pub type LibraryResult<T> = std::result::Result<T, LibraryError>;
 
-/// One capture. Mirrors `Shot` in src/library/api.ts.
+/// What a library item is. Mirrors `ShotKind` in src/library/api.ts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ShotKind {
+    /// A capture: a PNG in `originals/`.
+    #[default]
+    Image,
+    /// An MP4 recording.
+    Video,
+    /// A GIF recording.
+    Gif,
+}
+
+impl ShotKind {
+    /// How `kind` stores it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::Gif => "gif",
+        }
+    }
+
+    fn from_column(value: &str) -> Self {
+        match value {
+            "video" => Self::Video,
+            "gif" => Self::Gif,
+            _ => Self::Image,
+        }
+    }
+
+    /// The kind of recording at `path`, by its extension; `None` when it
+    /// is not one.
+    pub fn of_recording(path: &Path) -> Option<Self> {
+        let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
+        match ext.as_str() {
+            "mp4" => Some(Self::Video),
+            "gif" => Some(Self::Gif),
+            _ => None,
+        }
+    }
+
+    pub fn is_recording(self) -> bool {
+        self != Self::Image
+    }
+}
+
+/// One capture or recording. Mirrors `Shot` in src/library/api.ts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Shot {
     pub id: i64,
+    pub kind: ShotKind,
     pub path: PathBuf,
     pub file_name: String,
     pub thumb_path: PathBuf,
@@ -275,13 +341,18 @@ pub struct Shot {
     pub ai_category: Option<String>,
     /// Tags the vision model gave; the user's own are in `tags`.
     pub ai_tags: Vec<String>,
+    /// How long a recording runs, once known.
+    pub duration_ms: Option<u64>,
+    /// A recording's file size, once known.
+    pub bytes: Option<u64>,
 }
 
 /// The columns [`shot_from_row`] reads, in order, from `shots` as `s`.
 pub(crate) const SHOT_COLUMNS: &str = "s.id, s.path, s.thumb_path, s.captured_at, s.mode, s.app, \
-     s.window_title, s.width, s.height, s.notes, s.ai_description, s.ai_category";
+     s.window_title, s.width, s.height, s.notes, s.ai_description, s.ai_category, s.kind, \
+     s.duration_ms, s.bytes";
 /// How many columns [`SHOT_COLUMNS`] holds.
-pub(crate) const SHOT_COLUMN_COUNT: usize = 12;
+pub(crate) const SHOT_COLUMN_COUNT: usize = 15;
 
 /// The text in a shot, as far as OCR has got. Mirrors `ShotText` in
 /// src/library/api.ts.
@@ -311,11 +382,13 @@ pub struct ShotPage {
 pub struct RescanReport {
     pub added: usize,
     pub removed: usize,
+    /// Recordings whose length and size were filled in.
+    pub refreshed: usize,
 }
 
 impl RescanReport {
     pub fn changed(self) -> bool {
-        self.added > 0 || self.removed > 0
+        self.added > 0 || self.removed > 0 || self.refreshed > 0
     }
 }
 
@@ -433,21 +506,24 @@ impl Library {
     #[cfg(test)]
     pub fn rescan(&mut self, save_folder: &Path) -> LibraryResult<RescanReport> {
         let known = self.known()?;
-        let scan = scan_files(&known, save_folder)?;
+        let scan = scan_files(&known, save_folder, None)?;
         self.apply(&scan)
     }
 
-    /// Every row's id, path and thumbnail path.
+    /// Every row's id, path, thumbnail path and kind, and whether a
+    /// recording's length is known.
     pub fn known(&self) -> LibraryResult<Vec<KnownShot>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, path, thumb_path FROM shots")?;
+            .prepare("SELECT id, path, thumb_path, kind, duration_ms IS NOT NULL FROM shots")?;
         let known = stmt
             .query_map([], |row| {
                 Ok(KnownShot {
                     id: row.get(0)?,
                     path: PathBuf::from(row.get::<_, String>(1)?),
                     thumb_path: PathBuf::from(row.get::<_, String>(2)?),
+                    kind: ShotKind::from_column(&row.get::<_, String>(3)?),
+                    has_duration: row.get(4)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -482,6 +558,19 @@ impl Library {
             if known.is_none() && shot.path.is_file() {
                 insert_prepared(&tx, shot)?;
                 report.added += 1;
+            }
+        }
+        for shot in &scan.refreshed {
+            let known: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM shots WHERE path = ?1",
+                    [path_text(&shot.path)],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if known.is_some() && shot.path.is_file() {
+                insert_prepared(&tx, shot)?;
+                report.refreshed += 1;
             }
         }
         tx.commit()?;
@@ -604,11 +693,16 @@ impl Library {
     pub fn delete(&mut self, id: i64) -> LibraryResult<Shot> {
         let shot = self.get(id)?;
         remove_if_present(&shot.path)?;
-        for extra in [
+        let mut extras = vec![
             capture::meta_path(&shot.path),
             capture::annotations_path(&shot.path),
             shot.thumb_path.clone(),
-        ] {
+        ];
+        if shot.kind.is_recording() {
+            extras.push(crate::record::cursor_path(&shot.path));
+            extras.push(crate::recording_editor::edits_path(&shot.path));
+        }
+        for extra in extras {
             if let Err(err) = remove_if_present(&extra) {
                 eprintln!("Grab-it: could not delete {}: {err}", extra.display());
             }
@@ -622,7 +716,7 @@ impl Library {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, path FROM shots WHERE ocr_state = 0
+                "SELECT id, path FROM shots WHERE ocr_state = 0 AND kind = 'image'
                  ORDER BY captured_at DESC, id DESC LIMIT 1",
                 [],
                 |row| {
@@ -638,7 +732,7 @@ impl Library {
     /// How many shots are waiting for OCR.
     pub fn pending_ocr_count(&self) -> LibraryResult<u32> {
         Ok(self.conn.query_row(
-            "SELECT COUNT(*) FROM shots WHERE ocr_state = 0",
+            "SELECT COUNT(*) FROM shots WHERE ocr_state = 0 AND kind = 'image'",
             [],
             |row| row.get(0),
         )?)
@@ -690,7 +784,7 @@ impl Library {
             .conn
             .query_row(
                 "SELECT id, path, CASE WHEN ocr_state = 1 THEN ocr_text END, app, window_title
-                 FROM shots WHERE ai_state = 0 AND ocr_state <> 0
+                 FROM shots WHERE ai_state = 0 AND ocr_state <> 0 AND kind = 'image'
                  ORDER BY captured_at DESC, id DESC LIMIT 1",
                 [],
                 |row| {
@@ -710,7 +804,7 @@ impl Library {
     pub fn ai_counts(&self) -> LibraryResult<AiCounts> {
         Ok(self.conn.query_row(
             "SELECT coalesce(sum(ai_state IN (1, 2)), 0), coalesce(sum(ai_state <> 3), 0)
-             FROM shots",
+             FROM shots WHERE kind = 'image'",
             [],
             |row| {
                 Ok(AiCounts {
@@ -796,9 +890,10 @@ impl Library {
     /// Queues one shot to be described again. Its current description
     /// stays until the new one replaces it.
     pub fn requeue_ai(&mut self, id: i64) -> LibraryResult<()> {
-        let changed = self
-            .conn
-            .execute("UPDATE shots SET ai_state = 0 WHERE id = ?1", [id])?;
+        let changed = self.conn.execute(
+            "UPDATE shots SET ai_state = 0 WHERE id = ?1 AND kind = 'image'",
+            [id],
+        )?;
         if changed == 0 {
             return Err(LibraryError::NotFound(id));
         }
@@ -807,9 +902,10 @@ impl Library {
 
     /// Queues every shot, skipped ones included, to be described again.
     pub fn requeue_all_ai(&mut self) -> LibraryResult<usize> {
-        Ok(self
-            .conn
-            .execute("UPDATE shots SET ai_state = 0 WHERE ai_state <> 0", [])?)
+        Ok(self.conn.execute(
+            "UPDATE shots SET ai_state = 0 WHERE ai_state <> 0 AND kind = 'image'",
+            [],
+        )?)
     }
 
     /// Drops a shot's description, category and AI tags and skips it.
@@ -851,7 +947,7 @@ impl Library {
     /// The shot's thumbnail PNG, regenerated if it is missing.
     #[cfg(test)]
     pub fn thumbnail(&self, id: i64) -> LibraryResult<Vec<u8>> {
-        thumbnail_bytes(&self.get(id)?)
+        thumbnail_bytes(&self.get(id)?, None)
     }
 }
 
@@ -861,12 +957,17 @@ pub struct KnownShot {
     pub id: i64,
     pub path: PathBuf,
     pub thumb_path: PathBuf,
+    pub kind: ShotKind,
+    /// A recording's length is known (always true of a capture's row
+    /// that needs none).
+    pub has_duration: bool,
 }
 
-/// A capture's row, read from disk (with its thumbnail made) without
-/// touching the database.
+/// A capture's or recording's row, read from disk (with a capture's
+/// thumbnail made) without touching the database.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedShot {
+    pub kind: ShotKind,
     pub path: PathBuf,
     pub thumb_path: PathBuf,
     pub captured_at: i64,
@@ -875,6 +976,10 @@ pub struct PreparedShot {
     pub window_title: Option<String>,
     pub width: u32,
     pub height: u32,
+    /// How long a recording runs, when known.
+    pub duration_ms: Option<u64>,
+    /// A recording's file size.
+    pub bytes: Option<u64>,
 }
 
 /// The file work of a rescan, for [`Library::apply`].
@@ -882,8 +987,10 @@ pub struct PreparedShot {
 pub struct ScanResult {
     /// Rows whose file was missing.
     pub gone: Vec<i64>,
-    /// New captures in the save folder.
+    /// New captures and recordings in the save folder.
     pub new: Vec<PreparedShot>,
+    /// Known recordings read again now that ffmpeg can say how long they run.
+    pub refreshed: Vec<PreparedShot>,
 }
 
 /// Reads a capture's meta sidecar and size, and makes its thumbnail if
@@ -911,6 +1018,7 @@ pub fn prepare_capture(png: &Path) -> LibraryResult<PreparedShot> {
         .map(|meta| (meta.app, meta.window_title))
         .unwrap_or_default();
     Ok(PreparedShot {
+        kind: ShotKind::Image,
         path,
         thumb_path,
         captured_at,
@@ -919,16 +1027,76 @@ pub fn prepare_capture(png: &Path) -> LibraryResult<PreparedShot> {
         window_title,
         width,
         height,
+        duration_ms: None,
+        bytes: None,
+    })
+}
+
+/// Reads a recording's length, size and file size: `duration_ms` when the
+/// recorder knows it, else what ffmpeg says, when it is ready. Its preview
+/// is made when it is first shown. Touches only files.
+pub fn prepare_recording(
+    video: &Path,
+    duration_ms: Option<u64>,
+    ffmpeg: Option<&Path>,
+) -> LibraryResult<PreparedShot> {
+    let path = canonical(video);
+    let kind = ShotKind::of_recording(&path).ok_or_else(|| {
+        LibraryError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is not a recording", path.display()),
+        ))
+    })?;
+    let meta = fs::metadata(&path)?;
+    let probe = ffmpeg
+        .map(|ffmpeg| crate::ffmpeg::probe_file(ffmpeg, &path))
+        .unwrap_or_default();
+    let size = probe.size.or_else(|| {
+        (kind == ShotKind::Gif)
+            .then(|| image::image_dimensions(&path).ok())
+            .flatten()
+    });
+    let (width, height) = size.unwrap_or((0, 0));
+    Ok(PreparedShot {
+        kind,
+        thumb_path: thumb_path(&path),
+        captured_at: modified_millis(&path),
+        mode: None,
+        app: None,
+        window_title: None,
+        width,
+        height,
+        duration_ms: duration_ms.or(probe.duration_ms),
+        bytes: Some(meta.len()),
+        path,
     })
 }
 
 /// The file side of a rescan: finds rows whose file is gone, regenerates
 /// missing thumbnails and prepares new PNGs in `<save_folder>/originals/`.
 /// Touches only files, so it runs without the library lock.
-pub fn scan_files(known: &[KnownShot], save_folder: &Path) -> LibraryResult<ScanResult> {
+pub fn scan_files(
+    known: &[KnownShot],
+    save_folder: &Path,
+    ffmpeg: Option<&Path>,
+) -> LibraryResult<ScanResult> {
     let mut scan = ScanResult::default();
     for shot in known {
-        if shot.path.is_file() {
+        if shot.path.is_file() && shot.kind.is_recording() {
+            // Previews are made when first shown; a length ffmpeg could
+            // not tell before is asked again.
+            if !shot.has_duration
+                && let Some(ffmpeg) = ffmpeg
+            {
+                match prepare_recording(&shot.path, None, Some(ffmpeg)) {
+                    Ok(prepared) if prepared.duration_ms.is_some() => {
+                        scan.refreshed.push(prepared);
+                    }
+                    Ok(_) => {}
+                    Err(err) => eprintln!("Grab-it: skipped {}: {err}", shot.path.display()),
+                }
+            }
+        } else if shot.path.is_file() {
             if let Err(err) = ensure_thumbnail(&shot.path, &shot.thumb_path) {
                 eprintln!(
                     "Grab-it: could not make a thumbnail for {}: {err}",
@@ -950,22 +1118,41 @@ pub fn scan_files(known: &[KnownShot], save_folder: &Path) -> LibraryResult<Scan
             Err(err) => eprintln!("Grab-it: skipped {}: {err}", path.display()),
         }
     }
+    for video in recordings_in(save_folder)? {
+        let path = canonical(&video);
+        if paths.contains(path.as_path()) {
+            continue;
+        }
+        match prepare_recording(&path, None, ffmpeg) {
+            Ok(shot) => scan.new.push(shot),
+            Err(err) => eprintln!("Grab-it: skipped {}: {err}", path.display()),
+        }
+    }
     Ok(scan)
 }
 
 /// Upserts a prepared capture and returns its id.
 fn insert_prepared(conn: &Connection, shot: &PreparedShot) -> LibraryResult<i64> {
+    // A recording has no text to read and is not described: it starts out
+    // read (with no text) and skipped.
+    let recording = shot.kind.is_recording();
     conn.execute(
-        "INSERT INTO shots (path, thumb_path, captured_at, mode, app, window_title, width, height)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO shots (path, thumb_path, captured_at, mode, app, window_title, width, height,
+                            kind, duration_ms, bytes, ocr_text, ocr_state, ai_state)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                 CASE WHEN ?12 THEN '' END, CASE WHEN ?12 THEN 1 ELSE 0 END,
+                 CASE WHEN ?12 THEN 3 ELSE 0 END)
          ON CONFLICT (path) DO UPDATE SET
             thumb_path = excluded.thumb_path,
             captured_at = excluded.captured_at,
             mode = excluded.mode,
             app = excluded.app,
             window_title = excluded.window_title,
-            width = excluded.width,
-            height = excluded.height",
+            width = CASE WHEN excluded.width > 0 THEN excluded.width ELSE width END,
+            height = CASE WHEN excluded.width > 0 THEN excluded.height ELSE height END,
+            kind = excluded.kind,
+            duration_ms = coalesce(excluded.duration_ms, duration_ms),
+            bytes = coalesce(excluded.bytes, bytes)",
         params![
             path_text(&shot.path),
             path_text(&shot.thumb_path),
@@ -974,7 +1161,11 @@ fn insert_prepared(conn: &Connection, shot: &PreparedShot) -> LibraryResult<i64>
             shot.app,
             shot.window_title,
             shot.width,
-            shot.height
+            shot.height,
+            shot.kind.as_str(),
+            shot.duration_ms.map(|ms| ms as i64),
+            shot.bytes.map(|bytes| bytes as i64),
+            recording,
         ],
     )?;
     Ok(conn.query_row(
@@ -985,9 +1176,37 @@ fn insert_prepared(conn: &Connection, shot: &PreparedShot) -> LibraryResult<i64>
 }
 
 /// A shot's thumbnail PNG bytes, regenerated if missing.
-fn thumbnail_bytes(shot: &Shot) -> LibraryResult<Vec<u8>> {
-    ensure_thumbnail(&shot.path, &shot.thumb_path)?;
+/// A shot's thumbnail PNG, made first when missing. An MP4's is a frame
+/// ffmpeg decodes, so it needs `ffmpeg`; a GIF's is its first frame.
+fn thumbnail_bytes(shot: &Shot, ffmpeg: Option<&Path>) -> LibraryResult<Vec<u8>> {
+    if shot.kind == ShotKind::Video {
+        ensure_video_thumbnail(&shot.path, &shot.thumb_path, shot.duration_ms, ffmpeg)?;
+    } else {
+        ensure_thumbnail(&shot.path, &shot.thumb_path)?;
+    }
     Ok(fs::read(&shot.thumb_path)?)
+}
+
+/// Makes the thumbnail of the MP4 at `video` from a frame ffmpeg decodes,
+/// unless it exists.
+pub fn ensure_video_thumbnail(
+    video: &Path,
+    thumb: &Path,
+    duration_ms: Option<u64>,
+    ffmpeg: Option<&Path>,
+) -> LibraryResult<()> {
+    if thumb.is_file() {
+        return Ok(());
+    }
+    let ffmpeg = ffmpeg.ok_or(LibraryError::NoPreview)?;
+    let frame = crate::ffmpeg::video_frame(
+        ffmpeg,
+        video,
+        crate::ffmpeg::preview_at_ms(duration_ms),
+        THUMB_SIZE,
+    )
+    .map_err(|err| LibraryError::Io(io::Error::other(err)))?;
+    write_thumbnail(&frame, thumb)
 }
 
 pub(crate) fn shot_from_row(row: &Row<'_>) -> rusqlite::Result<Shot> {
@@ -1012,6 +1231,11 @@ pub(crate) fn shot_from_row(row: &Row<'_>) -> rusqlite::Result<Shot> {
         ai_description: row.get(10)?,
         ai_category: row.get(11)?,
         ai_tags: Vec::new(),
+        kind: ShotKind::from_column(&row.get::<_, String>(12)?),
+        duration_ms: row.get::<_, Option<i64>>(13)?.map(|ms| ms.max(0) as u64),
+        bytes: row
+            .get::<_, Option<i64>>(14)?
+            .map(|bytes| bytes.max(0) as u64),
     })
 }
 
@@ -1054,11 +1278,15 @@ pub fn ensure_thumbnail(png: &Path, thumb: &Path) -> LibraryResult<()> {
     if thumb.is_file() {
         return Ok(());
     }
-    let image = image::open(png)?;
+    write_thumbnail(&image::open(png)?, thumb)
+}
+
+/// Saves `image`, fitted inside [`THUMB_SIZE`], as the PNG `thumb`.
+fn write_thumbnail(image: &image::DynamicImage, thumb: &Path) -> LibraryResult<()> {
     let small = if image.width() > THUMB_SIZE || image.height() > THUMB_SIZE {
         image.thumbnail(THUMB_SIZE, THUMB_SIZE)
     } else {
-        image
+        image.clone()
     };
     if let Some(dir) = thumb.parent() {
         fs::create_dir_all(dir)?;
@@ -1116,6 +1344,22 @@ fn originals_in(save_folder: &Path) -> LibraryResult<Vec<PathBuf>> {
     Ok(pngs)
 }
 
+/// The MP4s and GIFs in `<save_folder>/recordings/`, sorted by name.
+fn recordings_in(save_folder: &Path) -> LibraryResult<Vec<PathBuf>> {
+    let dir = save_folder.join(RECORDINGS_DIR);
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err.into()),
+    };
+    let mut videos: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_file() && ShotKind::of_recording(path).is_some())
+        .collect();
+    videos.sort();
+    Ok(videos)
+}
+
 fn remove_if_present(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
@@ -1164,9 +1408,9 @@ impl LibraryState {
     /// [`Library::rescan`], holding the lock only to read and write rows:
     /// thumbnails are made unlocked, so the Library window and new
     /// captures are not held up by a scan of a large folder.
-    pub fn rescan(&self, save_folder: &Path) -> LibraryResult<RescanReport> {
+    pub fn rescan(&self, save_folder: &Path, ffmpeg: Option<&Path>) -> LibraryResult<RescanReport> {
         let known = self.lock().known()?;
-        let scan = scan_files(&known, save_folder)?;
+        let scan = scan_files(&known, save_folder, ffmpeg)?;
         self.lock().apply(&scan)
     }
 
@@ -1177,9 +1421,9 @@ impl LibraryState {
     }
 
     /// A shot's thumbnail PNG, regenerated without the lock if missing.
-    pub fn thumbnail(&self, id: i64) -> LibraryResult<Vec<u8>> {
+    pub fn thumbnail(&self, id: i64, ffmpeg: Option<&Path>) -> LibraryResult<Vec<u8>> {
         let shot = self.lock().get(id)?;
-        thumbnail_bytes(&shot)
+        thumbnail_bytes(&shot, ffmpeg)
     }
 }
 
@@ -1205,7 +1449,8 @@ pub fn rescan_in_background(app: &AppHandle, save_folder: PathBuf) {
         let Some(state) = app.try_state::<LibraryState>() else {
             return;
         };
-        let report = state.rescan(&save_folder);
+        let ffmpeg = crate::ffmpeg::ready(&app).map(|ready| ready.path);
+        let report = state.rescan(&save_folder, ffmpeg.as_deref());
         // Captures found by the scan, or left over from an earlier run,
         // wait for OCR and to be described.
         crate::ocr::wake(&app);
@@ -1242,6 +1487,26 @@ pub fn record_capture(app: &AppHandle, png: &Path) {
     }
 }
 
+/// Adds a just-saved recording, or an export of one, to the library.
+/// `duration_ms` is how long the recorder says it runs.
+pub fn record_recording(app: &AppHandle, video: &Path, duration_ms: u64) {
+    let Some(state) = app.try_state::<LibraryState>() else {
+        return;
+    };
+    let ffmpeg = crate::ffmpeg::ready(app).map(|ready| ready.path);
+    let result = prepare_recording(video, Some(duration_ms), ffmpeg.as_deref())
+        .and_then(|prepared| state.lock().insert(&prepared));
+    match result {
+        Ok(_) => {
+            let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
+        }
+        Err(err) => eprintln!(
+            "Grab-it: saved, but could not add {} to the library: {err}",
+            video.display()
+        ),
+    }
+}
+
 fn to_message(err: LibraryError) -> String {
     err.to_string()
 }
@@ -1259,13 +1524,45 @@ pub fn library_list(
     state.lock().list(offset, limit).map_err(to_message)
 }
 
+/// The ffmpeg to decode an MP4's preview with. While ffmpeg is still being
+/// checked or downloaded, as it is for a while after launch, waits for it
+/// (up to [`PREVIEW_FFMPEG_WAIT`]) rather than leave the tile without a
+/// preview until the Library is opened again.
+fn ffmpeg_for_preview(app: &AppHandle) -> Option<PathBuf> {
+    use crate::ffmpeg::FfmpegStatus;
+    let deadline = std::time::Instant::now() + PREVIEW_FFMPEG_WAIT;
+    loop {
+        if let Some(ready) = crate::ffmpeg::ready(app) {
+            return Some(ready.path);
+        }
+        let preparing = matches!(
+            crate::ffmpeg::status(app),
+            FfmpegStatus::Checking | FfmpegStatus::Downloading { .. }
+        );
+        if !preparing || std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
+/// How long an MP4's preview waits for ffmpeg to be ready.
+const PREVIEW_FFMPEG_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// A shot's thumbnail PNG bytes.
 #[tauri::command(async)]
 pub fn library_thumbnail(
     id: i64,
+    app: AppHandle,
     state: State<'_, LibraryState>,
 ) -> Result<tauri::ipc::Response, String> {
-    let bytes = state.thumbnail(id).map_err(to_message)?;
+    let shot = state.lock().get(id).map_err(to_message)?;
+    let ffmpeg = if shot.kind == ShotKind::Video && !shot.thumb_path.is_file() {
+        ffmpeg_for_preview(&app)
+    } else {
+        None
+    };
+    let bytes = state.thumbnail(id, ffmpeg.as_deref()).map_err(to_message)?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -1304,11 +1601,11 @@ pub fn library_delete(
     state: State<'_, LibraryState>,
 ) -> Result<(), String> {
     let path = state.lock().get(id).map_err(to_message)?.path;
-    if let Some(window) = app
-        .state::<EditorState>()
-        .label_for(&path)
-        .and_then(|label| app.get_webview_window(&label))
-    {
+    let editor = app.state::<EditorState>().label_for(&path).or_else(|| {
+        app.state::<crate::recording_editor::RecordingEditorState>()
+            .label_for(&path)
+    });
+    if let Some(window) = editor.and_then(|label| app.get_webview_window(&label)) {
         let _ = window.destroy();
     }
     state.lock().delete(id).map_err(to_message)?;
@@ -1316,20 +1613,56 @@ pub fn library_delete(
     Ok(())
 }
 
-/// Opens a shot in the editor. Async so the window is not created on the
-/// main thread inside a command, which deadlocks on Windows.
+/// Opens a shot in its editor: a capture in the image editor, an MP4 in
+/// the recording editor. A GIF, which has no editor, plays. Async so the
+/// window is not created on the main thread inside a command, which
+/// deadlocks on Windows.
 #[tauri::command]
 pub async fn library_open(id: i64, app: AppHandle) -> Result<(), String> {
-    let path = app
+    let shot = app
+        .state::<LibraryState>()
+        .lock()
+        .get(id)
+        .map_err(to_message)?;
+    let path = shot.path;
+    if !path.is_file() {
+        return Err(format!("{} no longer exists", path.display()));
+    }
+    match shot.kind {
+        ShotKind::Image => windows::show_editor(&app, &path).map_err(|err| err.to_string()),
+        ShotKind::Video => {
+            windows::show_recording_editor(&app, &path).map_err(|err| err.to_string())
+        }
+        ShotKind::Gif => play(&app, &path),
+    }
+}
+
+/// Opens a recording in the app that plays it.
+fn play(app: &AppHandle, path: &Path) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|err| format!("could not play the recording: {err}"))
+}
+
+/// Plays a recording in the app that plays its kind of file.
+#[tauri::command(async)]
+pub fn library_play(id: i64, app: AppHandle) -> Result<(), String> {
+    play(&app, &existing_path(&app, id)?)
+}
+
+/// The path of a capture (not a recording) that is still on disk.
+fn existing_image(app: &AppHandle, id: i64) -> Result<PathBuf, String> {
+    let kind = app
         .state::<LibraryState>()
         .lock()
         .get(id)
         .map_err(to_message)?
-        .path;
-    if !path.is_file() {
-        return Err(format!("{} no longer exists", path.display()));
+        .kind;
+    if kind.is_recording() {
+        return Err("That works on screenshots, not recordings.".into());
     }
-    windows::show_editor(&app, &path).map_err(|err| err.to_string())
+    existing_path(app, id)
 }
 
 /// The path of a shot that is still on disk.
@@ -1349,7 +1682,7 @@ fn existing_path(app: &AppHandle, id: i64) -> Result<PathBuf, String> {
 /// Copies a shot's original image to the clipboard.
 #[tauri::command(async)]
 pub fn library_copy(id: i64, app: AppHandle) -> Result<(), String> {
-    crate::quick::copy_file(&app, &existing_path(&app, id)?)
+    crate::quick::copy_file(&app, &existing_image(&app, id)?)
 }
 
 /// The text in a shot, as far as OCR has got.
@@ -1379,7 +1712,7 @@ pub fn library_copy_text(id: i64, app: AppHandle) -> Result<String, String> {
     let text = match known {
         ShotText::Read { text } => text,
         ShotText::Waiting | ShotText::Failed => {
-            let path = existing_path(&app, id)?;
+            let path = existing_image(&app, id)?;
             let image = image::open(&path)
                 .map_err(|err| format!("could not open {}: {err}", path.display()))?
                 .into_rgba8();
@@ -1412,7 +1745,7 @@ pub fn library_copy_text(id: i64, app: AppHandle) -> Result<String, String> {
 /// [`library_open`].
 #[tauri::command]
 pub async fn library_pin(id: i64, app: AppHandle) -> Result<(), String> {
-    crate::pin::open(&app, &existing_path(&app, id)?, false)
+    crate::pin::open(&app, &existing_image(&app, id)?, false)
 }
 
 /// Shows a shot's file in the system file manager.
@@ -1481,6 +1814,181 @@ mod tests {
         drop(library);
         let again = Library::open(&db).unwrap();
         assert_eq!(again.schema_version().unwrap(), MIGRATIONS.len() as i64);
+    }
+
+    /// A 2-frame GIF recording in `<folder>/recordings/`.
+    fn record_gif(folder: &Path, name: &str) -> PathBuf {
+        use image::{Delay, Frame, codecs::gif::GifEncoder};
+        let dir = folder.join(RECORDINGS_DIR);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        let mut encoder = GifEncoder::new(fs::File::create(&path).unwrap());
+        for shade in [40u8, 200] {
+            let image = RgbaImage::from_pixel(64, 32, Rgba([shade, 0, 0, 255]));
+            let delay = Delay::from_numer_denom_ms(100, 1);
+            encoder
+                .encode_frame(Frame::from_parts(image, 0, 0, delay))
+                .unwrap();
+        }
+        drop(encoder);
+        path
+    }
+
+    /// An MP4 recording in `<folder>/recordings/`, with its sidecars. Its
+    /// bytes are not a real video: without ffmpeg nothing decodes them.
+    fn record_mp4(folder: &Path, name: &str) -> PathBuf {
+        let dir = folder.join(RECORDINGS_DIR);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        fs::write(&path, b"not really a video").unwrap();
+        fs::write(crate::record::cursor_path(&path), b"{}").unwrap();
+        fs::write(crate::recording_editor::edits_path(&path), b"{}").unwrap();
+        path
+    }
+
+    #[test]
+    fn rescan_adds_recordings_which_are_never_read_or_described() {
+        let dir = TempDir::new().unwrap();
+        shoot(dir.path(), 1, (40, 20));
+        let gif = record_gif(dir.path(), "Grab-it 2026-03-07 09-05-02.gif");
+        let mp4 = record_mp4(dir.path(), "Grab-it 2026-03-07 09-05-03.mp4");
+        // Not recordings.
+        fs::write(dir.path().join(RECORDINGS_DIR).join("notes.txt"), b"x").unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+
+        let report = library.rescan(dir.path()).unwrap();
+
+        assert_eq!(report.added, 3);
+        let shots = library.list(0, MAX_PAGE).unwrap().shots;
+        let kind = |path: &Path| {
+            let path = fs::canonicalize(path).unwrap();
+            shots.iter().find(|shot| shot.path == path).unwrap().clone()
+        };
+        let gif = kind(&gif);
+        assert_eq!(gif.kind, ShotKind::Gif);
+        assert_eq!((gif.width, gif.height), (64, 32));
+        assert!(gif.bytes.unwrap() > 0);
+        let mp4 = kind(&mp4);
+        assert_eq!(mp4.kind, ShotKind::Video);
+        assert_eq!(mp4.bytes, Some(18));
+        // Without ffmpeg an MP4's length and size are not known yet.
+        assert_eq!((mp4.duration_ms, mp4.width), (None, 0));
+        let thumbs = fs::canonicalize(dir.path().join(RECORDINGS_DIR))
+            .unwrap()
+            .join(THUMBS_DIR);
+        assert_eq!(
+            mp4.thumb_path,
+            thumbs.join("Grab-it 2026-03-07 09-05-03.png")
+        );
+
+        // Only the capture waits for OCR and to be described, even when
+        // every shot is queued again.
+        assert_eq!(library.pending_ocr_count().unwrap(), 1);
+        library.requeue_all_ai().unwrap();
+        assert_eq!(library.ai_counts().unwrap().total, 1);
+        assert!(library.requeue_ai(mp4.id).is_err());
+        let job = library.next_for_ocr().unwrap().unwrap();
+        assert_eq!(library.get(job.id).unwrap().kind, ShotKind::Image);
+        assert_eq!(
+            library.text(mp4.id).unwrap(),
+            ShotText::Read {
+                text: String::new()
+            }
+        );
+
+        assert!(!library.rescan(dir.path()).unwrap().changed());
+    }
+
+    #[test]
+    fn a_recording_keeps_the_length_the_recorder_gave() {
+        let dir = TempDir::new().unwrap();
+        let mp4 = record_mp4(dir.path(), "a.mp4");
+        let mut library = Library::open_in_memory().unwrap();
+
+        let shot = library
+            .insert(&prepare_recording(&mp4, Some(46_120), None).unwrap())
+            .unwrap();
+        assert_eq!(shot.duration_ms, Some(46_120));
+
+        // A rescan without the recorder's length keeps it.
+        let again = library
+            .insert(&prepare_recording(&mp4, None, None).unwrap())
+            .unwrap();
+        assert_eq!((again.id, again.duration_ms), (shot.id, Some(46_120)));
+        assert!(prepare_recording(&dir.path().join("x.png"), None, None).is_err());
+    }
+
+    #[test]
+    fn a_gif_recording_previews_its_first_frame_and_an_mp4_needs_ffmpeg() {
+        let dir = TempDir::new().unwrap();
+        record_gif(dir.path(), "a.gif");
+        record_mp4(dir.path(), "b.mp4");
+        let mut library = Library::open_in_memory().unwrap();
+        library.rescan(dir.path()).unwrap();
+        let shots = library.list(0, MAX_PAGE).unwrap().shots;
+        let gif = shots
+            .iter()
+            .find(|shot| shot.kind == ShotKind::Gif)
+            .unwrap();
+        let mp4 = shots
+            .iter()
+            .find(|shot| shot.kind == ShotKind::Video)
+            .unwrap();
+
+        let png = library.thumbnail(gif.id).unwrap();
+        let thumb = image::load_from_memory(&png).unwrap().into_rgba8();
+        assert_eq!(thumb.dimensions(), (64, 32));
+        assert_eq!(thumb.get_pixel(0, 0)[0], 40);
+
+        assert!(matches!(
+            library.thumbnail(mp4.id),
+            Err(LibraryError::NoPreview)
+        ));
+    }
+
+    #[test]
+    fn deleting_a_recording_removes_its_sidecars_and_thumbnail() {
+        let dir = TempDir::new().unwrap();
+        let mp4 = record_mp4(dir.path(), "a.mp4");
+        let mut library = Library::open_in_memory().unwrap();
+        library.rescan(dir.path()).unwrap();
+        let shot = library.list(0, MAX_PAGE).unwrap().shots.remove(0);
+        fs::create_dir_all(shot.thumb_path.parent().unwrap()).unwrap();
+        fs::write(&shot.thumb_path, b"png").unwrap();
+
+        library.delete(shot.id).unwrap();
+
+        assert!(!mp4.exists());
+        assert!(!crate::record::cursor_path(&mp4).exists());
+        assert!(!crate::recording_editor::edits_path(&mp4).exists());
+        assert!(!shot.thumb_path.exists());
+        assert_eq!(library.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn an_older_library_keeps_its_captures_as_images() {
+        let dir = TempDir::new().unwrap();
+        let db = dir.path().join(LIBRARY_FILE);
+        let png = shoot(dir.path(), 1, (40, 20));
+        {
+            let mut conn = Connection::open(&db).unwrap();
+            for (index, sql) in MIGRATIONS.iter().take(3).enumerate() {
+                let tx = conn.transaction().unwrap();
+                tx.execute_batch(sql).unwrap();
+                tx.pragma_update(None, "user_version", index as i64 + 1)
+                    .unwrap();
+                tx.commit().unwrap();
+            }
+            conn.execute(
+                "INSERT INTO shots (path, thumb_path, captured_at) VALUES (?1, '', 0)",
+                [path_text(&fs::canonicalize(&png).unwrap())],
+            )
+            .unwrap();
+        }
+        let library = Library::open(&db).unwrap();
+        let shot = library.list(0, MAX_PAGE).unwrap().shots.remove(0);
+        assert_eq!(shot.kind, ShotKind::Image);
+        assert_eq!((shot.duration_ms, shot.bytes), (None, None));
     }
 
     #[test]
@@ -1749,7 +2257,8 @@ mod tests {
             report,
             RescanReport {
                 added: 2,
-                removed: 0
+                removed: 0,
+                refreshed: 0,
             }
         );
 
@@ -1760,7 +2269,8 @@ mod tests {
             report,
             RescanReport {
                 added: 1,
-                removed: 1
+                removed: 1,
+                refreshed: 0,
             }
         );
 
@@ -1833,7 +2343,8 @@ mod tests {
             library.rescan(&second).unwrap(),
             RescanReport {
                 added: 0,
-                removed: 1
+                removed: 1,
+                refreshed: 0,
             }
         );
         assert_eq!(
@@ -1851,7 +2362,7 @@ mod tests {
         // The scan's file work runs unlocked; meanwhile the capture is
         // recorded through the usual path.
         let known = library.known().unwrap();
-        let scan = scan_files(&known, dir.path()).unwrap();
+        let scan = scan_files(&known, dir.path(), None).unwrap();
         assert_eq!(scan.new.len(), 1);
         library.add_capture(&png).unwrap();
 
@@ -1869,7 +2380,7 @@ mod tests {
 
         let bytes = fs::read(&png).unwrap();
         fs::remove_file(&png).unwrap();
-        let scan = scan_files(&library.known().unwrap(), dir.path()).unwrap();
+        let scan = scan_files(&library.known().unwrap(), dir.path(), None).unwrap();
         assert_eq!(scan.gone, vec![shot.id]);
         fs::write(&png, bytes).unwrap();
 
@@ -1882,7 +2393,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let png = shoot(dir.path(), 1, (800, 400));
         // Only the rows, read up front; the scan itself gets no `Library`.
-        let scan = scan_files(&[], dir.path()).unwrap();
+        let scan = scan_files(&[], dir.path(), None).unwrap();
         assert_eq!(scan.gone, Vec::<i64>::new());
         assert_eq!(scan.new.len(), 1);
         let shot = &scan.new[0];
@@ -1907,18 +2418,22 @@ mod tests {
         let state = LibraryState::new(Library::open_in_memory().unwrap());
         shoot(dir.path(), 1, (4, 4));
         assert_eq!(
-            state.rescan(dir.path()).unwrap(),
+            state.rescan(dir.path(), None).unwrap(),
             RescanReport {
                 added: 1,
-                removed: 0
+                removed: 0,
+                refreshed: 0,
             }
         );
         let fresh = state.add_capture(&shoot(dir.path(), 2, (4, 4))).unwrap();
-        assert_eq!(state.rescan(dir.path()).unwrap(), RescanReport::default());
+        assert_eq!(
+            state.rescan(dir.path(), None).unwrap(),
+            RescanReport::default()
+        );
         assert_eq!(state.lock().count().unwrap(), 2);
 
         fs::remove_file(&fresh.thumb_path).unwrap();
-        assert!(!state.thumbnail(fresh.id).unwrap().is_empty());
+        assert!(!state.thumbnail(fresh.id, None).unwrap().is_empty());
         assert!(fresh.thumb_path.is_file());
     }
 

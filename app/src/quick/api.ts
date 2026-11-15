@@ -76,6 +76,7 @@ export type QuickAction =
   | "edit"
   | "pin"
   | "reveal"
+  | "open"
   | "delete"
   | "close";
 
@@ -87,7 +88,7 @@ export function quickInfo(): Promise<QuickShown | null> {
   return invoke<QuickShown | null>("quick_info");
 }
 
-/** The capture on the card as a small PNG. */
+/** The capture on the card as a small PNG, or a frame of the recording on it. */
 export function quickThumbnail(): Promise<ArrayBuffer> {
   return invoke<ArrayBuffer>("quick_thumbnail");
 }

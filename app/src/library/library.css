@@ -1100,6 +1100,68 @@
   inset: 10px;
 }
 
+/* A recording: a play badge in the middle of its preview, its length in
+   the corner. Always dark, as they sit over the frame. */
+.rec-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: #fff;
+  background: rgb(16 17 19 / 70%);
+  border: 1px solid rgb(255 255 255 / 16%);
+  border-radius: 50%;
+  box-shadow: 0 3px 12px rgb(0 0 0 / 35%);
+  transform: translate(-50%, -50%);
+  transition:
+    transform 120ms var(--ease),
+    background 120ms;
+  pointer-events: none;
+}
+
+.rec-play .icon {
+  margin-left: 2px;
+  stroke-width: 1.5;
+}
+
+.tile-main:hover .rec-play,
+.details-preview:hover .rec-play {
+  background: var(--accent);
+  border-color: transparent;
+  transform: translate(-50%, -50%) scale(1.06);
+}
+
+.details-preview.is-recording {
+  cursor: pointer;
+}
+
+.details-preview .rec-play {
+  width: 44px;
+  height: 44px;
+}
+
+.rec-length {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 1px 6px;
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  background: rgb(16 17 19 / 72%);
+  border-radius: 5px;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rec-play {
+    transition: none;
+  }
+}
+
 .details-body {
   display: flex;
   flex-direction: column;
