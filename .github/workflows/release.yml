@@ -147,8 +147,9 @@ jobs:
           | Platform | Installer |
           | --- | --- |
           | Windows | `.msi` or `-setup.exe` |
-          | macOS (Apple silicon) | `.dmg` |
-          | Linux | `.AppImage`, `.deb` or `.rpm` |
+          | macOS (Apple silicon or Intel) | `_universal.dmg` |
+          | Linux (x86_64) | `_amd64.AppImage`, `_amd64.deb` or `.x86_64.rpm` |
+          | Linux (arm64) | `_aarch64.AppImage`, `_arm64.deb` or `.aarch64.rpm` |
 
           The installers are not signed with a paid certificate, so Windows SmartScreen and macOS Gatekeeper warn on first launch.
 
@@ -192,7 +193,7 @@ jobs:
 
       # Installed copies of Grab-it read latest.json from the newest release
       # to find, and verify, the update package for their platform. Written
-      # here rather than by each build, so the three builds cannot race to
+      # here rather than by each build, so the four builds cannot race to
       # rewrite it.
       - name: Add the updater manifest
         env:

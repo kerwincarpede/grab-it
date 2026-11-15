@@ -64,19 +64,29 @@ class Changes(unittest.TestCase):
         self.assertEqual(got[-1]["version"], "0.1.21")
 
 
+RELEASE_PACKAGES = [
+    "Grab-it_universal.app.tar.gz",
+    "Grab-it_0.4.0_amd64.AppImage",
+    "Grab-it_0.4.0_amd64.deb",
+    "Grab-it-0.4.0-1.x86_64.rpm",
+    "Grab-it_0.4.0_aarch64.AppImage",
+    "Grab-it_0.4.0_arm64.deb",
+    "Grab-it-0.4.0-1.aarch64.rpm",
+    "Grab-it_0.4.0_x64-setup.exe",
+    "Grab-it_0.4.0_x64_en-US.msi",
+]
+
+
+def platforms_for(names):
+    with tempfile.TemporaryDirectory() as sigs:
+        for name in names:
+            Path(sigs, f"{name}.sig").write_text(f"sig {name}\n")
+        return manifest.platforms(sigs, "https://dl")
+
+
 class Platforms(unittest.TestCase):
     def test_maps_each_package_to_its_targets(self):
-        with tempfile.TemporaryDirectory() as sigs:
-            for name in [
-                "Grab-it_aarch64.app.tar.gz",
-                "Grab-it_0.4.0_amd64.AppImage",
-                "Grab-it_0.4.0_amd64.deb",
-                "Grab-it-0.4.0-1.x86_64.rpm",
-                "Grab-it_0.4.0_x64-setup.exe",
-                "Grab-it_0.4.0_x64_en-US.msi",
-            ]:
-                Path(sigs, f"{name}.sig").write_text(f"sig {name}\n")
-            found = manifest.platforms(sigs, "https://dl")
+        found = platforms_for(RELEASE_PACKAGES)
         self.assertEqual(found["darwin-aarch64"], found["darwin-aarch64-app"])
         self.assertEqual(
             found["windows-x86_64"]["url"], "https://dl/Grab-it_0.4.0_x64-setup.exe"
@@ -88,6 +98,48 @@ class Platforms(unittest.TestCase):
         self.assertIn("linux-x86_64-deb", found)
         self.assertIn("linux-x86_64-rpm", found)
         self.assertTrue(set(manifest.REQUIRED) <= set(found))
+
+    def test_lists_the_universal_mac_app_for_both_architectures(self):
+        found = platforms_for(["Grab-it_universal.app.tar.gz"])
+        universal = {
+            "signature": "sig Grab-it_universal.app.tar.gz",
+            "url": "https://dl/Grab-it_universal.app.tar.gz",
+        }
+        self.assertEqual(
+            found,
+            {
+                "darwin-aarch64": universal,
+                "darwin-aarch64-app": universal,
+                "darwin-x86_64": universal,
+                "darwin-x86_64-app": universal,
+            },
+        )
+
+    def test_maps_arm64_linux_packages_to_aarch64(self):
+        found = platforms_for(
+            [
+                "Grab-it_0.4.0_aarch64.AppImage",
+                "Grab-it_0.4.0_arm64.deb",
+                "Grab-it-0.4.0-1.aarch64.rpm",
+            ]
+        )
+        self.assertEqual(
+            sorted(found),
+            [
+                "linux-aarch64",
+                "linux-aarch64-appimage",
+                "linux-aarch64-deb",
+                "linux-aarch64-rpm",
+            ],
+        )
+        self.assertEqual(found["linux-aarch64"], found["linux-aarch64-appimage"])
+        self.assertEqual(
+            found["linux-aarch64-deb"]["url"], "https://dl/Grab-it_0.4.0_arm64.deb"
+        )
+
+    def test_requires_intel_macs_and_arm64_linux(self):
+        self.assertIn("darwin-x86_64", manifest.REQUIRED)
+        self.assertIn("linux-aarch64", manifest.REQUIRED)
 
 
 if __name__ == "__main__":

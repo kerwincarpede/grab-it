@@ -29,10 +29,13 @@ Grab the installer for your computer from the **[latest release](https://github.
 | Your computer | Download | |
 | --- | --- | --- |
 | **Windows** 10 or 11 | `Grab-it_<version>_x64-setup.exe` | Recommended. The `.msi` works too. |
-| **macOS** on Apple silicon (M1 or later) | `Grab-it_<version>_aarch64.dmg` | |
-| **Linux**: Ubuntu, Debian, Mint, Pop!_OS | `Grab-it_<version>_amd64.deb` | |
-| **Linux**: Fedora, openSUSE, RHEL | `Grab-it-<version>-1.x86_64.rpm` | |
-| **Linux**: anything else | `Grab-it_<version>_amd64.AppImage` | Runs without installing. |
+| **macOS** on Apple silicon (M1 or later) | `Grab-it_<version>_universal.dmg` | One app for every Mac. |
+| **macOS** on Intel | `Grab-it_<version>_universal.dmg` | The same download. |
+| **Linux**: Ubuntu, Debian, Mint, Pop!_OS | `Grab-it_<version>_amd64.deb` | On arm64: `Grab-it_<version>_arm64.deb` |
+| **Linux**: Fedora, openSUSE, RHEL | `Grab-it-<version>-1.x86_64.rpm` | On arm64: `Grab-it-<version>-1.aarch64.rpm` |
+| **Linux**: anything else | `Grab-it_<version>_amd64.AppImage` | Runs without installing. On arm64: `Grab-it_<version>_aarch64.AppImage` |
+
+Not sure which Linux build you need? Run `uname -m` in a terminal: `x86_64` takes the `amd64`/`x86_64` files, `aarch64` the `arm64`/`aarch64` ones.
 
 :::note
 Grab-it isn't signed with a paid developer certificate yet, so Windows and macOS warn you the first time you open it. That's expected. The steps below get you past it.
@@ -66,20 +69,20 @@ Grab-it isn't signed with a paid developer certificate yet, so Windows and macOS
 **Debian / Ubuntu:**
 
 ```sh
-sudo apt install ./Grab-it_*_amd64.deb
+sudo apt install ./Grab-it_*.deb
 ```
 
 **Fedora / openSUSE:**
 
 ```sh
-sudo dnf install ./Grab-it-*.x86_64.rpm      # or: sudo zypper install ./Grab-it-*.rpm
+sudo dnf install ./Grab-it-*.rpm      # or: sudo zypper install ./Grab-it-*.rpm
 ```
 
 **AppImage:**
 
 ```sh
-chmod +x Grab-it_*_amd64.AppImage
-./Grab-it_*_amd64.AppImage
+chmod +x Grab-it_*.AppImage
+./Grab-it_*.AppImage
 ```
 
 Then launch **Grab-it** from your app menu.
