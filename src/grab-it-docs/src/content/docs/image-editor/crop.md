@@ -9,6 +9,8 @@ sidebar:
 
 Drag over the part you want to keep. Everything outside it is dimmed, and left out when you copy or export.
 
+![A crop being drawn, with the ratios in the top bar and the rest dimmed.](../../../assets/image-editor/crop.png)
+
 ## Ratios
 
 With Crop picked, the top bar shows ratios instead of colours:

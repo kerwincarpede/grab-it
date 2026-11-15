@@ -7,6 +7,8 @@ sidebar:
 
 **All-in-one** is one shortcut for everything. Press `Ctrl + Alt + PrintScreen` (on macOS `⌘ ⇧ A`), or pick **All-in-one** in the tray menu. The screen freezes, with a toolbar at the top.
 
+![The All-in-one toolbar above a held region, with its size fields and ratio locks.](../../../assets/capture/all-in-one-toolbar.png)
+
 ## Modes
 
 Click a mode, or press its number. You can switch modes as often as you like before you capture.
@@ -38,7 +40,7 @@ In **Region** and **Text**, a region you drag doesn't capture when you let go. I
 | Resize it | Drag a handle on any corner or edge |
 | Move it | Drag inside it |
 | Start over | Drag anywhere outside it |
-| Pick a window instead | Click outside it |
+| Pick a window instead | Click outside it to let it go, then click a window |
 | Capture it | Press `Enter`, or the **Capture** button beside it (**Copy text** in Text mode) |
 
 `Shift` keeps a new drag square and `Space` moves it while you drag, as for a [region](/grab-it/capture/region/).
@@ -55,7 +57,7 @@ Next to the size are **Free**, **16:9**, **4:3** and **1:1**. Pick a ratio and t
 
 ## Your last region
 
-The last region you captured starts out selected on the monitor it was on, ready to capture again with `Enter`, or to adjust first. Drag anywhere else for a new one, or click away to pick a window instead.
+The last region you captured starts out selected on the monitor it was on, ready to capture again with `Enter`, or to adjust first. Drag anywhere else for a new one, or click away to let it go, then click a window to pick it instead.
 
 ## Record
 

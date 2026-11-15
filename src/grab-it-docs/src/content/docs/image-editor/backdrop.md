@@ -7,6 +7,8 @@ sidebar:
 
 A **Backdrop** puts your screenshot on a background, with padding around it, rounded corners and a soft shadow. Perfect for slides, docs and social posts.
 
+![The Backdrop panel with a mesh gradient behind the screenshot.](../../../assets/image-editor/backdrop.png)
+
 Click **Backdrop** in the top bar and pick a background. That turns it on; the button stays highlighted while it's on. Pick **No backdrop** (the first swatch) to turn it off again.
 
 ## Backgrounds

@@ -7,6 +7,8 @@ sidebar:
 
 **Capture region** is the capture you'll use most. Press `PrintScreen` (on macOS `⌘ ⇧ 2`), or pick **Capture region** in the tray menu.
 
+![Dragging a region over a window: the rest of the screen dims and the size shows at the corner.](../../../assets/capture/region-overlay.png)
+
 Every monitor freezes at once and dims, so menus, tooltips and videos stay exactly as they were. Each monitor gets its own overlay, so you can drag on whichever one you like.
 
 ## Drag a region

@@ -9,6 +9,8 @@ sidebar:
 
 Drag to draw; the line follows the pointer wherever it goes. A single click leaves a dot.
 
+![A freehand loop drawn around a number.](../../../assets/image-editor/freehand.png)
+
 **Options:** colour, and a width from 1 to 24 pixels. See [Colours and sizes](/grab-it/image-editor/styles/).
 
 Want it straight? Use [Line](/grab-it/image-editor/line/) with `Shift` instead.

@@ -9,6 +9,8 @@ sidebar:
 
 Drag from where the arrow starts to where it points. The arrowhead goes at the end you let go of.
 
+![An arrow pointing from a chart bar to a button.](../../../assets/image-editor/arrow.png)
+
 - Hold **`Shift`** while you drag to keep the arrow at 45° steps: perfectly level, upright or diagonal.
 - A drag of only a pixel or two is treated as a stray click, and draws nothing.
 

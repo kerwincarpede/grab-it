@@ -9,6 +9,8 @@ sidebar:
 
 Drag a box over anything you don't want to share. Everything under it is hidden. Hold **`Shift`** for a square.
 
+![An API key pixelated with Blur.](../../../assets/image-editor/blur.png)
+
 ## Pixelate or Smooth
 
 The top bar has two styles:

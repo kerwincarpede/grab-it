@@ -13,6 +13,8 @@ sidebar:
 
 To change text later, **double-click** it. Clearing all of it deletes it.
 
+![A text label placed on the screenshot.](../../../assets/image-editor/text.png)
+
 ## Options
 
 | Option | What it does |

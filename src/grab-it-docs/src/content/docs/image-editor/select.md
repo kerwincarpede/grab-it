@@ -9,6 +9,8 @@ sidebar:
 
 Select is for changing what you've already drawn. Click a shape to select it; click an empty part of the screenshot to deselect.
 
+![A selected rectangle with its handles.](../../../assets/image-editor/select.png)
+
 A selected shape shows handles:
 
 - **Drag the shape** to move it.

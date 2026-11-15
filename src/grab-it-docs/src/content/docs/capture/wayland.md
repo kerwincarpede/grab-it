@@ -13,7 +13,7 @@ Not sure? Run `echo $XDG_SESSION_TYPE` in a terminal. It prints `wayland` or `x1
 
 ## Hotkeys
 
-Grab-it's hotkeys are registered through your desktop's global shortcuts, so the first time your desktop may ask you to confirm them. You can change them there, as well as in Grab-it's [Settings](/grab-it/reference/settings/). If your desktop doesn't support this, the tray menu still starts every capture.
+Grab-it's hotkeys are registered through your desktop's global shortcuts, so the first time your desktop may ask you to confirm them. You can change them there. A hotkey you change in Grab-it's [Settings](/grab-it/reference/settings/) takes effect only after you restart Grab-it and confirm it in your desktop's shortcut settings. If your desktop doesn't support this, the tray menu still starts every capture.
 
 ## Captures
 

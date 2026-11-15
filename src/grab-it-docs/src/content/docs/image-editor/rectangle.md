@@ -9,6 +9,8 @@ sidebar:
 
 Drag from one corner to the opposite one. Hold **`Shift`** for a perfect square.
 
+![A rectangle around one card.](../../../assets/image-editor/rectangle.png)
+
 ## Options
 
 | Option | What it does |
