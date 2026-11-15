@@ -964,10 +964,14 @@
 /* ── Details pane ────────────────────────────────────────────────────── */
 
 .details {
+  position: relative;
   display: flex;
   flex: none;
   flex-direction: column;
-  width: 320px;
+  /* The inline width is the user's; these keep it sensible as the window changes. */
+  width: 400px;
+  min-width: 360px;
+  max-width: max(360px, min(720px, calc(100% - 360px)));
   min-height: 0;
   background: var(--chrome);
   border-left: 1px solid var(--border);
@@ -979,6 +983,77 @@
     opacity: 0;
     transform: translateX(8px);
   }
+}
+
+/* The grab line on the left edge, with a grip that says it can be dragged. */
+.details-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  cursor: col-resize;
+  outline: none;
+  touch-action: none;
+}
+
+.details-resizer::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 1px;
+  background: transparent;
+  content: "";
+  transition: background 120ms var(--ease);
+}
+
+.details-grip {
+  position: relative;
+  width: 10px;
+  height: 48px;
+  box-sizing: border-box;
+  color: var(--text-muted);
+  background: var(--chrome);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 18%);
+  transition:
+    color 120ms var(--ease),
+    background 120ms var(--ease),
+    border-color 120ms var(--ease),
+    height 120ms var(--ease);
+}
+
+/* Three dots: the usual "grab me" mark. */
+.details-grip::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  margin: -1.5px 0 0 -1.5px;
+  background: currentcolor;
+  border-radius: 50%;
+  box-shadow:
+    0 -6px currentcolor,
+    0 6px currentcolor;
+  content: "";
+}
+
+.details-resizer:where(:hover, :focus-visible, .is-dragging)::before {
+  background: var(--accent);
+}
+
+.details-resizer:where(:hover, :focus-visible, .is-dragging) .details-grip {
+  height: 60px;
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .details-top {
@@ -1267,6 +1342,8 @@
     right: 0;
     bottom: 0;
     z-index: 10;
+    min-width: min(360px, 100%);
+    max-width: calc(100% - 48px);
     box-shadow: -16px 0 40px -20px rgb(0 0 0 / 50%);
   }
 
