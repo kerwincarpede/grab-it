@@ -5,6 +5,7 @@ import {
   hintTop,
   boxFromPoints,
   clampedDelta,
+  clipToView,
   contains,
   dragBox,
   floatingPosition,
@@ -549,5 +550,17 @@ describe("hintTop", () => {
     expect(hintTop(undefined, 900)).toBe(12);
     expect(hintTop(Number.NaN, 900)).toBe(12);
     expect(hintTop(0.9, 1000)).toBe(212);
+  });
+});
+
+describe("clipToView", () => {
+  const view = { width: 1000, height: 600 };
+  it("keeps the part of a box on screen", () => {
+    expect(clipToView({ x: -20, y: 500, width: 200, height: 300 }, view)).toEqual({ x: 0, y: 500, width: 180, height: 100 });
+    expect(clipToView({ x: 10, y: 10, width: 50, height: 50 }, view)).toEqual({ x: 10, y: 10, width: 50, height: 50 });
+  });
+
+  it("is nothing for a box off screen", () => {
+    expect(clipToView({ x: 1200, y: 0, width: 100, height: 100 }, view)).toBeNull();
   });
 });

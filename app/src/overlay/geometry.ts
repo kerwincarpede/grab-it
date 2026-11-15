@@ -303,6 +303,16 @@ export function fromImagePixels(pixels: Box, scale: number): Box {
   return { x, y, width, height };
 }
 
+/** The part of `box` inside `view`, or null when none of it is. */
+export function clipToView(box: Box, view: Size): Box | null {
+  const left = Math.max(box.x, 0);
+  const top = Math.max(box.y, 0);
+  const right = Math.min(box.x + box.width, view.width);
+  const bottom = Math.min(box.y + box.height, view.height);
+  if (right <= left || bottom <= top) return null;
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
 /** A CSS-pixel box moved onto the image's pixel grid, whole pixels each way. */
 export function snapToImage(box: Box, scale: number): Box {
   const s = scale > 0 ? scale : 1;

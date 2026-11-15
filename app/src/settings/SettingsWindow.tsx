@@ -10,6 +10,7 @@ import {
   DEFAULT_RECORDING,
   POPUP_CORNERS,
   RECORDING_AUDIO,
+  RECORDING_COUNTDOWNS,
   RECORDING_FORMATS,
   RECORDING_FPS,
   RECORDING_QUALITIES,
@@ -830,6 +831,27 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                 </div>
               </>
             )}
+            <div className="row">
+              <span className="row-text">
+                <label className="row-title" htmlFor="recording-countdown">
+                  Countdown
+                </label>
+                <span className="row-hint">Counts down on the recording toolbar before the first frame.</span>
+              </span>
+              <select
+                id="recording-countdown"
+                className="row-field"
+                value={recording.countdown}
+                disabled={recordingOff}
+                onChange={(event) => void changeRecording({ countdown: Number(event.target.value) })}
+              >
+                {RECORDING_COUNTDOWNS.map((seconds) => (
+                  <option key={seconds} value={seconds}>
+                    {seconds === 0 ? "Off" : `${seconds} seconds`}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </section>
       )}

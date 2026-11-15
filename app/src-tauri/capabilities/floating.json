@@ -4,7 +4,8 @@
   "description": "Pins and the webcam bubble have no title bar, so they are dragged by their content",
   "windows": [
     "pin-*",
-    "webcam"
+    "webcam",
+    "record-bar"
   ],
   "permissions": [
     "core:window:allow-start-dragging"

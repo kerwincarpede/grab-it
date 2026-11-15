@@ -14,7 +14,6 @@ import {
   quickAction,
   quickInfo,
   quickThumbnail,
-  recordStop,
   type QuickAction,
   type QuickItem,
   type QuickShown,
@@ -130,17 +129,6 @@ function useThumbnail(item: QuickItem | null): string | null {
   return loaded && loaded.path === path ? loaded.url : null;
 }
 
-/** The time since `startedAt`, ticking while a recording runs. */
-function useElapsed(startedAt: number | null): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (startedAt === null) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 250);
-    return () => window.clearInterval(timer);
-  }, [startedAt]);
-  return startedAt === null ? 0 : Math.max(0, now - startedAt);
-}
-
 /**
  * The Quick Access card: what was just captured, with the next steps one
  * click away. It dismisses itself after a few seconds; resting the pointer
@@ -159,8 +147,6 @@ function QuickAccess() {
   /** What the card shows, for reading outside a render. */
   const latest = useRef<QuickShown | null>(null);
   const thumbnail = useThumbnail(item);
-  const elapsed = useElapsed(item?.kind === "recording" ? item.startedAt : null);
-  const [stopping, setStopping] = useState(false);
   const stored = useStoredText(item?.kind === "capture" ? item.path : null);
 
   const show = useCallback((next: QuickShown | null) => {
@@ -170,7 +156,6 @@ function QuickAccess() {
     setCurrent(next);
     setFlash(null);
     setError(null);
-    setStopping(false);
     setShown((count) => count + 1);
   }, []);
 
@@ -359,33 +344,6 @@ function QuickAccess() {
           </div>
         )}
         {timerBar}
-      </main>
-    );
-  }
-
-  if (item.kind === "recording") {
-    const stop = () => {
-      setStopping(true);
-      recordStop().catch((err: unknown) => {
-        setStopping(false);
-        setError(errorMessage(err));
-      });
-    };
-    return (
-      <main className="quick quick-message quick-recording" data-testid="quick" {...hover}>
-        <span className="quick-rec-dot" aria-hidden="true" />
-        <div className="quick-body" role="status">
-          <p className="quick-title">{stopping ? "Saving…" : "Recording"}</p>
-          <p className="quick-detail quick-elapsed">
-            {item.maxSeconds === undefined
-              ? formatElapsed(elapsed)
-              : `${formatElapsed(elapsed)} of ${formatElapsed(item.maxSeconds * 1000)}`}
-          </p>
-          {error && <p className="quick-detail quick-error-text">{error}</p>}
-        </div>
-        <button type="button" className="quick-stop" onClick={stop} disabled={stopping}>
-          Stop
-        </button>
       </main>
     );
   }

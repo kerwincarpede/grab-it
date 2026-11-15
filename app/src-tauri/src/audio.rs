@@ -30,7 +30,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, MutexGuard,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -201,8 +201,40 @@ struct Sink {
     holes: Vec<(u64, u64)>,
     /// Whether a stretch with no chunks is filled with silence.
     fill_gaps: bool,
+    /// While set, silence is written in place of what is heard, so the
+    /// sound keeps its length and stays in step with the video.
+    muted: bool,
+    /// The loudest sample heard since the meter was last read.
+    meter: Meter,
     /// The first write that failed.
     error: Option<String>,
+}
+
+/// How loud a sound is, for the recording toolbar's level meter: the
+/// loudest sample since it was last read, from 0 to 1.
+#[derive(Debug, Clone, Default)]
+pub struct Meter(Arc<AtomicU32>);
+
+impl Meter {
+    /// Notes `samples` just heard.
+    fn heard(&self, samples: &[i16]) {
+        let peak = samples
+            .iter()
+            .map(|sample| sample.unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        let level = f32::from(peak) / f32::from(i16::MAX);
+        let _ = self
+            .0
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bits| {
+                (level > f32::from_bits(bits)).then_some(level.to_bits())
+            });
+    }
+
+    /// The loudest level since the last read, which starts the next one.
+    pub fn take(&self) -> f32 {
+        f32::from_bits(self.0.swap(0, Ordering::Relaxed)).clamp(0.0, 1.0)
+    }
 }
 
 type SharedSink = Arc<Mutex<Sink>>;
@@ -230,6 +262,8 @@ impl Sink {
             frames: 0,
             holes: Vec::new(),
             fill_gaps,
+            muted: false,
+            meter: Meter::default(),
             error: None,
         })))
     }
@@ -253,6 +287,14 @@ impl Sink {
         let channels = u64::from(self.channels.max(1));
         let Some(writer) = self.writer.as_mut() else {
             return;
+        };
+        let quiet;
+        let samples = if self.muted {
+            quiet = vec![0; samples.len()];
+            &quiet[..]
+        } else {
+            self.meter.heard(samples);
+            samples
         };
         match writer.write(samples) {
             Ok(()) => {
@@ -603,6 +645,21 @@ impl Sound {
     /// What it records, as the card calls it.
     pub fn what(&self) -> &'static str {
         self.input.what()
+    }
+
+    /// What it records.
+    pub fn input(&self) -> &Input {
+        &self.input
+    }
+
+    /// Writes silence in place of what is heard while `muted`.
+    pub fn set_muted(&self, muted: bool) {
+        lock(&self.sink).muted = muted;
+    }
+
+    /// How loud it is, for a level meter.
+    pub fn meter(&self) -> Meter {
+        lock(&self.sink).meter.clone()
     }
 
     /// Stops recording. Returns the sound, or an error saying why there is
@@ -1190,6 +1247,27 @@ mod tests {
         assert!((offset(frame, later) - 0.12).abs() < 1e-9);
         assert!((offset(frame, earlier) + 0.25).abs() < 1e-9);
         assert_eq!(offset(frame, frame), 0.0);
+    }
+
+    #[test]
+    fn a_muted_sink_writes_silence_of_the_same_length_and_meters_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("muted.wav");
+        let sink = Sink::create(&wav, 1, 1000, false).unwrap();
+        let meter = lock(&sink).meter.clone();
+        let at = Instant::now();
+        lock(&sink).push(&[i16::MAX / 2; 100], at);
+        assert!((meter.take() - 0.5).abs() < 0.01);
+        assert_eq!(meter.take(), 0.0);
+        lock(&sink).muted = true;
+        lock(&sink).push(&[i16::MAX; 100], at + Duration::from_millis(100));
+        assert_eq!(meter.take(), 0.0);
+        lock(&sink).finish().unwrap();
+        let bytes = std::fs::read(&wav).unwrap();
+        // A 44-byte header, then 200 16-bit samples: the muted half silent.
+        assert_eq!(bytes.len(), 44 + 400);
+        assert!(bytes[44 + 200..].iter().all(|byte| *byte == 0));
+        assert!(bytes[44..44 + 200].iter().any(|byte| *byte != 0));
     }
 
     #[test]

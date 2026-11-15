@@ -44,7 +44,6 @@ export type QuickItem =
   | { kind: "notice"; title: string; message: string }
   | { kind: "error"; message: string }
   /** `maxSeconds` is how long a GIF may run; an MP4 has no limit. */
-  | { kind: "recording"; startedAt: number; maxSeconds?: number }
   /** `fallback` says why an MP4 recording was saved as a GIF instead. */
   | {
       kind: "recorded";
@@ -101,11 +100,6 @@ export function quickAction(action: QuickAction, generation: number): Promise<vo
   return invoke<void>("quick_action", { action, generation });
 }
 
-/** Ends the recording under way; the card then shows the saved GIF. */
-export function recordStop(): Promise<void> {
-  return invoke<void>("record_stop");
-}
-
 /** Calls `handler` when the card is reused for something new. */
 export function onQuickChanged(handler: (shown: QuickShown) => void): Promise<UnlistenFn> {
   return listen<QuickShown>(QUICK_CHANGED_EVENT, (event) => handler(event.payload));
@@ -116,7 +110,7 @@ export function onQuickChanged(handler: (shown: QuickShown) => void): Promise<Un
  * seconds chosen in Settings. `null` stays until something replaces it.
  */
 export function dismissAfter(item: QuickItem, seconds = 8): number | null {
-  if (item.kind === "working" || item.kind === "recording") return null;
+  if (item.kind === "working") return null;
   // The AI's text is on its way.
   if (item.kind === "text" && item.tidy?.state === "working") return null;
   // 0 is the user's "until I close it".
