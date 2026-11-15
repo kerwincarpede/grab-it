@@ -29,7 +29,7 @@ import {
 import LibraryWindow from "../library/LibraryWindow";
 import WelcomeWindow from "../welcome/WelcomeWindow";
 import { getSettings, stepTextSize, textSizeStep, type SettingsSection } from "../settings/api";
-import { onLibraryChanged, sidebarSummary, type SidebarSummary } from "../library/api";
+import { onLibraryChanged, sidebarSummary, type KindFilter, type SidebarSummary } from "../library/api";
 import { tagStyle } from "../library/tagColor";
 import { shortcutLabel } from "../hub/keys";
 
@@ -49,9 +49,12 @@ type Open = { kind: "settings"; section: SettingsSection } | { kind: "welcome" }
 interface Place {
   app: string;
   tag: string;
+  /** Only captures or only recordings; "" for both. */
+  kind: KindFilter | "";
 }
 
-const EVERYTHING: Place = { app: "", tag: "" };
+const EVERYTHING: Place = { app: "", tag: "", kind: "" };
+const RECORDINGS: Place = { app: "", tag: "", kind: "recording" };
 
 function dialogFor(view: MainView): Open {
   if (view === "settings") return { kind: "settings", section: "general" };
@@ -308,6 +311,7 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
 
   const pickApp = useCallback((app: string) => setPlace((was) => ({ ...was, app })), []);
   const pickTag = useCallback((tag: string) => setPlace((was) => ({ ...was, tag })), []);
+  const pickKind = useCallback((kind: KindFilter | "") => setPlace((was) => ({ ...was, kind })), []);
   const close = useCallback(() => setOpen(null), []);
 
   function run(action: () => Promise<void>) {
@@ -316,8 +320,9 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
 
   const apps = summary?.apps ?? [];
   const tags = summary?.tags ?? [];
-  const everything = place.app === "" && place.tag === "";
-  const title = place.app || (place.tag ? `Tagged ${place.tag}` : "All captures");
+  const everything = place.app === "" && place.tag === "" && place.kind === "";
+  const recordingsOnly = place.app === "" && place.tag === "" && place.kind === "recording";
+  const title = place.app || (place.tag ? `Tagged ${place.tag}` : recordingsOnly ? "Recordings" : "All captures");
 
   return (
     <div className="app-window">
@@ -325,6 +330,9 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
         <div className="sidebar-top" data-tauri-drag-region />
         <NavItem current={everything} icon={<GridIcon size={15} />} count={summary?.total} onClick={() => setPlace(EVERYTHING)}>
           All captures
+        </NavItem>
+        <NavItem current={recordingsOnly} icon={<RecordIcon size={15} />} count={summary?.recordings ?? 0} onClick={() => setPlace(RECORDINGS)}>
+          Recordings
         </NavItem>
 
         {apps.length > 0 && <h2 className="nav-heading">Apps</h2>}
@@ -338,7 +346,7 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
               </span>
             }
             count={count}
-            onClick={() => setPlace({ app: name, tag: "" })}
+            onClick={() => setPlace({ app: name, tag: "", kind: "" })}
           >
             {name}
           </NavItem>
@@ -354,7 +362,7 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
                 className="tag-link"
                 style={tagStyle(name)}
                 aria-pressed={place.tag.toLowerCase() === name.toLowerCase()}
-                onClick={() => setPlace({ app: "", tag: place.tag === name ? "" : name })}
+                onClick={() => setPlace({ app: "", tag: place.tag === name ? "" : name, kind: "" })}
               >
                 {name}
               </button>
@@ -388,6 +396,8 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
           onAppFilter={pickApp}
           tagFilter={place.tag}
           onTagFilter={pickTag}
+          kindFilter={place.kind}
+          onKindFilter={pickKind}
           toolbarEnd={<CaptureButton hotkey={regionHotkey} onError={setError} />}
         />
       </div>

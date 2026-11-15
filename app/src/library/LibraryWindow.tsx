@@ -30,6 +30,7 @@ import {
   formatTime,
   allTags,
   groupByDay,
+  isRecording,
   isSearching,
   listShots,
   ocrStatus,
@@ -40,6 +41,7 @@ import {
   openShot,
   pendingAiNotice,
   pinShot,
+  playShot,
   copyShotText,
   redescribeShot,
   retryOcr,
@@ -54,6 +56,7 @@ import {
   type CliProvider,
   type FilterOptions,
   type Filters,
+  type KindFilter,
   type OcrStatus,
   type SearchHit,
   type Shot,
@@ -65,11 +68,13 @@ import {
   CloseIcon,
   CopyIcon,
   EditIcon,
+  FilmIcon,
   FolderIcon,
   GridLargeIcon,
   GridSmallIcon,
   ImageIcon,
   PinIcon,
+  PlayIcon,
   LayersIcon,
   SearchIcon,
   SparkleIcon,
@@ -81,6 +86,7 @@ import { useInView, useThumbnail } from "./thumbnails";
 import { tagStyle } from "./tagColor";
 import { DETAILS_WIDTH, clampDetailsWidth } from "./detailsWidth";
 import { ChevronDownIcon, ChevronUpIcon } from "../app/icons";
+import { formatBytes, formatElapsed } from "../quick/api";
 
 function errorMessage(err: unknown): string {
   if (typeof err === "string") return err;
@@ -188,6 +194,11 @@ function Thumbnail({ shot, className = "" }: { shot: Shot; className?: string })
     <div ref={ref} className={`thumb ${className}${url && shown ? " is-loaded" : ""}`}>
       {url ? (
         <img src={url} alt="" draggable={false} decoding="async" onLoad={() => setShown(true)} />
+      ) : failed && isRecording(shot) ? (
+        // An MP4's preview waits for ffmpeg; the play badge says what it is.
+        <span className="thumb-failed">
+          <FilmIcon size={28} />
+        </span>
       ) : failed ? (
         <span className="thumb-failed">
           <ImageIcon />
@@ -195,6 +206,24 @@ function Thumbnail({ shot, className = "" }: { shot: Shot; className?: string })
         </span>
       ) : null}
     </div>
+  );
+}
+
+/** "Video" or "GIF", for a recording. */
+function recordingLabel(shot: Shot): string {
+  return shot.kind === "gif" ? "GIF" : "Video";
+}
+
+/** The play badge and length over a recording's preview. */
+function RecordingBadges({ shot }: { shot: Shot }) {
+  if (!isRecording(shot)) return null;
+  return (
+    <>
+      <span className="rec-play" aria-hidden="true">
+        <PlayIcon size={14} />
+      </span>
+      {shot.durationMs != null && <span className="rec-length">{formatElapsed(shot.durationMs)}</span>}
+    </>
   );
 }
 
@@ -327,8 +356,16 @@ interface ToolbarProps {
   onRowHeight: (height: number) => void;
   /** The app filter lives elsewhere (the Grab-it window's sidebar). */
   hideAppFilter?: boolean;
+  /** As `hideAppFilter`, for captures or recordings. */
+  hideKindFilter?: boolean;
   /** What "today" is for the time switch. */
   now: number;
+}
+
+const KIND_OPTIONS: KindFilter[] = ["image", "recording"];
+
+function kindLabel(kind: string): string {
+  return kind === "recording" ? "Recordings" : "Screenshots";
 }
 
 /** The date presets on the time switch, with their short names; the Filter menu has the rest. */
@@ -386,6 +423,7 @@ function Toolbar(props: ToolbarProps) {
   const anyTime = !filters.fromDate && !filters.toDate;
   const quickOn = ranges.some(({ range }) => range.fromDate === filters.fromDate && range.toDate === filters.toDate);
   const count =
+    (!props.hideKindFilter && filters.kind ? 1 : 0) +
     (!props.hideAppFilter && filters.app ? 1 : 0) +
     (filters.tag ? 1 : 0) +
     (filters.category ? 1 : 0) +
@@ -408,6 +446,20 @@ function Toolbar(props: ToolbarProps) {
         ))}
       </div>
       <FilterMenu count={count}>
+        {!props.hideKindFilter && (
+          <div className="filter-row">
+            <span className="filter-label">Type</span>
+            <ChipSelect
+              label="Filter by type"
+              icon={<FilmIcon />}
+              allLabel="Everything"
+              value={filters.kind ?? ""}
+              options={KIND_OPTIONS}
+              format={kindLabel}
+              onChange={(kind) => set({ kind: kind as KindFilter | "" })}
+            />
+          </div>
+        )}
         {!props.hideAppFilter && (
           <div className="filter-row">
             <span className="filter-label">App</span>
@@ -478,6 +530,13 @@ function Toolbar(props: ToolbarProps) {
   );
 }
 
+/** What double-clicking a tile does, by kind. */
+const OPEN_HINTS = {
+  image: "Double-click to open in the editor",
+  video: "Double-click to open in the recording editor",
+  gif: "Double-click to play",
+} as const;
+
 interface TileProps {
   shot: Shot;
   hit: SearchHit | undefined;
@@ -492,24 +551,27 @@ interface TileProps {
 const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, onAction }: TileProps) {
   const style = { "--i": Math.min(index, 18) } as CSSProperties;
   const tags = allTags(shot);
+  const recording = isRecording(shot);
+  const meta = recording ? [recordingLabel(shot), formatTime(shot.capturedAt)] : [shot.app, formatTime(shot.capturedAt)];
   return (
-    <li className={`tile${selected ? " is-selected" : ""}`} style={style}>
+    <li className={`tile${selected ? " is-selected" : ""}${recording ? " is-recording" : ""}`} style={style}>
       <button
         type="button"
         className="tile-main"
         data-shot-id={shot.id}
         aria-pressed={selected}
         aria-label={shot.fileName}
-        title="Double-click to open in the editor"
+        title={OPEN_HINTS[shot.kind ?? "image"]}
         onClick={() => onSelect(shot.id)}
         onDoubleClick={() => onOpen(shot.id)}
       >
         <span className="tile-frame">
           <Thumbnail shot={shot} />
+          <RecordingBadges shot={shot} />
         </span>
         <span className="tile-caption">
           <span className="tile-title">{shot.windowTitle || shot.fileName}</span>
-          <span className="tile-meta">{[shot.app, formatTime(shot.capturedAt)].filter(Boolean).join(" · ")}</span>
+          <span className="tile-meta">{meta.filter(Boolean).join(" · ")}</span>
           {hit && <Snippet hit={hit} />}
           {tags.length > 0 && (
             <span className="tile-tags">
@@ -522,31 +584,47 @@ const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, 
           )}
         </span>
       </button>
-      <span className="tile-actions">
-        <button type="button" className="tile-action" aria-label={`Copy ${shot.fileName}`} title="Copy to the clipboard" onClick={() => onAction(shot, "copy")}>
-          <CopyIcon />
-        </button>
-        <button
-          type="button"
-          className="tile-action"
-          aria-label={`Copy the text in ${shot.fileName}`}
-          title="Copy the text in this image"
-          onClick={() => onAction(shot, "text")}
-        >
-          <TextIcon />
-        </button>
-        <button type="button" className="tile-action" aria-label={`Edit ${shot.fileName}`} title="Open in editor" onClick={() => onOpen(shot.id)}>
-          <EditIcon />
-        </button>
-        <button type="button" className="tile-action" aria-label={`Pin ${shot.fileName}`} title="Pin to screen" onClick={() => onAction(shot, "pin")}>
-          <PinIcon />
-        </button>
-      </span>
+      {recording ? (
+        <span className="tile-actions">
+          <button type="button" className="tile-action" aria-label={`Play ${shot.fileName}`} title="Play" onClick={() => onAction(shot, "play")}>
+            <PlayIcon />
+          </button>
+          {shot.kind === "video" && (
+            <button type="button" className="tile-action" aria-label={`Edit ${shot.fileName}`} title="Open in the recording editor" onClick={() => onOpen(shot.id)}>
+              <EditIcon />
+            </button>
+          )}
+          <button type="button" className="tile-action" aria-label={`Show ${shot.fileName} in its folder`} title="Show in folder" onClick={() => onAction(shot, "reveal")}>
+            <FolderIcon />
+          </button>
+        </span>
+      ) : (
+        <span className="tile-actions">
+          <button type="button" className="tile-action" aria-label={`Copy ${shot.fileName}`} title="Copy to the clipboard" onClick={() => onAction(shot, "copy")}>
+            <CopyIcon />
+          </button>
+          <button
+            type="button"
+            className="tile-action"
+            aria-label={`Copy the text in ${shot.fileName}`}
+            title="Copy the text in this image"
+            onClick={() => onAction(shot, "text")}
+          >
+            <TextIcon />
+          </button>
+          <button type="button" className="tile-action" aria-label={`Edit ${shot.fileName}`} title="Open in editor" onClick={() => onOpen(shot.id)}>
+            <EditIcon />
+          </button>
+          <button type="button" className="tile-action" aria-label={`Pin ${shot.fileName}`} title="Pin to screen" onClick={() => onAction(shot, "pin")}>
+            <PinIcon />
+          </button>
+        </span>
+      )}
     </li>
   );
 });
 
-type TileAction = "copy" | "text" | "pin";
+type TileAction = "copy" | "text" | "pin" | "play" | "reveal";
 
 interface DetailsProps {
   shot: Shot;
@@ -682,8 +760,10 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
   }
 
   const when = formatCapturedAt(shot.capturedAt);
+  const recording = isRecording(shot);
+  const video = shot.kind === "video";
   return (
-    <aside className="details" aria-label="Capture details" style={{ width }}>
+    <aside className="details" aria-label={recording ? "Recording details" : "Capture details"} style={{ width }}>
       <DetailsResizer width={width} onWidth={onWidth} />
       <div className="details-top">
         <span className="details-heading">Details</span>
@@ -701,47 +781,66 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
       <div className="details-scroll">
         <button
           type="button"
-          className="details-preview"
-          title="Open in the editor"
+          className={`details-preview${recording ? " is-recording" : ""}`}
+          title={recording ? "Double-click to play" : "Open in the editor"}
           tabIndex={-1}
           aria-hidden="true"
-          onDoubleClick={() => void act(openShot)}
+          onDoubleClick={() => void act(recording ? playShot : openShot)}
         >
           <Thumbnail shot={shot} />
+          <RecordingBadges shot={shot} />
         </button>
 
         <div className="details-body">
           <div>
             <h2 title={shot.path}>{shot.windowTitle || shot.fileName}</h2>
-            <p className="details-sub">{[shot.app, when].filter(Boolean).join(" · ")}</p>
+            <p className="details-sub">{[recording ? recordingLabel(shot) : shot.app, when].filter(Boolean).join(" · ")}</p>
           </div>
 
-          <div className="details-actions">
-            <button type="button" className="btn btn-primary" aria-label="Open in editor" onClick={() => void act(openShot)}>
-              <EditIcon />
-              Edit
-            </button>
-            <button type="button" className="btn" onClick={() => void act(copyShot, "Copied to the clipboard")}>
-              <CopyIcon />
-              Copy
-            </button>
-            <button
-              type="button"
-              className="btn btn-icon"
-              aria-label="Copy text"
-              title="Copy the text in this image"
-              disabled={copyingText}
-              onClick={() => void copyText()}
-            >
-              <TextIcon />
-            </button>
-            <button type="button" className="btn btn-icon" aria-label="Pin" title="Pin to screen" onClick={() => void act(pinShot)}>
-              <PinIcon />
-            </button>
-            <button type="button" className="btn btn-icon" aria-label="Show in folder" title="Show in folder" onClick={() => void act(revealShot)}>
-              <FolderIcon />
-            </button>
-          </div>
+          {recording ? (
+            <div className="details-actions">
+              {video && (
+                <button type="button" className="btn btn-primary" aria-label="Open in the recording editor" onClick={() => void act(openShot)}>
+                  <EditIcon />
+                  Edit
+                </button>
+              )}
+              <button type="button" className={`btn${video ? "" : " btn-primary"}`} onClick={() => void act(playShot)}>
+                <PlayIcon />
+                Play
+              </button>
+              <button type="button" className="btn btn-icon" aria-label="Show in folder" title="Show in folder" onClick={() => void act(revealShot)}>
+                <FolderIcon />
+              </button>
+            </div>
+          ) : (
+            <div className="details-actions">
+              <button type="button" className="btn btn-primary" aria-label="Open in editor" onClick={() => void act(openShot)}>
+                <EditIcon />
+                Edit
+              </button>
+              <button type="button" className="btn" onClick={() => void act(copyShot, "Copied to the clipboard")}>
+                <CopyIcon />
+                Copy
+              </button>
+              <button
+                type="button"
+                className="btn btn-icon"
+                aria-label="Copy text"
+                title="Copy the text in this image"
+                disabled={copyingText}
+                onClick={() => void copyText()}
+              >
+                <TextIcon />
+              </button>
+              <button type="button" className="btn btn-icon" aria-label="Pin" title="Pin to screen" onClick={() => void act(pinShot)}>
+                <PinIcon />
+              </button>
+              <button type="button" className="btn btn-icon" aria-label="Show in folder" title="Show in folder" onClick={() => void act(revealShot)}>
+                <FolderIcon />
+              </button>
+            </div>
+          )}
 
           <dl className="details-meta">
             <dt>File</dt>
@@ -752,10 +851,26 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
                 <dd title={shot.windowTitle}>{shot.windowTitle}</dd>
               </>
             )}
-            <dt>Size</dt>
-            <dd>
-              {shot.width} × {shot.height}
-            </dd>
+            {shot.width > 0 && (
+              <>
+                <dt>Size</dt>
+                <dd>
+                  {shot.width} × {shot.height}
+                </dd>
+              </>
+            )}
+            {recording && shot.durationMs != null && (
+              <>
+                <dt>Length</dt>
+                <dd>{formatElapsed(shot.durationMs)}</dd>
+              </>
+            )}
+            {recording && shot.bytes != null && (
+              <>
+                <dt>File size</dt>
+                <dd>{formatBytes(shot.bytes)}</dd>
+              </>
+            )}
             {shot.aiCategory && (
               <>
                 <dt>Category</dt>
@@ -766,60 +881,64 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
             )}
           </dl>
 
-          <section className="details-block" aria-label="Text in image">
-            <h3 className="details-label">
-              <TextIcon />
-              Text in image
-              <span className="details-label-actions">
-                <button
-                  type="button"
-                  className="link-button"
-                  aria-label="Copy the text"
-                  disabled={copyingText || (text?.state === "read" && text.text.trim() === "")}
-                  onClick={() => void copyText()}
-                >
-                  {copyingText ? "Reading…" : "Copy"}
-                </button>
-              </span>
-            </h3>
-            {text?.state === "read" && text.text.trim() !== "" && (
-              // Selectable, to copy just part of it.
-              <pre className="details-text" tabIndex={0} aria-label="Text found in the image">
-                {text.text}
-              </pre>
-            )}
-            {text?.state === "read" && text.text.trim() === "" && <p className="hint">No text found in this image.</p>}
-            {text?.state === "waiting" && <p className="hint">Not read yet. Copy reads it now.</p>}
-            {text?.state === "failed" && <p className="hint">The text could not be read. Copy tries again.</p>}
-          </section>
+          {!recording && (
+            <section className="details-block" aria-label="Text in image">
+              <h3 className="details-label">
+                <TextIcon />
+                Text in image
+                <span className="details-label-actions">
+                  <button
+                    type="button"
+                    className="link-button"
+                    aria-label="Copy the text"
+                    disabled={copyingText || (text?.state === "read" && text.text.trim() === "")}
+                    onClick={() => void copyText()}
+                  >
+                    {copyingText ? "Reading…" : "Copy"}
+                  </button>
+                </span>
+              </h3>
+              {text?.state === "read" && text.text.trim() !== "" && (
+                // Selectable, to copy just part of it.
+                <pre className="details-text" tabIndex={0} aria-label="Text found in the image">
+                  {text.text}
+                </pre>
+              )}
+              {text?.state === "read" && text.text.trim() === "" && <p className="hint">No text found in this image.</p>}
+              {text?.state === "waiting" && <p className="hint">Not read yet. Copy reads it now.</p>}
+              {text?.state === "failed" && <p className="hint">The text could not be read. Copy tries again.</p>}
+            </section>
+          )}
 
-          <section className="details-block" aria-label="AI description">
-            <h3 className="details-label">
-              <SparkleIcon />
-              Description
-              <span className="details-label-actions">
-                <button type="button" className="link-button" aria-label="Re-describe" disabled={aiOff} onClick={() => void redescribe()}>
-                  Redo
-                </button>
-                <button
-                  type="button"
-                  className="link-button link-muted"
-                  aria-label="Clear AI description"
-                  disabled={!described}
-                  onClick={() => void clearAi()}
-                >
-                  Clear
-                </button>
-              </span>
-            </h3>
-            {shot.aiDescription ? (
-              <p className="details-ai-text">{shot.aiDescription}</p>
-            ) : (
-              <p className="hint">
-                {aiOff ? "Turn on AI descriptions in Settings to describe captures." : "Not described yet."}
-              </p>
-            )}
-          </section>
+          {!recording && (
+            <section className="details-block" aria-label="AI description">
+              <h3 className="details-label">
+                <SparkleIcon />
+                Description
+                <span className="details-label-actions">
+                  <button type="button" className="link-button" aria-label="Re-describe" disabled={aiOff} onClick={() => void redescribe()}>
+                    Redo
+                  </button>
+                  <button
+                    type="button"
+                    className="link-button link-muted"
+                    aria-label="Clear AI description"
+                    disabled={!described}
+                    onClick={() => void clearAi()}
+                  >
+                    Clear
+                  </button>
+                </span>
+              </h3>
+              {shot.aiDescription ? (
+                <p className="details-ai-text">{shot.aiDescription}</p>
+              ) : (
+                <p className="hint">
+                  {aiOff ? "Turn on AI descriptions in Settings to describe captures." : "Not described yet."}
+                </p>
+              )}
+            </section>
+          )}
 
           <div className="details-block">
             <label className="details-label" htmlFor="shot-tags">
@@ -851,7 +970,7 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
           <div className={`details-delete${confirming ? " is-confirming" : ""}`}>
             {confirming ? (
               <>
-                <span>Delete this capture and its annotations?</span>
+                <span>{recording ? "Delete this recording and its edits?" : "Delete this capture and its annotations?"}</span>
                 <div className="details-delete-buttons">
                   <button type="button" className="btn btn-danger" disabled={busy} onClick={() => void remove()}>
                     Delete permanently
@@ -954,6 +1073,9 @@ interface LibraryWindowProps {
   /** As `appFilter`, for the tag the sidebar picks. */
   tagFilter?: string;
   onTagFilter?: (tag: string) => void;
+  /** As `appFilter`, for captures or recordings only. */
+  kindFilter?: KindFilter | "";
+  onKindFilter?: (kind: KindFilter | "") => void;
   /** Shown at the end of the title bar (the Grab-it window's New capture button). */
   toolbarEnd?: ReactNode;
 }
@@ -964,6 +1086,8 @@ function LibraryWindow({
   onAppFilter,
   tagFilter,
   onTagFilter,
+  kindFilter,
+  onKindFilter,
   toolbarEnd,
 }: LibraryWindowProps = {}) {
   const [shots, setShots] = useState<Shot[]>([]);
@@ -990,15 +1114,17 @@ function LibraryWindow({
     let merged = ownFilters;
     if (appFilter !== undefined) merged = { ...merged, app: appFilter };
     if (tagFilter !== undefined) merged = { ...merged, tag: tagFilter };
+    if (kindFilter !== undefined) merged = { ...merged, kind: kindFilter };
     return merged;
-  }, [ownFilters, appFilter, tagFilter]);
+  }, [ownFilters, appFilter, tagFilter, kindFilter]);
   const setFilters = useCallback(
     (next: Filters) => {
       if (appFilter !== undefined && next.app !== appFilter) onAppFilter?.(next.app);
       if (tagFilter !== undefined && next.tag !== tagFilter) onTagFilter?.(next.tag);
+      if (kindFilter !== undefined && (next.kind ?? "") !== kindFilter) onKindFilter?.(next.kind ?? "");
       setOwnFilters(next);
     },
-    [appFilter, onAppFilter, tagFilter, onTagFilter],
+    [appFilter, onAppFilter, tagFilter, onTagFilter, kindFilter, onKindFilter],
   );
   const [options, setOptions] = useState<FilterOptions>({ apps: [], tags: [], categories: [] });
   // Null until the backend says; the AI actions then stay available.
@@ -1279,11 +1405,12 @@ function LibraryWindow({
   }
 
   function deleted(id: number) {
+    const gone = shots.find((shot) => shot.id === id);
     setError(null);
     setShots((current) => current.filter((shot) => shot.id !== id));
     setTotal((count) => Math.max(0, count - 1));
     setSelectedId(null);
-    setNotice({ text: "Capture deleted", key: Date.now() });
+    setNotice({ text: gone && isRecording(gone) ? "Recording deleted" : "Capture deleted", key: Date.now() });
   }
 
   const open = useCallback((id: number) => {
@@ -1295,6 +1422,8 @@ function LibraryWindow({
     const failed = (err: unknown) => setError(errorMessage(err));
     if (action === "copy") copyShot(shot.id).then(() => notice("Copied to the clipboard"), failed);
     else if (action === "text") copyShotText(shot.id).then((text) => notice(textCopied(text)), failed);
+    else if (action === "play") playShot(shot.id).catch(failed);
+    else if (action === "reveal") revealShot(shot.id).catch(failed);
     else pinShot(shot.id).catch(failed);
   }, []);
 
@@ -1364,6 +1493,7 @@ function LibraryWindow({
           onClear={clearSearch}
           onRowHeight={setRowHeight}
           hideAppFilter={appFilter !== undefined}
+          hideKindFilter={kindFilter !== undefined}
           now={now}
         />
         <OcrBanner status={ocr} onRetry={retry} />

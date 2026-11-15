@@ -77,6 +77,9 @@ function search(backend: Backend, query: SearchQuery): SearchHit[] {
     if (query.tag && ![...item.tags, ...item.aiTags].some((tag) => tag.toLowerCase() === query.tag?.toLowerCase()))
       continue;
     if (query.category && item.aiCategory !== query.category) continue;
+    const recorded = item.kind === "video" || item.kind === "gif";
+    if (query.kind === "recording" && !recorded) continue;
+    if (query.kind === "image" && recorded) continue;
     if (query.from !== null && item.capturedAt < query.from) continue;
     if (query.to !== null && item.capturedAt >= query.to) continue;
     const fields: [MatchField, string][] = [
@@ -166,6 +169,8 @@ function mockBackend(shots: Shot[]): Backend {
         case "library_open":
         case "library_copy":
         case "library_pin":
+        case "library_play":
+        case "library_reveal":
           find(args.id as number);
           return null;
         case "library_search": {
@@ -489,6 +494,123 @@ describe("LibraryWindow", () => {
     backend.fail = "library database error: disk I/O error";
     render(<LibraryWindow />);
     expect(await screen.findByRole("alert")).toHaveTextContent("disk I/O error");
+  });
+});
+
+/** An MP4 (or, with `kind: "gif"`, a GIF) recording. */
+function recording(id: number, overrides: Partial<Shot> = {}): Shot {
+  const ext = overrides.kind === "gif" ? "gif" : "mp4";
+  return shot(id, {
+    kind: "video",
+    path: `/home/me/Pictures/Grab-it/recordings/Grab-it ${id}.${ext}`,
+    fileName: `Grab-it ${id}.${ext}`,
+    thumbPath: `/home/me/Pictures/Grab-it/recordings/thumbs/Grab-it ${id}.png`,
+    mode: null,
+    app: null,
+    windowTitle: null,
+    width: 1920,
+    height: 1080,
+    durationMs: 46_000,
+    bytes: 10_800_000,
+    ...overrides,
+  });
+}
+
+describe("LibraryWindow recordings", () => {
+  it("shows a recording among the captures with its length, and plays or edits it", async () => {
+    const backend = mockBackend([shot(1), recording(2)]);
+    render(<LibraryWindow />);
+    const card = await screen.findByRole("button", { name: "Grab-it 2.mp4" });
+    const tile = card.closest("li")!;
+    expect(within(tile).getByText("0:46")).toBeInTheDocument();
+    expect(within(tile).getByText(/^Video · /)).toBeInTheDocument();
+    // Copying as an image, its text and pinning are for captures.
+    expect(within(tile).queryByRole("button", { name: "Copy Grab-it 2.mp4" })).not.toBeInTheDocument();
+    expect(within(tile).queryByRole("button", { name: "Pin Grab-it 2.mp4" })).not.toBeInTheDocument();
+
+    await userEvent.click(within(tile).getByRole("button", { name: "Play Grab-it 2.mp4" }));
+    await userEvent.click(within(tile).getByRole("button", { name: "Edit Grab-it 2.mp4" }));
+    await userEvent.click(within(tile).getByRole("button", { name: "Show Grab-it 2.mp4 in its folder" }));
+    await userEvent.dblClick(card);
+
+    await waitFor(() => expect(callsTo(backend, "library_open")).toHaveLength(2));
+    expect(callsTo(backend, "library_play")[0].payload).toEqual({ id: 2 });
+    expect(callsTo(backend, "library_reveal")[0].payload).toEqual({ id: 2 });
+    expect(callsTo(backend, "library_open")[0].payload).toEqual({ id: 2 });
+  });
+
+  it("shows a recording's details without the text and AI sections", async () => {
+    const backend = mockBackend([recording(2, { tags: ["demo"] })]);
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 2.mp4" }));
+
+    const details = screen.getByLabelText("Recording details");
+    // On the preview and under Length.
+    expect(within(details).getAllByText("0:46")).toHaveLength(2);
+    expect(within(details).getByText("10.3 MB")).toBeInTheDocument();
+    expect(within(details).getByText("1920 × 1080")).toBeInTheDocument();
+    expect(within(details).queryByLabelText("Text in image")).not.toBeInTheDocument();
+    expect(within(details).queryByLabelText("AI description")).not.toBeInTheDocument();
+    expect(within(details).getByText("demo")).toBeInTheDocument();
+
+    await userEvent.click(within(details).getByRole("button", { name: "Open in the recording editor" }));
+    await userEvent.click(within(details).getByRole("button", { name: "Play" }));
+    await waitFor(() => expect(callsTo(backend, "library_play")).toHaveLength(1));
+    expect(callsTo(backend, "library_open")[0].payload).toEqual({ id: 2 });
+  });
+
+  it("offers no editor for a GIF, only to play it", async () => {
+    mockBackend([recording(3, { kind: "gif", durationMs: null })]);
+    render(<LibraryWindow />);
+    const card = await screen.findByRole("button", { name: "Grab-it 3.gif" });
+    expect(within(card.closest("li")!).getByText(/^GIF · /)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit Grab-it 3.gif" })).not.toBeInTheDocument();
+
+    await userEvent.click(card);
+    const details = screen.getByLabelText("Recording details");
+    expect(within(details).queryByRole("button", { name: "Open in the recording editor" })).not.toBeInTheDocument();
+    expect(within(details).getByRole("button", { name: "Play" })).toHaveClass("btn-primary");
+    expect(within(details).queryByText("Length")).not.toBeInTheDocument();
+  });
+
+  it("deletes a recording after confirmation", async () => {
+    const backend = mockBackend([shot(1), recording(2)]);
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 2.mp4" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete…" }));
+    expect(screen.getByText("Delete this recording and its edits?")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Grab-it 2.mp4" })).not.toBeInTheDocument());
+    expect(callsTo(backend, "library_delete")[0].payload).toEqual({ id: 2 });
+    expect(screen.getByText("Recording deleted")).toBeInTheDocument();
+  });
+
+  it("narrows to recordings or screenshots", async () => {
+    const backend = mockBackend([shot(1), recording(2)]);
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: "Grab-it 2.mp4" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Filters" }));
+    await userEvent.click(screen.getByRole("button", { name: "Filter by type" }));
+    await userEvent.click(within(screen.getByRole("listbox", { name: "Filter by type" })).getByRole("option", { name: "Recordings" }));
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Grab-it 1.png" })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Grab-it 2.mp4" })).toBeInTheDocument();
+    const searches = callsTo(backend, "library_search").map((call) => (call.payload as { query: SearchQuery }).query);
+    expect(searches[searches.length - 1].kind).toBe("recording");
+  });
+
+  it("lets the sidebar pick recordings, leaving the type out of the filter menu", async () => {
+    const backend = mockBackend([shot(1), recording(2)]);
+    render(<LibraryWindow kindFilter="recording" onKindFilter={() => {}} />);
+    await screen.findByRole("button", { name: "Grab-it 2.mp4" });
+    expect(screen.queryByRole("button", { name: "Grab-it 1.png" })).not.toBeInTheDocument();
+    expect(callsTo(backend, "library_search")[0].payload).toMatchObject({ query: { kind: "recording" } });
+
+    await userEvent.click(screen.getByRole("button", { name: "Filters" }));
+    expect(screen.queryByRole("button", { name: "Filter by type" })).not.toBeInTheDocument();
   });
 });
 

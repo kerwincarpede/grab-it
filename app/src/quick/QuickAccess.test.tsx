@@ -376,10 +376,39 @@ describe("QuickAccess", () => {
     render(<QuickAccess />);
     expect(await screen.findByText("Video saved")).toBeInTheDocument();
     expect(screen.queryByText("GIF saved")).not.toBeInTheDocument();
-    expect(screen.getByText("Grab-it 2026-03-07 09-05-01.mp4")).toBeInTheDocument();
+    expect(screen.getByText("1:10 · 5.0 MB")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Show in folder" }));
     await waitFor(() => expect(actions(backend)).toEqual(["reveal"]));
+  });
+
+  it("plays a recording when its preview is clicked", async () => {
+    const backend = mockBackend({
+      kind: "recorded",
+      path: "/shots/recordings/Grab-it 2026-03-07 09-05-01.mp4",
+      fileName: "Grab-it 2026-03-07 09-05-01.mp4",
+      durationMs: 12_000,
+      bytes: 2_000_000,
+      format: "mp4",
+    });
+    render(<QuickAccess />);
+    await userEvent.click(await screen.findByRole("button", { name: "Play Grab-it 2026-03-07 09-05-01.mp4" }));
+    await waitFor(() => expect(actions(backend)).toEqual(["open"]));
+    expect(backend.calls.some((call) => call.cmd === "quick_thumbnail")).toBe(true);
+  });
+
+  it("deletes a recording", async () => {
+    const backend = mockBackend({
+      kind: "recorded",
+      path: "/shots/recordings/Grab-it 2026-03-07 09-05-01.gif",
+      fileName: "Grab-it 2026-03-07 09-05-01.gif",
+      durationMs: 3000,
+      bytes: 200_000,
+      format: "gif",
+    });
+    render(<QuickAccess />);
+    await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(actions(backend)).toEqual(["delete"]));
   });
 
   it("offers to edit an MP4 recording, not a GIF", async () => {

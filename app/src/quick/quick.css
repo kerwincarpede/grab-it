@@ -15,6 +15,7 @@
   --q-success: #3fcf8e;
   --q-danger: #ec7a80;
   --q-danger-soft: rgb(236 122 128 / 14%);
+  --q-warning: #e8b25c;
 
   position: fixed;
   inset: 0;
@@ -169,6 +170,66 @@
 .quick-capture .quick-close {
   top: 14px;
   right: 14px;
+}
+
+/* A recording: a frame of it, played with a click, like a capture's preview. */
+.quick-recorded .quick-badge {
+  top: 14px;
+  left: 14px;
+}
+
+.quick-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  color: #fff;
+  background: rgb(16 17 19 / 72%);
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 50%;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 40%);
+  transform: translate(-50%, -50%);
+  transition:
+    transform 120ms ease,
+    background 120ms ease;
+}
+
+.quick-play svg {
+  width: 18px;
+  height: 18px;
+  /* The triangle's weight sits left of its box; nudge it to look centred. */
+  margin-left: 2px;
+  stroke-width: 1.5;
+}
+
+.quick-preview:hover .quick-play {
+  background: var(--q-accent);
+  border-color: transparent;
+  transform: translate(-50%, -50%) scale(1.06);
+}
+
+.quick-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 8px 0;
+  color: var(--q-warning);
+  font-size: 11.5px;
+}
+
+.quick-note svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+}
+
+.quick-note span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 /* Like the hub's menu rows. */
@@ -344,13 +405,6 @@
   animation: quick-spin 800ms linear infinite;
 }
 
-.quick-file {
-  display: block;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
 .quick-error-text {
   color: var(--q-danger);
 }
@@ -416,6 +470,10 @@
 @media (prefers-reduced-motion: reduce) {
   .quick-spinner {
     animation-duration: 2400ms;
+  }
+
+  .quick-play {
+    transition: none;
   }
 
   .quick-timer {

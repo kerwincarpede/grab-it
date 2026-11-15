@@ -163,6 +163,14 @@ The Recording page shows the download's progress, and **Retry** when ffmpeg is n
 
 A recording started while ffmpeg is not ready yet (still downloading, not installed, or failed) is saved as a GIF, and the card after it says why. When MP4 is ready the card counts up with no limit and says **Video saved** when done.
 
+The card after a recording is laid out like a capture's: a frame of the recording (`quick_thumbnail`: a GIF's first frame, an MP4's from a second in, decoded by ffmpeg through `ffmpeg::video_frame`) with its length and file size, **Video saved** or **GIF saved**, and **Edit** (MP4 only), **Show in folder** and **Delete**. Clicking the frame plays the recording in the system's player (the `open` action). Why an MP4 was saved as a GIF shows as a line above the buttons.
+
+### Recordings in the library
+
+Recordings are rows in `library.db` beside captures (schema 4): `kind` is `image` for a capture, `video` for an MP4 and `gif` for a GIF, with `duration_ms` and `bytes`. A recording joins the library when it is saved or exported (`library::record_recording`), and a rescan adds the MP4s and GIFs in `<save folder>/recordings/` that it does not know. Their length and size come from the recorder, else from `ffmpeg -i` (`ffmpeg::probe_file`); a recording found before ffmpeg was ready is read again by the rescan that runs once it is. Their thumbnails go in `recordings/thumbs/` and are made when first shown: an MP4's needs ffmpeg, so until it is ready the tile shows a film icon. Recordings are never read by OCR or described: they start out read with no text and skipped, and the OCR and AI queues only take `kind = 'image'`.
+
+In the Library a recording's tile has a play badge and its length, and **Play**, **Edit** (MP4 only) and **Show in folder** on hover. Double-clicking opens an MP4 in the recording editor and plays a GIF (`library_open`); **Play** opens either in the system's player (`library_play`). Its details have the same actions, its size, length and file size, and its tags and notes, but no text or description. Deleting one removes its pointer and edits sidecars and closes its editor. **Recordings** in the sidebar, or **Type** in the filter menu of the Library window, narrows the library to recordings (`kind` in `SearchQuery`: `image` or `recording`).
+
 To try MP4 recording with a particular ffmpeg, point `GRAB_IT_FFMPEG` at it:
 
 ```sh

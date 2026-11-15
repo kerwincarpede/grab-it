@@ -987,6 +987,112 @@ pub(crate) fn wait_for(child: &mut Child, timeout: Duration) -> Option<ExitStatu
     }
 }
 
+/// What ffmpeg says a video or GIF holds.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Probe {
+    /// How long it runs, in milliseconds, when ffmpeg says.
+    pub duration_ms: Option<u64>,
+    /// Its first video stream's size, when ffmpeg says.
+    pub size: Option<(u32, u32)>,
+}
+
+/// Reads `Duration: 00:00:46.12` and the first video stream's `1920x1080`
+/// from what `ffmpeg -i` prints about a file.
+pub fn parse_probe(said: &str) -> Probe {
+    let duration_ms = said.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix("Duration:")?;
+        let stamp = rest.split(',').next()?.trim();
+        let mut parts = stamp.split(':');
+        let hours: f64 = parts.next()?.parse().ok()?;
+        let minutes: f64 = parts.next()?.parse().ok()?;
+        let seconds: f64 = parts.next()?.parse().ok()?;
+        let total = (hours * 3600.0 + minutes * 60.0 + seconds) * 1000.0;
+        (total.is_finite() && total >= 0.0).then(|| total.round() as u64)
+    });
+    let size = said
+        .lines()
+        .filter(|line| line.contains("Stream #") && line.contains("Video:"))
+        .find_map(|line| {
+            line.split([' ', ',']).find_map(|word| {
+                let (width, height) = word.split_once('x')?;
+                let width: u32 = width.parse().ok()?;
+                let height: u32 = height.parse().ok()?;
+                (width > 0 && height > 0).then_some((width, height))
+            })
+        });
+    Probe { duration_ms, size }
+}
+
+/// What ffmpeg says `video` holds; empty when it cannot say.
+pub fn probe_file(ffmpeg: &Path, video: &Path) -> Probe {
+    let said = command(ffmpeg)
+        .arg("-hide_banner")
+        .arg("-i")
+        .arg(video)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()
+        .and_then(|mut child| {
+            let reader = child.stderr.take().map(|mut stderr| {
+                thread::spawn(move || {
+                    let mut text = String::new();
+                    let _ = stderr.read_to_string(&mut text);
+                    text
+                })
+            });
+            // ffmpeg exits with an error here (no output named), after
+            // printing what the file holds.
+            wait_for(&mut child, Duration::from_secs(10));
+            reader.and_then(|reader| reader.join().ok())
+        });
+    said.as_deref().map(parse_probe).unwrap_or_default()
+}
+
+/// One frame of `video`, `at_ms` in, fitted inside `max` × `max` pixels.
+/// Decoded through a temporary PNG: a pipe would fill and stall ffmpeg
+/// while it waits to be read.
+pub fn video_frame(
+    ffmpeg: &Path,
+    video: &Path,
+    at_ms: u64,
+    max: u32,
+) -> Result<image::DynamicImage, String> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let frame = std::env::temp_dir().join(format!(
+        "grab-it-frame-{}-{}.png",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let args: Vec<OsString> = vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-ss".into(),
+        format!("{:.3}", at_ms as f64 / 1000.0).into(),
+        "-i".into(),
+        video.into(),
+        "-frames:v".into(),
+        "1".into(),
+        "-vf".into(),
+        format!("scale={max}:{max}:force_original_aspect_ratio=decrease").into(),
+        "-y".into(),
+        frame.clone().into(),
+    ];
+    let image = run(ffmpeg, args, Duration::from_secs(10))
+        .map_err(|err| err.to_string())
+        .and_then(|()| image::open(&frame).map_err(|err| err.to_string()));
+    let _ = fs::remove_file(&frame);
+    image.map_err(|err| format!("could not read a frame of {}: {err}", video.display()))
+}
+
+/// Where in a recording its preview frame is taken: a second in, or
+/// halfway through a shorter one, so it is rarely the blank first frame.
+pub fn preview_at_ms(duration_ms: Option<u64>) -> u64 {
+    duration_ms.map_or(1000, |duration| duration.min(2000) / 2)
+}
+
 /// Where ffmpeg is up to. Mirrors `FfmpegStatus` in src/settings/api.ts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
@@ -1127,6 +1233,12 @@ pub fn prepare_in_background(app: &AppHandle) {
                         encoder: ready.encoder.name.to_owned(),
                     };
                     state.lock().ready = Some(ready);
+                    // Recordings found before now get their length, size
+                    // and preview.
+                    crate::library::rescan_in_background(
+                        &handle,
+                        crate::library::current_save_folder(&handle),
+                    );
                     status
                 }
                 Err(FfmpegError::NotInstalled { install }) => FfmpegStatus::NotInstalled {
@@ -1251,6 +1363,47 @@ pub fn ffmpeg_retry(app: AppHandle) -> FfmpegStatus {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_probe_reads_the_length_and_size() {
+        let said = "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'a.mp4':
+  Metadata:
+    encoder         : Lavf61.7.100
+  Duration: 00:01:02.50, start: 0.000000, bitrate: 1785 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progressive), 1920x1080 [SAR 1:1 DAR 16:9], 1650 kb/s, 30 fps, 30 tbr, 15360 tbn (default)
+  Stream #0:1[0x2](und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 128 kb/s (default)
+At least one output file must be specified";
+        assert_eq!(
+            parse_probe(said),
+            Probe {
+                duration_ms: Some(62_500),
+                size: Some((1920, 1080)),
+            }
+        );
+    }
+
+    #[test]
+    fn a_gif_probe_reads_its_size_and_a_missing_length_is_none() {
+        let said = "Input #0, gif, from 'a.gif':
+  Duration: N/A, bitrate: N/A
+  Stream #0:0: Video: gif, bgra, 640x360, 10 fps, 10 tbr, 100 tbn";
+        assert_eq!(
+            parse_probe(said),
+            Probe {
+                duration_ms: None,
+                size: Some((640, 360)),
+            }
+        );
+        assert_eq!(parse_probe(""), Probe::default());
+    }
+
+    #[test]
+    fn the_preview_frame_is_a_second_in_or_halfway_through() {
+        assert_eq!(preview_at_ms(Some(46_000)), 1000);
+        assert_eq!(preview_at_ms(Some(600)), 300);
+        assert_eq!(preview_at_ms(None), 1000);
+    }
+
     use super::*;
     use std::net::TcpListener;
 

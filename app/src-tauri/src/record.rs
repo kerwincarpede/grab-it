@@ -801,6 +801,7 @@ pub fn start(
                 None => {}
                 Some(Ok(_)) if discard => remove_recording(&path),
                 Some(Ok((duration, note))) => {
+                    crate::library::record_recording(&handle, &path, duration.as_millis() as u64);
                     let bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
                     quick::show(
                         &handle,
