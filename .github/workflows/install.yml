@@ -1,0 +1,126 @@
+name: Install
+
+# Smoke-tests the one-line installer (src/grab-it-docs/public/install.sh,
+# served at https://kerwincarpede.github.io/grab-it/install.sh) by installing
+# the latest published release with it, once for each kind of install it
+# does: the .app on macOS, the .deb on Ubuntu, the .rpm on Fedora and the
+# AppImage on Arch. Each job runs the script from stdin, as
+# `curl ... | sh` does.
+on:
+  pull_request:
+    paths:
+      - src/grab-it-docs/public/install.sh
+      - .github/workflows/install.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # actions/checkout runs `git init`; naming the initial branch keeps git from
+  # printing its hint about the default branch name.
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+  INSTALL_SH: src/grab-it-docs/public/install.sh
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check install.sh is POSIX sh
+        run: shellcheck --shell=sh "$INSTALL_SH"
+
+  macos:
+    name: macOS (.app)
+    needs: shellcheck
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Grab-it
+        run: sh < "$INSTALL_SH"
+
+      - name: Check Grab-it is installed without quarantine
+        run: |
+          app=/Applications/Grab-it.app
+          test -d "$app" || { echo "::error::$app is missing"; exit 1; }
+          id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")
+          [ "$id" = com.kerwincarpede.grabit ] ||
+            { echo "::error::$app is $id, not Grab-it"; exit 1; }
+          if xattr -lr "$app" | grep -q com.apple.quarantine; then
+            echo "::error::$app still has the quarantine attribute"
+            xattr -lr "$app" | grep com.apple.quarantine
+            exit 1
+          fi
+          echo "$app is installed and not quarantined."
+
+      - name: Quit Grab-it
+        if: always()
+        run: osascript -e 'tell application id "com.kerwincarpede.grabit" to quit' || true
+
+  ubuntu:
+    name: Ubuntu (.deb)
+    needs: shellcheck
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Grab-it
+        run: sh < "$INSTALL_SH"
+
+      - name: Check Grab-it is installed from the .deb
+        run: |
+          test -x /usr/bin/grab-it || { echo "::error::/usr/bin/grab-it is missing"; exit 1; }
+          dpkg -S /usr/bin/grab-it
+
+  fedora:
+    name: Fedora (.rpm)
+    needs: shellcheck
+    runs-on: ubuntu-24.04
+    container: fedora:latest
+    steps:
+      # The image has curl but not always tar, and neither jq nor python3.
+      - name: Install the script's requirements
+        run: dnf install -y tar jq
+
+      - uses: actions/checkout@v7
+
+      - name: Install Grab-it
+        run: sh < "$INSTALL_SH"
+
+      - name: Check Grab-it is installed from the .rpm
+        run: |
+          test -x /usr/bin/grab-it || { echo "::error::/usr/bin/grab-it is missing"; exit 1; }
+          rpm -qf /usr/bin/grab-it
+
+  arch:
+    name: Arch Linux (AppImage)
+    needs: shellcheck
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - name: Install the script's requirements
+        run: pacman -Sy --noconfirm tar jq
+
+      - uses: actions/checkout@v7
+
+      - name: Install Grab-it
+        run: sh < "$INSTALL_SH"
+
+      - name: Check Grab-it is installed as an AppImage
+        run: |
+          appimage="$HOME/.local/bin/Grab-it.AppImage"
+          desktop="$HOME/.local/share/applications/grab-it.desktop"
+          test -x "$appimage" || { echo "::error::$appimage is missing"; exit 1; }
+          test -f "$desktop" || { echo "::error::$desktop is missing"; exit 1; }
+          grep -qx "Exec=\"$appimage\"" "$desktop" ||
+            { echo "::error::$desktop does not run $appimage"; cat "$desktop"; exit 1; }
+          echo "$appimage is installed with a menu entry."
