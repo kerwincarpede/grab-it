@@ -51,6 +51,8 @@ cask "grab-it" do
   zap trash: [
     "~/Library/Application Support/{identifier}",
     "~/Library/Caches/{identifier}",
+    # "Start at login" registers a LaunchAgent named after the app.
+    "~/Library/LaunchAgents/Grab-it.plist",
     "~/Library/Preferences/{identifier}.plist",
     "~/Library/Saved Application State/{identifier}.savedState",
     "~/Library/WebKit/{identifier}",

@@ -39,6 +39,9 @@ class Render(unittest.TestCase):
             '"~/Library/Application Support/com.kerwincarpede.grabit",', self.rb
         )
 
+    def test_zaps_the_login_item(self):
+        self.assertIn('"~/Library/LaunchAgents/Grab-it.plist",', self.rb)
+
     def test_blocks_are_balanced(self):
         opened = sum(line.rstrip().endswith((" do", "[")) for line in self.rb.splitlines())
         closed = sum(line.strip() in ("end", "]") for line in self.rb.splitlines())
