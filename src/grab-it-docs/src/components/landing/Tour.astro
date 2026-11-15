@@ -1,0 +1,78 @@
+---
+// The feature tour: one large panel per feature, each with its own colour
+// glow, a short explanation, links to its docs section and a live demo.
+import CaptureDemo from './CaptureDemo';
+import EditorDemo from './EditorDemo';
+import VideoDemo from './VideoDemo';
+import LibraryDemo from './LibraryDemo';
+
+// A panel's glow in one corner, over a gradient hairline border.
+const panel = (glow: string, corner: string) =>
+	`background: radial-gradient(70% 90% at ${corner}, var(${glow}), transparent 70%) padding-box, linear-gradient(var(--gi-panel), var(--gi-panel)) padding-box, linear-gradient(160deg, var(--gi-hair-strong), var(--gi-hair) 45%, var(--gi-hair)) border-box;`;
+---
+
+<div id="tour" style="position: relative; max-width: 1200px; margin: 0 auto; padding: clamp(96px, 11vw, 160px) clamp(16px, 4vw, 40px) 0">
+<div style="text-align: center; max-width: 720px; margin: 0 auto">
+<p style="margin: 0; font-family: var(--gi-font-mono); font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--gi-muted)">The tour</p>
+<h2 style="margin: 14px 0 0; font-size: clamp(34px, 4.6vw, 58px); line-height: 1.04; letter-spacing: -0.035em; font-weight: 650">Everything between the screenshot and the share.</h2>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 24px; margin-top: 64px">
+<section aria-labelledby="t-capture" style={`${panel('--gi-cap-a', '0% 0%')} border-radius: 26px; border: 1px solid transparent; padding: clamp(24px, 4vw, 48px); display: flex; flex-wrap: wrap; gap: 40px; align-items: center`}>
+<div style="flex: 1 1 300px; min-width: 0; max-width: 380px">
+<p style="margin: 0; display: inline-flex; align-items: center; gap: 8px; font-family: var(--gi-font-mono); font-size: 12.5px; color: var(--gi-hue-capture)"><span class="gi-pulse" style="width: 7px; height: 7px; border-radius: 50%; background: var(--gi-hue-capture); box-shadow: 0 0 12px var(--gi-hue-capture)"></span>01 · CAPTURE</p>
+<h3 id="t-capture" style="margin: 14px 0 0; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 650">One shortcut for every capture</h3>
+<p style="margin: 16px 0 0; color: var(--gi-muted)">All-in-one freezes the screen and puts every mode on one toolbar: a region, a window, a whole screen, some text or a colour, a recording or a timer.</p>
+<p style="margin: 12px 0 0; color: var(--gi-muted); font-size: 14.5px">Try it: pick a mode, or press its number.</p>
+<a class="gi-link" href="/grab-it/capture/" style="display: inline-flex; align-items: center; gap: 6px; margin-top: 20px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-capture)">Capture guide <span aria-hidden="true" style="color: var(--gi-hue-capture)">→</span></a>
+</div>
+<div style="flex: 1.5 1 480px; min-width: 0">
+<CaptureDemo client:visible />
+</div>
+</section>
+
+<section aria-labelledby="t-editor" style={`${panel('--gi-ed-a', '100% 0%')} border-radius: 26px; border: 1px solid transparent; padding: clamp(24px, 4vw, 48px); display: flex; flex-wrap: wrap-reverse; gap: 40px; align-items: center`}>
+<div style="flex: 1.5 1 480px; min-width: 0">
+<EditorDemo client:visible />
+</div>
+<div style="flex: 1 1 300px; min-width: 0; max-width: 380px">
+<p style="margin: 0; display: inline-flex; align-items: center; gap: 8px; font-family: var(--gi-font-mono); font-size: 12.5px; color: var(--gi-hue-editor)"><span class="gi-pulse" style="width: 7px; height: 7px; border-radius: 50%; background: var(--gi-hue-editor); box-shadow: 0 0 12px var(--gi-hue-editor)"></span>02 · IMAGE EDITOR</p>
+<h3 id="t-editor" style="margin: 14px 0 0; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 650">Explain it in seconds</h3>
+<p style="margin: 16px 0 0; color: var(--gi-muted)">Arrows, boxes, numbered steps, text and highlights, each one keystroke away. Blur the private bits, crop the rest, and drop it on a backdrop.</p>
+<p style="margin: 12px 0 0; color: var(--gi-muted); font-size: 14.5px">Try it: pick a tool and drag on the picture.</p>
+<a class="gi-link" href="/grab-it/image-editor/" style="display: inline-flex; align-items: center; gap: 6px; margin-top: 20px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-editor)">Image editor guide <span aria-hidden="true" style="color: var(--gi-hue-editor)">→</span></a>
+</div>
+</section>
+
+<section aria-labelledby="t-video" style={`${panel('--gi-vid-a', '0% 100%')} border-radius: 26px; border: 1px solid transparent; padding: clamp(24px, 4vw, 48px); display: flex; flex-wrap: wrap; gap: 40px; align-items: center`}>
+<div style="flex: 1 1 300px; min-width: 0; max-width: 380px">
+<p style="margin: 0; display: inline-flex; align-items: center; gap: 8px; font-family: var(--gi-font-mono); font-size: 12.5px; color: var(--gi-hue-video)"><span class="gi-pulse" style="width: 7px; height: 7px; border-radius: 50%; background: var(--gi-hue-video); box-shadow: 0 0 12px var(--gi-hue-video)"></span>03 · RECORDING AND VIDEO</p>
+<h3 id="t-video" style="margin: 14px 0 0; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 650">Record it, then make it look good</h3>
+<p style="margin: 16px 0 0; color: var(--gi-muted)">Record a region, a window or a display as an MP4 or a GIF. Trim the ends, zoom in on what matters with smooth easing, and export a new MP4.</p>
+<div style="display: flex; flex-wrap: wrap; gap: 4px 22px; margin-top: 20px">
+<a class="gi-link" href="/grab-it/recording/" style="display: inline-flex; align-items: center; gap: 6px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-video)">Recording guide <span aria-hidden="true" style="color: var(--gi-hue-video)">→</span></a>
+<a class="gi-link" href="/grab-it/video-editor/" style="display: inline-flex; align-items: center; gap: 6px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-video)">Video editor guide <span aria-hidden="true" style="color: var(--gi-hue-video)">→</span></a>
+</div>
+</div>
+<div style="flex: 1.5 1 480px; min-width: 0">
+<VideoDemo client:visible />
+</div>
+</section>
+
+<section aria-labelledby="t-library" style={`${panel('--gi-lib-a', '100% 100%')} border-radius: 26px; border: 1px solid transparent; padding: clamp(24px, 4vw, 48px); display: flex; flex-wrap: wrap-reverse; gap: 40px; align-items: center`}>
+<div style="flex: 1.5 1 480px; min-width: 0">
+<LibraryDemo client:visible />
+</div>
+<div style="flex: 1 1 300px; min-width: 0; max-width: 380px">
+<p style="margin: 0; display: inline-flex; align-items: center; gap: 8px; font-family: var(--gi-font-mono); font-size: 12.5px; color: var(--gi-hue-library)"><span class="gi-pulse" style="width: 7px; height: 7px; border-radius: 50%; background: var(--gi-hue-library); box-shadow: 0 0 12px var(--gi-hue-library)"></span>04 · LIBRARY AND AI</p>
+<h3 id="t-library" style="margin: 14px 0 0; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 650">Find any screenshot again</h3>
+<p style="margin: 16px 0 0; color: var(--gi-muted)">Search every capture by the words inside the image, or by app, tag and date. Text recognition runs on your computer. Add AI descriptions and tags from Claude Code, Codex or a local model.</p>
+<p style="margin: 12px 0 0; color: var(--gi-muted); font-size: 14.5px">Try it: search for “error” or “invoice”.</p>
+<div style="display: flex; flex-wrap: wrap; gap: 4px 22px; margin-top: 20px">
+<a class="gi-link" href="/grab-it/library/" style="display: inline-flex; align-items: center; gap: 6px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-library)">Library guide <span aria-hidden="true" style="color: var(--gi-hue-library)">→</span></a>
+<a class="gi-link" href="/grab-it/ai/" style="display: inline-flex; align-items: center; gap: 6px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-library)">AI guide <span aria-hidden="true" style="color: var(--gi-hue-library)">→</span></a>
+</div>
+</div>
+</section>
+</div>
+</div>

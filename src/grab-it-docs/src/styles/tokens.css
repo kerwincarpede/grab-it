@@ -1,0 +1,171 @@
+/*
+ * Grab-it site tokens, shared by the landing page and the Starlight docs.
+ *
+ * Accent, text, surface and border colours come from the app's light and dark
+ * tokens in src/grab-it/src/App.css. The deeper background, hairlines, glows,
+ * the headline gradient and the feature colours are new and only on the site.
+ *
+ * Dark is the main look. Both pages set data-theme on <html> before the first
+ * paint (Starlight's ThemeProvider, or the same script on the landing page), so
+ * Starlight's light/dark switch drives both. Without JavaScript, the system
+ * setting picks the theme.
+ */
+
+:root {
+	color-scheme: dark;
+
+	--gi-font-sans: 'Instrument Sans Variable', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+	--gi-font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+	--gi-bg: #0c0d0f;
+	--gi-surface: #17181b;
+	--gi-panel: #111215;
+	--gi-panel-2: #0e0f12;
+	--gi-pop: #17181b;
+	--gi-chrome: #101113;
+	--gi-border: #26282d;
+	--gi-border-strong: #34373e;
+	--gi-text: #ecedef;
+	--gi-muted: #9a9ea7;
+	--gi-accent: #8297ff;
+	--gi-accent-high: #b3c0ff;
+	--gi-accent-soft: rgb(130 151 255 / 14%);
+	--gi-accent-pill: rgb(130 151 255 / 12%);
+	--gi-accent-edge: rgb(130 151 255 / 30%);
+	--gi-on-accent: #0b0c10;
+	--gi-success: #3fcf8e;
+	--gi-cta: linear-gradient(180deg, #a9b7ff, #7088ff);
+	--gi-on-cta: #0b0c10;
+	--gi-glow: rgb(110 132 255 / 38%);
+	--gi-dot: rgb(255 255 255 / 9%);
+	--gi-glass: rgb(255 255 255 / 3.5%);
+	--gi-hair: rgb(255 255 255 / 8%);
+	--gi-hair-strong: rgb(255 255 255 / 16%);
+	--gi-fill: rgb(255 255 255 / 6%);
+	--gi-float: rgb(14 15 19 / 92%);
+	--gi-nav: rgb(12 13 15 / 72%);
+	--gi-code-bg: #0a0b0d;
+	--gi-docs-surface: #141519;
+	--gi-wall: #101218;
+	--gi-wall-a: rgb(110 132 255 / 30%);
+	--gi-wall-b: rgb(177 140 255 / 22%);
+	--gi-h1a: #a9b7ff;
+	--gi-h1b: #c3a4ff;
+	--gi-h1c: #ff9db5;
+	--gi-wordmark: rgb(255 255 255 / 9%);
+	--gi-hue-capture: #8297ff;
+	--gi-hue-editor: #ff8a7a;
+	--gi-hue-video: #b18cff;
+	--gi-hue-video-glow: rgb(177 140 255 / 55%);
+	--gi-hue-library: #4fd1c5;
+	--gi-hue-library-soft: rgb(79 209 197 / 10%);
+	--gi-cap-a: rgb(130 151 255 / 18%);
+	--gi-ed-a: rgb(255 138 122 / 15%);
+	--gi-vid-a: rgb(177 140 255 / 17%);
+	--gi-lib-a: rgb(79 209 197 / 13%);
+}
+
+:root[data-theme='light'] {
+	color-scheme: light;
+
+	--gi-bg: #ffffff;
+	--gi-surface: #f4f5f7;
+	--gi-panel: #fafafb;
+	--gi-panel-2: #ffffff;
+	--gi-pop: #ffffff;
+	--gi-chrome: #f6f7f8;
+	--gi-border: #e3e5e9;
+	--gi-border-strong: #cdd1d8;
+	--gi-text: #16181c;
+	--gi-muted: #5f6570;
+	--gi-accent: #4b62e3;
+	--gi-accent-high: #3346b8;
+	--gi-accent-soft: rgb(75 98 227 / 11%);
+	--gi-accent-pill: rgb(75 98 227 / 8%);
+	--gi-accent-edge: rgb(75 98 227 / 28%);
+	--gi-on-accent: #ffffff;
+	--gi-success: #1f8a4c;
+	--gi-cta: linear-gradient(180deg, #5f74ee, #3f55d2);
+	--gi-on-cta: #ffffff;
+	--gi-glow: rgb(75 98 227 / 22%);
+	--gi-dot: rgb(16 24 40 / 9%);
+	--gi-glass: rgb(255 255 255 / 70%);
+	--gi-hair: rgb(16 24 40 / 8%);
+	--gi-hair-strong: rgb(16 24 40 / 15%);
+	--gi-fill: rgb(16 24 40 / 5%);
+	--gi-float: rgb(18 20 25 / 90%);
+	--gi-nav: rgb(255 255 255 / 75%);
+	--gi-code-bg: #f6f7f8;
+	--gi-docs-surface: #f4f5f7;
+	--gi-wall: #e9ecf5;
+	--gi-wall-a: rgb(75 98 227 / 20%);
+	--gi-wall-b: rgb(139 92 246 / 16%);
+	--gi-h1a: #4b62e3;
+	--gi-h1b: #8b5cf6;
+	--gi-h1c: #e0457b;
+	--gi-wordmark: rgb(16 24 40 / 8%);
+	--gi-hue-capture: #4b62e3;
+	--gi-hue-editor: #d9473a;
+	--gi-hue-video: #7c4fe0;
+	--gi-hue-video-glow: rgb(124 79 224 / 35%);
+	--gi-hue-library: #0d8f84;
+	--gi-hue-library-soft: rgb(13 143 132 / 9%);
+	--gi-cap-a: rgb(75 98 227 / 10%);
+	--gi-ed-a: rgb(217 71 58 / 8%);
+	--gi-vid-a: rgb(124 79 224 / 9%);
+	--gi-lib-a: rgb(13 143 132 / 8%);
+}
+
+/* No script ran: follow the system setting. Keep in step with the light block. */
+@media (prefers-color-scheme: light) {
+	:root:not([data-theme]) {
+		color-scheme: light;
+
+		--gi-bg: #ffffff;
+		--gi-surface: #f4f5f7;
+		--gi-panel: #fafafb;
+		--gi-panel-2: #ffffff;
+		--gi-pop: #ffffff;
+		--gi-chrome: #f6f7f8;
+		--gi-border: #e3e5e9;
+		--gi-border-strong: #cdd1d8;
+		--gi-text: #16181c;
+		--gi-muted: #5f6570;
+		--gi-accent: #4b62e3;
+		--gi-accent-high: #3346b8;
+		--gi-accent-soft: rgb(75 98 227 / 11%);
+		--gi-accent-pill: rgb(75 98 227 / 8%);
+		--gi-accent-edge: rgb(75 98 227 / 28%);
+		--gi-on-accent: #ffffff;
+		--gi-success: #1f8a4c;
+		--gi-cta: linear-gradient(180deg, #5f74ee, #3f55d2);
+		--gi-on-cta: #ffffff;
+		--gi-glow: rgb(75 98 227 / 22%);
+		--gi-dot: rgb(16 24 40 / 9%);
+		--gi-glass: rgb(255 255 255 / 70%);
+		--gi-hair: rgb(16 24 40 / 8%);
+		--gi-hair-strong: rgb(16 24 40 / 15%);
+		--gi-fill: rgb(16 24 40 / 5%);
+		--gi-float: rgb(18 20 25 / 90%);
+		--gi-nav: rgb(255 255 255 / 75%);
+		--gi-code-bg: #f6f7f8;
+		--gi-docs-surface: #f4f5f7;
+		--gi-wall: #e9ecf5;
+		--gi-wall-a: rgb(75 98 227 / 20%);
+		--gi-wall-b: rgb(139 92 246 / 16%);
+		--gi-h1a: #4b62e3;
+		--gi-h1b: #8b5cf6;
+		--gi-h1c: #e0457b;
+		--gi-wordmark: rgb(16 24 40 / 8%);
+		--gi-hue-capture: #4b62e3;
+		--gi-hue-editor: #d9473a;
+		--gi-hue-video: #7c4fe0;
+		--gi-hue-video-glow: rgb(124 79 224 / 35%);
+		--gi-hue-library: #0d8f84;
+		--gi-hue-library-soft: rgb(13 143 132 / 9%);
+		--gi-cap-a: rgb(75 98 227 / 10%);
+		--gi-ed-a: rgb(217 71 58 / 8%);
+		--gi-vid-a: rgb(124 79 224 / 9%);
+		--gi-lib-a: rgb(13 143 132 / 8%);
+	}
+}

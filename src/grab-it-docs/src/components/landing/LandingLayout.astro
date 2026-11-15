@@ -1,0 +1,108 @@
+---
+// The landing page's own layout: head, theme, header and footer. Docs and
+// reference pages keep Starlight's layout.
+import '@fontsource-variable/instrument-sans';
+import '@fontsource-variable/geist-mono';
+import '../../styles/tokens.css';
+import '../../styles/landing.css';
+import Logo from '../Logo.astro';
+
+interface Props {
+	title: string;
+	description: string;
+}
+
+const { title, description } = Astro.props;
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const canonical = new URL(Astro.url.pathname, Astro.site);
+
+const guide = [
+	['Get started', '/grab-it/get-started/'],
+	['Library', '/grab-it/library/'],
+	['Capture', '/grab-it/capture/'],
+	['AI', '/grab-it/ai/'],
+	['Image editor', '/grab-it/image-editor/'],
+	['Reference', '/grab-it/reference/'],
+	['Recording', '/grab-it/recording/'],
+	['Contribute', '/grab-it/contribute/'],
+	['Video editor', '/grab-it/video-editor/'],
+	['GitHub', 'https://github.com/kerwincarpede/grab-it'],
+];
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>{title}</title>
+		<meta name="description" content={description} />
+		<link rel="canonical" href={canonical} />
+		<link rel="icon" href={`${base}/favicon.svg`} type="image/svg+xml" />
+		<meta property="og:title" content={title} />
+		<meta property="og:description" content={description} />
+		<meta property="og:type" content="website" />
+		<meta property="og:url" content={canonical} />
+		<meta name="color-scheme" content="dark light" />
+		{/* Before the first paint, as Starlight's ThemeProvider does: the theme
+		    picked on a docs page wins, otherwise the system setting. */}
+		<script is:inline>
+			(() => {
+				const stored = () => {
+					try {
+						return localStorage.getItem('starlight-theme');
+					} catch {
+						return null;
+					}
+				};
+				const light = window.matchMedia('(prefers-color-scheme: light)');
+				const apply = () => {
+					const theme = stored() || (light.matches ? 'light' : 'dark');
+					document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+				};
+				apply();
+				light.addEventListener('change', apply);
+			})();
+		</script>
+	</head>
+	<body>
+		<div class="gi-page">
+			<a class="gi-skip" href="#main">Skip to content</a>
+			<div aria-hidden="true" style="position: absolute; inset: 0 0 auto 0; height: 1400px; background-image: radial-gradient(var(--gi-dot) 1px, transparent 1px); background-size: 24px 24px; -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 30%, transparent 75%); mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 30%, transparent 75%)"></div>
+			<div aria-hidden="true" style="position: absolute; left: 50%; top: -260px; width: 1100px; height: 700px; transform: translateX(-50%); background: radial-gradient(closest-side, var(--gi-glow), transparent); filter: blur(20px)"></div>
+
+			<header style="position: relative; z-index: 2; max-width: 1200px; margin: 0 auto; padding: 18px clamp(16px, 4vw, 40px) 0">
+				<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; padding: 8px 8px 8px 16px; border-radius: 14px; background: var(--gi-glass); border: 1px solid var(--gi-hair); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px)">
+					<a href="/grab-it/" style="display: flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 650; font-size: 18px; letter-spacing: -0.01em">
+						<Logo id="gi-logo-header" />
+						Grab-it
+					</a>
+					<nav aria-label="Main" style="display: flex; flex-wrap: wrap; gap: 2px; font-size: 14.5px; color: var(--gi-muted); flex: 1 1 auto">
+						<a class="gi-link" href="#tour" style="text-decoration: none; padding: 8px 12px; border-radius: 8px">Tour</a>
+						<a class="gi-link" href="/grab-it/get-started/" style="text-decoration: none; padding: 8px 12px; border-radius: 8px">Docs</a>
+						<a class="gi-link" href="/grab-it/reference/" style="text-decoration: none; padding: 8px 12px; border-radius: 8px">Reference</a>
+						<a class="gi-link" href="https://github.com/kerwincarpede/grab-it" style="text-decoration: none; padding: 8px 12px; border-radius: 8px">GitHub</a>
+					</nav>
+					<a class="gi-cta" href="#download" style="text-decoration: none; background: var(--gi-cta); color: var(--gi-on-cta); font-weight: 650; font-size: 14.5px; padding: 0 16px; border-radius: 9px; min-height: 40px; box-sizing: border-box; display: inline-flex; align-items: center; box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%), 0 6px 20px var(--gi-glow)">Download</a>
+				</div>
+			</header>
+
+			<main id="main">
+				<slot name="hero" />
+				<slot />
+			</main>
+
+			<footer style="position: relative; max-width: 1200px; margin: 0 auto; padding: 96px clamp(16px, 4vw, 40px) 0">
+				<div style="display: flex; flex-wrap: wrap; gap: 32px 64px; font-size: 14px">
+					<div style="flex: 1 1 240px">
+						<p style="margin: 0; color: var(--gi-muted); max-width: 300px">MIT licensed. Made for people who explain things on screen.</p>
+					</div>
+					<nav aria-label="Guide" style="display: grid; grid-template-columns: repeat(2, minmax(120px, 1fr)); gap: 10px 48px; color: var(--gi-muted)">
+						{guide.map(([label, href]) => <a class="gi-link" href={href} style="text-decoration: none">{label}</a>)}
+					</nav>
+				</div>
+				<p aria-hidden="true" style="margin: 64px 0 0; font-size: clamp(88px, 21vw, 280px); line-height: 0.8; letter-spacing: -0.06em; font-weight: 700; text-align: center; background: linear-gradient(180deg, var(--gi-wordmark), transparent 85%); -webkit-background-clip: text; background-clip: text; color: transparent; user-select: none">Grab-it</p>
+			</footer>
+		</div>
+	</body>
+</html>

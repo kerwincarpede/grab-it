@@ -1,0 +1,32 @@
+---
+// Starlight's site title with the Grab-it mark in front, as on the landing
+// page. Starlight's logo option takes an image file, which can't share the
+// mark's markup, so this replaces the component.
+import Logo from '../Logo.astro';
+
+const { siteTitle, siteTitleHref } = Astro.locals.starlightRoute;
+---
+
+<a href={siteTitleHref} class="site-title sl-flex">
+	<Logo id="gi-docs-logo" size={26} />
+	<span translate="no">{siteTitle}</span>
+</a>
+
+<style>
+	@layer starlight.core {
+		.site-title {
+			align-items: center;
+			gap: 0.625rem;
+			font-size: var(--sl-text-h4);
+			text-decoration: none;
+			white-space: nowrap;
+			min-width: 0;
+		}
+		span {
+			overflow: hidden;
+		}
+		.site-title :global(svg) {
+			flex: none;
+		}
+	}
+</style>

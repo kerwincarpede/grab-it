@@ -1,0 +1,279 @@
+/*
+ * Starlight theme: every docs and reference page in the landing page's look.
+ *
+ * Maps the site tokens (tokens.css) onto Starlight's --sl-* properties, then
+ * restyles the parts the properties don't reach. This file is unlayered, so it
+ * wins over Starlight's own cascade layers without !important.
+ */
+
+/* Dark (Starlight's default) */
+:root,
+::backdrop {
+	--sl-font: var(--gi-font-sans);
+	--sl-font-mono: var(--gi-font-mono);
+
+	--sl-color-white: #f5f6f8;
+	--sl-color-gray-1: #ecedef;
+	--sl-color-gray-2: #c7cad1;
+	--sl-color-gray-3: #9a9ea7;
+	--sl-color-gray-4: #5d6169;
+	--sl-color-gray-5: #2a2c31;
+	--sl-color-gray-6: #141519;
+	--sl-color-black: #0c0d0f;
+
+	--sl-color-accent-low: #1b2142;
+	--sl-color-accent: #8297ff;
+	--sl-color-accent-high: #b3c0ff;
+
+	--sl-color-text: var(--gi-text);
+	--sl-color-text-accent: var(--gi-accent);
+	--sl-color-text-invert: var(--gi-on-accent);
+	--sl-color-bg: var(--gi-bg);
+	--sl-color-bg-nav: var(--gi-nav);
+	--sl-color-bg-sidebar: var(--gi-bg);
+	--sl-color-bg-inline-code: var(--gi-docs-surface);
+	--sl-color-bg-accent: var(--gi-accent);
+	--sl-color-hairline-light: var(--gi-hair);
+	--sl-color-hairline: var(--gi-hair);
+	--sl-color-hairline-shade: var(--gi-hair);
+	--sl-color-backdrop-overlay: rgb(5 6 10 / 66%);
+}
+
+:root[data-theme='light'],
+[data-theme='light'] ::backdrop {
+	--sl-color-white: #0b0c10;
+	--sl-color-gray-1: #16181c;
+	--sl-color-gray-2: #2f333a;
+	--sl-color-gray-3: #5f6570;
+	--sl-color-gray-4: #8b9099;
+	--sl-color-gray-5: #cdd1d8;
+	--sl-color-gray-6: #eceef1;
+	--sl-color-gray-7: #f6f7f8;
+	--sl-color-black: #ffffff;
+
+	--sl-color-accent-low: #e3e7fc;
+	--sl-color-accent: #4b62e3;
+	--sl-color-accent-high: #3346b8;
+
+	--sl-color-backdrop-overlay: rgb(16 18 24 / 32%);
+}
+
+body {
+	background-color: var(--gi-bg);
+	-webkit-font-smoothing: antialiased;
+}
+
+::selection {
+	background-color: var(--gi-accent-soft);
+}
+
+/* Header: translucent, blurred, with a hairline */
+.header {
+	background-color: var(--gi-nav);
+	-webkit-backdrop-filter: blur(14px);
+	backdrop-filter: blur(14px);
+	border-bottom-color: var(--gi-hair);
+}
+
+.site-title {
+	color: var(--gi-text);
+	font-weight: 650;
+	letter-spacing: -0.01em;
+}
+
+@media (min-width: 50rem) {
+	site-search button[data-open-modal] {
+		border-color: var(--gi-hair-strong);
+		border-radius: 9px;
+		background-color: var(--gi-glass);
+		color: var(--gi-muted);
+	}
+
+	site-search button[data-open-modal]:hover {
+		border-color: var(--gi-accent-edge);
+		color: var(--gi-text);
+	}
+}
+
+site-search button[data-open-modal] > kbd {
+	font-family: var(--gi-font-mono);
+	border: 1px solid var(--gi-hair-strong);
+	background-color: transparent;
+}
+
+/* Sidebar: muted links, the current page an accent-tinted pill */
+.sidebar-content a {
+	border-radius: 6px;
+	color: var(--gi-muted);
+}
+
+.sidebar-content a:hover,
+.sidebar-content a:focus {
+	color: var(--gi-text);
+}
+
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover,
+.sidebar-content a[aria-current='page']:focus {
+	background-color: var(--gi-accent-pill);
+	color: var(--gi-accent);
+	font-weight: 600;
+}
+
+.sidebar-content .large {
+	color: var(--gi-text);
+	font-weight: 650;
+}
+
+/* Headings */
+h1#_top,
+.sl-markdown-content :is(h1, h2, h3, h4):not(:where(.not-content *)) {
+	font-weight: 650;
+	letter-spacing: -0.03em;
+}
+
+.sl-markdown-content :is(h3, h4):not(:where(.not-content *)) {
+	letter-spacing: -0.02em;
+}
+
+/* Inline code and keycaps */
+.sl-markdown-content :not(pre) > code:not(:where(.not-content *)) {
+	font-size: 0.86em;
+	background-color: var(--gi-docs-surface);
+	border: 1px solid var(--gi-hair);
+	border-radius: 5px;
+	padding: 0.0625rem 0.375rem;
+}
+
+.sl-markdown-content kbd:not(:where(.not-content *)) {
+	display: inline-block;
+	min-width: 1.6em;
+	text-align: center;
+	font-family: var(--gi-font-mono);
+	font-size: 0.82em;
+	font-weight: 600;
+	line-height: 1.5;
+	color: var(--gi-text);
+	padding: 0.05em 0.5em 0.15em;
+	border-radius: 6px;
+	border: 1px solid var(--gi-hair-strong);
+	background: linear-gradient(180deg, var(--gi-fill), transparent), var(--gi-panel);
+	box-shadow: inset 0 -2px 0 var(--gi-hair-strong), 0 3px 8px rgb(0 0 0 / 14%);
+}
+
+/* Asides: rounded with a hairline, tinted by kind */
+.starlight-aside {
+	border: 1px solid var(--gi-aside-edge);
+	border-radius: 9px;
+	background-color: var(--gi-aside-bg);
+	padding: 0.875rem 1rem;
+	color: var(--gi-text);
+}
+
+.starlight-aside--note,
+.starlight-aside--tip {
+	--sl-color-asides-text-accent: var(--gi-accent);
+	--sl-color-asides-border: var(--gi-accent-edge);
+	--gi-aside-edge: var(--gi-accent-edge);
+	--gi-aside-bg: var(--gi-accent-pill);
+}
+
+.starlight-aside--caution {
+	--gi-aside-edge: color-mix(in srgb, var(--sl-color-orange) 34%, transparent);
+	--gi-aside-bg: color-mix(in srgb, var(--sl-color-orange) 9%, transparent);
+}
+
+.starlight-aside--danger {
+	--gi-aside-edge: color-mix(in srgb, var(--sl-color-red) 34%, transparent);
+	--gi-aside-bg: color-mix(in srgb, var(--sl-color-red) 9%, transparent);
+}
+
+.starlight-aside__title {
+	font-size: var(--sl-text-base);
+	font-weight: 650;
+}
+
+/* Tables: a rounded panel with hairlines and a tinted header row */
+.sl-markdown-content table:not(:where(.not-content *)) {
+	border: 1px solid var(--gi-hair);
+	border-radius: 9px;
+	border-collapse: separate;
+	border-spacing: 0;
+	font-size: 0.9375rem;
+}
+
+.sl-markdown-content :is(th, td):not(:where(.not-content *)),
+.sl-markdown-content :is(th:first-child, td:first-child, th:last-child, td:last-child):not(:where(.not-content *)) {
+	border-bottom: 1px solid var(--gi-hair);
+	padding: 0.625rem 0.875rem;
+}
+
+.sl-markdown-content th:not(:where(.not-content *)) {
+	background-color: var(--gi-docs-surface);
+	font-weight: 650;
+}
+
+.sl-markdown-content tbody tr:last-child td:not(:where(.not-content *)) {
+	border-bottom: 0;
+}
+
+/* Code blocks sit on a deeper panel; radius, border and background are set in astro.config.mjs */
+.expressive-code .frame {
+	box-shadow: none;
+}
+
+/* Buttons: the landing page's gradient call to action */
+.sl-link-button {
+	border-radius: 11px;
+	font-weight: 650;
+	transition: filter 0.2s ease, transform 0.2s ease;
+}
+
+.sl-link-button.primary,
+.sl-link-button.primary:hover {
+	background: var(--gi-cta);
+	border-color: transparent;
+	color: var(--gi-on-cta);
+	box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%), 0 6px 20px var(--gi-glow);
+}
+
+.sl-link-button.secondary {
+	background: var(--gi-glass);
+	border-color: var(--gi-hair-strong);
+	color: var(--gi-text);
+}
+
+.sl-link-button:hover {
+	filter: brightness(1.08);
+	transform: translateY(-1px);
+}
+
+/* Cards and the previous/next links */
+.card,
+.sl-link-card,
+.pagination-links a {
+	border: 1px solid var(--gi-hair);
+	border-radius: 12px;
+	box-shadow: none;
+	background-color: var(--gi-glass);
+}
+
+.sl-link-card:hover,
+.pagination-links a:hover {
+	border-color: var(--gi-accent-edge);
+}
+
+.pagination-links .link-title {
+	color: var(--gi-accent);
+	font-weight: 650;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.sl-link-button {
+		transition: none;
+	}
+
+	.sl-link-button:hover {
+		transform: none;
+	}
+}
