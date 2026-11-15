@@ -1,45 +1,77 @@
 ---
 title: Mark it up
-description: Every annotation tool and key, backdrops, rotate, flip, resize and export.
+description: A tour of the editor, the tool rail, the tool wheel, and every key.
 sidebar:
   order: 1
 ---
 
-Click **Annotate** and the editor opens. Pick a tool from the rail on the left, or press its key:
+Click **Annotate** and the editor opens, with your screenshot in the middle.
+
+- **The tool rail**, on the left, has every tool. Hover one to see its key.
+- **The top bar** has the colour and options for the tool you're using, then Undo, Redo and Delete, the turn and flip buttons, **Resize**, **Backdrop**, and finally **Pin**, **Copy** and **Export…**.
+- **The status bar**, at the bottom, shows the file name, the capture's size, the crop and output sizes when they differ, whether your edits are saved, and the zoom.
+
+## Tools
 
 | Tool | Key | Great for |
 | --- | --- | --- |
-| Arrow | `A` | "Click here" |
-| Rectangle / Ellipse | `R` / `E` | Boxing in the important bit (can be filled) |
-| Line / Freehand | `L` / `P` | Underlines and doodles |
-| Text | `T` | Notes and labels, with an optional background |
-| Step | `N` | Numbered steps (1, 2, 3…) for how-to guides |
-| Highlighter | `H` | Highlighting text |
-| Blur | `B` | Hiding emails, names and passwords (pixelated or smooth) |
-| Spotlight | `S` | Dimming everything except what matters |
-| Crop | `C` | Trimming the edges, free or to a ratio (Original, 16:9, 4:3, 1:1, 9:16) |
-| Select / Pan | `V` / `M` | Moving things around |
+| [Select](/grab-it/image-editor/select/) | `V` | Picking, moving and resizing what you've drawn |
+| [Pan](/grab-it/image-editor/pan/) | `M` | Moving around a zoomed-in screenshot |
+| [Arrow](/grab-it/image-editor/arrow/) | `A` | "Click here", straight or curved |
+| [Line](/grab-it/image-editor/line/) | `L` | Underlines and connectors |
+| [Rectangle](/grab-it/image-editor/rectangle/) | `R` | Boxing in the important bit (can be filled) |
+| [Ellipse](/grab-it/image-editor/ellipse/) | `E` | Circling something (can be filled) |
+| [Freehand](/grab-it/image-editor/freehand/) | `P` | Doodles and ticks |
+| [Text](/grab-it/image-editor/text/) | `T` | Notes and labels, with an optional background |
+| [Step](/grab-it/image-editor/step/) | `N` | Numbered steps (1, 2, 3…) for how-to guides |
+| [Highlighter](/grab-it/image-editor/highlighter/) | `H` | Highlighting text |
+| [Blur](/grab-it/image-editor/blur/) | `B` | Hiding emails, names and passwords |
+| [Spotlight](/grab-it/image-editor/spotlight/) | `S` | Dimming everything except what matters |
+| [Crop](/grab-it/image-editor/crop/) | `C` | Trimming the edges, free or to a ratio |
 
-## Make it pretty
+The editor remembers the tool, colour and sizes you used last, and opens with them next time (except Crop, so a capture never opens hidden behind a crop).
 
-Turn on the **Backdrop** to put your screenshot on a gradient or solid colour, with padding, rounded corners and a soft shadow. Perfect for slides, docs and social posts.
+### Hold a key to use a tool once
 
-## Turn, flip and resize
+Tap a tool's key and that tool stays picked. **Hold** the key instead, draw, and let go: you're back on the tool you had before. Great for dropping in one arrow while you're busy with the highlighter.
 
-The top bar's **Rotate left** and **Rotate right** buttons turn the screenshot a quarter turn, and **Flip horizontal** and **Flip vertical** mirror it. Your annotations and crop move with the image, and text and step numbers stay upright.
+### The tool wheel
 
-**Resize** sets a new width or height (the aspect ratio stays locked) or a percentage, from 10% to 400%; the status bar shows the output size. Each change is one step you can undo.
+**Right-click** anywhere on the screenshot and a wheel of every tool opens around the pointer. Click one to pick it; click anywhere else, or press `Esc`, to close it.
 
-## Handy keys while editing
+### Draw without switching
 
-- `Ctrl/⌘ + D` duplicates the selected shape.
-- Arrow keys nudge it (hold `Shift` for bigger steps).
-- With **Crop**, pick a ratio in the top bar to keep the crop to that shape (picking one reshapes a crop you already drew). Drag the crop to move it, or its handles to resize it. Hold `Shift` for a square Free crop. Crop edges snap to the image borders and to strong edges in the screenshot, such as window borders and panels; hold `Alt/⌥` while you drag to crop without snapping.
-- `[` and `]` make lines thinner or thicker.
-- `Ctrl/⌘ + [` and `Ctrl/⌘ + ]` rotate the screenshot left and right.
-- `Ctrl/⌘ + C` copies the finished image.
-- `Ctrl/⌘ + Enter` copies and closes the editor in one go.
+Whatever tool you're using:
 
-## Share it
+- **`Ctrl/⌘`-drag** draws a rectangle.
+- **`Alt/⌥`-drag** draws an arrow (with Crop, it crops without snapping instead).
+- Hold **`Space`** and drag to pan.
 
-When you're done, **Copy** it, **Export…** it to a file, or **Pin** it. Your edits are saved automatically and you can change them any time. The original screenshot is never altered.
+### Edit what you've drawn
+
+Something you've just drawn stays selected, with handles, so you can adjust it straight away. With any drawing tool, a drag that starts on an existing shape moves it instead of drawing a new one. See [Select](/grab-it/image-editor/select/) for everything you can do with a selected shape.
+
+## Every key
+
+| Key | What it does |
+| --- | --- |
+| Tool keys (`V` `M` `A` `L` `R` `E` `P` `T` `N` `H` `B` `S` `C`) | Pick a tool; hold to use it once |
+| `1` to `7` | Pick a colour from the top bar, in order |
+| `[` and `]` | Thinner or thicker (or smaller and larger text and badges) |
+| `Alt/⌥ + scroll` | Thinner or thicker |
+| Scroll | Zoom in or out around the pointer |
+| `Space` (hold) | Pan |
+| `Shift` while drawing | Straight lines at 45° steps; square boxes |
+| Arrow keys | Nudge the selected shape 1 pixel (with `Shift`, 10) |
+| `Delete` or `Backspace` | Delete the selected shape |
+| `Esc` | Deselect, and close any open panel or the wheel |
+| `Ctrl/⌘ + D` | Duplicate the selected shape |
+| `Ctrl/⌘ + Z` | Undo |
+| `Ctrl/⌘ + Shift + Z` or `Ctrl/⌘ + Y` | Redo |
+| `Ctrl/⌘ + [` and `Ctrl/⌘ + ]` | Rotate the screenshot left or right |
+| `Ctrl/⌘ + C` | Copy the finished image |
+| `Ctrl/⌘ + Enter` | Copy and close the editor |
+
+## Zoom
+
+Scroll over the screenshot to zoom in or out around the pointer, from 5% up to 1600%. The status bar has **Zoom out**, **Zoom in**, the current zoom and **Fit**, which fits the whole screenshot in the window again. The editor never enlarges a small screenshot to fit; it shows it at 100%.
