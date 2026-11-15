@@ -721,6 +721,13 @@ pub fn start(
         lock_status(&session.status).countdown_ends_at = Some(ends);
     }
     crate::record_bar::show(app, monitor, image_size, rect, &session.status());
+    crate::record_frame::show(
+        app,
+        monitor,
+        image_size,
+        rect,
+        crate::record_frame::shape_for(rect, image_size, recording.source),
+    );
     // Opened before the countdown and the settle delay, so the camera has
     // started by the first frame.
     if recording.show_webcam {
@@ -795,6 +802,7 @@ pub fn start(
             let discard = restart || controls.discard.load(Ordering::SeqCst);
             if !restart {
                 crate::record_bar::close(&handle);
+                crate::record_frame::close(&handle);
             }
             match result {
                 // Stopped during the countdown: nothing was recorded.
@@ -828,12 +836,14 @@ pub fn start(
                 && let Err(err) = start(&handle, &session.monitor, session.image_size, session.rect)
             {
                 crate::record_bar::close(&handle);
+                crate::record_frame::close(&handle);
                 actions::report_failure(&handle, &err);
             }
         });
     if let Err(err) = spawned {
         crate::webcam::close(app);
         crate::record_bar::close(app);
+        crate::record_frame::close(app);
         *state.lock() = None;
         crate::tray::set_recording(app, false);
         return Err(format!("could not start recording: {err}"));

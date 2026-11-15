@@ -24,6 +24,7 @@ mod portal;
 mod quick;
 mod record;
 mod record_bar;
+mod record_frame;
 mod recording_editor;
 mod screen;
 mod search;

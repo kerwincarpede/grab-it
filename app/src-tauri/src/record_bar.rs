@@ -640,10 +640,14 @@ fn moved(app: &AppHandle, position: PhysicalPosition<i32>) {
     });
 }
 
-/// Tells the toolbar what it shows now.
+/// Tells the toolbar what it shows now, and the recorded area's outline,
+/// which shows the countdown too (see record_frame.rs).
 pub fn changed(app: &AppHandle, status: &BarStatus) {
-    if let Some(window) = app.get_webview_window(LABEL) {
-        let _ = window.emit(RECORD_BAR_EVENT, status);
+    let listening = [LABEL, crate::record_frame::LABEL]
+        .into_iter()
+        .any(|label| app.get_webview_window(label).is_some());
+    if listening {
+        let _ = app.emit(RECORD_BAR_EVENT, status);
     }
 }
 

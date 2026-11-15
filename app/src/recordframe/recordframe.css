@@ -1,0 +1,104 @@
+/*
+ * The recorded-area outline's window is see-through and takes no clicks:
+ * the page paints only the outline, in the margin around the recorded
+ * area, and the countdown's number. The colour scheme is pinned because a
+ * dark one makes the browser fill the page behind the root.
+ */
+:root.recordframe-clear,
+:root.recordframe-clear body {
+  color-scheme: light;
+  background: transparent;
+}
+
+.recordframe {
+  /* The recording toolbar's red (`--rb-rec` in src/recordbar/recordbar.css). */
+  --rf-rec: #ff4d4f;
+  /* Set by RecordFrame.tsx: the margin, and where the brackets' outer edge is. */
+  --rf-margin: 6px;
+  --rf-bracket-at: 3px;
+  --rf-bracket: 3px;
+  --rf-bracket-length: 16px;
+  --rf-radius: 0px;
+
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* A window's area is rounded like the window. */
+.recordframe[data-shape="window"] {
+  --rf-radius: 10px;
+}
+
+/* One pixel wide, in the last pixel before the area. */
+.recordframe-edge {
+  position: absolute;
+  inset: calc(var(--rf-margin) - 1px);
+  box-sizing: border-box;
+  border: 1px dashed var(--rf-rec);
+  border-radius: calc(var(--rf-radius) + 1px);
+}
+
+.recordframe-corner {
+  position: absolute;
+  box-sizing: border-box;
+  width: var(--rf-bracket-length);
+  height: var(--rf-bracket-length);
+  border: 0 solid var(--rf-rec);
+}
+
+.recordframe-corner[data-corner="top-left"] {
+  top: var(--rf-bracket-at);
+  left: var(--rf-bracket-at);
+  border-top-width: var(--rf-bracket);
+  border-left-width: var(--rf-bracket);
+  border-top-left-radius: calc(var(--rf-radius) + var(--rf-bracket));
+}
+
+.recordframe-corner[data-corner="top-right"] {
+  top: var(--rf-bracket-at);
+  right: var(--rf-bracket-at);
+  border-top-width: var(--rf-bracket);
+  border-right-width: var(--rf-bracket);
+  border-top-right-radius: calc(var(--rf-radius) + var(--rf-bracket));
+}
+
+.recordframe-corner[data-corner="bottom-left"] {
+  bottom: var(--rf-bracket-at);
+  left: var(--rf-bracket-at);
+  border-bottom-width: var(--rf-bracket);
+  border-left-width: var(--rf-bracket);
+  border-bottom-left-radius: calc(var(--rf-radius) + var(--rf-bracket));
+}
+
+.recordframe-corner[data-corner="bottom-right"] {
+  right: var(--rf-bracket-at);
+  bottom: var(--rf-bracket-at);
+  border-right-width: var(--rf-bracket);
+  border-bottom-width: var(--rf-bracket);
+  border-bottom-right-radius: calc(var(--rf-radius) + var(--rf-bracket));
+}
+
+/* The countdown's big number, in the middle of the area. */
+.recordframe-count {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: min(160px, 40vmin);
+  height: min(160px, 40vmin);
+  color: var(--rf-rec);
+  font-family: var(--font-mono);
+  font-size: min(96px, 26vmin);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  background: rgb(16 17 19 / 72%);
+  border-radius: 50%;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 40%);
+  transform: translate(-50%, -50%);
+}

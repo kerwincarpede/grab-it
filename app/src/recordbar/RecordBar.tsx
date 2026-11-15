@@ -3,9 +3,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./recordbar.css";
 import {
   CameraIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
-  CloseIcon,
   GripIcon,
   MicIcon,
   MicOffIcon,
@@ -138,6 +135,17 @@ interface ToolProps {
   disabled?: boolean;
 }
 
+/** Three dots, for the button that opens the menu. */
+function MoreIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+      <circle cx="5.5" cy="12" r="1.6" />
+      <circle cx="12" cy="12" r="1.6" />
+      <circle cx="18.5" cy="12" r="1.6" />
+    </svg>
+  );
+}
+
 function Tool({ label, onClick, children, className, pressed, expanded, disabled }: ToolProps) {
   return (
     <button
@@ -151,6 +159,26 @@ function Tool({ label, onClick, children, className, pressed, expanded, disabled
       onClick={onClick}
     >
       {children}
+    </button>
+  );
+}
+
+interface LabelledProps {
+  /** Shown beside the icon, and the button's name. */
+  label: string;
+  /** Said when the pointer rests on it. */
+  tip: string;
+  icon: ReactNode;
+  onClick: () => void;
+  className: string;
+}
+
+/** A button that says what it does in words, beside its icon. */
+function Labelled({ label, tip, icon, onClick, className }: LabelledProps) {
+  return (
+    <button type="button" className={`recordbar-labelled ${className}`} title={tip} onClick={onClick}>
+      {icon}
+      <span>{label}</span>
     </button>
   );
 }
@@ -210,9 +238,10 @@ interface RecordBarProps {
 }
 
 /**
- * The recording toolbar: a small pill with the time, the microphone,
- * Pause, Stop and a menu of the rest. Dragged by its body, it remembers
- * where it was left on each display (see src-tauri/src/record_bar.rs).
+ * The recording toolbar: a small pill with the time, the microphone, a
+ * labelled Pause, a labelled red Stop and a menu of the rest (⋯). Dragged
+ * by its body, it remembers where it was left on each display (see
+ * src-tauri/src/record_bar.rs).
  */
 function RecordBar({ status: given }: RecordBarProps) {
   const live = useBarStatus();
@@ -279,9 +308,15 @@ function RecordBar({ status: given }: RecordBarProps) {
           {countdownLeft(status, now)}
         </span>
         <span className="recordbar-note">Starting…</span>
-        <Tool label="Cancel recording" className="recordbar-cancel" onClick={() => run(stopRecording)}>
-          <CloseIcon size={15} />
-        </Tool>
+        <button
+          type="button"
+          className="recordbar-cancel"
+          aria-label="Cancel recording"
+          title="Cancel recording"
+          onClick={() => run(stopRecording)}
+        >
+          Cancel
+        </button>
       </>
     );
   } else if (status.phase === "saving") {
@@ -301,6 +336,11 @@ function RecordBar({ status: given }: RecordBarProps) {
           {formatClock(recorded)}
           {status.maxSeconds !== null && <span className="recordbar-limit"> / {formatClock(status.maxSeconds * 1000)}</span>}
         </span>
+        {paused && (
+          <span className="recordbar-paused" aria-hidden="true">
+            PAUSED
+          </span>
+        )}
         <span className="recordbar-sep" aria-hidden="true" />
         {status.microphone !== null && (
           <>
@@ -329,15 +369,23 @@ function RecordBar({ status: given }: RecordBarProps) {
             {status.system ? <SpeakerOffIcon size={16} /> : <SpeakerIcon size={16} />}
           </Tool>
         )}
-        <Tool label={paused ? "Resume" : "Pause"} onClick={() => run(() => pauseRecording(!paused))}>
-          {paused ? <PlayIcon size={16} /> : <PauseIcon size={16} />}
+        <Labelled
+          label={paused ? "Resume" : "Pause"}
+          tip={paused ? "Resume recording" : "Pause recording"}
+          icon={paused ? <PlayIcon size={14} /> : <PauseIcon size={14} />}
+          className="recordbar-pause"
+          onClick={() => run(() => pauseRecording(!paused))}
+        />
+        <Tool label="More" className="recordbar-more" expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>
+          <MoreIcon size={16} />
         </Tool>
-        <Tool label="More" expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>
-          {menuOpen === up ? <ChevronDownIcon size={16} /> : <ChevronUpIcon size={16} />}
-        </Tool>
-        <Tool label="Stop and save" className="recordbar-stop" onClick={() => run(stopRecording)}>
-          <StopIcon size={16} />
-        </Tool>
+        <Labelled
+          label="Stop"
+          tip="Stop and save"
+          icon={<StopIcon size={14} />}
+          className="recordbar-stop"
+          onClick={() => run(stopRecording)}
+        />
       </>
     );
   }
@@ -354,6 +402,7 @@ function RecordBar({ status: given }: RecordBarProps) {
         ref={pill}
         className="recordbar-pill"
         data-phase={status.phase}
+        data-paused={paused ? "true" : "false"}
         title="Drag to move"
         onMouseDown={onPillMouseDown}
       >

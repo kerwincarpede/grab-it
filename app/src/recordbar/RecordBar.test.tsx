@@ -81,7 +81,44 @@ describe("RecordBar", () => {
     expect(screen.getByRole("button", { name: "Mute the microphone" })).toBeInTheDocument();
     expect(screen.getByTestId("recordbar-meter")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Stop and save" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+  });
+
+  it("labels Pause and Stop in words, with Stop as the red pill", async () => {
+    mockBackend(RECORDING);
+    render(<RecordBar />);
+    const stop = await screen.findByRole("button", { name: "Stop" });
+    expect(stop).toHaveClass("recordbar-stop");
+    expect(stop).toHaveTextContent("Stop");
+    expect(stop).toHaveAttribute("title", "Stop and save");
+    expect(screen.getByRole("button", { name: "Pause" })).toHaveTextContent("Pause");
+    expect(screen.getByRole("button", { name: "More" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("PAUSED")).not.toBeInTheDocument();
+  });
+
+  it("turns the dot amber and says PAUSED while paused, with Resume in place of Pause", async () => {
+    const backend = mockBackend({ ...RECORDING, pausedAt: Date.now() });
+    render(<RecordBar />);
+    const resume = await screen.findByRole("button", { name: "Resume" });
+    expect(resume).toHaveTextContent("Resume");
+    expect(screen.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
+    expect(screen.getByText("PAUSED")).toBeInTheDocument();
+    const bar = screen.getByTestId("recordbar");
+    expect(bar.querySelector(".recordbar-dot")).toHaveAttribute("data-paused", "true");
+    expect(bar.querySelector(".recordbar-pill")).toHaveAttribute("data-paused", "true");
+    // Stop still saves what was recorded before the pause.
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+
+    await userEvent.click(resume);
+    await waitFor(() => expect(called(backend, "record_pause")[0].payload).toEqual({ paused: false }));
+  });
+
+  it("stops and saves from the Stop pill", async () => {
+    const backend = mockBackend(RECORDING);
+    render(<RecordBar />);
+    await userEvent.click(await screen.findByRole("button", { name: "Stop" }));
+    await waitFor(() => expect(called(backend, "record_stop")).toHaveLength(1));
+    expect(called(backend, "record_pause")).toHaveLength(0);
   });
 
   it("shows a GIF's limit beside its time", async () => {
@@ -104,7 +141,7 @@ describe("RecordBar", () => {
     render(<RecordBar />);
     await userEvent.click(await screen.findByRole("button", { name: "Mute the microphone" }));
     await userEvent.click(screen.getByRole("button", { name: "Pause" }));
-    await userEvent.click(screen.getByRole("button", { name: "Stop and save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
     await waitFor(() => expect(called(backend, "record_stop")).toHaveLength(1));
     expect(called(backend, "record_mute")[0].payload).toEqual({ input: "microphone", muted: true });
     expect(called(backend, "record_pause")[0].payload).toEqual({ paused: true });
@@ -117,6 +154,7 @@ describe("RecordBar", () => {
     await act(() => emit(RECORD_BAR_EVENT, { ...RECORDING, pausedAt: Date.now(), microphone: true }));
     expect(await screen.findByRole("button", { name: "Resume" })).toBeInTheDocument();
     expect(screen.getByRole("timer")).toHaveAccessibleName("Paused");
+    expect(screen.getByText("PAUSED")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Turn the microphone on" })).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -171,6 +209,7 @@ describe("RecordBar", () => {
     render(<RecordBar />);
     expect(await screen.findByText("3")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel recording" })).toHaveTextContent("Cancel");
     await userEvent.click(screen.getByRole("button", { name: "Cancel recording" }));
     await waitFor(() => expect(called(backend, "record_stop")).toHaveLength(1));
   });
@@ -179,7 +218,7 @@ describe("RecordBar", () => {
     mockBackend({ ...RECORDING, phase: "saving" });
     render(<RecordBar />);
     expect(await screen.findByRole("status")).toHaveTextContent("Saving…");
-    expect(screen.queryByRole("button", { name: "Stop and save" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
   });
 
   it("shows nothing when nothing is recording", async () => {

@@ -69,6 +69,13 @@ impl Action {
         }
     }
 
+    /// Whether this action stops a recording under way instead of starting
+    /// anything: Record, and All-in-one, whose toolbar starts recordings
+    /// too, so the shortcut that started one ends it.
+    fn stops_recording(self) -> bool {
+        matches!(self, Self::Record | Self::AllInOne)
+    }
+
     /// What the region overlay is asked to pick, for the actions that use it.
     fn intent(self) -> Intent {
         match self {
@@ -93,7 +100,7 @@ pub fn start_after(app: &AppHandle, action: Action, delay: Duration) {
 /// Starts a capture without blocking the caller (often the main thread).
 pub fn start(app: &AppHandle, action: Action) {
     // The same action that starts a recording ends it.
-    if action == Action::Record && record::stop(app) {
+    if action.stops_recording() && record::stop(app) {
         return;
     }
     if !permissions::ensure_screen_capture(app) {
@@ -535,6 +542,23 @@ mod tests {
         assert_eq!(Action::Record.intent(), Intent::Record);
         assert_eq!(Action::Region.intent(), Intent::Capture);
         assert_eq!(Action::Window.intent(), Intent::Capture);
+    }
+
+    #[test]
+    fn record_and_all_in_one_stop_a_recording_under_way() {
+        assert!(Action::Record.stops_recording());
+        assert!(Action::AllInOne.stops_recording());
+        for action in [
+            Action::Region,
+            Action::Window,
+            Action::Screen,
+            Action::Monitor(0),
+            Action::Repeat,
+            Action::Text,
+            Action::Colour,
+        ] {
+            assert!(!action.stops_recording(), "{action:?} must not stop it");
+        }
     }
 
     #[test]
