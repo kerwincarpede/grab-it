@@ -62,10 +62,21 @@ describe("RecordFrame", () => {
     expect(screen.queryByTestId("recordframe-count")).not.toBeInTheDocument();
   });
 
-  it("rounds a window's outline", () => {
-    render(<RecordFrame options={options("window")} status={RECORDING} />);
+  it("rounds a window's outline where the window is left out of the recording", () => {
+    render(<RecordFrame options={options("window", true)} status={RECORDING} />);
     expect(screen.getByTestId("recordframe")).toHaveAttribute("data-shape", "window");
+    expect(screen.getByTestId("recordframe")).toHaveAttribute("data-rounded", "true");
     expect(screen.getByTestId("recordframe-edge")).toBeInTheDocument();
+  });
+
+  it("keeps a window's outline square where it would be recorded, so no arc bends into the area", () => {
+    render(<RecordFrame options={options("window")} status={RECORDING} />);
+    const frame = screen.getByTestId("recordframe");
+    expect(frame).toHaveAttribute("data-shape", "window");
+    expect(frame).toHaveAttribute("data-rounded", "false");
+    expect(frame.style.getPropertyValue("--rf-bracket-at")).toBe("3px");
+    expect(screen.getByTestId("recordframe-edge")).toBeInTheDocument();
+    expect(screen.getAllByTestId("recordframe-corner")).toHaveLength(4);
   });
 
   it("marks a whole display with brackets in its corners only", () => {

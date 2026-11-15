@@ -64,7 +64,9 @@ interface RecordFrameProps {
  * The recorded-area outline: a see-through, click-through window around
  * what is recorded, with a thin dashed red edge and solid corner brackets
  * drawn in the margin just outside the area, so they never land in the
- * video. A window's area is rounded; a whole display gets brackets in its
+ * video. A window's area is rounded where the window is left out of the
+ * recording, and square elsewhere, as a rounded edge bends into the area;
+ * a whole display gets brackets in its
  * corners only. Before the first frame, the countdown's big number sits in
  * the middle (see src-tauri/src/record_frame.rs).
  */
@@ -79,6 +81,9 @@ function RecordFrame({ options = frameOptions(window.location.hash), status: giv
   // A display's brackets sit on the area itself: where the window is
   // recorded, they show only until the recording starts.
   const brackets = shape !== "screen" || options.protected || count !== null;
+  // A rounded edge bends inside the area's corner, so only a window left out
+  // of the recording may have one.
+  const rounded = shape === "window" && options.protected;
 
   // The window is see-through: only the outline and the number may paint.
   useLayoutEffect(() => {
@@ -91,7 +96,9 @@ function RecordFrame({ options = frameOptions(window.location.hash), status: giv
     "--rf-bracket-at": `${shape === "screen" ? 0 : Math.max(0, margin - BRACKET)}px`,
   } as CSSProperties;
   return (
-    <main className="recordframe" data-testid="recordframe" data-shape={shape} style={style} aria-hidden="true">
+    <main className="recordframe" data-testid="recordframe" data-shape={shape}
+      data-rounded={rounded ? "true" : "false"}
+      style={style} aria-hidden="true">
       {shape !== "screen" && <div className="recordframe-edge" data-testid="recordframe-edge" />}
       {brackets &&
         CORNERS.map((corner) => <div key={corner} className="recordframe-corner" data-corner={corner} data-testid="recordframe-corner" />)}

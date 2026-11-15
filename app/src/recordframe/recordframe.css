@@ -28,8 +28,12 @@
   user-select: none;
 }
 
-/* A window's area is rounded like the window. */
-.recordframe[data-shape="window"] {
+/*
+ * A window's area is rounded like the window, where the outline is left
+ * out of the recording: a rounded edge bends past the area's corner, into
+ * what is recorded, so elsewhere it stays square.
+ */
+.recordframe[data-rounded="true"] {
   --rf-radius: 10px;
 }
 

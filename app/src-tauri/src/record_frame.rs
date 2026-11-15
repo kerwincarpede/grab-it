@@ -6,8 +6,9 @@
 //! The window is the recorded area grown by [`MARGIN`] on every side, and
 //! the page draws only in that margin, so the outline never lands in the
 //! video even where the window cannot be left out of it. Clicks pass
-//! straight through it. A window's area is drawn with rounded corners; a
-//! whole display has no room around it, so it gets only brackets in its
+//! straight through it. A window's area is drawn with rounded corners
+//! where the window is left out of the capture; a rounded edge bends past
+//! the area's corner into it, so elsewhere it stays square. A whole display has no room around it, so it gets only brackets in its
 //! corners, inside the area: Windows and macOS leave the window out of the
 //! capture (`content_protected`), and elsewhere the brackets go once the
 //! countdown ends, so they are not recorded.
@@ -25,7 +26,8 @@ const MARGIN: f64 = 6.0;
 pub enum Shape {
     /// A dragged region: a square dashed edge with brackets.
     Region,
-    /// A picked window's area: the edge and brackets rounded at its corners.
+    /// A picked window's area: the edge and brackets rounded at its
+    /// corners where the outline is left out of the capture, else square.
     Window,
     /// A whole display: brackets in its corners only.
     Screen,
