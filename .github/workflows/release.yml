@@ -5,9 +5,15 @@ name: Release
 # merge is checked and built once, and those builds are the release. To force
 # a bump instead: Actions → Release → Run workflow, or
 #   gh workflow run release.yml -f bump=minor
+# A push that changes only docs (the site, docs/ or Markdown) is not
+# released; docs.yml publishes the site instead.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - src/grab-it-docs/**
+      - docs/**
+      - '**/*.md'
   workflow_dispatch:
     inputs:
       bump:
