@@ -14,7 +14,9 @@
 //! card says why. A GIF is silent, encoded here at about ten frames a
 //! second, for at most [`MAX_DURATION`]. MP4 is the
 //! default; while ffmpeg is not ready yet, a recording is saved as a GIF
-//! and the card says why. Frames are grabbed as frames.rs says.
+//! and the card says why. Frames are grabbed as frames.rs says. With Show
+//! clicks or Show keystrokes on, click rings and a keystroke label are
+//! drawn into each frame after the pointer (see frame_overlays.rs).
 //!
 //! Recording needs to read the screen freely, so it is not offered on
 //! Wayland, where only the desktop's own portal may do that.
@@ -45,7 +47,8 @@ use crate::{
     capture::{self, Rect},
     commands::{SettingsState, lock},
     ffmpeg::{self, Video, VideoSpec},
-    frames::{self, FrameSource},
+    frame_overlays::Overlays,
+    frames::{self, FrameSource, Grabbed},
     quick::{self, QuickItem},
     screen::MonitorInfo,
     settings::{RecordingAudio, RecordingFormat, RecordingSettings},
@@ -367,6 +370,16 @@ pub fn start(
     if microphone && !microphone_allowed {
         fallback = Some(no_sound("Grab-it may not use the microphone"));
     }
+    // Clicks and keys are watched through global input hooks, which macOS
+    // only allows with Input Monitoring.
+    let wants_input = recording.show_clicks || recording.show_keystrokes;
+    let input_allowed = wants_input && crate::permissions::ensure_input_monitoring(app);
+    if wants_input && !input_allowed && fallback.is_none() {
+        fallback = Some(
+            "Saved without clicks or keystrokes: Grab-it may not watch the mouse and keyboard."
+                .to_owned(),
+        );
+    }
     let started = Local::now();
     let prepared = fs::create_dir_all(&folder)
         .map(|()| unique_recording_path(&folder, &started, format))
@@ -411,9 +424,20 @@ pub fn start(
             // The overlay was closed a moment ago; give the desktop time to
             // repaint so the first frame shows the screen, not the overlay.
             std::thread::sleep(SETTLE_DELAY);
+            // Started after the settle delay, so the click that chose the
+            // area is not shown.
+            let mut overlays = if input_allowed {
+                Overlays::start(
+                    recording.show_clicks,
+                    recording.show_keystrokes,
+                    monitor.scale_factor,
+                )
+            } else {
+                Overlays::none()
+            };
             let result = match &output {
                 Output::Gif => frames::open(&monitor, rect, GIF_FPS, recording.show_cursor)
-                    .and_then(|mut source| record_gif(source.as_mut(), &path, &flag))
+                    .and_then(|mut source| record_gif(source.as_mut(), &path, &flag, &mut overlays))
                     .map(|duration| (duration, None)),
                 Output::Mp4(ready) => {
                     frames::open(&monitor, rect, recording.fps, recording.show_cursor).and_then(
@@ -425,11 +449,14 @@ pub fn start(
                                 ready,
                                 &recording,
                                 microphone_allowed,
+                                &mut overlays,
                             )
                         },
                     )
                 }
             };
+            // Stops collecting clicks and keys.
+            drop(overlays);
             *handle.state::<RecordState>().lock() = None;
             crate::tray::set_recording(&handle, false);
             match result {
@@ -472,9 +499,10 @@ fn no_sound(why: &str) -> String {
 
 /// Grabs frames into the MP4 at `path` until `stop` is set, at a constant
 /// frame rate: a frame time that goes by while a grab is under way
-/// repeats the frame before. Saves where the pointer was beside it, and
-/// with `microphone` muxes in its sound. Returns how long the video runs,
-/// and why it has no sound when the microphone failed.
+/// repeats the frame before. Draws `overlays` into each frame grabbed.
+/// Saves where the pointer was beside it, and with `microphone` muxes in
+/// its sound. Returns how long the video runs, and why it has no sound
+/// when the microphone failed.
 fn record_mp4(
     source: &mut dyn FrameSource,
     path: &Path,
@@ -482,6 +510,7 @@ fn record_mp4(
     ready: &ffmpeg::Ready,
     recording: &RecordingSettings,
     microphone: bool,
+    overlays: &mut Overlays,
 ) -> Result<(Duration, Option<String>), String> {
     let mut note = None;
     // Started before the first grab, so the sound covers the first frame;
@@ -499,8 +528,11 @@ fn record_mp4(
     } else {
         None
     };
-    let first = source.grab()?;
-    let (mut frame, mut pointer) = (first.image, first.pointer);
+    let Grabbed {
+        image: mut frame,
+        mut pointer,
+    } = source.grab()?;
+    overlays.apply(&mut frame, pointer, Instant::now());
     let input = frame.dimensions();
     let spec = VideoSpec {
         input,
@@ -534,7 +566,10 @@ fn record_mp4(
             std::thread::sleep(due - now);
         }
         (frame, pointer) = match source.grab() {
-            Ok(next) if next.image.dimensions() == input => (next.image, next.pointer),
+            Ok(Grabbed { mut image, pointer }) if image.dimensions() == input => {
+                overlays.apply(&mut image, pointer, Instant::now());
+                (image, pointer)
+            }
             // The monitor changed resolution: keep what was recorded.
             Ok(_) => {
                 eprintln!("Grab-it: recording ended early: the recorded area changed size");
@@ -574,11 +609,12 @@ fn record_mp4(
 }
 
 /// Grabs frames into the GIF at `path` until `stop` is set or the time is
-/// up. Returns how long the recording runs.
+/// up, drawing `overlays` into each. Returns how long the recording runs.
 fn record_gif(
     source: &mut dyn FrameSource,
     path: &Path,
     stop: &AtomicBool,
+    overlays: &mut Overlays,
 ) -> Result<Duration, String> {
     let file = File::create(path).map_err(|err| format!("could not create the file: {err}"))?;
     let mut encoder = GifEncoder::new_with_speed(BufWriter::new(file), QUANTISER_SPEED);
@@ -593,7 +629,7 @@ fn record_gif(
     let mut total = Duration::ZERO;
     loop {
         let grabbed_at = Instant::now();
-        let frame = match grab(source) {
+        let frame = match grab(source, overlays) {
             Ok(frame) => frame,
             // Nothing recorded yet: the recording failed outright.
             Err(err) if pending.is_none() => return Err(err),
@@ -625,9 +661,13 @@ fn record_gif(
     Ok(total)
 }
 
-/// The recorded area, scaled down for a GIF.
-fn grab(source: &mut dyn FrameSource) -> Result<RgbaImage, String> {
-    let cropped = source.grab()?.image;
+/// The recorded area with `overlays` drawn in, scaled down for a GIF.
+fn grab(source: &mut dyn FrameSource, overlays: &mut Overlays) -> Result<RgbaImage, String> {
+    let Grabbed {
+        image: mut cropped,
+        pointer,
+    } = source.grab()?;
+    overlays.apply(&mut cropped, pointer, Instant::now());
     let size = frame_size(cropped.dimensions());
     Ok(if size == cropped.dimensions() {
         cropped

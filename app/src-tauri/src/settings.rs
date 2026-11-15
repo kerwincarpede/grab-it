@@ -588,6 +588,10 @@ pub struct RecordingSettings {
     pub fps: u32,
     /// Whether the pointer is drawn into the recording.
     pub show_cursor: bool,
+    /// Whether a fading ring is drawn where each click lands.
+    pub show_clicks: bool,
+    /// Whether the keys pressed are drawn as a label at the bottom centre.
+    pub show_keystrokes: bool,
     /// MP4 only: a GIF is always silent.
     pub audio: RecordingAudio,
     /// The microphone recorded, by the id `audio::microphones` lists it
@@ -602,6 +606,8 @@ impl Default for RecordingSettings {
             quality: RecordingQuality::default(),
             fps: RECORDING_FPS[0],
             show_cursor: true,
+            show_clicks: false,
+            show_keystrokes: false,
             audio: RecordingAudio::default(),
             microphone: None,
         }
@@ -627,6 +633,12 @@ impl RecordingSettings {
             show_cursor: field("showCursor")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(defaults.show_cursor),
+            show_clicks: field("showClicks")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(defaults.show_clicks),
+            show_keystrokes: field("showKeystrokes")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(defaults.show_keystrokes),
             audio: field("audio")
                 .and_then(|v| serde_json::from_value(v).ok())
                 .unwrap_or(defaults.audio),
@@ -1331,6 +1343,8 @@ mod tests {
                 quality: RecordingQuality::Low,
                 fps: 60,
                 show_cursor: false,
+                show_clicks: true,
+                show_keystrokes: true,
                 audio: RecordingAudio::Microphone,
                 microphone: Some("USB Microphone".into()),
             },
@@ -1407,6 +1421,8 @@ mod tests {
                 "quality": "high",
                 "fps": 30,
                 "showCursor": true,
+                "showClicks": false,
+                "showKeystrokes": false,
                 "audio": "none",
                 "microphone": null,
             })
@@ -1480,6 +1496,7 @@ mod tests {
             quality: RecordingQuality::Medium,
             fps: 60,
             show_cursor: false,
+            show_clicks: true,
             ..RecordingSettings::default()
         };
         assert_eq!(
@@ -1496,6 +1513,8 @@ mod tests {
                 "quality": "medium",
                 "fps": 60,
                 "showCursor": false,
+                "showClicks": true,
+                "showKeystrokes": false,
                 "audio": "none",
                 "microphone": null,
             })
@@ -1513,6 +1532,8 @@ mod tests {
         assert_eq!(loaded.quality, RecordingQuality::Low);
         assert_eq!(loaded.fps, 30);
         assert!(loaded.show_cursor);
+        assert!(!loaded.show_clicks);
+        assert!(!loaded.show_keystrokes);
     }
 
     #[test]

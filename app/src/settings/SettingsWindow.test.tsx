@@ -8,6 +8,7 @@ import {
   DEFAULT_AI_PREFERENCES,
   DEFAULT_RECORDING,
   isLocalEndpoint,
+  keystrokesHint,
   type AiPreferences,
   type FfmpegStatus,
   type Microphone,
@@ -851,6 +852,46 @@ describe("SettingsWindow recording", () => {
     await userEvent.click(cursor);
     await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, format: "mp4", quality: "high", fps: 60, showCursor: false }));
     expect(screen.getByRole("switch", { name: /Show cursor/ })).not.toBeChecked();
+  });
+
+  it("leaves clicks and keystrokes out by default and saves either at once", async () => {
+    const backend = mockBackend();
+    render(<SettingsWindow section="recording" />);
+    const clicks = await screen.findByRole("switch", { name: /Show clicks/ });
+    await waitFor(() => expect(clicks).toBeEnabled());
+    const keystrokes = screen.getByRole("switch", { name: /Show keystrokes/ });
+    expect(clicks).not.toBeChecked();
+    expect(keystrokes).not.toBeChecked();
+    // jsdom is not a Mac: the hint says passwords cannot be told apart.
+    expect(screen.getByText(keystrokesHint(false))).toBeInTheDocument();
+
+    await userEvent.click(clicks);
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, showClicks: true }));
+    expect(screen.getByRole("switch", { name: /Show clicks/ })).toBeChecked();
+
+    await waitFor(() => expect(screen.getByRole("switch", { name: /Show keystrokes/ })).toBeEnabled());
+    await userEvent.click(screen.getByRole("switch", { name: /Show keystrokes/ }));
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, showClicks: true, showKeystrokes: true }));
+    expect(screen.getByRole("switch", { name: /Show keystrokes/ })).toBeChecked();
+
+    await waitFor(() => expect(screen.getByRole("switch", { name: /Show clicks/ })).toBeEnabled());
+    await userEvent.click(screen.getByRole("switch", { name: /Show clicks/ }));
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, showKeystrokes: true }));
+  });
+
+  it("says which platforms can leave out passwords from keystrokes", () => {
+    expect(keystrokesHint(true)).toMatch(/except while you type a password/);
+    expect(keystrokesHint(true)).toMatch(/Input Monitoring/);
+    expect(keystrokesHint(false)).toMatch(/cannot tell when you type a password/);
+  });
+
+  it("offers Show clicks and Show keystrokes for a GIF too", async () => {
+    mockBackend({ recording: { ...DEFAULT_RECORDING, format: "gif", showClicks: true, showKeystrokes: true } });
+    render(<SettingsWindow section="recording" />);
+    const clicks = await screen.findByRole("switch", { name: /Show clicks/ });
+    await waitFor(() => expect(clicks).toBeEnabled());
+    expect(clicks).toBeChecked();
+    expect(screen.getByRole("switch", { name: /Show keystrokes/ })).toBeChecked();
   });
 
   it("offers Show cursor for a GIF too", async () => {

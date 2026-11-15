@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import AiSection from "./AiSection";
 import HotkeysSection from "./HotkeysSection";
+import { isMacPlatform } from "./accelerator";
 import { FolderIcon } from "../app/icons";
 import {
   AFTER_CAPTURE_CHOICES,
@@ -13,6 +14,7 @@ import {
   RECORDING_FPS,
   RECORDING_QUALITIES,
   ffmpegStatus,
+  keystrokesHint as keystrokesHintFor,
   listMicrophones,
   onFfmpegStatus,
   retryFfmpeg,
@@ -389,6 +391,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   const recording: RecordingSettings = { ...DEFAULT_RECORDING, ...settings?.recording };
   const recordingOff = busy || settings === null;
   const silent = recording.format === "gif";
+  const keystrokesHint = keystrokesHintFor(isMacPlatform());
   const defaultMicrophone = microphones.find((microphone) => microphone.isDefault);
   const savedMicrophoneMissing =
     recording.microphone !== null && !microphones.some((microphone) => microphone.id === recording.microphone);
@@ -645,6 +648,34 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                 checked={recording.showCursor}
                 disabled={busy || settings === null}
                 onChange={(event) => void changeRecording({ showCursor: event.target.checked })}
+              />
+            </label>
+            <label className="row">
+              <span className="row-text">
+                <span className="row-title">Show clicks</span>
+                <span className="row-hint">Draws a ring where you click, fading in half a second.</span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                className="switch"
+                checked={recording.showClicks}
+                disabled={busy || settings === null}
+                onChange={(event) => void changeRecording({ showClicks: event.target.checked })}
+              />
+            </label>
+            <label className="row">
+              <span className="row-text">
+                <span className="row-title">Show keystrokes</span>
+                <span className="row-hint">{keystrokesHint}</span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                className="switch"
+                checked={recording.showKeystrokes}
+                disabled={busy || settings === null}
+                onChange={(event) => void changeRecording({ showKeystrokes: event.target.checked })}
               />
             </label>
           </div>
