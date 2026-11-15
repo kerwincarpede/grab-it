@@ -22,12 +22,11 @@ on:
         options: [auto, patch, minor, major]
         default: auto
 
-# One release at a time, never cut short, so each run sees the tag the
-# previous one published. Pushes that land while one runs wait; only the
-# newest waiting run is kept, and it releases all of their commits.
-concurrency:
-  group: release
-  cancel-in-progress: false
+# No concurrency group: GitHub keeps only one waiting run per group and
+# cancels the rest, which would skip merges that land while a release runs.
+# Instead every run waits in its first step for the earlier ones to finish
+# (see "Wait for earlier releases"), so each merge is built and released in
+# turn and each run sees the tag the previous one published.
 
 permissions:
   contents: read
@@ -46,7 +45,10 @@ jobs:
   version:
     name: Version
     runs-on: ubuntu-24.04
+    # Long enough to queue behind a few releases of about ten minutes each.
+    timeout-minutes: 180
     permissions:
+      actions: read
       contents: write
     outputs:
       version: ${{ steps.next.outputs.version }}
@@ -57,6 +59,23 @@ jobs:
         run: |
           echo "::error::Releases are made from main, not $GITHUB_REF."
           exit 1
+
+      # Releases go out one at a time, in the order their runs started. Runs
+      # are numbered in that order, so wait until no lower-numbered run of
+      # this workflow is still queued or running. Checkout comes after, so
+      # the tags it fetches include the release the previous run published.
+      - name: Wait for earlier releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          while :; do
+            earlier=$(gh run list -R "$GITHUB_REPOSITORY" -w release.yml -L 100 \
+              --json number,status,url \
+              --jq "[.[] | select(.number < $GITHUB_RUN_NUMBER and .status != \"completed\")] | sort_by(.number) | .[].url")
+            [ -z "$earlier" ] && break
+            echo "Waiting for:"; echo "$earlier"
+            sleep 30
+          done
 
       - uses: actions/checkout@v7
         with:
