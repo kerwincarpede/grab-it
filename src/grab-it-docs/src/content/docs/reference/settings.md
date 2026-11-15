@@ -7,6 +7,8 @@ sidebar:
 
 Open **Settings** from the Grab-it window's sidebar, with `⌘ ,` (`Ctrl + ,` on Windows and Linux) in the Grab-it window, from the gear in the Grab-it panel, or from **Settings…** in the tray menu. Settings has a page for each part of Grab-it, listed on its left.
 
+![Settings open at Hotkeys, with the capture hotkeys.](../../../assets/reference/settings-hotkeys.png)
+
 Most changes save as soon as you make them. Hotkeys save when you press **Save hotkeys**, and an AI endpoint's URL, model and key when you press **Save**.
 
 ## General

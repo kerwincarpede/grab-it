@@ -8,6 +8,8 @@ sidebar:
 
 The Library is the Grab-it window: every screenshot and recording you've taken, newest first, grouped by day (**Today**, **Yesterday**, then the day of the week, then the full date).
 
+![The Library with four captures under Today.](../../../assets/library/library.png)
+
 ## Open it
 
 - Click the Grab-it icon in the menu bar or tray and choose **Open Grab-it…**, or click its Dock icon on a Mac.
@@ -33,7 +35,7 @@ Each tile shows the window title (or the file name), the app and the time. Hover
 | --- | --- |
 | `/` | Jump to the search box |
 | Arrow keys | Move between tiles |
-| `⌘ Enter` | Open the selected tile |
+| `⌘ Enter` | Open the selected tile (macOS only: this one is not `Ctrl` on Windows and Linux, so double-click the tile there) |
 | `Esc` | Clear the search, or close the details |
 
 ## In this section

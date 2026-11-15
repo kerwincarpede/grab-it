@@ -7,6 +7,8 @@ sidebar:
 
 Pick who describes your captures in **Settings → AI descriptions → Described by**. The provider saves as soon as you click it. **Test connection** sends a tiny test image and tells you whether the model answered.
 
+![Settings open at AI descriptions, with the switches and Claude Code picked as the provider.](../../../assets/ai/ai-settings.png)
+
 ## Claude Code
 
 Uses the `claude` command you already have and are signed in to. Nothing to set up or download.

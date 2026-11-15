@@ -7,6 +7,8 @@ sidebar:
 
 Type in the search box at the top of the Library (press `/` to jump there). Results update as you type; press `Enter` to search at once, and `Esc` to clear it.
 
+![Searching for planning finds the capture whose text contains it, with the match highlighted.](../../../assets/library/library-search.png)
+
 ## What search looks at
 
 Every word you type is matched against:

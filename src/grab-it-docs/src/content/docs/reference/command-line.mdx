@@ -43,13 +43,19 @@ Grab-it ignores other arguments, and prints a message (on the terminal it was st
 <Tabs syncKey="os">
 <TabItem label="Windows" icon="seti:windows">
 
-The installer puts Grab-it in your user's programs folder:
+Where Grab-it is depends on which installer you used. The `-setup.exe` puts it in your user's programs folder:
 
 ```powershell
 & "$env:LOCALAPPDATA\Grab-it\grab-it.exe" --open region
 ```
 
-To make a desktop shortcut, right-click the desktop, choose **New → Shortcut**, and enter that path followed by `--open region`.
+The `.msi` installs it for everyone on the PC, in Program Files:
+
+```powershell
+& "$env:ProgramFiles\Grab-it\grab-it.exe" --open region
+```
+
+To make a desktop shortcut, right-click the desktop, choose **New → Shortcut**, and enter the path for your installer followed by `--open region`.
 
 </TabItem>
 <TabItem label="macOS" icon="apple">

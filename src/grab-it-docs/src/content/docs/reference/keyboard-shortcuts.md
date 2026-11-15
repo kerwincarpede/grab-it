@@ -123,7 +123,7 @@ Double-click the zoom track to add a zoom. See [Video editor](/grab-it/video-edi
 | `Enter` in search | Search now |
 | `Esc` | Clear the search, or close the details |
 | Arrow keys | Move between tiles |
-| `⌘ Enter` | Open the selected tile |
+| `⌘ Enter` | Open the selected tile (macOS only: this one is not `Ctrl` on Windows and Linux, so double-click the tile there) |
 | `⌘ ,` | Open Settings |
 | `⌘ +`, `⌘ −`, `⌘ 0` | Bigger text, smaller text, default text size |
 | In **Tags**: `Enter`, `,` | Add a tag |
