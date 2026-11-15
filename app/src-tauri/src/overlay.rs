@@ -825,6 +825,9 @@ pub struct OverlayInfo {
     pub intent: Intent,
     /// Opened by All-in-one: show the mode toolbar.
     pub all_in_one: bool,
+    /// What the toolbar has chosen so far on another monitor, for a page
+    /// that loads after the choice was made.
+    pub choice: Option<Choice>,
     pub monitor_width: u32,
     pub monitor_height: u32,
     /// The frozen image's width in its own pixels, for sizes shown before
@@ -1005,6 +1008,7 @@ pub fn overlay_info(window: WebviewWindow, state: State<'_, OverlayState>) -> Op
         mode: session.mode,
         intent: session.intent,
         all_in_one: session.all_in_one,
+        choice: session.choice,
         monitor_width: frame.monitor.width,
         monitor_height: frame.monitor.height,
         image_width: frame.image.width(),
@@ -1615,6 +1619,36 @@ mod tests {
                 delay: None,
             }
         );
+    }
+
+    #[test]
+    fn a_late_page_is_told_the_choice_made_so_far() {
+        let info = OverlayInfo {
+            mode: CaptureMode::Region,
+            intent: Intent::Capture,
+            all_in_one: true,
+            choice: Some(Choice {
+                intent: Some(Intent::Text),
+                mode: Some(CaptureMode::Region),
+                delay_seconds: Some(3),
+            }),
+            monitor_width: 100,
+            monitor_height: 100,
+            image_width: 100,
+            windows: Vec::new(),
+            top_inset: 0.0,
+        };
+        let value = serde_json::to_value(&info).unwrap();
+        assert_eq!(value["allInOne"], true);
+        assert_eq!(
+            value["choice"],
+            serde_json::json!({"intent": "text", "mode": "region", "delaySeconds": 3})
+        );
+        let none = OverlayInfo {
+            choice: None,
+            ..info
+        };
+        assert!(serde_json::to_value(&none).unwrap()["choice"].is_null());
     }
 
     #[test]

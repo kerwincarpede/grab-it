@@ -282,6 +282,13 @@ function RegionOverlay() {
   const [timer, setTimer] = useState(0);
   const toolbar = useRef<HTMLDivElement>(null);
 
+  /** Takes on a choice another monitor's toolbar made. */
+  const follow = useEffectEvent((choice: OverlayChoice) => {
+    setTool(toolOf(choice));
+    setTimer(TIMER_STEPS.includes(choice.delaySeconds) ? choice.delaySeconds : 0);
+    setDrag(null);
+  });
+
   useEffect(() => {
     let cancelled = false;
     let started = false;
@@ -297,6 +304,8 @@ function RegionOverlay() {
           if (cancelled || started || !loaded) return;
           started = true;
           setInfo(loaded);
+          // Another monitor's toolbar may have chosen before this page loaded.
+          if (loaded.allInOne && loaded.choice) follow(loaded.choice);
           return overlayImage().then((bytes) => {
             if (cancelled) return;
             url = toImageUrl(bytes);
@@ -480,15 +489,13 @@ function RegionOverlay() {
   }
 
   // Another monitor's toolbar changed: follow it, without sharing it back.
+  // Listening from the start, not once the info says All-in-one, so a
+  // choice made while this page loads is not missed; only All-in-one
+  // selections send it.
   useEffect(() => {
-    if (!allInOne) return;
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    onOverlayChoice((choice) => {
-      setTool(toolOf(choice));
-      setTimer(TIMER_STEPS.includes(choice.delaySeconds) ? choice.delaySeconds : 0);
-      setDrag(null);
-    })
+    onOverlayChoice((choice) => follow(choice))
       .then((stop) => {
         if (cancelled) stop();
         else unlisten = stop;
@@ -500,7 +507,7 @@ function RegionOverlay() {
       cancelled = true;
       unlisten?.();
     };
-  }, [allInOne]);
+  }, []);
 
   const onToolKey = useEffectEvent((event: KeyboardEvent) => {
     if (!allInOne || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;

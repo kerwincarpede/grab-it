@@ -32,6 +32,11 @@ export interface OverlayInfo {
    * backends leave this out.
    */
   allInOne?: boolean;
+  /**
+   * What All-in-one's toolbar has chosen so far on another monitor, so a
+   * page that loads late starts on it. Null until a choice is made.
+   */
+  choice?: OverlayChoice | null;
   monitorWidth: number;
   monitorHeight: number;
   /**

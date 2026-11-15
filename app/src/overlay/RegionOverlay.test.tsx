@@ -761,6 +761,37 @@ describe("RegionOverlay", () => {
       expect(screen.getByTestId("overlay-timer")).toHaveTextContent("Timer 5 s");
     });
 
+    it("starts on the choice another monitor made before this page loaded", async () => {
+      const calls = mockOverlay({
+        allInOne: true,
+        choice: { intent: "capture", mode: "window", delaySeconds: 5 },
+      });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      expect(overlay).toHaveAttribute("data-mode", "window");
+      expect(screen.getByRole("button", { name: "Window" })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByTestId("overlay-timer")).toHaveTextContent("Timer 5 s");
+      expect(calls.map((c) => c.cmd)).not.toContain("overlay_choose");
+
+      fireEvent.mouseMove(overlay, { clientX: 150, clientY: 150 });
+      fireEvent.mouseDown(overlay, { button: 0, clientX: 150, clientY: 150 });
+      fireEvent.mouseUp(overlay, { button: 0, clientX: 150, clientY: 150 });
+      await waitFor(() =>
+        expect(last(calls).payload).toEqual({
+          selection: { kind: "window", id: 7 },
+          choice: { intent: "capture", mode: "window", delaySeconds: 5 },
+        }),
+      );
+    });
+
+    it("ignores a shared choice in an overlay opened for one mode", async () => {
+      mockOverlay({ choice: { intent: "text", mode: "region", delaySeconds: 0 } });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+      expect(overlay).toHaveAttribute("data-intent", "capture");
+    });
+
     it("hides the toolbar while a region is dragged under it", async () => {
       mockOverlay({ allInOne: true });
       render(<RegionOverlay />);
