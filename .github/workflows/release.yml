@@ -142,6 +142,12 @@ jobs:
           curl -fsSL https://kerwincarpede.github.io/grab-it/install.sh | sh
           ```
 
+          **Homebrew (macOS):**
+
+          ```sh
+          brew install --cask kerwincarpede/tap/grab-it
+          ```
+
           Or download the installer for your platform from **Assets** below:
 
           | Platform | Installer |
@@ -233,3 +239,75 @@ jobs:
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
             -F draft=false -f make_latest=true \
             --jq '"Published \(.tag_name): \(.html_url)"'
+
+  # Homebrew users install the universal .dmg through the cask in
+  # kerwincarpede/homebrew-tap:
+  #   brew install --cask kerwincarpede/tap/grab-it
+  # Each release points the cask at its own .dmg. The push needs the
+  # HOMEBREW_TAP_TOKEN secret (fine-grained, contents: write on the tap);
+  # without it the release still goes out and the cask stays as it was.
+  homebrew:
+    name: Update the Homebrew cask
+    needs: [version, publish]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check for the tap token
+        id: token
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set, so the Homebrew cask was not updated."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.token.outputs.present == 'true'
+
+      - name: Render the cask
+        if: steps.token.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: v${{ needs.version.outputs.version }}
+        run: |
+          mkdir dmg
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p '*_universal.dmg' -D dmg
+          set -- dmg/*_universal.dmg
+          if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+            echo "::error::Expected one universal .dmg on $TAG."
+            exit 1
+          fi
+          name=$(basename "$1")
+          sha256=$(sha256sum "$1" | cut -d' ' -f1)
+          python3 .github/scripts/homebrew_cask.py \
+            --version "$VERSION" \
+            --url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$name" \
+            --sha256 "$sha256" \
+            > grab-it.rb
+          cat grab-it.rb
+
+      - name: Push the cask to the tap
+        if: steps.token.outputs.present == 'true'
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: v${{ needs.version.outputs.version }}
+        run: |
+          git clone --depth 1 \
+            "https://x-access-token:$TAP_TOKEN@github.com/kerwincarpede/homebrew-tap.git" tap
+          mkdir -p tap/Casks
+          cp grab-it.rb tap/Casks/grab-it.rb
+          cd tap
+          git add Casks/grab-it.rb
+          if git diff --cached --quiet; then
+            echo "The cask already installs $TAG."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "grab-it $TAG"
+          git push origin HEAD

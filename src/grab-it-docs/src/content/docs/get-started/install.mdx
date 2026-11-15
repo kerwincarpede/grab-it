@@ -1,6 +1,6 @@
 ---
 title: Install
-description: Install Grab-it with one command on macOS or Linux, or download the installer for Windows, macOS or Linux.
+description: Install Grab-it with one command on macOS or Linux, with Homebrew, or download the installer for Windows, macOS or Linux.
 sidebar:
   order: 1
 ---
@@ -21,6 +21,16 @@ It downloads the latest Grab-it for your computer, installs it and opens it:
 - **Linux:** the `.deb` (Debian, Ubuntu) or `.rpm` (Fedora, openSUSE) is installed with your package manager, which asks for your password. On other distributions, the AppImage goes into `~/.local/bin` and Grab-it appears in your app menu.
 
 Run the same command again any time to reinstall the latest version. Prefer to read it first? [View install.sh](/grab-it/install.sh).
+
+## macOS: Homebrew
+
+Already use [Homebrew](https://brew.sh)? Install Grab-it with:
+
+```sh
+brew install --cask kerwincarpede/tap/grab-it
+```
+
+It opens without the "can't verify the developer" prompt, like the one-command install. Grab-it keeps itself up to date, so `brew upgrade` leaves it alone; `brew uninstall --cask grab-it` removes it.
 
 ## Or download an installer
 
