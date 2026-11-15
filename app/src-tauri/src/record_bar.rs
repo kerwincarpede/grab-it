@@ -451,7 +451,10 @@ fn displays(app: &AppHandle) -> Vec<Display> {
 }
 
 /// The Tauri monitor that `monitor` is, by name, else by position.
-pub(crate) fn monitor_for<'a>(monitor: &MonitorInfo, monitors: &'a [Monitor]) -> Option<&'a Monitor> {
+pub(crate) fn monitor_for<'a>(
+    monitor: &MonitorInfo,
+    monitors: &'a [Monitor],
+) -> Option<&'a Monitor> {
     monitors
         .iter()
         .find(|m| m.name().is_some_and(|name| *name == monitor.name))

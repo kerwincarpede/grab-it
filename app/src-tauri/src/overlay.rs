@@ -1863,7 +1863,10 @@ mod tests {
         };
         assert!(serde_json::to_value(&none).unwrap()["lastRegion"].is_null());
         assert_eq!(value["pointerHere"], false);
-        assert_eq!(value["barCentre"], serde_json::json!({ "x": 960.0, "y": 42.0 }));
+        assert_eq!(
+            value["barCentre"],
+            serde_json::json!({ "x": 960.0, "y": 42.0 })
+        );
         assert_eq!(value["monitorName"], "DELL U2720Q");
         let unknown = OverlayInfo {
             bar_centre: None,
