@@ -194,7 +194,7 @@ pub struct Progress {
 
 /// Removes an item's files: its main file first, then its sidecars. Fails
 /// only when the main file could not be removed. Faked in tests.
-pub type RemoveFiles = dyn Fn(&[PathBuf], Removal) -> io::Result<()> + Sync;
+pub type RemoveFiles<'a> = dyn Fn(&[PathBuf], Removal) -> io::Result<()> + Sync + 'a;
 
 /// Moves `files` to the system Trash or deletes them. The first is the
 /// item's main file; the rest are its sidecars, whose failures are logged.
@@ -291,7 +291,7 @@ pub fn cleanup(
     retention: &Retention,
     removal: Removal,
     now_ms: i64,
-    remove: &RemoveFiles,
+    remove: &RemoveFiles<'_>,
     progress: &mut dyn FnMut(Progress),
     stop: &AtomicBool,
 ) -> Result<Cleaned, CleanupError> {
@@ -559,13 +559,7 @@ mod tests {
 
     /// A library item of `kind` captured `days_old` days before [`NOW`],
     /// with its file and thumbnail on disk in `dir`.
-    fn aged(
-        library: &mut Library,
-        dir: &Path,
-        kind: ShotKind,
-        name: &str,
-        days_old: i64,
-    ) -> Shot {
+    fn aged(library: &mut Library, dir: &Path, kind: ShotKind, name: &str, days_old: i64) -> Shot {
         let path = dir.join(name);
         std::fs::write(&path, b"item").unwrap();
         let thumb_path = dir.join(format!("{name}.thumb.png"));
@@ -638,7 +632,11 @@ mod tests {
         let mut library = Library::open_in_memory().unwrap();
         aged(&mut library, dir.path(), ShotKind::Image, "a.png", 5_000);
         aged(&mut library, dir.path(), ShotKind::Video, "b.mp4", 5_000);
-        assert!(due(&library, &Retention::default(), NOW).unwrap().is_empty());
+        assert!(
+            due(&library, &Retention::default(), NOW)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -658,13 +656,28 @@ mod tests {
         // Blank notes and AI tags do not protect an item.
         let blank = aged(&mut library, dir.path(), ShotKind::Image, "blank.png", 90);
         library.set_notes(blank.id, "   ").unwrap();
+        let described = aged(&mut library, dir.path(), ShotKind::Image, "ai.png", 90);
+        library
+            .set_ai_description(
+                described.id,
+                &crate::library::AiDescription {
+                    description: "A receipt.".into(),
+                    category: "receipt".into(),
+                    tags: vec!["receipts".into()],
+                },
+                "test-model",
+            )
+            .unwrap();
         let plain = aged(&mut library, dir.path(), ShotKind::Video, "plain.mp4", 90);
 
         let retention = keep(Some(30), Some(30), Some(30));
         assert_eq!(
             ids(&due(&library, &retention, NOW).unwrap()),
-            vec![blank.id, plain.id]
+            vec![blank.id, described.id, plain.id]
         );
+        let described = library.get(described.id).unwrap();
+        assert_eq!(described.ai_tags, vec!["receipts".to_string()]);
+        assert!(!is_protected(&described));
         for id in [starred.id, tagged.id, noted.id] {
             assert!(is_protected(&library.get(id).unwrap()));
         }
@@ -685,13 +698,16 @@ mod tests {
         assert_eq!(ids(&due(&library, &retention, NOW).unwrap()), vec![shot.id]);
     }
 
+    /// What a cleanup asked its remover to do.
+    type RemoveCall = (Vec<PathBuf>, Removal);
+
     /// Runs a cleanup with a remover that records what it was asked to do
     /// and deletes the files.
     fn clean(
         library: &LibraryState,
         retention: &Retention,
         removal: Removal,
-    ) -> (Cleaned, Vec<(Vec<PathBuf>, Removal)>, Vec<Progress>) {
+    ) -> (Cleaned, Vec<RemoveCall>, Vec<Progress>) {
         let calls = std::sync::Mutex::new(Vec::new());
         let remove = |files: &[PathBuf], removal: Removal| -> io::Result<()> {
             calls.lock().unwrap().push((files.to_vec(), removal));
@@ -722,8 +738,7 @@ mod tests {
         let kept = aged(&mut library, dir.path(), ShotKind::Video, "new.mp4", 10);
         let state = LibraryState::new(library);
 
-        let (cleaned, calls, progress) =
-            clean(&state, &keep(None, None, Some(30)), Removal::Trash);
+        let (cleaned, calls, progress) = clean(&state, &keep(None, None, Some(30)), Removal::Trash);
 
         assert_eq!(
             cleaned,
@@ -751,7 +766,10 @@ mod tests {
             }]
         );
         let library = state.lock();
-        assert!(matches!(library.get(old.id), Err(LibraryError::NotFound(_))));
+        assert!(matches!(
+            library.get(old.id),
+            Err(LibraryError::NotFound(_))
+        ));
         assert!(library.get(kept.id).is_ok());
         assert!(kept.path.exists());
     }
@@ -792,9 +810,8 @@ mod tests {
         let mut library = Library::open_in_memory().unwrap();
         let old = aged(&mut library, dir.path(), ShotKind::Gif, "old.gif", 60);
         let state = LibraryState::new(library);
-        let refuse = |_: &[PathBuf], _: Removal| -> io::Result<()> {
-            Err(io::Error::other("in use"))
-        };
+        let refuse =
+            |_: &[PathBuf], _: Removal| -> io::Result<()> { Err(io::Error::other("in use")) };
         let cleaned = cleanup(
             &CleanupLock::default(),
             &state,
