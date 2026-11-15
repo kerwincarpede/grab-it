@@ -296,7 +296,12 @@ export interface RecordingSettings {
   camera: string | null;
   /** The bubble's outline. */
   webcamShape: WebcamShape;
+  /** Seconds counted down on the recording toolbar before it starts: one of `RECORDING_COUNTDOWNS`. */
+  countdown: number;
 }
+
+/** Mirrors `RECORDING_COUNTDOWNS` in src-tauri/src/settings.rs; 0 starts at once. */
+export const RECORDING_COUNTDOWNS = [0, 3, 5, 10] as const;
 
 export const DEFAULT_RECORDING: RecordingSettings = {
   format: "mp4",
@@ -310,6 +315,7 @@ export const DEFAULT_RECORDING: RecordingSettings = {
   showWebcam: false,
   camera: null,
   webcamShape: "round",
+  countdown: 0,
 };
 
 /**

@@ -46,6 +46,7 @@ import {
   moveTo,
   resizeBox,
   snapToImage,
+  clipToView,
   stretch,
   surround,
   topmostAt,
@@ -70,6 +71,7 @@ import {
   WindowIcon,
 } from "../app/icons";
 import Loupe from "./Loupe";
+import RecordSetup from "./RecordSetup";
 import "./overlay.css";
 
 interface PickableWindow {
@@ -90,8 +92,12 @@ const HINTS: Record<OverlayIntent, string> = {
 const WINDOW_HINT = "Click a window to capture it. Esc cancels.";
 /** All-in-one, once a region is selected and waits to be confirmed. */
 const ADJUST_HINT = "Drag the handles to adjust, then press Enter. Esc cancels.";
+/** A recording area, once picked: it waits to be set up and started. */
+const RECORD_HINT = "Adjust the area and choose how to record, then press Enter. Esc cancels.";
 /** Room the size field and ratio presets take beside a selection; an estimate. */
 const SIZE_PANEL: Size = { width: 470, height: 46 };
+/** The same with the recording options below them. */
+const RECORD_PANEL: Size = { width: 720, height: 92 };
 /**
  * The hovered window's rounded corners, in CSS px. Matches `.overlay-window`
  * and `.overlay-dim-corner`.
@@ -254,6 +260,8 @@ interface SizePanelProps {
   onSize: (size: Size) => void;
   onRatio: (ratio: RatioId) => void;
   onConfirm: () => void;
+  /** A second row, below the size: a recording's options. */
+  children?: ReactNode;
 }
 
 /** A typed size: a whole number of image pixels, at least one. */
@@ -276,6 +284,7 @@ function SizePanel({
   onSize,
   onRatio,
   onConfirm,
+  children,
 }: SizePanelProps) {
   // What is being typed, until Enter or leaving the field applies it.
   const [draft, setDraft] = useState<{ width: string; height: string } | null>(null);
@@ -316,6 +325,7 @@ function SizePanel({
     <div
       className="overlay-size-panel"
       data-testid="overlay-size-panel"
+      data-rows={children ? "2" : "1"}
       style={{ transform }}
       // A click on a button leaves the focus where it was, so Enter never
       // presses it again; the fields take the focus as fields do.
@@ -323,35 +333,38 @@ function SizePanel({
         if ((event.target as HTMLElement).closest("button")) event.preventDefault();
       }}
     >
-      {field("width", "Width")}
-      <span aria-hidden="true">×</span>
-      {field("height", "Height")}
-      <span className="overlay-size-unit">px</span>
-      <span className="overlay-toolbar-gap" aria-hidden="true" />
-      <div className="overlay-ratios" role="group" aria-label="Aspect ratio">
-        {RATIOS.map(({ id, label }) => (
-          <button
-            key={id}
-            type="button"
-            className="overlay-tool overlay-ratio"
-            aria-pressed={id === ratio}
-            onClick={() => onRatio(id)}
-          >
-            {label}
-          </button>
-        ))}
+      <div className="overlay-size-row">
+        {field("width", "Width")}
+        <span aria-hidden="true">×</span>
+        {field("height", "Height")}
+        <span className="overlay-size-unit">px</span>
+        <span className="overlay-toolbar-gap" aria-hidden="true" />
+        <div className="overlay-ratios" role="group" aria-label="Aspect ratio">
+          {RATIOS.map(({ id, label }) => (
+            <button
+              key={id}
+              type="button"
+              className="overlay-tool overlay-ratio"
+              aria-pressed={id === ratio}
+              onClick={() => onRatio(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <span className="overlay-toolbar-gap" aria-hidden="true" />
+        <button
+          type="button"
+          className="overlay-tool overlay-confirm"
+          data-testid="overlay-confirm"
+          disabled={!canConfirm}
+          onClick={onConfirm}
+        >
+          <span>{confirmLabel}</span>
+          <kbd aria-hidden="true">Enter</kbd>
+        </button>
       </div>
-      <span className="overlay-toolbar-gap" aria-hidden="true" />
-      <button
-        type="button"
-        className="overlay-tool overlay-confirm"
-        data-testid="overlay-confirm"
-        disabled={!canConfirm}
-        onClick={onConfirm}
-      >
-        <span>{confirmLabel}</span>
-        <kbd aria-hidden="true">Enter</kbd>
-      </button>
+      {children}
     </div>
   );
 }
@@ -612,7 +625,8 @@ function RegionOverlay() {
   const scale = imageWidth > 0 && view.width > 0 ? imageWidth / view.width : 1;
 
   // All-in-one keeps a dragged region selected until it is confirmed.
-  const adjustable = allInOne && canDrag;
+  // So is a recording's area, which waits to be set up and started.
+  const adjustable = (allInOne || intent === "record") && canDrag;
   const ratioValue = adjustable ? (RATIOS.find((each) => each.id === ratio)?.value ?? null) : null;
   const preset = allInOne && info?.lastRegion ? fromImagePixels(info.lastRegion, scale) : null;
   const held = adjustable ? (picked === undefined ? preset : picked) : null;
@@ -732,7 +746,8 @@ function RegionOverlay() {
   }, []);
 
   const onToolKey = useEffectEvent((event: KeyboardEvent) => {
-    if (!allInOne || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+    // All-in-one's keys, and Enter for a recording's held area.
+    if (!(allInOne || adjustable) || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
     if (isField(event.target)) return;
     if (event.key === "Enter") {
       if (!held) return;
@@ -740,6 +755,7 @@ function RegionOverlay() {
       confirmHeld();
       return;
     }
+    if (!allInOne) return;
     const digit = digitOf(event);
     if (digit === null || digit > TIMER_KEY) return;
     event.preventDefault();
@@ -847,7 +863,16 @@ function RegionOverlay() {
       return;
     }
     const under = canPickWindow ? topmostAt(pickable, end) : undefined;
-    if (under) finish({ kind: "window", id: under.window.id });
+    if (!under) return;
+    // A recording holds the window's area, to be set up and started.
+    if (intent === "record" && adjustable) {
+      const clipped = clipToView(under.box, view);
+      if (clipped) {
+        setPicked(snapToImage(clipped, scale));
+        return;
+      }
+    }
+    finish({ kind: "window", id: under.window.id });
   }
 
   // A drag is labelled with the size it will be captured at, in image pixels.
@@ -856,7 +881,11 @@ function RegionOverlay() {
     ? `${captured.width} × ${captured.height}`
     : hovered?.window.title || hovered?.window.appName;
   const placement = highlight
-    ? labelPlacement(highlight, dragging ? SIZE_LABEL : held ? SIZE_PANEL : TITLE_LABEL, view)
+    ? labelPlacement(
+        highlight,
+        dragging ? SIZE_LABEL : held ? (intent === "record" ? RECORD_PANEL : SIZE_PANEL) : TITLE_LABEL,
+        view,
+      )
     : null;
   const heldSize = held ? imageSize(held, scale) : null;
 
@@ -954,7 +983,9 @@ function RegionOverlay() {
             onSize={applySize}
             onRatio={chooseRatio}
             onConfirm={confirmHeld}
-          />
+          >
+            {intent === "record" && <RecordSetup up={placement.side === "below"} />}
+          </SizePanel>
         </div>
       )}
       {hovered && !framed && placement && (
@@ -1010,7 +1041,7 @@ function RegionOverlay() {
         style={{ top: hintTop(info?.topInset, view.height) + (allInOne ? TOOLBAR_ROOM : 0) }}
       >
         <p className="overlay-hint-text" role="status" data-error={error ? "true" : "false"}>
-          {error ?? (windowMode ? WINDOW_HINT : held ? ADJUST_HINT : HINTS[intent])}
+          {error ?? (windowMode ? WINDOW_HINT : held ? (intent === "record" ? RECORD_HINT : ADJUST_HINT) : HINTS[intent])}
         </p>
         <ul className="overlay-keys" aria-label="Keyboard shortcuts">
           <li>

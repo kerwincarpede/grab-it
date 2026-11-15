@@ -213,3 +213,81 @@ export const AppearanceIcon = ({ size }: IconProps) => (
     <path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" />
   </Icon>
 );
+
+export const MicIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <rect x="9" y="3" width="6" height="11" rx="3" />
+    <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" />
+  </Icon>
+);
+
+export const MicOffIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M15 10V6a3 3 0 0 0-5.7-1.3M9 9v2a3 3 0 0 0 5.1 2.1M5.5 11a6.5 6.5 0 0 0 10.9 4.8M18.5 11a6.5 6.5 0 0 1-.5 2.5M12 17.5V21M3 3l18 18" />
+  </Icon>
+);
+
+export const SpeakerIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M11 5 6 9H3v6h3l5 4z" />
+    <path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" />
+  </Icon>
+);
+
+export const SpeakerOffIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M11 5 6 9H3v6h3l5 4z" />
+    <path d="m16 9 5 6M21 9l-5 6" />
+  </Icon>
+);
+
+export const CameraIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <rect x="3" y="6" width="13" height="12" rx="2" />
+    <path d="m16 10 5-3v10l-5-3z" />
+  </Icon>
+);
+
+export const PauseIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M9 5.5v13M15 5.5v13" />
+  </Icon>
+);
+
+export const PlayIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M7.5 5.5v13l11-6.5z" />
+  </Icon>
+);
+
+export const StopIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none" />
+  </Icon>
+);
+
+export const RestartIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M4 12a8 8 0 1 0 2.4-5.7" />
+    <path d="M4 4v5h5" />
+  </Icon>
+);
+
+export const TrashIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />
+  </Icon>
+);
+
+export const ClickIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="m9 9 11 4-5 2-2 5z" />
+    <path d="M5 3v3M3 5h3M8.5 4.5 7 6" />
+  </Icon>
+);
+
+export const GripIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01" strokeWidth="2.6" />
+  </Icon>
+);

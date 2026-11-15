@@ -95,15 +95,6 @@ pub enum QuickItem {
     Error {
         message: String,
     },
-    /// A screen recording is under way; the card offers Stop.
-    #[serde(rename_all = "camelCase")]
-    Recording {
-        /// Milliseconds since the Unix epoch, for the card's timer.
-        started_at: u64,
-        /// A GIF stops by itself after this long; an MP4 has no limit.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        max_seconds: Option<u64>,
-    },
     /// A finished recording.
     #[serde(rename_all = "camelCase")]
     Recorded {
@@ -232,17 +223,12 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// Shows `item` on the card, creating the card when it is not on screen,
 /// and returns its generation. Call this off the main thread: it may create
 /// a window.
-pub fn show(app: &AppHandle, item: QuickItem) -> u64 {
-    show_in(app, item, preferred_corner(app))
-}
-
-/// Like [`show`], in a chosen corner: a recording keeps the card out of
-/// the area being recorded.
 ///
 /// An existing card window is told about the item by event; a card still
 /// loading reads it with `quick_info` once it is up, and reads it again
 /// after subscribing, so an item set in between is not missed.
-pub fn show_in(app: &AppHandle, item: QuickItem, corner: Corner) -> u64 {
+pub fn show(app: &AppHandle, item: QuickItem) -> u64 {
+    let corner = preferred_corner(app);
     let state = app.state::<QuickState>();
     if matches!(item, QuickItem::Capture { .. }) {
         *lock(&state.last_capture) = Some(item.clone());
@@ -398,53 +384,6 @@ pub fn place_in_corner(
         Corner::TopLeft => PhysicalPosition::new(left, top),
         Corner::TopRight => PhysicalPosition::new(right.max(origin.0), top),
     }
-}
-
-/// The corner whose card would not cover `region`, a rectangle in a
-/// monitor's image pixels: `preferred` when it is clear, else the first
-/// clear one, else `preferred` anyway. The card's footprint is padded
-/// generously, since the work area (and so the card's exact place) is only
-/// known in screen units.
-pub fn corner_clear_of(
-    region: crate::capture::Rect,
-    image_size: (u32, u32),
-    scale: f64,
-    preferred: Corner,
-) -> Corner {
-    let scale = if scale.is_finite() && scale > 0.0 {
-        scale
-    } else {
-        1.0
-    };
-    // The card, its margin, and room for a taskbar or Dock.
-    let reach_x = ((WIDTH + 2.0 * MARGIN) * scale) as i64;
-    let reach_y = ((HEIGHT + 2.0 * MARGIN + 80.0) * scale) as i64;
-    let (width, height) = (i64::from(image_size.0), i64::from(image_size.1));
-    let left = i64::from(region.x);
-    let top = i64::from(region.y);
-    let right = left + i64::from(region.width);
-    let bottom = top + i64::from(region.height);
-
-    let in_left = left < reach_x;
-    let in_right = right > width - reach_x;
-    let in_bottom = bottom > height - reach_y;
-    let in_top = top < reach_y;
-    let covered = |corner: Corner| match corner {
-        Corner::BottomLeft => in_left && in_bottom,
-        Corner::BottomRight => in_right && in_bottom,
-        Corner::TopLeft => in_left && in_top,
-        Corner::TopRight => in_right && in_top,
-    };
-    [
-        preferred,
-        Corner::BottomLeft,
-        Corner::BottomRight,
-        Corner::TopLeft,
-        Corner::TopRight,
-    ]
-    .into_iter()
-    .find(|corner| !covered(*corner))
-    .unwrap_or(preferred)
 }
 
 #[tauri::command]
@@ -700,51 +639,6 @@ mod tests {
         assert_eq!(
             place_in_corner((100, 50), (1920, 1040), 1.0, Corner::TopLeft),
             PhysicalPosition::new(120, 70)
-        );
-    }
-
-    #[test]
-    fn the_card_keeps_out_of_a_recorded_region() {
-        use crate::capture::Rect;
-        let screen = (1920, 1080);
-        let region = |x, y, width, height| Rect {
-            x,
-            y,
-            width,
-            height,
-        };
-        // A region in the middle leaves the usual corner free.
-        assert_eq!(
-            corner_clear_of(region(700, 300, 500, 300), screen, 1.0, Corner::BottomLeft),
-            Corner::BottomLeft
-        );
-        // Recording the bottom-left moves the card to the right.
-        assert_eq!(
-            corner_clear_of(region(0, 600, 600, 480), screen, 1.0, Corner::BottomLeft),
-            Corner::BottomRight
-        );
-        // A strip along the whole bottom leaves the top.
-        assert_eq!(
-            corner_clear_of(region(0, 800, 1920, 280), screen, 1.0, Corner::BottomLeft),
-            Corner::TopLeft
-        );
-        // The whole screen: nowhere is clear, so the usual corner it is.
-        assert_eq!(
-            corner_clear_of(region(0, 0, 1920, 1080), screen, 1.0, Corner::BottomLeft),
-            Corner::BottomLeft
-        );
-        // The chosen corner wins when it is clear, and is kept when nothing is.
-        assert_eq!(
-            corner_clear_of(region(700, 300, 500, 300), screen, 1.0, Corner::TopRight),
-            Corner::TopRight
-        );
-        assert_eq!(
-            corner_clear_of(region(1400, 0, 520, 300), screen, 1.0, Corner::TopRight),
-            Corner::BottomLeft
-        );
-        assert_eq!(
-            corner_clear_of(region(0, 0, 1920, 1080), screen, 1.0, Corner::TopRight),
-            Corner::TopRight
         );
     }
 

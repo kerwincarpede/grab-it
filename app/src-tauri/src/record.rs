@@ -3,8 +3,9 @@
 //! The user drags a region (or clicks a window) on the usual overlay; that
 //! area of that monitor is then grabbed over and over and written straight
 //! into a file in `<save folder>/recordings/`, so memory use does not grow
-//! with the length of the recording. The Quick Access card shows the
-//! elapsed time and a Stop button, and moves out of the recorded area.
+//! with the length of the recording. The recording toolbar (record_bar.rs)
+//! shows the elapsed time with Mute, Pause, Stop, Restart and Discard,
+//! after an optional countdown.
 //!
 //! An MP4 is piped through ffmpeg (see ffmpeg.rs) at a constant 30 or 60
 //! frames a second, with no length limit, and `<name>.cursor.json` beside
@@ -79,30 +80,163 @@ const MAX_WIDTH: u32 = 1280;
 /// own recommendation for a good balance.
 const QUANTISER_SPEED: i32 = 10;
 
-/// The stop flag of the recording under way, if any.
+/// How often a paused recording checks whether it should go on.
+const PAUSE_POLL: Duration = Duration::from_millis(20);
+
+/// What the recording toolbar can change while a recording runs, shared
+/// with the thread that records.
+#[derive(Debug, Default)]
+pub struct Controls {
+    stop: AtomicBool,
+    /// Throw the recording away once it stops.
+    discard: AtomicBool,
+    /// Throw it away and start again on the same area once it stops.
+    restart: AtomicBool,
+    paused: AtomicBool,
+    microphone_muted: AtomicBool,
+    system_muted: AtomicBool,
+    /// How loud the microphone is, once it has started.
+    meter: Mutex<Option<audio::Meter>>,
+}
+
+impl Controls {
+    fn stopped(&self) -> bool {
+        self.stop.load(Ordering::SeqCst)
+    }
+
+    fn paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+
+    /// Whether `input` is muted on the toolbar.
+    fn muted(&self, input: &Input) -> bool {
+        match input {
+            Input::Microphone(_) => self.microphone_muted.load(Ordering::SeqCst),
+            Input::System => self.system_muted.load(Ordering::SeqCst),
+        }
+    }
+
+    /// Waits while paused and not stopped. Returns how long it waited.
+    fn wait_while_paused(&self) -> Duration {
+        let began = Instant::now();
+        while self.paused() && !self.stopped() {
+            std::thread::sleep(PAUSE_POLL);
+        }
+        began.elapsed()
+    }
+}
+
+/// Where a recording is in its life, as the toolbar shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Phase {
+    /// Counting down to the first frame.
+    Countdown,
+    Recording,
+    /// Stopped, and finishing the file.
+    Saving,
+}
+
+/// What the recording toolbar shows. Mirrors `BarStatus` in
+/// src/recordbar/api.ts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BarStatus {
+    pub phase: Phase,
+    /// Milliseconds since the Unix epoch when the countdown ends.
+    pub countdown_ends_at: Option<u64>,
+    /// Milliseconds since the Unix epoch when the first frame was grabbed.
+    pub started_at: Option<u64>,
+    /// How long the recording has been paused, before the pause under way.
+    pub paused_ms: u64,
+    /// When the pause under way began, if it is paused.
+    pub paused_at: Option<u64>,
+    /// A GIF stops by itself after this many seconds; an MP4 has no limit.
+    pub max_seconds: Option<u64>,
+    pub format: RecordingFormat,
+    /// Whether the microphone is muted, when it is recorded at all.
+    pub microphone: Option<bool>,
+    /// Whether the system sound is muted, when it is recorded at all.
+    pub system: Option<bool>,
+    /// Whether the webcam bubble is showing.
+    pub webcam: bool,
+}
+
+/// The recording under way: what it records, its controls and what the
+/// toolbar shows of it.
+pub struct Session {
+    controls: Arc<Controls>,
+    monitor: MonitorInfo,
+    image_size: (u32, u32),
+    rect: Rect,
+    recording: RecordingSettings,
+    status: Mutex<BarStatus>,
+}
+
+impl Session {
+    /// What the toolbar shows now.
+    pub fn status(&self) -> BarStatus {
+        lock_status(&self.status).clone()
+    }
+
+    /// Changes what the toolbar shows and tells it.
+    fn update(&self, app: &AppHandle, change: impl FnOnce(&mut BarStatus)) {
+        let status = {
+            let mut status = lock_status(&self.status);
+            change(&mut status);
+            status.clone()
+        };
+        crate::record_bar::changed(app, &status);
+    }
+}
+
+fn lock_status(status: &Mutex<BarStatus>) -> MutexGuard<'_, BarStatus> {
+    status
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Milliseconds since the Unix epoch.
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or_default()
+}
+
+/// The recording under way, if any.
 #[derive(Default)]
-pub struct RecordState(Mutex<Option<Arc<AtomicBool>>>);
+pub struct RecordState(Mutex<Option<Arc<Session>>>);
 
 impl RecordState {
-    fn lock(&self) -> MutexGuard<'_, Option<Arc<AtomicBool>>> {
+    fn lock(&self) -> MutexGuard<'_, Option<Arc<Session>>> {
         self.0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
-/// Asks the recording under way to finish. False when there is none.
+/// The recording under way, if any.
+pub fn session(app: &AppHandle) -> Option<Arc<Session>> {
+    app.try_state::<RecordState>()
+        .and_then(|state| state.lock().clone())
+}
+
+/// Asks the recording under way to finish. False when there is none. A
+/// recording still counting down has nothing to keep, so it is dropped.
 pub fn stop(app: &AppHandle) -> bool {
-    let Some(state) = app.try_state::<RecordState>() else {
+    let Some(session) = session(app) else {
         return false;
     };
-    match &*state.lock() {
-        Some(flag) => {
-            flag.store(true, Ordering::SeqCst);
-            true
-        }
-        None => false,
+    let counting = session.status().phase == Phase::Countdown;
+    if counting {
+        session.controls.discard.store(true, Ordering::SeqCst);
     }
+    session.controls.stop.store(true, Ordering::SeqCst);
+    // Unpaused, so a paused recording finishes at once.
+    session.controls.paused.store(false, Ordering::SeqCst);
+    session.update(app, |status| status.phase = Phase::Saving);
+    true
 }
 
 /// Stops the recording under way and waits, briefly, for its file to be
@@ -113,10 +247,7 @@ pub fn stop_and_wait(app: &AppHandle) {
     }
     let deadline = Instant::now() + STOP_TIMEOUT;
     while Instant::now() < deadline {
-        let recording = app
-            .try_state::<RecordState>()
-            .is_some_and(|state| state.lock().is_some());
-        if !recording {
+        if session(app).is_none() {
             return;
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -126,6 +257,122 @@ pub fn stop_and_wait(app: &AppHandle) {
 #[tauri::command]
 pub fn record_stop(app: AppHandle) {
     stop(&app);
+}
+
+/// Pauses the recording under way, or carries it on.
+#[tauri::command]
+pub fn record_pause(paused: bool, app: AppHandle) {
+    let Some(session) = session(&app) else {
+        return;
+    };
+    if session.status().phase != Phase::Recording {
+        return;
+    }
+    let was = session.controls.paused.swap(paused, Ordering::SeqCst);
+    if was == paused {
+        return;
+    }
+    let now = now_ms();
+    session.update(&app, |status| {
+        if paused {
+            status.paused_at = Some(now);
+        } else if let Some(at) = status.paused_at.take() {
+            status.paused_ms += now.saturating_sub(at);
+        }
+    });
+}
+
+/// Which sound the toolbar mutes. Mirrors `MutedInput` in
+/// src/recordbar/api.ts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MutedInput {
+    Microphone,
+    System,
+}
+
+/// Mutes the microphone or the system sound of the recording under way,
+/// or turns it back on: silence is recorded in its place meanwhile.
+#[tauri::command]
+pub fn record_mute(input: MutedInput, muted: bool, app: AppHandle) {
+    let Some(session) = session(&app) else {
+        return;
+    };
+    let flag = match input {
+        MutedInput::Microphone => &session.controls.microphone_muted,
+        MutedInput::System => &session.controls.system_muted,
+    };
+    flag.store(muted, Ordering::SeqCst);
+    session.update(&app, |status| {
+        let shown = match input {
+            MutedInput::Microphone => &mut status.microphone,
+            MutedInput::System => &mut status.system,
+        };
+        if shown.is_some() {
+            *shown = Some(muted);
+        }
+    });
+}
+
+/// Shows or hides the webcam bubble of the recording under way.
+#[tauri::command]
+pub fn record_webcam(shown: bool, app: AppHandle) {
+    let Some(session) = session(&app) else {
+        return;
+    };
+    // Opening a window waits on the main thread.
+    std::thread::spawn(move || {
+        if shown {
+            crate::webcam::open(
+                &app,
+                &session.monitor,
+                session.image_size,
+                session.rect,
+                &session.recording,
+            );
+        } else {
+            crate::webcam::close(&app);
+        }
+        session.update(&app, |status| status.webcam = shown);
+    });
+}
+
+/// Throws the recording under way away.
+#[tauri::command]
+pub fn record_discard(app: AppHandle) {
+    if let Some(session) = session(&app) {
+        session.controls.discard.store(true, Ordering::SeqCst);
+    }
+    stop(&app);
+}
+
+/// Throws the recording under way away and starts again on the same area.
+#[tauri::command]
+pub fn record_restart(app: AppHandle) {
+    if let Some(session) = session(&app) {
+        session.controls.restart.store(true, Ordering::SeqCst);
+    }
+    stop(&app);
+}
+
+/// What the recording toolbar shows, or None when nothing is recording.
+#[tauri::command]
+pub fn record_bar_status(app: AppHandle) -> Option<BarStatus> {
+    session(&app).map(|session| session.status())
+}
+
+/// How loud the microphone has been since this was last asked, from 0 to
+/// 1, or None when it is not being recorded.
+#[tauri::command]
+pub fn record_bar_level(app: AppHandle) -> Option<f32> {
+    let session = session(&app)?;
+    let meter = session
+        .controls
+        .meter
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()?;
+    Some(meter.take())
 }
 
 /// The file name for a recording started at `time`, without a folder.
@@ -226,6 +473,22 @@ impl Pacer {
         repeats
     }
 
+    /// Skips the frame times that went by during a pause that ended
+    /// `elapsed` after the recording started, keeping them as a [`Gap`] so
+    /// the same stretch is cut out of the sound.
+    pub fn resume(&mut self, elapsed: Duration) {
+        let current = (elapsed.as_nanos() * u128::from(self.fps) / NANOS_PER_SECOND) as u64;
+        let next = self.frames + self.dropped;
+        if current <= next {
+            return;
+        }
+        self.gaps.push(Gap {
+            start: self.at(next),
+            length: self.at(current) - self.at(next),
+        });
+        self.dropped += current - next;
+    }
+
     /// The stretches of the recording the video skipped, in order.
     pub fn gaps(&self) -> &[Gap] {
         &self.gaps
@@ -320,25 +583,15 @@ enum Output {
 }
 
 /// Starts recording `rect` of `monitor`. `rect` is in the pixels of the
-/// monitor's image, whose size is `image_size`. Runs until [`stop`], or for
-/// a GIF [`MAX_DURATION`]. Call this off the main thread.
+/// monitor's image, whose size is `image_size`. Counts down first when
+/// the settings say so, then runs until [`stop`], or for a GIF
+/// [`MAX_DURATION`] of recording time. Call this off the main thread.
 pub fn start(
     app: &AppHandle,
     monitor: &MonitorInfo,
     image_size: (u32, u32),
     rect: Rect,
 ) -> Result<(), String> {
-    let state = app.state::<RecordState>();
-    let flag = Arc::new(AtomicBool::new(false));
-    {
-        let mut current = state.lock();
-        if current.is_some() {
-            return Err("a recording is already under way".to_owned());
-        }
-        *current = Some(Arc::clone(&flag));
-    }
-    crate::tray::set_recording(app, true);
-
     let (folder, recording) = {
         let state = app.state::<SettingsState>();
         let store = lock(&state);
@@ -366,6 +619,42 @@ pub fn start(
         Output::Gif => RecordingFormat::Gif,
         Output::Mp4(..) => RecordingFormat::Mp4,
     };
+    let session = Arc::new(Session {
+        controls: Arc::new(Controls::default()),
+        monitor: monitor.clone(),
+        image_size,
+        rect,
+        recording: recording.clone(),
+        status: Mutex::new(BarStatus {
+            phase: if recording.countdown > 0 {
+                Phase::Countdown
+            } else {
+                Phase::Recording
+            },
+            countdown_ends_at: None,
+            started_at: None,
+            paused_ms: 0,
+            paused_at: None,
+            max_seconds: match format {
+                RecordingFormat::Gif => Some(MAX_DURATION.as_secs()),
+                RecordingFormat::Mp4 => None,
+            },
+            format,
+            microphone: None,
+            system: None,
+            webcam: recording.show_webcam,
+        }),
+    });
+    let state = app.state::<RecordState>();
+    {
+        let mut current = state.lock();
+        if current.is_some() {
+            return Err("a recording is already under way".to_owned());
+        }
+        *current = Some(Arc::clone(&session));
+    }
+    crate::tray::set_recording(app, true);
+
     // Only an MP4 has sound. macOS asks for the microphone first, the
     // first time; the recording waits for the answer.
     let mp4 = format == RecordingFormat::Mp4;
@@ -393,6 +682,14 @@ pub fn start(
             ));
         }
     }
+    {
+        let mut status = lock_status(&session.status);
+        status.microphone = inputs
+            .iter()
+            .any(|input| matches!(input, Input::Microphone(_)))
+            .then_some(false);
+        status.system = inputs.contains(&Input::System).then_some(false);
+    }
     // What was refused is told on the card with whatever else fails, once
     // the recording knows what sound it kept (see `record_mp4`).
 
@@ -419,81 +716,91 @@ pub fn start(
         }
     };
 
-    // Measured against the frozen frame itself: whether a monitor's
-    // reported size is in pixels or points differs between platforms.
-    let corner = quick::corner_clear_of(
-        rect,
-        image_size,
-        monitor.scale_factor,
-        quick::preferred_corner(app),
-    );
-    quick::show_in(
-        app,
-        QuickItem::Recording {
-            started_at: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|elapsed| elapsed.as_millis() as u64)
-                .unwrap_or_default(),
-            max_seconds: match format {
-                RecordingFormat::Gif => Some(MAX_DURATION.as_secs()),
-                RecordingFormat::Mp4 => None,
-            },
-        },
-        corner,
-    );
-    // Opened before the settle delay, so the camera has started by the
-    // first frame.
+    if recording.countdown > 0 {
+        let ends = now_ms() + u64::from(recording.countdown) * 1000;
+        lock_status(&session.status).countdown_ends_at = Some(ends);
+    }
+    crate::record_bar::show(app, monitor, image_size, rect, &session.status());
+    // Opened before the countdown and the settle delay, so the camera has
+    // started by the first frame.
     if recording.show_webcam {
         crate::webcam::open(app, monitor, image_size, rect, &recording);
     }
 
     let handle = app.clone();
-    let monitor = monitor.clone();
     let spawned = std::thread::Builder::new()
         .name("grab-it-record".into())
         .spawn(move || {
-            // The overlay was closed a moment ago; give the desktop time to
-            // repaint so the first frame shows the screen, not the overlay.
-            std::thread::sleep(SETTLE_DELAY);
-            // Started after the settle delay, so the click that chose the
-            // area is not shown.
-            let mut overlays = if input_allowed {
-                Overlays::start(
-                    recording.show_clicks,
-                    recording.show_keystrokes,
-                    monitor.scale_factor,
-                )
-            } else {
-                Overlays::none()
-            };
-            let result = match &output {
-                Output::Gif => frames::open(&monitor, rect, GIF_FPS, recording.show_cursor)
-                    .and_then(|mut source| record_gif(source.as_mut(), &path, &flag, &mut overlays))
-                    .map(|duration| (duration, None)),
-                Output::Mp4(ready) => {
-                    frames::open(&monitor, rect, recording.fps, recording.show_cursor).and_then(
-                        |mut source| {
-                            record_mp4(
-                                source.as_mut(),
-                                &path,
-                                &flag,
-                                ready,
-                                &recording,
-                                inputs,
-                                refused,
-                                &mut overlays,
-                            )
-                        },
+            let controls = Arc::clone(&session.controls);
+            let counted = count_down(&controls, recording.countdown);
+            let result = if counted {
+                // The overlay was closed a moment ago; give the desktop time
+                // to repaint so the first frame shows the screen, not the
+                // overlay.
+                std::thread::sleep(SETTLE_DELAY);
+                session.update(&handle, |status| {
+                    status.phase = if controls.stopped() {
+                        Phase::Saving
+                    } else {
+                        Phase::Recording
+                    };
+                    status.countdown_ends_at = None;
+                    status.started_at = Some(now_ms());
+                });
+                // Started after the settle delay, so the click that chose
+                // the area is not shown.
+                let mut overlays = if input_allowed {
+                    Overlays::start(
+                        recording.show_clicks,
+                        recording.show_keystrokes,
+                        session.monitor.scale_factor,
                     )
-                }
+                } else {
+                    Overlays::none()
+                };
+                let monitor = &session.monitor;
+                let result = match &output {
+                    Output::Gif => frames::open(monitor, rect, GIF_FPS, recording.show_cursor)
+                        .and_then(|mut source| {
+                            record_gif(source.as_mut(), &path, &controls, &mut overlays)
+                        })
+                        .map(|duration| (duration, None)),
+                    Output::Mp4(ready) => {
+                        frames::open(monitor, rect, recording.fps, recording.show_cursor).and_then(
+                            |mut source| {
+                                record_mp4(
+                                    source.as_mut(),
+                                    &path,
+                                    &controls,
+                                    ready,
+                                    &recording,
+                                    inputs,
+                                    refused,
+                                    &mut overlays,
+                                )
+                            },
+                        )
+                    }
+                };
+                // Stops collecting clicks and keys.
+                drop(overlays);
+                Some(result)
+            } else {
+                None
             };
-            // Stops collecting clicks and keys.
-            drop(overlays);
             crate::webcam::close(&handle);
             *handle.state::<RecordState>().lock() = None;
             crate::tray::set_recording(&handle, false);
+            let restart = controls.restart.load(Ordering::SeqCst);
+            let discard = restart || controls.discard.load(Ordering::SeqCst);
+            if !restart {
+                crate::record_bar::close(&handle);
+            }
             match result {
-                Ok((duration, note)) => {
+                // Stopped during the countdown: nothing was recorded.
+                None => {}
+                Some(Ok(_)) if discard => remove_recording(&path),
+                Some(Ok((duration, note))) => {
                     let bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
                     quick::show(
                         &handle,
@@ -510,20 +817,47 @@ pub fn start(
                         },
                     );
                 }
-                Err(err) => {
-                    let _ = fs::remove_file(&path);
-                    let _ = fs::remove_file(cursor_path(&path));
-                    actions::report_failure(&handle, &format!("the recording failed: {err}"));
+                Some(Err(err)) => {
+                    remove_recording(&path);
+                    if !restart {
+                        actions::report_failure(&handle, &format!("the recording failed: {err}"));
+                    }
                 }
+            }
+            if restart
+                && let Err(err) = start(&handle, &session.monitor, session.image_size, session.rect)
+            {
+                crate::record_bar::close(&handle);
+                actions::report_failure(&handle, &err);
             }
         });
     if let Err(err) = spawned {
         crate::webcam::close(app);
+        crate::record_bar::close(app);
         *state.lock() = None;
         crate::tray::set_recording(app, false);
         return Err(format!("could not start recording: {err}"));
     }
     Ok(())
+}
+
+/// Waits `seconds` before a recording starts. False when it was stopped
+/// meanwhile, so there is nothing to record.
+fn count_down(controls: &Controls, seconds: u32) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(u64::from(seconds));
+    while Instant::now() < deadline {
+        if controls.stopped() {
+            return false;
+        }
+        std::thread::sleep(PAUSE_POLL);
+    }
+    !controls.stopped()
+}
+
+/// Deletes a recording thrown away, with its pointer sidecar.
+fn remove_recording(path: &Path) {
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(cursor_path(path));
 }
 
 /// What the card says when a recording was saved without its sound.
@@ -566,7 +900,7 @@ fn final_note(failed: &[(&str, String)], kept: bool, muxed: Result<(), String>) 
 fn record_mp4(
     source: &mut dyn FrameSource,
     path: &Path,
-    stop: &AtomicBool,
+    controls: &Controls,
     ready: &ffmpeg::Ready,
     recording: &RecordingSettings,
     inputs: Vec<Input>,
@@ -592,6 +926,21 @@ fn record_mp4(
             }
         })
         .collect();
+    if let Some(sound) = sounds
+        .iter()
+        .find(|sound| matches!(sound.input(), Input::Microphone(_)))
+    {
+        *controls
+            .meter
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(sound.meter());
+    }
+    let mute = |sounds: &[Sound]| {
+        for sound in sounds {
+            sound.set_muted(controls.muted(sound.input()));
+        }
+    };
+    mute(&sounds);
     let Grabbed {
         image: mut frame,
         mut pointer,
@@ -614,16 +963,26 @@ fn record_mp4(
         track.push(pointer, 1);
         // Stop is checked between repeats, so it is never kept waiting.
         for _ in 0..pacer.wrote_frame(started.elapsed()) {
-            if stop.load(Ordering::SeqCst) {
+            if controls.stopped() {
                 break;
             }
             video.write(&frame).map_err(|err| err.to_string())?;
             pacer.repeated();
             track.push(pointer, 1);
         }
-        if stop.load(Ordering::SeqCst) {
+        if controls.stopped() {
             break;
         }
+        if controls.paused() {
+            // The sound runs on meanwhile: the pause is cut out of it as
+            // a gap, as a stretch the video dropped is.
+            controls.wait_while_paused();
+            pacer.resume(started.elapsed());
+            if controls.stopped() {
+                break;
+            }
+        }
+        mute(&sounds);
         let due = started + pacer.next_frame_at();
         let now = Instant::now();
         if due > now {
@@ -699,7 +1058,7 @@ fn record_mp4(
 fn record_gif(
     source: &mut dyn FrameSource,
     path: &Path,
-    stop: &AtomicBool,
+    controls: &Controls,
     overlays: &mut Overlays,
 ) -> Result<Duration, String> {
     let file = File::create(path).map_err(|err| format!("could not create the file: {err}"))?;
@@ -708,7 +1067,8 @@ fn record_gif(
         .set_repeat(Repeat::Infinite)
         .map_err(|err| err.to_string())?;
 
-    let started = Instant::now();
+    // Moved on by each pause, so a pause does not count towards the limit.
+    let mut started = Instant::now();
     // Each frame is shown until the next one was grabbed, so the GIF plays
     // back in real time even when a frame took longer than the interval.
     let mut pending: Option<(RgbaImage, Instant)> = None;
@@ -731,7 +1091,16 @@ fn record_gif(
         }
         pending = Some((frame, grabbed_at));
 
-        if stop.load(Ordering::SeqCst) || started.elapsed() >= MAX_DURATION {
+        if controls.paused() {
+            // The frame before the pause is shown only as long as it was
+            // on screen before it.
+            let paused = controls.wait_while_paused();
+            started += paused;
+            if let Some((_, since)) = pending.as_mut() {
+                *since += paused;
+            }
+        }
+        if controls.stopped() || started.elapsed() >= MAX_DURATION {
             break;
         }
         let spent = grabbed_at.elapsed();
@@ -955,6 +1324,38 @@ mod tests {
         }
         assert_eq!(written, 1800);
         assert_eq!(pacer.duration().as_secs(), 60);
+    }
+
+    #[test]
+    fn a_pause_is_skipped_in_the_video_and_kept_as_a_gap_for_the_sound() {
+        let mut pacer = Pacer::new(30);
+        // A second of frames, on time.
+        for frame in 0..30u64 {
+            let elapsed = Duration::from_nanos(frame * 1_000_000_000 / 30);
+            assert_eq!(pacer.wrote_frame(elapsed), 0);
+        }
+        assert_eq!(pacer.next_frame_at(), Duration::from_secs(1));
+        // Paused from 1 s until 3 s.
+        pacer.resume(Duration::from_secs(3));
+        assert_eq!(
+            pacer.gaps(),
+            &[Gap {
+                start: Duration::from_secs(1),
+                length: Duration::from_secs(2),
+            }]
+        );
+        // The next frame is due at once, and nothing is repeated for the pause.
+        assert_eq!(pacer.next_frame_at(), Duration::from_secs(3));
+        assert_eq!(pacer.wrote_frame(Duration::from_secs(3)), 0);
+        assert_eq!(
+            pacer.duration(),
+            Duration::from_nanos(31 * 1_000_000_000 / 30)
+        );
+        // A pause shorter than a frame skips nothing.
+        let mut short = Pacer::new(30);
+        short.wrote_frame(Duration::ZERO);
+        short.resume(Duration::from_millis(10));
+        assert!(short.gaps().is_empty());
     }
 
     #[test]

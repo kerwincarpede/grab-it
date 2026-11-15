@@ -346,20 +346,6 @@ describe("QuickAccess", () => {
     expect(actions(backend)).toEqual(["close"]);
   });
 
-  it("shows a recording's clock and stops it", async () => {
-    const backend = mockBackend({ kind: "recording", startedAt: Date.now() - 65_000, maxSeconds: 60 });
-    render(<QuickAccess />);
-    expect(await screen.findByText("Recording")).toBeInTheDocument();
-    expect(screen.getByText(/^1:0\d of 1:00$/)).toBeInTheDocument();
-    // Nothing dismisses a recording but Stop.
-    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
-
-    expect(await screen.findByText("Saving…")).toBeInTheDocument();
-    expect(backend.calls.map((call) => call.cmd)).toContain("record_stop");
-  });
-
   it("shows a saved recording with its length and size", async () => {
     const backend = mockBackend({
       kind: "recorded",
@@ -376,14 +362,6 @@ describe("QuickAccess", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Show in folder" }));
     await waitFor(() => expect(actions(backend)).toEqual(["reveal"]));
-  });
-
-  it("shows only the elapsed time while an MP4 records", async () => {
-    mockBackend({ kind: "recording", startedAt: Date.now() - 75_000 });
-    render(<QuickAccess />);
-    expect(await screen.findByText("Recording")).toBeInTheDocument();
-    expect(screen.getByText(/^1:1\d$/)).toBeInTheDocument();
-    expect(screen.queryByText(/ of /)).not.toBeInTheDocument();
   });
 
   it("says a video was saved, and offers its folder", async () => {

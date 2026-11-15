@@ -344,43 +344,6 @@
   animation: quick-spin 800ms linear infinite;
 }
 
-/* Recording: a pulsing dot, the clock and Stop. */
-.quick-recording {
-  padding-right: 20px;
-}
-
-.quick-recording .quick-body {
-  flex: 1;
-}
-
-.quick-rec-dot {
-  flex: none;
-  width: 14px;
-  height: 14px;
-  background: #ff4d4f;
-  border-radius: 50%;
-  box-shadow: 0 0 0 5px rgb(255 77 79 / 22%);
-  animation: quick-pulse 1200ms ease-in-out infinite;
-}
-
-.quick-elapsed {
-  font-size: 14px;
-  font-variant-numeric: tabular-nums;
-}
-
-.quick .quick-stop {
-  flex: none;
-  padding: 7px 16px;
-  color: #fff;
-  font-weight: 600;
-  background: #e5484d;
-  border-radius: 7px;
-}
-
-.quick .quick-stop:hover:not(:disabled) {
-  background: #f2555a;
-}
-
 .quick-file {
   display: block;
   overflow: hidden;
@@ -423,12 +386,6 @@
 
 .quick-inline-actions button.danger:hover:not(:disabled) svg {
   color: inherit;
-}
-
-@keyframes quick-pulse {
-  50% {
-    opacity: 0.45;
-  }
 }
 
 /* Runs down while the card waits to dismiss itself. */

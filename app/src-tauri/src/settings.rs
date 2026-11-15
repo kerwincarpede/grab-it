@@ -594,6 +594,10 @@ impl RecordingQuality {
 /// The frame rates an MP4 can be recorded at.
 pub const RECORDING_FPS: [u32; 2] = [30, 60];
 
+/// The seconds a recording can count down before it starts; 0 starts at
+/// once. Mirrors `RECORDING_COUNTDOWNS` in src/settings/api.ts.
+pub const RECORDING_COUNTDOWNS: [u32; 4] = [0, 3, 5, 10];
+
 /// What sound an MP4 records.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -673,6 +677,9 @@ pub struct RecordingSettings {
     /// with. None shows the system's default camera.
     pub camera: Option<String>,
     pub webcam_shape: WebcamShape,
+    /// Seconds counted down on the recording toolbar before the first
+    /// frame: one of [`RECORDING_COUNTDOWNS`].
+    pub countdown: u32,
 }
 
 impl Default for RecordingSettings {
@@ -689,6 +696,7 @@ impl Default for RecordingSettings {
             show_webcam: false,
             camera: None,
             webcam_shape: WebcamShape::default(),
+            countdown: 0,
         }
     }
 }
@@ -733,6 +741,10 @@ impl RecordingSettings {
             webcam_shape: field("webcamShape")
                 .and_then(|v| serde_json::from_value(v).ok())
                 .unwrap_or(defaults.webcam_shape),
+            countdown: field("countdown")
+                .and_then(|v| serde_json::from_value::<u32>(v).ok())
+                .filter(|seconds| RECORDING_COUNTDOWNS.contains(seconds))
+                .unwrap_or(defaults.countdown),
         }
     }
 }
@@ -1307,6 +1319,12 @@ impl SettingsStore {
                 recording.fps
             )));
         }
+        if !RECORDING_COUNTDOWNS.contains(&recording.countdown) {
+            return Err(SettingsError::Invalid(format!(
+                "a recording can count down 0, 3, 5 or 10 seconds, not {}",
+                recording.countdown
+            )));
+        }
         let next = Settings {
             recording: RecordingSettings {
                 microphone: recording.microphone.filter(|name| !name.is_empty()),
@@ -1442,6 +1460,7 @@ mod tests {
                 show_webcam: true,
                 camera: Some("3f9a1c".into()),
                 webcam_shape: WebcamShape::Rounded,
+                countdown: 5,
             },
         };
         save(&path, &settings).unwrap();
@@ -1556,6 +1575,7 @@ mod tests {
                 "showWebcam": false,
                 "camera": null,
                 "webcamShape": "round",
+                "countdown": 0,
             })
         );
     }
@@ -1675,6 +1695,7 @@ mod tests {
                 "showWebcam": false,
                 "camera": null,
                 "webcamShape": "round",
+                "countdown": 0,
             })
         );
         assert_eq!(json["showInDock"], false);
@@ -1744,6 +1765,27 @@ mod tests {
         assert!(loaded.show_webcam);
         assert_eq!(loaded.camera.as_deref(), Some("cam"));
         assert_eq!(loaded.webcam_shape, WebcamShape::Rounded);
+    }
+
+    #[test]
+    fn a_countdown_is_off_by_default_and_one_of_the_offered_lengths() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        assert_eq!(defaults(&dir).recording.countdown, 0);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        let three = RecordingSettings {
+            countdown: 3,
+            ..RecordingSettings::default()
+        };
+        assert_eq!(store.set_recording(three).unwrap().recording.countdown, 3);
+        assert_eq!(load(&path, defaults(&dir)).unwrap().recording.countdown, 3);
+        let odd = RecordingSettings {
+            countdown: 7,
+            ..RecordingSettings::default()
+        };
+        assert!(store.set_recording(odd).is_err());
+        fs::write(&path, r#"{"recording": {"countdown": 4}}"#).unwrap();
+        assert_eq!(load(&path, defaults(&dir)).unwrap().recording.countdown, 0);
     }
 
     #[test]

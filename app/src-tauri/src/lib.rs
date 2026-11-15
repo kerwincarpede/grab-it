@@ -23,6 +23,7 @@ mod pin;
 mod portal;
 mod quick;
 mod record;
+mod record_bar;
 mod recording_editor;
 mod screen;
 mod search;
@@ -78,6 +79,7 @@ pub fn run() {
         .manage(quick::QuickState::default())
         .manage(pin::PinState::default())
         .manage(record::RecordState::default())
+        .manage(record_bar::RecordBarState::default())
         .manage(hotkeys::HotkeyState::default())
         .manage(editor::EditorState::default())
         .manage(recording_editor::RecordingEditorState::default())
@@ -119,6 +121,15 @@ pub fn run() {
             pin::pin_close,
             pin::editor_pin,
             record::record_stop,
+            record::record_pause,
+            record::record_mute,
+            record::record_webcam,
+            record::record_discard,
+            record::record_restart,
+            record::record_bar_status,
+            record::record_bar_level,
+            record_bar::record_bar_fit,
+            record_bar::record_bar_reset,
             ffmpeg::ffmpeg_status,
             ffmpeg::ffmpeg_retry,
             audio::recording_microphones,

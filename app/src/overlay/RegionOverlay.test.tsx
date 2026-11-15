@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RegionOverlay from "./RegionOverlay";
 import { CHOICE_EVENT, START_EVENT, type OverlayInfo } from "./api";
 import type { Box } from "./geometry";
+import { DEFAULT_RECORDING } from "../settings/api";
 
 interface Call {
   cmd: string;
@@ -30,6 +31,15 @@ function mockOverlay(info: Partial<OverlayInfo> = {}): Call[] {
         };
       case "overlay_image":
         return new ArrayBuffer(8);
+      // The recording options beside a recording's area.
+      case "get_settings":
+        return { recording: { ...DEFAULT_RECORDING, audio: "microphone" } };
+      case "recording_microphones":
+        return [{ id: "usb", name: "USB Microphone", isDefault: false }];
+      case "recording_system_audio":
+        return true;
+      case "set_recording":
+        return { recording: (payload as { recording: unknown }).recording };
       case "overlay_ready":
       case "overlay_finish":
       case "overlay_choose":
@@ -1299,6 +1309,84 @@ describe("RegionOverlay", () => {
       fireEvent.mouseMove(overlay, { clientX: 100, clientY: 50 });
 
       expect(screen.getByTestId("overlay-selection")).toHaveTextContent("400 × 400");
+    });
+  });
+
+  describe("a recording's area", () => {
+    function dragOver(overlay: HTMLElement, from: [number, number], to: [number, number]) {
+      fireEvent.mouseDown(overlay, { button: 0, clientX: from[0], clientY: from[1] });
+      fireEvent.mouseMove(overlay, { clientX: to[0], clientY: to[1] });
+      fireEvent.mouseUp(overlay, { button: 0, clientX: to[0], clientY: to[1] });
+    }
+
+    const finishes = (calls: Call[]) => calls.filter((c) => c.cmd === "overlay_finish");
+
+    it("is held with the recording options until Enter starts it", async () => {
+      const calls = mockOverlay({ intent: "record" });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      dragOver(overlay, [100, 50], [300, 250]);
+      expect(finishes(calls)).toHaveLength(0);
+      expect(overlay).toHaveAttribute("data-selected", "true");
+      const setup = await screen.findByRole("group", { name: "Recording options" });
+      expect(within(setup).getByRole("button", { name: "Microphone" })).toHaveTextContent("Default microphone");
+      expect(within(screen.getByRole("list", { name: "Keyboard shortcuts" })).getByText(/Start recording/)).toBeInTheDocument();
+
+      fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
+      await waitFor(() => expect(finishes(calls)).toHaveLength(1));
+      expect(finishes(calls)[0].payload).toEqual({
+        selection: { kind: "region", rect: { x: 100, y: 50, width: 200, height: 200 }, viewportWidth: 1000 },
+      });
+    });
+
+    it("holds a clicked window's area to be set up too", async () => {
+      const calls = mockOverlay({ intent: "record" });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      fireEvent.mouseMove(overlay, { clientX: 150, clientY: 150 });
+      fireEvent.mouseDown(overlay, { button: 0, clientX: 150, clientY: 150 });
+      fireEvent.mouseUp(overlay, { button: 0, clientX: 150, clientY: 150 });
+      expect(finishes(calls)).toHaveLength(0);
+      expect(overlay).toHaveAttribute("data-selected", "true");
+      fireEvent.click(screen.getByRole("button", { name: /Start recording/ }));
+      await waitFor(() => expect(finishes(calls)).toHaveLength(1));
+      // The window's area, snapped to whole image pixels.
+      const { rect } = (finishes(calls)[0].payload as { selection: { rect: Box } }).selection;
+      expect(rect.x).toBeCloseTo(100, 2);
+      expect(rect.y).toBeCloseTo(100, 2);
+      expect(rect.width).toBeCloseTo(200, 2);
+      expect(rect.height).toBeCloseTo(150, 2);
+    });
+
+    it("saves each option as it is chosen", async () => {
+      const calls = mockOverlay({ intent: "record" });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+      dragOver(overlay, [100, 50], [300, 250]);
+      const setup = await screen.findByRole("group", { name: "Recording options" });
+      const saved = () => {
+        const sets = calls.filter((c) => c.cmd === "set_recording");
+        return (sets[sets.length - 1]?.payload as { recording: Record<string, unknown> } | undefined)?.recording;
+      };
+
+      fireEvent.click(within(setup).getByRole("button", { name: "Microphone" }));
+      fireEvent.click(screen.getByRole("menuitemradio", { name: "USB Microphone" }));
+      await waitFor(() => expect(saved()).toMatchObject({ audio: "microphone", microphone: "usb" }));
+
+      fireEvent.click(within(setup).getByRole("button", { name: "System sound" }));
+      await waitFor(() => expect(saved()).toMatchObject({ audio: "both" }));
+
+      fireEvent.click(within(setup).getByRole("button", { name: "No countdown" }));
+      await waitFor(() => expect(saved()).toMatchObject({ countdown: 3 }));
+
+      fireEvent.click(within(setup).getByRole("button", { name: "Format" }));
+      fireEvent.click(screen.getByRole("menuitemradio", { name: /GIF/ }));
+      await waitFor(() => expect(saved()).toMatchObject({ format: "gif" }));
+      // A GIF is silent.
+      expect(within(setup).getByRole("button", { name: "Microphone" })).toBeDisabled();
+      expect(finishes(calls)).toHaveLength(0);
     });
   });
 });
