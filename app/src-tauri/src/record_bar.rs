@@ -218,6 +218,80 @@ pub fn position_at(spot: Option<Spot>, size: (u32, u32), display: &Display) -> (
     clamp_into(position, size, work)
 }
 
+/// The pill of `size` centred on `centre`, all in physical pixels.
+pub fn pill_around(centre: (i32, i32), size: (u32, u32)) -> Area {
+    Area {
+        x: centre.0 - (size.0 / 2) as i32,
+        y: centre.1 - (size.1 / 2) as i32,
+        width: size.0,
+        height: size.1,
+    }
+}
+
+/// The centre of a pill of `size` at `position`, in the CSS pixels of a
+/// page covering the display whose top-left corner is `origin`, drawn at
+/// `scale`. All but the result are physical pixels.
+pub fn centre_in_css(
+    position: (i32, i32),
+    size: (u32, u32),
+    origin: (i32, i32),
+    scale: f64,
+) -> (f64, f64) {
+    let scale = valid_scale(scale);
+    let pill = Area {
+        x: position.0,
+        y: position.1,
+        width: size.0,
+        height: size.1,
+    };
+    let (x, y) = pill.centre();
+    (
+        f64::from(x - origin.0) / scale,
+        f64::from(y - origin.1) / scale,
+    )
+}
+
+/// A point in a page's CSS pixels. Mirrors `Point` in src/overlay/geometry.ts.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CssPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Where the recording toolbar would open on `monitor`, as the centre of
+/// its pill in the CSS pixels of an overlay covering that monitor: the
+/// Record overlay's setup toolbar opens centred on the same point.
+pub fn bar_centre_on(app: &AppHandle, monitor: &MonitorInfo) -> Option<CssPoint> {
+    let monitors = app.available_monitors().ok()?;
+    let found = monitor_for(monitor, &monitors)?;
+    let display = display_of(found);
+    let size = pill_size(app, &display);
+    let spot = memory(app).spots.get(&display.key).copied();
+    let position = position_at(spot, size, &display);
+    let origin = (found.position().x, found.position().y);
+    let (x, y) = centre_in_css(position, size, origin, found.scale_factor());
+    Some(CssPoint { x, y })
+}
+
+/// Whether the pointer is on `monitor`. Where the pointer cannot be read,
+/// the primary monitor counts as the one it is on.
+pub fn pointer_on(app: &AppHandle, monitor: &MonitorInfo) -> bool {
+    let Ok(pointer) = app.cursor_position() else {
+        return monitor.is_primary;
+    };
+    let monitors = app.available_monitors().unwrap_or_default();
+    let Some(found) = monitor_for(monitor, &monitors) else {
+        return monitor.is_primary;
+    };
+    let area = Area {
+        x: found.position().x,
+        y: found.position().y,
+        width: found.size().width,
+        height: found.size().height,
+    };
+    area.contains((pointer.x.floor() as i32, pointer.y.floor() as i32))
+}
+
 /// A toolbar of `size` at `position` moved just outside `recorded` when
 /// it would cover it, for a system that cannot leave it out of the
 /// recording: below, above, to the right or to the left of it, whichever
@@ -377,7 +451,7 @@ fn displays(app: &AppHandle) -> Vec<Display> {
 }
 
 /// The Tauri monitor that `monitor` is, by name, else by position.
-fn monitor_for<'a>(monitor: &MonitorInfo, monitors: &'a [Monitor]) -> Option<&'a Monitor> {
+pub(crate) fn monitor_for<'a>(monitor: &MonitorInfo, monitors: &'a [Monitor]) -> Option<&'a Monitor> {
     monitors
         .iter()
         .find(|m| m.name().is_some_and(|name| *name == monitor.name))
@@ -666,6 +740,49 @@ pub fn record_bar_fit(
     Ok(BarLayout { up })
 }
 
+/// Remembers where the Record overlay's setup toolbar was dragged to, as
+/// the spot of the recording toolbar's pill centred on the same point:
+/// `centre` is in the CSS pixels of the overlay `window` it was dragged
+/// on. The two toolbars share one spot per display, so the recording
+/// toolbar opens where the setup toolbar was left, and the next setup
+/// toolbar too.
+#[tauri::command]
+pub fn record_bar_remember(
+    centre: CssPoint,
+    window: WebviewWindow,
+    app: AppHandle,
+) -> Result<(), String> {
+    if !(centre.x.is_finite() && centre.y.is_finite()) {
+        return Err("the toolbar's centre is not a point".into());
+    }
+    let origin = window.outer_position().map_err(|err| err.to_string())?;
+    let scale = valid_scale(window.scale_factor().map_err(|err| err.to_string())?);
+    let physical = (
+        origin.x + (centre.x * scale).round() as i32,
+        origin.y + (centre.y * scale).round() as i32,
+    );
+    let all = displays(&app);
+    let display = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| display_of(&monitor))
+        .or_else(|| {
+            all.iter()
+                .find(|display| display.work.contains(physical))
+                .cloned()
+        })
+        .ok_or("the toolbar is on no display")?;
+    let bar = pill_around(physical, pill_size(&app, &display));
+    let spot = spot_of(bar, &display);
+    let key = display.key.clone();
+    remember(&app, |memory| {
+        memory.spots.insert(key.clone(), spot);
+        memory.last_display = Some(key);
+    });
+    Ok(())
+}
+
 /// Forgets where the toolbar was left and moves it back to the top
 /// centre of the display it is on.
 #[tauri::command]
@@ -872,6 +989,54 @@ mod tests {
     #[test]
     fn a_full_screen_recording_leaves_the_toolbar_where_it_is() {
         assert_eq!(clear_of((810, 37), (300, 60), WORK, WORK, 1.0), (810, 37));
+    }
+
+    #[test]
+    fn the_setup_toolbar_opens_centred_where_the_recording_toolbar_would() {
+        let retina = display("Built-in", WORK, 2.0);
+        // No spot: top centre, 12 points down, on a display at the desktop's origin.
+        let position = position_at(None, (600, 120), &retina);
+        assert_eq!(
+            centre_in_css(position, (600, 120), (0, 0), 2.0),
+            (480.0, 54.5)
+        );
+        // A second display to the right: measured from its own corner.
+        assert_eq!(
+            centre_in_css((2000, 100), (300, 60), (1920, 0), 1.0),
+            (230.0, 130.0)
+        );
+    }
+
+    #[test]
+    fn a_dragged_setup_toolbar_leaves_the_spot_the_recording_toolbar_opens_at() {
+        let built_in = display("eDP-1", WORK, 1.0);
+        let size = (300, 60);
+        // Dropped with its centre near the bottom left.
+        let bar = pill_around((400, 900), size);
+        assert_eq!(
+            bar,
+            Area {
+                x: 250,
+                y: 870,
+                width: 300,
+                height: 60,
+            }
+        );
+        let spot = spot_of(bar, &built_in);
+        assert_eq!(spot.corner, Corner::BottomLeft);
+        let position = position_at(Some(spot), size, &built_in);
+        assert_eq!(position, (250, 870));
+        assert_eq!(centre_in_css(position, size, (0, 0), 1.0), (400.0, 900.0));
+    }
+
+    #[test]
+    fn css_points_use_the_frontend_spelling() {
+        let point: CssPoint = serde_json::from_str(r#"{"x": 12.5, "y": 40}"#).unwrap();
+        assert_eq!(point, CssPoint { x: 12.5, y: 40.0 });
+        assert_eq!(
+            serde_json::to_value(point).unwrap(),
+            serde_json::json!({"x": 12.5, "y": 40.0})
+        );
     }
 
     #[test]

@@ -142,6 +142,7 @@ pub fn run() {
             record::record_bar_level,
             record_bar::record_bar_fit,
             record_bar::record_bar_reset,
+            record_bar::record_bar_remember,
             ffmpeg::ffmpeg_status,
             ffmpeg::ffmpeg_retry,
             audio::recording_microphones,
