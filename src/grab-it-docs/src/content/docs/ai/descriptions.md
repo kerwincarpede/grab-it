@@ -1,18 +1,57 @@
 ---
 title: AI descriptions
-description: Describe captures and tidy up captured text with Claude Code, Codex or a local model.
+description: A short description, a category and tags for each capture, so you can search for what it shows.
 sidebar:
   order: 1
 ---
 
-If you have [Claude Code](https://claude.com/claude-code) installed, Grab-it uses it to describe each new capture: a sentence or two, a category and a few tags, so you can search for what a screenshot *shows* and filter by category in the [Library](/grab-it/library/find-it-again/). It turns this on by itself the first time it finds Claude Code, and the Library says so once. Those screenshots go to Anthropic under your Claude account.
+With **Describe captures with AI** on, every new screenshot is described in the background, newest first, one at a time, once Grab-it has read its text. The Library shows *Describing 3 of 12…* while it works.
 
-## Tidied-up text
+## What you get
 
-The same AI tidies up [**Capture text**](/grab-it/capture/more-tricks/). The text is copied the moment it's read, then the AI reads it again from the image. It fixes what was misread, and lays out JSON (valid and indented), code (with its indentation) and tables (as Markdown). The tidied text replaces what was copied, unless you've copied something else since. **Copy as read** on the card gets the original back. Turn it off under **Tidy up captured text**.
+For each screenshot the AI writes:
 
-## Providers and turning it off
+- **A description**: one or two sentences on what the screenshot shows and what it's about, naming the app, site, product, error or topic you might search for. It's in the details panel under **Description**.
+- **A category**: one of the list below. It's in the details panel, and you can filter by it.
+- **Up to three tags**: short, lowercase, most specific first, such as the app, product, language or topic. They're marked **✦** in the details, and work like your own tags in search, the sidebar and **Filters → Tag**. Remove any you don't want.
 
-To turn it off, or use another provider such as a local [Ollama](https://ollama.com) model that keeps everything on your computer, open **Settings** → **AI descriptions**.
+Search then finds a capture by its description too: `invoice` finds a receipt even if the word *invoice* isn't in it.
 
-Without Claude Code but with [Codex](https://developers.openai.com/codex/cli) installed, Grab-it uses Codex the same way, and those screenshots go to OpenAI under your ChatGPT or OpenAI account. With neither, describing stays off until you turn it on there.
+Recordings aren't described.
+
+## Categories
+
+| Category | For |
+| --- | --- |
+| Code | Source code in an editor or on a page |
+| Terminal | A shell or command output |
+| Browser / web page | A website |
+| Chat | Slack, Teams, Messages and the like |
+| Document | Docs, PDFs, spreadsheets |
+| Design | Figma, mockups, artwork |
+| Error / dialog | Error messages, alerts and dialogs |
+| Receipt | Receipts, invoices, orders |
+| Photo | Photographs |
+| Other | Anything else, or a category the AI made up |
+
+## What the AI is sent
+
+Each screenshot goes scaled down to at most 1568 pixels on its long edge, with up to 2,000 characters of the text Grab-it read in it, the app name and the window title. Where it goes depends on the [provider](/grab-it/ai/providers/#what-goes-where).
+
+## Old captures
+
+**Only describe new captures** is on by default, so turning describing on leaves earlier captures alone. Turn it off to describe the whole library.
+
+**Re-describe all…** under **Your library** describes every capture again, replacing the current descriptions. It's useful after switching to a better model. It asks first.
+
+To redo one capture, click **Redo** next to its **Description** in the details panel. **Clear** removes its description, category and AI tags.
+
+## When it can't describe
+
+If the provider can't be reached, times out, or isn't signed in, describing pauses and the Library says *Could not describe captures*, with the reason and an **Open Settings** button. Captures wait their turn; Grab-it tries again with the next capture, no sooner than a minute later, or straight away when you change the AI settings. A capture whose answer can't be used is skipped, and the rest carry on.
+
+A local model on a slow computer can take minutes for one image, so Grab-it gives an endpoint up to five minutes without progress before it gives up.
+
+## Turn it off
+
+Open **Settings → AI descriptions** and turn off **Describe captures with AI**. Nothing more is sent. Descriptions already written stay until you **Clear** them.
