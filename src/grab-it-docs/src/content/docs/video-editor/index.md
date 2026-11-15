@@ -8,6 +8,8 @@ sidebar:
 
 The video editor polishes an MP4 [recording](/grab-it/recording/) before you share it: cut its start and end, put it on a backdrop with rounded corners and a shadow, and zoom in on the parts that matter. Export saves the result as a new MP4 beside the recording.
 
+![The video editor with a gradient backdrop, the timeline and a zoom below it.](../../../assets/video-editor/video-editor.png)
+
 ## Open a recording
 
 - When an MP4 recording stops, click **Edit** on its Quick Access card.

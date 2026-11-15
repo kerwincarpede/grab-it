@@ -7,6 +7,8 @@ sidebar:
 
 The recording setup toolbar holds the options you change most. Hover an icon for its name and whether it's on; an option that's on is tinted. Every change is saved to **Settings → Recording**, so the next recording starts the same way, and Settings has a few more.
 
+![The recording options: Region, Window or Screen, the format, the microphone, sound, webcam, clicks, keys and countdown.](../../../assets/recording/options-bar.png)
+
 ## Format
 
 The first chip picks what the recording is saved as:
@@ -17,7 +19,7 @@ The first chip picks what the recording is saved as:
 | **MP4 · 60 fps** | Smoother scrolling and pointer movement, in bigger files. |
 | **GIF · silent, 1 min** | An animated GIF at about ten frames a second. No sound, and it stops by itself after one minute. |
 
-Recordings wider than 1280 pixels are scaled down to 1280 wide, keeping their shape, so HiDPI recordings stay a sensible size.
+Wide recordings are scaled down, keeping their shape, so HiDPI recordings stay a sensible size: a GIF to at most 1280 pixels wide, and an MP4 to at most 1920 pixels wide (with both sides rounded to even numbers, as the video format needs).
 
 An MP4 needs ffmpeg. Grab-it uses one already on your computer, or downloads one in the background (on macOS, Settings asks you to install Homebrew's). Until ffmpeg is ready, a recording is saved as a GIF and its card says why; **Settings → Recording** shows the progress.
 

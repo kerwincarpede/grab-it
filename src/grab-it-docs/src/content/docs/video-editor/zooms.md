@@ -7,6 +7,8 @@ sidebar:
 
 A zoom shows a stretch of the recording larger, so a small button or a line of text is easy to see. It eases in, holds, and eases back out. Each zoom either stays on an **area** you choose or **follows the pointer**.
 
+![A zoom selected on the timeline, with its area on the video and Area, Follow cursor and Scale in the top bar.](../../../assets/video-editor/zoom.png)
+
 Zooms sit on the row under the timeline, each as a segment labelled with its scale and focus, like **2× Area** or **2× Cursor**. The preview plays them as the export will.
 
 ## Add a zoom

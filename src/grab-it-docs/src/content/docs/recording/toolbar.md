@@ -7,6 +7,8 @@ sidebar:
 
 While you record, a small toolbar floats over the screen. On Windows and macOS it's left out of the video, so it never shows in your recording.
 
+![The recording toolbar: grip, time, microphone level, Pause, the More menu and Stop.](../../../assets/recording/toolbar.png)
+
 From left to right it shows:
 
 - a red dot and the time recorded so far (a GIF also shows its one-minute limit, like `0:12 / 1:00`),
@@ -54,7 +56,7 @@ With a [countdown](/grab-it/recording/options/#countdown) on, the toolbar shows 
 
 Drag the toolbar by any part that isn't a button. Grab-it remembers where you left it on each display, as a distance from the nearest corner, so it stays put when you change the resolution. The next recording opens it on the display you last left it on, if that's still connected, or else on the display you're recording, at the spot saved for it. With no spot saved, it opens at the top centre.
 
-Moving the setup toolbar before you start (by its grip) sets where the recording toolbar opens, too.
+Moving the setup toolbar before you start (by its grip) sets where the recording toolbar opens, too. The grip is there only when Record is started on its own (the tray's **Record** or `--open record`), not from the All-in-one toolbar.
 
 :::note
 On Linux (X11), the toolbar can't be hidden from the recording. If it would sit on the area you're recording, Grab-it moves it just outside when it opens. Move it clear of the area yourself if you drag it back in.

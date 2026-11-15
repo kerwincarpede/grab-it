@@ -7,6 +7,8 @@ sidebar:
 
 **Backdrop** in the top bar puts your recording on a background, as it does for a screenshot in the [image editor](/grab-it/image-editor/). It's also how you change the video's shape: its aspect ratio sets the shape of the export.
 
+![The Backdrop panel in the video editor, with a gradient behind the recording.](../../../assets/video-editor/backdrop.png)
+
 Click **Backdrop** to open its panel. Click outside it or press `Esc` to close it. The preview shows each change straight away.
 
 ## Fill
