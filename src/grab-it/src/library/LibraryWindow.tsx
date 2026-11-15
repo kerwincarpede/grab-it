@@ -60,6 +60,7 @@ import {
   type FilterOptions,
   type Filters,
   type KindFilter,
+  type LibraryStorage,
   type OcrStatus,
   type SearchHit,
   type Shot,
@@ -89,7 +90,8 @@ import {
 import { useInView, useThumbnail } from "./thumbnails";
 import { tagStyle } from "./tagColor";
 import { DETAILS_WIDTH, clampDetailsWidth } from "./detailsWidth";
-import { StoragePill } from "./storage";
+import { CleanUpDialog, StoragePill } from "./storage";
+import type { SettingsSection } from "../settings/api";
 import { ChevronDownIcon, ChevronUpIcon } from "../app/icons";
 import { formatBytes, formatElapsed } from "../quick/api";
 
@@ -1116,6 +1118,11 @@ interface LibraryWindowProps {
   onKindFilter?: (kind: KindFilter | "") => void;
   /** Shown at the end of the title bar (the Grab-it window's New capture button). */
   toolbarEnd?: ReactNode;
+  /**
+   * Opens Settings on a page, as the Grab-it window does in its own dialog;
+   * without it the Settings window opens.
+   */
+  onOpenSettings?: (section: SettingsSection) => void;
 }
 
 function LibraryWindow({
@@ -1127,8 +1134,11 @@ function LibraryWindow({
   kindFilter,
   onKindFilter,
   toolbarEnd,
+  onOpenSettings,
 }: LibraryWindowProps = {}) {
   const [shots, setShots] = useState<Shot[]>([]);
+  /** The storage the Clean up dialog is open for, if it is. */
+  const [cleaning, setCleaning] = useState<LibraryStorage | null>(null);
   const [total, setTotal] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -1450,6 +1460,11 @@ function LibraryWindow({
     openSettings().catch((err: unknown) => setError(errorMessage(err)));
   }
 
+  function showStorageSettings() {
+    if (onOpenSettings) onOpenSettings("storage");
+    else showSettings();
+  }
+
   function retry() {
     setOcr({ state: "idle" });
     retryOcr().catch((err: unknown) => setError(errorMessage(err)));
@@ -1536,7 +1551,12 @@ function LibraryWindow({
               (searching ? (
                 <span className="count-pill">{total === 1 ? "1 result" : `${total} results`}</span>
               ) : (
-                <StoragePill count={total} version={reloads} />
+                <StoragePill
+                  count={total}
+                  version={reloads}
+                  onCleanUp={setCleaning}
+                  onOpenSettings={showStorageSettings}
+                />
               ))}
           </div>
           <SearchField text={text} searchRef={searchBox} onText={setText} onSubmit={() => setSearchedText(text)} />
@@ -1661,6 +1681,7 @@ function LibraryWindow({
           {notice.text}
         </div>
       )}
+      {cleaning && <CleanUpDialog storage={cleaning} onClose={() => setCleaning(null)} />}
     </main>
   );
 }

@@ -185,6 +185,8 @@ pub fn run() {
             library::library_reveal,
             library::library_play,
             storage::library_storage,
+            storage::library_clean_up,
+            storage::library_stop_clean_up,
             search::library_search,
             search::library_filter_options,
             ocr::ocr_status,

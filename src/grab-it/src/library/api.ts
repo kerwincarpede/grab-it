@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { Retention } from "../settings/api";
+import type { Removal, Retention } from "../settings/api";
 
 /** Mirrors `Shot` in src-tauri/src/library.rs. */
 /** What a library item is. Mirrors `ShotKind` in src-tauri/src/library.rs. */
@@ -124,6 +124,55 @@ export function cleanedText(cleaned: Cleaned): string {
 /** Calls `handler` with what went whenever an automatic cleanup removes items. */
 export function onLibraryCleaned(handler: (cleaned: Cleaned) => void): Promise<UnlistenFn> {
   return listen<Cleaned>(LIBRARY_CLEANED_EVENT, (event) => handler(event.payload));
+}
+
+/** How far a cleanup has got. Mirrors `Progress` in src-tauri/src/storage.rs. */
+export interface CleanupProgress {
+  /** Items looked at so far, removed or not. */
+  done: number;
+  total: number;
+  /** What the items removed so far took up. */
+  bytes: number;
+}
+
+/** Mirrors `CLEANUP_PROGRESS_EVENT` in src-tauri/src/storage.rs: sent after each item any cleanup looks at. */
+export const CLEANUP_PROGRESS_EVENT = "cleanup-progress";
+
+/** Mirrors `CLEANUP_DONE_EVENT` in src-tauri/src/storage.rs: a cleanup ended, done, stopped or failed. */
+export const CLEANUP_DONE_EVENT = "cleanup-done";
+
+/**
+ * Removes what the saved Keep settings say is due, to the Trash or for good,
+ * and resolves to what went once it is done or stopped. Rejects while
+ * another cleanup runs.
+ */
+export function cleanUp(removal: Removal): Promise<Cleaned> {
+  return invoke<Cleaned>("library_clean_up", { removal });
+}
+
+/** Stops the running cleanup before its next item. */
+export function stopCleanUp(): Promise<void> {
+  return invoke<void>("library_stop_clean_up");
+}
+
+/** Calls `handler` after each item a cleanup, automatic or not, looks at. */
+export function onCleanupProgress(handler: (progress: CleanupProgress) => void): Promise<UnlistenFn> {
+  return listen<CleanupProgress>(CLEANUP_PROGRESS_EVENT, (event) => handler(event.payload));
+}
+
+/** Calls `handler` whenever a cleanup ends. */
+export function onCleanupDone(handler: () => void): Promise<UnlistenFn> {
+  return listen(CLEANUP_DONE_EVENT, () => handler());
+}
+
+/** What the next cleanup removes, all kinds together; null when the backend does not say. */
+export function dueTotal(storage: LibraryStorage): KindUsage | null {
+  const { due } = storage;
+  if (!due) return null;
+  return {
+    count: due.image.count + due.gif.count + due.video.count,
+    bytes: due.image.bytes + due.gif.bytes + due.video.bytes,
+  };
 }
 
 /** Every item's size added up. */

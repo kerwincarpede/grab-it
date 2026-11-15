@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
+import type { Removal } from "../settings/api";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import LibraryWindow from "./LibraryWindow";
@@ -11,6 +12,8 @@ import {
   AI_STATUS_EVENT,
   LIBRARY_CHANGED_EVENT,
   LIBRARY_CLEANED_EVENT,
+  CLEANUP_DONE_EVENT,
+  CLEANUP_PROGRESS_EVENT,
   cleanedText,
   NO_FILTERS,
   OCR_STATUS_EVENT,
@@ -72,6 +75,12 @@ interface Backend {
   disk?: { free: number; total: number } | null;
   /** `library_storage` fails, as an older backend without it would. */
   storageFails?: boolean;
+  /** What cleanup would remove, by kind; left out of `library_storage` when unset, as older backends do. */
+  due?: Partial<Record<"image" | "gif" | "video", { count: number; bytes: number }>>;
+  /** How Settings says cleanup removes items; no Keep settings when unset. */
+  removal?: Removal;
+  /** Answers `library_clean_up`; nothing removed when unset. */
+  cleanUp?: (removal: Removal) => Promise<{ count: number; bytes: number }> | { count: number; bytes: number };
 }
 
 /** A small stand-in for `Library::search`: every word must start a word in some field. */
@@ -147,8 +156,24 @@ function mockBackend(shots: Shot[]): Backend {
             const items = backend.shots.filter((item) => (item.kind ?? "image") === kind);
             return { count: items.length, bytes: items.reduce((sum, item) => sum + (item.bytes ?? 0), 0) };
           };
-          return { image: usage("image"), gif: usage("gif"), video: usage("video"), disk: backend.disk ?? null };
+          const none = { count: 0, bytes: 0 };
+          const due = backend.due && {
+            image: backend.due.image ?? none,
+            gif: backend.due.gif ?? none,
+            video: backend.due.video ?? none,
+          };
+          return {
+            image: usage("image"),
+            gif: usage("gif"),
+            video: usage("video"),
+            disk: backend.disk ?? null,
+            ...(due ? { due } : {}),
+          };
         }
+        case "library_clean_up":
+          return backend.cleanUp ? backend.cleanUp(args.removal as Removal) : { count: 0, bytes: 0 };
+        case "library_stop_clean_up":
+          return null;
         case "library_set_tags": {
           const updated = { ...find(args.id as number), tags: args.tags as string[] };
           backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
@@ -235,6 +260,9 @@ function mockBackend(shots: Shot[]): Backend {
               provider: backend.aiProvider ?? "claudeCode",
               noticePending: backend.aiNotice,
             },
+            ...(backend.removal
+              ? { retention: { image: null, gif: 90, video: 30, removal: backend.removal } }
+              : {}),
           };
         case "dismiss_ai_notice":
           backend.aiNotice = false;
@@ -693,6 +721,233 @@ describe("LibraryWindow storage", () => {
     await userEvent.type(screen.getByRole("searchbox", { name: "Search captures" }), "firefox{Enter}");
     expect(await screen.findByText("2 results")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /4 captures/ })).not.toBeInTheDocument();
+  });
+});
+
+const MB = 1024 ** 2;
+
+describe("LibraryWindow cleanup", () => {
+  /** Four items, of which a GIF and a video are older than their Keep settings. */
+  function dueBackend() {
+    const backend = mockBackend([
+      shot(1, { bytes: 1_000_000 }),
+      shot(2, { bytes: 500_000 }),
+      recording(3, { bytes: 10_800_000 }),
+      recording(4, { kind: "gif", bytes: 2_000_000 }),
+    ]);
+    backend.disk = { free: 48 * GB, total: 256 * GB };
+    backend.due = { gif: { count: 1, bytes: 2 * MB }, video: { count: 1, bytes: 10 * MB } };
+    return backend;
+  }
+
+  async function openPopover() {
+    await userEvent.click(await screen.findByRole("button", { name: /4 captures/ }));
+    return screen.getByRole("dialog", { name: "Storage" });
+  }
+
+  /** Opens the Clean up dialog from the popover. */
+  async function openCleanUp() {
+    const popover = await openPopover();
+    await userEvent.click(within(popover).getByRole("button", { name: "Clean up" }));
+    return screen.getByRole("dialog", { name: "Clean up storage" });
+  }
+
+  /** Lets event listeners finish registering. */
+  async function settle() {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  it("shows what Clean up frees in the popover's footer, and stripes what is due", async () => {
+    dueBackend();
+    render(<LibraryWindow />);
+    const popover = await openPopover();
+
+    expect(within(popover).getByText(/Cleanup frees/)).toHaveTextContent("Cleanup frees 12 MB · 2 items");
+    expect(within(popover).getByRole("button", { name: "Clean up" })).toBeEnabled();
+    const stripes = popover.querySelectorAll(".storage-donut .storage-arc-due");
+    expect([...stripes].map((stripe) => stripe.getAttribute("data-kind"))).toEqual(["gif", "video"]);
+    // The stripes do not take the arcs' tooltips.
+    expect(stripes[0]).toHaveAttribute("pointer-events", "none");
+    const rows = within(within(popover).getByRole("list", { name: "Storage by type" })).getAllByRole("listitem");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "Screenshots1.4 MB2 screenshots · 10%",
+      "GIFs1.9 MB1 GIF · 14% · 2.0 MB due",
+      "Videos10 MB1 video · 76% · 10 MB due",
+    ]);
+  });
+
+  it("offers no Clean up when nothing is older than the Keep settings", async () => {
+    const backend = dueBackend();
+    backend.due = {};
+    render(<LibraryWindow />);
+    const popover = await openPopover();
+    expect(within(popover).getByText("Nothing is older than your Keep settings")).toBeInTheDocument();
+    expect(within(popover).getByRole("button", { name: "Clean up" })).toBeDisabled();
+    expect(popover.querySelector(".storage-arc-due")).toBeNull();
+  });
+
+  it("leaves the footer out for a backend that does not say what is due", async () => {
+    const backend = dueBackend();
+    backend.due = undefined;
+    render(<LibraryWindow />);
+    const popover = await openPopover();
+    expect(within(popover).queryByRole("button", { name: "Clean up" })).not.toBeInTheDocument();
+  });
+
+  it("shows an automatic cleanup's progress in the footer, with Stop", async () => {
+    const backend = dueBackend();
+    render(<LibraryWindow />);
+    const popover = await openPopover();
+    await settle();
+
+    await act(async () => {
+      await emit(CLEANUP_PROGRESS_EVENT, { done: 1, total: 3, bytes: 2 * MB });
+    });
+    expect(within(popover).getByText("Cleaning up · 1 of 3")).toBeInTheDocument();
+    expect(within(popover).getByText("2.0 MB removed")).toBeInTheDocument();
+    expect(within(popover).getByRole("progressbar", { name: "Cleanup progress" })).toHaveAttribute("aria-valuenow", "1");
+    expect(within(popover).queryByRole("button", { name: "Clean up" })).not.toBeInTheDocument();
+
+    await userEvent.click(within(popover).getByRole("button", { name: "Stop" }));
+    expect(callsTo(backend, "library_stop_clean_up")).toHaveLength(1);
+
+    await act(async () => {
+      await emit(CLEANUP_DONE_EVENT, { count: 1, bytes: 2 * MB });
+    });
+    expect(within(popover).queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(within(popover).getByRole("button", { name: "Clean up" })).toBeInTheDocument();
+  });
+
+  it("closes the popover and asks how to remove items, Move to Trash first by default", async () => {
+    const backend = dueBackend();
+    backend.cleanUp = () => ({ count: 2, bytes: 12 * MB });
+    render(<LibraryWindow />);
+    const dialog = await openCleanUp();
+
+    expect(screen.queryByRole("dialog", { name: "Storage" })).not.toBeInTheDocument();
+    expect(within(dialog).getByText("2 items (12 MB) are older than your Keep settings.")).toBeInTheDocument();
+    const kinds = within(within(dialog).getByRole("list", { name: "Due for cleanup" })).getAllByRole("listitem");
+    expect(kinds.map((row) => row.textContent)).toEqual(["1 GIF2.0 MB", "1 video10 MB"]);
+    expect(within(dialog).getByRole("radio", { name: /Move to Trash/ })).toBeChecked();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move to Trash" }));
+
+    const done = await screen.findByRole("dialog", { name: "Cleanup done" });
+    expect(callsTo(backend, "library_clean_up").map((call) => call.payload)).toEqual([{ removal: "trash" }]);
+    expect(within(done).getByText("2 items moved to the Trash · 12 MB")).toBeInTheDocument();
+    await userEvent.click(within(done).getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("cancels without cleaning up", async () => {
+    const backend = dueBackend();
+    render(<LibraryWindow />);
+    const dialog = await openCleanUp();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(callsTo(backend, "library_clean_up")).toHaveLength(0);
+  });
+
+  it("pre-selects deleting permanently from Settings and asks again before it", async () => {
+    const backend = dueBackend();
+    backend.removal = "permanent";
+    backend.cleanUp = () => ({ count: 2, bytes: 12 * MB });
+    render(<LibraryWindow />);
+    const dialog = await openCleanUp();
+    await waitFor(() => expect(within(dialog).getByRole("radio", { name: /Delete permanently/ })).toBeChecked());
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Continue…" }));
+    const confirm = screen.getByRole("dialog", { name: "Delete 2 items permanently?" });
+    expect(
+      within(confirm).getByText("12 MB will be deleted from this computer. They won't go to the Trash, and this can't be undone."),
+    ).toBeInTheDocument();
+    expect(callsTo(backend, "library_clean_up")).toHaveLength(0);
+
+    // Back keeps the choice.
+    await userEvent.click(within(confirm).getByRole("button", { name: "Back" }));
+    const again = screen.getByRole("dialog", { name: "Clean up storage" });
+    expect(within(again).getByRole("radio", { name: /Delete permanently/ })).toBeChecked();
+    await userEvent.click(within(again).getByRole("button", { name: "Continue…" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+
+    const done = await screen.findByRole("dialog", { name: "Cleanup done" });
+    expect(callsTo(backend, "library_clean_up").map((call) => call.payload)).toEqual([{ removal: "permanent" }]);
+    expect(within(done).getByText("2 items deleted · 12 MB freed")).toBeInTheDocument();
+  });
+
+  it("can switch to deleting permanently when Settings says the Trash", async () => {
+    const backend = dueBackend();
+    backend.removal = "trash";
+    render(<LibraryWindow />);
+    const dialog = await openCleanUp();
+    await userEvent.click(within(dialog).getByRole("radio", { name: /Delete permanently/ }));
+    expect(within(dialog).getByRole("button", { name: "Continue…" })).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("radio", { name: /Move to Trash/ }));
+    expect(within(dialog).getByRole("button", { name: "Move to Trash" })).toBeInTheDocument();
+    expect(callsTo(backend, "library_clean_up")).toHaveLength(0);
+  });
+
+  it("shows progress while it runs, and stops when asked", async () => {
+    const backend = dueBackend();
+    let finish: (cleaned: { count: number; bytes: number }) => void = () => {};
+    backend.cleanUp = () => new Promise((resolve) => (finish = resolve));
+    render(<LibraryWindow />);
+    const dialog = await openCleanUp();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move to Trash" }));
+
+    const running = screen.getByRole("dialog", { name: "Moving to the Trash…" });
+    expect(within(running).getByText("0 of 2 items · 0 B of 12 MB")).toBeInTheDocument();
+    await settle();
+    await act(async () => {
+      await emit(CLEANUP_PROGRESS_EVENT, { done: 1, total: 2, bytes: 2 * MB });
+    });
+    expect(within(running).getByText("1 of 2 items · 2.0 MB of 12 MB")).toBeInTheDocument();
+    expect(within(running).getByRole("progressbar", { name: "Cleanup progress" })).toHaveAttribute("aria-valuenow", "1");
+
+    // A running cleanup is not closed by Escape.
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "Moving to the Trash…" })).toBeInTheDocument();
+
+    await userEvent.click(within(running).getByRole("button", { name: "Stop" }));
+    expect(callsTo(backend, "library_stop_clean_up")).toHaveLength(1);
+    expect(within(running).getByRole("button", { name: "Stopping…" })).toBeDisabled();
+
+    await act(async () => {
+      finish({ count: 1, bytes: 2 * MB });
+      await emit(CLEANUP_DONE_EVENT, { count: 1, bytes: 2 * MB });
+    });
+    const stopped = await screen.findByRole("dialog", { name: "Stopped" });
+    expect(within(stopped).getByText("1 item moved to the Trash · 2.0 MB · 1 left")).toBeInTheDocument();
+  });
+
+  it("says why a cleanup could not start", async () => {
+    const backend = dueBackend();
+    backend.cleanUp = () => Promise.reject("a cleanup is already running");
+    render(<LibraryWindow />);
+    const dialog = await openCleanUp();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move to Trash" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("a cleanup is already running");
+    expect(screen.getByRole("dialog", { name: "Clean up storage" })).toBeInTheDocument();
+  });
+
+  it("opens Storage settings from the popover", async () => {
+    dueBackend();
+    const onOpenSettings = vi.fn();
+    render(<LibraryWindow onOpenSettings={onOpenSettings} />);
+    const popover = await openPopover();
+    await userEvent.click(within(popover).getByRole("button", { name: "Storage settings…" }));
+    expect(onOpenSettings).toHaveBeenCalledWith("storage");
+    expect(screen.queryByRole("dialog", { name: "Storage" })).not.toBeInTheDocument();
+  });
+
+  it("opens the Settings window from the popover on its own", async () => {
+    const backend = dueBackend();
+    render(<LibraryWindow />);
+    const popover = await openPopover();
+    await userEvent.click(within(popover).getByRole("button", { name: "Storage settings…" }));
+    expect(callsTo(backend, "open_target").map((call) => call.payload)).toEqual([{ target: "settings" }]);
   });
 });
 

@@ -183,6 +183,21 @@ describe("AppWindow", () => {
     expect(calls.map((call) => call.cmd)).not.toContain("set_retention");
   });
 
+  it("opens Settings on its Storage page from the Library's storage popover", async () => {
+    const none = { count: 0, bytes: 0 };
+    backend({
+      storage: { image: none, gif: none, video: none, disk: null, due: { image: none, gif: none, video: none } },
+    });
+    render(<AppWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: /0 captures/ }));
+    const popover = screen.getByRole("dialog", { name: "Storage" });
+    await userEvent.click(within(popover).getByRole("button", { name: "Storage settings…" }));
+
+    expect(screen.queryByRole("dialog", { name: "Storage" })).not.toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Settings" });
+    expect(within(dialog).getByRole("heading", { level: 1, name: "Storage" })).toBeInTheDocument();
+  });
+
   it("opens Settings with Cmd+comma and closes it with Escape", async () => {
     backend();
     render(<AppWindow />);
