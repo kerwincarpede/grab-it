@@ -423,7 +423,10 @@ export type FfmpegStatus =
   /** `total` is 0 until the server says. */
   | { state: "downloading"; downloaded: number; total: number }
   | { state: "checking" }
-  | { state: "ready"; encoder: string }
+  /** `path` is the ffmpeg in use: one already installed, or the one Grab-it downloaded. */
+  | { state: "ready"; path: string; encoder: string }
+  /** None is installed and none can be downloaded here; `install` is the command that installs one. */
+  | { state: "notInstalled"; install: string | null }
   | { state: "failed"; message: string };
 
 /** Mirrors `FFMPEG_STATUS_EVENT` in src-tauri/src/ffmpeg.rs. */
@@ -433,7 +436,7 @@ export function ffmpegStatus(): Promise<FfmpegStatus> {
   return invoke<FfmpegStatus>("ffmpeg_status");
 }
 
-/** Tries again to download ffmpeg or find an encoder; resolves to the status as it starts. */
+/** Looks for ffmpeg again, downloading it or finding an encoder; resolves to the status as it starts. */
 export function retryFfmpeg(): Promise<FfmpegStatus> {
   return invoke<FfmpegStatus>("ffmpeg_retry");
 }

@@ -115,9 +115,9 @@ function ScaleSlider({ id, label, hint, value, disabled, onCommit }: ScaleSlider
   );
 }
 
-/** Whether MP4 can be recorded yet, with Retry when getting ffmpeg failed. */
+/** Whether MP4 can be recorded yet, with Retry when ffmpeg is not installed or getting it failed. */
 function FfmpegRow({ status, onRetry }: { status: FfmpegStatus | null; onRetry: () => void }) {
-  let detail: string;
+  let detail: React.ReactNode;
   let failed = false;
   let progress: { value: number; max: number } | null = null;
   switch (status?.state) {
@@ -125,7 +125,7 @@ function FfmpegRow({ status, onRetry }: { status: FfmpegStatus | null; onRetry: 
       detail = "Checking…";
       break;
     case "missing":
-      detail = "ffmpeg is downloaded the first time you record an MP4.";
+      detail = "ffmpeg is set up the first time you record an MP4.";
       break;
     case "downloading": {
       const megabytes = (bytes: number) => (bytes / 1_048_576).toFixed(1);
@@ -140,7 +140,18 @@ function FfmpegRow({ status, onRetry }: { status: FfmpegStatus | null; onRetry: 
       detail = "Finding the best video encoder…";
       break;
     case "ready":
-      detail = `Ready. Videos are encoded with ${status.encoder}.`;
+      detail = `Ready. Videos are encoded with ${status.encoder} by ${status.path}.`;
+      break;
+    case "notInstalled":
+      detail = status.install ? (
+        <>
+          MP4 needs ffmpeg. Install it with <code className="ffmpeg-install">{status.install}</code>, then press
+          Retry. Until then, recordings are saved as GIFs.
+        </>
+      ) : (
+        "MP4 needs ffmpeg. Install it, then press Retry. Until then, recordings are saved as GIFs."
+      );
+      failed = true;
       break;
     case "failed":
       detail = `Could not set up ffmpeg: ${status.message}. Until it works, recordings are saved as GIFs.`;

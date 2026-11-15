@@ -39,8 +39,13 @@ rten = { version = "0.24", default-features = false, features = ["onnx_format"] 
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 # Already in the tree through ureq; encodes captures for vision models.
 base64 = "0.23"
-# Already in the tree: unpack and check the ffmpeg download (ffmpeg.rs).
-flate2 = "1"
+# Unpack the ffmpeg download (ffmpeg.rs): FFmpeg-Builds packs its Linux
+# builds as .tar.xz and its Windows ones as .zip. tar and zip are already in
+# the tree through the updater; lzma-rust2 is the pure-Rust xz decoder zip
+# uses, so no C library is built.
+tar = "0.4"
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "optimization", "xz"] }
 sha2 = "0.10"
 # Already in the tree through the updater; orders versions in its changelog.
 semver = "1"
@@ -128,6 +133,8 @@ cpal = "0.18"
 tempfile = "3"
 # The tests draw the codes they decode; the app itself never writes one.
 rxing = { version = "0.9", default-features = false, features = ["encoders"] }
+# The tests pack the .tar.xz builds they download.
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "encoder", "xz"] }
 
 # ocrs is unusably slow unoptimised (see its README), so OCR crates are
 # optimised in dev and test builds too.

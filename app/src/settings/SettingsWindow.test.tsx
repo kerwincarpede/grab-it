@@ -72,7 +72,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     picked: "/data/Shots",
     hotkeys: { ...DEFAULT_HOTKEYS },
     hotkeyWarnings: [],
-    ffmpeg: { state: "ready", encoder: "libopenh264" },
+    ffmpeg: { state: "ready", path: "/usr/bin/ffmpeg", encoder: "libopenh264" },
     ffmpegAfterRetry: { state: "downloading", downloaded: 0, total: 0 },
     microphones: [],
     systemSound: true,
@@ -847,7 +847,7 @@ describe("SettingsWindow recording", () => {
     await waitFor(() => expect(mp4).toBeEnabled());
     expect(mp4).toBeChecked();
     expect(screen.getByRole("radio", { name: "High" })).toBeChecked();
-    expect(await screen.findByText("Ready. Videos are encoded with libopenh264.")).toBeInTheDocument();
+    expect(await screen.findByText("Ready. Videos are encoded with libopenh264 by /usr/bin/ffmpeg.")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("radio", { name: "Medium" }));
     await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, format: "mp4", quality: "medium", fps: 30, showCursor: true }));
@@ -945,6 +945,32 @@ describe("SettingsWindow recording", () => {
     expect(await screen.findByText("Downloading ffmpeg… 0.0 MB")).toBeInTheDocument();
     expect(commands(backend)).toContain("ffmpeg_retry");
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
+  it("says which ffmpeg and encoder record MP4", async () => {
+    mockBackend({ ffmpeg: { state: "ready", path: "/opt/homebrew/bin/ffmpeg", encoder: "h264_videotoolbox" } });
+    render(<SettingsWindow section="recording" />);
+    expect(
+      await screen.findByText("Ready. Videos are encoded with h264_videotoolbox by /opt/homebrew/bin/ffmpeg."),
+    ).toBeInTheDocument();
+  });
+
+  it("says how to install ffmpeg where it cannot be downloaded, and looks again on Retry", async () => {
+    const backend = mockBackend({
+      ffmpeg: { state: "notInstalled", install: "brew install ffmpeg" },
+      ffmpegAfterRetry: { state: "checking" },
+    });
+    render(<SettingsWindow section="recording" />);
+    const command = await screen.findByText("brew install ffmpeg");
+    expect(command.tagName).toBe("CODE");
+    expect(screen.getByTestId("ffmpeg-status")).toHaveTextContent(
+      "MP4 needs ffmpeg. Install it with brew install ffmpeg, then press Retry. Until then, recordings are saved as GIFs.",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByText("Finding the best video encoder…")).toBeInTheDocument();
+    expect(commands(backend)).toContain("ffmpeg_retry");
   });
   it("records no sound by default and records the system default microphone when Microphone is chosen", async () => {
     const backend = mockBackend({

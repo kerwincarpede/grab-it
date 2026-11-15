@@ -695,3 +695,15 @@ button.update-card {
 .ffmpeg-failed {
   color: var(--danger);
 }
+
+/* The command that installs ffmpeg, there to be copied. */
+.ffmpeg-install {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--fill);
+  color: var(--text);
+  user-select: text;
+  -webkit-user-select: text;
+}

@@ -1,19 +1,23 @@
 //! ffmpeg, which encodes MP4 recordings.
 //!
 //! ffmpeg is not shipped with Grab-it. `$GRAB_IT_FFMPEG` names one to use;
-//! otherwise the copy in `ffmpeg/` in the app data directory is used, and
-//! when there is none, this platform's LGPL build is downloaded there from
-//! the `ffmpeg-n8.1` release (see .github/workflows/ffmpeg.yml) and checked
-//! against its `.sha256`. That happens in the background when Grab-it starts
-//! with MP4 chosen, or when MP4 is chosen in Settings, with progress shown
-//! on the Recording page.
+//! otherwise Grab-it looks for one already on this computer: on `PATH`,
+//! then where package managers put it ([`system_dirs`]), then the copy it
+//! downloaded earlier to `ffmpeg/` in the app data directory. When none of
+//! those can encode H.264, it downloads FFmpeg-Builds' static LGPL build
+//! for this platform from a pinned release ([`RELEASE_URL`]), checks it
+//! against the SHA-256 compiled in here ([`build_for`]), and keeps its `ffmpeg`
+//! there. There is no such build for macOS, where Settings asks for
+//! Homebrew's. That happens in the background when Grab-it starts with MP4
+//! chosen, or when MP4 is chosen in Settings, with progress shown on the
+//! Recording page.
 //!
-//! Once ffmpeg is found, each H.264 encoder it may have is tried in turn by
-//! encoding one frame, hardware encoders first, and the first that works is
-//! kept until Grab-it quits. A recording then pipes raw RGBA frames into
-//! ffmpeg's stdin ([`Video`]), and its sound, if any, is muxed in once it
-//! stops ([`add_audio`]): the microphone, the system sound, or both mixed
-//! into one track.
+//! Each H.264 encoder an ffmpeg may have is tried in turn by encoding one
+//! frame, hardware encoders first, and the first ffmpeg with one that works
+//! is kept, with that encoder, until Grab-it quits. A recording then pipes
+//! raw RGBA frames into ffmpeg's stdin ([`Video`]), and its sound, if any,
+//! is muxed in once it stops ([`add_audio`]): the microphone, the system
+//! sound, or both mixed into one track.
 
 use std::{
     ffi::OsString,
@@ -38,13 +42,45 @@ use crate::ocr::DOWNLOAD_STALL_TIMEOUT;
 
 /// Where the downloaded ffmpeg lives, under the app data directory.
 pub const FFMPEG_DIR: &str = "ffmpeg";
-/// Names an ffmpeg to use instead of downloading one.
+/// Names an ffmpeg to use instead of looking for or downloading one.
 pub const FFMPEG_ENV: &str = "GRAB_IT_FFMPEG";
 /// Emitted with an [`FfmpegStatus`] whenever it changes.
 pub const FFMPEG_STATUS_EVENT: &str = "ffmpeg-status";
-/// The release the builds are downloaded from.
+/// The FFmpeg-Builds (BtbN) release the builds are downloaded from. It is a
+/// month-end autobuild: FFmpeg-Builds keeps those for about two years, but
+/// its daily ones for only about two weeks. To move to a newer one, take
+/// the builds' names and checksums from its `checksums.sha256`; the
+/// `pinned_builds_are_still_published` test checks them.
 pub const RELEASE_URL: &str =
-    "https://github.com/kerwincarpede/grab-it/releases/download/ffmpeg-n8.1";
+    "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59";
+
+/// One of FFmpeg-Builds' static LGPL ffmpeg 8.1 builds: its archive in the
+/// release, and that archive's SHA-256.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Build {
+    pub archive: &'static str,
+    pub sha256: &'static str,
+}
+
+pub const LINUX_X64: Build = Build {
+    archive: "ffmpeg-n8.1.3-27-g8dca1586f4-linux64-lgpl-8.1.tar.xz",
+    sha256: "a64f3171e6ad1f7d358d28890a907ee478c331d1177ec696a93418f79ac3f1f3",
+};
+pub const LINUX_ARM64: Build = Build {
+    archive: "ffmpeg-n8.1.3-27-g8dca1586f4-linuxarm64-lgpl-8.1.tar.xz",
+    sha256: "2ea30086a637e3f0ad0f49a1b38db34121422b85e93cc82df2e01d9ee5200809",
+};
+pub const WINDOWS_X64: Build = Build {
+    archive: "ffmpeg-n8.1.3-27-g8dca1586f4-win64-lgpl-8.1.zip",
+    sha256: "d4c2a42673917b4a97104a3e9f082729a9730796b98664e37c0b7eba6c6c613d",
+};
+pub const WINDOWS_ARM64: Build = Build {
+    archive: "ffmpeg-n8.1.3-27-g8dca1586f4-winarm64-lgpl-8.1.zip",
+    sha256: "c918142d3920f6b15282739dd523885be0586cbd8684f400acea9d4a8c97002f",
+};
+/// Every build Grab-it may download.
+#[cfg(test)]
+pub const BUILDS: [Build; 4] = [LINUX_X64, LINUX_ARM64, WINDOWS_X64, WINDOWS_ARM64];
 
 /// How long trying one encoder may take. A hardware encoder whose driver
 /// hangs must not keep Grab-it from trying the next one.
@@ -58,29 +94,36 @@ const FINISH_TIMEOUT: Duration = Duration::from_secs(60);
 /// The VA-API device on Linux.
 const VAAPI_DEVICE: &str = "/dev/dri/renderD128";
 
-/// The release asset for an OS and architecture, as Rust names them
-/// (`std::env::consts`). None where no build is published.
-pub fn asset_for(os: &str, arch: &str) -> Option<&'static str> {
+/// The build for an OS and architecture, as Rust names them
+/// (`std::env::consts`). None where FFmpeg-Builds publishes none, as for
+/// macOS.
+pub fn build_for(os: &str, arch: &str) -> Option<Build> {
     match (os, arch) {
-        ("linux", "x86_64") => Some("ffmpeg-linux-x64.gz"),
-        ("windows", "x86_64") => Some("ffmpeg-windows-x64.exe.gz"),
-        ("macos", "aarch64") => Some("ffmpeg-macos-arm64.gz"),
+        ("linux", "x86_64") => Some(LINUX_X64),
+        ("linux", "aarch64") => Some(LINUX_ARM64),
+        ("windows", "x86_64") => Some(WINDOWS_X64),
+        ("windows", "aarch64") => Some(WINDOWS_ARM64),
         _ => None,
     }
 }
 
-/// This platform's release asset.
-pub fn platform_asset() -> Option<&'static str> {
-    asset_for(std::env::consts::OS, std::env::consts::ARCH)
+/// This platform's build.
+pub fn platform_build() -> Option<Build> {
+    build_for(std::env::consts::OS, std::env::consts::ARCH)
 }
 
-/// The executable's file name on this platform.
-pub fn executable_name() -> &'static str {
-    if cfg!(windows) {
+/// The executable's file name on `os`.
+pub fn executable_name_for(os: &str) -> &'static str {
+    if os == "windows" {
         "ffmpeg.exe"
     } else {
         "ffmpeg"
     }
+}
+
+/// The executable's file name on this platform.
+pub fn executable_name() -> &'static str {
+    executable_name_for(std::env::consts::OS)
 }
 
 /// Where the downloaded ffmpeg is kept.
@@ -88,55 +131,167 @@ pub fn installed_path(app_data: &Path) -> PathBuf {
     app_data.join(FFMPEG_DIR).join(executable_name())
 }
 
+/// What a person installs ffmpeg with on `os`, when Grab-it cannot
+/// download it there.
+pub fn install_command(os: &str) -> Option<&'static str> {
+    match os {
+        "macos" => Some("brew install ffmpeg"),
+        _ => None,
+    }
+}
+
+/// The directories an ffmpeg installed on `os` may be in, most likely
+/// first: each one on `PATH` (`path`), then where package managers put it.
+/// An app opened from the Dock, Finder or Start menu often does not have
+/// those on its `PATH`, and one installed after Grab-it started never does.
+/// `env` reads the other environment variables they are found from.
+pub fn system_dirs(
+    os: &str,
+    path: Option<OsString>,
+    env: impl Fn(&str) -> Option<OsString>,
+) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = path
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    let under = |var: &str, rest: &[&str]| {
+        env(var).filter(|base| !base.is_empty()).map(|base| {
+            rest.iter()
+                .fold(PathBuf::from(base), |dir, part| dir.join(part))
+        })
+    };
+    match os {
+        "macos" => dirs.extend(
+            // Homebrew on Apple silicon, then on Intel, then MacPorts.
+            ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"].map(PathBuf::from),
+        ),
+        "windows" => dirs.extend(
+            [
+                // winget's links, which it adds to PATH only for apps
+                // started after it.
+                under("LOCALAPPDATA", &["Microsoft", "WinGet", "Links"]),
+                under("ProgramData", &["chocolatey", "bin"]),
+                under("USERPROFILE", &["scoop", "shims"]),
+            ]
+            .into_iter()
+            .flatten(),
+        ),
+        _ => {
+            dirs.extend(
+                [
+                    "/usr/local/bin",
+                    "/usr/bin",
+                    "/home/linuxbrew/.linuxbrew/bin",
+                ]
+                .map(PathBuf::from),
+            );
+            dirs.extend(under("HOME", &[".local", "bin"]));
+        }
+    }
+    dirs.retain(|dir| dir.is_absolute());
+    dirs
+}
+
+/// The ffmpegs in `dirs` called `name`, in order, each once: a directory
+/// that is a link to another, such as `/bin` to `/usr/bin`, finds the
+/// same one twice.
+pub fn find_in(dirs: &[PathBuf], name: &str) -> Vec<PathBuf> {
+    let mut seen = Vec::new();
+    let mut found = Vec::new();
+    for dir in dirs {
+        let path = dir.join(name);
+        if !path.is_file() {
+            continue;
+        }
+        let real = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if !seen.contains(&real) {
+            seen.push(real);
+            found.push(path);
+        }
+    }
+    found
+}
+
 /// Where ffmpeg comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     /// `$GRAB_IT_FFMPEG`, used as it is.
     Override(PathBuf),
-    /// A copy downloaded earlier.
-    Installed(PathBuf),
-    /// Nothing yet: `asset` is downloaded to `to`.
-    Download { asset: &'static str, to: PathBuf },
-    /// Nothing yet, and no build is published for this platform.
-    Unsupported,
+    /// The ffmpegs already on this computer, to try in order (the copy
+    /// Grab-it downloaded earlier last), then what to download when none
+    /// of them can encode H.264. With no download, Settings says how to
+    /// install one (`install`).
+    Search {
+        found: Vec<PathBuf>,
+        download: Option<Download>,
+        install: Option<&'static str>,
+    },
 }
 
-/// Where ffmpeg comes from, given `$GRAB_IT_FFMPEG` (`env`) and this
-/// platform's asset.
-pub fn locate_with(app_data: &Path, env: Option<OsString>, asset: Option<&'static str>) -> Source {
+/// A build to download, and where its ffmpeg goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Download {
+    pub build: Build,
+    pub to: PathBuf,
+}
+
+/// Where ffmpeg comes from, given `$GRAB_IT_FFMPEG` (`env`), the ffmpegs
+/// installed on this computer (`system`), and this platform's build.
+pub fn locate_with(
+    app_data: &Path,
+    env: Option<OsString>,
+    system: Vec<PathBuf>,
+    build: Option<Build>,
+    install: Option<&'static str>,
+) -> Source {
     if let Some(path) = env.filter(|path| !path.is_empty()) {
         return Source::Override(PathBuf::from(path));
     }
     let installed = installed_path(app_data);
+    let mut found = system;
     if installed.is_file() {
-        return Source::Installed(installed);
+        found.push(installed.clone());
     }
-    match asset {
-        Some(asset) => Source::Download {
-            asset,
+    Source::Search {
+        found,
+        download: build.map(|build| Download {
+            build,
             to: installed,
-        },
-        None => Source::Unsupported,
+        }),
+        install,
     }
 }
 
 /// Where ffmpeg comes from on this machine.
 pub fn locate(app_data: &Path) -> Source {
-    locate_with(app_data, std::env::var_os(FFMPEG_ENV), platform_asset())
+    let os = std::env::consts::OS;
+    let system = find_in(
+        &system_dirs(os, std::env::var_os("PATH"), |var| std::env::var_os(var)),
+        executable_name(),
+    );
+    locate_with(
+        app_data,
+        std::env::var_os(FFMPEG_ENV),
+        system,
+        platform_build(),
+        install_command(os),
+    )
 }
 
 #[derive(Debug)]
 pub enum FfmpegError {
     /// The download failed.
     Download(String),
-    /// The download did not match its published checksum.
+    /// The download did not match its pinned checksum.
     Checksum {
         expected: String,
         actual: String,
     },
     Io(io::Error),
-    /// No build is published for this platform.
-    Unsupported,
+    /// No ffmpeg is installed, and none can be downloaded for this
+    /// platform. `install` says how to install one.
+    NotInstalled {
+        install: Option<&'static str>,
+    },
     /// `$GRAB_IT_FFMPEG` names no file.
     Missing(PathBuf),
     /// None of the H.264 encoders worked.
@@ -154,9 +309,12 @@ impl fmt::Display for FfmpegError {
                 "the ffmpeg download was damaged (its SHA-256 is {actual}, not {expected})"
             ),
             Self::Io(err) => write!(f, "{err}"),
-            Self::Unsupported => f.write_str(
-                "there is no ffmpeg download for this computer; set GRAB_IT_FFMPEG to an ffmpeg to use",
-            ),
+            Self::NotInstalled {
+                install: Some(command),
+            } => {
+                write!(f, "ffmpeg is not installed; install it with `{command}`")
+            }
+            Self::NotInstalled { install: None } => f.write_str("ffmpeg is not installed"),
             Self::Missing(path) => write!(
                 f,
                 "{FFMPEG_ENV} is set to {}, which does not exist",
@@ -178,30 +336,33 @@ impl From<io::Error> for FfmpegError {
 
 pub type FfmpegResult<T> = std::result::Result<T, FfmpegError>;
 
-/// Downloads `asset` from the release and installs it as the executable
-/// `to`. `progress` gets the bytes downloaded so far and the total (0 when
-/// the server does not say).
-pub fn download(asset: &str, to: &Path, progress: impl FnMut(u64, u64)) -> FfmpegResult<()> {
+/// Downloads `build` from the release and installs its ffmpeg as the
+/// executable `to`. `progress` gets the bytes downloaded so far and the
+/// total (0 when the server does not say).
+pub fn download(build: Build, to: &Path, progress: impl FnMut(u64, u64)) -> FfmpegResult<()> {
     download_from(
         &crate::ocr::download_agent(DOWNLOAD_STALL_TIMEOUT),
         RELEASE_URL,
-        asset,
+        build,
+        executable_name(),
         to,
         progress,
     )
 }
 
-/// [`download`] from the release at `base_url`. The archive is written and
-/// unpacked beside `to` and renamed into place only once its checksum
-/// matched, so a cut-off or damaged download is never mistaken for ffmpeg.
+/// [`download`] from the release at `base_url`, taking the executable
+/// `name` out of the archive. The archive is written and unpacked beside
+/// `to`, and the executable renamed into place only once the archive's
+/// checksum matched, so a cut-off or damaged download is never mistaken for
+/// ffmpeg.
 fn download_from(
     agent: &ureq::Agent,
     base_url: &str,
-    asset: &str,
+    build: Build,
+    name: &str,
     to: &Path,
     mut progress: impl FnMut(u64, u64),
 ) -> FfmpegResult<()> {
-    let expected = fetch_checksum(agent, &format!("{base_url}/{asset}.sha256"))?;
     let dir = to.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(dir)?;
     // Unique per download, so parallel downloads (tests) never share one.
@@ -211,19 +372,22 @@ fn download_from(
         std::process::id(),
         NEXT_PART.fetch_add(1, Ordering::Relaxed)
     );
-    let archive = dir.join(format!("{asset}.{suffix}"));
-    let unpacked = dir.join(format!("{}.{suffix}", executable_name()));
+    let archive = dir.join(format!("{}.{suffix}", build.archive));
+    let unpacked = dir.join(format!("{name}.{suffix}"));
     let result = (|| -> FfmpegResult<()> {
         let actual = download_hashed(
             agent,
-            &format!("{base_url}/{asset}"),
+            &format!("{base_url}/{}", build.archive),
             &archive,
             &mut progress,
         )?;
-        if actual != expected {
-            return Err(FfmpegError::Checksum { expected, actual });
+        if actual != build.sha256 {
+            return Err(FfmpegError::Checksum {
+                expected: build.sha256.to_owned(),
+                actual,
+            });
         }
-        unpack(&archive, &unpacked)?;
+        unpack(&archive, build.archive, name, &unpacked)?;
         make_executable(&unpacked)?;
         fs::rename(&unpacked, to)?;
         Ok(())
@@ -233,25 +397,6 @@ fn download_from(
         let _ = fs::remove_file(&unpacked);
     }
     result
-}
-
-/// The checksum in a `sha256sum` line (`<hex>  <file>`), lowercased.
-pub fn parse_checksum(text: &str) -> Option<String> {
-    let hex = text.split_whitespace().next()?;
-    (hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()))
-        .then(|| hex.to_ascii_lowercase())
-}
-
-fn fetch_checksum(agent: &ureq::Agent, url: &str) -> FfmpegResult<String> {
-    let text = agent
-        .get(url)
-        .call()
-        .map_err(|err| FfmpegError::Download(err.to_string()))?
-        .into_body()
-        .read_to_string()
-        .map_err(|err| FfmpegError::Download(err.to_string()))?;
-    parse_checksum(&text)
-        .ok_or_else(|| FfmpegError::Download(format!("{url} holds no SHA-256 checksum")))
 }
 
 /// Streams `url` into `to`, returning the SHA-256 of what was written.
@@ -296,15 +441,55 @@ fn download_hashed(
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-/// Unpacks the gzip archive `from` into `to`.
-fn unpack(from: &Path, to: &Path) -> FfmpegResult<()> {
-    let mut decoder = flate2::read::GzDecoder::new(BufReader::new(fs::File::open(from)?));
+/// Whether `path`, inside a build's archive, is its executable `name`:
+/// `bin/<name>` in the build's own top folder.
+fn is_executable_entry(path: &Path, name: &str) -> bool {
+    path.file_name().is_some_and(|file| file == name)
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|dir| dir == "bin")
+}
+
+/// Takes the executable `name` out of the archive `from` (`archive` names
+/// how it is packed: `.tar.xz` or `.zip`) and writes it to `to`.
+fn unpack(from: &Path, archive: &str, name: &str, to: &Path) -> FfmpegResult<()> {
+    let damaged = |err: &dyn fmt::Display| {
+        FfmpegError::Download(format!("could not unpack {archive}: {err}"))
+    };
+    let file = BufReader::new(fs::File::open(from)?);
     let mut out = fs::File::create(to)?;
-    io::copy(&mut decoder, &mut out).map_err(|err| {
-        FfmpegError::Download(format!("could not unpack {}: {err}", from.display()))
-    })?;
-    out.sync_all()?;
-    Ok(())
+    if archive.ends_with(".zip") {
+        let mut zip = zip::ZipArchive::new(file).map_err(|err| damaged(&err))?;
+        for index in 0..zip.len() {
+            let mut entry = zip.by_index(index).map_err(|err| damaged(&err))?;
+            if entry
+                .enclosed_name()
+                .is_some_and(|path| is_executable_entry(&path, name))
+            {
+                io::copy(&mut entry, &mut out).map_err(|err| damaged(&err))?;
+                out.sync_all()?;
+                return Ok(());
+            }
+        }
+    } else {
+        // bin/ffmpeg comes first in FFmpeg-Builds' archives, so little more
+        // than it is decompressed.
+        let xz = lzma_rust2::XzReader::new(file, true);
+        let mut tar = tar::Archive::new(xz);
+        for entry in tar.entries().map_err(|err| damaged(&err))? {
+            let mut entry = entry.map_err(|err| damaged(&err))?;
+            let wanted = entry
+                .path()
+                .is_ok_and(|path| is_executable_entry(&path, name));
+            if wanted {
+                io::copy(&mut entry, &mut out).map_err(|err| damaged(&err))?;
+                out.sync_all()?;
+                return Ok(());
+            }
+        }
+    }
+    Err(damaged(&format!("it has no bin/{name}")))
 }
 
 #[cfg(unix)]
@@ -349,11 +534,16 @@ pub const VAAPI: Encoder = Encoder {
     pix_fmt: "nv12",
     vaapi: true,
 };
-/// Cisco's software encoder, in every build: the last resort.
+/// x264, the better software encoder. It is GPL, so the LGPL builds
+/// Grab-it downloads leave it out, but most ffmpegs installed from a
+/// package manager have it.
+pub const X264: Encoder = Encoder::new("libx264", "yuv420p");
+/// Cisco's software encoder, in every build Grab-it downloads: the last
+/// resort.
 pub const OPENH264: Encoder = Encoder::new("libopenh264", "yuv420p");
 
 /// The encoders to try on `os` (`std::env::consts::OS`), in order:
-/// the platform's hardware encoders, then OpenH264.
+/// the platform's hardware encoders, then x264, then OpenH264.
 pub fn candidates(os: &str) -> Vec<Encoder> {
     let mut list = match os {
         "macos" => vec![VIDEOTOOLBOX],
@@ -361,7 +551,7 @@ pub fn candidates(os: &str) -> Vec<Encoder> {
         "linux" => vec![NVENC, VAAPI],
         _ => Vec::new(),
     };
-    list.push(OPENH264);
+    list.extend([X264, OPENH264]);
     list
 }
 
@@ -807,8 +997,12 @@ pub enum FfmpegStatus {
     Downloading { downloaded: u64, total: u64 },
     /// Found; its encoders are being tried.
     Checking,
-    /// Ready to record with `encoder`.
-    Ready { encoder: String },
+    /// Ready to record with the ffmpeg at `path` and its `encoder`.
+    Ready { path: String, encoder: String },
+    /// No ffmpeg is installed, and none can be downloaded for this
+    /// platform. `install` is the command that installs one, if known.
+    /// Retry looks again.
+    NotInstalled { install: Option<String> },
     /// It could not be downloaded or used. Retry tries again.
     Failed { message: String },
 }
@@ -908,8 +1102,12 @@ pub fn prepare_in_background(app: &AppHandle) {
     // Said at once, so Settings shows the work as soon as it is asked for.
     set_status(
         app,
-        match source {
-            Source::Download { .. } => FfmpegStatus::Downloading {
+        match &source {
+            Source::Search {
+                found,
+                download: Some(_),
+                ..
+            } if found.is_empty() => FfmpegStatus::Downloading {
                 downloaded: 0,
                 total: 0,
             },
@@ -924,10 +1122,16 @@ pub fn prepare_in_background(app: &AppHandle) {
             let state = handle.state::<FfmpegState>();
             let status = match result {
                 Ok(ready) => {
-                    let encoder = ready.encoder.name.to_owned();
+                    let status = FfmpegStatus::Ready {
+                        path: ready.path.display().to_string(),
+                        encoder: ready.encoder.name.to_owned(),
+                    };
                     state.lock().ready = Some(ready);
-                    FfmpegStatus::Ready { encoder }
+                    status
                 }
+                Err(FfmpegError::NotInstalled { install }) => FfmpegStatus::NotInstalled {
+                    install: install.map(str::to_owned),
+                },
                 Err(err) => {
                     eprintln!("Grab-it: {err}");
                     FfmpegStatus::Failed {
@@ -949,45 +1153,66 @@ pub fn prepare_in_background(app: &AppHandle) {
     }
 }
 
-/// Gets ffmpeg from `source`, downloading it with progress if needed, and
-/// chooses its encoder.
+/// Gets ffmpeg from `source`: the first ffmpeg found that can encode
+/// H.264, or else one downloaded with progress, and its encoder.
 fn prepare(app: &AppHandle, source: Source) -> FfmpegResult<Ready> {
-    let (path, downloaded) = match source {
+    let (found, download_to, install) = match source {
         Source::Override(path) => {
             if !path.is_file() {
                 return Err(FfmpegError::Missing(path));
             }
-            (path, false)
+            let encoder = choose_encoder(&path).ok_or(FfmpegError::NoEncoder)?;
+            return Ok(Ready { path, encoder });
         }
-        Source::Installed(path) => (path, false),
-        Source::Download { asset, to } => {
-            let mut last_percent = None;
-            download(asset, &to, |downloaded, total| {
-                // Every percent, or every megabyte while the size is unknown.
-                let step = (downloaded * 100)
-                    .checked_div(total)
-                    .unwrap_or(downloaded >> 20);
-                if last_percent != Some(step) {
-                    last_percent = Some(step);
-                    set_status(app, FfmpegStatus::Downloading { downloaded, total });
-                }
-            })?;
-            (to, true)
-        }
-        Source::Unsupported => return Err(FfmpegError::Unsupported),
+        Source::Search {
+            found,
+            download,
+            install,
+        } => (found, download, install),
     };
-    set_status(app, FfmpegStatus::Checking);
-    match choose_encoder(&path) {
-        Some(encoder) => Ok(Ready { path, encoder }),
-        None => {
-            // A copy Grab-it downloaded earlier may be damaged: fetch a
-            // fresh one on Retry. One just downloaded was checked.
-            if !downloaded && path == installed_path(&app.state::<FfmpegState>().app_data) {
-                let _ = fs::remove_file(&path);
-            }
-            Err(FfmpegError::NoEncoder)
+    let installed = installed_path(&app.state::<FfmpegState>().app_data);
+    for path in &found {
+        set_status(app, FfmpegStatus::Checking);
+        if let Some(encoder) = choose_encoder(path) {
+            return Ok(Ready {
+                path: path.clone(),
+                encoder,
+            });
+        }
+        // A copy Grab-it downloaded earlier may be damaged: fetch it again.
+        if *path == installed {
+            let _ = fs::remove_file(path);
         }
     }
+    let Some(Download { build, to }) = download_to else {
+        return Err(if found.is_empty() {
+            FfmpegError::NotInstalled { install }
+        } else {
+            FfmpegError::NoEncoder
+        });
+    };
+    set_status(
+        app,
+        FfmpegStatus::Downloading {
+            downloaded: 0,
+            total: 0,
+        },
+    );
+    let mut last_percent = None;
+    download(build, &to, |downloaded, total| {
+        // Every percent, or every megabyte while the size is unknown.
+        let step = (downloaded * 100)
+            .checked_div(total)
+            .unwrap_or(downloaded >> 20);
+        if last_percent != Some(step) {
+            last_percent = Some(step);
+            set_status(app, FfmpegStatus::Downloading { downloaded, total });
+        }
+    })?;
+    set_status(app, FfmpegStatus::Checking);
+    // Just downloaded and checked, so kept even when no encoder works.
+    let encoder = choose_encoder(&to).ok_or(FfmpegError::NoEncoder)?;
+    Ok(Ready { path: to, encoder })
 }
 
 /// Why an MP4 recording was saved as a GIF instead, as the card says it.
@@ -1000,6 +1225,10 @@ pub fn fallback_reason(status: &FfmpegStatus) -> String {
             "Saved as a GIF: ffmpeg, which MP4 needs, is still getting ready.".to_owned()
         }
         FfmpegStatus::Ready { .. } => "Saved as a GIF.".to_owned(),
+        FfmpegStatus::NotInstalled { .. } => {
+            "Saved as a GIF: MP4 needs ffmpeg, which is not installed. See Settings → Recording."
+                .to_owned()
+        }
         FfmpegStatus::Failed { .. } => {
             "Saved as a GIF: ffmpeg, which MP4 needs, could not be set up. See Settings → Recording."
                 .to_owned()
@@ -1012,7 +1241,7 @@ pub fn ffmpeg_status(app: AppHandle) -> FfmpegStatus {
     status(&app)
 }
 
-/// Tries again to download ffmpeg or find an encoder. Returns the status
+/// Looks again for ffmpeg, downloading it or finding an encoder. Returns the status
 /// as the new attempt starts.
 #[tauri::command]
 pub fn ffmpeg_retry(app: AppHandle) -> FfmpegStatus {
@@ -1026,62 +1255,205 @@ mod tests {
     use std::net::TcpListener;
 
     #[test]
-    fn each_platform_has_its_release_asset() {
-        assert_eq!(asset_for("linux", "x86_64"), Some("ffmpeg-linux-x64.gz"));
-        assert_eq!(
-            asset_for("windows", "x86_64"),
-            Some("ffmpeg-windows-x64.exe.gz")
-        );
-        assert_eq!(asset_for("macos", "aarch64"), Some("ffmpeg-macos-arm64.gz"));
-        assert_eq!(asset_for("macos", "x86_64"), None);
-        assert_eq!(asset_for("linux", "aarch64"), None);
+    fn each_platform_but_macos_has_its_build() {
+        assert_eq!(build_for("linux", "x86_64"), Some(LINUX_X64));
+        assert_eq!(build_for("linux", "aarch64"), Some(LINUX_ARM64));
+        assert_eq!(build_for("windows", "x86_64"), Some(WINDOWS_X64));
+        assert_eq!(build_for("windows", "aarch64"), Some(WINDOWS_ARM64));
+        assert_eq!(build_for("macos", "aarch64"), None);
+        assert_eq!(build_for("macos", "x86_64"), None);
+        assert_eq!(install_command("macos"), Some("brew install ffmpeg"));
+        assert_eq!(install_command("linux"), None);
+        for build in BUILDS {
+            assert_eq!(build.sha256.len(), 64, "{}", build.archive);
+            assert!(
+                build
+                    .sha256
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            );
+            assert!(
+                build.archive.contains("-lgpl-"),
+                "{} is not LGPL",
+                build.archive
+            );
+        }
+    }
+
+    fn no_env(_: &str) -> Option<OsString> {
+        None
     }
 
     #[test]
-    fn the_override_comes_first_then_the_installed_copy_then_a_download() {
+    #[cfg(unix)]
+    fn path_comes_before_where_package_managers_put_ffmpeg() {
+        let path = std::env::join_paths(["/custom/bin", "relative/bin", "/usr/bin"]).unwrap();
+        assert_eq!(
+            system_dirs("macos", Some(path.clone()), no_env),
+            [
+                "/custom/bin",
+                "/usr/bin",
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+                "/opt/local/bin"
+            ]
+            .map(PathBuf::from)
+        );
+        let home = |var: &str| (var == "HOME").then(|| OsString::from("/home/me"));
+        assert_eq!(
+            system_dirs("linux", Some(path), home),
+            [
+                "/custom/bin",
+                "/usr/bin",
+                "/usr/local/bin",
+                "/usr/bin",
+                "/home/linuxbrew/.linuxbrew/bin",
+                "/home/me/.local/bin"
+            ]
+            .map(PathBuf::from)
+        );
+        assert_eq!(system_dirs("linux", None, no_env).len(), 3);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_looks_where_winget_chocolatey_and_scoop_put_ffmpeg() {
+        let env = |var: &str| match var {
+            "LOCALAPPDATA" => Some(OsString::from(r"C:\Users\me\AppData\Local")),
+            "ProgramData" => Some(OsString::from(r"C:\ProgramData")),
+            "USERPROFILE" => Some(OsString::from(r"C:\Users\me")),
+            _ => None,
+        };
+        assert_eq!(
+            system_dirs("windows", Some(OsString::from(r"C:\Tools")), env),
+            [
+                r"C:\Tools",
+                r"C:\Users\me\AppData\Local\Microsoft\WinGet\Links",
+                r"C:\ProgramData\chocolatey\bin",
+                r"C:\Users\me\scoop\shims"
+            ]
+            .map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn each_installed_ffmpeg_is_found_once_in_order() {
+        let root = tempfile::tempdir().unwrap();
+        let [first, second, empty] = ["first", "second", "empty"].map(|dir| {
+            let dir = root.path().join(dir);
+            fs::create_dir_all(&dir).unwrap();
+            dir
+        });
+        fs::write(first.join("ffmpeg"), b"").unwrap();
+        fs::write(second.join("ffmpeg"), b"").unwrap();
+        // A directory linked to one already searched finds the same ffmpeg.
+        let linked = root.path().join("linked");
+        std::os::unix::fs::symlink(&first, &linked).unwrap();
+        // A directory called ffmpeg is not one.
+        fs::create_dir_all(empty.join("ffmpeg")).unwrap();
+        assert_eq!(
+            find_in(
+                &[
+                    empty,
+                    second.clone(),
+                    linked,
+                    first,
+                    root.path().join("gone")
+                ],
+                "ffmpeg"
+            ),
+            [
+                second.join("ffmpeg"),
+                root.path().join("linked").join("ffmpeg")
+            ]
+        );
+    }
+
+    #[test]
+    fn the_override_comes_first_then_installed_ffmpegs_then_a_download() {
         let dir = tempfile::tempdir().unwrap();
         let installed = installed_path(dir.path());
+        let system = vec![PathBuf::from("/usr/bin/ffmpeg")];
         assert_eq!(
             locate_with(
                 dir.path(),
                 Some("/opt/ffmpeg".into()),
-                Some("ffmpeg-linux-x64.gz")
+                system.clone(),
+                Some(LINUX_X64),
+                None
             ),
             Source::Override(PathBuf::from("/opt/ffmpeg"))
         );
         assert_eq!(
-            locate_with(dir.path(), Some("".into()), Some("ffmpeg-linux-x64.gz")),
-            Source::Download {
-                asset: "ffmpeg-linux-x64.gz",
-                to: installed.clone()
+            locate_with(
+                dir.path(),
+                Some("".into()),
+                system.clone(),
+                Some(LINUX_X64),
+                None
+            ),
+            Source::Search {
+                found: system.clone(),
+                download: Some(Download {
+                    build: LINUX_X64,
+                    to: installed.clone()
+                }),
+                install: None,
             }
         );
-        assert_eq!(locate_with(dir.path(), None, None), Source::Unsupported);
+        assert_eq!(
+            locate_with(
+                dir.path(),
+                None,
+                Vec::new(),
+                None,
+                Some("brew install ffmpeg")
+            ),
+            Source::Search {
+                found: Vec::new(),
+                download: None,
+                install: Some("brew install ffmpeg"),
+            }
+        );
 
+        // The copy downloaded earlier is tried after the system's.
         fs::create_dir_all(installed.parent().unwrap()).unwrap();
         fs::write(&installed, b"ffmpeg").unwrap();
-        assert_eq!(
-            locate_with(dir.path(), None, Some("ffmpeg-linux-x64.gz")),
-            Source::Installed(installed.clone())
-        );
+        let Source::Search { found, .. } =
+            locate_with(dir.path(), None, system, Some(LINUX_X64), None)
+        else {
+            panic!("expected a search");
+        };
+        assert_eq!(found, [PathBuf::from("/usr/bin/ffmpeg"), installed.clone()]);
         assert_eq!(installed.parent().unwrap(), dir.path().join(FFMPEG_DIR));
     }
 
     #[test]
-    fn checksums_are_read_from_sha256sum_lines() {
-        let hex = "AB".repeat(32);
+    fn not_installed_says_how_to_install_it() {
         assert_eq!(
-            parse_checksum(&format!("{hex}  ffmpeg-linux-x64.gz\n")),
-            Some("ab".repeat(32))
+            FfmpegError::NotInstalled {
+                install: Some("brew install ffmpeg")
+            }
+            .to_string(),
+            "ffmpeg is not installed; install it with `brew install ffmpeg`"
         );
-        assert_eq!(parse_checksum("not-a-checksum  ffmpeg"), None);
-        assert_eq!(parse_checksum(""), None);
+        assert_eq!(
+            serde_json::to_value(FfmpegStatus::NotInstalled {
+                install: Some("brew install ffmpeg".into())
+            })
+            .unwrap(),
+            serde_json::json!({ "state": "notInstalled", "install": "brew install ffmpeg" })
+        );
     }
 
     #[test]
-    fn hardware_encoders_are_tried_before_openh264() {
+    fn hardware_encoders_are_tried_before_x264_then_openh264() {
         let names = |os: &str| candidates(os).iter().map(|e| e.name).collect::<Vec<_>>();
-        assert_eq!(names("macos"), ["h264_videotoolbox", "libopenh264"]);
+        assert_eq!(
+            names("macos"),
+            ["h264_videotoolbox", "libx264", "libopenh264"]
+        );
         assert_eq!(
             names("windows"),
             [
@@ -1089,11 +1461,15 @@ mod tests {
                 "h264_qsv",
                 "h264_amf",
                 "h264_mf",
+                "libx264",
                 "libopenh264"
             ]
         );
-        assert_eq!(names("linux"), ["h264_nvenc", "h264_vaapi", "libopenh264"]);
-        assert_eq!(names("freebsd"), ["libopenh264"]);
+        assert_eq!(
+            names("linux"),
+            ["h264_nvenc", "h264_vaapi", "libx264", "libopenh264"]
+        );
+        assert_eq!(names("freebsd"), ["libx264", "libopenh264"]);
     }
 
     #[test]
@@ -1288,6 +1664,10 @@ mod tests {
             })
             .contains("could not be set up")
         );
+        assert!(
+            fallback_reason(&FfmpegStatus::NotInstalled { install: None })
+                .contains("not installed")
+        );
     }
 
     #[test]
@@ -1302,10 +1682,11 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(FfmpegStatus::Ready {
+                path: "/usr/bin/ffmpeg".into(),
                 encoder: "libopenh264".into()
             })
             .unwrap(),
-            serde_json::json!({ "state": "ready", "encoder": "libopenh264" })
+            serde_json::json!({ "state": "ready", "path": "/usr/bin/ffmpeg", "encoder": "libopenh264" })
         );
     }
 
@@ -1346,37 +1727,91 @@ mod tests {
         (url, server)
     }
 
-    fn gzip(bytes: &[u8]) -> Vec<u8> {
-        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        encoder.write_all(bytes).unwrap();
-        encoder.finish().unwrap()
+    /// A `.tar.xz` like FFmpeg-Builds': `files` in one top folder.
+    fn tar_xz(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut tar = tar::Builder::new(Vec::new());
+        for (path, bytes) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            tar.append_data(&mut header, format!("ffmpeg-n8.1-lgpl/{path}"), *bytes)
+                .unwrap();
+        }
+        let tar = tar.into_inner().unwrap();
+        let mut xz =
+            lzma_rust2::XzWriter::new(Vec::new(), lzma_rust2::XzOptions::with_preset(1)).unwrap();
+        xz.write_all(&tar).unwrap();
+        xz.finish().unwrap()
+    }
+
+    /// A `.zip` like FFmpeg-Builds': `files` in one top folder.
+    fn zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(io::Cursor::new(Vec::new()));
+        for (path, bytes) in files {
+            zip.start_file(
+                format!("ffmpeg-n8.1-lgpl/{path}"),
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Deflated),
+            )
+            .unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
     }
 
     fn sha256(bytes: &[u8]) -> String {
         format!("{:x}", Sha256::digest(bytes))
     }
 
+    /// A build called `archive` whose checksum is `bytes`'.
+    fn build_of(archive: &'static str, bytes: &[u8]) -> Build {
+        Build {
+            archive,
+            sha256: Box::leak(sha256(bytes).into_boxed_str()),
+        }
+    }
+
+    /// Downloads `build`, served as `bytes`, taking out `name`.
+    fn download_served(
+        build: Build,
+        bytes: Vec<u8>,
+        name: &str,
+        to: &Path,
+        progress: impl FnMut(u64, u64),
+    ) -> FfmpegResult<()> {
+        let (url, server) = release_server(vec![(build.archive, bytes)]);
+        let result = download_from(
+            &crate::ocr::download_agent(Duration::from_secs(5)),
+            &url,
+            build,
+            name,
+            to,
+            progress,
+        );
+        server.join().unwrap();
+        result
+    }
+
+    const FAKE_FFMPEG: &[u8] = b"#!/bin/sh\necho ffmpeg\n";
+
     #[test]
-    fn a_download_matching_its_checksum_is_unpacked_into_place() {
-        let archive = gzip(b"#!/bin/sh\necho ffmpeg\n");
-        let line = format!("{}  ffmpeg-linux-x64.gz\n", sha256(&archive)).into_bytes();
-        let (url, server) = release_server(vec![
-            ("ffmpeg-linux-x64.gz.sha256", line),
-            ("ffmpeg-linux-x64.gz", archive),
+    fn a_linux_build_matching_its_checksum_is_unpacked_into_place() {
+        let archive = tar_xz(&[
+            ("LICENSE.txt", b"LGPL"),
+            ("bin/ffprobe", b"ffprobe"),
+            ("bin/ffmpeg", FAKE_FFMPEG),
+            ("doc/ffmpeg", b"not this one"),
         ]);
+        let build = build_of("ffmpeg-linux64-lgpl-8.1.tar.xz", &archive);
         let dir = tempfile::tempdir().unwrap();
         let to = installed_path(dir.path());
         let mut seen = Vec::new();
-        download_from(
-            &crate::ocr::download_agent(Duration::from_secs(5)),
-            &url,
-            "ffmpeg-linux-x64.gz",
-            &to,
-            |done, total| seen.push((done, total)),
-        )
+        download_served(build, archive, "ffmpeg", &to, |done, total| {
+            seen.push((done, total))
+        })
         .unwrap();
-        server.join().unwrap();
-        assert_eq!(fs::read(&to).unwrap(), b"#!/bin/sh\necho ffmpeg\n");
+        assert_eq!(fs::read(&to).unwrap(), FAKE_FFMPEG);
         assert_eq!(seen.last().map(|(done, total)| done == total), Some(true));
         #[cfg(unix)]
         {
@@ -1391,23 +1826,29 @@ mod tests {
     }
 
     #[test]
-    fn a_download_not_matching_its_checksum_is_thrown_away() {
-        let archive = gzip(b"tampered");
-        let line = format!("{}  ffmpeg-linux-x64.gz\n", "0".repeat(64)).into_bytes();
-        let (url, server) = release_server(vec![
-            ("ffmpeg-linux-x64.gz.sha256", line),
-            ("ffmpeg-linux-x64.gz", archive),
+    fn a_windows_build_is_unpacked_from_its_zip() {
+        let archive = zip(&[
+            ("bin/ffplay.exe", b"ffplay"),
+            ("bin/ffmpeg.exe", FAKE_FFMPEG),
         ]);
+        let build = build_of("ffmpeg-win64-lgpl-8.1.zip", &archive);
+        let dir = tempfile::tempdir().unwrap();
+        let to = dir.path().join(FFMPEG_DIR).join("ffmpeg.exe");
+        download_served(build, archive, "ffmpeg.exe", &to, |_, _| {}).unwrap();
+        assert_eq!(fs::read(&to).unwrap(), FAKE_FFMPEG);
+        assert_eq!(fs::read_dir(to.parent().unwrap()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_download_not_matching_its_checksum_is_thrown_away() {
+        let archive = tar_xz(&[("bin/ffmpeg", b"tampered")]);
+        let build = Build {
+            archive: "ffmpeg-linux64-lgpl-8.1.tar.xz",
+            sha256: LINUX_X64.sha256,
+        };
         let dir = tempfile::tempdir().unwrap();
         let to = installed_path(dir.path());
-        let result = download_from(
-            &crate::ocr::download_agent(Duration::from_secs(5)),
-            &url,
-            "ffmpeg-linux-x64.gz",
-            &to,
-            |_, _| {},
-        );
-        server.join().unwrap();
+        let result = download_served(build, archive, "ffmpeg", &to, |_, _| {});
         assert!(
             matches!(result, Err(FfmpegError::Checksum { .. })),
             "got {result:?}"
@@ -1417,14 +1858,30 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_checksum_fails_before_downloading() {
+    fn an_archive_without_ffmpeg_installs_nothing() {
+        let archive = tar_xz(&[("ffmpeg", b"not in bin/"), ("bin/ffprobe", b"ffprobe")]);
+        let build = build_of("ffmpeg-linux64-lgpl-8.1.tar.xz", &archive);
+        let dir = tempfile::tempdir().unwrap();
+        let to = installed_path(dir.path());
+        let result = download_served(build, archive, "ffmpeg", &to, |_, _| {});
+        assert!(
+            matches!(&result, Err(FfmpegError::Download(err)) if err.contains("no bin/ffmpeg")),
+            "got {result:?}"
+        );
+        assert!(!to.exists());
+        assert_eq!(fs::read_dir(to.parent().unwrap()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_missing_build_fails_to_download() {
         let (url, server) = release_server(vec![("nothing", Vec::new())]);
         let dir = tempfile::tempdir().unwrap();
         let to = installed_path(dir.path());
         let result = download_from(
             &crate::ocr::download_agent(Duration::from_secs(5)),
             &url,
-            "ffmpeg-linux-x64.gz",
+            LINUX_X64,
+            "ffmpeg",
             &to,
             |_, _| {},
         );
@@ -1434,5 +1891,29 @@ mod tests {
             "got {result:?}"
         );
         assert!(!to.exists());
+    }
+
+    /// FFmpeg-Builds still publishes every pinned build with the pinned
+    /// checksum. It prunes old releases, so this fails CI, and with it a
+    /// release, before installed copies would find their build gone.
+    #[test]
+    fn pinned_builds_are_still_published() {
+        let url = format!("{RELEASE_URL}/checksums.sha256");
+        let checksums = crate::ocr::download_agent(Duration::from_secs(30))
+            .get(&url)
+            .call()
+            .unwrap_or_else(|err| panic!("{url}: {err}"))
+            .into_body()
+            .read_to_string()
+            .unwrap();
+        for build in BUILDS {
+            let line = format!("{}  {}", build.sha256, build.archive);
+            assert!(
+                checksums
+                    .lines()
+                    .any(|published| published.trim_end() == line),
+                "{url} does not list {line}"
+            );
+        }
     }
 }
