@@ -136,7 +136,13 @@ jobs:
           body=$(cat <<'BODY'
           ## Install
 
-          Download the installer for your platform from **Assets** below:
+          **macOS and Linux:** install and open it with one command:
+
+          ```sh
+          curl -fsSL https://kerwincarpede.github.io/grab-it/install.sh | sh
+          ```
+
+          Or download the installer for your platform from **Assets** below:
 
           | Platform | Installer |
           | --- | --- |

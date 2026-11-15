@@ -1,13 +1,30 @@
 ---
 title: Install
-description: Download and install Grab-it on Windows, macOS or Linux.
+description: Install Grab-it with one command on macOS or Linux, or download the installer for Windows, macOS or Linux.
 sidebar:
   order: 1
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Grab the installer for your computer from the **[latest release](https://github.com/kerwincarpede/grab-it/releases/latest)** (scroll down to *Assets*).
+## macOS and Linux: one command
+
+Paste this into Terminal:
+
+```sh
+curl -fsSL https://kerwincarpede.github.io/grab-it/install.sh | sh
+```
+
+It downloads the latest Grab-it for your computer, installs it and opens it:
+
+- **macOS:** Grab-it goes into **Applications**, ready to open without the "can't verify the developer" prompt.
+- **Linux:** the `.deb` (Debian, Ubuntu) or `.rpm` (Fedora, openSUSE) is installed with your package manager, which asks for your password. On other distributions, the AppImage goes into `~/.local/bin` and Grab-it appears in your app menu.
+
+Run the same command again any time to reinstall the latest version. Prefer to read it first? [View install.sh](/grab-it/install.sh).
+
+## Or download an installer
+
+Grab the installer for your computer from the **[latest release](https://github.com/kerwincarpede/grab-it/releases/latest)** (scroll down to *Assets*). On Windows, this is the way to install.
 
 | Your computer | Download | |
 | --- | --- | --- |

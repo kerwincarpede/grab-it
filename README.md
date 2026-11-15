@@ -101,6 +101,14 @@ Pin a capture above your other windows as a reference while you work. Choose how
 
 Grab-it is free and open source.
 
+**macOS and Linux:** install and open it with one command:
+
+```sh
+curl -fsSL https://kerwincarpede.github.io/grab-it/install.sh | sh
+```
+
+**Windows, or to install by hand:**
+
 1. Download the installer for your computer from the **[latest release](https://github.com/kerwincarpede/grab-it/releases/latest)**.
 2. Follow the **[Grab-it guide](https://kerwincarpede.github.io/grab-it/)**. It covers installing on Windows, macOS and Linux, your first capture, editing screenshots and recordings, and every shortcut.
 
