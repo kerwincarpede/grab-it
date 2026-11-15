@@ -51,6 +51,12 @@ export interface OverlayInfo {
    * share of its height. Older backends leave this out.
    */
   topInset?: number;
+  /**
+   * The last region captured, in this monitor's image pixels, when it was
+   * on this monitor: All-in-one starts with it selected. Only an All-in-one
+   * overlay is sent one, and older backends leave it out.
+   */
+  lastRegion?: Box | null;
 }
 
 /** Mirrors `START_EVENT` in src-tauri/src/overlay.rs. */

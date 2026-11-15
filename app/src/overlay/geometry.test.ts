@@ -9,6 +9,8 @@ import {
   dragBox,
   floatingPosition,
   frameParts,
+  fromImagePixels,
+  handlePoint,
   holeCorners,
   imagePixelAt,
   imageSize,
@@ -17,11 +19,18 @@ import {
   labelTransform,
   monitorToCss,
   moveTo,
+  ratioHead,
+  resizeBox,
+  snapToImage,
   squareHead,
   stretch,
   surround,
   toHex,
   topmostAt,
+  translate,
+  withRatio,
+  withSize,
+  type Box,
 } from "./geometry";
 
 describe("boxFromPoints", () => {
@@ -93,6 +102,22 @@ describe("squareHead", () => {
   });
 });
 
+describe("ratioHead", () => {
+  it("holds the ratio, taking whichever side asks for the bigger box", () => {
+    expect(ratioHead({ x: 0, y: 0 }, { x: 160, y: 10 }, 16 / 9)).toEqual({ x: 160, y: 90 });
+    expect(ratioHead({ x: 0, y: 0 }, { x: 10, y: 90 }, 16 / 9)).toEqual({ x: 160, y: 90 });
+    expect(ratioHead({ x: 200, y: 200 }, { x: 100, y: 190 }, 4 / 3)).toEqual({ x: 100, y: 125 });
+  });
+
+  it("stops growing at the edge of the bounds", () => {
+    // 100 px of room below allows 160 wide at 16:10 even though the cursor asks for 300.
+    expect(ratioHead({ x: 0, y: 100 }, { x: 300, y: 120 }, 1.6, { width: 1000, height: 200 })).toEqual({
+      x: 160,
+      y: 200,
+    });
+  });
+});
+
 describe("dragBox", () => {
   const drag = { anchor: { x: 50, y: 50 }, head: { x: 10, y: 30 } };
 
@@ -102,6 +127,147 @@ describe("dragBox", () => {
 
   it("is a square when constrained", () => {
     expect(dragBox(drag, true)).toEqual({ x: 10, y: 10, width: 40, height: 40 });
+  });
+
+  it("holds a locked ratio, which Shift overrides with a square", () => {
+    expect(dragBox(drag, false, undefined, 2)).toEqual({ x: 10, y: 30, width: 40, height: 20 });
+    expect(dragBox({ anchor: { x: 0, y: 0 }, head: { x: 40, y: 40 } }, false, undefined, 2)).toEqual({
+      x: 0,
+      y: 0,
+      width: 80,
+      height: 40,
+    });
+    expect(dragBox(drag, true, undefined, 2)).toEqual({ x: 10, y: 10, width: 40, height: 40 });
+  });
+});
+
+describe("translate", () => {
+  it("moves a box, keeping its size", () => {
+    expect(translate({ x: 1, y: 2, width: 3, height: 4 }, { x: 10, y: -2 })).toEqual({
+      x: 11,
+      y: 0,
+      width: 3,
+      height: 4,
+    });
+  });
+});
+
+describe("handlePoint", () => {
+  const box = { x: 100, y: 50, width: 200, height: 100 };
+
+  it("puts handles on the corners and the middle of each edge", () => {
+    expect(handlePoint(box, "nw")).toEqual({ x: 100, y: 50 });
+    expect(handlePoint(box, "se")).toEqual({ x: 300, y: 150 });
+    expect(handlePoint(box, "n")).toEqual({ x: 200, y: 50 });
+    expect(handlePoint(box, "e")).toEqual({ x: 300, y: 100 });
+    expect(handlePoint(box, "sw")).toEqual({ x: 100, y: 150 });
+  });
+});
+
+describe("resizeBox", () => {
+  const bounds = { width: 1000, height: 800 };
+  const box: Box = { x: 100, y: 100, width: 200, height: 100 };
+  const resize = (handle: Parameters<typeof resizeBox>[1], dx: number, dy: number, ratio?: number) =>
+    resizeBox(box, handle, { x: dx, y: dy }, { bounds, ratio });
+
+  it("moves only the edges the handle holds", () => {
+    expect(resize("e", 50, 30)).toEqual({ x: 100, y: 100, width: 250, height: 100 });
+    expect(resize("n", 30, -20)).toEqual({ x: 100, y: 80, width: 200, height: 120 });
+    expect(resize("sw", 20, 10)).toEqual({ x: 120, y: 100, width: 180, height: 110 });
+    expect(resize("ne", -50, 50)).toEqual({ x: 100, y: 150, width: 150, height: 50 });
+  });
+
+  it("turns over when pulled past the opposite edge", () => {
+    expect(resize("w", 250, 0)).toEqual({ x: 300, y: 100, width: 50, height: 100 });
+    expect(resize("se", -250, -150)).toEqual({ x: 50, y: 50, width: 50, height: 50 });
+  });
+
+  it("stays inside the bounds", () => {
+    expect(resize("nw", -500, -500)).toEqual({ x: 0, y: 0, width: 300, height: 200 });
+    expect(resize("se", 5000, 5000)).toEqual({ x: 100, y: 100, width: 900, height: 700 });
+  });
+
+  it("keeps a ratio from the opposite corner", () => {
+    expect(resize("se", 100, 0, 2)).toEqual({ x: 100, y: 100, width: 300, height: 150 });
+    expect(resize("nw", 0, -50, 2)).toEqual({ x: 0, y: 50, width: 300, height: 150 });
+  });
+
+  it("keeps a ratio from an edge, centred on the other axis", () => {
+    expect(resize("e", 100, 0, 2)).toEqual({ x: 100, y: 75, width: 300, height: 150 });
+    expect(resize("s", 0, 50, 2)).toEqual({ x: 50, y: 100, width: 300, height: 150 });
+    // The box can only grow as far as its centre leaves room above and below.
+    expect(
+      resizeBox({ x: 0, y: 0, width: 100, height: 50 }, "e", { x: 900, y: 0 }, { bounds, ratio: 2 }),
+    ).toEqual({ x: 0, y: 0, width: 100, height: 50 });
+  });
+});
+
+describe("withSize", () => {
+  const bounds = { width: 1000, height: 800 };
+
+  it("keeps the top-left corner", () => {
+    expect(withSize({ x: 10, y: 20, width: 5, height: 5 }, { width: 640, height: 360 }, bounds)).toEqual({
+      x: 10,
+      y: 20,
+      width: 640,
+      height: 360,
+    });
+  });
+
+  it("moves back onto the screen, and is cut to it when larger", () => {
+    expect(withSize({ x: 900, y: 700, width: 5, height: 5 }, { width: 640, height: 360 }, bounds)).toEqual({
+      x: 360,
+      y: 440,
+      width: 640,
+      height: 360,
+    });
+    expect(withSize({ x: 50, y: 50, width: 5, height: 5 }, { width: 4000, height: 100 }, bounds)).toEqual({
+      x: 0,
+      y: 50,
+      width: 1000,
+      height: 100,
+    });
+  });
+});
+
+describe("withRatio", () => {
+  const bounds = { width: 1000, height: 800 };
+
+  it("reshapes around the centre, keeping the width", () => {
+    expect(withRatio({ x: 100, y: 100, width: 320, height: 100 }, 16 / 9, bounds)).toEqual({
+      x: 100,
+      y: 60,
+      width: 320,
+      height: 180,
+    });
+  });
+
+  it("stays on the screen", () => {
+    const tall = withRatio({ x: 0, y: 0, width: 1000, height: 100 }, 1, bounds);
+    expect(tall).toEqual({ x: 100, y: 0, width: 800, height: 800 });
+  });
+});
+
+describe("fromImagePixels", () => {
+  it("covers exactly the image pixels it was made from at any scale", () => {
+    for (const scale of [1, 1.25, 1.5, 2, 3]) {
+      const box = fromImagePixels({ x: 37, y: 11, width: 1280, height: 720 }, scale);
+      // As src-tauri's css_to_image_rect rounds: edges outwards.
+      expect(Math.floor(box.x * scale)).toBe(37);
+      expect(Math.floor(box.y * scale)).toBe(11);
+      expect(Math.ceil((box.x + box.width) * scale)).toBe(37 + 1280);
+      expect(Math.ceil((box.y + box.height) * scale)).toBe(11 + 720);
+      expect(imageSize(box, scale)).toEqual({ width: 1280, height: 720 });
+    }
+  });
+});
+
+describe("snapToImage", () => {
+  it("rounds a box onto whole image pixels, and leaves a snapped one be", () => {
+    const snapped = snapToImage({ x: 10.3, y: 20.6, width: 100.4, height: 50.2 }, 2);
+    expect(imageSize(snapped, 2)).toEqual({ width: 200, height: 101 });
+    expect(Math.floor(snapped.x * 2)).toBe(21);
+    expect(snapToImage(snapped, 2)).toEqual(snapped);
   });
 });
 

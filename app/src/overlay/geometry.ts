@@ -68,28 +68,38 @@ export interface Drag {
 }
 
 /**
- * The corner that makes `anchor`→`point` a square: the longer side wins, so
- * the square grows with the cursor instead of lagging behind it. With
- * `bounds`, the square stops growing where it would leave the screen.
+ * The corner that makes `anchor`→`point` a box of `ratio` (width over
+ * height): the side that asks for the bigger box wins, so the box grows with
+ * the cursor instead of lagging behind it. With `bounds`, it stops growing
+ * where it would leave the screen.
  */
-export function squareHead(anchor: Point, point: Point, bounds?: Size): Point {
+export function ratioHead(anchor: Point, point: Point, ratio: number, bounds?: Size): Point {
   const dx = point.x - anchor.x;
   const dy = point.y - anchor.y;
   // `|| 1` keeps a straight horizontal or vertical drag growing down-right.
   const signX = Math.sign(dx) || 1;
   const signY = Math.sign(dy) || 1;
-  let side = Math.max(Math.abs(dx), Math.abs(dy));
+  let width = Math.max(Math.abs(dx), Math.abs(dy) * ratio);
   if (bounds) {
     const roomX = signX > 0 ? bounds.width - anchor.x : anchor.x;
     const roomY = signY > 0 ? bounds.height - anchor.y : anchor.y;
-    side = Math.max(Math.min(side, roomX, roomY), 0);
+    width = Math.max(Math.min(width, roomX, roomY * ratio), 0);
   }
-  return { x: anchor.x + side * signX, y: anchor.y + side * signY };
+  return { x: anchor.x + width * signX, y: anchor.y + (width / ratio) * signY };
 }
 
-/** The selection a drag describes; `square` is the Shift constraint. */
-export function dragBox(drag: Drag, square = false, bounds?: Size): Box {
-  const head = square ? squareHead(drag.anchor, drag.head, bounds) : drag.head;
+/** The corner that makes `anchor`→`point` a square; see `ratioHead`. */
+export function squareHead(anchor: Point, point: Point, bounds?: Size): Point {
+  return ratioHead(anchor, point, 1, bounds);
+}
+
+/**
+ * The selection a drag describes; `square` is the Shift constraint, and
+ * `ratio` (width over height) a locked aspect ratio, which Shift overrides.
+ */
+export function dragBox(drag: Drag, square = false, bounds?: Size, ratio?: number | null): Box {
+  const lock = square ? 1 : ratio;
+  const head = lock ? ratioHead(drag.anchor, drag.head, lock, bounds) : drag.head;
   return boxFromPoints(drag.anchor, head);
 }
 
@@ -115,11 +125,11 @@ export function advanceDrag(
   drag: Drag,
   from: Point,
   to: Point,
-  options: { move: boolean; square: boolean; bounds: Size },
+  options: { move: boolean; square: boolean; bounds: Size; ratio?: number | null },
 ): Drag {
   if (!options.move) return { anchor: drag.anchor, head: to };
   const delta = clampedDelta(
-    dragBox(drag, options.square, options.bounds),
+    dragBox(drag, options.square, options.bounds, options.ratio),
     { x: to.x - from.x, y: to.y - from.y },
     options.bounds,
   );
@@ -127,6 +137,186 @@ export function advanceDrag(
     anchor: { x: drag.anchor.x + delta.x, y: drag.anchor.y + delta.y },
     head: { x: drag.head.x + delta.x, y: drag.head.y + delta.y },
   };
+}
+
+/** Moves a box by `delta` as it is. */
+export function translate(box: Box, delta: Point): Box {
+  return { ...box, x: box.x + delta.x, y: box.y + delta.y };
+}
+
+/**
+ * The handles an adjustable selection is resized by: a compass point each,
+ * corners first. `n` is the top edge, `se` the bottom-right corner.
+ */
+export const HANDLES = ["nw", "ne", "sw", "se", "n", "s", "w", "e"] as const;
+export type Handle = (typeof HANDLES)[number];
+
+/** Where each handle sits on `box`: its corners and the middle of its edges. */
+export function handlePoint(box: Box, handle: Handle): Point {
+  const x = handle.includes("w")
+    ? box.x
+    : handle.includes("e")
+      ? box.x + box.width
+      : box.x + box.width / 2;
+  const y = handle.includes("n")
+    ? box.y
+    : handle.includes("s")
+      ? box.y + box.height
+      : box.y + box.height / 2;
+  return { x, y };
+}
+
+const clampTo = (value: number, max: number) => Math.min(Math.max(value, 0), max);
+
+/**
+ * `box` as it is when `handle` has been dragged by `delta`. The edges the
+ * handle holds follow the cursor, kept inside `bounds`, and a handle pulled
+ * past the opposite edge turns the box over rather than shrinking it below
+ * nothing. With `ratio` (width over height) the box keeps its shape: a
+ * corner grows from the opposite corner, and an edge from the opposite edge
+ * with the box centred on the other axis.
+ */
+export function resizeBox(
+  box: Box,
+  handle: Handle,
+  delta: Point,
+  options: { bounds: Size; ratio?: number | null },
+): Box {
+  const { bounds, ratio } = options;
+  const left = box.x;
+  const top = box.y;
+  const right = box.x + box.width;
+  const bottom = box.y + box.height;
+  const west = handle.includes("w");
+  const east = handle.includes("e");
+  const north = handle.includes("n");
+  const south = handle.includes("s");
+
+  if (!ratio) {
+    const x0 = west ? clampTo(left + delta.x, bounds.width) : left;
+    const x1 = east ? clampTo(right + delta.x, bounds.width) : right;
+    const y0 = north ? clampTo(top + delta.y, bounds.height) : top;
+    const y1 = south ? clampTo(bottom + delta.y, bounds.height) : bottom;
+    return boxFromPoints({ x: x0, y: y0 }, { x: x1, y: y1 });
+  }
+
+  if ((west || east) && (north || south)) {
+    const anchor = { x: west ? right : left, y: north ? bottom : top };
+    const corner = { x: west ? left : right, y: north ? top : bottom };
+    const head = { x: corner.x + delta.x, y: corner.y + delta.y };
+    return boxFromPoints(anchor, ratioHead(anchor, head, ratio, bounds));
+  }
+
+  if (west || east) {
+    // The opposite edge stays put; the height follows the width, centred.
+    const anchor = west ? right : left;
+    const moved = (west ? left : right) + delta.x;
+    const sign = Math.sign(moved - anchor) || (west ? -1 : 1);
+    const centre = box.y + box.height / 2;
+    const roomX = sign > 0 ? bounds.width - anchor : anchor;
+    const roomY = 2 * Math.min(centre, bounds.height - centre);
+    const width = Math.max(Math.min(Math.abs(moved - anchor), roomX, roomY * ratio), 0);
+    const height = width / ratio;
+    return {
+      x: sign > 0 ? anchor : anchor - width,
+      y: centre - height / 2,
+      width,
+      height,
+    };
+  }
+
+  // The top or bottom edge: the width follows the height, centred.
+  const anchor = north ? bottom : top;
+  const moved = (north ? top : bottom) + delta.y;
+  const sign = Math.sign(moved - anchor) || (north ? -1 : 1);
+  const centre = box.x + box.width / 2;
+  const roomY = sign > 0 ? bounds.height - anchor : anchor;
+  const roomX = 2 * Math.min(centre, bounds.width - centre);
+  const height = Math.max(Math.min(Math.abs(moved - anchor), roomY, roomX / ratio), 0);
+  const width = height * ratio;
+  return {
+    x: centre - width / 2,
+    y: sign > 0 ? anchor : anchor - height,
+    width,
+    height,
+  };
+}
+
+/**
+ * `box` given `size`, keeping its top-left corner where it fits: a box that
+ * would run off the screen moves back onto it, and one larger than the
+ * screen is cut to it.
+ */
+export function withSize(box: Box, size: Size, bounds: Size): Box {
+  const width = Math.min(Math.max(size.width, 0), bounds.width);
+  const height = Math.min(Math.max(size.height, 0), bounds.height);
+  return {
+    x: clampTo(Math.min(box.x, bounds.width - width), bounds.width),
+    y: clampTo(Math.min(box.y, bounds.height - height), bounds.height),
+    width,
+    height,
+  };
+}
+
+/**
+ * `box` reshaped to `ratio` (width over height) around its centre, as large
+ * as its width allows, then kept on the screen.
+ */
+export function withRatio(box: Box, ratio: number, bounds: Size): Box {
+  let width = box.width;
+  let height = width / ratio;
+  if (height > bounds.height) {
+    height = bounds.height;
+    width = height * ratio;
+  }
+  if (width > bounds.width) {
+    width = bounds.width;
+    height = width / ratio;
+  }
+  const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  return withSize(
+    { x: centre.x - width / 2, y: centre.y - height / 2, width, height },
+    { width, height },
+    bounds,
+  );
+}
+
+/**
+ * How far inside each image pixel's edge a box from `fromImagePixels` starts
+ * and ends, in image pixels. The backend rounds a selection's edges outwards
+ * (src-tauri/src/capture.rs, `css_to_image_rect`), so a box placed exactly on
+ * the pixel grid could gain a pixel to rounding error; nudged this little
+ * inwards it covers exactly the pixels it was made from.
+ */
+const PIXEL_INSET = 1e-3;
+
+/**
+ * A box in image pixels as CSS pixels, so that it is captured as exactly
+ * those pixels: an exact size typed in, or the last region.
+ */
+export function fromImagePixels(pixels: Box, scale: number): Box {
+  const s = scale > 0 ? scale : 1;
+  const x = (pixels.x + PIXEL_INSET) / s;
+  const y = (pixels.y + PIXEL_INSET) / s;
+  const width = Math.max(pixels.width - PIXEL_INSET * 2, 0) / s;
+  const height = Math.max(pixels.height - PIXEL_INSET * 2, 0) / s;
+  return { x, y, width, height };
+}
+
+/** A CSS-pixel box moved onto the image's pixel grid, whole pixels each way. */
+export function snapToImage(box: Box, scale: number): Box {
+  const s = scale > 0 ? scale : 1;
+  const left = Math.round(box.x * s);
+  const top = Math.round(box.y * s);
+  return fromImagePixels(
+    {
+      x: left,
+      y: top,
+      width: Math.round((box.x + box.width) * s) - left,
+      height: Math.round((box.y + box.height) * s) - top,
+    },
+    s,
+  );
 }
 
 /** The size of a CSS-pixel box in image pixels, as it will be captured. */
