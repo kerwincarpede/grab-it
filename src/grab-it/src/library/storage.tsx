@@ -38,16 +38,19 @@ function Ring({ storage, size, radius, width, gap, className, onArcEnter, onArcL
   const total = storageTotal(storage);
   const circumference = 2 * Math.PI * radius;
   const centre = size / 2;
-  const parts = STORAGE_KINDS.filter(({ kind }) => storage[kind].bytes > 0);
-  let offset = 0;
+  const kinds = STORAGE_KINDS.filter(({ kind }) => storage[kind].bytes > 0);
+  // Each arc's length, and where it starts: after the arcs before it.
+  const lengths = kinds.map(({ kind }) => (storage[kind].bytes / total) * circumference);
+  const parts = kinds.map(({ kind }, index) => ({
+    kind,
+    length: lengths[index],
+    start: lengths.slice(0, index).reduce((sum, length) => sum + length, 0),
+  }));
   return (
     <svg className={className} viewBox={`0 0 ${size} ${size}`} aria-hidden="true" focusable="false">
       <circle className="storage-track" cx={centre} cy={centre} r={radius} fill="none" strokeWidth={width} />
-      {parts.map(({ kind }) => {
-        const length = (storage[kind].bytes / total) * circumference;
+      {parts.map(({ kind, length, start }) => {
         const arc = Math.max(length - (parts.length > 1 ? gap : 0), 0.5);
-        const start = offset;
-        offset += length;
         return (
           <circle
             key={kind}
