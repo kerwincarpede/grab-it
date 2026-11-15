@@ -107,6 +107,12 @@ Grab-it is free and open source.
 curl -fsSL https://kerwincarpede.github.io/grab-it/install.sh | sh
 ```
 
+**Homebrew (macOS):**
+
+```sh
+brew install --cask kerwincarpede/tap/grab-it
+```
+
 **Windows, or to install by hand:**
 
 1. Download the installer for your computer from the **[latest release](https://github.com/kerwincarpede/grab-it/releases/latest)**.
