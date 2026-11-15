@@ -18,6 +18,8 @@ fields.
 
 Grab-it's updater looks for `<os>-<arch>-<installer>` first, so each kind
 of install updates with its own kind of package, and then `<os>-<arch>`.
+A universal macOS package runs on both Apple silicon and Intel, so it is
+listed under both darwin architectures.
 """
 
 import argparse
@@ -39,7 +41,13 @@ PACKAGES = [
 ]
 
 # Every release must update these, or it is not published.
-REQUIRED = ["darwin-aarch64", "linux-x86_64", "windows-x86_64"]
+REQUIRED = [
+    "darwin-aarch64",
+    "darwin-x86_64",
+    "linux-aarch64",
+    "linux-x86_64",
+    "windows-x86_64",
+]
 
 # How many versions `changes` covers, this one included.
 HISTORY = 20
@@ -53,12 +61,15 @@ PREFIX = re.compile(r"^(?P<type>[a-z]+)(\([^)]*\))?!?:\s*")
 CREDIT = re.compile(r"\s+by @\S+ in https://\S+$")
 
 
-def arch_of(name):
+def arches_of(name):
+    """The architectures a package runs on; empty when its name doesn't say."""
+    if "universal" in name:
+        return ["aarch64", "x86_64"]
     if re.search(r"(aarch64|arm64)", name):
-        return "aarch64"
+        return ["aarch64"]
     if re.search(r"(x86_64|x64|amd64)", name):
-        return "x86_64"
-    return None
+        return ["x86_64"]
+    return []
 
 
 def platforms(sig_dir, download_base):
@@ -68,16 +79,17 @@ def platforms(sig_dir, download_base):
         for suffix, os_name, installer, default in PACKAGES:
             if not package.endswith(suffix):
                 continue
-            arch = arch_of(package)
-            if arch is None:
+            arches = arches_of(package)
+            if not arches:
                 sys.exit(f"cannot tell the architecture of {package}")
             entry = {
                 "signature": sig.read_text().strip(),
                 "url": f"{download_base}/{quote(package)}",
             }
-            found[f"{os_name}-{arch}-{installer}"] = entry
-            if default:
-                found[f"{os_name}-{arch}"] = entry
+            for arch in arches:
+                found[f"{os_name}-{arch}-{installer}"] = entry
+                if default:
+                    found[f"{os_name}-{arch}"] = entry
             break
     return found
 

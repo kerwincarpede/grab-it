@@ -125,7 +125,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [ubuntu-24.04, windows-latest, macos-latest]
+        # ubuntu-24.04-arm builds the arm64 Linux packages; macos-latest
+        # builds one universal app for Apple silicon and Intel Macs.
+        platform: [ubuntu-24.04, ubuntu-24.04-arm, windows-latest, macos-latest]
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
@@ -142,7 +144,10 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      # The universal macOS app joins an Apple silicon and an Intel build.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -221,6 +226,8 @@ jobs:
       # packages with their .sig files, are also uploaded to the draft
       # release; without one, tauri-action only builds. latest.json is left
       # to release.yml, which writes it once every platform is in.
+      # On macOS one universal build serves both Apple silicon and Intel, and
+      # lands under target/universal-apple-darwin/ rather than target/.
       - name: Build installers
         uses: tauri-apps/tauri-action@v0
         env:
@@ -232,6 +239,7 @@ jobs:
           projectPath: src/grab-it
           releaseId: ${{ inputs.release_id }}
           includeUpdaterJson: false
+          args: ${{ runner.os == 'macOS' && '--target universal-apple-darwin' || '' }}
 
       # A designated requirement naming a cdhash is the per-build identity
       # that loses permissions on update; a certificate one is stable.
@@ -239,7 +247,7 @@ jobs:
         if: runner.os == 'macOS' && steps.macos-signing.outputs.identity != ''
         shell: bash
         run: |
-          app=src/grab-it/src-tauri/target/release/bundle/macos/Grab-it.app
+          app=src/grab-it/src-tauri/target/universal-apple-darwin/release/bundle/macos/Grab-it.app
           codesign --verify --strict --verbose=2 "$app"
           requirement=$(codesign -d -r- "$app" 2>&1 | sed -n 's/^designated => //p')
           echo "Designated requirement: $requirement"
@@ -251,7 +259,8 @@ jobs:
       - name: Upload installers
         uses: actions/upload-artifact@v7
         with:
-          name: grab-it-${{ runner.os }}
+          # Per runner, so the x86_64 and arm64 Linux builds don't collide.
+          name: grab-it-${{ matrix.platform }}
           if-no-files-found: error
           path: |
             src/grab-it/src-tauri/target/release/bundle/deb/*.deb
@@ -259,5 +268,5 @@ jobs:
             src/grab-it/src-tauri/target/release/bundle/appimage/*.AppImage
             src/grab-it/src-tauri/target/release/bundle/msi/*.msi
             src/grab-it/src-tauri/target/release/bundle/nsis/*.exe
-            src/grab-it/src-tauri/target/release/bundle/dmg/*.dmg
+            src/grab-it/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
 
