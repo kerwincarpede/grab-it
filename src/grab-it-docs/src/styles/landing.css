@@ -1,0 +1,173 @@
+/*
+ * Landing page base styles, hover lifts and the hero and demo animations.
+ * Colours come from tokens.css. Every animation stops under
+ * prefers-reduced-motion.
+ */
+
+html {
+	background: var(--gi-bg);
+	scroll-behavior: smooth;
+}
+
+body {
+	margin: 0;
+	background: var(--gi-bg);
+}
+
+a {
+	color: inherit;
+}
+
+.gi-page {
+	position: relative;
+	background: var(--gi-bg);
+	color: var(--gi-text);
+	font-family: var(--gi-font-sans);
+	font-size: 16px;
+	line-height: 1.55;
+	min-height: 100vh;
+	overflow: hidden;
+	-webkit-font-smoothing: antialiased;
+}
+
+.gi-page :focus-visible {
+	outline: 2px solid var(--gi-accent);
+	outline-offset: 2px;
+}
+
+.gi-sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	white-space: nowrap;
+}
+
+.gi-skip {
+	position: absolute;
+	left: 16px;
+	top: -100px;
+	z-index: 10;
+	background: var(--gi-cta);
+	color: var(--gi-on-cta);
+	font-weight: 650;
+	padding: 10px 16px;
+	border-radius: 9px;
+	text-decoration: none;
+}
+
+.gi-skip:focus {
+	top: 16px;
+}
+
+/* Shown in one theme only, such as the colour picker's hex value */
+:root[data-theme='light'] .gi-only-dark,
+:root:not([data-theme='light']) .gi-only-light {
+	display: none;
+}
+
+@media (prefers-color-scheme: light) {
+	:root:not([data-theme]) .gi-only-dark {
+		display: none;
+	}
+	:root:not([data-theme]) .gi-only-light {
+		display: inline;
+	}
+}
+
+/* Demo buttons */
+.gi-chip {
+	font: inherit;
+	font-size: 13.5px;
+	font-weight: 600;
+	border-radius: 9px;
+	min-height: 44px;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	background: transparent;
+	color: var(--gi-muted);
+	border: 1px solid transparent;
+	transition: background 0.2s ease, color 0.2s ease;
+}
+
+.gi-chip:hover {
+	color: var(--gi-text);
+}
+
+.gi-chip[aria-pressed='true'] {
+	background: var(--gi-accent-soft);
+	color: var(--gi-accent);
+	border-color: var(--gi-accent-soft);
+	box-shadow: inset 0 0 0 1px var(--gi-accent-soft);
+}
+
+.gi-chip--editor[aria-pressed='true'] {
+	background: rgb(255 138 122 / 14%);
+	color: var(--gi-hue-editor);
+	border-color: rgb(255 138 122 / 24%);
+	box-shadow: none;
+}
+
+.gi-chip-key {
+	font-family: var(--gi-font-mono);
+	font-size: 10.5px;
+	opacity: 0.65;
+}
+
+.gi-search:focus-within {
+	border-color: var(--gi-hue-library) !important;
+}
+
+/* The image editor demo: drawing surface */
+.gi-stage {
+	touch-action: none;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.gi-stage:focus-visible {
+	outline: 3px solid #ffffff;
+	outline-offset: 3px;
+}
+
+a{color:inherit}
+.gi-lift{transition:transform .25s ease, box-shadow .25s ease, border-color .25s ease}
+.gi-lift:hover{transform:translateY(-3px)}
+.gi-cta{transition:filter .2s ease, transform .2s ease}
+.gi-cta:hover{filter:brightness(1.08);transform:translateY(-1px)}
+.gi-link:hover{opacity:.8}
+@keyframes gi-sel{0%,10%{width:0;height:0;opacity:0}11%{opacity:1}30%,88%{width:46%;height:52%;opacity:1}100%{width:46%;height:52%;opacity:0}}
+@keyframes gi-cur{0%{transform:translate(0,0)}10%{transform:translate(0,0)}30%{transform:translate(440%,520%)}45%{transform:translate(620%,260%)}60%{transform:translate(380%,640%)}100%{transform:translate(380%,640%)}}
+@keyframes gi-arrow{0%,34%{opacity:0;transform:translate(-12px,12px)}42%,88%{opacity:1;transform:none}100%{opacity:0}}
+@keyframes gi-box{0%,44%{opacity:0;transform:scale(.92)}52%,88%{opacity:1;transform:none}100%{opacity:0}}
+@keyframes gi-blur{0%,54%{opacity:0}62%,88%{opacity:1}100%{opacity:0}}
+@keyframes gi-toast{0%,66%{opacity:0;transform:translateY(18px) scale(.96)}72%,92%{opacity:1;transform:none}100%{opacity:0;transform:translateY(8px)}}
+@keyframes gi-play{0%{left:12%}100%{left:84%}}
+@keyframes gi-zoom{0%,30%{transform:scale(1)}45%,62%{transform:scale(1.7)}78%,100%{transform:scale(1)}}
+@keyframes gi-pulse{0%,100%{opacity:.55}50%{opacity:1}}
+.gi-sel{animation:gi-sel 7s ease-in-out infinite}
+.gi-cur{animation:gi-cur 7s cubic-bezier(.6,0,.3,1) infinite}
+.gi-arrow{animation:gi-arrow 7s ease-out infinite}
+.gi-box{animation:gi-box 7s ease-out infinite}
+.gi-blur{animation:gi-blur 7s ease-out infinite}
+.gi-toast{animation:gi-toast 7s ease-out infinite}
+.gi-head{animation:gi-play 6s linear infinite}
+/* Ease-in-out between keyframes, so the zoom eases in and out like the video editor's. */
+.gi-zoom{animation:gi-zoom 6s ease-in-out infinite;transform-origin:72% 38%}
+.gi-pulse{animation:gi-pulse 2.4s ease-in-out infinite}
+@media (prefers-reduced-motion: reduce){.gi-sel,.gi-cur,.gi-arrow,.gi-box,.gi-blur,.gi-toast,.gi-head,.gi-zoom,.gi-pulse{animation:none !important}.gi-lift,.gi-cta{transition:none}}
+
+@media (prefers-reduced-motion: reduce) {
+	html {
+		scroll-behavior: auto;
+	}
+	.gi-chip,
+	.gi-lift:hover,
+	.gi-cta:hover {
+		transition: none;
+		transform: none;
+	}
+}

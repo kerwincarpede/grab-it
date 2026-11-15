@@ -1,5 +1,6 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
+import react from '@astrojs/react';
 import starlight from '@astrojs/starlight';
 
 // Served from GitHub Pages at https://kerwincarpede.github.io/grab-it/, so
@@ -19,6 +20,23 @@ export default defineConfig({
 			editLink: {
 				baseUrl: 'https://github.com/kerwincarpede/grab-it/edit/main/src/grab-it-docs/',
 			},
+			// The app's fonts and the site's colours, shared with the landing page.
+			customCss: [
+				'@fontsource-variable/instrument-sans',
+				'@fontsource-variable/geist-mono',
+				'./src/styles/tokens.css',
+				'./src/styles/theme.css',
+			],
+			components: {
+				SiteTitle: './src/components/starlight/SiteTitle.astro',
+			},
+			expressiveCode: {
+				styleOverrides: {
+					borderRadius: '0.75rem',
+					borderColor: 'var(--gi-hair)',
+					codeBackground: 'var(--gi-code-bg)',
+				},
+			},
 			sidebar: [
 				section('Get started', 'get-started'),
 				section('Capture', 'capture'),
@@ -31,5 +49,6 @@ export default defineConfig({
 				section('Contribute', 'contribute'),
 			],
 		}),
+		react(),
 	],
 });

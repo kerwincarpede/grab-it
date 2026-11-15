@@ -10,7 +10,16 @@
     "astro": "astro"
   },
   "dependencies": {
+    "@astrojs/react": "7.1.9",
     "@astrojs/starlight": "0.43.1",
-    "astro": "7.4.1"
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@fontsource-variable/instrument-sans": "^5.3.0",
+    "astro": "7.4.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6"
   }
 }
