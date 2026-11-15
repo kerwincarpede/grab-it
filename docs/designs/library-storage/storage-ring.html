@@ -289,6 +289,15 @@ button, select { font: inherit; color: inherit; }
 .modal h3 { margin: 0 0 6px; font-size: 15px; }
 .modal p { margin: 0; color: var(--muted); font-size: 13px; }
 .modal .pf-actions { margin-top: 18px; }
+.clean-modal { width: 420px; }
+.clean-modal .warn { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; margin-bottom: 12px; background: var(--danger-soft); color: var(--danger); font-size: 18px; font-weight: 700; }
+.clean-modal .kinds { display: grid; gap: 6px; margin: 14px 0 14px; padding: 12px; border-radius: 10px; background: var(--surface); }
+.clean-modal .kinds div { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.clean-modal .kinds div span:last-child { margin-left: auto; color: var(--muted); }
+.clean-modal .choice { border-color: var(--border); }
+.clean-modal .choice.is-on { border-color: var(--accent); background: var(--accent-soft); }
+.clean-modal .choice.danger.is-on { border-color: var(--danger); background: var(--danger-soft); }
+.clean-modal .pbar { margin-top: 16px; }
 
 @media (max-width: 860px) {
   .settings-win { grid-template-columns: 1fr; }
@@ -309,13 +318,13 @@ button, select { font: inherit; color: inherit; }
   <header class="page-head">
     <div>
       <h1>Library storage: Ring</h1>
-      <p>The storage pill and popover in the Library, and a new Storage page in Settings for the Keep settings. Sample data. Try Clean up, Stop, and changing a Keep setting.</p>
+      <p>The storage pill and popover in the Library, and a new Storage page in Settings for the Keep settings. Sample data. Try Clean up, both removal options, Stop, and changing a Keep setting.</p>
     </div>
     <div class="switcher"><button type="button" class="theme-btn" id="theme">Theme</button></div>
   </header>
 
   <section class="stage" id="stage-library">
-    <div class="stage-cap"><b>Library</b><span>The storage pill opens the popover. Clean up asks how to remove items, then shows progress.</span></div>
+    <div class="stage-cap"><b>Library</b><span>The storage pill opens the popover. Clean up opens a dialog that asks how to remove items, confirms a permanent delete, then shows progress.</span></div>
     <div class="win" id="win-a">
       <div class="bar">
         <div class="lights"><i></i><i></i><i></i></div>
@@ -353,6 +362,9 @@ button, select { font: inherit; color: inherit; }
         <div class="pop-foot" id="a-foot"></div>
       </div>
       <div class="grid-wrap" id="a-grid"></div>
+      <div class="modal-scrim" id="c-modal">
+        <div class="modal clean-modal" role="dialog" aria-modal="true" aria-labelledby="c-title" id="c-dialog"></div>
+      </div>
     </div>
   </section>
 
@@ -609,8 +621,8 @@ button, select { font: inherit; color: inherit; }
       f.innerHTML = st.dueBytes
         ? `<span class="fc">Cleanup frees <b>${fmt(st.dueBytes)}</b> · ${plural(st.dueCount, "item")}</span><button type="button" class="btn" id="f-clean">Clean up</button>`
         : `<span class="fc">Nothing is older than your Keep settings</span><button type="button" class="btn" disabled>Clean up</button>`;
-      f.querySelector("#f-clean")?.addEventListener("click", () => { choice = method; foot = "confirm"; renderAll(); });
-    } else if (foot === "confirm") {
+      f.querySelector("#f-clean")?.addEventListener("click", () => { choice = method; step = "choose"; renderAll(); });
+    } else if (foot === "never") {
       f.innerHTML = `<div class="pf-title">Remove ${plural(st.dueCount, "item")} (${fmt(st.dueBytes)})?</div>
         <label class="choice${choice === "trash" ? " is-on" : ""}"><input type="radio" name="how" value="trash"${choice === "trash" ? " checked" : ""}>
           <span><span class="c-t">Move to Trash</span><br><span class="c-h">You can restore them. Space is freed when you empty the Trash.</span></span></label>
@@ -636,21 +648,70 @@ button, select { font: inherit; color: inherit; }
     }
   }
 
+  // Clean up dialog: choose → (confirm, when permanent) → running → done.
+  let step = null;
+  const cModal = document.getElementById("c-modal");
+  function kindsList(st) {
+    return `<div class="kinds">${KINDS.filter((k) => st[k.id].dueCount).map((k) =>
+      `<div><i class="dot" style="background:${color(k.id)}"></i><span>${plural(st[k.id].dueCount, k.one)}</span><span>${fmt(st[k.id].dueBytes)}</span></div>`).join("")}</div>`;
+  }
+  function renderDialog(st) {
+    cModal.classList.toggle("on", !!step);
+    // The dialog takes over from the popover, which reopens when it closes.
+    aPop.hidden = !!step;
+    aPill.setAttribute("aria-expanded", String(!step));
+    const d = document.getElementById("c-dialog");
+    if (!step) return;
+    if (step === "choose") {
+      d.innerHTML = `<h3 id="c-title">Clean up storage</h3>
+        <p>${plural(st.dueCount, "item")} (${fmt(st.dueBytes)}) ${st.dueCount === 1 ? "is" : "are"} older than your Keep settings.</p>
+        ${kindsList(st)}
+        <label class="choice${choice === "trash" ? " is-on" : ""}"><input type="radio" name="how" value="trash"${choice === "trash" ? " checked" : ""}>
+          <span><span class="c-t">Move to Trash</span><br><span class="c-h">You can restore them. Space is freed when you empty the Trash.</span></span></label>
+        <label class="choice danger${choice === "permanent" ? " is-on" : ""}"><input type="radio" name="how" value="permanent"${choice === "permanent" ? " checked" : ""}>
+          <span><span class="c-t">Delete permanently</span><br><span class="c-h">Frees the space now. This can't be undone.</span></span></label>
+        <div class="pf-actions"><button type="button" class="btn ghost" id="c-cancel">Cancel</button>
+          <button type="button" class="btn" id="c-go">${choice === "trash" ? "Move to Trash" : "Continue…"}</button></div>`;
+      d.querySelectorAll("input[name=how]").forEach((r) => r.addEventListener("change", () => { choice = r.value; renderAll(); }));
+      d.querySelector("#c-cancel").addEventListener("click", () => { step = null; renderAll(); });
+      d.querySelector("#c-go").addEventListener("click", () => { if (choice === "trash") start("trash"); else { step = "confirm"; renderAll(); } });
+    } else if (step === "confirm") {
+      d.innerHTML = `<div class="warn">!</div><h3 id="c-title">Delete ${plural(st.dueCount, "item")} permanently?</h3>
+        <p>${fmt(st.dueBytes)} will be deleted from this computer. They won't go to the Trash, and this can't be undone.</p>
+        <div class="pf-actions"><button type="button" class="btn ghost" id="c-back">Back</button>
+          <button type="button" class="btn danger" id="c-go">Delete permanently</button></div>`;
+      d.querySelector("#c-back").addEventListener("click", () => { step = "choose"; renderAll(); });
+      d.querySelector("#c-go").addEventListener("click", () => start("permanent"));
+    } else if (step === "running") {
+      const p = run.done / run.total;
+      d.innerHTML = `<h3 id="c-title">${run.method === "trash" ? "Moving to the Trash" : "Deleting permanently"}…</h3>
+        <p>${num(run.done)} of ${plural(run.total, "item")} · ${fmt(run.bytes)} of ${fmt(run.totalBytes)}</p>
+        <div class="pbar" role="progressbar" aria-valuemin="0" aria-valuemax="${run.total}" aria-valuenow="${run.done}"><i style="width:${p * 100}%"></i></div>
+        <div class="pf-actions"><button type="button" class="btn ghost" id="c-stop">Stop</button></div>`;
+      d.querySelector("#c-stop").addEventListener("click", stop);
+    } else {
+      d.innerHTML = `<div class="done-row"><span class="tick">✓</span><span><div class="d-t" id="c-title">${run.stopped ? "Stopped" : "Cleanup done"}</div>
+        <div class="d-h">${plural(run.done, "item")} ${run.method === "trash" ? "moved to the Trash" : "deleted"} · ${fmt(run.bytes)} ${run.method === "trash" ? "" : "freed"}${run.stopped ? ` · ${num(run.total - run.done)} left` : ""}</div></span></div>
+        <div class="pf-actions"><button type="button" class="btn" id="c-ok">Done</button></div>`;
+      d.querySelector("#c-ok").addEventListener("click", () => { step = null; renderAll(); });
+    }
+  }
+
   function start(how) {
     const list = live().filter(isDue).sort((a, b) => b.age - a.age);
     run = { list, done: 0, bytes: 0, total: list.length, totalBytes: list.reduce((a, x) => a + x.bytes, 0), method: how, stopped: false };
-    foot = "running";
+    step = "running";
     renderAll();
     run.timer = setInterval(() => {
       for (let i = 0; i < 2 && run.done < run.total; i++) {
         const x = run.list[run.done++];
         x.removed = true; run.bytes += x.bytes;
       }
-      if (run.done >= run.total) { clearInterval(run.timer); foot = "done"; }
+      if (run.done >= run.total) { clearInterval(run.timer); step = "done"; }
       renderAll();
     }, 70);
   }
-  function stop() { clearInterval(run.timer); run.stopped = true; foot = "done"; renderAll(); }
+  function stop() { clearInterval(run.timer); run.stopped = true; step = "done"; renderAll(); }
 
   function renderLibrary(st) {
     document.getElementById("a-pill-text").innerHTML = `${num(st.count)} captures · <b>${fmt(st.total)}</b>`;
@@ -667,7 +728,8 @@ button, select { font: inherit; color: inherit; }
     document.getElementById("a-disk-text").innerHTML = `<b>${fmt(st.total)}</b> of ${fmt(DISK_TOTAL)} · ${fmt(DISK_FREE + (run ? (run.method === "permanent" ? run.bytes : 0) : 0))} free`;
     meter(document.getElementById("a-disk"), st, true);
     renderFoot(st);
-    if (foot !== "running") renderGrid(document.getElementById("a-grid"), null);
+    renderDialog(st);
+    if (step !== "running") renderGrid(document.getElementById("a-grid"), null);
   }
 
   // Settings › Storage
@@ -735,9 +797,9 @@ button, select { font: inherit; color: inherit; }
   });
 
   // Initial state, for static captures of each step.
-  if (INITIAL.foot === "confirm") { foot = "confirm"; choice = INITIAL.choice || method; }
+  if (INITIAL.step === "choose" || INITIAL.step === "confirm") { step = INITIAL.step; choice = INITIAL.choice || method; }
   renderAll();
-  if (INITIAL.foot === "running") {
+  if (INITIAL.step === "running") {
     start(INITIAL.choice || method);
     clearInterval(run.timer);
     const target = Math.round(run.total * (INITIAL.progress || 0.55));
