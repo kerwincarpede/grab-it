@@ -6,5 +6,9 @@
 	     asks for the microphone (permissions.rs). -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Grab-it records your microphone into screen recordings when Audio is set to Microphone in Settings → Recording.</string>
+	<!-- Shown when the webcam bubble or Settings first opens the camera
+	     (webcam.rs). -->
+	<key>NSCameraUsageDescription</key>
+	<string>Grab-it shows your camera in a bubble over screen recordings when Show webcam is on in Settings → Recording.</string>
 </dict>
 </plist>

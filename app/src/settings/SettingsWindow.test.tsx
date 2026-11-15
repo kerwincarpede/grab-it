@@ -2,13 +2,15 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import SettingsWindow from "./SettingsWindow";
+import { camera, fakeMedia, type FakeMedia } from "../webcam/testMedia";
 import {
   DEFAULT_AI_PREFERENCES,
   DEFAULT_RECORDING,
   isLocalEndpoint,
   keystrokesHint,
+  listCameras,
   type AiPreferences,
   type FfmpegStatus,
   type Microphone,
@@ -1020,5 +1022,103 @@ describe("SettingsWindow recording", () => {
     expect(microphone).toHaveValue("USB Headset");
     expect(screen.getByRole("option", { name: "USB Headset (not connected)" })).toBeInTheDocument();
     expect(await screen.findByRole("option", { name: "Built-in Microphone" })).toBeInTheDocument();
+  });
+});
+
+describe("SettingsWindow webcam", () => {
+  let media: FakeMedia | null = null;
+
+  afterEach(() => {
+    media?.restore();
+    media = null;
+  });
+
+  it("leaves the webcam out by default, and asks for the camera when it is turned on", async () => {
+    media = fakeMedia({
+      // Names and ids are hidden until a camera has been allowed.
+      devices: [camera("", "")],
+      devicesAfterOpen: [camera("cam-front", "FaceTime HD Camera"), camera("cam-usb", "USB Webcam")],
+    });
+    const backend = mockBackend();
+    render(<SettingsWindow section="recording" />);
+    const webcam = await screen.findByRole("switch", { name: /Show webcam/ });
+    await waitFor(() => expect(webcam).toBeEnabled());
+    expect(webcam).not.toBeChecked();
+    expect(screen.queryByRole("combobox", { name: "Camera" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Webcam shape" })).not.toBeInTheDocument();
+    expect(media.requests).toEqual([]);
+
+    await userEvent.click(webcam);
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, showWebcam: true }));
+    const picker = await screen.findByRole("combobox", { name: "Camera" });
+    expect(await screen.findByRole("option", { name: "USB Webcam" })).toBeInTheDocument();
+    expect(media.requests).toHaveLength(1);
+    // The camera opened to ask is closed straight away.
+    expect(media.stopped).toBe(1);
+    await waitFor(() => expect(picker).toBeEnabled());
+    expect(picker).toHaveValue("");
+
+    await userEvent.selectOptions(picker, "USB Webcam");
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, showWebcam: true, camera: "cam-usb" }));
+
+    const shape = screen.getByRole("combobox", { name: "Webcam shape" });
+    await waitFor(() => expect(shape).toBeEnabled());
+    expect(shape).toHaveValue("round");
+    await userEvent.selectOptions(shape, "Rounded square");
+    await waitFor(() =>
+      expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, showWebcam: true, camera: "cam-usb", webcamShape: "rounded" }),
+    );
+
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Camera" })).toBeEnabled());
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Camera" }), "System default");
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, showWebcam: true, webcamShape: "rounded" }));
+  });
+
+  it("lists the cameras without asking when the webcam is already on, and keeps a camera that is gone", async () => {
+    media = fakeMedia({ devices: [camera("cam-front", "FaceTime HD Camera")] });
+    mockBackend({ recording: { ...DEFAULT_RECORDING, showWebcam: true, camera: "cam-old", webcamShape: "rounded" } });
+    render(<SettingsWindow section="recording" />);
+    const picker = await screen.findByRole("combobox", { name: "Camera" });
+    expect(await screen.findByRole("option", { name: "FaceTime HD Camera" })).toBeInTheDocument();
+    expect(picker).toHaveValue("cam-old");
+    expect(screen.getByRole("option", { name: "Saved camera (not connected)" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Webcam shape" })).toHaveValue("rounded");
+    expect(media.requests).toEqual([]);
+  });
+
+  it("offers only the system default where the window cannot list cameras", async () => {
+    mockBackend({ recording: { ...DEFAULT_RECORDING, showWebcam: true } });
+    render(<SettingsWindow section="recording" />);
+    const picker = await screen.findByRole("combobox", { name: "Camera" });
+    expect(within(picker).getAllByRole("option").map((option) => option.textContent)).toEqual(["System default"]);
+  });
+});
+
+describe("listCameras", () => {
+  let media: FakeMedia | null = null;
+
+  afterEach(() => {
+    media?.restore();
+    media = null;
+  });
+
+  it("numbers cameras whose names are hidden and leaves out other devices", async () => {
+    media = fakeMedia({
+      devices: [camera("a", ""), { kind: "audioinput", deviceId: "mic", label: "Mic" }, camera("b", "Desk Cam")],
+    });
+    expect(await listCameras()).toEqual([
+      { id: "a", name: "Camera 1" },
+      { id: "b", name: "Desk Cam" },
+    ]);
+  });
+
+  it("keeps the numbered names when the camera is refused", async () => {
+    media = fakeMedia({ devices: [camera("a", "")], fail: { name: "NotAllowedError" } });
+    expect(await listCameras(true)).toEqual([{ id: "a", name: "Camera 1" }]);
+    expect(media.requests).toHaveLength(1);
+  });
+
+  it("is empty where the window has no media devices", async () => {
+    expect(await listCameras(true)).toEqual([]);
   });
 });

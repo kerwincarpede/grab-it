@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import AiSection from "./AiSection";
 import HotkeysSection from "./HotkeysSection";
 import { isMacPlatform } from "./accelerator";
@@ -14,7 +14,9 @@ import {
   RECORDING_FPS,
   RECORDING_QUALITIES,
   ffmpegStatus,
+  WEBCAM_SHAPES,
   keystrokesHint as keystrokesHintFor,
+  listCameras,
   listMicrophones,
   onFfmpegStatus,
   recordsMicrophone,
@@ -23,9 +25,11 @@ import {
   retryFfmpeg,
   setRecording,
   type FfmpegStatus,
+  type Camera,
   type Microphone,
   type RecordingAudio,
   type RecordingSettings,
+  type WebcamShape,
   POPUP_SECONDS,
   TEXT_SCALE,
   setAppearance,
@@ -192,6 +196,11 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   /** Whether system sound can be recorded here; null until the backend has said, which hides it. */
   const [systemSound, setSystemSound] = useState<boolean | null>(null);
   const ffmpegReady = ffmpeg?.state === "ready";
+  /** The cameras to pick from, listed by the webview once Show webcam is on. */
+  const [cameras, setCameras] = useState<Camera[]>([]);
+  const showsWebcam = showsRecording && settings?.recording?.showWebcam === true;
+  /** Set as Show webcam is turned on: the next listing asks for the camera. */
+  const askForCameras = useRef(false);
   // Null until the system has answered, or when it cannot say: the toggle
   // is then left out rather than shown in a state that may be wrong.
   const [autostart, setAutostartState] = useState<boolean | null>(null);
@@ -280,6 +289,30 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
       cancelled = true;
     };
   }, [showsRecording]);
+
+  useEffect(() => {
+    if (!showsWebcam) return;
+    let cancelled = false;
+    const ask = askForCameras.current;
+    askForCameras.current = false;
+    listCameras(ask)
+      .then((list) => {
+        if (!cancelled) setCameras(list);
+      })
+      .catch(() => {
+        // The default camera still works without the list.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showsWebcam]);
+
+  function changeShowWebcam(enabled: boolean) {
+    // Turning it on is when to ask for the camera, so its names show and
+    // the first recording does not wait on the system's prompt.
+    askForCameras.current = enabled;
+    return changeRecording({ showWebcam: enabled });
+  }
 
   async function changeRecording(change: Partial<RecordingSettings>) {
     setBusy(true);
@@ -420,6 +453,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   const defaultMicrophone = microphones.find((microphone) => microphone.isDefault);
   const savedMicrophoneMissing =
     recording.microphone !== null && !microphones.some((microphone) => microphone.id === recording.microphone);
+  const savedCameraMissing = recording.camera !== null && !cameras.some((camera) => camera.id === recording.camera);
   const recordingFormat = RECORDING_FORMATS.find((choice) => choice.value === recording.format);
   const appearance = settings?.appearance ?? DEFAULT_APPEARANCE;
   const appearanceOff = busy || settings === null;
@@ -703,6 +737,69 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                 onChange={(event) => void changeRecording({ showKeystrokes: event.target.checked })}
               />
             </label>
+            <label className="row">
+              <span className="row-text">
+                <span className="row-title">Show webcam</span>
+                <span className="row-hint">Shows your camera in a bubble over the recorded area, recorded with it. Drag it anywhere while recording.</span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                className="switch"
+                checked={recording.showWebcam}
+                disabled={busy || settings === null}
+                onChange={(event) => void changeShowWebcam(event.target.checked)}
+              />
+            </label>
+            {recording.showWebcam && (
+              <>
+                <div className="row">
+                  <span className="row-text">
+                    <label className="row-title" htmlFor="recording-camera">
+                      Camera
+                    </label>
+                    <span className="row-hint">System default is the camera your system picks first.</span>
+                  </span>
+                  <select
+                    id="recording-camera"
+                    className="row-field"
+                    value={recording.camera ?? ""}
+                    disabled={recordingOff}
+                    onChange={(event) => void changeRecording({ camera: event.target.value === "" ? null : event.target.value })}
+                  >
+                    <option value="">System default</option>
+                    {cameras.map((camera) => (
+                      <option key={camera.id} value={camera.id}>
+                        {camera.name}
+                      </option>
+                    ))}
+                    {savedCameraMissing && recording.camera !== null && (
+                      <option value={recording.camera}>Saved camera (not connected)</option>
+                    )}
+                  </select>
+                </div>
+                <div className="row">
+                  <span className="row-text">
+                    <label className="row-title" htmlFor="recording-webcam-shape">
+                      Webcam shape
+                    </label>
+                  </span>
+                  <select
+                    id="recording-webcam-shape"
+                    className="row-field"
+                    value={recording.webcamShape}
+                    disabled={recordingOff}
+                    onChange={(event) => void changeRecording({ webcamShape: event.target.value as WebcamShape })}
+                  >
+                    {WEBCAM_SHAPES.map((choice) => (
+                      <option key={choice.value} value={choice.value}>
+                        {choice.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
           </div>
         </section>
       )}

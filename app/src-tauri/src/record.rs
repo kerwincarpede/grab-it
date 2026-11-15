@@ -17,7 +17,10 @@
 //! default; while ffmpeg is not ready yet, a recording is saved as a GIF
 //! and the card says why. Frames are grabbed as frames.rs says. With Show
 //! clicks or Show keystrokes on, click rings and a keystroke label are
-//! drawn into each frame after the pointer (see frame_overlays.rs).
+//! drawn into each frame after the pointer (see frame_overlays.rs). With
+//! Show webcam on, the camera is shown in a bubble over the recorded area
+//! for as long as the recording runs, and so recorded with it (see
+//! webcam.rs).
 //!
 //! Recording needs to read the screen freely, so it is not offered on
 //! Wayland, where only the desktop's own portal may do that.
@@ -438,6 +441,11 @@ pub fn start(
         },
         corner,
     );
+    // Opened before the settle delay, so the camera has started by the
+    // first frame.
+    if recording.show_webcam {
+        crate::webcam::open(app, monitor, image_size, rect, &recording);
+    }
 
     let handle = app.clone();
     let monitor = monitor.clone();
@@ -481,6 +489,7 @@ pub fn start(
             };
             // Stops collecting clicks and keys.
             drop(overlays);
+            crate::webcam::close(&handle);
             *handle.state::<RecordState>().lock() = None;
             crate::tray::set_recording(&handle, false);
             match result {
@@ -509,6 +518,7 @@ pub fn start(
             }
         });
     if let Err(err) = spawned {
+        crate::webcam::close(app);
         *state.lock() = None;
         crate::tray::set_recording(app, false);
         return Err(format!("could not start recording: {err}"));

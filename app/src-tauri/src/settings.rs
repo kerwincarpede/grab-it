@@ -593,6 +593,27 @@ impl RecordingAudio {
     }
 }
 
+/// The webcam bubble's outline while recording (see webcam.rs).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WebcamShape {
+    /// A circle.
+    #[default]
+    Round,
+    /// A square with rounded corners.
+    Rounded,
+}
+
+impl WebcamShape {
+    /// The name the settings file and the bubble's page use.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Round => "round",
+            Self::Rounded => "rounded",
+        }
+    }
+}
+
 /// How screen recordings are made. Mirrors `RecordingSettings` in
 /// src/settings/api.ts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -615,6 +636,13 @@ pub struct RecordingSettings {
     /// The microphone recorded, by the id `audio::microphones` lists it
     /// with. None records the system's default microphone.
     pub microphone: Option<String>,
+    /// Whether the webcam is shown in a bubble on screen, and so recorded
+    /// with it.
+    pub show_webcam: bool,
+    /// The camera in the bubble, by the `deviceId` the webview lists it
+    /// with. None shows the system's default camera.
+    pub camera: Option<String>,
+    pub webcam_shape: WebcamShape,
 }
 
 impl Default for RecordingSettings {
@@ -628,6 +656,9 @@ impl Default for RecordingSettings {
             show_keystrokes: false,
             audio: RecordingAudio::default(),
             microphone: None,
+            show_webcam: false,
+            camera: None,
+            webcam_shape: WebcamShape::default(),
         }
     }
 }
@@ -663,6 +694,15 @@ impl RecordingSettings {
             microphone: field("microphone")
                 .and_then(|v| v.as_str().map(str::to_owned))
                 .filter(|name| !name.is_empty()),
+            show_webcam: field("showWebcam")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(defaults.show_webcam),
+            camera: field("camera")
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .filter(|id| !id.is_empty()),
+            webcam_shape: field("webcamShape")
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or(defaults.webcam_shape),
         }
     }
 }
@@ -1237,6 +1277,7 @@ impl SettingsStore {
         let next = Settings {
             recording: RecordingSettings {
                 microphone: recording.microphone.filter(|name| !name.is_empty()),
+                camera: recording.camera.filter(|id| !id.is_empty()),
                 ..recording
             },
             ..self.current.clone()
@@ -1365,6 +1406,9 @@ mod tests {
                 show_keystrokes: true,
                 audio: RecordingAudio::Microphone,
                 microphone: Some("USB Microphone".into()),
+                show_webcam: true,
+                camera: Some("3f9a1c".into()),
+                webcam_shape: WebcamShape::Rounded,
             },
         };
         save(&path, &settings).unwrap();
@@ -1443,6 +1487,9 @@ mod tests {
                 "showKeystrokes": false,
                 "audio": "none",
                 "microphone": null,
+                "showWebcam": false,
+                "camera": null,
+                "webcamShape": "round",
             })
         );
     }
@@ -1559,6 +1606,9 @@ mod tests {
                 "showKeystrokes": false,
                 "audio": "none",
                 "microphone": null,
+                "showWebcam": false,
+                "camera": null,
+                "webcamShape": "round",
             })
         );
         assert_eq!(json["showInDock"], false);
@@ -1576,6 +1626,58 @@ mod tests {
         assert!(loaded.show_cursor);
         assert!(!loaded.show_clicks);
         assert!(!loaded.show_keystrokes);
+    }
+
+    #[test]
+    fn webcam_is_off_by_default_and_remembered() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let recording = defaults(&dir).recording;
+        assert!(!recording.show_webcam);
+        assert_eq!(recording.camera, None);
+        assert_eq!(recording.webcam_shape, WebcamShape::Round);
+        assert_eq!(WebcamShape::Round.as_str(), "round");
+        assert_eq!(WebcamShape::Rounded.as_str(), "rounded");
+
+        let mut store = open_store(path.clone(), defaults(&dir));
+        let chosen = RecordingSettings {
+            show_webcam: true,
+            camera: Some("c0ffee".into()),
+            webcam_shape: WebcamShape::Rounded,
+            ..RecordingSettings::default()
+        };
+        assert_eq!(
+            store.set_recording(chosen.clone()).unwrap().recording,
+            chosen
+        );
+        assert_eq!(load(&path, defaults(&dir)).unwrap().recording, chosen);
+
+        // An empty id is the system's default camera.
+        let blank = RecordingSettings {
+            camera: Some(String::new()),
+            ..chosen
+        };
+        assert_eq!(store.set_recording(blank).unwrap().recording.camera, None);
+
+        // An unknown shape or a wrong type keeps its default.
+        fs::write(
+            &path,
+            r#"{"recording": {"showWebcam": "yes", "camera": 3, "webcamShape": "star"}}"#,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap().recording;
+        assert!(!loaded.show_webcam);
+        assert_eq!(loaded.camera, None);
+        assert_eq!(loaded.webcam_shape, WebcamShape::Round);
+        fs::write(
+            &path,
+            r#"{"recording": {"showWebcam": true, "camera": "cam", "webcamShape": "rounded"}}"#,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap().recording;
+        assert!(loaded.show_webcam);
+        assert_eq!(loaded.camera.as_deref(), Some("cam"));
+        assert_eq!(loaded.webcam_shape, WebcamShape::Rounded);
     }
 
     #[test]

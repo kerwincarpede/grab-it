@@ -257,6 +257,12 @@ export interface RecordingSettings {
   audio: RecordingAudio;
   /** The `Microphone.id` recorded; null records the system's default microphone. */
   microphone: string | null;
+  /** Shows the webcam in a bubble on screen while recording, so it is recorded too. */
+  showWebcam: boolean;
+  /** The `Camera.id` shown; null shows the system's default camera. */
+  camera: string | null;
+  /** The bubble's outline. */
+  webcamShape: WebcamShape;
 }
 
 export const DEFAULT_RECORDING: RecordingSettings = {
@@ -268,6 +274,9 @@ export const DEFAULT_RECORDING: RecordingSettings = {
   showKeystrokes: false,
   audio: "none",
   microphone: null,
+  showWebcam: false,
+  camera: null,
+  webcamShape: "round",
 };
 
 /**
@@ -311,6 +320,46 @@ export function recordsSystemSound(audio: RecordingAudio): boolean {
 /** The choices that record the microphone. */
 export function recordsMicrophone(audio: RecordingAudio): boolean {
   return audio === "microphone" || audio === "both";
+}
+
+/** Mirrors `WebcamShape` in src-tauri/src/settings.rs. */
+export type WebcamShape = "round" | "rounded";
+
+export const WEBCAM_SHAPES: { value: WebcamShape; title: string }[] = [
+  { value: "round", title: "Round" },
+  { value: "rounded", title: "Rounded square" },
+];
+
+/** A camera the webview can show. */
+export interface Camera {
+  /** What `RecordingSettings.camera` saves to pick it: the webview's `deviceId`. */
+  id: string;
+  name: string;
+}
+
+/**
+ * The cameras the webview offers, named "Camera 1", "Camera 2" and so on
+ * where it hides their names, as it does until a camera has been allowed.
+ * With `ask`, a camera is opened for a moment when names are hidden, which
+ * asks for the permission where the system wants one and then reveals them.
+ */
+export async function listCameras(ask = false): Promise<Camera[]> {
+  const media = typeof navigator === "undefined" ? undefined : navigator.mediaDevices;
+  if (!media || typeof media.enumerateDevices !== "function") return [];
+  const read = async () => (await media.enumerateDevices()).filter((device) => device.kind === "videoinput");
+  let devices = await read();
+  if (ask && devices.some((device) => device.label === "") && typeof media.getUserMedia === "function") {
+    try {
+      const stream = await media.getUserMedia({ video: true, audio: false });
+      for (const track of stream.getTracks()) track.stop();
+      devices = await read();
+    } catch {
+      // Refused or no camera: the list keeps its numbered names.
+    }
+  }
+  return devices
+    .filter((device) => device.deviceId !== "")
+    .map((device, index) => ({ id: device.deviceId, name: device.label || `Camera ${index + 1}` }));
 }
 
 export function setRecording(recording: RecordingSettings): Promise<Settings> {

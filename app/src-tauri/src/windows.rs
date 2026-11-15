@@ -208,6 +208,8 @@ pub fn show_main(app: &AppHandle, view: MainView) -> tauri::Result<()> {
     .inner_size(1180.0, 760.0)
     .min_inner_size(720.0, 480.0)
     .center();
+    // Settings → Recording lists the cameras for Show webcam.
+    let builder = crate::webcam::allow_camera(builder);
     // On macOS the sidebar runs to the top and holds the window buttons;
     // the page marks where the window can be dragged.
     #[cfg(target_os = "macos")]
@@ -215,6 +217,9 @@ pub fn show_main(app: &AppHandle, view: MainView) -> tauri::Result<()> {
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true);
     let window = builder.build()?;
+    if let Err(err) = crate::webcam::enable_media_streams(&window) {
+        eprintln!("Grab-it: could not let Settings list the cameras: {err}");
+    }
     let zoom = app
         .try_state::<crate::commands::SettingsState>()
         .map(|state| crate::commands::lock(&state).get().appearance.zoom())

@@ -75,6 +75,9 @@ futures-util = "0.3"
 # Already in the tree: the pointer's place and image for recordings on
 # X11 (frames.rs). Pure Rust, so no libxcb-xfixes headers are needed.
 x11rb = { version = "0.13", features = ["xfixes"] }
+# Already in the tree through wry: turns on media streams so the webcam
+# bubble and Settings can use the camera (webcam.rs).
+webkit2gtk = "2.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # The version xcap uses: draws the pointer into recordings (frames.rs).
