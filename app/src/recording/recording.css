@@ -1,0 +1,161 @@
+/* The recording editor shares the capture editor's dark chrome (editor.css). */
+
+.recording-stage-area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--ed-canvas);
+  container-type: size;
+}
+
+/* The output's shape, as large as fits; the video sits on it where it is exported. */
+.recording-stage {
+  position: relative;
+  width: min(100cqw, calc(100cqh * var(--stage-ratio, 1.7778)));
+  max-height: 100cqh;
+  overflow: hidden;
+  background: #000000;
+  box-shadow: var(--ed-shadow);
+}
+
+.recording-stage:not([data-framed]) {
+  box-shadow: none;
+}
+
+.recording-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.recording-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  background: #000000;
+  cursor: pointer;
+}
+
+.recording-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--ed-border);
+  background: var(--ed-surface);
+}
+
+.recording-time {
+  min-width: 112px;
+  color: var(--ed-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.timeline {
+  flex: 1;
+  padding: 0 8px;
+}
+
+.timeline-track {
+  position: relative;
+  height: 40px;
+  border-radius: 6px;
+  background: var(--ed-raised);
+  cursor: pointer;
+  touch-action: none;
+}
+
+/* What the trim cuts off is dimmed. */
+.timeline-cut {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(135deg, rgba(0, 0, 0, 0.35) 0 6px, rgba(0, 0, 0, 0.2) 6px 12px);
+}
+
+.timeline-kept {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-top: 2px solid var(--ed-accent);
+  border-bottom: 2px solid var(--ed-accent);
+  background: var(--ed-accent-soft);
+  pointer-events: none;
+}
+
+.timeline-playhead {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--ed-text);
+  pointer-events: none;
+}
+
+.timeline-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  background: var(--ed-accent);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.timeline-handle.start {
+  margin-left: -12px;
+  border-radius: 6px 0 0 6px;
+}
+
+.timeline-handle.end {
+  border-radius: 0 6px 6px 0;
+}
+
+.timeline-handle::after {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 5px;
+  width: 2px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.timeline-handle:hover,
+.timeline-handle:focus-visible {
+  background: var(--ed-accent-hover);
+  outline: none;
+}
+
+.recording-progress {
+  height: 3px;
+  background: var(--ed-raised);
+}
+
+.recording-progress > div {
+  height: 100%;
+  background: var(--ed-accent);
+  transition: width 0.2s ease;
+}
+
+.recording-error {
+  margin: auto;
+  color: var(--ed-danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recording-progress > div {
+    transition: none;
+  }
+}

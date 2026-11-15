@@ -35,6 +35,7 @@ describe("routeFromHash", () => {
     ["#/settings", "settings"],
     ["#/overlay", "overlay"],
     ["#/editor", "editor"],
+    ["#/recording", "recording"],
     ["#/library", "library"],
     ["#/quick", "quick"],
     ["#/pin", "pin"],

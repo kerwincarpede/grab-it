@@ -21,6 +21,7 @@ mod pin;
 mod portal;
 mod quick;
 mod record;
+mod recording_editor;
 mod screen;
 mod search;
 mod settings;
@@ -57,6 +58,16 @@ pub fn run() {
             None,
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // The recording editor plays recordings from here, a range at a time.
+        .register_asynchronous_uri_scheme_protocol(
+            recording_editor::VIDEO_SCHEME,
+            |ctx, request, responder| {
+                let app = ctx.app_handle().clone();
+                std::thread::spawn(move || {
+                    responder.respond(recording_editor::serve_video(&app, &request));
+                });
+            },
+        )
         .manage(overlay::OverlayState::default())
         .manage(overlay::SpareState::default())
         .manage(overlay::LastRegionState::default())
@@ -65,6 +76,7 @@ pub fn run() {
         .manage(record::RecordState::default())
         .manage(hotkeys::HotkeyState::default())
         .manage(editor::EditorState::default())
+        .manage(recording_editor::RecordingEditorState::default())
         .manage(update::UpdateState::default())
         .manage(hub::HubState::default())
         .invoke_handler(tauri::generate_handler![
@@ -119,6 +131,9 @@ pub fn run() {
             editor::editor_save_annotations,
             editor::editor_copy,
             editor::editor_export,
+            recording_editor::recording_info,
+            recording_editor::recording_save_edits,
+            recording_editor::recording_export,
             library::library_list,
             library::library_thumbnail,
             library::library_set_tags,

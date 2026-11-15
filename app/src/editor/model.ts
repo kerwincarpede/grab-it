@@ -98,7 +98,7 @@ export type Shape = LineShape | PathShape | BoxShape | BlurShape | SpotlightShap
 export type ShapeType = Shape["type"];
 
 /** The output shapes a backdrop can pad the capture to; "auto" pads evenly. */
-export type BackdropAspect = "auto" | "16:9" | "4:3" | "1:1";
+export type BackdropAspect = "auto" | "16:9" | "4:3" | "1:1" | "9:16";
 
 /** A two-colour gradient the user mixed, at a CSS angle (0 is bottom to top, 90 left to right). */
 export interface CustomGradient {
@@ -278,6 +278,7 @@ export const BACKDROP_ASPECTS: { aspect: BackdropAspect; label: string; ratio: n
   { aspect: "16:9", label: "16:9", ratio: 16 / 9 },
   { aspect: "4:3", label: "4:3", ratio: 4 / 3 },
   { aspect: "1:1", label: "1:1", ratio: 1 },
+  { aspect: "9:16", label: "9:16", ratio: 9 / 16 },
 ];
 
 /** A crop shape the Crop tool holds drags to. Chosen per editor session, never saved. */

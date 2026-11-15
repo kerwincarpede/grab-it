@@ -60,7 +60,7 @@ impl EditorState {
             .map(|(label, _)| label.clone())
     }
 
-    fn path_for(&self, label: &str) -> Result<PathBuf, String> {
+    pub(crate) fn path_for(&self, label: &str) -> Result<PathBuf, String> {
         self.lock()
             .get(label)
             .cloned()

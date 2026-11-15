@@ -96,3 +96,11 @@ export function toPreferences(choices: EditorChoices): EditorPreferences {
     ...(choices.backdrop ? { backdrop: choices.backdrop } : {}),
   };
 }
+
+/** "Preset N" for the next preset: one more than there are, skipping any name taken. */
+export function presetName(presets: SavedBackdrop[]): string {
+  const taken = new Set(presets.map((preset) => preset.name));
+  let n = presets.length + 1;
+  while (taken.has(`Preset ${n}`)) n += 1;
+  return `Preset ${n}`;
+}

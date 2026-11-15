@@ -14,6 +14,7 @@ import { viewFromHash } from "./app/api";
 // The editor brings Konva, most of the bundle, so it loads only in the
 // editor window; the overlay and the other windows open without it.
 const EditorWindow = lazy(() => import("./editor/EditorWindow"));
+const RecordingEditor = lazy(() => import("./recording/RecordingEditor"));
 
 interface AppProps {
   route?: Route;
@@ -33,6 +34,12 @@ function App({ route = routeFromHash(window.location.hash) }: AppProps) {
       return (
         <Suspense fallback={null}>
           <EditorWindow />
+        </Suspense>
+      );
+    case "recording":
+      return (
+        <Suspense fallback={null}>
+          <RecordingEditor />
         </Suspense>
       );
     case "library":

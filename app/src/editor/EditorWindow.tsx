@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import "./editor.css";
 import { getEditorPreferences, MAX_BACKDROP_PRESETS, setBackdropPresets } from "../settings/api";
-import { backdropImage, chooseBackdropImage, copyImage, editorImage, exportImage, pinImage, saveBackdropPresetImage } from "./api";
+import { chooseBackdropImage, copyImage, editorImage, exportImage, pinImage, saveBackdropPresetImage } from "./api";
 import BackdropPanel from "./BackdropPanel";
 import { copyShotText, hasShotText, textCopied, watchShotText, type ShotText } from "../library/api";
 import { imageEdges, NO_EDGES, orientEdges, type Edges } from "./edges";
@@ -82,7 +82,7 @@ import {
   withScale,
   type Orientation,
 } from "./orient";
-import { DEFAULT_CHOICES, parseBackdropPresets, type EditorChoices, type SavedBackdrop } from "./preferences";
+import { DEFAULT_CHOICES, parseBackdropPresets, presetName, type EditorChoices, type SavedBackdrop } from "./preferences";
 import ResizePanel from "./ResizePanel";
 import ShapeNode, { SpotlightDim } from "./ShapeNode";
 import ToolWheel from "./ToolWheel";
@@ -133,6 +133,7 @@ import {
 } from "./tools";
 import { useAnnotations } from "./useAnnotations";
 import { useEditorPreferences } from "./useEditorPreferences";
+import { useBackdropImage } from "./useBackdropImage";
 import WidthControl from "./WidthControl";
 
 const MIN_ZOOM = 0.05;
@@ -182,37 +183,6 @@ function useCaptureImage(ready: boolean) {
     };
   }, [ready]);
   return { image, error };
-}
-
-/** Loads the image a backdrop is filled with; null until it loads, or when it cannot. */
-function useBackdropImage(path: string | null) {
-  const [loaded, setLoaded] = useState<{ path: string; image: HTMLImageElement } | null>(null);
-  useEffect(() => {
-    if (!path) return;
-    let url: string | null = null;
-    let cancelled = false;
-    let reading: Promise<ArrayBuffer>;
-    try {
-      reading = backdropImage(path);
-    } catch (err) {
-      reading = Promise.reject(err);
-    }
-    reading
-      .then((bytes) => {
-        if (cancelled) return;
-        url = URL.createObjectURL(new Blob([bytes]));
-        const img = new Image();
-        img.onload = () => !cancelled && setLoaded({ path, image: img });
-        img.src = url;
-      })
-      // A moved or unreadable image leaves the plain underlay showing.
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-      if (url) URL.revokeObjectURL(url);
-    };
-  }, [path]);
-  return loaded && loaded.path === path ? loaded.image : null;
 }
 
 /** One layer of the backdrop preview, painted as the export compose paints it (see `paintBackdrop`). */
@@ -1705,14 +1675,6 @@ export default function EditorWindow() {
       </footer>
     </main>
   );
-}
-
-/** "Preset N" for the next preset: one more than there are, skipping any name taken. */
-function presetName(presets: SavedBackdrop[]): string {
-  const taken = new Set(presets.map((preset) => preset.name));
-  let n = presets.length + 1;
-  while (taken.has(`Preset ${n}`)) n += 1;
-  return `Preset ${n}`;
 }
 
 function statusText(status: ReturnType<typeof useAnnotations>["status"]): string {
