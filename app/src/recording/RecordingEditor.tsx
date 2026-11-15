@@ -4,7 +4,7 @@ import "./recording.css";
 import { MAX_BACKDROP_PRESETS } from "../settings/api";
 import { chooseBackdropImage, saveBackdropPresetImage } from "../editor/api";
 import BackdropPanel from "../editor/BackdropPanel";
-import { BackdropIcon, ExportIcon } from "../editor/icons";
+import { BackdropIcon, ExportIcon, TrashIcon, ZoomInIcon } from "../editor/icons";
 import { BACKDROP_FILLS, type Backdrop } from "../editor/model";
 import { presetName } from "../editor/preferences";
 import { newId } from "../editor/tools";
@@ -15,6 +15,24 @@ import { clampTrim, emptyEdits, formatTime, isWhole, parseEdits, serializeEdits,
 import { exportLayers, paintUnderlay, recordingLayout } from "./layout";
 import { useBackdropPresets } from "./useBackdropPresets";
 import Timeline from "./Timeline";
+import ZoomAreaPicker from "./ZoomAreaPicker";
+import ZoomTrack from "./ZoomTrack";
+import {
+  addZoom,
+  clampCentre,
+  cursorAt,
+  FULL_VIEW,
+  MAX_ZOOM_SCALE,
+  MIN_ZOOM_SCALE,
+  removeZoom,
+  updateZoom,
+  viewAt,
+  viewTransform,
+  zoomLabel,
+  ZOOM_SCALE_STEP,
+  type Zoom,
+  type ZoomFocus,
+} from "./zooms";
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
@@ -84,8 +102,8 @@ function saveText(status: SaveStatus): string {
 
 /**
  * The recording editor: plays an MP4 recording on its backdrop, with a
- * timeline to trim its start and end, and exports the result as a new MP4
- * beside it. Edits are kept in `<recording>.edits.json` as they are made;
+ * timeline to trim its start and end and a row of zooms under it, and
+ * exports the result as a new MP4 beside it. Edits are kept in `<recording>.edits.json` as they are made;
  * the recording itself is never changed.
  */
 export default function RecordingEditor() {
@@ -110,6 +128,9 @@ export default function RecordingEditor() {
   /** A backdrop still being dragged in the panel; undefined when none is. */
   const [backdropDraft, setBackdropDraft] = useState<Backdrop | null | undefined>(undefined);
   const [backdropOpen, setBackdropOpen] = useState(false);
+  /** Zooms still being dragged; null when none are. */
+  const [zoomDraft, setZoomDraft] = useState<Zoom[] | null>(null);
+  const [selectedZoomId, setSelectedZoomId] = useState<string | null>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const [progress, setProgress] = useState<ExportProgress | null>(null);
   const exporting = progress !== null;
@@ -144,6 +165,9 @@ export default function RecordingEditor() {
 
   const backdrop = backdropDraft !== undefined ? backdropDraft : (edits.backdrop ?? null);
   const savedTrim = trimOf(edits, durationMs);
+  const zooms = zoomDraft ?? edits.zooms ?? [];
+  const selectedZoom = zooms.find((zoom) => zoom.id === selectedZoomId) ?? null;
+  const cursor = info?.cursor ?? null;
   const trim = trimDraft ?? savedTrim;
   const layout = useMemo(() => (videoSize ? recordingLayout(videoSize, backdrop) : null), [videoSize, backdrop]);
   const backdropImageEl = useBackdropImage(backdrop?.fill === BACKDROP_FILLS.image ? (backdrop.image ?? null) : null);
@@ -184,6 +208,56 @@ export default function RecordingEditor() {
   const commitBackdrop = (next: Backdrop | null) => {
     setBackdropDraft(undefined);
     commitEdits({ ...edits, backdrop: next });
+  };
+
+  // --- Zooms --------------------------------------------------------------
+
+  const commitZooms = (next: Zoom[]) => {
+    setZoomDraft(null);
+    commitEdits({ ...edits, zooms: next });
+  };
+
+  const canAddZoom = durationMs > 0 && addZoom(zooms, currentMs, durationMs) !== null;
+
+  const addZoomAt = (ms: number) => {
+    const added = addZoom(zooms, ms, durationMs);
+    if (!added) {
+      setMessage("There is no room for a zoom there.");
+      return;
+    }
+    setMessage(null);
+    commitZooms(added.zooms);
+    setSelectedZoomId(added.zoom.id);
+    seek(Math.min(Math.max(added.zoom.startMs + 1, trim.startMs), trim.endMs));
+  };
+
+  const setZoomFocus = (zoom: Zoom, kind: ZoomFocus["kind"]) => {
+    if (zoom.focus.kind === kind) return;
+    // An area starts where the pointer was, when that is known.
+    const [x, y] = clampCentre(cursorAt(cursor, zoom.startMs) ?? [0.5, 0.5], zoom.scale);
+    commitZooms(updateZoom(zooms, zoom.id, { focus: kind === "cursor" ? { kind: "cursor" } : { kind: "area", x, y } }));
+  };
+
+  const setZoomScale = (zoom: Zoom, scale: number, keep: boolean) => {
+    let next = updateZoom(zooms, zoom.id, { scale });
+    // An area stays inside the frame at its new size.
+    if (zoom.focus.kind === "area") {
+      const [x, y] = clampCentre([zoom.focus.x, zoom.focus.y], scale);
+      next = updateZoom(next, zoom.id, { focus: { kind: "area", x, y } });
+    }
+    if (keep) commitZooms(next);
+    else setZoomDraft(next);
+  };
+
+  const deleteZoom = (zoom: Zoom) => {
+    setSelectedZoomId(null);
+    commitZooms(removeZoom(zooms, zoom.id));
+  };
+
+  const setZoomArea = (zoom: Zoom, x: number, y: number, keep: boolean) => {
+    const next = updateZoom(zooms, zoom.id, { focus: { kind: "area", x, y } });
+    if (keep) commitZooms(next);
+    else setZoomDraft(next);
   };
 
   // --- Playback -----------------------------------------------------------
@@ -335,6 +409,9 @@ export default function RecordingEditor() {
           videoWidth: shape.videoWidth,
           videoHeight: shape.videoHeight,
           backdropBytes: 0,
+          zooms: edits.zooms ?? [],
+          sourceWidth: videoSize.width,
+          sourceHeight: videoSize.height,
         },
         layers,
       );
@@ -362,7 +439,10 @@ export default function RecordingEditor() {
   const status = exporting ? `Exporting… ${percent}%` : (message ?? saveText(saveStatus));
   // The video's place on the preview, as shares of the output.
   const share = (part: number, whole: number) => `${(part / whole) * 100}%`;
-  const videoStyle = layout
+  // While an area zoom is chosen, the whole frame shows with the area on it.
+  const picking = selectedZoom?.focus.kind === "area" && !playing && !exporting;
+  const view = picking ? FULL_VIEW : viewAt(zooms, currentMs, cursor);
+  const frameStyle = layout
     ? {
         left: share(layout.x, layout.width),
         top: share(layout.y, layout.height),
@@ -410,6 +490,55 @@ export default function RecordingEditor() {
             />
           )}
         </div>
+        <div className="bar-group">
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => addZoomAt(currentMs)}
+            disabled={!canAddZoom || exporting}
+            title={canAddZoom ? "Zoom in from the playhead" : "Move the playhead clear of the other zooms to add one"}
+          >
+            <ZoomInIcon />
+            Zoom
+          </button>
+        </div>
+        {selectedZoom && (
+          <div className="bar-group zoom-controls" role="group" aria-label={zoomLabel(selectedZoom)}>
+            <div className="bar-group segmented" role="group" aria-label="Zoom on">
+              <button type="button" aria-pressed={selectedZoom.focus.kind === "area"} onClick={() => setZoomFocus(selectedZoom, "area")} disabled={exporting}>
+                Area
+              </button>
+              <button
+                type="button"
+                aria-pressed={selectedZoom.focus.kind === "cursor"}
+                onClick={() => setZoomFocus(selectedZoom, "cursor")}
+                disabled={exporting || (!cursor && selectedZoom.focus.kind !== "cursor")}
+                title={cursor ? "Follow the pointer, smoothed" : "This recording has no pointer track"}
+              >
+                Follow cursor
+              </button>
+            </div>
+            <label className="zoom-scale">
+              <span>Scale</span>
+              <input
+                type="range"
+                aria-label="Zoom scale"
+                min={MIN_ZOOM_SCALE}
+                max={MAX_ZOOM_SCALE}
+                step={ZOOM_SCALE_STEP}
+                value={selectedZoom.scale}
+                disabled={exporting}
+                onChange={(event) => setZoomScale(selectedZoom, Number(event.target.value), false)}
+                onPointerUp={() => setZoomScale(selectedZoom, selectedZoom.scale, true)}
+                onKeyUp={() => setZoomScale(selectedZoom, selectedZoom.scale, true)}
+              />
+              <output>{selectedZoom.scale}×</output>
+            </label>
+            <button type="button" className="icon-button" aria-label="Delete zoom" title="Delete zoom (Delete)" onClick={() => deleteZoom(selectedZoom)} disabled={exporting}>
+              <TrashIcon />
+            </button>
+          </div>
+        )}
         <div className="bar-group end">
           <button type="button" className="primary" onClick={() => void exportNow()} disabled={!videoSize || exporting} title="Save the edited recording beside the original">
             <ExportIcon />
@@ -425,25 +554,36 @@ export default function RecordingEditor() {
           style={layout ? ({ aspectRatio: `${layout.width} / ${layout.height}`, "--stage-ratio": layout.width / layout.height } as CSSProperties) : undefined}
         >
           {backdrop && <canvas ref={canvasRef} className="recording-backdrop" aria-hidden="true" />}
-          {src && (
-            <video
-              ref={videoRef}
-              className="recording-video"
-              src={src}
-              crossOrigin="anonymous"
-              preload="auto"
-              playsInline
-              style={videoStyle}
-              onLoadedMetadata={onMetadata}
-              onPlay={() => setPlaying(true)}
-              onPause={() => setPlaying(false)}
-              onEnded={() => setPlaying(false)}
-              onSeeked={() => setFrameTick((tick) => tick + 1)}
-              onTimeUpdate={() => !playing && setCurrentMs((videoRef.current?.currentTime ?? 0) * 1000)}
-              onError={() => setMessage("The recording cannot be played.")}
-              onClick={toggle}
-            />
-          )}
+          <div className="recording-frame" style={frameStyle}>
+            {src && (
+              <video
+                ref={videoRef}
+                className="recording-video"
+                src={src}
+                crossOrigin="anonymous"
+                preload="auto"
+                playsInline
+                style={{ transform: viewTransform(view) }}
+                onLoadedMetadata={onMetadata}
+                onPlay={() => setPlaying(true)}
+                onPause={() => setPlaying(false)}
+                onEnded={() => setPlaying(false)}
+                onSeeked={() => setFrameTick((tick) => tick + 1)}
+                onTimeUpdate={() => !playing && setCurrentMs((videoRef.current?.currentTime ?? 0) * 1000)}
+                onError={() => setMessage("The recording cannot be played.")}
+                onClick={toggle}
+              />
+            )}
+            {picking && selectedZoom?.focus.kind === "area" && (
+              <ZoomAreaPicker
+                scale={selectedZoom.scale}
+                x={selectedZoom.focus.x}
+                y={selectedZoom.focus.y}
+                onPreview={(x, y) => setZoomArea(selectedZoom, x, y, false)}
+                onCommit={(x, y) => setZoomArea(selectedZoom, x, y, true)}
+              />
+            )}
+          </div>
         </div>
       </div>
       <div className="recording-controls">
@@ -464,7 +604,18 @@ export default function RecordingEditor() {
             seek(next.startMs !== trim.startMs ? next.startMs : next.endMs);
           }}
           onTrimCommit={commitTrim}
-        />
+        >
+          <ZoomTrack
+            durationMs={durationMs}
+            zooms={zooms}
+            selectedId={selectedZoom?.id ?? null}
+            onSelect={setSelectedZoomId}
+            onPreview={setZoomDraft}
+            onCommit={commitZooms}
+            onAdd={addZoomAt}
+            onSeek={(ms) => seek(Math.min(Math.max(ms, trim.startMs), trim.endMs))}
+          />
+        </Timeline>
       </div>
       {exporting && (
         <div className="recording-progress" role="progressbar" aria-label="Export progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>

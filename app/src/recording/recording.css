@@ -32,6 +32,13 @@
   height: 100%;
 }
 
+/* The video's place on the backdrop; a zoom shows part of the video, cut to it. */
+.recording-frame {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
 .recording-video {
   position: absolute;
   inset: 0;
@@ -40,6 +47,30 @@
   object-fit: fill;
   background: #000000;
   cursor: pointer;
+  transform-origin: 0 0;
+}
+
+/* Choosing a zoom's area: the area, with the rest of the frame dimmed. */
+.zoom-picker {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.zoom-picker:focus-visible {
+  outline: 2px solid var(--ed-accent);
+  outline-offset: -2px;
+}
+
+.zoom-area {
+  position: absolute;
+  border: 2px solid var(--ed-accent);
+  border-radius: 4px;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.45);
+  cursor: move;
+  pointer-events: none;
 }
 
 .recording-controls {
@@ -136,6 +167,110 @@
 .timeline-handle:focus-visible {
   background: var(--ed-accent-hover);
   outline: none;
+}
+
+/* The zoom row, lined up under the track. */
+.zoom-track {
+  position: relative;
+  height: 26px;
+  margin-top: 8px;
+  border-radius: 6px;
+  background: var(--ed-bg);
+  touch-action: none;
+}
+
+.zoom-track-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ed-muted);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.zoom-segment {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 12px;
+  overflow: hidden;
+  border: 1px solid #a774ff;
+  border-radius: 6px;
+  background: rgba(167, 116, 255, 0.32);
+  color: var(--ed-text);
+  cursor: grab;
+}
+
+.zoom-segment.cursor {
+  border-color: #3fc7a4;
+  background: rgba(63, 199, 164, 0.3);
+}
+
+.zoom-track[data-dragging] .zoom-segment {
+  cursor: grabbing;
+}
+
+.zoom-segment[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--ed-text);
+}
+
+.zoom-segment:focus-visible {
+  outline: 2px solid var(--ed-accent);
+  outline-offset: 2px;
+}
+
+.zoom-segment-label {
+  overflow: hidden;
+  padding: 0 10px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.zoom-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.zoom-edge.start {
+  left: 0;
+}
+
+.zoom-edge.end {
+  right: 0;
+}
+
+.zoom-edge:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.zoom-scale {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  color: var(--ed-muted);
+}
+
+.zoom-scale input[type="range"] {
+  width: 96px;
+  margin: 0;
+}
+
+.zoom-scale output {
+  min-width: 36px;
+  color: var(--ed-text);
+  font-variant-numeric: tabular-nums;
 }
 
 .recording-progress {
