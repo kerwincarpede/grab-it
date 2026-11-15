@@ -2,18 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type R
 import { DATE_PRESETS, dateFilterLabel, parseTags } from "./api";
 import { CalendarIcon, CheckIcon, ChevronIcon, CloseIcon } from "./icons";
 import { tagStyle } from "./tagColor";
-
-/** Closes a popover on a click outside `root` while `open`. */
-function useOutsideClick(root: React.RefObject<HTMLElement | null>, open: boolean, close: () => void) {
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: MouseEvent) => {
-      if (root.current && !root.current.contains(event.target as Node)) close();
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [root, open, close]);
-}
+import { useOutsideClick } from "./useOutsideClick";
 
 interface ChipSelectProps {
   /** The accessible name, e.g. "Filter by app". */

@@ -70,6 +70,233 @@
   font-size: 13px;
 }
 
+/* Storage: the pill in the title bar and its popover. Each kind keeps one
+   colour, in light and dark. */
+:root {
+  --kind-image: #2a78d6;
+  --kind-gif: #eb6834;
+  --kind-video: #1baf7a;
+  --storage-track: #e8eaee;
+  --storage-other: var(--border-strong);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --kind-image: #3987e5;
+    --kind-gif: #d95926;
+    --kind-video: #199e70;
+    --storage-track: #22252a;
+  }
+}
+
+.storage-menu {
+  position: relative;
+  flex: none;
+  align-self: center;
+}
+
+.storage-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px 0 7px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 13px;
+}
+
+.storage-pill:hover,
+.storage-pill[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.storage-pill b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.storage-ring-mini {
+  flex: none;
+  width: 15px;
+  height: 15px;
+}
+
+.storage-track {
+  stroke: var(--storage-track);
+}
+
+.storage-arc {
+  transition: stroke-width 150ms;
+}
+
+.storage-donut .storage-arc:hover {
+  stroke-width: 20;
+}
+
+.popover.storage-popover {
+  display: block;
+  width: 372px;
+  max-height: none;
+  padding: 18px;
+  border-radius: 14px;
+  cursor: default;
+}
+
+.storage-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.storage-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.storage-body {
+  display: grid;
+  grid-template-columns: 136px 1fr;
+  gap: 18px;
+  align-items: center;
+}
+
+.storage-donut {
+  position: relative;
+  width: 136px;
+  height: 136px;
+}
+
+.storage-donut svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.storage-donut-centre {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  pointer-events: none;
+}
+
+.storage-donut-centre b {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.storage-donut-centre span {
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+
+.storage-tip {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  max-width: 220px;
+  padding: 7px 10px;
+  color: var(--on-float);
+  font-size: 12px;
+  line-height: 1.4;
+  background: var(--float);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 25%);
+  pointer-events: none;
+}
+
+.storage-tip b {
+  font-weight: 600;
+}
+
+.storage-tip span {
+  opacity: 0.75;
+}
+
+.storage-legend {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.storage-legend-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  gap: 2px 8px;
+  align-items: center;
+  font-size: 12.5px;
+}
+
+.storage-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.storage-legend-name {
+  font-weight: 500;
+}
+
+.storage-legend-size {
+  font-weight: 600;
+  text-align: right;
+}
+
+.storage-legend-sub {
+  grid-column: 2 / 4;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+
+.storage-disk {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.storage-disk-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.storage-disk-top b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.storage-meter {
+  display: flex;
+  gap: 2px;
+  height: 8px;
+  overflow: hidden;
+  background: var(--storage-track);
+  border-radius: 4px;
+}
+
+.storage-meter i {
+  display: block;
+  flex: none;
+  height: 100%;
+}
+
 .search-field {
   display: flex;
   flex: 0 1 300px;

@@ -29,7 +29,7 @@ export interface Shot {
   aiTags: string[];
   /** How long a recording runs, once known. */
   durationMs?: number | null;
-  /** A recording's file size, once known. */
+  /** The main file's size (the PNG's or the recording's), once known. */
   bytes?: number | null;
 }
 
@@ -49,6 +49,59 @@ export interface ShotPage {
   offset: number;
   /** Every shot in the library. */
   total: number;
+}
+
+/** How many items of one kind the library holds and their size. Mirrors `KindUsage` in src-tauri/src/storage.rs. */
+export interface KindUsage {
+  count: number;
+  bytes: number;
+}
+
+/** Space on a disk, in bytes. Mirrors `DiskSpace` in src-tauri/src/storage.rs. */
+export interface DiskSpace {
+  /** What Grab-it may still write. */
+  free: number;
+  total: number;
+}
+
+/** The library's size by kind and the save folder's disk. Mirrors `LibraryStorage` in src-tauri/src/storage.rs. */
+export interface LibraryStorage {
+  image: KindUsage;
+  gif: KindUsage;
+  video: KindUsage;
+  /** Null when the disk could not be read. */
+  disk: DiskSpace | null;
+}
+
+/** The kinds the Storage popover shows, in its order. */
+export const STORAGE_KINDS: { kind: ShotKind; name: string; one: string; many: string }[] = [
+  { kind: "image", name: "Screenshots", one: "screenshot", many: "screenshots" },
+  { kind: "gif", name: "GIFs", one: "GIF", many: "GIFs" },
+  { kind: "video", name: "Videos", one: "video", many: "videos" },
+];
+
+export function libraryStorage(): Promise<LibraryStorage> {
+  return invoke<LibraryStorage>("library_storage");
+}
+
+/** Every item's size added up. */
+export function storageTotal(storage: LibraryStorage): number {
+  return storage.image.bytes + storage.gif.bytes + storage.video.bytes;
+}
+
+/** "412 KB", "4.7 MB", "57 MB", "6.3 GB": a size for the storage pill and popover. */
+export function formatSize(bytes: number): string {
+  const units = ["KB", "MB", "GB", "TB"];
+  if (bytes < 1024) return `${Math.max(0, Math.round(bytes))} B`;
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  // Whole kilobytes; one decimal below 10 MB, and always for GB and TB.
+  const digits = unit === 0 || (unit === 1 && value >= 10) ? 0 : 1;
+  return `${value.toFixed(digits)} ${units[unit]}`;
 }
 
 /** Mirrors `LIBRARY_CHANGED_EVENT` in src-tauri/src/library.rs. */

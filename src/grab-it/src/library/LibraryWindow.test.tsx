@@ -66,6 +66,10 @@ interface Backend {
   aiEnabled?: boolean;
   /** The provider now; Claude Code when unset. */
   aiProvider?: "claudeCode" | "codex" | "endpoint" | null;
+  /** The save folder's disk; unreadable when null. */
+  disk?: { free: number; total: number } | null;
+  /** `library_storage` fails, as an older backend without it would. */
+  storageFails?: boolean;
 }
 
 /** A small stand-in for `Library::search`: every word must start a word in some field. */
@@ -135,6 +139,14 @@ function mockBackend(shots: Shot[]): Backend {
         }
         case "library_thumbnail":
           return new Uint8Array([137, 80, 78, 71]).buffer;
+        case "library_storage": {
+          if (backend.storageFails) throw new Error("unexpected command library_storage");
+          const usage = (kind: string) => {
+            const items = backend.shots.filter((item) => (item.kind ?? "image") === kind);
+            return { count: items.length, bytes: items.reduce((sum, item) => sum + (item.bytes ?? 0), 0) };
+          };
+          return { image: usage("image"), gif: usage("gif"), video: usage("video"), disk: backend.disk ?? null };
+        }
         case "library_set_tags": {
           const updated = { ...find(args.id as number), tags: args.tags as string[] };
           backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
@@ -494,6 +506,133 @@ describe("LibraryWindow", () => {
     backend.fail = "library database error: disk I/O error";
     render(<LibraryWindow />);
     expect(await screen.findByRole("alert")).toHaveTextContent("disk I/O error");
+  });
+});
+
+const GB = 1024 ** 3;
+
+describe("LibraryWindow storage", () => {
+  function storageBackend() {
+    const backend = mockBackend([
+      shot(1, { bytes: 1_000_000 }),
+      shot(2, { bytes: 500_000 }),
+      recording(3, { bytes: 10_800_000 }),
+      recording(4, { kind: "gif", bytes: 2_000_000 }),
+    ]);
+    backend.disk = { free: 48 * GB, total: 256 * GB };
+    return backend;
+  }
+
+  it("shows the count and total size in a pill with a ring by type", async () => {
+    storageBackend();
+    render(<LibraryWindow />);
+    const pill = await screen.findByRole("button", { name: /4 captures/ });
+    expect(pill).toHaveTextContent("4 captures·14 MB");
+    expect(pill).toHaveAttribute("aria-expanded", "false");
+    expect(pill.querySelectorAll(".storage-ring-mini .storage-arc")).toHaveLength(3);
+  });
+
+  it("opens the Storage popover with a donut, a legend and the disk", async () => {
+    storageBackend();
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: /4 captures/ }));
+
+    const popover = screen.getByRole("dialog", { name: "Storage" });
+    const donut = within(popover).getByRole("img", { name: /^Storage by type/ });
+    expect(donut).toHaveAccessibleName("Storage by type: Screenshots 1.4 MB, GIFs 1.9 MB, Videos 10 MB");
+    expect(donut).toHaveTextContent("14 MB");
+
+    const rows = within(within(popover).getByRole("list", { name: "Storage by type" })).getAllByRole("listitem");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "Screenshots1.4 MB2 screenshots · 10%",
+      "GIFs1.9 MB1 GIF · 14%",
+      "Videos10 MB1 video · 76%",
+    ]);
+
+    expect(within(popover).getByText("This disk")).toBeInTheDocument();
+    expect(within(popover).getByRole("meter", { name: "Grab-it's share of this disk" })).toHaveAttribute(
+      "aria-valuetext",
+      "14 MB of 256.0 GB, 48.0 GB free",
+    );
+  });
+
+  it("names a type, its size and its share in a tooltip over its arc", async () => {
+    storageBackend();
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: /4 captures/ }));
+    const popover = screen.getByRole("dialog", { name: "Storage" });
+    const arc = popover.querySelector<SVGElement>('.storage-donut .storage-arc[data-kind="video"]');
+    expect(arc).not.toBeNull();
+
+    await userEvent.hover(arc!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Videos · 10 MB1 video · 76% of the library");
+    await userEvent.unhover(arc!);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("leaves the disk out when it cannot be read", async () => {
+    const backend = storageBackend();
+    backend.disk = null;
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: /4 captures/ }));
+    const popover = screen.getByRole("dialog", { name: "Storage" });
+    expect(within(popover).queryByText("This disk")).not.toBeInTheDocument();
+    expect(within(popover).getByRole("list", { name: "Storage by type" })).toBeInTheDocument();
+  });
+
+  it("closes the popover with Escape, keeping the details open", async () => {
+    storageBackend();
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 2.png" }));
+    expect(await screen.findByRole("complementary")).toBeInTheDocument();
+    const pill = screen.getByRole("button", { name: /4 captures/ });
+    await userEvent.click(pill);
+    expect(screen.getByRole("dialog", { name: "Storage" })).toBeInTheDocument();
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Storage" })).not.toBeInTheDocument();
+    expect(pill).toHaveFocus();
+    expect(screen.getByRole("complementary")).toBeInTheDocument();
+  });
+
+  it("refreshes the pill and the open popover when the library changes", async () => {
+    const backend = mockBackend([shot(1, { bytes: 1_000_000 })]);
+    render(<LibraryWindow />);
+    const pill = await screen.findByRole("button", { name: /1 capture/ });
+    expect(pill).toHaveTextContent("977 KB");
+    await userEvent.click(pill);
+    // Let the event listener finish registering.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    backend.shots = [...backend.shots, shot(2, { bytes: 2_000_000 })];
+    await act(async () => {
+      await emit(LIBRARY_CHANGED_EVENT);
+    });
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /2 captures/ })).toHaveTextContent("2.9 MB"));
+    const popover = screen.getByRole("dialog", { name: "Storage" });
+    expect(within(popover).getByText("2 screenshots · 100%")).toBeInTheDocument();
+    expect(callsTo(backend, "library_storage").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("shows just the count when sizes cannot be read", async () => {
+    const backend = storageBackend();
+    backend.storageFails = true;
+    render(<LibraryWindow />);
+    expect(await screen.findByText("4 captures")).toBeInTheDocument();
+    await waitFor(() => expect(callsTo(backend, "library_storage")).toHaveLength(1));
+    expect(screen.queryByRole("button", { name: /4 captures/ })).not.toBeInTheDocument();
+  });
+
+  it("shows the result count instead while searching", async () => {
+    storageBackend();
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: /4 captures/ });
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search captures" }), "firefox{Enter}");
+    expect(await screen.findByText("2 results")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /4 captures/ })).not.toBeInTheDocument();
   });
 });
 

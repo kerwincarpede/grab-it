@@ -85,6 +85,7 @@ import {
 import { useInView, useThumbnail } from "./thumbnails";
 import { tagStyle } from "./tagColor";
 import { DETAILS_WIDTH, clampDetailsWidth } from "./detailsWidth";
+import { StoragePill } from "./storage";
 import { ChevronDownIcon, ChevronUpIcon } from "../app/icons";
 import { formatBytes, formatElapsed } from "../quick/api";
 
@@ -1468,17 +1469,12 @@ function LibraryWindow({
         <div className="library-bar" data-tauri-drag-region>
           <div className="library-title" data-tauri-drag-region>
             <h1>{title}</h1>
-            {loaded && (
-              <span className="count-pill">
-                {searching
-                  ? total === 1
-                    ? "1 result"
-                    : `${total} results`
-                  : total === 1
-                    ? "1 capture"
-                    : `${total} captures`}
-              </span>
-            )}
+            {loaded &&
+              (searching ? (
+                <span className="count-pill">{total === 1 ? "1 result" : `${total} results`}</span>
+              ) : (
+                <StoragePill count={total} version={reloads} />
+              ))}
           </div>
           <SearchField text={text} searchRef={searchBox} onText={setText} onSubmit={() => setSearchedText(text)} />
           {toolbarEnd}

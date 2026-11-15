@@ -293,7 +293,7 @@ impl ShotKind {
         }
     }
 
-    fn from_column(value: &str) -> Self {
+    pub(crate) fn from_column(value: &str) -> Self {
         match value {
             "video" => Self::Video,
             "gif" => Self::Gif,
@@ -382,7 +382,7 @@ pub struct ShotPage {
 pub struct RescanReport {
     pub added: usize,
     pub removed: usize,
-    /// Recordings whose length and size were filled in.
+    /// Rows whose length or file size were filled in.
     pub refreshed: usize,
 }
 
@@ -511,11 +511,12 @@ impl Library {
     }
 
     /// Every row's id, path, thumbnail path and kind, and whether a
-    /// recording's length is known.
+    /// recording's length and a row's file size are known.
     pub fn known(&self) -> LibraryResult<Vec<KnownShot>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, path, thumb_path, kind, duration_ms IS NOT NULL FROM shots")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, path, thumb_path, kind, duration_ms IS NOT NULL, bytes IS NOT NULL
+             FROM shots",
+        )?;
         let known = stmt
             .query_map([], |row| {
                 Ok(KnownShot {
@@ -524,6 +525,7 @@ impl Library {
                     thumb_path: PathBuf::from(row.get::<_, String>(2)?),
                     kind: ShotKind::from_column(&row.get::<_, String>(3)?),
                     has_duration: row.get(4)?,
+                    has_bytes: row.get(5)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -961,6 +963,9 @@ pub struct KnownShot {
     /// A recording's length is known (always true of a capture's row
     /// that needs none).
     pub has_duration: bool,
+    /// The file's size is known. Captures stored before sizes were
+    /// recorded have none until a rescan fills it in.
+    pub has_bytes: bool,
 }
 
 /// A capture's or recording's row, read from disk (with a capture's
@@ -978,7 +983,7 @@ pub struct PreparedShot {
     pub height: u32,
     /// How long a recording runs, when known.
     pub duration_ms: Option<u64>,
-    /// A recording's file size.
+    /// The main file's size: the PNG's or the recording's.
     pub bytes: Option<u64>,
 }
 
@@ -989,7 +994,8 @@ pub struct ScanResult {
     pub gone: Vec<i64>,
     /// New captures and recordings in the save folder.
     pub new: Vec<PreparedShot>,
-    /// Known recordings read again now that ffmpeg can say how long they run.
+    /// Known rows read again: recordings now that ffmpeg can say how long
+    /// they run, and rows stored without their file size.
     pub refreshed: Vec<PreparedShot>,
 }
 
@@ -1017,6 +1023,7 @@ pub fn prepare_capture(png: &Path) -> LibraryResult<PreparedShot> {
     let (app, window_title) = meta
         .map(|meta| (meta.app, meta.window_title))
         .unwrap_or_default();
+    let bytes = fs::metadata(&path).map(|meta| meta.len()).ok();
     Ok(PreparedShot {
         kind: ShotKind::Image,
         path,
@@ -1028,7 +1035,7 @@ pub fn prepare_capture(png: &Path) -> LibraryResult<PreparedShot> {
         width,
         height,
         duration_ms: None,
-        bytes: None,
+        bytes,
     })
 }
 
@@ -1084,17 +1091,23 @@ pub fn scan_files(
     for shot in known {
         if shot.path.is_file() && shot.kind.is_recording() {
             // Previews are made when first shown; a length ffmpeg could
-            // not tell before is asked again.
-            if !shot.has_duration
-                && let Some(ffmpeg) = ffmpeg
-            {
-                match prepare_recording(&shot.path, None, Some(ffmpeg)) {
-                    Ok(prepared) if prepared.duration_ms.is_some() => {
+            // not tell before is asked again, and a missing size is read.
+            let wants_duration = !shot.has_duration && ffmpeg.is_some();
+            if wants_duration || !shot.has_bytes {
+                match prepare_recording(&shot.path, None, ffmpeg) {
+                    Ok(prepared) if prepared.duration_ms.is_some() || !shot.has_bytes => {
                         scan.refreshed.push(prepared);
                     }
                     Ok(_) => {}
                     Err(err) => eprintln!("Grab-it: skipped {}: {err}", shot.path.display()),
                 }
+            }
+        } else if shot.path.is_file() && !shot.has_bytes {
+            // Stored before sizes were recorded: read it again, which also
+            // makes a missing thumbnail.
+            match prepare_capture(&shot.path) {
+                Ok(prepared) => scan.refreshed.push(prepared),
+                Err(err) => eprintln!("Grab-it: skipped {}: {err}", shot.path.display()),
             }
         } else if shot.path.is_file() {
             if let Err(err) = ensure_thumbnail(&shot.path, &shot.thumb_path) {
@@ -2283,6 +2296,61 @@ mod tests {
 
         // Nothing changed: nothing to do.
         assert!(!library.rescan(dir.path()).unwrap().changed());
+    }
+
+    #[test]
+    fn a_capture_records_its_pngs_size() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (40, 20));
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        assert_eq!(shot.bytes, Some(fs::metadata(&png).unwrap().len()));
+        assert!(shot.bytes.unwrap() > 0);
+    }
+
+    #[test]
+    fn rescan_fills_in_the_size_of_captures_stored_without_one() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (40, 20));
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        library.set_tags(shot.id, &["keep".into()]).unwrap();
+        // As a capture stored before sizes were recorded.
+        library
+            .conn
+            .execute("UPDATE shots SET bytes = NULL WHERE id = ?1", [shot.id])
+            .unwrap();
+        assert_eq!(library.get(shot.id).unwrap().bytes, None);
+
+        assert_eq!(
+            library.rescan(dir.path()).unwrap(),
+            RescanReport {
+                added: 0,
+                removed: 0,
+                refreshed: 1,
+            }
+        );
+        let refreshed = library.get(shot.id).unwrap();
+        assert_eq!(refreshed.bytes, Some(fs::metadata(&png).unwrap().len()));
+        assert_eq!(refreshed.tags, vec!["keep"]);
+        // Known now: the next scan has nothing to do.
+        assert!(!library.rescan(dir.path()).unwrap().changed());
+    }
+
+    #[test]
+    fn rescan_fills_in_a_recordings_missing_size_without_ffmpeg() {
+        let dir = TempDir::new().unwrap();
+        let gif = record_gif(dir.path(), "Grab-it 1.gif");
+        let mut library = Library::open_in_memory().unwrap();
+        library.rescan(dir.path()).unwrap();
+        library
+            .conn
+            .execute("UPDATE shots SET bytes = NULL", [])
+            .unwrap();
+
+        assert_eq!(library.rescan(dir.path()).unwrap().refreshed, 1);
+        let shot = library.list(0, 1).unwrap().shots.remove(0);
+        assert_eq!(shot.bytes, Some(fs::metadata(&gif).unwrap().len()));
     }
 
     #[test]

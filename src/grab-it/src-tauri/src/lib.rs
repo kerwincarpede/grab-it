@@ -29,6 +29,7 @@ mod recording_editor;
 mod screen;
 mod search;
 mod settings;
+mod storage;
 mod tidy;
 mod tray;
 mod update;
@@ -181,6 +182,7 @@ pub fn run() {
             library::library_pin,
             library::library_reveal,
             library::library_play,
+            storage::library_storage,
             search::library_search,
             search::library_filter_options,
             ocr::ocr_status,
