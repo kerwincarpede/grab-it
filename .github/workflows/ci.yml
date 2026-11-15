@@ -1,11 +1,10 @@
 name: CI
 
+# Pushes to main run these checks and builds through release.yml, which
+# releases what they build, so main is not built twice.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
-  # release.yml runs the same checks and builds for a release.
   workflow_call:
     inputs:
       version:

@@ -10,7 +10,7 @@ Grab-it is built with Rust and [Tauri 2](https://tauri.app/), with a React + Typ
 | `app/src/` | Frontend: React + TypeScript + Vite |
 | `app/src-tauri/` | Backend: Rust |
 | `.github/workflows/ci.yml` | Checks plus installer builds on Linux, Windows and macOS |
-| `.github/workflows/release.yml` | Manually triggered release from `main` |
+| `.github/workflows/release.yml` | Release of every push to `main` |
 | `docs/` | User and developer docs; `docs/assets/demo.gif` is the README animation |
 
 ## Setup
@@ -301,21 +301,22 @@ To build installers locally, run `npm run tauri build`; they land in `app/src-ta
 
 ## CI
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04 (caching the ocrs models for the OCR tests) and, in parallel, builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts. It runs on every pull request and push to `main`, and never publishes anything.
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04 (caching the ocrs models for the OCR tests) and, in parallel, builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts. It runs on every pull request and never publishes anything. Pushes to `main` run it through the release workflow instead (below), so `main` is built once, as a release.
 
 ## Releases
 
-Releases are cut by hand. Each one publishes a [GitHub release](https://github.com/kerwincarpede/grab-it/releases) of the current `main` with the installers attached: `.msi` and `-setup.exe` for Windows, `.dmg` for macOS (Apple silicon), and `.AppImage`, `.deb` and `.rpm` for Linux.
+Every push to `main`, such as a merged pull request, is released. Each release publishes a [GitHub release](https://github.com/kerwincarpede/grab-it/releases) of that commit with the installers attached: `.msi` and `-setup.exe` for Windows, `.dmg` for macOS (Apple silicon), and `.AppImage`, `.deb` and `.rpm` for Linux.
 
-To release, open **Actions → Release → Run workflow** on GitHub, or from a terminal:
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) runs the whole of `ci.yml` (checks and the three installer builds) as a reusable workflow, so a release gets exactly the checks a pull request does, and those builds are the ones released. Releases run one at a time: pushes that land during a release wait, and only the newest of them runs, releasing all their commits together.
+
+To force a bump the commits would not give, or to retry a failed release, open **Actions → Release → Run workflow** on GitHub, or from a terminal:
 
 ```sh
-gh workflow run release.yml                # bump from the commits (below)
-gh workflow run release.yml -f bump=minor  # or force patch, minor or major
+gh workflow run release.yml -f bump=minor  # force patch, minor or major
 gh run watch                               # follow it
 ```
 
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) only runs from `main`, and refuses a commit that is already released. It runs the whole of `ci.yml` (checks and the three installer builds) as a reusable workflow, so a release gets exactly the checks a pull request does.
+A release only runs from `main`, and refuses a commit that is already released.
 
 Versions come from the `v*` git tags. With the default `auto` bump, [`PaulHatch/semantic-version`](https://github.com/PaulHatch/semantic-version) reads the commits since the last tag and bumps by [Conventional Commits](https://www.conventionalcommits.org/):
 
