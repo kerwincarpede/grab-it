@@ -145,10 +145,13 @@ export const CLEANUP_DONE_EVENT = "cleanup-done";
  * Removes what the saved Keep settings say is due, to the Trash or for good,
  * and resolves to what went once it is done or stopped. `confirmed` is what
  * the user agreed to remove: when more is due now, nothing is removed and it
- * rejects. It also rejects while another cleanup runs.
+ * rejects. It also rejects while another cleanup runs. `retention`, when
+ * given, stands in for the saved Keep settings, as Purge now does.
  */
-export function cleanUp(removal: Removal, confirmed: KindUsage): Promise<Cleaned> {
-  return invoke<Cleaned>("library_clean_up", { removal, confirmed });
+export function cleanUp(removal: Removal, confirmed: KindUsage, retention?: Retention): Promise<Cleaned> {
+  return retention
+    ? invoke<Cleaned>("library_clean_up", { removal, confirmed, retention })
+    : invoke<Cleaned>("library_clean_up", { removal, confirmed });
 }
 
 /** Stops the running cleanup before its next item. */

@@ -133,7 +133,7 @@ fn has_edits(shot: &Shot) -> bool {
 }
 
 /// The items older than their kind's Keep setting at `now_ms` and not
-/// protected, oldest first.
+/// protected, oldest first. Zero days, as Purge now asks, is every item.
 pub fn due(library: &Library, retention: &Retention, now_ms: i64) -> LibraryResult<Vec<Shot>> {
     let mut stmt = library.connection().prepare(&format!(
         "SELECT {SHOT_COLUMNS} FROM shots s
@@ -147,7 +147,13 @@ pub fn due(library: &Library, retention: &Retention, now_ms: i64) -> LibraryResu
         let Some(days) = retention.days(kind) else {
             continue;
         };
-        let cutoff = now_ms.saturating_sub(i64::from(days) * DAY_MS);
+        // Zero days keeps nothing, even an item captured this instant or
+        // stamped ahead of the clock.
+        let cutoff = if days == 0 {
+            i64::MAX
+        } else {
+            now_ms.saturating_sub(i64::from(days) * DAY_MS)
+        };
         let shots = stmt
             .query_map(rusqlite::params![kind.as_str(), cutoff], shot_from_row)?
             .collect::<Result<Vec<_>, _>>()?;
@@ -498,7 +504,9 @@ fn clean_up(
 }
 
 /// Removes what the saved Keep settings say is due, to the Trash or for
-/// good as the Clean up dialog chose, on a worker thread. `confirmed` is
+/// good as the Clean up dialog chose, on a worker thread. `retention`, when
+/// given, stands in for the saved Keep settings: Purge now passes zero days
+/// for the kinds it empties, whatever they are kept for. `confirmed` is
 /// what the dialog showed and the user agreed to; when more is due now it
 /// removes nothing and fails, so the dialog can ask again. Resolves to what
 /// went once it is done or stopped; fails while another cleanup runs.
@@ -506,10 +514,12 @@ fn clean_up(
 pub async fn library_clean_up(
     removal: Removal,
     confirmed: KindUsage,
+    retention: Option<Retention>,
     app: AppHandle,
 ) -> Result<Cleaned, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let retention = lock(&app.state::<SettingsState>()).get().retention;
+        let retention =
+            retention.unwrap_or_else(|| lock(&app.state::<SettingsState>()).get().retention);
         clean_up(&app, &retention, removal, Some(confirmed))
     })
     .await
@@ -738,6 +748,22 @@ mod tests {
                 },
                 video: KindUsage::default(),
             }
+        );
+    }
+
+    #[test]
+    fn zero_days_makes_every_unprotected_item_of_a_kind_due() {
+        let dir = TempDir::new().unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let old_video = aged(&mut library, dir.path(), ShotKind::Video, "a.mp4", 900);
+        let new_video = aged(&mut library, dir.path(), ShotKind::Video, "b.mp4", 0);
+        let _image = aged(&mut library, dir.path(), ShotKind::Image, "c.png", 900);
+
+        // Purge now: videos at zero days, whatever they are kept for.
+        let retention = keep(None, None, Some(0));
+        assert_eq!(
+            ids(&due(&library, &retention, NOW).unwrap()),
+            vec![old_video.id, new_video.id]
         );
     }
 

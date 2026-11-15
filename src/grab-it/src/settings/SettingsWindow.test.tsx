@@ -133,11 +133,26 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
       case "library_storage": {
         if (backend.storageFails) throw new Error("unexpected command library_storage");
         const retention = (payload as { candidate?: Retention } | undefined)?.candidate ?? backend.retention;
-        const due = (kind: KindName) => (retention[kind] === null ? { count: 0, bytes: 0 } : backend.older[kind]);
+        // Zero days, as Purge now asks, is everything unprotected.
+        const due = (kind: KindName) =>
+          retention[kind] === null
+            ? { count: 0, bytes: 0 }
+            : retention[kind] === 0
+              ? backend.usage[kind]
+              : backend.older[kind];
         return {
           ...backend.usage,
           disk: { free: 100 * GB, total: 500 * GB },
           due: { image: due("image"), gif: due("gif"), video: due("video") },
+        };
+      }
+      case "library_clean_up": {
+        const { retention } = payload as { retention?: Retention };
+        const removed = (kind: KindName) => (retention?.[kind] === 0 ? backend.usage[kind] : { count: 0, bytes: 0 });
+        const kinds: KindName[] = ["image", "gif", "video"];
+        return {
+          count: kinds.reduce((sum, kind) => sum + removed(kind).count, 0),
+          bytes: kinds.reduce((sum, kind) => sum + removed(kind).bytes, 0),
         };
       }
       case "ffmpeg_status":
@@ -1223,11 +1238,11 @@ describe("SettingsWindow storage", () => {
     expect(screen.getByTestId("keep-gif-hint")).toHaveTextContent("96 GIFs · 1.1 GB · 255 MB older than 90 days");
     expect(screen.getByTestId("keep-video-hint")).toHaveTextContent("86 videos · 4.7 GB · 3.7 GB older than 30 days");
     expect(within(screenshots).getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "Forever",
-      "For 1 year",
-      "For 90 days",
-      "For 30 days",
       "For 1 week",
+      "For 30 days",
+      "For 90 days",
+      "For 1 year",
+      "Forever",
     ]);
     expect(screen.getByLabelText("Remove items by")).toHaveValue("trash");
     expect(screen.getByText(/Starred, tagged, noted and annotated items are never removed/)).toBeInTheDocument();
@@ -1324,6 +1339,36 @@ describe("SettingsWindow storage", () => {
 
     await waitFor(() => expect(backend.retention).toEqual({ ...kept, removal: "permanent" }));
     expect(await screen.findByText(/gone for good/)).toBeInTheDocument();
+  });
+
+  it("purges the picked kinds now, whatever the Keep settings say", async () => {
+    const backend = mockBackend({ retention: kept });
+    render(<SettingsWindow section="storage" />);
+    const purge = await screen.findByRole("button", { name: "Purge…" });
+    await waitFor(() => expect(purge).toBeEnabled());
+
+    await userEvent.click(purge);
+
+    const dialog = await screen.findByRole("dialog", { name: "Purge now" });
+    await waitFor(() =>
+      expect(dialog).toHaveTextContent("Removes 1,284 items (6.2 GB) now, whatever your Keep settings say."),
+    );
+    expect(within(dialog).getByRole("checkbox", { name: "Screenshots" })).toBeChecked();
+
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "Screenshots" }));
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "GIFs" }));
+    expect(dialog).toHaveTextContent("Removes 86 items (4.7 GB) now");
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move to Trash" }));
+
+    await screen.findByRole("dialog", { name: "Cleanup done" });
+    const run = backend.calls.find((call) => call.cmd === "library_clean_up");
+    expect(run?.payload).toEqual({
+      removal: "trash",
+      confirmed: { count: 86, bytes: 4.7 * GB },
+      retention: { image: null, gif: null, video: 0, removal: "trash" },
+    });
+    expect(backend.retention).toEqual(kept);
   });
 
   it("still sets Keep when sizes cannot be read", async () => {
