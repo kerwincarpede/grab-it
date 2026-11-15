@@ -1,0 +1,754 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Library Storage Ring</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: light;
+  --page: #eceef1;
+  --bg: #ffffff;
+  --chrome: #f6f7f8;
+  --surface: #f4f5f7;
+  --surface-2: #ebedf0;
+  --border: #e3e5e9;
+  --border-strong: #cdd1d8;
+  --text: #16181c;
+  --muted: #5f6570;
+  --faint: #8b9099;
+  --accent: #4b62e3;
+  --accent-soft: rgb(75 98 227 / 11%);
+  --on-accent: #fff;
+  --pop: #ffffff;
+  --pop-edge: #e3e5e9;
+  --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 4px 12px rgb(16 24 40 / 6%);
+  --pop-shadow: 0 18px 50px rgb(16 24 40 / 18%), 0 0 0 1px rgb(16 24 40 / 7%);
+  --win-shadow: 0 30px 80px rgb(16 24 40 / 16%), 0 0 0 1px rgb(16 24 40 / 9%);
+  --float: rgb(18 20 25 / 92%);
+  --on-float: #f1f2f5;
+  --s-image: #2a78d6;
+  --s-gif: #eb6834;
+  --s-video: #1baf7a;
+  --hatch: rgb(255 255 255 / 62%);
+  --track: #e8eaee;
+  --t1: 86%;
+  --t2: 74%;
+  --t3: 95%;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #08090a;
+    --bg: #101113;
+    --chrome: #141517;
+    --surface: #17181b;
+    --surface-2: #1c1e22;
+    --border: #26282d;
+    --border-strong: #33363c;
+    --text: #eceef1;
+    --muted: #a3a8b2;
+    --faint: #6f747e;
+    --accent: #7c8cf8;
+    --accent-soft: rgb(124 140 248 / 14%);
+    --on-accent: #0d0f1a;
+    --pop: #1a1c20;
+    --pop-edge: #2c2f35;
+    --shadow: 0 1px 2px rgb(0 0 0 / 30%);
+    --pop-shadow: 0 18px 50px rgb(0 0 0 / 55%), 0 0 0 1px rgb(255 255 255 / 6%);
+    --win-shadow: 0 30px 80px rgb(0 0 0 / 60%), 0 0 0 1px rgb(255 255 255 / 7%);
+    --float: rgb(236 238 241 / 95%);
+    --on-float: #111216;
+    --s-image: #3987e5;
+    --s-gif: #d95926;
+    --s-video: #199e70;
+    --hatch: rgb(0 0 0 / 48%);
+    --track: #22252a;
+    --t1: 30%;
+    --t2: 19%;
+    --t3: 40%;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #08090a;
+  --bg: #101113;
+  --chrome: #141517;
+  --surface: #17181b;
+  --surface-2: #1c1e22;
+  --border: #26282d;
+  --border-strong: #33363c;
+  --text: #eceef1;
+  --muted: #a3a8b2;
+  --faint: #6f747e;
+  --accent: #7c8cf8;
+  --accent-soft: rgb(124 140 248 / 14%);
+  --on-accent: #0d0f1a;
+  --pop: #1a1c20;
+  --pop-edge: #2c2f35;
+  --shadow: 0 1px 2px rgb(0 0 0 / 30%);
+  --pop-shadow: 0 18px 50px rgb(0 0 0 / 55%), 0 0 0 1px rgb(255 255 255 / 6%);
+  --win-shadow: 0 30px 80px rgb(0 0 0 / 60%), 0 0 0 1px rgb(255 255 255 / 7%);
+  --float: rgb(236 238 241 / 95%);
+  --on-float: #111216;
+  --s-image: #3987e5;
+  --s-gif: #d95926;
+  --s-video: #199e70;
+  --hatch: rgb(0 0 0 / 48%);
+  --track: #22252a;
+  --t1: 30%;
+  --t2: 19%;
+  --t3: 40%;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: transparent;
+  color: var(--text);
+  font: 13px/1.45 "Instrument Sans", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+button, select { font: inherit; color: inherit; }
+
+/* ── Page chrome ─────────────────────────────────────────────── */
+.page { max-width: 1180px; margin: 0 auto; padding: 4px 0 24px; }
+.page-head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.page-head h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+.page-head p { margin: 0; color: var(--muted); max-width: 640px; }
+.switcher { display: flex; gap: 10px; align-items: center; }
+.seg { display: inline-flex; padding: 3px; gap: 2px; background: var(--surface-2); border-radius: 9px; }
+.seg button { border: 0; background: none; padding: 6px 12px; border-radius: 7px; cursor: pointer; color: var(--muted); font-weight: 500; white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--bg); color: var(--text); box-shadow: 0 0 0 1px var(--border), 0 1px 2px rgb(16 24 40 / 8%); }
+.seg.small button { padding: 3px 8px; font-size: 12px; }
+.theme-btn { border: 1px solid var(--border); background: var(--bg); border-radius: 8px; padding: 6px 10px; cursor: pointer; color: var(--muted); }
+
+.opt { display: none; }
+.opt.is-on { display: block; animation: rise 260ms cubic-bezier(.2,.8,.2,1); }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+.opt-note { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0 0 16px; padding: 14px 16px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; }
+.opt-note .letter { grid-row: span 2; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 15px; }
+.opt-note strong { font-size: 14px; }
+.opt-note span { color: var(--muted); }
+
+/* ── Library window mock ─────────────────────────────────────── */
+.win { position: relative; background: var(--bg); border-radius: 12px; box-shadow: var(--win-shadow); overflow: hidden; }
+.bar { display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 20px; border-bottom: 1px solid var(--border); background: var(--bg); }
+.lights { display: flex; gap: 7px; margin-right: 6px; }
+.lights i { width: 11px; height: 11px; border-radius: 50%; background: var(--border-strong); }
+.title { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; }
+.title h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.count-pill { color: var(--faint); font-size: 13px; white-space: nowrap; }
+.search { flex: 0 1 260px; display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-radius: 8px; background: var(--surface); color: var(--faint); min-width: 120px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 20px; border-bottom: 1px solid var(--border); }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px; background: var(--surface); color: var(--muted); font-size: 12px; font-weight: 500; border: 0; cursor: pointer; white-space: nowrap; }
+.chip.is-on { background: var(--text); color: var(--bg); }
+.chip .dot, .dot { width: 8px; height: 8px; border-radius: 3px; flex: none; }
+.toolbar .spacer { flex: 1; }
+
+/* Grid of captures */
+.grid-wrap { padding: 4px 20px 22px; min-height: 380px; }
+.day { margin: 14px 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.tile { position: relative; transition: opacity 300ms, transform 300ms; }
+.tile.is-gone { opacity: 0; transform: scale(.92); }
+.thumb { position: relative; aspect-ratio: 16 / 10; border-radius: 8px; overflow: hidden; box-shadow: inset 0 0 0 1px var(--border);
+  background: linear-gradient(140deg, hsl(var(--h) 32% var(--t1)), hsl(calc(var(--h) + 38) 28% var(--t2))); }
+.thumb::before { content: ""; position: absolute; left: 12%; top: 16%; width: 58%; height: 54%; border-radius: 4px; background: hsl(var(--h) 20% var(--t3) / 70%); box-shadow: 0 0 0 1px hsl(var(--h) 20% 50% / 12%); }
+.thumb::after { content: ""; position: absolute; left: 12%; top: 16%; width: 58%; height: 7%; border-radius: 4px 4px 0 0; background: hsl(var(--h) 25% 50% / 22%); }
+.badge { position: absolute; z-index: 1; bottom: 6px; left: 6px; display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 5px; background: rgb(10 12 16 / 72%); color: #fff; font-size: 11px; font-weight: 600; }
+.badge.right { left: auto; right: 6px; }
+.due-flag { position: absolute; z-index: 1; top: 6px; right: 6px; padding: 2px 6px; border-radius: 5px; background: var(--pop); color: var(--text); font-size: 10.5px; font-weight: 600; box-shadow: var(--shadow); }
+.tile .cap { display: flex; justify-content: space-between; gap: 6px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.tile .cap b { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Option A: pill + popover ────────────────────────────────── */
+.storage-pill { display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px 0 7px; border-radius: 13px; border: 1px solid var(--border); background: var(--bg); color: var(--muted); cursor: pointer; font-size: 12.5px; }
+.storage-pill:hover, .storage-pill[aria-expanded="true"] { background: var(--surface); color: var(--text); }
+.storage-pill b { color: var(--text); font-weight: 600; }
+.popover { position: absolute; z-index: 20; top: 50px; left: 150px; width: 372px; background: var(--pop); border-radius: 14px; box-shadow: var(--pop-shadow); padding: 18px; transform-origin: 30px 0; transition: opacity 160ms, transform 200ms cubic-bezier(.2,.8,.2,1); }
+.popover[hidden] { display: block; opacity: 0; transform: scale(.96) translateY(-4px); pointer-events: none; }
+.popover::before { content: ""; position: absolute; top: -6px; left: 44px; width: 12px; height: 12px; background: var(--pop); transform: rotate(45deg); box-shadow: -1px -1px 0 var(--pop-edge); }
+.pop-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
+.pop-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.pop-head span { color: var(--faint); font-size: 12px; }
+.donut-row { display: grid; grid-template-columns: 136px 1fr; gap: 18px; align-items: center; }
+.donut { position: relative; width: 136px; height: 136px; }
+.donut svg { width: 100%; height: 100%; overflow: visible; }
+.donut .center { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; pointer-events: none; }
+.donut .center b { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
+.donut .center span { color: var(--faint); font-size: 11.5px; }
+.arc { transition: stroke-width 150ms; cursor: default; }
+.legend-rows { display: grid; gap: 9px; }
+.lrow { display: grid; grid-template-columns: 10px 1fr auto; gap: 2px 8px; align-items: center; font-size: 12.5px; }
+.lrow .dot { width: 10px; height: 10px; }
+.lrow .name { font-weight: 500; }
+.lrow .size { font-weight: 600; text-align: right; }
+.lrow .sub { grid-column: 2 / 4; color: var(--faint); font-size: 11.5px; }
+.lrow .sub em { font-style: normal; color: var(--muted); }
+.disk { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.disk-top { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 7px; }
+.disk-top b { color: var(--text); font-weight: 600; }
+.meter { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; background: var(--track); }
+.meter i { display: block; height: 100%; }
+.keep { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.keep h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.keep-row { display: flex; align-items: center; gap: 8px; height: 30px; font-size: 12.5px; }
+.keep-row .label { flex: 1; display: flex; align-items: center; gap: 8px; }
+.sel { appearance: none; border: 1px solid var(--border); background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b9099' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 8px center; border-radius: 7px; padding: 3px 26px 3px 9px; font-size: 12.5px; cursor: pointer; }
+.pop-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: var(--surface); }
+.pop-foot .fc { font-size: 12px; color: var(--muted); }
+.pop-foot .fc b { color: var(--text); }
+.btn { border: 0; border-radius: 8px; padding: 7px 12px; background: var(--accent); color: var(--on-accent); font-weight: 600; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.ghost { background: var(--surface-2); color: var(--text); }
+.ring-mini { width: 15px; height: 15px; }
+
+/* Tooltip and toast */
+.tip { position: fixed; z-index: 100; pointer-events: none; background: var(--float); color: var(--on-float); padding: 8px 10px; border-radius: 8px; font-size: 12px; line-height: 1.4; box-shadow: 0 8px 24px rgb(0 0 0 / 25%); opacity: 0; transition: opacity 100ms; max-width: 240px; }
+.tip.on { opacity: 1; }
+.tip b { font-weight: 600; }
+.tip .t-sub { opacity: .7; }
+.toast { position: absolute; z-index: 30; left: 50%; bottom: 18px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none; display: flex; gap: 12px; align-items: center; padding: 9px 10px 9px 14px; border-radius: 10px; background: var(--float); color: var(--on-float); font-size: 12.5px; transition: opacity 200ms, transform 260ms cubic-bezier(.2,.8,.2,1); white-space: nowrap; }
+.toast.on { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.toast button { border: 0; background: rgb(255 255 255 / 14%); color: inherit; border-radius: 6px; padding: 4px 9px; font-weight: 600; cursor: pointer; }
+:root[data-theme="dark"] .toast button { background: rgb(0 0 0 / 10%); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .toast button { background: rgb(0 0 0 / 10%); } }
+
+
+/* ── Ring v2 ─────────────────────────────────────────────────── */
+:root { --group: #f6f7f8; --divider: #e3e5e9; --danger: #d13b44; --danger-soft: rgb(209 59 68 / 9%); --nav: #f3f4f6; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --group: #17181b; --divider: #26282d; --danger: #f0646c; --danger-soft: rgb(240 100 108 / 12%); --nav: #131416; }
+}
+:root[data-theme="dark"] { --group: #17181b; --divider: #26282d; --danger: #f0646c; --danger-soft: rgb(240 100 108 / 12%); --nav: #131416; }
+
+.page { max-width: 1120px; }
+.stage { margin-bottom: 34px; }
+.stage-cap { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px 2px; }
+.stage-cap b { font-size: 14px; }
+.stage-cap span { color: var(--muted); }
+
+.pop-head a { color: var(--accent); font-size: 12px; font-weight: 500; text-decoration: none; cursor: pointer; }
+.pop-head a:hover { text-decoration: underline; }
+.popover { width: 384px; }
+.pop-foot { flex-wrap: wrap; transition: background 200ms; }
+.pop-foot.is-confirm, .pop-foot.is-running, .pop-foot.is-done { display: block; }
+.pf-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.choice { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 9px; cursor: pointer; border: 1px solid transparent; }
+.choice + .choice { margin-top: 4px; }
+.choice input { margin: 2px 0 0; accent-color: var(--accent); }
+.choice.is-on { background: var(--bg); border-color: var(--border); }
+.choice .c-t { font-size: 12.5px; font-weight: 500; }
+.choice .c-h { font-size: 11.5px; color: var(--faint); }
+.choice.danger.is-on .c-h { color: var(--danger); }
+.pf-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.btn.danger { background: var(--danger); color: #fff; }
+.progress-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 12.5px; margin-bottom: 8px; }
+.progress-top b { font-weight: 600; }
+.progress-top span { color: var(--muted); font-size: 12px; }
+.pbar { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
+.pbar i { display: block; height: 100%; width: 0; border-radius: 4px; background: var(--accent); transition: width 160ms linear; }
+.progress-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 11.5px; color: var(--faint); }
+.done-row { display: flex; align-items: center; gap: 10px; }
+.done-row .tick { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: color-mix(in srgb, var(--s-video) 18%, transparent); color: var(--s-video); font-weight: 700; flex: none; }
+.done-row .d-t { font-size: 12.5px; font-weight: 600; }
+.done-row .d-h { font-size: 11.5px; color: var(--muted); }
+.done-row .btn { margin-left: auto; }
+
+/* Settings dialog */
+.settings-win { display: grid; grid-template-columns: 210px 1fr; min-height: 640px; }
+.s-nav { background: var(--nav); border-right: 1px solid var(--border); padding: 18px 10px; }
+.s-nav .lights { margin: 0 0 22px 8px; }
+.s-nav p { margin: 0 0 8px 10px; font-size: 11.5px; font-weight: 600; color: var(--faint); }
+.nav-item { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 10px; border: 0; border-radius: 8px; background: none; color: var(--muted); font-weight: 500; text-align: left; cursor: default; }
+.nav-item.is-current { background: var(--fill-current, rgb(16 24 40 / 7%)); color: var(--text); }
+.nav-item .new { margin-left: auto; font-size: 10px; font-weight: 700; color: var(--accent); background: var(--accent-soft); padding: 1px 6px; border-radius: 5px; }
+.s-body { position: relative; padding: 34px 40px 40px; overflow: hidden; }
+.s-body h1 { margin: 0 0 6px; font-size: 24px; font-weight: 600; letter-spacing: -0.02em; }
+.s-lead { margin: 0 0 26px; color: var(--muted); font-size: 15px; }
+.group-heading { margin: 0 0 10px 4px; color: var(--muted); font-size: 13px; font-weight: 600; }
+.group { margin: 0 0 26px; overflow: hidden; background: var(--group); border-radius: 14px; box-shadow: 0 0 0 1px var(--border) inset; }
+.row { display: flex; align-items: center; gap: 16px; min-height: 60px; padding: 12px 18px; }
+.row + .row { box-shadow: 0 1px 0 var(--divider) inset; }
+.row-text { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.row-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; letter-spacing: -0.015em; }
+.row-hint { margin-top: 3px; color: var(--muted); font-size: 12.5px; }
+.row-hint em { font-style: normal; color: var(--text); font-weight: 500; }
+.row select { appearance: none; height: 34px; padding: 0 34px 0 12px; background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b9099' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 12px center; border: 1px solid var(--border); border-radius: 10px; font-size: 13px; cursor: pointer; min-width: 170px; }
+.row .dot { width: 10px; height: 10px; }
+.danger-note { color: var(--danger) !important; }
+
+.modal-scrim { position: absolute; inset: 0; z-index: 10; display: grid; place-items: center; background: rgb(16 18 24 / 32%); opacity: 0; pointer-events: none; transition: opacity 160ms; }
+.modal-scrim.on { opacity: 1; pointer-events: auto; }
+.modal { width: 360px; background: var(--pop); border-radius: 14px; box-shadow: var(--pop-shadow); padding: 20px; transform: scale(.97); transition: transform 200ms cubic-bezier(.2,.8,.2,1); }
+.modal-scrim.on .modal { transform: none; }
+.modal h3 { margin: 0 0 6px; font-size: 15px; }
+.modal p { margin: 0; color: var(--muted); font-size: 13px; }
+.modal .pf-actions { margin-top: 18px; }
+
+@media (max-width: 860px) {
+  .settings-win { grid-template-columns: 1fr; }
+  .s-nav { display: none; }
+  .s-body { padding: 24px 18px; }
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="3" height="6" style="fill: var(--hatch)"></rect>
+    </pattern>
+  </defs>
+</svg>
+<div class="page">
+  <header class="page-head">
+    <div>
+      <h1>Library storage: Ring</h1>
+      <p>The storage pill and popover in the Library, and a new Storage page in Settings for the Keep settings. Sample data. Try Clean up, Stop, and changing a Keep setting.</p>
+    </div>
+    <div class="switcher"><button type="button" class="theme-btn" id="theme">Theme</button></div>
+  </header>
+
+  <section class="stage" id="stage-library">
+    <div class="stage-cap"><b>Library</b><span>The storage pill opens the popover. Clean up asks how to remove items, then shows progress.</span></div>
+    <div class="win" id="win-a">
+      <div class="bar">
+        <div class="lights"><i></i><i></i><i></i></div>
+        <div class="title">
+          <h2>Library</h2>
+          <button type="button" class="storage-pill" id="a-pill" aria-expanded="true" aria-controls="a-pop">
+            <svg class="ring-mini" viewBox="0 0 16 16" id="a-ring" aria-hidden="true"></svg>
+            <span id="a-pill-text"></span>
+          </button>
+        </div>
+        <div class="search">⌕ <span>Search text, tags, apps…</span></div>
+      </div>
+      <div class="toolbar">
+        <button class="chip is-on">All</button>
+        <button class="chip">Screenshots</button>
+        <button class="chip">GIFs</button>
+        <button class="chip">Videos</button>
+        <span class="spacer"></span>
+        <button class="chip">Any app ▾</button>
+        <button class="chip">Any time ▾</button>
+      </div>
+      <div class="popover" id="a-pop">
+        <div class="pop-head"><h3>Storage</h3><a id="to-settings">Storage settings…</a></div>
+        <div class="donut-row">
+          <div class="donut">
+            <svg viewBox="0 0 136 136" id="a-donut" role="img" aria-label="Storage by type"></svg>
+            <div class="center"><b id="a-total"></b><span id="a-total-sub">used</span></div>
+          </div>
+          <div class="legend-rows" id="a-legend"></div>
+        </div>
+        <div class="disk">
+          <div class="disk-top"><span>This disk</span><span id="a-disk-text"></span></div>
+          <div class="meter" id="a-disk"></div>
+        </div>
+        <div class="pop-foot" id="a-foot"></div>
+      </div>
+      <div class="grid-wrap" id="a-grid"></div>
+    </div>
+  </section>
+
+  <section class="stage" id="stage-settings">
+    <div class="stage-cap"><b>Settings › Storage</b><span>A new page between Recording and AI descriptions.</span></div>
+    <div class="win settings-win">
+      <nav class="s-nav" aria-label="Settings pages">
+        <div class="lights"><i></i><i></i><i></i></div>
+        <p>Settings</p>
+        <button class="nav-item">General</button>
+        <button class="nav-item">Appearance</button>
+        <button class="nav-item">After a capture</button>
+        <button class="nav-item">Editor</button>
+        <button class="nav-item">Recording</button>
+        <button class="nav-item is-current">Storage <span class="new">New</span></button>
+        <button class="nav-item">AI descriptions</button>
+        <button class="nav-item">Hotkeys</button>
+      </nav>
+      <div class="s-body">
+        <h1>Storage</h1>
+        <p class="s-lead">Changes save as you make them.</p>
+
+        <h2 class="group-heading">Keep</h2>
+        <div class="group" id="s-keep"></div>
+
+        <h2 class="group-heading">Cleanup</h2>
+        <div class="group">
+          <div class="row">
+            <span class="row-text">
+              <span class="row-title">Remove items by</span>
+              <span class="row-hint" id="s-method-hint"></span>
+            </span>
+            <select id="s-method" aria-label="Remove items by">
+              <option value="trash">Moving to the Trash</option>
+              <option value="permanent">Deleting permanently</option>
+            </select>
+          </div>
+          <div class="row">
+            <span class="row-text">
+              <span class="row-title">Automatic cleanup</span>
+              <span class="row-hint">Runs when Grab-it starts and once a day. Starred, tagged, noted and annotated items are never removed.</span>
+            </span>
+          </div>
+        </div>
+
+        <div class="modal-scrim" id="s-modal">
+          <div class="modal" role="dialog" aria-modal="true" aria-labelledby="s-modal-title">
+            <h3 id="s-modal-title"></h3>
+            <p id="s-modal-text"></p>
+            <div class="pf-actions">
+              <button type="button" class="btn ghost" id="s-modal-cancel">Cancel</button>
+              <button type="button" class="btn" id="s-modal-ok"></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<script>
+(() => {
+  // ── Data ────────────────────────────────────────────────────────
+  const KINDS = [
+    { id: "image", name: "Screenshots", one: "screenshot", count: 1102, total: 412e6 },
+    { id: "gif",   name: "GIFs",        one: "GIF",        count: 96,   total: 1.14e9 },
+    { id: "video", name: "Videos",      one: "video",      count: 86,   total: 4.71e9 },
+  ];
+  const KIND = Object.fromEntries(KINDS.map((k) => [k.id, k]));
+  const LIMITS = [
+    { days: 7, label: "1 week", short: "1 wk" },
+    { days: 30, label: "30 days", short: "1 mo" },
+    { days: 90, label: "90 days", short: "3 mo" },
+    { days: 365, label: "1 year", short: "1 yr" },
+    { days: Infinity, label: "Forever", short: "Forever" },
+  ];
+  const DISK_TOTAL = 256e9, DISK_FREE = 48.3e9;
+  const APPS = ["Figma", "Safari", "Slack", "Terminal", "VS Code", "Linear", "Notion", "Chrome", "Zoom", "Finder"];
+
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+  const items = [];
+  const MEAN_AGE = { image: 150, gif: 110, video: 75 };
+  for (const k of KINDS) {
+    const list = [];
+    for (let i = 0; i < k.count; i++) {
+      const age = Math.min(-Math.log(1 - rnd() * 0.995) * MEAN_AGE[k.id], 540) + rnd() * 0.9;
+      const duration = k.id === "image" ? 0 : k.id === "gif" ? 3 + rnd() * 22 : 12 + Math.pow(rnd(), 1.8) * 420;
+      const weight = k.id === "image" ? 0.4 + rnd() * 1.6 : duration * (0.6 + rnd() * 0.8);
+      list.push({ kind: k.id, age, duration, weight, kept: rnd() < 0.09, hue: Math.floor(rnd() * 360), app: APPS[Math.floor(rnd() * APPS.length)], removed: false });
+    }
+    const sum = list.reduce((s, x) => s + x.weight, 0);
+    list.forEach((x) => (x.bytes = (x.weight / sum) * k.total));
+    items.push(...list);
+  }
+  items.forEach((x, i) => (x.id = i));
+
+  const policy = { image: Infinity, gif: 90, video: 30 };
+  const live = () => items.filter((x) => !x.removed);
+  const isDue = (x) => !x.kept && x.age > policy[x.kind];
+
+  function stats() {
+    const out = {};
+    for (const k of KINDS) out[k.id] = { count: 0, bytes: 0, dueCount: 0, dueBytes: 0, week: 0 };
+    for (const x of live()) {
+      const s = out[x.kind];
+      s.count++; s.bytes += x.bytes;
+      if (isDue(x)) { s.dueCount++; s.dueBytes += x.bytes; }
+      if (x.age < 7) s.week += x.bytes;
+    }
+    const all = Object.values(out);
+    out.total = all.reduce((a, s) => a + s.bytes, 0);
+    out.count = all.reduce((a, s) => a + s.count, 0);
+    out.dueBytes = all.reduce((a, s) => a + s.dueBytes, 0);
+    out.dueCount = all.reduce((a, s) => a + s.dueCount, 0);
+    out.week = all.reduce((a, s) => a + s.week, 0);
+    return out;
+  }
+
+  // ── Formatting ──────────────────────────────────────────────────
+  const fmt = (b) => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ? `${b >= 1e7 ? Math.round(b / 1e6) : (b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1e3))} KB`;
+  const num = (n) => n.toLocaleString("en-US");
+  const pct = (a, b) => b ? `${Math.round((a / b) * 100)}%` : "0%";
+  const plural = (n, one, many) => `${num(n)} ${n === 1 ? one : many || one + "s"}`;
+  const dur = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+  const ago = (d) => d < 1 ? "Today" : d < 2 ? "Yesterday" : d < 7 ? `${Math.floor(d)} days ago` : d < 30 ? `${Math.floor(d / 7)} wk ago` : d < 365 ? `${Math.floor(d / 30)} mo ago` : `${(d / 365).toFixed(1)} yr ago`;
+  const color = (k) => `var(--s-${k})`;
+  const limitLabel = (days) => LIMITS.find((l) => l.days === days).label;
+  const el = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; };
+
+  // ── Tooltip ─────────────────────────────────────────────────────
+  const tip = document.getElementById("tip");
+  function bindTip(node, html) {
+    node.addEventListener("pointermove", (e) => {
+      tip.innerHTML = typeof html === "function" ? html() : html;
+      tip.classList.add("on");
+      const r = tip.getBoundingClientRect();
+      let x = e.clientX + 14, y = e.clientY + 14;
+      if (x + r.width > innerWidth - 8) x = e.clientX - r.width - 14;
+      if (y + r.height > innerHeight - 8) y = e.clientY - r.height - 14;
+      tip.style.left = `${x}px`; tip.style.top = `${y}px`;
+    });
+    node.addEventListener("pointerleave", () => tip.classList.remove("on"));
+  }
+  const itemTip = (x) => () => {
+    const k = KIND[x.kind];
+    const due = isDue(x);
+    return `<b>${k.one[0].toUpperCase() + k.one.slice(1)} · ${fmt(x.bytes)}</b><br>` +
+      `<span class="t-sub">${x.app} · ${ago(x.age)}${x.duration ? ` · ${dur(x.duration)}` : ""}</span>` +
+      (x.kept ? `<br>★ Starred: never removed` : due ? `<br>Removed by “Keep ${limitLabel(policy[x.kind])}”` : "");
+  };
+
+  // ── Shared pieces ───────────────────────────────────────────────
+  function keepSelect(kind, cls = "sel") {
+    const s = document.createElement("select");
+    s.className = cls;
+    s.setAttribute("aria-label", `Keep ${KIND[kind].name.toLowerCase()} for`);
+    for (const l of LIMITS) {
+      const o = document.createElement("option");
+      o.value = String(l.days); o.textContent = l.label;
+      if (l.days === policy[kind]) o.selected = true;
+      s.append(o);
+    }
+    s.addEventListener("change", () => { policy[kind] = Number(s.value); renderAll(); });
+    return s;
+  }
+
+  function legendRows(container, st) {
+    container.replaceChildren(...KINDS.map((k) => {
+      const s = st[k.id];
+      const row = el(`<div class="lrow"><i class="dot" style="background:${color(k.id)}"></i><span class="name">${k.name}</span><span class="size">${fmt(s.bytes)}</span>
+        <span class="sub">${plural(s.count, k.one)} · ${pct(s.bytes, st.total)}${s.dueBytes ? ` · <em>${fmt(s.dueBytes)} due</em>` : ""}</span></div>`);
+      return row;
+    }));
+  }
+
+  function meter(container, st, withDisk) {
+    const parts = KINDS.map((k) => ({ w: st[k.id].bytes, c: color(k.id), label: `${k.name} · ${fmt(st[k.id].bytes)}` }));
+    if (withDisk) parts.push({ w: DISK_TOTAL - DISK_FREE - st.total, c: "var(--border-strong)", label: `Other files · ${fmt(DISK_TOTAL - DISK_FREE - st.total)}` });
+    const sum = withDisk ? DISK_TOTAL : st.total;
+    container.replaceChildren(...parts.filter((p) => p.w > 0).map((p) => {
+      const i = document.createElement("i");
+      i.style.cssText = `width:${Math.max((p.w / sum) * 100, 0.8)}%;background:${p.c}`;
+      bindTip(i, `<b>${p.label}</b>`);
+      return i;
+    }));
+  }
+
+  function tileHTML(x) {
+    const due = isDue(x);
+    const badge = x.kind === "video" ? `<span class="badge">▶ ${dur(x.duration)}</span>` : x.kind === "gif" ? `<span class="badge">GIF</span>` : "";
+    const size = x.kind !== "image" ? `<span class="badge right">${fmt(x.bytes)}</span>` : "";
+    return `<div class="tile" data-id="${x.id}"><div class="thumb" style="--h:${x.hue}">${badge}${size}${due ? `<span class="due-flag">Due for cleanup</span>` : ""}</div>
+      <div class="cap"><b>${x.app}</b><span>${x.kind === "image" ? fmt(x.bytes) : ""}</span></div></div>`;
+  }
+
+  function renderGrid(container, filter) {
+    const list = live().filter((x) => !filter || x.kind === filter).sort((a, b) => a.age - b.age).slice(0, 18);
+    const groups = [];
+    for (const x of list) {
+      const label = x.age < 1 ? "Today" : x.age < 2 ? "Yesterday" : x.age < 7 ? "This week" : x.age < 30 ? "This month" : "Earlier";
+      if (!groups.length || groups[groups.length - 1].label !== label) groups.push({ label, items: [] });
+      groups[groups.length - 1].items.push(x);
+    }
+    container.innerHTML = groups.map((g) => `<div class="day">${g.label}</div><div class="grid">${g.items.map(tileHTML).join("")}</div>`).join("");
+    container.querySelectorAll(".tile").forEach((t) => bindTip(t, itemTip(items[t.dataset.id])));
+  }
+
+
+  // ── Ring v2 ─────────────────────────────────────────────────────
+  const INITIAL = window.RING_INITIAL || {};
+  let method = INITIAL.method || "trash";
+  let foot = "idle";           // idle | confirm | running | done
+  let choice = method;
+  let run = null;              // { list, done, bytes, total, totalBytes, method, timer, stopped }
+
+  const aPill = document.getElementById("a-pill"), aPop = document.getElementById("a-pop");
+  aPill.addEventListener("click", () => {
+    const open = aPop.hidden;
+    aPop.hidden = !open;
+    aPill.setAttribute("aria-expanded", String(open));
+  });
+  document.getElementById("to-settings").addEventListener("click", () =>
+    document.getElementById("stage-settings").scrollIntoView({ behavior: "smooth" }));
+
+  function donutSVG(svg, st, r, w, gap) {
+    const C = 2 * Math.PI * r, cx = svg.viewBox.baseVal.width / 2;
+    let html = `<circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="var(--track)" stroke-width="${w}"></circle>`;
+    let off = 0;
+    const parts = KINDS.filter((k) => st[k.id].bytes > 0);
+    for (const k of parts) {
+      const s = st[k.id];
+      const len = (s.bytes / st.total) * C;
+      const g = parts.length > 1 ? gap : 0;
+      const seg = Math.max(len - g, 0.5);
+      const dueLen = Math.min((s.dueBytes / st.total) * C, seg);
+      const base = `cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke-width="${w}" transform="rotate(-90 ${cx} ${cx})"`;
+      html += `<circle class="arc" data-k="${k.id}" ${base} stroke="${color(k.id)}" stroke-dasharray="${seg} ${C}" stroke-dashoffset="${-off}"></circle>`;
+      if (dueLen > 0.5) html += `<circle ${base} stroke="url(#hatch)" stroke-dasharray="${dueLen} ${C}" stroke-dashoffset="${-(off + seg - dueLen)}" pointer-events="none"></circle>`;
+      off += len;
+    }
+    svg.innerHTML = html;
+    return svg;
+  }
+
+  const verb = (m) => (m === "trash" ? "Move to Trash" : "Delete permanently");
+
+  function renderFoot(st) {
+    const f = document.getElementById("a-foot");
+    f.className = `pop-foot is-${foot}`;
+    if (foot === "idle") {
+      f.innerHTML = st.dueBytes
+        ? `<span class="fc">Cleanup frees <b>${fmt(st.dueBytes)}</b> · ${plural(st.dueCount, "item")}</span><button type="button" class="btn" id="f-clean">Clean up</button>`
+        : `<span class="fc">Nothing is older than your Keep settings</span><button type="button" class="btn" disabled>Clean up</button>`;
+      f.querySelector("#f-clean")?.addEventListener("click", () => { choice = method; foot = "confirm"; renderAll(); });
+    } else if (foot === "confirm") {
+      f.innerHTML = `<div class="pf-title">Remove ${plural(st.dueCount, "item")} (${fmt(st.dueBytes)})?</div>
+        <label class="choice${choice === "trash" ? " is-on" : ""}"><input type="radio" name="how" value="trash"${choice === "trash" ? " checked" : ""}>
+          <span><span class="c-t">Move to Trash</span><br><span class="c-h">You can restore them. Space is freed when you empty the Trash.</span></span></label>
+        <label class="choice danger${choice === "permanent" ? " is-on" : ""}"><input type="radio" name="how" value="permanent"${choice === "permanent" ? " checked" : ""}>
+          <span><span class="c-t">Delete permanently</span><br><span class="c-h">Frees the space now. This can't be undone.</span></span></label>
+        <div class="pf-actions"><button type="button" class="btn ghost" id="f-cancel">Cancel</button>
+          <button type="button" class="btn${choice === "permanent" ? " danger" : ""}" id="f-go">${verb(choice)}</button></div>`;
+      f.querySelectorAll("input[name=how]").forEach((r) => r.addEventListener("change", () => { choice = r.value; renderAll(); }));
+      f.querySelector("#f-cancel").addEventListener("click", () => { foot = "idle"; renderAll(); });
+      f.querySelector("#f-go").addEventListener("click", () => start(choice));
+    } else if (foot === "running") {
+      const p = run.done / run.total;
+      f.innerHTML = `<div class="progress-top"><b>${run.method === "trash" ? "Moving to the Trash" : "Deleting"} · ${num(run.done)} of ${num(run.total)}</b><span>${fmt(run.bytes)} freed</span></div>
+        <div class="pbar" role="progressbar" aria-valuemin="0" aria-valuemax="${run.total}" aria-valuenow="${run.done}"><i style="width:${p * 100}%"></i></div>
+        <div class="progress-foot"><span>${fmt(run.totalBytes - run.bytes)} to go</span><button type="button" class="btn ghost" id="f-stop">Stop</button></div>`;
+      f.querySelector("#f-stop").addEventListener("click", stop);
+    } else {
+      const stopped = run.stopped;
+      f.innerHTML = `<div class="done-row"><span class="tick">✓</span><span><div class="d-t">${stopped ? "Stopped" : "Done"} · ${fmt(run.bytes)} ${run.method === "trash" ? "moved to the Trash" : "freed"}</div>
+        <div class="d-h">${plural(run.done, "item")} ${run.method === "trash" ? "moved" : "deleted"}${stopped ? `, ${num(run.total - run.done)} left` : ""}</div></span>
+        <button type="button" class="btn ghost" id="f-ok">OK</button></div>`;
+      f.querySelector("#f-ok").addEventListener("click", () => { foot = "idle"; renderAll(); });
+    }
+  }
+
+  function start(how) {
+    const list = live().filter(isDue).sort((a, b) => b.age - a.age);
+    run = { list, done: 0, bytes: 0, total: list.length, totalBytes: list.reduce((a, x) => a + x.bytes, 0), method: how, stopped: false };
+    foot = "running";
+    renderAll();
+    run.timer = setInterval(() => {
+      for (let i = 0; i < 2 && run.done < run.total; i++) {
+        const x = run.list[run.done++];
+        x.removed = true; run.bytes += x.bytes;
+      }
+      if (run.done >= run.total) { clearInterval(run.timer); foot = "done"; }
+      renderAll();
+    }, 70);
+  }
+  function stop() { clearInterval(run.timer); run.stopped = true; foot = "done"; renderAll(); }
+
+  function renderLibrary(st) {
+    document.getElementById("a-pill-text").innerHTML = `${num(st.count)} captures · <b>${fmt(st.total)}</b>`;
+    donutSVG(document.getElementById("a-ring"), st, 6, 3, 1);
+    const svg = donutSVG(document.getElementById("a-donut"), st, 56, 16, 3);
+    svg.querySelectorAll(".arc").forEach((a) => {
+      const k = KIND[a.dataset.k], s = st[a.dataset.k];
+      a.addEventListener("pointerenter", () => a.setAttribute("stroke-width", "20"));
+      a.addEventListener("pointerleave", () => a.setAttribute("stroke-width", "16"));
+      bindTip(a, `<b>${k.name} · ${fmt(s.bytes)}</b><br><span class="t-sub">${plural(s.count, k.one)} · ${pct(s.bytes, st.total)} of the library</span>${s.dueBytes ? `<br>${fmt(s.dueBytes)} due for cleanup` : ""}`);
+    });
+    document.getElementById("a-total").textContent = fmt(st.total);
+    legendRows(document.getElementById("a-legend"), st);
+    document.getElementById("a-disk-text").innerHTML = `<b>${fmt(st.total)}</b> of ${fmt(DISK_TOTAL)} · ${fmt(DISK_FREE + (run ? (run.method === "permanent" ? run.bytes : 0) : 0))} free`;
+    meter(document.getElementById("a-disk"), st, true);
+    renderFoot(st);
+    if (foot !== "running") renderGrid(document.getElementById("a-grid"), null);
+  }
+
+  // Settings › Storage
+  let pending = null;
+  const modal = document.getElementById("s-modal");
+  function dueFor(kind, days) {
+    const xs = live().filter((x) => x.kind === kind && !x.kept && x.age > days);
+    return { n: xs.length, bytes: xs.reduce((a, x) => a + x.bytes, 0) };
+  }
+  function renderSettings(st) {
+    const g = document.getElementById("s-keep");
+    g.replaceChildren(...KINDS.map((k) => {
+      const s = st[k.id];
+      const days = policy[k.id];
+      const hint = days === Infinity
+        ? `${plural(s.count, k.one)} · ${fmt(s.bytes)} · never removed`
+        : `${plural(s.count, k.one)} · ${fmt(s.bytes)} · ${s.dueCount ? `<em>${fmt(s.dueBytes)} older than ${limitLabel(days).toLowerCase()}</em>` : "nothing older"}`;
+      const row = el(`<div class="row"><span class="row-text"><span class="row-title"><i class="dot" style="background:${color(k.id)}"></i>${k.name}</span><span class="row-hint">${hint}</span></span></div>`);
+      const sel = document.createElement("select");
+      sel.setAttribute("aria-label", `Keep ${k.name.toLowerCase()} for`);
+      for (const l of LIMITS) {
+        const o = document.createElement("option");
+        o.value = String(l.days); o.textContent = l.days === Infinity ? "Forever" : `For ${l.label}`;
+        o.selected = l.days === days;
+        sel.append(o);
+      }
+      sel.addEventListener("change", () => {
+        const next = Number(sel.value);
+        const now = dueFor(k.id, days), then = dueFor(k.id, next);
+        if (next < days && then.n > now.n) {
+          pending = { kind: k.id, days: next, sel, prev: days };
+          document.getElementById("s-modal-title").textContent = `Keep ${k.name.toLowerCase()} for ${limitLabel(next).toLowerCase()}?`;
+          document.getElementById("s-modal-text").textContent = `${plural(then.n, k.one)} (${fmt(then.bytes)}) ${then.n === 1 ? "is" : "are"} older and will be ${method === "trash" ? "moved to the Trash" : "deleted permanently"} at the next cleanup.`;
+          const ok = document.getElementById("s-modal-ok");
+          ok.textContent = `Keep for ${limitLabel(next).toLowerCase()}`;
+          ok.className = `btn${method === "permanent" ? " danger" : ""}`;
+          modal.classList.add("on");
+        } else { policy[k.id] = next; renderAll(); }
+      });
+      row.append(sel);
+      return row;
+    }));
+    const m = document.getElementById("s-method");
+    m.value = method;
+    const hint = document.getElementById("s-method-hint");
+    hint.textContent = method === "trash"
+      ? "You can restore items from the Trash. Their space is freed when you empty it. Clean up in the Library asks each time."
+      : "Removed items are gone right away and can't be restored. Clean up in the Library asks each time.";
+    hint.classList.toggle("danger-note", method === "permanent");
+  }
+  document.getElementById("s-method").addEventListener("change", (e) => { method = e.target.value; renderAll(); });
+  document.getElementById("s-modal-cancel").addEventListener("click", () => { pending.sel.value = String(pending.prev); pending = null; modal.classList.remove("on"); });
+  document.getElementById("s-modal-ok").addEventListener("click", () => { policy[pending.kind] = pending.days; pending = null; modal.classList.remove("on"); renderAll(); });
+
+  function renderAll() {
+    const st = stats();
+    renderLibrary(st);
+    renderSettings(st);
+  }
+
+  document.getElementById("theme").addEventListener("click", () => {
+    const root = document.documentElement;
+    const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    root.dataset.theme = dark ? "light" : "dark";
+  });
+
+  // Initial state, for static captures of each step.
+  if (INITIAL.foot === "confirm") { foot = "confirm"; choice = INITIAL.choice || method; }
+  renderAll();
+  if (INITIAL.foot === "running") {
+    start(INITIAL.choice || method);
+    clearInterval(run.timer);
+    const target = Math.round(run.total * (INITIAL.progress || 0.55));
+    while (run.done < target) { const x = run.list[run.done++]; x.removed = true; run.bytes += x.bytes; }
+    renderAll();
+  }
+  if (INITIAL.modal) {
+    const sel = document.querySelectorAll("#s-keep select")[2];
+    sel.value = "7"; sel.dispatchEvent(new Event("change"));
+  }
+})();
+</script>
+</body>
+</html>
