@@ -69,7 +69,19 @@ pub fn run() {
             |ctx, request, responder| {
                 let app = ctx.app_handle().clone();
                 std::thread::spawn(move || {
-                    responder.respond(recording_editor::serve_video(&app, &request));
+                    let response = recording_editor::serve_video(&app, &request);
+                    // WebKit on macOS hands a reply made on another thread
+                    // to the main thread, and raises there if the player
+                    // has cancelled the request meanwhile, as it often does
+                    // on play and seek: an exception nothing catches, which
+                    // quits Grab-it. Replying on the main thread lets wry
+                    // see the cancellation first and drop the reply.
+                    #[cfg(target_os = "macos")]
+                    {
+                        let _ = app.run_on_main_thread(move || responder.respond(response));
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    responder.respond(response);
                 });
             },
         )
