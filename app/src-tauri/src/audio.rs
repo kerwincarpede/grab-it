@@ -1,15 +1,28 @@
-//! The microphone, recorded into an MP4's sound.
+//! The microphone and the system sound, recorded into an MP4's sound.
 //!
-//! While an MP4 records, the chosen microphone is written to a 16-bit PCM
-//! WAV in the temporary folder, and the time its first sample was heard is
-//! noted. When the recording stops, ffmpeg muxes the WAV into the MP4 as
-//! AAC, shifted by the gap between the first frame and that first sample
-//! (see `ffmpeg::add_audio`), and the WAV is deleted.
+//! While an MP4 records, each [`Input`] it records (the chosen microphone,
+//! what the computer plays, or both) is written to its own 16-bit PCM WAV
+//! in the temporary folder, and the time its first sample was heard is
+//! noted. When the recording stops, ffmpeg muxes the WAVs into the MP4 as
+//! one AAC track, each shifted by the gap between the first frame and its
+//! first sample and mixed together when there are two (see
+//! `ffmpeg::add_audio`), and the WAVs are deleted.
 //!
 //! On macOS and Windows the microphone is read through cpal (Core Audio,
 //! WASAPI). On Linux ffmpeg's own PulseAudio input reads it (`-f pulse`,
 //! which PipeWire's Pulse server also answers) and pipes raw samples to
 //! Grab-it, so no ALSA or Pulse headers are needed to build Grab-it.
+//!
+//! The system sound is read on Windows through cpal's WASAPI loopback of
+//! the default output device, on Linux by ffmpeg from the default output's
+//! monitor source (`@DEFAULT_MONITOR@`), and on macOS 13 and later by an
+//! audio-only ScreenCaptureKit stream (see audio/system_mac.rs). macOS
+//! before 13 cannot record it ([`system_available`]). WASAPI sends nothing
+//! while nothing plays, so the system sound's WAV is padded with silence
+//! wherever its chunks arrive later than the samples so far account for.
+
+#[cfg(target_os = "macos")]
+mod system_mac;
 
 use std::{
     fs::{self, File},
@@ -28,6 +41,75 @@ use tauri::AppHandle;
 /// How long a microphone gets to start.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const START_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// What a recording's sound is recorded from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Input {
+    /// A microphone, by its [`MicrophoneInfo::id`], or the system's default
+    /// one when None.
+    Microphone(Option<String>),
+    /// What the computer plays.
+    System,
+}
+
+impl Input {
+    /// What the card calls it.
+    pub fn what(&self) -> &'static str {
+        match self {
+            Self::Microphone(_) => "the microphone",
+            Self::System => "the system sound",
+        }
+    }
+
+    /// Why there is no sound when none was heard.
+    fn silent(&self) -> &'static str {
+        match self {
+            Self::Microphone(_) => "the microphone sent no sound",
+            Self::System => "the computer played no sound",
+        }
+    }
+
+    /// Names its WAV in the temporary folder.
+    fn tag(&self) -> &'static str {
+        match self {
+            Self::Microphone(_) => "microphone",
+            Self::System => "system",
+        }
+    }
+
+    /// Whether a stretch with no chunks is filled with silence: the
+    /// system sound may send nothing while nothing plays.
+    fn fills_gaps(&self) -> bool {
+        matches!(self, Self::System)
+    }
+}
+
+/// Whether what the computer plays can be recorded here: on Windows, on
+/// Linux, and on macOS 13 and later.
+pub fn system_available() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        system_mac::available()
+    }
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        true
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        false
+    }
+}
+
+/// Whether Settings offers System and Both.
+#[tauri::command]
+pub fn recording_system_audio() -> bool {
+    system_available()
+}
+
+/// The longest stretch with no chunks that is not filled with silence:
+/// chunks arrive in bursts, so a little lateness is not a gap.
+const SILENCE_AFTER: Duration = Duration::from_millis(100);
 
 /// A microphone that can be picked. Mirrors `Microphone` in
 /// src/settings/api.ts.
@@ -111,6 +193,14 @@ struct Sink {
     sample_rate: u32,
     /// When the first sample was heard.
     first_sample: Option<Instant>,
+    /// The sample frames heard so far, silence included.
+    frames: u64,
+    /// The stretches of silence that are not written, as sorted `[from,
+    /// to)` sample frames of the sound: they are filled in when it is cut
+    /// to the video, so silence the video skipped is never written.
+    holes: Vec<(u64, u64)>,
+    /// Whether a stretch with no chunks is filled with silence.
+    fill_gaps: bool,
     /// The first write that failed.
     error: Option<String>,
 }
@@ -122,7 +212,12 @@ fn lock(sink: &SharedSink) -> MutexGuard<'_, Sink> {
 }
 
 impl Sink {
-    fn create(wav: &Path, channels: u16, sample_rate: u32) -> Result<SharedSink, String> {
+    fn create(
+        wav: &Path,
+        channels: u16,
+        sample_rate: u32,
+        fill_gaps: bool,
+    ) -> Result<SharedSink, String> {
         let file = File::create(wav)
             .map_err(|err| format!("could not create {}: {err}", wav.display()))?;
         let writer = WavWriter::new(BufWriter::new(file), channels, sample_rate)
@@ -132,6 +227,9 @@ impl Sink {
             channels,
             sample_rate,
             first_sample: None,
+            frames: 0,
+            holes: Vec::new(),
+            fill_gaps,
             error: None,
         })))
     }
@@ -141,21 +239,32 @@ impl Sink {
         if samples.is_empty() {
             return;
         }
-        if self.first_sample.is_none() {
-            self.first_sample = Some(first_sample_at(
-                at,
-                samples.len(),
-                self.channels,
-                self.sample_rate,
-            ));
-        }
+        let heard = first_sample_at(at, samples.len(), self.channels, self.sample_rate);
+        let silence = match self.first_sample {
+            None => {
+                self.first_sample = Some(heard);
+                0
+            }
+            Some(first) if self.fill_gaps => {
+                missing_frames(first, self.frames, self.sample_rate, heard)
+            }
+            Some(_) => 0,
+        };
+        let channels = u64::from(self.channels.max(1));
         let Some(writer) = self.writer.as_mut() else {
             return;
         };
-        if let Err(err) = writer.write(samples)
-            && self.error.is_none()
-        {
-            self.error = Some(format!("could not write the sound: {err}"));
+        match writer.write(samples) {
+            Ok(()) => {
+                if silence > 0 {
+                    self.holes.push((self.frames, self.frames + silence));
+                }
+                self.frames += silence + samples.len() as u64 / channels;
+            }
+            Err(err) if self.error.is_none() => {
+                self.error = Some(format!("could not write the sound: {err}"));
+            }
+            Err(_) => {}
         }
     }
 
@@ -172,6 +281,76 @@ impl Sink {
         }
         Ok(self.first_sample)
     }
+}
+
+/// How many sample frames of silence go before a chunk first heard at
+/// `heard`, given that the sound's first sample was heard at `first` and
+/// `written` frames have been heard since: none unless the chunk is more
+/// than [`SILENCE_AFTER`] later than they account for.
+pub fn missing_frames(first: Instant, written: u64, sample_rate: u32, heard: Instant) -> u64 {
+    let rate = u64::from(sample_rate.max(1));
+    let nanos = u128::from(written) * 1_000_000_000 / u128::from(rate);
+    let accounted = first + Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX));
+    match heard.checked_duration_since(accounted) {
+        Some(late) if late > SILENCE_AFTER => {
+            (late.as_secs_f64() * f64::from(sample_rate)).round() as u64
+        }
+        _ => 0,
+    }
+}
+
+/// Writes `frames` sample frames of silence, a piece at a time.
+fn write_silence<W: Write + Seek>(
+    writer: &mut WavWriter<W>,
+    frames: u64,
+    channels: u16,
+) -> io::Result<()> {
+    const PIECE: u64 = 4800;
+    if frames == 0 {
+        return Ok(());
+    }
+    let channels = u64::from(channels.max(1));
+    let zeros = vec![0u8; (PIECE * channels * 2) as usize];
+    let mut left = frames;
+    while left > 0 {
+        let now = left.min(PIECE);
+        writer.write_bytes(&zeros[..(now * channels * 2) as usize])?;
+        left -= now;
+    }
+    Ok(())
+}
+
+/// Float samples from `planes`, each holding its channel count of
+/// interleaved channels in turn (one plane of two, say, or two planes of
+/// one), as `channels` interleaved 16-bit ones: the first `channels` of
+/// them, or the one there is repeated.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn interleave_planes(planes: &[(&[f32], usize)], channels: usize) -> Vec<i16> {
+    let frames = planes
+        .iter()
+        .map(|(samples, count)| samples.len() / (*count).max(1))
+        .min()
+        .unwrap_or(0);
+    let total: usize = planes.iter().map(|(_, count)| *count).sum();
+    if total == 0 || channels == 0 {
+        return Vec::new();
+    }
+    let float = |sample: f32| (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16;
+    let mut out = Vec::with_capacity(frames * channels);
+    for frame in 0..frames {
+        for channel in 0..channels {
+            // The channel'th across the planes, or the last there is.
+            let mut wanted = channel.min(total - 1);
+            for (samples, count) in planes {
+                if wanted < *count {
+                    out.push(float(samples[frame * count + wanted]));
+                    break;
+                }
+                wanted -= count;
+            }
+        }
+    }
+    out
 }
 
 /// When the first of `samples` (interleaved over `channels`) was heard,
@@ -194,11 +373,11 @@ pub fn offset(first_frame: Instant, first_sample: Instant) -> f64 {
     }
 }
 
-/// A WAV in the temporary folder for one recording's sound.
-fn scratch_wav() -> PathBuf {
+/// A WAV in the temporary folder for one recording's sound from `tag`.
+fn scratch_wav(tag: &str) -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     std::env::temp_dir().join(format!(
-        "grab-it-microphone-{}-{}.wav",
+        "grab-it-{tag}-{}-{}.wav",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ))
@@ -212,20 +391,30 @@ pub struct Captured {
     pub first_sample: Instant,
     channels: u16,
     sample_rate: u32,
+    /// The silence not written to the WAV (see `Sink::holes`).
+    holes: Vec<(u64, u64)>,
 }
 
 impl Captured {
     /// Cuts the stretches the video skipped (`gaps`) out of the sound, so
-    /// what comes after them stays in step. `offset` is when the sound
-    /// starts against the first frame, as [`offset`] says.
+    /// what comes after them stays in step, and writes in the silence not
+    /// yet written that is left. `offset` is when the sound starts against
+    /// the first frame, as [`offset`] says.
     pub fn cut(&self, gaps: &[Gap], offset: f64) -> io::Result<()> {
         let ranges = gap_frames(gaps, offset, self.sample_rate);
-        if ranges.is_empty() {
+        if ranges.is_empty() && self.holes.is_empty() {
             return Ok(());
         }
         let cut = self.wav.with_extension("cut.wav");
-        let result = cut_wav(&self.wav, &cut, self.channels, self.sample_rate, &ranges)
-            .and_then(|()| fs::rename(&cut, &self.wav));
+        let result = cut_wav(
+            &self.wav,
+            &cut,
+            self.channels,
+            self.sample_rate,
+            &ranges,
+            &self.holes,
+        )
+        .and_then(|()| fs::rename(&cut, &self.wav));
         if result.is_err() {
             let _ = fs::remove_file(&cut);
         }
@@ -269,42 +458,84 @@ pub fn gap_frames(gaps: &[Gap], offset: f64, sample_rate: u32) -> Vec<(u64, u64)
 }
 
 /// Copies the 16-bit WAV `from` (as [`WavWriter`] writes it) to `to`,
-/// leaving out the sample frames in `ranges`, which must be sorted and not
-/// overlap, as [`gap_frames`] gives them. One pass over the file, copying
-/// and skipping whole stretches.
+/// along the sound's own frames, which are the file's with the silence in
+/// `holes` put back, leaving out the frames in `ranges`. Both must be
+/// sorted and not overlap, as [`gap_frames`] and `Sink::holes` give them.
+/// Whole stretches are copied, skipped or written as silence.
 fn cut_wav(
     from: &Path,
     to: &Path,
     channels: u16,
     sample_rate: u32,
     ranges: &[(u64, u64)],
+    holes: &[(u64, u64)],
 ) -> io::Result<()> {
     let frame_bytes = u64::from(channels.max(1)) * 2;
     let mut input = BufReader::new(File::open(from)?);
-    input.seek(SeekFrom::Start(u64::from(WAV_HEADER_BYTES)))?;
+    let file_frames = input
+        .get_ref()
+        .metadata()?
+        .len()
+        .saturating_sub(u64::from(WAV_HEADER_BYTES))
+        / frame_bytes;
+    let total = file_frames + holes.iter().map(|(from, to)| to - from).sum::<u64>();
     let mut writer = WavWriter::new(BufWriter::new(File::create(to)?), channels, sample_rate)?;
     let mut buffer = vec![0u8; 64 * 1024];
-    // The sample frame `input` is at.
+    for (start, end) in kept_ranges(ranges, total) {
+        let mut at = start;
+        while at < end {
+            // The first hole not over by `at`, and the frames of those before.
+            let mut before = 0;
+            let mut next = None;
+            for &(hole_start, hole_end) in holes {
+                if hole_end <= at {
+                    before += hole_end - hole_start;
+                } else {
+                    next = Some((hole_start, hole_end));
+                    break;
+                }
+            }
+            match next {
+                Some((hole_start, hole_end)) if hole_start <= at => {
+                    let until = hole_end.min(end);
+                    write_silence(&mut writer, until - at, channels)?;
+                    at = until;
+                }
+                next => {
+                    let until = next.map_or(end, |(hole_start, _)| hole_start.min(end));
+                    input.seek(SeekFrom::Start(
+                        u64::from(WAV_HEADER_BYTES) + (at - before) * frame_bytes,
+                    ))?;
+                    let wanted = (until - at) * frame_bytes;
+                    let copied = copy_bytes(&mut input, &mut writer, wanted, &mut buffer)?;
+                    if copied < wanted {
+                        // The file ended early.
+                        return finish_cut(writer);
+                    }
+                    at = until;
+                }
+            }
+        }
+    }
+    finish_cut(writer)
+}
+
+/// The `[from, to)` ranges of `0..total` outside `ranges`, which must be
+/// sorted and not overlap.
+fn kept_ranges(ranges: &[(u64, u64)], total: u64) -> Vec<(u64, u64)> {
+    let mut kept = Vec::with_capacity(ranges.len() + 1);
     let mut at = 0u64;
     for &(start, end) in ranges {
-        if end <= at {
-            continue;
-        }
+        let start = start.min(total);
         if start > at {
-            let wanted = (start - at) * frame_bytes;
-            let copied = copy_bytes(&mut input, &mut writer, wanted, &mut buffer)?;
-            if copied < wanted {
-                // The sound ended before this gap.
-                return finish_cut(writer);
-            }
-            at = start;
+            kept.push((at, start));
         }
-        let skip = (end - at) * frame_bytes;
-        input.seek_relative(i64::try_from(skip).unwrap_or(i64::MAX))?;
-        at = end;
+        at = at.max(end.min(total));
     }
-    copy_bytes(&mut input, &mut writer, u64::MAX, &mut buffer)?;
-    finish_cut(writer)
+    if total > at {
+        kept.push((at, total));
+    }
+    kept
 }
 
 /// Copies up to `limit` bytes of samples from `input` to `writer`, in
@@ -343,20 +574,21 @@ impl Drop for Captured {
     }
 }
 
-/// The microphone being recorded.
-pub struct Microphone {
+/// An [`Input`] being recorded.
+pub struct Sound {
+    input: Input,
     wav: PathBuf,
     sink: SharedSink,
     capture: Option<platform::Capture>,
 }
 
-impl Microphone {
-    /// Starts recording `device` (a [`MicrophoneInfo::id`]), or the
-    /// system's default microphone when None. On Linux `ffmpeg` reads it.
-    pub fn start(ffmpeg: &Path, device: Option<&str>) -> Result<Self, String> {
-        let wav = scratch_wav();
-        match platform::Capture::start(ffmpeg, device, &wav) {
+impl Sound {
+    /// Starts recording `input`. On Linux `ffmpeg` reads it.
+    pub fn start(ffmpeg: &Path, input: Input) -> Result<Self, String> {
+        let wav = scratch_wav(input.tag());
+        match platform::Capture::start(ffmpeg, &input, &wav) {
             Ok((capture, sink)) => Ok(Self {
+                input,
                 wav,
                 sink,
                 capture: Some(capture),
@@ -368,6 +600,11 @@ impl Microphone {
         }
     }
 
+    /// What it records, as the card calls it.
+    pub fn what(&self) -> &'static str {
+        self.input.what()
+    }
+
     /// Stops recording. Returns the sound, or an error saying why there is
     /// none.
     pub fn stop(mut self) -> Result<Captured, String> {
@@ -375,9 +612,10 @@ impl Microphone {
             Some(capture) => capture.stop(),
             None => None,
         };
-        let (finished, channels, sample_rate) = {
+        let (finished, channels, sample_rate, holes) = {
             let mut sink = lock(&self.sink);
-            (sink.finish(), sink.channels, sink.sample_rate)
+            let holes = std::mem::take(&mut sink.holes);
+            (sink.finish(), sink.channels, sink.sample_rate, holes)
         };
         // From here the WAV is the result's to delete.
         let wav = std::mem::take(&mut self.wav);
@@ -387,10 +625,11 @@ impl Microphone {
                 first_sample,
                 channels,
                 sample_rate,
+                holes,
             }),
             Ok(None) => {
                 let _ = std::fs::remove_file(&wav);
-                Err(said.unwrap_or_else(|| "the microphone sent no sound".to_owned()))
+                Err(said.unwrap_or_else(|| self.input.silent().to_owned()))
             }
             Err(err) => {
                 let _ = std::fs::remove_file(&wav);
@@ -400,7 +639,7 @@ impl Microphone {
     }
 }
 
-impl Drop for Microphone {
+impl Drop for Sound {
     fn drop(&mut self) {
         if let Some(capture) = self.capture.take() {
             capture.stop();
@@ -462,17 +701,32 @@ pub fn parse_pulse_sources(text: &str) -> Vec<MicrophoneInfo> {
 /// The PulseAudio source ffmpeg records on Linux.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub const PULSE_RATE: u32 = 48_000;
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub const PULSE_CHANNELS: u16 = 1;
 
-/// ffmpeg's arguments to record the Pulse source `device` (its default
-/// source when None) and write raw 16-bit samples to stdout.
+/// The Pulse source `input` is read from, and its channels: the chosen
+/// microphone (the default source when None) in mono, or the default
+/// output's monitor, which hears what it plays, in stereo.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub fn pulse_capture_args(device: Option<&str>) -> Vec<std::ffi::OsString> {
+pub fn pulse_source(input: &Input) -> (&str, u16) {
+    match input {
+        Input::Microphone(device) => (
+            device
+                .as_deref()
+                .filter(|device| !device.is_empty())
+                .unwrap_or("default"),
+            1,
+        ),
+        Input::System => ("@DEFAULT_MONITOR@", 2),
+    }
+}
+
+/// ffmpeg's arguments to record the Pulse source `source` in `channels`
+/// and write raw 16-bit samples to stdout.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn pulse_capture_args(source: &str, channels: u16) -> Vec<std::ffi::OsString> {
     let rate = PULSE_RATE.to_string();
-    let channels = PULSE_CHANNELS.to_string();
     // 20 ms of sound a read, so the first sample's time is close.
-    let fragment = (PULSE_RATE / 50 * u32::from(PULSE_CHANNELS) * 2).to_string();
+    let fragment = (PULSE_RATE / 50 * u32::from(channels) * 2).to_string();
+    let channels = channels.to_string();
     [
         "-hide_banner",
         "-loglevel",
@@ -487,9 +741,7 @@ pub fn pulse_capture_args(device: Option<&str>) -> Vec<std::ffi::OsString> {
         "-fragment_size",
         fragment.as_str(),
         "-i",
-        device
-            .filter(|device| !device.is_empty())
-            .unwrap_or("default"),
+        source,
         "-f",
         "s16le",
         "pipe:1",
@@ -510,29 +762,32 @@ mod platform {
     };
 
     use super::{
-        MicrophoneInfo, PULSE_CHANNELS, PULSE_RATE, SharedSink, Sink, lock, parse_pulse_sources,
-        pulse_capture_args,
+        Input, MicrophoneInfo, PULSE_RATE, SharedSink, Sink, lock, parse_pulse_sources,
+        pulse_capture_args, pulse_source,
     };
 
     /// How long ffmpeg gets to exit once told to.
     const EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 
-    /// ffmpeg reading the microphone, and the thread writing what it reads.
+    /// ffmpeg reading the microphone or the system sound, and the thread
+    /// writing what it reads.
     pub struct Capture {
         child: Child,
         reader: Option<JoinHandle<()>>,
         stderr: Option<JoinHandle<String>>,
+        what: &'static str,
     }
 
     impl Capture {
         pub fn start(
             ffmpeg: &Path,
-            device: Option<&str>,
+            input: &Input,
             wav: &Path,
         ) -> Result<(Self, SharedSink), String> {
-            let sink = Sink::create(wav, PULSE_CHANNELS, PULSE_RATE)?;
+            let (source, channels) = pulse_source(input);
+            let sink = Sink::create(wav, channels, PULSE_RATE, input.fills_gaps())?;
             let mut child = crate::ffmpeg::command(ffmpeg)
-                .args(pulse_capture_args(device))
+                .args(pulse_capture_args(source, channels))
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -578,6 +833,7 @@ mod platform {
                     child,
                     reader,
                     stderr,
+                    what: input.what(),
                 },
                 sink,
             ))
@@ -598,10 +854,11 @@ mod platform {
                 .take()
                 .and_then(|reader| reader.join().ok())
                 .unwrap_or_default();
+            let what = self.what;
             exited_early.then(|| {
                 crate::ffmpeg::last_line(&said)
-                    .map(|line| format!("ffmpeg could not record the microphone: {line}"))
-                    .unwrap_or_else(|| "ffmpeg could not record the microphone".to_owned())
+                    .map(|line| format!("ffmpeg could not record {what}: {line}"))
+                    .unwrap_or_else(|| format!("ffmpeg could not record {what}"))
             })
         }
     }
@@ -631,13 +888,20 @@ mod platform {
     };
 
     use cpal::{
-        Data, InputCallbackInfo, SampleFormat,
+        Data, InputCallbackInfo, SampleFormat, SupportedStreamConfig,
         traits::{DeviceTrait, HostTrait, StreamTrait},
     };
 
-    use super::{MicrophoneInfo, START_TIMEOUT, SharedSink, Sink, lock};
+    use super::{Input, MicrophoneInfo, START_TIMEOUT, SharedSink, Sink, lock};
 
-    /// The thread holding the cpal stream, which is not `Send` everywhere.
+    /// What keeps the sound coming until it is dropped.
+    enum Held {
+        Cpal(#[allow(dead_code)] cpal::Stream),
+        #[cfg(target_os = "macos")]
+        Screen(#[allow(dead_code)] super::system_mac::Stream),
+    }
+
+    /// The thread holding the stream, which is not `Send` everywhere.
     pub struct Capture {
         stop: mpsc::Sender<()>,
         thread: Option<JoinHandle<()>>,
@@ -646,16 +910,17 @@ mod platform {
     impl Capture {
         pub fn start(
             _ffmpeg: &Path,
-            device: Option<&str>,
+            input: &Input,
             wav: &Path,
         ) -> Result<(Self, SharedSink), String> {
             let (ready_tx, ready_rx) = mpsc::channel::<Result<SharedSink, String>>();
             let (stop_tx, stop_rx) = mpsc::channel::<()>();
-            let device = device.map(str::to_owned);
+            let what = input.what();
+            let input = input.clone();
             let wav = wav.to_owned();
             let thread = thread::Builder::new()
-                .name("grab-it-microphone".into())
-                .spawn(move || match open(device.as_deref(), &wav) {
+                .name(format!("grab-it-{}", input.tag()))
+                .spawn(move || match open(&input, &wav) {
                     Ok((stream, sink)) => {
                         let _ = ready_tx.send(Ok(sink));
                         // Until stopped, or until the recording is dropped.
@@ -666,7 +931,7 @@ mod platform {
                         let _ = ready_tx.send(Err(err));
                     }
                 })
-                .map_err(|err| format!("could not start the microphone: {err}"))?;
+                .map_err(|err| format!("could not start {what}: {err}"))?;
             let capture = Self {
                 stop: stop_tx,
                 thread: Some(thread),
@@ -674,7 +939,7 @@ mod platform {
             match ready_rx.recv_timeout(START_TIMEOUT) {
                 Ok(Ok(sink)) => Ok((capture, sink)),
                 Ok(Err(err)) => Err(err),
-                Err(_) => Err("the microphone did not start".to_owned()),
+                Err(_) => Err(format!("{what} did not start")),
             }
         }
 
@@ -687,9 +952,39 @@ mod platform {
         }
     }
 
+    /// Opens `input` and starts it into a WAV at `wav`.
+    fn open(input: &Input, wav: &Path) -> Result<(Held, SharedSink), String> {
+        match input {
+            Input::Microphone(name) => open_microphone(name.as_deref(), wav)
+                .map(|(stream, sink)| (Held::Cpal(stream), sink)),
+            #[cfg(target_os = "windows")]
+            Input::System => open_loopback(wav).map(|(stream, sink)| (Held::Cpal(stream), sink)),
+            #[cfg(target_os = "macos")]
+            Input::System => super::system_mac::Stream::start(wav)
+                .map(|(stream, sink)| (Held::Screen(stream), sink)),
+        }
+    }
+
+    /// Opens the default output device for WASAPI loopback, which hears
+    /// what it plays, and starts it into a WAV at `wav`: cpal records an
+    /// output device that is opened for input that way.
+    #[cfg(target_os = "windows")]
+    fn open_loopback(wav: &Path) -> Result<(cpal::Stream, SharedSink), String> {
+        let device = cpal::default_host()
+            .default_output_device()
+            .ok_or("there is no sound output")?;
+        let supported = device
+            .default_output_config()
+            .map_err(|err| format!("could not use the sound output: {err}"))?;
+        start_stream(&device, supported, wav, &Input::System)
+    }
+
     /// Opens `name`, or the default microphone, and starts it into a WAV
     /// at `wav`.
-    fn open(name: Option<&str>, wav: &Path) -> Result<(cpal::Stream, SharedSink), String> {
+    fn open_microphone(
+        name: Option<&str>,
+        wav: &Path,
+    ) -> Result<(cpal::Stream, SharedSink), String> {
         let host = cpal::default_host();
         let named = name.and_then(|name| {
             let found = host
@@ -707,6 +1002,18 @@ mod platform {
         let supported = device
             .default_input_config()
             .map_err(|err| format!("could not use the microphone: {err}"))?;
+        start_stream(&device, supported, wav, &Input::Microphone(None))
+    }
+
+    /// Starts `device` as an input stream in `supported` into a WAV at
+    /// `wav`. `input` says what it is.
+    fn start_stream(
+        device: &cpal::Device,
+        supported: SupportedStreamConfig,
+        wav: &Path,
+        input: &Input,
+    ) -> Result<(cpal::Stream, SharedSink), String> {
+        let what = input.what();
         let format = supported.sample_format();
         if !matches!(
             format,
@@ -718,13 +1025,13 @@ mod platform {
                 | SampleFormat::U8
                 | SampleFormat::U16
         ) {
-            return Err(format!("the microphone sends {format} samples"));
+            return Err(format!("{what} sends {format} samples"));
         }
         let config = supported.config();
         let channels = usize::from(config.channels.max(1));
         // More than two channels (an audio interface, say) keeps the first two.
         let kept = channels.min(2);
-        let sink = Sink::create(wav, kept as u16, config.sample_rate)?;
+        let sink = Sink::create(wav, kept as u16, config.sample_rate, input.fills_gaps())?;
         let writer = SharedSink::clone(&sink);
         let stream = device
             .build_input_stream_raw(
@@ -743,13 +1050,13 @@ mod platform {
                     };
                     lock(&writer).push(&samples, at);
                 },
-                |err| eprintln!("Grab-it: the microphone failed: {err}"),
+                move |err| eprintln!("Grab-it: {what} failed: {err}"),
                 None,
             )
-            .map_err(|err| format!("could not open the microphone: {err}"))?;
+            .map_err(|err| format!("could not open {what}: {err}"))?;
         stream
             .play()
-            .map_err(|err| format!("could not start the microphone: {err}"))?;
+            .map_err(|err| format!("could not start {what}: {err}"))?;
         Ok((stream, sink))
     }
 
@@ -803,22 +1110,22 @@ mod platform {
     }
 }
 
-/// Elsewhere there is no microphone to record.
+/// Elsewhere there is no sound to record.
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod platform {
     use std::path::Path;
 
-    use super::{MicrophoneInfo, SharedSink};
+    use super::{Input, MicrophoneInfo, SharedSink};
 
     pub struct Capture;
 
     impl Capture {
         pub fn start(
             _ffmpeg: &Path,
-            _device: Option<&str>,
+            input: &Input,
             _wav: &Path,
         ) -> Result<(Self, SharedSink), String> {
-            Err("recording a microphone is not supported here".to_owned())
+            Err(format!("recording {} is not supported here", input.what()))
         }
 
         pub fn stop(self) -> Option<String> {
@@ -889,7 +1196,7 @@ mod tests {
     fn the_sink_notes_when_its_first_sample_was_heard() {
         let dir = tempfile::tempdir().unwrap();
         let wav = dir.path().join("mic.wav");
-        let sink = Sink::create(&wav, 1, 1000).unwrap();
+        let sink = Sink::create(&wav, 1, 1000, false).unwrap();
         let at = Instant::now() + Duration::from_secs(1);
         lock(&sink).push(&[], at);
         lock(&sink).push(&[1; 100], at);
@@ -939,6 +1246,7 @@ mod tests {
             first_sample: Instant::now(),
             channels: 2,
             sample_rate: 10,
+            holes: Vec::new(),
         };
         let gap = Gap {
             start: Duration::from_millis(500),
@@ -991,6 +1299,7 @@ mod tests {
             first_sample: Instant::now(),
             channels: 1,
             sample_rate: 100,
+            holes: Vec::new(),
         };
         let ms = Duration::from_millis;
         let gap = |start, length| Gap {
@@ -1059,20 +1368,157 @@ mod tests {
 
     #[test]
     fn pulse_is_read_as_raw_samples_on_stdout() {
-        let args = |device| {
-            pulse_capture_args(device)
+        let args = |input: Input| {
+            let (source, channels) = pulse_source(&input);
+            pulse_capture_args(source, channels)
                 .into_iter()
                 .map(|arg| arg.into_string().unwrap())
                 .collect::<Vec<_>>()
                 .join(" ")
         };
+        let microphone = |device: Option<&str>| Input::Microphone(device.map(str::to_owned));
         assert_eq!(
-            args(Some("alsa_input.usb")),
+            args(microphone(Some("alsa_input.usb"))),
             "-hide_banner -loglevel error -nostdin -f pulse -sample_rate 48000 -channels 1 \
              -fragment_size 1920 -i alsa_input.usb -f s16le pipe:1"
         );
-        assert!(args(None).contains("-i default -f s16le"));
-        assert!(args(Some("")).contains("-i default -f s16le"));
+        assert!(args(microphone(None)).contains("-i default -f s16le"));
+        assert!(args(microphone(Some(""))).contains("-i default -f s16le"));
+        // The system sound is the default output's monitor, in stereo.
+        assert_eq!(
+            args(Input::System),
+            "-hide_banner -loglevel error -nostdin -f pulse -sample_rate 48000 -channels 2 \
+             -fragment_size 3840 -i @DEFAULT_MONITOR@ -f s16le pipe:1"
+        );
+    }
+
+    #[test]
+    fn system_sound_is_offered_on_windows_linux_and_macos_13() {
+        // macOS before 13 has no ScreenCaptureKit sound; the CI runners
+        // are newer.
+        let expected = cfg!(any(
+            target_os = "linux",
+            target_os = "windows",
+            target_os = "macos"
+        ));
+        assert_eq!(system_available(), expected);
+        assert_eq!(recording_system_audio(), expected);
+    }
+
+    #[test]
+    fn each_input_says_what_it_is_and_names_its_wav() {
+        let microphone = Input::Microphone(Some("Mic".into()));
+        assert_eq!(microphone.what(), "the microphone");
+        assert_eq!(Input::System.what(), "the system sound");
+        assert!(!microphone.fills_gaps());
+        assert!(Input::System.fills_gaps());
+        let wav = scratch_wav(Input::System.tag());
+        let name = wav.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("grab-it-system-"), "{name}");
+        assert!(name.ends_with(".wav"), "{name}");
+    }
+
+    #[test]
+    fn a_late_chunk_of_system_sound_is_preceded_by_silence() {
+        let first = Instant::now() + Duration::from_secs(1);
+        let ms = Duration::from_millis;
+        // 1000 frames at 1 kHz is a second: a chunk heard then is on time.
+        assert_eq!(missing_frames(first, 1000, 1000, first + ms(1000)), 0);
+        // Late by no more than the allowance: chunks arrive in bursts.
+        assert_eq!(missing_frames(first, 1000, 1000, first + ms(1100)), 0);
+        // Early: nothing is missing.
+        assert_eq!(missing_frames(first, 1000, 1000, first + ms(500)), 0);
+        // Nothing played for 2.5 s.
+        assert_eq!(missing_frames(first, 1000, 1000, first + ms(3500)), 2500);
+
+        let dir = tempfile::tempdir().unwrap();
+        // The sound of a sink pushed `chunks`, cut to the video's `gaps`.
+        let record = |name: &str, chunks: &[(i16, Duration)], gaps: &[Gap]| {
+            let wav = dir.path().join(name);
+            let sink = Sink::create(&wav, 2, 1000, true).unwrap();
+            for &(value, at) in chunks {
+                lock(&sink).push(&[value; 200], first + at);
+            }
+            let mut sink = lock(&sink);
+            assert_eq!(sink.finish().unwrap(), Some(first));
+            // The silence is not written while recording.
+            assert_eq!(
+                fs::metadata(&wav).unwrap().len(),
+                44 + 400 * chunks.len() as u64
+            );
+            let sound = Captured {
+                wav: wav.clone(),
+                first_sample: first,
+                channels: 2,
+                sample_rate: 1000,
+                holes: std::mem::take(&mut sink.holes),
+            };
+            sound.cut(gaps, 0.0).unwrap();
+            let bytes = fs::read(&wav).unwrap();
+            bytes[44..]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| i16::from_le_bytes(*pair))
+                .collect::<Vec<i16>>()
+        };
+        // 100 stereo frames, then the next 100 half a second late: 100
+        // frames, 500 of silence, then 100 more.
+        let samples = record("system.wav", &[(1, ms(100)), (2, ms(700))], &[]);
+        assert_eq!(samples.len(), (100 + 500 + 100) * 2);
+        assert!(samples[..200].iter().all(|&s| s == 1));
+        assert!(samples[200..1200].iter().all(|&s| s == 0));
+        assert!(samples[1200..].iter().all(|&s| s == 2));
+
+        // The computer slept for an hour, and the video skipped all but a
+        // second of it: only that second of silence is ever written.
+        let hour = Duration::from_secs(3600);
+        let slept = Gap {
+            start: ms(500),
+            length: hour - ms(1000),
+        };
+        let samples = record("slept.wav", &[(1, ms(100)), (2, hour + ms(100))], &[slept]);
+        // 100 frames, 400 + 500 of silence either side of the gap, 100 more.
+        assert_eq!(samples.len(), (100 + 900 + 100) * 2);
+        assert!(samples[..200].iter().all(|&s| s == 1));
+        assert!(samples[200..2000].iter().all(|&s| s == 0));
+        assert!(samples[2000..].iter().all(|&s| s == 2));
+
+        // The microphone is never padded.
+        let wav = dir.path().join("mic.wav");
+        let sink = Sink::create(&wav, 2, 1000, false).unwrap();
+        lock(&sink).push(&[1; 200], first + ms(100));
+        lock(&sink).push(&[2; 200], first + ms(700));
+        lock(&sink).finish().unwrap();
+        assert_eq!(fs::metadata(&wav).unwrap().len(), 44 + 800);
+    }
+
+    #[test]
+    fn screen_capture_kit_planes_are_interleaved_as_16_bit_stereo() {
+        let left: &[f32] = &[0.0, 0.5, -1.0];
+        let right: &[f32] = &[1.0, -0.5, 2.0];
+        // Two planes of one channel: ScreenCaptureKit's own layout.
+        assert_eq!(
+            interleave_planes(&[(left, 1), (right, 1)], 2),
+            vec![0, 32767, 16383, -16383, -32767, 32767]
+        );
+        // One plane of two channels already interleaved.
+        let both: &[f32] = &[0.0, 1.0, 0.5, -0.5];
+        assert_eq!(
+            interleave_planes(&[(both, 2)], 2),
+            vec![0, 32767, 16383, -16383]
+        );
+        // One mono plane is repeated on both sides.
+        assert_eq!(
+            interleave_planes(&[(&left[..2], 1)], 2),
+            vec![0, 0, 16383, 16383]
+        );
+        // Planes of different lengths stop at the shortest.
+        assert_eq!(
+            interleave_planes(&[(left, 1), (&right[..1], 1)], 2),
+            vec![0, 32767]
+        );
+        assert_eq!(interleave_planes(&[], 2), Vec::<i16>::new());
     }
 
     #[test]
