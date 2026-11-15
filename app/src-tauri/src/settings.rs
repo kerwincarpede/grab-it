@@ -1716,6 +1716,7 @@ mod tests {
                 "camera": null,
                 "webcamShape": "round",
                 "countdown": 0,
+                "source": "region",
             })
         );
         assert_eq!(json["showInDock"], false);
