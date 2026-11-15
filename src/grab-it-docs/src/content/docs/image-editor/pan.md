@@ -9,7 +9,7 @@ sidebar:
 
 With Pan, dragging moves the whole view, so you can get around a screenshot you've zoomed into. Nothing you've drawn moves.
 
-![Pan moving a zoomed-in screenshot around.](../../../assets/image-editor/pan.png)
+![The editor at its normal fit zoom, with the view panned left and up past the edge of the screenshot.](../../../assets/image-editor/pan.png)
 
 You rarely need to pick it: **hold `Space`** with any tool and drag to pan, then let go of `Space` to carry on drawing.
 
