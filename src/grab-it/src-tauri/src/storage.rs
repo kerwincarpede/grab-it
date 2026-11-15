@@ -12,10 +12,10 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::{SettingsState, lock};
@@ -40,7 +40,7 @@ const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
 
 /// How many items of one kind the library holds and their total size.
 /// Mirrors `KindUsage` in src/library/api.ts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KindUsage {
     pub count: u32,
@@ -236,49 +236,60 @@ pub fn remove_files(files: &[PathBuf], removal: Removal) -> io::Result<()> {
     Ok(())
 }
 
-/// Lets one cleanup run at a time.
+/// Lets one cleanup run at a time, and lets Stop end the one running.
+/// Whether one runs and whether it was asked to stop change together under
+/// one lock, so a Stop that comes as a run ends cannot outlive it and cut
+/// the next one short.
 #[derive(Debug, Default)]
-pub struct CleanupLock(AtomicBool);
+pub struct CleanupLock(Mutex<RunState>);
+
+#[derive(Debug, Default)]
+struct RunState {
+    running: bool,
+    stop: bool,
+}
 
 impl CleanupLock {
+    fn state(&self) -> MutexGuard<'_, RunState> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// `None` while another cleanup runs.
     fn try_begin(&self) -> Option<CleanupGuard<'_>> {
-        self.0
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .ok()
-            .map(|_| CleanupGuard(&self.0))
-    }
-
-    fn is_running(&self) -> bool {
-        self.0.load(Ordering::Acquire)
-    }
-}
-
-/// Asks the running cleanup to stop before its next item.
-#[derive(Debug, Default)]
-pub struct CleanupStop(AtomicBool);
-
-impl CleanupStop {
-    /// Stops the cleanup `running` holds; does nothing when none runs, so a
-    /// late Stop cannot cut the next cleanup short.
-    pub fn request(&self, running: &CleanupLock) -> bool {
-        let asked = running.is_running();
-        if asked {
-            self.0.store(true, Ordering::Release);
+        let mut state = self.state();
+        if state.running {
+            return None;
         }
-        asked
+        *state = RunState {
+            running: true,
+            stop: false,
+        };
+        Some(CleanupGuard(self))
     }
 
-    fn clear(&self) {
-        self.0.store(false, Ordering::Release);
+    /// Asks the running cleanup to stop before its next item. Does nothing,
+    /// and says so, when none runs.
+    pub fn request_stop(&self) -> bool {
+        let mut state = self.state();
+        state.stop = state.running;
+        state.running
+    }
+
+    fn stop_requested(&self) -> bool {
+        self.state().stop
+    }
+
+    #[cfg(test)]
+    fn is_running(&self) -> bool {
+        self.state().running
     }
 }
 
-struct CleanupGuard<'a>(&'a AtomicBool);
+struct CleanupGuard<'a>(&'a CleanupLock);
 
 impl Drop for CleanupGuard<'_> {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
+        *self.0.state() = RunState::default();
     }
 }
 
@@ -286,6 +297,9 @@ impl Drop for CleanupGuard<'_> {
 pub enum CleanupError {
     /// Another cleanup is running.
     Busy,
+    /// More is due than the user confirmed removing, as when a Keep setting
+    /// was shortened or items aged past it since the Clean up dialog looked.
+    MoreDue(KindUsage),
     Library(LibraryError),
 }
 
@@ -293,6 +307,12 @@ impl std::fmt::Display for CleanupError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Busy => f.write_str("a cleanup is already running"),
+            Self::MoreDue(due) => write!(
+                f,
+                "More is due now than when you confirmed: {} {}. Check what Clean up removes and confirm again.",
+                due.count,
+                if due.count == 1 { "item" } else { "items" }
+            ),
             Self::Library(err) => write!(f, "{err}"),
         }
     }
@@ -305,8 +325,9 @@ impl From<LibraryError> for CleanupError {
 }
 
 /// Removes the items [`due`] finds at `now_ms`, oldest first, with
-/// `remove`, telling `progress` after each one. Stops before the next item
-/// once `stop` is set. An item starred, tagged or edited since the list was
+/// `remove`, telling `progress` after each one. Removes nothing when more
+/// is due than `confirmed`, when given: what the user agreed to remove.
+/// Stops before the next item once [`CleanupLock::request_stop`] asks. An item starred, tagged or edited since the list was
 /// made is spared, and one whose file cannot be removed stays in the
 /// library. The library is locked one item at a time, so the windows keep
 /// working while it runs.
@@ -319,14 +340,23 @@ pub fn cleanup(
     now_ms: i64,
     remove: &RemoveFiles<'_>,
     progress: &mut dyn FnMut(Progress),
-    stop: &AtomicBool,
+    confirmed: Option<KindUsage>,
 ) -> Result<Cleaned, CleanupError> {
     let _guard = running.try_begin().ok_or(CleanupError::Busy)?;
     let items = due(&library.lock(), retention, now_ms)?;
     let total = items.len() as u32;
+    if let Some(confirmed) = confirmed {
+        let found = KindUsage {
+            count: total,
+            bytes: items.iter().map(|item| item.bytes.unwrap_or(0)).sum(),
+        };
+        if found.count > confirmed.count || found.bytes > confirmed.bytes {
+            return Err(CleanupError::MoreDue(found));
+        }
+    }
     let mut cleaned = Cleaned::default();
     for (index, item) in items.into_iter().enumerate() {
-        if stop.load(Ordering::Acquire) {
+        if running.stop_requested() {
             break;
         }
         let shot = match library.lock().get(item.id) {
@@ -370,41 +400,10 @@ pub fn cleanup(
     Ok(cleaned)
 }
 
-/// Runs [`cleanup`] with `stop`, telling `on_progress` after each item.
-/// A stop asked for during the run is cleared once it ends, so the next one
-/// runs in full; a cleanup turned away as busy leaves it for the one running.
-#[allow(clippy::too_many_arguments)]
-pub fn run_cleanup(
-    running: &CleanupLock,
-    stop: &CleanupStop,
-    library: &LibraryState,
-    retention: &Retention,
-    removal: Removal,
-    now_ms: i64,
-    remove: &RemoveFiles<'_>,
-    on_progress: &mut dyn FnMut(Progress),
-) -> Result<Cleaned, CleanupError> {
-    let result = cleanup(
-        running,
-        library,
-        retention,
-        removal,
-        now_ms,
-        remove,
-        on_progress,
-        &stop.0,
-    );
-    if !matches!(result, Err(CleanupError::Busy)) {
-        stop.clear();
-    }
-    result
-}
-
 /// Rescans the save folder, then cleans up, and again whenever a day has
 /// passed since, on a thread of its own.
 pub fn start(app: &AppHandle, save_folder: PathBuf) {
     app.manage(CleanupLock::default());
-    app.manage(CleanupStop::default());
     let app = app.clone();
     let spawned = std::thread::Builder::new()
         .name("grab-it-cleanup".into())
@@ -432,7 +431,7 @@ pub fn clean_up_automatically(app: &AppHandle) {
     if retention.image.is_none() && retention.gif.is_none() && retention.video.is_none() {
         return;
     }
-    match clean_up(app, &retention, retention.removal) {
+    match clean_up(app, &retention, retention.removal, None) {
         Ok(cleaned) if cleaned.count > 0 => {
             let _ = app.emit(LIBRARY_CLEANED_EVENT, cleaned);
         }
@@ -447,10 +446,10 @@ fn clean_up(
     app: &AppHandle,
     retention: &Retention,
     removal: Removal,
+    confirmed: Option<KindUsage>,
 ) -> Result<Cleaned, CleanupError> {
-    let (Some(running), Some(stop), Some(library)) = (
+    let (Some(running), Some(library)) = (
         app.try_state::<CleanupLock>(),
-        app.try_state::<CleanupStop>(),
         app.try_state::<LibraryState>(),
     ) else {
         return Ok(Cleaned::default());
@@ -465,9 +464,8 @@ fn clean_up(
         }
         remove_files(files, removal)
     };
-    let result = run_cleanup(
+    let result = cleanup(
         &running,
-        &stop,
         &library,
         retention,
         removal,
@@ -476,9 +474,14 @@ fn clean_up(
         &mut |progress| {
             let _ = app.emit(CLEANUP_PROGRESS_EVENT, progress);
         },
+        confirmed,
     );
     match &result {
         Err(CleanupError::Busy) => {}
+        // Nothing was removed; the dialog asks again.
+        Err(CleanupError::MoreDue(_)) => {
+            let _ = app.emit(CLEANUP_DONE_EVENT, Cleaned::default());
+        }
         Ok(cleaned) => {
             let _ = app.emit(CLEANUP_DONE_EVENT, cleaned);
             if cleaned.count > 0 {
@@ -495,13 +498,19 @@ fn clean_up(
 }
 
 /// Removes what the saved Keep settings say is due, to the Trash or for
-/// good as the Clean up dialog chose, on a worker thread. Resolves to what
+/// good as the Clean up dialog chose, on a worker thread. `confirmed` is
+/// what the dialog showed and the user agreed to; when more is due now it
+/// removes nothing and fails, so the dialog can ask again. Resolves to what
 /// went once it is done or stopped; fails while another cleanup runs.
 #[tauri::command]
-pub async fn library_clean_up(removal: Removal, app: AppHandle) -> Result<Cleaned, String> {
+pub async fn library_clean_up(
+    removal: Removal,
+    confirmed: KindUsage,
+    app: AppHandle,
+) -> Result<Cleaned, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let retention = lock(&app.state::<SettingsState>()).get().retention;
-        clean_up(&app, &retention, removal)
+        clean_up(&app, &retention, removal, Some(confirmed))
     })
     .await
     .map_err(|err| err.to_string())?
@@ -512,11 +521,8 @@ pub async fn library_clean_up(removal: Removal, app: AppHandle) -> Result<Cleane
 /// next item. Does nothing when none runs.
 #[tauri::command]
 pub fn library_stop_clean_up(app: AppHandle) {
-    if let (Some(running), Some(stop)) = (
-        app.try_state::<CleanupLock>(),
-        app.try_state::<CleanupStop>(),
-    ) {
-        stop.request(&running);
+    if let Some(running) = app.try_state::<CleanupLock>() {
+        running.request_stop();
     }
 }
 
@@ -831,7 +837,7 @@ mod tests {
             NOW,
             &remove,
             &mut |progress| seen.push(progress),
-            &AtomicBool::new(false),
+            None,
         )
         .unwrap();
         (cleaned, calls.into_inner().unwrap(), seen)
@@ -929,7 +935,7 @@ mod tests {
             NOW,
             &refuse,
             &mut |_| {},
-            &AtomicBool::new(false),
+            None,
         )
         .unwrap();
         assert_eq!(cleaned, Cleaned::default());
@@ -959,7 +965,7 @@ mod tests {
             NOW,
             &remove,
             &mut |_| {},
-            &AtomicBool::new(false),
+            None,
         )
         .unwrap();
         assert_eq!(cleaned.count, 1);
@@ -975,10 +981,10 @@ mod tests {
             aged(&mut library, dir.path(), ShotKind::Image, name, 60);
         }
         let state = LibraryState::new(library);
-        let stop = AtomicBool::new(false);
+        let running = CleanupLock::default();
         let mut seen = Vec::new();
         let cleaned = cleanup(
-            &CleanupLock::default(),
+            &running,
             &state,
             &keep(Some(30), None, None),
             Removal::Permanent,
@@ -986,9 +992,9 @@ mod tests {
             &remove_files,
             &mut |progress| {
                 seen.push(progress);
-                stop.store(true, Ordering::Release);
+                assert!(running.request_stop(), "a running cleanup can be stopped");
             },
-            &stop,
+            None,
         )
         .unwrap();
         assert_eq!(cleaned.count, 1);
@@ -1011,7 +1017,7 @@ mod tests {
             NOW,
             &remove_files,
             &mut |_| {},
-            &AtomicBool::new(false),
+            None,
         );
         assert!(matches!(busy, Err(CleanupError::Busy)));
         drop(held);
@@ -1025,7 +1031,7 @@ mod tests {
                 NOW,
                 &remove_files,
                 &mut |_| {},
-                &AtomicBool::new(false),
+                None,
             )
             .is_ok()
         );
@@ -1046,16 +1052,16 @@ mod tests {
             }
             remove_files(files, removal)
         };
-        let seen = std::sync::Mutex::new(Vec::new());
-        let cleaned = run_cleanup(
+        let mut seen = Vec::new();
+        let cleaned = cleanup(
             &CleanupLock::default(),
-            &CleanupStop::default(),
             &state,
             &keep(Some(30), Some(30), None),
             Removal::Permanent,
             NOW,
             &remove,
-            &mut |progress| seen.lock().unwrap().push(progress),
+            &mut |progress| seen.push(progress),
+            None,
         )
         .unwrap();
 
@@ -1067,7 +1073,7 @@ mod tests {
             }
         );
         assert_eq!(
-            seen.into_inner().unwrap(),
+            seen,
             vec![
                 Progress {
                     done: 1,
@@ -1110,7 +1116,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_asked_for_mid_run_ends_it_and_is_then_cleared() {
+    fn a_stop_asked_for_mid_run_ends_only_that_run() {
         let dir = TempDir::new().unwrap();
         let mut library = Library::open_in_memory().unwrap();
         for name in ["a.png", "b.png", "c.png", "d.png"] {
@@ -1118,48 +1124,44 @@ mod tests {
         }
         let state = LibraryState::new(library);
         let running = CleanupLock::default();
-        let stop = CleanupStop::default();
-        let seen = std::sync::Mutex::new(Vec::new());
+        let mut seen = Vec::new();
         // Stop is pressed while the second item is removed, as
         // `library_stop_clean_up` does.
-        let cleaned = run_cleanup(
+        let removed = std::sync::atomic::AtomicU32::new(0);
+        let cleaned = cleanup(
             &running,
-            &stop,
             &state,
             &keep(Some(30), None, None),
             Removal::Trash,
             NOW,
             &|files: &[PathBuf], _: Removal| {
-                if seen.lock().unwrap().len() == 1 {
-                    assert!(stop.request(&running), "a running cleanup can be stopped");
+                if removed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 1 {
+                    assert!(running.request_stop(), "a running cleanup can be stopped");
                 }
                 remove_files(files, Removal::Permanent)
             },
-            &mut |progress| seen.lock().unwrap().push(progress),
+            &mut |progress| seen.push(progress),
+            None,
         )
         .unwrap();
 
         assert_eq!(cleaned.count, 2);
-        let seen = seen.into_inner().unwrap();
         assert_eq!(seen.len(), 2);
         assert_eq!(seen[1].done, 2);
         assert_eq!(seen[1].total, 4);
         assert_eq!(state.lock().count().unwrap(), 2);
-        assert!(
-            !stop.0.load(Ordering::Acquire),
-            "the stop is cleared once it ends"
-        );
+        assert!(!running.stop_requested(), "the stop ends with its run");
 
         // The next cleanup removes the rest.
-        let rest = run_cleanup(
+        let rest = cleanup(
             &running,
-            &stop,
             &state,
             &keep(Some(30), None, None),
             Removal::Permanent,
             NOW,
             &remove_files,
             &mut |_| {},
+            None,
         )
         .unwrap();
         assert_eq!(rest.count, 2);
@@ -1167,32 +1169,124 @@ mod tests {
     }
 
     #[test]
-    fn stop_does_nothing_when_no_cleanup_runs() {
+    fn a_stop_that_comes_after_a_run_ends_is_dropped() {
+        let dir = TempDir::new().unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        for name in ["a.png", "b.png"] {
+            aged(&mut library, dir.path(), ShotKind::Image, name, 60);
+        }
+        let state = LibraryState::new(library);
         let running = CleanupLock::default();
-        let stop = CleanupStop::default();
-        assert!(!stop.request(&running));
-        assert!(!stop.0.load(Ordering::Acquire));
+        // Stop pressed just after the last run ended, or while none runs.
+        assert!(!running.request_stop());
+        assert!(!running.stop_requested());
+
+        let cleaned = cleanup(
+            &running,
+            &state,
+            &keep(Some(30), None, None),
+            Removal::Permanent,
+            NOW,
+            &remove_files,
+            &mut |_| {},
+            None,
+        )
+        .unwrap();
+        assert_eq!(cleaned.count, 2, "the next run is not cut short");
+    }
+
+    #[test]
+    fn a_stop_left_from_an_earlier_run_is_cleared_when_the_next_begins() {
+        let running = CleanupLock::default();
+        {
+            let _first = running.try_begin().expect("the first cleanup starts");
+            assert!(running.request_stop());
+        }
+        assert!(!running.stop_requested());
+        let _second = running.try_begin().expect("the second cleanup starts");
+        assert!(!running.stop_requested());
+        // A stop asked of the second run is its own.
+        assert!(running.request_stop());
+        assert!(running.stop_requested());
     }
 
     #[test]
     fn a_busy_cleanup_leaves_the_stop_for_the_one_running() {
         let state = LibraryState::new(Library::open_in_memory().unwrap());
         let running = CleanupLock::default();
-        let stop = CleanupStop::default();
         let _held = running.try_begin().expect("the first cleanup starts");
-        assert!(stop.request(&running));
-        let busy = run_cleanup(
+        assert!(running.request_stop());
+        let busy = cleanup(
             &running,
-            &stop,
             &state,
             &Retention::default(),
             Removal::Trash,
             NOW,
             &remove_files,
             &mut |_| {},
+            None,
         );
         assert!(matches!(busy, Err(CleanupError::Busy)));
-        assert!(stop.0.load(Ordering::Acquire));
+        assert!(running.stop_requested());
+    }
+
+    #[test]
+    fn a_cleanup_removes_nothing_when_more_is_due_than_confirmed() {
+        let dir = TempDir::new().unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        aged(&mut library, dir.path(), ShotKind::Video, "a.mp4", 40);
+        aged(&mut library, dir.path(), ShotKind::Video, "b.mp4", 10);
+        let state = LibraryState::new(library);
+        // The dialog showed one video due under 30 days; Keep is 7 days now.
+        let shown = KindUsage {
+            count: 1,
+            bytes: 100,
+        };
+        let more = cleanup(
+            &CleanupLock::default(),
+            &state,
+            &keep(None, None, Some(7)),
+            Removal::Permanent,
+            NOW,
+            &remove_files,
+            &mut |_| {},
+            Some(shown),
+        );
+        assert!(matches!(
+            more,
+            Err(CleanupError::MoreDue(KindUsage {
+                count: 2,
+                bytes: 200,
+            }))
+        ));
+        assert_eq!(state.lock().count().unwrap(), 2, "nothing is removed");
+
+        // What was shown, or less, goes ahead.
+        let cleaned = cleanup(
+            &CleanupLock::default(),
+            &state,
+            &keep(None, None, Some(30)),
+            Removal::Permanent,
+            NOW,
+            &remove_files,
+            &mut |_| {},
+            Some(shown),
+        )
+        .unwrap();
+        assert_eq!(cleaned.count, 1);
+    }
+
+    #[test]
+    fn the_dialogs_confirmed_usage_deserializes() {
+        let confirmed: KindUsage =
+            serde_json::from_value(serde_json::json!({ "count": 3, "bytes": 42 })).unwrap();
+        assert_eq!(
+            confirmed,
+            KindUsage {
+                count: 3,
+                bytes: 42,
+            }
+        );
     }
 
     #[test]

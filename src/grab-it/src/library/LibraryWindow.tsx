@@ -60,7 +60,6 @@ import {
   type FilterOptions,
   type Filters,
   type KindFilter,
-  type LibraryStorage,
   type OcrStatus,
   type SearchHit,
   type Shot,
@@ -1137,8 +1136,8 @@ function LibraryWindow({
   onOpenSettings,
 }: LibraryWindowProps = {}) {
   const [shots, setShots] = useState<Shot[]>([]);
-  /** The storage the Clean up dialog is open for, if it is. */
-  const [cleaning, setCleaning] = useState<LibraryStorage | null>(null);
+  /** Whether the Clean up dialog is open. */
+  const [cleaning, setCleaning] = useState(false);
   const [total, setTotal] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -1554,7 +1553,7 @@ function LibraryWindow({
                 <StoragePill
                   count={total}
                   version={reloads}
-                  onCleanUp={setCleaning}
+                  onCleanUp={() => setCleaning(true)}
                   onOpenSettings={showStorageSettings}
                 />
               ))}
@@ -1681,7 +1680,7 @@ function LibraryWindow({
           {notice.text}
         </div>
       )}
-      {cleaning && <CleanUpDialog storage={cleaning} onClose={() => setCleaning(null)} />}
+      {cleaning && <CleanUpDialog onClose={() => setCleaning(false)} />}
     </main>
   );
 }

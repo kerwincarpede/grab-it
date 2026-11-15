@@ -170,8 +170,17 @@ function mockBackend(shots: Shot[]): Backend {
             ...(due ? { due } : {}),
           };
         }
-        case "library_clean_up":
+        case "library_clean_up": {
+          // As the backend does: nothing is removed when more is due than the dialog showed.
+          const confirmed = args.confirmed as { count: number; bytes: number };
+          const due = Object.values(backend.due ?? {});
+          const count = due.reduce((sum, kind) => sum + kind.count, 0);
+          const bytes = due.reduce((sum, kind) => sum + kind.bytes, 0);
+          if (count > confirmed.count || bytes > confirmed.bytes) {
+            throw `More is due now than when you confirmed: ${count} items. Check what Clean up removes and confirm again.`;
+          }
           return backend.cleanUp ? backend.cleanUp(args.removal as Removal) : { count: 0, bytes: 0 };
+        }
         case "library_stop_clean_up":
           return null;
         case "library_set_tags": {
@@ -749,7 +758,10 @@ describe("LibraryWindow cleanup", () => {
   async function openCleanUp() {
     const popover = await openPopover();
     await userEvent.click(within(popover).getByRole("button", { name: "Clean up" }));
-    return screen.getByRole("dialog", { name: "Clean up storage" });
+    const dialog = screen.getByRole("dialog", { name: "Clean up storage" });
+    // It reads what is due afresh before it offers to remove anything.
+    await within(dialog).findByText(/older than your Keep settings\.$/);
+    return dialog;
   }
 
   /** Lets event listeners finish registering. */
@@ -835,7 +847,9 @@ describe("LibraryWindow cleanup", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Move to Trash" }));
 
     const done = await screen.findByRole("dialog", { name: "Cleanup done" });
-    expect(callsTo(backend, "library_clean_up").map((call) => call.payload)).toEqual([{ removal: "trash" }]);
+    expect(callsTo(backend, "library_clean_up").map((call) => call.payload)).toEqual([
+      { removal: "trash", confirmed: { count: 2, bytes: 12 * MB } },
+    ]);
     expect(within(done).getByText("2 items moved to the Trash · 12 MB")).toBeInTheDocument();
     await userEvent.click(within(done).getByRole("button", { name: "Done" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -873,7 +887,9 @@ describe("LibraryWindow cleanup", () => {
     await userEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
 
     const done = await screen.findByRole("dialog", { name: "Cleanup done" });
-    expect(callsTo(backend, "library_clean_up").map((call) => call.payload)).toEqual([{ removal: "permanent" }]);
+    expect(callsTo(backend, "library_clean_up").map((call) => call.payload)).toEqual([
+      { removal: "permanent", confirmed: { count: 2, bytes: 12 * MB } },
+    ]);
     expect(within(done).getByText("2 items deleted · 12 MB freed")).toBeInTheDocument();
   });
 
@@ -930,6 +946,58 @@ describe("LibraryWindow cleanup", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Move to Trash" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("a cleanup is already running");
     expect(screen.getByRole("dialog", { name: "Clean up storage" })).toBeInTheDocument();
+  });
+
+  it("shows what is due when the dialog opens, not when the popover first measured", async () => {
+    const backend = dueBackend();
+    render(<LibraryWindow />);
+    const popover = await openPopover();
+    expect(within(popover).getByText(/Cleanup frees/)).toHaveTextContent("Cleanup frees 12 MB · 2 items");
+
+    // A shorter Keep setting makes another video due while the popover is open.
+    backend.due = { gif: { count: 1, bytes: 2 * MB }, video: { count: 2, bytes: 20 * MB } };
+    await userEvent.click(within(popover).getByRole("button", { name: "Clean up" }));
+    const dialog = screen.getByRole("dialog", { name: "Clean up storage" });
+    expect(await within(dialog).findByText("3 items (22 MB) are older than your Keep settings.")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("radio", { name: /Delete permanently/ }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Continue…" }));
+    expect(screen.getByRole("dialog", { name: "Delete 3 items permanently?" })).toBeInTheDocument();
+  });
+
+  it("measures again when the popover opens", async () => {
+    const backend = dueBackend();
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: /4 captures/ });
+    backend.due = { video: { count: 1, bytes: 10 * MB } };
+    const popover = await openPopover();
+    await waitFor(() => expect(within(popover).getByText(/Cleanup frees/)).toHaveTextContent("Cleanup frees 10 MB · 1 item"));
+  });
+
+  it("deletes nothing, and asks again, when more became due after confirming", async () => {
+    const backend = dueBackend();
+    backend.cleanUp = vi.fn(() => ({ count: 2, bytes: 12 * MB }));
+    render(<LibraryWindow />);
+    const dialog = await openCleanUp();
+    await within(dialog).findByText("2 items (12 MB) are older than your Keep settings.");
+    await userEvent.click(within(dialog).getByRole("radio", { name: /Delete permanently/ }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Continue…" }));
+    const confirm = screen.getByRole("dialog", { name: "Delete 2 items permanently?" });
+
+    // Items age past their Keep setting before the user confirms.
+    backend.due = { gif: { count: 1, bytes: 2 * MB }, video: { count: 3, bytes: 30 * MB } };
+    await userEvent.click(within(confirm).getByRole("button", { name: "Delete permanently" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("More is due now than when you confirmed");
+    expect(backend.cleanUp).not.toHaveBeenCalled();
+    const again = screen.getByRole("dialog", { name: "Clean up storage" });
+    expect(await within(again).findByText("4 items (32 MB) are older than your Keep settings.")).toBeInTheDocument();
+    await userEvent.click(within(again).getByRole("button", { name: "Continue…" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+    await screen.findByRole("dialog", { name: "Cleanup done" });
+    expect(callsTo(backend, "library_clean_up").map((call) => call.payload)).toEqual([
+      { removal: "permanent", confirmed: { count: 2, bytes: 12 * MB } },
+      { removal: "permanent", confirmed: { count: 4, bytes: 32 * MB } },
+    ]);
   });
 
   it("opens Storage settings from the popover", async () => {

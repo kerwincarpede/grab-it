@@ -293,8 +293,8 @@ interface StoragePillProps {
   count: number;
   /** Changes whenever the library may have changed, to measure it again. */
   version: number;
-  /** Opens the Clean up dialog for what `storage` says is due. */
-  onCleanUp: (storage: LibraryStorage) => void;
+  /** Opens the Clean up dialog, which reads what is due afresh. */
+  onCleanUp: () => void;
   /** Opens Settings on its Storage page. */
   onOpenSettings: () => void;
 }
@@ -325,7 +325,9 @@ export function StoragePill({ count, version, onCleanUp, onOpenSettings }: Stora
     return () => {
       cancelled = true;
     };
-  }, [version]);
+    // Measured again on opening too: Keep settings may have changed, or items
+    // aged past them, since the library last changed.
+  }, [version, open]);
 
   const countText = count === 1 ? "1 capture" : `${count} captures`;
   if (!storage) return <span className="count-pill">{countText}</span>;
@@ -392,7 +394,7 @@ export function StoragePill({ count, version, onCleanUp, onOpenSettings }: Stora
             </ul>
           </div>
           <DiskMeter storage={storage} />
-          <StorageFoot storage={storage} progress={progress} onCleanUp={() => leave(() => onCleanUp(storage))} />
+          <StorageFoot storage={storage} progress={progress} onCleanUp={() => leave(onCleanUp)} />
         </div>
       )}
     </div>
@@ -421,18 +423,20 @@ function errorMessage(err: unknown): string {
 }
 
 interface CleanUpDialogProps {
-  /** The storage as the popover showed it: what is due, by kind. */
-  storage: LibraryStorage;
   onClose: () => void;
 }
+
+const NOTHING_DUE = { count: 0, bytes: 0 };
 
 /**
  * Clean up: asks whether to move what is due to the Trash or delete it for
  * good (Settings' choice first), asks again before deleting for good, then
  * shows progress with Stop, and what went.
  */
-export function CleanUpDialog({ storage, onClose }: CleanUpDialogProps) {
-  const due = dueTotal(storage) ?? { count: 0, bytes: 0 };
+export function CleanUpDialog({ onClose }: CleanUpDialogProps) {
+  /** What is due, read when the dialog opens and again after a failed run; null until read. */
+  const [storage, setStorage] = useState<LibraryStorage | null>(null);
+  const due = (storage && dueTotal(storage)) ?? NOTHING_DUE;
   const [saved, setSaved] = useState<Removal | null>(null);
   const [picked, setPicked] = useState<Removal | null>(null);
   const [step, setStep] = useState<Step>("choose");
@@ -451,8 +455,25 @@ export function CleanUpDialog({ storage, onClose }: CleanUpDialogProps) {
     if (live) latest.current = live;
   }, [live]);
 
+  /** Reads what is due again, after a run that failed or found more due than shown. */
+  async function measure() {
+    try {
+      const found = await libraryStorage();
+      if (alive.current) setStorage(found);
+    } catch (err) {
+      if (alive.current) setError(errorMessage(err));
+    }
+  }
+
   useEffect(() => {
     alive.current = true;
+    libraryStorage()
+      .then((found) => {
+        if (alive.current) setStorage(found);
+      })
+      .catch((err: unknown) => {
+        if (alive.current) setError(errorMessage(err));
+      });
     getSettings()
       .then((settings) => {
         if (alive.current) setSaved(settings?.retention?.removal ?? "trash");
@@ -478,7 +499,8 @@ export function CleanUpDialog({ storage, onClose }: CleanUpDialogProps) {
     stopAsked.current = false;
     latest.current = null;
     try {
-      const cleaned = await cleanUp(how);
+      // The backend removes nothing when more is due than this.
+      const cleaned = await cleanUp(how, due);
       if (!alive.current) return;
       // Set by progress events while it ran, which TypeScript cannot see.
       const last = latest.current as CleanupProgress | null;
@@ -489,6 +511,8 @@ export function CleanUpDialog({ storage, onClose }: CleanUpDialogProps) {
       if (!alive.current) return;
       setError(errorMessage(err));
       setStep("choose");
+      // Show what is due now before the user confirms again.
+      await measure();
     }
   }
 
@@ -524,14 +548,16 @@ export function CleanUpDialog({ storage, onClose }: CleanUpDialogProps) {
         {step === "choose" && (
           <>
             <p className="clean-up-text">
-              {items} ({formatSize(due.bytes)}) {due.count === 1 ? "is" : "are"} older than your Keep settings.
+              {storage
+                ? `${items} (${formatSize(due.bytes)}) ${due.count === 1 ? "is" : "are"} older than your Keep settings.`
+                : "Checking what is older than your Keep settings…"}
             </p>
             <ul className="clean-up-kinds" aria-label="Due for cleanup">
-              {STORAGE_KINDS.filter(({ kind }) => (storage.due?.[kind].count ?? 0) > 0).map(({ kind, one, many }) => (
+              {STORAGE_KINDS.filter(({ kind }) => (storage?.due?.[kind].count ?? 0) > 0).map(({ kind, one, many }) => (
                 <li key={kind}>
                   <i className="storage-dot" style={{ background: kindColor(kind) }} aria-hidden="true" />
-                  <span>{plural(storage.due?.[kind].count ?? 0, one, many)}</span>
-                  <span className="clean-up-kind-size">{formatSize(storage.due?.[kind].bytes ?? 0)}</span>
+                  <span>{plural(storage?.due?.[kind].count ?? 0, one, many)}</span>
+                  <span className="clean-up-kind-size">{formatSize(storage?.due?.[kind].bytes ?? 0)}</span>
                 </li>
               ))}
             </ul>
