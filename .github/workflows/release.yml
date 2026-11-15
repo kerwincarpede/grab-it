@@ -126,13 +126,6 @@ jobs:
           VERSION: ${{ steps.next.outputs.version }}
           TAG: v${{ steps.next.outputs.version }}
         run: |
-          # Drop drafts an earlier, unfinished run left for this tag.
-          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
-            --jq ".[] | select(.draft and .tag_name == \"$TAG\") | .id" |
-            while read -r id; do
-              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
-            done
-
           body=$(cat <<'BODY'
           ## Install
 
@@ -165,14 +158,38 @@ jobs:
           BODY
           )
 
-          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
-            -f tag_name="$TAG" \
-            -f target_commitish="$GITHUB_SHA" \
-            -f name="$VERSION" \
-            -f body="$body" \
-            -F draft=true \
-            -F generate_release_notes=true \
-            --jq .id)
+          # Drop drafts an earlier, unfinished run (or an earlier try) left
+          # for this tag, then open this run's draft.
+          open_draft() {
+            drafts=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+              --jq ".[] | select(.draft and .tag_name == \"$TAG\") | .id") || return 1
+            for draft in $drafts; do
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$draft" || return 1
+            done
+            gh api "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$TAG" \
+              -f target_commitish="$GITHUB_SHA" \
+              -f name="$VERSION" \
+              -f body="$body" \
+              -F draft=true \
+              -F generate_release_notes=true \
+              --jq .id
+          }
+
+          # The API now and then refuses a call it accepts moments later (a
+          # one-off HTTP 403 failed a release after it had queued for nine
+          # minutes), so a failure gets two more tries before the run fails.
+          for attempt in 1 2 3; do
+            if id=$(open_draft) && [ -n "$id" ]; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Could not open the draft release for $TAG."
+              exit 1
+            fi
+            echo "::warning::Opening the draft release failed (try $attempt of 3); trying again in 20 seconds."
+            sleep 20
+          done
           echo "release_id=$id" >> "$GITHUB_OUTPUT"
 
   # The same checks and installer builds as every CI run, stamped with the
