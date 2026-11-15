@@ -281,23 +281,43 @@
   will-change: transform;
 }
 
-.overlay-size-input {
+/*
+ * Scoped by the panel so it outranks App.css's `input[type="text"]`, whose
+ * light `--surface` background otherwise showed under white digits; native
+ * styling is turned off so WebKitGTK's light theme does not draw one either.
+ */
+.overlay-size-panel .overlay-size-input {
   width: 56px;
   height: 28px;
   box-sizing: border-box;
   padding: 0 6px;
   color: #fff;
+  -webkit-text-fill-color: #fff;
+  caret-color: #fff;
   font: inherit;
   font-variant-numeric: tabular-nums;
   text-align: right;
+  color-scheme: dark;
+  appearance: none;
   background: #1c1e22;
   border: 1px solid #2e3036;
   border-radius: 6px;
+  box-shadow: none;
+  transition: none;
 }
 
-.overlay-size-input:focus {
-  outline: 2px solid var(--overlay-accent);
-  outline-offset: -1px;
+.overlay-size-panel .overlay-size-input:focus,
+.overlay-size-panel .overlay-size-input:focus-visible {
+  background: #1c1e22;
+  border-color: var(--overlay-accent);
+  outline: none;
+  box-shadow: 0 0 0 2px rgb(47 129 247 / 35%);
+}
+
+.overlay-size-panel .overlay-size-input::selection {
+  color: #fff;
+  -webkit-text-fill-color: #fff;
+  background: var(--overlay-accent);
 }
 
 .overlay-size-unit {
