@@ -1,0 +1,50 @@
+---
+title: Permissions
+description: What Grab-it asks for before it records, and how to turn it on later.
+sidebar:
+  order: 4
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Recording uses your screen and, depending on the [options](/grab-it/recording/options/) you pick, your microphone, your camera and your mouse and keyboard. Only macOS asks for permission first; Windows and Linux record straight away.
+
+<Tabs syncKey="os">
+<TabItem label="Windows" icon="seti:windows">
+
+Grab-it needs no permission to record. The webcam bubble may use your camera without asking, as it's Grab-it's own window.
+
+</TabItem>
+<TabItem label="macOS" icon="apple">
+
+macOS asks once for each of these, the first time it's needed:
+
+| Permission | Asked for when | Without it |
+| --- | --- | --- |
+| **Screen Recording** | You first capture or record. | Grab-it can't record. It offers to open System Settings. |
+| **Microphone** | You first record an MP4 with a microphone. The recording waits for your answer. | The recording is saved without your voice, and the card says why. |
+| **Camera** | You first turn on **Webcam**. | The bubble can't show your camera. |
+| **Input Monitoring** | You first record with **Clicks** or **Keys** on. | The recording is saved without clicks or keystrokes, and the card says why. |
+
+System sound needs no permission, but it needs macOS 13 or later.
+
+If you said **Don't Allow** earlier, Grab-it shows a message with **Open System Settings** the next time. To turn a permission on yourself:
+
+1. Open **System Settings → Privacy & Security**.
+2. Choose **Screen Recording**, **Microphone**, **Camera** or **Input Monitoring**.
+3. Turn on **Grab-it**.
+4. For Screen Recording and Input Monitoring, quit and reopen Grab-it if macOS asks you to.
+
+</TabItem>
+<TabItem label="Linux" icon="linux">
+
+On X11, Grab-it needs no permission to record, and the webcam bubble may use your camera without asking.
+
+Under Wayland, recording isn't available: only your desktop may read the screen there, and its screenshot picker can't record. See [Troubleshooting](/grab-it/reference/troubleshooting/#on-linux-wayland-the-desktop-asks-me-to-pick-an-area-itself).
+
+</TabItem>
+</Tabs>
+
+:::note
+Updating from an older version can make macOS treat Grab-it as a new app, once. If recording stops working after an update, turn Grab-it off and on again under **Screen Recording**. See [Troubleshooting](/grab-it/reference/troubleshooting/).
+:::
