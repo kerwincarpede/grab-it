@@ -1,10 +1,11 @@
 //! Global hotkeys for the captures, the two capture tools and the library.
 //!
-//! The defaults are PrintScreen, Alt+PrintScreen and Ctrl+PrintScreen for
-//! region, window and screen, Shift+PrintScreen to capture text,
-//! Ctrl+Shift+PrintScreen to pick a colour and Alt+Shift+PrintScreen to open
-//! the library; on macOS Cmd+Shift+2, Cmd+Shift+W, Cmd+Shift+F, Cmd+Shift+1,
-//! Cmd+Shift+9 and Cmd+Shift+0. On Wayland they are bound through the GlobalShortcuts portal
+//! The defaults are Ctrl+Alt+PrintScreen for All-in-one, PrintScreen,
+//! Alt+PrintScreen and Ctrl+PrintScreen for region, window and screen,
+//! Shift+PrintScreen to capture text, Ctrl+Shift+PrintScreen to pick a colour
+//! and Alt+Shift+PrintScreen to open the library; on macOS Cmd+Shift+A,
+//! Cmd+Shift+2, Cmd+Shift+W, Cmd+Shift+F, Cmd+Shift+1, Cmd+Shift+9 and
+//! Cmd+Shift+0. On Wayland they are bound through the GlobalShortcuts portal
 //! (see `portal.rs`), since apps cannot grab keys there themselves.
 
 use std::{
@@ -27,6 +28,8 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Hotkeys {
+    /// Opens the overlay with a toolbar offering every capture mode.
+    pub all_in_one: String,
     pub region: String,
     pub window: String,
     pub screen: String,
@@ -66,6 +69,7 @@ impl Default for Hotkeys {
     fn default() -> Self {
         if cfg!(target_os = "macos") {
             Self {
+                all_in_one: "Cmd+Shift+A".into(),
                 region: "Cmd+Shift+2".into(),
                 window: "Cmd+Shift+W".into(),
                 screen: "Cmd+Shift+F".into(),
@@ -75,6 +79,7 @@ impl Default for Hotkeys {
             }
         } else {
             Self {
+                all_in_one: "Ctrl+Alt+PrintScreen".into(),
                 region: "PrintScreen".into(),
                 window: "Alt+PrintScreen".into(),
                 screen: "Ctrl+PrintScreen".into(),
@@ -88,9 +93,14 @@ impl Default for Hotkeys {
 
 impl Hotkeys {
     /// Each hotkey with what it does and its name in Settings.
-    pub fn entries(&self) -> [(HotkeyAction, &'static str, &str); 6] {
+    pub fn entries(&self) -> [(HotkeyAction, &'static str, &str); 7] {
         use HotkeyAction::{Capture, Library};
         [
+            (
+                Capture(Action::AllInOne),
+                "All-in-one",
+                self.all_in_one.as_str(),
+            ),
             (Capture(Action::Region), "Region", self.region.as_str()),
             (Capture(Action::Window), "Window", self.window.as_str()),
             (Capture(Action::Screen), "Screen", self.screen.as_str()),
@@ -107,6 +117,7 @@ impl Hotkeys {
     /// Trims every hotkey and checks it parses and is not used twice.
     pub fn validated(&self) -> Result<Hotkeys, String> {
         let trimmed = Hotkeys {
+            all_in_one: self.all_in_one.trim().to_owned(),
             region: self.region.trim().to_owned(),
             window: self.window.trim().to_owned(),
             screen: self.screen.trim().to_owned(),
@@ -297,7 +308,9 @@ mod tests {
         assert_eq!(defaults.validated(), Ok(defaults.clone()));
         if cfg!(target_os = "macos") {
             assert_eq!(defaults.region, "Cmd+Shift+2");
+            assert_eq!(defaults.all_in_one, "Cmd+Shift+A");
         } else {
+            assert_eq!(defaults.all_in_one, "Ctrl+Alt+PrintScreen");
             assert_eq!(defaults.region, "PrintScreen");
             assert_eq!(defaults.window, "Alt+PrintScreen");
             assert_eq!(defaults.screen, "Ctrl+PrintScreen");
@@ -348,6 +361,15 @@ mod tests {
         assert_eq!(
             tool_clash.validated(),
             Err("Pick a colour and Capture text use the same hotkey.".into())
+        );
+
+        let all_in_one_clash = Hotkeys {
+            all_in_one: Hotkeys::default().region,
+            ..Hotkeys::default()
+        };
+        assert_eq!(
+            all_in_one_clash.validated(),
+            Err("Region and All-in-one use the same hotkey.".into())
         );
 
         let library_clash = Hotkeys {

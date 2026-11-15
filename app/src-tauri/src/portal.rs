@@ -143,6 +143,7 @@ where
 /// The id a hotkey is bound under. Monitors have no hotkey.
 fn shortcut_id(action: HotkeyAction) -> Option<&'static str> {
     match action {
+        HotkeyAction::Capture(Action::AllInOne) => Some("all-in-one"),
         HotkeyAction::Capture(Action::Region) => Some("capture-region"),
         HotkeyAction::Capture(Action::Window) => Some("capture-window"),
         HotkeyAction::Capture(Action::Screen) => Some("capture-screen"),
@@ -156,6 +157,8 @@ fn shortcut_id(action: HotkeyAction) -> Option<&'static str> {
 /// What the desktop's shortcut settings call each hotkey.
 fn description(action: HotkeyAction) -> &'static str {
     match action {
+        // The portal picks the area itself, so this captures a region there.
+        HotkeyAction::Capture(Action::AllInOne) => "All-in-one capture",
         HotkeyAction::Capture(Action::Region | Action::Repeat) => "Capture a region",
         HotkeyAction::Capture(Action::Window) => "Capture a window",
         HotkeyAction::Capture(Action::Screen | Action::Monitor(_)) => "Capture the screen",

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import "./welcome.css";
 import Logo from "../app/Logo";
 import {
+  AllInOneIcon,
   CardIcon,
   ColourIcon,
   GridIcon,
@@ -27,6 +28,7 @@ function openTarget(target: string): Promise<void> {
 
 /** The hotkeys in the order they are listed, with what each one does. */
 const SHORTCUTS: { key: keyof Hotkeys; title: string; detail: string; icon: ReactNode }[] = [
+  { key: "allInOne", title: "All-in-one", detail: "Every capture mode on one toolbar.", icon: <AllInOneIcon /> },
   { key: "region", title: "Capture a region", detail: "Drag an area, or click a window.", icon: <RegionIcon /> },
   { key: "window", title: "Capture a window", detail: "Hover a window and click it.", icon: <WindowIcon /> },
   { key: "screen", title: "Capture the screen", detail: "Every monitor at once.", icon: <ScreenIcon /> },

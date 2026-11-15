@@ -129,6 +129,7 @@ pub fn run() {
             overlay::overlay_image,
             overlay::overlay_ready,
             overlay::overlay_finish,
+            overlay::overlay_choose,
             overlay::overlay_cancel,
             editor::editor_info,
             editor::editor_image,

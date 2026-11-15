@@ -1,14 +1,26 @@
-import { useEffect, useMemo, useReducer, useRef, useState, type MouseEvent } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { flushSync } from "react-dom";
 import {
   cancelOverlay,
+  chooseOverlay,
   finishOverlay,
   imageType,
   isInstantOverlay,
+  onOverlayChoice,
   onOverlayStart,
   overlayImage,
   overlayInfo,
   overlayReady,
+  type OverlayChoice,
   type OverlayInfo,
   type OverlayIntent,
   type OverlayWindow,
@@ -37,6 +49,15 @@ import {
   type Size,
 } from "./geometry";
 import { drawBackdrop } from "./backdrop";
+import {
+  ColourIcon,
+  RecordIcon,
+  RegionIcon,
+  ScreenIcon,
+  TextIcon,
+  TimerIcon,
+  WindowIcon,
+} from "../app/icons";
 import Loupe from "./Loupe";
 import "./overlay.css";
 
@@ -61,6 +82,48 @@ const WINDOW_HINT = "Click a window to capture it. Esc cancels.";
  * and `.overlay-dim-corner`.
  */
 const WINDOW_RADIUS = 10;
+
+/**
+ * All-in-one's modes, in the order of their number keys. Screen captures
+ * as soon as it is picked; the others say what the next selection is for.
+ */
+type Tool = "region" | "window" | "screen" | "text" | "color" | "record";
+
+const TOOLS: { tool: Tool; label: string; icon: ReactNode }[] = [
+  { tool: "region", label: "Region", icon: <RegionIcon /> },
+  { tool: "window", label: "Window", icon: <WindowIcon /> },
+  { tool: "screen", label: "Screen", icon: <ScreenIcon /> },
+  { tool: "text", label: "Text", icon: <TextIcon /> },
+  { tool: "color", label: "Colour", icon: <ColourIcon /> },
+  { tool: "record", label: "Record", icon: <RecordIcon /> },
+];
+/** The Timer's settings in seconds, in the order a click steps through them. */
+const TIMER_STEPS = [0, 3, 5, 10];
+/** The Timer's number key, after the modes'. */
+const TIMER_KEY = TOOLS.length + 1;
+/** Room the toolbar takes above the hint, gap included, in CSS px. */
+const TOOLBAR_ROOM = 52;
+
+function toolIntent(tool: Tool): OverlayIntent {
+  return tool === "text" || tool === "color" || tool === "record" ? tool : "capture";
+}
+
+/** The toolbar mode another monitor's overlay chose, from its choice. */
+function toolOf(choice: OverlayChoice): Tool {
+  if (choice.intent !== "capture") return choice.intent;
+  return choice.mode === "window" ? "window" : "region";
+}
+
+/** The Timer only delays screenshots: Region, Window and Screen. */
+function isTimed(tool: Tool): boolean {
+  return toolIntent(tool) === "capture";
+}
+
+/** The number key pressed, 1 to 9, from the top row or the keypad. */
+function digitOf(event: KeyboardEvent): number | null {
+  const match = /^(?:Digit|Numpad)([1-9])$/.exec(event.code) ?? /^([1-9])$/.exec(event.key);
+  return match ? Number(match[1]) : null;
+}
 
 function viewport(): Size {
   return { width: window.innerWidth, height: window.innerHeight };
@@ -119,12 +182,77 @@ function SelectionFrame({ box, label, placement }: SelectionFrameProps) {
   );
 }
 
+interface ToolbarProps {
+  tool: Tool;
+  timer: number;
+  hidden: boolean;
+  top: number;
+  onTool: (tool: Tool) => void;
+  onTimer: () => void;
+}
+
+/**
+ * All-in-one's mode toolbar: a button per mode, numbered by its key, and the
+ * Timer. It never follows the pointer.
+ */
+function Toolbar({ tool, timer, hidden, top, onTool, onTimer }: ToolbarProps) {
+  const timed = isTimed(tool);
+  return (
+    <div
+      className="overlay-toolbar"
+      role="toolbar"
+      aria-label="Capture mode"
+      data-testid="overlay-toolbar"
+      data-hidden={hidden ? "true" : "false"}
+      style={{ top }}
+      // Clicks leave the focus where it was, so Enter and Space never press
+      // the last button again.
+      onMouseDown={(event) => event.preventDefault()}
+    >
+      {TOOLS.map(({ tool: each, label, icon }, at) => (
+        <button
+          key={each}
+          type="button"
+          className="overlay-tool"
+          aria-pressed={each === "screen" ? undefined : each === tool}
+          title={`${label} (${at + 1})`}
+          onClick={() => onTool(each)}
+        >
+          {icon}
+          <span>{label}</span>
+          <kbd aria-hidden="true">{at + 1}</kbd>
+        </button>
+      ))}
+      <span className="overlay-toolbar-gap" aria-hidden="true" />
+      <button
+        type="button"
+        className="overlay-tool"
+        data-testid="overlay-timer"
+        data-active={timed && timer > 0 ? "true" : "false"}
+        disabled={!timed}
+        title={`Timer (${TIMER_KEY})`}
+        onClick={onTimer}
+      >
+        <TimerIcon />
+        <span>{timer > 0 ? `Timer ${timer} s` : "Timer off"}</span>
+        <kbd aria-hidden="true">{TIMER_KEY}</kbd>
+      </button>
+    </div>
+  );
+}
+
 /**
  * Shows one monitor, frozen, fullscreen. What a selection means depends on
  * the intent: "capture" drags a region or clicks a window (window mode only
  * clicks windows), "text" only drags, and "color" picks the pixel under a
  * click. While dragging, Shift keeps the selection square and Space moves it.
  * Esc or right-click cancels.
+ *
+ * Opened by All-in-one, a toolbar at the top switches between those modes
+ * in place, keys 1 to 6 pick them and 7 steps the Timer through off, 3, 5
+ * and 10 s. Screen captures every monitor as frozen the moment it is
+ * picked. With the Timer on, the overlay closes on the selection and the
+ * backend captures the same area live once the time is up.
  *
  * The page is usually loaded ahead of time in a hidden spare window, and
  * draws nothing until a selection starts on it.
@@ -149,6 +277,17 @@ function RegionOverlay() {
   const [backdropReady, setBackdropReady] = useState(false);
   // The last window hovered, so the blur keeps its hole while it fades out.
   const [lastHovered, setLastHovered] = useState<Box | null>(null);
+  // All-in-one's toolbar: the mode picked, and the Timer in seconds.
+  const [tool, setTool] = useState<Tool>("region");
+  const [timer, setTimer] = useState(0);
+  const toolbar = useRef<HTMLDivElement>(null);
+
+  /** Takes on a choice another monitor's toolbar made. */
+  const follow = useEffectEvent((choice: OverlayChoice) => {
+    setTool(toolOf(choice));
+    setTimer(TIMER_STEPS.includes(choice.delaySeconds) ? choice.delaySeconds : 0);
+    setDrag(null);
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -165,6 +304,8 @@ function RegionOverlay() {
           if (cancelled || started || !loaded) return;
           started = true;
           setInfo(loaded);
+          // Another monitor's toolbar may have chosen before this page loaded.
+          if (loaded.allInOne && loaded.choice) follow(loaded.choice);
           return overlayImage().then((bytes) => {
             if (cancelled) return;
             url = toImageUrl(bytes);
@@ -254,25 +395,28 @@ function RegionOverlay() {
 
   const view = viewport();
 
-  // Blurred once per image (and viewport size), not on every hover.
+  const allInOne = info?.allInOne === true;
+  const intent = allInOne ? toolIntent(tool) : (info?.intent ?? "capture");
+  // Only screenshots can be of a window; text and colour ignore window mode.
+  const windowMode =
+    intent === "capture" && (allInOne ? tool === "window" : info?.mode === "window");
+  // A recording picks its area exactly as a screenshot does.
+  const picksArea = intent === "capture" || intent === "record";
+  const canDrag = intent === "text" || (picksArea && !windowMode);
+  const canPickWindow = picksArea;
+
+  // Blurred once per image (and viewport size), not on every hover. In
+  // All-in-one the canvas comes back with a mode that picks windows.
   useEffect(() => {
     if (!image || !backdrop.current) return;
     setBackdropReady(drawBackdrop(backdrop.current, image, view.width, view.height));
-  }, [image, view.width, view.height]);
+  }, [image, view.width, view.height, canPickWindow]);
   const pickable = useMemo<PickableWindow[]>(() => {
     if (!info) return [];
     const monitor = { width: info.monitorWidth, height: info.monitorHeight };
     const size = { width: view.width, height: view.height };
     return info.windows.map((win) => ({ window: win, box: monitorToCss(win, monitor, size) }));
   }, [info, view.width, view.height]);
-
-  const intent = info?.intent ?? "capture";
-  // Only screenshots can be of a window; text and colour ignore window mode.
-  const windowMode = intent === "capture" && info?.mode === "window";
-  // A recording picks its area exactly as a screenshot does.
-  const picksArea = intent === "capture" || intent === "record";
-  const canDrag = intent === "text" || (picksArea && !windowMode);
-  const canPickWindow = picksArea;
 
   // Image pixels per CSS pixel, the same ratio the backend crops with. The
   // image's width is known before the image has loaded; without either
@@ -295,17 +439,97 @@ function RegionOverlay() {
     void cancelOverlay();
   }
 
-  function finish(choice: Selection) {
+  /** What All-in-one's toolbar chose, sent with a selection made in `mode`. */
+  function toolbarChoice(mode: OverlayChoice["mode"]): OverlayChoice {
+    return { intent, mode, delaySeconds: isTimed(tool) ? timer : 0 };
+  }
+
+  /**
+   * Shares a new mode or Timer with every other monitor's overlay, so the
+   * selection finishes the same whichever monitor it is made on. The Timer
+   * is sent as set, even while a mode that ignores it is picked.
+   */
+  function share(nextTool: Tool, seconds: number) {
+    const choice: OverlayChoice = {
+      intent: toolIntent(nextTool),
+      mode: nextTool === "window" ? "window" : "region",
+      delaySeconds: seconds,
+    };
+    chooseOverlay(choice).catch(() => {
+      // This monitor still finishes with its own choice.
+    });
+  }
+
+  function finish(picked: Selection) {
     if (done.current) return;
     done.current = true;
-    finishOverlay(choice).catch((err: unknown) => {
+    const mode = picked.kind === "screen" ? "screen" : windowMode ? "window" : "region";
+    finishOverlay(picked, allInOne ? toolbarChoice(mode) : undefined).catch((err: unknown) => {
       done.current = false;
       setError(String(err));
     });
   }
 
+  function chooseTool(next: Tool) {
+    if (next === "screen") {
+      // Nothing to select: every monitor, as frozen.
+      finish({ kind: "screen" });
+      return;
+    }
+    setTool(next);
+    setDrag(null);
+    share(next, timer);
+  }
+
+  function stepTimer() {
+    if (!isTimed(tool)) return;
+    const seconds = TIMER_STEPS[(TIMER_STEPS.indexOf(timer) + 1) % TIMER_STEPS.length];
+    setTimer(seconds);
+    share(tool, seconds);
+  }
+
+  // Another monitor's toolbar changed: follow it, without sharing it back.
+  // Listening from the start, not once the info says All-in-one, so a
+  // choice made while this page loads is not missed; only All-in-one
+  // selections send it.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    onOverlayChoice((choice) => follow(choice))
+      .then((stop) => {
+        if (cancelled) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {
+        // Then each monitor keeps its own choice.
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const onToolKey = useEffectEvent((event: KeyboardEvent) => {
+    if (!allInOne || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+    const digit = digitOf(event);
+    if (digit === null || digit > TIMER_KEY) return;
+    event.preventDefault();
+    if (digit === TIMER_KEY) stepTimer();
+    else chooseTool(TOOLS[digit - 1].tool);
+  });
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => onToolKey(event);
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  /** The toolbar takes its own clicks; they never start or end a selection. */
+  function onToolbar(event: MouseEvent): boolean {
+    return toolbar.current?.contains(event.target as Node) ?? false;
+  }
+
   function onMouseDown(event: MouseEvent) {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || onToolbar(event)) return;
     const point = pointOf(event);
     setDrag({ anchor: point, head: point });
     setPointer(point);
@@ -467,10 +691,22 @@ function RegionOverlay() {
       {!windowMode && pointer && (
         <Loupe image={image} pointer={pointer} scale={scale} viewport={view} />
       )}
+      {allInOne && (
+        <div ref={toolbar}>
+          <Toolbar
+            tool={tool}
+            timer={timer}
+            hidden={dragging}
+            top={hintTop(info?.topInset, view.height)}
+            onTool={chooseTool}
+            onTimer={stepTimer}
+          />
+        </div>
+      )}
       <div
         className="overlay-hint"
         data-hidden={dragging && !error ? "true" : "false"}
-        style={{ top: hintTop(info?.topInset, view.height) }}
+        style={{ top: hintTop(info?.topInset, view.height) + (allInOne ? TOOLBAR_ROOM : 0) }}
       >
         <p className="overlay-hint-text" role="status" data-error={error ? "true" : "false"}>
           {error ?? (windowMode ? WINDOW_HINT : HINTS[intent])}
@@ -479,6 +715,11 @@ function RegionOverlay() {
           <li>
             <kbd>Esc</kbd> Cancel
           </li>
+          {allInOne && (
+            <li>
+              <kbd>1</kbd>–<kbd>{TIMER_KEY}</kbd> Mode
+            </li>
+          )}
           {canDrag && (
             <>
               <li>

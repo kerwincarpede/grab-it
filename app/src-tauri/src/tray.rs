@@ -40,6 +40,7 @@ pub fn set_unlock_enabled(app: &AppHandle, enabled: bool) {
         eprintln!("Grab-it: could not update the tray menu: {err}");
     }
 }
+const MENU_ALL_IN_ONE: &str = "all-in-one";
 const MENU_REGION: &str = "capture-region";
 const MENU_WINDOW: &str = "capture-window";
 const MENU_SCREEN: &str = "capture-screen";
@@ -61,6 +62,7 @@ const MENU_QUIT: &str = "quit";
 /// The capture a menu item starts, if any.
 fn action_for(id: &str) -> Option<Action> {
     match id {
+        MENU_ALL_IN_ONE => Some(Action::AllInOne),
         MENU_REGION => Some(Action::Region),
         MENU_WINDOW => Some(Action::Window),
         MENU_SCREEN => Some(Action::Screen),
@@ -161,6 +163,7 @@ pub fn quit(app: &AppHandle) {
 const CLICK_OPENS_HUB: bool = cfg!(not(target_os = "linux"));
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
+    let all_in_one = MenuItem::with_id(app, MENU_ALL_IN_ONE, "All-in-one", true, None::<&str>)?;
     let region = MenuItem::with_id(app, MENU_REGION, "Capture region", true, None::<&str>)?;
     let window = MenuItem::with_id(app, MENU_WINDOW, "Capture window", true, None::<&str>)?;
     let screen_item = MenuItem::with_id(
@@ -202,6 +205,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
+            &all_in_one,
             &region,
             &window,
             &screen_item,
@@ -296,6 +300,7 @@ mod tests {
 
     #[test]
     fn menu_ids_map_to_captures() {
+        assert_eq!(action_for(MENU_ALL_IN_ONE), Some(Action::AllInOne));
         assert_eq!(action_for(MENU_REGION), Some(Action::Region));
         assert_eq!(action_for(MENU_WINDOW), Some(Action::Window));
         assert_eq!(action_for(MENU_SCREEN), Some(Action::Screen));

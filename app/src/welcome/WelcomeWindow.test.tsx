@@ -8,6 +8,7 @@ import { acceleratorKeys } from "../settings/accelerator";
 import WelcomeWindow from "./WelcomeWindow";
 
 const HOTKEYS = {
+  allInOne: "Ctrl+Alt+PrintScreen",
   region: "PrintScreen",
   window: "Alt+PrintScreen",
   screen: "Ctrl+PrintScreen",
@@ -48,6 +49,8 @@ describe("WelcomeWindow", () => {
     expect(within(colour).getAllByText(/Ctrl|Shift|PrintScreen/)).toHaveLength(3);
     const library = screen.getByLabelText("Alt+Shift+PrintScreen").closest("li") as HTMLElement;
     expect(within(library).getByText("Open the library")).toBeInTheDocument();
+    const allInOne = screen.getByLabelText("Ctrl+Alt+PrintScreen").closest("li") as HTMLElement;
+    expect(within(allInOne).getByText("All-in-one")).toBeInTheDocument();
   });
 
   it("mentions AI descriptions only while Claude Code describes captures", async () => {

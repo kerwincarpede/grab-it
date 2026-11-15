@@ -486,6 +486,8 @@ export const AFTER_CAPTURE_CHOICES: { value: AfterCapture; title: string; hint: 
 
 /** Mirrors `Hotkeys` in src-tauri/src/hotkeys.rs: accelerator strings. */
 export interface Hotkeys {
+  /** Opens the capture overlay with a toolbar offering every mode. */
+  allInOne: string;
   region: string;
   window: string;
   screen: string;

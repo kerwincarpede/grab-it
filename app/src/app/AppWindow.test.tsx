@@ -12,6 +12,7 @@ import { routeFromHash } from "../routes";
 const SETTINGS = {
   saveFolder: "/home/me/Pictures/Grab-it",
   hotkeys: {
+    allInOne: "Cmd+Shift+A",
     region: "Cmd+Shift+2",
     window: "Cmd+Shift+W",
     screen: "Cmd+Shift+F",

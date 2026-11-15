@@ -50,6 +50,11 @@ pub const LABEL_PREFIX: &str = "overlay-";
 /// `START_EVENT` in src/overlay/api.ts.
 const START_EVENT: &str = "overlay-start";
 
+/// Emitted to every overlay of an All-in-one selection when one of them
+/// changes the toolbar's mode or Timer, with the [`Choice`]. Mirrors
+/// `CHOICE_EVENT` in src/overlay/api.ts.
+const CHOICE_EVENT: &str = "overlay-choice";
+
 /// Whether overlays are see-through and shown the moment the monitors are
 /// frozen, ahead of their frozen image.
 const INSTANT: bool = cfg!(target_os = "macos");
@@ -78,7 +83,7 @@ struct Frame {
 
 /// What the overlay's selection is for. Mirrors `Intent` in
 /// src/overlay/api.ts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Intent {
     /// Save the selection as a capture.
@@ -98,6 +103,12 @@ struct Session {
     id: u64,
     mode: CaptureMode,
     intent: Intent,
+    /// Opened by All-in-one: the page shows its mode toolbar, and
+    /// [`overlay_finish`] takes the mode and intent chosen there.
+    all_in_one: bool,
+    /// What the toolbar last chose on any monitor, so every overlay
+    /// finishes the same way whichever one the selection is made on.
+    choice: Option<Choice>,
     foreground: Foreground,
     /// Frozen monitors, by overlay window label.
     frames: HashMap<String, Frame>,
@@ -310,7 +321,13 @@ fn abandon(app: &AppHandle) {
 
 /// Freezes every monitor and shows an overlay on each. Expects a claim
 /// from [`begin`], and releases it when the overlay cannot be shown.
-pub fn open(app: &AppHandle, mode: CaptureMode, intent: Intent) -> Result<(), String> {
+/// `all_in_one` gives the overlay its mode toolbar.
+pub fn open(
+    app: &AppHandle,
+    mode: CaptureMode,
+    intent: Intent,
+    all_in_one: bool,
+) -> Result<(), String> {
     // The windows are listed beside the capture, not ahead of it, so the
     // overlay waits only for the slower of the two. Both are done before an
     // overlay takes the focus from the window the user was in.
@@ -336,6 +353,8 @@ pub fn open(app: &AppHandle, mode: CaptureMode, intent: Intent) -> Result<(), St
         id,
         mode,
         intent,
+        all_in_one,
+        choice: None,
         foreground,
         frames: HashMap::new(),
         windows,
@@ -804,6 +823,11 @@ pub struct OverlayWindow {
 pub struct OverlayInfo {
     pub mode: CaptureMode,
     pub intent: Intent,
+    /// Opened by All-in-one: show the mode toolbar.
+    pub all_in_one: bool,
+    /// What the toolbar has chosen so far on another monitor, for a page
+    /// that loads after the choice was made.
+    pub choice: Option<Choice>,
     pub monitor_width: u32,
     pub monitor_height: u32,
     /// The frozen image's width in its own pixels, for sizes shown before
@@ -879,6 +903,76 @@ pub enum Selection {
     /// A clicked point in the overlay's CSS pixels, for picking a colour.
     #[serde(rename_all = "camelCase")]
     Point { x: f64, y: f64, viewport_width: f64 },
+    /// Every frozen monitor, stitched. Only All-in-one's Screen mode
+    /// sends it.
+    Screen,
+}
+
+/// What an All-in-one overlay's toolbar chose, sent with its selection.
+/// An overlay opened for one mode has no toolbar, and this is ignored.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Choice {
+    pub intent: Option<Intent>,
+    pub mode: Option<CaptureMode>,
+    /// The Timer: how long to wait, with the overlay closed, before the
+    /// chosen area is captured as it looks then.
+    pub delay_seconds: Option<u64>,
+}
+
+/// The longest Timer the toolbar offers.
+const MAX_DELAY_SECONDS: u64 = 10;
+
+/// What a finished selection is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Resolved {
+    intent: Intent,
+    mode: CaptureMode,
+    /// Only screenshots wait: text, colours and recordings start at once.
+    delay: Option<Duration>,
+}
+
+/// The session's own intent and mode, or in an All-in-one overlay the ones
+/// its toolbar chose.
+fn resolve(
+    all_in_one: bool,
+    intent: Intent,
+    mode: CaptureMode,
+    choice: Option<Choice>,
+) -> Resolved {
+    let choice = choice.filter(|_| all_in_one).unwrap_or_default();
+    let intent = choice.intent.unwrap_or(intent);
+    let mode = choice.mode.unwrap_or(mode);
+    let delay = choice
+        .delay_seconds
+        .filter(|seconds| *seconds > 0 && intent == Intent::Capture)
+        .map(|seconds| Duration::from_secs(seconds.min(MAX_DELAY_SECONDS)));
+    Resolved {
+        intent,
+        mode,
+        delay,
+    }
+}
+
+/// Every frozen monitor joined into one image, following the desktop
+/// layout, with the densest monitor's scale factor it is drawn at.
+fn stitch_frames(frames: &HashMap<String, Frame>) -> Result<(RgbaImage, Option<f64>), String> {
+    let tiles: Vec<capture::Tile<'_>> = frames
+        .values()
+        .map(|frame| capture::Tile {
+            x: frame.monitor.x,
+            y: frame.monitor.y,
+            width: frame.monitor.width,
+            height: frame.monitor.height,
+            image: &frame.image,
+        })
+        .collect();
+    let image = capture::stitch(&tiles).ok_or("no monitors found")?;
+    let scale = frames
+        .values()
+        .map(|frame| frame.monitor.scale_factor)
+        .reduce(f64::max);
+    Ok((image, scale))
 }
 
 /// The image pixel under a point in the overlay's CSS pixels, clamped to
@@ -913,6 +1007,8 @@ pub fn overlay_info(window: WebviewWindow, state: State<'_, OverlayState>) -> Op
     Some(OverlayInfo {
         mode: session.mode,
         intent: session.intent,
+        all_in_one: session.all_in_one,
+        choice: session.choice,
         monitor_width: frame.monitor.width,
         monitor_height: frame.monitor.height,
         image_width: frame.image.width(),
@@ -1038,25 +1134,89 @@ pub fn overlay_ready(window: WebviewWindow, state: State<'_, OverlayState>) -> R
     reveal(&window).map_err(|err| err.to_string())
 }
 
+/// The All-in-one toolbar on one monitor changed its mode or Timer: keep
+/// it for the session and tell every other overlay, so each toolbar shows
+/// it and a selection on any monitor finishes with it.
+#[tauri::command]
+pub fn overlay_choose(
+    window: WebviewWindow,
+    state: State<'_, OverlayState>,
+    choice: Choice,
+) -> Result<(), String> {
+    let others: Vec<String> = {
+        let mut guard = state.lock();
+        let Phase::Open(session) = &mut *guard else {
+            return Err("no capture in progress".into());
+        };
+        if !session.all_in_one {
+            return Err("this overlay has no toolbar".into());
+        }
+        session.choice = Some(choice);
+        session
+            .frames
+            .keys()
+            .filter(|label| *label != window.label())
+            .cloned()
+            .collect()
+    };
+    // Sent without the lock held.
+    for label in others {
+        if let Err(err) = window.emit_to(label.as_str(), CHOICE_EVENT, choice) {
+            eprintln!("Grab-it: could not share the capture mode: {err}");
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn overlay_cancel(app: AppHandle) {
     close(&app);
 }
 
-/// Closes the overlays and saves the selection.
+/// Closes the overlays and saves the selection. An All-in-one overlay
+/// sends the `choice` its toolbar made with it; with a Timer, the area is
+/// captured live once the overlays are gone and the time is up.
 #[tauri::command]
 pub fn overlay_finish(
     window: WebviewWindow,
     app: AppHandle,
     selection: Selection,
+    choice: Option<Choice>,
 ) -> Result<(), String> {
     let session = take_session(&app).ok_or("no capture in progress")?;
     let frame = session
         .frames
         .get(window.label())
         .ok_or("this window is not a capture overlay")?;
+    let Resolved {
+        intent,
+        mode,
+        delay,
+    } = resolve(
+        session.all_in_one,
+        session.intent,
+        session.mode,
+        choice.or(session.choice),
+    );
 
-    if session.intent == Intent::Record {
+    if selection == Selection::Screen {
+        // Screen is a mode of its own: it always saves a screenshot.
+        if mode != CaptureMode::Screen {
+            return Err("this overlay does not capture the screen".into());
+        }
+        if let Some(delay) = delay {
+            actions::start_after(&app, actions::Action::Screen, delay);
+            return Ok(());
+        }
+        let (image, scale) = stitch_frames(&session.frames)?;
+        let foreground = session.foreground.clone();
+        std::thread::spawn(move || {
+            actions::finish(&app, &image, CaptureMode::Screen, &foreground, scale)
+        });
+        return Ok(());
+    }
+
+    if intent == Intent::Record {
         let size = frame.image.dimensions();
         let rect = match selection {
             Selection::Region {
@@ -1075,7 +1235,7 @@ pub fn overlay_finish(
                 };
                 capture::clip_rect(monitor_to_image_rect(relative, &frame.monitor, size), size)
             }),
-            Selection::Point { .. } => None,
+            Selection::Point { .. } | Selection::Screen => None,
         }
         .ok_or("the selection is empty")?;
         let monitor = frame.monitor.clone();
@@ -1117,11 +1277,16 @@ pub fn overlay_finish(
             let pixels = capture::css_to_image_rect(rect, scale, frame.image.dimensions())
                 .ok_or("the selection is empty")?;
             let image = capture::crop(&frame.image, pixels).ok_or("the selection is empty")?;
-            if session.intent == Intent::Capture {
+            if intent == Intent::Capture {
                 *app.state::<LastRegionState>().lock() = Some(LastRegion {
                     monitor: frame.monitor.clone(),
                     rect: pixels,
                 });
+                if let Some(delay) = delay {
+                    // The same area as Repeat last region captures, live.
+                    actions::start_after(&app, actions::Action::Repeat, delay);
+                    return Ok(());
+                }
             }
             (image, CaptureMode::Region, session.foreground.clone())
         }
@@ -1131,15 +1296,34 @@ pub fn overlay_finish(
                 .iter()
                 .find(|w| w.id == id)
                 .ok_or("the window is no longer there")?;
+            let foreground = screen::foreground_of(picked);
+            if let Some(delay) = delay {
+                let scale = frame.monitor.scale_factor;
+                std::thread::spawn(move || {
+                    std::thread::sleep(delay);
+                    match screen::capture_window(id) {
+                        Ok(image) => actions::finish(
+                            &app,
+                            &image,
+                            CaptureMode::Window,
+                            &foreground,
+                            Some(scale),
+                        ),
+                        Err(err) => actions::report_failure(&app, &err),
+                    }
+                });
+                return Ok(());
+            }
             (
                 window_image(frame, picked)?,
                 CaptureMode::Window,
-                screen::foreground_of(picked),
+                foreground,
             )
         }
+        // Handled above.
+        Selection::Screen => return Err("the selection is empty".into()),
     };
 
-    let intent = session.intent;
     let scale = frame.monitor.scale_factor;
     std::thread::spawn(move || match intent {
         Intent::Text => actions::finish_text(&app, &image),
@@ -1342,6 +1526,172 @@ mod tests {
         assert_eq!(serde_json::to_value(Intent::Text).unwrap(), "text");
         assert_eq!(serde_json::to_value(Intent::Capture).unwrap(), "capture");
         assert_eq!(serde_json::to_value(Intent::Record).unwrap(), "record");
+    }
+
+    #[test]
+    fn all_in_one_finishes_with_what_its_toolbar_chose() {
+        let choice = Choice {
+            intent: Some(Intent::Text),
+            mode: Some(CaptureMode::Region),
+            delay_seconds: None,
+        };
+        assert_eq!(
+            resolve(true, Intent::Capture, CaptureMode::Region, Some(choice)),
+            Resolved {
+                intent: Intent::Text,
+                mode: CaptureMode::Region,
+                delay: None,
+            }
+        );
+        // An overlay opened for one mode keeps it, whatever is sent.
+        assert_eq!(
+            resolve(false, Intent::Colour, CaptureMode::Region, Some(choice)),
+            Resolved {
+                intent: Intent::Colour,
+                mode: CaptureMode::Region,
+                delay: None,
+            }
+        );
+        // Nothing chosen: the overlay's own intent and mode.
+        assert_eq!(
+            resolve(true, Intent::Capture, CaptureMode::Region, None),
+            Resolved {
+                intent: Intent::Capture,
+                mode: CaptureMode::Region,
+                delay: None,
+            }
+        );
+    }
+
+    #[test]
+    fn the_timer_only_delays_screenshots() {
+        let timed = |intent, seconds| Choice {
+            intent: Some(intent),
+            mode: Some(CaptureMode::Screen),
+            delay_seconds: Some(seconds),
+        };
+        let delay =
+            |choice| resolve(true, Intent::Capture, CaptureMode::Region, Some(choice)).delay;
+        assert_eq!(
+            delay(timed(Intent::Capture, 5)),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(delay(timed(Intent::Capture, 0)), None);
+        // Longer than the toolbar offers is cut to its longest.
+        assert_eq!(
+            delay(timed(Intent::Capture, 600)),
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(delay(timed(Intent::Text, 5)), None);
+        assert_eq!(delay(timed(Intent::Colour, 5)), None);
+        assert_eq!(delay(timed(Intent::Record, 5)), None);
+        // Not from an overlay without the toolbar.
+        assert_eq!(
+            resolve(
+                false,
+                Intent::Capture,
+                CaptureMode::Region,
+                Some(timed(Intent::Capture, 5))
+            )
+            .delay,
+            None
+        );
+    }
+
+    #[test]
+    fn choices_reach_the_other_overlays_in_the_frontend_spelling() {
+        let choice = Choice {
+            intent: Some(Intent::Text),
+            mode: Some(CaptureMode::Region),
+            delay_seconds: Some(5),
+        };
+        assert_eq!(
+            serde_json::to_value(choice).unwrap(),
+            serde_json::json!({"intent": "text", "mode": "region", "delaySeconds": 5})
+        );
+        // A page that sends no choice of its own finishes with the shared one.
+        let shared = Some(choice);
+        assert_eq!(
+            resolve(true, Intent::Capture, CaptureMode::Region, None.or(shared)),
+            Resolved {
+                intent: Intent::Text,
+                mode: CaptureMode::Region,
+                delay: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_late_page_is_told_the_choice_made_so_far() {
+        let info = OverlayInfo {
+            mode: CaptureMode::Region,
+            intent: Intent::Capture,
+            all_in_one: true,
+            choice: Some(Choice {
+                intent: Some(Intent::Text),
+                mode: Some(CaptureMode::Region),
+                delay_seconds: Some(3),
+            }),
+            monitor_width: 100,
+            monitor_height: 100,
+            image_width: 100,
+            windows: Vec::new(),
+            top_inset: 0.0,
+        };
+        let value = serde_json::to_value(&info).unwrap();
+        assert_eq!(value["allInOne"], true);
+        assert_eq!(
+            value["choice"],
+            serde_json::json!({"intent": "text", "mode": "region", "delaySeconds": 3})
+        );
+        let none = OverlayInfo {
+            choice: None,
+            ..info
+        };
+        assert!(serde_json::to_value(&none).unwrap()["choice"].is_null());
+    }
+
+    #[test]
+    fn choices_and_screen_selections_deserialize_from_the_frontend() {
+        let choice: Choice =
+            serde_json::from_str(r#"{"intent":"color","mode":"window","delaySeconds":3}"#).unwrap();
+        assert_eq!(
+            choice,
+            Choice {
+                intent: Some(Intent::Colour),
+                mode: Some(CaptureMode::Window),
+                delay_seconds: Some(3),
+            }
+        );
+        assert_eq!(
+            serde_json::from_str::<Choice>("{}").unwrap(),
+            Choice::default()
+        );
+        let screen: Selection = serde_json::from_str(r#"{"kind":"screen"}"#).unwrap();
+        assert_eq!(screen, Selection::Screen);
+    }
+
+    #[test]
+    fn screen_stitches_every_frozen_monitor() {
+        let frame = |x: i32, value: u8| Frame {
+            monitor: MonitorInfo {
+                scale_factor: f64::from(value),
+                ..monitor(x, 0, 2, 2)
+            },
+            image: Arc::new(RgbaImage::from_pixel(2, 2, image::Rgba([value, 0, 0, 255]))),
+            encoded: Encoded::default(),
+            responded: false,
+        };
+        let frames = HashMap::from([
+            ("overlay-2".to_owned(), frame(2, 2)),
+            ("overlay-1".to_owned(), frame(0, 1)),
+        ]);
+        let (image, scale) = stitch_frames(&frames).unwrap();
+        assert_eq!(image.dimensions(), (4, 2));
+        assert_eq!(image.get_pixel(0, 0).0[0], 1);
+        assert_eq!(image.get_pixel(3, 1).0[0], 2);
+        assert_eq!(scale, Some(2.0));
+        assert!(stitch_frames(&HashMap::new()).is_err());
     }
 
     #[test]

@@ -3,6 +3,7 @@ import { acceleratorFromEvent, isMacPlatform } from "./accelerator";
 import { pauseHotkeys, resumeHotkeys, type Hotkeys, type HotkeysUpdate } from "./api";
 
 const FIELDS: { key: keyof Hotkeys; label: string }[] = [
+  { key: "allInOne", label: "All-in-one" },
   { key: "region", label: "Region" },
   { key: "window", label: "Window" },
   { key: "screen", label: "Screen" },

@@ -29,6 +29,17 @@ export const RegionIcon = ({ size }: IconProps) => (
   </Icon>
 );
 
+/** A region's corners around four small tiles: every capture mode in one. */
+export const AllInOneIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" />
+    <rect x="8" y="8" width="3" height="3" rx="0.5" />
+    <rect x="13" y="8" width="3" height="3" rx="0.5" />
+    <rect x="8" y="13" width="3" height="3" rx="0.5" />
+    <rect x="13" y="13" width="3" height="3" rx="0.5" />
+  </Icon>
+);
+
 export const WindowIcon = ({ size }: IconProps) => (
   <Icon size={size}>
     <rect x="3" y="5" width="18" height="14" rx="2" />

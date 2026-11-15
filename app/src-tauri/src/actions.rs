@@ -50,14 +50,19 @@ pub enum Action {
     Colour,
     /// Record a region or window as an MP4 or a GIF, or stop the recording under way.
     Record,
+    /// The region overlay with a toolbar offering every capture mode.
+    AllInOne,
 }
 
 impl Action {
     pub fn mode(self) -> CaptureMode {
         match self {
-            Self::Region | Self::Repeat | Self::Text | Self::Colour | Self::Record => {
-                CaptureMode::Region
-            }
+            Self::Region
+            | Self::Repeat
+            | Self::Text
+            | Self::Colour
+            | Self::Record
+            | Self::AllInOne => CaptureMode::Region,
             Self::Window => CaptureMode::Window,
             Self::Screen => CaptureMode::Screen,
             Self::Monitor(_) => CaptureMode::Monitor,
@@ -129,6 +134,8 @@ pub fn start(app: &AppHandle, action: Action) {
                 }
                 return;
             }
+            // All-in-one has no toolbar here: the portal's own picker offers
+            // the area, as it does for Region.
             match crate::portal::screenshot(mode).await {
                 Ok(Some(image)) if action == Action::Text => {
                     // OCR is slow: keep it off the async runtime's threads.
@@ -148,7 +155,12 @@ pub fn start(app: &AppHandle, action: Action) {
     // monitors are still freezing does not open a second overlay.
     let uses_overlay = matches!(
         action,
-        Action::Region | Action::Window | Action::Text | Action::Colour | Action::Record
+        Action::Region
+            | Action::Window
+            | Action::Text
+            | Action::Colour
+            | Action::Record
+            | Action::AllInOne
     );
     if uses_overlay && !overlay::begin(app) {
         return;
@@ -158,8 +170,10 @@ pub fn start(app: &AppHandle, action: Action) {
     std::thread::spawn(move || {
         let result = match action {
             Action::Region | Action::Window | Action::Text | Action::Colour | Action::Record => {
-                overlay::open(&app, action.mode(), action.intent())
+                overlay::open(&app, action.mode(), action.intent(), false)
             }
+            // Starts as a region capture; its toolbar switches mode in place.
+            Action::AllInOne => overlay::open(&app, action.mode(), action.intent(), true),
             Action::Repeat => {
                 let foreground = screen::foreground();
                 overlay::capture_last_region(&app).map(|(image, scale)| {
@@ -187,7 +201,7 @@ pub fn start(app: &AppHandle, action: Action) {
 
 /// The pixels per point of monitor `index`, or for `None` of the densest
 /// monitor (which a stitched capture of every screen is drawn at).
-fn monitor_scale(index: Option<usize>) -> Option<f64> {
+pub(crate) fn monitor_scale(index: Option<usize>) -> Option<f64> {
     let monitors = screen::monitors().ok()?;
     match index {
         Some(index) => monitors.get(index).map(|monitor| monitor.scale_factor),
@@ -521,6 +535,12 @@ mod tests {
         assert_eq!(Action::Record.intent(), Intent::Record);
         assert_eq!(Action::Region.intent(), Intent::Capture);
         assert_eq!(Action::Window.intent(), Intent::Capture);
+    }
+
+    #[test]
+    fn all_in_one_starts_as_a_region_capture() {
+        assert_eq!(Action::AllInOne.mode(), CaptureMode::Region);
+        assert_eq!(Action::AllInOne.intent(), Intent::Capture);
     }
 
     fn tidied(text: &str, format: &str) -> Result<Tidied, AiError> {

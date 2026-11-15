@@ -15,7 +15,7 @@ function backend({ monitors = 1, shots = 0 } = {}) {
       case "get_settings":
         return {
           saveFolder: "/tmp",
-          hotkeys: { region: "Ctrl+Shift+R", window: "Alt+PrintScreen", screen: "", text: "", colour: "", library: "Ctrl+Shift+L" },
+          hotkeys: { allInOne: "", region: "Ctrl+Shift+R", window: "Alt+PrintScreen", screen: "", text: "", colour: "", library: "Ctrl+Shift+L" },
           afterCapture: "quickAccess",
           copyToClipboard: true,
         };

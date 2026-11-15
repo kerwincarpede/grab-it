@@ -53,7 +53,7 @@ npm run tauri dev
 
 Grab-it starts in the tray with no window open. Closing a window keeps the app running in the tray. The very first launch also opens a short welcome listing the hotkeys; the tray's **Shortcuts and tips…** shows it again.
 
-To open a window or start a capture directly, for example on a desktop without a tray host, pass `--open` with one of `settings`, `library`, `welcome`, `region`, `repeat`, `text`, `colour`, `record`, `editor <file>`, `quick <file>` or `pin <file>`. npm, the Tauri CLI and cargo each consume one `--`, so three are needed:
+To open a window or start a capture directly, for example on a desktop without a tray host, pass `--open` with one of `settings`, `library`, `welcome`, `region`, `all-in-one`, `repeat`, `text`, `colour`, `record`, `editor <file>`, `quick <file>` or `pin <file>`. npm, the Tauri CLI and cargo each consume one `--`, so three are needed:
 
 ```sh
 npm run tauri dev -- -- -- --open settings
@@ -73,6 +73,8 @@ Each capture is copied to the clipboard and saved to `<save folder>/originals/` 
 Annotations are saved in `<name>.annotations.json` beside the capture. Crop and backdrop are non-destructive and only applied on copy and export. Recordings go to `<save folder>/recordings/` as `Grab-it YYYY-MM-DD HH-MM-SS.mp4` (or `.gif`), with their edits in `<name>.edits.json` (see [Recording editor](#recording-editor)).
 
 Region and Window freeze every monitor and show it fullscreen. Each monitor is cropped at its own scale factor, so mixed-DPI setups capture sharp.
+
+All-in-one (`Action::AllInOne`) opens the same overlay with `allInOne` set in `OverlayInfo`, and the page adds a mode toolbar (`Toolbar` in `src/overlay/RegionOverlay.tsx`). Switching modes only changes what the page does with the frozen image already on screen; the toolbar's intent, mode and Timer reach `overlay_finish` as its `choice`, which an overlay opened for one mode ignores. Screen sends `{ kind: "screen" }` and saves every frozen monitor stitched. With the Timer on, `overlay_finish` closes the overlay and captures live after the delay: a region through Repeat last region (the region is remembered first), a window by its id and the screen through Screen. On Wayland All-in-one opens the portal's picker, as Region does.
 
 The overlay has to appear the moment it is asked for, so a spare overlay window per monitor is kept hidden with its page already loaded, and replaced after each selection. On macOS the overlay is a see-through window (hence `macOSPrivateApi` in `tauri.conf.json`), shown as soon as the monitors are frozen; the frozen image reaches the page a moment later and slots in underneath. On Windows and X11 the overlay stays hidden until the frozen image is painted.
 
