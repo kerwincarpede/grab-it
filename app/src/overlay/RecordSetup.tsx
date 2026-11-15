@@ -20,7 +20,7 @@ import {
   type Microphone,
   type RecordingSettings,
 } from "../settings/api";
-import { microphoneLabel, nextCountdown, withMicrophone, withSystemSound } from "./recordSetup";
+import { microphoneLabel, nextCountdown, withMicrophone, withSystemSound } from "./recordOptions";
 
 type FormatChoice = "mp4-30" | "mp4-60" | "gif";
 

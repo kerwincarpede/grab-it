@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_RECORDING } from "../settings/api";
-import { audioWith, microphoneLabel, nextCountdown, withMicrophone, withSystemSound } from "./recordSetup";
+import { audioWith, microphoneLabel, nextCountdown, withMicrophone, withSystemSound } from "./recordOptions";
 
 describe("the recording options", () => {
   it("combines the microphone and the system sound", () => {

@@ -224,11 +224,9 @@ impl Meter {
             .max()
             .unwrap_or(0);
         let level = f32::from(peak) / f32::from(i16::MAX);
-        let _ = self
-            .0
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bits| {
-                (level > f32::from_bits(bits)).then_some(level.to_bits())
-            });
+        // A level is never negative, and the bits of non-negative floats
+        // order as the floats do.
+        self.0.fetch_max(level.to_bits(), Ordering::Relaxed);
     }
 
     /// The loudest level since the last read, which starts the next one.
