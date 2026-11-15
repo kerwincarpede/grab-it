@@ -783,7 +783,12 @@ function RegionOverlay() {
   function grabbed(current: Grab, point: Point, shift: boolean): Box {
     const delta = { x: point.x - current.from.x, y: point.y - current.from.y };
     if (current.handle === "move") {
-      return translate(current.box, clampedDelta(current.box, delta, view));
+      // Moved by whole image pixels, so a box on the pixel grid (a typed
+      // size, the last region) stays on it and keeps its exact size at any
+      // scale. Towards zero, so the clamped move still stays on screen.
+      const clamped = clampedDelta(current.box, delta, view);
+      const whole = (value: number) => Math.trunc(value * scale) / scale;
+      return translate(current.box, { x: whole(clamped.x), y: whole(clamped.y) });
     }
     return resizeBox(current.box, current.handle, delta, {
       bounds: view,

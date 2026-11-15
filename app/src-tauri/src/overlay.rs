@@ -847,13 +847,21 @@ pub struct OverlayInfo {
 /// The last region as a starting selection for an overlay on `monitor`
 /// whose frozen image is `image_size`: in that image's pixels, or `None`
 /// when it was on another monitor or no longer fits on this one.
+///
+/// The region's monitor is found among every frozen monitor (`monitors`),
+/// as Repeat last region finds it, so a name match on one monitor wins over
+/// an index match on another and only one overlay offers it.
 pub fn last_region_on(
     last: Option<&LastRegion>,
     monitor: &MonitorInfo,
+    monitors: &[MonitorInfo],
     image_size: (u32, u32),
 ) -> Option<Rect> {
     let last = last?;
-    find_monitor(&last.monitor, std::slice::from_ref(monitor))?;
+    let found = find_monitor(&last.monitor, monitors)?;
+    if found.index != monitor.index || found.name != monitor.name {
+        return None;
+    }
     let clipped = capture::clip_rect(last.rect, image_size)?;
     // Cut short by the edge, it would not be the same region any more.
     (clipped == last.rect).then_some(clipped)
@@ -1025,6 +1033,12 @@ pub fn overlay_info(
     let Phase::Open(session) = &mut *guard else {
         return None;
     };
+    // Every frozen monitor, so the last region is offered on its own one only.
+    let monitors: Vec<MonitorInfo> = session
+        .frames
+        .values()
+        .map(|frame| frame.monitor.clone())
+        .collect();
     let frame = session.frames.get_mut(window.label())?;
     frame.responded = true;
     Some(OverlayInfo {
@@ -1041,6 +1055,7 @@ pub fn overlay_info(
             last_region_on(
                 last.lock().as_ref(),
                 &frame.monitor,
+                &monitors,
                 frame.image.dimensions(),
             )
         } else {
@@ -1669,6 +1684,7 @@ mod tests {
             image_width: 100,
             windows: Vec::new(),
             top_inset: 0.0,
+            last_region: None,
         };
         let value = serde_json::to_value(&info).unwrap();
         assert_eq!(value["allInOne"], true);
@@ -1747,11 +1763,54 @@ mod tests {
             monitor: left.clone(),
             rect,
         };
-        assert_eq!(last_region_on(Some(&last), &left, (1920, 1080)), Some(rect));
-        assert_eq!(last_region_on(Some(&last), &right, (1280, 1024)), None);
-        assert_eq!(last_region_on(None, &left, (1920, 1080)), None);
+        let both = [left.clone(), right.clone()];
+        assert_eq!(
+            last_region_on(Some(&last), &left, &both, (1920, 1080)),
+            Some(rect)
+        );
+        assert_eq!(
+            last_region_on(Some(&last), &right, &both, (1280, 1024)),
+            None
+        );
+        assert_eq!(last_region_on(None, &left, &both, (1920, 1080)), None);
         // A region that no longer fits the frozen image is not offered.
-        assert_eq!(last_region_on(Some(&last), &left, (1000, 1080)), None);
+        assert_eq!(
+            last_region_on(Some(&last), &left, &both, (1000, 1080)),
+            None
+        );
+    }
+
+    #[test]
+    fn the_last_region_stays_on_its_monitor_after_the_indices_swap() {
+        let screen = |index: usize, name: &str, x: i32| MonitorInfo {
+            index,
+            name: name.into(),
+            ..monitor(x, 0, 1920, 1080)
+        };
+        let rect = Rect {
+            x: 10,
+            y: 10,
+            width: 100,
+            height: 100,
+        };
+        // Taken on DP-1 while it was index 0.
+        let last = LastRegion {
+            monitor: screen(0, "DP-1", 0),
+            rect,
+        };
+        // After a replug DP-2 is index 0 and DP-1 index 1.
+        let dp2 = screen(0, "DP-2", 0);
+        let dp1 = screen(1, "DP-1", 1920);
+        let monitors = [dp2.clone(), dp1.clone()];
+        assert_eq!(
+            last_region_on(Some(&last), &dp1, &monitors, (1920, 1080)),
+            Some(rect)
+        );
+        // DP-2 only matches by index, and DP-1 matched by name first.
+        assert_eq!(
+            last_region_on(Some(&last), &dp2, &monitors, (1920, 1080)),
+            None
+        );
     }
 
     #[test]
@@ -1760,6 +1819,7 @@ mod tests {
             mode: CaptureMode::Region,
             intent: Intent::Capture,
             all_in_one: true,
+            choice: None,
             monitor_width: 1920,
             monitor_height: 1080,
             image_width: 1920,

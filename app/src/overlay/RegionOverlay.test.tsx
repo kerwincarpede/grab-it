@@ -936,6 +936,34 @@ describe("RegionOverlay", () => {
       expect(sent.selection.rect.height).toBeCloseTo(360, 2);
     });
 
+    it("keeps an exact size exact when it is moved at a fractional scale", async () => {
+      // 1500 image px over 1000 CSS px: a 150% monitor.
+      const calls = mockOverlay({ allInOne: true, imageWidth: 1500 });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+      dragOver(overlay, [100, 100], [300, 200]);
+
+      const width = screen.getByRole("textbox", { name: "Width" });
+      fireEvent.change(width, { target: { value: "1280" } });
+      fireEvent.change(screen.getByRole("textbox", { name: "Height" }), { target: { value: "720" } });
+      fireEvent.keyDown(width, { key: "Enter" });
+
+      // One CSS px is 1.5 image px: off the grid unless the move snaps.
+      dragOver(overlay, [200, 200], [201, 201]);
+      expect(sizeOf()).toEqual(["1280", "720"]);
+
+      fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
+      await waitFor(() => expect(finishes(calls)).toHaveLength(1));
+      const { rect } = (last(calls).payload as unknown as { selection: { rect: Box } }).selection;
+      // As src-tauri's css_to_image_rect rounds: edges outwards.
+      const scale = 1.5;
+      const left = Math.floor(rect.x * scale);
+      const top = Math.floor(rect.y * scale);
+      expect(Math.ceil((rect.x + rect.width) * scale) - left).toBe(1280);
+      expect(Math.ceil((rect.y + rect.height) * scale) - top).toBe(720);
+      expect(left).toBeGreaterThan(150);
+    });
+
     it("keeps a size that would run off the screen on it", async () => {
       mockOverlay({ allInOne: true, imageWidth: 2000 });
       render(<RegionOverlay />);
@@ -981,7 +1009,10 @@ describe("RegionOverlay", () => {
       dragOver(overlay, [700, 500], [860, 510]);
       expect(sizeOf()).toEqual(["160", "90"]);
 
-      fireEvent.click(within(ratios).getByRole("button", { name: "1:1" }));
+      // The panel was put away during the drag; it is a new one now.
+      fireEvent.click(
+        within(screen.getByRole("group", { name: "Aspect ratio" })).getByRole("button", { name: "1:1" }),
+      );
       expect(sizeOf()).toEqual(["160", "160"]);
 
       // A typed size has its own shape: back to Free.
