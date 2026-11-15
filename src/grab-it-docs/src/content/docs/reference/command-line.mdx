@@ -1,0 +1,87 @@
+---
+title: Command line
+description: Open a Grab-it window or start a capture with --open, from a terminal, a script or a desktop shortcut.
+sidebar:
+  order: 3
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Run Grab-it with `--open` and a target to open a window or start a capture straight away. It works whether or not Grab-it is already running: a second launch hands its `--open` to the running Grab-it and quits. That makes it handy for a desktop shortcut, a script, a launcher like Raycast or Alfred, or a desktop without a tray.
+
+```sh
+grab-it --open region
+grab-it --open=library
+grab-it --open editor ~/Pictures/Grab-it/shot.png
+```
+
+Launching Grab-it again with no `--open` opens the Library.
+
+## Targets
+
+| Target | What it does |
+| --- | --- |
+| `settings` | Opens Settings |
+| `library` | Opens the Grab-it window on the Library |
+| `welcome` | Opens the welcome: what Grab-it does and its hotkeys |
+| `region` | Starts a region capture |
+| `all-in-one` | Opens the overlay with its toolbar of every capture mode |
+| `repeat` | Captures the last dragged region again |
+| `text` | Starts Capture text: drag over text to copy it |
+| `colour` (or `color`) | Starts the colour picker |
+| `record` | Starts a recording, or stops the one under way |
+| `editor <file>` | Opens a capture in the image editor |
+| `quick <file>` | Shows a capture on the Quick Access card |
+| `pin <file>` | Pins an image above other windows |
+
+`editor`, `quick` and `pin` need the file to open, such as `--open pin shot.png`. If the file doesn't exist, nothing opens.
+
+Grab-it ignores other arguments, and prints a message (on the terminal it was started from) for an unknown target or a missing file.
+
+## Where Grab-it is
+
+<Tabs syncKey="os">
+<TabItem label="Windows" icon="seti:windows">
+
+The installer puts Grab-it in your user's programs folder:
+
+```powershell
+& "$env:LOCALAPPDATA\Grab-it\grab-it.exe" --open region
+```
+
+To make a desktop shortcut, right-click the desktop, choose **New → Shortcut**, and enter that path followed by `--open region`.
+
+</TabItem>
+<TabItem label="macOS" icon="apple">
+
+Run the program inside the app:
+
+```sh
+/Applications/Grab-it.app/Contents/MacOS/grab-it --open region
+```
+
+`open -a Grab-it` doesn't pass `--open` on to a Grab-it that's already running, so use the full path.
+
+</TabItem>
+<TabItem label="Linux" icon="linux">
+
+The `.deb` and `.rpm` packages install `grab-it` on your `PATH`:
+
+```sh
+grab-it --open region
+```
+
+With the AppImage, run the AppImage itself:
+
+```sh
+./Grab-it_*_amd64.AppImage --open region
+```
+
+Bind it to a key in your desktop's keyboard settings if global hotkeys don't work there.
+
+</TabItem>
+</Tabs>
+
+:::tip
+Building from source? `npm run tauri dev` takes the same targets after three `--`: `npm run tauri dev -- -- -- --open settings`. See [Developing Grab-it](https://github.com/kerwincarpede/grab-it/blob/main/docs/development.md).
+:::

@@ -1,27 +1,55 @@
 ---
 title: Find it again
-description: Search every capture by the text inside it, its app, tags, notes or date.
+description: Search every capture by the text inside it, a code it holds, its app, window, tags, notes, AI description or date.
 sidebar:
   order: 1
 ---
 
-Click the Grab-it icon in the menu bar or tray and choose **Open Grab-it** (or click its Dock icon on a Mac) to see every capture, newest first. The sidebar lists the apps you've captured from; pick one to see only its captures.
+Type in the search box at the top of the Library (press `/` to jump there). Results update as you type; press `Enter` to search at once, and `Esc` to clear it.
 
-## Search
+## What search looks at
 
-The search box finds captures by **the text inside the image**, as well as by tags, notes, the app you captured, and its window title. Remember a word that was in that error message or receipt? Type it:
+Every word you type is matched against:
 
-- `inv 2026` finds a receipt that says "Invoice 2026-03". Each word matches the start of a word.
-- Search also finds what a **QR code or barcode** in a capture holds, such as the link in a QR code or the number under a barcode.
-- Narrow things down by **app** in the sidebar, or by **tag** or **date range** in the filter bar.
+- **Text in image**: the words Grab-it read in the capture.
+- **Tags**: yours and the ones AI added.
+- **Notes** you wrote.
+- **App**: the app you captured from.
+- **Window**: the window title at the time.
+- **Description**: the AI description, when [AI descriptions](/grab-it/ai/descriptions/) are on.
 
-With [AI descriptions](/grab-it/ai/descriptions/) on, search also finds what a screenshot *shows*, and you can filter by category.
+Each result says where it matched, with the matching words highlighted, such as *Text in image: …Invoice **2026**-03…*. The best matches come first; with nothing typed, the newest captures come first.
 
-## Work with a capture
+## How words match
 
-- Select a capture to open it in the editor, copy it, pin it, or add **tags** and **notes**.
-- **Copy the text in a capture** with the text button (a "T" in a frame) on its tile or in its details. The details also show all the text Grab-it found, so you can select and copy just part of it. This works for any capture, including full-screen ones, long after you took it.
+- **Every word must match**, somewhere in the capture. `stripe error` finds captures that have both.
+- **Each word matches the start of a word.** `inv 2026` finds a receipt that says "Invoice 2026-03"; `voice` doesn't.
+- Case doesn't matter, and punctuation in what you type is ignored. A "word" with no letters or digits, like `-`, is dropped.
+
+## QR codes and barcodes
+
+When Grab-it reads a capture's text, it also reads any QR code, Data Matrix, Aztec, PDF417 or barcode (Code 128, EAN, UPC and the rest) in it, and stores the value along with the text. So search finds a capture by the link in its QR code or the number under its barcode, even though those characters never appear as text on screen.
+
+## Filters
+
+The filter bar narrows any search, or the whole Library:
+
+- **Any time**, **Today**, **7 days** and **30 days** switch the date range in one click.
+- **Filters** opens the rest:
+  - **Tag**: one of your tags or the AI's.
+  - **Category**: the kind of capture the AI decided it is, such as *Code*, *Error / dialog* or *Receipt*. See [AI descriptions](/grab-it/ai/descriptions/#categories).
+  - **Dates**: *Past 7 days*, *Past 30 days*, *This year*, or a **Custom range** with a *From* and a *To* date. Either end can be left open.
+  - **Type** (Screenshots or Recordings) and **App** appear here when the sidebar isn't already choosing them.
+- **Clear** turns every filter off.
+
+The sidebar's **Apps**, **Tags** and **Recordings** combine with the search box and filters too.
+
+## When a capture isn't found yet
+
+Grab-it reads text in the background, one capture at a time, newest first. While it works, the Library says *Reading text in 3 captures…*. The very first time, it downloads two small text-recognition models (about 12 MB together) and shows *Downloading text recognition models…* with the progress. If the download fails, a **Retry** button appears.
+
+Recordings are never read or described, so search finds them by their app, window title, tags and notes.
 
 :::note
-Reading the text in images happens on your computer, never in the cloud. The first time it's needed, Grab-it downloads a small text-recognition model (about 12 MB), and the Library shows the progress.
+Reading the text in images happens on your computer, never in the cloud. Only the models are downloaded.
 :::

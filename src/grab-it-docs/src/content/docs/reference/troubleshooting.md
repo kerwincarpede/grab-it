@@ -2,7 +2,7 @@
 title: Troubleshooting
 description: Fixes for the most common Grab-it hiccups.
 sidebar:
-  order: 3
+  order: 6
 ---
 
 ## I can't see Grab-it anywhere
@@ -19,7 +19,7 @@ Grab-it needs **Screen Recording** permission. Open **System Settings → Privac
 
 ## On Linux (Wayland), the desktop asks me to pick an area itself
 
-That's normal on Wayland: only the desktop is allowed to read the screen, so captures go through its own screenshot picker. *Repeat last region* and *Record GIF* aren't available there. If your desktop doesn't support global shortcuts for apps, use the tray menu.
+That's normal on Wayland: only the desktop is allowed to read the screen, so captures go through its own screenshot picker. *Repeat last region* and recording aren't available there yet. If your desktop doesn't support global shortcuts for apps, use the tray menu.
 
 ## macOS captures show only my wallpaper again after an update
 
@@ -28,6 +28,33 @@ Updating from an older version can make macOS treat the updated app as a new one
 ## Searching doesn't find text in an old capture
 
 Grab-it reads captures one at a time in the background, newest first, so give it a moment. If the text-recognition download failed, the Library shows a **Retry** button.
+
+## A hotkey does nothing
+
+Another app may hold it. Open [Settings → Hotkeys](/grab-it/reference/settings/#hotkeys) and press **Save hotkeys**: Settings says which hotkey couldn't be registered. Pick other keys, or use the tray menu. On Wayland, your desktop binds the hotkeys: restart Grab-it after changing them, then confirm them in your desktop's shortcut settings.
+
+## Recordings come out as GIFs, not MP4s
+
+MP4 needs ffmpeg. Open **Settings → Recording** and look at **Video encoder**:
+
+- *Downloading ffmpeg…*: wait for it to finish.
+- *MP4 needs ffmpeg* on macOS: install it with `brew install ffmpeg`, then press **Retry**.
+- *Could not set up ffmpeg*: check your internet connection and press **Retry**.
+
+Until ffmpeg works, recordings are saved as GIFs.
+
+## The Library says "Could not describe captures"
+
+The AI provider didn't answer.
+
+- **Claude Code or Codex**: run `claude` (or `codex`) in a terminal to check it's installed and signed in. If Settings says *Grab-it cannot find Claude Code*, install it, sign in, and reopen Settings.
+- **An endpoint**: check the URL and model in **Settings → AI descriptions**, and that the server (such as Ollama) is running. **Test connection** shows the error.
+
+Describing carries on by itself once the provider works, or straight away when you change a setting. See [AI descriptions](/grab-it/ai/descriptions/#when-it-cant-describe).
+
+## Recordings don't show my clicks or keystrokes on macOS
+
+They need **Input Monitoring** permission. Turn on Grab-it under **System Settings → Privacy & Security → Input Monitoring**, then quit and reopen it.
 
 ## Still stuck?
 
