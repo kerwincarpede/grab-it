@@ -81,7 +81,7 @@ jobs:
           fi
           if ! git tag -l 'v[0-9]*' | grep -q .; then
             # No release tag yet: the first release takes the app's version.
-            version="$(jq -r .version app/src-tauri/tauri.conf.json)"
+            version="$(jq -r .version src/grab-it/src-tauri/tauri.conf.json)"
           else
             IFS=. read -r major minor patch <<< "$PREVIOUS"
             case "$BUMP" in

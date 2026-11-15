@@ -5,7 +5,7 @@ Every file in `../` is generated from these SVGs; edit the SVGs, then regenerate
 - `app-icon.svg` is the icon on a near full-bleed tile, used for Windows, Linux, the tray and the window icon.
 - `app-icon-macos.svg` is the same artwork on Apple's icon grid (an 824 px tile with a shadow in a 1024 px canvas) so it matches other macOS icons. Only `icon.icns` comes from it.
 
-From `app/`:
+From `src/grab-it/`:
 
 ```sh
 npx tauri icon src-tauri/icons/source/app-icon.svg -o /tmp/grab-it-icons

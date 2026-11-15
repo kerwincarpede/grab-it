@@ -6,9 +6,10 @@ Grab-it is built with Rust and [Tauri 2](https://tauri.app/), with a React + Typ
 
 | Path | Contents |
 | --- | --- |
-| `app/` | The Tauri project |
-| `app/src/` | Frontend: React + TypeScript + Vite |
-| `app/src-tauri/` | Backend: Rust |
+| `package.json` | npm workspace root over `src/*`; holds the one lockfile |
+| `src/grab-it/` | The Tauri project |
+| `src/grab-it/src/` | Frontend: React + TypeScript + Vite |
+| `src/grab-it/src-tauri/` | Backend: Rust |
 | `.github/workflows/ci.yml` | Checks plus installer builds on Linux, Windows and macOS |
 | `.github/workflows/release.yml` | Release of every push to `main` |
 | `docs/` | User and developer docs; `docs/assets/demo.gif` is the README animation |
@@ -36,17 +37,16 @@ Grab-it is built with Rust and [Tauri 2](https://tauri.app/), with a React + Typ
      libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev
    ```
 
-3. Install the frontend dependencies:
+3. Install the frontend dependencies from the repository root, which is an npm workspace over `src/*`:
 
    ```sh
-   cd app
    npm ci
    ```
 
 ## Run
 
 ```sh
-cd app
+cd src/grab-it
 npm run tauri dev
 ```
 
@@ -309,10 +309,11 @@ It holds the save folder (default `~/Pictures/Grab-it/`), the hotkeys, what happ
 
 ## Checks
 
-Run these from `app/`. CI runs the same commands.
+Run `npm ci` at the repository root, then the rest from `src/grab-it/`. CI runs the same commands.
 
 ```sh
-npm ci
+npm ci              # at the repository root
+cd src/grab-it
 npm run lint        # eslint + tsc --noEmit
 npm test            # vitest run
 npm run build       # tsc + vite build, also needed before the Rust build
@@ -323,7 +324,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 The OCR tests download the ocrs models once into `src-tauri/target/ocr-models/`, or into `$GRAB_IT_OCR_MODELS` when set; CI caches that directory. Their fixture, `src-tauri/tests/fixtures/ocr-pineapple.png`, was made with ImageMagick (the command is in `src-tauri/src/ocr.rs`).
 
-To build installers locally, run `npm run tauri build`; they land in `app/src-tauri/target/release/bundle/`.
+To build installers locally, run `npm run tauri build`; they land in `src/grab-it/src-tauri/target/release/bundle/`.
 
 ## CI
 
@@ -352,13 +353,13 @@ Versions come from the `v*` git tags. With the default `auto` bump, [`PaulHatch/
 | `feat: ...` or `feat(scope): ...` | minor |
 | anything else | patch |
 
-The first release, made before any tag exists, takes the version in `app/src-tauri/tauri.conf.json`. After that the tags are the source of truth: CI writes the release version into `tauri.conf.json` before building, so the version fields in the repository do not need bumping by hand.
+The first release, made before any tag exists, takes the version in `src/grab-it/src-tauri/tauri.conf.json`. After that the tags are the source of truth: CI writes the release version into `tauri.conf.json` before building, so the version fields in the repository do not need bumping by hand.
 
 A run opens a draft release, builds the installers into it, and publishes it (creating the tag) only when the checks and all three builds pass. A failed run leaves only a hidden draft, which the next release of that version replaces. Each release is named by its version, for example `0.2.1` for the tag `v0.2.1`.
 
 ### Updates
 
-Installed copies update themselves from these releases with Tauri's [updater plugin](https://v2.tauri.app/plugin/updater/) (`app/src-tauri/src/update.rs`). They read `latest.json` from the latest release (`releases/latest/download/latest.json`), compare its version with their own, and offer to download and install the package for their platform and installer type. A release builds those packages because CI turns on `bundle.createUpdaterArtifacts` when it stamps the version: the `.app.tar.gz` on macOS, and the `.AppImage`, `.deb`, `.rpm`, `.msi` and `-setup.exe` themselves elsewhere, each with a `.sig`. The publish job then writes `latest.json` from those signatures ([`.github/scripts/updater_manifest.py`](../.github/scripts/updater_manifest.py)) and refuses to publish a release that is missing macOS, Linux or Windows.
+Installed copies update themselves from these releases with Tauri's [updater plugin](https://v2.tauri.app/plugin/updater/) (`src/grab-it/src-tauri/src/update.rs`). They read `latest.json` from the latest release (`releases/latest/download/latest.json`), compare its version with their own, and offer to download and install the package for their platform and installer type. A release builds those packages because CI turns on `bundle.createUpdaterArtifacts` when it stamps the version: the `.app.tar.gz` on macOS, and the `.AppImage`, `.deb`, `.rpm`, `.msi` and `-setup.exe` themselves elsewhere, each with a `.sig`. The publish job then writes `latest.json` from those signatures ([`.github/scripts/updater_manifest.py`](../.github/scripts/updater_manifest.py)) and refuses to publish a release that is missing macOS, Linux or Windows.
 
 `latest.json` also carries `changes`: the user-facing entries of the generated release notes ("What's Changed") of this release and the 19 before it. The update prompt lists those newer than the installed version, so someone several versions behind sees everything the update brings. Entries come from the pull request titles, without their Conventional Commits prefix; `ci`, `docs`, `chore`, `build`, `refactor`, `style` and `test` changes are left out, so write `feat:` and `fix:` titles for a user to read.
 

@@ -10,7 +10,7 @@ if pgrep -x grab-it >/dev/null; then
 fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
-B="${GRAB_IT_BIN:-$ROOT/app/src-tauri/target/release/grab-it}"
+B="${GRAB_IT_BIN:-$ROOT/src/grab-it/src-tauri/target/release/grab-it}"
 OUT="${BENCH_OUT:-${TMPDIR:-/tmp}/grab-it-bench}"
 mkdir -p "$OUT"
 [ -x "$OUT/presented" ] || swiftc -O "$HERE/presented.swift" -o "$OUT/presented" 2>/dev/null
