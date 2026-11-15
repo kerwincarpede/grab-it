@@ -4,7 +4,7 @@ import type { InvokeArgs } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RegionOverlay from "./RegionOverlay";
-import { START_EVENT, type OverlayInfo } from "./api";
+import { CHOICE_EVENT, START_EVENT, type OverlayInfo } from "./api";
 
 interface Call {
   cmd: string;
@@ -31,6 +31,7 @@ function mockOverlay(info: Partial<OverlayInfo> = {}): Call[] {
         return new ArrayBuffer(8);
       case "overlay_ready":
       case "overlay_finish":
+      case "overlay_choose":
       case "overlay_cancel":
         return null;
       default:
@@ -710,6 +711,54 @@ describe("RegionOverlay", () => {
       fireEvent.click(screen.getByRole("button", { name: "Region" }));
       expect(timer).toBeEnabled();
       expect(timer).toHaveTextContent("Timer 3 s");
+    });
+
+    it("shares a new mode or Timer with the other monitors' overlays", async () => {
+      const calls = mockOverlay({ allInOne: true });
+      render(<RegionOverlay />);
+      await ready();
+
+      fireEvent.keyDown(window, { key: "4", code: "Digit4" });
+      expect(last(calls)).toEqual({
+        cmd: "overlay_choose",
+        payload: { choice: { intent: "text", mode: "region", delaySeconds: 0 } },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Window" }));
+      fireEvent.click(screen.getByTestId("overlay-timer"));
+      expect(last(calls)).toEqual({
+        cmd: "overlay_choose",
+        payload: { choice: { intent: "capture", mode: "window", delaySeconds: 3 } },
+      });
+    });
+
+    it("follows a choice made on another monitor and finishes with it", async () => {
+      const calls = mockOverlay({ allInOne: true });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      // Sent until the page is listening, which it starts once loaded.
+      await waitFor(async () => {
+        await emit(CHOICE_EVENT, { intent: "text", mode: "region", delaySeconds: 5 });
+        expect(overlay).toHaveAttribute("data-intent", "text");
+      });
+      expect(screen.getByRole("button", { name: "Text" })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("button", { name: "Region" })).toHaveAttribute("aria-pressed", "false");
+      // Not shared back: only the page that changed it tells the others.
+      expect(calls.map((c) => c.cmd)).not.toContain("overlay_choose");
+
+      fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 50 });
+      fireEvent.mouseMove(overlay, { clientX: 300, clientY: 90 });
+      fireEvent.mouseUp(overlay, { button: 0, clientX: 300, clientY: 90 });
+      await waitFor(() =>
+        expect(last(calls).payload).toMatchObject({
+          choice: { intent: "text", mode: "region", delaySeconds: 0 },
+        }),
+      );
+
+      // The Timer it set applies once back on a screenshot mode.
+      await emit(CHOICE_EVENT, { intent: "capture", mode: "window", delaySeconds: 5 });
+      await waitFor(() => expect(overlay).toHaveAttribute("data-mode", "window"));
+      expect(screen.getByTestId("overlay-timer")).toHaveTextContent("Timer 5 s");
     });
 
     it("hides the toolbar while a region is dragged under it", async () => {

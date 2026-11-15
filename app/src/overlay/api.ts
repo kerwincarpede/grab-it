@@ -117,6 +117,25 @@ export function finishOverlay(selection: Selection, choice?: OverlayChoice): Pro
   return invoke<void>("overlay_finish", choice ? { selection, choice } : { selection });
 }
 
+/** Mirrors `CHOICE_EVENT` in src-tauri/src/overlay.rs. */
+export const CHOICE_EVENT = "overlay-choice";
+
+/**
+ * Tells the backend, and through it every other monitor's overlay, what
+ * All-in-one's toolbar now has chosen.
+ */
+export function chooseOverlay(choice: OverlayChoice): Promise<void> {
+  return invoke<void>("overlay_choose", { choice });
+}
+
+/**
+ * Calls `handler` when another monitor's toolbar changed the choice.
+ * Resolves to a function that stops listening.
+ */
+export function onOverlayChoice(handler: (choice: OverlayChoice) => void): Promise<() => void> {
+  return listen<OverlayChoice>(CHOICE_EVENT, (event) => handler(event.payload));
+}
+
 export function cancelOverlay(): Promise<void> {
   return invoke<void>("overlay_cancel");
 }

@@ -11,9 +11,11 @@ import {
 import { flushSync } from "react-dom";
 import {
   cancelOverlay,
+  chooseOverlay,
   finishOverlay,
   imageType,
   isInstantOverlay,
+  onOverlayChoice,
   onOverlayStart,
   overlayImage,
   overlayInfo,
@@ -104,6 +106,12 @@ const TOOLBAR_ROOM = 52;
 
 function toolIntent(tool: Tool): OverlayIntent {
   return tool === "text" || tool === "color" || tool === "record" ? tool : "capture";
+}
+
+/** The toolbar mode another monitor's overlay chose, from its choice. */
+function toolOf(choice: OverlayChoice): Tool {
+  if (choice.intent !== "capture") return choice.intent;
+  return choice.mode === "window" ? "window" : "region";
 }
 
 /** The Timer only delays screenshots: Region, Window and Screen. */
@@ -427,6 +435,22 @@ function RegionOverlay() {
     return { intent, mode, delaySeconds: isTimed(tool) ? timer : 0 };
   }
 
+  /**
+   * Shares a new mode or Timer with every other monitor's overlay, so the
+   * selection finishes the same whichever monitor it is made on. The Timer
+   * is sent as set, even while a mode that ignores it is picked.
+   */
+  function share(nextTool: Tool, seconds: number) {
+    const choice: OverlayChoice = {
+      intent: toolIntent(nextTool),
+      mode: nextTool === "window" ? "window" : "region",
+      delaySeconds: seconds,
+    };
+    chooseOverlay(choice).catch(() => {
+      // This monitor still finishes with its own choice.
+    });
+  }
+
   function finish(picked: Selection) {
     if (done.current) return;
     done.current = true;
@@ -445,12 +469,38 @@ function RegionOverlay() {
     }
     setTool(next);
     setDrag(null);
+    share(next, timer);
   }
 
   function stepTimer() {
     if (!isTimed(tool)) return;
-    setTimer((seconds) => TIMER_STEPS[(TIMER_STEPS.indexOf(seconds) + 1) % TIMER_STEPS.length]);
+    const seconds = TIMER_STEPS[(TIMER_STEPS.indexOf(timer) + 1) % TIMER_STEPS.length];
+    setTimer(seconds);
+    share(tool, seconds);
   }
+
+  // Another monitor's toolbar changed: follow it, without sharing it back.
+  useEffect(() => {
+    if (!allInOne) return;
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    onOverlayChoice((choice) => {
+      setTool(toolOf(choice));
+      setTimer(TIMER_STEPS.includes(choice.delaySeconds) ? choice.delaySeconds : 0);
+      setDrag(null);
+    })
+      .then((stop) => {
+        if (cancelled) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {
+        // Then each monitor keeps its own choice.
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [allInOne]);
 
   const onToolKey = useEffectEvent((event: KeyboardEvent) => {
     if (!allInOne || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;

@@ -50,6 +50,11 @@ pub const LABEL_PREFIX: &str = "overlay-";
 /// `START_EVENT` in src/overlay/api.ts.
 const START_EVENT: &str = "overlay-start";
 
+/// Emitted to every overlay of an All-in-one selection when one of them
+/// changes the toolbar's mode or Timer, with the [`Choice`]. Mirrors
+/// `CHOICE_EVENT` in src/overlay/api.ts.
+const CHOICE_EVENT: &str = "overlay-choice";
+
 /// Whether overlays are see-through and shown the moment the monitors are
 /// frozen, ahead of their frozen image.
 const INSTANT: bool = cfg!(target_os = "macos");
@@ -101,6 +106,9 @@ struct Session {
     /// Opened by All-in-one: the page shows its mode toolbar, and
     /// [`overlay_finish`] takes the mode and intent chosen there.
     all_in_one: bool,
+    /// What the toolbar last chose on any monitor, so every overlay
+    /// finishes the same way whichever one the selection is made on.
+    choice: Option<Choice>,
     foreground: Foreground,
     /// Frozen monitors, by overlay window label.
     frames: HashMap<String, Frame>,
@@ -346,6 +354,7 @@ pub fn open(
         mode,
         intent,
         all_in_one,
+        choice: None,
         foreground,
         frames: HashMap::new(),
         windows,
@@ -898,7 +907,7 @@ pub enum Selection {
 
 /// What an All-in-one overlay's toolbar chose, sent with its selection.
 /// An overlay opened for one mode has no toolbar, and this is ignored.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Choice {
     pub intent: Option<Intent>,
@@ -1121,6 +1130,40 @@ pub fn overlay_ready(window: WebviewWindow, state: State<'_, OverlayState>) -> R
     reveal(&window).map_err(|err| err.to_string())
 }
 
+/// The All-in-one toolbar on one monitor changed its mode or Timer: keep
+/// it for the session and tell every other overlay, so each toolbar shows
+/// it and a selection on any monitor finishes with it.
+#[tauri::command]
+pub fn overlay_choose(
+    window: WebviewWindow,
+    state: State<'_, OverlayState>,
+    choice: Choice,
+) -> Result<(), String> {
+    let others: Vec<String> = {
+        let mut guard = state.lock();
+        let Phase::Open(session) = &mut *guard else {
+            return Err("no capture in progress".into());
+        };
+        if !session.all_in_one {
+            return Err("this overlay has no toolbar".into());
+        }
+        session.choice = Some(choice);
+        session
+            .frames
+            .keys()
+            .filter(|label| *label != window.label())
+            .cloned()
+            .collect()
+    };
+    // Sent without the lock held.
+    for label in others {
+        if let Err(err) = window.emit_to(label.as_str(), CHOICE_EVENT, choice) {
+            eprintln!("Grab-it: could not share the capture mode: {err}");
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn overlay_cancel(app: AppHandle) {
     close(&app);
@@ -1145,7 +1188,12 @@ pub fn overlay_finish(
         intent,
         mode,
         delay,
-    } = resolve(session.all_in_one, session.intent, session.mode, choice);
+    } = resolve(
+        session.all_in_one,
+        session.intent,
+        session.mode,
+        choice.or(session.choice),
+    );
 
     if selection == Selection::Screen {
         // Screen is a mode of its own: it always saves a screenshot.
@@ -1543,6 +1591,29 @@ mod tests {
             )
             .delay,
             None
+        );
+    }
+
+    #[test]
+    fn choices_reach_the_other_overlays_in_the_frontend_spelling() {
+        let choice = Choice {
+            intent: Some(Intent::Text),
+            mode: Some(CaptureMode::Region),
+            delay_seconds: Some(5),
+        };
+        assert_eq!(
+            serde_json::to_value(choice).unwrap(),
+            serde_json::json!({"intent": "text", "mode": "region", "delaySeconds": 5})
+        );
+        // A page that sends no choice of its own finishes with the shared one.
+        let shared = Some(choice);
+        assert_eq!(
+            resolve(true, Intent::Capture, CaptureMode::Region, None.or(shared)),
+            Resolved {
+                intent: Intent::Text,
+                mode: CaptureMode::Region,
+                delay: None,
+            }
         );
     }
 
