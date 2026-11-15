@@ -4,7 +4,7 @@ import starlight from '@astrojs/starlight';
 
 // Served from GitHub Pages at https://kerwincarpede.github.io/grab-it/, so
 // every link inside the site starts with the /grab-it base.
-const section = (label, directory) => ({ label, autogenerate: { directory } });
+const section = (label, directory) => ({ label, items: [{ autogenerate: { directory } }] });
 
 export default defineConfig({
 	site: 'https://kerwincarpede.github.io',
