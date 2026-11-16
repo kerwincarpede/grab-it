@@ -481,3 +481,24 @@
     opacity: 0;
   }
 }
+
+
+.quick .quick-drag-source {
+  cursor: grab;
+  touch-action: none;
+}
+
+.quick .quick-drag-source:active {
+  cursor: grabbing;
+}
+
+.quick-recording-details {
+  margin: 4px 8px 0;
+}
+
+.quick-recording-details .quick-detail {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

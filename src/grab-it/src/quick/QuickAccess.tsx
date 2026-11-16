@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import "./quick.css";
 import {
   codeFormats,
@@ -13,6 +13,7 @@ import {
   onQuickChanged,
   quickAction,
   quickInfo,
+  quickDrag,
   quickThumbnail,
   type QuickAction,
   type QuickItem,
@@ -147,6 +148,10 @@ function QuickAccess() {
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hovered, setHovered] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const dragActive = useRef(false);
+  const pendingDrag = useRef<{ x: number; y: number; pointer: number; target: QuickShown } | null>(null);
+  const suppressClick = useRef<number | null>(null);
   /** Bumped for each new item, restarting the dismiss timer and its bar. */
   const [shown, setShown] = useState(0);
   /** An action is under way; a second click must not start another. */
@@ -159,6 +164,8 @@ function QuickAccess() {
   const show = useCallback((next: QuickShown | null) => {
     // The window is reused after a dismissal: it can act again.
     busy.current = false;
+    pendingDrag.current = null;
+    suppressClick.current = null;
     latest.current = next;
     setCurrent(next);
     setFlash(null);
@@ -203,7 +210,7 @@ function QuickAccess() {
 
   const run = useCallback((action: QuickAction, done?: string) => {
     const target = latest.current;
-    if (!target || busy.current) return;
+    if (!target || busy.current || dragActive.current) return;
     // Copying and Show in folder leave the card up and may be repeated;
     // the others end it, so a double-click must not run them twice.
     const ends = action !== "copy" && action !== "copyOriginal" && action !== "copyText" && action !== "reveal";
@@ -230,6 +237,47 @@ function QuickAccess() {
       });
   }, []);
 
+  // Pointer capture keeps threshold detection working outside the source.
+  const beginDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || !latest.current || busy.current || dragActive.current) return;
+    if ((event.target as HTMLElement).closest("button") && event.currentTarget.tagName !== "BUTTON") return;
+    suppressClick.current = null;
+    pendingDrag.current = { x: event.clientX, y: event.clientY, pointer: event.pointerId, target: latest.current };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  useEffect(() => {
+    const move = (event: PointerEvent) => {
+      const pending = pendingDrag.current;
+      if (!pending || event.pointerId !== pending.pointer || latest.current !== pending.target) return;
+      if (Math.hypot(event.clientX - pending.x, event.clientY - pending.y) < 5) return;
+      pendingDrag.current = null;
+      suppressClick.current = pending.target.generation;
+      dragActive.current = true;
+      setDragging(true);
+      setError(null);
+      quickDrag(pending.target.generation)
+        .catch((err: unknown) => {
+          if (latest.current === pending.target) setError(errorMessage(err));
+        })
+        .finally(() => {
+          dragActive.current = false;
+          setDragging(false);
+          // A complete new lifetime after either a drop or cancellation.
+          setShown((count) => count + 1);
+        });
+    };
+    const end = () => { pendingDrag.current = null; };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+    };
+  }, []);
+
   /** Copies the capture's stored OCR text; the card stays up, as for Copy. */
   const copyText = useCallback((id: number) => {
     const target = latest.current;
@@ -245,7 +293,7 @@ function QuickAccess() {
   }, []);
 
   const lifetime = item ? dismissAfter(item, current?.seconds ?? 8) : null;
-  const paused = hovered || error !== null;
+  const paused = hovered || dragging || error !== null;
   useEffect(() => {
     if (lifetime === null || paused) return;
     const timer = window.setTimeout(() => run("close"), lifetime);
@@ -288,10 +336,21 @@ function QuickAccess() {
         <div className="quick-stage">
           <button
             type="button"
-            className="quick-preview"
+            className="quick-preview quick-drag-source"
+            onPointerDown={beginDrag}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") suppressClick.current = null;
+            }}
+            onDragStart={(event) => event.preventDefault()}
             aria-label={`Annotate ${item.fileName}`}
-            title="Click to annotate"
-            onClick={() => run("edit")}
+            title="Click to annotate, or drag to share the original PNG"
+            onClick={(event) => {
+              if (suppressClick.current === current?.generation) {
+                event.preventDefault();
+                return;
+              }
+              run("edit");
+            }}
           >
             {thumbnail && <img src={thumbnail} alt="" draggable={false} />}
             <span className="quick-size">
@@ -382,6 +441,11 @@ function QuickAccess() {
           {what} saved
         </span>
         {close}
+        <div className="quick-body quick-recording-details quick-drag-source"
+          onPointerDown={beginDrag} onDragStart={(event) => event.preventDefault()}
+          title="Drag to share this recording">
+          <p className="quick-detail">{item.fileName}</p>
+        </div>
         {item.fallback && (
           <p className="quick-note" title={item.fallback}>
             <Icon>{ICONS.warning}</Icon>

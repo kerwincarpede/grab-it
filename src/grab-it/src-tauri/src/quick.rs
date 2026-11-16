@@ -424,6 +424,11 @@ pub fn quick_thumbnail(
         }
         _ => return Err("there is no capture on the card".to_owned()),
     };
+    thumbnail_png(image).map(tauri::ipc::Response::new)
+}
+
+/// Shared thumbnail encoding for the card and its native drag image.
+fn thumbnail_png(image: image::DynamicImage) -> Result<Vec<u8>, String> {
     let small = if image.width() > THUMB_MAX || image.height() > THUMB_MAX {
         image.resize(THUMB_MAX, THUMB_MAX, FilterType::Triangle)
     } else {
@@ -433,7 +438,92 @@ pub fn quick_thumbnail(
     small
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .map_err(|err| err.to_string())?;
-    Ok(tauri::ipc::Response::new(png))
+    Ok(png)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DragImage {
+    Thumbnail,
+    AppIcon,
+}
+
+/// Pure selection: never reads the filesystem or uses window state.
+fn drag_source(item: &QuickItem) -> Option<(PathBuf, DragImage)> {
+    match item {
+        QuickItem::Capture { path, .. } => Some((path.clone(), DragImage::Thumbnail)),
+        QuickItem::Recorded { path, .. } => Some((path.clone(), DragImage::AppIcon)),
+        _ => None,
+    }
+}
+
+/// Resolves only after native drop/cancel, not when GTK merely starts the drag.
+#[tauri::command]
+pub async fn quick_drag(generation: u64, app: AppHandle) -> Result<(), String> {
+    let item = {
+        let state = app.state::<QuickState>();
+        let current = lock(&state.current);
+        match current.as_ref() {
+            Some(shown) if shown.generation == generation => shown.item.clone(),
+            _ => return Ok(()),
+        }
+    };
+    let (path, image) = drag_source(&item).ok_or("there is no file on the card")?;
+    let path = path
+        .canonicalize()
+        .map_err(|err| format!("could not find the file: {err}"))?;
+    if !path.is_file() {
+        return Err("the card's file is no longer available".into());
+    }
+    let image = match image {
+        DragImage::Thumbnail => drag::Image::Raw(thumbnail_png(
+            image::open(&path).map_err(|err| format!("could not open the capture: {err}"))?,
+        )?),
+        // Embedded so installed builds do not depend on the source tree.
+        DragImage::AppIcon => drag::Image::Raw(include_bytes!("../icons/128x128.png").to_vec()),
+    };
+    let (send, receive) = std::sync::mpsc::channel();
+    let main_app = app.clone();
+    app.run_on_main_thread(move || {
+        let result = (|| -> Result<(), String> {
+            // Thumbnail IO may have raced a new capture.
+            let state = main_app.state::<QuickState>();
+            if lock(&state.current).as_ref().map(|shown| shown.generation) != Some(generation) {
+                let _ = send.send(Ok(()));
+                return Ok(());
+            }
+            let window = main_app
+                .get_webview_window(LABEL)
+                .ok_or("Quick Access is closed")?;
+            let completed = send.clone();
+            #[cfg(target_os = "linux")]
+            let native = window.gtk_window().map_err(|err| err.to_string())?;
+            drag::start_drag(
+                #[cfg(target_os = "linux")]
+                &native,
+                #[cfg(not(target_os = "linux"))]
+                &window,
+                drag::DragItem::Files(vec![path]),
+                image,
+                move |_, _| {
+                    let _ = completed.send(Ok(()));
+                },
+                drag::Options::default(),
+            )
+            .map_err(|err| format!("could not drag the file: {err}"))?;
+            Ok(())
+        })();
+        if let Err(err) = result {
+            let _ = send.send(Err(err));
+        }
+    })
+    .map_err(|err| err.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        receive
+            .recv()
+            .map_err(|_| "native drag ended without a result".to_owned())?
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 /// What a button on the card does. Mirrors `QuickAction` in src/quick/api.ts.
@@ -634,6 +724,51 @@ fn delete_capture(app: &AppHandle, path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drag_sources_keep_original_files_and_choose_their_preview() {
+        let capture = QuickItem::capture(Path::new("/shots/original.png"), (30, 20), true);
+        assert_eq!(
+            drag_source(&capture),
+            Some(("/shots/original.png".into(), DragImage::Thumbnail))
+        );
+        for format in [RecordingFormat::Mp4, RecordingFormat::Gif] {
+            let path = PathBuf::from(if format == RecordingFormat::Mp4 {
+                "/video.mp4"
+            } else {
+                "/video.gif"
+            });
+            let recording = QuickItem::Recorded {
+                path: path.clone(),
+                file_name: "video".into(),
+                duration_ms: 100,
+                bytes: 42,
+                format,
+                fallback: None,
+            };
+            assert_eq!(drag_source(&recording), Some((path, DragImage::AppIcon)));
+        }
+        for item in [
+            QuickItem::colour([0, 0, 0]),
+            QuickItem::text("text".into()),
+            QuickItem::Code {
+                codes: vec![],
+                text: String::new(),
+            },
+            QuickItem::Notice {
+                title: "Notice".into(),
+                message: String::new(),
+            },
+            QuickItem::Error {
+                message: "error".into(),
+            },
+            QuickItem::Working {
+                message: "working".into(),
+            },
+        ] {
+            assert_eq!(drag_source(&item), None);
+        }
+    }
 
     #[test]
     fn colours_are_upper_case_hex() {

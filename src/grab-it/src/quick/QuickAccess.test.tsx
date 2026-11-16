@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
@@ -31,6 +31,8 @@ const CAPTURE: QuickItem = {
 interface Backend {
   calls: { cmd: string; payload?: InvokeArgs }[];
   failAction?: string;
+  drag?: Promise<void>;
+  failDrag?: string;
   /** What `library_text` answers; the capture is not in the library when unset. */
   text?: ShotText;
   /** Mock Tauri events, so tests can emit them. */
@@ -50,6 +52,9 @@ function mockBackend(item: QuickItem | null, options: Partial<Backend> = {}): Ba
           return item && { generation: 7, item };
         case "quick_thumbnail":
           return new ArrayBuffer(4);
+        case "quick_drag":
+          if (backend.failDrag) throw backend.failDrag;
+          return backend.drag ?? null;
         case "quick_action":
           if (backend.failAction) throw backend.failAction;
           return null;
@@ -563,5 +568,132 @@ describe("quick helpers", () => {
     expect(describeText("one")).toBe("1 line, 3 characters");
     expect(describeText("a\n\nb")).toBe("2 lines, 4 characters");
     expect(describeText("x")).toBe("1 line, 1 character");
+  });
+});
+
+
+// MouseEvent supplies coordinates in jsdom, which has no native PointerEvent.
+function pointer(target: Element | Window, type: string, x: number, y: number, button = 0) {
+  const event = new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button });
+  Object.defineProperty(event, "pointerId", { value: 1 });
+  fireEvent(target, event);
+}
+
+const dragCalls = (backend: Backend) => backend.calls.filter((call) => call.cmd === "quick_drag");
+const RECORDING: QuickItem = {
+  kind: "recorded", path: "/shots/movie.mp4", fileName: "movie.mp4",
+  durationMs: 1000, bytes: 1024, format: "mp4",
+};
+
+describe("Quick Access native dragging", () => {
+  it("keeps a short press a click that opens the editor", async () => {
+    const backend = mockBackend(CAPTURE);
+    render(<QuickAccess />);
+    const source = await screen.findByRole("button", { name: `Annotate ${CAPTURE.fileName}` });
+    pointer(source, "pointerdown", 10, 10);
+    pointer(window, "pointermove", 12, 12);
+    pointer(window, "pointerup", 12, 12);
+    fireEvent.click(source, { detail: 1 });
+    await waitFor(() => expect(actions(backend)).toEqual(["edit"]));
+    expect(dragCalls(backend)).toEqual([]);
+  });
+
+  it("starts one drag at the threshold and suppresses the following click", async () => {
+    const backend = mockBackend(CAPTURE);
+    render(<QuickAccess />);
+    const source = await screen.findByRole("button", { name: `Annotate ${CAPTURE.fileName}` });
+    pointer(source, "pointerdown", 10, 10);
+    pointer(window, "pointermove", 15, 10);
+    pointer(window, "pointermove", 30, 10);
+    pointer(window, "pointerup", 30, 10);
+    fireEvent.click(source, { detail: 1 });
+    await waitFor(() => expect(dragCalls(backend)).toHaveLength(1));
+    expect(dragCalls(backend)[0].payload).toEqual({ generation: 7 });
+    expect(actions(backend)).toEqual([]);
+    // A separate later press is a click again.
+    pointer(source, "pointerdown", 10, 10);
+    pointer(window, "pointerup", 10, 10);
+    fireEvent.click(source, { detail: 1 });
+    await waitFor(() => expect(actions(backend)).toEqual(["edit"]));
+  });
+
+  it("waits for native completion even after pointerup and restarts the dismiss lifetime", async () => {
+    let complete!: () => void;
+    const backend = mockBackend(CAPTURE, { drag: new Promise<void>((resolve) => { complete = resolve; }) });
+    render(<QuickAccess />);
+    const source = await screen.findByRole("button", { name: `Annotate ${CAPTURE.fileName}` });
+    vi.useFakeTimers();
+    pointer(source, "pointerdown", 0, 0);
+    pointer(window, "pointermove", 20, 0);
+    pointer(window, "pointerup", 20, 0);
+    await act(async () => { vi.advanceTimersByTime(30_000); });
+    expect(actions(backend)).toEqual([]);
+    expect(source).toBeInTheDocument();
+    await act(async () => { complete(); });
+    expect(source).toBeInTheDocument();
+    await act(async () => { vi.advanceTimersByTime(7999); });
+    expect(actions(backend)).toEqual([]);
+    await act(async () => { vi.advanceTimersByTime(1); });
+    expect(actions(backend)).toEqual(["close"]);
+  });
+
+  it.each(["mp4", "gif"] as const)("drags %s recordings only from the details area", async (format) => {
+    const backend = mockBackend({ ...RECORDING, format });
+    const user = userEvent.setup();
+    render(<QuickAccess />);
+    const details = (await screen.findByText("movie.mp4")).closest(".quick-body")!;
+    pointer(details, "pointerdown", 0, 0);
+    pointer(window, "pointermove", 10, 0);
+    await waitFor(() => expect(dragCalls(backend)).toHaveLength(1));
+    pointer(window, "pointerup", 10, 0);
+    const folder = screen.getByRole("button", { name: "Show in folder" });
+    pointer(folder, "pointerdown", 0, 0);
+    pointer(window, "pointermove", 20, 0);
+    pointer(window, "pointerup", 20, 0);
+    await user.click(folder);
+    expect(dragCalls(backend)).toHaveLength(1);
+    expect(actions(backend)).toEqual(["reveal"]);
+  });
+
+  it("shows a start error, preserves the card and allows another attempt", async () => {
+    const backend = mockBackend(CAPTURE, { failDrag: "file missing" });
+    render(<QuickAccess />);
+    const source = await screen.findByRole("button", { name: `Annotate ${CAPTURE.fileName}` });
+    pointer(source, "pointerdown", 0, 0);
+    pointer(window, "pointermove", 10, 0);
+    expect(await screen.findByRole("alert")).toHaveTextContent("file missing");
+    expect(source).toBeInTheDocument();
+    backend.failDrag = undefined;
+    pointer(source, "pointerdown", 0, 0);
+    pointer(window, "pointermove", 10, 0);
+    await waitFor(() => expect(dragCalls(backend)).toHaveLength(2));
+    expect(actions(backend)).toEqual([]);
+  });
+
+  it("abandons a pending gesture when a newer card arrives", async () => {
+    const backend = mockBackend(CAPTURE, { events: true });
+    render(<QuickAccess />);
+    const source = await screen.findByRole("button", { name: `Annotate ${CAPTURE.fileName}` });
+    // Let the event subscription and its refresh finish.
+    await waitFor(() => expect(backend.calls.filter((call) => call.cmd === "quick_info")).toHaveLength(2));
+    pointer(source, "pointerdown", 0, 0);
+    await act(async () => {
+      await emit("quick-changed", { generation: 8, item: { ...CAPTURE, fileName: "new.png" } });
+    });
+    pointer(window, "pointermove", 20, 0);
+    expect(dragCalls(backend)).toEqual([]);
+    expect(screen.getByRole("button", { name: "Annotate new.png" })).toBeInTheDocument();
+  });
+
+  it("ignores right presses and cancelled gestures", async () => {
+    const backend = mockBackend(CAPTURE);
+    render(<QuickAccess />);
+    const source = await screen.findByRole("button", { name: `Annotate ${CAPTURE.fileName}` });
+    pointer(source, "pointerdown", 0, 0, 2);
+    pointer(window, "pointermove", 20, 0, 2);
+    pointer(source, "pointerdown", 0, 0);
+    pointer(window, "pointercancel", 0, 0);
+    pointer(window, "pointermove", 20, 0);
+    expect(dragCalls(backend)).toEqual([]);
   });
 });

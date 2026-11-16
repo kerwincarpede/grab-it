@@ -129,6 +129,7 @@ pub fn run() {
             quick::quick_info,
             quick::quick_thumbnail,
             quick::quick_action,
+            quick::quick_drag,
             pin::pin_info,
             pin::pin_image,
             pin::pin_zoom,
