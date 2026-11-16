@@ -157,8 +157,6 @@ mod linux {
         if !taken {
             return Err("could not copy the file to the clipboard".into());
         }
-        // Lets a clipboard manager keep the files after Grab-it quits.
-        clipboard.store();
         Ok(())
     }
 }
@@ -198,7 +196,7 @@ mod mac {
 mod win {
     use std::{os::windows::ffi::OsStrExt, path::PathBuf, thread, time::Duration};
 
-    use windows::Win32::{
+    use ::windows::Win32::{
         Foundation::{GlobalFree, HANDLE, HGLOBAL},
         System::{
             DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
@@ -219,8 +217,9 @@ mod win {
             .map(|path| path.as_os_str().encode_wide().collect())
             .collect();
         let bytes = super::drop_files(&names);
-        let fail =
-            |err: windows::core::Error| format!("could not copy the file to the clipboard: {err}");
+        let fail = |err: ::windows::core::Error| {
+            format!("could not copy the file to the clipboard: {err}")
+        };
         // SAFETY: the memory is sized for `bytes`, written only while
         // locked, and handed to the clipboard (which then owns it) or freed.
         unsafe {

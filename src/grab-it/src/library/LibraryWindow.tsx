@@ -1588,11 +1588,7 @@ function LibraryWindow({
 
   /** Saves tags set from the menu's Add tag submenu; rejects with the backend's reason so the menu can show it. */
   async function saveMenuTags(shot: Shot, tags: string[]) {
-    try {
-      updated(await setShotTags(shot.id, tags));
-    } catch (err: unknown) {
-      throw new Error(errorMessage(err));
-    }
+    updated(await setShotTags(shot.id, tags));
   }
 
   function menuAction(shot: Shot, action: ShotMenuAction) {
