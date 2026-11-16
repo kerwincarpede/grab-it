@@ -56,7 +56,7 @@ describe("routeFromHash", () => {
     ["#/library", "library"],
     ["#/quick", "quick"],
     ["#/pin", "pin"],
-    ["#/webcam?shape=rounded&camera=abc", "webcam"],
+    ["#/webcam?shape=arch&mirror=0&camera=abc", "webcam"],
     ["#/recordbar", "recordbar"],
     ["#/recordframe?shape=window&margin=6&protected=1", "recordframe"],
     ["#/welcome", "welcome"],

@@ -357,6 +357,8 @@ export interface RecordingSettings {
   camera: string | null;
   /** The bubble's outline. */
   webcamShape: WebcamShape;
+  /** Shows the camera mirrored, as a mirror would. */
+  mirrorWebcam: boolean;
   /** Seconds counted down on the recording toolbar before it starts: one of `RECORDING_COUNTDOWNS`. */
   countdown: number;
   /** The source the Record overlay opens on: the one used last. */
@@ -377,7 +379,8 @@ export const DEFAULT_RECORDING: RecordingSettings = {
   microphone: null,
   showWebcam: false,
   camera: null,
-  webcamShape: "round",
+  webcamShape: "squircle",
+  mirrorWebcam: true,
   countdown: 0,
   source: "region",
 };
@@ -426,11 +429,15 @@ export function recordsMicrophone(audio: RecordingAudio): boolean {
 }
 
 /** Mirrors `WebcamShape` in src-tauri/src/settings.rs. */
-export type WebcamShape = "round" | "rounded";
+export type WebcamShape = "squircle" | "round" | "arch" | "pill" | "wide" | "blob";
 
 export const WEBCAM_SHAPES: { value: WebcamShape; title: string }[] = [
+  { value: "squircle", title: "Squircle" },
   { value: "round", title: "Round" },
-  { value: "rounded", title: "Rounded square" },
+  { value: "arch", title: "Arch" },
+  { value: "pill", title: "Pill" },
+  { value: "wide", title: "Wide" },
+  { value: "blob", title: "Blob (moves)" },
 ];
 
 /** A camera the webview can show. */

@@ -1144,6 +1144,7 @@ describe("SettingsWindow webcam", () => {
     expect(webcam).not.toBeChecked();
     expect(screen.queryByRole("combobox", { name: "Camera" })).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Webcam shape" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /Mirror webcam/ })).not.toBeInTheDocument();
     expect(media.requests).toEqual([]);
 
     await userEvent.click(webcam);
@@ -1161,26 +1162,50 @@ describe("SettingsWindow webcam", () => {
 
     const shape = screen.getByRole("combobox", { name: "Webcam shape" });
     await waitFor(() => expect(shape).toBeEnabled());
-    expect(shape).toHaveValue("round");
-    await userEvent.selectOptions(shape, "Rounded square");
+    expect(shape).toHaveValue("squircle");
+    expect(within(shape).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Squircle",
+      "Round",
+      "Arch",
+      "Pill",
+      "Wide",
+      "Blob (moves)",
+    ]);
+    await userEvent.selectOptions(shape, "Arch");
     await waitFor(() =>
-      expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, showWebcam: true, camera: "cam-usb", webcamShape: "rounded" }),
+      expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, showWebcam: true, camera: "cam-usb", webcamShape: "arch" }),
+    );
+
+    const mirror = screen.getByRole("switch", { name: /Mirror webcam/ });
+    await waitFor(() => expect(mirror).toBeEnabled());
+    expect(mirror).toBeChecked();
+    await userEvent.click(mirror);
+    await waitFor(() =>
+      expect(backend.recording).toEqual({
+        ...DEFAULT_RECORDING,
+        showWebcam: true,
+        camera: "cam-usb",
+        webcamShape: "arch",
+        mirrorWebcam: false,
+      }),
     );
 
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Camera" })).toBeEnabled());
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Camera" }), "System default");
-    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, showWebcam: true, webcamShape: "rounded" }));
+    await waitFor(() =>
+      expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, showWebcam: true, webcamShape: "arch", mirrorWebcam: false }),
+    );
   });
 
   it("lists the cameras without asking when the webcam is already on, and keeps a camera that is gone", async () => {
     media = fakeMedia({ devices: [camera("cam-front", "FaceTime HD Camera")] });
-    mockBackend({ recording: { ...DEFAULT_RECORDING, showWebcam: true, camera: "cam-old", webcamShape: "rounded" } });
+    mockBackend({ recording: { ...DEFAULT_RECORDING, showWebcam: true, camera: "cam-old", webcamShape: "pill" } });
     render(<SettingsWindow section="recording" />);
     const picker = await screen.findByRole("combobox", { name: "Camera" });
     expect(await screen.findByRole("option", { name: "FaceTime HD Camera" })).toBeInTheDocument();
     expect(picker).toHaveValue("cam-old");
     expect(screen.getByRole("option", { name: "Saved camera (not connected)" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Webcam shape" })).toHaveValue("rounded");
+    expect(screen.getByRole("combobox", { name: "Webcam shape" })).toHaveValue("pill");
     expect(media.requests).toEqual([]);
   });
 

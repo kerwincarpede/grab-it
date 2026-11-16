@@ -1,8 +1,10 @@
-import type { WebcamShape } from "../settings/api";
+import { WEBCAM_SHAPES, type WebcamShape } from "../settings/api";
 
-/** What the bubble shows, as webcam.rs puts it in the hash (`#/webcam?shape=round&camera=…`). */
+/** What the bubble shows, as webcam.rs puts it in the hash (`#/webcam?shape=squircle&mirror=0&camera=…`). */
 export interface WebcamOptions {
   shape: WebcamShape;
+  /** Whether the camera is shown mirrored, as a mirror would. */
+  mirror: boolean;
   /** The camera's `deviceId`; null shows the system's default camera. */
   camera: string | null;
 }
@@ -10,8 +12,10 @@ export interface WebcamOptions {
 export function webcamOptions(hash: string): WebcamOptions {
   const query = new URLSearchParams(hash.split("?")[1] ?? "");
   const camera = query.get("camera");
+  const shape = WEBCAM_SHAPES.find((choice) => choice.value === query.get("shape"))?.value;
   return {
-    shape: query.get("shape") === "rounded" ? "rounded" : "round",
+    shape: shape ?? "squircle",
+    mirror: query.get("mirror") !== "0",
     camera: camera === null || camera === "" ? null : camera,
   };
 }

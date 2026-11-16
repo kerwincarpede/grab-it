@@ -248,6 +248,13 @@ export const CameraIcon = ({ size }: IconProps) => (
   </Icon>
 );
 
+/** The camera, struck through: it could not be shown. */
+export const CameraOffIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M10 6h4a2 2 0 0 1 2 2v2l5-3v10l-2-1.2M16 16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h1M3 3l18 18" />
+  </Icon>
+);
+
 export const PauseIcon = ({ size }: IconProps) => (
   <Icon size={size}>
     <path d="M9 5.5v13M15 5.5v13" />
