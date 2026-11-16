@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./welcome.css";
 import Logo from "../app/Logo";
@@ -20,6 +20,8 @@ import {
 import { keyCaps } from "../hub/keys";
 import { onAiStatus } from "../library/api";
 import { aiProvider, getSettings, type Hotkeys } from "../settings/api";
+import PermissionsPage from "./PermissionsPage";
+import { finishPermissions, permissionsMissing, permissionStatus, type PermissionStatus } from "./permissions";
 
 /** Opens a window or starts a capture by its `--open` name. */
 function openTarget(target: string): Promise<void> {
@@ -67,11 +69,60 @@ const CLAUDE_TIP = {
     "Claude Code describes each new capture, so you can search for what it shows. Change or turn it off in Settings.",
 };
 
+type Step = { kind: "loading" } | { kind: "permissions"; status: PermissionStatus } | { kind: "hotkeys" };
+
 /**
- * Shown once, on the first launch, and from the tray afterwards: a tray app
- * opens no window of its own, so this says where it lives and how to use it.
+ * Shown on the first launch, and from the tray afterwards: a tray app opens
+ * no window of its own, so this says where it lives and how to use it. On
+ * macOS, while a permission is missing, it starts on the Permissions page.
  */
 function WelcomeWindow({ onClose }: { onClose?: () => void } = {}) {
+  const [step, setStep] = useState<Step>({ kind: "loading" });
+  const main = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    permissionStatus()
+      .then((status) => {
+        if (cancelled) return;
+        if (status && permissionsMissing(status)) {
+          setStep({ kind: "permissions", status });
+          return;
+        }
+        // Reopened after Allow all's restart with everything granted:
+        // setup is done.
+        if (status?.resume) void finishPermissions().catch(() => undefined);
+        setStep({ kind: "hotkeys" });
+      })
+      .catch(() => {
+        // Nothing reported is nothing missing.
+        if (!cancelled) setStep({ kind: "hotkeys" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // The dialog focuses its main button as it opens, before a step shows.
+  useEffect(() => {
+    if (onClose && step.kind !== "loading") main.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+  }, [onClose, step.kind]);
+
+  let page: ReactNode = null;
+  if (step.kind === "permissions") {
+    page = <PermissionsPage initial={step.status} inDialog={!!onClose} onDone={() => setStep({ kind: "hotkeys" })} />;
+  } else if (step.kind === "hotkeys") {
+    page = <HotkeysPage onClose={onClose} />;
+  }
+  return (
+    <div ref={main} className="welcome-step">
+      {page}
+    </div>
+  );
+}
+
+/** The hotkeys and tips: what Grab-it does and how to reach it. */
+function HotkeysPage({ onClose }: { onClose?: () => void }) {
   const [hotkeys, setHotkeys] = useState<Hotkeys | null>(null);
   const [claudeDescribes, setClaudeDescribes] = useState(false);
   const [error, setError] = useState<string | null>(null);

@@ -17,14 +17,22 @@ Grab-it needs no permission to record. The webcam bubble may use your camera wit
 </TabItem>
 <TabItem label="macOS" icon="apple">
 
-macOS asks once for each of these, the first time it's needed:
+Grab-it asks for all four the first time you open it, on its **Set up Grab-it** page:
 
-| Permission | Asked for when | Without it |
+1. Click **Allow all**. macOS asks about the Microphone and the Camera, then about Screen Recording and Input Monitoring.
+2. Turn on **Grab-it** under Screen Recording and Input Monitoring in System Settings: each prompt offers to open it, and so does **Open** on the page. macOS only lets Grab-it use these two after it restarts, so the page shows them as *Turn on in System Settings* until then.
+3. Click **Restart Grab-it**. It reopens on its hotkeys, and your first capture works.
+
+Each row shows **Allowed**, or **Off** with a way to **Open System Settings**. The page comes back each time you open Grab-it while Screen Recording is off or a permission was never asked for; a Microphone or Camera you declined doesn't bring it back. **Skip for now** closes it.
+
+Anything you didn't allow is asked for again when it's first needed:
+
+| Permission | Needed for | Without it |
 | --- | --- | --- |
-| **Screen Recording** | You first capture or record. | Grab-it can't record. It offers to open System Settings. |
-| **Microphone** | You first record an MP4 with a microphone. The recording waits for your answer. | The recording is saved without your voice, and the card says why. |
-| **Camera** | You first turn on **Webcam**. | The bubble can't show your camera. |
-| **Input Monitoring** | You first record with **Clicks** or **Keys** on. | The recording is saved without clicks or keystrokes, and the card says why. |
+| **Screen Recording** | Every capture and recording. | Grab-it can't capture or record. It offers to open System Settings. |
+| **Microphone** | Recording an MP4 with a microphone. The recording waits for your answer. | The recording is saved without your voice, and the card says why. |
+| **Camera** | The **Webcam** bubble. | The bubble can't show your camera. |
+| **Input Monitoring** | Recording with **Clicks** or **Keys** on. | The recording is saved without clicks or keystrokes, and the card says why. |
 
 System sound needs no permission, but it needs macOS 13 or later.
 

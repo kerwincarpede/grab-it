@@ -231,7 +231,7 @@ describe("AppWindow", () => {
     render(<AppWindow initialView="welcome" />);
     const dialog = screen.getByRole("dialog", { name: "Welcome to Grab-it" });
     expect(screen.getByRole("heading", { name: "All captures" })).toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole("button", { name: "Get started" }));
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Get started" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
