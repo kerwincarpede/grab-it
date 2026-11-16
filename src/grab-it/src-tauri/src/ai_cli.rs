@@ -267,6 +267,16 @@ fn run(
     if let Some(path) = child_path(program) {
         command.env("PATH", path);
     }
+    // Grab-it has no console of its own, so on Windows a console program
+    // such as `claude.exe`, or `cmd.exe` running `claude.cmd`, would open a
+    // terminal window for every run. Anything it starts shares the hidden
+    // console.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
     let name = display_name(program);
     let mut attempts = 0;
     let mut child = loop {
