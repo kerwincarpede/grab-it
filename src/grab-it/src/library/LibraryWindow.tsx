@@ -46,7 +46,6 @@ import {
   playShot,
   copyShotText,
   redescribeShot,
-  retryOcr,
   revealShot,
   searchShots,
   setShotKeep,
@@ -246,19 +245,9 @@ function Snippet({ hit }: { hit: SearchHit }) {
   );
 }
 
-/** Model download progress and the OCR queue, while there is something to say. */
-function OcrBanner({ status, onRetry }: { status: OcrStatus; onRetry: () => void }) {
+/** The OCR queue, or why it cannot read text, while there is something to say. */
+function OcrBanner({ status }: { status: OcrStatus }) {
   switch (status.state) {
-    case "downloading": {
-      const percent = status.total > 0 ? Math.floor((status.downloaded * 100) / status.total) : 0;
-      return (
-        <div className="ocr-status" role="status">
-          <span className="spinner" aria-hidden="true" />
-          <span>Downloading text recognition models… {percent}%</span>
-          <progress aria-label="Model download" max={status.total} value={status.downloaded} />
-        </div>
-      );
-    }
     case "working":
       return (
         <div className="ocr-status" role="status">
@@ -270,9 +259,7 @@ function OcrBanner({ status, onRetry }: { status: OcrStatus; onRetry: () => void
       return (
         <div className="ocr-status ocr-status-error" role="status">
           <span>{status.message}</span>
-          <button type="button" className="pill-button" onClick={onRetry}>
-            Retry
-          </button>
+          <span className="hint">The text recognition models ship with Grab-it. Reinstall it to restore them.</span>
         </div>
       );
     default:
@@ -1464,11 +1451,6 @@ function LibraryWindow({
     else showSettings();
   }
 
-  function retry() {
-    setOcr({ state: "idle" });
-    retryOcr().catch((err: unknown) => setError(errorMessage(err)));
-  }
-
   function clearSearch() {
     setText("");
     setSearchedText("");
@@ -1574,7 +1556,7 @@ function LibraryWindow({
           hideKindFilter={kindFilter !== undefined}
           now={now}
         />
-        <OcrBanner status={ocr} onRetry={retry} />
+        <OcrBanner status={ocr} />
         {aiNotice && (
           <AiNotice
             provider={aiNotice}

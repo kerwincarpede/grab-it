@@ -14,7 +14,7 @@ sidebar:
 Nothing is saved: Capture text never adds a screenshot to your folder or Library.
 
 :::note
-The first text capture is slower. Grab-it reads text on your own computer, and downloads its text-reading models the first time it needs them. After that, it's quick, and works offline.
+The first text capture after Grab-it starts is a little slower while it loads its text-reading models. After that, it's quick. Grab-it reads text on your own computer, with models it comes with, so it works offline.
 :::
 
 ## Tidy it up with AI

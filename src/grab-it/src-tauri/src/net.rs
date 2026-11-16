@@ -22,7 +22,10 @@ mod tests {
     #[test]
     fn agents_verify_with_the_platform_trust_store() {
         let stall = Duration::from_secs(1);
-        for agent in [crate::ocr::download_agent(stall), crate::ai::agent(stall)] {
+        for agent in [
+            crate::ffmpeg::download_agent(stall),
+            crate::ai::agent(stall),
+        ] {
             assert!(matches!(
                 agent.config().tls_config().root_certs(),
                 RootCerts::PlatformVerifier

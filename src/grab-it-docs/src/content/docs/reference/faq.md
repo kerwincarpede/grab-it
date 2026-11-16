@@ -11,7 +11,7 @@ Yes. Grab-it is free and open source, with no account and no subscription.
 
 ## Does Grab-it need the internet?
 
-No. Capturing, editing, recording, reading text in images and searching all work offline. Grab-it goes online only to check for updates, to download its text-recognition models and ffmpeg the first time it needs them, and to describe captures if you use a cloud AI. See [Privacy](/grab-it/reference/privacy/).
+No. Capturing, editing, recording, reading text in images and searching all work offline. Grab-it goes online only to check for updates, to download ffmpeg the first time it needs it, and to describe captures if you use a cloud AI. See [Privacy](/grab-it/reference/privacy/).
 
 ## Where are my captures?
 

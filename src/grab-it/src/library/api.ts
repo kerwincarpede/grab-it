@@ -482,7 +482,6 @@ export function filterOptions(): Promise<FilterOptions> {
 /** Mirrors `OcrStatus` in src-tauri/src/ocr.rs. */
 export type OcrStatus =
   | { state: "idle" }
-  | { state: "downloading"; downloaded: number; total: number }
   | { state: "working"; pending: number }
   | { state: "failed"; message: string };
 
@@ -491,11 +490,6 @@ export const OCR_STATUS_EVENT = "ocr-status";
 
 export function ocrStatus(): Promise<OcrStatus> {
   return invoke<OcrStatus>("ocr_status");
-}
-
-/** Retries a failed model download. */
-export function retryOcr(): Promise<void> {
-  return invoke<void>("ocr_retry");
 }
 
 /** Calls `handler` whenever the OCR queue changes state. */

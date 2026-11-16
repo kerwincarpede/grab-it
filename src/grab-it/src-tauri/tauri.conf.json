@@ -28,6 +28,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "ocr-models/text-detection.onnx": "ocr-models/text-detection.onnx",
+      "ocr-models/text-recognition.onnx": "ocr-models/text-recognition.onnx",
+      "ocr-models/LICENSE.md": "ocr-models/LICENSE.md"
+    },
     "macOS": {
       "entitlements": "./Entitlements.plist"
     }
