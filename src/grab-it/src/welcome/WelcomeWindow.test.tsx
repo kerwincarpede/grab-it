@@ -228,6 +228,25 @@ describe("WelcomeWindow's Permissions page", () => {
     expect(calls.map((call) => call.cmd)).not.toContain("permission_finish");
   });
 
+  it("still offers Restart Grab-it when reopened after Allow all", async () => {
+    const calls = mockBackend({
+      permissions: { ...NOTHING_ASKED },
+      afterAllowAll: { ...WAITING_FOR_RESTART, askedThisLaunch: true },
+    });
+    const first = render(<WelcomeWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Allow all" }));
+    await screen.findByRole("button", { name: "Restart Grab-it" });
+    first.unmount();
+
+    render(<WelcomeWindow />);
+    const restart = await screen.findByRole("button", { name: "Restart Grab-it" });
+    expect(within(row("Screen Recording")).getByText("Turn on in System Settings")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Continue" })).not.toBeInTheDocument();
+    await userEvent.click(restart);
+    await waitFor(() => expect(calls.map((call) => call.cmd)).toContain("permission_restart"));
+    expect(calls.map((call) => call.cmd)).not.toContain("permission_finish");
+  });
+
   it("offers Continue once Allow all leaves nothing waiting for a restart", async () => {
     const calls = mockBackend({
       permissions: { ...NOTHING_ASKED },

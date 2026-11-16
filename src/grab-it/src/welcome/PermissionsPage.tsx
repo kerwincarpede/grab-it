@@ -46,7 +46,8 @@ function PermissionsPage({ initial, inDialog, onDone }: { initial: PermissionSta
   const [asking, setAsking] = useState(false);
   // Allow all ran, or System Settings was opened for Screen Recording or
   // Input Monitoring, here: a grant there only shows after a restart.
-  const [restartPending, setRestartPending] = useState(false);
+  // Seeded from the backend, so closing and reopening the page keeps it.
+  const [restartPending, setRestartPending] = useState(initial.askedThisLaunch === true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -54,7 +55,9 @@ function PermissionsPage({ initial, inDialog, onDone }: { initial: PermissionSta
     const timer = window.setInterval(() => {
       permissionStatus()
         .then((next) => {
-          if (!cancelled && next) setStatus(next);
+          if (cancelled || !next) return;
+          setStatus(next);
+          if (next.askedThisLaunch) setRestartPending(true);
         })
         .catch(() => {
           // The next poll tries again.

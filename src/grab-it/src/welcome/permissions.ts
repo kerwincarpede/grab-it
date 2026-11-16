@@ -14,6 +14,8 @@ export interface PermissionStatus {
   camera: Access;
   /** Allow all ran and setup is not finished. */
   resume: boolean;
+  /** Allow all ran since Grab-it started: Screen Recording and Input Monitoring wait for a restart. */
+  askedThisLaunch?: boolean;
 }
 
 export const PERMISSIONS: readonly Permission[] = ["screenRecording", "inputMonitoring", "microphone", "camera"];

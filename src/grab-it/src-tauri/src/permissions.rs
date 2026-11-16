@@ -11,6 +11,8 @@
 //! camera, at the first launch (the `permission_*` commands below); the
 //! `ensure_*` checks stay as the fallback for anything not granted then.
 
+use std::sync::atomic::AtomicBool;
+
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
@@ -222,6 +224,7 @@ impl Permission {
 /// Where one permission stands. Mirrors `Access` in src/welcome/permissions.ts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub enum Access {
     Allowed,
     /// Asked for and not granted, or (Screen Recording and Input
@@ -241,6 +244,10 @@ pub struct PermissionStatus {
     pub camera: Access,
     /// Allow all ran and setup is not finished.
     pub resume: bool,
+    /// Allow all ran since Grab-it started, so a grant of Screen Recording
+    /// or Input Monitoring only shows after a restart. Unlike `resume`, a
+    /// restart clears it.
+    pub asked_this_launch: bool,
 }
 
 impl PermissionStatus {
@@ -252,6 +259,7 @@ impl PermissionStatus {
         microphone: Access::Allowed,
         camera: Access::Allowed,
         resume: false,
+        asked_this_launch: false,
     };
 
     fn all(&self) -> [Access; 4] {
@@ -277,6 +285,10 @@ impl PermissionStatus {
 pub fn should_open_welcome(status: &PermissionStatus) -> bool {
     status.missing() || status.resume
 }
+
+/// Allow all ran in this process.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+static ASKED_THIS_LAUNCH: AtomicBool = AtomicBool::new(false);
 
 fn setup(app: &AppHandle) -> PermissionSetup {
     lock(&app.state::<SettingsState>()).get().permissions
@@ -308,6 +320,7 @@ pub fn status(app: &AppHandle) -> PermissionStatus {
             microphone: mac::media_access(mac::Media::Audio),
             camera: mac::media_access(mac::Media::Video),
             resume: setup.resume,
+            asked_this_launch: ASKED_THIS_LAUNCH.load(std::sync::atomic::Ordering::Relaxed),
         }
     }
     #[cfg(not(target_os = "macos"))]
@@ -424,6 +437,7 @@ pub fn request_all(app: &AppHandle) -> PermissionStatus {
     {
         // Remembered first, so quitting during a prompt still resumes setup.
         save_setup(app, |setup| setup.resume = true);
+        ASKED_THIS_LAUNCH.store(true, std::sync::atomic::Ordering::Relaxed);
         mac::request_media(mac::Media::Audio);
         mac::request_media(mac::Media::Video);
         save_setup(app, |setup| setup.asked = true);
@@ -488,6 +502,7 @@ mod tests {
         microphone: Access::NotAsked,
         camera: Access::NotAsked,
         resume: false,
+        asked_this_launch: false,
     };
 
     #[test]
@@ -555,6 +570,7 @@ mod tests {
                 "microphone": "notAsked",
                 "camera": "notAsked",
                 "resume": false,
+                "askedThisLaunch": false,
             })
         );
     }
