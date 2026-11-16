@@ -727,7 +727,7 @@ describe("RegionOverlay", () => {
         expect(timer).toBeDisabled();
         expect(timer).toHaveAttribute("data-active", "false");
       }
-      // Key 7 leaves it alone too.
+      // Key 8 leaves it alone too.
       fireEvent.keyDown(window, { key: "8", code: "Digit8" });
 
       fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 50 });
