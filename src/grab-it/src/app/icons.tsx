@@ -306,3 +306,12 @@ export const GripIcon = ({ size }: IconProps) => (
     <path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01" strokeWidth="2.6" />
   </Icon>
 );
+
+/** Scroll capture: a region extending beyond the viewport. */
+export function ScrollIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M8 6l4-4 4 4M12 2v20M8 18l4 4 4-4M4 9v6M20 9v6" />
+    </svg>
+  );
+}

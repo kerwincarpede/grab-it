@@ -534,7 +534,8 @@ describe("RegionOverlay", () => {
         "Text4",
         "Colour5",
         "Record6",
-        "Timer off7",
+        "Scroll7",
+        "Timer off8",
       ]);
       expect(within(toolbar).getByRole("button", { name: "Region" })).toHaveAttribute("aria-pressed", "true");
       expect(within(toolbar).getByRole("button", { name: "Window" })).toHaveAttribute("aria-pressed", "false");
@@ -542,7 +543,7 @@ describe("RegionOverlay", () => {
       expect(toolbar.style.top).toBe("52px");
       const hint = screen.getByRole("status").closest(".overlay-hint") as HTMLElement;
       expect(hint.style.top).toBe("104px");
-      expect(screen.getByRole("list", { name: "Keyboard shortcuts" })).toHaveTextContent("1–7 Mode");
+      expect(screen.getByRole("list", { name: "Keyboard shortcuts" })).toHaveTextContent("1–8 Mode");
     });
 
     it("captures a dragged region with what the toolbar chose", async () => {
@@ -696,7 +697,7 @@ describe("RegionOverlay", () => {
       fireEvent.click(timer);
       expect(timer).toHaveTextContent("Timer 3 s");
       expect(timer).toHaveAttribute("data-active", "true");
-      fireEvent.keyDown(window, { key: "7", code: "Digit7" });
+      fireEvent.keyDown(window, { key: "8", code: "Digit8" });
       expect(timer).toHaveTextContent("Timer 5 s");
       fireEvent.click(timer);
       expect(timer).toHaveTextContent("Timer 10 s");
@@ -727,7 +728,7 @@ describe("RegionOverlay", () => {
         expect(timer).toHaveAttribute("data-active", "false");
       }
       // Key 7 leaves it alone too.
-      fireEvent.keyDown(window, { key: "7", code: "Digit7" });
+      fireEvent.keyDown(window, { key: "8", code: "Digit8" });
 
       fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 50 });
       fireEvent.mouseMove(overlay, { clientX: 300, clientY: 90 });
@@ -1699,5 +1700,24 @@ describe("RegionOverlay", () => {
         expect(choices()).toEqual(["No webcam", "Default camera", "FaceTime HD Camera", "Logitech C920"]);
       });
     });
+  });
+});
+
+
+describe("scrolling capture", () => {
+  it("selects Scroll with key 7 and starts the held region", async () => {
+    const calls = mockOverlay({ allInOne: true });
+    render(<RegionOverlay />);
+    await ready();
+    fireEvent.keyDown(window, { key: "7", code: "Digit7" });
+    const overlay = screen.getByTestId("overlay");
+    expect(overlay).toHaveAttribute("data-intent", "scroll");
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(overlay, { clientX: 400, clientY: 400 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 400, clientY: 400 });
+    fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
+    await waitFor(() => expect(calls).toContainEqual(expect.objectContaining({
+      cmd: "overlay_finish", payload: expect.objectContaining({ choice: { intent: "scroll", mode: "region", delaySeconds: 0 } }),
+    })));
   });
 });

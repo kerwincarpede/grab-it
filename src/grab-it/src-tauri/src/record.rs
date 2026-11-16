@@ -592,6 +592,10 @@ pub fn start(
     image_size: (u32, u32),
     rect: Rect,
 ) -> Result<(), String> {
+    let _gate = crate::scroll::start_lock();
+    if crate::scroll::active(app) {
+        return Err("a scrolling capture is already under way".into());
+    }
     let (folder, recording) = {
         let state = app.state::<SettingsState>();
         let store = lock(&state);

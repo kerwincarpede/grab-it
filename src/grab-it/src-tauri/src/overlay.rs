@@ -97,6 +97,8 @@ pub enum Intent {
     Colour,
     /// Record the selection as an MP4 or an animated GIF.
     Record,
+    /// Stitch manually scrolled frames of the selected area.
+    Scroll,
 }
 
 struct Session {
@@ -1369,7 +1371,7 @@ pub fn overlay_finish(
         return Ok(());
     }
 
-    if intent == Intent::Record {
+    if matches!(intent, Intent::Record | Intent::Scroll) {
         let size = frame.image.dimensions();
         let rect = match selection {
             Selection::Region {
@@ -1392,8 +1394,14 @@ pub fn overlay_finish(
         }
         .ok_or("the selection is empty")?;
         let monitor = frame.monitor.clone();
+        let foreground = session.foreground.clone();
         std::thread::spawn(move || {
-            if let Err(err) = crate::record::start(&app, &monitor, size, rect) {
+            let result = if intent == Intent::Scroll {
+                crate::scroll::start(&app, &monitor, rect, size, foreground)
+            } else {
+                crate::record::start(&app, &monitor, size, rect)
+            };
+            if let Err(err) = result {
                 actions::report_failure(&app, &err);
             }
         });
@@ -1480,7 +1488,7 @@ pub fn overlay_finish(
     let scale = frame.monitor.scale_factor;
     std::thread::spawn(move || match intent {
         Intent::Text => actions::finish_text(&app, &image),
-        Intent::Capture | Intent::Colour | Intent::Record => {
+        Intent::Capture | Intent::Colour | Intent::Record | Intent::Scroll => {
             actions::finish(&app, &image, mode, &foreground, Some(scale))
         }
     });
@@ -1780,6 +1788,7 @@ mod tests {
         assert_eq!(serde_json::to_value(Intent::Text).unwrap(), "text");
         assert_eq!(serde_json::to_value(Intent::Capture).unwrap(), "capture");
         assert_eq!(serde_json::to_value(Intent::Record).unwrap(), "record");
+        assert_eq!(serde_json::to_value(Intent::Scroll).unwrap(), "scroll");
     }
 
     #[test]
