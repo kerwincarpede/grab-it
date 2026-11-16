@@ -640,9 +640,12 @@ fn create_window(
         .visible(false)
         .focused(true);
     // See-through, so it can be on screen before its page has anything to
-    // paint. Matches `INSTANT`.
+    // paint. Matches `INSTANT`. Not focused: wry activates Grab-it for a
+    // focused webview as it is made, even in a hidden window, and the
+    // spares are made in the background. `panel::focus` gives the page the
+    // keyboard when the overlay shows.
     #[cfg(target_os = "macos")]
-    let builder = builder.transparent(true);
+    let builder = builder.transparent(true).focused(false);
     // The setup toolbar's Refresh camera list opens a camera for a moment
     // to read the cameras' names.
     let builder = crate::webcam::allow_camera(builder);
@@ -798,14 +801,13 @@ fn render_at_display_rate(window: &WebviewWindow) -> tauri::Result<()> {
 /// Removes every overlay and forgets the frozen images, and gives the
 /// focus back to the app the user was in.
 pub fn close(app: &AppHandle) {
-    if let Some(session) = take_session(app) {
-        give_back_focus(app, &session);
-    }
+    let _ = take_session(app, |_| true);
 }
 
-/// macOS: makes the app that was active when `session` opened active again,
-/// in case the overlay activated Grab-it after all. Elsewhere the window
-/// manager gives the focus back itself.
+/// macOS: makes the app that was active when `session` opened active
+/// again, in case something activated Grab-it meanwhile
+/// ([`crate::panel::reactivate`]). Elsewhere the window manager gives the
+/// focus back itself.
 fn give_back_focus(app: &AppHandle, session: &Session) {
     #[cfg(target_os = "macos")]
     if let Some(pid) = session.previous_app {
@@ -815,7 +817,9 @@ fn give_back_focus(app: &AppHandle, session: &Session) {
     let _ = (app, session);
 }
 
-fn take_session(app: &AppHandle) -> Option<Session> {
+/// Ends the selection: takes its session and removes its overlays, giving
+/// the focus back first when `give_back` says so for the session.
+fn take_session(app: &AppHandle, give_back: impl FnOnce(&Session) -> bool) -> Option<Session> {
     // Taken before the windows go, so their `Destroyed` events find nothing.
     let session = {
         let state = app.state::<OverlayState>();
@@ -829,6 +833,11 @@ fn take_session(app: &AppHandle) -> Option<Session> {
             }
         }
     };
+    // Before the windows go, so an active Grab-it does not move the focus
+    // to another of its windows on the way.
+    if give_back(&session) {
+        give_back_focus(app, &session);
+    }
     for label in session.frames.keys() {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.destroy();
@@ -1314,7 +1323,20 @@ pub fn overlay_finish(
     selection: Selection,
     choice: Option<Choice>,
 ) -> Result<(), String> {
-    let session = take_session(&app).ok_or("no capture in progress")?;
+    let after_capture = crate::commands::lock(&app.state::<crate::commands::SettingsState>())
+        .get()
+        .preferences
+        .after_capture;
+    let session = take_session(&app, |session| {
+        let Resolved { intent, delay, .. } = resolve(
+            session.all_in_one,
+            session.intent,
+            session.mode,
+            choice.or(session.choice),
+        );
+        !opens_editor(intent, delay, &selection, after_capture)
+    })
+    .ok_or("no capture in progress")?;
     let frame = session
         .frames
         .get(window.label())
@@ -1329,13 +1351,6 @@ pub fn overlay_finish(
         session.mode,
         choice.or(session.choice),
     );
-    let after_capture = crate::commands::lock(&app.state::<crate::commands::SettingsState>())
-        .get()
-        .preferences
-        .after_capture;
-    if !opens_editor(intent, delay, &selection, after_capture) {
-        give_back_focus(&app, &session);
-    }
 
     if selection == Selection::Screen {
         // Screen is a mode of its own: it always saves a screenshot.
