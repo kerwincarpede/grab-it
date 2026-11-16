@@ -57,7 +57,7 @@ pub fn toggle(app: &AppHandle, anchor: Option<Rect>) {
         place(app, &window, anchor, zoom);
         let _ = window.emit(HUB_SHOWN_EVENT, ());
         let _ = window.show();
-        let _ = window.set_focus();
+        let _ = focus(&window);
         return;
     }
     if let Err(err) = create(app, anchor) {
@@ -104,6 +104,11 @@ fn create(app: &AppHandle, anchor: Option<Rect>) -> tauri::Result<()> {
         .shadow(true)
         .visible(false)
         .build()?;
+    // A panel, so opening the hub does not activate Grab-it and bring the
+    // library or Settings forward with it. It still hides when another app
+    // or window takes the focus.
+    #[cfg(target_os = "macos")]
+    crate::panel::make_panel(&window)?;
     let handle = app.clone();
     window.on_window_event(move |event| {
         if let WindowEvent::Focused(false) = event {
@@ -116,8 +121,16 @@ fn create(app: &AppHandle, anchor: Option<Rect>) -> tauri::Result<()> {
     apply_zoom(&window, zoom)?;
     place(app, &window, anchor, zoom);
     window.show()?;
-    window.set_focus()?;
-    Ok(())
+    focus(&window)
+}
+
+/// Gives the shown hub the keyboard, on macOS without activating Grab-it
+/// ([`crate::panel`]).
+fn focus(window: &WebviewWindow) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
+    return crate::panel::focus(window);
+    #[cfg(not(target_os = "macos"))]
+    window.set_focus()
 }
 
 /// The hub's corner radius at actual size, in points. Matches `.hub` in

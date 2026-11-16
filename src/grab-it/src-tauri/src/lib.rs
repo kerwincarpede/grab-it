@@ -18,6 +18,8 @@ mod library;
 mod net;
 mod ocr;
 mod overlay;
+#[cfg(target_os = "macos")]
+mod panel;
 mod permissions;
 mod pin;
 #[cfg(target_os = "linux")]

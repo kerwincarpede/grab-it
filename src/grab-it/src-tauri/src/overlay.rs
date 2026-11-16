@@ -41,6 +41,7 @@ use crate::{
     actions,
     capture::{self, CaptureMode, CssRect, Foreground, Rect},
     screen::{self, MonitorInfo, WindowInfo},
+    settings::AfterCapture,
 };
 
 /// Overlay windows are labelled `overlay-<n>`.
@@ -110,6 +111,10 @@ struct Session {
     /// finishes the same way whichever one the selection is made on.
     choice: Option<Choice>,
     foreground: Foreground,
+    /// macOS: the app that was active when the overlay opened, given the
+    /// focus back when it closes ([`give_back_focus`]).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    previous_app: Option<u32>,
     /// Frozen monitors, by overlay window label.
     frames: HashMap<String, Frame>,
     /// Visible windows, front to back, in desktop coordinates.
@@ -333,7 +338,7 @@ pub fn open(
     // overlay takes the focus from the window the user was in.
     let started = Instant::now();
     let listing = std::thread::spawn(move || {
-        let listed = screen::windows_and_foreground();
+        let listed = screen::desktop();
         trace(format_args!("windows listed in {:?}", started.elapsed()));
         listed
     });
@@ -345,7 +350,7 @@ pub fn open(
         }
     };
     trace(format_args!("monitors frozen in {:?}", started.elapsed()));
-    let (foreground, windows) = listing.join().unwrap_or_default();
+    let desktop = listing.join().unwrap_or_default();
     let placements = app.available_monitors().unwrap_or_default();
 
     let id = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
@@ -355,9 +360,10 @@ pub fn open(
         intent,
         all_in_one,
         choice: None,
-        foreground,
+        foreground: desktop.foreground,
+        previous_app: desktop.active_app,
         frames: HashMap::new(),
-        windows,
+        windows: desktop.windows,
     };
     let mut spares = std::mem::take(&mut *app.state::<SpareState>().lock());
     let mut warm = Vec::new();
@@ -542,10 +548,14 @@ fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, String> {
 /// How long an overlay's page may take to respond.
 const READY_TIMEOUT: Duration = Duration::from_millis(1500);
 
-/// Shows and focuses an overlay that is still hidden.
+/// Shows and focuses an overlay that is still hidden. On macOS it takes
+/// the keyboard without activating Grab-it ([`crate::panel`]).
 fn reveal(window: &WebviewWindow) -> tauri::Result<()> {
     if !window.is_visible()? {
         window.show()?;
+        #[cfg(target_os = "macos")]
+        crate::panel::focus(window)?;
+        #[cfg(not(target_os = "macos"))]
         window.set_focus()?;
     }
     Ok(())
@@ -640,6 +650,10 @@ fn create_window(
     if let Err(err) = crate::webcam::enable_media_streams(&window) {
         eprintln!("Grab-it: could not let the overlay list the cameras: {err}");
     }
+    // A panel, so showing it does not activate Grab-it and bring the
+    // library or Settings forward from under it.
+    #[cfg(target_os = "macos")]
+    crate::panel::make_panel(&window)?;
     #[cfg(target_os = "macos")]
     raise_above_menu_bar(&window)?;
     #[cfg(target_os = "macos")]
@@ -781,9 +795,24 @@ fn render_at_display_rate(window: &WebviewWindow) -> tauri::Result<()> {
     })
 }
 
-/// Removes every overlay and forgets the frozen images.
+/// Removes every overlay and forgets the frozen images, and gives the
+/// focus back to the app the user was in.
 pub fn close(app: &AppHandle) {
-    let _ = take_session(app);
+    if let Some(session) = take_session(app) {
+        give_back_focus(app, &session);
+    }
+}
+
+/// macOS: makes the app that was active when `session` opened active again,
+/// in case the overlay activated Grab-it after all. Elsewhere the window
+/// manager gives the focus back itself.
+fn give_back_focus(app: &AppHandle, session: &Session) {
+    #[cfg(target_os = "macos")]
+    if let Some(pid) = session.previous_app {
+        crate::panel::reactivate(app, pid);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, session);
 }
 
 fn take_session(app: &AppHandle) -> Option<Session> {
@@ -882,6 +911,20 @@ pub fn last_region_on(
     (clipped == last.rect).then_some(clipped)
 }
 
+/// On macOS, how much of a window that is cut off by its monitor's edge has
+/// to show, across and down in points, for the overlay to offer it there.
+/// AeroSpace hides the windows of other workspaces by moving them into a
+/// corner of the screen with a pixel or so left on it, and the window
+/// server still lists them as on screen. Elsewhere any part will do.
+const MIN_VISIBLE: u32 = if cfg!(target_os = "macos") { 16 } else { 1 };
+
+/// Whether a window whose part on a monitor is `visible`, out of `whole`,
+/// shows enough there to be picked: all of it, or at least `min` across
+/// and down.
+fn shows_enough(visible: Rect, whole: Rect, min: u32) -> bool {
+    visible == whole || (visible.width >= min && visible.height >= min)
+}
+
 /// Windows that show on `monitor`, moved to the monitor's origin.
 pub fn windows_on_monitor(monitor: &MonitorInfo, windows: &[WindowInfo]) -> Vec<OverlayWindow> {
     let bounds = Rect {
@@ -898,7 +941,10 @@ pub fn windows_on_monitor(monitor: &MonitorInfo, windows: &[WindowInfo]) -> Vec<
                 y: window.rect.y - monitor.y,
                 ..window.rect
             };
-            capture::clip_rect(relative, (bounds.width, bounds.height))?;
+            let visible = capture::clip_rect(relative, (bounds.width, bounds.height))?;
+            if !shows_enough(visible, relative, MIN_VISIBLE) {
+                return None;
+            }
             Some(OverlayWindow {
                 id: window.id,
                 title: window.title.clone(),
@@ -994,6 +1040,25 @@ fn resolve(
         mode,
         delay,
     }
+}
+
+/// Whether finishing with `selection` opens the editor straight away: a
+/// screenshot taken now, with After capture set to open it. The editor
+/// makes Grab-it the active app on purpose, so the app the user was in is
+/// not given the focus back first, only to lose it again.
+fn opens_editor(
+    intent: Intent,
+    delay: Option<Duration>,
+    selection: &Selection,
+    after_capture: AfterCapture,
+) -> bool {
+    let screenshot = match selection {
+        // Screen always saves a screenshot.
+        Selection::Screen => true,
+        Selection::Point { .. } => false,
+        Selection::Region { .. } | Selection::Window { .. } => intent == Intent::Capture,
+    };
+    screenshot && delay.is_none() && after_capture == AfterCapture::Editor
 }
 
 /// Every frozen monitor joined into one image, following the desktop
@@ -1264,6 +1329,13 @@ pub fn overlay_finish(
         session.mode,
         choice.or(session.choice),
     );
+    let after_capture = crate::commands::lock(&app.state::<crate::commands::SettingsState>())
+        .get()
+        .preferences
+        .after_capture;
+    if !opens_editor(intent, delay, &selection, after_capture) {
+        give_back_focus(&app, &session);
+    }
 
     if selection == Selection::Screen {
         // Screen is a mode of its own: it always saves a screenshot.
@@ -1464,6 +1536,107 @@ mod tests {
         assert_eq!(ids, vec![1, 3]);
         assert_eq!((shown[0].x, shown[0].y), (80, 100));
         assert_eq!(shown[1].x, -120);
+    }
+
+    #[test]
+    fn windows_with_only_a_sliver_on_screen_are_not_offered() {
+        let whole = Rect {
+            x: 1900,
+            y: 1060,
+            width: 800,
+            height: 600,
+        };
+        // AeroSpace's parked window: a corner pixel or so of it shows.
+        let corner = Rect {
+            width: 20,
+            height: 4,
+            ..whole
+        };
+        assert!(!shows_enough(corner, whole, 16));
+        assert!(shows_enough(
+            Rect {
+                width: 120,
+                height: 600,
+                ..whole
+            },
+            whole,
+            16
+        ));
+        // A small window that shows in full is offered however small.
+        let tiny = Rect {
+            width: 10,
+            height: 10,
+            ..whole
+        };
+        assert!(shows_enough(tiny, tiny, 16));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_window_parked_in_the_corner_is_left_out_of_the_picker() {
+        let screen = monitor(0, 0, 1920, 1080);
+        let windows = [
+            window(1, 1919, 1079, 1200, 800),
+            window(2, 100, 100, 1200, 800),
+            window(3, -1199, 1079, 1200, 800),
+        ];
+        let ids: Vec<u32> = windows_on_monitor(&screen, &windows)
+            .iter()
+            .map(|w| w.id)
+            .collect();
+        assert_eq!(ids, vec![2]);
+    }
+
+    #[test]
+    fn only_an_editor_opened_now_keeps_grab_it_in_front() {
+        let region = Selection::Region {
+            rect: CssRect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            viewport_width: 100.0,
+        };
+        let point = Selection::Point {
+            x: 1.0,
+            y: 1.0,
+            viewport_width: 100.0,
+        };
+        let editor = AfterCapture::Editor;
+        assert!(opens_editor(Intent::Capture, None, &region, editor));
+        assert!(opens_editor(
+            Intent::Capture,
+            None,
+            &Selection::Screen,
+            editor
+        ));
+        assert!(opens_editor(
+            Intent::Capture,
+            None,
+            &Selection::Window { id: 1 },
+            editor
+        ));
+        // Quick Access and nothing show no Grab-it window that wants the focus.
+        assert!(!opens_editor(
+            Intent::Capture,
+            None,
+            &region,
+            AfterCapture::QuickAccess
+        ));
+        assert!(!opens_editor(
+            Intent::Capture,
+            None,
+            &region,
+            AfterCapture::Nothing
+        ));
+        // A Timer captures the user's own app live first.
+        let timer = Some(Duration::from_secs(3));
+        assert!(!opens_editor(Intent::Capture, timer, &region, editor));
+        // Text, colours and recordings never open the editor.
+        assert!(!opens_editor(Intent::Text, None, &region, editor));
+        assert!(!opens_editor(Intent::Colour, None, &point, editor));
+        assert!(!opens_editor(Intent::Record, None, &region, editor));
     }
 
     #[test]
