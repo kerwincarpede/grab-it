@@ -21,7 +21,13 @@ import { keyCaps } from "../hub/keys";
 import { onAiStatus } from "../library/api";
 import { aiProvider, getSettings, type Hotkeys } from "../settings/api";
 import PermissionsPage from "./PermissionsPage";
-import { finishPermissions, permissionsMissing, permissionStatus, type PermissionStatus } from "./permissions";
+import {
+  finishPermissions,
+  permissionsMissing,
+  permissionStatus,
+  primeScreenCapture,
+  type PermissionStatus,
+} from "./permissions";
 
 /** Opens a window or starts a capture by its `--open` name. */
 function openTarget(target: string): Promise<void> {
@@ -90,8 +96,12 @@ function WelcomeWindow({ onClose }: { onClose?: () => void } = {}) {
           return;
         }
         // Reopened after Allow all's restart with everything granted:
-        // setup is done.
-        if (status?.resume) void finishPermissions().catch(() => undefined);
+        // setup is done. One throwaway capture brings up macOS's
+        // window-picker alert now, not on the first real capture.
+        if (status?.resume) {
+          void primeScreenCapture().catch(() => undefined);
+          void finishPermissions().catch(() => undefined);
+        }
         setStep({ kind: "hotkeys" });
       })
       .catch(() => {

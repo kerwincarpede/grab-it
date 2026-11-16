@@ -17,6 +17,13 @@ Another app (or the operating system) has claimed that key. Either pick a differ
 
 Grab-it needs **Screen Recording** permission. Grab-it asks for it, with every other permission, the first time you open it; if you skipped that, it opens **Set up Grab-it** again when you next open it. Or open **System Settings → Privacy & Security → Screen Recording**, turn on Grab-it, then quit and reopen it.
 
+## macOS asks to bypass the system private window picker
+
+On macOS 15 and later, macOS asks about once a month: *"Grab-it" is requesting to bypass the system private window picker and directly access your screen and audio.* It asks even with Screen Recording on, and no app can ask for it ahead of time. Grab-it brings it up as it reopens after setup, then macOS asks again on a capture about a month later.
+
+- **Allow For One Month**: captures, recordings and system sound carry on, and macOS asks again in about a month.
+- **Open System Settings**: opens **Privacy & Security → Screen Recording** instead, without allowing it. macOS asks again on your next capture; choose **Allow For One Month** then.
+
 ## On Linux (Wayland), the desktop asks me to pick an area itself
 
 That's normal on Wayland: only the desktop is allowed to read the screen, so captures go through its own screenshot picker. *Repeat last region* and recording aren't available there yet. If your desktop doesn't support global shortcuts for apps, use the tray menu.

@@ -179,6 +179,18 @@ describe("WelcomeWindow's Permissions page", () => {
     render(<WelcomeWindow />);
     expect(await screen.findByRole("heading", { name: "Welcome to Grab-it" })).toBeInTheDocument();
     await waitFor(() => expect(calls.map((call) => call.cmd)).toContain("permission_finish"));
+    // Brings up macOS's window-picker alert now, not on the first real capture.
+    expect(calls.map((call) => call.cmd)).toContain("permission_prime_capture");
+  });
+
+  it("makes no throwaway capture unless setup resumes with nothing missing", async () => {
+    for (const permissions of [null, ALL_ALLOWED, NOTHING_ASKED, WAITING_FOR_RESTART]) {
+      const calls = mockBackend({ permissions });
+      const view = render(<WelcomeWindow />);
+      await screen.findByRole("heading", { name: /Welcome to Grab-it|Set up Grab-it/ });
+      expect(calls.map((call) => call.cmd)).not.toContain("permission_prime_capture");
+      view.unmount();
+    }
   });
 
   it("lists every permission as not asked yet before Allow all", async () => {
@@ -192,6 +204,7 @@ describe("WelcomeWindow's Permissions page", () => {
     expect(screen.getByRole("button", { name: "Allow all" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Skip for now" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Restart Grab-it" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/private window picker/)).not.toBeInTheDocument();
   });
 
   it("opens while only Screen Recording is off", async () => {
@@ -216,6 +229,8 @@ describe("WelcomeWindow's Permissions page", () => {
       expect(within(row(title)).getByText("Allowed")).toBeInTheDocument();
     }
     expect(screen.getByText(/only lets Grab-it use them after a restart/)).toBeInTheDocument();
+    expect(screen.getByText(/may ask to let Grab-it bypass the system private window picker/)).toBeInTheDocument();
+    expect(screen.getByText(/Allow For One Month: macOS asks again about once a month/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Allow all" })).not.toBeInTheDocument();
 
     await userEvent.click(within(row("Input Monitoring")).getByRole("button", { name: /Open System Settings for/ }));

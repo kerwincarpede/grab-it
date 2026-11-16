@@ -203,6 +203,7 @@ pub fn run() {
             update::update_later,
             permissions::permission_status,
             permissions::permission_request_all,
+            permissions::permission_prime_capture,
             permissions::permission_finish,
             permissions::permission_restart,
             permissions::permission_open_settings
