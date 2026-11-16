@@ -1512,16 +1512,12 @@ function LibraryWindow({
     setNotice({ text: trashed ? `${what} moved to the Trash` : `${what} deleted`, key: Date.now() });
   }
 
-  /** Renames a shot's file from its menu; rejects with the backend's reason so the menu can show it. */
+  /** Renames a shot's file from its menu; rejects with the backend's reason, which the menu shows. */
   const rename = useCallback(async (shot: Shot, name: string) => {
-    try {
-      const renamed = await renameShot(shot.id, name);
-      setError(null);
-      setShots((current) => current.map((item) => (item.id === renamed.id ? renamed : item)));
-      setNotice({ text: `Renamed to ${renamed.fileName}`, key: Date.now() });
-    } catch (err: unknown) {
-      throw new Error(errorMessage(err));
-    }
+    const renamed = await renameShot(shot.id, name);
+    setError(null);
+    setShots((current) => current.map((item) => (item.id === renamed.id ? renamed : item)));
+    setNotice({ text: `Renamed to ${renamed.fileName}`, key: Date.now() });
   }, []);
 
   const open = useCallback((id: number) => {

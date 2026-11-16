@@ -740,14 +740,9 @@ impl Library {
     /// nothing else is touched.
     pub fn rename(&mut self, id: i64, name: &str) -> LibraryResult<Shot> {
         let shot = self.get(id)?;
-        let file_name = renamed_file_name(&shot.path, name)?;
-        if file_name == shot.file_name {
+        let Some(target) = self.rename_target(&shot, name)? else {
             return Ok(shot);
-        }
-        let target = moved_to(&shot, shot.path.with_file_name(&file_name));
-        if !self.is_free(&target, Some(&shot))? {
-            return Err(LibraryError::NameTaken(file_name));
-        }
+        };
         fs::rename(&shot.path, &target.path)?;
         for (from, to) in extra_files(&shot).into_iter().zip(extra_files(&target)) {
             if from.exists()
@@ -780,6 +775,32 @@ impl Library {
             return Err(err.into());
         }
         self.get(id)
+    }
+
+    /// `shot` as a rename to `name` leaves it, or `None` when the name is
+    /// the one it has. Refuses names a file cannot have, names whose file
+    /// or any sidecar's would be longer than [`MAX_NAME_BYTES`], and names
+    /// another file or row has (see [`Library::is_free`]). Touches nothing,
+    /// so a rename can be checked before its editor is closed.
+    pub fn rename_target(&self, shot: &Shot, name: &str) -> LibraryResult<Option<Shot>> {
+        let file_name = renamed_file_name(&shot.path, name)?;
+        if file_name == shot.file_name {
+            return Ok(None);
+        }
+        let target = moved_to(shot, shot.path.with_file_name(&file_name));
+        let too_long = std::iter::once(target.path.clone())
+            .chain(extra_files(&target))
+            .any(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().len() > MAX_NAME_BYTES)
+            });
+        if too_long {
+            return Err(LibraryError::BadName("That name is too long.".into()));
+        }
+        if !self.is_free(&target, Some(shot))? {
+            return Err(LibraryError::NameTaken(file_name));
+        }
+        Ok(Some(target))
     }
 
     /// Where a copy of `shot` goes: beside it, as "<name> copy", then
@@ -1541,6 +1562,11 @@ const MAX_COPIES: u32 = 999;
 /// The longest name, in characters, a rename gives a file.
 const MAX_NAME_CHARS: usize = 200;
 
+/// The longest file name, in bytes, most disks take (ext4, APFS and NTFS
+/// all stop near 255). A rename checks it against every file it renames,
+/// sidecars included, so none is left behind under the old name.
+const MAX_NAME_BYTES: usize = 255;
+
 /// Characters no file name may hold on Windows, refused everywhere so the
 /// save folder can move between systems.
 const BAD_NAME_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
@@ -2029,10 +2055,13 @@ pub fn library_rename(
     if !shot.path.is_file() {
         return Err(format!("{} no longer exists", shot.path.display()));
     }
-    // Checked before the editor is closed, so a name that is refused
-    // leaves it open.
-    let file_name = renamed_file_name(&shot.path, &name).map_err(to_message)?;
-    if file_name != shot.file_name {
+    // Checked before the editor is closed, so a name that is refused,
+    // whether not allowed or taken, leaves it open with its edits.
+    let target = state
+        .lock()
+        .rename_target(&shot, &name)
+        .map_err(to_message)?;
+    if target.is_some() {
         close_editor(&app, &shot.path);
     }
     let renamed = state.lock().rename(id, &name).map_err(to_message)?;
@@ -2092,11 +2121,12 @@ pub async fn library_open_with(id: i64, app: AppHandle) -> Result<(), String> {
 #[cfg(target_os = "windows")]
 fn open_with_dialog(path: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::Foundation::ERROR_CANCELLED;
-    use windows::Win32::UI::Shell::{
+    // `::windows` is the crate; `windows` alone is Grab-it's own module.
+    use ::windows::Win32::Foundation::ERROR_CANCELLED;
+    use ::windows::Win32::UI::Shell::{
         OAIF_ALLOW_REGISTRATION, OAIF_EXEC, OAIF_REGISTER_EXT, OPENASINFO, SHOpenWithDialog,
     };
-    use windows::core::{HRESULT, PCWSTR};
+    use ::windows::core::{HRESULT, PCWSTR};
     let wide: Vec<u16> = path
         .as_os_str()
         .encode_wide()
@@ -3169,6 +3199,31 @@ mod tests {
             library.rename(shot.id, "Console").unwrap().file_name,
             "Console.png"
         );
+    }
+
+    #[test]
+    fn rename_refuses_a_name_too_long_for_a_sidecar_and_touches_nothing() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (4, 4));
+        fs::write(capture::annotations_path(&png), "{}").unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        // 80 characters of 3 bytes: "<name>.png" fits in 255 bytes, but
+        // "<name>.annotations.json" does not.
+        let name = "\u{8a9e}".repeat(80);
+        assert!(format!("{name}.png").len() <= MAX_NAME_BYTES);
+
+        assert!(matches!(
+            library.rename(shot.id, &name),
+            Err(LibraryError::BadName(_))
+        ));
+        assert!(png.is_file());
+        assert!(capture::meta_path(&png).is_file());
+        assert!(capture::annotations_path(&png).is_file());
+        assert_eq!(library.get(shot.id).unwrap().path, shot.path);
+        // A shorter multibyte name is fine, sidecars and all.
+        let renamed = library.rename(shot.id, &"\u{8a9e}".repeat(20)).unwrap();
+        assert!(capture::annotations_path(&renamed.path).is_file());
     }
 
     #[test]
