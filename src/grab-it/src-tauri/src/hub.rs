@@ -57,7 +57,7 @@ pub fn toggle(app: &AppHandle, anchor: Option<Rect>) {
         place(app, &window, anchor, zoom);
         let _ = window.emit(HUB_SHOWN_EVENT, ());
         let _ = window.show();
-        let _ = window.set_focus();
+        let _ = focus(&window);
         return;
     }
     if let Err(err) = create(app, anchor) {
@@ -93,7 +93,7 @@ pub fn resize(app: &AppHandle) {
 
 fn create(app: &AppHandle, anchor: Option<Rect>) -> tauri::Result<()> {
     let zoom = zoom(app);
-    let window = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html#/hub".into()))
+    let builder = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html#/hub".into()))
         .title("Grab-it")
         .inner_size(WIDTH * zoom, HEIGHT * zoom)
         .decorations(false)
@@ -102,8 +102,17 @@ fn create(app: &AppHandle, anchor: Option<Rect>) -> tauri::Result<()> {
         .skip_taskbar(true)
         .visible_on_all_workspaces(true)
         .shadow(true)
-        .visible(false)
-        .build()?;
+        .visible(false);
+    // Not focused: wry activates Grab-it for a focused webview as it is
+    // made. `panel::focus` gives the page the keyboard instead.
+    #[cfg(target_os = "macos")]
+    let builder = builder.focused(false);
+    let window = builder.build()?;
+    // A panel, so opening the hub does not activate Grab-it and bring the
+    // library or Settings forward with it. It still hides when another app
+    // or window takes the focus.
+    #[cfg(target_os = "macos")]
+    crate::panel::make_panel(&window)?;
     let handle = app.clone();
     window.on_window_event(move |event| {
         if let WindowEvent::Focused(false) = event {
@@ -116,8 +125,16 @@ fn create(app: &AppHandle, anchor: Option<Rect>) -> tauri::Result<()> {
     apply_zoom(&window, zoom)?;
     place(app, &window, anchor, zoom);
     window.show()?;
-    window.set_focus()?;
-    Ok(())
+    focus(&window)
+}
+
+/// Gives the shown hub the keyboard, on macOS without activating Grab-it
+/// ([`crate::panel`]).
+fn focus(window: &WebviewWindow) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
+    return crate::panel::focus(window);
+    #[cfg(not(target_os = "macos"))]
+    window.set_focus()
 }
 
 /// The hub's corner radius at actual size, in points. Matches `.hub` in

@@ -118,25 +118,46 @@ pub fn capture_window(id: u32) -> Result<RgbaImage, String> {
         .map_err(|e| err("could not capture the window", e))
 }
 
-/// The windows the overlay can pick, front to back, skipping Grab-it's
-/// own, and the app and window the user was in.
+/// The desktop as a selection finds it.
+#[derive(Debug, Default)]
+pub struct Desktop {
+    /// The app and window the user was in.
+    pub foreground: Foreground,
+    /// The windows the overlay can pick, front to back, skipping Grab-it's
+    /// own.
+    pub windows: Vec<WindowInfo>,
+    /// macOS: the active app's process, unless it is Grab-it, to give the
+    /// focus back to when the overlay closes. `None` elsewhere.
+    pub active_app: Option<u32>,
+}
+
+/// The windows the overlay can pick, and the app and window the user was
+/// in.
 ///
 /// On macOS this is one pass over the window server's list. xcap's
 /// `Window` asks the window server for the whole list again for every
 /// property it reads, so listing through it took about ten full lists per
 /// window: hundreds of round trips the overlay waited on before it could
 /// appear.
-pub fn windows_and_foreground() -> (Foreground, Vec<WindowInfo>) {
+pub fn desktop() -> Desktop {
     #[cfg(target_os = "macos")]
     {
         let listed = mac::list();
         let active = mac::active_pid();
-        let foreground = front_of(&listed, active);
-        (foreground, pickable(listed, std::process::id()))
+        let own_pid = std::process::id();
+        Desktop {
+            foreground: front_of(&listed, active),
+            windows: pickable(listed, own_pid),
+            active_app: active.filter(|pid| *pid != own_pid),
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
-        (foreground(), windows())
+        Desktop {
+            foreground: foreground(),
+            windows: windows(),
+            active_app: None,
+        }
     }
 }
 
