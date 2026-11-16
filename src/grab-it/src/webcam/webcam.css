@@ -43,6 +43,22 @@
   height: 100%;
   object-fit: cover;
   pointer-events: none;
+  border-radius: inherit;
+}
+
+/*
+ * The video is clipped to the shape as well as its parent: WebView2 on
+ * Windows can draw a video that fills the window in a layer of its own,
+ * which the parent's rounded overflow does not clip, so the square camera
+ * showed past the round outline. A clip-path on the video keeps it in the
+ * page's own drawing, where it is clipped.
+ */
+.webcam-round .webcam-video {
+  clip-path: circle(50%);
+}
+
+.webcam-rounded .webcam-video {
+  clip-path: inset(0 round 22%);
 }
 
 .webcam-problem {
