@@ -494,22 +494,27 @@ pub async fn quick_drag(generation: u64, app: AppHandle) -> Result<(), String> {
             let window = main_app
                 .get_webview_window(LABEL)
                 .ok_or("Quick Access is closed")?;
-            let completed = send.clone();
             #[cfg(target_os = "linux")]
-            let native = window.gtk_window().map_err(|err| err.to_string())?;
-            drag::start_drag(
-                #[cfg(target_os = "linux")]
-                &native,
-                #[cfg(not(target_os = "linux"))]
-                &window,
-                drag::DragItem::Files(vec![path]),
+            start_gtk_file_drag(
+                &window.gtk_window().map_err(|err| err.to_string())?,
+                &path,
                 image,
-                move |_, _| {
-                    let _ = completed.send(Ok(()));
-                },
-                drag::Options::default(),
-            )
-            .map_err(|err| format!("could not drag the file: {err}"))?;
+                send.clone(),
+            )?;
+            #[cfg(not(target_os = "linux"))]
+            {
+                let completed = send.clone();
+                drag::start_drag(
+                    &window,
+                    drag::DragItem::Files(vec![path]),
+                    image,
+                    move |_, _| {
+                        let _ = completed.send(Ok(()));
+                    },
+                    drag::Options::default(),
+                )
+                .map_err(|err| format!("could not drag the file: {err}"))?;
+            }
             Ok(())
         })();
         if let Err(err) = result {
@@ -524,6 +529,72 @@ pub async fn quick_drag(generation: u64, app: AppHandle) -> Result<(), String> {
     })
     .await
     .map_err(|err| err.to_string())?
+}
+
+/// GTK asks for selection data asynchronously, potentially *after*
+/// drop-performed. Keep the provider installed until drag-end, which GTK
+/// emits after transfer or cancellation. Never complete on drop-performed.
+#[cfg(target_os = "linux")]
+fn start_gtk_file_drag(
+    window: &gtk::ApplicationWindow,
+    path: &Path,
+    image: drag::Image,
+    completed: std::sync::mpsc::Sender<Result<(), String>>,
+) -> Result<(), String> {
+    use gtk::prelude::*;
+    use std::{cell::RefCell, rc::Rc};
+
+    // Validate everything fallible before installing any handlers.
+    let bytes = match image {
+        drag::Image::Raw(bytes) => bytes,
+        drag::Image::File(path) => fs::read(path).map_err(|err| err.to_string())?,
+    };
+    let loader = gtk::gdk_pixbuf::PixbufLoader::new();
+    loader.write(&bytes).map_err(|err| err.to_string())?;
+    loader.close().map_err(|err| err.to_string())?;
+    let icon = loader.pixbuf().ok_or("could not decode the drag image")?;
+    let uri = gtk::gio::File::for_path(path).uri();
+    let handlers = Rc::new(RefCell::new(Vec::<gtk::glib::SignalHandlerId>::new()));
+
+    // Closures own only handler IDs, URI data and the sender, never a window
+    // or drag context. There is no GObject -> callback -> GObject cycle.
+    let data_handler = window.connect_drag_data_get(move |_, _, selection, _, _| {
+        selection.set_uris(&[uri.as_str()]);
+    });
+    handlers.borrow_mut().push(data_handler);
+    let end_handlers = handlers.clone();
+    let end_handler = window.connect_drag_end(move |window, _| {
+        // Disconnect even ourselves, releasing the URI and callback sender.
+        let ids = std::mem::take(&mut *end_handlers.borrow_mut());
+        for id in ids {
+            window.disconnect(id);
+        }
+        let _ = completed.send(Ok(()));
+    });
+    handlers.borrow_mut().push(end_handler);
+
+    // An explicit target list avoids changing the widget's persistent drag
+    // source configuration. Button is the button number, not its GDK mask.
+    let targets = gtk::TargetList::new(&[gtk::TargetEntry::new(
+        "text/uri-list",
+        gtk::TargetFlags::empty(),
+        0,
+    )]);
+    let context =
+        window.drag_begin_with_coordinates(&targets, gtk::gdk::DragAction::COPY, 1, None, -1, -1);
+    match context {
+        Some(context) => {
+            context.drag_set_icon_pixbuf(&icon, 0, 0);
+            Ok(())
+        }
+        None => {
+            let ids = std::mem::take(&mut *handlers.borrow_mut());
+            for id in ids {
+                window.disconnect(id);
+            }
+            Err("could not start the native file drag".into())
+        }
+    }
 }
 
 /// What a button on the card does. Mirrors `QuickAction` in src/quick/api.ts.
@@ -724,6 +795,118 @@ fn delete_capture(app: &AppHandle, path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Run explicitly under Xvfb + dbus-run-session with xdotool installed:
+    /// cargo test gtk_drag_serves_a_delayed_drop -- --ignored --test-threads=1
+    /// This is a native GTK fixture, independent of the Grab-it application.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires an isolated X11 display and xdotool"]
+    fn gtk_drag_serves_a_delayed_drop() {
+        use gtk::{gdk, glib, prelude::*};
+        use std::{cell::RefCell, rc::Rc, time::Duration};
+
+        gtk::init().expect("GTK display");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("original # capture %.png");
+        fs::write(&path, include_bytes!("../icons/128x128.png")).unwrap();
+        let expected = gtk::gio::File::for_path(&path).uri().to_string();
+        assert!(expected.contains("%23"));
+        assert!(expected.contains("%25"));
+        assert!(expected.contains("%20"));
+
+        let source = gtk::ApplicationWindow::builder()
+            .title("Drag source fixture")
+            .default_width(160)
+            .default_height(160)
+            .build();
+        source.move_(40, 40);
+        source.add_events(gdk::EventMask::BUTTON_PRESS_MASK);
+        let target = gtk::Window::builder()
+            .title("Delayed URI target fixture")
+            .default_width(200)
+            .default_height(200)
+            .build();
+        target.move_(350, 40);
+        target.drag_dest_set(
+            gtk::DestDefaults::empty(),
+            &[gtk::TargetEntry::new(
+                "text/uri-list",
+                gtk::TargetFlags::empty(),
+                0,
+            )],
+            gdk::DragAction::COPY,
+        );
+        target.connect_drag_motion(|_, context, _, _, time| {
+            context.drag_status(gdk::DragAction::COPY, time);
+            true
+        });
+        // No data prefetch during motion. Request it only *after* release,
+        // delayed further so drop-performed has already been delivered.
+        target.connect_drag_drop(|target, context, _, _, time| {
+            let target = target.clone();
+            let context = context.clone();
+            glib::timeout_add_local_once(Duration::from_millis(100), move || {
+                target.drag_get_data(&context, &gdk::Atom::intern("text/uri-list"), time);
+            });
+            true
+        });
+        let received = Rc::new(RefCell::new(Vec::new()));
+        let received_data = received.clone();
+        target.connect_drag_data_received(move |_, context, _, _, data, _, time| {
+            *received_data.borrow_mut() = data.uris().iter().map(ToString::to_string).collect();
+            // The copy must not delete the source file.
+            context.drag_finish(!received_data.borrow().is_empty(), false, time);
+        });
+        let (send, receive) = std::sync::mpsc::channel();
+        let start_error = Rc::new(RefCell::new(None));
+        let error = start_error.clone();
+        source.connect_button_press_event(move |window, _| {
+            if let Err(err) = start_gtk_file_drag(
+                window,
+                &path,
+                drag::Image::Raw(include_bytes!("../icons/128x128.png").to_vec()),
+                send.clone(),
+            ) {
+                *error.borrow_mut() = Some(err);
+            }
+            glib::Propagation::Stop
+        });
+        source.show_all();
+        target.show_all();
+        let main_loop = glib::MainLoop::new(None, false);
+        let done = main_loop.clone();
+        let completion = Rc::new(RefCell::new(None));
+        let result = completion.clone();
+        let poll = glib::timeout_add_local(Duration::from_millis(20), move || {
+            if let Ok(value) = receive.try_recv() {
+                *result.borrow_mut() = Some(value);
+                done.quit();
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+        let deadline_loop = main_loop.clone();
+        let deadline =
+            glib::timeout_add_local_once(Duration::from_secs(6), move || deadline_loop.quit());
+        let mut pointer = std::process::Command::new("sh").args(["-c",
+            "sleep 0.5; xdotool mousemove 100 100 mousedown 1; sleep 0.3; xdotool mousemove 120 100; sleep 0.3; xdotool mousemove 430 120; sleep 0.5; xdotool mouseup 1"
+        ]).spawn().expect("xdotool fixture");
+        main_loop.run();
+        assert!(pointer.wait().unwrap().success(), "xdotool fixture failed");
+        // Remove only sources that did not remove themselves.
+        if completion.borrow().is_some() {
+            deadline.remove();
+        } else {
+            poll.remove();
+        }
+        source.close();
+        target.close();
+        assert_eq!(*start_error.borrow(), None);
+        assert_eq!(*received.borrow(), vec![expected]);
+        assert_eq!(*completion.borrow(), Some(Ok(())));
+    }
 
     #[test]
     fn drag_sources_keep_original_files_and_choose_their_preview() {

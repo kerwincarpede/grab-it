@@ -2126,6 +2126,7 @@ dependencies = [
  "drag",
  "fs4",
  "futures-util",
+ "gtk",
  "image",
  "keyring",
  "lzma-rust2",
