@@ -58,6 +58,8 @@ pub enum QuickItem {
         width: u32,
         height: u32,
         capped: bool,
+        auto_scrolling: bool,
+        manual_reason: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     Capture {

@@ -340,7 +340,9 @@ function QuickAccess() {
           <p className="quick-detail">
             {item.capped
               ? "Stopped at the 30,000 px limit. Choose Done to save."
-              : "Scroll by hand, then choose Done to save."}
+              : item.autoScrolling
+                ? "Scrolling automatically. Move the mouse to scroll by hand."
+                : item.manualReason ?? "Scroll by hand, then choose Done to save."}
           </p>
         </div>
         {error && <p className="quick-detail" role="alert">{error}</p>}
