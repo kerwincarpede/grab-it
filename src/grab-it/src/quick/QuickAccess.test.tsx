@@ -742,6 +742,7 @@ describe("scrolling card", () => {
   it.each([
     [true, null, "Scrolling automatically. Move the mouse to scroll by hand."],
     [false, "Mouse moved. Scroll by hand, then choose Done.", "Mouse moved. Scroll by hand, then choose Done."],
+    [false, "Nothing scrolled automatically. Scroll by hand, then choose Done.", "Nothing scrolled automatically. Scroll by hand, then choose Done."],
     [false, "Accessibility permission is needed. Scroll by hand, then choose Done.", "Accessibility permission is needed. Scroll by hand, then choose Done."],
   ] as const)("shows auto/manual status (%s, %s)", async (autoScrolling, manualReason, message) => {
     mockBackend({ kind: "scrolling", sessionId: 42, width: 800, height: 1600, capped: false, autoScrolling, manualReason });

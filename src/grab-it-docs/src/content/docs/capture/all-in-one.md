@@ -66,7 +66,7 @@ The last region you captured starts out selected on the monitor it was on, ready
 
 ## Scroll
 
-Choose **Scroll**, drag an area or click a window, then press **Start scrolling** or `Enter`. Grab-it moves the pointer to the middle of the area and scrolls automatically, saving when several wheel steps move no new content. The first detected movement sets the direction.
+Choose **Scroll**, drag an area or click a window, then press **Start scrolling** or `Enter`. Grab-it moves the pointer to the middle of the area and tries scrolling down. Once content has scrolled, it saves when several wheel steps move no new content. The first detected movement sets the direction. If nothing scrolls automatically, the card asks you to scroll by hand instead of saving. You can scroll horizontal-only content by hand, then choose **Done**.
 
 Move the mouse more than 8 px from where Grab-it placed it to pause automatic scrolling for the rest of that capture. The card changes to **Scroll by hand**. Scroll slowly by hand vertically or horizontally, keeping some content visible between movements. Keep the content still apart from scrolling.
 

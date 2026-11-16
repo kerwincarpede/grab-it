@@ -116,12 +116,19 @@ impl AutoScroll {
     }
     /// Count only unchanged frames after successful wheel events. Rejected
     /// overlaps can be moving content and must not be mistaken for the end.
-    fn at_end(&mut self, unchanged: bool) -> bool {
+    fn at_end(&mut self, unchanged: bool, has_scrolled: bool) -> bool {
         if self.reason.is_some() {
             return false;
         }
         self.still_steps = if unchanged { self.still_steps + 1 } else { 0 };
-        self.still_steps >= 5
+        if self.still_steps < 5 {
+            return false;
+        }
+        if !has_scrolled {
+            self.reason = Some("Nothing scrolled automatically. Scroll by hand, then choose Done.");
+            return false;
+        }
+        true
     }
     fn wheel(&self, axis: Option<Axis>, reverse: Option<bool>) -> rdev::EventType {
         let delta = if reverse == Some(true) { 1 } else { -1 };
@@ -482,7 +489,7 @@ pub fn start(
                     let unchanged = frame.image == previous;
                     previous = frame.image.clone();
                     let changed = stitch.push(frame.image);
-                    if wheel_pending && auto.at_end(unchanged) {
+                    if wheel_pending && auto.at_end(unchanged, stitch.axis.is_some()) {
                         let _ = control.end.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
                         break;
                     }
@@ -900,7 +907,7 @@ mod tests {
         assert!(auto.reason.is_some());
         auto.observe_pointer(Some((100, 100)));
         for _ in 0..10 {
-            assert!(!auto.at_end(true));
+            assert!(!auto.at_end(true, true));
         }
         assert!(auto.reason.is_some());
     }
@@ -908,16 +915,39 @@ mod tests {
     fn end_requires_five_consecutive_unchanged_wheel_steps() {
         let mut auto = AutoScroll::new((0, 0), true);
         for _ in 0..4 {
-            assert!(!auto.at_end(true));
+            assert!(!auto.at_end(true, true));
         }
-        assert!(!auto.at_end(false));
+        assert!(!auto.at_end(false, true));
         for _ in 0..4 {
-            assert!(!auto.at_end(true));
+            assert!(!auto.at_end(true, true));
         }
-        assert!(auto.at_end(true));
+        assert!(auto.at_end(true, true));
         let mut refused = AutoScroll::new((0, 0), false);
         for _ in 0..10 {
-            assert!(!refused.at_end(true));
+            assert!(!refused.at_end(true, true));
+        }
+    }
+    #[test]
+    fn never_moved_capture_yields_to_manual_without_saving() {
+        let mut auto = AutoScroll::new((0, 0), true);
+        let first = frame(Axis::Horizontal, 0, false);
+        let mut stitch = Stitcher::new(first.clone());
+        for _ in 0..4 {
+            assert!(!stitch.push(first.clone()));
+            assert!(!auto.at_end(true, stitch.axis.is_some()));
+            assert!(auto.reason.is_none());
+        }
+        assert!(!auto.at_end(true, stitch.axis.is_some()));
+        assert_eq!(
+            auto.reason,
+            Some("Nothing scrolled automatically. Scroll by hand, then choose Done.")
+        );
+        assert_eq!(stitch.image, first);
+        // A horizontal gesture can still grow the image, but yielding to the
+        // user is permanent: a later stall must wait for Done or Cancel.
+        assert!(stitch.push(frame(Axis::Horizontal, 20, false)));
+        for _ in 0..10 {
+            assert!(!auto.at_end(true, stitch.axis.is_some()));
         }
     }
     #[test]
