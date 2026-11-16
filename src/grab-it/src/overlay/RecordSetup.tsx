@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import {
   CameraIcon,
+  CameraOffIcon,
+  CheckIcon,
   ChevronDownIcon,
   ClickIcon,
   CloseIcon,
@@ -8,6 +10,7 @@ import {
   KeyboardIcon,
   MicIcon,
   MicOffIcon,
+  RestartIcon,
   SpeakerIcon,
   TimerIcon,
 } from "../app/icons";
@@ -17,7 +20,14 @@ import {
   type RecordingSettings,
   type RecordingSource,
 } from "../settings/api";
-import { microphoneLabel, nextCountdown, withMicrophone, withSystemSound } from "./recordOptions";
+import {
+  cameraLabel,
+  microphoneLabel,
+  nextCountdown,
+  withCamera,
+  withMicrophone,
+  withSystemSound,
+} from "./recordOptions";
 import { SOURCES, type RecordingOptions } from "./recordSources";
 
 type FormatChoice = "mp4-30" | "mp4-60" | "gif";
@@ -38,6 +48,14 @@ function withFormat(recording: RecordingSettings, choice: FormatChoice): Recordi
   return { ...recording, format: "mp4", fps: choice === "mp4-60" ? 60 : 30 };
 }
 
+/** A row of a chip's list: an option to pick, or a separator, heading or action between them. */
+type ChipRow =
+  | { kind?: "option"; key: string; title: string; selected: boolean; onPick: () => void }
+  | { kind: "separator"; key: string }
+  | { kind: "heading"; key: string; title: string }
+  /** Does something rather than pick; the list stays open, as it may change the list. */
+  | { kind: "action"; key: string; title: string; icon?: ReactNode; busy?: boolean; onPick: () => void };
+
 interface ChipMenuProps {
   label: ReactNode;
   icon?: ReactNode;
@@ -45,11 +63,13 @@ interface ChipMenuProps {
   disabled?: boolean;
   /** Opens above the chip, for a panel near the bottom of the screen. */
   up: boolean;
-  options: { key: string; title: string; selected: boolean; onPick: () => void }[];
+  /** Marks the option picked with a check, and lines the others up with it. */
+  checks?: boolean;
+  options: ChipRow[];
 }
 
 /** A chip that opens a short list to pick from. */
-function ChipMenu({ label, icon, title, disabled, up, options }: ChipMenuProps) {
+function ChipMenu({ label, icon, title, disabled, up, checks = false, options }: ChipMenuProps) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -77,22 +97,63 @@ function ChipMenu({ label, icon, title, disabled, up, options }: ChipMenuProps) 
         <ChevronDownIcon size={12} />
       </button>
       {open && (
-        <div className="overlay-chip-list" role="menu" aria-label={title} data-up={up ? "true" : "false"}>
-          {options.map((option) => (
-            <button
-              key={option.key}
-              type="button"
-              role="menuitemradio"
-              aria-checked={option.selected}
-              className="overlay-chip-option"
-              onClick={() => {
-                setOpen(false);
-                option.onPick();
-              }}
-            >
-              {option.title}
-            </button>
-          ))}
+        <div
+          className="overlay-chip-list"
+          role="menu"
+          aria-label={title}
+          data-up={up ? "true" : "false"}
+          data-checks={checks ? "true" : undefined}
+        >
+          {options.map((row) => {
+            switch (row.kind) {
+              case "separator":
+                return <div key={row.key} role="separator" className="overlay-chip-separator" />;
+              case "heading":
+                return (
+                  <div key={row.key} role="presentation" className="overlay-chip-heading">
+                    {row.title}
+                  </div>
+                );
+              case "action":
+                return (
+                  <button
+                    key={row.key}
+                    type="button"
+                    role="menuitem"
+                    className="overlay-chip-option overlay-chip-action"
+                    disabled={row.busy}
+                    aria-busy={row.busy || undefined}
+                    onClick={row.onPick}
+                  >
+                    <span className="overlay-chip-mark" aria-hidden="true">
+                      {row.icon}
+                    </span>
+                    <span>{row.title}</span>
+                  </button>
+                );
+              default:
+                return (
+                  <button
+                    key={row.key}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={row.selected}
+                    className="overlay-chip-option"
+                    onClick={() => {
+                      setOpen(false);
+                      row.onPick();
+                    }}
+                  >
+                    {checks && (
+                      <span className="overlay-chip-mark" aria-hidden="true">
+                        {row.selected && <CheckIcon size={14} />}
+                      </span>
+                    )}
+                    <span>{row.title}</span>
+                  </button>
+                );
+            }
+          })}
         </div>
       )}
     </div>
@@ -148,8 +209,8 @@ interface RecordSetupProps {
 /**
  * The Record overlay's setup toolbar, in the recording toolbar's look: a
  * grip to move it, what to record (Region, Window or Screen), the format,
- * the microphone, the system sound, webcam, clicks and keys as icons, the
- * countdown, Record and Cancel.
+ * the microphone, the camera, the system sound, clicks and keys as icons,
+ * the countdown, Record and Cancel.
  */
 function RecordSetup({
   options,
@@ -163,7 +224,7 @@ function RecordSetup({
   onRecord,
   onCancel,
 }: RecordSetupProps) {
-  const { recording, microphones, system, error, save } = options;
+  const { recording, microphones, cameras, refreshingCameras, refreshCameras, system, error, save } = options;
 
   const sources = (
     <div className="overlay-setup-sources" role="group" aria-label="What to record">
@@ -206,6 +267,39 @@ function RecordSetup({
         onPick: () => save(withMicrophone(recording, { kind: "device", id: mic.id })),
       })),
     ];
+    const webcamOn = recording.showWebcam;
+    const cameraSection: ChipRow[] =
+      cameras.length === 0
+        ? []
+        : [
+            { kind: "separator", key: "cameras-separator" },
+            { kind: "heading", key: "cameras-heading", title: "Cameras" },
+            ...cameras.map((camera) => ({
+              key: `camera-${camera.id}`,
+              title: camera.name,
+              selected: webcamOn && recording.camera === camera.id,
+              onPick: () => save(withCamera(recording, { kind: "device", id: camera.id })),
+            })),
+          ];
+    const cameraRows: ChipRow[] = [
+      { key: "none", title: "No webcam", selected: !webcamOn, onPick: () => save(withCamera(recording, { kind: "none" })) },
+      {
+        key: "default",
+        title: "Default camera",
+        selected: webcamOn && recording.camera === null,
+        onPick: () => save(withCamera(recording, { kind: "default" })),
+      },
+      ...cameraSection,
+      { kind: "separator", key: "refresh-separator" },
+      {
+        kind: "action",
+        key: "refresh",
+        title: "Refresh camera list",
+        icon: <RestartIcon size={14} />,
+        busy: refreshingCameras,
+        onPick: refreshCameras,
+      },
+    ];
     settings = (
       <div className="overlay-record-setup" data-testid="overlay-record-setup" role="group" aria-label="Recording options">
         <ChipMenu
@@ -227,6 +321,14 @@ function RecordSetup({
           label={gif ? "No sound" : microphoneLabel(recording, microphones)}
           options={micOptions}
         />
+        <ChipMenu
+          title="Camera"
+          up={up}
+          checks
+          icon={webcamOn ? <CameraIcon size={14} /> : <CameraOffIcon size={14} />}
+          label={cameraLabel(recording, cameras)}
+          options={cameraRows}
+        />
         <span className="overlay-toolbar-gap" aria-hidden="true" />
         {system && (
           <IconToggle
@@ -238,12 +340,6 @@ function RecordSetup({
             onToggle={() => save(withSystemSound(recording, !recordsSystemSound(recording.audio)))}
           />
         )}
-        <IconToggle
-          label="Webcam"
-          icon={<CameraIcon size={16} />}
-          on={recording.showWebcam}
-          onToggle={() => save({ ...recording, showWebcam: !recording.showWebcam })}
-        />
         <IconToggle
           label="Clicks"
           icon={<ClickIcon size={16} />}

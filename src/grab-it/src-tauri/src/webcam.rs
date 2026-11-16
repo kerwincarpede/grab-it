@@ -11,7 +11,17 @@
 //! a page may use the camera. [`allow_camera`] grants it to Grab-it's own
 //! pages, and [`enable_media_streams`] turns them on. macOS asks for the
 //! camera itself the first time, with Info.plist's `NSCameraUsageDescription`.
+//!
+//! The cameras' names are remembered in [`CAMERAS_FILE`], so the setup
+//! toolbar can list them without turning a camera on: a webview names its
+//! cameras only once one has been opened.
 
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
@@ -25,6 +35,8 @@ use crate::{
 };
 
 pub const LABEL: &str = "webcam";
+/// The cameras last listed with their names, in the app data dir.
+const CAMERAS_FILE: &str = "cameras.json";
 /// The bubble's size, in points, when the recorded area has room for it: a
 /// round or square bubble's side. Other shapes take about the same area.
 const SIZE: f64 = 200.0;
@@ -49,6 +61,55 @@ fn proportions(shape: WebcamShape) -> (f64, f64) {
         WebcamShape::Pill => (0.84, 1.20),
         WebcamShape::Wide => (1.28, 0.80),
     }
+}
+
+/// A camera the webview listed by name. Mirrors `Camera` in
+/// src/settings/api.ts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Camera {
+    /// The webview's `deviceId`, as `RecordingSettings::camera` saves it.
+    pub id: String,
+    pub name: String,
+}
+
+fn cameras_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join(CAMERAS_FILE))
+}
+
+/// The cameras saved at `path`; none when the file is missing or unreadable.
+fn read_cameras(path: &Path) -> Vec<Camera> {
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+/// Saves `cameras` at `path`, making its folder first.
+fn write_cameras(path: &Path, cameras: &[Camera]) -> Result<(), String> {
+    let json = serde_json::to_vec_pretty(cameras).map_err(|err| err.to_string())?;
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|err| err.to_string())?;
+    }
+    fs::write(path, json).map_err(|err| err.to_string())
+}
+
+/// The cameras last listed with their names.
+#[tauri::command]
+pub fn known_cameras(app: AppHandle) -> Vec<Camera> {
+    cameras_path(&app)
+        .map(|path| read_cameras(&path))
+        .unwrap_or_default()
+}
+
+/// Remembers `cameras`, a listing in which every camera had its name.
+#[tauri::command]
+pub fn remember_cameras(app: AppHandle, cameras: Vec<Camera>) -> Result<(), String> {
+    let path =
+        cameras_path(&app).ok_or("Grab-it has no data folder to remember the cameras in.")?;
+    write_cameras(&path, &cameras)
 }
 
 /// Lets a window's page use the camera, and nothing else it asks for that
@@ -447,6 +508,37 @@ mod tests {
             screen_area(rect, (0, 0), (-1280, 0), (1280, 1024)),
             ((-1080, 100), (800, 600))
         );
+    }
+
+    #[test]
+    fn remembers_the_cameras_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data").join(CAMERAS_FILE);
+        assert_eq!(read_cameras(&path), Vec::new());
+        let cameras = vec![
+            Camera {
+                id: "cam-1".into(),
+                name: "FaceTime HD Camera".into(),
+            },
+            Camera {
+                id: "cam-2".into(),
+                name: "Logitech BRIO".into(),
+            },
+        ];
+        write_cameras(&path, &cameras).unwrap();
+        assert_eq!(read_cameras(&path), cameras);
+        write_cameras(&path, &[]).unwrap();
+        assert_eq!(read_cameras(&path), Vec::new());
+    }
+
+    #[test]
+    fn an_unreadable_camera_list_reads_as_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CAMERAS_FILE);
+        fs::write(&path, b"{not json").unwrap();
+        assert_eq!(read_cameras(&path), Vec::new());
+        fs::write(&path, br#"[{"id":"cam-1"}]"#).unwrap();
+        assert_eq!(read_cameras(&path), Vec::new());
     }
 
     #[test]

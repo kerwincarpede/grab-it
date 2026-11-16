@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from "r
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./webcam.css";
 import { CameraIcon, CameraOffIcon } from "../app/icons";
+import { listCameras, rememberListing } from "../settings/api";
 import { cameraProblem, openCamera, webcamOptions, type WebcamOptions } from "./api";
 import { BLOB_SECONDS, shapeOutline } from "./shapes";
 
@@ -70,6 +71,15 @@ function WebcamBubble({ options = webcamOptions(window.location.hash) }: WebcamB
       for (const track of stream?.getTracks() ?? []) track.stop();
     };
   }, [camera]);
+
+  // With a camera live, the webview names its cameras: they are remembered
+  // for the setup toolbar's Camera chip.
+  useEffect(() => {
+    if (!live) return;
+    listCameras()
+      .then(rememberListing)
+      .catch(() => undefined);
+  }, [live]);
 
   // The video fades in once its picture has settled.
   useEffect(() => {

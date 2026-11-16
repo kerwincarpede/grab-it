@@ -1,10 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WEBCAM_SHAPES } from "../settings/api";
 import WebcamBubble from "./WebcamBubble";
 import { cameraConstraints, cameraProblem, webcamOptions, type WebcamOptions } from "./api";
 import { SHAPE_OUTLINES, shapeOutline } from "./shapes";
-import { fakeMedia, type FakeMedia } from "./testMedia";
+import { camera, fakeMedia, type FakeMedia } from "./testMedia";
 
 const SQUIRCLE: WebcamOptions = { shape: "squircle", mirror: true, camera: null };
 
@@ -96,6 +97,42 @@ describe("WebcamBubble", () => {
     expect(media.requests).toHaveLength(1);
     expect(media.requests[0].video).toMatchObject({ deviceId: { exact: "cam-1" } });
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("remembers the cameras' names once its camera is live", async () => {
+    const remembered: unknown[] = [];
+    mockIPC((cmd, payload) => {
+      if (cmd === "remember_cameras") remembered.push((payload as { cameras: unknown }).cameras);
+      return null;
+    });
+    media = fakeMedia({
+      devices: [camera("", "")],
+      devicesAfterOpen: [camera("cam-1", "FaceTime HD Camera"), camera("cam-2", "USB Webcam")],
+    });
+    render(<WebcamBubble options={{ ...SQUIRCLE, camera: "cam-1" }} />);
+    await waitFor(() =>
+      expect(remembered).toEqual([
+        [
+          { id: "cam-1", name: "FaceTime HD Camera" },
+          { id: "cam-2", name: "USB Webcam" },
+        ],
+      ]),
+    );
+    // Listing them never opens another camera.
+    expect(media.requests).toHaveLength(1);
+  });
+
+  it("keeps the cameras remembered when their names are hidden", async () => {
+    const commands: string[] = [];
+    mockIPC((cmd) => {
+      commands.push(cmd);
+      return null;
+    });
+    media = fakeMedia({ devices: [camera("cam-1", "")] });
+    render(<WebcamBubble options={SQUIRCLE} />);
+    await waitFor(() => expect(screen.getByTestId("webcam")).toHaveAttribute("data-live", "true"));
+    await act(() => Promise.resolve());
+    expect(commands).not.toContain("remember_cameras");
   });
 
   it("takes the chosen shape, unmirrored when asked", () => {

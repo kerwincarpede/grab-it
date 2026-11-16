@@ -776,6 +776,51 @@
   background: rgb(47 129 247 / 28%);
 }
 
+.overlay-chip-option {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+  align-items: center;
+}
+
+/* The check in a list that marks its pick, and the icon of an action. */
+.overlay-chip-mark {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+}
+
+.overlay-chip-action {
+  color: #8d919a;
+}
+
+.overlay-chip-action:hover:not(:disabled) {
+  color: #ecedef;
+}
+
+.overlay-chip-action:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.overlay-chip-separator {
+  flex-shrink: 0;
+  height: 1px;
+  margin: 3px 6px;
+  background: #2a2c31;
+}
+
+.overlay-chip-heading {
+  flex-shrink: 0;
+  padding: 6px 10px 2px 32px;
+  color: #6f737c;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .overlay-record-note {
   padding: 0 6px;
   color: #8d919a;

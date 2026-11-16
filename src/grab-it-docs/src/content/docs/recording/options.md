@@ -43,9 +43,17 @@ It's offered on Windows, Linux and macOS 13 or later. A GIF is silent, so it's t
 
 ## Webcam
 
-The camera icon shows your webcam in a bubble over the recorded area. The bubble is part of the screen, so it's recorded with it. It opens at the bottom-right corner of the area; drag it anywhere while you record.
+The camera chip, beside the microphone chip, shows your webcam in a bubble over the recorded area. The bubble is part of the screen, so it's recorded with it. It opens at the bottom-right corner of the area; drag it anywhere while you record. The chip offers:
 
-**Settings → Recording** picks the **Camera** (the system default unless you choose one) the **Webcam shape** (**Squircle**, the default, **Round**, **Arch**, **Pill**, **Wide** or **Blob**, which slowly changes its outline) and whether to **Mirror webcam**. Mirroring is on by default, so you see yourself as in a mirror and pointing at the screen points the right way; turn it off when there's writing behind you, which would read backwards. You can hide and show the bubble while you record from the [toolbar's menu](/grab-it/recording/toolbar/#the-menu).
+- **No webcam**,
+- **Default camera**: the camera your system picks first,
+- or, under **Cameras**, each camera by name.
+
+Picking a camera turns the webcam on with it; **No webcam** turns it off and keeps the camera chosen for next time. A camera chosen before that is no longer connected shows as **Saved camera**, and the bubble uses the default camera instead.
+
+The names come from a list Grab-it remembers, so opening the toolbar never turns your camera on. The list is updated whenever Settings or the webcam bubble sees your cameras. To update it yourself, say after plugging a camera in, choose **Refresh camera list**: it turns the camera on for a moment to read the names, and may ask for permission to use it.
+
+You can also pick the **Camera** in **Settings → Recording**, which also sets the **Webcam shape** (**Squircle**, the default, **Round**, **Arch**, **Pill**, **Wide** or **Blob**, which slowly changes its outline) and whether to **Mirror webcam**. Mirroring is on by default, so you see yourself as in a mirror and pointing at the screen points the right way; turn it off when there's writing behind you, which would read backwards. You can hide and show the bubble while you record from the [toolbar's menu](/grab-it/recording/toolbar/#the-menu).
 
 ## Clicks
 

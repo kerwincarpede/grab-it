@@ -3,9 +3,13 @@ import { RegionIcon, ScreenIcon, WindowIcon } from "../app/icons";
 import {
   DEFAULT_RECORDING,
   getSettings,
+  knownCameras,
+  listCameras,
   listMicrophones,
+  rememberListing,
   setRecording,
   systemSoundAvailable,
+  type Camera,
   type Microphone,
   type RecordingSettings,
   type RecordingSource,
@@ -22,6 +26,15 @@ export const SOURCES: { source: RecordingSource; label: string; icon: ReactNode 
 export interface RecordingOptions {
   recording: RecordingSettings | null;
   microphones: Microphone[];
+  /** The cameras last listed with their names; reading them never turns a camera on. */
+  cameras: Camera[];
+  /** The cameras are being listed again. */
+  refreshingCameras: boolean;
+  /**
+   * Lists the cameras again, opening one for a moment to read their names,
+   * and shows and remembers them when every one was named.
+   */
+  refreshCameras: () => void;
   /** System sound can be recorded here. */
   system: boolean;
   error: string | null;
@@ -37,6 +50,8 @@ export interface RecordingOptions {
 export function useRecordingOptions(enabled: boolean): RecordingOptions {
   const [recording, setLocal] = useState<RecordingSettings | null>(null);
   const [microphones, setMicrophones] = useState<Microphone[]>([]);
+  const [cameras, setCameras] = useState<Camera[]>([]);
+  const [refreshingCameras, setRefreshingCameras] = useState(false);
   const [system, setSystem] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,6 +71,13 @@ export function useRecordingOptions(enabled: boolean): RecordingOptions {
       })
       .catch(() => {
         // The default microphone is still offered.
+      });
+    knownCameras()
+      .then((known) => {
+        if (!cancelled) setCameras(known);
+      })
+      .catch(() => {
+        // The default camera is still offered.
       });
     systemSoundAvailable()
       .then((available) => {
@@ -79,5 +101,20 @@ export function useRecordingOptions(enabled: boolean): RecordingOptions {
     });
   }
 
-  return { recording, microphones, system, error, save };
+  function refreshCameras() {
+    setRefreshingCameras(true);
+    listCameras(true)
+      .then(async (listing) => {
+        // A listing with a hidden name keeps the names known.
+        if (!listing.named) return;
+        setCameras(listing.cameras);
+        await rememberListing(listing);
+      })
+      .catch(() => {
+        // The list stays as it was.
+      })
+      .finally(() => setRefreshingCameras(false));
+  }
+
+  return { recording, microphones, cameras, refreshingCameras, refreshCameras, system, error, save };
 }

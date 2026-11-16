@@ -147,6 +147,8 @@ pub fn run() {
             record_bar::record_bar_fit,
             record_bar::record_bar_reset,
             record_bar::record_bar_remember,
+            webcam::known_cameras,
+            webcam::remember_cameras,
             ffmpeg::ffmpeg_status,
             ffmpeg::ffmpeg_retry,
             audio::recording_microphones,

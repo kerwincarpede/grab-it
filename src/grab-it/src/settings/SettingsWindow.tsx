@@ -20,6 +20,7 @@ import {
   WEBCAM_SHAPES,
   keystrokesHint as keystrokesHintFor,
   listCameras,
+  rememberListing,
   listMicrophones,
   onFfmpegStatus,
   recordsMicrophone,
@@ -330,8 +331,10 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     const ask = askForCameras.current;
     askForCameras.current = false;
     listCameras(ask)
-      .then((list) => {
-        if (!cancelled) setCameras(list);
+      .then((listing) => {
+        if (!cancelled) setCameras(listing.cameras);
+        // Named, they are remembered for the setup toolbar's Camera chip.
+        rememberListing(listing).catch(() => undefined);
       })
       .catch(() => {
         // The default camera still works without the list.
