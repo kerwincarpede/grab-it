@@ -26,6 +26,7 @@ import {
   dayLabel,
   deleteShot,
   dismissAiNotice,
+  duplicateShot,
   filterOptions,
   formatCapturedAt,
   formatTime,
@@ -48,7 +49,10 @@ import {
   copyShotPath,
   openShotExternally,
   openShotFolder,
+  openShotWith,
+  openWithSupported,
   redescribeShot,
+  renameShot,
   revealShot,
   searchShots,
   setShotKeep,
@@ -57,6 +61,7 @@ import {
   setShotTags,
   shotText,
   textCopied,
+  trashShot,
   type AiStatus,
   type CliProvider,
   type FilterOptions,
@@ -1159,6 +1164,8 @@ function LibraryWindow({
   const [menu, setMenu] = useState<{ id: number; x: number; y: number } | null>(null);
   /** The tile the menu opened from, to give focus back to. */
   const menuFrom = useRef<HTMLElement | null>(null);
+  /** Whether the system can ask which app to open a file with; Open with… is hidden until it says. */
+  const [canOpenWith, setCanOpenWith] = useState(false);
   const [reloads, setReloads] = useState(0);
   const [rowHeight, setRowHeight] = useState(readRowHeight);
   const [detailsWidth, setDetailsWidth] = useState(readDetailsWidth);
@@ -1442,6 +1449,16 @@ function LibraryWindow({
     return () => observer.disconnect();
   }, [shots.length, hasMore]);
 
+  useEffect(() => {
+    let live = true;
+    openWithSupported().then((supported) => {
+      if (live) setCanOpenWith(supported);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
   // "/" jumps to search; Escape closes the details.
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent) => {
@@ -1485,14 +1502,27 @@ function LibraryWindow({
     setFilters(NO_FILTERS);
   }
 
-  function deleted(id: number) {
+  function deleted(id: number, trashed = false) {
     const gone = shots.find((shot) => shot.id === id);
     setError(null);
     setShots((current) => current.filter((shot) => shot.id !== id));
     setTotal((count) => Math.max(0, count - 1));
     setSelectedId(null);
-    setNotice({ text: gone && isRecording(gone) ? "Recording deleted" : "Capture deleted", key: Date.now() });
+    const what = gone && isRecording(gone) ? "Recording" : "Capture";
+    setNotice({ text: trashed ? `${what} moved to the Trash` : `${what} deleted`, key: Date.now() });
   }
+
+  /** Renames a shot's file from its menu; rejects with the backend's reason so the menu can show it. */
+  const rename = useCallback(async (shot: Shot, name: string) => {
+    try {
+      const renamed = await renameShot(shot.id, name);
+      setError(null);
+      setShots((current) => current.map((item) => (item.id === renamed.id ? renamed : item)));
+      setNotice({ text: `Renamed to ${renamed.fileName}`, key: Date.now() });
+    } catch (err: unknown) {
+      throw new Error(errorMessage(err));
+    }
+  }, []);
 
   const open = useCallback((id: number) => {
     openShot(id).catch((err: unknown) => setError(errorMessage(err)));
@@ -1542,6 +1572,22 @@ function LibraryWindow({
         break;
       case "openExternal":
         openShotExternally(shot.id).catch(failed);
+        break;
+      case "openWith":
+        openShotWith(shot.id).catch(failed);
+        break;
+      case "rename":
+        // Edited in the menu itself; see `rename`.
+        break;
+      case "duplicate":
+        duplicateShot(shot.id).then((copy) => {
+          setError(null);
+          say(`Duplicated as ${copy.fileName}`);
+          setReloads((count) => count + 1);
+        }, failed);
+        break;
+      case "trash":
+        trashShot(shot.id).then(() => deleted(shot.id, true), failed);
         break;
       case "copy":
         tileAction(shot, "copy");
@@ -1764,8 +1810,10 @@ function LibraryWindow({
           x={menu.x}
           y={menu.y}
           aiOff={ai?.state === "off"}
+          openWith={canOpenWith}
           preview={<Thumbnail shot={menuShot} />}
           onAction={menuAction}
+          onRename={rename}
           onClose={closeMenu}
         />
       )}

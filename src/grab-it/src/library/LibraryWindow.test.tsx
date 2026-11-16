@@ -79,6 +79,8 @@ interface Backend {
   due?: Partial<Record<"image" | "gif" | "video", { count: number; bytes: number }>>;
   /** How Settings says cleanup removes items; no Keep settings when unset. */
   removal?: Removal;
+  /** The system can ask which app to open a file with; it cannot when unset. */
+  openWith?: boolean;
   /** Answers `library_clean_up`; nothing removed when unset. */
   cleanUp?: (removal: Removal) => Promise<{ count: number; bytes: number }> | { count: number; bytes: number };
 }
@@ -199,9 +201,40 @@ function mockBackend(shots: Shot[]): Backend {
           return updated;
         }
         case "library_delete":
+        case "library_trash":
           find(args.id as number);
           backend.shots = backend.shots.filter((item) => item.id !== args.id);
           return null;
+        case "library_rename": {
+          // As the backend does: the extension is kept, and a taken name is refused.
+          const current = find(args.id as number);
+          const extension = current.fileName.slice(current.fileName.lastIndexOf("."));
+          const fileName = `${String(args.name).trim()}${extension}`;
+          if (backend.shots.some((item) => item.id !== current.id && item.fileName === fileName)) {
+            throw `There is already a file called ${fileName}.`;
+          }
+          const folder = current.path.slice(0, current.path.lastIndexOf("/") + 1);
+          const updated = { ...current, fileName, path: `${folder}${fileName}` };
+          backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
+          return updated;
+        }
+        case "library_duplicate": {
+          const current = find(args.id as number);
+          const dot = current.fileName.lastIndexOf(".");
+          const fileName = `${current.fileName.slice(0, dot)} copy${current.fileName.slice(dot)}`;
+          const folder = current.path.slice(0, current.path.lastIndexOf("/") + 1);
+          const copy = {
+            ...current,
+            id: Math.max(...backend.shots.map((item) => item.id)) + 1,
+            fileName,
+            path: `${folder}${fileName}`,
+            keep: false,
+          };
+          backend.shots = [...backend.shots, copy];
+          return copy;
+        }
+        case "library_open_with_supported":
+          return backend.openWith ?? false;
         case "library_text": {
           const id = args.id as number;
           find(id);
@@ -226,6 +259,7 @@ function mockBackend(shots: Shot[]): Backend {
         case "library_reveal":
         case "library_open_folder":
         case "library_open_external":
+        case "library_open_with":
           find(args.id as number);
           return null;
         case "library_copy_path":
@@ -1158,13 +1192,16 @@ describe("LibraryWindow right-click menu", () => {
       "Copy image",
       "Copy text in image",
       "Pin to screen",
+      "Rename…",
+      "Duplicate",
       "Show in file manager",
       "Open containing folder",
       "Copy file path",
       "Keep forever",
       "Describe again",
       "Show details",
-      "Delete…",
+      "Move to Trash",
+      "Delete permanently…",
     ]);
     expect(within(menu).getByText("Screenshot · 800 × 600 · firefox")).toBeInTheDocument();
 
@@ -1195,13 +1232,17 @@ describe("LibraryWindow right-click menu", () => {
     expect(screen.getByLabelText("Capture details")).toBeInTheDocument();
   });
 
-  it("asks again in place before deleting", async () => {
+  it("asks again in place before deleting permanently", async () => {
     const backend = mockBackend([shot(1), shot(2)]);
     render(<LibraryWindow />);
     const menu = await openMenu("Grab-it 1.png");
-    await userEvent.click(within(menu).getByRole("menuitem", { name: "Delete…" }));
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Delete permanently…" }));
     expect(callsTo(backend, "library_delete")).toHaveLength(0);
-    await userEvent.click(within(menu).getByRole("menuitem", { name: "Click again to delete" }));
+    // Moving to another entry disarms it.
+    await userEvent.hover(within(menu).getByRole("menuitem", { name: "Move to Trash" }));
+    expect(within(menu).getByRole("menuitem", { name: "Delete permanently…" })).toBeInTheDocument();
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Delete permanently…" }));
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Click again to delete for good" }));
 
     await waitFor(() => expect(callsTo(backend, "library_delete")[0].payload).toEqual({ id: 1 }));
     expect(await screen.findByText("Capture deleted")).toBeInTheDocument();
@@ -1241,12 +1282,15 @@ describe("LibraryWindow right-click menu", () => {
     expect(labels(menu)).toEqual([
       "Play",
       "Edit in recording editor",
+      "Rename…",
+      "Duplicate",
       "Show in file manager",
       "Open containing folder",
       "Copy file path",
       "Keep forever",
       "Show details",
-      "Delete…",
+      "Move to Trash",
+      "Delete permanently…",
     ]);
     expect(within(menu).getByText("Video · 0:46 · 10.3 MB")).toBeInTheDocument();
     await userEvent.click(within(menu).getByRole("menuitem", { name: "Play" }));
@@ -1258,6 +1302,129 @@ describe("LibraryWindow right-click menu", () => {
     render(<LibraryWindow />);
     const menu = await openMenu("Grab-it 3.gif");
     expect(within(menu).queryByRole("menuitem", { name: "Edit in recording editor" })).not.toBeInTheDocument();
+  });
+
+  it("moves a capture to the Trash without asking again", async () => {
+    const backend = mockBackend([shot(1), shot(2)]);
+    render(<LibraryWindow />);
+    await userEvent.click(within(await openMenu("Grab-it 1.png")).getByRole("menuitem", { name: "Move to Trash" }));
+
+    await waitFor(() => expect(callsTo(backend, "library_trash")[0].payload).toEqual({ id: 1 }));
+    expect(callsTo(backend, "library_delete")).toHaveLength(0);
+    expect(await screen.findByText("Capture moved to the Trash")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Grab-it 1.png" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Grab-it 2.png" })).toBeInTheDocument();
+  });
+
+  it("moves a recording to the Trash", async () => {
+    const backend = mockBackend([recording(2)]);
+    render(<LibraryWindow />);
+    await userEvent.click(within(await openMenu("Grab-it 2.mp4")).getByRole("menuitem", { name: "Move to Trash" }));
+    await waitFor(() => expect(callsTo(backend, "library_trash")[0].payload).toEqual({ id: 2 }));
+    expect(await screen.findByText("Recording moved to the Trash")).toBeInTheDocument();
+  });
+
+  it("duplicates a capture and shows the copy", async () => {
+    const backend = mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    await userEvent.click(within(await openMenu("Grab-it 1.png")).getByRole("menuitem", { name: "Duplicate" }));
+
+    await waitFor(() => expect(callsTo(backend, "library_duplicate")[0].payload).toEqual({ id: 1 }));
+    expect(await screen.findByText("Duplicated as Grab-it 1 copy.png")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Grab-it 1 copy.png" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Grab-it 1.png" })).toBeInTheDocument();
+  });
+
+  it("renames a capture in the menu, keeping its extension", async () => {
+    const backend = mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    const menu = await openMenu("Grab-it 1.png");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Rename…" }));
+
+    const field = within(menu).getByRole("textbox", { name: "New name" });
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue("Grab-it 1");
+    expect(within(menu).getByText(".png")).toBeInTheDocument();
+    await userEvent.clear(field);
+    // Typed letters go to the field, not to the menu's type-ahead or the search box.
+    await userEvent.type(field, "Login bug/x{Backspace}{Backspace}{Enter}");
+
+    await waitFor(() =>
+      expect(callsTo(backend, "library_rename")[0].payload).toEqual({ id: 1, name: "Login bug" }),
+    );
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(await screen.findByText("Renamed to Login bug.png")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Login bug.png" })).toBeInTheDocument();
+  });
+
+  it("cancels a rename with Escape, back to the menu", async () => {
+    const backend = mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
+    const menu = await openMenu("Grab-it 1.png");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Rename…" }));
+    await userEvent.type(within(menu).getByRole("textbox", { name: "New name" }), "Other");
+    await userEvent.keyboard("{Escape}");
+
+    expect(within(menu).queryByRole("textbox", { name: "New name" })).not.toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "Rename…" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Capture details")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(callsTo(backend, "library_rename")).toHaveLength(0);
+  });
+
+  it("keeps the name field open with the reason when a rename is refused", async () => {
+    const backend = mockBackend([shot(1), shot(2)]);
+    render(<LibraryWindow />);
+    const menu = await openMenu("Grab-it 1.png");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Rename…" }));
+    const field = within(menu).getByRole("textbox", { name: "New name" });
+    await userEvent.clear(field);
+    await userEvent.type(field, "Grab-it 2{Enter}");
+
+    expect(await within(menu).findByRole("alert")).toHaveTextContent("There is already a file called Grab-it 2.png.");
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Grab-it 1.png" })).toBeInTheDocument();
+
+    // An empty name is not sent.
+    await userEvent.clear(field);
+    await userEvent.keyboard("{Enter}");
+    expect(within(menu).getByRole("alert")).toHaveTextContent("Give it a name.");
+    expect(callsTo(backend, "library_rename")).toHaveLength(1);
+  });
+
+  it("closes without renaming when the name is unchanged", async () => {
+    const backend = mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    const menu = await openMenu("Grab-it 1.png");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Rename…" }));
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(callsTo(backend, "library_rename")).toHaveLength(0);
+  });
+
+  it("offers Open with… only where the system has an app chooser", async () => {
+    const backend = mockBackend([shot(1), recording(2)]);
+    backend.openWith = true;
+    render(<LibraryWindow />);
+    await waitFor(() => expect(callsTo(backend, "library_open_with_supported")).toHaveLength(1));
+    const menu = await openMenu("Grab-it 1.png");
+    await waitFor(() => expect(labels(menu).slice(0, 3)).toEqual(["Open in editor", "Open in default app", "Open with…"]));
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Open with…" }));
+    await waitFor(() => expect(callsTo(backend, "library_open_with")[0].payload).toEqual({ id: 1 }));
+
+    const recordingMenu = await openMenu("Grab-it 2.mp4");
+    expect(labels(recordingMenu).slice(0, 3)).toEqual(["Play", "Edit in recording editor", "Open with…"]);
+  });
+
+  it("hides Open with… where the system cannot ask", async () => {
+    const backend = mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    await waitFor(() => expect(callsTo(backend, "library_open_with_supported")).toHaveLength(1));
+    const menu = await openMenu("Grab-it 1.png");
+    expect(within(menu).queryByRole("menuitem", { name: "Open with…" })).not.toBeInTheDocument();
   });
 
   it("leaves out Describe again while AI descriptions are off", async () => {

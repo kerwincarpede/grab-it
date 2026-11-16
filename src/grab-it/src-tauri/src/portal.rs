@@ -1,10 +1,12 @@
 //! Wayland: captures and hotkeys go through the XDG desktop portals, since
-//! Wayland lets no app read the screen or grab keys on its own.
+//! Wayland lets no app read the screen or grab keys on its own. The Library's
+//! Open with… uses the OpenURI portal's app chooser on any Linux desktop.
 
-use std::fs;
+use std::{fs, os::fd::AsFd, path::Path};
 
 use ashpd::desktop::{
     global_shortcuts::{GlobalShortcuts, NewShortcut},
+    open_uri::OpenFileRequest,
     screenshot::Screenshot,
 };
 use futures_util::StreamExt;
@@ -70,6 +72,24 @@ pub async fn pick_colour() -> Result<Option<[u8; 3]>, String> {
         )),
         Err(err) if is_cancelled(&err) => Ok(None),
         Err(err) => Err(format!("the colour picker portal failed: {err}")),
+    }
+}
+
+/// Asks the desktop which app to open `path` with, through the OpenURI
+/// portal with `ask` set, so its app chooser shows even when the file's
+/// kind has a default app. Backing out of the chooser is not a failure.
+pub async fn open_with(path: &Path) -> Result<(), String> {
+    let file =
+        fs::File::open(path).map_err(|err| format!("could not open {}: {err}", path.display()))?;
+    let opened = OpenFileRequest::default()
+        .ask(true)
+        .send_file(&file.as_fd())
+        .await
+        .and_then(|request| request.response());
+    match opened {
+        Ok(()) => Ok(()),
+        Err(err) if is_cancelled(&err) => Ok(()),
+        Err(err) => Err(format!("could not ask which app to open it with: {err}")),
     }
 }
 

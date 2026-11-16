@@ -229,6 +229,10 @@ pub enum LibraryError {
     NoPreview,
     /// The database was written by a newer Grab-it.
     TooNew(i64),
+    /// A file cannot be given this name; says why.
+    BadName(String),
+    /// Another file already has this name.
+    NameTaken(String),
 }
 
 impl fmt::Display for LibraryError {
@@ -246,6 +250,8 @@ impl fmt::Display for LibraryError {
                 f,
                 "the library was created by a newer Grab-it (schema {version})"
             ),
+            Self::BadName(why) => write!(f, "{why}"),
+            Self::NameTaken(name) => write!(f, "There is already a file called {name}."),
         }
     }
 }
@@ -724,6 +730,120 @@ impl Library {
     pub(crate) fn forget(&mut self, id: i64) -> LibraryResult<()> {
         self.conn.execute("DELETE FROM shots WHERE id = ?1", [id])?;
         Ok(())
+    }
+
+    /// Renames a shot's file to `name` (its extension is kept, and added
+    /// when `name` leaves it out), moving its sidecars and thumbnail with
+    /// it, and points its row at the new file. A name another file, or
+    /// another row, already has is refused, as are names a file cannot have
+    /// on any of the systems Grab-it runs on. If the file cannot be renamed
+    /// nothing else is touched.
+    pub fn rename(&mut self, id: i64, name: &str) -> LibraryResult<Shot> {
+        let shot = self.get(id)?;
+        let file_name = renamed_file_name(&shot.path, name)?;
+        if file_name == shot.file_name {
+            return Ok(shot);
+        }
+        let target = moved_to(&shot, shot.path.with_file_name(&file_name));
+        if !self.is_free(&target, Some(&shot))? {
+            return Err(LibraryError::NameTaken(file_name));
+        }
+        fs::rename(&shot.path, &target.path)?;
+        for (from, to) in extra_files(&shot).into_iter().zip(extra_files(&target)) {
+            if from.exists()
+                && let Err(err) = fs::rename(&from, &to)
+            {
+                eprintln!(
+                    "Grab-it: could not rename {} to {}: {err}",
+                    from.display(),
+                    to.display()
+                );
+            }
+        }
+        let updated = self.conn.execute(
+            "UPDATE shots SET path = ?1, thumb_path = ?2 WHERE id = ?3",
+            params![path_text(&target.path), path_text(&target.thumb_path), id],
+        );
+        if let Err(err) = updated {
+            // Put the file back so the row still finds it.
+            if let Err(back) = fs::rename(&target.path, &shot.path) {
+                eprintln!(
+                    "Grab-it: could not rename {} back: {back}",
+                    target.path.display()
+                );
+            }
+            for (from, to) in extra_files(&shot).into_iter().zip(extra_files(&target)) {
+                if to.exists() {
+                    let _ = fs::rename(&to, &from);
+                }
+            }
+            return Err(err.into());
+        }
+        self.get(id)
+    }
+
+    /// Where a copy of `shot` goes: beside it, as "<name> copy", then
+    /// "<name> copy 2" and so on, the first name no file or row has.
+    pub fn copy_target(&self, shot: &Shot) -> LibraryResult<Shot> {
+        let stem = shot
+            .path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let extension = shot
+            .path
+            .extension()
+            .map(|ext| format!(".{}", ext.to_string_lossy()))
+            .unwrap_or_default();
+        for n in 1..=MAX_COPIES {
+            let name = if n == 1 {
+                format!("{stem} copy{extension}")
+            } else {
+                format!("{stem} copy {n}{extension}")
+            };
+            let target = moved_to(shot, shot.path.with_file_name(name));
+            if self.is_free(&target, None)? {
+                return Ok(target);
+            }
+        }
+        Err(LibraryError::NameTaken(format!(
+            "{stem} copy {MAX_COPIES}{extension}"
+        )))
+    }
+
+    /// Whether `target`'s file and sidecars are free to be written: no file
+    /// is there, besides `current`'s own (a rename that only changes the
+    /// case of a name, on a disk that ignores case), and no other row has
+    /// its path. A thumbnail left there is Grab-it's own and is replaced.
+    fn is_free(&self, target: &Shot, current: Option<&Shot>) -> LibraryResult<bool> {
+        let taken = |to: &Path, from: Option<&Path>| {
+            to.exists() && !from.is_some_and(|from| same_file(from, to))
+        };
+        if taken(
+            target.path.as_path(),
+            current.map(|shot| shot.path.as_path()),
+        ) {
+            return Ok(false);
+        }
+        let currents = current.map(extra_files);
+        for (index, to) in extra_files(target).iter().enumerate() {
+            if *to == target.thumb_path {
+                continue;
+            }
+            let from = currents.as_ref().and_then(|files| files.get(index));
+            if taken(to.as_path(), from.map(PathBuf::as_path)) {
+                return Ok(false);
+            }
+        }
+        let row: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM shots WHERE path = ?1",
+                [path_text(&target.path)],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(row.is_none_or(|row| current.is_some_and(|shot| shot.id == row)))
     }
 
     /// The newest shot still waiting for OCR, if any.
@@ -1402,6 +1522,172 @@ pub(crate) fn extra_files(shot: &Shot) -> Vec<PathBuf> {
     extras
 }
 
+/// What goes to the Trash with a shot: its main file first, then its
+/// sidecars. Not its thumbnail, which is Grab-it's own and is made again
+/// if the item comes back, so it is deleted instead.
+pub(crate) fn trashed_files(shot: &Shot) -> Vec<PathBuf> {
+    let mut files = vec![shot.path.clone()];
+    files.extend(
+        extra_files(shot)
+            .into_iter()
+            .filter(|path| *path != shot.thumb_path),
+    );
+    files
+}
+
+/// How many "<name> copy N" names a duplicate tries.
+const MAX_COPIES: u32 = 999;
+
+/// The longest name, in characters, a rename gives a file.
+const MAX_NAME_CHARS: usize = 200;
+
+/// Characters no file name may hold on Windows, refused everywhere so the
+/// save folder can move between systems.
+const BAD_NAME_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+
+/// The file name a rename to `name` gives the file at `path`: `name`,
+/// trimmed, with the file's extension (kept when `name` already ends in
+/// it). Refuses names a file cannot have.
+pub(crate) fn renamed_file_name(path: &Path, name: &str) -> LibraryResult<String> {
+    let bad = |why: &str| Err(LibraryError::BadName(why.to_owned()));
+    let extension = path
+        .extension()
+        .map(|ext| ext.to_string_lossy().into_owned());
+    let mut stem = name.trim();
+    if let Some(ext) = &extension {
+        let suffix = format!(".{ext}");
+        if stem.len() > suffix.len()
+            && stem.is_char_boundary(stem.len() - suffix.len())
+            && stem[stem.len() - suffix.len()..].eq_ignore_ascii_case(&suffix)
+        {
+            stem = stem[..stem.len() - suffix.len()].trim_end();
+        }
+    }
+    if stem.is_empty() {
+        return bad("Give it a name.");
+    }
+    if stem
+        .chars()
+        .any(|c| c.is_control() || BAD_NAME_CHARS.contains(&c))
+    {
+        return bad("A name can't contain / \\ : * ? \" < > | or control characters.");
+    }
+    if stem.starts_with('.') {
+        return bad("A name can't start with a dot.");
+    }
+    if stem.ends_with('.') {
+        return bad("A name can't end with a dot.");
+    }
+    if stem.chars().count() > MAX_NAME_CHARS {
+        return bad("That name is too long.");
+    }
+    let device = stem.split('.').next().unwrap_or(stem).to_ascii_uppercase();
+    let reserved = matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((device.starts_with("COM") || device.starts_with("LPT"))
+            && device.len() == 4
+            && device.as_bytes()[3].is_ascii_digit()
+            && device.as_bytes()[3] != b'0');
+    if reserved {
+        return bad("Windows keeps that name for itself.");
+    }
+    Ok(match extension {
+        Some(ext) => format!("{stem}.{ext}"),
+        None => stem.to_owned(),
+    })
+}
+
+/// `shot` as it would be with its main file at `path`: its file name and
+/// thumbnail follow.
+fn moved_to(shot: &Shot, path: PathBuf) -> Shot {
+    let mut moved = shot.clone();
+    moved.file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    moved.thumb_path = thumb_path(&path);
+    moved.path = path;
+    moved
+}
+
+/// Whether two paths name the same file on disk, as two spellings of one
+/// name do on a disk that ignores case.
+fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (fs::metadata(a), fs::metadata(b)) {
+            (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        match (fs::canonicalize(a), fs::canonicalize(b)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+/// Copies `shot`'s file, sidecars and thumbnail to `target`'s (from
+/// [`Library::copy_target`]) and returns the copy's row, which keeps the
+/// original's time, size and metadata. The file is never written over:
+/// if something took its name meanwhile, or it cannot be copied, nothing
+/// is left behind. Touches only files, so it runs without the lock.
+pub fn copy_files(shot: &Shot, target: &Shot) -> LibraryResult<PreparedShot> {
+    copy_new(&shot.path, &target.path)?;
+    for (from, to) in extra_files(shot).into_iter().zip(extra_files(target)) {
+        if from.is_file()
+            && let Err(err) = fs::copy(&from, &to)
+        {
+            eprintln!(
+                "Grab-it: could not copy {} to {}: {err}",
+                from.display(),
+                to.display()
+            );
+        }
+    }
+    Ok(PreparedShot {
+        kind: shot.kind,
+        path: target.path.clone(),
+        thumb_path: target.thumb_path.clone(),
+        captured_at: shot.captured_at,
+        mode: shot.mode.clone(),
+        app: shot.app.clone(),
+        window_title: shot.window_title.clone(),
+        width: shot.width,
+        height: shot.height,
+        duration_ms: shot.duration_ms,
+        bytes: fs::metadata(&target.path)
+            .map(|meta| meta.len())
+            .ok()
+            .or(shot.bytes),
+    })
+}
+
+/// Copies `from` to `to`, which must not exist yet; a half-written copy
+/// is removed.
+fn copy_new(from: &Path, to: &Path) -> LibraryResult<()> {
+    let mut source = fs::File::open(from)?;
+    let mut copy = match fs::OpenOptions::new().write(true).create_new(true).open(to) {
+        Ok(copy) => copy,
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+            let name = to
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            return Err(LibraryError::NameTaken(name));
+        }
+        Err(err) => return Err(err.into()),
+    };
+    if let Err(err) = io::copy(&mut source, &mut copy).and_then(|_| copy.sync_all()) {
+        drop(copy);
+        let _ = fs::remove_file(to);
+        return Err(err.into());
+    }
+    Ok(())
+}
+
 pub(crate) fn remove_if_present(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
@@ -1460,6 +1746,43 @@ impl LibraryState {
     pub fn add_capture(&self, png: &Path) -> LibraryResult<Shot> {
         let prepared = prepare_capture(png)?;
         self.lock().insert(&prepared)
+    }
+
+    /// Copies a shot beside itself (see [`Library::copy_target`]) with its
+    /// sidecars and thumbnail, and adds the copy, with the original's tags
+    /// and notes. Files are copied without the lock, so a long recording
+    /// does not hold up the Library.
+    pub fn duplicate(&self, id: i64) -> LibraryResult<Shot> {
+        let (shot, target) = {
+            let library = self.lock();
+            let shot = library.get(id)?;
+            let target = library.copy_target(&shot)?;
+            (shot, target)
+        };
+        let prepared = copy_files(&shot, &target)?;
+        let mut library = self.lock();
+        let copy = library.insert(&prepared)?;
+        if !shot.notes.is_empty() {
+            library.set_notes(copy.id, &shot.notes)?;
+        }
+        library.set_tags(copy.id, &shot.tags)
+    }
+
+    /// Moves a shot's file and sidecars to the Trash with `remove` (see
+    /// [`trashed_files`]), deletes its thumbnail and drops its row. If the
+    /// file cannot be moved nothing else is touched. The files are moved
+    /// without the lock: the Trash may be on another disk.
+    pub fn trash(&self, id: i64, remove: &crate::storage::RemoveFiles) -> LibraryResult<Shot> {
+        let shot = self.lock().get(id)?;
+        remove(&trashed_files(&shot), crate::settings::Removal::Trash)?;
+        if let Err(err) = remove_if_present(&shot.thumb_path) {
+            eprintln!(
+                "Grab-it: could not delete {}: {err}",
+                shot.thumb_path.display()
+            );
+        }
+        self.lock().forget(id)?;
+        Ok(shot)
     }
 
     /// A shot's thumbnail PNG, regenerated without the lock if missing.
@@ -1657,16 +1980,139 @@ pub fn library_delete(
     state: State<'_, LibraryState>,
 ) -> Result<(), String> {
     let path = state.lock().get(id).map_err(to_message)?.path;
-    let editor = app.state::<EditorState>().label_for(&path).or_else(|| {
+    close_editor(&app, &path);
+    state.lock().delete(id).map_err(to_message)?;
+    let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
+    Ok(())
+}
+
+/// Closes the image or recording editor open on `path`, if any, before
+/// its file is moved or removed.
+fn close_editor(app: &AppHandle, path: &Path) {
+    let editor = app.state::<EditorState>().label_for(path).or_else(|| {
         app.state::<crate::recording_editor::RecordingEditorState>()
-            .label_for(&path)
+            .label_for(path)
     });
     if let Some(window) = editor.and_then(|label| app.get_webview_window(&label)) {
         let _ = window.destroy();
     }
-    state.lock().delete(id).map_err(to_message)?;
+}
+
+/// Moves a shot's file and sidecars to the system Trash and drops it from
+/// the library, closing its editor first.
+#[tauri::command(async)]
+pub fn library_trash(
+    id: i64,
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+) -> Result<(), String> {
+    let path = state.lock().get(id).map_err(to_message)?.path;
+    close_editor(&app, &path);
+    state
+        .trash(id, &crate::storage::remove_files)
+        .map_err(|err| format!("could not move it to the Trash: {err}"))?;
     let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
     Ok(())
+}
+
+/// Renames a shot's file, with its sidecars and thumbnail, and returns
+/// the shot as it now is. `name` is the new name; the file keeps its
+/// extension. Its editor is closed first, since it saves to the old path.
+#[tauri::command(async)]
+pub fn library_rename(
+    id: i64,
+    name: String,
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+) -> Result<Shot, String> {
+    let shot = state.lock().get(id).map_err(to_message)?;
+    if !shot.path.is_file() {
+        return Err(format!("{} no longer exists", shot.path.display()));
+    }
+    // Checked before the editor is closed, so a name that is refused
+    // leaves it open.
+    let file_name = renamed_file_name(&shot.path, &name).map_err(to_message)?;
+    if file_name != shot.file_name {
+        close_editor(&app, &shot.path);
+    }
+    let renamed = state.lock().rename(id, &name).map_err(to_message)?;
+    let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
+    Ok(renamed)
+}
+
+/// Copies a shot beside itself as "<name> copy" with its sidecars, adds
+/// the copy to the library and returns it.
+#[tauri::command(async)]
+pub fn library_duplicate(
+    id: i64,
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+) -> Result<Shot, String> {
+    existing_path(&app, id)?;
+    let copy = state
+        .duplicate(id)
+        .map_err(|err| format!("could not duplicate it: {err}"))?;
+    let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
+    Ok(copy)
+}
+
+/// Whether [`library_open_with`] can ask which app to use here: through
+/// the OpenURI portal on Linux and the Open With dialog on Windows. macOS
+/// has no system chooser an app can show.
+#[tauri::command]
+pub fn library_open_with_supported() -> bool {
+    cfg!(any(target_os = "linux", target_os = "windows"))
+}
+
+/// Asks the system which app to open a shot's file with, and opens it
+/// there. Resolves once the choice is made; backing out is not a failure.
+#[tauri::command]
+pub async fn library_open_with(id: i64, app: AppHandle) -> Result<(), String> {
+    let path = existing_path(&app, id)?;
+    #[cfg(target_os = "linux")]
+    {
+        crate::portal::open_with(&path).await
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // The dialog is modal and blocks until it closes.
+        tauri::async_runtime::spawn_blocking(move || open_with_dialog(&path))
+            .await
+            .map_err(|err| format!("the Open With dialog failed: {err}"))?
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        let _ = path;
+        Err("Open with is not available on this system.".into())
+    }
+}
+
+/// Shows Windows' Open With dialog for `path`, which opens it in the app
+/// picked there.
+#[cfg(target_os = "windows")]
+fn open_with_dialog(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Foundation::ERROR_CANCELLED;
+    use windows::Win32::UI::Shell::{
+        OAIF_ALLOW_REGISTRATION, OAIF_EXEC, OAIF_REGISTER_EXT, OPENASINFO, SHOpenWithDialog,
+    };
+    use windows::core::{HRESULT, PCWSTR};
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let info = OPENASINFO {
+        pcszFile: PCWSTR(wide.as_ptr()),
+        pcszClass: PCWSTR::null(),
+        oaifInFlags: OAIF_ALLOW_REGISTRATION | OAIF_REGISTER_EXT | OAIF_EXEC,
+    };
+    // SAFETY: `info` and the name it points to outlive the call.
+    match unsafe { SHOpenWithDialog(None, &info) } {
+        Ok(()) => Ok(()),
+        Err(err) if err.code() == HRESULT::from_win32(ERROR_CANCELLED.0) => Ok(()),
+        Err(err) => Err(format!("could not show the Open With dialog: {err}")),
+    }
 }
 
 /// Opens a shot in its editor: a capture in the image editor, an MP4 in
@@ -2592,5 +3038,294 @@ mod tests {
             thumb_path(Path::new("/elsewhere/shot.png")),
             PathBuf::from("/elsewhere/thumbs/shot.png")
         );
+    }
+
+    #[test]
+    fn rename_moves_the_file_sidecars_and_thumbnail_and_keeps_the_row() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (4, 4));
+        fs::write(
+            capture::annotations_path(&png),
+            r#"{"version":1,"shapes":[]}"#,
+        )
+        .unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        library.set_tags(shot.id, &["bug".into()]).unwrap();
+        library.set_notes(shot.id, "login page").unwrap();
+
+        let renamed = library.rename(shot.id, "  Login bug  ").unwrap();
+
+        assert_eq!(renamed.id, shot.id);
+        assert_eq!(renamed.file_name, "Login bug.png");
+        assert_eq!(renamed.path, shot.path.with_file_name("Login bug.png"));
+        assert_eq!(renamed.thumb_path, thumb_path(&renamed.path));
+        assert_eq!(renamed.tags, vec!["bug".to_string()]);
+        assert_eq!(renamed.notes, "login page");
+        assert!(renamed.path.is_file());
+        assert!(capture::meta_path(&renamed.path).is_file());
+        assert!(capture::annotations_path(&renamed.path).is_file());
+        assert!(renamed.thumb_path.is_file());
+        assert!(!png.exists());
+        assert!(!capture::meta_path(&png).exists());
+        assert!(!capture::annotations_path(&png).exists());
+        assert!(!shot.thumb_path.exists());
+        assert_eq!(library.count().unwrap(), 1);
+        assert_eq!(library.id_for_path(&renamed.path).unwrap(), Some(shot.id));
+    }
+
+    #[test]
+    fn rename_keeps_the_extension_whether_or_not_it_is_typed() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (4, 4));
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+
+        assert_eq!(
+            library.rename(shot.id, "First.PNG").unwrap().file_name,
+            "First.png"
+        );
+        assert_eq!(
+            library.rename(shot.id, "notes.v2").unwrap().file_name,
+            "notes.v2.png"
+        );
+        // The same name changes nothing.
+        assert_eq!(
+            library.rename(shot.id, "notes.v2").unwrap().file_name,
+            "notes.v2.png"
+        );
+    }
+
+    #[test]
+    fn rename_moves_a_recordings_sidecars() {
+        let dir = TempDir::new().unwrap();
+        let mp4 = record_mp4(dir.path(), "a.mp4");
+        let mut library = Library::open_in_memory().unwrap();
+        library.rescan(dir.path()).unwrap();
+        let shot = library.list(0, MAX_PAGE).unwrap().shots.remove(0);
+
+        let renamed = library.rename(shot.id, "Demo").unwrap();
+
+        assert_eq!(renamed.file_name, "Demo.mp4");
+        assert_eq!(renamed.kind, ShotKind::Video);
+        assert!(crate::record::cursor_path(&renamed.path).is_file());
+        assert!(crate::recording_editor::edits_path(&renamed.path).is_file());
+        assert!(!mp4.exists());
+        assert!(!crate::record::cursor_path(&mp4).exists());
+    }
+
+    #[test]
+    fn rename_refuses_taken_and_invalid_names_and_touches_nothing() {
+        let dir = TempDir::new().unwrap();
+        let first = shoot(dir.path(), 1, (4, 4));
+        let second = shoot(dir.path(), 2, (4, 4));
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&first).unwrap();
+        let other = library.add_capture(&second).unwrap();
+        let other_stem = second.file_stem().unwrap().to_string_lossy().into_owned();
+        // A sidecar left without its image still holds the name.
+        fs::write(first.with_file_name("Orphan.annotations.json"), "{}").unwrap();
+
+        assert!(matches!(
+            library.rename(shot.id, &other_stem),
+            Err(LibraryError::NameTaken(_))
+        ));
+        assert!(matches!(
+            library.rename(shot.id, "Orphan"),
+            Err(LibraryError::NameTaken(_))
+        ));
+        for bad in [
+            "",
+            "   ",
+            ".hidden",
+            "trailing.",
+            "a/b",
+            "a\\b",
+            "what?",
+            "CON",
+            "lpt1",
+            "tab\there",
+        ] {
+            assert!(
+                matches!(library.rename(shot.id, bad), Err(LibraryError::BadName(_))),
+                "{bad:?} is refused"
+            );
+        }
+        assert!(matches!(
+            library.rename(shot.id, &"x".repeat(MAX_NAME_CHARS + 1)),
+            Err(LibraryError::BadName(_))
+        ));
+        assert!(matches!(
+            library.rename(999, "Fine"),
+            Err(LibraryError::NotFound(999))
+        ));
+
+        assert!(first.is_file());
+        assert!(second.is_file());
+        assert_eq!(library.get(shot.id).unwrap().path, shot.path);
+        assert_eq!(library.get(other.id).unwrap().path, other.path);
+        // Names that only look like reserved ones are fine.
+        assert_eq!(
+            library.rename(shot.id, "Console").unwrap().file_name,
+            "Console.png"
+        );
+    }
+
+    #[test]
+    fn rename_refuses_a_name_another_row_holds_even_when_its_file_is_gone() {
+        let dir = TempDir::new().unwrap();
+        let first = shoot(dir.path(), 1, (4, 4));
+        let second = shoot(dir.path(), 2, (4, 4));
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&first).unwrap();
+        let other = library.add_capture(&second).unwrap();
+        fs::remove_file(&other.path).unwrap();
+        fs::remove_file(capture::meta_path(&other.path)).unwrap();
+
+        let stem = other
+            .path
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(matches!(
+            library.rename(shot.id, &stem),
+            Err(LibraryError::NameTaken(_))
+        ));
+        assert!(first.is_file());
+    }
+
+    #[test]
+    fn duplicate_copies_the_file_sidecars_tags_and_notes_to_a_free_name() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (4, 4));
+        fs::write(
+            capture::annotations_path(&png),
+            r#"{"version":1,"shapes":[]}"#,
+        )
+        .unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        library.set_tags(shot.id, &["bug".into()]).unwrap();
+        library.set_notes(shot.id, "login page").unwrap();
+        library.set_keep(shot.id, true).unwrap();
+        let state = LibraryState::new(library);
+        let stem = png.file_stem().unwrap().to_string_lossy().into_owned();
+
+        let copy = state.duplicate(shot.id).unwrap();
+        let again = state.duplicate(shot.id).unwrap();
+
+        assert_ne!(copy.id, shot.id);
+        assert_eq!(copy.file_name, format!("{stem} copy.png"));
+        assert_eq!(again.file_name, format!("{stem} copy 2.png"));
+        assert_eq!(copy.kind, ShotKind::Image);
+        assert_eq!(copy.captured_at, shot.captured_at);
+        assert_eq!((copy.width, copy.height), (shot.width, shot.height));
+        assert_eq!(copy.app, shot.app);
+        assert_eq!(copy.tags, vec!["bug".to_string()]);
+        assert_eq!(copy.notes, "login page");
+        assert!(!copy.keep, "Keep forever is not copied");
+        assert_eq!(fs::read(&copy.path).unwrap(), fs::read(&png).unwrap());
+        assert!(capture::meta_path(&copy.path).is_file());
+        assert!(capture::annotations_path(&copy.path).is_file());
+        assert!(copy.thumb_path.is_file());
+        assert!(png.is_file(), "the original stays");
+        assert_eq!(state.lock().count().unwrap(), 3);
+    }
+
+    #[test]
+    fn duplicate_copies_a_recording_with_its_length_and_sidecars() {
+        let dir = TempDir::new().unwrap();
+        record_mp4(dir.path(), "a.mp4");
+        let mut library = Library::open_in_memory().unwrap();
+        library.rescan(dir.path()).unwrap();
+        let shot = library.list(0, MAX_PAGE).unwrap().shots.remove(0);
+        let state = LibraryState::new(library);
+
+        let copy = state.duplicate(shot.id).unwrap();
+
+        assert_eq!(copy.file_name, "a copy.mp4");
+        assert_eq!(copy.kind, ShotKind::Video);
+        assert_eq!(copy.bytes, shot.bytes);
+        assert!(crate::record::cursor_path(&copy.path).is_file());
+        assert!(crate::recording_editor::edits_path(&copy.path).is_file());
+    }
+
+    #[test]
+    fn duplicate_skips_names_a_file_already_has() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (4, 4));
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        let stem = png.file_stem().unwrap().to_string_lossy().into_owned();
+        fs::write(
+            png.with_file_name(format!("{stem} copy.png")),
+            b"someone else's",
+        )
+        .unwrap();
+        let state = LibraryState::new(library);
+
+        let copy = state.duplicate(shot.id).unwrap();
+
+        assert_eq!(copy.file_name, format!("{stem} copy 2.png"));
+        assert_eq!(
+            fs::read(png.with_file_name(format!("{stem} copy.png"))).unwrap(),
+            b"someone else's"
+        );
+    }
+
+    #[test]
+    fn trash_moves_the_file_and_sidecars_deletes_the_thumbnail_and_drops_the_row() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (4, 4));
+        fs::write(capture::annotations_path(&png), "{}").unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        let state = LibraryState::new(library);
+        let calls = Mutex::new(Vec::new());
+        let remove = |files: &[PathBuf], removal: crate::settings::Removal| -> io::Result<()> {
+            calls.lock().unwrap().push((files.to_vec(), removal));
+            Ok(())
+        };
+
+        state.trash(shot.id, &remove).unwrap();
+
+        let calls = calls.into_inner().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (files, removal) = &calls[0];
+        assert_eq!(removal, &crate::settings::Removal::Trash);
+        assert_eq!(files[0], png, "the main file goes first");
+        assert!(files.contains(&capture::meta_path(&png)));
+        assert!(files.contains(&capture::annotations_path(&png)));
+        assert!(
+            !files.contains(&shot.thumb_path),
+            "the thumbnail is not put in the Trash"
+        );
+        assert!(!shot.thumb_path.exists(), "the thumbnail is deleted");
+        assert_eq!(state.lock().count().unwrap(), 0);
+    }
+
+    #[test]
+    fn trash_that_fails_keeps_the_row_and_thumbnail() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (4, 4));
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        let state = LibraryState::new(library);
+        let remove = |_: &[PathBuf], _: crate::settings::Removal| -> io::Result<()> {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "no Trash here",
+            ))
+        };
+
+        assert!(state.trash(shot.id, &remove).is_err());
+
+        assert!(shot.thumb_path.is_file());
+        assert_eq!(state.lock().get(shot.id).unwrap().path, shot.path);
+        assert!(matches!(
+            state.trash(999, &remove),
+            Err(LibraryError::NotFound(999))
+        ));
     }
 }

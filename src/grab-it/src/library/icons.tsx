@@ -206,3 +206,36 @@ export const InfoIcon = () => (
     <path d="M12 11v5M12 8h.01" />
   </Icon>
 );
+
+/** A text cursor in a field: renames a file. */
+export const RenameIcon = () => (
+  <Icon>
+    <rect x="3.5" y="7" width="17" height="10" rx="2" />
+    <path d="M8 10v4M12.5 5v14M10.5 5h4M10.5 19h4" />
+  </Icon>
+);
+
+/** A sheet with a plus behind another: makes a copy beside the file. */
+export const DuplicateIcon = () => (
+  <Icon>
+    <rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2" />
+    <path d="M15.5 8.5V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7.5a2 2 0 002 2h2.5M14.25 11.75v5M11.75 14.25h5" />
+  </Icon>
+);
+
+/** Four app tiles: opens in an app picked from a list. */
+export const OpenWithIcon = () => (
+  <Icon>
+    <rect x="4" y="4" width="6.5" height="6.5" rx="1.5" />
+    <rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5" />
+    <rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5" />
+    <path d="M16.75 13.5v6.5M13.5 16.75H20" />
+  </Icon>
+);
+
+/** A bin with a cross: deletes for good, past the Trash. */
+export const DeleteForeverIcon = () => (
+  <Icon>
+    <path d="M4 7h16M6 7l1 12.5a1.5 1.5 0 001.5 1.5h7a1.5 1.5 0 001.5-1.5L18 7M9 7V4.5h6V7M10 11.5l4 4M14 11.5l-4 4" />
+  </Icon>
+);
