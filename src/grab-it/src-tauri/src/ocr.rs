@@ -136,9 +136,11 @@ pub fn download_models(dir: &Path, progress: impl FnMut(u64, u64)) -> OcrResult<
 }
 
 /// An HTTP agent whose every network phase gives up after `stall`
-/// without progress. ureq has no timeouts by default.
+/// without progress. ureq has no timeouts by default. Certificates are
+/// checked against the OS trust store (`net::tls_config`).
 pub(crate) fn download_agent(stall: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
+        .tls_config(crate::net::tls_config())
         .timeout_resolve(Some(stall))
         .timeout_connect(Some(stall))
         .timeout_send_request(Some(stall))
