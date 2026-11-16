@@ -66,9 +66,13 @@ The last region you captured starts out selected on the monitor it was on, ready
 
 ## Scroll
 
-Choose **Scroll**, drag an area or click a window, then press **Start scrolling** or `Enter`. Scroll slowly by hand vertically or horizontally, keeping some content visible between movements. Keep the content still apart from scrolling.
+Choose **Scroll**, drag an area or click a window, then press **Start scrolling** or `Enter`. Grab-it moves the pointer to the middle of the area and scrolls automatically, saving when several wheel steps move no new content. The first detected movement sets the direction.
+
+Move the mouse more than 8 px from where Grab-it placed it to pause automatic scrolling for the rest of that capture. The card changes to **Scroll by hand**. Scroll slowly by hand vertically or horizontally, keeping some content visible between movements. Keep the content still apart from scrolling.
 
 The Quick Access card shows the image size so far. **Done** saves one stitched image; **Cancel** discards it. At 30,000 px along the scroll direction, the image stops growing and the card shows the cap was reached. Choose **Done** or **Cancel** to finish.
+
+On macOS, automatic scrolling asks for **Accessibility** permission. If you don't allow it, capture continues by hand and the card explains why. See [Permissions](/grab-it/recording/permissions/#automatic-scrolling).
 
 Scroll capture is not available on Wayland.
 

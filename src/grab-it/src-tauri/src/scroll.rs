@@ -352,6 +352,37 @@ fn end(app: &AppHandle, id: u64, action: u8) {
             .compare_exchange(0, action, Ordering::SeqCst, Ordering::SeqCst);
     }
 }
+// SetCursorPos accepts signed virtual-desktop coordinates directly, avoiding
+// rdev's absolute-input normalization that loses a negative desktop origin.
+#[cfg(any(target_os = "windows", test))]
+fn desktop_pointer_target(monitor: (i32, i32), offset: (i32, i32)) -> (i32, i32) {
+    (monitor.0 + offset.0, monitor.1 + offset.1)
+}
+
+fn place_pointer(monitor: &MonitorInfo, offset: (i32, i32)) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let (x, y) = desktop_pointer_target((monitor.x, monitor.y), offset);
+        // SAFETY: SetCursorPos takes coordinates by value and no pointers.
+        unsafe { windows::Win32::UI::WindowsAndMessaging::SetCursorPos(x, y) }
+            .map_err(|error| error.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // rdev uses desktop points on macOS and pixels on X11.
+        let scale = if cfg!(target_os = "macos") {
+            monitor.scale_factor
+        } else {
+            1.0
+        };
+        rdev::simulate(&rdev::EventType::MouseMove {
+            x: monitor.x as f64 + offset.0 as f64 / scale,
+            y: monitor.y as f64 + offset.1 as f64 / scale,
+        })
+        .map_err(|error| format!("{error:?}"))
+    }
+}
+
 pub fn start(
     app: &AppHandle,
     monitor: &MonitorInfo,
@@ -385,12 +416,7 @@ pub fn start(
                 let center = ((rect.width / 2) as i32, (rect.height / 2) as i32);
                 let mut auto = AutoScroll::new(center, allowed);
                 if allowed {
-                    // rdev uses desktop points on macOS and pixels elsewhere.
-                    let scale = if cfg!(target_os = "macos") { monitor.scale_factor } else { 1.0 };
-                    if rdev::simulate(&rdev::EventType::MouseMove {
-                        x: monitor.x as f64 + (rect.x as f64 + center.0 as f64) / scale,
-                        y: monitor.y as f64 + (rect.y as f64 + center.1 as f64) / scale,
-                    }).is_err() {
+                    if place_pointer(&monitor, (rect.x + center.0, rect.y + center.1)).is_err() {
                         auto.reason = Some("Automatic scrolling is unavailable. Scroll by hand, then choose Done.");
                     }
                     std::thread::sleep(Duration::from_millis(100));
@@ -644,6 +670,20 @@ mod tests {
         assert_eq!(card, before);
         assert_eq!(control.end.load(Ordering::SeqCst), 0);
     }
+    #[test]
+    fn windows_pointer_target_preserves_negative_monitor_origins() {
+        // A monitor left of and above the primary, with a region on it.
+        let target = desktop_pointer_target((-1920, -1080), (300 + 400, 100 + 300));
+        assert_eq!(target, (-1220, -680));
+        // The frame reports coordinates relative to the captured region.
+        let mut auto = AutoScroll::new((400, 300), true);
+        auto.observe_pointer(Some((
+            target.0 - (-1920 + 300),
+            target.1 - (-1080 + 100),
+        )));
+        assert!(auto.reason.is_none());
+    }
+
     #[test]
     fn recording_rejection_preserves_scrolling_card() {
         rejected_start_preserves_scroll();
