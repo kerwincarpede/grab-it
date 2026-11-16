@@ -100,3 +100,71 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Each step fills the window or dialog itself. */
+.welcome-step {
+  display: contents;
+}
+
+/* Permissions: one card of rows, each with where it stands. */
+.perm-body {
+  min-height: 0;
+  padding: 0 28px 16px;
+  overflow-y: auto;
+}
+
+.perm-list {
+  padding: 2px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.perm-row {
+  padding: 10px 0;
+}
+
+.perm-required {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
+.perm-state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.perm-allowed {
+  gap: 5px;
+  color: var(--success);
+  font-weight: 500;
+}
+
+.perm-todo {
+  color: var(--text);
+}
+
+.perm-off {
+  color: var(--text-muted);
+}
+
+.perm-note {
+  margin: 10px 2px 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+@media (max-width: 520px) {
+  .perm-row {
+    flex-wrap: wrap;
+  }
+
+  .perm-state {
+    margin-left: 27px;
+  }
+}

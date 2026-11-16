@@ -5,6 +5,7 @@ import { emit } from "@tauri-apps/api/event";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { describe, expect, it } from "vitest";
 import { acceleratorKeys } from "../settings/accelerator";
+import type { PermissionStatus } from "./permissions";
 import WelcomeWindow from "./WelcomeWindow";
 
 const HOTKEYS = {
@@ -17,10 +18,54 @@ const HOTKEYS = {
   library: "Alt+Shift+PrintScreen",
 };
 
-function mockBackend(options: { failSettings?: boolean; failOpen?: string; ai?: object } = {}) {
+const NOTHING_ASKED: PermissionStatus = {
+  screenRecording: "notAsked",
+  inputMonitoring: "notAsked",
+  microphone: "notAsked",
+  camera: "notAsked",
+  resume: false,
+};
+
+/** Just after Allow all: macOS shows the two restart permissions as off until Grab-it restarts. */
+const WAITING_FOR_RESTART: PermissionStatus = {
+  screenRecording: "off",
+  inputMonitoring: "off",
+  microphone: "allowed",
+  camera: "allowed",
+  resume: true,
+};
+
+const ALL_ALLOWED: PermissionStatus = {
+  screenRecording: "allowed",
+  inputMonitoring: "allowed",
+  microphone: "allowed",
+  camera: "allowed",
+  resume: false,
+};
+
+function mockBackend(
+  options: {
+    failSettings?: boolean;
+    failOpen?: string;
+    ai?: object;
+    /** What permission_status reports; null, as off macOS, by default. */
+    permissions?: PermissionStatus | null;
+    failPermissions?: boolean;
+    /** What permission_status reports once Allow all has run. */
+    afterAllowAll?: PermissionStatus;
+  } = {},
+) {
   const calls: { cmd: string; payload?: InvokeArgs }[] = [];
   mockIPC((cmd, payload) => {
     calls.push({ cmd, payload });
+    if (cmd === "permission_status") {
+      if (options.failPermissions) throw "no status";
+      return options.permissions ?? null;
+    }
+    if (cmd === "permission_request_all") {
+      if (options.afterAllowAll) options.permissions = options.afterAllowAll;
+      return options.permissions ?? null;
+    }
     if (cmd === "get_settings") {
       if (options.failSettings) throw "no settings";
       return {
@@ -41,7 +86,7 @@ describe("WelcomeWindow", () => {
   it("lists what each hotkey does with the user's own keys", async () => {
     mockBackend();
     render(<WelcomeWindow />);
-    expect(screen.getByRole("heading", { name: "Welcome to Grab-it" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Welcome to Grab-it" })).toBeInTheDocument();
 
     const text = (await screen.findByLabelText("Shift+PrintScreen")).closest("li") as HTMLElement;
     expect(within(text).getByText("Capture text")).toBeInTheDocument();
@@ -86,7 +131,7 @@ describe("WelcomeWindow", () => {
     const calls = mockBackend({ failSettings: true });
     render(<WelcomeWindow />);
     await waitFor(() => expect(calls.map((call) => call.cmd)).toContain("get_settings"));
-    expect(screen.getByText("Capture a region")).toBeInTheDocument();
+    expect(await screen.findByText("Capture a region")).toBeInTheDocument();
     expect(screen.getByText("Quick Access")).toBeInTheDocument();
   });
 
@@ -97,15 +142,161 @@ describe("WelcomeWindow", () => {
   ])("%s opens %s", async (name, target) => {
     const calls = mockBackend();
     render(<WelcomeWindow />);
-    await userEvent.click(screen.getByRole("button", { name }));
+    await userEvent.click(await screen.findByRole("button", { name }));
     await waitFor(() => expect(calls).toContainEqual({ cmd: "open_target", payload: { target } }));
   });
 
   it("says so when something cannot be opened", async () => {
     mockBackend({ failOpen: "could not open Settings" });
     render(<WelcomeWindow />);
-    await userEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Open Settings" }));
     expect(await screen.findByText("could not open Settings")).toBeInTheDocument();
+  });
+});
+
+/** The row for `title` on the Permissions page. */
+function row(title: string): HTMLElement {
+  return screen.getByText(title).closest("li") as HTMLElement;
+}
+
+describe("WelcomeWindow's Permissions page", () => {
+  it("opens on the hotkeys when nothing is reported, as off macOS", async () => {
+    const calls = mockBackend({ permissions: null });
+    render(<WelcomeWindow />);
+    expect(await screen.findByRole("heading", { name: "Welcome to Grab-it" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Set up Grab-it" })).not.toBeInTheDocument();
+    expect(calls.map((call) => call.cmd)).not.toContain("permission_finish");
+  });
+
+  it("opens on the hotkeys when the status cannot be read", async () => {
+    mockBackend({ failPermissions: true });
+    render(<WelcomeWindow />);
+    expect(await screen.findByRole("heading", { name: "Welcome to Grab-it" })).toBeInTheDocument();
+  });
+
+  it("opens on the hotkeys when nothing is missing, and finishes a setup waiting for that", async () => {
+    const calls = mockBackend({ permissions: { ...ALL_ALLOWED, inputMonitoring: "off", camera: "off", resume: true } });
+    render(<WelcomeWindow />);
+    expect(await screen.findByRole("heading", { name: "Welcome to Grab-it" })).toBeInTheDocument();
+    await waitFor(() => expect(calls.map((call) => call.cmd)).toContain("permission_finish"));
+  });
+
+  it("lists every permission as not asked yet before Allow all", async () => {
+    mockBackend({ permissions: NOTHING_ASKED });
+    render(<WelcomeWindow />);
+    expect(await screen.findByRole("heading", { name: "Set up Grab-it" })).toBeInTheDocument();
+    for (const title of ["Screen Recording", "Input Monitoring", "Microphone", "Camera"]) {
+      expect(within(row(title)).getByText("Not asked yet")).toBeInTheDocument();
+    }
+    expect(within(row("Screen Recording")).getByText(/Required/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Allow all" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Skip for now" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Restart Grab-it" })).not.toBeInTheDocument();
+  });
+
+  it("opens while only Screen Recording is off", async () => {
+    mockBackend({ permissions: { ...ALL_ALLOWED, screenRecording: "off" } });
+    render(<WelcomeWindow />);
+    expect(await screen.findByRole("heading", { name: "Set up Grab-it" })).toBeInTheDocument();
+    expect(within(row("Screen Recording")).getByText("Off")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue" })).toBeInTheDocument();
+  });
+
+  it("asks for everything, then offers one restart while Screen Recording and Input Monitoring wait for it", async () => {
+    const calls = mockBackend({ permissions: { ...NOTHING_ASKED }, afterAllowAll: WAITING_FOR_RESTART });
+    render(<WelcomeWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Allow all" }));
+
+    const restart = await screen.findByRole("button", { name: "Restart Grab-it" });
+    expect(calls.map((call) => call.cmd)).toContain("permission_request_all");
+    for (const title of ["Screen Recording", "Input Monitoring"]) {
+      expect(within(row(title)).getByText("Turn on in System Settings")).toBeInTheDocument();
+    }
+    for (const title of ["Microphone", "Camera"]) {
+      expect(within(row(title)).getByText("Allowed")).toBeInTheDocument();
+    }
+    expect(screen.getByText(/only lets Grab-it use them after a restart/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Allow all" })).not.toBeInTheDocument();
+
+    await userEvent.click(within(row("Input Monitoring")).getByRole("button", { name: /Open System Settings for/ }));
+    await waitFor(() =>
+      expect(calls).toContainEqual({ cmd: "permission_open_settings", payload: { permission: "inputMonitoring" } }),
+    );
+
+    await userEvent.click(restart);
+    await waitFor(() => expect(calls.map((call) => call.cmd)).toContain("permission_restart"));
+    expect(calls.map((call) => call.cmd)).not.toContain("permission_finish");
+  });
+
+  it("offers Continue once Allow all leaves nothing waiting for a restart", async () => {
+    const calls = mockBackend({
+      permissions: { ...NOTHING_ASKED },
+      afterAllowAll: { ...ALL_ALLOWED, microphone: "off", resume: true },
+    });
+    render(<WelcomeWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Allow all" }));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    expect(await screen.findByRole("heading", { name: "Welcome to Grab-it" })).toBeInTheDocument();
+    expect(calls.map((call) => call.cmd)).toContain("permission_finish");
+  });
+
+  it("shows a declined permission as off with a way to System Settings", async () => {
+    const calls = mockBackend({ permissions: { ...ALL_ALLOWED, screenRecording: "off", camera: "off" } });
+    render(<WelcomeWindow />);
+    await screen.findByRole("heading", { name: "Set up Grab-it" });
+    expect(within(row("Microphone")).getByText("Allowed")).toBeInTheDocument();
+    expect(within(row("Camera")).getByText("Off")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Skip for now" })).not.toBeInTheDocument();
+
+    await userEvent.click(within(row("Camera")).getByRole("button", { name: "Open System Settings for Camera" }));
+    await waitFor(() =>
+      expect(calls).toContainEqual({ cmd: "permission_open_settings", payload: { permission: "camera" } }),
+    );
+    // Turning on the camera needs no restart.
+    expect(screen.getByRole("button", { name: "Continue" })).toBeInTheDocument();
+
+    // Screen Recording does.
+    await userEvent.click(
+      within(row("Screen Recording")).getByRole("button", { name: "Open System Settings for Screen Recording" }),
+    );
+    expect(await screen.findByRole("button", { name: "Restart Grab-it" })).toBeInTheDocument();
+  });
+
+  it("Skip for now finishes setup and goes to the hotkeys", async () => {
+    const calls = mockBackend({ permissions: NOTHING_ASKED });
+    render(<WelcomeWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Skip for now" }));
+    expect(await screen.findByRole("heading", { name: "Welcome to Grab-it" })).toBeInTheDocument();
+    expect(calls.map((call) => call.cmd)).toContain("permission_finish");
+    expect(calls.map((call) => call.cmd)).not.toContain("permission_request_all");
+  });
+
+  it("follows answers as they arrive by polling the status", async () => {
+    const options = { permissions: { ...NOTHING_ASKED } as PermissionStatus | null };
+    const calls = mockBackend(options);
+    render(<WelcomeWindow />);
+    await screen.findByRole("heading", { name: "Set up Grab-it" });
+
+    options.permissions = { ...NOTHING_ASKED, microphone: "allowed" };
+    await waitFor(() => expect(within(row("Microphone")).getByText("Allowed")).toBeInTheDocument(), {
+      timeout: 3000,
+    });
+    expect(calls.filter((call) => call.cmd === "permission_status").length).toBeGreaterThan(1);
+  });
+
+  it("says so when Grab-it cannot restart", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "permission_status" || cmd === "permission_request_all") return WAITING_FOR_RESTART;
+      if (cmd === "permission_restart") throw "could not restart";
+      return null;
+    }, { shouldMockEvents: true });
+    render(<WelcomeWindow />);
+    await screen.findByRole("heading", { name: "Set up Grab-it" });
+    // Already asked: Continue, until System Settings is opened for one that needs a restart.
+    await userEvent.click(within(row("Screen Recording")).getByRole("button", { name: /Open System Settings for/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Restart Grab-it" }));
+    expect(await screen.findByText("could not restart")).toBeInTheDocument();
   });
 });
 

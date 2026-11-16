@@ -15,7 +15,7 @@ Another app (or the operating system) has claimed that key. Either pick a differ
 
 ## macOS captures only show my wallpaper, or nothing
 
-Grab-it needs **Screen Recording** permission. Open **System Settings → Privacy & Security → Screen Recording**, turn on Grab-it, then quit and reopen it.
+Grab-it needs **Screen Recording** permission. Grab-it asks for it, with every other permission, the first time you open it; if you skipped that, it opens **Set up Grab-it** again when you next open it. Or open **System Settings → Privacy & Security → Screen Recording**, turn on Grab-it, then quit and reopen it.
 
 ## On Linux (Wayland), the desktop asks me to pick an area itself
 

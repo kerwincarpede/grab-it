@@ -201,7 +201,12 @@ pub fn run() {
             update::update_status,
             update::update_check,
             update::update_install,
-            update::update_later
+            update::update_later,
+            permissions::permission_status,
+            permissions::permission_request_all,
+            permissions::permission_finish,
+            permissions::permission_restart,
+            permissions::permission_open_settings
         ])
         .setup(move |app| {
             let mut store = open_settings(app)?;
@@ -251,7 +256,7 @@ pub fn run() {
             overlay::prewarm_later(handle);
             if let Some(target) = open_target {
                 windows::open(handle, target)?;
-            } else if first_run {
+            } else if first_run || permissions_need_welcome(handle) {
                 windows::show_welcome(handle)?;
             }
             Ok(())
@@ -303,6 +308,21 @@ fn second_launch(app: &tauri::AppHandle, args: Vec<String>) {
             eprintln!("Grab-it: {err}");
         }
     });
+}
+
+/// macOS: the Welcome window opens on its Permissions page while one is
+/// missing, and reopens after Allow all's restart to finish setup. Other
+/// systems need no permission.
+fn permissions_need_welcome(app: &tauri::AppHandle) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        permissions::should_open_welcome(&permissions::status(app))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        false
+    }
 }
 
 /// Wayland binds hotkeys through the GlobalShortcuts portal instead of the

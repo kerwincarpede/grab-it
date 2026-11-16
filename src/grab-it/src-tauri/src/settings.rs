@@ -822,6 +822,36 @@ impl Retention {
     }
 }
 
+/// Where the macOS Permissions page (the Welcome window's first step) has
+/// got to. No system API says whether Screen Recording or Input Monitoring
+/// were ever asked for, so Grab-it remembers it. Kept outside
+/// [`Preferences`], so saving any other settings carries it over.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PermissionSetup {
+    /// Allow all has asked for Screen Recording and Input Monitoring.
+    pub asked: bool,
+    /// Allow all ran and setup is not finished: until Skip for now or
+    /// Continue, each launch reopens the Welcome window.
+    pub resume: bool,
+}
+
+impl PermissionSetup {
+    /// Read from the settings file: anything it cannot use is false.
+    fn from_stored(value: serde_json::Value) -> Self {
+        let flag = |key: &str| {
+            value
+                .get(key)
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        };
+        Self {
+            asked: flag("asked"),
+            resume: flag("resume"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -843,6 +873,9 @@ pub struct Settings {
     /// How long items are kept and how cleanup removes them.
     #[serde(default)]
     pub retention: Retention,
+    /// The macOS Permissions page's progress.
+    #[serde(default)]
+    pub permissions: PermissionSetup,
 }
 
 impl Settings {
@@ -858,6 +891,7 @@ impl Settings {
             appearance: Appearance::default(),
             recording: RecordingSettings::default(),
             retention: Retention::default(),
+            permissions: PermissionSetup::default(),
         }
     }
 }
@@ -880,6 +914,8 @@ struct StoredSettings {
     recording: Option<serde_json::Value>,
     /// Read leniently by [`Retention::from_stored`].
     retention: Option<serde_json::Value>,
+    /// Read leniently by [`PermissionSetup::from_stored`].
+    permissions: Option<serde_json::Value>,
 }
 
 /// Hotkeys on disk; a missing or empty one keeps its default.
@@ -951,6 +987,10 @@ impl StoredSettings {
                 .retention
                 .map(Retention::from_stored)
                 .unwrap_or(defaults.retention),
+            permissions: self
+                .permissions
+                .map(PermissionSetup::from_stored)
+                .unwrap_or(defaults.permissions),
         }
     }
 }
@@ -1013,6 +1053,7 @@ struct SettingsOnDisk<'a> {
     appearance: Appearance,
     recording: &'a RecordingSettings,
     retention: Retention,
+    permissions: PermissionSetup,
 }
 
 #[derive(Serialize)]
@@ -1072,6 +1113,7 @@ impl<'a> SettingsOnDisk<'a> {
             appearance: settings.appearance,
             recording: &settings.recording,
             retention: settings.retention,
+            permissions: settings.permissions,
         }
     }
 }
@@ -1451,6 +1493,23 @@ impl SettingsStore {
         Ok(self.current.clone())
     }
 
+    /// Records the macOS Permissions page's progress.
+    pub fn set_permission_setup(
+        &mut self,
+        permissions: PermissionSetup,
+    ) -> Result<Settings, SettingsError> {
+        if self.current.permissions == permissions {
+            return Ok(self.current.clone());
+        }
+        let next = Settings {
+            permissions,
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
     /// Changes the capture hotkeys after checking them. Registering them is
     /// up to the caller.
     pub fn set_hotkeys(&mut self, hotkeys: &Hotkeys) -> Result<Settings, SettingsError> {
@@ -1570,6 +1629,10 @@ mod tests {
                 gif: Some(90),
                 video: Some(30),
                 removal: Removal::Permanent,
+            },
+            permissions: PermissionSetup {
+                asked: true,
+                resume: true,
             },
         };
         save(&path, &settings).unwrap();
@@ -2028,6 +2091,74 @@ mod tests {
         };
         assert!(store.set_retention(zero).is_err());
         assert_eq!(store.get().retention, Retention::default());
+    }
+
+    #[test]
+    fn permission_setup_is_off_by_default_and_read_leniently() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        assert_eq!(defaults(&dir).permissions, PermissionSetup::default());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"permissions": {"asked": true, "resume": "yes"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load(&path, defaults(&dir)).unwrap().permissions,
+            PermissionSetup {
+                asked: true,
+                resume: false,
+            }
+        );
+    }
+
+    #[test]
+    fn permission_setup_is_saved() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        let setup = PermissionSetup {
+            asked: true,
+            resume: true,
+        };
+        assert_eq!(
+            store.set_permission_setup(setup).unwrap().permissions,
+            setup
+        );
+        assert_eq!(load(&path, defaults(&dir)).unwrap().permissions, setup);
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            json["permissions"],
+            serde_json::json!({ "asked": true, "resume": true })
+        );
+    }
+
+    #[test]
+    fn set_preferences_and_other_saves_keep_the_permission_setup() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        let setup = PermissionSetup {
+            asked: true,
+            resume: true,
+        };
+        store.set_permission_setup(setup).unwrap();
+        let updated = store
+            .set_preferences(Preferences {
+                after_capture: AfterCapture::Editor,
+                ..Preferences::default()
+            })
+            .unwrap();
+        assert_eq!(updated.permissions, setup);
+        // A frontend that never heard of it saves without it.
+        let update: PreferencesUpdate =
+            serde_json::from_str(r#"{"afterCapture": "nothing", "copyToClipboard": false}"#)
+                .unwrap();
+        assert_eq!(store.set_preferences(update).unwrap().permissions, setup);
+        assert_eq!(store.set_show_in_dock(false).unwrap().permissions, setup);
+        assert_eq!(load(&path, defaults(&dir)).unwrap().permissions, setup);
     }
 
     #[test]

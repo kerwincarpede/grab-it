@@ -6,8 +6,18 @@
 //! for before a recording with Show clicks or Show keystrokes, whose input
 //! hooks (input.rs) see nothing without it. Other platforms need no
 //! permission.
+//!
+//! The Welcome window's Permissions page asks for all of them, and the
+//! camera, at the first launch (the `permission_*` commands below); the
+//! `ensure_*` checks stay as the fallback for anything not granted then.
 
-use tauri::AppHandle;
+use serde::Serialize;
+use tauri::{AppHandle, Manager};
+
+use crate::{
+    commands::{SettingsState, lock},
+    settings::PermissionSetup,
+};
 
 /// Returns true when capturing may go ahead. On macOS, without permission,
 /// asks the system to register Grab-it and offers to open System Settings.
@@ -21,8 +31,7 @@ pub fn ensure_screen_capture(app: &AppHandle) -> bool {
         fn CGRequestScreenCaptureAccess() -> bool;
     }
 
-    const SETTINGS_URL: &str =
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+    const SETTINGS_URL: &str = Permission::ScreenRecording.settings_url();
 
     // SAFETY: both functions take no arguments and only query or request
     // the permission; they are safe to call from any thread.
@@ -73,8 +82,7 @@ pub fn ensure_microphone(app: &AppHandle) -> bool {
     use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
-    const SETTINGS_URL: &str =
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
+    const SETTINGS_URL: &str = Permission::Microphone.settings_url();
 
     // SAFETY: a constant AVFoundation exports.
     let Some(audio) = (unsafe { AVMediaTypeAudio }) else {
@@ -137,8 +145,7 @@ pub fn ensure_input_monitoring(app: &AppHandle) -> bool {
         fn CGRequestListenEventAccess() -> bool;
     }
 
-    const SETTINGS_URL: &str =
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent";
+    const SETTINGS_URL: &str = Permission::InputMonitoring.settings_url();
 
     // SAFETY: both functions take no arguments and only query or request
     // the permission; they are safe to call from any thread.
@@ -179,4 +186,376 @@ pub fn ensure_input_monitoring(app: &AppHandle) -> bool {
 #[cfg(not(target_os = "macos"))]
 pub fn ensure_input_monitoring(_app: &AppHandle) -> bool {
     true
+}
+
+/// The permissions the Permissions page lists, in its order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Permission {
+    ScreenRecording,
+    InputMonitoring,
+    Microphone,
+    Camera,
+}
+
+impl Permission {
+    /// Its pane in System Settings → Privacy & Security.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub const fn settings_url(self) -> &'static str {
+        match self {
+            Self::ScreenRecording => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+            }
+            Self::InputMonitoring => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+            }
+            Self::Microphone => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+            }
+            Self::Camera => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
+            }
+        }
+    }
+}
+
+/// Where one permission stands. Mirrors `Access` in src/welcome/permissions.ts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Access {
+    Allowed,
+    /// Asked for and not granted, or (Screen Recording and Input
+    /// Monitoring) granted but not seen until Grab-it restarts.
+    Off,
+    NotAsked,
+}
+
+/// What `permission_status` reports. Mirrors `PermissionStatus` in
+/// src/welcome/permissions.ts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionStatus {
+    pub screen_recording: Access,
+    pub input_monitoring: Access,
+    pub microphone: Access,
+    pub camera: Access,
+    /// Allow all ran and setup is not finished.
+    pub resume: bool,
+}
+
+impl PermissionStatus {
+    /// Every permission allowed: what systems without them report.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    const ALL_ALLOWED: Self = Self {
+        screen_recording: Access::Allowed,
+        input_monitoring: Access::Allowed,
+        microphone: Access::Allowed,
+        camera: Access::Allowed,
+        resume: false,
+    };
+
+    fn all(&self) -> [Access; 4] {
+        [
+            self.screen_recording,
+            self.input_monitoring,
+            self.microphone,
+            self.camera,
+        ]
+    }
+
+    /// Something the Permissions page is for: Screen Recording is off, or a
+    /// permission was never asked for. A declined Microphone or Camera is
+    /// not: the per-feature checks offer System Settings for those.
+    pub fn missing(&self) -> bool {
+        self.screen_recording != Access::Allowed || self.all().contains(&Access::NotAsked)
+    }
+}
+
+/// True when launch should open the Welcome window: something is missing,
+/// or Allow all ran and setup is waiting to be finished after a restart.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn should_open_welcome(status: &PermissionStatus) -> bool {
+    status.missing() || status.resume
+}
+
+fn setup(app: &AppHandle) -> PermissionSetup {
+    lock(&app.state::<SettingsState>()).get().permissions
+}
+
+fn save_setup(app: &AppHandle, change: impl FnOnce(&mut PermissionSetup)) {
+    let state = app.state::<SettingsState>();
+    let mut store = lock(&state);
+    let mut next = store.get().permissions;
+    change(&mut next);
+    if let Err(err) = store.set_permission_setup(next) {
+        eprintln!("Grab-it: could not write the settings file: {err}");
+    }
+}
+
+/// Where each permission stands, without asking for any.
+pub fn status(app: &AppHandle) -> PermissionStatus {
+    let setup = setup(app);
+    #[cfg(target_os = "macos")]
+    {
+        let cg = |granted: bool| match (granted, setup.asked) {
+            (true, _) => Access::Allowed,
+            (false, true) => Access::Off,
+            (false, false) => Access::NotAsked,
+        };
+        PermissionStatus {
+            screen_recording: cg(mac::screen_recording_granted()),
+            input_monitoring: cg(mac::input_monitoring_granted()),
+            microphone: mac::media_access(mac::Media::Audio),
+            camera: mac::media_access(mac::Media::Video),
+            resume: setup.resume,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = setup;
+        PermissionStatus::ALL_ALLOWED
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod mac {
+    use block2::RcBlock;
+    use objc2::runtime::Bool;
+    use objc2_av_foundation::{
+        AVAuthorizationStatus, AVCaptureDevice, AVMediaType, AVMediaTypeAudio, AVMediaTypeVideo,
+    };
+
+    use super::Access;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGPreflightScreenCaptureAccess() -> bool;
+        fn CGRequestScreenCaptureAccess() -> bool;
+        fn CGPreflightListenEventAccess() -> bool;
+        fn CGRequestListenEventAccess() -> bool;
+    }
+
+    /// How long each of the system's prompts is waited for.
+    const PROMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+    #[derive(Clone, Copy)]
+    pub enum Media {
+        Audio,
+        Video,
+    }
+
+    fn media_type(media: Media) -> Option<&'static AVMediaType> {
+        // SAFETY: constants AVFoundation exports.
+        unsafe {
+            match media {
+                Media::Audio => AVMediaTypeAudio,
+                Media::Video => AVMediaTypeVideo,
+            }
+        }
+    }
+
+    pub fn screen_recording_granted() -> bool {
+        // SAFETY: takes no arguments and only queries the permission.
+        unsafe { CGPreflightScreenCaptureAccess() }
+    }
+
+    pub fn input_monitoring_granted() -> bool {
+        // SAFETY: as above.
+        unsafe { CGPreflightListenEventAccess() }
+    }
+
+    /// Shows the Screen Recording and Input Monitoring prompts, which add
+    /// Grab-it to each list. Neither waits for an answer, and a grant is
+    /// only seen once Grab-it restarts.
+    pub fn request_screen_and_input() {
+        // SAFETY: both take no arguments and only request the permission;
+        // they are safe to call from any thread.
+        unsafe {
+            if !CGPreflightScreenCaptureAccess() {
+                let _ = CGRequestScreenCaptureAccess();
+            }
+            if !CGPreflightListenEventAccess() {
+                let _ = CGRequestListenEventAccess();
+            }
+        }
+    }
+
+    pub fn media_access(media: Media) -> Access {
+        let Some(kind) = media_type(media) else {
+            return Access::Off;
+        };
+        // SAFETY: AVMediaTypeAudio and AVMediaTypeVideo are the two media
+        // types it takes.
+        let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(kind) };
+        if status == AVAuthorizationStatus::Authorized {
+            Access::Allowed
+        } else if status == AVAuthorizationStatus::NotDetermined {
+            Access::NotAsked
+        } else {
+            Access::Off
+        }
+    }
+
+    /// Shows the system's prompt for `media` when it was never asked for,
+    /// and waits for the answer, as `ensure_microphone` does.
+    pub fn request_media(media: Media) {
+        if media_access(media) != Access::NotAsked {
+            return;
+        }
+        let Some(kind) = media_type(media) else {
+            return;
+        };
+        let (sender, answer) = std::sync::mpsc::channel();
+        let handler = RcBlock::new(move |granted: Bool| {
+            let _ = sender.send(granted.as_bool());
+        });
+        // SAFETY: as above; the handler may be called on any thread, and
+        // only sends on a channel.
+        unsafe { AVCaptureDevice::requestAccessForMediaType_completionHandler(kind, &handler) };
+        let _ = answer.recv_timeout(PROMPT_TIMEOUT);
+    }
+}
+
+/// Asks for every permission, then reports where they stand. Blocks while
+/// the Microphone and Camera prompts wait for answers, so call this off the
+/// main thread.
+pub fn request_all(app: &AppHandle) -> PermissionStatus {
+    #[cfg(target_os = "macos")]
+    {
+        // Remembered first, so quitting during a prompt still resumes setup.
+        save_setup(app, |setup| setup.resume = true);
+        mac::request_media(mac::Media::Audio);
+        mac::request_media(mac::Media::Video);
+        save_setup(app, |setup| setup.asked = true);
+        // Together, so both are answered before the one restart.
+        mac::request_screen_and_input();
+    }
+    status(app)
+}
+
+/// Where each permission stands, for the Permissions page, which polls it.
+#[tauri::command]
+pub fn permission_status(app: AppHandle) -> PermissionStatus {
+    status(&app)
+}
+
+/// Allow all: asks for each permission in turn.
+#[tauri::command]
+pub async fn permission_request_all(app: AppHandle) -> Result<PermissionStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || request_all(&app))
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// Skip for now or Continue: launches stop reopening the Welcome window for
+/// an unfinished setup.
+#[tauri::command]
+pub fn permission_finish(app: AppHandle) {
+    save_setup(&app, |setup| setup.resume = false);
+}
+
+/// Restarts Grab-it, so it sees Screen Recording and Input Monitoring.
+#[tauri::command]
+pub fn permission_restart(app: AppHandle) {
+    app.restart();
+}
+
+/// Opens `permission`'s pane in System Settings. Only macOS has one.
+#[tauri::command]
+pub fn permission_open_settings(permission: Permission) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(permission.settings_url())
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("Could not open System Settings: {err}"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = permission;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NOTHING_ASKED: PermissionStatus = PermissionStatus {
+        screen_recording: Access::NotAsked,
+        input_monitoring: Access::NotAsked,
+        microphone: Access::NotAsked,
+        camera: Access::NotAsked,
+        resume: false,
+    };
+
+    #[test]
+    fn welcome_opens_while_nothing_was_asked() {
+        assert!(should_open_welcome(&NOTHING_ASKED));
+    }
+
+    #[test]
+    fn welcome_stays_shut_once_everything_is_allowed() {
+        assert!(!should_open_welcome(&PermissionStatus::ALL_ALLOWED));
+    }
+
+    #[test]
+    fn welcome_opens_while_screen_recording_is_off() {
+        let status = PermissionStatus {
+            screen_recording: Access::Off,
+            ..PermissionStatus::ALL_ALLOWED
+        };
+        assert!(should_open_welcome(&status));
+    }
+
+    #[test]
+    fn welcome_opens_while_any_permission_was_never_asked() {
+        let camera = PermissionStatus {
+            camera: Access::NotAsked,
+            ..PermissionStatus::ALL_ALLOWED
+        };
+        let input = PermissionStatus {
+            input_monitoring: Access::NotAsked,
+            ..PermissionStatus::ALL_ALLOWED
+        };
+        assert!(should_open_welcome(&camera));
+        assert!(should_open_welcome(&input));
+    }
+
+    #[test]
+    fn a_declined_microphone_camera_or_input_monitoring_does_not_reopen_it() {
+        let status = PermissionStatus {
+            input_monitoring: Access::Off,
+            microphone: Access::Off,
+            camera: Access::Off,
+            ..PermissionStatus::ALL_ALLOWED
+        };
+        assert!(!should_open_welcome(&status));
+    }
+
+    #[test]
+    fn welcome_reopens_to_finish_setup_after_the_restart() {
+        let status = PermissionStatus {
+            resume: true,
+            ..PermissionStatus::ALL_ALLOWED
+        };
+        assert!(should_open_welcome(&status));
+        assert!(!status.missing());
+    }
+
+    #[test]
+    fn status_is_sent_in_the_frontends_spelling() {
+        let json = serde_json::to_value(NOTHING_ASKED).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "screenRecording": "notAsked",
+                "inputMonitoring": "notAsked",
+                "microphone": "notAsked",
+                "camera": "notAsked",
+                "resume": false,
+            })
+        );
+    }
 }
