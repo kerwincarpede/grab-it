@@ -55,4 +55,3 @@ export function magnifyLinePoints(shape: MagnifyShape): number[] {
   }
   return [...shape.spot, shape.x + half + dx * low, shape.y + half + dy * low];
 }
-
