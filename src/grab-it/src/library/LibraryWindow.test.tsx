@@ -81,6 +81,10 @@ interface Backend {
   removal?: Removal;
   /** The system can ask which app to open a file with; it cannot when unset. */
   openWith?: boolean;
+  /** What the save dialog answers; cancelled when unset. */
+  saveAs?: string | null;
+  /** `library_set_tags` fails with this. */
+  tagsFail?: string;
   /** Answers `library_clean_up`; nothing removed when unset. */
   cleanUp?: (removal: Removal) => Promise<{ count: number; bytes: number }> | { count: number; bytes: number };
 }
@@ -186,6 +190,7 @@ function mockBackend(shots: Shot[]): Backend {
         case "library_stop_clean_up":
           return null;
         case "library_set_tags": {
+          if (backend.tagsFail) throw backend.tagsFail;
           const updated = { ...find(args.id as number), tags: args.tags as string[] };
           backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
           return updated;
@@ -264,6 +269,14 @@ function mockBackend(shots: Shot[]): Backend {
           return null;
         case "library_copy_path":
           return find(args.id as number).path;
+        case "library_copy_file":
+          find(args.id as number);
+          return null;
+        case "library_export":
+          find(args.id as number);
+          return args.target;
+        case "plugin:dialog|save":
+          return backend.saveAs ?? null;
         case "library_search": {
           const { query, offset, limit } = args as { query: SearchQuery; offset: number; limit: number };
           const hits = search(backend, query);
@@ -1190,13 +1203,16 @@ describe("LibraryWindow right-click menu", () => {
       "Open in editor",
       "Open in default app",
       "Copy image",
+      "Copy as file",
       "Copy text in image",
       "Pin to screen",
       "Rename…",
       "Duplicate",
+      "Export…",
       "Show in file manager",
       "Open containing folder",
       "Copy file path",
+      "Add tag",
       "Keep forever",
       "Describe again",
       "Show details",
@@ -1282,11 +1298,14 @@ describe("LibraryWindow right-click menu", () => {
     expect(labels(menu)).toEqual([
       "Play",
       "Edit in recording editor",
+      "Copy as file",
       "Rename…",
       "Duplicate",
+      "Export…",
       "Show in file manager",
       "Open containing folder",
       "Copy file path",
+      "Add tag",
       "Keep forever",
       "Show details",
       "Move to Trash",
@@ -1425,6 +1444,204 @@ describe("LibraryWindow right-click menu", () => {
     await waitFor(() => expect(callsTo(backend, "library_open_with_supported")).toHaveLength(1));
     const menu = await openMenu("Grab-it 1.png");
     expect(within(menu).queryByRole("menuitem", { name: "Open with…" })).not.toBeInTheDocument();
+  });
+
+  it("copies a capture or a recording as a file", async () => {
+    const backend = mockBackend([shot(1), recording(2)]);
+    render(<LibraryWindow />);
+    await userEvent.click(within(await openMenu("Grab-it 1.png")).getByRole("menuitem", { name: "Copy as file" }));
+    expect(await screen.findByText("Copied as a file")).toBeInTheDocument();
+    await userEvent.click(within(await openMenu("Grab-it 2.mp4")).getByRole("menuitem", { name: "Copy as file" }));
+
+    await waitFor(() => expect(callsTo(backend, "library_copy_file")).toHaveLength(2));
+    expect(callsTo(backend, "library_copy_file").map((call) => call.payload)).toEqual([{ id: 1 }, { id: 2 }]);
+    expect(callsTo(backend, "library_copy")).toHaveLength(0);
+  });
+
+  /** Waits for the library's tags, which the Add tag submenu offers. */
+  async function tagsLoaded(backend: Backend) {
+    await waitFor(() => expect(callsTo(backend, "library_filter_options").length).toBeGreaterThan(0));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  it("checks a capture's tags in the Add tag submenu, the most used others below", async () => {
+    const backend = mockBackend([
+      shot(1, { tags: ["bug"] }),
+      shot(2, { tags: ["login", "ui"] }),
+      shot(3, { tags: ["login"] }),
+    ]);
+    render(<LibraryWindow />);
+    await tagsLoaded(backend);
+    const menu = await openMenu("Grab-it 1.png");
+    const item = within(menu).getByRole("menuitem", { name: "Add tag" });
+    await userEvent.click(item);
+
+    expect(item).toHaveAttribute("aria-expanded", "true");
+    const submenu = within(menu).getByRole("menu", { name: "Tags" });
+    const rows = within(submenu).getAllByRole("menuitemcheckbox");
+    expect(rows.map((row) => row.textContent)).toEqual(["bug", "login", "ui"]);
+    expect(rows.map((row) => row.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
+    expect(within(submenu).getByRole("menuitem", { name: "New tag…" })).toBeInTheDocument();
+
+    await userEvent.click(within(submenu).getByRole("menuitemcheckbox", { name: "login" }));
+    await waitFor(() =>
+      expect(callsTo(backend, "library_set_tags")[0].payload).toEqual({ id: 1, tags: ["bug", "login"] }),
+    );
+    expect(within(submenu).getByRole("menuitemcheckbox", { name: "login" })).toHaveAttribute("aria-checked", "true");
+
+    // Unchecking keeps the row, so it can be checked again.
+    await userEvent.click(within(submenu).getByRole("menuitemcheckbox", { name: "bug" }));
+    await waitFor(() => expect(callsTo(backend, "library_set_tags")[1].payload).toEqual({ id: 1, tags: ["login"] }));
+    expect(within(submenu).getByRole("menuitemcheckbox", { name: "bug" })).toHaveAttribute("aria-checked", "false");
+
+    // The menu stays open, and the tile shows the new tags.
+    expect(screen.getByRole("menu", { name: "Actions for Grab-it 1.png" })).toBeInTheDocument();
+    const card = screen.getByRole("button", { name: "Grab-it 1.png" });
+    await waitFor(() => expect(within(card).getByText("login")).toBeInTheDocument());
+    expect(within(card).queryByText("bug")).not.toBeInTheDocument();
+  });
+
+  it("adds a new tag from the Add tag submenu", async () => {
+    const backend = mockBackend([shot(1, { tags: ["bug"] }), shot(2, { tags: ["ui"] })]);
+    render(<LibraryWindow />);
+    await tagsLoaded(backend);
+    const menu = await openMenu("Grab-it 1.png");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Add tag" }));
+    const submenu = within(menu).getByRole("menu", { name: "Tags" });
+    await userEvent.click(within(submenu).getByRole("menuitem", { name: "New tag…" }));
+
+    const field = within(submenu).getByRole("textbox", { name: "New tag" });
+    expect(field).toHaveFocus();
+    // Typed letters go to the field, not to the submenu's type-ahead.
+    await userEvent.type(field, "Release, ui{Enter}");
+
+    await waitFor(() =>
+      expect(callsTo(backend, "library_set_tags")[0].payload).toEqual({ id: 1, tags: ["bug", "Release", "ui"] }),
+    );
+    const rows = within(submenu).getAllByRole("menuitemcheckbox");
+    expect(rows.map((row) => row.textContent)).toEqual(["bug", "ui", "Release"]);
+    expect(rows.every((row) => row.getAttribute("aria-checked") === "true")).toBe(true);
+    expect(within(submenu).queryByRole("textbox", { name: "New tag" })).not.toBeInTheDocument();
+
+    // Escape leaves the field without adding anything.
+    await userEvent.click(within(submenu).getByRole("menuitem", { name: "New tag…" }));
+    await userEvent.type(within(submenu).getByRole("textbox", { name: "New tag" }), "draft");
+    await userEvent.keyboard("{Escape}");
+    expect(within(submenu).queryByRole("textbox", { name: "New tag" })).not.toBeInTheDocument();
+    expect(callsTo(backend, "library_set_tags")).toHaveLength(1);
+  });
+
+  it("drives the Add tag submenu from the keyboard, Escape going back to the menu", async () => {
+    const backend = mockBackend([shot(1, { tags: ["bug"] }), shot(2, { tags: ["login"] })]);
+    render(<LibraryWindow />);
+    await tagsLoaded(backend);
+    const menu = await openMenu("Grab-it 1.png");
+
+    // "a" jumps to Add tag; the right arrow opens it on its first row.
+    await userEvent.keyboard("a{ArrowRight}");
+    const submenu = within(menu).getByRole("menu", { name: "Tags" });
+    expect(menu).toHaveAttribute("aria-activedescendant", "shot-menu-tag-0");
+    await userEvent.keyboard("{ArrowDown}{Enter}");
+    await waitFor(() =>
+      expect(callsTo(backend, "library_set_tags")[0].payload).toEqual({ id: 1, tags: ["bug", "login"] }),
+    );
+    expect(within(submenu).getByRole("menuitemcheckbox", { name: "login" })).toHaveAttribute("aria-checked", "true");
+
+    await userEvent.keyboard("{Escape}");
+    expect(within(menu).queryByRole("menu", { name: "Tags" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menu", { name: "Actions for Grab-it 1.png" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("says why tags could not be saved and shows what was", async () => {
+    const backend = mockBackend([shot(1, { tags: ["bug"] }), shot(2, { tags: ["login"] })]);
+    backend.tagsFail = "the library is locked";
+    render(<LibraryWindow />);
+    await tagsLoaded(backend);
+    const menu = await openMenu("Grab-it 1.png");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Add tag" }));
+    const submenu = within(menu).getByRole("menu", { name: "Tags" });
+    await userEvent.click(within(submenu).getByRole("menuitemcheckbox", { name: "login" }));
+
+    expect(await within(submenu).findByRole("alert")).toHaveTextContent("the library is locked");
+    expect(within(submenu).getByRole("menuitemcheckbox", { name: "login" })).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("exports a capture through the save dialog, offering PNG, JPG and WebP", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.saveAs = "/home/me/Desktop/Login bug.webp";
+    render(<LibraryWindow />);
+    await userEvent.click(within(await openMenu("Grab-it 1.png")).getByRole("menuitem", { name: "Export…" }));
+
+    expect(await screen.findByText("Exported to Login bug.webp")).toBeInTheDocument();
+    expect(callsTo(backend, "plugin:dialog|save")[0].payload).toMatchObject({
+      options: {
+        defaultPath: "Grab-it 1.png",
+        filters: [
+          { name: "PNG image", extensions: ["png"] },
+          { name: "JPEG image", extensions: ["jpg", "jpeg"] },
+          { name: "WebP image", extensions: ["webp"] },
+        ],
+      },
+    });
+    expect(callsTo(backend, "library_export")[0].payload).toEqual({ id: 1, target: "/home/me/Desktop/Login bug.webp" });
+  });
+
+  it("gives an export its extension when the dialog leaves it off", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.saveAs = "/home/me/Desktop/Login bug";
+    render(<LibraryWindow />);
+    await userEvent.click(within(await openMenu("Grab-it 1.png")).getByRole("menuitem", { name: "Export…" }));
+
+    await waitFor(() =>
+      expect(callsTo(backend, "library_export")[0].payload).toEqual({ id: 1, target: "/home/me/Desktop/Login bug.png" }),
+    );
+  });
+
+  it("exports a recording as a copy of its own kind", async () => {
+    const backend = mockBackend([recording(2), recording(3, { kind: "gif" })]);
+    backend.saveAs = "/home/me/Desktop/Demo";
+    render(<LibraryWindow />);
+    await userEvent.click(within(await openMenu("Grab-it 2.mp4")).getByRole("menuitem", { name: "Export…" }));
+    await waitFor(() =>
+      expect(callsTo(backend, "library_export")[0].payload).toEqual({ id: 2, target: "/home/me/Desktop/Demo.mp4" }),
+    );
+    expect(callsTo(backend, "plugin:dialog|save")[0].payload).toMatchObject({
+      options: { defaultPath: "Grab-it 2.mp4", filters: [{ name: "MP4 video", extensions: ["mp4"] }] },
+    });
+
+    await userEvent.click(within(await openMenu("Grab-it 3.gif")).getByRole("menuitem", { name: "Export…" }));
+    await waitFor(() => expect(callsTo(backend, "plugin:dialog|save")).toHaveLength(2));
+    expect(callsTo(backend, "plugin:dialog|save")[1].payload).toMatchObject({
+      options: { defaultPath: "Grab-it 3.gif", filters: [{ name: "GIF animation", extensions: ["gif"] }] },
+    });
+  });
+
+  it("exports nothing when the save dialog is cancelled", async () => {
+    const backend = mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    await userEvent.click(within(await openMenu("Grab-it 1.png")).getByRole("menuitem", { name: "Export…" }));
+    await waitFor(() => expect(callsTo(backend, "plugin:dialog|save")).toHaveLength(1));
+    expect(callsTo(backend, "library_export")).toHaveLength(0);
+    expect(screen.queryByText(/Exported to/)).not.toBeInTheDocument();
+  });
+
+  it("shows tags set from the menu in the open details", async () => {
+    const backend = mockBackend([shot(1, { tags: ["bug"] }), shot(2, { tags: ["login"] })]);
+    render(<LibraryWindow />);
+    await tagsLoaded(backend);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
+    const details = screen.getByLabelText("Capture details");
+    const menu = await openMenu("Grab-it 1.png");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Add tag" }));
+    const submenu = within(menu).getByRole("menu", { name: "Tags" });
+    await userEvent.click(within(submenu).getByRole("menuitemcheckbox", { name: "login" }));
+
+    await waitFor(() => expect(within(details).getByRole("button", { name: "Remove tag login" })).toBeInTheDocument());
+    expect(within(details).getByRole("button", { name: "Remove tag bug" })).toBeInTheDocument();
   });
 
   it("leaves out Describe again while AI descriptions are off", async () => {

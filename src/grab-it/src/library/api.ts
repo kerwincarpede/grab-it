@@ -291,6 +291,71 @@ export function openWithSupported(): Promise<boolean> {
   );
 }
 
+/** Puts the shot's file on the clipboard as a file, to paste into a file manager or attach in another app. */
+export function copyShotFile(id: number): Promise<void> {
+  return invoke<void>("library_copy_file", { id });
+}
+
+/**
+ * Exports the shot's original file to `target`, a file or a folder, and
+ * resolves to the path written: a screenshot as PNG, JPG or WebP by the
+ * target's extension, a recording as a copy.
+ */
+export function exportShot(id: number, target: string): Promise<string> {
+  return invoke<string>("library_export", { id, target });
+}
+
+/** A file type the export save dialog offers. */
+export interface ExportFilter {
+  name: string;
+  extensions: string[];
+}
+
+/** The file types `shot` exports as: PNG, JPG and WebP for a screenshot, its own for a recording. */
+export function exportFilters(shot: Pick<Shot, "kind" | "fileName">): ExportFilter[] {
+  if (!isRecording(shot)) {
+    return [
+      { name: "PNG image", extensions: ["png"] },
+      { name: "JPEG image", extensions: ["jpg", "jpeg"] },
+      { name: "WebP image", extensions: ["webp"] },
+    ];
+  }
+  const fallback = shot.kind === "gif" ? "gif" : "mp4";
+  const extension = splitFileName(shot.fileName).extension.slice(1).toLowerCase() || fallback;
+  return [{ name: shot.kind === "gif" ? "GIF animation" : "MP4 video", extensions: [extension] }];
+}
+
+/** `path` as the export writes it: given the first of `filters`' extensions when it has none of theirs. */
+export function exportPath(path: string, filters: ExportFilter[]): string {
+  const lower = path.toLowerCase();
+  const extensions = filters.flatMap((filter) => filter.extensions);
+  if (extensions.some((extension) => lower.endsWith(`.${extension}`))) return path;
+  return `${path}.${extensions[0]}`;
+}
+
+/**
+ * Tags to offer for one shot: `known` (every tag in the library) most used
+ * first among `shots`, then by name, leaving out those in `own`; at most `limit`.
+ */
+export function suggestedTags(known: string[], shots: Pick<Shot, "tags">[], own: string[], limit: number): string[] {
+  const uses = new Map<string, number>();
+  for (const item of shots) {
+    for (const tag of item.tags) uses.set(tag.toLowerCase(), (uses.get(tag.toLowerCase()) ?? 0) + 1);
+  }
+  const mine = new Set(own.map((tag) => tag.toLowerCase()));
+  return known
+    .filter((tag) => !mine.has(tag.toLowerCase()))
+    .map((tag, order) => ({ tag, order, count: uses.get(tag.toLowerCase()) ?? 0 }))
+    .sort((a, b) => b.count - a.count || a.order - b.order)
+    .slice(0, limit)
+    .map(({ tag }) => tag);
+}
+
+/** The last part of a path, for saying where a file went. */
+export function baseName(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
+}
+
 /** A file name split into the part a rename edits and its extension (".png"), which it keeps. */
 export function splitFileName(fileName: string): { stem: string; extension: string } {
   const dot = fileName.lastIndexOf(".");
