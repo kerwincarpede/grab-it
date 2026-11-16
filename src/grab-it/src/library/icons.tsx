@@ -174,3 +174,35 @@ export const StarIcon = ({ filled = false, size }: { filled?: boolean; size?: nu
     />
   </Icon>
 );
+
+/** An open folder, for opening the folder a file is in. */
+export const FolderOpenIcon = () => (
+  <Icon>
+    <path d="M3.5 17V7a2 2 0 012-2h4l2 2.5h6a2 2 0 012 2v1" />
+    <path d="M3.5 17l2.3-5.6a2 2 0 011.85-1.24H20a1 1 0 01.93 1.37L18.6 17.7A2 2 0 0116.75 19H5.5a2 2 0 01-2-2z" />
+  </Icon>
+);
+
+/** An arrow leaving a box: opens in another app. */
+export const ExternalIcon = () => (
+  <Icon>
+    <path d="M14 4.5h5.5V10M19.5 4.5L11 13" />
+    <path d="M17.5 14v3.5a2 2 0 01-2 2h-9a2 2 0 01-2-2v-9a2 2 0 012-2H10" />
+  </Icon>
+);
+
+/** Two chain links: copies where a file lives. */
+export const LinkIcon = () => (
+  <Icon>
+    <path d="M10 14a4 4 0 005.66 0l3-3a4 4 0 00-5.66-5.66l-1 1" />
+    <path d="M14 10a4 4 0 00-5.66 0l-3 3a4 4 0 005.66 5.66l1-1" />
+  </Icon>
+);
+
+/** A circled "i": shows the details pane. */
+export const InfoIcon = () => (
+  <Icon>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 11v5M12 8h.01" />
+  </Icon>
+);

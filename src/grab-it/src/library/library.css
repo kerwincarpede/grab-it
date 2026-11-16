@@ -1919,3 +1919,161 @@
   gap: 8px;
   margin-top: 18px;
 }
+
+/* The right-click menu on a tile: the popovers' surface, with a small
+   preview of what it acts on at the top. */
+.tile.is-menu-open .tile-frame {
+  border-color: var(--accent-edge);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.tile.is-selected.is-menu-open .tile-frame {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.shot-menu {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  width: 248px;
+  padding: 4px;
+  color: var(--text);
+  background: var(--pop);
+  border: 1px solid var(--pop-edge);
+  border-radius: 10px;
+  box-shadow: 0 18px 44px -14px rgb(0 0 0 / 45%), 0 2px 6px -2px rgb(0 0 0 / 12%);
+  outline: none;
+  visibility: hidden;
+  user-select: none;
+}
+
+.shot-menu.is-ready {
+  visibility: visible;
+  animation: shot-menu-in 120ms var(--ease);
+}
+
+@keyframes shot-menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+.shot-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+  padding: 6px 6px 8px;
+  border-bottom: 1px solid var(--pop-edge);
+}
+
+.shot-menu-thumb {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 32px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.shot-menu-thumb .thumb {
+  inset: 3px;
+}
+
+.shot-menu-thumb .thumb img {
+  border-radius: 2px;
+  box-shadow: none;
+}
+
+.shot-menu-thumb .thumb-failed {
+  font-size: 0;
+}
+
+.shot-menu-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.shot-menu-name {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shot-menu-meta {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shot-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 29px;
+  padding: 0 9px;
+  font-size: 13px;
+  font-weight: 450;
+  border-radius: 6px;
+  cursor: default;
+}
+
+.shot-menu-item .icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--text-muted);
+}
+
+.shot-menu-item.is-active {
+  background: var(--fill-hover);
+}
+
+.shot-menu-item.is-active .icon {
+  color: var(--text);
+}
+
+.shot-menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shot-menu-item.is-danger,
+.shot-menu-item.is-danger .icon {
+  color: var(--danger);
+}
+
+.shot-menu-item.is-danger.is-active {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.shot-menu-item.is-confirming {
+  color: var(--on-accent);
+  font-weight: 550;
+  background: var(--danger);
+}
+
+.shot-menu-item.is-confirming .icon,
+.shot-menu-item.is-confirming.is-active .icon {
+  color: var(--on-accent);
+}
+
+.shot-menu-item.is-confirming.is-active {
+  background: color-mix(in srgb, var(--danger) 90%, #000);
+}
+
+.shot-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--pop-edge);
+}

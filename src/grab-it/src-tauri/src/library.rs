@@ -1813,6 +1813,40 @@ pub fn library_reveal(id: i64, app: AppHandle) -> Result<(), String> {
         .map_err(|err| format!("could not show the capture in its folder: {err}"))
 }
 
+/// Opens the folder a shot's file is in, without picking the file out as
+/// [`library_reveal`] does.
+#[tauri::command(async)]
+pub fn library_open_folder(id: i64, app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = existing_path(&app, id)?;
+    let folder = path
+        .parent()
+        .ok_or_else(|| format!("{} has no folder", path.display()))?;
+    app.opener()
+        .open_path(folder.to_string_lossy(), None::<&str>)
+        .map_err(|err| format!("could not open the folder: {err}"))
+}
+
+/// Opens a shot's file in the app the system opens its kind of file with.
+#[tauri::command(async)]
+pub fn library_open_external(id: i64, app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_path(existing_path(&app, id)?.to_string_lossy(), None::<&str>)
+        .map_err(|err| format!("could not open the file: {err}"))
+}
+
+/// Puts the full path of a shot's file on the clipboard and returns it.
+#[tauri::command(async)]
+pub fn library_copy_path(id: i64, app: AppHandle) -> Result<String, String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let path = existing_path(&app, id)?.to_string_lossy().into_owned();
+    app.clipboard()
+        .write_text(path.clone())
+        .map_err(|err| format!("could not copy the path: {err}"))?;
+    Ok(path)
+}
+
 /// The current save folder, for the startup rescan.
 pub fn current_save_folder(app: &AppHandle) -> PathBuf {
     lock(&app.state::<SettingsState>())
