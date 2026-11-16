@@ -33,6 +33,8 @@ The card offers what you most likely want next:
 | **Pin** | Floats it above your other windows |
 | 📁 / 🗑 | Shows it in its folder, or deletes it |
 
+Drag the **Quick Access** thumbnail into another app to share the original PNG. A short click still opens **Annotate**. The shared PNG does not include annotations or backdrops.
+
 The card fades away on its own after a few seconds. Rest your pointer on it to keep it around. Missed it? The tray's **Show last capture** brings it back.
 
 Want something other than the card after each capture? **After a capture** in [Settings](/grab-it/reference/settings/) can open the editor straight away instead, or do nothing at all (the capture is still saved, and copied unless you turned that off).
