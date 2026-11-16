@@ -44,6 +44,16 @@ export function requestAllPermissions(): Promise<PermissionStatus | null> {
   return invoke<PermissionStatus | null>("permission_request_all");
 }
 
+/**
+ * One throwaway capture after Allow all's restart, so macOS 15+ shows its
+ * "bypass the system private window picker" alert during setup rather than
+ * on the first real capture. Does nothing without Screen Recording, or off
+ * macOS.
+ */
+export function primeScreenCapture(): Promise<void> {
+  return invoke<void>("permission_prime_capture");
+}
+
 /** Skip for now or Continue: launches stop reopening setup. */
 export function finishPermissions(): Promise<void> {
   return invoke<void>("permission_finish");

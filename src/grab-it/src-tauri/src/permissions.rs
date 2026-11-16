@@ -427,6 +427,53 @@ mod mac {
         unsafe { AVCaptureDevice::requestAccessForMediaType_completionHandler(kind, &handler) };
         let _ = answer.recv_timeout(PROMPT_TIMEOUT);
     }
+
+    /// Captures one pixel of the screen and throws it away. On macOS 15
+    /// and later, the first capture through the older APIs shows the alert
+    /// asking to let Grab-it bypass the system private window picker, even
+    /// with Screen Recording on; no API asks for it ahead of time, so this
+    /// shows it now instead of on the first real capture.
+    pub fn prime_capture() {
+        use std::ffi::c_void;
+
+        use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" {
+            fn CGWindowListCreateImage(
+                bounds: CGRect,
+                list_option: u32,
+                window_id: u32,
+                image_option: u32,
+            ) -> *mut c_void;
+            fn CGImageRelease(image: *mut c_void);
+        }
+
+        /// kCGWindowListOptionOnScreenOnly.
+        const ON_SCREEN_ONLY: u32 = 1 << 0;
+        /// kCGNullWindowID.
+        const NULL_WINDOW_ID: u32 = 0;
+        /// kCGWindowImageDefault.
+        const IMAGE_DEFAULT: u32 = 0;
+
+        if !screen_recording_granted() {
+            return;
+        }
+        let pixel = CGRect {
+            origin: CGPoint { x: 0.0, y: 0.0 },
+            size: CGSize {
+                width: 1.0,
+                height: 1.0,
+            },
+        };
+        // SAFETY: takes plain values and returns a new image, or null,
+        // which the caller owns; CGImageRelease accepts null.
+        unsafe {
+            let image =
+                CGWindowListCreateImage(pixel, ON_SCREEN_ONLY, NULL_WINDOW_ID, IMAGE_DEFAULT);
+            CGImageRelease(image);
+        }
+    }
 }
 
 /// Asks for every permission, then reports where they stand. Blocks while
@@ -459,6 +506,20 @@ pub async fn permission_request_all(app: AppHandle) -> Result<PermissionStatus, 
     tauri::async_runtime::spawn_blocking(move || request_all(&app))
         .await
         .map_err(|err| err.to_string())
+}
+
+/// Setup reopened after Allow all's restart with nothing missing: one
+/// throwaway capture, so macOS 15+ shows its window-picker alert now rather
+/// than on the first real capture. Does nothing without Screen Recording,
+/// or off macOS.
+#[tauri::command]
+pub async fn permission_prime_capture() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        #[cfg(target_os = "macos")]
+        mac::prime_capture();
+    })
+    .await
+    .map_err(|err| err.to_string())
 }
 
 /// Skip for now or Continue: launches stop reopening the Welcome window for

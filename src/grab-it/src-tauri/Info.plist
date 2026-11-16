@@ -10,5 +10,9 @@
 	     (webcam.rs). -->
 	<key>NSCameraUsageDescription</key>
 	<string>Grab-it shows your camera in a bubble over screen recordings when Show webcam is on in Settings → Recording.</string>
+	<!-- Shown on macOS 15+ the first time Grab-it reaches an AI endpoint on
+	     another machine on the local network (ai.rs). -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Grab-it reaches the AI endpoint you set in Settings → AI descriptions on your network to describe your captures.</string>
 </dict>
 </plist>

@@ -206,6 +206,12 @@ function PermissionsPage({ initial, inDialog, onDone }: { initial: PermissionSta
             them after a restart.
           </p>
         )}
+        {waitingForRestart && (
+          <p className="perm-note">
+            After the restart, macOS may ask to let Grab-it bypass the system private window picker. Choose Allow For
+            One Month: macOS asks again about once a month.
+          </p>
+        )}
       </section>
 
       {error && (
