@@ -36,7 +36,10 @@ rusqlite = { version = "0.42", features = ["bundled"] }
 # loads the published .onnx models (the .rten ones are no longer hosted).
 ocrs = { version = "=0.12.2", default-features = false, features = ["onnx"] }
 rten = { version = "0.24", default-features = false, features = ["onnx_format"] }
-ureq = { version = "3", default-features = false, features = ["rustls"] }
+# `platform-verifier` checks certificates against the OS trust store
+# (net.rs), so roots installed by IT, such as a TLS-inspecting proxy's,
+# are trusted.
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 # Already in the tree through ureq; encodes captures for vision models.
 base64 = "0.23"
 # Unpack the ffmpeg download (ffmpeg.rs): FFmpeg-Builds packs its Linux

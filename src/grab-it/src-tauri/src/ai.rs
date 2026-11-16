@@ -158,9 +158,11 @@ impl AiStatus {
 
 /// An HTTP agent whose every network phase gives up after `stall` without
 /// progress, and which hands back error responses so their message can be
-/// shown.
+/// shown. Certificates are checked against the OS trust store
+/// (`net::tls_config`).
 pub fn agent(stall: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
+        .tls_config(crate::net::tls_config())
         .http_status_as_error(false)
         .timeout_resolve(Some(stall))
         .timeout_connect(Some(stall))

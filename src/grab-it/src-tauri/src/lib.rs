@@ -15,6 +15,7 @@ mod hub;
 mod input;
 mod keychain;
 mod library;
+mod net;
 mod ocr;
 mod overlay;
 mod permissions;
