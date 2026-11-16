@@ -2,6 +2,7 @@ import {
   RECORDING_COUNTDOWNS,
   recordsMicrophone,
   recordsSystemSound,
+  type Camera,
   type Microphone,
   type RecordingAudio,
   type RecordingSettings,
@@ -45,4 +46,20 @@ export function microphoneLabel(recording: RecordingSettings, microphones: Micro
   if (!recordsMicrophone(recording.audio)) return "No microphone";
   if (recording.microphone === null) return "Default microphone";
   return microphones.find((mic) => mic.id === recording.microphone)?.name ?? "Saved microphone";
+}
+
+/** The camera chosen in the setup bar: no webcam, the system's default, or one by id. */
+export type CameraChoice = { kind: "none" } | { kind: "default" } | { kind: "device"; id: string };
+
+/** `recording` with `choice` as its webcam; no webcam keeps the camera saved for next time. */
+export function withCamera(recording: RecordingSettings, choice: CameraChoice): RecordingSettings {
+  if (choice.kind === "none") return { ...recording, showWebcam: false };
+  return { ...recording, showWebcam: true, camera: choice.kind === "device" ? choice.id : null };
+}
+
+/** What the camera chip says. */
+export function cameraLabel(recording: RecordingSettings, cameras: Camera[]): string {
+  if (!recording.showWebcam) return "No webcam";
+  if (recording.camera === null) return "Default camera";
+  return cameras.find((camera) => camera.id === recording.camera)?.name ?? "Saved camera";
 }

@@ -62,6 +62,8 @@ interface Backend {
   ffmpeg: FfmpegStatus;
   /** What `ffmpeg_retry` answers. */
   ffmpegAfterRetry: FfmpegStatus;
+  /** What `remember_cameras` was last given. */
+  rememberedCameras?: unknown;
   /** What `recording_microphones` answers. */
   microphones: Microphone[];
   /** What `recording_system_audio` answers. */
@@ -162,6 +164,9 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
         return backend.ffmpeg;
       case "recording_microphones":
         return backend.microphones;
+      case "remember_cameras":
+        backend.rememberedCameras = (payload as { cameras: unknown }).cameras;
+        return null;
       case "recording_system_audio":
         return backend.systemSound;
       case "get_autostart":
@@ -1154,6 +1159,13 @@ describe("SettingsWindow webcam", () => {
     expect(media.requests).toHaveLength(1);
     // The camera opened to ask is closed straight away.
     expect(media.stopped).toBe(1);
+    // Named, the cameras are remembered for the setup toolbar.
+    await waitFor(() =>
+      expect(backend.rememberedCameras).toEqual([
+        { id: "cam-front", name: "FaceTime HD Camera" },
+        { id: "cam-usb", name: "USB Webcam" },
+      ]),
+    );
     await waitFor(() => expect(picker).toBeEnabled());
     expect(picker).toHaveValue("");
 
@@ -1199,10 +1211,11 @@ describe("SettingsWindow webcam", () => {
 
   it("lists the cameras without asking when the webcam is already on, and keeps a camera that is gone", async () => {
     media = fakeMedia({ devices: [camera("cam-front", "FaceTime HD Camera")] });
-    mockBackend({ recording: { ...DEFAULT_RECORDING, showWebcam: true, camera: "cam-old", webcamShape: "pill" } });
+    const backend = mockBackend({ recording: { ...DEFAULT_RECORDING, showWebcam: true, camera: "cam-old", webcamShape: "pill" } });
     render(<SettingsWindow section="recording" />);
     const picker = await screen.findByRole("combobox", { name: "Camera" });
     expect(await screen.findByRole("option", { name: "FaceTime HD Camera" })).toBeInTheDocument();
+    await waitFor(() => expect(backend.rememberedCameras).toEqual([{ id: "cam-front", name: "FaceTime HD Camera" }]));
     expect(picker).toHaveValue("cam-old");
     expect(screen.getByRole("option", { name: "Saved camera (not connected)" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Webcam shape" })).toHaveValue("pill");
@@ -1229,20 +1242,34 @@ describe("listCameras", () => {
     media = fakeMedia({
       devices: [camera("a", ""), { kind: "audioinput", deviceId: "mic", label: "Mic" }, camera("b", "Desk Cam")],
     });
-    expect(await listCameras()).toEqual([
-      { id: "a", name: "Camera 1" },
-      { id: "b", name: "Desk Cam" },
-    ]);
+    expect(await listCameras()).toEqual({
+      cameras: [
+        { id: "a", name: "Camera 1" },
+        { id: "b", name: "Desk Cam" },
+      ],
+      named: false,
+    });
+  });
+
+  it("says when every camera had its name", async () => {
+    media = fakeMedia({ devices: [camera("a", "Desk Cam"), camera("b", "USB Webcam")] });
+    expect(await listCameras()).toEqual({
+      cameras: [
+        { id: "a", name: "Desk Cam" },
+        { id: "b", name: "USB Webcam" },
+      ],
+      named: true,
+    });
   });
 
   it("keeps the numbered names when the camera is refused", async () => {
     media = fakeMedia({ devices: [camera("a", "")], fail: { name: "NotAllowedError" } });
-    expect(await listCameras(true)).toEqual([{ id: "a", name: "Camera 1" }]);
+    expect(await listCameras(true)).toEqual({ cameras: [{ id: "a", name: "Camera 1" }], named: false });
     expect(media.requests).toHaveLength(1);
   });
 
   it("is empty where the window has no media devices", async () => {
-    expect(await listCameras(true)).toEqual([]);
+    expect(await listCameras(true)).toEqual({ cameras: [], named: false });
   });
 });
 

@@ -633,7 +633,13 @@ fn create_window(
     // paint. Matches `INSTANT`.
     #[cfg(target_os = "macos")]
     let builder = builder.transparent(true);
+    // The setup toolbar's Refresh camera list opens a camera for a moment
+    // to read the cameras' names.
+    let builder = crate::webcam::allow_camera(builder);
     let window = builder.build()?;
+    if let Err(err) = crate::webcam::enable_media_streams(&window) {
+        eprintln!("Grab-it: could not let the overlay list the cameras: {err}");
+    }
     #[cfg(target_os = "macos")]
     raise_above_menu_bar(&window)?;
     #[cfg(target_os = "macos")]

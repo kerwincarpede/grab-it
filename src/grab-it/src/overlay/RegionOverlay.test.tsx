@@ -6,14 +6,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RegionOverlay from "./RegionOverlay";
 import { CHOICE_EVENT, START_EVENT, type OverlayInfo } from "./api";
 import type { Box } from "./geometry";
-import { DEFAULT_RECORDING, type RecordingSettings } from "../settings/api";
+import { DEFAULT_RECORDING, type Camera, type RecordingSettings } from "../settings/api";
+import { camera, fakeMedia, type FakeMedia } from "../webcam/testMedia";
 
 interface Call {
   cmd: string;
   payload?: InvokeArgs;
 }
 
-function mockOverlay(info: Partial<OverlayInfo> = {}, recording: Partial<RecordingSettings> = {}): Call[] {
+/** The cameras remembered with their names, as `known_cameras` reads them by default. */
+const KNOWN_CAMERAS: Camera[] = [
+  { id: "cam-front", name: "FaceTime HD Camera" },
+  { id: "cam-usb", name: "Logitech C920" },
+];
+
+function mockOverlay(
+  info: Partial<OverlayInfo> = {},
+  recording: Partial<RecordingSettings> = {},
+  cameras: Camera[] = KNOWN_CAMERAS,
+): Call[] {
   const calls: Call[] = [];
   mockIPC((cmd, payload) => {
     calls.push({ cmd, payload });
@@ -38,6 +49,10 @@ function mockOverlay(info: Partial<OverlayInfo> = {}, recording: Partial<Recordi
         return [{ id: "usb", name: "USB Microphone", isDefault: false }];
       case "recording_system_audio":
         return true;
+      case "known_cameras":
+        return cameras;
+      case "remember_cameras":
+        return null;
       case "set_recording":
         return { recording: (payload as { recording: unknown }).recording };
       case "overlay_ready":
@@ -1567,6 +1582,122 @@ describe("RegionOverlay", () => {
       // A GIF is silent.
       expect(within(setup).getByRole("button", { name: "Microphone" })).toBeDisabled();
       expect(finishes(calls)).toHaveLength(0);
+    });
+
+    describe("the Camera chip", () => {
+      let media: FakeMedia | null = null;
+
+      afterEach(() => {
+        media?.restore();
+        media = null;
+      });
+
+      const cameraChip = (setup: HTMLElement) => within(setup).getByRole("button", { name: "Camera" });
+      const choices = () => screen.getAllByRole("menuitemradio").map((item) => item.textContent);
+
+      it("lists the remembered cameras without turning a camera on", async () => {
+        media = fakeMedia({ devices: [camera("", "")] });
+        mockOverlay({ intent: "record" });
+        render(<RegionOverlay />);
+        await ready();
+        const setup = await screen.findByRole("group", { name: "Recording options" });
+        expect(within(setup).queryByRole("button", { name: "Webcam" })).not.toBeInTheDocument();
+        const chip = cameraChip(setup);
+        expect(chip).toHaveTextContent("No webcam");
+
+        fireEvent.click(chip);
+        const list = screen.getByRole("menu", { name: "Camera" });
+        await waitFor(() => expect(choices()).toEqual(["No webcam", "Default camera", "FaceTime HD Camera", "Logitech C920"]));
+        expect(screen.getByRole("menuitemradio", { name: "No webcam" })).toHaveAttribute("aria-checked", "true");
+        expect(within(list).getByText("Cameras")).toBeInTheDocument();
+        expect(within(list).getAllByRole("separator")).toHaveLength(2);
+        expect(within(list).getByRole("menuitem", { name: "Refresh camera list" })).toBeInTheDocument();
+        expect(media.requests).toEqual([]);
+      });
+
+      it("turns the webcam on with the camera picked, and off with No webcam", async () => {
+        const calls = mockOverlay({ intent: "record" });
+        render(<RegionOverlay />);
+        await ready();
+        const setup = await screen.findByRole("group", { name: "Recording options" });
+
+        fireEvent.click(cameraChip(setup));
+        fireEvent.click(await screen.findByRole("menuitemradio", { name: "Logitech C920" }));
+        await waitFor(() => expect(saved(calls)).toMatchObject({ showWebcam: true, camera: "cam-usb" }));
+        expect(screen.queryByRole("menu", { name: "Camera" })).not.toBeInTheDocument();
+        expect(cameraChip(setup)).toHaveTextContent("Logitech C920");
+
+        fireEvent.click(cameraChip(setup));
+        expect(screen.getByRole("menuitemradio", { name: "Logitech C920" })).toHaveAttribute("aria-checked", "true");
+        fireEvent.click(screen.getByRole("menuitemradio", { name: "Default camera" }));
+        await waitFor(() => expect(saved(calls)).toMatchObject({ showWebcam: true, camera: null }));
+        expect(cameraChip(setup)).toHaveTextContent("Default camera");
+
+        fireEvent.click(cameraChip(setup));
+        fireEvent.click(screen.getByRole("menuitemradio", { name: "No webcam" }));
+        await waitFor(() => expect(saved(calls)).toMatchObject({ showWebcam: false }));
+        expect(cameraChip(setup)).toHaveTextContent("No webcam");
+        expect(finishes(calls)).toHaveLength(0);
+      });
+
+      it("names a saved camera that is no longer listed", async () => {
+        mockOverlay({ intent: "record" }, { showWebcam: true, camera: "cam-gone" });
+        render(<RegionOverlay />);
+        await ready();
+        const setup = await screen.findByRole("group", { name: "Recording options" });
+        await waitFor(() => expect(cameraChip(setup)).toHaveTextContent("Saved camera"));
+      });
+
+      it("refreshes the list in place, remembering the cameras named", async () => {
+        media = fakeMedia({
+          devices: [camera("", ""), camera("", "")],
+          devicesAfterOpen: [camera("cam-usb", "Logitech C920"), camera("cam-new", "Elgato Facecam")],
+        });
+        const calls = mockOverlay({ intent: "record" }, {}, []);
+        render(<RegionOverlay />);
+        await ready();
+        const setup = await screen.findByRole("group", { name: "Recording options" });
+
+        fireEvent.click(cameraChip(setup));
+        const list = screen.getByRole("menu", { name: "Camera" });
+        await waitFor(() => expect(calls.some((c) => c.cmd === "known_cameras")).toBe(true));
+        expect(choices()).toEqual(["No webcam", "Default camera"]);
+        expect(within(list).queryByText("Cameras")).not.toBeInTheDocument();
+
+        fireEvent.click(within(list).getByRole("menuitem", { name: "Refresh camera list" }));
+        // The list stays open and takes the cameras' names.
+        expect(await screen.findByRole("menuitemradio", { name: "Elgato Facecam" })).toBeInTheDocument();
+        expect(screen.getByRole("menu", { name: "Camera" })).toBeInTheDocument();
+        expect(choices()).toEqual(["No webcam", "Default camera", "Logitech C920", "Elgato Facecam"]);
+        await waitFor(() =>
+          expect(calls.find((c) => c.cmd === "remember_cameras")?.payload).toEqual({
+            cameras: [
+              { id: "cam-usb", name: "Logitech C920" },
+              { id: "cam-new", name: "Elgato Facecam" },
+            ],
+          }),
+        );
+        // The camera opened to read the names is closed straight away.
+        expect(media.requests).toHaveLength(1);
+        expect(media.stopped).toBe(1);
+        await waitFor(() => expect(within(list).getByRole("menuitem", { name: "Refresh camera list" })).toBeEnabled());
+      });
+
+      it("keeps the remembered cameras when Refresh cannot read their names", async () => {
+        media = fakeMedia({ devices: [camera("cam-front", "")], fail: { name: "NotAllowedError" } });
+        const calls = mockOverlay({ intent: "record" });
+        render(<RegionOverlay />);
+        await ready();
+        const setup = await screen.findByRole("group", { name: "Recording options" });
+
+        fireEvent.click(cameraChip(setup));
+        const refresh = screen.getByRole("menuitem", { name: "Refresh camera list" });
+        fireEvent.click(refresh);
+        await waitFor(() => expect(media?.requests).toHaveLength(1));
+        await waitFor(() => expect(refresh).toBeEnabled());
+        expect(calls.some((c) => c.cmd === "remember_cameras")).toBe(false);
+        expect(choices()).toEqual(["No webcam", "Default camera", "FaceTime HD Camera", "Logitech C920"]);
+      });
     });
   });
 });

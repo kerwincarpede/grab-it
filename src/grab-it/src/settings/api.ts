@@ -440,11 +440,18 @@ export const WEBCAM_SHAPES: { value: WebcamShape; title: string }[] = [
   { value: "blob", title: "Blob (moves)" },
 ];
 
-/** A camera the webview can show. */
+/** A camera the webview can show. Mirrors `Camera` in src-tauri/src/webcam.rs. */
 export interface Camera {
   /** What `RecordingSettings.camera` saves to pick it: the webview's `deviceId`. */
   id: string;
   name: string;
+}
+
+/** The cameras the webview listed, and whether it gave each one its real name. */
+export interface CameraListing {
+  cameras: Camera[];
+  /** At least one camera was listed, and none had its name hidden. */
+  named: boolean;
 }
 
 /**
@@ -453,9 +460,9 @@ export interface Camera {
  * With `ask`, a camera is opened for a moment when names are hidden, which
  * asks for the permission where the system wants one and then reveals them.
  */
-export async function listCameras(ask = false): Promise<Camera[]> {
+export async function listCameras(ask = false): Promise<CameraListing> {
   const media = typeof navigator === "undefined" ? undefined : navigator.mediaDevices;
-  if (!media || typeof media.enumerateDevices !== "function") return [];
+  if (!media || typeof media.enumerateDevices !== "function") return { cameras: [], named: false };
   const read = async () => (await media.enumerateDevices()).filter((device) => device.kind === "videoinput");
   let devices = await read();
   if (ask && devices.some((device) => device.label === "") && typeof media.getUserMedia === "function") {
@@ -467,9 +474,31 @@ export async function listCameras(ask = false): Promise<Camera[]> {
       // Refused or no camera: the list keeps its numbered names.
     }
   }
-  return devices
-    .filter((device) => device.deviceId !== "")
-    .map((device, index) => ({ id: device.deviceId, name: device.label || `Camera ${index + 1}` }));
+  return {
+    cameras: devices
+      .filter((device) => device.deviceId !== "")
+      .map((device, index) => ({ id: device.deviceId, name: device.label || `Camera ${index + 1}` })),
+    named: devices.length > 0 && devices.every((device) => device.label !== "" && device.deviceId !== ""),
+  };
+}
+
+/** The cameras last listed with their names, remembered across restarts; empty when none were. */
+export function knownCameras(): Promise<Camera[]> {
+  return invoke<Camera[]>("known_cameras");
+}
+
+/** Remembers `cameras` for {@link knownCameras}. */
+export function rememberCameras(cameras: Camera[]): Promise<void> {
+  return invoke<void>("remember_cameras", { cameras });
+}
+
+/**
+ * Remembers `listing` when every camera in it had its name, so the setup
+ * toolbar can name them without turning a camera on. A listing with a
+ * hidden name keeps what was remembered.
+ */
+export async function rememberListing(listing: CameraListing): Promise<void> {
+  if (listing.named) await rememberCameras(listing.cameras);
 }
 
 export function setRecording(recording: RecordingSettings): Promise<Settings> {
