@@ -20,7 +20,7 @@ export interface OverlayWindow {
  * What the selection is for: a screenshot, text recognition over the dragged
  * area, the colour of one pixel, or the area to record as a GIF.
  */
-export type OverlayIntent = "capture" | "text" | "color" | "record";
+export type OverlayIntent = "capture" | "text" | "color" | "record" | "scroll";
 
 /** Mirrors `OverlayInfo` in src-tauri/src/overlay.rs. */
 export interface OverlayInfo {

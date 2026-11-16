@@ -34,6 +34,7 @@ export interface QuickCode {
 
 /** Mirrors `QuickItem` in src-tauri/src/quick.rs. */
 export type QuickItem =
+  | { kind: "scrolling"; sessionId: number; width: number; height: number; capped: boolean }
   | { kind: "capture"; path: string; fileName: string; width: number; height: number; copied: boolean }
   /** `original` is what OCR read, when the AI's tidied text took its place. */
   | { kind: "text"; text: string; original?: string; tidy?: TextTidy }
@@ -111,7 +112,7 @@ export function onQuickChanged(handler: (shown: QuickShown) => void): Promise<Un
  * seconds chosen in Settings. `null` stays until something replaces it.
  */
 export function dismissAfter(item: QuickItem, seconds = 8): number | null {
-  if (item.kind === "working") return null;
+  if (item.kind === "working" || item.kind === "scrolling") return null;
   // The AI's text is on its way.
   if (item.kind === "text" && item.tidy?.state === "working") return null;
   // 0 is the user's "until I close it".
@@ -201,3 +202,6 @@ export function isStructured(format: string | undefined): boolean {
 export function quickDrag(generation: number): Promise<void> {
   return invoke<void>("quick_drag", { generation });
 }
+
+export function scrollDone(sessionId: number): Promise<void> { return invoke("scroll_done", { sessionId }); }
+export function scrollCancel(sessionId: number): Promise<void> { return invoke("scroll_cancel", { sessionId }); }

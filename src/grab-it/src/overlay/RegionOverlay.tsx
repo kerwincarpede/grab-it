@@ -65,6 +65,7 @@ import { drawBackdrop } from "./backdrop";
 import {
   ColourIcon,
   RecordIcon,
+  ScrollIcon,
   RegionIcon,
   ScreenIcon,
   TextIcon,
@@ -90,6 +91,7 @@ const HINTS: Record<OverlayIntent, string> = {
   capture: "Drag to capture a region, or click a window. Esc cancels.",
   text: "Drag over the text to copy it. Esc cancels.",
   color: "Click to copy the colour under the cursor. Esc cancels.",
+  scroll: "Drag to choose an area or click a window, then scroll by hand. Esc cancels.",
   record: "Drag to choose the area to record, or click a window. Esc cancels.",
 };
 /** The Record overlay's hint for each source, before and after a pick. */
@@ -125,7 +127,7 @@ const WINDOW_RADIUS = 10;
  * All-in-one's modes, in the order of their number keys. Screen captures
  * as soon as it is picked; the others say what the next selection is for.
  */
-type Tool = "region" | "window" | "screen" | "text" | "color" | "record";
+type Tool = "region" | "window" | "screen" | "text" | "color" | "record" | "scroll";
 
 const TOOLS: { tool: Tool; label: string; icon: ReactNode }[] = [
   { tool: "region", label: "Region", icon: <RegionIcon /> },
@@ -134,6 +136,7 @@ const TOOLS: { tool: Tool; label: string; icon: ReactNode }[] = [
   { tool: "text", label: "Text", icon: <TextIcon /> },
   { tool: "color", label: "Colour", icon: <ColourIcon /> },
   { tool: "record", label: "Record", icon: <RecordIcon /> },
+  { tool: "scroll", label: "Scroll", icon: <ScrollIcon /> },
 ];
 /** The Timer's settings in seconds, in the order a click steps through them. */
 const TIMER_STEPS = [0, 3, 5, 10];
@@ -157,6 +160,7 @@ const CONFIRM_LABELS: Record<OverlayIntent, string> = {
   text: "Copy text",
   color: "Capture",
   record: "Record",
+  scroll: "Start scrolling",
 };
 
 /**
@@ -175,7 +179,7 @@ function isField(target: EventTarget | null): boolean {
 }
 
 function toolIntent(tool: Tool): OverlayIntent {
-  return tool === "text" || tool === "color" || tool === "record" ? tool : "capture";
+  return tool === "text" || tool === "color" || tool === "record" || tool === "scroll" ? tool : "capture";
 }
 
 /** The toolbar mode another monitor's overlay chose, from its choice. */
@@ -636,7 +640,7 @@ function RegionOverlay() {
     source === "window";
   const screenSource = source === "screen";
   // A recording picks its area exactly as a screenshot does.
-  const picksArea = intent === "capture" || intent === "record";
+  const picksArea = intent === "capture" || intent === "record" || intent === "scroll";
   const canDrag = intent === "text" || (picksArea && !windowMode && !screenSource);
   const canPickWindow = picksArea && !screenSource;
 
@@ -964,7 +968,7 @@ function RegionOverlay() {
     const under = canPickWindow ? topmostAt(pickable, end) : undefined;
     if (!under) return;
     // A recording holds the window's area, to be set up and started.
-    if (intent === "record" && adjustable) {
+    if ((intent === "record" || intent === "scroll") && adjustable) {
       const clipped = clipToView(under.box, view);
       if (clipped) {
         setPicked(snapToImage(clipped, scale));

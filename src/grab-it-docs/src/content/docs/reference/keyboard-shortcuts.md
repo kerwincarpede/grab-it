@@ -35,8 +35,8 @@ While you're picking an area to capture or record:
 | Hold `Shift` while dragging | Make the selection a square |
 | Hold `Space` while dragging | Move the selection instead of resizing it |
 | `Enter` | Capture (or record) the adjusted selection, in All-in-one and Record |
-| `1` to `6` | In All-in-one: Region, Window, Screen, Text, Colour, Record |
-| `7` | In All-in-one: step the timer through off, 3, 5 and 10 seconds |
+| `1` to `7` | In All-in-one: Region, Window, Screen, Text, Colour, Record, Scroll |
+| `8` | In All-in-one: step the timer through off, 3, 5 and 10 seconds |
 | `1` to `3` | When recording: Region, Window, Screen |
 
 ## Image editor

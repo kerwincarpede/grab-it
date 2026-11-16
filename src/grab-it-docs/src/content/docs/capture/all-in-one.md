@@ -21,13 +21,14 @@ Click a mode, or press its number. You can switch modes as often as you like bef
 | `4` | **Text** | Drag over text or a code to copy it ([Text and codes](/grab-it/capture/text-and-codes/)) |
 | `5` | **Colour** | Click a pixel to copy its colour ([Pick a colour](/grab-it/capture/colour/)) |
 | `6` | **Record** | Choose what to record and start a recording ([Recording](/grab-it/recording/record/)) |
-| `7` | **Timer** | Steps through off, 3, 5 and 10 seconds (see below) |
+| `7` | **Scroll** | Choose an area or window and stitch a scrolling capture (see below) |
+| `8` | **Timer** | Steps through off, 3, 5 and 10 seconds (see below) |
 
 `Esc` or right-click cancels at any point. The hint under the toolbar lists the keys you can use right now.
 
 ## The Timer
 
-The **Timer** button shows *Timer off*, or the delay it's set to, like *Timer 5 s*. Each click (or press of `7`) steps it on: off, 3 s, 5 s, 10 s, then off again. It works with **Region**, **Window** and **Screen**; it's greyed out for the other modes.
+The **Timer** button shows *Timer off*, or the delay it's set to, like *Timer 5 s*. Each click (or press of `8`) steps it on: off, 3 s, 5 s, 10 s, then off again. It works with **Region**, **Window** and **Screen**; it's greyed out for **Text**, **Colour**, **Record** and **Scroll**.
 
 With the Timer on, you pick the area first. The overlay then closes, and when the time is up Grab-it captures that area **as the screen looks then**. Handy for opening a menu inside the area you chose. See [Timed capture](/grab-it/capture/timed/).
 
@@ -62,6 +63,14 @@ The last region you captured starts out selected on the monitor it was on, ready
 ## Record
 
 **Record** shows the recording setup toolbar under the mode toolbar. Pick a region, a window or a screen and the recording options, then press **Record** or `Enter`. Press the All-in-one shortcut again to stop the recording. See [Record your screen](/grab-it/recording/record/).
+
+## Scroll
+
+Choose **Scroll**, drag an area or click a window, then press **Start scrolling** or `Enter`. Scroll slowly by hand vertically or horizontally, keeping some content visible between movements. Keep the content still apart from scrolling.
+
+The Quick Access card shows the image size so far. **Done** saves one stitched image; **Cancel** discards it. At 30,000 px along the scroll direction, the image stops growing and the card shows the cap was reached. Choose **Done** or **Cancel** to finish.
+
+Scroll capture is not available on Wayland.
 
 :::note
 On Wayland your desktop's own picker shows instead of All-in-one's toolbar, as for a region. See [Wayland](/grab-it/capture/wayland/).

@@ -30,6 +30,7 @@ mod record_bar;
 mod record_frame;
 mod recording_editor;
 mod screen;
+mod scroll;
 mod search;
 mod settings;
 mod storage;
@@ -96,6 +97,7 @@ pub fn run() {
         .manage(quick::QuickState::default())
         .manage(pin::PinState::default())
         .manage(record::RecordState::default())
+        .manage(scroll::ScrollState::default())
         .manage(record_bar::RecordBarState::default())
         .manage(hotkeys::HotkeyState::default())
         .manage(editor::EditorState::default())
@@ -140,6 +142,8 @@ pub fn run() {
             pin::pin_close,
             pin::editor_pin,
             record::record_stop,
+            scroll::scroll_done,
+            scroll::scroll_cancel,
             record::record_pause,
             record::record_mute,
             record::record_webcam,
