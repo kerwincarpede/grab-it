@@ -1699,14 +1699,22 @@ describe("LibraryWindow multi-select", () => {
     expect(selectedTiles()).toEqual(["Grab-it 4.png"]);
     expect(screen.getByLabelText("Capture details")).toBeInTheDocument();
 
-    // Shift selects from the last tile clicked, either way.
+    // Shift selects from the last tile clicked without it, either way; a Ctrl/Cmd-click counts.
+    fireEvent.click(tile("Grab-it 4.png"));
     fireEvent.click(tile("Grab-it 1.png"), { shiftKey: true });
     expect(selectedTiles()).toEqual(["Grab-it 4.png", "Grab-it 3.png", "Grab-it 2.png", "Grab-it 1.png"]);
     fireEvent.click(tile("Grab-it 5.png"), { shiftKey: true });
     expect(selectedTiles()).toEqual(["Grab-it 5.png", "Grab-it 4.png"]);
+    fireEvent.click(tile("Grab-it 2.png"), { metaKey: true });
+    fireEvent.click(tile("Grab-it 1.png"), { shiftKey: true });
+    expect(selectedTiles()).toEqual(["Grab-it 2.png", "Grab-it 1.png"]);
+    fireEvent.click(tile("Grab-it 4.png"), { shiftKey: true });
+    expect(selectedTiles()).toEqual(["Grab-it 4.png", "Grab-it 3.png", "Grab-it 2.png"]);
     expect(screen.queryByLabelText("Capture details")).not.toBeInTheDocument();
 
     // Ctrl/Cmd+Shift adds a range to what is selected.
+    fireEvent.click(tile("Grab-it 5.png"));
+    fireEvent.click(tile("Grab-it 4.png"), { shiftKey: true });
     fireEvent.click(tile("Grab-it 1.png"), { ctrlKey: true });
     fireEvent.click(tile("Grab-it 2.png"), { ctrlKey: true, shiftKey: true });
     expect(selectedTiles()).toEqual(["Grab-it 5.png", "Grab-it 4.png", "Grab-it 2.png", "Grab-it 1.png"]);
