@@ -142,7 +142,7 @@ impl Stitcher {
                 };
                 let last = &last_image;
                 let next = &next_image;
-                let n = length(&next, axis);
+                let n = length(next, axis);
                 let fixed = |p| line_error(last, next, axis, p, p) < 0.5;
                 let head = (0..n).take_while(|&p| fixed(p)).count() as u32;
                 let tail = (0..n.saturating_sub(head))
@@ -422,7 +422,11 @@ fn grab_clean(
     if !obscured {
         return buffered.grab();
     }
-    hide()?;
+    if let Err(error) = hide() {
+        // The request may have executed even if visibility confirmation failed.
+        let _ = restore();
+        return Err(error);
+    }
     let grabbed = synchronous.grab();
     let restored = restore();
     match grabbed {
@@ -435,8 +439,32 @@ fn grab_clean(
 }
 fn hide_card(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(quick::LABEL) {
-        window.hide().map_err(|e| e.to_string())?;
+        hide_and_wait(
+            || window.hide().map_err(|e| e.to_string()),
+            || window.is_visible().map_err(|e| e.to_string()),
+        )?;
     }
+    Ok(())
+}
+/// Off-main-thread Tauri hide() only enqueues WindowMessage::Hide. The
+/// visibility getter round-trips through the UI event loop, so an invisible
+/// reply acknowledges that the queued hide has actually executed. Do not grab
+/// on an error or while the native window still reports itself visible.
+fn hide_and_wait(
+    hide: impl FnOnce() -> Result<(), String>,
+    mut is_visible: impl FnMut() -> Result<bool, String>,
+) -> Result<(), String> {
+    hide()?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while is_visible()? {
+        if std::time::Instant::now() >= deadline {
+            return Err("Quick Access did not become invisible before capture".into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Let the compositor repaint the uncovered area after native visibility
+    // changes. This delay follows acknowledgement; it does not replace it.
+    std::thread::sleep(Duration::from_millis(50));
     Ok(())
 }
 fn restore_card(app: &AppHandle) -> Result<(), String> {
@@ -444,6 +472,56 @@ fn restore_card(app: &AppHandle) -> Result<(), String> {
         window.show().map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Picks a clear corner on the captured monitor, independent of the pointer.
+/// Returns whether all corners overlap and grabs must hide the card briefly.
+fn place_card(app: &AppHandle, info: &MonitorInfo, rect: Rect, image_size: (u32, u32)) -> bool {
+    let monitor = app
+        .monitor_from_point(info.x as f64 + 1., info.y as f64 + 1.)
+        .ok()
+        .flatten();
+    let Some(monitor) = monitor else {
+        return true;
+    };
+    let scale = monitor.scale_factor();
+    let origin = monitor.position();
+    let size = monitor.size();
+    let sx = size.width as f64 / image_size.0.max(1) as f64;
+    let sy = size.height as f64 / image_size.1.max(1) as f64;
+    let region = (
+        origin.x as f64 + rect.x as f64 * sx,
+        origin.y as f64 + rect.y as f64 * sy,
+        rect.width as f64 * sx,
+        rect.height as f64 * sy,
+    );
+    let area = monitor.work_area();
+    let corners = [
+        quick::preferred_corner(app),
+        quick::Corner::TopLeft,
+        quick::Corner::TopRight,
+        quick::Corner::BottomLeft,
+        quick::Corner::BottomRight,
+    ];
+    for corner in corners {
+        let p = quick::place_in_corner(
+            (area.position.x, area.position.y),
+            (area.size.width, area.size.height),
+            scale,
+            corner,
+        );
+        let clear = p.x as f64 + 336. * scale <= region.0
+            || p.y as f64 + 232. * scale <= region.1
+            || p.x as f64 >= region.0 + region.2
+            || p.y as f64 >= region.1 + region.3;
+        if clear {
+            if let Some(w) = app.get_webview_window("quick") {
+                let _ = w.set_position(p);
+            }
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -556,6 +634,68 @@ mod tests {
         assert_eq!(synchronous.calls, 3);
     }
     #[test]
+    fn queued_hide_must_execute_before_synchronous_capture() {
+        use std::cell::{Cell, RefCell};
+        use std::collections::VecDeque;
+
+        for fail in [false, true] {
+            let visible = Cell::new(true);
+            // Model Tauri's UI queue: hide returns with the window still
+            // visible. A visibility query drives/acknowledges queued work.
+            let queue = RefCell::new(VecDeque::new());
+            let queries = Cell::new(0);
+            let mut buffered = TestSource {
+                visible: &visible,
+                cached: true,
+                calls: 0,
+                fail: false,
+            };
+            let mut synchronous = TestSource {
+                visible: &visible,
+                cached: false,
+                calls: 0,
+                fail,
+            };
+            let result = grab_clean(
+                &mut buffered,
+                &mut synchronous,
+                true,
+                || {
+                    hide_and_wait(
+                        || {
+                            queue.borrow_mut().push_back(false);
+                            assert!(visible.get(), "enqueueing hide must not hide immediately");
+                            Ok(())
+                        },
+                        || {
+                            let count = queries.get() + 1;
+                            queries.set(count);
+                            if count > 1 {
+                                visible.set(queue.borrow_mut().pop_front().unwrap());
+                            }
+                            Ok(visible.get())
+                        },
+                    )
+                },
+                || {
+                    assert!(!visible.get(), "capture must precede restoring controls");
+                    visible.set(true);
+                    Ok(())
+                },
+            );
+            if fail {
+                assert_eq!(result.err().as_deref(), Some("grab failed"));
+            } else {
+                assert_eq!(result.unwrap().image.get_pixel(0, 0)[0], 0);
+            }
+            assert_eq!(queries.get(), 2);
+            assert!(queue.borrow().is_empty());
+            assert_eq!(buffered.calls, 0);
+            assert_eq!(synchronous.calls, 1);
+            assert!(visible.get());
+        }
+    }
+    #[test]
     fn controls_are_restored_after_synchronous_capture_failure() {
         let visible = std::cell::Cell::new(true);
         let mut buffered = TestSource {
@@ -622,7 +762,7 @@ mod tests {
         RgbaImage::from_fn(w, h, |x, y| {
             let p = if axis == Axis::Vertical { y } else { x };
             let c = if axis == Axis::Vertical { x } else { y };
-            let v = if sticky && (p < 5 || p >= 75) {
+            let v = if sticky && !(5..75).contains(&p) {
                 p
             } else {
                 p + offset
@@ -711,54 +851,4 @@ mod tests {
         )));
         assert!(s.push(frame(Axis::Vertical, 10, false)));
     }
-}
-
-/// Picks a clear corner on the captured monitor, independent of the pointer.
-/// Returns whether all corners overlap and grabs must hide the card briefly.
-fn place_card(app: &AppHandle, info: &MonitorInfo, rect: Rect, image_size: (u32, u32)) -> bool {
-    let monitor = app
-        .monitor_from_point(info.x as f64 + 1., info.y as f64 + 1.)
-        .ok()
-        .flatten();
-    let Some(monitor) = monitor else {
-        return true;
-    };
-    let scale = monitor.scale_factor();
-    let origin = monitor.position();
-    let size = monitor.size();
-    let sx = size.width as f64 / image_size.0.max(1) as f64;
-    let sy = size.height as f64 / image_size.1.max(1) as f64;
-    let region = (
-        origin.x as f64 + rect.x as f64 * sx,
-        origin.y as f64 + rect.y as f64 * sy,
-        rect.width as f64 * sx,
-        rect.height as f64 * sy,
-    );
-    let area = monitor.work_area();
-    let corners = [
-        quick::preferred_corner(app),
-        quick::Corner::TopLeft,
-        quick::Corner::TopRight,
-        quick::Corner::BottomLeft,
-        quick::Corner::BottomRight,
-    ];
-    for corner in corners {
-        let p = quick::place_in_corner(
-            (area.position.x, area.position.y),
-            (area.size.width, area.size.height),
-            scale,
-            corner,
-        );
-        let clear = p.x as f64 + 336. * scale <= region.0
-            || p.y as f64 + 232. * scale <= region.1
-            || p.x as f64 >= region.0 + region.2
-            || p.y as f64 >= region.1 + region.3;
-        if clear {
-            if let Some(w) = app.get_webview_window("quick") {
-                let _ = w.set_position(p);
-            }
-            return false;
-        }
-    }
-    true
 }
