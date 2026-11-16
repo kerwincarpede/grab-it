@@ -64,7 +64,8 @@ Most changes save as soon as you make them. Hotkeys save when you press **Save h
 | **Show keystrokes** | Off | Shows the keys you press at the bottom of the recording. |
 | **Show webcam** | Off | Shows your camera in a bubble over the recorded area, recorded with it. Drag it anywhere while recording. |
 | **Camera** | System default | Which camera, when Show webcam is on. |
-| **Webcam shape** | Round | Round or Rounded square. |
+| **Webcam shape** | Squircle | Squircle, Round, Arch, Pill, Wide or Blob. |
+| **Mirror webcam** | On | Shows you as a mirror would. Turn it off when there's writing behind you. |
 | **Countdown** | Off | Off, 3, 5 or 10 seconds, counted down on the recording toolbar before the first frame. |
 
 **Show keystrokes and passwords.** On macOS, keys you type into a password field are left out, and the first recording with clicks or keystrokes on asks for **Input Monitoring** permission. Windows and Linux can't tell when you're typing a password, so turn **Show keystrokes** off before you type one.

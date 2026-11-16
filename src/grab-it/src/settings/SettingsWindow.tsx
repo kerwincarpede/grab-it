@@ -848,6 +848,20 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                     ))}
                   </select>
                 </div>
+                <label className="row">
+                  <span className="row-text">
+                    <span className="row-title">Mirror webcam</span>
+                    <span className="row-hint">Shows you as a mirror would, so pointing at the screen points the right way. Turn it off when there is writing behind you.</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    className="switch"
+                    checked={recording.mirrorWebcam}
+                    disabled={recordingOff}
+                    onChange={(event) => void changeRecording({ mirrorWebcam: event.target.checked })}
+                  />
+                </label>
               </>
             )}
             <div className="row">

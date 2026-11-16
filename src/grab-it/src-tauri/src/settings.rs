@@ -627,23 +627,38 @@ impl RecordingAudio {
     }
 }
 
-/// The webcam bubble's outline while recording (see webcam.rs).
+/// The webcam bubble's outline while recording (see webcam.rs). Mirrors
+/// `WebcamShape` in src/settings/api.ts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WebcamShape {
-    /// A circle.
+    /// A square with smooth, continuous corners. Saved as `rounded` before
+    /// it was drawn as a squircle.
     #[default]
+    #[serde(alias = "rounded")]
+    Squircle,
+    /// A circle.
     Round,
-    /// A square with rounded corners.
-    Rounded,
+    /// Portrait: a round top on a square base with soft corners.
+    Arch,
+    /// A tall capsule.
+    Pill,
+    /// Landscape, 16:10, with soft corners.
+    Wide,
+    /// A soft outline that slowly changes.
+    Blob,
 }
 
 impl WebcamShape {
     /// The name the settings file and the bubble's page use.
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Squircle => "squircle",
             Self::Round => "round",
-            Self::Rounded => "rounded",
+            Self::Arch => "arch",
+            Self::Pill => "pill",
+            Self::Wide => "wide",
+            Self::Blob => "blob",
         }
     }
 }
@@ -689,6 +704,9 @@ pub struct RecordingSettings {
     /// with. None shows the system's default camera.
     pub camera: Option<String>,
     pub webcam_shape: WebcamShape,
+    /// Whether the bubble shows the camera mirrored, as a mirror would, so
+    /// pointing at the screen points the right way in the recording.
+    pub mirror_webcam: bool,
     /// Seconds counted down on the recording toolbar before the first
     /// frame: one of [`RECORDING_COUNTDOWNS`].
     pub countdown: u32,
@@ -710,6 +728,7 @@ impl Default for RecordingSettings {
             show_webcam: false,
             camera: None,
             webcam_shape: WebcamShape::default(),
+            mirror_webcam: true,
             countdown: 0,
             source: RecordingSource::default(),
         }
@@ -756,6 +775,9 @@ impl RecordingSettings {
             webcam_shape: field("webcamShape")
                 .and_then(|v| serde_json::from_value(v).ok())
                 .unwrap_or(defaults.webcam_shape),
+            mirror_webcam: field("mirrorWebcam")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(defaults.mirror_webcam),
             countdown: field("countdown")
                 .and_then(|v| serde_json::from_value::<u32>(v).ok())
                 .filter(|seconds| RECORDING_COUNTDOWNS.contains(seconds))
@@ -1620,7 +1642,8 @@ mod tests {
                 microphone: Some("USB Microphone".into()),
                 show_webcam: true,
                 camera: Some("3f9a1c".into()),
-                webcam_shape: WebcamShape::Rounded,
+                webcam_shape: WebcamShape::Arch,
+                mirror_webcam: false,
                 countdown: 5,
                 source: RecordingSource::Screen,
             },
@@ -1746,7 +1769,8 @@ mod tests {
                 "microphone": null,
                 "showWebcam": false,
                 "camera": null,
-                "webcamShape": "round",
+                "webcamShape": "squircle",
+                "mirrorWebcam": true,
                 "countdown": 0,
                 "source": "region",
             })
@@ -1867,7 +1891,8 @@ mod tests {
                 "microphone": null,
                 "showWebcam": false,
                 "camera": null,
-                "webcamShape": "round",
+                "webcamShape": "squircle",
+                "mirrorWebcam": true,
                 "countdown": 0,
                 "source": "region",
             })
@@ -1896,15 +1921,26 @@ mod tests {
         let recording = defaults(&dir).recording;
         assert!(!recording.show_webcam);
         assert_eq!(recording.camera, None);
-        assert_eq!(recording.webcam_shape, WebcamShape::Round);
-        assert_eq!(WebcamShape::Round.as_str(), "round");
-        assert_eq!(WebcamShape::Rounded.as_str(), "rounded");
+        assert_eq!(recording.webcam_shape, WebcamShape::Squircle);
+        assert!(recording.mirror_webcam);
+        for (shape, name) in [
+            (WebcamShape::Squircle, "squircle"),
+            (WebcamShape::Round, "round"),
+            (WebcamShape::Arch, "arch"),
+            (WebcamShape::Pill, "pill"),
+            (WebcamShape::Wide, "wide"),
+            (WebcamShape::Blob, "blob"),
+        ] {
+            assert_eq!(shape.as_str(), name);
+            assert_eq!(serde_json::to_value(shape).unwrap(), name);
+        }
 
         let mut store = open_store(path.clone(), defaults(&dir));
         let chosen = RecordingSettings {
             show_webcam: true,
             camera: Some("c0ffee".into()),
-            webcam_shape: WebcamShape::Rounded,
+            webcam_shape: WebcamShape::Pill,
+            mirror_webcam: false,
             ..RecordingSettings::default()
         };
         assert_eq!(
@@ -1923,22 +1959,25 @@ mod tests {
         // An unknown shape or a wrong type keeps its default.
         fs::write(
             &path,
-            r#"{"recording": {"showWebcam": "yes", "camera": 3, "webcamShape": "star"}}"#,
+            r#"{"recording": {"showWebcam": "yes", "camera": 3, "webcamShape": "star", "mirrorWebcam": "no"}}"#,
         )
         .unwrap();
         let loaded = load(&path, defaults(&dir)).unwrap().recording;
         assert!(!loaded.show_webcam);
         assert_eq!(loaded.camera, None);
-        assert_eq!(loaded.webcam_shape, WebcamShape::Round);
+        assert_eq!(loaded.webcam_shape, WebcamShape::Squircle);
+        assert!(loaded.mirror_webcam);
+        // A shape saved as "rounded" is the squircle that replaced it.
         fs::write(
             &path,
-            r#"{"recording": {"showWebcam": true, "camera": "cam", "webcamShape": "rounded"}}"#,
+            r#"{"recording": {"showWebcam": true, "camera": "cam", "webcamShape": "rounded", "mirrorWebcam": false}}"#,
         )
         .unwrap();
         let loaded = load(&path, defaults(&dir)).unwrap().recording;
         assert!(loaded.show_webcam);
         assert_eq!(loaded.camera.as_deref(), Some("cam"));
-        assert_eq!(loaded.webcam_shape, WebcamShape::Rounded);
+        assert_eq!(loaded.webcam_shape, WebcamShape::Squircle);
+        assert!(!loaded.mirror_webcam);
     }
 
     #[test]
