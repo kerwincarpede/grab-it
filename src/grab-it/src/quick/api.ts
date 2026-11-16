@@ -195,3 +195,9 @@ export function formatName(format: string, language: string | null): string | nu
 export function isStructured(format: string | undefined): boolean {
   return format !== undefined && format !== "plain";
 }
+
+
+/** Waits for native drag completion (drop or cancel). */
+export function quickDrag(generation: number): Promise<void> {
+  return invoke<void>("quick_drag", { generation });
+}

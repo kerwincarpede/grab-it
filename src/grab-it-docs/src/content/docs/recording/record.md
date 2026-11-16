@@ -53,7 +53,7 @@ Stop the recording in any of these ways:
 
 A GIF also stops by itself after one minute.
 
-The toolbar shows **Saving…** for a moment, then the Quick Access card shows the recording with its length and size. Click the preview to play it, **Show in folder** to find it, or the bin to delete it. An MP4's card also has **Edit**, which opens it in the [video editor](/grab-it/video-editor/).
+The toolbar shows **Saving…** for a moment, then the **Quick Access** card shows the recording with its length and size. Drag the filename in the card's details area into another app to share the MP4 or GIF. Click the preview to play it, **Show in folder** to find it, or the bin to delete it. An MP4's card also has **Edit**, which opens it in the [video editor](/grab-it/video-editor/).
 
 If something went wrong with part of the recording, the card says so. For example, when ffmpeg isn't ready yet an MP4 is saved as a GIF instead (see [Recording options](/grab-it/recording/options/#format)), and when a sound couldn't be recorded the video is kept with the sound that worked.
 
