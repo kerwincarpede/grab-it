@@ -45,6 +45,9 @@ import {
   pinShot,
   playShot,
   copyShotText,
+  copyShotPath,
+  openShotExternally,
+  openShotFolder,
   redescribeShot,
   revealShot,
   searchShots,
@@ -89,6 +92,7 @@ import { useInView, useThumbnail } from "./thumbnails";
 import { tagStyle } from "./tagColor";
 import { DETAILS_WIDTH, clampDetailsWidth } from "./detailsWidth";
 import { CleanUpDialog, StoragePill } from "./storage";
+import { ShotMenu, type ShotMenuAction } from "./ShotMenu";
 import type { SettingsSection } from "../settings/api";
 import { ChevronDownIcon, ChevronUpIcon } from "../app/icons";
 import { formatBytes, formatElapsed } from "../quick/api";
@@ -540,26 +544,46 @@ interface TileProps {
   onAction: (shot: Shot, action: TileAction) => void;
   /** Stars or unstars the shot Keep forever. */
   onKeep: (shot: Shot) => void;
+  /** Its right-click menu is open. */
+  menuOpen: boolean;
+  /** Opens its right-click menu at a point in the window. */
+  onMenu: (shot: Shot, x: number, y: number, from: HTMLElement) => void;
 }
 
 /** "Keep forever" or "Starred: kept forever", for the star's tooltip. */
 const keepTitle = (shot: Shot) => (shot.keep ? "Kept forever: cleanup never removes it" : "Keep forever");
 
 /** One capture in the grid; actions appear on hover, the star too until it is on. */
-const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, onAction, onKeep }: TileProps) {
+const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, onAction, onKeep, menuOpen, onMenu }: TileProps) {
   const style = { "--i": Math.min(index, 18) } as CSSProperties;
   const tags = allTags(shot);
   const recording = isRecording(shot);
   const meta = recording ? [recordingLabel(shot), formatTime(shot.capturedAt)] : [shot.app, formatTime(shot.capturedAt)];
   return (
-    <li className={`tile${selected ? " is-selected" : ""}${recording ? " is-recording" : ""}`} style={style}>
+    <li
+      className={`tile${selected ? " is-selected" : ""}${recording ? " is-recording" : ""}${menuOpen ? " is-menu-open" : ""}`}
+      style={style}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        const main = event.currentTarget.querySelector<HTMLElement>(".tile-main") ?? event.currentTarget;
+        // The menu key and Shift+F10 give no pointer position: open by the tile.
+        if (event.clientX === 0 && event.clientY === 0) {
+          const box = main.getBoundingClientRect();
+          onMenu(shot, box.left + 12, box.top + 12, main);
+        } else {
+          onMenu(shot, event.clientX, event.clientY, main);
+        }
+      }}
+    >
       <button
         type="button"
         className="tile-main"
         data-shot-id={shot.id}
         aria-pressed={selected}
+        aria-haspopup="menu"
         aria-label={shot.fileName}
-        title={OPEN_HINTS[shot.kind ?? "image"]}
+        // No tooltip over its own menu.
+        title={menuOpen ? undefined : OPEN_HINTS[shot.kind ?? "image"]}
         onClick={() => onSelect(shot.id)}
         onDoubleClick={() => onOpen(shot.id)}
       >
@@ -1131,6 +1155,10 @@ function LibraryWindow({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; key: number } | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  /** The shot whose right-click menu is open, and where. */
+  const [menu, setMenu] = useState<{ id: number; x: number; y: number } | null>(null);
+  /** The tile the menu opened from, to give focus back to. */
+  const menuFrom = useRef<HTMLElement | null>(null);
   const [reloads, setReloads] = useState(0);
   const [rowHeight, setRowHeight] = useState(readRowHeight);
   const [detailsWidth, setDetailsWidth] = useState(readDetailsWidth);
@@ -1487,6 +1515,67 @@ function LibraryWindow({
     else pinShot(shot.id).catch(failed);
   }, []);
 
+  const openMenu = useCallback((shot: Shot, x: number, y: number, from: HTMLElement) => {
+    menuFrom.current = from;
+    setMenu({ id: shot.id, x, y });
+  }, []);
+
+  const closeMenu = useCallback(() => {
+    setMenu(null);
+    const from = menuFrom.current;
+    menuFrom.current = null;
+    // Back to the tile, unless a click outside already moved focus on.
+    if (from?.isConnected && (document.activeElement === document.body || document.activeElement?.closest(".shot-menu"))) {
+      from.focus({ preventScroll: true });
+    }
+  }, []);
+
+  function menuAction(shot: Shot, action: ShotMenuAction) {
+    const say = (text: string) => setNotice({ text, key: Date.now() });
+    const failed = (err: unknown) => setError(errorMessage(err));
+    switch (action) {
+      case "open":
+        open(shot.id);
+        break;
+      case "play":
+        tileAction(shot, "play");
+        break;
+      case "openExternal":
+        openShotExternally(shot.id).catch(failed);
+        break;
+      case "copy":
+        tileAction(shot, "copy");
+        break;
+      case "copyText":
+        tileAction(shot, "text");
+        break;
+      case "copyPath":
+        copyShotPath(shot.id).then(() => say("Copied the file path"), failed);
+        break;
+      case "pin":
+        tileAction(shot, "pin");
+        break;
+      case "keep":
+        toggleKeep(shot);
+        break;
+      case "redescribe":
+        redescribeShot(shot.id).then(() => say("Describing again"), failed);
+        break;
+      case "reveal":
+        tileAction(shot, "reveal");
+        break;
+      case "openFolder":
+        openShotFolder(shot.id).catch(failed);
+        break;
+      case "details":
+        setSelectedId(shot.id);
+        break;
+      case "delete":
+        deleteShot(shot.id).then(() => deleted(shot.id), failed);
+        break;
+    }
+  }
+
   function onGridKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const from = (event.target as HTMLElement).closest<HTMLElement>(".tile-main");
     if (!from || !scroller.current) return;
@@ -1511,6 +1600,8 @@ function LibraryWindow({
   );
   const selectedIndex = shots.findIndex((shot) => shot.id === selectedId);
   const selected = selectedIndex >= 0 ? shots[selectedIndex] : null;
+  // Looked up afresh so the menu follows changes (Keep forever) and goes with a deleted shot.
+  const menuShot = menu ? shots.find((shot) => shot.id === menu.id) ?? null : null;
 
   function step(delta: -1 | 1) {
     const next = shots[selectedIndex + delta];
@@ -1585,6 +1676,8 @@ function LibraryWindow({
           aria-label="Captures"
           ref={scroller}
           onKeyDown={onGridKeyDown}
+          // The webview's own menu (Reload, Inspect Element) has nothing for the Library.
+          onContextMenu={(event) => event.preventDefault()}
           onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 4)}
         >
           {!loaded && !error && <Skeleton />}
@@ -1610,6 +1703,8 @@ function LibraryWindow({
                       onOpen={open}
                       onAction={tileAction}
                       onKeep={toggleKeep}
+                      menuOpen={menu?.id === shot.id}
+                      onMenu={openMenu}
                     />
                   ))}
                 </ul>
@@ -1661,6 +1756,18 @@ function LibraryWindow({
         <div key={notice.key} className="toast" role="status">
           {notice.text}
         </div>
+      )}
+      {menu && menuShot && (
+        <ShotMenu
+          key={`${menu.id}:${menu.x}:${menu.y}`}
+          shot={menuShot}
+          x={menu.x}
+          y={menu.y}
+          aiOff={ai?.state === "off"}
+          preview={<Thumbnail shot={menuShot} />}
+          onAction={menuAction}
+          onClose={closeMenu}
+        />
       )}
       {cleaning && <CleanUpDialog onClose={() => setCleaning(false)} />}
     </main>

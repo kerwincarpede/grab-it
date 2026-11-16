@@ -224,8 +224,12 @@ function mockBackend(shots: Shot[]): Backend {
         case "library_pin":
         case "library_play":
         case "library_reveal":
+        case "library_open_folder":
+        case "library_open_external":
           find(args.id as number);
           return null;
+        case "library_copy_path":
+          return find(args.id as number).path;
         case "library_search": {
           const { query, offset, limit } = args as { query: SearchQuery; offset: number; limit: number };
           const hits = search(backend, query);
@@ -1131,6 +1135,139 @@ describe("LibraryWindow recordings", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Filters" }));
     expect(screen.queryByRole("button", { name: "Filter by type" })).not.toBeInTheDocument();
+  });
+});
+
+describe("LibraryWindow right-click menu", () => {
+  /** Right-clicks the tile for `name` and resolves to its menu. */
+  async function openMenu(name: string) {
+    const card = await screen.findByRole("button", { name });
+    fireEvent.contextMenu(card, { clientX: 120, clientY: 80 });
+    return screen.getByRole("menu", { name: `Actions for ${name}` });
+  }
+
+  const labels = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((item) => item.textContent);
+
+  it("offers a capture's actions and runs them from the menu", async () => {
+    const backend = mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    const menu = await openMenu("Grab-it 1.png");
+    expect(labels(menu)).toEqual([
+      "Open in editor",
+      "Open in default app",
+      "Copy image",
+      "Copy text in image",
+      "Pin to screen",
+      "Show in file manager",
+      "Open containing folder",
+      "Copy file path",
+      "Keep forever",
+      "Describe again",
+      "Show details",
+      "Delete…",
+    ]);
+    expect(within(menu).getByText("Screenshot · 800 × 600 · firefox")).toBeInTheDocument();
+
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Open containing folder" }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    await userEvent.click(within(await openMenu("Grab-it 1.png")).getByRole("menuitem", { name: "Copy file path" }));
+    expect(await screen.findByText("Copied the file path")).toBeInTheDocument();
+    await userEvent.click(within(await openMenu("Grab-it 1.png")).getByRole("menuitem", { name: "Show in file manager" }));
+    await userEvent.click(within(await openMenu("Grab-it 1.png")).getByRole("menuitem", { name: "Open in default app" }));
+    await userEvent.click(within(await openMenu("Grab-it 1.png")).getByRole("menuitem", { name: "Open in editor" }));
+
+    await waitFor(() => expect(callsTo(backend, "library_open")).toHaveLength(1));
+    expect(callsTo(backend, "library_open_folder")[0].payload).toEqual({ id: 1 });
+    expect(callsTo(backend, "library_copy_path")[0].payload).toEqual({ id: 1 });
+    expect(callsTo(backend, "library_reveal")[0].payload).toEqual({ id: 1 });
+    expect(callsTo(backend, "library_open_external")[0].payload).toEqual({ id: 1 });
+  });
+
+  it("stars a capture and opens its details", async () => {
+    const backend = mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    await userEvent.click(within(await openMenu("Grab-it 1.png")).getByRole("menuitem", { name: "Keep forever" }));
+    await waitFor(() => expect(callsTo(backend, "library_set_keep")[0].payload).toEqual({ id: 1, keep: true }));
+    const menu = await openMenu("Grab-it 1.png");
+    await waitFor(() => expect(within(menu).getByRole("menuitem", { name: "Stop keeping forever" })).toBeInTheDocument());
+
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Show details" }));
+    expect(screen.getByLabelText("Capture details")).toBeInTheDocument();
+  });
+
+  it("asks again in place before deleting", async () => {
+    const backend = mockBackend([shot(1), shot(2)]);
+    render(<LibraryWindow />);
+    const menu = await openMenu("Grab-it 1.png");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Delete…" }));
+    expect(callsTo(backend, "library_delete")).toHaveLength(0);
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Click again to delete" }));
+
+    await waitFor(() => expect(callsTo(backend, "library_delete")[0].payload).toEqual({ id: 1 }));
+    expect(await screen.findByText("Capture deleted")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Grab-it 1.png" })).not.toBeInTheDocument();
+  });
+
+  it("is driven by the keyboard and closes with Escape, keeping the details open", async () => {
+    const backend = mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
+    const menu = await openMenu("Grab-it 1.png");
+    expect(menu).toHaveFocus();
+
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+    await waitFor(() => expect(callsTo(backend, "library_copy")[0].payload).toEqual({ id: 1 }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    await openMenu("Grab-it 1.png");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Capture details")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Grab-it 1.png" })).toHaveFocus();
+  });
+
+  it("closes on a click outside it", async () => {
+    mockBackend([shot(1)]);
+    render(<LibraryWindow />);
+    await openMenu("Grab-it 1.png");
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("offers a recording's actions, and no image ones", async () => {
+    const backend = mockBackend([recording(2)]);
+    render(<LibraryWindow />);
+    const menu = await openMenu("Grab-it 2.mp4");
+    expect(labels(menu)).toEqual([
+      "Play",
+      "Edit in recording editor",
+      "Show in file manager",
+      "Open containing folder",
+      "Copy file path",
+      "Keep forever",
+      "Show details",
+      "Delete…",
+    ]);
+    expect(within(menu).getByText("Video · 0:46 · 10.3 MB")).toBeInTheDocument();
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Play" }));
+    await waitFor(() => expect(callsTo(backend, "library_play")[0].payload).toEqual({ id: 2 }));
+  });
+
+  it("offers no editor for a GIF", async () => {
+    mockBackend([recording(3, { kind: "gif", durationMs: null })]);
+    render(<LibraryWindow />);
+    const menu = await openMenu("Grab-it 3.gif");
+    expect(within(menu).queryByRole("menuitem", { name: "Edit in recording editor" })).not.toBeInTheDocument();
+  });
+
+  it("leaves out Describe again while AI descriptions are off", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.aiStatus = { state: "off", done: 0, total: 0, error: null };
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: "Grab-it 1.png" });
+    await waitFor(() => expect(callsTo(backend, "ai_status")).toHaveLength(1));
+    const menu = await openMenu("Grab-it 1.png");
+    await waitFor(() => expect(within(menu).queryByRole("menuitem", { name: "Describe again" })).not.toBeInTheDocument());
   });
 });
 

@@ -336,6 +336,21 @@ export function revealShot(id: number): Promise<void> {
   return invoke<void>("library_reveal", { id });
 }
 
+/** Opens the folder the shot's file is in. */
+export function openShotFolder(id: number): Promise<void> {
+  return invoke<void>("library_open_folder", { id });
+}
+
+/** Opens the shot's file in the system's default app for its kind. */
+export function openShotExternally(id: number): Promise<void> {
+  return invoke<void>("library_open_external", { id });
+}
+
+/** Copies the full path of the shot's file and resolves to it. */
+export function copyShotPath(id: number): Promise<string> {
+  return invoke<string>("library_copy_path", { id });
+}
+
 /** Calls `handler` whenever shots are added, changed or removed. */
 export function onLibraryChanged(handler: () => void): Promise<UnlistenFn> {
   return listen(LIBRARY_CHANGED_EVENT, () => handler());
