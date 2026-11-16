@@ -211,3 +211,19 @@ describe("annotations sidecar", () => {
     });
   });
 });
+
+
+describe("magnify sidecars", () => {
+  const lens = { id: "m", type: "magnify", x: 10, y: 20, width: 100, height: 100,
+    color: "#0090ff", strokeWidth: 4, spot: [60, 70], zoom: 3 };
+  it("round-trips round and square lenses with their spot and line", () => {
+    const value = { version: 1, shapes: [lens, { ...lens, id: "square", lens: "square", line: true }], crop: null };
+    expect(parseAnnotations(JSON.parse(JSON.stringify(value)))).toEqual(value);
+  });
+  it.each([
+    { zoom: 1 }, { zoom: 7 }, { zoom: 2.5 }, { spot: [1] }, { spot: [NaN, 2] },
+    { lens: "triangle" }, { line: "yes" }, { height: 50 }, { width: -100, height: -100 },
+  ])("skips malformed magnify fields %j", (invalid) => {
+    expect(parseAnnotations({ version: 1, shapes: [{ ...lens, ...invalid }] }).shapes).toEqual([]);
+  });
+});

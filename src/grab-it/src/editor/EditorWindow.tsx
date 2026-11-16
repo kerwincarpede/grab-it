@@ -57,6 +57,7 @@ import {
   type BlurMode,
   type CropAspect,
   type LineShape,
+  type MagnifyShape,
   type Point,
   type Rect,
   type Shape,
@@ -388,13 +389,15 @@ export default function EditorWindow() {
   const [view, setView] = useState<View | null>(null);
   const [tool, setTool] = useState<Tool>(DEFAULT_CHOICES.tool);
   /** Colour and options for the next shape; each tool's width is in `widths`. */
-  const [style, setStyle] = useState<EditorChoices["style"]>(DEFAULT_CHOICES.style);
+  const [style, setStyle] = useState<Omit<Style, "strokeWidth">>(DEFAULT_CHOICES.style);
   const [widths, setWidths] = useState<Widths>(DEFAULT_CHOICES.widths);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Shape | null>(null);
   /** An arrow or line while one of its handles is dragged: shown, not yet committed. */
   const [bending, setBending] = useState<LineShape | null>(null);
-  /** A selected arrow or line being dragged, so its handles follow it. */
+  /** A lens's spot mid-drag, committed once when its handle is released. */
+  const [spotting, setSpotting] = useState<MagnifyShape | null>(null);
+  /** A selected line or lens mid-drag, so its handles or connector follow it. */
   const [moving, setMoving] = useState<{ id: string; transform: NodeTransform } | null>(null);
   /** A crop being drawn; `square` is Shift, which squares a Free crop, and `snap` is off while ⌥/Alt is held. */
   const [cropDrag, setCropDrag] = useState<{ start: Point; end: Point; square: boolean; snap: boolean } | null>(null);
@@ -878,9 +881,9 @@ export default function EditorWindow() {
     if (shape) commit(replaceShape(doc, transformShape(shape, transform)));
   };
 
-  /** Follows a selected arrow or line as it is dragged, so its handles move with it. */
+  /** Follows a selected line or lens while its annotation node is dragged. */
   const moveShapeLive = (id: string, transform: NodeTransform) => {
-    if (id === selectedId && lineSelected) setMoving({ id, transform });
+    if (id === selectedId && (lineSelected || selected?.type === "magnify")) setMoving({ id, transform });
   };
 
   /** Ends a bend or end-handle drag: one undo step, unless nothing changed. */
@@ -903,7 +906,7 @@ export default function EditorWindow() {
 
   /** Sets the colour or an option for the next shape and applies it to the selected one. */
   const changeStyle = useCallback(
-    (next: Partial<Pick<Style, "color" | "fill" | "background" | "blurMode">>) => {
+    (next: Partial<Pick<Style, "color" | "fill" | "background" | "blurMode" | "zoom" | "lens" | "lensLine">>) => {
       setStyle((now) => ({ ...now, ...next }));
       restyleSelected(next);
     },
@@ -1244,7 +1247,13 @@ export default function EditorWindow() {
   const cropShown = (cropDrag && shownSize ? cropDragBox(cropDrag, shownSize) : null) ?? cropEdit ?? shownCrop;
   /** The same crop in capture pixels, for the dim drawn in the oriented group. */
   const crop = cropShown ? shownToCapture(cropShown) : null;
-  const placed = bending ? doc.shapes.map((shape) => (shape.id === bending.id ? bending : shape)) : doc.shapes;
+  const placed = doc.shapes.map((shape) => {
+    if (bending?.id === shape.id) return bending;
+    if (spotting?.id === shape.id) return spotting;
+    if (shape.type === "magnify" && moving?.id === shape.id) return transformShape(shape, moving.transform);
+    return shape;
+  });
+  const spotLens = selected?.type === "magnify" && editable ? (spotting?.id === selected.id ? spotting : selected) : null;
   const shapes = draft ? [...placed, draft] : placed;
   /** The selected arrow or line as its handles show it: mid-drag, mid-bend, or as saved. */
   const handleBase =
@@ -1263,6 +1272,9 @@ export default function EditorWindow() {
   const fillOn = selected?.type === "rect" || selected?.type === "ellipse" ? Boolean(selected.fill) : Boolean(style.fill);
   const backgroundOn = selected?.type === "text" ? Boolean(selected.background) : Boolean(style.background);
   const blurMode = (selected?.type === "blur" ? selected.mode : style.blurMode) ?? "pixelate";
+  const lensZoom = selected?.type === "magnify" ? selected.zoom : (style.zoom ?? 2);
+  const lens = (selected?.type === "magnify" ? selected.lens : style.lens) ?? "round";
+  const lensLine = Boolean(selected?.type === "magnify" ? selected.line : style.lensLine);
 
   return (
     <main className="editor" data-testid="editor" data-ready={image ? "true" : "false"}>
@@ -1321,6 +1333,25 @@ export default function EditorWindow() {
               </button>
             ))}
           </div>
+        )}
+        {optionsFor === "magnify" && (
+          <>
+            <div className="bar-group segmented" role="group" aria-label="Lens shape">
+              {(["round", "square"] as const).map((value) => (
+                <button key={value} type="button" aria-pressed={lens === value} onClick={() => changeStyle({ lens: value })}>
+                  {value === "round" ? "Round" : "Square"}
+                </button>
+              ))}
+            </div>
+            <div className="bar-group segmented" role="group" aria-label="Lens zoom">
+              {[2, 3, 4, 5, 6].map((zoom) => (
+                <button key={zoom} type="button" aria-pressed={lensZoom === zoom} onClick={() => changeStyle({ zoom })}>{zoom}x</button>
+              ))}
+            </div>
+            <div className="bar-group segmented">
+              <button type="button" aria-pressed={lensLine} onClick={() => changeStyle({ lensLine: !lensLine })}>Line to spot</button>
+            </div>
+          </>
         )}
         {optionsFor === "crop" && (
           <div className="bar-group segmented" role="group" aria-label="Crop ratio">
@@ -1585,7 +1616,8 @@ export default function EditorWindow() {
                   ref={transformerRef}
                   rotateEnabled={false}
                   ignoreStroke
-                  keepRatio={selected?.type === "text" || selected?.type === "step"}
+                  flipEnabled={selected?.type !== "magnify"}
+                  keepRatio={selected?.type === "text" || selected?.type === "step" || selected?.type === "magnify"}
                   enabledAnchors={anchorsFor(selected)}
                 />
                 {handleBase && (
@@ -1597,6 +1629,27 @@ export default function EditorWindow() {
                       scale={currentView.scale}
                       onPreview={setBending}
                       onCommit={commitLine}
+                    />
+                  </Group>
+                )}
+                {spotLens && (
+                  <Group name="oriented-handles" {...groupAttrs}>
+                    <Circle name={`${LINE_HANDLE} ${LINE_HANDLE}-spot`}
+                      x={spotLens.spot[0]} y={spotLens.spot[1]}
+                      radius={LINE_HANDLE_RADIUS / currentView.scale}
+                      fill="#ffffff" stroke={HANDLE_COLOR} strokeWidth={1.5 / currentView.scale} draggable
+                      onDragMove={(event: Konva.KonvaEventObject<DragEvent>) => {
+                        const at = event.target.position();
+                        setSpotting({ ...spotLens, spot: [at.x, at.y] });
+                      }}
+                      onDragEnd={(event: Konva.KonvaEventObject<DragEvent>) => {
+                        event.cancelBubble = true;
+                        const at = event.target.position();
+                        setSpotting(null);
+                        if (selected?.type === "magnify" && (at.x !== selected.spot[0] || at.y !== selected.spot[1])) {
+                          commit(replaceShape(doc, { ...spotLens, spot: [at.x, at.y] }));
+                        }
+                      }}
                     />
                   </Group>
                 )}

@@ -55,6 +55,11 @@ export function beginShape(tool: Tool, at: Point, style: Style, id = newId()): S
     case "ellipse":
       // Optional fields are written only when set, so plain shapes match old sidecars.
       return { id, type: tool, color, strokeWidth, x: at.x, y: at.y, width: 0, height: 0, ...(style.fill ? { fill: true } : {}) };
+    case "magnify":
+      return { id, type: "magnify", color, strokeWidth, x: at.x, y: at.y, width: 0, height: 0,
+        spot: [at.x, at.y], zoom: style.zoom ?? 2,
+        ...(style.lens === "square" ? { lens: "square" as const } : {}),
+        ...(style.lensLine ? { line: true } : {}) };
     case "blur":
       return {
         id,
@@ -119,12 +124,16 @@ export function dragShape(shape: Shape, to: Point, constrain = false): Shape {
     case "freehand":
     case "highlighter":
       return { ...shape, points: [...shape.points, to.x, to.y] };
+    case "magnify":
     case "rect":
     case "ellipse":
     case "blur":
     case "spotlight": {
-      const end = constrain ? squareCorner(shape, to) : to;
-      return { ...shape, width: end.x - shape.x, height: end.y - shape.y };
+      const end = constrain || shape.type === "magnify" ? squareCorner(shape, to) : to;
+      const width = end.x - shape.x;
+      const height = end.y - shape.y;
+      return { ...shape, width, height,
+        ...(shape.type === "magnify" ? { spot: [shape.x + width / 2, shape.y + height / 2] as [number, number] } : {}) };
     }
     default:
       return shape;
@@ -143,6 +152,7 @@ export function finishShape(shape: Shape): Shape | null {
     case "highlighter":
       // A click leaves a dot.
       return shape.points.length === 2 ? { ...shape, points: [...shape.points, shape.points[0] + 0.5, shape.points[1]] } : shape;
+    case "magnify":
     case "rect":
     case "ellipse":
     case "blur":
@@ -427,7 +437,7 @@ export const ALL_ANCHORS = [...CORNER_ANCHORS, "top-center", "middle-left", "mid
  * resize from the corners, keeping their ratio.
  */
 export function anchorsFor(shape: Shape | null): string[] {
-  return shape?.type === "text" || shape?.type === "step" ? CORNER_ANCHORS : ALL_ANCHORS;
+  return shape?.type === "text" || shape?.type === "step" || shape?.type === "magnify" ? CORNER_ANCHORS : ALL_ANCHORS;
 }
 
 /**
@@ -463,6 +473,10 @@ export function transformShape(shape: Shape, t: NodeTransform): Shape {
         ...shape,
         ...normalizeRect({ x: t.x, y: t.y, width: shape.width * t.scaleX, height: shape.height * t.scaleY }),
       };
+    case "magnify": {
+      const side = Math.max(MIN_SIZE, shape.width * uniformScale(t));
+      return { ...shape, x: t.x, y: t.y, width: side, height: side };
+    }
     case "text":
       return { ...shape, x: t.x, y: t.y, fontSize: Math.max(6, shape.fontSize * uniformScale(t)) };
     case "step":
@@ -559,6 +573,7 @@ export function curvePoints(shape: LineShape): number[] {
 
 /** Moves a shape by dx, dy. */
 export function moveShape(shape: Shape, dx: number, dy: number): Shape {
+  if (shape.type === "magnify") return { ...shape, x: shape.x + dx, y: shape.y + dy, spot: [shape.spot[0] + dx, shape.spot[1] + dy] };
   if ("points" in shape) return transformShape(shape, { x: dx, y: dy, scaleX: 1, scaleY: 1 });
   return transformShape(shape, { x: shape.x + dx, y: shape.y + dy, scaleX: 1, scaleY: 1 });
 }
@@ -600,6 +615,11 @@ export function restyleShape(shape: Shape, style: Partial<Style>): Shape {
   }
   if (style.background !== undefined && next.type === "text") {
     next = { ...next, background: style.background };
+  }
+  if (next.type === "magnify") {
+    if (style.zoom !== undefined) next = { ...next, zoom: style.zoom };
+    if (style.lens !== undefined) next = { ...next, lens: style.lens === "square" ? "square" : undefined };
+    if (style.lensLine !== undefined) next = { ...next, line: style.lensLine || undefined };
   }
   return next;
 }

@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import Konva from "konva";
 import { Arrow, Circle, Ellipse, Group, Image as KonvaImage, Label, Line, Rect, Shape as KonvaShape, Tag, Text } from "react-konva";
 import { FILL_OPACITY, SPOTLIGHT_DIM, type BlurShape, type Rect as Box, type Shape } from "./model";
+import { lensPath, magnifyLinePoints, magnifyScene } from "./magnify";
 import { isIdentity, textSize, uprightTransform, type Orientation } from "./orient";
 import { contrastColor, curvePoints, normalizeRect, withAlpha, type NodeTransform } from "./tools";
 
@@ -191,6 +192,18 @@ export default function ShapeNode({ shape, image, step, editable, onSelect, onCh
           strokeWidth={shape.strokeWidth}
           fill={shape.fill ? withAlpha(shape.color, FILL_OPACITY) : undefined}
         />
+      );
+    }
+    case "magnify": {
+      const rect = normalizeRect(shape);
+      return (
+        <>
+          {shape.line && <Line name="magnify-line" points={magnifyLinePoints({ ...shape, ...rect })}
+            stroke={shape.color} strokeWidth={shape.strokeWidth} lineCap="round" listening={false} />}
+          <KonvaShape {...common} {...rect} fill="#ffffff" stroke={shape.color} strokeWidth={shape.strokeWidth}
+            sceneFunc={magnifyScene(shape, image)}
+            hitFunc={(ctx, node) => { lensPath(ctx, shape); ctx.fillStrokeShape(node); }} />
+        </>
       );
     }
     case "blur":

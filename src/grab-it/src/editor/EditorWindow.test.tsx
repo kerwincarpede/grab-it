@@ -385,6 +385,51 @@ describe("EditorWindow", () => {
     URL.revokeObjectURL = vi.fn();
   });
 
+  it("draws with Z, selects the lens interior and saves its zoom, shape, line and spot", async () => {
+    const saved = mockEditor({ version: 1, shapes: [], crop: null });
+    await ready();
+    holdKey("z", 10);
+    expect(pressed("Magnify")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "2x" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Round" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Line to spot" })).toHaveAttribute("aria-pressed", "false");
+    drag([20, 30], [100, 70]);
+    await waitFor(() => expect(last(saved)?.shapes[0]).toMatchObject({ type: "magnify", x: 20, y: 30, width: 80, height: 80, spot: [60, 70], zoom: 2 }));
+    const id = last(saved)!.shapes[0].id;
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(stage());
+    expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+    // The lens's custom hit surface is one annotation, including its interior.
+    fireEvent.mouseDown(document.querySelector(`[data-id="${id}"]`) as Element);
+    expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+    expect(anchors()).toEqual(["top-left", "top-right", "bottom-left", "bottom-right"]);
+    fireEvent.click(screen.getByRole("button", { name: "3x" }));
+    fireEvent.click(screen.getByRole("button", { name: "Square" }));
+    fireEvent.click(screen.getByRole("button", { name: "Line to spot" }));
+    expect(screen.getByRole("button", { name: "3x" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Square" })).toHaveAttribute("aria-pressed", "true");
+    expect(handleAt("spot")).toEqual([60, 70]);
+    dragHandle("spot", [10, 15]);
+    await waitFor(() => expect(last(saved)?.shapes[0]).toMatchObject({ zoom: 3, lens: "square", line: true, spot: [10, 15], x: 20, y: 30 }));
+    const line = () => document.querySelector('[data-name="magnify-line"]')!.getAttribute("data-points");
+    const before = line();
+    Object.assign(pointerAt, { x: 200, y: 140 });
+    fireEvent(document.querySelector(`[data-id="${id}"]`)!, new MouseEvent("drag", { bubbles: true }));
+    expect(line()).not.toEqual(before);
+    fireEvent(document.querySelector(`[data-id="${id}"]`)!, new MouseEvent("dragend", { bubbles: true }));
+    await waitFor(() => expect(last(saved)?.shapes[0]).toMatchObject({ x: 200, y: 140, spot: [10, 15] }));
+    fireEvent.click(screen.getByRole("button", { name: "Round" }));
+    fireEvent.click(screen.getByRole("button", { name: "Line to spot" }));
+    await waitFor(() => {
+      const shape = last(saved)?.shapes[0];
+      expect(shape?.type).toBe("magnify");
+      if (shape?.type === "magnify") {
+        expect(shape.lens).toBeUndefined();
+        expect(shape.line).toBeUndefined();
+      }
+    });
+  });
+
   it("shows the capture with its saved annotations and numbered steps", async () => {
     mockEditor();
     await ready();
@@ -401,7 +446,7 @@ describe("EditorWindow", () => {
     mockEditor();
     await ready();
     const rail = within(screen.getByRole("toolbar", { name: "Annotation tools" }));
-    for (const name of ["Arrow", "Rectangle", "Ellipse", "Line", "Freehand", "Text", "Highlighter", "Blur", "Spotlight", "Step", "Crop", "Select", "Pan"]) {
+    for (const name of ["Arrow", "Rectangle", "Ellipse", "Line", "Freehand", "Text", "Highlighter", "Blur", "Magnify", "Spotlight", "Step", "Crop", "Select", "Pan"]) {
       expect(rail.getByRole("button", { name })).toBeInTheDocument();
     }
     // Icon buttons: the name is the label, the tooltip adds the key.
@@ -1110,7 +1155,7 @@ describe("EditorWindow", () => {
     // The webview's own menu is suppressed.
     expect(fireEvent.contextMenu(canvas, { clientX: 300, clientY: 200 })).toBe(false);
     const wheel = within(screen.getByRole("menu", { name: "Tools" }));
-    expect(wheel.getAllByRole("menuitemradio")).toHaveLength(13);
+    expect(wheel.getAllByRole("menuitemradio")).toHaveLength(14);
     expect(wheel.getByRole("menuitemradio", { name: "Arrow" })).toHaveAttribute("aria-checked", "true");
     fireEvent.click(wheel.getByRole("menuitemradio", { name: "Spotlight" }));
     expect(screen.queryByRole("menu", { name: "Tools" })).not.toBeInTheDocument();

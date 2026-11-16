@@ -741,3 +741,35 @@ describe("crop snapping", () => {
     expect(snapCropDrag({ x: 398, y: 298 }, { x: 399, y: 299 }, image, null, lines, 6)).toEqual({ x: 398, y: 298, width: 1, height: 1 });
   });
 });
+
+describe("magnify lenses", () => {
+  const style: Style = { color: "#0090ff", strokeWidth: 4 };
+  const lens = { id: "m", type: "magnify" as const, x: 100, y: 120, width: 80, height: 80,
+    color: style.color, strokeWidth: 4, spot: [40, 50] as [number, number], zoom: 2 };
+
+  it("draws a square in either direction and puts its spot at the centre", () => {
+    const started = beginShape("magnify", { x: 100, y: 100 }, style, "m")!;
+    expect(started).toMatchObject({ zoom: 2, spot: [100, 100] });
+    expect(finishShape(dragShape(started, { x: 60, y: 80 }))).toMatchObject({ x: 60, y: 60, width: 40, height: 40, spot: [80, 80] });
+    expect(finishShape(dragShape(started, { x: 130, y: 150 }))).toMatchObject({ width: 50, height: 50, spot: [125, 125] });
+    expect(finishShape(started)).toBeNull();
+  });
+  it("keeps the spot fixed on drag and resize, with corner anchors only", () => {
+    expect(transformShape(lens, { x: 200, y: 220, scaleX: 1, scaleY: 1 })).toMatchObject({ x: 200, y: 220, spot: [40, 50] });
+    expect(transformShape(lens, { x: 90, y: 110, scaleX: 2, scaleY: 1 })).toMatchObject({ width: 160, height: 160, spot: [40, 50] });
+    expect(transformShape(lens, { x: 90, y: 110, scaleX: 0.5, scaleY: 1 })).toMatchObject({ width: 40, height: 40 });
+    expect(anchorsFor(lens)).toEqual(CORNER_ANCHORS);
+    expect(widthKind("magnify")?.label).toBe("Width");
+  });
+  it("nudges and duplicates both lens and spot together", () => {
+    expect(moveShape(lens, 1, -10)).toMatchObject({ x: 101, y: 110, spot: [41, 40] });
+    expect(duplicateShape(lens, "copy", 12)).toMatchObject({ id: "copy", x: 112, y: 132, spot: [52, 62] });
+    expect(lens.spot).toEqual([40, 50]);
+  });
+  it("restyles border, zoom, outline and the line, including turning options off", () => {
+    const changed = restyleShape(lens, { zoom: 6, lens: "square", lensLine: true, color: "#ffffff", strokeWidth: 8 });
+    expect(changed).toMatchObject({ zoom: 6, lens: "square", line: true, color: "#ffffff", strokeWidth: 8, spot: [40, 50] });
+    expect(restyleShape(changed, { lens: "round", lensLine: false })).toMatchObject({ lens: undefined, line: undefined });
+    expect(beginShape("magnify", { x: 0, y: 0 }, { ...style, zoom: 4, lens: "square", lensLine: true })).toMatchObject({ zoom: 4, lens: "square", line: true });
+  });
+});
