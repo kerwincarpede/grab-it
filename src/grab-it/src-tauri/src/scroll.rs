@@ -127,7 +127,13 @@ impl AutoScroll {
         let delta = if reverse == Some(true) { 1 } else { -1 };
         if axis == Some(Axis::Horizontal) {
             rdev::EventType::Wheel {
-                delta_x: delta,
+                // X11 button 7 and Windows HWHEEL use positive for right;
+                // macOS uses negative for right, as it does for down.
+                delta_x: if cfg!(target_os = "macos") {
+                    delta
+                } else {
+                    -delta
+                },
                 delta_y: 0,
             }
         } else {
@@ -677,10 +683,7 @@ mod tests {
         assert_eq!(target, (-1220, -680));
         // The frame reports coordinates relative to the captured region.
         let mut auto = AutoScroll::new((400, 300), true);
-        auto.observe_pointer(Some((
-            target.0 - (-1920 + 300),
-            target.1 - (-1080 + 100),
-        )));
+        auto.observe_pointer(Some((target.0 - (-1920 + 300), target.1 - (-1080 + 100))));
         assert!(auto.reason.is_none());
     }
 
@@ -939,13 +942,44 @@ mod tests {
                             if axis == Axis::Vertical {
                                 (0, delta)
                             } else {
-                                (delta, 0)
+                                (
+                                    if cfg!(target_os = "macos") {
+                                        delta
+                                    } else {
+                                        -delta
+                                    },
+                                    0,
+                                )
                             }
                         );
                     }
                     _ => panic!("expected wheel event"),
                 }
             }
+        }
+    }
+    #[test]
+    fn horizontal_wheel_continues_toward_new_content() {
+        let auto = AutoScroll::new((0, 0), true);
+        for reverse in [false, true] {
+            let mut stitch = Stitcher::new(frame(Axis::Horizontal, 20, false));
+            let next = if reverse { 0 } else { 40 };
+            assert!(stitch.push(frame(Axis::Horizontal, next, false)));
+            let rdev::EventType::Wheel { delta_x, delta_y } =
+                auto.wheel(stitch.axis, stitch.reverse)
+            else {
+                panic!("expected horizontal wheel event");
+            };
+            // Interpret the native event: X11 button 7 / Windows positive
+            // HWHEEL moves right; CGEvent's negative horizontal delta does so.
+            let moves_right = if cfg!(target_os = "macos") {
+                delta_x < 0
+            } else {
+                delta_x > 0
+            };
+            assert_eq!(moves_right, !reverse);
+            assert_eq!(delta_y, 0);
+            assert_eq!(delta_x.abs(), 1);
         }
     }
     fn frame(axis: Axis, offset: u32, sticky: bool) -> RgbaImage {
