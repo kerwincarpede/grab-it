@@ -107,7 +107,8 @@ pub fn known_cameras(app: AppHandle) -> Vec<Camera> {
 /// Remembers `cameras`, a listing in which every camera had its name.
 #[tauri::command]
 pub fn remember_cameras(app: AppHandle, cameras: Vec<Camera>) -> Result<(), String> {
-    let path = cameras_path(&app).ok_or("Grab-it has no data folder to remember the cameras in.")?;
+    let path =
+        cameras_path(&app).ok_or("Grab-it has no data folder to remember the cameras in.")?;
     write_cameras(&path, &cameras)
 }
 
