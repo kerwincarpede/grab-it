@@ -27,7 +27,7 @@ Updating from an older version can make macOS treat the updated app as a new one
 
 ## Searching doesn't find text in an old capture
 
-Grab-it reads captures one at a time in the background, newest first, so give it a moment. If the text-recognition download failed, the Library shows a **Retry** button.
+Grab-it reads captures one at a time in the background, newest first, so give it a moment. If the Library says it could not load the text recognition models, reinstall Grab-it: they come with it.
 
 ## A hotkey does nothing
 

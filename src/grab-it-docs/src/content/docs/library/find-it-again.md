@@ -48,10 +48,10 @@ The sidebar's **Apps**, **Tags** and **Recordings** combine with the search box 
 
 ## When a capture isn't found yet
 
-Grab-it reads text in the background, one capture at a time, newest first. While it works, the Library says *Reading text in 3 captures…*. The very first time, it downloads two small text-recognition models (about 12 MB together) and shows *Downloading text recognition models…* with the progress. If the download fails, a **Retry** button appears.
+Grab-it reads text in the background, one capture at a time, newest first. While it works, the Library says *Reading text in 3 captures…*.
 
 Recordings are never read or described, so search finds them by their app, window title, tags and notes.
 
 :::note
-Reading the text in images happens on your computer, never in the cloud. Only the models are downloaded.
+Reading the text in images happens on your computer, never in the cloud. The text-recognition models come with Grab-it, so it works offline from the start.
 :::

@@ -38,8 +38,6 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::ocr::DOWNLOAD_STALL_TIMEOUT;
-
 /// Where the downloaded ffmpeg lives, under the app data directory.
 pub const FFMPEG_DIR: &str = "ffmpeg";
 /// Names an ffmpeg to use instead of looking for or downloading one.
@@ -336,12 +334,34 @@ impl From<io::Error> for FfmpegError {
 
 pub type FfmpegResult<T> = std::result::Result<T, FfmpegError>;
 
+/// How long the ffmpeg download may wait to resolve the host, connect, or
+/// for any single read or write before it gives up. A stalled connection
+/// (Wi-Fi drop, sleep, hung proxy) then fails the download, so Settings
+/// offers Retry instead of waiting forever.
+const DOWNLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// An HTTP agent whose every network phase gives up after `stall`
+/// without progress. ureq has no timeouts by default. Certificates are
+/// checked against the OS trust store (`net::tls_config`).
+pub(crate) fn download_agent(stall: Duration) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .tls_config(crate::net::tls_config())
+        .timeout_resolve(Some(stall))
+        .timeout_connect(Some(stall))
+        .timeout_send_request(Some(stall))
+        .timeout_recv_response(Some(stall))
+        .timeout_per_read(Some(stall))
+        .timeout_per_write(Some(stall))
+        .build()
+        .new_agent()
+}
+
 /// Downloads `build` from the release and installs its ffmpeg as the
 /// executable `to`. `progress` gets the bytes downloaded so far and the
 /// total (0 when the server does not say).
 pub fn download(build: Build, to: &Path, progress: impl FnMut(u64, u64)) -> FfmpegResult<()> {
     download_from(
-        &crate::ocr::download_agent(DOWNLOAD_STALL_TIMEOUT),
+        &download_agent(DOWNLOAD_STALL_TIMEOUT),
         RELEASE_URL,
         build,
         executable_name(),
@@ -1925,6 +1945,53 @@ At least one output file must be specified";
         }
     }
 
+    /// Serves one connection: sends `reply`, then holds the connection
+    /// open without sending anything more, like a stalled network.
+    fn stalling_server(reply: &'static [u8]) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/ffmpeg.zip", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request);
+            let _ = stream.write_all(reply);
+            let _ = stream.flush();
+            thread::sleep(Duration::from_secs(5));
+        });
+        (url, server)
+    }
+
+    fn assert_stalled_download_fails(reply: &'static [u8]) {
+        let (url, server) = stalling_server(reply);
+        let dir = tempfile::TempDir::new().unwrap();
+        let part = dir.path().join("ffmpeg.zip.part");
+        let started = Instant::now();
+        let result = download_hashed(
+            &download_agent(Duration::from_millis(300)),
+            &url,
+            &part,
+            &mut |_, _| {},
+        );
+        assert!(
+            matches!(result, Err(FfmpegError::Download(_))),
+            "got {result:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(4));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_download_stalled_before_the_response_fails() {
+        assert_stalled_download_fails(b"");
+    }
+
+    #[test]
+    fn a_download_stalled_mid_body_fails() {
+        assert_stalled_download_fails(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\nonly a few bytes",
+        );
+    }
+
     /// Downloads `build`, served as `bytes`, taking out `name`.
     fn download_served(
         build: Build,
@@ -1935,7 +2002,7 @@ At least one output file must be specified";
     ) -> FfmpegResult<()> {
         let (url, server) = release_server(vec![(build.archive, bytes)]);
         let result = download_from(
-            &crate::ocr::download_agent(Duration::from_secs(5)),
+            &download_agent(Duration::from_secs(5)),
             &url,
             build,
             name,
@@ -2031,7 +2098,7 @@ At least one output file must be specified";
         let dir = tempfile::tempdir().unwrap();
         let to = installed_path(dir.path());
         let result = download_from(
-            &crate::ocr::download_agent(Duration::from_secs(5)),
+            &download_agent(Duration::from_secs(5)),
             &url,
             LINUX_X64,
             "ffmpeg",
@@ -2052,7 +2119,7 @@ At least one output file must be specified";
     #[test]
     fn pinned_builds_are_still_published() {
         let url = format!("{RELEASE_URL}/checksums.sha256");
-        let checksums = crate::ocr::download_agent(Duration::from_secs(30))
+        let checksums = download_agent(Duration::from_secs(30))
             .get(&url)
             .call()
             .unwrap_or_else(|err| panic!("{url}: {err}"))

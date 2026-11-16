@@ -191,7 +191,6 @@ pub fn run() {
             search::library_search,
             search::library_filter_options,
             ocr::ocr_status,
-            ocr::ocr_retry,
             ai::ai_status,
             ai::ai_redescribe,
             ai::ai_clear,
@@ -236,8 +235,10 @@ pub fn run() {
                 handle.plugin(hotkeys::plugin())?;
             }
             hotkeys::start(handle, &hotkeys);
-            // Reads captures waiting for OCR, downloading the models first.
-            ocr::start(handle, ocr::models_dir(&data_dir));
+            // Reads captures waiting for OCR with the bundled models. Earlier
+            // versions downloaded them into the app data directory instead.
+            ocr::start(handle, ocr::models_dir(&app.path().resource_dir()?));
+            ocr::remove_downloaded_models(&data_dir);
             // Has ffmpeg ready to record MP4, downloading it the first time.
             ffmpeg::start(handle, data_dir.clone(), records_mp4);
             // Describes captures with a vision model, once turned on. With

@@ -227,7 +227,7 @@ The text in each image is read by [ocrs](https://github.com/robertknight/ocrs) i
 
 The same pass decodes any QR codes and barcodes in the image (`codes::decode`, as Capture text does) and appends their values to the stored text, one per line (`ocr::with_codes`), so search finds a capture by what its codes hold and **Copy text** includes them. The plain text is stored before decoding (`ocr::store_text`): release builds abort on a panic, so a capture that crashes the decoder is already read and is not retried on every launch. Captures read before this was added are not read again.
 
-The OCR models (about 12 MB) are not bundled: they are downloaded into `ocr-models/` in the app data directory the first time a capture needs reading, with progress shown in the Library. If the download fails, the Library offers **Retry**; the next capture also retries. Set `GRAB_IT_OCR_MODELS` to use another models directory. Downloads (the OCR models, ffmpeg) and AI endpoints verify certificates against the operating system's trust store (`src-tauri/src/net.rs`), so they work behind TLS-inspecting proxies whose root CA IT has installed.
+The two ocrs models (about 12 MB) ship with the app. They are committed in `src-tauri/ocr-models/` with their licence (CC BY-SA 4.0, see `LICENSE.md` there) and listed under `bundle.resources` in `tauri.conf.json`, so every package, `tauri dev` and the tests find them in `ocr-models/` under the resource directory without a network. A test pins their SHA-256 checksums (`ocr::tests::MODEL_SHA256`); to update them, replace both files, the checksums in the test and in `LICENSE.md`. If the models cannot be loaded, the Library says so and suggests reinstalling; the next capture tries again. Set `GRAB_IT_OCR_MODELS` to load models from another directory instead. Earlier versions downloaded the models into `ocr-models/` in the app data directory; Grab-it deletes that copy when it starts (`ocr::remove_downloaded_models`). Downloads (ffmpeg) and AI endpoints verify certificates against the operating system's trust store (`src-tauri/src/net.rs`), so they work behind TLS-inspecting proxies whose root CA IT has installed.
 
 The Library's **Copy text** copies a capture's stored OCR text (`library_copy_text`). A capture OCR has not read yet, or could not read, is read on the spot, codes included, and the result stored, as the queue would.
 
@@ -322,13 +322,13 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-The OCR tests download the ocrs models once into `src-tauri/target/ocr-models/`, or into `$GRAB_IT_OCR_MODELS` when set; CI caches that directory. Their fixture, `src-tauri/tests/fixtures/ocr-pineapple.png`, was made with ImageMagick (the command is in `src-tauri/src/ocr.rs`).
+The OCR tests load the bundled models from `src-tauri/ocr-models/`, so they need no network. Their fixture, `src-tauri/tests/fixtures/ocr-pineapple.png`, was made with ImageMagick (the command is in `src-tauri/src/ocr.rs`).
 
 To build installers locally, run `npm run tauri build`; they land in `src/grab-it/src-tauri/target/release/bundle/`.
 
 ## CI
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04 (caching the ocrs models for the OCR tests) and, in parallel, builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts. It runs on every pull request and never publishes anything. Pushes to `main` run it through the release workflow instead (below), so `main` is built once, as a release.
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04 and, in parallel, builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts. It runs on every pull request and never publishes anything. Pushes to `main` run it through the release workflow instead (below), so `main` is built once, as a release.
 
 ## Releases
 

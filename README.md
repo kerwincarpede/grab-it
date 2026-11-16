@@ -135,4 +135,4 @@ Bug reports, ideas and pull requests are all welcome. [Open an issue](https://gi
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Grab-it ships the [ocrs](https://github.com/robertknight/ocrs) text-recognition models, which are under their own licence: Ocrs models (https://github.com/robertknight/ocrs-models), trained on the HierText dataset by Google Research. Licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). See [`ocr-models/LICENSE.md`](src/grab-it/src-tauri/ocr-models/LICENSE.md).

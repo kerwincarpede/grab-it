@@ -241,8 +241,6 @@ function mockBackend(shots: Shot[]): Backend {
           };
         case "ocr_status":
           return backend.ocrStatus;
-        case "ocr_retry":
-          return null;
         case "ai_status":
           return backend.aiStatus;
         case "ai_redescribe":
@@ -1239,13 +1237,12 @@ describe("LibraryWindow search", () => {
     });
   });
 
-  it("shows model download progress, then the OCR queue", async () => {
+  it("shows the OCR queue while it reads captures", async () => {
     const backend = mockBackend([shot(1)]);
-    backend.ocrStatus = { state: "downloading", downloaded: 25, total: 100 };
+    backend.ocrStatus = { state: "working", pending: 1 };
     render(<LibraryWindow />);
 
-    expect(await screen.findByText(/Downloading text recognition models… 25%/)).toBeInTheDocument();
-    expect(screen.getByRole("progressbar", { name: "Model download" })).toHaveAttribute("value", "25");
+    expect(await screen.findByText("Reading text in 1 capture…")).toBeInTheDocument();
     // Let the event listener finish registering.
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1255,7 +1252,6 @@ describe("LibraryWindow search", () => {
       await emit(OCR_STATUS_EVENT, { state: "working", pending: 3 });
     });
     expect(screen.getByText("Reading text in 3 captures…")).toBeInTheDocument();
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
 
     await act(async () => {
       await emit(OCR_STATUS_EVENT, { state: "idle" });
@@ -1263,16 +1259,17 @@ describe("LibraryWindow search", () => {
     expect(screen.queryByText(/Reading text/)).not.toBeInTheDocument();
   });
 
-  it("offers a retry when the models could not be downloaded", async () => {
+  it("says to reinstall when the bundled models cannot be loaded", async () => {
     const backend = mockBackend([shot(1)]);
-    backend.ocrStatus = { state: "failed", message: "could not download the text recognition models: offline" };
+    backend.ocrStatus = {
+      state: "failed",
+      message: "could not load the text recognition models: text-detection.onnx: not found",
+    };
     render(<LibraryWindow />);
 
-    expect(await screen.findByText(/offline/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-
-    await waitFor(() => expect(callsTo(backend, "ocr_retry")).toHaveLength(1));
-    expect(screen.queryByText(/offline/)).not.toBeInTheDocument();
+    expect(await screen.findByText(/text-detection.onnx: not found/)).toBeInTheDocument();
+    expect(screen.getByText(/Reinstall it to restore them/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
   });
 });
 

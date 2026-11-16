@@ -1,20 +1,18 @@
 //! OCR of captures with [ocrs](https://github.com/robertknight/ocrs).
 //!
-//! The two ocrs models are not shipped with Grab-it: they are downloaded
-//! into `ocr-models/` in the app data directory the first time a capture
-//! needs OCR, with progress shown in the Library. One background thread
-//! then reads the text of every capture waiting for OCR, newest first and
-//! one at a time, and stores it in the library, where the full-text index
-//! picks it up. The values of any QR codes or barcodes in a capture are
-//! stored after its text (see [`with_codes`]), so search finds them too.
+//! The two ocrs models ship with Grab-it as Tauri resources, in
+//! `ocr-models/` under the resource directory (from `src-tauri/ocr-models/`,
+//! with their licence). One background thread reads the text of every
+//! capture waiting for OCR, newest first and one at a time, and stores it in
+//! the library, where the full-text index picks it up. The values of any QR
+//! codes or barcodes in a capture are stored after its text (see
+//! [`with_codes`]), so search finds them too.
 
 use std::{
     fmt, fs,
-    io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     thread,
@@ -33,48 +31,23 @@ use crate::{
     library::{LIBRARY_CHANGED_EVENT, LibraryResult, LibraryState},
 };
 
-/// Where the models live, under the app data directory.
+/// Where the models live, under the resource directory. Earlier versions
+/// downloaded them into a folder of the same name under the app data
+/// directory; [`remove_downloaded_models`] deletes that copy.
 pub const MODELS_DIR: &str = "ocr-models";
-/// Overrides the models directory, for tests and CI caches.
+/// Overrides the models directory, for trying other models.
 pub const MODELS_DIR_ENV: &str = "GRAB_IT_OCR_MODELS";
 /// Emitted with an [`OcrStatus`] whenever the OCR queue changes state.
 pub const OCR_STATUS_EVENT: &str = "ocr-status";
 
-/// How long the model download may wait to resolve the host, connect, or
-/// for any single read or write before it gives up. A stalled connection
-/// (Wi-Fi drop, sleep, hung proxy) then fails the download, so the Library
-/// offers Retry instead of waiting forever.
-pub const DOWNLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// One ocrs model file.
-#[derive(Debug, Clone, Copy)]
-pub struct ModelFile {
-    pub file: &'static str,
-    pub url: &'static str,
-    /// Expected size in bytes, for download progress.
-    pub size: u64,
-}
-
-/// The ocrs models, as published by the ocrs project (see its
-/// `ocrs/examples/download-models.sh`).
-pub const MODELS: [ModelFile; 2] = [
-    ModelFile {
-        file: "text-detection.onnx",
-        url: "https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.onnx",
-        size: 2_499_479,
-    },
-    ModelFile {
-        file: "text-recognition.onnx",
-        url: "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.onnx",
-        size: 9_713_177,
-    },
-];
+/// The ocrs detection and recognition models, unmodified copies of the
+/// ones the ocrs project publishes at
+/// `https://ocrs-models.s3-accelerate.amazonaws.com/<file>`. Their SHA-256
+/// checksums are pinned in the tests.
+pub const MODELS: [&str; 2] = ["text-detection.onnx", "text-recognition.onnx"];
 
 #[derive(Debug)]
 pub enum OcrError {
-    /// A model could not be downloaded.
-    Download(String),
-    Io(io::Error),
     /// A model file could not be loaded.
     Model(String),
     /// The capture could not be opened.
@@ -86,10 +59,6 @@ pub enum OcrError {
 impl fmt::Display for OcrError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Download(err) => {
-                write!(f, "could not download the text recognition models: {err}")
-            }
-            Self::Io(err) => write!(f, "{err}"),
             Self::Model(err) => write!(f, "could not load the text recognition models: {err}"),
             Self::Image(err) => write!(f, "could not read the capture: {err}"),
             Self::Engine(err) => write!(f, "text recognition failed: {err}"),
@@ -98,12 +67,6 @@ impl fmt::Display for OcrError {
 }
 
 impl std::error::Error for OcrError {}
-
-impl From<io::Error> for OcrError {
-    fn from(err: io::Error) -> Self {
-        Self::Io(err)
-    }
-}
 
 impl From<image::ImageError> for OcrError {
     fn from(err: image::ImageError) -> Self {
@@ -118,114 +81,41 @@ fn engine_error(err: impl fmt::Display) -> OcrError {
 
 pub type OcrResult<T> = std::result::Result<T, OcrError>;
 
-/// The models directory: `$GRAB_IT_OCR_MODELS` when set, else
-/// `ocr-models/` in the app data directory.
-pub fn models_dir(app_data: &Path) -> PathBuf {
+/// The models directory: `$GRAB_IT_OCR_MODELS` when set, else the models
+/// bundled in `ocr-models/` under the resource directory.
+pub fn models_dir(resources: &Path) -> PathBuf {
     match std::env::var_os(MODELS_DIR_ENV) {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => app_data.join(MODELS_DIR),
+        _ => resources.join(MODELS_DIR),
     }
 }
 
-/// Downloads the models missing from `dir`. `progress` gets the bytes
-/// downloaded so far and the total expected. Each file is written beside
-/// its final name and renamed when complete, so a cut-off download is never
-/// mistaken for a model.
-pub fn download_models(dir: &Path, progress: impl FnMut(u64, u64)) -> OcrResult<()> {
-    download_models_from(&download_agent(DOWNLOAD_STALL_TIMEOUT), dir, progress)
-}
-
-/// An HTTP agent whose every network phase gives up after `stall`
-/// without progress. ureq has no timeouts by default. Certificates are
-/// checked against the OS trust store (`net::tls_config`).
-pub(crate) fn download_agent(stall: Duration) -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .tls_config(crate::net::tls_config())
-        .timeout_resolve(Some(stall))
-        .timeout_connect(Some(stall))
-        .timeout_send_request(Some(stall))
-        .timeout_recv_response(Some(stall))
-        .timeout_per_read(Some(stall))
-        .timeout_per_write(Some(stall))
-        .build()
-        .new_agent()
-}
-
-fn download_models_from(
-    agent: &ureq::Agent,
-    dir: &Path,
-    mut progress: impl FnMut(u64, u64),
-) -> OcrResult<()> {
-    let missing: Vec<&ModelFile> = MODELS
-        .iter()
-        .filter(|model| !dir.join(model.file).is_file())
-        .collect();
-    if missing.is_empty() {
-        return Ok(());
-    }
-    fs::create_dir_all(dir)?;
-    let total: u64 = missing.iter().map(|model| model.size).sum();
-    let mut done = 0;
-    progress(0, total);
-    // Unique per download, so parallel downloads (tests) never share one.
-    static NEXT_PART: AtomicU64 = AtomicU64::new(0);
-    for model in missing {
-        let part = dir.join(format!(
-            "{}.part-{}-{}",
-            model.file,
-            std::process::id(),
-            NEXT_PART.fetch_add(1, Ordering::Relaxed)
-        ));
-        let result = download(agent, model.url, &part, |bytes| {
-            progress((done + bytes).min(total), total);
-        })
-        .and_then(|bytes| {
-            fs::rename(&part, dir.join(model.file))?;
-            Ok(bytes)
+/// Deletes the models that earlier versions downloaded into `ocr-models/`
+/// under `app_data`, and their unfinished `.part-*` downloads, now that the
+/// app ships its own. The folder itself goes only once it is empty, so
+/// anything else someone put there stays.
+pub fn remove_downloaded_models(app_data: &Path) {
+    let dir = app_data.join(MODELS_DIR);
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let ours = MODELS.iter().any(|model| {
+            name == *model
+                || name
+                    .strip_prefix(model)
+                    .is_some_and(|rest| rest.starts_with(".part"))
         });
-        match result {
-            Ok(bytes) => done += bytes.min(model.size),
-            Err(err) => {
-                let _ = fs::remove_file(&part);
-                return Err(err);
-            }
+        if ours && let Err(err) = fs::remove_file(entry.path()) {
+            eprintln!(
+                "Grab-it: could not delete {}: {err}",
+                entry.path().display()
+            );
         }
     }
-    progress(total, total);
-    Ok(())
-}
-
-/// Streams `url` into `to`, returning how many bytes were written.
-fn download(
-    agent: &ureq::Agent,
-    url: &str,
-    to: &Path,
-    mut progress: impl FnMut(u64),
-) -> OcrResult<u64> {
-    let response = agent
-        .get(url)
-        .call()
-        .map_err(|err| OcrError::Download(err.to_string()))?;
-    let mut reader = response.into_body().into_reader();
-    let mut out = fs::File::create(to)?;
-    let mut buffer = vec![0; 64 * 1024];
-    let mut written = 0u64;
-    loop {
-        let read = match reader.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(read) => read,
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-            Err(err) => return Err(OcrError::Download(err.to_string())),
-        };
-        out.write_all(&buffer[..read])?;
-        written += read as u64;
-        progress(written);
-    }
-    out.sync_all()?;
-    if written == 0 {
-        return Err(OcrError::Download(format!("{url} was empty")));
-    }
-    Ok(written)
+    let _ = fs::remove_dir(&dir);
 }
 
 /// A loaded ocrs engine.
@@ -234,15 +124,15 @@ pub struct Ocr {
 }
 
 impl Ocr {
-    /// Loads the models from `dir`; they must have been downloaded.
+    /// Loads the models from `dir`.
     pub fn load(dir: &Path) -> OcrResult<Self> {
-        let load = |model: &ModelFile| {
-            Model::load_file(dir.join(model.file))
-                .map_err(|err| OcrError::Model(format!("{}: {err}", model.file)))
+        let load = |model: &str| {
+            Model::load_file(dir.join(model))
+                .map_err(|err| OcrError::Model(format!("{model}: {err}")))
         };
         let engine = OcrEngine::new(OcrEngineParams {
-            detection_model: Some(load(&MODELS[0])?),
-            recognition_model: Some(load(&MODELS[1])?),
+            detection_model: Some(load(MODELS[0])?),
+            recognition_model: Some(load(MODELS[1])?),
             ..Default::default()
         })
         .map_err(engine_error)?;
@@ -324,12 +214,10 @@ pub fn store_text(
 pub enum OcrStatus {
     /// Nothing waits for OCR.
     Idle,
-    /// The models are being downloaded.
-    Downloading { downloaded: u64, total: u64 },
     /// Captures are being read; `pending` counts the one being read too.
     Working { pending: u32 },
-    /// The models could not be downloaded or loaded. Waiting captures are
-    /// read after a retry or the next capture.
+    /// The models could not be loaded, so the install is damaged. The next
+    /// capture tries again.
     Failed { message: String },
 }
 
@@ -398,8 +286,8 @@ impl TextOcr {
     }
 }
 
-/// Reads the text in `image` right now, downloading the models first when
-/// this is the first OCR on this machine.
+/// Reads the text in `image` right now, loading the models first when this
+/// is the first text capture since Grab-it started.
 pub fn read_now(app: &AppHandle, image: &image::RgbaImage) -> OcrResult<String> {
     let state = app.state::<TextOcr>();
     let engine = {
@@ -410,7 +298,7 @@ pub fn read_now(app: &AppHandle, image: &image::RgbaImage) -> OcrResult<String> 
         match slot.as_ref() {
             Some(engine) => Arc::clone(engine),
             None => {
-                let engine = Arc::new(prepare(app, &state.models)?);
+                let engine = Arc::new(Ocr::load(&state.models)?);
                 *slot = Some(Arc::clone(&engine));
                 engine
             }
@@ -479,7 +367,7 @@ fn run(app: &AppHandle, models: &Path, receiver: &Receiver<()>) {
         };
 
         if engine.is_none() {
-            match prepare(app, models) {
+            match Ocr::load(models) {
                 Ok(ocr) => engine = Some(ocr),
                 Err(err) => {
                     eprintln!("Grab-it: {err}");
@@ -537,35 +425,9 @@ fn run(app: &AppHandle, models: &Path, receiver: &Receiver<()>) {
     }
 }
 
-/// Downloads the models if needed, reporting progress, then loads them.
-fn prepare(app: &AppHandle, models: &Path) -> OcrResult<Ocr> {
-    let mut last_percent = None;
-    download_models(models, |downloaded, total| {
-        let percent = downloaded * 100 / total.max(1);
-        if last_percent != Some(percent) {
-            last_percent = Some(percent);
-            set_status(app, OcrStatus::Downloading { downloaded, total });
-        }
-    })?;
-    Ocr::load(models).inspect_err(|_| {
-        // Most likely a damaged download: fetch fresh copies next time.
-        for model in &MODELS {
-            let _ = fs::remove_file(models.join(model.file));
-        }
-    })
-}
-
 #[tauri::command]
 pub fn ocr_status(state: State<'_, OcrState>) -> OcrStatus {
     state.status()
-}
-
-/// Retries a failed model download and reads any waiting captures.
-#[tauri::command]
-pub fn ocr_retry(app: AppHandle) {
-    // Cleared first so the same failure, if it happens again, is reported.
-    set_status(&app, OcrStatus::Idle);
-    wake(&app);
 }
 
 #[cfg(test)]
@@ -587,35 +449,101 @@ pub(crate) mod tests {
             .join("ocr-pineapple.png")
     }
 
-    /// Where tests keep the models between runs: `$GRAB_IT_OCR_MODELS`
-    /// (cached in CI), else `target/ocr-models`.
-    pub fn test_models_dir() -> PathBuf {
-        match std::env::var_os(MODELS_DIR_ENV) {
-            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-            _ => Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("target")
-                .join(MODELS_DIR),
-        }
+    /// The models as the app bundles them.
+    pub fn bundled_models_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(MODELS_DIR)
     }
 
-    /// One engine shared by every test, downloading the models once.
+    /// One engine shared by every test, loaded from the bundled models.
     pub fn engine() -> &'static Ocr {
         static ENGINE: OnceLock<Ocr> = OnceLock::new();
-        ENGINE.get_or_init(|| {
-            let dir = test_models_dir();
-            download_models(&dir, |_, _| {}).expect("download the ocrs models");
-            Ocr::load(&dir).expect("load the ocrs models")
-        })
+        ENGINE.get_or_init(|| Ocr::load(&bundled_models_dir()).expect("load the ocrs models"))
     }
 
     #[test]
-    fn models_dir_defaults_to_the_app_data_dir() {
+    fn models_dir_defaults_to_the_resource_dir() {
         if std::env::var_os(MODELS_DIR_ENV).is_none() {
             assert_eq!(
-                models_dir(Path::new("/data")),
-                Path::new("/data").join(MODELS_DIR)
+                models_dir(Path::new("/resources")),
+                Path::new("/resources").join(MODELS_DIR)
             );
         }
+    }
+
+    /// The SHA-256 of each bundled model, as published by the ocrs project.
+    /// Also listed in `ocr-models/LICENSE.md`.
+    const MODEL_SHA256: [(&str, &str); 2] = [
+        (
+            "text-detection.onnx",
+            "a917b23dbd9524b465df7e922641b3ff2981623df4ded5a0234004ef2fee7cfe",
+        ),
+        (
+            "text-recognition.onnx",
+            "86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5",
+        ),
+    ];
+
+    #[test]
+    fn the_bundled_models_match_their_checksums() {
+        use sha2::{Digest, Sha256};
+        assert_eq!(MODEL_SHA256.map(|(file, _)| file), MODELS);
+        for (file, expected) in MODEL_SHA256 {
+            let bytes = fs::read(bundled_models_dir().join(file)).unwrap();
+            let actual: String = Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            assert_eq!(actual, expected, "{file}");
+        }
+    }
+
+    #[test]
+    fn the_bundle_ships_every_model_and_its_licence() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let resources = &config["bundle"]["resources"];
+        for file in MODELS.into_iter().chain(["LICENSE.md"]) {
+            let path = format!("{MODELS_DIR}/{file}");
+            assert_eq!(resources[&path], path.as_str(), "bundle.resources");
+        }
+    }
+
+    #[test]
+    fn a_missing_model_is_a_model_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let err = Ocr::load(dir.path()).err().expect("no models to load");
+        assert!(matches!(err, OcrError::Model(_)), "got {err:?}");
+        assert!(err.to_string().contains("text-detection.onnx"), "{err}");
+    }
+
+    #[test]
+    fn the_downloaded_models_are_removed() {
+        let data = tempfile::TempDir::new().unwrap();
+        let dir = data.path().join(MODELS_DIR);
+        fs::create_dir_all(&dir).unwrap();
+        for name in [
+            "text-detection.onnx",
+            "text-recognition.onnx",
+            "text-recognition.onnx.part-123-0",
+        ] {
+            fs::write(dir.join(name), b"model").unwrap();
+        }
+        remove_downloaded_models(data.path());
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn other_files_beside_the_downloaded_models_are_kept() {
+        let data = tempfile::TempDir::new().unwrap();
+        let dir = data.path().join(MODELS_DIR);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("text-detection.onnx"), b"model").unwrap();
+        fs::write(dir.join("notes.txt"), b"mine").unwrap();
+        remove_downloaded_models(data.path());
+        assert!(!dir.join("text-detection.onnx").exists());
+        assert!(dir.join("notes.txt").is_file());
+        // Nothing to remove is fine too.
+        remove_downloaded_models(&data.path().join("nowhere"));
     }
 
     #[test]
@@ -625,9 +553,6 @@ pub(crate) mod tests {
             text.to_lowercase().contains(FIXTURE_WORD),
             "OCR read {text:?}"
         );
-        for model in &MODELS {
-            assert!(test_models_dir().join(model.file).is_file());
-        }
     }
 
     #[test]
@@ -741,63 +666,11 @@ pub(crate) mod tests {
         ));
     }
 
-    /// Serves one connection: sends `reply`, then holds the connection
-    /// open without sending anything more, like a stalled network.
-    fn stalling_server(reply: &'static [u8]) -> (String, thread::JoinHandle<()>) {
-        use std::net::TcpListener;
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/model.onnx", listener.local_addr().unwrap());
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0; 4096];
-            let _ = stream.read(&mut request);
-            let _ = stream.write_all(reply);
-            let _ = stream.flush();
-            thread::sleep(Duration::from_secs(5));
-        });
-        (url, server)
-    }
-
-    fn assert_stalled_download_fails(reply: &'static [u8]) {
-        let (url, server) = stalling_server(reply);
-        let dir = tempfile::TempDir::new().unwrap();
-        let part = dir.path().join("model.onnx.part");
-        let started = std::time::Instant::now();
-        let result = download(
-            &download_agent(Duration::from_millis(300)),
-            &url,
-            &part,
-            |_| {},
-        );
-        assert!(
-            matches!(result, Err(OcrError::Download(_))),
-            "got {result:?}"
-        );
-        assert!(started.elapsed() < Duration::from_secs(4));
-        server.join().unwrap();
-    }
-
-    #[test]
-    fn a_download_stalled_before_the_response_fails() {
-        assert_stalled_download_fails(b"");
-    }
-
-    #[test]
-    fn a_download_stalled_mid_body_fails() {
-        assert_stalled_download_fails(
-            b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\nonly a few bytes",
-        );
-    }
-
     #[test]
     fn statuses_serialize_for_the_frontend() {
         assert_eq!(
-            serde_json::to_value(OcrStatus::Downloading {
-                downloaded: 5,
-                total: 10
-            })
-            .unwrap(),
-            serde_json::json!({ "state": "downloading", "downloaded": 5, "total": 10 })
+            serde_json::to_value(OcrStatus::Working { pending: 3 }).unwrap(),
+            serde_json::json!({ "state": "working", "pending": 3 })
         );
         assert_eq!(
             serde_json::to_value(OcrStatus::Idle).unwrap(),
