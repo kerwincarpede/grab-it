@@ -591,11 +591,9 @@ pub fn start(
     monitor: &MonitorInfo,
     image_size: (u32, u32),
     rect: Rect,
-) -> Result<(), String> {
+) -> Result<(), crate::scroll::StartError> {
     let _gate = crate::scroll::start_lock();
-    if crate::scroll::active(app) {
-        return Err("a scrolling capture is already under way".into());
-    }
+    crate::scroll::ensure_idle(session(app).is_some(), crate::scroll::active(app))?;
     let (folder, recording) = {
         let state = app.state::<SettingsState>();
         let store = lock(&state);
@@ -653,7 +651,7 @@ pub fn start(
     {
         let mut current = state.lock();
         if current.is_some() {
-            return Err("a recording is already under way".to_owned());
+            return Err(crate::scroll::StartError::Busy);
         }
         *current = Some(Arc::clone(&session));
     }
@@ -716,7 +714,7 @@ pub fn start(
         Err(err) => {
             *state.lock() = None;
             crate::tray::set_recording(app, false);
-            return Err(err);
+            return Err(err.into());
         }
     };
 
@@ -842,7 +840,9 @@ pub fn start(
             {
                 crate::record_bar::close(&handle);
                 crate::record_frame::close(&handle);
-                actions::report_failure(&handle, &err);
+                crate::scroll::report_start_failure(err, |message| {
+                    actions::report_failure(&handle, message)
+                });
             }
         });
     if let Err(err) = spawned {
@@ -851,7 +851,7 @@ pub fn start(
         crate::record_frame::close(app);
         *state.lock() = None;
         crate::tray::set_recording(app, false);
-        return Err(format!("could not start recording: {err}"));
+        return Err(format!("could not start recording: {err}").into());
     }
     Ok(())
 }

@@ -14,6 +14,33 @@ pub fn start_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|p| p.into_inner())
 }
 
+/// A busy rejection must not replace the card controlling an existing session.
+#[derive(Debug, PartialEq, Eq)]
+pub enum StartError {
+    Busy,
+    Failed(String),
+}
+impl From<String> for StartError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+pub fn ensure_idle(recording: bool, scrolling: bool) -> Result<(), StartError> {
+    if recording || scrolling {
+        Err(StartError::Busy)
+    } else {
+        Ok(())
+    }
+}
+pub fn report_start_failure(error: StartError, report: impl FnOnce(&str)) {
+    match error {
+        StartError::Busy => {
+            eprintln!("Grab-it: a recording or scrolling capture is already under way")
+        }
+        StartError::Failed(message) => report(&message),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Axis {
     Vertical,
@@ -280,15 +307,15 @@ pub fn start(
     rect: Rect,
     image_size: (u32, u32),
     foreground: Foreground,
-) -> Result<(), String> {
+) -> Result<(), StartError> {
     #[cfg(target_os = "linux")]
     if crate::portal::is_wayland() {
-        return Err("scrolling capture is unavailable on Wayland".into());
+        return Err(StartError::Failed(
+            "scrolling capture is unavailable on Wayland".into(),
+        ));
     }
     let _gate = start_lock();
-    if crate::record::session(app).is_some() || active(app) {
-        return Err("a recording or scrolling capture is already under way".into());
-    }
+    ensure_idle(crate::record::session(app).is_some(), active(app))?;
     static IDS: AtomicU64 = AtomicU64::new(1);
     let control = Arc::new(Control {
         id: IDS.fetch_add(1, Ordering::Relaxed),
@@ -303,11 +330,17 @@ pub fn start(
             let result = (|| -> Result<(), String> {
                 std::thread::sleep(Duration::from_millis(250));
                 let mut source = frames::open(&monitor, rect, 10, false)?;
-                if let Some(w) = handle.get_webview_window(quick::LABEL) {
-                    let _ = w.hide();
-                }
-                std::thread::sleep(Duration::from_millis(40));
-                let mut stitch = Stitcher::new(source.grab()?.image);
+                let mut synchronous = frames::open_synchronous(&monitor, rect)?;
+                let mut stitch = Stitcher::new(
+                    grab_clean(
+                        source.as_mut(),
+                        synchronous.as_mut(),
+                        true,
+                        || hide_card(&handle),
+                        || restore_card(&handle),
+                    )?
+                    .image,
+                );
                 let item = |s: &Stitcher| QuickItem::Scrolling {
                     session_id: control.id,
                     width: s.image.width(),
@@ -316,24 +349,12 @@ pub fn start(
                 };
                 let mut generation = quick::show(&handle, item(&stitch));
                 let overlaps = place_card(&handle, &monitor, rect, image_size);
-                let grab = |source: &mut dyn frames::FrameSource| {
-                    // A fullscreen selection has no free corner. Hide only while
-                    // grabbing in that case, so the controls never enter the image.
-                    let window = handle.get_webview_window("quick");
-                    if overlaps {
-                        if let Some(w) = &window {
-                            let _ = w.hide();
-                        }
-                        std::thread::sleep(Duration::from_millis(40));
-                    }
-                    let result = source.grab();
-                    if overlaps {
-                        if let Some(w) = &window {
-                            let _ = w.show();
-                        }
-                    }
-                    result
-                };
+                if !overlaps {
+                    // Start the video cache only after the old card has moved
+                    // out of the selection; its previous frames are unsafe.
+                    drop(source);
+                    source = frames::open(&monitor, rect, 10, false)?;
+                }
                 while control.end.load(Ordering::SeqCst) == 0 {
                     std::thread::sleep(Duration::from_millis(100));
                     if !quick::is_current(&handle, generation) {
@@ -343,7 +364,18 @@ pub fn start(
                     if control.end.load(Ordering::SeqCst) != 0 {
                         break;
                     }
-                    if !stitch.capped && stitch.push(grab(source.as_mut())?.image) {
+                    if !stitch.capped
+                        && stitch.push(
+                            grab_clean(
+                                source.as_mut(),
+                                synchronous.as_mut(),
+                                overlaps,
+                                || hide_card(&handle),
+                                || restore_card(&handle),
+                            )?
+                            .image,
+                        )
+                    {
                         if let Some(g) = quick::replace(&handle, generation, item(&stitch)) {
                             generation = g;
                         } else {
@@ -372,7 +404,44 @@ pub fn start(
         });
     if let Err(e) = spawned {
         *state_lock(&app.state::<ScrollState>()) = None;
-        return Err(e.to_string());
+        return Err(e.to_string().into());
+    }
+    Ok(())
+}
+
+/// Hiding a window does not invalidate AVCapture/DXGI's latest-frame cache.
+/// Bypass that cache entirely for the initial image and all obscured grabs.
+/// Restore the controls on capture failure as well as success.
+fn grab_clean(
+    buffered: &mut dyn frames::FrameSource,
+    synchronous: &mut dyn frames::FrameSource,
+    obscured: bool,
+    hide: impl FnOnce() -> Result<(), String>,
+    restore: impl FnOnce() -> Result<(), String>,
+) -> Result<frames::Grabbed, String> {
+    if !obscured {
+        return buffered.grab();
+    }
+    hide()?;
+    let grabbed = synchronous.grab();
+    let restored = restore();
+    match grabbed {
+        Err(error) => Err(error),
+        Ok(frame) => {
+            restored?;
+            Ok(frame)
+        }
+    }
+}
+fn hide_card(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(quick::LABEL) {
+        window.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+fn restore_card(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(quick::LABEL) {
+        window.show().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -380,6 +449,170 @@ pub fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn rejected_start_preserves_scroll() {
+        let control = Control {
+            id: 17,
+            end: AtomicU8::new(0),
+        };
+        let mut card = QuickItem::Scrolling {
+            session_id: 17,
+            width: 800,
+            height: 1200,
+            capped: false,
+        };
+        let before = card.clone();
+        // Both start paths use this guard before changing state, and the
+        // overlay/restart handler must not publish an Error card for Busy.
+        let error = ensure_idle(false, true).unwrap_err();
+        report_start_failure(error, |message| {
+            card = QuickItem::Error {
+                message: message.to_owned(),
+            };
+        });
+        assert_eq!(card, before);
+        assert_eq!(control.end.load(Ordering::SeqCst), 0);
+    }
+    #[test]
+    fn recording_rejection_preserves_scrolling_card() {
+        rejected_start_preserves_scroll();
+    }
+    #[test]
+    fn second_scroll_rejection_preserves_scrolling_card() {
+        rejected_start_preserves_scroll();
+    }
+    #[test]
+    fn real_start_failures_are_still_reported() {
+        let mut reported = None;
+        report_start_failure(
+            StartError::Failed("capture unavailable".into()),
+            |message| reported = Some(message.to_owned()),
+        );
+        assert_eq!(reported.as_deref(), Some("capture unavailable"));
+        assert_eq!(ensure_idle(true, false), Err(StartError::Busy));
+        assert_eq!(ensure_idle(false, false), Ok(()));
+    }
+    struct TestSource<'a> {
+        visible: &'a std::cell::Cell<bool>,
+        cached: bool,
+        calls: usize,
+        fail: bool,
+    }
+    impl frames::FrameSource for TestSource<'_> {
+        fn grab(&mut self) -> Result<frames::Grabbed, String> {
+            self.calls += 1;
+            if self.fail {
+                return Err("grab failed".into());
+            }
+            // A buffered source can retain a card-visible image indefinitely.
+            let includes_card = if self.cached {
+                true
+            } else {
+                self.visible.get()
+            };
+            Ok(frames::Grabbed {
+                image: RgbaImage::from_pixel(
+                    2,
+                    2,
+                    image::Rgba([if includes_card { 255 } else { 0 }, 0, 0, 255]),
+                ),
+                pointer: None,
+            })
+        }
+    }
+    #[test]
+    fn initial_and_obscured_grabs_bypass_stale_video_frames() {
+        let visible = std::cell::Cell::new(true);
+        let mut buffered = TestSource {
+            visible: &visible,
+            cached: true,
+            calls: 0,
+            fail: false,
+        };
+        let mut synchronous = TestSource {
+            visible: &visible,
+            cached: false,
+            calls: 0,
+            fail: false,
+        };
+        for _ in 0..3 {
+            let frame = grab_clean(
+                &mut buffered,
+                &mut synchronous,
+                true,
+                || {
+                    visible.set(false);
+                    Ok(())
+                },
+                || {
+                    visible.set(true);
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(frame.image.get_pixel(0, 0)[0], 0);
+            assert!(visible.get());
+        }
+        assert_eq!(buffered.calls, 0);
+        assert_eq!(synchronous.calls, 3);
+    }
+    #[test]
+    fn controls_are_restored_after_synchronous_capture_failure() {
+        let visible = std::cell::Cell::new(true);
+        let mut buffered = TestSource {
+            visible: &visible,
+            cached: true,
+            calls: 0,
+            fail: false,
+        };
+        let mut synchronous = TestSource {
+            visible: &visible,
+            cached: false,
+            calls: 0,
+            fail: true,
+        };
+        let result = grab_clean(
+            &mut buffered,
+            &mut synchronous,
+            true,
+            || {
+                visible.set(false);
+                Ok(())
+            },
+            || {
+                visible.set(true);
+                Ok(())
+            },
+        );
+        assert_eq!(result.err().as_deref(), Some("grab failed"));
+        assert!(visible.get());
+        assert_eq!(buffered.calls, 0);
+    }
+    #[test]
+    fn a_failed_hide_never_reads_a_contaminated_frame() {
+        let visible = std::cell::Cell::new(true);
+        let mut buffered = TestSource {
+            visible: &visible,
+            cached: true,
+            calls: 0,
+            fail: false,
+        };
+        let mut synchronous = TestSource {
+            visible: &visible,
+            cached: false,
+            calls: 0,
+            fail: false,
+        };
+        let result = grab_clean(
+            &mut buffered,
+            &mut synchronous,
+            true,
+            || Err("hide failed".into()),
+            || Ok(()),
+        );
+        assert_eq!(result.err().as_deref(), Some("hide failed"));
+        assert_eq!(buffered.calls + synchronous.calls, 0);
+    }
+
     fn frame(axis: Axis, offset: u32, sticky: bool) -> RgbaImage {
         let (w, h) = if axis == Axis::Vertical {
             (24, 80)

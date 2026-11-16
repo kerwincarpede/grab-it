@@ -53,6 +53,13 @@ pub fn open(
     Ok(Box::new(RegionSource::open(monitor, rect, show_cursor)?))
 }
 
+/// Opens a synchronous screen reader, with no cached video frames. Use after
+/// hiding capture controls when the next image must reflect that hide.
+/// Unlike `open`, every `grab` requests a new screen image from the OS.
+pub fn open_synchronous(monitor: &MonitorInfo, rect: Rect) -> Result<Box<dyn FrameSource>, String> {
+    Ok(Box::new(RegionSource::open(monitor, rect, false)?))
+}
+
 /// Where a pointer at `position`, in the desktop coordinates monitors are
 /// placed in, lies in a frame of `rect`. `scale` is the monitor image's
 /// pixels per desktop unit: 1 where desktop coordinates are pixels, the

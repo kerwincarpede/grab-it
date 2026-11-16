@@ -1402,7 +1402,9 @@ pub fn overlay_finish(
                 crate::record::start(&app, &monitor, size, rect)
             };
             if let Err(err) = result {
-                actions::report_failure(&app, &err);
+                crate::scroll::report_start_failure(err, |message| {
+                    actions::report_failure(&app, message)
+                });
             }
         });
         return Ok(());
