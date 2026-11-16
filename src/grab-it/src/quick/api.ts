@@ -34,7 +34,7 @@ export interface QuickCode {
 
 /** Mirrors `QuickItem` in src-tauri/src/quick.rs. */
 export type QuickItem =
-  | { kind: "scrolling"; sessionId: number; width: number; height: number; capped: boolean }
+  | { kind: "scrolling"; sessionId: number; width: number; height: number; capped: boolean; autoScrolling: boolean; manualReason: string | null }
   | { kind: "capture"; path: string; fileName: string; width: number; height: number; copied: boolean }
   /** `original` is what OCR read, when the AI's tidied text took its place. */
   | { kind: "text"; text: string; original?: string; tidy?: TextTidy }

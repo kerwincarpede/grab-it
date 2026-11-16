@@ -701,7 +701,7 @@ describe("Quick Access native dragging", () => {
 
 describe("scrolling card", () => {
   it("keeps scrolling controls operable across a saved-image drag", async () => {
-    const scrolling: QuickItem = { kind: "scrolling", sessionId: 42, width: 800, height: 1600, capped: false };
+    const scrolling: QuickItem = { kind: "scrolling", sessionId: 42, width: 800, height: 1600, capped: false, autoScrolling: false, manualReason: null };
     const backend = mockBackend(scrolling, { events: true });
     render(<QuickAccess />);
     await screen.findByText("Scrolling capture");
@@ -739,8 +739,21 @@ describe("scrolling card", () => {
     expect(screen.getByRole("button", { name: "Done" })).toBeEnabled();
   });
 
+  it.each([
+    [true, null, "Scrolling automatically. Move the mouse to scroll by hand."],
+    [false, "Mouse moved. Scroll by hand, then choose Done.", "Mouse moved. Scroll by hand, then choose Done."],
+    [false, "Nothing scrolled automatically. Scroll by hand, then choose Done.", "Nothing scrolled automatically. Scroll by hand, then choose Done."],
+    [false, "Accessibility permission is needed. Scroll by hand, then choose Done.", "Accessibility permission is needed. Scroll by hand, then choose Done."],
+  ] as const)("shows auto/manual status (%s, %s)", async (autoScrolling, manualReason, message) => {
+    mockBackend({ kind: "scrolling", sessionId: 42, width: 800, height: 1600, capped: false, autoScrolling, manualReason });
+    render(<QuickAccess />);
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Done" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  });
+
   it.each([false, true])("shows progress and session-scoped controls (cap %s)", async (capped) => {
-    const item: QuickItem = { kind: "scrolling", sessionId: 42, width: 800, height: capped ? 30000 : 1600, capped };
+    const item: QuickItem = { kind: "scrolling", sessionId: 42, width: 800, height: capped ? 30000 : 1600, capped, autoScrolling: !capped, manualReason: null };
     const backend = mockBackend(item);
     render(<QuickAccess />);
     await screen.findByText("Scrolling capture");

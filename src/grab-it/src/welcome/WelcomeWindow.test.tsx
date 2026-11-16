@@ -1,12 +1,21 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { emit } from "@tauri-apps/api/event";
 import type { InvokeArgs } from "@tauri-apps/api/core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { acceleratorKeys } from "../settings/accelerator";
 import type { PermissionStatus } from "./permissions";
 import WelcomeWindow from "./WelcomeWindow";
+
+// Keep AI subscriptions local to this component test. Late subscription cleanup
+// must not call Tauri internals after the shared setup clears the IPC mocks.
+const aiEvents = vi.hoisted(() => ({ listeners: new Set<() => void>() }));
+vi.mock("../library/api", () => ({
+  onAiStatus: async (callback: () => void) => {
+    aiEvents.listeners.add(callback);
+    return () => { aiEvents.listeners.delete(callback); };
+  },
+}));
 
 const HOTKEYS = {
   allInOne: "Ctrl+Alt+PrintScreen",
@@ -122,7 +131,7 @@ describe("WelcomeWindow", () => {
 
     options.ai = { enabled: true, provider: "claudeCode" };
     await act(async () => {
-      await emit("ai-status", { state: "idle", done: 0, total: 0, error: null, provider: "claudeCode" });
+      for (const listener of aiEvents.listeners) listener();
     });
     expect(await screen.findByText(/Claude Code describes each new capture/)).toBeInTheDocument();
   });

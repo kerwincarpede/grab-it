@@ -553,6 +553,57 @@ pub fn permission_open_settings(permission: Permission) -> Result<(), String> {
     }
 }
 
+/// Synthetic scrolling needs Accessibility on macOS. The system prompt is
+/// asynchronous: until a grant is visible, this capture remains manual.
+#[cfg(target_os = "macos")]
+pub fn ensure_accessibility(_app: &AppHandle) -> bool {
+    use std::ffi::c_void;
+    #[link(name = "ApplicationServices", kind = "framework")]
+    unsafe extern "C" {
+        static kAXTrustedCheckOptionPrompt: *const c_void;
+        fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        static kCFBooleanTrue: *const c_void;
+        fn CFDictionaryCreate(
+            allocator: *const c_void,
+            keys: *const *const c_void,
+            values: *const *const c_void,
+            count: isize,
+            key_callbacks: *const c_void,
+            value_callbacks: *const c_void,
+        ) -> *const c_void;
+        fn CFRelease(value: *const c_void);
+    }
+    // SAFETY: the key and value are immortal framework constants. Null
+    // callbacks leave them unretained, valid for this dictionary's lifetime.
+    // Release the owned dictionary after the synchronous trust query.
+    unsafe {
+        let key = kAXTrustedCheckOptionPrompt;
+        let value = kCFBooleanTrue;
+        let options = CFDictionaryCreate(
+            std::ptr::null(),
+            &key,
+            &value,
+            1,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+        if options.is_null() {
+            return false;
+        }
+        let trusted = AXIsProcessTrustedWithOptions(options);
+        CFRelease(options);
+        trusted
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn ensure_accessibility(_app: &AppHandle) -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

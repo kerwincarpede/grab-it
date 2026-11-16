@@ -1,4 +1,4 @@
-//! Manual scrolling capture. Unmatched frames never alter the accepted reference.
+//! Automatic and manual scrolling capture. Unmatched frames never alter the accepted reference.
 use image::{RgbaImage, imageops};
 use std::{
     borrow::Cow,
@@ -85,6 +85,70 @@ fn flip(i: &RgbaImage, axis: Axis) -> RgbaImage {
         imageops::flip_vertical(i)
     } else {
         imageops::flip_horizontal(i)
+    }
+}
+
+/// A session never resumes synthetic input after yielding to the user.
+struct AutoScroll {
+    center: (i32, i32),
+    reason: Option<&'static str>,
+    still_steps: u8,
+}
+impl AutoScroll {
+    fn new(center: (i32, i32), allowed: bool) -> Self {
+        Self {
+            center,
+            reason: (!allowed)
+                .then_some("Accessibility permission is needed. Scroll by hand, then choose Done."),
+            still_steps: 0,
+        }
+    }
+    fn observe_pointer(&mut self, pointer: Option<(i32, i32)>) {
+        if self.reason.is_none()
+            && pointer.is_some_and(|(x, y)| {
+                let dx = i64::from(x) - i64::from(self.center.0);
+                let dy = i64::from(y) - i64::from(self.center.1);
+                dx * dx + dy * dy > 64
+            })
+        {
+            self.reason = Some("Mouse moved. Scroll by hand, then choose Done.");
+        }
+    }
+    /// Count only unchanged frames after successful wheel events. Rejected
+    /// overlaps can be moving content and must not be mistaken for the end.
+    fn at_end(&mut self, unchanged: bool, has_scrolled: bool) -> bool {
+        if self.reason.is_some() {
+            return false;
+        }
+        self.still_steps = if unchanged { self.still_steps + 1 } else { 0 };
+        if self.still_steps < 5 {
+            return false;
+        }
+        if !has_scrolled {
+            self.reason = Some("Nothing scrolled automatically. Scroll by hand, then choose Done.");
+            return false;
+        }
+        true
+    }
+    fn wheel(&self, axis: Option<Axis>, reverse: Option<bool>) -> rdev::EventType {
+        let delta = if reverse == Some(true) { 1 } else { -1 };
+        if axis == Some(Axis::Horizontal) {
+            rdev::EventType::Wheel {
+                // X11 button 7 and Windows HWHEEL use positive for right;
+                // macOS uses negative for right, as it does for down.
+                delta_x: if cfg!(target_os = "macos") {
+                    delta
+                } else {
+                    -delta
+                },
+                delta_y: 0,
+            }
+        } else {
+            rdev::EventType::Wheel {
+                delta_x: 0,
+                delta_y: delta,
+            }
+        }
     }
 }
 
@@ -301,6 +365,37 @@ fn end(app: &AppHandle, id: u64, action: u8) {
             .compare_exchange(0, action, Ordering::SeqCst, Ordering::SeqCst);
     }
 }
+// SetCursorPos accepts signed virtual-desktop coordinates directly, avoiding
+// rdev's absolute-input normalization that loses a negative desktop origin.
+#[cfg(any(target_os = "windows", test))]
+fn desktop_pointer_target(monitor: (i32, i32), offset: (i32, i32)) -> (i32, i32) {
+    (monitor.0 + offset.0, monitor.1 + offset.1)
+}
+
+fn place_pointer(monitor: &MonitorInfo, offset: (i32, i32)) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let (x, y) = desktop_pointer_target((monitor.x, monitor.y), offset);
+        // SAFETY: SetCursorPos takes coordinates by value and no pointers.
+        unsafe { windows::Win32::UI::WindowsAndMessaging::SetCursorPos(x, y) }
+            .map_err(|error| error.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // rdev uses desktop points on macOS and pixels on X11.
+        let scale = if cfg!(target_os = "macos") {
+            monitor.scale_factor
+        } else {
+            1.0
+        };
+        rdev::simulate(&rdev::EventType::MouseMove {
+            x: monitor.x as f64 + offset.0 as f64 / scale,
+            y: monitor.y as f64 + offset.1 as f64 / scale,
+        })
+        .map_err(|error| format!("{error:?}"))
+    }
+}
+
 pub fn start(
     app: &AppHandle,
     monitor: &MonitorInfo,
@@ -329,25 +424,39 @@ pub fn start(
         .spawn(move || {
             let result = (|| -> Result<(), String> {
                 std::thread::sleep(Duration::from_millis(250));
+                hide_card(&handle)?;
+                let allowed = crate::permissions::ensure_accessibility(&handle);
+                let center = ((rect.width / 2) as i32, (rect.height / 2) as i32);
+                let mut auto = AutoScroll::new(center, allowed);
+                if allowed {
+                    if place_pointer(&monitor, (rect.x + center.0, rect.y + center.1)).is_err() {
+                        auto.reason = Some("Automatic scrolling is unavailable. Scroll by hand, then choose Done.");
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                // Open after placing the pointer, so buffered video frames cannot
+                // report its pre-placement position and falsely pause the session.
                 let mut source = frames::open(&monitor, rect, 10, false)?;
                 let mut synchronous = frames::open_synchronous(&monitor, rect)?;
-                let mut stitch = Stitcher::new(
-                    grab_clean(
-                        source.as_mut(),
-                        synchronous.as_mut(),
-                        true,
-                        || hide_card(&handle),
-                        || restore_card(&handle),
-                    )?
-                    .image,
-                );
-                let item = |s: &Stitcher| QuickItem::Scrolling {
+                let first = grab_clean(
+                    source.as_mut(),
+                    synchronous.as_mut(),
+                    true,
+                    || hide_card(&handle),
+                    || restore_card(&handle),
+                )?;
+                auto.observe_pointer(first.pointer);
+                let mut previous = first.image.clone();
+                let mut stitch = Stitcher::new(first.image);
+                let item = |s: &Stitcher, a: &AutoScroll| QuickItem::Scrolling {
                     session_id: control.id,
                     width: s.image.width(),
                     height: s.image.height(),
                     capped: s.capped,
+                    auto_scrolling: a.reason.is_none() && !s.capped,
+                    manual_reason: a.reason.map(str::to_owned),
                 };
-                let mut generation = quick::show(&handle, item(&stitch));
+                let mut generation = quick::show(&handle, item(&stitch, &auto));
                 let overlaps = place_card(&handle, &monitor, rect, image_size);
                 if !overlaps {
                     // Start the video cache only after the old card has moved
@@ -355,8 +464,9 @@ pub fn start(
                     drop(source);
                     source = frames::open(&monitor, rect, 10, false)?;
                 }
+                let mut wheel_pending = false;
                 while control.end.load(Ordering::SeqCst) == 0 {
-                    std::thread::sleep(Duration::from_millis(100));
+                    std::thread::sleep(Duration::from_millis(250));
                     if !quick::is_current(&handle, generation) {
                         control.end.store(2, Ordering::SeqCst);
                         break;
@@ -364,22 +474,43 @@ pub fn start(
                     if control.end.load(Ordering::SeqCst) != 0 {
                         break;
                     }
-                    if !stitch.capped
-                        && stitch.push(
-                            grab_clean(
-                                source.as_mut(),
-                                synchronous.as_mut(),
-                                overlaps,
-                                || hide_card(&handle),
-                                || restore_card(&handle),
-                            )?
-                            .image,
-                        )
-                    {
-                        if let Some(g) = quick::replace(&handle, generation, item(&stitch)) {
+                    if stitch.capped {
+                        continue;
+                    }
+                    let frame = grab_clean(
+                        source.as_mut(),
+                        synchronous.as_mut(),
+                        overlaps,
+                        || hide_card(&handle),
+                        || restore_card(&handle),
+                    )?;
+                    let old_reason = auto.reason;
+                    auto.observe_pointer(frame.pointer);
+                    let unchanged = frame.image == previous;
+                    previous = frame.image.clone();
+                    let changed = stitch.push(frame.image);
+                    if wheel_pending && auto.at_end(unchanged, stitch.axis.is_some()) {
+                        let _ = control.end.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
+                        break;
+                    }
+                    wheel_pending = false;
+                    if changed || old_reason != auto.reason {
+                        if let Some(g) = quick::replace(&handle, generation, item(&stitch, &auto)) {
                             generation = g;
                         } else {
                             control.end.store(2, Ordering::SeqCst);
+                        }
+                    }
+                    if auto.reason.is_none() && !stitch.capped && control.end.load(Ordering::SeqCst) == 0 {
+                        if rdev::simulate(&auto.wheel(stitch.axis, stitch.reverse)).is_ok() {
+                            wheel_pending = true;
+                        } else {
+                            auto.reason = Some("Automatic scrolling is unavailable. Scroll by hand, then choose Done.");
+                            if let Some(g) = quick::replace(&handle, generation, item(&stitch, &auto)) {
+                                generation = g;
+                            } else {
+                                control.end.store(2, Ordering::SeqCst);
+                            }
                         }
                     }
                 }
@@ -537,6 +668,8 @@ mod tests {
             width: 800,
             height: 1200,
             capped: false,
+            auto_scrolling: true,
+            manual_reason: None,
         };
         let before = card.clone();
         // Both start paths use this guard before changing state, and the
@@ -550,6 +683,17 @@ mod tests {
         assert_eq!(card, before);
         assert_eq!(control.end.load(Ordering::SeqCst), 0);
     }
+    #[test]
+    fn windows_pointer_target_preserves_negative_monitor_origins() {
+        // A monitor left of and above the primary, with a region on it.
+        let target = desktop_pointer_target((-1920, -1080), (300 + 400, 100 + 300));
+        assert_eq!(target, (-1220, -680));
+        // The frame reports coordinates relative to the captured region.
+        let mut auto = AutoScroll::new((400, 300), true);
+        auto.observe_pointer(Some((target.0 - (-1920 + 300), target.1 - (-1080 + 100))));
+        assert!(auto.reason.is_none());
+    }
+
     #[test]
     fn recording_rejection_preserves_scrolling_card() {
         rejected_start_preserves_scroll();
@@ -753,6 +897,121 @@ mod tests {
         assert_eq!(buffered.calls + synchronous.calls, 0);
     }
 
+    #[test]
+    fn pointer_threshold_is_radial_and_pause_is_permanent() {
+        let mut auto = AutoScroll::new((100, 100), true);
+        auto.observe_pointer(None);
+        auto.observe_pointer(Some((108, 100)));
+        assert!(auto.reason.is_none());
+        auto.observe_pointer(Some((106, 106)));
+        assert!(auto.reason.is_some());
+        auto.observe_pointer(Some((100, 100)));
+        for _ in 0..10 {
+            assert!(!auto.at_end(true, true));
+        }
+        assert!(auto.reason.is_some());
+    }
+    #[test]
+    fn end_requires_five_consecutive_unchanged_wheel_steps() {
+        let mut auto = AutoScroll::new((0, 0), true);
+        for _ in 0..4 {
+            assert!(!auto.at_end(true, true));
+        }
+        assert!(!auto.at_end(false, true));
+        for _ in 0..4 {
+            assert!(!auto.at_end(true, true));
+        }
+        assert!(auto.at_end(true, true));
+        let mut refused = AutoScroll::new((0, 0), false);
+        for _ in 0..10 {
+            assert!(!refused.at_end(true, true));
+        }
+    }
+    #[test]
+    fn never_moved_capture_yields_to_manual_without_saving() {
+        let mut auto = AutoScroll::new((0, 0), true);
+        let first = frame(Axis::Horizontal, 0, false);
+        let mut stitch = Stitcher::new(first.clone());
+        for _ in 0..4 {
+            assert!(!stitch.push(first.clone()));
+            assert!(!auto.at_end(true, stitch.axis.is_some()));
+            assert!(auto.reason.is_none());
+        }
+        assert!(!auto.at_end(true, stitch.axis.is_some()));
+        assert_eq!(
+            auto.reason,
+            Some("Nothing scrolled automatically. Scroll by hand, then choose Done.")
+        );
+        assert_eq!(stitch.image, first);
+        // A horizontal gesture can still grow the image, but yielding to the
+        // user is permanent: a later stall must wait for Done or Cancel.
+        assert!(stitch.push(frame(Axis::Horizontal, 20, false)));
+        for _ in 0..10 {
+            assert!(!auto.at_end(true, stitch.axis.is_some()));
+        }
+    }
+    #[test]
+    fn wheel_follows_first_accepted_axis_and_direction() {
+        let auto = AutoScroll::new((0, 0), true);
+        assert!(matches!(
+            auto.wheel(None, None),
+            rdev::EventType::Wheel {
+                delta_x: 0,
+                delta_y: -1
+            }
+        ));
+        for axis in [Axis::Vertical, Axis::Horizontal] {
+            for reverse in [false, true] {
+                let mut stitch = Stitcher::new(frame(axis, if reverse { 20 } else { 0 }, false));
+                assert!(stitch.push(frame(axis, if reverse { 0 } else { 20 }, false)));
+                let delta = if reverse { 1 } else { -1 };
+                match auto.wheel(stitch.axis, stitch.reverse) {
+                    rdev::EventType::Wheel { delta_x, delta_y } => {
+                        assert_eq!(
+                            (delta_x, delta_y),
+                            if axis == Axis::Vertical {
+                                (0, delta)
+                            } else {
+                                (
+                                    if cfg!(target_os = "macos") {
+                                        delta
+                                    } else {
+                                        -delta
+                                    },
+                                    0,
+                                )
+                            }
+                        );
+                    }
+                    _ => panic!("expected wheel event"),
+                }
+            }
+        }
+    }
+    #[test]
+    fn horizontal_wheel_continues_toward_new_content() {
+        let auto = AutoScroll::new((0, 0), true);
+        for reverse in [false, true] {
+            let mut stitch = Stitcher::new(frame(Axis::Horizontal, 20, false));
+            let next = if reverse { 0 } else { 40 };
+            assert!(stitch.push(frame(Axis::Horizontal, next, false)));
+            let rdev::EventType::Wheel { delta_x, delta_y } =
+                auto.wheel(stitch.axis, stitch.reverse)
+            else {
+                panic!("expected horizontal wheel event");
+            };
+            // Interpret the native event: X11 button 7 / Windows positive
+            // HWHEEL moves right; CGEvent's negative horizontal delta does so.
+            let moves_right = if cfg!(target_os = "macos") {
+                delta_x < 0
+            } else {
+                delta_x > 0
+            };
+            assert_eq!(moves_right, !reverse);
+            assert_eq!(delta_y, 0);
+            assert_eq!(delta_x.abs(), 1);
+        }
+    }
     fn frame(axis: Axis, offset: u32, sticky: bool) -> RgbaImage {
         let (w, h) = if axis == Axis::Vertical {
             (24, 80)
