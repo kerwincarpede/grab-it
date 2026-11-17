@@ -289,6 +289,8 @@ interface PreferencesMock {
   presets?: BackdropPreset[][];
   /** What `editor_words` answers (an Error makes it fail); no words when unset. */
   words?: OcrLine[] | Error | Promise<OcrLine[]>;
+  /** What `editor_asset_image` answers; four bytes at once when unset. */
+  asset?: Promise<ArrayBuffer>;
   /** What `editor_faces` answers; no faces when unset. */
   faces?: { x: number; y: number; width: number; height: number }[];
   /** The mouse pointer saved with the capture; none when unset. */
@@ -349,7 +351,7 @@ function mockEditor(
         return "pasted-1700000000000.png";
       case "editor_asset_image":
         calls.push({ cmd, payload });
-        return new ArrayBuffer(4);
+        return preferences.asset ?? new ArrayBuffer(4);
       case "editor_save_annotations":
         saved.push((payload as { annotations: Annotations }).annotations);
         return null;
@@ -974,6 +976,41 @@ describe("EditorWindow", () => {
     await ready();
     await waitFor(() => expect(document.querySelector('[data-konva="Image"][data-id="i1"]')).not.toBeNull());
     expect(calls.filter((call) => call.cmd === "editor_asset_image").map((call) => call.payload)).toEqual([{ name: "kept.png" }]);
+  });
+
+  it("waits for an added image still being read before copying and closing", async () => {
+    const calls: { cmd: string; payload: unknown }[] = [];
+    let finishRead: (bytes: ArrayBuffer) => void = () => undefined;
+    const asset = new Promise<ArrayBuffer>((resolve) => {
+      finishRead = resolve;
+    });
+    mockWindows("editor-1");
+    mockEditor({ version: 1, shapes: [{ id: "i1", type: "image", x: 400, y: 0, width: 40, height: 30, src: "big.png" }], crop: null }, calls, { asset });
+    await ready();
+    await waitFor(() => expect(calls.map((call) => call.cmd)).toContain("editor_asset_image"));
+
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls.map((call) => call.cmd)).not.toContain("editor_copy");
+
+    finishRead(new ArrayBuffer(4));
+    await waitFor(() => expect(calls.map((call) => call.cmd)).toEqual(["editor_asset_image", "editor_copy", "plugin:window|close"]));
+    // By then the image is drawn, and the output takes it in.
+    expect(document.querySelector('[data-konva="Image"][data-id="i1"]')).not.toBeNull();
+    expect(last(flattened.calls)).toMatchObject({ crop: { x: 0, y: 0, width: 440, height: 300 } });
+  });
+
+  it("copies without an added image whose file is gone", async () => {
+    const calls: { cmd: string; payload: unknown }[] = [];
+    const gone = Promise.reject(new Error("the added image is missing"));
+    // Handled here so the test runner does not flag it before the editor reads it.
+    gone.catch(() => undefined);
+    mockEditor({ version: 1, shapes: [{ id: "i1", type: "image", x: 0, y: 0, width: 40, height: 30, src: "gone.png" }], crop: null }, calls, {
+      asset: gone,
+    });
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(calls.map((call) => call.cmd)).toContain("editor_copy"));
   });
 
   it("brings the selected annotation forward and sends it backward", async () => {

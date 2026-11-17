@@ -631,7 +631,7 @@ export default function EditorWindow() {
   const imageSize = useMemo(() => (image ? { width: image.width, height: image.height } : null), [image]);
   /** The capture and every added image: what shows and exports before a crop. */
   const canvas = useMemo(() => (imageSize ? canvasRect(imageSize, doc.shapes) : null), [imageSize, doc.shapes]);
-  const { images: assetImages, seed: seedAssetImage } = useAssetImages(doc.shapes);
+  const { images: assetImages, seed: seedAssetImage, ready: assetsReady } = useAssetImages(doc.shapes);
   /** The latest canvas, for an image pasted after an await. */
   const canvasRef = useRef(canvas);
   useEffect(() => {
@@ -1405,6 +1405,8 @@ export default function EditorWindow() {
 
   const render = useCallback(
     async (format: ExportFormat) => {
+      // An added image still being read would be left out of the output.
+      await assetsReady();
       const layer = contentRef.current;
       if (!layer || !imageSize || !canvas) throw new Error("The capture has not loaded yet.");
       const o = { rotation, flipX, flipY };
@@ -1423,7 +1425,7 @@ export default function EditorWindow() {
         seeThrough,
       });
     },
-    [doc.crop, backdrop, imageSize, canvas, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale, borders, seeThrough],
+    [assetsReady, doc.crop, backdrop, imageSize, canvas, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale, borders, seeThrough],
   );
 
   /** Copies the flattened image; false when it failed (and said so). */
