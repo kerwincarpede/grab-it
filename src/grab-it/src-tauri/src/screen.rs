@@ -470,12 +470,17 @@ struct ListedWindow {
     app_name: String,
     title: String,
     rect: Rect,
+    /// Whether the owner is a running app. Helpers such as JankyBorders draw
+    /// click-through windows from processes that are not apps.
+    is_app: bool,
 }
 
 /// The windows the overlay offers from `listed`: ordinary app windows that
 /// can be seen, front to back, not Grab-it's own. Menu bar icons, the Dock,
 /// Control Center and widgets are left out, so hovering never lands on a
-/// small piece of the screen instead of the window under it.
+/// small piece of the screen instead of the window under it. Windows whose
+/// owner is not an app, such as window border outlines, are left out too,
+/// so a capture is never filed under a helper process.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn pickable(listed: Vec<ListedWindow>, own_pid: u32) -> Vec<WindowInfo> {
     listed
@@ -484,6 +489,7 @@ fn pickable(listed: Vec<ListedWindow>, own_pid: u32) -> Vec<WindowInfo> {
             window.layer == 0
                 && window.alpha > 0.0
                 && window.pid != own_pid
+                && window.is_app
                 && window.rect.width > 0
                 && window.rect.height > 0
         })
@@ -523,9 +529,10 @@ fn front_of(listed: &[ListedWindow], active_pid: Option<u32>) -> Foreground {
 /// for each property, here made once per window instead.
 #[cfg(target_os = "macos")]
 mod mac {
+    use std::collections::HashMap;
     use std::ffi::c_void;
 
-    use objc2_app_kit::NSWorkspace;
+    use objc2_app_kit::{NSRunningApplication, NSWorkspace};
     use objc2_core_foundation::{CFDictionary, CFNumber, CFNumberType, CFString, CGRect};
     use objc2_core_graphics::{
         CGRectMakeWithDictionaryRepresentation, CGWindowListCopyWindowInfo, CGWindowListOption,
@@ -590,6 +597,8 @@ mod mac {
             return Vec::new();
         };
         let mut listed = Vec::new();
+        // Whether each owner is an app, looked up once per process.
+        let mut apps: HashMap<i32, bool> = HashMap::new();
         for i in 0..windows.count() {
             // SAFETY: `i` is within the array, whose items are dictionaries.
             let dictionary = unsafe { windows.value_at_index(i) } as *const CFDictionary;
@@ -610,9 +619,14 @@ mod mac {
             if title == "StatusIndicator" && app_name == "Window Server" {
                 continue;
             }
+            let pid = int(dictionary, "kCGWindowOwnerPID").unwrap_or(-1);
+            let is_app = pid >= 0
+                && *apps.entry(pid).or_insert_with(|| {
+                    NSRunningApplication::runningApplicationWithProcessIdentifier(pid).is_some()
+                });
             listed.push(ListedWindow {
                 id: id as u32,
-                pid: int(dictionary, "kCGWindowOwnerPID").unwrap_or(-1) as u32,
+                pid: pid as u32,
                 layer: int(dictionary, "kCGWindowLayer").unwrap_or(0),
                 alpha: number(dictionary, "kCGWindowAlpha", CFNumberType::DoubleType)
                     .unwrap_or(1.0),
@@ -624,6 +638,7 @@ mod mac {
                     width: rect.size.width as u32,
                     height: rect.size.height as u32,
                 },
+                is_app,
             });
         }
         listed
@@ -766,6 +781,7 @@ mod tests {
                 width: 800,
                 height: 600,
             },
+            is_app: true,
         }
     }
 
@@ -775,7 +791,11 @@ mod tests {
         clear.alpha = 0.0;
         let mut empty = listed(5, 20, 0, "Empty");
         empty.rect.width = 0;
+        let mut border = listed(8, 60, 0, "borders");
+        border.title = String::new();
+        border.is_app = false;
         let windows = [
+            border,
             listed(1, 30, 25, "Control Center"),
             listed(2, 10, 0, "Grab-it"),
             listed(3, 20, 0, "Safari"),
