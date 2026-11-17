@@ -1,39 +1,22 @@
 name: PR Agent
 
-# AI code review with PR-Agent (https://docs.pr-agent.ai), on request only:
-#   - Adding the `ai-review` label to a PR reviews it, and every later push to
-#     a PR that still has the label is reviewed again. Remove the label to stop.
-#   - The repo owner, a member or a collaborator can comment a PR-Agent command
-#     such as `/review`, `/improve` or `/ask <question>` on a PR.
-# Needs the ANTHROPIC_KEY repository secret.
+# AI review (https://docs.pr-agent.ai) when the `ai-review` label is added.
+# Re-add the label to review again. Needs the ANTHROPIC_KEY secret.
 
 on:
   pull_request:
-    types: [labeled, synchronize]
-  issue_comment:
-    types: [created, edited]
+    types: [labeled]
 
-# A newer push or label supersedes an older review of the same PR. Comment
-# commands queue instead, so a second question doesn't cancel the first.
 concurrency:
-  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: pr-agent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   pr-agent:
-    if: >-
-      github.event.sender.type != 'Bot' && (
-        (github.event_name == 'pull_request' && github.event.action == 'labeled'
-          && github.event.label.name == 'ai-review') ||
-        (github.event_name == 'pull_request' && github.event.action == 'synchronize'
-          && contains(github.event.pull_request.labels.*.name, 'ai-review')) ||
-        (github.event_name == 'issue_comment' && github.event.issue.pull_request
-          && startsWith(github.event.comment.body, '/')
-          && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
-      )
+    if: github.event.sender.type != 'Bot' && github.event.label.name == 'ai-review'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -47,13 +30,8 @@ jobs:
           ANTHROPIC.KEY: ${{ secrets.ANTHROPIC_KEY }}
           config.model: anthropic/claude-opus-5-5
           config.fallback_models: '["anthropic/claude-sonnet-5"]'
-          # The label event runs the auto commands: review only. /describe
-          # would rewrite the PR body.
+          # Review only; /describe would rewrite the PR body.
           github_action_config.pr_actions: '["labeled"]'
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "false"
-          # Pushes to a labelled PR run push_commands. Merges of main into the
-          # branch are skipped.
-          github_action_config.handle_push_trigger: "true"
-          github_action_config.push_commands: '["/review"]'

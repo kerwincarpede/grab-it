@@ -331,7 +331,7 @@ To build installers locally, run `npm run tauri build`; they land in `src/grab-i
 
 ## CI
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04 and, in parallel, builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts. It runs on every pull request and never publishes anything. Pushes to `main` run it through the release workflow instead (below), so `main` is built once, as a release.
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04 and, in parallel, builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts. It runs on every pull request except those that change only docs (the site, `docs/` or Markdown), and never publishes anything. Pushes to `main` run it through the release workflow instead (below), so `main` is built once, as a release.
 
 ## Releases
 

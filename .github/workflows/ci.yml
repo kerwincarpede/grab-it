@@ -1,9 +1,12 @@
 name: CI
 
-# Pushes to main run these checks and builds through release.yml, which
-# releases what they build, so main is not built twice.
+# main runs this through release.yml. Docs-only PRs skip it; docs.yml builds the site.
 on:
   pull_request:
+    paths-ignore:
+      - src/grab-it-docs/**
+      - docs/**
+      - '**/*.md'
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -16,9 +19,7 @@ on:
         type: string
         default: ''
 
-# On a pull request a newer push supersedes an older run. Called from
-# release.yml, each release gets a group of its own and is never cancelled,
-# so every merge into main is built and released.
+# Releases are never cancelled; a newer push to a PR cancels the older run.
 concurrency:
   group: ${{ github.workflow == 'Release' && format('release-{0}', github.run_id) || format('{0}-{1}', github.workflow, github.ref) }}
   cancel-in-progress: ${{ github.workflow != 'Release' }}
@@ -28,8 +29,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # actions/checkout runs `git init`; naming the initial branch keeps git from
-  # printing its hint about the default branch name.
+  # Silences git's default-branch hint during checkout.
   GIT_CONFIG_COUNT: 1
   GIT_CONFIG_KEY_0: init.defaultBranch
   GIT_CONFIG_VALUE_0: main
@@ -93,8 +93,6 @@ jobs:
         with:
           workspaces: src/grab-it/src-tauri
 
-      # The root package.json is an npm workspace over src/*; one install
-      # there serves every package.
       - name: Install dependencies
         working-directory: .
         run: npm ci
@@ -116,8 +114,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # ubuntu-24.04-arm builds the arm64 Linux packages; macos-latest
-        # builds one universal app for Apple silicon and Intel Macs.
         platform: [ubuntu-24.04, ubuntu-24.04-arm, windows-latest, macos-latest]
     runs-on: ${{ matrix.platform }}
     steps:
