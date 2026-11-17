@@ -2170,6 +2170,7 @@ dependencies = [
  "trash",
  "ureq",
  "webkit2gtk",
+ "widestring",
  "windows 0.61.3",
  "x11rb",
  "xcap",

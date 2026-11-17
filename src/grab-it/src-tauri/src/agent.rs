@@ -176,7 +176,7 @@ pub fn match_display<'a>(
 
 /// The monitor holding the most of `rect` (desktop coordinates), or None
 /// when it is on none of them.
-pub fn monitor_for<'a>(monitors: &'a [MonitorInfo], rect: Rect) -> Option<&'a MonitorInfo> {
+pub fn monitor_for(monitors: &[MonitorInfo], rect: Rect) -> Option<&MonitorInfo> {
     let overlap = |monitor: &MonitorInfo| {
         let left = rect.x.max(monitor.x);
         let top = rect.y.max(monitor.y);
