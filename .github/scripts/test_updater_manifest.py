@@ -45,23 +45,40 @@ class ChangeItems(unittest.TestCase):
 
 
 class Changes(unittest.TestCase):
-    def test_newest_first_skipping_drafts_prereleases_and_later_versions(self):
+    def test_newest_first_skipping_drafts_and_later_versions(self):
         history = [
             release("0.2.0", "## What's Changed\n* feat: two"),
             release("0.10.0", "## What's Changed\n* feat: ten"),
             release("0.3.0", "## What's Changed\n* feat: three"),
             release("0.3.1", draft=True),
-            release("0.3.2", prerelease=True),
         ]
         got = manifest.changes(release("0.4.0", BODY), history)
         self.assertEqual([c["version"] for c in got], ["0.4.0", "0.3.0", "0.2.0"])
         self.assertEqual(got[1]["items"], ["Three"])
 
+    def test_counts_edge_prereleases(self):
+        history = [
+            release("0.3.0"),
+            release("0.3.1", "## What's Changed\n* fix: one", prerelease=True),
+            release("0.3.2", prerelease=True),
+        ]
+        got = manifest.changes(release("0.3.3"), history)
+        self.assertEqual(
+            [c["version"] for c in got], ["0.3.3", "0.3.2", "0.3.1", "0.3.0"]
+        )
+        self.assertEqual(got[2]["items"], ["One"])
+
+    def test_skips_the_rolling_edge_release(self):
+        edge = {"id": "edge", "tag_name": "edge", "body": "", "prerelease": True}
+        got = manifest.changes(release("0.4.0"), [edge, release("0.3.0")])
+        self.assertEqual([c["version"] for c in got], ["0.4.0", "0.3.0"])
+
     def test_keeps_only_recent_versions(self):
-        history = [release(f"0.1.{n}") for n in range(40)]
+        history = [release(f"0.1.{n}") for n in range(80)]
         got = manifest.changes(release("0.2.0"), history)
+        self.assertEqual(manifest.HISTORY, 50)
         self.assertEqual(len(got), manifest.HISTORY)
-        self.assertEqual(got[-1]["version"], "0.1.21")
+        self.assertEqual(got[-1]["version"], "0.1.31")
 
 
 RELEASE_PACKAGES = [

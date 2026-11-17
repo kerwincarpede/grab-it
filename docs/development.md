@@ -358,7 +358,7 @@ To build installers locally, run `npm run tauri build`; they land in `src/grab-i
 
 ## Releases
 
-Every push to `main`, such as a merged pull request, is released. Each release publishes a [GitHub release](https://github.com/kerwincarpede/grab-it/releases) of that commit with the installers attached: `.msi` and `-setup.exe` for Windows, `.dmg` for macOS (Apple silicon), and `.AppImage`, `.deb` and `.rpm` for Linux.
+Every push to `main`, such as a merged pull request, is released to the Edge channel. Each release publishes a [GitHub release](https://github.com/kerwincarpede/grab-it/releases) of that commit, marked as a pre-release and never as the latest release, with the installers attached: `.msi` and `-setup.exe` for Windows, a universal `.dmg` for macOS, and `.AppImage`, `.deb` and `.rpm` for Linux. Only copies on the Edge update channel offer it. A Stable release is an Edge release promoted later, with the same installers (see "Promoting to Stable").
 
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) runs the whole of `ci.yml` (checks and the three installer builds) as a reusable workflow, so a release gets exactly the checks a pull request does, and those builds are the ones released. Releases run one at a time: pushes that land during a release wait, and only the newest of them runs, releasing all their commits together.
 
@@ -381,7 +381,24 @@ Versions come from the `v*` git tags. With the default `auto` bump, [`PaulHatch/
 
 The first release, made before any tag exists, takes the version in `src/grab-it/src-tauri/tauri.conf.json`. After that the tags are the source of truth: CI writes the release version into `tauri.conf.json` before building, so the version fields in the repository do not need bumping by hand.
 
-A run opens a draft release, builds the installers into it, and publishes it (creating the tag) only when the checks and all three builds pass. A failed run leaves only a hidden draft, which the next release of that version replaces. Each release is named by its version, for example `0.2.1` for the tag `v0.2.1`.
+A run opens a draft release, builds the installers into it, and publishes it as a pre-release (creating the tag) only when the checks and all the builds pass. A failed run leaves only a hidden draft, which the next release of that version replaces. Each release is named by its version, for example `0.2.1` for the tag `v0.2.1`, and its notes open with an **Edge build** line.
+
+Publishing then copies the release's `latest.json` onto the rolling `edge` pre-release, which Edge copies read, creating that release the first time. Its tag, `edge`, has no `v`, so version numbering ignores it, and `latest.json` is its only asset. A replaced `latest.json` is deleted by id and uploaded again.
+
+Releases run only from `main`. The release workflow's version and publish jobs, and `ci.yml`'s build jobs when they build a release, run in the `release` environment, which only `main` may deploy to. It holds the signing secrets: `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD`. A branch cannot use them, so pull request builds make no update packages and sign the macOS app ad-hoc.
+
+### Promoting to Stable
+
+[`.github/workflows/promote.yml`](../.github/workflows/promote.yml) makes an Edge release the latest release, which Stable copies update to. Nothing is rebuilt. Run it from `main` with **Actions → Promote to Stable → Run workflow**, or:
+
+```sh
+gh workflow run promote.yml                  # the newest Edge release
+gh workflow run promote.yml -f version=0.9.3 # a chosen one
+```
+
+It runs in the `stable` environment, which only `main` may deploy to and which waits for the owner's approval. [`.github/scripts/promote.py`](../.github/scripts/promote.py) picks the newest `v*` pre-release when no version is given, and refuses a draft or any version not newer than the current Stable release. The workflow then writes that release's `latest.json` again, as the publish job does, drops the **Edge build** line from its notes, and marks it as the latest release and no longer a pre-release.
+
+Homebrew users install the universal `.dmg` through the cask in [kerwincarpede/homebrew-tap](https://github.com/kerwincarpede/homebrew-tap) (`brew install --cask kerwincarpede/tap/grab-it`). Promotion points the cask at the promoted release's `.dmg` ([`.github/scripts/homebrew_cask.py`](../.github/scripts/homebrew_cask.py)), so Homebrew installs only Stable. The push needs `HOMEBREW_TAP_TOKEN` in the `stable` environment (fine-grained, contents: write on the tap); without it the release is still promoted and the cask stays as it was. The cask is updated after the release is published, so if that push fails, the run cannot simply be run again (the version is Stable by then): update `Casks/grab-it.rb` in the tap by hand.
 
 ### Updates
 
@@ -391,15 +408,15 @@ The channel is **Settings → General → Updates** (`updateChannel` in `setting
 
 A release builds those packages because CI turns on `bundle.createUpdaterArtifacts` when it stamps the version: the `.app.tar.gz` on macOS, and the `.AppImage`, `.deb`, `.rpm`, `.msi` and `-setup.exe` themselves elsewhere, each with a `.sig`. The publish job then writes `latest.json` from those signatures ([`.github/scripts/updater_manifest.py`](../.github/scripts/updater_manifest.py)) and refuses to publish a release that is missing macOS, Linux or Windows.
 
-`latest.json` also carries `changes`: the user-facing entries of the generated release notes ("What's Changed") of this release and the 19 before it. The update prompt lists those newer than the installed version, so someone several versions behind sees everything the update brings. Entries come from the pull request titles, without their Conventional Commits prefix; `ci`, `docs`, `chore`, `build`, `refactor`, `style` and `test` changes are left out, so write `feat:` and `fix:` titles for a user to read.
+`latest.json` also carries `changes`: the user-facing entries of the generated release notes ("What's Changed") of this release and the 49 before it, Edge pre-releases included, so a Stable release lists every Edge release since the last Stable one. The rolling `edge` release is left out. The update prompt lists those newer than the installed version, so someone several versions behind sees everything the update brings. Entries come from the pull request titles, without their Conventional Commits prefix; `ci`, `docs`, `chore`, `build`, `refactor`, `style` and `test` changes are left out, so write `feat:` and `fix:` titles for a user to read.
 
-The updater accepts only packages signed with the key whose public half is `plugins.updater.pubkey` in `tauri.conf.json`. The private key and its password are the `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repository secrets. **Keep a backup of the key**: if it is lost, installed copies cannot be updated, and everyone has to download a release built with a new key by hand. Ordinary CI builds make no update packages, so they need neither secret.
+The updater accepts only packages signed with the key whose public half is `plugins.updater.pubkey` in `tauri.conf.json`. The private key and its password are the `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets in the `release` environment. **Keep a backup of the key**: if it is lost, installed copies cannot be updated, and everyone has to download a release built with a new key by hand. Ordinary CI builds make no update packages, so they need neither secret.
 
 Development builds (`npm run tauri dev`) do not check by themselves; the tray's **Check for updates…** still works.
 
 The installers are not signed with a paid certificate, so Gatekeeper says it cannot verify the developer of the macOS app rather than calling it damaged, and Windows SmartScreen warns too.
 
-CI signs the macOS app with a self-signed certificate, held in the `MACOS_CERTIFICATE` (a base64 `.p12`) and `MACOS_CERTIFICATE_PASSWORD` repository secrets. macOS remembers Screen Recording and keychain permissions by the app's signature. Each ad-hoc signature is tied to one exact build, so before this certificate every update lost them. With the certificate, every release has the same identity and keeps them. Tauri's own `APPLE_CERTIFICATE` import accepts only Apple-issued certificates, so CI imports this one into a temporary keychain itself and hands its name to Tauri as `APPLE_SIGNING_IDENTITY`, then fails the build if the signature is not tied to it. Without the secret, as in pull requests from forks, the app is signed ad-hoc (`-`). An `APPLE_SIGNING_IDENTITY` secret (a paid certificate) takes precedence over both.
+CI signs the macOS app with a self-signed certificate, held in the `MACOS_CERTIFICATE` (a base64 `.p12`) and `MACOS_CERTIFICATE_PASSWORD` secrets in the `release` environment. macOS remembers Screen Recording and keychain permissions by the app's signature. Each ad-hoc signature is tied to one exact build, so before this certificate every update lost them. With the certificate, every release has the same identity and keeps them. Tauri's own `APPLE_CERTIFICATE` import accepts only Apple-issued certificates, so CI imports this one into a temporary keychain itself and hands its name to Tauri as `APPLE_SIGNING_IDENTITY`, then fails the build if the signature is not tied to it. Without the secret, as in every pull request, the app is signed ad-hoc (`-`). An `APPLE_SIGNING_IDENTITY` secret (a paid certificate) takes precedence over both.
 
 The certificate was made once with [`.github/scripts/make_macos_signing_cert.sh`](../.github/scripts/make_macos_signing_cert.sh) and is valid for 20 years. **Keep a backup of the `.p12` and its password**: a new certificate is a new identity, so every installed copy would have to grant its permissions again once.
 
