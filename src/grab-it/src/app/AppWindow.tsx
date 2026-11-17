@@ -29,7 +29,13 @@ import {
 } from "./updates";
 import LibraryWindow from "../library/LibraryWindow";
 import WelcomeWindow from "../welcome/WelcomeWindow";
-import { getSettings, stepTextSize, textSizeStep, type SettingsSection } from "../settings/api";
+import {
+  getSettings,
+  stepTextSize,
+  textSizeStep,
+  type SettingsSection,
+  type UpdateChannel,
+} from "../settings/api";
 import { onLibraryChanged, sidebarSummary, type KindFilter, type SidebarSummary } from "../library/api";
 import { tagStyle } from "../library/tagColor";
 import { shortcutLabel } from "../hub/keys";
@@ -162,8 +168,16 @@ function CaptureButton({ hotkey, onError }: { hotkey: string | null; onError: (m
   );
 }
 
+interface UpdateSlotProps {
+  status: UpdateStatus | null;
+  /** Edge copies say so by the version. */
+  channel: UpdateChannel;
+  onOpen: () => void;
+  onCheck: () => void;
+}
+
 /** The version, or the update waiting to be installed. */
-function UpdateSlot({ status, onOpen, onCheck }: { status: UpdateStatus | null; onOpen: () => void; onCheck: () => void }) {
+function UpdateSlot({ status, channel, onOpen, onCheck }: UpdateSlotProps) {
   const pending = pendingUpdate(status);
   if (pending && status?.state === "installing") {
     const percent = status.total ? Math.round((status.downloaded * 100) / status.total) : null;
@@ -195,6 +209,11 @@ function UpdateSlot({ status, onOpen, onCheck }: { status: UpdateStatus | null; 
     <div className="version">
       <span className="version-dot" aria-hidden="true" />
       {version && <span>v{version}</span>}
+      {channel === "edge" && (
+        <span className="version-channel" title="This copy updates to every change as soon as it is built.">
+          Edge
+        </span>
+      )}
       <button
         type="button"
         className="icon-button version-check"
@@ -221,15 +240,19 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [regionHotkey, setRegionHotkey] = useState<string | null>(null);
+  const [updateChannel, setUpdateChannel] = useState<UpdateChannel>("stable");
 
-  // Read again whenever a dialog closes, so a hotkey changed in Settings shows.
+  // Read again whenever a dialog closes, so a hotkey or update channel
+  // changed in Settings shows.
   const settingsOpen = open?.kind === "settings";
   useEffect(() => {
     if (settingsOpen) return;
     let cancelled = false;
     getSettings()
       .then((settings) => {
-        if (!cancelled) setRegionHotkey(settings?.hotkeys?.region || null);
+        if (cancelled) return;
+        setRegionHotkey(settings?.hotkeys?.region || null);
+        setUpdateChannel(settings?.updateChannel === "edge" ? "edge" : "stable");
       })
       .catch(() => {
         // The button works without its hotkey label.
@@ -384,7 +407,12 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
           <NavItem icon={<SlidersIcon size={15} />} hint="⌘," onClick={() => setOpen({ kind: "settings", section: "general" })}>
             Settings
           </NavItem>
-          <UpdateSlot status={update} onOpen={() => setOpen({ kind: "updates" })} onCheck={() => run(checkForUpdate)} />
+          <UpdateSlot
+            status={update}
+            channel={updateChannel}
+            onOpen={() => setOpen({ kind: "updates" })}
+            onCheck={() => run(checkForUpdate)}
+          />
         </div>
       </nav>
 

@@ -7,7 +7,10 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::{
     hotkeys::{self, Hotkeys},
-    settings::{BackdropPreset, EditorPreferences, PreferencesUpdate, Settings, SettingsStore},
+    settings::{
+        BackdropPreset, EditorPreferences, PreferencesUpdate, Settings, SettingsStore,
+        UpdateChannel,
+    },
 };
 
 pub type SettingsState = Mutex<SettingsStore>;
@@ -151,6 +154,30 @@ pub fn set_agent_access(
     lock(&state)
         .set_agent_access(enabled)
         .map_err(|err| err.to_string())
+}
+
+/// Settings › Updates: switches between Stable and Edge, forgets the
+/// update the old channel offered and checks the new one. Refused while an
+/// update installs, so the install and the setting always agree.
+#[tauri::command]
+pub fn set_update_channel(
+    channel: UpdateChannel,
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+) -> Result<Settings, String> {
+    if crate::update::installing(&app) {
+        return Err("Wait for the update to finish installing, then switch.".into());
+    }
+    let mut store = lock(&state);
+    let was = store.get().update_channel;
+    let settings = store
+        .set_update_channel(channel)
+        .map_err(|err| err.to_string())?;
+    drop(store);
+    if was != channel {
+        crate::update::channel_switched(&app);
+    }
+    Ok(settings)
 }
 
 /// The annotation editor's remembered colour, tool, widths and options.

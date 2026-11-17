@@ -19,6 +19,7 @@ import {
   type Microphone,
   type RecordingSettings,
   type Retention,
+  type UpdateChannel,
 } from "./api";
 
 const MB = 1024 * 1024;
@@ -77,6 +78,8 @@ interface Backend {
   setError?: string;
   /** Settings › AI agents' access switch. */
   agentAccess?: boolean;
+  /** Settings › Updates' channel; undefined as an older backend leaves it out. */
+  updateChannel?: UpdateChannel;
   /** The SKILL.md files `agent_skill_status` finds. */
   skillInstalled?: string[];
   /** What `install_agent_skill` fails with, when it does. */
@@ -125,6 +128,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     recording: backend.recording,
     retention: backend.retention,
     agentAccess: backend.agentAccess,
+    updateChannel: backend.updateChannel,
   });
   mockIPC((cmd, payload) => {
     backend.calls.push({ cmd, payload });
@@ -227,6 +231,10 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
       case "set_agent_access":
         if (backend.setError) throw backend.setError;
         backend.agentAccess = (payload as { enabled: boolean }).enabled;
+        return settings();
+      case "set_update_channel":
+        if (backend.setError) throw backend.setError;
+        backend.updateChannel = (payload as { channel: UpdateChannel }).channel;
         return settings();
       case "agent_skill_status":
         return { installed: backend.skillInstalled ?? [], current: (backend.skillInstalled ?? []).length > 0 };
@@ -1449,6 +1457,53 @@ describe("SettingsWindow storage", () => {
     const gifs = await screen.findByLabelText("GIFs");
     await waitFor(() => expect(gifs).toBeEnabled());
     expect(screen.queryByTestId("keep-gif-hint")).not.toBeInTheDocument();
+  });
+});
+
+describe("SettingsWindow updates", () => {
+  it("starts on Stable and switches to Edge at once", async () => {
+    const backend = mockBackend();
+    render(<SettingsWindow section="general" />);
+    const updates = await screen.findByRole("group", { name: "Updates" });
+    const stable = within(updates).getByRole("radio", { name: "Stable" });
+    await waitFor(() => expect(stable).toBeChecked());
+    expect(within(updates).getByRole("radio", { name: "Edge" })).not.toBeChecked();
+    expect(screen.getByText(/Releases that have been tried out first/)).toBeInTheDocument();
+    expect(screen.getByText(/Grab-it waits until Stable catches up/)).toBeInTheDocument();
+
+    await userEvent.click(within(updates).getByRole("radio", { name: "Edge" }));
+
+    await waitFor(() => expect(within(updates).getByRole("radio", { name: "Edge" })).toBeChecked());
+    expect(backend.updateChannel).toBe("edge");
+    expect(backend.calls.find((call) => call.cmd === "set_update_channel")?.payload).toEqual({ channel: "edge" });
+    expect(screen.getByText(/Every change as soon as it is built/)).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Saved.");
+  });
+
+  it("shows a saved Edge choice and switches back to Stable", async () => {
+    const backend = mockBackend({ updateChannel: "edge" });
+    render(<SettingsWindow section="general" />);
+    const updates = await screen.findByRole("group", { name: "Updates" });
+    await waitFor(() => expect(within(updates).getByRole("radio", { name: "Edge" })).toBeChecked());
+
+    await userEvent.click(within(updates).getByRole("radio", { name: "Stable" }));
+
+    await waitFor(() => expect(within(updates).getByRole("radio", { name: "Stable" })).toBeChecked());
+    expect(backend.updateChannel).toBe("stable");
+  });
+
+  it("keeps the channel and says why when it cannot switch", async () => {
+    mockBackend({ setError: "Wait for the update to finish installing, then switch." });
+    render(<SettingsWindow section="general" />);
+    const updates = await screen.findByRole("group", { name: "Updates" });
+    await waitFor(() => expect(within(updates).getByRole("radio", { name: "Stable" })).toBeChecked());
+
+    await userEvent.click(within(updates).getByRole("radio", { name: "Edge" }));
+
+    expect(await screen.findByText("Wait for the update to finish installing, then switch.")).toBe(
+      screen.getByRole("status"),
+    );
+    expect(within(updates).getByRole("radio", { name: "Stable" })).toBeChecked();
   });
 });
 

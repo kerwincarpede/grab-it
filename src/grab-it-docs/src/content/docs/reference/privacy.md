@@ -18,7 +18,7 @@ Grab-it has no account, no analytics and no tracking. Your captures stay on your
 
 | What | When | Where to |
 | --- | --- | --- |
-| Update check | Shortly after Grab-it starts, then every few hours, and when you click **Check for updates…** or the refresh button next to the version | GitHub, for the latest Grab-it release |
+| Update check | Shortly after Grab-it starts, then every few hours, when you click **Check for updates…** or the refresh button next to the version, and when you switch update channel | GitHub: the latest Grab-it release on Stable, or the `edge` release on Edge |
 | ffmpeg | Once, the first time you record an MP4, if your computer has no ffmpeg that works (not on macOS) | A pinned FFmpeg-Builds release on GitHub, checked against a checksum built into Grab-it |
 | Your screenshots, with their text, app and window title | Only with AI descriptions on, for each capture described or text tidied, and for each click in a [step capture](/grab-it/capture/step-capture/): its screenshot with the step's badge drawn on it | Your chosen [AI provider](/grab-it/ai/providers/#what-goes-where) |
 

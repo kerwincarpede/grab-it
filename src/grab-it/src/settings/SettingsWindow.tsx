@@ -54,12 +54,15 @@ import {
   setPreferences,
   setSaveFolder,
   setShowInDock,
+  setUpdateChannel,
+  UPDATE_CHANNELS,
   type AiPreferences,
   type Hotkeys,
   type HotkeysUpdate,
   type Preferences,
   type Settings,
   type SettingsSection,
+  type UpdateChannel,
 } from "./api";
 
 interface ScaleSliderProps {
@@ -474,6 +477,18 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     }
   }
 
+  async function changeUpdateChannel(channel: UpdateChannel) {
+    setBusy(true);
+    try {
+      setSettings(await setUpdateChannel(channel));
+      setStatus({ kind: "preferences-saved" });
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function changeAppearance(change: Partial<Appearance>) {
     setBusy(true);
     try {
@@ -526,6 +541,8 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   const appearance = settings?.appearance ?? DEFAULT_APPEARANCE;
   const appearanceOff = busy || settings === null;
   const showsMac = shows("general") && (hasDock() || autostart !== null);
+  const updateChannel = settings?.updateChannel ?? "stable";
+  const updateChannelChoice = UPDATE_CHANNELS.find((choice) => choice.value === updateChannel);
 
   return (
     <main className={section === undefined ? "window settings" : "window settings settings-page"}>
@@ -1008,6 +1025,35 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
               <button type="button" className="pill" onClick={changeFolder} disabled={busy || settings === null}>
                 Change…
               </button>
+            </div>
+          </div>
+        </section>
+      )}
+      {shows("general") && (
+        <section aria-labelledby="updates-heading">
+          <h2 className="group-heading" id="updates-heading">
+            Updates
+          </h2>
+          <div className="group">
+            <div className="row is-stacked">
+              <fieldset className="segmented" aria-labelledby="updates-heading" disabled={busy || settings === null}>
+                {UPDATE_CHANNELS.map((choice) => (
+                  <label key={choice.value}>
+                    <input
+                      type="radio"
+                      name="update-channel"
+                      value={choice.value}
+                      checked={settings !== null && updateChannel === choice.value}
+                      onChange={() => void changeUpdateChannel(choice.value)}
+                    />
+                    {choice.title}
+                  </label>
+                ))}
+              </fieldset>
+              {updateChannelChoice && <span className="row-hint">{updateChannelChoice.hint}</span>}
+              <span className="row-hint">
+                Switching from Edge to Stable never installs an older version: Grab-it waits until Stable catches up.
+              </span>
             </div>
           </div>
         </section>

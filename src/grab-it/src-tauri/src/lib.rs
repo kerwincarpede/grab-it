@@ -135,6 +135,7 @@ pub fn run() {
             commands::set_recording,
             commands::set_retention,
             commands::set_agent_access,
+            commands::set_update_channel,
             agent::agent_skill_status,
             agent::install_agent_skill,
             hub::hub_capture,
