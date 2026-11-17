@@ -1,0 +1,2 @@
+# Noto Emoji SVGs are vendored unchanged; their trailing whitespace is upstream's.
+emoji_u*.svg -whitespace
