@@ -1,7 +1,7 @@
 import type { Annotations, Backdrop, PointerEdit, Rect, Shape } from "./model";
 import { BACKDROP_ASPECTS, BACKDROP_MAX_PADDING, BACKDROP_MAX_RADIUS, emptyAnnotations } from "./model";
 import { clampScale, normalizeRotation } from "./orient";
-import { clampPointerScale } from "./pointer";
+import { clampPointerScale, isPointerLook } from "./pointer";
 
 export class SidecarError extends Error {}
 
@@ -129,12 +129,18 @@ export function parseAnnotations(value: unknown): Annotations {
   };
 }
 
-/** The user's pointer edits, kept only when every field makes sense. */
+/**
+ * The user's pointer edits, kept only when every field makes sense. A
+ * `look` that is not a built-in one is dropped on its own, so the pointer
+ * shows as captured.
+ */
 export function parsePointer(value: unknown): PointerEdit | null {
   if (typeof value !== "object" || value === null) return null;
   const pointer = value as Record<string, unknown>;
   if (!isBool(pointer.shown) || !isNum(pointer.x) || !isNum(pointer.y) || !isNum(pointer.scale) || pointer.scale <= 0) return null;
-  return { shown: pointer.shown, x: pointer.x, y: pointer.y, scale: clampPointerScale(pointer.scale) };
+  const edit: PointerEdit = { shown: pointer.shown, x: pointer.x, y: pointer.y, scale: clampPointerScale(pointer.scale) };
+  if (isPointerLook(pointer.look)) edit.look = pointer.look;
+  return edit;
 }
 
 function pointerField(value: unknown): Pick<Annotations, "pointer"> {

@@ -14,7 +14,6 @@ import {
   exportImage,
   pinImage,
   saveBackdropPresetImage,
-  type CapturedPointer,
 } from "./api";
 import BackdropPanel from "./BackdropPanel";
 import { copyShotText, hasShotText, textCopied, watchShotText, type OcrLine, type ShotText } from "../library/api";
@@ -36,6 +35,7 @@ import {
 } from "./flatten";
 import {
   BackdropIcon,
+  ChevronDownIcon,
   CopyIcon,
   CopyTextIcon,
   CropResetIcon,
@@ -71,6 +71,7 @@ import {
   type LineShape,
   type MagnifyShape,
   type Point,
+  type PointerLook,
   type Rect,
   type Shape,
   type Style,
@@ -96,7 +97,20 @@ import {
   type Orientation,
 } from "./orient";
 import { DEFAULT_CHOICES, parseBackdropPresets, presetName, type EditorChoices, type SavedBackdrop } from "./preferences";
-import { movePointer, POINTER_ID, pointerBox, pointerState, showPointer, transformPointer, withPointer } from "./pointer";
+import {
+  builtInImage,
+  changePointerLook,
+  movePointer,
+  POINTER_ID,
+  POINTER_LOOKS,
+  pointerBox,
+  pointerImageSource,
+  pointerSprite,
+  pointerState,
+  showPointer,
+  transformPointer,
+  withPointer,
+} from "./pointer";
 import ResizePanel from "./ResizePanel";
 import ShapeNode, { SpotlightDim } from "./ShapeNode";
 import ToolWheel from "./ToolWheel";
@@ -199,22 +213,25 @@ function useCaptureImage(ready: boolean) {
   return { image, error };
 }
 
-/** The captured pointer's image, once decoded; null while it loads or when there is none. */
-function usePointerImage(captured: CapturedPointer | null) {
-  const [image, setImage] = useState<HTMLImageElement | null>(null);
-  const data = captured?.image ?? null;
+/** The pointer's image (`src`, a data URL), once decoded; null while it loads or when there is none. */
+function usePointerImage(src: string | null) {
+  const [loaded, setLoaded] = useState<{ src: string; image: HTMLImageElement } | null>(null);
   useEffect(() => {
-    if (!data) return;
+    if (!src) return;
     let cancelled = false;
     const img = new Image();
-    img.onload = () => !cancelled && setImage(img);
-    img.src = `data:image/png;base64,${data}`;
+    img.onload = () => !cancelled && setLoaded({ src, image: img });
+    img.src = src;
     return () => {
       cancelled = true;
     };
-  }, [data]);
-  return data ? image : null;
+  }, [src]);
+  // A look that is still loading shows nothing rather than the last look in the new look's box.
+  return src && loaded?.src === src ? loaded.image : null;
 }
+
+/** The built-in looks' names in the Pointer look picker, which lists Captured first. */
+const LOOK_LABELS: Record<PointerLook, string> = { arrow: "Arrow", hand: "Hand", text: "Text" };
 
 /** One layer of the backdrop preview, painted as the export compose paints it (see `paintBackdrop`). */
 function PaintNode({
@@ -415,6 +432,7 @@ export default function EditorWindow() {
   const cropTransformerRef = useRef<Konva.Transformer>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<HTMLDivElement>(null);
+  const lookRef = useRef<HTMLDivElement>(null);
 
   const [view, setView] = useState<View | null>(null);
   const [tool, setTool] = useState<Tool>(DEFAULT_CHOICES.tool);
@@ -447,6 +465,8 @@ export default function EditorWindow() {
   const [storedFor, setStoredFor] = useState<{ path: string; id: number; text: ShotText } | null>(null);
   const [backdropOpen, setBackdropOpen] = useState(false);
   const [resizeOpen, setResizeOpen] = useState(false);
+  /** The Pointer look picker is open. */
+  const [lookOpen, setLookOpen] = useState(false);
   /** A backdrop being adjusted (a slider mid-drag), shown but not yet committed. */
   const [backdropDraft, setBackdropDraft] = useState<Backdrop | null>(null);
   /** The backdrop last picked, here or in an earlier session: new backdrops start from it. */
@@ -623,8 +643,11 @@ export default function EditorWindow() {
   const selected = doc.shapes.find((shape) => shape.id === selectedId) ?? null;
   /** The pointer saved with the capture, and where and whether it shows; null when there is none. */
   const captured = info?.pointer ?? null;
-  const pointerImage = usePointerImage(captured);
   const capturePointer = useMemo(() => pointerState(doc, captured, pointerByDefault), [doc, captured, pointerByDefault]);
+  const pointerSource = captured && capturePointer ? pointerImageSource(captured, capturePointer, captureScale) : null;
+  const pointerImage = usePointerImage(pointerSource);
+  /** The size and hot spot of the image the pointer shows as. */
+  const sprite = captured && capturePointer ? pointerSprite(captured, capturePointer, captureScale) : null;
   const pointerSelected = selectedId === POINTER_ID && Boolean(capturePointer?.shown);
   const steps = useMemo(() => stepNumbers(doc.shapes), [doc.shapes]);
   const panning = tool === "pan" || spaceHeld;
@@ -645,7 +668,8 @@ export default function EditorWindow() {
     const node = selectedId && editable && !lineSelected ? contentRef.current?.findOne(`#${selectedId}`) : null;
     transformer.nodes(node ? [node] : []);
     transformer.getLayer()?.batchDraw();
-  }, [selectedId, editable, lineSelected, doc]);
+    // The pointer's node is drawn anew when its look's image arrives.
+  }, [selectedId, editable, lineSelected, doc, pointerImage]);
 
   /** The saved crop gets move and resize handles while the Crop tool is out and no new crop is being drawn. */
   const cropHandles = tool === "crop" && !panning && Boolean(doc.crop) && !cropDrag;
@@ -675,6 +699,16 @@ export default function EditorWindow() {
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [resizeOpen]);
+
+  // A click outside the pointer look picker closes it.
+  useEffect(() => {
+    if (!lookOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !lookRef.current?.contains(event.target)) setLookOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [lookOpen]);
 
   // A click outside the backdrop panel closes it.
   useEffect(() => {
@@ -1034,12 +1068,17 @@ export default function EditorWindow() {
     if (capturePointer.shown && selectedId === POINTER_ID) setSelectedId(null);
   };
 
+  /** Draws the pointer as `look`, or as captured for null, and shows it: one undo step. */
+  const pickPointerLook = (look: PointerLook | null) => {
+    if (capturePointer) commit(changePointerLook(doc, capturePointer, look));
+  };
+
   /** Ends a drag or resize of the pointer's node: one undo step, unless nothing changed. */
   const commitPointerNode = (node: Konva.Node) => {
     const transform = { x: node.x(), y: node.y(), scaleX: node.scaleX(), scaleY: node.scaleY() };
     node.scale({ x: 1, y: 1 });
-    if (!captured || !capturePointer) return;
-    commit(withPointer(doc, capturePointer, transformPointer(captured, capturePointer, transform)));
+    if (!sprite || !capturePointer) return;
+    commit(withPointer(doc, capturePointer, transformPointer(sprite, capturePointer, transform)));
   };
 
   const duplicateSelected = useCallback(() => {
@@ -1345,6 +1384,7 @@ export default function EditorWindow() {
         setCropDrag(null);
         setBackdropOpen(false);
         setResizeOpen(false);
+        setLookOpen(false);
         setWheelAt(null);
       } else if (event.key === " ") {
         event.preventDefault();
@@ -1513,6 +1553,14 @@ export default function EditorWindow() {
           <button type="button" className="icon-button" onClick={removeSelected} disabled={!selectedId} aria-label="Delete" title="Delete (Del)">
             <TrashIcon />
           </button>
+        </div>
+        <div
+          className="bar-group pointer-anchor"
+          ref={lookRef}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setLookOpen(false);
+          }}
+        >
           <button
             type="button"
             className="icon-button"
@@ -1524,6 +1572,35 @@ export default function EditorWindow() {
           >
             <PointerIcon />
           </button>
+          <button
+            type="button"
+            className="icon-button look-button"
+            aria-haspopup="dialog"
+            aria-expanded={lookOpen}
+            disabled={!capturePointer}
+            aria-label="Pointer look"
+            title="Swap the pointer for an arrow, hand or text pointer"
+            onClick={() => setLookOpen(!lookOpen)}
+          >
+            <ChevronDownIcon />
+          </button>
+          {lookOpen && captured && capturePointer && (
+            <div className="backdrop-panel pointer-panel" role="dialog" aria-label="Pointer look">
+              <div className="pointer-looks" role="group" aria-label="Looks">
+                <button type="button" aria-pressed={!capturePointer.look} onClick={() => pickPointerLook(null)}>
+                  <img src={`data:image/png;base64,${captured.image}`} alt="" />
+                  Captured
+                </button>
+                {POINTER_LOOKS.map((look) => (
+                  <button key={look} type="button" aria-pressed={capturePointer.look === look} onClick={() => pickPointerLook(look)}>
+                    <img src={builtInImage(look, 1)} alt="" />
+                    {LOOK_LABELS[look]}
+                  </button>
+                ))}
+              </div>
+              <p className="resize-note">The new look points where the pointer pointed.</p>
+            </div>
+          )}
         </div>
         <div className="bar-group" role="group" aria-label="Orientation">
           <button type="button" className="icon-button" onClick={() => rotateBy(-1)} disabled={!image} aria-label="Rotate left" title="Rotate left (Ctrl+[)">
@@ -1722,12 +1799,12 @@ export default function EditorWindow() {
                 <Group name="oriented" {...groupAttrs}>
                   <KonvaImage name="capture" image={image} listening={tool === "select"} />
                   {/* The captured pointer: above the capture, below every annotation, moved and resized like a shape. */}
-                  {captured && capturePointer?.shown && pointerImage && (
+                  {sprite && capturePointer?.shown && pointerImage && (
                     <KonvaImage
                       id={POINTER_ID}
                       name="annotation captured-pointer"
                       image={pointerImage}
-                      {...pointerBox(captured, capturePointer)}
+                      {...pointerBox(sprite, capturePointer)}
                       draggable={editable}
                       listening={editable}
                       onMouseDown={() => setSelectedId(POINTER_ID)}
