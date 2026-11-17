@@ -110,6 +110,13 @@ webkit2gtk = "2.0"
 # shows the Open With dialog (library.rs) and puts files on the clipboard
 # (file_clipboard.rs).
 windows = { version = "0.61", features = [
+    # Reads text with the system's own recognition (ocr_windows.rs).
+    "Foundation",
+    "Foundation_Collections",
+    "Globalization",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     # Attaches the command line to the terminal it was run from (cli.rs).

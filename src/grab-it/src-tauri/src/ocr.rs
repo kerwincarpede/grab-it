@@ -1,5 +1,6 @@
 //! OCR of captures: with the system's own recognition where there is one
-//! (Vision on macOS, see [`crate::ocr_vision`]), else with
+//! (Vision on macOS, see [`crate::ocr_vision`], and Windows.Media.Ocr on
+//! Windows, see [`crate::ocr_windows`]), else with
 //! [ocrs](https://github.com/robertknight/ocrs), which is also the fallback
 //! when the system's engine fails.
 //!
@@ -156,10 +157,13 @@ impl Ocr {
     /// the system's engine when there is one, else, or when it fails, with
     /// ocrs.
     pub fn read_image(&self, image: &image::RgbImage) -> OcrResult<Vec<OcrLine>> {
-        match crate::ocr_vision::read(image) {
-            Some(Ok(lines)) => return Ok(lines),
-            Some(Err(err)) => {
-                eprintln!("Grab-it: Vision could not read the text, reading it with ocrs: {err}");
+        let system = crate::ocr_vision::read(image)
+            .map(|read| ("Vision", read))
+            .or_else(|| crate::ocr_windows::read(image).map(|read| ("Windows OCR", read)));
+        match system {
+            Some((_, Ok(lines))) => return Ok(lines),
+            Some((engine, Err(err))) => {
+                eprintln!("Grab-it: {engine} could not read the text, reading it with ocrs: {err}");
             }
             None => {}
         }
