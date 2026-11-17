@@ -48,6 +48,13 @@ const TOOL_ICONS: Record<Tool, ReactNode> = {
       <path d="M10.5 9.5L12.5 8v8" />
     </>
   ),
+  stamp: (
+    <>
+      <path d="M10 13.5V10a3 3 0 113.999 0V13.5" />
+      <path d="M4.5 16.5a2 2 0 012-2h11a2 2 0 012 2v1.5h-15z" />
+      <path d="M6 21h12" />
+    </>
+  ),
   highlighter: (
     <>
       <path d="M14.5 4.5l5 5L11 18H6v-5z" />

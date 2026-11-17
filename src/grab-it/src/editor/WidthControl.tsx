@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { nearestPreset, type WidthKind } from "./model";
+import { StampPreview } from "./StampPicker";
 
 interface WidthControlProps {
   /** What the width sets for the active tool or selected shape. */
@@ -66,6 +67,11 @@ export default function WidthControl({ kind, value, color, onChange }: WidthCont
             {kind.preview === "text" && (
               <span className="width-preview-text" style={{ fontSize: shown, color }}>
                 Aa
+              </span>
+            )}
+            {kind.preview === "stamp" && (
+              <span className="width-preview-stamp">
+                <StampPreview id="check" color={color} size={shown} />
               </span>
             )}
             {kind.preview === "step" && (

@@ -1,18 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_FONT_SIZE,
+  DEFAULT_STAMP_SIZE,
   DEFAULT_STEP_RADIUS,
   emptyAnnotations,
   FONT_SIZES,
   nearestPreset,
+  STAMP_SIZES,
   STEP_RADII,
   STROKE_WIDTHS,
+  TOOLS,
   widthFor,
   widthKind,
   canvasBounds,
   type ImageShape,
   type LineShape,
   type Shape,
+  type StampShape,
   type Style,
 } from "./model";
 import {
@@ -48,12 +52,17 @@ import {
   reorderShape,
   holdCropSides,
   HOLD_MS,
+  keepsRatio,
+  MIN_STAMP_SIZE,
   modifierTool,
   moveCrop,
   moveLineEnd,
   moveShape,
   nearestLine,
+  needsLabel,
   nudgeDelta,
+  pickedStamp,
+  placeStamp,
   releaseRestores,
   replaceShape,
   resizeCrop,
@@ -74,6 +83,7 @@ import {
   transformShape,
   withAlpha,
   withCaptureBorders,
+  withStampRotation,
 } from "./tools";
 import { IDENTITY, orientRect } from "./orient";
 
@@ -1021,5 +1031,86 @@ describe("drawing order", () => {
     expect(reorderShape(doc, "c", 1)).toBe(doc);
     expect(reorderShape(doc, "a", -1)).toBe(doc);
     expect(reorderShape(doc, "zz", 1)).toBe(doc);
+  });
+});
+
+describe("stamps", () => {
+  const style: Style = { color: "#0090ff", strokeWidth: 4 };
+  const check: StampShape = { id: "c", type: "stamp", name: "check", x: 100, y: 80, size: 48, color: "#e5484d" };
+
+  it("places the picked stamp centred on the click, at the stamp size", () => {
+    expect(beginShape("stamp", { x: 10, y: 20 }, { ...style, stamp: "star", stampSize: 64 }, "s")).toEqual({
+      id: "s", type: "stamp", name: "star", x: 10, y: 20, size: 64, color: "#0090ff",
+    });
+    // The default stamp and size when nothing was picked.
+    expect(beginShape("stamp", { x: 0, y: 0 }, style)).toMatchObject({ name: "check", size: DEFAULT_STAMP_SIZE });
+  });
+
+  it("gives emoji and cursors no colour, and a keycap preset its label", () => {
+    expect(beginShape("stamp", { x: 0, y: 0 }, { ...style, stamp: "emoji-1f44d" })).not.toHaveProperty("color");
+    expect(beginShape("stamp", { x: 0, y: 0 }, { ...style, stamp: "cursor-hand" })).not.toHaveProperty("color");
+    expect(beginShape("stamp", { x: 0, y: 0 }, { ...style, stamp: "keycap:Esc" })).toMatchObject({ name: "keycap", label: "Esc", color: "#0090ff" });
+  });
+
+  it("leaves a blank keycap to the editor, which asks for its label", () => {
+    expect(beginShape("stamp", { x: 0, y: 0 }, { ...style, stamp: "keycap" })).toBeNull();
+    expect(needsLabel(pickedStamp({ stamp: "keycap" }))).toBe(true);
+    expect(needsLabel(pickedStamp({ stamp: "keycap:Tab" }))).toBe(false);
+    expect(placeStamp({ name: "keycap", label: "F5" }, { x: 1, y: 2 }, style, "k")).toMatchObject({ label: "F5", x: 1, y: 2 });
+  });
+
+  it("falls back to the default stamp for a pick it does not know", () => {
+    expect(pickedStamp({ stamp: "sparkle" })).toEqual({ name: "check" });
+  });
+
+  it("moves and duplicates, keeping the rotation", () => {
+    const turned = { ...check, rotation: 30 };
+    expect(moveShape(turned, 5, -5)).toEqual({ ...turned, x: 105, y: 75 });
+    expect(duplicateShape(turned, "d")).toMatchObject({ id: "d", x: 112, y: 92, rotation: 30, size: 48 });
+  });
+
+  it("resizes keeping its ratio, and saves the Transformer's rotation", () => {
+    expect(transformShape(check, { x: 90, y: 70, scaleX: 2, scaleY: 1.5 })).toEqual({ ...check, x: 90, y: 70, size: 96 });
+    expect(transformShape(check, { x: 100, y: 80, scaleX: 1, scaleY: 1, rotation: -45 })).toEqual({ ...check, rotation: 315 });
+    expect(transformShape(check, { x: 100, y: 80, scaleX: 0.01, scaleY: 0.01 })).toMatchObject({ size: MIN_STAMP_SIZE });
+  });
+
+  it("drops the rotation when turned back upright", () => {
+    expect(transformShape({ ...check, rotation: 90 }, { x: 100, y: 80, scaleX: 1, scaleY: 1, rotation: 360 })).toEqual(check);
+    expect(withStampRotation(check, 15.004)).toMatchObject({ rotation: 15 });
+  });
+
+  it("resizes from the corners only", () => {
+    expect(anchorsFor(check)).toEqual(CORNER_ANCHORS);
+    expect(keepsRatio(check)).toBe(true);
+  });
+
+  it("recolours icons and keycaps but not emoji", () => {
+    expect(restyleShape(check, { color: "#30a46c" })).toEqual({ ...check, color: "#30a46c" });
+    const emoji: StampShape = { id: "e", type: "stamp", name: "emoji-1f525", x: 0, y: 0, size: 48 };
+    expect(restyleShape(emoji, { color: "#30a46c" })).toBe(emoji);
+    expect(restyleShape(check, { stampSize: 80 })).toMatchObject({ size: 80 });
+    expect(restyleShape(check, { stampSize: 48 })).toBe(check);
+  });
+
+  it("swaps the stamp from the picker, keeping its size and rotation", () => {
+    const turned = { ...check, rotation: 45 };
+    expect(restyleShape(turned, { stamp: "emoji-1f44d" })).toEqual({ id: "c", type: "stamp", name: "emoji-1f44d", x: 100, y: 80, size: 48, rotation: 45 });
+    const emoji = restyleShape(turned, { stamp: "emoji-1f44d" });
+    expect(restyleShape(emoji, { stamp: "cross", color: "#1f2328" })).toMatchObject({ name: "cross", color: "#1f2328" });
+    expect(restyleShape(check, { stamp: "keycap:Ctrl" })).toMatchObject({ name: "keycap", label: "Ctrl", color: "#e5484d" });
+  });
+
+  it("keeps a keycap's label for a blank keycap, and never turns another stamp into a blank one", () => {
+    const cap: StampShape = { id: "k", type: "stamp", name: "keycap", x: 0, y: 0, size: 48, color: "#1f2328", label: "F5" };
+    expect(restyleShape(cap, { stamp: "keycap" })).toBe(cap);
+    expect(restyleShape(cap, { stamp: "check" })).not.toHaveProperty("label");
+    expect(restyleShape(check, { stamp: "keycap" })).toBe(check);
+  });
+
+  it("has its own size control", () => {
+    expect(widthKind("stamp")).toMatchObject({ label: "Stamp size", preview: "stamp", presets: STAMP_SIZES, fallback: DEFAULT_STAMP_SIZE });
+    expect(widthFor({}, "stamp")).toBe(48);
+    expect(TOOLS.find((entry) => entry.tool === "stamp")?.key).toBe("i");
   });
 });

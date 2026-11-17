@@ -16,6 +16,8 @@ const pointerAt = vi.hoisted(() => ({ x: 0, y: 0 }));
 /** What the content layer was rendered over, outside flatten (which is mocked): the preview's shadow silhouette. */
 const layerRenders = vi.hoisted(() => ({ areas: [] as { x: number; y: number; width: number; height: number; pixelRatio: number }[] }));
 const placed = vi.hoisted(() => ({ at: null as { x: number; y: number } | null }));
+/** What a node reports when a Transformer resize or turn ends on it. */
+const transformTo = vi.hoisted(() => ({ x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 }));
 
 // jsdom has no canvas, so Konva nodes render as plain elements that keep
 // the props the tests look at.
@@ -41,8 +43,13 @@ vi.mock("react-konva", async () => {
       scaleY,
       onDragMove,
       onDragEnd,
+      onTransformEnd,
+      rotateEnabled,
+      keepRatio,
+      rotationSnaps,
       stroke,
       shadowColor,
+      fill,
     }: {
       children?: ReactNode;
       id?: string;
@@ -61,8 +68,13 @@ vi.mock("react-konva", async () => {
       scaleY?: number;
       onDragMove?: (event: unknown) => void;
       onDragEnd?: (event: unknown) => void;
+      onTransformEnd?: (event: unknown) => void;
+      rotateEnabled?: boolean;
+      keepRatio?: boolean;
+      rotationSnaps?: number[];
       stroke?: string;
       shadowColor?: string;
+      fill?: string;
     }) =>
       // Only annotations (which have ids) take clicks; the Stage's handler
       // needs real Konva events.
@@ -82,10 +94,16 @@ vi.mock("react-konva", async () => {
           "data-rotation": rotation,
           "data-scale-x": scaleX,
           "data-scale-y": scaleY,
+          "data-rotate-enabled": rotateEnabled === undefined ? undefined : String(rotateEnabled),
+          "data-keep-ratio": keepRatio === undefined ? undefined : String(keepRatio),
+          "data-rotation-snaps": rotationSnaps?.length,
           "data-stroke": stroke,
           "data-shadow": shadowColor,
+          "data-fill": fill,
           onMouseDown: id ? () => onMouseDown?.() : undefined,
           onDoubleClick: onDblClick ? () => onDblClick() : undefined,
+          // A DOM transitionend stands in for the end of a Konva transform: the node reports `transformTo`.
+          onTransitionEnd: onTransformEnd ? () => onTransformEnd(transformEvent()) : undefined,
           // A DOM drag stands in for a Konva drag: the node lands where `pointerAt` says.
           onDrag: onDragMove ? (event: { nativeEvent: MouseEvent }) => onDragMove(dragEvent(event.nativeEvent)) : undefined,
           onDragEnd: onDragEnd ? (event: { nativeEvent: MouseEvent }) => onDragEnd(dragEvent(event.nativeEvent)) : undefined,
@@ -107,6 +125,17 @@ vi.mock("react-konva", async () => {
         placed.at = { ...to };
         return undefined;
       },
+    },
+  });
+  const transformEvent = () => ({
+    target: {
+      x: () => transformTo.x,
+      y: () => transformTo.y,
+      scaleX: () => transformTo.scaleX,
+      scaleY: () => transformTo.scaleY,
+      rotation: () => transformTo.rotation,
+      scale: () => undefined,
+      position: () => undefined,
     },
   });
   const LayerNode = node("Layer");
@@ -223,6 +252,7 @@ vi.mock("react-konva", async () => {
     Circle: node("Circle"),
     Text: node("Text"),
     Image: node("Image"),
+    Path: node("Path"),
     Transformer: node("Transformer"),
   };
 });
@@ -559,7 +589,7 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
     mockEditor();
     await ready();
     const rail = within(screen.getByRole("toolbar", { name: "Annotation tools" }));
-    for (const name of ["Arrow", "Rectangle", "Ellipse", "Line", "Freehand", "Text", "Highlighter", "Blur", "Magnify", "Spotlight", "Step", "Crop", "Cut out", "Select", "Pan"]) {
+    for (const name of ["Arrow", "Rectangle", "Ellipse", "Line", "Freehand", "Text", "Highlighter", "Blur", "Magnify", "Spotlight", "Step", "Stamp", "Crop", "Cut out", "Select", "Pan"]) {
       expect(rail.getByRole("button", { name })).toBeInTheDocument();
     }
     // Icon buttons: the name is the label, the tooltip adds the key.
@@ -2760,5 +2790,143 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
       await ready();
       expect(backdropPanel().queryByRole("group", { name: "Saved" })).not.toBeInTheDocument();
     });
+  });
+});
+
+describe("stamps", () => {
+  beforeEach(() => {
+    flattened.calls = [];
+    vi.stubGlobal("Image", LoadedImage);
+    URL.createObjectURL = vi.fn(() => "blob:capture");
+    URL.revokeObjectURL = vi.fn();
+    Object.assign(transformTo, { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 });
+  });
+
+  const topBar = () => within(screen.getByRole("toolbar", { name: "Style and actions" }));
+  /** Opens the stamp picker and picks `name`. */
+  const pickStamp = (name: string) => {
+    fireEvent.click(topBar().getByRole("button", { name: "Choose stamp" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Stamps" })).getByRole("button", { name }));
+  };
+  const click = (x: number, y: number) => {
+    Object.assign(pointerAt, { x, y });
+    fireEvent.mouseDown(stage());
+    fireEvent.mouseUp(stage());
+  };
+  const transformer = () => document.querySelector('[data-konva="Transformer"]') as Element;
+  const stampOf = (saved: Annotations[], id?: string) =>
+    last(saved)?.shapes.find((shape) => shape.type === "stamp" && (id === undefined || shape.id === id));
+
+  it("places the picked stamp centred on a click with I, and keeps it selected", async () => {
+    const saved = mockEditor({ version: 1, shapes: [], crop: null });
+    await ready();
+    fireEvent.keyDown(window, { key: "i" });
+    fireEvent.keyUp(window, { key: "i" });
+    expect(pressed("Stamp")).toHaveAttribute("aria-pressed", "true");
+    expect(pressed("Stamp")).toHaveAttribute("title", "Stamp (I)");
+    expect(widthButton("Stamp size")).toHaveTextContent("48px");
+    pickStamp("Star");
+    expect(topBar().getByRole("button", { name: "Choose stamp" })).toHaveAttribute("title", "Stamp: Star");
+    click(200, 150);
+    await waitFor(() => expect(stampOf(saved)).toMatchObject({ type: "stamp", name: "star", x: 200, y: 150, size: 48, color: "#e5484d" }));
+    // Selected straight away, with corner handles that keep its ratio and a rotate handle.
+    expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+    expect(anchors()).toEqual(["top-left", "top-right", "bottom-left", "bottom-right"]);
+    expect(transformer()).toHaveAttribute("data-rotate-enabled", "true");
+    expect(transformer()).toHaveAttribute("data-keep-ratio", "true");
+    // The size steps with ] like any width, and resizes the selected stamp.
+    fireEvent.keyDown(window, { key: "]" });
+    await waitFor(() => expect(stampOf(saved)).toMatchObject({ size: 64 }));
+  });
+
+  it("recolours icons, and hides the colours for emoji", async () => {
+    const saved = mockEditor({ version: 1, shapes: [{ id: "c1", type: "stamp", name: "check", x: 50, y: 60, size: 48, color: "#e5484d" }], crop: null });
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="c1"]') as Element);
+    expect(topBar().getByRole("button", { name: "Choose stamp" })).toHaveAttribute("title", "Stamp: Check mark");
+    fireEvent.click(screen.getByRole("button", { name: "Colour #0090ff" }));
+    await waitFor(() => expect(stampOf(saved, "c1")).toMatchObject({ name: "check", color: "#0090ff" }));
+    expect(document.querySelector('[data-id="c1"] [data-konva="Path"][data-stroke="#0090ff"]')).toBeInTheDocument();
+
+    pickStamp("Thumbs up emoji");
+    await waitFor(() => expect(stampOf(saved, "c1")).toMatchObject({ name: "emoji-1f44d", size: 48 }));
+    expect(stampOf(saved, "c1")).not.toHaveProperty("color");
+    expect(screen.queryByRole("button", { name: "Colour #0090ff" })).not.toBeInTheDocument();
+    // Drawn as its image once loaded.
+    await waitFor(() => expect(document.querySelector('[data-id="c1"] [data-konva="Image"]')).toBeInTheDocument());
+
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(stampOf(saved, "c1")).toMatchObject({ name: "check", color: "#0090ff" }));
+  });
+
+  it("saves a stamp's rotation from the rotate handle, snapping to 15° while Shift is held", async () => {
+    const saved = mockEditor({ version: 1, shapes: [{ id: "c1", type: "stamp", name: "check", x: 50, y: 60, size: 48, color: "#e5484d" }], crop: null });
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="c1"]') as Element);
+    expect(transformer()).toHaveAttribute("data-rotation-snaps", "0");
+    fireEvent.keyDown(window, { key: "Shift" });
+    expect(transformer()).toHaveAttribute("data-rotation-snaps", "24");
+    fireEvent.keyUp(window, { key: "Shift" });
+    expect(transformer()).toHaveAttribute("data-rotation-snaps", "0");
+
+    Object.assign(transformTo, { x: 50, y: 60, scaleX: 1, scaleY: 1, rotation: 30 });
+    fireEvent.transitionEnd(document.querySelector('[data-id="c1"]') as Element);
+    await waitFor(() => expect(stampOf(saved, "c1")).toMatchObject({ rotation: 30, size: 48 }));
+    expect(document.querySelector('[data-id="c1"]')).toHaveAttribute("data-rotation", "30");
+
+    // Other shapes still never turn.
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(transformer()).toHaveAttribute("data-rotate-enabled", "false");
+  });
+
+  it("asks for a blank keycap's label, and edits it on a double-click", async () => {
+    const saved = mockEditor({ version: 1, shapes: [], crop: null });
+    await ready();
+    fireEvent.keyDown(window, { key: "i" });
+    fireEvent.keyUp(window, { key: "i" });
+    pickStamp("Blank key");
+    click(120, 80);
+    const box = screen.getByRole("textbox", { name: "Text" });
+    fireEvent.change(box, { target: { value: "F5" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(stampOf(saved)).toMatchObject({ name: "keycap", label: "F5", x: 120, y: 80, color: "#e5484d" }));
+    expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+    const id = stampOf(saved)!.id;
+    expect(document.querySelector(`[data-id="${id}"] [data-text="F5"]`)).toBeInTheDocument();
+
+    fireEvent.doubleClick(document.querySelector(`[data-id="${id}"]`) as Element);
+    const edit = screen.getByRole("textbox", { name: "Text" });
+    expect(edit).toHaveValue("F5");
+    fireEvent.change(edit, { target: { value: "Esc" } });
+    fireEvent.keyDown(edit, { key: "Enter" });
+    await waitFor(() => expect(stampOf(saved, id)).toMatchObject({ label: "Esc" }));
+  });
+
+  it("places a keycap preset straight away, and drops a blank one left empty", async () => {
+    const saved = mockEditor({ version: 1, shapes: [], crop: null });
+    await ready();
+    fireEvent.keyDown(window, { key: "i" });
+    fireEvent.keyUp(window, { key: "i" });
+    pickStamp("Blank key");
+    click(10, 10);
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Text" }), { key: "Enter" });
+    expect(screen.queryByRole("textbox", { name: "Text" })).not.toBeInTheDocument();
+
+    pickStamp("Ctrl key");
+    click(60, 40);
+    await waitFor(() => expect(last(saved)?.shapes).toEqual([expect.objectContaining({ name: "keycap", label: "Ctrl", x: 60, y: 40 })]));
+  });
+
+  it("remembers the last-picked stamp with the editor preferences", async () => {
+    const stored: EditorPreferences[] = [];
+    mockEditor(sidecar, [], { stored: { tool: "stamp", stamp: "emoji-1f525" }, saved: stored });
+    await ready();
+    await waitFor(() => expect(pressed("Stamp")).toHaveAttribute("aria-pressed", "true"));
+    expect(topBar().getByRole("button", { name: "Choose stamp" })).toHaveAttribute("title", "Stamp: Fire emoji");
+    expect(screen.queryByRole("button", { name: "Colour #0090ff" })).not.toBeInTheDocument();
+    pickStamp("Warning");
+    await waitFor(() => expect(last(stored)).toMatchObject({ stamp: "warning", tool: "stamp" }));
   });
 });

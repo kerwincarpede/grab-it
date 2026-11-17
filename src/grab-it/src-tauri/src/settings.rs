@@ -330,6 +330,10 @@ pub struct EditorPreferences {
     /// `pixelate` or `blur`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blur_mode: Option<String>,
+    /// The stamp the Stamp tool places: a bundled stamp's name, or
+    /// `keycap:<label>` for a keycap preset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stamp: Option<String>,
     /// The last backdrop picked, as the editor writes it in a sidecar. Kept
     /// as JSON: the editor checks each field when it reads it back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -455,6 +459,7 @@ impl EditorPreferences {
             text_background: flag("textBackground"),
             text_style: text("textStyle"),
             blur_mode: text("blurMode"),
+            stamp: text("stamp"),
             backdrop: value
                 .get("backdrop")
                 .filter(|backdrop| backdrop.is_object())
@@ -3281,6 +3286,7 @@ mod tests {
             text_background: Some(false),
             text_style: Some("outline".into()),
             blur_mode: Some("blur".into()),
+            stamp: Some("keycap:Ctrl".into()),
             backdrop: Some(serde_json::json!({
                 "fill": "aurora", "padding": 48, "radius": 36, "shadow": true, "aspect": "16:9"
             })),
@@ -3326,6 +3332,7 @@ mod tests {
         assert_eq!(json["editor"]["textBackground"], false);
         assert_eq!(json["editor"]["textStyle"], "outline");
         assert_eq!(json["editor"]["blurMode"], "blur");
+        assert_eq!(json["editor"]["stamp"], "keycap:Ctrl");
         assert_eq!(json["editor"]["widths"]["text"], 48);
         assert_eq!(json["editor"]["backdrop"]["aspect"], "16:9");
     }
@@ -3368,6 +3375,7 @@ mod tests {
                     "color": "#e5484d",
                     "fill": "yes",
                     "textStyle": 3,
+                    "stamp": 7,
                     "widths": {"arrow": 6, "line": -2, "rect": 2.5, "text": "big"},
                     "backdrop": {"fill": "ocean"},
                     "autoBackdrop": "on"

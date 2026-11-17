@@ -1,4 +1,8 @@
 import Konva from "konva";
+import { createElement } from "react";
+import { flushSync } from "react-dom";
+import { createRoot } from "react-dom/client";
+import { Layer, Stage } from "react-konva";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   angleLine,
@@ -22,7 +26,8 @@ import {
   resample,
   type PaintLayer,
 } from "./flatten";
-import { backdropColors, canvasBounds, sameBackdrop, type Backdrop, type MagnifyShape, type LineShape } from "./model";
+import { backdropColors, canvasBounds, sameBackdrop, type Backdrop, type MagnifyShape, type LineShape, type StampShape } from "./model";
+import ShapeNode from "./ShapeNode";
 import { curvePoints } from "./tools";
 import { magnifyLinePoints, magnifyScene } from "./magnify";
 
@@ -743,5 +748,79 @@ describe("magnify lenses in exports", () => {
       expect(points[3]).toBeCloseTo(160);
     }
     expect(magnifyLinePoints({ ...lens, spot: [260, 160] })).toEqual([]);
+  });
+});
+
+/**
+ * Stamps are drawn on the same layer copy and export flatten, turned about
+ * their centre: what is exported is what shows.
+ */
+describe("rotated stamps in exports", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Draws `shape` on a real Konva layer (jsdom has no 2D canvas, so drawing calls do nothing); returns its node. */
+  function drawStamp(shape: StampShape) {
+    const noop = () => undefined;
+    const ctx = new Proxy({} as Record<string | symbol, unknown>, {
+      get: (target, key) => {
+        if (key in target) return target[key];
+        if (key === "getImageData") return () => ({ data: new Uint8ClampedArray(400).fill(255) });
+        if (key === "measureText") return () => ({ width: 10 });
+        return noop;
+      },
+      set: (target, key, value) => {
+        target[key] = value;
+        return true;
+      },
+    });
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    let layer: Konva.Layer | null = null;
+    flushSync(() =>
+      root.render(
+        createElement(
+          Stage,
+          { width: 400, height: 300 },
+          createElement(
+            Layer,
+            { ref: (node: Konva.Layer | null) => { layer = node; } },
+            createElement(ShapeNode, { shape, image: null, editable: false, onSelect: noop, onChange: noop, onEditText: noop }),
+          ),
+        ),
+      ),
+    );
+    const node = (layer as Konva.Layer | null)?.findOne(`#${shape.id}`);
+    return { node, cleanup: () => { root.unmount(); host.remove(); } };
+  }
+
+  it("turns a stamp about its centre, keeping its size", () => {
+    const stamp: StampShape = { id: "k", type: "stamp", name: "check", x: 100, y: 80, size: 48, rotation: 45, color: "#30a46c" };
+    const { node, cleanup } = drawStamp(stamp);
+    try {
+      expect(node?.rotation()).toBe(45);
+      expect(node?.position()).toEqual({ x: 100, y: 80 });
+      // The 48px square turned 45° covers 48√2 each way, still centred on 100, 80.
+      const box = node!.getClientRect({ skipStroke: true });
+      expect(box.width).toBeCloseTo(48 * Math.SQRT2, 1);
+      expect(box.height).toBeCloseTo(48 * Math.SQRT2, 1);
+      expect(box.x + box.width / 2).toBeCloseTo(100, 1);
+      expect(box.y + box.height / 2).toBeCloseTo(80, 1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("draws an upright stamp's box at its size", () => {
+    const { node, cleanup } = drawStamp({ id: "u", type: "stamp", name: "cursor-arrow", x: 50, y: 50, size: 64 });
+    try {
+      expect(node?.rotation()).toBe(0);
+      const box = node!.getClientRect({ skipStroke: true });
+      expect(box.height).toBeCloseTo(64, 1);
+      expect(box.width).toBeCloseTo(44, 1);
+    } finally {
+      cleanup();
+    }
   });
 });

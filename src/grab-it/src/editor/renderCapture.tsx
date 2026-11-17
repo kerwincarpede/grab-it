@@ -10,6 +10,7 @@ import { renderPlan } from "./render";
 import { parseAnnotations } from "./sidecar";
 import ShapeNode, { SpotlightDim } from "./ShapeNode";
 import { spotlightDim, stepNumbers } from "./tools";
+import { loadStampImages } from "./useStampImage";
 
 const noop = () => {};
 
@@ -37,7 +38,7 @@ function nextFrame(): Promise<void> {
 
 /**
  * Draws a capture with its saved edits as a PNG, the way the editor's Copy
- * and Export draw it: its cuts, shapes and blurs, then crop, rotation and flips, the
+ * and Export draw it: its cuts, shapes, stamps and blurs, then crop, rotation and flips, the
  * backdrop (with its image fill), then the output scale. `png` is the
  * original's bytes and `annotations` its sidecar, as saved. The drawing
  * happens on a hidden stage that is removed afterwards. An unknown sidecar
@@ -53,6 +54,8 @@ export async function renderCapture(png: ArrayBuffer, annotations: unknown, scal
   const plan = renderPlan(doc, size, scaleFactor);
   // A moved or unreadable backdrop image leaves the plain underlay showing, as in the editor.
   const fill = plan.backdropImage ? await backdropImage(plan.backdropImage).then(loadImage, () => null) : null;
+  // Cursor and emoji stamps are images: loaded first, so the one drawing below has them.
+  await loadStampImages(doc.shapes);
   const borders = plan.measureBorders ? measureBorders(image, plan.crop, size, plan.orientation) : null;
   const shown = plan.blurredFill && plan.oriented ? (orientedCanvas(image, { x: 0, y: 0, ...size }, size, plan.orientation) ?? image) : image;
   const badges = stepNumbers(doc.shapes);

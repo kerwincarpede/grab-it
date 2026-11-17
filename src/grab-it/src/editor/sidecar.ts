@@ -2,6 +2,7 @@ import type { Annotations, Backdrop, Cut, PointerEdit, Rect, Shape } from "./mod
 import { BACKDROP_ASPECTS, BACKDROP_MAX_PADDING, BACKDROP_MAX_RADIUS, emptyAnnotations } from "./model";
 import { clampScale, normalizeRotation } from "./orient";
 import { clampPointerScale, isPointerLook } from "./pointer";
+import { isStampName, MAX_KEYCAP_LABEL } from "./stamps";
 
 export class SidecarError extends Error {}
 
@@ -81,6 +82,18 @@ export function isShape(value: unknown): value is Shape {
       );
     case "image":
       return isRect(shape) && (shape.width as number) > 0 && (shape.height as number) > 0 && isAssetName(shape.src);
+    case "stamp":
+      // A stamp this version does not bundle (from a newer one) is skipped, like an unknown shape.
+      return (
+        isStampName(shape.name) &&
+        isNum(shape.x) &&
+        isNum(shape.y) &&
+        isNum(shape.size) &&
+        shape.size > 0 &&
+        isOptional(shape.rotation, isNum) &&
+        isOptional(shape.color, isStr) &&
+        isOptional(shape.label, (label) => isStr(label) && label.length <= MAX_KEYCAP_LABEL)
+      );
     default:
       return false;
   }
