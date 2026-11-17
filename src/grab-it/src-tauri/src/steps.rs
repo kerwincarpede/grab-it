@@ -75,16 +75,23 @@ const STEP_COLOR: &str = "#e5484d";
 const STEP_RADIUS: f64 = 20.0;
 /// How many of the clicks that stop a step capture from the tray or the
 /// hub land outside Grab-it, so are taken as steps before the stop is
-/// seen. Windows: the click on the tray icon, which belongs to Explorer;
-/// the menu and the hub are Grab-it's own. macOS: none, since the status
-/// item, its menu and the hub are all Grab-it's. Linux: the click on the
-/// icon and the one on the menu item, both shown by the panel's tray host.
-#[cfg(target_os = "windows")]
-const STOP_CLICKS_OUTSIDE: usize = 1;
-#[cfg(target_os = "macos")]
-const STOP_CLICKS_OUTSIDE: usize = 0;
+/// seen, when they cannot be told apart by what they hit. Windows: none
+/// by count; its stopping clicks are the ones on the taskbar or the tray's
+/// overflow flyout (see [`kept_at_stop`]), and the menu and the hub are
+/// Grab-it's own. macOS: none, since the status item, its menu and the hub
+/// are all Grab-it's. Linux: the click on the icon and the one on the menu
+/// item, both shown by the panel's tray host.
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const STOP_CLICKS_OUTSIDE: usize = 2;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+const STOP_CLICKS_OUTSIDE: usize = 0;
+/// How many of the latest steps wait for a later click, or the stop, to
+/// say whether they were stopping clicks. Windows: the chevron on the
+/// taskbar and the icon in the overflow flyout.
+#[cfg(target_os = "windows")]
+const HELD_STEPS: usize = 2;
+#[cfg(not(target_os = "windows"))]
+const HELD_STEPS: usize = STOP_CLICKS_OUTSIDE;
 /// A step is taken for one of those clicks only when it was clicked this
 /// soon before the stop: an older one is the user's.
 const STOP_GESTURE: Duration = Duration::from_secs(15);
@@ -567,6 +574,8 @@ pub struct Grabbed {
     image_per_point: f64,
     mode: CaptureMode,
     foreground: Foreground,
+    /// The shell part its click hit, for telling stopping clicks apart.
+    shell: Option<screen::Shell>,
 }
 
 /// A step to describe once it is saved, found again by its capture so a
@@ -582,15 +591,18 @@ struct DescribeJob {
 pub struct Held<T> {
     /// When its click was seen.
     pub at: Instant,
+    /// The shell part its click hit.
+    pub shell: Option<screen::Shell>,
     pub step: T,
 }
 
 /// The held steps kept when the session stops at `stopped_at`, oldest
 /// first. Stopped from the keyboard, all of them. Stopped by clicking, the
-/// last `outside` are the stopping clicks that landed outside Grab-it
-/// (those on Grab-it were never taken), so they are dropped, unless one was
-/// clicked longer than [`STOP_GESTURE`] before the stop and so is the
-/// user's.
+/// stopping clicks that landed outside Grab-it are dropped (those on
+/// Grab-it were never taken): a click on the taskbar's tray icon, or on the
+/// overflow flyout's icon with the taskbar chevron click that opened it,
+/// then the last `outside` of the rest. A step clicked longer than
+/// [`STOP_GESTURE`] before the stop is the user's and is kept.
 pub fn kept_at_stop<T>(
     mut held: Vec<Held<T>>,
     trigger: Trigger,
@@ -598,12 +610,22 @@ pub fn kept_at_stop<T>(
     outside: usize,
 ) -> Vec<T> {
     if trigger == Trigger::Click {
+        let recent = |held: &[Held<T>], shell: Option<screen::Shell>| {
+            held.last().is_some_and(|last| {
+                stopped_at.saturating_duration_since(last.at) <= STOP_GESTURE
+                    && (shell.is_none() || last.shell == shell)
+            })
+        };
+        if recent(&held, Some(screen::Shell::TrayOverflow)) {
+            held.pop();
+            if recent(&held, Some(screen::Shell::Taskbar)) {
+                held.pop();
+            }
+        } else if recent(&held, Some(screen::Shell::Taskbar)) {
+            held.pop();
+        }
         let mut dropped = 0;
-        while dropped < outside
-            && held
-                .last()
-                .is_some_and(|last| stopped_at.saturating_duration_since(last.at) <= STOP_GESTURE)
-        {
+        while dropped < outside && recent(&held, None) {
             held.pop();
             dropped += 1;
         }
@@ -613,7 +635,7 @@ pub fn kept_at_stop<T>(
 
 /// The session's loop. Each click's frame is grabbed as soon as the click
 /// is seen; a saver thread writes it, so slow saves never delay the next
-/// grab. The latest [`STOP_CLICKS_OUTSIDE`] steps wait until later clicks,
+/// grab. The latest [`HELD_STEPS`] steps wait until later clicks,
 /// or the stop, say whether they are kept.
 fn run(
     app: &AppHandle,
@@ -666,9 +688,10 @@ fn run(
                     last = Some(step);
                     held.push_back(Held {
                         at: event.at,
+                        shell: grabbed.shell,
                         step: grabbed,
                     });
-                    while held.len() > STOP_CLICKS_OUTSIDE {
+                    while held.len() > HELD_STEPS {
                         if let Some(oldest) = held.pop_front() {
                             let _ = frames.send(oldest.step);
                         }
@@ -713,6 +736,10 @@ fn grab(
     if hit == screen::Hit::Own {
         return Ok(None);
     }
+    let shell = match hit {
+        screen::Hit::Shell(shell) => Some(shell),
+        _ => None,
+    };
     let monitors = screen::monitors()?;
     let monitor = screen::monitor_at(&monitors, x, y)
         .or_else(|| monitors.first())
@@ -767,6 +794,7 @@ fn grab(
             image_per_point,
             mode,
             foreground,
+            shell,
         },
     )))
 }
@@ -1049,6 +1077,8 @@ mod tests {
     use chrono::TimeZone;
     use image::Luma;
 
+    use crate::screen::Shell;
+
     #[test]
     fn guides_are_named_after_their_start_and_never_overwritten() {
         let dir = tempfile::tempdir().unwrap();
@@ -1264,10 +1294,17 @@ mod tests {
     }
 
     fn held(stopped_at: Instant, ago: &[u64]) -> Vec<Held<u8>> {
-        ago.iter()
+        let clicks: Vec<(u64, Option<Shell>)> = ago.iter().map(|secs| (*secs, None)).collect();
+        held_on(stopped_at, &clicks)
+    }
+
+    fn held_on(stopped_at: Instant, clicks: &[(u64, Option<Shell>)]) -> Vec<Held<u8>> {
+        clicks
+            .iter()
             .enumerate()
-            .map(|(n, secs)| Held {
+            .map(|(n, (secs, shell))| Held {
                 at: stopped_at - Duration::from_secs(*secs),
+                shell: *shell,
                 step: n as u8 + 1,
             })
             .collect()
@@ -1302,11 +1339,6 @@ mod tests {
             kept_at_stop(held(now, &[8, 3, 1]), Trigger::Click, now, 2),
             vec![1]
         );
-        // Windows: the tray icon, which is Explorer's.
-        assert_eq!(
-            kept_at_stop(held(now, &[8, 1]), Trigger::Click, now, 1),
-            vec![1]
-        );
         // A step clicked well before the stop is the user's, kept even
         // when fewer stopping clicks were taken than expected.
         assert_eq!(
@@ -1314,6 +1346,45 @@ mod tests {
             vec![1]
         );
         assert!(kept_at_stop(held(now, &[2, 1]), Trigger::Click, now, 2).is_empty());
+    }
+
+    #[test]
+    fn stopping_clicks_on_the_windows_taskbar_and_overflow_are_dropped() {
+        let now = Instant::now();
+        let stop = |clicks: &[(u64, Option<Shell>)]| {
+            kept_at_stop(held_on(now, clicks), Trigger::Click, now, 0)
+        };
+        // A pinned tray icon: one click on the taskbar.
+        assert_eq!(stop(&[(8, None), (1, Some(Shell::Taskbar))]), vec![1]);
+        // An icon in the overflow flyout: the chevron on the taskbar, then
+        // the icon in the flyout.
+        assert_eq!(
+            stop(&[
+                (8, None),
+                (3, Some(Shell::Taskbar)),
+                (1, Some(Shell::TrayOverflow))
+            ]),
+            vec![1]
+        );
+        // A taskbar click of the user's just before a pinned icon's is kept.
+        assert_eq!(
+            stop(&[(4, Some(Shell::Taskbar)), (1, Some(Shell::Taskbar))]),
+            vec![1]
+        );
+        // The last step was in an app window: the stop came from the hub.
+        assert_eq!(stop(&[(3, None), (1, None)]), vec![1, 2]);
+        // A taskbar click long before the stop is the user's.
+        assert_eq!(stop(&[(60, Some(Shell::Taskbar))]), vec![1]);
+        // Stopped from the keyboard, a taskbar step is kept.
+        assert_eq!(
+            kept_at_stop(
+                held_on(now, &[(1, Some(Shell::Taskbar))]),
+                Trigger::Keys,
+                now,
+                0
+            ),
+            vec![1]
+        );
     }
 
     #[test]

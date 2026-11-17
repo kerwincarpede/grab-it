@@ -144,8 +144,34 @@ pub enum Hit {
     Popup,
     /// An ordinary app window.
     Window(WindowInfo),
+    /// Part of the system shell that a click on a tray icon goes through.
+    /// Only Windows reports it.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    Shell(Shell),
     /// No window: the desktop.
     Nothing,
+}
+
+/// The parts of the Windows shell clicked on the way to a tray icon's menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shell {
+    /// A taskbar, with its notification area and the overflow chevron.
+    Taskbar,
+    /// The flyout of tray icons hidden behind the chevron.
+    TrayOverflow,
+}
+
+/// The shell part a top-level window of class `class` is, if any.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn shell_of_class(class: &str) -> Option<Shell> {
+    match class {
+        "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" => Some(Shell::Taskbar),
+        // Windows 10's flyout, then Windows 11's.
+        "NotifyIconOverflowWindow" | "TopLevelWindowForOverflowXamlIsland" => {
+            Some(Shell::TrayOverflow)
+        }
+        _ => None,
+    }
 }
 
 /// A window for hit-testing: every visible one, Grab-it's own and popups
@@ -245,7 +271,7 @@ mod native {
         },
     };
 
-    use super::Hit;
+    use super::{Hit, shell_of_class};
 
     pub fn popup_at(x: f64, y: f64, own_pid: u32) -> Option<Hit> {
         let point = POINT {
@@ -265,11 +291,15 @@ mod native {
             if pid == own_pid {
                 return Some(Hit::Own);
             }
-            // A menu's own window class: xcap's list leaves it out.
-            let mut class = [0u16; 16];
+            // A menu's own window class, which xcap's list leaves out, or
+            // the taskbar and the tray's overflow flyout.
+            let mut class = [0u16; 64];
             let len = windows::Win32::UI::WindowsAndMessaging::GetClassNameW(root, &mut class);
             let class = String::from_utf16_lossy(&class[..len.max(0) as usize]);
-            (class == "#32768").then_some(Hit::Popup)
+            if class == "#32768" {
+                return Some(Hit::Popup);
+            }
+            shell_of_class(&class).map(Hit::Shell)
         }
     }
 }
@@ -683,6 +713,25 @@ mod tests {
         );
         assert_eq!(classify(&windows, 950.0, 50.0), Hit::Own);
         assert_eq!(classify(&windows, 5000.0, 50.0), Hit::Nothing);
+    }
+
+    #[test]
+    fn the_taskbar_and_the_tray_overflow_are_told_apart() {
+        assert_eq!(shell_of_class("Shell_TrayWnd"), Some(Shell::Taskbar));
+        assert_eq!(
+            shell_of_class("Shell_SecondaryTrayWnd"),
+            Some(Shell::Taskbar)
+        );
+        assert_eq!(
+            shell_of_class("NotifyIconOverflowWindow"),
+            Some(Shell::TrayOverflow)
+        );
+        assert_eq!(
+            shell_of_class("TopLevelWindowForOverflowXamlIsland"),
+            Some(Shell::TrayOverflow)
+        );
+        assert_eq!(shell_of_class("Notepad"), None);
+        assert_eq!(shell_of_class("#32768"), None);
     }
 
     #[test]
