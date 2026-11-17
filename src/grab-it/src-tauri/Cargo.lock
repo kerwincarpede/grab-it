@@ -2143,6 +2143,7 @@ dependencies = [
  "ocrs",
  "rdev",
  "rten",
+ "rten-tensor",
  "rusqlite",
  "rxing",
  "semver",

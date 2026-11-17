@@ -5,9 +5,10 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import "./editor.css";
 import { getEditorPreferences, MAX_BACKDROP_PRESETS, setBackdropPresets } from "../settings/api";
-import { chooseBackdropImage, copyImage, editorImage, exportImage, pinImage, saveBackdropPresetImage } from "./api";
+import { chooseBackdropImage, copyImage, editorFaces, editorImage, editorWords, exportImage, pinImage, saveBackdropPresetImage } from "./api";
 import BackdropPanel from "./BackdropPanel";
-import { copyShotText, hasShotText, textCopied, watchShotText, type ShotText } from "../library/api";
+import { copyShotText, hasShotText, textCopied, watchShotText, type OcrLine, type ShotText } from "../library/api";
+import { blursFor, findDetails, findWord, wordAt } from "./redact";
 import { imageEdges, NO_EDGES, orientEdges, type Edges } from "./edges";
 import {
   backdropLayout,
@@ -409,6 +410,10 @@ export default function EditorWindow() {
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  /** The ids of the blurs Blur private details added while on, with the capture they are for; null while off. */
+  const [privateFor, setPrivateFor] = useState<{ path: string | null; ids: string[] } | null>(null);
+  /** Blur private details is finding text and faces. */
+  const [findingPrivate, setFindingPrivate] = useState(false);
   /** The capture's library id and stored OCR text; null when the library does not know it. */
   const [storedFor, setStoredFor] = useState<{ path: string; id: number; text: ShotText } | null>(null);
   const [backdropOpen, setBackdropOpen] = useState(false);
@@ -470,6 +475,12 @@ export default function EditorWindow() {
   }, [autoBackdrop, info, annotations.canUndo, doc, adopt]);
 
   /** Everything `drawWith` draws the next shape with: the style plus that tool's own width. */
+  /** The latest document, for work that finishes after an await. */
+  const docRef = useRef(doc);
+  useEffect(() => {
+    docRef.current = doc;
+  }, [doc]);
+
   const drawStyle = (drawWith: Tool): Style => ({
     ...style,
     strokeWidth: widthFor(widths, drawWith),
@@ -763,6 +774,9 @@ export default function EditorWindow() {
         commit(addShape(doc, shape));
         // The new shape keeps its handles, ready to adjust, move or restyle.
         setSelectedId(shape.id);
+      } else if (draft.type === "blur") {
+        // A click, not a drag, with the Blur tool blurs the word under it everywhere.
+        void blurWord({ x: draft.x, y: draft.y });
       }
       setDraft(null);
     }
@@ -1132,6 +1146,75 @@ export default function EditorWindow() {
     }
   };
 
+  /** The capture's words and their boxes, read once per capture and kept. */
+  const wordsFor = useRef<{ path: string; lines: Promise<OcrLine[]> } | null>(null);
+  const captureWords = (): Promise<OcrLine[]> => {
+    const path = capturePath ?? "";
+    if (wordsFor.current?.path !== path) {
+      const lines = editorWords();
+      wordsFor.current = { path, lines };
+      // A failed read is tried again next time.
+      lines.catch(() => {
+        if (wordsFor.current?.lines === lines) wordsFor.current = null;
+      });
+    }
+    return wordsFor.current.lines;
+  };
+  // Kept with the path it is for, so Blur private details starts off for each capture.
+  const privateBlurs = privateFor !== null && privateFor.path === capturePath ? privateFor.ids : null;
+
+  /** Adds blurs over `rects` to the latest document as one undo step; returns their ids. */
+  const addBlurs = (rects: Rect[]): string[] => {
+    const shapes = blursFor(rects, drawStyle("blur"), imageSize ?? undefined);
+    if (shapes.length > 0) {
+      const latest = docRef.current;
+      commit({ ...latest, shapes: [...latest.shapes, ...shapes] });
+    }
+    return shapes.map((shape) => shape.id);
+  };
+
+  /**
+   * Blur private details: on, blurs every email, phone number, card number,
+   * street address and face; off, removes the blurs it added that are still
+   * there. Everything is found on this computer.
+   */
+  const togglePrivate = async () => {
+    if (findingPrivate || !image) return;
+    if (privateBlurs) {
+      const added = new Set(privateBlurs);
+      const latest = docRef.current;
+      const kept = latest.shapes.filter((shape) => !added.has(shape.id));
+      if (kept.length !== latest.shapes.length) commit({ ...latest, shapes: kept });
+      if (selectedId && added.has(selectedId)) setSelectedId(null);
+      setPrivateFor(null);
+      return;
+    }
+    setFindingPrivate(true);
+    try {
+      const [lines, faces] = await Promise.all([captureWords(), editorFaces()]);
+      const rects = [...findDetails(lines).flatMap((detail) => detail.rects), ...faces];
+      const ids = addBlurs(rects);
+      // With nothing found the toggle stays off, so a later click looks again.
+      if (ids.length === 0) setMessage("No private details found");
+      else setPrivateFor({ path: capturePath, ids });
+    } catch (err) {
+      setMessage(`Blur private details failed: ${errorText(err)}`);
+    } finally {
+      setFindingPrivate(false);
+    }
+  };
+
+  /** Blurs the word at `at`, in capture pixels, and every other place it appears, as one undo step. */
+  const blurWord = async (at: Point) => {
+    try {
+      const lines = await captureWords();
+      const word = wordAt(lines, at);
+      if (word) addBlurs(findWord(lines, word));
+    } catch (err) {
+      setMessage(`Blur word failed: ${errorText(err)}`);
+    }
+  };
+
   const pin = async () => {
     try {
       await pinImage(await render("png"));
@@ -1481,6 +1564,19 @@ export default function EditorWindow() {
               Copy text
             </button>
           )}
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => void togglePrivate()}
+            disabled={!image || findingPrivate}
+            aria-pressed={privateBlurs !== null}
+            aria-busy={findingPrivate}
+            data-on={privateBlurs !== null ? "true" : undefined}
+            title="Blur emails, phone numbers, card numbers, addresses and faces. Found on this computer."
+          >
+            <ToolIcon tool="blur" />
+            Blur private details
+          </button>
           <button type="button" className="text-button primary" onClick={() => void exportAs()} disabled={!image}>
             <ExportIcon />
             Export…

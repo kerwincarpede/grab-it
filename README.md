@@ -135,4 +135,4 @@ Bug reports, ideas and pull requests are all welcome. [Open an issue](https://gi
 
 ## License
 
-[MIT](LICENSE). Grab-it ships the [ocrs](https://github.com/robertknight/ocrs) text-recognition models, which are under their own licence: Ocrs models (https://github.com/robertknight/ocrs-models), trained on the HierText dataset by Google Research. Licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). See [`ocr-models/LICENSE.md`](src/grab-it/src-tauri/ocr-models/LICENSE.md).
+[MIT](LICENSE). Grab-it ships the [ocrs](https://github.com/robertknight/ocrs) text-recognition models, which are under their own licence: Ocrs models (https://github.com/robertknight/ocrs-models), trained on the HierText dataset by Google Research. Licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). See [`ocr-models/LICENSE.md`](src/grab-it/src-tauri/ocr-models/LICENSE.md). It also ships the [UltraFace](https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB) RFB-320 face-detection model, under the [MIT licence](src/grab-it/src-tauri/face-models/LICENSE.md), for Blur private details.
