@@ -132,6 +132,30 @@ fn tile_lines(lines: Vec<OcrLine>, tile: &Tile) -> Vec<OcrLine> {
         .collect()
 }
 
+/// `lines` gathered from several tiles in reading order: rows top to
+/// bottom, and the lines of a row left to right. A line joins the row of
+/// the line above it when its centre lies within that line's height, so
+/// text on one row whose boxes start a pixel or two apart stays together.
+#[cfg(any(target_os = "macos", test))]
+fn reading_order(mut lines: Vec<OcrLine>) -> Vec<OcrLine> {
+    lines.sort_by_key(|line| (line.rect.y, line.rect.x));
+    let mut ordered = Vec::with_capacity(lines.len());
+    let mut rest = lines.into_iter().peekable();
+    while let Some(first) = rest.next() {
+        let bottom = i64::from(first.rect.y) + i64::from(first.rect.height);
+        let mut row = vec![first];
+        // Twice the centre, to stay in whole pixels.
+        while let Some(next) = rest
+            .next_if(|line| 2 * i64::from(line.rect.y) + i64::from(line.rect.height) < 2 * bottom)
+        {
+            row.push(next);
+        }
+        row.sort_by_key(|line| line.rect.x);
+        ordered.extend(row);
+    }
+    ordered
+}
+
 /// The lines of text in `image` as Vision reads them, top-left boxes in the
 /// image's pixels. `None` when Vision cannot be used here, so the caller
 /// reads the image with ocrs; an error when Vision failed on it.
@@ -255,7 +279,9 @@ mod mac {
         VNRequest, VNRequestTextRecognitionLevel,
     };
 
-    use super::{keep_line, pick_languages, pixel_rect, tile_lines, tiles, word_ranges};
+    use super::{
+        keep_line, pick_languages, pixel_rect, reading_order, tile_lines, tiles, word_ranges,
+    };
     use crate::ocr::{OcrLine, OcrWord};
 
     pub fn read(image: &RgbImage) -> Option<Result<Vec<OcrLine>, String>> {
@@ -320,7 +346,7 @@ mod mac {
     }
 
     /// The lines in `image`, read in one go when it is small enough, else
-    /// tile by tile.
+    /// tile by tile and put back into reading order.
     fn recognize(image: &RgbImage) -> Result<Vec<OcrLine>, String> {
         let tiles = tiles(image.dimensions());
         if let [_] = tiles.as_slice() {
@@ -341,7 +367,7 @@ mod mac {
             let read = autoreleasepool(|_| recognize_one(&part))?;
             lines.extend(tile_lines(read, tile));
         }
-        Ok(lines)
+        Ok(reading_order(lines))
     }
 
     /// The lines in `image`, read with one Vision request.
@@ -668,6 +694,59 @@ mod tests {
             .len()
         };
         assert_eq!((on_edge(&first), on_edge(&second)), (0, 1));
+    }
+
+    #[test]
+    fn lines_from_side_by_side_tiles_read_top_to_bottom() {
+        let spans = spans(6400);
+        let make = |(x, w, left, right): (u32, u32, u32, u32)| Tile {
+            rect: Rect {
+                x: x as i32,
+                y: 0,
+                width: w,
+                height: 3600,
+            },
+            core: (left, right, 0, 3600),
+        };
+        let (left, right) = (make(spans[0]), make(spans[1]));
+        let at = |tile: &Tile, text: &str, image_x: i32, y: i32| {
+            boxed(text, image_x - tile.rect.x, y, 80, 20)
+        };
+        // Each tile reads its own lines top to bottom, as Vision does.
+        let mut lines = tile_lines(
+            vec![
+                at(&left, "New issue", 100, 40),
+                at(&left, "Labels", 100, 400),
+            ],
+            &left,
+        );
+        lines.extend(tile_lines(
+            vec![
+                // On the first row, its box a pixel higher.
+                at(&right, "Newest", 6000, 39),
+                at(&right, "Assignee", 6000, 200),
+            ],
+            &right,
+        ));
+        let text: Vec<String> = reading_order(lines)
+            .into_iter()
+            .map(|line| line.text)
+            .collect();
+        assert_eq!(text, ["New issue", "Newest", "Assignee", "Labels"]);
+    }
+
+    #[test]
+    fn lines_on_one_row_read_left_to_right() {
+        let lines = vec![
+            boxed("right", 300, 10, 50, 20),
+            boxed("below", 0, 40, 50, 20),
+            boxed("left", 0, 12, 50, 20),
+        ];
+        let text: Vec<String> = reading_order(lines)
+            .into_iter()
+            .map(|line| line.text)
+            .collect();
+        assert_eq!(text, ["left", "right", "below"]);
     }
 
     fn tags(tags: &[&str]) -> Vec<String> {

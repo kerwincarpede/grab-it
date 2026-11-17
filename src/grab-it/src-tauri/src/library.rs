@@ -4016,7 +4016,10 @@ mod tests {
     #[test]
     fn trash_moves_the_file_and_sidecars_deletes_the_thumbnail_and_drops_the_row() {
         let dir = TempDir::new().unwrap();
-        let png = shoot(dir.path(), 1, (4, 4));
+        // The library stores canonical paths: on macOS the temporary folder
+        // is under /var, a link to /private/var.
+        let folder = dir.path().canonicalize().unwrap();
+        let png = shoot(&folder, 1, (4, 4));
         fs::write(capture::annotations_path(&png), "{}").unwrap();
         let mut library = Library::open_in_memory().unwrap();
         let shot = library.add_capture(&png).unwrap();
