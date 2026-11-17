@@ -8,6 +8,13 @@
 //! bottom left; [`pixel_rect`] turns them into the top-left image pixels
 //! every other OCR box uses. Short lines Vision is unsure of are mostly
 //! icons read as letters, so [`keep_line`] leaves them out.
+//!
+//! Vision scales a very large image down until ordinary UI text is too
+//! small to read (a capture across two displays gave 2 lines where one
+//! display gave 97), so images over [`MAX_TILE`] pixels either way are read
+//! as overlapping tiles ([`tiles`]). Each line is kept only from the tile
+//! whose core holds the centre of its box ([`tile_lines`]), so the overlaps
+//! give no duplicates.
 
 use image::RgbImage;
 
@@ -23,6 +30,107 @@ const SHORT_LINE_CHARS: usize = 2;
 /// The confidence a short line needs to be kept.
 #[cfg(any(target_os = "macos", test))]
 const MIN_SHORT_CONFIDENCE: f32 = 0.5;
+
+/// The largest tile Vision reads at once, in pixels either way: larger
+/// images are read in tiles of at most this size.
+#[cfg(any(target_os = "macos", test))]
+const MAX_TILE: u32 = 4096;
+/// How far neighbouring tiles overlap at least, in pixels, so a line cut at
+/// one tile's edge is whole in its neighbour.
+#[cfg(any(target_os = "macos", test))]
+const TILE_OVERLAP: u32 = 128;
+
+/// A part of an image Vision reads on its own, in the image's pixels.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Tile {
+    /// The pixels read.
+    rect: Rect,
+    /// The part of `rect` this tile alone owns: `[left, right)` and
+    /// `[top, bottom)`. The cores of all tiles cover the image once.
+    core: (u32, u32, u32, u32),
+}
+
+/// One axis of the tile layout: `(start, length, core start, core end)` of
+/// each span of an axis `length` pixels long. One span when it fits in
+/// [`MAX_TILE`]; else the fewest spans of [`MAX_TILE`] that overlap by at
+/// least [`TILE_OVERLAP`], evenly spread, the last ending at the edge, and
+/// each core ending halfway through the overlap with the next.
+#[cfg(any(target_os = "macos", test))]
+fn spans(length: u32) -> Vec<(u32, u32, u32, u32)> {
+    if length <= MAX_TILE {
+        return vec![(0, length, 0, length)];
+    }
+    let extra = length - MAX_TILE;
+    let count = 1 + extra.div_ceil(MAX_TILE - TILE_OVERLAP);
+    let step = extra.div_ceil(count - 1);
+    let starts: Vec<u32> = (0..count).map(|i| (i * step).min(extra)).collect();
+    let boundary = |i: usize| -> u32 {
+        if i == 0 {
+            0
+        } else if i == starts.len() {
+            length
+        } else {
+            // Halfway between where this span starts and the last one ends.
+            (starts[i] + starts[i - 1] + MAX_TILE) / 2
+        }
+    };
+    starts
+        .iter()
+        .enumerate()
+        .map(|(i, &start)| (start, MAX_TILE, boundary(i), boundary(i + 1)))
+        .collect()
+}
+
+/// The tiles to read an image of `size` in, row by row: the whole image
+/// when it fits in [`MAX_TILE`] both ways.
+#[cfg(any(target_os = "macos", test))]
+fn tiles((width, height): (u32, u32)) -> Vec<Tile> {
+    let columns = spans(width);
+    spans(height)
+        .into_iter()
+        .flat_map(|(y, h, top, bottom)| {
+            columns.iter().map(move |&(x, w, left, right)| Tile {
+                rect: Rect {
+                    x: x as i32,
+                    y: y as i32,
+                    width: w,
+                    height: h,
+                },
+                core: (left, right, top, bottom),
+            })
+        })
+        .collect()
+}
+
+/// The `lines` Vision read in `tile`, boxes in the tile's pixels, moved
+/// into the image's pixels, keeping only those whose box's centre lies in
+/// the tile's core.
+#[cfg(any(target_os = "macos", test))]
+fn tile_lines(lines: Vec<OcrLine>, tile: &Tile) -> Vec<OcrLine> {
+    let shift = |rect: &mut Rect| {
+        rect.x += tile.rect.x;
+        rect.y += tile.rect.y;
+    };
+    let (left, right, top, bottom) = tile.core;
+    // Twice the centre, to stay in whole pixels.
+    let inside = |rect: &Rect| {
+        let cx = 2 * i64::from(rect.x) + i64::from(rect.width);
+        let cy = 2 * i64::from(rect.y) + i64::from(rect.height);
+        (2 * i64::from(left)..2 * i64::from(right)).contains(&cx)
+            && (2 * i64::from(top)..2 * i64::from(bottom)).contains(&cy)
+    };
+    lines
+        .into_iter()
+        .filter_map(|mut line| {
+            shift(&mut line.rect);
+            for word in &mut line.words {
+                shift(&mut word.rect);
+            }
+            inside(&line.rect).then_some(line)
+        })
+        .collect()
+}
 
 /// The lines of text in `image` as Vision reads them, top-left boxes in the
 /// image's pixels. `None` when Vision cannot be used here, so the caller
@@ -147,7 +255,7 @@ mod mac {
         VNRequest, VNRequestTextRecognitionLevel,
     };
 
-    use super::{keep_line, pick_languages, pixel_rect, word_ranges};
+    use super::{keep_line, pick_languages, pixel_rect, tile_lines, tiles, word_ranges};
     use crate::ocr::{OcrLine, OcrWord};
 
     pub fn read(image: &RgbImage) -> Option<Result<Vec<OcrLine>, String>> {
@@ -211,7 +319,33 @@ mod mac {
         Some(NSArray::from_retained_slice(&picked))
     }
 
+    /// The lines in `image`, read in one go when it is small enough, else
+    /// tile by tile.
     fn recognize(image: &RgbImage) -> Result<Vec<OcrLine>, String> {
+        let tiles = tiles(image.dimensions());
+        if let [_] = tiles.as_slice() {
+            return recognize_one(image);
+        }
+        let mut lines = Vec::new();
+        for tile in &tiles {
+            let rect = tile.rect;
+            let part = image::imageops::crop_imm(
+                image,
+                rect.x.unsigned_abs(),
+                rect.y.unsigned_abs(),
+                rect.width,
+                rect.height,
+            )
+            .to_image();
+            // Each tile's objects go before the next is read.
+            let read = autoreleasepool(|_| recognize_one(&part))?;
+            lines.extend(tile_lines(read, tile));
+        }
+        Ok(lines)
+    }
+
+    /// The lines in `image`, read with one Vision request.
+    fn recognize_one(image: &RgbImage) -> Result<Vec<OcrLine>, String> {
         let size = image.dimensions();
         let cg_image = cg_image(image)?;
 
@@ -409,6 +543,133 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_small_image_is_one_tile() {
+        let tiles = tiles((4096, 2000));
+        assert_eq!(
+            tiles,
+            vec![Tile {
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    width: 4096,
+                    height: 2000,
+                },
+                core: (0, 4096, 0, 2000),
+            }]
+        );
+    }
+
+    /// Checks the spans of an axis `length` long against the layout's
+    /// promises.
+    fn check_spans(length: u32) -> Vec<(u32, u32, u32, u32)> {
+        let spans = spans(length);
+        assert_eq!(spans[0].0, 0, "{spans:?}");
+        assert_eq!(spans[0].2, 0, "{spans:?}");
+        let last = spans[spans.len() - 1];
+        assert_eq!(last.0 + last.1, length, "{spans:?}");
+        assert_eq!(last.3, length, "{spans:?}");
+        for &(start, len, core_start, core_end) in &spans {
+            assert!(len <= MAX_TILE, "{spans:?}");
+            // The core lies inside the span.
+            assert!(start <= core_start && core_end <= start + len, "{spans:?}");
+            assert!(core_start < core_end, "{spans:?}");
+        }
+        for pair in spans.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            assert!(a.0 + a.1 >= b.0 + TILE_OVERLAP, "overlap {spans:?}");
+            // The cores meet without a gap or overlap.
+            assert_eq!(a.3, b.2, "{spans:?}");
+        }
+        spans
+    }
+
+    #[test]
+    fn a_wide_image_is_read_in_overlapping_tiles() {
+        // The full-screen capture of two displays that Vision misread.
+        let spans = check_spans(10832);
+        assert_eq!(spans.len(), 3, "{spans:?}");
+        for length in [4097, 4224, 7000, 8064, 8065, 12000, 40000] {
+            check_spans(length);
+        }
+    }
+
+    #[test]
+    fn tiles_cover_both_directions_row_by_row() {
+        let tiles = tiles((10832, 5000));
+        assert_eq!(tiles.len(), 3 * 2);
+        assert_eq!((tiles[0].rect.x, tiles[0].rect.y), (0, 0));
+        assert_eq!((tiles[1].rect.y, tiles[3].rect.x), (0, 0));
+        assert!(tiles[3].rect.y > 0);
+        for tile in &tiles {
+            assert!(tile.rect.width <= MAX_TILE && tile.rect.height <= MAX_TILE);
+        }
+    }
+
+    fn boxed(text: &str, x: i32, y: i32, width: u32, height: u32) -> OcrLine {
+        let rect = Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        OcrLine {
+            text: text.to_owned(),
+            rect,
+            words: vec![crate::ocr::OcrWord {
+                text: text.to_owned(),
+                rect,
+            }],
+        }
+    }
+
+    #[test]
+    fn tile_lines_move_into_image_pixels() {
+        let tile = Tile {
+            rect: Rect {
+                x: 1000,
+                y: 500,
+                width: 4096,
+                height: 4096,
+            },
+            core: (1064, 5000, 500, 4596),
+        };
+        let kept = tile_lines(vec![boxed("Newest", 100, 20, 60, 10)], &tile);
+        assert_eq!(kept, vec![boxed("Newest", 1100, 520, 60, 10)]);
+    }
+
+    #[test]
+    fn a_line_in_the_overlap_is_kept_by_one_tile_only() {
+        let spans = spans(10832);
+        let make = |(x, w, left, right): (u32, u32, u32, u32)| Tile {
+            rect: Rect {
+                x: x as i32,
+                y: 0,
+                width: w,
+                height: 3780,
+            },
+            core: (left, right, 0, 3780),
+        };
+        let (first, second) = (make(spans[0]), make(spans[1]));
+        // A line in both tiles: the same place in the image, seen from each.
+        let image_x = second.rect.x + 10;
+        let from_first = vec![boxed("Labels", image_x - first.rect.x, 40, 50, 12)];
+        let from_second = vec![boxed("Labels", image_x - second.rect.x, 40, 50, 12)];
+        let kept = tile_lines(from_first, &first).len() + tile_lines(from_second, &second).len();
+        assert_eq!(kept, 1);
+        // A line whose centre sits exactly on the boundary goes to the
+        // second tile.
+        let boundary = first.core.1 as i32;
+        let on_edge = |tile: &Tile| {
+            tile_lines(
+                vec![boxed("Issues", boundary - 20 - tile.rect.x, 0, 40, 10)],
+                tile,
+            )
+            .len()
+        };
+        assert_eq!((on_edge(&first), on_edge(&second)), (0, 1));
+    }
+
     fn tags(tags: &[&str]) -> Vec<String> {
         tags.iter().map(|tag| (*tag).to_owned()).collect()
     }
@@ -471,6 +732,30 @@ mod tests {
             middle_y > height / 4 && middle_y < height * 3 / 4,
             "{rect:?}"
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn vision_reads_text_across_a_wide_image_once() {
+        use crate::ocr::tests::{FIXTURE_WORD, fixture_png};
+        // The fixture three times along a canvas wider than one tile,
+        // the middle copy straddling the first seam.
+        let fixture = image::open(fixture_png()).unwrap().into_rgb8();
+        let mut wide = RgbImage::from_pixel(9000, 400, image::Rgb([255, 255, 255]));
+        let seam = spans(9000)[0].3;
+        for x in [200, seam - fixture.width() / 2, 8000] {
+            image::imageops::overlay(&mut wide, &fixture, i64::from(x), 120);
+        }
+        let Some(read) = read(&wide) else {
+            return;
+        };
+        let lines = read.unwrap();
+        let found = lines
+            .iter()
+            .flat_map(|line| &line.words)
+            .filter(|word| word.text.to_lowercase() == FIXTURE_WORD)
+            .count();
+        assert_eq!(found, 3, "{lines:?}");
     }
 
     #[cfg(target_os = "macos")]
