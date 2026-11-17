@@ -900,7 +900,7 @@ describe("added images", () => {
     expect(transformShape(image, { x: 0, y: 0, scaleX: 0.5, scaleY: 2 })).toMatchObject({ width: 100, height: 200 });
     expect(keepsRatio(image)).toBe(true);
     expect(anchorsFor(image)).toEqual(CORNER_ANCHORS);
-    const copy = duplicateShape(image, "j");
+    const copy = duplicateShape(image, "j") as ImageShape;
     expect(copy).toMatchObject({ id: "j", type: "image", src: "added.png", width: 200, height: 100 });
     expect(copy.x).toBeGreaterThan(image.x);
     expect(nudgeDelta("ArrowLeft", false)).toEqual({ x: -1, y: 0 });

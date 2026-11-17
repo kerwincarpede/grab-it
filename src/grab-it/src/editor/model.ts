@@ -326,7 +326,9 @@ export function widthKind(tool: Tool | ShapeType): WidthKind | null {
 
 /** The width `tool` draws with: its remembered one, else its default. */
 export function widthFor(widths: Widths, tool: Tool | ShapeType): number {
-  return widths[tool] ?? widthKind(tool)?.fallback ?? DEFAULT_STROKE_WIDTH;
+  // Shape types that are not tools (an added image) have no remembered width.
+  const remembered = (widths as Partial<Record<Tool | ShapeType, number>>)[tool];
+  return remembered ?? widthKind(tool)?.fallback ?? DEFAULT_STROKE_WIDTH;
 }
 
 /** The index of the preset closest to `value`, for a slider over the presets. */
