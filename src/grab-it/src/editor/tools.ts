@@ -140,6 +140,80 @@ export function dragShape(shape: Shape, to: Point, constrain = false): Shape {
   }
 }
 
+/** How many times a finished path is smoothed (see `smoothPath`). */
+export const SMOOTH_PASSES = 2;
+/** The least a finished path's points may stray from it when simplified, in capture pixels. */
+export const SIMPLIFY_TOLERANCE = 1;
+
+/**
+ * A path's points with the jitter of a hand evened out: each point but the
+ * two ends moves towards its neighbours (weights 1, 2, 1), `passes` times.
+ */
+export function smoothPath(points: number[], passes = SMOOTH_PASSES): number[] {
+  let path = points;
+  const count = points.length / 2;
+  for (let pass = 0; pass < passes && count > 2; pass += 1) {
+    const next = [...path];
+    for (let i = 1; i < count - 1; i += 1) {
+      for (const axis of [0, 1]) {
+        next[i * 2 + axis] = (path[(i - 1) * 2 + axis] + 2 * path[i * 2 + axis] + path[(i + 1) * 2 + axis]) / 4;
+      }
+    }
+    path = next;
+  }
+  return path;
+}
+
+/** How far `p` lies from the segment `a`–`b`. */
+function segmentDistance(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const length = dx * dx + dy * dy;
+  const t = length === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+/**
+ * A path with the points it can do without dropped (Ramer–Douglas–Peucker):
+ * every point dropped lies within `tolerance` of what is kept, and both
+ * ends are always kept.
+ */
+export function simplifyPath(points: number[], tolerance: number): number[] {
+  const count = points.length / 2;
+  if (count <= 2) return points;
+  const at = (i: number): Point => ({ x: points[i * 2], y: points[i * 2 + 1] });
+  const keep = new Array<boolean>(count).fill(false);
+  keep[0] = true;
+  keep[count - 1] = true;
+  // Spans still to split, as [first, last] point indices; a stack rather than recursion keeps long strokes safe.
+  const spans: [number, number][] = [[0, count - 1]];
+  while (spans.length) {
+    const [first, last] = spans.pop()!;
+    let farthest = -1;
+    let distance = tolerance;
+    for (let i = first + 1; i < last; i += 1) {
+      const d = segmentDistance(at(i), at(first), at(last));
+      if (d > distance) {
+        distance = d;
+        farthest = i;
+      }
+    }
+    if (farthest < 0) continue;
+    keep[farthest] = true;
+    spans.push([first, farthest], [farthest, last]);
+  }
+  return points.filter((_, i) => keep[Math.floor(i / 2)]);
+}
+
+/**
+ * A finished freehand or highlighter path: smoothed, then simplified. A
+ * thicker stroke hides more, so it may lose points that stray further (a
+ * quarter of its width). Konva's tension draws curves through what is left.
+ */
+export function tidyPath(points: number[], strokeWidth: number): number[] {
+  return simplifyPath(smoothPath(points), Math.max(SIMPLIFY_TOLERANCE, strokeWidth / 4));
+}
+
 /** Ends a drawing: normalises boxes and drops shapes too small to see. */
 export function finishShape(shape: Shape): Shape | null {
   switch (shape.type) {
@@ -151,7 +225,8 @@ export function finishShape(shape: Shape): Shape | null {
     case "freehand":
     case "highlighter":
       // A click leaves a dot.
-      return shape.points.length === 2 ? { ...shape, points: [...shape.points, shape.points[0] + 0.5, shape.points[1]] } : shape;
+      if (shape.points.length === 2) return { ...shape, points: [...shape.points, shape.points[0] + 0.5, shape.points[1]] };
+      return { ...shape, points: tidyPath(shape.points, shape.strokeWidth) };
     case "magnify":
     case "rect":
     case "ellipse":

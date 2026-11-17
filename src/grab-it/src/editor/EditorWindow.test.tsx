@@ -218,6 +218,16 @@ vi.mock("./flatten", async (original) => ({
   },
 }));
 
+/** The line of text the highlighter finds under a drag (jsdom cannot read pixels), and what it was asked. */
+const textBands = vi.hoisted(() => ({ band: null as { top: number; bottom: number } | null, asked: [] as unknown[][] }));
+vi.mock("./textBand", async (original) => ({
+  ...(await original<typeof import("./textBand")>()),
+  imageTextBand: (...args: unknown[]) => {
+    textBands.asked.push(args);
+    return textBands.band;
+  },
+}));
+
 class LoadedImage {
   width = 400;
   height = 300;
@@ -391,9 +401,28 @@ describe("EditorWindow", () => {
     flattened.calls = [];
     flattened.options = [];
     flattened.measured = [];
+    textBands.band = null;
+    textBands.asked = [];
     vi.stubGlobal("Image", LoadedImage);
     URL.createObjectURL = vi.fn(() => "blob:capture");
     URL.revokeObjectURL = vi.fn();
+  });
+
+  it("fits a highlighter drag over a line of text to it, and keeps the stroke where none is found", async () => {
+    const saved = mockEditor({ version: 1, shapes: [], crop: null });
+    await ready();
+    fireEvent.click(pressed("Highlighter"));
+    textBands.band = { top: 50, bottom: 64 };
+    drag([20, 58], [120, 60]);
+    await waitFor(() => expect(last(saved)?.shapes).toHaveLength(1));
+    expect(last(saved)!.shapes[0]).toMatchObject({ type: "highlighter", points: [20, 57, 120, 57], strokeWidth: 14 });
+    // It looked at the capture under the drag.
+    expect(last(textBands.asked)?.[1]).toEqual([20, 58, 120, 60]);
+    textBands.band = null;
+    drag([20, 100], [120, 102]);
+    await waitFor(() => expect(last(saved)?.shapes).toHaveLength(2));
+    expect(last(saved)!.shapes[1]).toMatchObject({ type: "highlighter", points: [20, 100, 120, 102] });
+    expect(last(saved)!.shapes[1]).not.toMatchObject({ strokeWidth: 14 });
   });
 
   it("draws with Z, selects the lens interior and saves its zoom, shape, line and spot", async () => {
