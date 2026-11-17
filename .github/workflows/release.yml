@@ -268,15 +268,26 @@ jobs:
             -F draft=false -F prerelease=true -f make_latest=false \
             --jq '"Published \(.tag_name): \(.html_url)"'
 
-      # Edge copies read latest.json from the rolling "edge" pre-release.
-      # Its tag has no "v", so version numbering ignores it, and latest.json
-      # is its only asset. A replaced asset is deleted by id first, since an
-      # upload refuses a name already taken.
+  # Edge copies read latest.json from the rolling "edge" pre-release. Its
+  # tag has no "v", so version numbering ignores it, and latest.json is its
+  # only asset. A job of its own, so a failure here can be re-run without
+  # publishing the release again.
+  edge:
+    name: Update the edge channel
+    needs: [version, publish]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      # A replaced asset is deleted by id first, since an upload refuses a
+      # name already taken.
       - name: Point the edge channel at this release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ needs.version.outputs.version }}
         run: |
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p latest.json
           if edge=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/edge" --jq .id 2> error.txt); then
             echo "The edge release is $edge."
           elif grep -q "HTTP 404" error.txt; then

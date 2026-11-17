@@ -383,9 +383,9 @@ The first release, made before any tag exists, takes the version in `src/grab-it
 
 A run opens a draft release, builds the installers into it, and publishes it as a pre-release (creating the tag) only when the checks and all the builds pass. A failed run leaves only a hidden draft, which the next release of that version replaces. Each release is named by its version, for example `0.2.1` for the tag `v0.2.1`, and its notes open with an **Edge build** line.
 
-Publishing then copies the release's `latest.json` onto the rolling `edge` pre-release, which Edge copies read, creating that release the first time. Its tag, `edge`, has no `v`, so version numbering ignores it, and `latest.json` is its only asset. A replaced `latest.json` is deleted by id and uploaded again.
+Once the release is published, a separate job copies its `latest.json` onto the rolling `edge` pre-release, which Edge copies read, creating that release the first time. If that job fails, re-running it alone repairs Edge without publishing the release again. Its tag, `edge`, has no `v`, so version numbering ignores it, and `latest.json` is its only asset. A replaced `latest.json` is deleted by id and uploaded again.
 
-Releases run only from `main`. The release workflow's version and publish jobs, and `ci.yml`'s build jobs when they build a release, run in the `release` environment, which only `main` may deploy to. It holds the signing secrets: `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD`. A branch cannot use them, so pull request builds make no update packages and sign the macOS app ad-hoc.
+Releases run only from `main`. The release workflow's version, publish and edge jobs, and `ci.yml`'s build jobs when they build a release, run in the `release` environment, which only `main` may deploy to. It holds the signing secrets: `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD`. A branch cannot use them, so pull request builds make no update packages and sign the macOS app ad-hoc.
 
 ### Promoting to Stable
 
