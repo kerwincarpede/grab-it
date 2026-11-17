@@ -124,7 +124,9 @@ export function isCut(value: unknown): value is Cut {
     (cut.axis === "x" || cut.axis === "y") &&
     isNum(cut.start) &&
     isNum(cut.end) &&
-    cut.start >= 0 &&
+    Number.isInteger(cut.start) &&
+    Number.isInteger(cut.end) &&
+    cut.start > 0 &&
     cut.end > cut.start &&
     (cut.edge === "straight" || cut.edge === "zigzag" || cut.edge === "torn") &&
     isOptional(cut.seed, (seed) => isNum(seed) && Number.isInteger(seed))

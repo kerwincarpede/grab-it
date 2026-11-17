@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { Group, Image as KonvaImage, Layer, Stage } from "react-konva";
 import { backdropImage } from "./api";
-import { hasCutGaps, joinedImage, joinedSize } from "./cut";
+import { hasCutGaps, joinedImage, joinedSize, validCuts } from "./cut";
 import { flatten, measureBorders } from "./flatten";
 import { groupTransform, orientedCanvas } from "./orient";
 import { renderPlan } from "./render";
@@ -46,6 +46,7 @@ function nextFrame(): Promise<void> {
 export async function renderCapture(png: ArrayBuffer, annotations: unknown, scaleFactor?: number | null): Promise<Uint8Array> {
   const doc = parseAnnotations(annotations);
   const original = await loadImage(png);
+  if (doc.cuts) doc.cuts = validCuts(original, doc.cuts);
   // Everything after the cuts works on the joined image, as in the editor.
   const image = joinedImage(original, doc.cuts);
   const size = joinedSize({ width: original.naturalWidth || original.width, height: original.naturalHeight || original.height }, doc.cuts);

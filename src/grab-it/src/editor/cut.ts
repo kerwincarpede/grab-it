@@ -43,9 +43,19 @@ export function cutSize(size: Size, cut: Cut): Size {
   return cut.axis === "y" ? { width: size.width, height: size.height - shift } : { width: size.width - shift, height: size.height };
 }
 
+/** Drop cuts outside the image left by preceding valid cuts. */
+export function validCuts(size: Size, cuts: Cut[] | undefined): Cut[] {
+  return (cuts ?? []).filter((cut) => {
+    const length = cut.axis === "y" ? size.height : size.width;
+    if (!(cut.start > 0 && cut.end < length && cut.end - cut.start >= MIN_SIZE)) return false;
+    size = cutSize(size, cut);
+    return true;
+  });
+}
+
 /** The image's size after every cut, in order. */
 export function joinedSize(size: Size, cuts: Cut[] | undefined): Size {
-  return (cuts ?? []).reduce(cutSize, { width: size.width, height: size.height });
+  return validCuts(size, cuts).reduce(cutSize, { width: size.width, height: size.height });
 }
 
 /** A seed for a new torn edge. */
@@ -98,51 +108,47 @@ export function joinCanvas(source: CanvasImageSource, size: Size, cut: Cut): HTM
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(out.width));
   canvas.height = Math.max(1, Math.round(out.height));
-  let context: CanvasRenderingContext2D | null = null;
+  let ctx: CanvasRenderingContext2D | null;
   try {
-    context = canvas.getContext("2d");
+    ctx = canvas.getContext("2d");
   } catch {
-    context = null;
+    return canvas;
   }
-  if (!context) return canvas;
-  const ctx = context;
+  if (!ctx) return canvas;
   const vertical = cut.axis === "y";
   // Along the axis: how long the capture is; across it, how wide the edge is.
   const length = vertical ? size.height : size.width;
   const across = vertical ? size.width : size.height;
-  const joinedLength = vertical ? out.height : out.width;
   const gap = cutGap(cut.edge);
-  /** A point given along the edge and along the axis, in canvas x, y. */
-  const at = (along: number, depth: number): [number, number] => (vertical ? [along, depth] : [depth, along]);
-  /** Draws the source's `from`–`to` stretch along the axis at `place`, clipped to `clip` when given. */
-  const part = (from: number, to: number, place: number, clip: [number, number][] | null) => {
-    if (to <= from) return;
-    ctx.save();
-    if (clip) {
-      ctx.beginPath();
-      clip.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-      ctx.closePath();
-      ctx.clip();
-    }
-    if (vertical) ctx.drawImage(source, 0, from, across, to - from, 0, place, across, to - from);
-    else ctx.drawImage(source, from, 0, to - from, across, place, 0, to - from, across);
-    ctx.restore();
-  };
   const profile = edgeProfile(cut, across);
-  if (profile.length === 0) {
-    part(0, cut.start, 0, null);
-    part(cut.end, length, cut.start, null);
-    return canvas;
+  // Draw matching runs of pixels on either side of the join. Both edges
+  // follow the same displacement, keeping the transparent gap exactly gap pixels wide.
+  const drawRun = (along: number, width: number, depth: number) => {
+    const before = cut.start - depth;
+    const after = cut.end - depth;
+    if (vertical) {
+      ctx.drawImage(source, along, 0, width, before, along, 0, width, before);
+      ctx.drawImage(source, along, after, width, length - after, along, before + gap, width, length - after);
+    } else {
+      ctx.drawImage(source, 0, along, before, width, 0, along, before, width);
+      ctx.drawImage(source, after, along, length - after, width, before + gap, along, length - after, width);
+    }
+  };
+  let run = 0;
+  let depth = 0;
+  let segment = 1;
+  for (let along = 0; profile.length && along < across; along++) {
+    while (profile[segment][0] <= along) segment++;
+    const [x, y] = profile[segment - 1];
+    const [nextX, nextY] = profile[segment];
+    const next = Math.min(cut.start - 1, Math.round(y + (nextY - y) * (along - x) / (nextX - x)));
+    if (next !== depth) {
+      if (along > run) drawRun(run, along - run, depth);
+      run = along;
+      depth = next;
+    }
   }
-  // The part before keeps what lies before start − depth; the part after begins CUT_DEPTH + gap past that line.
-  const before = [at(0, 0), at(across, 0), ...[...profile].reverse().map(([along, depth]) => at(along, cut.start - depth))];
-  const after = [
-    at(0, joinedLength),
-    at(across, joinedLength),
-    ...[...profile].reverse().map(([along, depth]) => at(along, cut.start + gap + CUT_DEPTH - depth)),
-  ];
-  part(0, cut.start, 0, before);
-  part(cut.end, length, cut.start + gap, after);
+  drawRun(run, across - run, depth);
   return canvas;
 }
 
@@ -150,7 +156,7 @@ export function joinCanvas(source: CanvasImageSource, size: Size, cut: Cut): HTM
 export function joinedImage<T extends CanvasImageSource & Size>(image: T, cuts: Cut[] | undefined): T | HTMLCanvasElement {
   let current: T | HTMLCanvasElement = image;
   let size: Size = { width: image.width, height: image.height };
-  for (const cut of cuts ?? []) {
+  for (const cut of validCuts(size, cuts)) {
     current = joinCanvas(current, size, cut);
     size = cutSize(size, cut);
   }
@@ -166,7 +172,7 @@ export function shiftValue(value: number, cut: Cut): number {
 
 /** A coordinate after the cut put back where it was before it: past the join it moves forward again. */
 export function restoreValue(value: number, cut: Cut): number {
-  return value > cut.start + cutGap(cut.edge) ? value + cutShift(cut) : value;
+  return value > cut.start && value >= cut.start + cutGap(cut.edge) ? value + cutShift(cut) : value;
 }
 
 /** How far a shape reaches along `axis`: its lowest and highest coordinate. */
@@ -244,11 +250,11 @@ function mapRect(rect: Rect, axis: "x" | "y", map: (value: number) => number): R
   if (axis === "x") {
     const x = map(rect.x);
     const width = map(rect.x + rect.width) - x;
-    return width < MIN_SIZE ? null : { ...rect, x, width };
+    return width <= 0 ? null : { ...rect, x, width };
   }
   const y = map(rect.y);
   const height = map(rect.y + rect.height) - y;
-  return height < MIN_SIZE ? null : { ...rect, y, height };
+  return height <= 0 ? null : { ...rect, y, height };
 }
 
 /**

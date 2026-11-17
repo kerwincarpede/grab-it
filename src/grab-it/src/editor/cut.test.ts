@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CUT_DEPTH,
   CUT_GAP,
@@ -13,6 +13,7 @@ import {
   seededRandom,
   shiftValue,
   stripBox,
+  validCuts,
 } from "./cut";
 import type { Annotations, Cut } from "./model";
 import { IDENTITY } from "./orient";
@@ -134,5 +135,82 @@ describe("cut out", () => {
     expect(joinedImage(image, [])).toBe(image);
     const joined = joinedImage(image, [straight]);
     expect([joined.width, joined.height]).toEqual([400, 240]);
+  });
+
+  it("keeps a crop the cut leaves only a pixel or two of", () => {
+    expect(cutAnnotations({ ...doc, crop: { x: 0, y: 150, width: 400, height: 12 } }, straight).crop).toEqual({ x: 0, y: 100, width: 400, height: 2 });
+    expect(cutAnnotations({ ...doc, crop: { x: 0, y: 159, width: 400, height: 2 } }, straight).crop).toEqual({ x: 0, y: 100, width: 400, height: 1 });
+  });
+
+  it("puts back a shape flush with the end of a jagged strip on restore", () => {
+    const flush: Annotations = {
+      version: 1,
+      shapes: [{ id: "flush", type: "rect", color: "#e5484d", strokeWidth: 4, x: 10, y: 160, width: 50, height: 40 }],
+      crop: { x: 0, y: 160, width: 400, height: 40 },
+    };
+    const cut = cutAnnotations(flush, zigzag);
+    expect(cut.shapes[0]).toMatchObject({ y: 108, height: 40 });
+    expect(cut.crop).toEqual({ x: 0, y: 108, width: 400, height: 40 });
+    const restored = restoreStrips(cut);
+    expect(restored.shapes[0]).toMatchObject({ y: 160, height: 40 });
+    expect(restored.crop).toEqual(flush.crop);
+  });
+
+  it("leaves out stored cuts that do not fit the image the earlier cuts left", () => {
+    const size = { width: 400, height: 200 };
+    const tooLong: Cut = { axis: "y", start: 100, end: 1000, edge: "straight" };
+    // Fits the capture, but not what the first cut leaves.
+    const pastFirst: Cut = { axis: "y", start: 120, end: 160, edge: "straight" };
+    const first: Cut = { axis: "y", start: 20, end: 80, edge: "straight" };
+    expect(validCuts(size, [tooLong, first, pastFirst])).toEqual([first]);
+    expect(joinedSize(size, [tooLong])).toEqual(size);
+    expect(joinedSize(size, [first, pastFirst])).toEqual({ width: 400, height: 140 });
+    const image = { width: 400, height: 200 } as unknown as HTMLImageElement;
+    expect(joinedImage(image, [tooLong])).toBe(image);
+  });
+});
+
+describe("joining the parts", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /**
+   * Joins a capture `width` × `height` whose every pixel holds its row, and
+   * returns, per column, the source row drawn at each joined row (null for a
+   * see-through one).
+   */
+  function rows(width: number, height: number, cut: Cut): (number | null)[][] {
+    const out = joinedSize({ width, height }, [cut]);
+    const columns: (number | null)[][] = Array.from({ length: out.width }, () => Array<number | null>(out.height).fill(null));
+    const context = {
+      drawImage: (_: unknown, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number) => {
+        expect([dw, dh]).toEqual([sw, sh]);
+        for (let x = 0; x < sw; x++) for (let y = 0; y < sh; y++) columns[dx + x][dy + y] = sy + y;
+        expect(sx).toBe(dx);
+      },
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
+    joinedImage({ width, height } as unknown as HTMLImageElement, [cut]);
+    return columns;
+  }
+
+  it.each([zigzag, { ...zigzag, edge: "torn" as const, seed: 42 }])("leaves exactly the gap between matching $edge edges", (cut) => {
+    const shift = cutShift(cut);
+    for (const column of rows(60, 300, cut)) {
+      const empty = column.flatMap((row, y) => (row === null ? [y] : []));
+      expect(empty).toHaveLength(CUT_GAP);
+      const top = empty[0];
+      expect(empty).toEqual(Array.from({ length: CUT_GAP }, (_, i) => top + i));
+      // The part before keeps everything up to its jagged edge, the part after starts on the same line.
+      expect(top).toBeGreaterThan(cut.start - CUT_DEPTH - 1);
+      expect(top).toBeLessThanOrEqual(cut.start);
+      column.forEach((row, y) => {
+        if (y < top) expect(row).toBe(y);
+        else if (y >= top + CUT_GAP) expect(row).toBe(y + shift);
+      });
+    }
+  });
+
+  it("joins a straight cut seamlessly", () => {
+    for (const column of rows(20, 300, straight)) expect(column).toEqual([...Array.from({ length: 100 }, (_, y) => y), ...Array.from({ length: 140 }, (_, y) => y + 160)]);
   });
 });

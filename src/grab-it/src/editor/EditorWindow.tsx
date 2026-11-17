@@ -29,6 +29,7 @@ import {
   pointBeforeCuts,
   rectsThroughCuts,
   restoreStrips,
+  validCuts,
   stripBox,
   type CaptureImage,
   type StripDirection,
@@ -467,8 +468,14 @@ interface ToolHold {
 /** The annotation editor: a react-konva stage over the original capture. */
 export default function EditorWindow() {
   const annotations = useAnnotations();
-  const { doc, commit, adopt, info, undo: undoDoc, redo: redoDoc } = annotations;
+  const { doc: storedDoc, commit, adopt, info, undo: undoDoc, redo: redoDoc } = annotations;
   const { image: capture, error: imageError } = useCaptureImage(info !== null);
+  /** The stored cuts that fit the capture: a malformed sidecar's others are left out, in the editor as on export. */
+  const doc = useMemo(() => {
+    if (!capture || !storedDoc.cuts) return storedDoc;
+    const cuts = validCuts(capture, storedDoc.cuts);
+    return cuts.length === storedDoc.cuts.length ? storedDoc : { ...storedDoc, cuts };
+  }, [capture, storedDoc]);
   /**
    * The capture with its cuts made. It stands in for the capture everywhere:
    * shapes and the crop live in its pixels, and it is what shows, blurs and

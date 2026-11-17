@@ -311,7 +311,7 @@ describe("cut sidecars", () => {
   });
 
   it.each([
-    { axis: "z" }, { start: "1" }, { start: -5 }, { end: 100 }, { end: Number.NaN }, { edge: "wavy" }, { seed: 1.5 }, { seed: "x" },
+    { axis: "z" }, { start: "1" }, { start: -5 }, { start: 0 }, { start: 100.5 }, { end: 159.5 }, { end: 100 }, { end: Number.NaN }, { edge: "wavy" }, { seed: 1.5 }, { seed: "x" },
   ])("drops a malformed cut %j on its own", (invalid) => {
     const parsed = parseAnnotations({ version: 1, shapes: [], cuts: [cuts[0], { ...cuts[0], ...invalid }, cuts[2]] });
     expect(parsed.cuts).toEqual([cuts[0], cuts[2]]);
