@@ -79,8 +79,11 @@ const STEP_RADIUS: f64 = 20.0;
 /// by count; its stopping clicks are the ones on the taskbar or the tray's
 /// overflow flyout (see [`kept_at_stop`]), and the menu and the hub are
 /// Grab-it's own. macOS: none, since the status item, its menu and the hub
-/// are all Grab-it's. Linux: the click on the icon and the one on the menu
-/// item, both shown by the panel's tray host.
+/// are all Grab-it's, and a click on the status item that the window list
+/// misses is skipped by the icon's hover (see [`tray::pointer_over_icon`]),
+/// as is any click on the tray icon where it reports hover. Linux: the
+/// click on the icon and the one on the menu item, both shown by the
+/// panel's tray host, which reports no hover.
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const STOP_CLICKS_OUTSIDE: usize = 2;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -492,6 +495,8 @@ fn begin(app: &AppHandle) {
     if let Err(err) = write_guide(&guide, &Guide::default()) {
         return actions::report_failure(app, &err);
     }
+    // Hover on the icon from before the session says nothing about its clicks.
+    tray::reset_hover();
     let stop = Arc::new(AtomicBool::new(false));
     let stopped_by_click = Arc::new(AtomicBool::new(false));
     let thread = {
@@ -690,7 +695,7 @@ fn run(
             if double {
                 continue;
             }
-            match grab(position, last.as_ref()) {
+            match grab(position, event.at, last.as_ref()) {
                 Ok(Some((step, grabbed))) => {
                     last = Some(step);
                     held.push_back(Held {
@@ -715,7 +720,8 @@ fn run(
     }
     let stopped_at = Instant::now();
     // Clicks seen just before the stop, such as the one on the menu item
-    // that stopped it, are still looked at: Grab-it's own are skipped.
+    // that stopped it, are still looked at: Grab-it's own, and those on
+    // its tray icon, are skipped.
     handle(capture.take(), &mut held);
     let trigger = if stopped_by_click.load(Ordering::SeqCst) {
         Trigger::Click
@@ -733,14 +739,21 @@ fn run(
 
 /// Grabs the frame for a click at `position`: the window under it, or its
 /// monitor for a small window, a menu or popover, or the desktop. None for
-/// a click on Grab-it itself or one that repeats `last`.
+/// a click on Grab-it itself, on its tray icon, or one that repeats `last`.
 fn grab(
     position: (f64, f64),
+    at: Instant,
     last: Option<&LastStep>,
 ) -> Result<Option<(LastStep, Grabbed)>, String> {
     let (x, y) = position;
     let hit = screen::hit_test(x, y);
     if hit == screen::Hit::Own {
+        return Ok(None);
+    }
+    // The window list may not report the icon as Grab-it's, as with an
+    // auto-hidden macOS menu bar, so its hover events decide. A click that
+    // hit an ordinary window or the Windows shell is judged as before.
+    if matches!(hit, screen::Hit::Popup | screen::Hit::Nothing) && tray::pointer_over_icon(at) {
         return Ok(None);
     }
     let shell = match hit {
