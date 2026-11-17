@@ -63,6 +63,14 @@ A built binary takes the argument directly, for example `src-tauri/target/releas
 
 Only one Grab-it runs at a time. Starting it again hands the arguments to the running one, so `grab-it --open region` works as a desktop shortcut or from a script; with no arguments it opens the Library.
 
+The subcommands `displays`, `windows`, `shot` and `help` are the command line for agents and scripts (`cli.rs`). They run in `lib.rs` `run()` before the Tauri builder, so the single-instance plugin never sees them, and talk to the running app over the control connection (`control.rs`). Try them against the dev app with **Settings → AI agents → Let AI agents use Grab-it** on:
+
+```sh
+npm run tauri dev                                  # in one terminal
+src-tauri/target/debug/grab-it windows             # in another
+src-tauri/target/debug/grab-it shot --window code --max-width 1280
+```
+
 ## How it works
 
 ### Captures on disk
@@ -294,6 +302,14 @@ Valid JSON is re-indented in Rust token by token, so key order and long numbers 
 **Capture text** first looks for QR codes and barcodes in the region (`codes.rs`), with [rxing](https://github.com/rxing-core/rxing), a Rust port of ZXing. Every format rxing reads is tried: QR, Micro QR, Data Matrix, Aztec, PDF417, MaxiCode and the 1D codes (Code 128, Code 39, EAN, UPC, ITF and more), light-on-dark as well as dark-on-light. rxing is built without its default features: Grab-it hands it the region's grey pixels itself, so rxing's own `image` dependency, SVG reading and result parsers stay out of the binary. The tests draw the codes they read with rxing's writers (`encoders`, a dev-dependency feature only), so there are no image fixtures.
 
 When it finds a code, the region is OCR'd as well, and the card (`QuickItem::Code`) shows the values. Every value is copied, one per line, top to bottom. **Copy text** copies what OCR read around them; an OCR failure only leaves that out. Only `http://` and `https://` values count as links. **Open link** opens the first one through `tauri-plugin-opener`, and only from the card's `quick_action`: nothing opens a decoded link by itself. The text is not tidied by AI. When the region holds no code, Capture text works as before.
+
+### Agents and the control connection
+
+The running app listens on a local socket made with the [interprocess](https://github.com/kotauskas/interprocess) crate (`control::start`): `control.sock` in the app data directory on Linux and macOS, mode `0600`, and on Windows the named pipe `\\.\pipe\com.kerwincarpede.grabit.control.<user>`, whose security descriptor (`D:P(A;;GA;;;OW)`) admits only its owner. Each connection carries one request, a JSON line such as `{"command":"shot","target":{"kind":"window","window":"firefox"},"delayMs":0}`, and gets one reply line, `{"ok":true,"result":…}` or `{"ok":false,"error":"…"}`; the CLI prints `result` as one JSON line on stdout, or `error` on stderr with exit code 1 (2 for bad arguments). When the socket is missing the CLI starts the same executable with no arguments, so it waits in the tray, and retries for up to 15 seconds. On Windows release builds, a GUI-subsystem program, the CLI attaches to the parent console when its stdout is not already a pipe or file.
+
+While `agentAccess` in `settings.json` is `false` (the default) every request is refused with a message naming the switch. Requests run in `agent.rs`: `displays` and `windows` come from `screen::monitors` and `screen::desktop`, and `shot` captures with xcap, saves with `capture::save_capture`, adds the PNG with `library::record_capture` and tags it `agent`. Agent shots are never copied or opened: a `QuickItem::Notice` titled *Captured by an agent* shows instead. `--window` takes an id or the frontmost window whose app or title contains the text; `--region` is in desktop coordinates and is cropped from the display holding most of it. On Wayland (`portal::is_wayland`) the three commands fail with one message.
+
+**Install skill** in Settings (`install_agent_skill`) writes `src-tauri/agent-skill/SKILL.md`, compiled in with `include_str!`, to `~/.agents/skills/grab-it/` and `~/.claude/skills/grab-it/`, with `{{GRAB_IT}}` replaced by the absolute path of the running executable. `agent_skill_status` reports where it is installed and whether every copy names the current executable.
 
 ### Settings
 

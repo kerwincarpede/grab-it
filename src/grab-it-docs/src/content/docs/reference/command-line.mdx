@@ -1,6 +1,6 @@
 ---
 title: Command line
-description: Open a Grab-it window or start a capture with --open, from a terminal, a script or a desktop shortcut.
+description: Open a Grab-it window or start a capture with --open, and take screenshots from a terminal, a script or an AI agent with grab-it shot.
 sidebar:
   order: 3
 ---
@@ -38,6 +38,54 @@ Launching Grab-it again with no `--open` opens the Library.
 
 Grab-it ignores other arguments, and prints a message (on the terminal it was started from) for an unknown target or a missing file.
 
+## Commands
+
+The commands ask the running Grab-it to list your displays and windows or take a screenshot, and print the result as one line of JSON. They're made for [AI agents](/grab-it/ai/agents/) and scripts. Turn on **Settings → AI agents → Let AI agents use Grab-it** first: while it's off, every command fails with a message saying so.
+
+If Grab-it isn't running, a command starts it in the tray and waits up to 15 seconds for it. Errors go to stderr, with exit code 1 when Grab-it couldn't do what was asked and 2 for a mistake in the command itself.
+
+| Command | What it prints |
+| --- | --- |
+| `grab-it displays` | `{"displays":[…]}`: each display's `id`, `name`, `x`, `y`, `width`, `height`, `scaleFactor` and `primary` |
+| `grab-it windows` | `{"windows":[…]}`: each window's `id`, `app`, `title`, `x`, `y`, `width` and `height`, front to back |
+| `grab-it shot` | `{"path":…,"width":…,"height":…,"id":…}`: the saved PNG, its size in pixels and its Library item |
+| `grab-it help` | Every command and option |
+
+```sh
+grab-it windows
+# {"windows":[{"id":4194307,"app":"Firefox","title":"Docs","x":0,"y":25,"width":1280,"height":800}]}
+grab-it shot --window firefox --max-width 1280
+# {"path":"/home/me/Pictures/Grab-it/originals/Grab-it 2026-11-17 09-00-00.png","width":1280,"height":800,"id":42}
+```
+
+Rectangles are in desktop coordinates, the same ones `--region` takes.
+
+### What `shot` captures
+
+Give one of these; with none, `shot` captures every display.
+
+| Option | Captures |
+| --- | --- |
+| `--screen` | Every display, stitched into one image |
+| `--display <id or name>` | One display: an `id` from `grab-it displays`, or text in its name |
+| `--window <id or text>` | One window: an `id` from `grab-it windows`, or text in its app's name or title, ignoring case. With several matches, the frontmost wins. |
+| `--region <x,y,w,h>` | A rectangle, such as `--region 0,0,800,600`, from the display that holds most of it |
+
+And any of these:
+
+| Option | What it does |
+| --- | --- |
+| `--delay <seconds>` | Waits before capturing, up to 60 seconds, such as `--delay 2` or `--delay 0.5` |
+| `--max-width <pixels>` | Scales the shot down to at most that width, keeping its shape |
+
+Options take their value after a space or an `=`: `--window=Firefox`.
+
+Shots are saved to your save folder and Library like any capture, tagged **agent**. They aren't copied to the clipboard, and Quick Access and the editor don't open: a short **Captured by an agent** notice shows instead.
+
+:::note[Linux on Wayland]
+Only your desktop may read the screen on Wayland, so `displays`, `windows` and `shot` fail there with a message saying so. Use an X11 session.
+:::
+
 ## Where Grab-it is
 
 <Tabs syncKey="os">
@@ -47,6 +95,12 @@ Where Grab-it is depends on which installer you used. The `-setup.exe` puts it i
 
 ```powershell
 & "$env:LOCALAPPDATA\Grab-it\grab-it.exe" --open region
+```
+
+The commands print to the PowerShell or Command Prompt window you run them from, or to the program reading their output:
+
+```powershell
+& "$env:LOCALAPPDATA\Grab-it\grab-it.exe" shot --window Notepad
 ```
 
 The `.msi` installs it for everyone on the PC, in Program Files:

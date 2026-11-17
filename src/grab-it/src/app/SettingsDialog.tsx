@@ -10,6 +10,7 @@ import {
   SlidersIcon,
   SparkleIcon,
   StorageIcon,
+  TerminalIcon,
 } from "./icons";
 import SettingsWindow from "../settings/SettingsWindow";
 import { SETTINGS_SECTIONS, type SettingsSection } from "../settings/api";
@@ -22,6 +23,7 @@ const SECTION_ICONS: Record<SettingsSection, ReactNode> = {
   recording: <RecordIcon />,
   storage: <StorageIcon />,
   ai: <SparkleIcon />,
+  agents: <TerminalIcon />,
   hotkeys: <KeyboardIcon />,
 };
 

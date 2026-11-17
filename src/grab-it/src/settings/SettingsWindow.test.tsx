@@ -10,6 +10,7 @@ import {
   DEFAULT_AI_PREFERENCES,
   DEFAULT_RECORDING,
   DEFAULT_RETENTION,
+  SETTINGS_SECTIONS,
   isLocalEndpoint,
   keystrokesHint,
   listCameras,
@@ -73,6 +74,12 @@ interface Backend {
   hotkeyWarnings: string[];
   picked: string | null;
   setError?: string;
+  /** Settings › AI agents' access switch. */
+  agentAccess?: boolean;
+  /** The SKILL.md files `agent_skill_status` finds. */
+  skillInstalled?: string[];
+  /** What `install_agent_skill` fails with, when it does. */
+  installError?: string;
   calls: { cmd: string; payload?: InvokeArgs }[];
 }
 
@@ -116,6 +123,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     appearance: backend.appearance,
     recording: backend.recording,
     retention: backend.retention,
+    agentAccess: backend.agentAccess,
   });
   mockIPC((cmd, payload) => {
     backend.calls.push({ cmd, payload });
@@ -215,6 +223,16 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
       case "pause_hotkeys":
       case "resume_hotkeys":
         return null;
+      case "set_agent_access":
+        if (backend.setError) throw backend.setError;
+        backend.agentAccess = (payload as { enabled: boolean }).enabled;
+        return settings();
+      case "agent_skill_status":
+        return { installed: backend.skillInstalled ?? [], current: (backend.skillInstalled ?? []).length > 0 };
+      case "install_agent_skill":
+        if (backend.installError) throw backend.installError;
+        backend.skillInstalled = ["/home/me/.agents/skills/grab-it/SKILL.md", "/home/me/.claude/skills/grab-it/SKILL.md"];
+        return { installed: backend.skillInstalled, current: true };
       default:
         throw new Error(`unexpected command ${cmd}`);
     }
@@ -1429,5 +1447,57 @@ describe("SettingsWindow storage", () => {
     const gifs = await screen.findByLabelText("GIFs");
     await waitFor(() => expect(gifs).toBeEnabled());
     expect(screen.queryByTestId("keep-gif-hint")).not.toBeInTheDocument();
+  });
+});
+
+describe("SettingsWindow AI agents", () => {
+  it("comes after AI descriptions in the sidebar", () => {
+    const ids = SETTINGS_SECTIONS.map((section) => section.id);
+    expect(ids.indexOf("agents")).toBe(ids.indexOf("ai") + 1);
+    expect(SETTINGS_SECTIONS.find((section) => section.id === "agents")?.title).toBe("AI agents");
+  });
+
+  it("keeps agent access off by default and turns it on at once", async () => {
+    const backend = mockBackend();
+    render(<SettingsWindow section="agents" />);
+    const toggle = await screen.findByRole("switch", { name: /Let AI agents use Grab-it/ });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByRole("heading", { level: 1, name: "AI agents" })).toBeInTheDocument();
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(backend.agentAccess).toBe(true);
+    expect(backend.calls.find((call) => call.cmd === "set_agent_access")?.payload).toEqual({ enabled: true });
+    expect(screen.getByRole("status")).toHaveTextContent("Saved.");
+  });
+
+  it("installs the skill and says where", async () => {
+    const backend = mockBackend({ agentAccess: true });
+    render(<SettingsWindow section="agents" />);
+    expect(await screen.findByRole("switch", { name: /Let AI agents use Grab-it/ })).toBeChecked();
+    const hint = screen.getByTestId("agent-skill");
+    expect(hint).toHaveTextContent("~/.agents/skills and ~/.claude/skills");
+
+    await userEvent.click(screen.getByRole("button", { name: "Install skill" }));
+
+    await waitFor(() => expect(hint).toHaveTextContent("Installed in ~/.agents/skills and ~/.claude/skills."));
+    expect(commands(backend)).toContain("install_agent_skill");
+    expect(screen.getByRole("button", { name: "Reinstall skill" })).toBeEnabled();
+  });
+
+  it("shows an installed skill as installed", async () => {
+    mockBackend({ skillInstalled: ["/home/me/.claude/skills/grab-it/SKILL.md"] });
+    render(<SettingsWindow section="agents" />);
+    await waitFor(() => expect(screen.getByTestId("agent-skill")).toHaveTextContent("Installed in ~/.claude/skills."));
+    expect(screen.getByRole("button", { name: "Reinstall skill" })).toBeInTheDocument();
+  });
+
+  it("says why the skill could not be installed", async () => {
+    mockBackend({ installError: "could not write /home/me/.claude/skills/grab-it/SKILL.md: permission denied" });
+    render(<SettingsWindow section="agents" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Install skill" }));
+    await waitFor(() => expect(screen.getByTestId("agent-skill")).toHaveTextContent("permission denied"));
+    expect(screen.getByRole("button", { name: "Install skill" })).toBeEnabled();
   });
 });

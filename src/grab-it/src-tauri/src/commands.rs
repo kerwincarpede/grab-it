@@ -141,6 +141,15 @@ pub fn set_show_in_dock(
     Ok(settings)
 }
 
+/// Turns Settings › AI agents' access switch on or off. The control
+/// connection reads it with every request, so it applies at once.
+#[tauri::command]
+pub fn set_agent_access(enabled: bool, state: State<'_, SettingsState>) -> Result<Settings, String> {
+    lock(&state)
+        .set_agent_access(enabled)
+        .map_err(|err| err.to_string())
+}
+
 /// The annotation editor's remembered colour, tool, widths and options.
 #[tauri::command]
 pub fn get_editor_preferences(state: State<'_, SettingsState>) -> EditorPreferences {

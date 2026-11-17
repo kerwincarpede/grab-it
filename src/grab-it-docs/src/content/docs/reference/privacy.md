@@ -35,6 +35,10 @@ AI descriptions are off until you, or Grab-it on its first start, pick a provide
 
 Turn describing off in **Settings → AI descriptions** and nothing more is sent. See [AI](/grab-it/ai/).
 
+## AI agents
+
+[AI agents](/grab-it/ai/agents/) can take screenshots only after you turn on **Settings → AI agents → Let AI agents use Grab-it**; it's off by default. The commands reach only the Grab-it running as you, on this computer: through a socket file only you can open on Linux and macOS, and a pipe only you can connect to on Windows. Every screenshot an agent takes shows a notice and is tagged **agent** in your Library. Grab-it sends nothing over the internet for them; what the agent does with a screenshot is up to the agent.
+
 ## Recordings
 
 Microphone, system sound and webcam are off by default, and recorded only when you turn them on in [Settings → Recording](/grab-it/reference/settings/#recording). **Show keystrokes** draws the keys you press into the recording. On macOS, keys typed into a password field are left out; on Windows and Linux they aren't, so turn it off before you type a password.
