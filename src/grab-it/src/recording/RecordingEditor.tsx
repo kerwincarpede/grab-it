@@ -42,6 +42,7 @@ import {
   toSource,
   withClips,
   zoomOnSource,
+  zoomOwners,
   zoomsIn,
   type Clip,
   type ClipAt,
@@ -566,7 +567,26 @@ export default function RecordingEditor() {
 
   // --- Playback -----------------------------------------------------------
 
-  const pause = () => videoRef.current?.pause();
+  const pause = () => {
+    // A recording still loading for the next clip must not start once it has.
+    if (pendingRef.current) pendingRef.current.play = false;
+    videoRef.current?.pause();
+    setPlaying(false);
+  };
+
+  /**
+   * Whether the video stopping now is only a clip ending, joined, with
+   * another clip after it: a clip that keeps its recording's end runs the
+   * video to its own end (and its `ended` and `pause`) first, and loading
+   * the next recording pauses it too.
+   */
+  const handingOn = () => {
+    const now = playRef.current;
+    const video = videoRef.current;
+    if (!now.joined || !now.at || !video) return false;
+    if (pendingRef.current) return pendingRef.current.play;
+    return now.at.index < now.clips.length - 1 && (video.ended || video.currentTime * 1000 >= now.at.clip.endMs);
+  };
 
   const play = () => {
     const video = videoRef.current;
@@ -615,7 +635,9 @@ export default function RecordingEditor() {
           return;
         }
         const { index, clip } = now.at;
-        if (ms >= clip.endMs) {
+        // A clip that keeps its recording's end may never reach `endMs`:
+        // the video ends a little before, on its last frame.
+        if (ms >= clip.endMs || video.ended) {
           const next = now.clips[index + 1] as Clip | undefined;
           if (!next) {
             video.pause();
@@ -627,6 +649,13 @@ export default function RecordingEditor() {
           setCurrentMs(start);
           if (next.source === loadedRef.current) {
             video.currentTime = next.startMs / 1000;
+            if (video.paused) {
+              try {
+                void video.play()?.catch(() => setPlaying(false));
+              } catch {
+                setPlaying(false);
+              }
+            }
           } else {
             // The new recording plays from its clip's start once it loads.
             pendingRef.current = { sourceMs: next.startMs, play: true };
@@ -795,7 +824,8 @@ export default function RecordingEditor() {
       unlisten = await onExportProgress(setProgress).catch(() => null);
       const shape = recordingLayout(videoSize, edits.backdrop);
       const layers = edits.backdrop ? await exportLayers(shape, edits.backdrop, sources()) : null;
-      const exportClips = savedClips.map((clip): ExportClip => {
+      const owners = zoomOwners(savedClips, allZooms, own);
+      const exportClips = savedClips.map((clip, index): ExportClip => {
         const size = meta[clip.source];
         const box = clip.source === own ? { x: 0, y: 0, width: shape.videoWidth, height: shape.videoHeight } : fitInside(size.width, size.height, shape.videoWidth, shape.videoHeight);
         return {
@@ -805,7 +835,7 @@ export default function RecordingEditor() {
           sourceWidth: size.width,
           sourceHeight: size.height,
           ...box,
-          zooms: (joined ? zoomsIn(allZooms, clip, own) : allZooms.filter((zoom) => zoomOnSource(zoom, own, own))).map((zoom) => {
+          zooms: (joined ? zoomsIn(allZooms, clip, own).filter((zoom) => owners.get(zoom.id) === index) : allZooms.filter((zoom) => zoomOnSource(zoom, own, own))).map((zoom) => {
             const sent = { ...zoom };
             delete sent.source;
             return sent;
@@ -1007,8 +1037,12 @@ export default function RecordingEditor() {
                 style={{ transform: viewTransform(view) }}
                 onLoadedMetadata={onMetadata}
                 onPlay={() => setPlaying(true)}
-                onPause={() => setPlaying(false)}
-                onEnded={() => setPlaying(false)}
+                onPause={() => {
+                  if (!handingOn()) setPlaying(false);
+                }}
+                onEnded={() => {
+                  if (!handingOn()) setPlaying(false);
+                }}
                 onSeeked={() => setFrameTick((tick) => tick + 1)}
                 onTimeUpdate={() => {
                   if (playing || pendingRef.current) return;

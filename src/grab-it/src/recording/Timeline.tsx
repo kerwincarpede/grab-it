@@ -110,6 +110,7 @@ export default function Timeline({ durationMs, trim, currentMs, onSeek, onTrimPr
     return (
       <div
         className={`timeline-handle ${edge}`}
+        hidden={!trimmable}
         role="slider"
         tabIndex={0}
         aria-label={label}
@@ -145,8 +146,8 @@ export default function Timeline({ durationMs, trim, currentMs, onSeek, onTrimPr
         <div className="timeline-cut" style={{ left: percent(trim.endMs, durationMs), right: 0 }} />
         <div className="timeline-kept" style={{ left: percent(trim.startMs, durationMs), width: percent(trim.endMs - trim.startMs, durationMs) }} />
         <div className="timeline-playhead" data-testid="playhead" style={{ left: percent(currentMs, durationMs) }} />
-        {trimmable && handle("start")}
-        {trimmable && handle("end")}
+        {handle("start")}
+        {handle("end")}
       </div>
       {children}
     </div>

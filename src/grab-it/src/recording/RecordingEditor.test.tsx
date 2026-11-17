@@ -568,6 +568,90 @@ describe("RecordingEditor", () => {
       });
     });
 
+    it("trims a clip by dragging its edge, undoably", async () => {
+      const backend = mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      // 10 s over 100 px: 100 ms a pixel, kept from when the drag began.
+      placeAt(screen.getByRole("listbox", { name: "Clips" }), 100, 26);
+      const edge = screen.getByRole("option", { name: `${OTHER}, 0:06.0` }).querySelector(".clip-edge.end") as HTMLElement;
+      fireEvent.pointerDown(edge, { clientX: 100 });
+      fireEvent.pointerMove(edge, { clientX: 90 });
+      fireEvent.pointerMove(edge, { clientX: 80 });
+      fireEvent.pointerUp(edge, { clientX: 80 });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [JOINED.clips[0], { ...JOINED.clips[1], endMs: 4000 }] }));
+      expect(saved(backend)).toHaveLength(1);
+
+      await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual(JOINED));
+    });
+
+    it("reorders a clip by dragging it, undoably", async () => {
+      const backend = mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      placeAt(screen.getByRole("listbox", { name: "Clips" }), 100, 26);
+      const first = screen.getByRole("option", { name: `${OWN}, 0:04.0` });
+      fireEvent.pointerDown(first, { clientX: 10 });
+      fireEvent.pointerMove(first, { clientX: 90 });
+      fireEvent.pointerUp(first, { clientX: 90 });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [JOINED.clips[1], JOINED.clips[0]] }));
+
+      await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual(JOINED));
+    });
+
+    it("plays on into the next clip when the first runs to its recording's end", async () => {
+      const clips = [
+        { id: "a", source: OWN, startMs: 8000, endMs: 12_000 },
+        { id: "b", source: OWN, startMs: 0, endMs: 2000 },
+      ];
+      mockBackend({ version: 2, clips });
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+      const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+      render(<RecordingEditor />);
+      const video = await loadJoined();
+      await userEvent.click(screen.getByRole("button", { name: "Play" }));
+      fireEvent.play(video);
+      // The video stops on its last frame, short of the clip's 12 s end.
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 11.98 });
+      Object.defineProperty(video, "ended", { configurable: true, value: true });
+      Object.defineProperty(video, "paused", { configurable: true, value: true });
+      fireEvent.pause(video);
+      fireEvent.ended(video);
+      expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+      act(() => frames.splice(0).forEach((frame) => frame(0)));
+      // On to the second clip's start, playing again.
+      expect(video.currentTime).toBe(0);
+      expect(play).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    });
+
+    it("gives a zoom in two clips of one recording to the first only, in the preview and the export", async () => {
+      const zoom = { id: "z3", startMs: 2500, endMs: 3500, scale: 2, focus: { kind: "area", x: 0.5, y: 0.5 } };
+      const backend = mockBackend({
+        version: 2,
+        clips: [
+          { id: "a", source: OWN, startMs: 1000, endMs: 5000 },
+          { id: "c", source: OWN, startMs: 2000, endMs: 6000 },
+        ],
+        zooms: [zoom],
+      });
+      render(<RecordingEditor />);
+      await loadJoined();
+      expect(screen.getAllByTestId("zoom-segment")).toHaveLength(1);
+      await waitFor(() => expect(screen.getByRole("button", { name: "Export" })).toBeEnabled());
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan } = await exportCall(backend);
+      expect((plan as { clips: { zooms: unknown[] }[] }).clips.map((clip) => clip.zooms)).toEqual([[zoom], []]);
+    });
+
     it("marks a recording that is gone and holds Export back", async () => {
       gone = [OTHER];
       mockBackend(JOINED);

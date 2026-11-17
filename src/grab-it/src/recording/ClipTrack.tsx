@@ -20,7 +20,8 @@ interface ClipTrackProps {
   onMove: (id: string, to: number) => void;
 }
 
-type Drag = { kind: "start" | "end"; id: string; x: number; ms: number; width: number } | { kind: "move"; id: string; moved: boolean };
+/** An edge drag keeps the row's width and the sequence's length from when it began. */
+type Drag = { kind: "start" | "end"; id: string; x: number; ms: number; width: number; durationMs: number } | { kind: "move"; id: string; moved: boolean };
 
 const percent = (ms: number, durationMs: number) => `${durationMs > 0 ? (ms / durationMs) * 100 : 0}%`;
 
@@ -51,7 +52,7 @@ export default function ClipTrack({ clips, durationMs, sourceDuration, missing, 
 
   const beginEdge = (event: PointerEvent<HTMLElement>, clip: Clip, kind: "start" | "end") => {
     const width = rowRef.current?.getBoundingClientRect().width ?? 0;
-    begin(event, { kind, id: clip.id, x: event.clientX, ms: kind === "start" ? clip.startMs : clip.endMs, width });
+    begin(event, { kind, id: clip.id, x: event.clientX, ms: kind === "start" ? clip.startMs : clip.endMs, width, durationMs });
   };
 
   const move = (event: PointerEvent<HTMLElement>) => {
@@ -63,8 +64,9 @@ export default function ClipTrack({ clips, durationMs, sourceDuration, missing, 
     if (drag.width <= 0) return;
     const clip = clips.find((each) => each.id === drag.id);
     if (!clip) return;
-    // The edge keeps the sequence's scale from when the drag began.
-    const ms = drag.ms + ((event.clientX - drag.x) / drag.width) * durationMs;
+    // The edge keeps the sequence's scale from when the drag began: the
+    // live length changes with the very trim being dragged.
+    const ms = drag.ms + ((event.clientX - drag.x) / drag.width) * drag.durationMs;
     const next = trimClip(clips, drag.id, drag.kind, ms, sourceDuration(clip.source) || clip.endMs);
     moved.current = next;
     onTrimPreview(next);

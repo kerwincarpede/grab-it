@@ -204,3 +204,16 @@ export function fitInside(sourceWidth: number, sourceHeight: number, boxWidth: n
   const height = even(sourceHeight, boxHeight);
   return { x: Math.floor((boxWidth - width) / 2), y: Math.floor((boxHeight - height) / 2), width, height };
 }
+
+/**
+ * Which clip shows each zoom: the first that holds it (see `zoomsIn`),
+ * when a recording is in the sequence more than once. The preview and
+ * the export both give a zoom to that clip only.
+ */
+export function zoomOwners(clips: Clip[], zooms: Zoom[], own: string): Map<string, number> {
+  const owners = new Map<string, number>();
+  clips.forEach((clip, index) => {
+    for (const zoom of zoomsIn(zooms, clip, own)) if (!owners.has(zoom.id)) owners.set(zoom.id, index);
+  });
+  return owners;
+}

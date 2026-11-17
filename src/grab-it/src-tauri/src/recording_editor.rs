@@ -139,7 +139,11 @@ pub fn validate_edits(value: &Value) -> Result<(), String> {
 /// One entry of a version 2 `clips` list: an id, the file name of a
 /// recording (no folders), and a stretch of it.
 fn validate_clip(clip: &Value) -> Result<(), String> {
-    let text = |key: &str| clip.get(key).and_then(Value::as_str).filter(|text| !text.is_empty());
+    let text = |key: &str| {
+        clip.get(key)
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+    };
     if text("id").is_none() {
         return Err("a clip needs an id".to_owned());
     }
@@ -839,8 +843,9 @@ pub struct ClipSound<'a> {
 
 /// ffmpeg's arguments to write `output` from the silent `video` with each
 /// clip's stretch of its recording's sound, resampled to 48 kHz stereo
-/// and joined in order, as AAC. A clip whose recording has no sound is
-/// silence of its length.
+/// and joined in order, as AAC. Each clip's sound is exactly its length:
+/// padded with silence where its recording's sound stops early, and
+/// silence throughout when its recording has none.
 pub fn clip_sound_args(video: &Path, clips: &[ClipSound<'_>], output: &Path) -> Vec<OsString> {
     let mut args: Vec<OsString> = ["-hide_banner", "-loglevel", "error", "-y", "-i"]
         .into_iter()
@@ -856,11 +861,16 @@ pub fn clip_sound_args(video: &Path, clips: &[ClipSound<'_>], output: &Path) -> 
                 args.push("-i".into());
                 args.push(file.as_os_str().to_owned());
                 inputs += 1;
+                // Padded with silence and cut to the clip's length, so a
+                // sound track that ends early never pulls later clips'
+                // sound ahead of their frames.
                 filters.push(format!(
                     "[{inputs}:a:0]atrim=start={}:end={},asetpts=PTS-STARTPTS,\
-                     aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a{index}]",
+                     aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,\
+                     apad,atrim=duration={}[a{index}]",
                     seconds(clip.start_ms),
-                    seconds(clip.end_ms)
+                    seconds(clip.end_ms),
+                    seconds(clip.duration_ms())
                 ));
             }
             None => filters.push(format!(
@@ -870,7 +880,9 @@ pub fn clip_sound_args(video: &Path, clips: &[ClipSound<'_>], output: &Path) -> 
             )),
         }
     }
-    let joined: String = (0..clips.len()).map(|index| format!("[a{index}]")).collect();
+    let joined: String = (0..clips.len())
+        .map(|index| format!("[a{index}]"))
+        .collect();
     filters.push(format!("{joined}concat=n={}:v=0:a=1[sound]", clips.len()));
     args.push("-filter_complex".into());
     args.push(filters.join(";").into());
@@ -1159,7 +1171,10 @@ fn render(
                 Ok(())
             })?;
             if frames == 0 {
-                return Err(format!("the trimmed stretch of {} holds no frames", clip.source));
+                return Err(format!(
+                    "the trimmed stretch of {} holds no frames",
+                    clip.source
+                ));
             }
         }
         video.finish().map_err(|err| err.to_string())?;
@@ -1496,9 +1511,7 @@ mod tests {
 
     #[test]
     fn version_2_edits_hold_a_list_of_clips() {
-        let clip = |source: &str, start: f64, end: f64| {
-            json!({ "id": "c1", "source": source, "startMs": start, "endMs": end })
-        };
+        let clip = |source: &str, start: f64, end: f64| json!({ "id": "c1", "source": source, "startMs": start, "endMs": end });
         assert!(validate_edits(&json!({ "version": 2 })).is_ok());
         assert!(
             validate_edits(&json!({
@@ -1524,8 +1537,10 @@ mod tests {
             validate_edits(&json!({ "version": 2, "clips": [clip("a.mp4", 5.0, 5.0)] })).is_err()
         );
         assert!(
-            validate_edits(&json!({ "version": 2, "clips": [{ "source": "a.mp4", "startMs": 0, "endMs": 1 }] }))
-                .is_err()
+            validate_edits(
+                &json!({ "version": 2, "clips": [{ "source": "a.mp4", "startMs": 0, "endMs": 1 }] })
+            )
+            .is_err()
         );
     }
 
@@ -1911,11 +1926,13 @@ mod tests {
             "-hide_banner -loglevel error -y -i /rec/clip (edited).exporting.mp4 \
              -i /rec/clip.mp4 -i /rec/clip.mp4 -filter_complex \
              [1:a:0]atrim=start=1.250:end=9.500,asetpts=PTS-STARTPTS,\
-             aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a0];\
+             aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,\
+             apad,atrim=duration=8.250[a0];\
              anullsrc=r=48000:cl=stereo,atrim=duration=2.000,\
              aformat=sample_fmts=fltp:channel_layouts=stereo[a1];\
              [2:a:0]atrim=start=0.000:end=0.500,asetpts=PTS-STARTPTS,\
-             aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a2];\
+             aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,\
+             apad,atrim=duration=0.500[a2];\
              [a0][a1][a2]concat=n=3:v=0:a=1[sound] \
              -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k -shortest \
              -movflags +faststart /rec/clip (edited).mp4"
@@ -1998,7 +2015,7 @@ mod tests {
                 &[],
                 &ExportPlan {
                     backdrop_bytes: 0,
-                    ..plan()
+                    ..self::plan()
                 }
             ),
             Ok(None)

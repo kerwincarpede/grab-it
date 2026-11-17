@@ -143,6 +143,10 @@
   touch-action: none;
 }
 
+.timeline-handle[hidden] {
+  display: none;
+}
+
 .timeline-handle.start {
   margin-left: -12px;
   border-radius: 6px 0 0 6px;
