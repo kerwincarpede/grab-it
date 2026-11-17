@@ -141,27 +141,25 @@ function spanOf(clips: Clip[], own: string, index: number, ownDurationMs: number
  * on Linux a blob of the file fetched from it. Null while the blob is on
  * its way.
  *
- * Joined, the one preview plays several recordings in turn. Each one's blob
- * is fetched once and kept until the editor closes: revoking a blob when
- * the preview moves to another recording left WebKitGTK unable to load the
- * next one, and coming back would fetch the whole file again.
+ * Joined, the one preview plays several recordings in turn, each in a
+ * fresh video element. Each recording's Blob is fetched once and kept
+ * until the editor closes, and every visit to a recording mints its own
+ * object URL from it, revoked when the preview moves on: WebKitGTK loads
+ * neither a blob whose URL was revoked under a playing element nor a URL
+ * that a torn-down element used.
  */
 function usePlayableSrc(path: string | null, onError: (message: string) => void): string | null {
   const blob = playsFromBlob();
-  const [urls, setUrls] = useState<Record<string, string>>({});
-  /** Paths fetched or on their way, and every blob URL made; read only in effects. */
+  const [blobs, setBlobs] = useState<Record<string, Blob>>({});
+  /** Paths fetched or on their way; read only in effects. */
   const fetching = useRef(new Set<string>());
-  const made = useRef<string[]>([]);
   const closed = useRef(false);
   useEffect(() => {
     if (!path || !blob || fetching.current.has(path)) return;
     fetching.current.add(path);
     fetchRecording(videoSrc(path))
       .then((data) => {
-        if (closed.current) return;
-        const url = URL.createObjectURL(data);
-        made.current.push(url);
-        setUrls((known) => ({ ...known, [path]: url }));
+        if (!closed.current) setBlobs((known) => ({ ...known, [path]: data }));
       })
       .catch((err: unknown) => {
         fetching.current.delete(path);
@@ -170,17 +168,22 @@ function usePlayableSrc(path: string | null, onError: (message: string) => void)
   }, [path, blob, onError]);
   useEffect(() => {
     closed.current = false;
-    const all = made.current;
     const asked = fetching.current;
     return () => {
       closed.current = true;
-      for (const url of all.splice(0)) URL.revokeObjectURL(url);
       asked.clear();
     };
   }, []);
+  const data = blob && path ? blobs[path] : undefined;
+  // A new URL each time the preview comes to this recording's Blob.
+  const url = useMemo(() => (data ? URL.createObjectURL(data) : null), [data]);
+  useEffect(() => {
+    if (!url) return;
+    return () => URL.revokeObjectURL(url);
+  }, [url]);
   if (!path) return null;
   if (!blob) return videoSrc(path);
-  return urls[path] ?? null;
+  return url;
 }
 
 /** Why a recording's sound shows as Mixed sound. */

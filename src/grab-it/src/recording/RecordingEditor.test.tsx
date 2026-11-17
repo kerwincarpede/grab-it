@@ -652,12 +652,16 @@ describe("RecordingEditor", () => {
       expect((plan as { clips: { zooms: unknown[] }[] }).clips.map((clip) => clip.zooms)).toEqual([[zoom], []]);
     });
 
-    it("on Linux keeps each recording's blob as the preview moves between them, each in a fresh element", async () => {
+    it("on Linux gives each visit to a recording a fresh element and object URL, from a Blob fetched once", async () => {
       vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko)");
       const fetcher = vi.fn(async () => new Response(new Uint8Array(4), { status: 200 }));
       vi.stubGlobal("fetch", fetcher);
       let made = 0;
-      const createObjectURL = vi.fn(() => `blob:tauri://localhost/${++made}`);
+      const minted: Blob[] = [];
+      const createObjectURL = vi.fn((blob: Blob) => {
+        minted.push(blob);
+        return `blob:tauri://localhost/${++made}`;
+      });
       const revokeObjectURL = vi.fn();
       Object.assign(URL, { createObjectURL, revokeObjectURL });
       mockBackend(JOINED);
@@ -685,15 +689,19 @@ describe("RecordingEditor", () => {
       Object.defineProperty(second, "videoHeight", { configurable: true, value: 720 });
       fireEvent.canPlay(second);
       expect(second.currentTime).toBe(2);
-      expect(revokeObjectURL).not.toHaveBeenCalled();
+      // The first element's URL goes with it.
+      expect(revokeObjectURL.mock.calls.map(([url]) => url)).toEqual(["blob:tauri://localhost/1"]);
 
-      // Back in the opened recording: its blob again, not fetched again.
+      // Back in the opened recording: a new element and URL from the kept Blob, not fetched again.
       fireEvent.pointerDown(track, { clientX: 10 });
       fireEvent.pointerUp(track, { clientX: 10 });
-      await waitFor(() => expect(stageVideo()?.getAttribute("src")).toBe("blob:tauri://localhost/1"));
+      await waitFor(() => expect(stageVideo()?.getAttribute("src")).toBe("blob:tauri://localhost/3"));
+      expect(stageVideo()).not.toBe(first);
       expect(fetcher).toHaveBeenCalledTimes(2);
+      expect(minted[2]).toBe(minted[0]);
+      expect(revokeObjectURL.mock.calls.map(([url]) => url)).toEqual(["blob:tauri://localhost/1", "blob:tauri://localhost/2"]);
       unmount();
-      expect(revokeObjectURL.mock.calls.map(([url]) => url).sort()).toEqual(["blob:tauri://localhost/1", "blob:tauri://localhost/2"]);
+      expect(revokeObjectURL.mock.calls.map(([url]) => url)).toEqual(["blob:tauri://localhost/1", "blob:tauri://localhost/2", "blob:tauri://localhost/3"]);
       vi.unstubAllGlobals();
     });
 
