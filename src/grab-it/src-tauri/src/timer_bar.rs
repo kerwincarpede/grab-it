@@ -112,17 +112,35 @@ fn show(app: &AppHandle, countdown: u64, ends: i64) {
     let _window = WINDOW
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    destroy_and_wait(app);
-    if GENERATION.load(Ordering::SeqCst) != countdown {
+    replace(
+        &GENERATION,
+        countdown,
+        || destroy_and_wait(app),
+        || {
+            let Some(display) = steps_bar::pointer_display(app) else {
+                eprintln!("Grab-it: no display to show the timed capture pill on");
+                return;
+            };
+            if let Err(err) = create(app, &display, ends) {
+                eprintln!("Grab-it: could not show the timed capture pill: {err}");
+            }
+        },
+    );
+}
+
+/// Swaps the open pill for `countdown`'s: `destroy` closes the open one
+/// and `open` opens the new one. A countdown no longer current touches
+/// neither, so it never closes a newer countdown's pill; it is checked
+/// again after `destroy`, since it can be replaced while that waits.
+fn replace(generation: &AtomicU64, countdown: u64, destroy: impl FnOnce(), open: impl FnOnce()) {
+    if generation.load(Ordering::SeqCst) != countdown {
         return;
     }
-    let Some(display) = steps_bar::pointer_display(app) else {
-        eprintln!("Grab-it: no display to show the timed capture pill on");
+    destroy();
+    if generation.load(Ordering::SeqCst) != countdown {
         return;
-    };
-    if let Err(err) = create(app, &display, ends) {
-        eprintln!("Grab-it: could not show the timed capture pill: {err}");
     }
+    open();
 }
 
 fn create(app: &AppHandle, display: &Display, ends: i64) -> tauri::Result<()> {
@@ -259,6 +277,72 @@ mod tests {
         // A countdown started afterwards is not affected by it.
         let next = begin(&generation);
         assert!(finish(&generation, next));
+    }
+
+    #[test]
+    fn a_stale_countdown_leaves_the_newer_pill_alone() {
+        let generation = AtomicU64::new(0);
+        let older = begin(&generation);
+        let newer = begin(&generation);
+        let pills = std::cell::RefCell::new(Vec::new());
+        // The newer countdown's thread reaches the pill first.
+        replace(
+            &generation,
+            newer,
+            || pills.borrow_mut().clear(),
+            || pills.borrow_mut().push(newer),
+        );
+        let mut destroyed = false;
+        let mut opened = false;
+        replace(&generation, older, || destroyed = true, || opened = true);
+        assert!(!destroyed && !opened);
+        assert_eq!(pills.into_inner(), vec![newer]);
+    }
+
+    #[test]
+    fn a_countdown_cancelled_before_its_pill_opens_touches_no_pill() {
+        let generation = AtomicU64::new(0);
+        let countdown = begin(&generation);
+        cancel(&generation);
+        let mut destroyed = false;
+        let mut opened = false;
+        replace(
+            &generation,
+            countdown,
+            || destroyed = true,
+            || opened = true,
+        );
+        assert!(!destroyed && !opened);
+    }
+
+    #[test]
+    fn a_countdown_replaced_while_the_old_pill_closes_opens_none() {
+        let generation = AtomicU64::new(0);
+        let countdown = begin(&generation);
+        let mut opened = false;
+        replace(
+            &generation,
+            countdown,
+            || {
+                begin(&generation);
+            },
+            || opened = true,
+        );
+        assert!(!opened);
+    }
+
+    #[test]
+    fn a_current_countdown_swaps_the_pill() {
+        let generation = AtomicU64::new(0);
+        let countdown = begin(&generation);
+        let steps = std::cell::RefCell::new(Vec::new());
+        replace(
+            &generation,
+            countdown,
+            || steps.borrow_mut().push("destroy"),
+            || steps.borrow_mut().push("open"),
+        );
+        assert_eq!(steps.into_inner(), vec!["destroy", "open"]);
     }
 
     #[test]
