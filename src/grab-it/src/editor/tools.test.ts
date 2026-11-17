@@ -52,6 +52,8 @@ import {
   replaceShape,
   resizeCrop,
   restyleShape,
+  simplifyPath,
+  smoothPath,
   snapAngle,
   snapCropDrag,
   snapCropEdges,
@@ -59,6 +61,7 @@ import {
   squareCorner,
   stepNumbers,
   stepStrokeWidth,
+  tidyPath,
   transformShape,
   withAlpha,
 } from "./tools";
@@ -79,6 +82,29 @@ function drawConstrained(tool: Parameters<typeof beginShape>[0], from: [number, 
   const shape = beginShape(tool, { x: from[0], y: from[1] }, style, "id");
   return shape && finishShape(dragShape(shape, { x: to[0], y: to[1] }, true));
 }
+
+describe("tidying paths", () => {
+  it("smooths every point but the ends", () => {
+    expect(smoothPath([0, 0, 10, 8, 20, 0], 1)).toEqual([0, 0, 10, 4, 20, 0]);
+    expect(smoothPath([0, 0, 10, 8], 3)).toEqual([0, 0, 10, 8]);
+  });
+
+  it("drops points within the tolerance and keeps those beyond it", () => {
+    expect(simplifyPath([0, 0, 5, 0.5, 10, 0], 1)).toEqual([0, 0, 10, 0]);
+    expect(simplifyPath([0, 0, 5, 3, 10, 0], 1)).toEqual([0, 0, 5, 3, 10, 0]);
+    expect(simplifyPath([0, 0, 1, 1], 1)).toEqual([0, 0, 1, 1]);
+  });
+
+  it("keeps a loop that ends where it started", () => {
+    expect(simplifyPath([0, 0, 10, 0, 10, 10, 0, 10, 0, 0], 1)).toEqual([0, 0, 10, 0, 10, 10, 0, 10, 0, 0]);
+  });
+
+  it("lets a thicker stroke stray further", () => {
+    const points = [0, 0, 10, 8, 20, 0];
+    expect(tidyPath(points, 4).length).toBe(6);
+    expect(tidyPath(points, 24)).toEqual([0, 0, 20, 0]);
+  });
+});
 
 describe("constraining with Shift", () => {
   it.each([
@@ -191,8 +217,36 @@ describe("drawing tools", () => {
     expect(beginShape("blur", at, { ...style, blurMode: "pixelate" }, "b")).not.toHaveProperty("mode");
   });
 
-  it("records every point of a freehand path", () => {
-    expect(draw("freehand", [0, 0], [5, 5], [10, 0])).toMatchObject({ points: [0, 0, 5, 5, 10, 0] });
+  it("records a freehand path as it is drawn, then smooths it when it ends", () => {
+    let shape = beginShape("freehand", { x: 0, y: 0 }, style, "id")!;
+    for (const [x, y] of [[5, 5], [10, 0]]) shape = dragShape(shape, { x, y });
+    expect(shape).toMatchObject({ points: [0, 0, 5, 5, 10, 0] });
+    expect(finishShape(shape)).toMatchObject({ points: [0, 0, 5, 1.25, 10, 0] });
+  });
+
+  it("evens out a shaky freehand stroke and drops the points it does not need", () => {
+    // A straight stroke along y = 10, wobbling a pixel either way every 2 pixels.
+    const path: [number, number][] = [];
+    for (let x = 2; x <= 100; x += 2) path.push([x, x % 4 === 0 ? 11 : 9]);
+    path.push([102, 10]);
+    const shape = draw("freehand", [0, 10], ...path) as { points: number[] };
+    expect(shape.points.slice(0, 2)).toEqual([0, 10]);
+    expect(shape.points.slice(-2)).toEqual([102, 10]);
+    expect(shape.points.length).toBeLessThan(10);
+    for (let i = 1; i < shape.points.length; i += 2) expect(Math.abs(shape.points[i] - 10)).toBeLessThanOrEqual(1);
+  });
+
+  it("keeps the corners of a freehand path", () => {
+    const shape = draw("freehand", [0, 0], [25, 0], [50, 0], [50, 25], [50, 50]) as { points: number[] };
+    expect(shape.points.slice(0, 2)).toEqual([0, 0]);
+    expect(shape.points.slice(-2)).toEqual([50, 50]);
+    // The corner is rounded a little, but still there.
+    expect(shape.points.length).toBeGreaterThan(4);
+  });
+
+  it("smooths and simplifies the highlighter too", () => {
+    const shape = draw("highlighter", [0, 0], [10, 1], [20, -1], [30, 1], [40, 0]) as { points: number[] };
+    expect(shape.points).toEqual([0, 0, 40, 0]);
   });
 
   it("draws the highlighter wide", () => {

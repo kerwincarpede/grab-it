@@ -7,7 +7,7 @@ sidebar:
 
 **Key: `P`**
 
-Drag to draw; the line follows the pointer wherever it goes. A single click leaves a dot.
+Drag to draw; the line follows the pointer wherever it goes. When you let go, Grab-it smooths the line, so a shaky hand still draws a clean stroke. A single click leaves a dot.
 
 ![A freehand loop drawn around a number.](../../../assets/image-editor/freehand.png)
 

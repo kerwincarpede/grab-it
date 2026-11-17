@@ -20,6 +20,7 @@ import BackdropPanel from "./BackdropPanel";
 import { copyShotText, hasShotText, textCopied, watchShotText, type OcrLine, type ShotText } from "../library/api";
 import { blursFor, findDetails, findWord, wordAt } from "./redact";
 import { imageEdges, NO_EDGES, orientEdges, type Edges } from "./edges";
+import { bandReach, fitToBand, imageTextBand } from "./textBand";
 import {
   backdropLayout,
   backdropPaint,
@@ -824,7 +825,10 @@ export default function EditorWindow() {
       textAt.current = null;
     }
     if (draft) {
-      const shape = finishShape(draft);
+      const finished = finishShape(draft);
+      // A level highlighter drag over a line of text becomes a straight bar fitted to it.
+      const band = finished?.type === "highlighter" && image ? imageTextBand(image, finished.points, bandReach(finished.strokeWidth)) : null;
+      const shape = band && finished?.type === "highlighter" ? fitToBand(finished, band) : finished;
       if (shape) {
         commit(addShape(doc, shape));
         // The new shape keeps its handles, ready to adjust, move or restyle.
