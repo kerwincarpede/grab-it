@@ -652,6 +652,51 @@ describe("RecordingEditor", () => {
       expect((plan as { clips: { zooms: unknown[] }[] }).clips.map((clip) => clip.zooms)).toEqual([[zoom], []]);
     });
 
+    it("on Linux keeps each recording's blob as the preview moves between them, each in a fresh element", async () => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko)");
+      const fetcher = vi.fn(async () => new Response(new Uint8Array(4), { status: 200 }));
+      vi.stubGlobal("fetch", fetcher);
+      let made = 0;
+      const createObjectURL = vi.fn(() => `blob:tauri://localhost/${++made}`);
+      const revokeObjectURL = vi.fn();
+      Object.assign(URL, { createObjectURL, revokeObjectURL });
+      mockBackend(JOINED);
+      const stageVideo = () => screen.getByTestId("recording-stage").querySelector("video");
+      const { unmount } = render(<RecordingEditor />);
+      const first = await loadJoined();
+      expect(first.getAttribute("src")).toBe("blob:tauri://localhost/1");
+      // 10 s over 100 px: 6 s is 2 s into the other recording.
+      const track = screen.getByTestId("timeline-track");
+      placeAt(track, 100, 26);
+      fireEvent.pointerDown(track, { clientX: 60 });
+      fireEvent.pointerUp(track, { clientX: 60 });
+      const second = await waitFor(() => {
+        const found = stageVideo();
+        if (!found || found === first) throw new Error("still the first recording's element");
+        return found;
+      });
+      expect(second.dataset.source).toBe(OTHER);
+      expect(second.getAttribute("src")).toBe("blob:tauri://localhost/2");
+      expect(second.hasAttribute("crossorigin")).toBe(false);
+      // Its loadedmetadata goes unseen: the first frame still applies the seek.
+      Object.defineProperty(second, "currentTime", { configurable: true, writable: true, value: 0 });
+      Object.defineProperty(second, "duration", { configurable: true, value: 8 });
+      Object.defineProperty(second, "videoWidth", { configurable: true, value: 720 });
+      Object.defineProperty(second, "videoHeight", { configurable: true, value: 720 });
+      fireEvent.canPlay(second);
+      expect(second.currentTime).toBe(2);
+      expect(revokeObjectURL).not.toHaveBeenCalled();
+
+      // Back in the opened recording: its blob again, not fetched again.
+      fireEvent.pointerDown(track, { clientX: 10 });
+      fireEvent.pointerUp(track, { clientX: 10 });
+      await waitFor(() => expect(stageVideo()?.getAttribute("src")).toBe("blob:tauri://localhost/1"));
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      unmount();
+      expect(revokeObjectURL.mock.calls.map(([url]) => url).sort()).toEqual(["blob:tauri://localhost/1", "blob:tauri://localhost/2"]);
+      vi.unstubAllGlobals();
+    });
+
     it("marks a recording that is gone and holds Export back", async () => {
       gone = [OTHER];
       mockBackend(JOINED);

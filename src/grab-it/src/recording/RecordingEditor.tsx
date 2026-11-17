@@ -138,31 +138,49 @@ function spanOf(clips: Clip[], own: string, index: number, ownDurationMs: number
 
 /**
  * The URL the video plays `path` from: the grab-it-video scheme itself, or
- * on Linux a blob of the file fetched from it, revoked when the path
- * changes or the editor closes. Null while the blob is on its way.
+ * on Linux a blob of the file fetched from it. Null while the blob is on
+ * its way.
+ *
+ * Joined, the one preview plays several recordings in turn. Each one's blob
+ * is fetched once and kept until the editor closes: revoking a blob when
+ * the preview moves to another recording left WebKitGTK unable to load the
+ * next one, and coming back would fetch the whole file again.
  */
 function usePlayableSrc(path: string | null, onError: (message: string) => void): string | null {
   const blob = playsFromBlob();
-  const [loaded, setLoaded] = useState<{ path: string; url: string } | null>(null);
+  const [urls, setUrls] = useState<Record<string, string>>({});
+  /** Paths fetched or on their way, and every blob URL made; read only in effects. */
+  const fetching = useRef(new Set<string>());
+  const made = useRef<string[]>([]);
+  const closed = useRef(false);
   useEffect(() => {
-    if (!path || !blob) return;
-    let url: string | null = null;
-    let cancelled = false;
+    if (!path || !blob || fetching.current.has(path)) return;
+    fetching.current.add(path);
     fetchRecording(videoSrc(path))
       .then((data) => {
-        if (cancelled) return;
-        url = URL.createObjectURL(data);
-        setLoaded({ path, url });
+        if (closed.current) return;
+        const url = URL.createObjectURL(data);
+        made.current.push(url);
+        setUrls((known) => ({ ...known, [path]: url }));
       })
-      .catch((err: unknown) => !cancelled && onError(`The recording cannot be played: ${errorText(err)}`));
-    return () => {
-      cancelled = true;
-      if (url) URL.revokeObjectURL(url);
-    };
+      .catch((err: unknown) => {
+        fetching.current.delete(path);
+        if (!closed.current) onError(`The recording cannot be played: ${errorText(err)}`);
+      });
   }, [path, blob, onError]);
+  useEffect(() => {
+    closed.current = false;
+    const all = made.current;
+    const asked = fetching.current;
+    return () => {
+      closed.current = true;
+      for (const url of all.splice(0)) URL.revokeObjectURL(url);
+      asked.clear();
+    };
+  }, []);
   if (!path) return null;
   if (!blob) return videoSrc(path);
-  return loaded && loaded.path === path ? loaded.url : null;
+  return urls[path] ?? null;
 }
 
 /** Why a recording's sound shows as Mixed sound. */
@@ -1027,15 +1045,27 @@ export default function RecordingEditor() {
             <div className="recording-fit" style={fitStyle}>
             {src && (
               <video
+                // A fresh element for each recording: WebKitGTK does not
+                // always load a new blob into an element that played another.
+                key={`${currentSource}\n${src}`}
                 ref={videoRef}
                 className="recording-video"
                 data-source={currentSource}
                 src={src}
-                crossOrigin="anonymous"
+                // A blob is the page's own; the scheme needs CORS for the backdrop's canvas.
+                crossOrigin={src.startsWith("blob:") ? undefined : "anonymous"}
                 preload="auto"
                 playsInline
                 style={{ transform: viewTransform(view) }}
                 onLoadedMetadata={onMetadata}
+                // Should loadedmetadata come and go unseen, the first frame
+                // still hands the element its pending seek and play.
+                onLoadedData={(event) => {
+                  if (loadedRef.current !== event.currentTarget.dataset.source || pendingRef.current) onMetadata();
+                }}
+                onCanPlay={(event) => {
+                  if (loadedRef.current !== event.currentTarget.dataset.source || pendingRef.current) onMetadata();
+                }}
                 onPlay={() => setPlaying(true)}
                 onPause={() => {
                   if (!handingOn()) setPlaying(false);
