@@ -143,7 +143,7 @@ jobs:
           curl -fsSL https://kerwincarpede.github.io/grab-it/install.sh | sh
           ```
 
-          **Homebrew (macOS):**
+          **Homebrew (macOS):** installs the latest Stable release:
 
           ```sh
           brew install --cask kerwincarpede/tap/grab-it
