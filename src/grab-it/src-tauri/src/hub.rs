@@ -9,8 +9,7 @@ use std::{
 
 use serde::Serialize;
 use tauri::{
-    AppHandle, Emitter, Manager, PhysicalPosition, Rect, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder, WindowEvent,
+    AppHandle, Emitter, Manager, Rect, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 
 use crate::{
@@ -157,26 +156,76 @@ fn place(app: &AppHandle, window: &WebviewWindow, anchor: Option<Rect>, zoom: f6
     };
     let position = anchor.position.to_physical::<f64>(1.0);
     let size = anchor.size.to_physical::<f64>(1.0);
+    let icon = Bounds {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+    };
+    if !place_under(app, window, icon, zoom) {
+        let _ = window.center();
+    }
+}
+
+/// macOS: the icon's rect is in physical pixels at the icon window's scale,
+/// which Grab-it is not told, while monitors are looked up in logical points.
+/// So the display is picked per its own scale, and the hub is placed in
+/// points on it.
+#[cfg(target_os = "macos")]
+fn place_under(app: &AppHandle, window: &WebviewWindow, icon: Bounds, zoom: f64) -> bool {
+    let monitors = app.available_monitors().unwrap_or_default();
+    let displays: Vec<Display> = monitors.iter().map(display_of).collect();
+    let monitor = match icon_display(icon, &displays) {
+        Some(index) => monitors[index].clone(),
+        None => match app.primary_monitor().ok().flatten() {
+            Some(monitor) => monitor,
+            None => return false,
+        },
+    };
+    let display = display_of(&monitor);
+    let scale = display.scale;
+    let area = monitor.work_area();
+    let area = Bounds {
+        x: f64::from(area.position.x) / scale,
+        y: f64::from(area.position.y) / scale,
+        width: f64::from(area.size.width) / scale,
+        height: f64::from(area.size.height) / scale,
+    };
+    let icon = Bounds {
+        x: icon.x / scale,
+        y: icon.y / scale,
+        width: icon.width / scale,
+        height: icon.height / scale,
+    };
+    let (x, y) = hub_position(
+        icon,
+        (WIDTH * zoom, HEIGHT * zoom),
+        GAP,
+        area,
+        display.bounds.y + display.bounds.height / 2.0,
+    );
+    let _ = window.set_position(tauri::LogicalPosition::new(x.round(), y.round()));
+    true
+}
+
+/// Windows and Linux: the icon's rect and the monitors are both in physical
+/// pixels, so the hub is placed in pixels.
+#[cfg(not(target_os = "macos"))]
+fn place_under(app: &AppHandle, window: &WebviewWindow, icon: Bounds, zoom: f64) -> bool {
     let Some(monitor) = app
-        .monitor_from_point(position.x, position.y)
+        .monitor_from_point(icon.x, icon.y)
         .ok()
         .flatten()
         .or_else(|| app.primary_monitor().ok().flatten())
     else {
-        let _ = window.center();
-        return;
+        return false;
     };
     let scale = monitor.scale_factor();
     let area = monitor.work_area();
     let screen = monitor.size();
     let origin = monitor.position();
     let (x, y) = hub_position(
-        Bounds {
-            x: position.x,
-            y: position.y,
-            width: size.width,
-            height: size.height,
-        },
+        icon,
         (WIDTH * zoom * scale, HEIGHT * zoom * scale),
         GAP * scale,
         Bounds {
@@ -187,7 +236,55 @@ fn place(app: &AppHandle, window: &WebviewWindow, anchor: Option<Rect>, zoom: f6
         },
         f64::from(origin.y) + f64::from(screen.height) / 2.0,
     );
-    let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+    let _ = window.set_position(tauri::PhysicalPosition::new(
+        x.round() as i32,
+        y.round() as i32,
+    ));
+    true
+}
+
+/// A display's frame in logical points, and its scale.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+struct Display {
+    bounds: Bounds,
+    scale: f64,
+}
+
+#[cfg(target_os = "macos")]
+fn display_of(monitor: &tauri::Monitor) -> Display {
+    let scale = monitor.scale_factor();
+    let position = monitor.position();
+    let size = monitor.size();
+    Display {
+        bounds: Bounds {
+            x: f64::from(position.x) / scale,
+            y: f64::from(position.y) / scale,
+            width: f64::from(size.width) / scale,
+            height: f64::from(size.height) / scale,
+        },
+        scale,
+    }
+}
+
+/// Which of `displays` holds the menu-bar icon whose rect `icon` is in
+/// physical pixels at the scale of the display it is on. A display is a
+/// candidate when the icon's centre, in its points, lies across its width;
+/// of those, the one whose top is nearest the icon wins, since an
+/// auto-hidden menu bar puts the icon just above its display.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn icon_display(icon: Bounds, displays: &[Display]) -> Option<usize> {
+    let centre = icon.x + icon.width / 2.0;
+    displays
+        .iter()
+        .enumerate()
+        .filter(|(_, display)| {
+            let x = centre / display.scale;
+            x >= display.bounds.x && x < display.bounds.x + display.bounds.width
+        })
+        .map(|(index, display)| (index, (icon.y / display.scale - display.bounds.y).abs()))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(index, _)| index)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -198,7 +295,8 @@ struct Bounds {
     height: f64,
 }
 
-/// Where the hub's top-left corner goes, in physical pixels: centred on
+/// Where the hub's top-left corner goes, in the units of its arguments
+/// (physical pixels, or points on macOS): centred on
 /// the icon, below it when the icon is in the top half of the screen and
 /// above it otherwise, and kept inside the work area.
 fn hub_position(
@@ -357,5 +455,78 @@ mod tests {
         };
         let (_, y) = hub_position(icon(1700.0, 1046.0), (360.0, 492.0), 6.0, area, 540.0);
         assert_eq!(y, 1040.0 - 492.0 - 6.0);
+    }
+
+    /// The displays in #206, in points: two Retina DELLs side by side with
+    /// the menu bar on the left one, and a scale-1 LG above both.
+    fn displays_206() -> Vec<Display> {
+        let display = |x, y, width, height, scale| Display {
+            bounds: Bounds {
+                x,
+                y,
+                width,
+                height,
+            },
+            scale,
+        };
+        vec![
+            display(0.0, 0.0, 3008.0, 1692.0, 2.0),
+            display(3008.0, 0.0, 3008.0, 1692.0, 2.0),
+            display(1640.0, -1080.0, 2560.0, 1080.0, 1.0),
+        ]
+    }
+
+    /// The menu-bar icon's rect in physical pixels at scale 2, at `y`.
+    fn icon_206(y: f64) -> Bounds {
+        Bounds {
+            x: 4080.0,
+            y,
+            width: 70.0,
+            height: 54.0,
+        }
+    }
+
+    #[test]
+    fn the_icon_is_on_the_main_display_with_the_menu_bar_shown() {
+        assert_eq!(icon_display(icon_206(0.0), &displays_206()), Some(0));
+    }
+
+    #[test]
+    fn the_icon_is_on_the_main_display_with_the_menu_bar_hidden() {
+        assert_eq!(icon_display(icon_206(-54.0), &displays_206()), Some(0));
+    }
+
+    #[test]
+    fn no_display_holds_an_icon_off_every_display() {
+        let icon = Bounds {
+            x: 20000.0,
+            ..icon_206(0.0)
+        };
+        assert_eq!(icon_display(icon, &displays_206()), None);
+        assert_eq!(icon_display(icon_206(0.0), &[]), None);
+    }
+
+    #[test]
+    fn hub_centres_under_the_icon_in_points() {
+        let displays = displays_206();
+        let display = displays[icon_display(icon_206(-54.0), &displays).unwrap()];
+        let scale = display.scale;
+        let icon = icon_206(-54.0);
+        let icon = Bounds {
+            x: icon.x / scale,
+            y: icon.y / scale,
+            width: icon.width / scale,
+            height: icon.height / scale,
+        };
+        let (x, y) = hub_position(
+            icon,
+            (WIDTH, HEIGHT),
+            GAP,
+            display.bounds,
+            display.bounds.y + display.bounds.height / 2.0,
+        );
+        assert_eq!(x, 2040.0 + 35.0 / 2.0 - WIDTH / 2.0);
+        assert_eq!(y, GAP);
+        assert!(x >= 0.0 && x + WIDTH <= 3008.0);
     }
 }
