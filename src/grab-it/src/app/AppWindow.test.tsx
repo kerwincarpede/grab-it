@@ -260,6 +260,19 @@ describe("AppWindow", () => {
     expect(calls.some(({ cmd }) => cmd === "update_check")).toBe(true);
   });
 
+  it("can check again after finding Grab-it up to date", async () => {
+    backend({ update: { state: "upToDate", current: "0.2.1", checkedAt: 1 } });
+    render(<AppWindow />);
+    expect(await screen.findByText("v0.2.1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled();
+  });
+
+  it("disables the check while one runs", async () => {
+    backend({ update: { state: "checking", current: "0.2.1" } });
+    render(<AppWindow />);
+    expect(await screen.findByRole("button", { name: "Checking for updates" })).toBeDisabled();
+  });
+
   it("shows a waiting update in the sidebar and installs it from the dialog", async () => {
     const calls = backend({ update: { state: "available", info: UPDATE, declined: false } });
     render(<AppWindow />);
@@ -295,7 +308,8 @@ describe("AppWindow", () => {
     });
     const dialog = screen.getByRole("dialog", { name: "Updates" });
     expect(within(dialog).getByText("Grab-it is up to date")).toBeInTheDocument();
-    expect(screen.getByText("Up to date")).toBeInTheDocument();
+    expect(screen.queryByText("Up to date")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled();
 
     await act(async () => {
       await emit("update-status", {

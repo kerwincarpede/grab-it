@@ -288,6 +288,14 @@ export const RestartIcon = ({ size }: IconProps) => (
   </Icon>
 );
 
+/** A clockwise arrow: check again. */
+export const RefreshIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+    <path d="M20 4v5h-5" />
+  </Icon>
+);
+
 export const StorageIcon = ({ size }: IconProps) => (
   <Icon size={size}>
     <ellipse cx="12" cy="6" rx="7.5" ry="3" />
