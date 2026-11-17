@@ -2,8 +2,15 @@ name: CI
 
 # Pushes to main run these checks and builds through release.yml, which
 # releases what they build, so main is not built twice.
+# A pull request that changes only docs (the site, docs/ or Markdown) skips
+# these checks, matching release.yml; docs.yml builds the site instead. No
+# check is required on main, so a skipped run doesn't block the merge.
 on:
   pull_request:
+    paths-ignore:
+      - src/grab-it-docs/**
+      - docs/**
+      - '**/*.md'
   workflow_dispatch:
   workflow_call:
     inputs:
