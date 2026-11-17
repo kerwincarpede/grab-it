@@ -122,7 +122,8 @@ struct Session {
     /// Visible windows, front to back, in desktop coordinates.
     windows: Vec<WindowInfo>,
     /// The mouse pointer as the monitors froze.
-    pointer: Option<crate::pointer::Snapshot>,
+    /// Boxed, so an open session stays small beside the other phases.
+    pointer: Option<Box<crate::pointer::Snapshot>>,
 }
 
 #[derive(Default)]
@@ -361,7 +362,7 @@ pub fn open(
             return Err(err);
         }
     };
-    let pointer = crate::pointer::snapshot();
+    let pointer = crate::pointer::snapshot().map(Box::new);
     trace(format_args!("monitors frozen in {:?}", started.elapsed()));
     let desktop = listing.join().unwrap_or_default();
     let placements = app.available_monitors().unwrap_or_default();

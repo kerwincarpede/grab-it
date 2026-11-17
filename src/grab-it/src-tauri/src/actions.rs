@@ -281,7 +281,8 @@ pub fn finish(
     pointer: Option<CapturedPointer>,
 ) {
     let (preferences, show_pointer) = {
-        let store = lock(&app.state::<SettingsState>());
+        let state = app.state::<SettingsState>();
+        let store = lock(&state);
         let settings = store.get();
         (
             settings.preferences.clone(),

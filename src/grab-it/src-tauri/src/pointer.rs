@@ -161,6 +161,7 @@ pub struct Snapshot {
 /// Reads the pointer's place and image now. `None` on Wayland, when the
 /// pointer is hidden, or when the platform could not say.
 pub fn snapshot() -> Option<Snapshot> {
+    #[cfg(target_os = "linux")]
     if crate::portal::is_wayland() {
         return None;
     }

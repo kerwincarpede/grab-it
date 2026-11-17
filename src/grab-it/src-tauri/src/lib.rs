@@ -27,8 +27,8 @@ mod overlay;
 mod panel;
 mod permissions;
 mod pin;
-#[cfg(target_os = "linux")]
 mod pointer;
+#[cfg(target_os = "linux")]
 mod portal;
 mod quick;
 mod record;
