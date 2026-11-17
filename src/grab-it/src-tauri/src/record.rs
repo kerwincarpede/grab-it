@@ -668,6 +668,20 @@ pub fn cursor_path(video: &Path) -> PathBuf {
     capture::sidecar_path(video, CURSOR_SUFFIX)
 }
 
+/// Why a recording cannot start while a step capture runs.
+pub const STEPS_RUNNING: &str = "Stop the step capture before recording.";
+
+/// Refuses a recording while a step capture is under way: both watch
+/// clicks through input.rs's one listener, and a recording ending would
+/// disconnect it from the step capture.
+fn refuse_during_steps(steps_running: bool) -> Result<(), crate::scroll::StartError> {
+    if steps_running {
+        Err(crate::scroll::StartError::Failed(STEPS_RUNNING.to_owned()))
+    } else {
+        Ok(())
+    }
+}
+
 /// What a recording is written as.
 enum Output {
     Gif,
@@ -699,6 +713,7 @@ pub fn start_with(
 ) -> Result<Arc<Session>, crate::scroll::StartError> {
     let _gate = crate::scroll::start_lock();
     crate::scroll::ensure_idle(session(app).is_some(), crate::scroll::active(app))?;
+    refuse_during_steps(crate::steps::is_running())?;
     let (folder, recording) = {
         let state = app.state::<SettingsState>();
         let store = lock(&state);
@@ -1304,6 +1319,15 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
     use image::{AnimationDecoder, Rgba, codecs::gif::GifDecoder};
+
+    #[test]
+    fn a_recording_is_refused_while_a_step_capture_runs() {
+        assert_eq!(
+            refuse_during_steps(true),
+            Err(crate::scroll::StartError::Failed(STEPS_RUNNING.to_owned()))
+        );
+        assert_eq!(refuse_during_steps(false), Ok(()));
+    }
 
     #[test]
     fn an_agents_options_replace_the_settings_with_no_sound_webcam_or_countdown() {

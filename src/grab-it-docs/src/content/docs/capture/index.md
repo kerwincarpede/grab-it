@@ -19,6 +19,7 @@ Grab-it sits in your system tray (menu bar on macOS) and captures with one key. 
 | Text, QR codes and barcodes | `Shift + PrintScreen` | `⌘ ⇧ 1` | [Text and codes](/grab-it/capture/text-and-codes/) |
 | A colour | `Ctrl + Shift + PrintScreen` | `⌘ ⇧ 9` | [Pick a colour](/grab-it/capture/colour/) |
 | Any of the above from a toolbar | `Ctrl + Alt + PrintScreen` | `⌘ ⇧ A` | [All-in-one](/grab-it/capture/all-in-one/) |
+| Each click, as a how-to guide | `Ctrl + Alt + Shift + PrintScreen` | `⌘ ⇧ 8` | [Step capture](/grab-it/capture/step-capture/) |
 
 New here? Start with [Your first capture](/grab-it/capture/first-capture/), then see [More tricks](/grab-it/capture/more-tricks/) for the tray menu and pins. On a Linux desktop running Wayland, read [Wayland](/grab-it/capture/wayland/) too: a few things work differently there.
 

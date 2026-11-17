@@ -111,9 +111,10 @@ pub fn start(app: &AppHandle, action: Action) {
     if action.stops_recording() && record::stop(app) {
         return;
     }
-    // Both watch clicks through the one input listener (input.rs).
+    // Refused before a region is picked; record::start_with refuses
+    // every other way of starting one too.
     if action == Action::Record && crate::steps::is_running() {
-        report_failure(app, "Stop the step capture before recording.");
+        report_failure(app, record::STEPS_RUNNING);
         return;
     }
     if !permissions::ensure_screen_capture(app) {
