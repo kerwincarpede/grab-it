@@ -191,6 +191,17 @@ pub fn set_auto_backdrop(
         .map_err(|err| err.to_string())
 }
 
+/// Turns showing the pointer in new captures on or off.
+#[tauri::command]
+pub fn set_show_pointer(
+    enabled: bool,
+    state: State<'_, SettingsState>,
+) -> Result<Settings, String> {
+    lock(&state)
+        .set_show_pointer(enabled)
+        .map_err(|err| err.to_string())
+}
+
 /// Clears the one-time notice that Grab-it turned describing on.
 #[tauri::command]
 pub fn dismiss_ai_notice(state: State<'_, SettingsState>) -> Result<Settings, String> {

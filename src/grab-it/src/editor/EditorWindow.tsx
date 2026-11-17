@@ -5,7 +5,17 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import "./editor.css";
 import { getEditorPreferences, MAX_BACKDROP_PRESETS, setBackdropPresets } from "../settings/api";
-import { chooseBackdropImage, copyImage, editorFaces, editorImage, editorWords, exportImage, pinImage, saveBackdropPresetImage } from "./api";
+import {
+  chooseBackdropImage,
+  copyImage,
+  editorFaces,
+  editorImage,
+  editorWords,
+  exportImage,
+  pinImage,
+  saveBackdropPresetImage,
+  type CapturedPointer,
+} from "./api";
 import BackdropPanel from "./BackdropPanel";
 import { copyShotText, hasShotText, textCopied, watchShotText, type OcrLine, type ShotText } from "../library/api";
 import { blursFor, findDetails, findWord, wordAt } from "./redact";
@@ -35,6 +45,7 @@ import {
   FlipHorizontalIcon,
   FlipVerticalIcon,
   PinIcon,
+  PointerIcon,
   RedoIcon,
   ResizeIcon,
   RotateLeftIcon,
@@ -85,6 +96,7 @@ import {
   type Orientation,
 } from "./orient";
 import { DEFAULT_CHOICES, parseBackdropPresets, presetName, type EditorChoices, type SavedBackdrop } from "./preferences";
+import { movePointer, POINTER_ID, pointerBox, pointerState, showPointer, transformPointer, withPointer } from "./pointer";
 import ResizePanel from "./ResizePanel";
 import ShapeNode, { SpotlightDim } from "./ShapeNode";
 import ToolWheel from "./ToolWheel";
@@ -185,6 +197,23 @@ function useCaptureImage(ready: boolean) {
     };
   }, [ready]);
   return { image, error };
+}
+
+/** The captured pointer's image, once decoded; null while it loads or when there is none. */
+function usePointerImage(captured: CapturedPointer | null) {
+  const [image, setImage] = useState<HTMLImageElement | null>(null);
+  const data = captured?.image ?? null;
+  useEffect(() => {
+    if (!data) return;
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => !cancelled && setImage(img);
+    img.src = `data:image/png;base64,${data}`;
+    return () => {
+      cancelled = true;
+    };
+  }, [data]);
+  return data ? image : null;
 }
 
 /** One layer of the backdrop preview, painted as the export compose paints it (see `paintBackdrop`). */
@@ -438,6 +467,8 @@ export default function EditorWindow() {
    */
   const presetsQueue = useRef<Promise<void>>(Promise.resolve());
   const autoApplied = useRef(false);
+  /** "Show the pointer in new captures": whether a pointer not yet edited shows. */
+  const [pointerByDefault, setPointerByDefault] = useState(false);
   /** Where the right-click tool wheel is open, in canvas pixels. */
   const [wheelAt, setWheelAt] = useState<Point | null>(null);
   const hold = useRef<ToolHold | null>(null);
@@ -455,6 +486,7 @@ export default function EditorWindow() {
     setWidths(choices.widths);
     setLastBackdrop(choices.backdrop);
     if (choices.autoBackdrop && choices.backdrop) setAutoBackdrop(choices.backdrop);
+    setPointerByDefault(choices.showPointer === true);
     presetsRef.current = choices.backdropPresets ?? [];
     setPresets(presetsRef.current);
   }, []);
@@ -589,6 +621,11 @@ export default function EditorWindow() {
     return drag.snap ? snapCropDrag(drag.start, drag.end, shown, ratio, snapLines, snapThreshold) : cropBox(drag.start, drag.end, shown, ratio);
   };
   const selected = doc.shapes.find((shape) => shape.id === selectedId) ?? null;
+  /** The pointer saved with the capture, and where and whether it shows; null when there is none. */
+  const captured = info?.pointer ?? null;
+  const pointerImage = usePointerImage(captured);
+  const capturePointer = useMemo(() => pointerState(doc, captured, pointerByDefault), [doc, captured, pointerByDefault]);
+  const pointerSelected = selectedId === POINTER_ID && Boolean(capturePointer?.shown);
   const steps = useMemo(() => stepNumbers(doc.shapes), [doc.shapes]);
   const panning = tool === "pan" || spaceHeld;
   /**
@@ -981,9 +1018,29 @@ export default function EditorWindow() {
 
   const removeSelected = useCallback(() => {
     if (!selectedId) return;
-    commit(deleteShape(doc, selectedId));
+    // Delete hides the pointer; the Pointer button brings it back.
+    if (selectedId === POINTER_ID) {
+      if (capturePointer) commit(showPointer(doc, capturePointer, false));
+    } else {
+      commit(deleteShape(doc, selectedId));
+    }
     setSelectedId(null);
-  }, [selectedId, doc, commit]);
+  }, [selectedId, doc, commit, capturePointer]);
+
+  /** Shows or hides the captured pointer: one undo step. */
+  const togglePointer = () => {
+    if (!capturePointer) return;
+    commit(showPointer(doc, capturePointer, !capturePointer.shown));
+    if (capturePointer.shown && selectedId === POINTER_ID) setSelectedId(null);
+  };
+
+  /** Ends a drag or resize of the pointer's node: one undo step, unless nothing changed. */
+  const commitPointerNode = (node: Konva.Node) => {
+    const transform = { x: node.x(), y: node.y(), scaleX: node.scaleX(), scaleY: node.scaleY() };
+    node.scale({ x: 1, y: 1 });
+    if (!captured || !capturePointer) return;
+    commit(withPointer(doc, capturePointer, transformPointer(captured, capturePointer, transform)));
+  };
 
   const duplicateSelected = useCallback(() => {
     if (!selected) return;
@@ -997,8 +1054,9 @@ export default function EditorWindow() {
       // Arrow keys move on screen; shapes live in capture pixels.
       const move = toCaptureDelta(by, orientation);
       if (selected) commit(replaceShape(doc, moveShape(selected, move.x, move.y)));
+      else if (selectedId === POINTER_ID && capturePointer) commit(withPointer(doc, capturePointer, movePointer(capturePointer, move.x, move.y)));
     },
-    [selected, doc, commit, orientation],
+    [selected, selectedId, capturePointer, doc, commit, orientation],
   );
 
   /** Turns or mirrors the capture with everything on it: one undo step. */
@@ -1455,6 +1513,17 @@ export default function EditorWindow() {
           <button type="button" className="icon-button" onClick={removeSelected} disabled={!selectedId} aria-label="Delete" title="Delete (Del)">
             <TrashIcon />
           </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={togglePointer}
+            disabled={!capturePointer}
+            aria-pressed={capturePointer?.shown ?? false}
+            aria-label="Pointer"
+            title={!capturePointer ? "This capture has no pointer" : capturePointer.shown ? "Hide the pointer" : "Show the pointer"}
+          >
+            <PointerIcon />
+          </button>
         </div>
         <div className="bar-group" role="group" aria-label="Orientation">
           <button type="button" className="icon-button" onClick={() => rotateBy(-1)} disabled={!image} aria-label="Rotate left" title="Rotate left (Ctrl+[)">
@@ -1652,6 +1721,24 @@ export default function EditorWindow() {
                 {/* Capture pixels inside, turned and mirrored into display space. */}
                 <Group name="oriented" {...groupAttrs}>
                   <KonvaImage name="capture" image={image} listening={tool === "select"} />
+                  {/* The captured pointer: above the capture, below every annotation, moved and resized like a shape. */}
+                  {captured && capturePointer?.shown && pointerImage && (
+                    <KonvaImage
+                      id={POINTER_ID}
+                      name="annotation captured-pointer"
+                      image={pointerImage}
+                      {...pointerBox(captured, capturePointer)}
+                      draggable={editable}
+                      listening={editable}
+                      onMouseDown={() => setSelectedId(POINTER_ID)}
+                      onTap={() => setSelectedId(POINTER_ID)}
+                      onDragEnd={(event: Konva.KonvaEventObject<DragEvent>) => {
+                        event.cancelBubble = true;
+                        commitPointerNode(event.target);
+                      }}
+                      onTransformEnd={(event: Konva.KonvaEventObject<Event>) => commitPointerNode(event.target)}
+                    />
+                  )}
                   {/* The shade covers the capture only: every annotation stays bright above it. */}
                   {spotlights.length > 0 && <SpotlightDim dim={dim} />}
                   {shapes.map((shape) => (
@@ -1712,9 +1799,9 @@ export default function EditorWindow() {
                   ref={transformerRef}
                   rotateEnabled={false}
                   ignoreStroke
-                  flipEnabled={selected?.type !== "magnify"}
-                  keepRatio={selected?.type === "text" || selected?.type === "step" || selected?.type === "magnify"}
-                  enabledAnchors={anchorsFor(selected)}
+                  flipEnabled={selected?.type !== "magnify" && !pointerSelected}
+                  keepRatio={pointerSelected || selected?.type === "text" || selected?.type === "step" || selected?.type === "magnify"}
+                  enabledAnchors={pointerSelected ? CORNER_ANCHORS : anchorsFor(selected)}
                 />
                 {handleBase && (
                   // In capture pixels like the line, so a dragged handle's position maps back through the turn and mirror.

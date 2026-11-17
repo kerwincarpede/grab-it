@@ -14,7 +14,11 @@
 
 use image::RgbaImage;
 
-use crate::{capture::Rect, screen::MonitorInfo};
+use crate::{
+    capture::Rect,
+    pointer::{Pointer, pointer_in_frame},
+    screen::MonitorInfo,
+};
 
 /// One frame of the recorded area, at its own size.
 pub struct Grabbed {
@@ -60,21 +64,6 @@ pub fn open_synchronous(monitor: &MonitorInfo, rect: Rect) -> Result<Box<dyn Fra
     Ok(Box::new(RegionSource::open(monitor, rect, false)?))
 }
 
-/// Where a pointer at `position`, in the desktop coordinates monitors are
-/// placed in, lies in a frame of `rect`. `scale` is the monitor image's
-/// pixels per desktop unit: 1 where desktop coordinates are pixels, the
-/// backing scale on macOS, where they are points.
-pub fn pointer_in_frame(
-    position: (f64, f64),
-    origin: (i32, i32),
-    scale: f64,
-    rect: Rect,
-) -> (i32, i32) {
-    let x = ((position.0 - f64::from(origin.0)) * scale).round() as i32;
-    let y = ((position.1 - f64::from(origin.1)) * scale).round() as i32;
-    (x - rect.x, y - rect.y)
-}
-
 /// Copies `rect` out of an RGBA image of `width` × `height` whose rows are
 /// `pitch` bytes apart, as GPU buffers often are. `None` when `rect` is
 /// outside the image or `raw` is too short.
@@ -96,53 +85,6 @@ pub fn crop_rows(
     RgbaImage::from_raw(rect.width, rect.height, out)
 }
 
-/// A pointer image: premultiplied ARGB, one `u32` a pixel, as XFixes sends.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CursorImage {
-    pub width: u32,
-    pub height: u32,
-    /// The pixel that points, from the image's top-left corner.
-    pub hot: (u32, u32),
-    pub argb: Vec<u32>,
-}
-
-/// Draws `cursor` over `frame` with its hot spot at `pointer`, in frame
-/// pixels, clipping whatever falls outside the frame.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub fn draw_cursor(frame: &mut RgbaImage, cursor: &CursorImage, pointer: (i32, i32)) {
-    let left = i64::from(pointer.0) - i64::from(cursor.hot.0);
-    let top = i64::from(pointer.1) - i64::from(cursor.hot.1);
-    for cy in 0..cursor.height {
-        let y = top + i64::from(cy);
-        if y < 0 || y >= i64::from(frame.height()) {
-            continue;
-        }
-        for cx in 0..cursor.width {
-            let x = left + i64::from(cx);
-            if x < 0 || x >= i64::from(frame.width()) {
-                continue;
-            }
-            let Some(&argb) = cursor.argb.get((cy * cursor.width + cx) as usize) else {
-                return;
-            };
-            let alpha = argb >> 24;
-            if alpha == 0 {
-                continue;
-            }
-            let source = [(argb >> 16) & 0xff, (argb >> 8) & 0xff, argb & 0xff];
-            let pixel = frame.get_pixel_mut(x as u32, y as u32);
-            for (channel, value) in source.iter().enumerate() {
-                let under = u32::from(pixel.0[channel]);
-                // Premultiplied: the colour already carries its alpha.
-                let blended = value + (under * (255 - alpha) + 127) / 255;
-                pixel.0[channel] = blended.min(255) as u8;
-            }
-            pixel.0[3] = 255;
-        }
-    }
-}
-
 /// Grabs the area with xcap one frame at a time: X11, and elsewhere when
 /// the faster way could not start.
 struct RegionSource {
@@ -151,7 +93,7 @@ struct RegionSource {
     origin: (i32, i32),
     scale: f64,
     show_cursor: bool,
-    pointer: Option<pointer::Pointer>,
+    pointer: Option<Pointer>,
 }
 
 impl RegionSource {
@@ -168,7 +110,7 @@ impl RegionSource {
             origin: (info.x, info.y),
             scale: desktop_scale(info),
             show_cursor,
-            pointer: pointer::Pointer::open(),
+            pointer: Pointer::open(),
         })
     }
 
@@ -220,258 +162,6 @@ fn desktop_scale(info: &MonitorInfo) -> f64 {
     }
 }
 
-/// The pointer on X11: its place and image through XFixes.
-#[cfg(target_os = "linux")]
-mod pointer {
-    use image::RgbaImage;
-    use x11rb::{
-        connection::Connection as _, protocol::xfixes::ConnectionExt as _,
-        rust_connection::RustConnection,
-    };
-
-    use super::{CursorImage, draw_cursor};
-
-    pub struct Pointer {
-        conn: RustConnection,
-        cursor: Option<CursorImage>,
-    }
-
-    impl Pointer {
-        pub fn open() -> Option<Self> {
-            let (conn, _) = x11rb::connect(None).ok()?;
-            conn.xfixes_query_version(4, 0).ok()?.reply().ok()?;
-            conn.flush().ok()?;
-            Some(Self { conn, cursor: None })
-        }
-
-        /// Where the pointer is on the desktop, keeping its image for
-        /// [`Pointer::draw`].
-        pub fn position(&mut self) -> Option<(f64, f64)> {
-            let reply = self.conn.xfixes_get_cursor_image().ok()?.reply().ok()?;
-            self.cursor = Some(CursorImage {
-                width: u32::from(reply.width),
-                height: u32::from(reply.height),
-                hot: (u32::from(reply.xhot), u32::from(reply.yhot)),
-                argb: reply.cursor_image,
-            });
-            Some((f64::from(reply.x), f64::from(reply.y)))
-        }
-
-        pub fn draw(&mut self, frame: &mut RgbaImage, at: (i32, i32)) {
-            if let Some(cursor) = &self.cursor {
-                draw_cursor(frame, cursor, at);
-            }
-        }
-    }
-}
-
-/// The pointer on Windows: `GetCursorInfo` for its place, `DrawIconEx` to
-/// draw it, which gets inverting pointers such as the I-beam right.
-#[cfg(target_os = "windows")]
-mod pointer {
-    use ::windows::Win32::{
-        Graphics::Gdi::{
-            BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection,
-            DIB_RGB_COLORS, DeleteDC, DeleteObject, GdiFlush, GetObjectW, HBITMAP, HGDIOBJ,
-            SelectObject,
-        },
-        UI::WindowsAndMessaging::{
-            CURSOR_SHOWING, CURSORINFO, DI_NORMAL, DrawIconEx, GetCursorInfo, GetIconInfo, HCURSOR,
-            HICON, ICONINFO,
-        },
-    };
-    use image::RgbaImage;
-
-    pub struct Pointer {
-        /// The pointer last seen, if it was showing.
-        current: Option<HCURSOR>,
-        /// The last pointer measured, with its hot spot and size.
-        shape: Option<(HCURSOR, (i32, i32), (i32, i32))>,
-    }
-
-    impl Pointer {
-        pub fn open() -> Option<Self> {
-            Some(Self {
-                current: None,
-                shape: None,
-            })
-        }
-
-        pub fn position(&mut self) -> Option<(f64, f64)> {
-            let mut info = CURSORINFO {
-                cbSize: size_of::<CURSORINFO>() as u32,
-                ..Default::default()
-            };
-            unsafe { GetCursorInfo(&mut info) }.ok()?;
-            self.current = (info.flags.0 & CURSOR_SHOWING.0 != 0 && !info.hCursor.is_invalid())
-                .then_some(info.hCursor);
-            Some((f64::from(info.ptScreenPos.x), f64::from(info.ptScreenPos.y)))
-        }
-
-        /// The hot spot and size of `cursor`.
-        fn shape(&mut self, cursor: HCURSOR) -> Option<((i32, i32), (i32, i32))> {
-            if let Some((known, hot, size)) = self.shape
-                && known == cursor
-            {
-                return Some((hot, size));
-            }
-            let mut info = ICONINFO::default();
-            unsafe { GetIconInfo(HICON::from(cursor), &mut info) }.ok()?;
-            let measure = |bitmap: HBITMAP| {
-                let mut bits = BITMAP::default();
-                let read = unsafe {
-                    GetObjectW(
-                        HGDIOBJ::from(bitmap),
-                        size_of::<BITMAP>() as i32,
-                        Some((&raw mut bits).cast()),
-                    )
-                };
-                (read != 0).then_some((bits.bmWidth, bits.bmHeight))
-            };
-            let size = if info.hbmColor.is_invalid() {
-                // A monochrome pointer: its mask holds the AND and XOR
-                // halves one above the other.
-                measure(info.hbmMask).map(|(width, height)| (width, height / 2))
-            } else {
-                measure(info.hbmColor)
-            };
-            unsafe {
-                if !info.hbmColor.is_invalid() {
-                    let _ = DeleteObject(info.hbmColor.into());
-                }
-                if !info.hbmMask.is_invalid() {
-                    let _ = DeleteObject(info.hbmMask.into());
-                }
-            }
-            let hot = (info.xHotspot as i32, info.yHotspot as i32);
-            let size = size?;
-            self.shape = Some((cursor, hot, size));
-            Some((hot, size))
-        }
-
-        pub fn draw(&mut self, frame: &mut RgbaImage, at: (i32, i32)) {
-            let Some(cursor) = self.current else {
-                return;
-            };
-            let Some((hot, (width, height))) = self.shape(cursor) else {
-                return;
-            };
-            if width <= 0 || height <= 0 {
-                return;
-            }
-            let (left, top) = (at.0 - hot.0, at.1 - hot.1);
-            unsafe { draw_icon(frame, HICON::from(cursor), (left, top), (width, height)) };
-        }
-    }
-
-    /// Draws `icon` with its top-left corner at `corner` in `frame`: the
-    /// pixels under it are copied into a bitmap, the icon is drawn over
-    /// them there, and the result is copied back.
-    unsafe fn draw_icon(frame: &mut RgbaImage, icon: HICON, corner: (i32, i32), size: (i32, i32)) {
-        let (frame_width, frame_height) = (frame.width() as i32, frame.height() as i32);
-        let (width, height) = size;
-        unsafe {
-            let dc = CreateCompatibleDC(None);
-            if dc.is_invalid() {
-                return;
-            }
-            let info = BITMAPINFO {
-                bmiHeader: BITMAPINFOHEADER {
-                    biSize: size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: width,
-                    // Negative: rows run top to bottom.
-                    biHeight: -height,
-                    biPlanes: 1,
-                    biBitCount: 32,
-                    biCompression: BI_RGB.0,
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-            let Ok(bitmap) = CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0)
-            else {
-                let _ = DeleteDC(dc);
-                return;
-            };
-            let previous = SelectObject(dc, bitmap.into());
-            let patch =
-                std::slice::from_raw_parts_mut(bits.cast::<u8>(), (width * height * 4) as usize);
-            let inside = |x: i32, y: i32| x >= 0 && y >= 0 && x < frame_width && y < frame_height;
-            for y in 0..height {
-                for x in 0..width {
-                    let (fx, fy) = (corner.0 + x, corner.1 + y);
-                    if inside(fx, fy) {
-                        let [r, g, b, _] = frame.get_pixel(fx as u32, fy as u32).0;
-                        let at = ((y * width + x) * 4) as usize;
-                        patch[at..at + 4].copy_from_slice(&[b, g, r, 255]);
-                    }
-                }
-            }
-            if DrawIconEx(dc, 0, 0, icon, width, height, 0, None, DI_NORMAL).is_ok() {
-                let _ = GdiFlush();
-                for y in 0..height {
-                    for x in 0..width {
-                        let (fx, fy) = (corner.0 + x, corner.1 + y);
-                        if inside(fx, fy) {
-                            let at = ((y * width + x) * 4) as usize;
-                            let (b, g, r) = (patch[at], patch[at + 1], patch[at + 2]);
-                            frame.put_pixel(fx as u32, fy as u32, image::Rgba([r, g, b, 255]));
-                        }
-                    }
-                }
-            }
-            SelectObject(dc, previous);
-            let _ = DeleteObject(bitmap.into());
-            let _ = DeleteDC(dc);
-        }
-    }
-}
-
-/// The pointer on macOS: only its place, since AVFoundation draws it.
-#[cfg(target_os = "macos")]
-mod pointer {
-    use image::RgbaImage;
-    use objc2_core_graphics::CGEvent;
-
-    pub struct Pointer;
-
-    impl Pointer {
-        pub fn open() -> Option<Self> {
-            Some(Self)
-        }
-
-        /// In global points from the top-left of the main display, as
-        /// monitors are placed.
-        pub fn position(&mut self) -> Option<(f64, f64)> {
-            let event = CGEvent::new(None)?;
-            let point = CGEvent::location(Some(&*event));
-            Some((point.x, point.y))
-        }
-
-        pub fn draw(&mut self, _frame: &mut RgbaImage, _at: (i32, i32)) {}
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-mod pointer {
-    use image::RgbaImage;
-
-    pub struct Pointer;
-
-    impl Pointer {
-        pub fn open() -> Option<Self> {
-            None
-        }
-
-        pub fn position(&mut self) -> Option<(f64, f64)> {
-            None
-        }
-
-        pub fn draw(&mut self, _frame: &mut RgbaImage, _at: (i32, i32)) {}
-    }
-}
-
 /// Windows: DXGI desktop duplication through xcap's recorder.
 #[cfg(target_os = "windows")]
 mod win {
@@ -486,7 +176,8 @@ mod win {
 
     use xcap::{Frame, Monitor};
 
-    use super::{FrameSource, Grabbed, RegionSource, crop_rows, pointer_in_frame};
+    use super::{FrameSource, Grabbed, RegionSource, crop_rows};
+    use crate::pointer::pointer_in_frame;
     use crate::{capture::Rect, screen::MonitorInfo};
 
     /// How long the duplication thread waits for a frame before it looks
@@ -706,7 +397,8 @@ mod mac {
     };
     use objc2_foundation::{NSDictionary, NSNumber, NSObject, NSObjectProtocol, NSString};
 
-    use super::{FrameSource, Grabbed, crop_rows, pointer::Pointer, pointer_in_frame};
+    use super::{FrameSource, Grabbed, crop_rows};
+    use crate::pointer::{Pointer, pointer_in_frame};
     use crate::{capture::Rect, screen::MonitorInfo};
 
     /// How long the session gets to send its first frame.
@@ -956,52 +648,5 @@ mod tests {
         assert!(crop_rows(&raw, 3, 2, pitch, off).is_none());
         // A short buffer is refused rather than read past.
         assert!(crop_rows(&raw[..20], 3, 2, pitch, rect).is_none());
-    }
-
-    #[test]
-    fn the_pointer_is_placed_relative_to_the_recorded_area() {
-        let rect = Rect {
-            x: 100,
-            y: 50,
-            width: 400,
-            height: 300,
-        };
-        // A second monitor to the right of a 1920 px one.
-        assert_eq!(
-            pointer_in_frame((2120.0, 80.0), (1920, 0), 1.0, rect),
-            (100, 30)
-        );
-        // Left of and above the area: outside the frame.
-        assert_eq!(
-            pointer_in_frame((1950.0, 10.0), (1920, 0), 1.0, rect),
-            (-70, -40)
-        );
-        // macOS: points at twice the pixels.
-        assert_eq!(pointer_in_frame((75.5, 40.0), (0, 0), 2.0, rect), (51, 30));
-    }
-
-    #[test]
-    fn the_cursor_is_drawn_at_its_hot_spot_and_clipped() {
-        let mut frame = RgbaImage::from_pixel(4, 4, Rgba([0, 0, 255, 255]));
-        // 2×2: opaque red, transparent, half-transparent white, opaque green.
-        let cursor = CursorImage {
-            width: 2,
-            height: 2,
-            hot: (1, 1),
-            argb: vec![0xffff0000, 0x00000000, 0x80808080, 0xff00ff00],
-        };
-        draw_cursor(&mut frame, &cursor, (2, 2));
-        assert_eq!(frame.get_pixel(1, 1), &Rgba([255, 0, 0, 255]));
-        assert_eq!(frame.get_pixel(2, 1), &Rgba([0, 0, 255, 255]));
-        // 0x80 white premultiplied over blue.
-        assert_eq!(frame.get_pixel(1, 2), &Rgba([128, 128, 255, 255]));
-        assert_eq!(frame.get_pixel(2, 2), &Rgba([0, 255, 0, 255]));
-        assert_eq!(frame.get_pixel(0, 0), &Rgba([0, 0, 255, 255]));
-
-        // Hanging off the top-left corner: only the part inside is drawn.
-        let mut frame = RgbaImage::from_pixel(2, 2, Rgba([0, 0, 0, 255]));
-        draw_cursor(&mut frame, &cursor, (0, 0));
-        assert_eq!(frame.get_pixel(0, 0), &Rgba([0, 255, 0, 255]));
-        assert_eq!(frame.get_pixel(1, 1), &Rgba([0, 0, 0, 255]));
     }
 }

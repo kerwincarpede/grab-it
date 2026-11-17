@@ -524,6 +524,7 @@ pub fn start(
                         CaptureMode::Region,
                         &foreground,
                         Some(monitor.scale_factor),
+                        None,
                     );
                 }
                 Ok(())

@@ -333,6 +333,11 @@ pub struct EditorPreferences {
     /// from the Settings window; the editor's own saves keep it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_backdrop: Option<bool>,
+    /// New captures start with their mouse pointer shown in the editor and
+    /// drawn into the copy made at capture time. Set from the Settings
+    /// window; the editor's own saves keep it. Off when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_pointer: Option<bool>,
     /// Backdrops saved by name in the editor's backdrop panel. Set with
     /// [`SettingsStore::set_backdrop_presets`]; the editor's other saves
     /// keep them.
@@ -418,6 +423,7 @@ impl EditorPreferences {
                 .filter(|backdrop| backdrop.is_object())
                 .cloned(),
             auto_backdrop: flag("autoBackdrop"),
+            show_pointer: flag("showPointer"),
             backdrop_presets: value
                 .get("backdropPresets")
                 .and_then(serde_json::Value::as_array)
@@ -1407,6 +1413,7 @@ impl SettingsStore {
         let next = Settings {
             editor: EditorPreferences {
                 auto_backdrop: self.current.editor.auto_backdrop,
+                show_pointer: self.current.editor.show_pointer,
                 backdrop_presets: self.current.editor.backdrop_presets.clone(),
                 ..editor
             },
@@ -1441,6 +1448,21 @@ impl SettingsStore {
         let next = Settings {
             editor: EditorPreferences {
                 auto_backdrop: Some(enabled),
+                ..self.current.editor.clone()
+            },
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
+    /// Turns showing the pointer in new captures on or off, keeping the
+    /// rest of the editor's choices.
+    pub fn set_show_pointer(&mut self, enabled: bool) -> Result<Settings, SettingsError> {
+        let next = Settings {
+            editor: EditorPreferences {
+                show_pointer: Some(enabled),
                 ..self.current.editor.clone()
             },
             ..self.current.clone()
@@ -3114,6 +3136,7 @@ mod tests {
                 "fill": "aurora", "padding": 48, "radius": 36, "shadow": true, "aspect": "16:9"
             })),
             auto_backdrop: None,
+            show_pointer: None,
             backdrop_presets: Vec::new(),
         }
     }
@@ -3250,6 +3273,28 @@ mod tests {
         let loaded = load(&path, defaults(&dir)).unwrap();
         assert_eq!(loaded.editor.backdrop, None);
         assert_eq!(loaded.editor.auto_backdrop, Some(true));
+    }
+
+    #[test]
+    fn show_pointer_is_off_until_set_and_kept_by_the_editor() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        assert_eq!(store.get().editor.show_pointer, None);
+
+        let updated = store.set_show_pointer(true).unwrap();
+        assert_eq!(updated.editor.show_pointer, Some(true));
+        let saved = store.set_editor_preferences(editor_preferences()).unwrap();
+        assert_eq!(saved.show_pointer, Some(true));
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(json["editor"]["showPointer"], true);
+
+        store.set_show_pointer(false).unwrap();
+        assert_eq!(
+            load(&path, defaults(&dir)).unwrap().editor.show_pointer,
+            Some(false)
+        );
     }
 
     #[test]

@@ -86,6 +86,9 @@ pub struct EditorInfo {
     /// captures saved before it was recorded (the editor then uses its own
     /// window's density).
     pub scale_factor: Option<f64>,
+    /// The mouse pointer saved with the capture, from its `meta.json`;
+    /// `None` when there was none.
+    pub pointer: Option<crate::capture::CapturedPointer>,
 }
 
 /// Image types a backdrop may be filled with, by extension.
@@ -275,12 +278,15 @@ pub fn editor_info(
         .unwrap_or_default();
     let annotations = read_annotations(&path)?;
     let meta = crate::capture::read_meta(&path);
-    let scale_factor = crate::capture::valid_scale(meta.and_then(|meta| meta.scale_factor));
+    let scale_factor =
+        crate::capture::valid_scale(meta.as_ref().and_then(|meta| meta.scale_factor));
+    let pointer = meta.and_then(|meta| meta.pointer);
     Ok(EditorInfo {
         path,
         file_name,
         annotations,
         scale_factor,
+        pointer,
     })
 }
 

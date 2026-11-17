@@ -39,7 +39,7 @@ use tauri::{
 
 use crate::{
     actions,
-    capture::{self, CaptureMode, CssRect, Foreground, Rect},
+    capture::{self, CaptureMode, CapturedPointer, CssRect, Foreground, Rect},
     screen::{self, MonitorInfo, WindowInfo},
     settings::AfterCapture,
 };
@@ -121,6 +121,8 @@ struct Session {
     frames: HashMap<String, Frame>,
     /// Visible windows, front to back, in desktop coordinates.
     windows: Vec<WindowInfo>,
+    /// The mouse pointer as the monitors froze.
+    pointer: Option<crate::pointer::Snapshot>,
 }
 
 #[derive(Default)]
@@ -180,8 +182,10 @@ pub fn find_monitor<'a>(
 }
 
 /// Captures the last dragged region again, as the screen looks now, with
-/// its monitor's scale factor.
-pub fn capture_last_region(app: &AppHandle) -> Result<(RgbaImage, f64), String> {
+/// its monitor's scale factor and the mouse pointer in it.
+pub fn capture_last_region(
+    app: &AppHandle,
+) -> Result<(RgbaImage, f64, Option<CapturedPointer>), String> {
     let last = app
         .state::<LastRegionState>()
         .lock()
@@ -190,9 +194,13 @@ pub fn capture_last_region(app: &AppHandle) -> Result<(RgbaImage, f64), String> 
     let monitors = screen::monitors()?;
     let monitor = find_monitor(&last.monitor, &monitors)
         .ok_or("The monitor the last region was on is no longer connected.")?;
+    let snapshot = crate::pointer::snapshot();
     let image = screen::capture_monitor(monitor.index)?;
     let region = capture::crop(&image, last.rect).ok_or("the last region is off screen")?;
-    Ok((region, monitor.scale_factor))
+    let pointer = snapshot.and_then(|snapshot| {
+        snapshot.place_on_monitor(monitor, image.dimensions(), Some(last.rect))
+    });
+    Ok((region, monitor.scale_factor, pointer))
 }
 
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
@@ -353,6 +361,7 @@ pub fn open(
             return Err(err);
         }
     };
+    let pointer = crate::pointer::snapshot();
     trace(format_args!("monitors frozen in {:?}", started.elapsed()));
     let desktop = listing.join().unwrap_or_default();
     let placements = app.available_monitors().unwrap_or_default();
@@ -368,6 +377,7 @@ pub fn open(
         previous_app: desktop.active_app,
         frames: HashMap::new(),
         windows: desktop.windows,
+        pointer,
     };
     let mut spares = std::mem::take(&mut *app.state::<SpareState>().lock());
     let mut warm = Vec::new();
@@ -1492,9 +1502,25 @@ pub fn overlay_finish(
             return Ok(());
         }
         let (image, scale) = stitch_frames(&session.frames)?;
+        let monitors: Vec<MonitorInfo> = session
+            .frames
+            .values()
+            .map(|frame| frame.monitor.clone())
+            .collect();
+        let pointer = session
+            .pointer
+            .as_ref()
+            .and_then(|snapshot| snapshot.place_on_desktop(&monitors, image.dimensions()));
         let foreground = session.foreground.clone();
         std::thread::spawn(move || {
-            actions::finish(&app, &image, CaptureMode::Screen, &foreground, scale)
+            actions::finish(
+                &app,
+                &image,
+                CaptureMode::Screen,
+                &foreground,
+                scale,
+                pointer,
+            )
         });
         return Ok(());
     }
@@ -1538,7 +1564,7 @@ pub fn overlay_finish(
         return Ok(());
     }
 
-    let (image, mode, foreground) = match selection {
+    let (image, mode, foreground, pointer) = match selection {
         Selection::Point {
             x,
             y,
@@ -1568,6 +1594,9 @@ pub fn overlay_finish(
             let pixels = capture::css_to_image_rect(rect, scale, frame.image.dimensions())
                 .ok_or("the selection is empty")?;
             let image = capture::crop(&frame.image, pixels).ok_or("the selection is empty")?;
+            let pointer = session.pointer.as_ref().and_then(|snapshot| {
+                snapshot.place_on_monitor(&frame.monitor, frame.image.dimensions(), Some(pixels))
+            });
             if intent == Intent::Capture {
                 *app.state::<LastRegionState>().lock() = Some(LastRegion {
                     monitor: frame.monitor.clone(),
@@ -1579,7 +1608,12 @@ pub fn overlay_finish(
                     return Ok(());
                 }
             }
-            (image, CaptureMode::Region, session.foreground.clone())
+            (
+                image,
+                CaptureMode::Region,
+                session.foreground.clone(),
+                pointer,
+            )
         }
         Selection::Window { id } => {
             let picked = session
@@ -1590,8 +1624,10 @@ pub fn overlay_finish(
             let foreground = screen::foreground_of(picked);
             if let Some(delay) = delay {
                 let scale = frame.monitor.scale_factor;
+                let area = picked.rect;
                 std::thread::spawn(move || {
                     std::thread::sleep(delay);
+                    let snapshot = crate::pointer::snapshot();
                     match screen::capture_window(id) {
                         Ok(image) => actions::finish(
                             &app,
@@ -1599,17 +1635,21 @@ pub fn overlay_finish(
                             CaptureMode::Window,
                             &foreground,
                             Some(scale),
+                            snapshot.and_then(|snapshot| {
+                                snapshot.place_in_area(area, image.dimensions())
+                            }),
                         ),
                         Err(err) => actions::report_failure(&app, &err),
                     }
                 });
                 return Ok(());
             }
-            (
-                window_image(frame, picked)?,
-                CaptureMode::Window,
-                foreground,
-            )
+            let image = window_image(frame, picked)?;
+            let pointer = session
+                .pointer
+                .as_ref()
+                .and_then(|snapshot| snapshot.place_in_area(picked.rect, image.dimensions()));
+            (image, CaptureMode::Window, foreground, pointer)
         }
         // Handled above.
         Selection::Screen => return Err("the selection is empty".into()),
@@ -1619,7 +1659,7 @@ pub fn overlay_finish(
     std::thread::spawn(move || match intent {
         Intent::Text => actions::finish_text(&app, &image),
         Intent::Capture | Intent::Colour | Intent::Record | Intent::Scroll => {
-            actions::finish(&app, &image, mode, &foreground, Some(scale))
+            actions::finish(&app, &image, mode, &foreground, Some(scale), pointer)
         }
     });
     Ok(())

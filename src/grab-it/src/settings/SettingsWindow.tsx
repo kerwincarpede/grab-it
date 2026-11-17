@@ -49,6 +49,7 @@ import {
   SETTINGS_SECTIONS,
   setAgentAccess,
   setAutoBackdrop,
+  setShowPointer,
   setAutostart,
   setHotkeys,
   setPreferences,
@@ -438,6 +439,18 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     }
   }
 
+  async function changeShowPointer(enabled: boolean) {
+    setBusy(true);
+    try {
+      setSettings(await setShowPointer(enabled));
+      setStatus({ kind: "preferences-saved" });
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function changeAutostart(enabled: boolean) {
     setBusy(true);
     try {
@@ -636,6 +649,22 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                 checked={settings?.editor?.autoBackdrop ?? false}
                 disabled={busy || settings === null}
                 onChange={(event) => void changeAutoBackdrop(event.target.checked)}
+              />
+            </label>
+            <label className="row">
+              <span className="row-text">
+                <span className="row-title">Show the pointer in new captures</span>
+                <span className="row-hint">
+                  The editor starts with the mouse pointer shown, and the clipboard copy has it drawn in. The saved capture never has it.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                className="switch"
+                checked={settings?.editor?.showPointer ?? false}
+                disabled={busy || settings === null}
+                onChange={(event) => void changeShowPointer(event.target.checked)}
               />
             </label>
           </div>

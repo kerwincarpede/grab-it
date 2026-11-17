@@ -163,6 +163,8 @@ export interface EditorPreferences {
   backdrop?: unknown;
   /** Frame captures that have no annotations yet with `backdrop`. Set from Settings; the editor never writes it. */
   autoBackdrop?: boolean;
+  /** New captures start with their mouse pointer shown. Set from Settings; the editor never writes it. Off when unset. */
+  showPointer?: boolean;
   /** Backdrops saved by name. Set with `setBackdropPresets`; the editor's other saves keep them. */
   backdropPresets?: BackdropPreset[];
 }
@@ -681,6 +683,11 @@ export function setBackdropPresets<B>(presets: BackdropPreset<B>[]): Promise<Bac
 /** Turns framing new captures with the last backdrop on or off. */
 export function setAutoBackdrop(enabled: boolean): Promise<Settings> {
   return invoke<Settings>("set_auto_backdrop", { enabled });
+}
+
+/** Turns showing the pointer in new captures on or off. */
+export function setShowPointer(enabled: boolean): Promise<Settings> {
+  return invoke<Settings>("set_show_pointer", { enabled });
 }
 
 /** Whether Grab-it starts when the user signs in; the system holds this. */

@@ -28,6 +28,7 @@ mod panel;
 mod permissions;
 mod pin;
 #[cfg(target_os = "linux")]
+mod pointer;
 mod portal;
 mod quick;
 mod record;
@@ -124,6 +125,7 @@ pub fn run() {
             commands::get_editor_preferences,
             commands::set_editor_preferences,
             commands::set_auto_backdrop,
+            commands::set_show_pointer,
             commands::set_backdrop_presets,
             commands::dismiss_ai_notice,
             commands::open_target,
