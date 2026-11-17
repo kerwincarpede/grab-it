@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import type { OcrLine } from "../library/api";
 import type { Annotations } from "./model";
 
 /** Mirrors `EditorInfo` in src-tauri/src/editor.rs. */
@@ -67,4 +68,25 @@ export function exportImage(path: string, bytes: Uint8Array): Promise<void> {
   return invoke<void>("editor_export", bytes, {
     headers: { [EXPORT_PATH_HEADER]: encodeURIComponent(path) },
   });
+}
+
+/** A box in the capture's pixels. Mirrors `Rect` in src-tauri/src/capture.rs. */
+export interface PixelRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * The capture's lines of text with their word boxes, in capture pixels:
+ * the library's stored ones, else read now. Nothing leaves the computer.
+ */
+export function editorWords(): Promise<OcrLine[]> {
+  return invoke<OcrLine[]>("editor_words");
+}
+
+/** The faces found in the capture, in capture pixels. */
+export function editorFaces(): Promise<PixelRect[]> {
+  return invoke<PixelRect[]>("editor_faces");
 }

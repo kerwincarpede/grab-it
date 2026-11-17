@@ -7,6 +7,7 @@ mod cli;
 mod codes;
 mod commands;
 mod editor;
+mod faces;
 mod ffmpeg;
 mod file_clipboard;
 mod frame_overlays;
@@ -176,6 +177,8 @@ pub fn run() {
             editor::editor_save_annotations,
             editor::editor_copy,
             editor::editor_export,
+            editor::editor_words,
+            editor::editor_faces,
             recording_editor::recording_info,
             recording_editor::recording_save_edits,
             recording_editor::recording_export,
@@ -261,6 +264,11 @@ pub fn run() {
             // versions downloaded them into the app data directory instead.
             ocr::start(handle, ocr::models_dir(&app.path().resource_dir()?));
             ocr::remove_downloaded_models(&data_dir);
+            // Finds faces for the editor's Blur private details, loading the
+            // bundled model the first time it is used.
+            app.manage(faces::FaceState::new(faces::models_dir(
+                &app.path().resource_dir()?,
+            )));
             // Has ffmpeg ready to record MP4, downloading it the first time.
             ffmpeg::start(handle, data_dir.clone(), records_mp4);
             // Describes captures with a vision model, once turned on. With

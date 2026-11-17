@@ -4,7 +4,7 @@ import type { ReactNode, Ref } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import EditorWindow from "./EditorWindow";
 import type { BackdropPreset, EditorPreferences } from "../settings/api";
-import type { ShotText } from "../library/api";
+import type { OcrLine, ShotText } from "../library/api";
 import type { Annotations } from "./model";
 import { PREFERENCES_DELAY_MS } from "./preferences";
 import { AUTOSAVE_DELAY_MS } from "./useAnnotations";
@@ -254,6 +254,10 @@ interface PreferencesMock {
   shotText?: ShotText;
   /** Collects every list of backdrop presets written. */
   presets?: BackdropPreset[][];
+  /** What `editor_words` answers (an Error makes it fail); no words when unset. */
+  words?: OcrLine[] | Error | Promise<OcrLine[]>;
+  /** What `editor_faces` answers; no faces when unset. */
+  faces?: { x: number; y: number; width: number; height: number }[];
 }
 
 /** The capture's id in the mocked library. */
@@ -309,6 +313,13 @@ function mockEditor(
       case "plugin:event|listen":
       case "plugin:event|unlisten":
         return 1;
+      case "editor_words":
+        calls.push({ cmd, payload });
+        if (preferences.words instanceof Error) throw preferences.words;
+        return preferences.words ?? [];
+      case "editor_faces":
+        calls.push({ cmd, payload });
+        return preferences.faces ?? [];
       case "editor_pin":
       case "editor_copy":
       case "plugin:window|close":
@@ -1233,6 +1244,111 @@ describe("EditorWindow", () => {
     // Give the text lookup time to answer.
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByRole("button", { name: "Copy text" })).not.toBeInTheDocument();
+  });
+
+  /** A line of words 10px per character and 5px apart, at `y`. */
+  const wordLine = (text: string, y: number): OcrLine => {
+    let x = 10;
+    const words = text.split(" ").map((word) => {
+      const box = { text: word, x, y, width: word.length * 10, height: 12 };
+      x += box.width + 5;
+      return box;
+    });
+    return { text, x: 10, y, width: x - 15, height: 12, words };
+  };
+  const PRIVATE_WORDS = [wordLine("Mail jane@example.com", 20), wordLine("Call +1 555 010 0199", 50)];
+  const FACE = { x: 300, y: 100, width: 60, height: 70 };
+  const privateToggle = () =>
+    within(screen.getByRole("toolbar", { name: "Style and actions" })).getByRole("button", { name: "Blur private details" });
+  const blurs = (doc?: Annotations) => (doc?.shapes ?? []).filter((shape) => shape.type === "blur");
+
+  it("blurs every private detail and face as one undo step, and removes its blurs when turned off", async () => {
+    const calls: { cmd: string; payload: unknown }[] = [];
+    const saved = mockEditor({ version: 1, shapes: [], crop: null }, calls, { words: PRIVATE_WORDS, faces: [FACE] });
+    await ready();
+    const toggle = privateToggle();
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(blurs(last(saved))).toHaveLength(3));
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(blurs(last(saved))).toEqual([
+      // The email, the phone number's four words as one rect, then the face, each padded by 2px.
+      expect.objectContaining({ x: 53, y: 18, width: 164, height: 16 }),
+      expect.objectContaining({ x: 53, y: 48, width: 139, height: 16 }),
+      expect.objectContaining({ x: 298, y: 98, width: 64, height: 74 }),
+    ]);
+    expect(calls.map((call) => call.cmd).sort()).toEqual(["editor_faces", "editor_words"]);
+
+    // One undo removes them all.
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(blurs(last(saved))).toHaveLength(0));
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(blurs(last(saved))).toHaveLength(3));
+
+    // Off removes the blurs it added, keeping a blur drawn by hand.
+    fireEvent.click(pressed("Blur"));
+    drag([10, 200], [60, 240]);
+    await waitFor(() => expect(blurs(last(saved))).toHaveLength(4));
+    fireEvent.click(toggle);
+    await waitFor(() => expect(blurs(last(saved))).toEqual([expect.objectContaining({ x: 10, y: 200, width: 50, height: 40 })]));
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    // On again adds them once more, never twice, and reads the words only once.
+    fireEvent.click(toggle);
+    await waitFor(() => expect(blurs(last(saved))).toHaveLength(4));
+    expect(calls.filter((call) => call.cmd === "editor_words")).toHaveLength(1);
+  });
+
+  it("shows the toggle busy while finding, then notes when nothing was found", async () => {
+    let answer: (lines: OcrLine[]) => void = () => {};
+    const words = new Promise<OcrLine[]>((resolve) => (answer = resolve));
+    const saved = mockEditor({ version: 1, shapes: [], crop: null }, [], { words });
+    await ready();
+    // Shown whatever the tool.
+    fireEvent.click(pressed("Arrow"));
+    fireEvent.click(privateToggle());
+
+    await waitFor(() => expect(privateToggle()).toHaveAttribute("aria-busy", "true"));
+    expect(privateToggle()).toBeDisabled();
+    answer([wordLine("Order pineapple today", 20)]);
+
+    expect(await screen.findByText("No private details found")).toBeInTheDocument();
+    expect(privateToggle()).toHaveAttribute("aria-busy", "false");
+    expect(privateToggle()).toBeEnabled();
+    expect(privateToggle()).toHaveAttribute("aria-pressed", "false");
+    expect(blurs(last(saved))).toHaveLength(0);
+  });
+
+  it("says why Blur private details failed", async () => {
+    mockEditor({ version: 1, shapes: [], crop: null }, [], { words: new Error("no models") });
+    await ready();
+    fireEvent.click(privateToggle());
+    expect(await screen.findByText("Blur private details failed: no models")).toBeInTheDocument();
+    expect(privateToggle()).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("blurs a clicked word and every other place it appears with the Blur tool, as one undo step", async () => {
+    const lines = [wordLine("Order pineapple today", 20), wordLine("Pineapple, again", 60), wordLine("pineapples", 100)];
+    const saved = mockEditor({ version: 1, shapes: [], crop: null }, [], { words: lines });
+    await ready();
+    fireEvent.click(pressed("Blur"));
+    // A click, not a drag, on "pineapple".
+    drag([100, 25], [100, 25]);
+
+    await waitFor(() => expect(blurs(last(saved))).toHaveLength(2));
+    expect(blurs(last(saved))).toEqual([
+      expect.objectContaining({ x: 63, y: 18, width: 94, height: 16 }),
+      expect.objectContaining({ x: 8, y: 58, width: 104, height: 16 }),
+    ]);
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(blurs(last(saved))).toHaveLength(0));
+
+    // A click on no word adds nothing; a drag still draws a blur.
+    drag([390, 290], [390, 290]);
+    drag([200, 150], [260, 190]);
+    await waitFor(() => expect(blurs(last(saved))).toEqual([expect.objectContaining({ x: 200, y: 150, width: 60, height: 40 })]));
   });
 
   const backdropPanel = () => {

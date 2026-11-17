@@ -31,7 +31,9 @@
     "resources": {
       "ocr-models/text-detection.onnx": "ocr-models/text-detection.onnx",
       "ocr-models/text-recognition.onnx": "ocr-models/text-recognition.onnx",
-      "ocr-models/LICENSE.md": "ocr-models/LICENSE.md"
+      "ocr-models/LICENSE.md": "ocr-models/LICENSE.md",
+      "face-models/version-RFB-320.onnx": "face-models/version-RFB-320.onnx",
+      "face-models/LICENSE.md": "face-models/LICENSE.md"
     },
     "macOS": {
       "entitlements": "./Entitlements.plist"
