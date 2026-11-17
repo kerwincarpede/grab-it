@@ -33,8 +33,8 @@ use std::{
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder, WindowEvent,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
+    State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 
 use crate::{
@@ -257,16 +257,18 @@ fn prewarm(app: &AppHandle) {
     };
     let wanted: Vec<_> = monitors
         .iter()
-        .map(|monitor| (*monitor.position(), *monitor.size()))
+        .map(|monitor| (*monitor.position(), *monitor.size(), monitor.scale_factor()))
         .collect();
 
     // A monitor that was unplugged or changed leaves its spare misplaced.
     let stale: Vec<Spare> = {
         let state = app.state::<SpareState>();
         let mut spares = state.lock();
-        let (keep, stale) = std::mem::take(&mut *spares)
-            .into_iter()
-            .partition(|spare| wanted.contains(&(spare.position, spare.size)));
+        let (keep, stale) = std::mem::take(&mut *spares).into_iter().partition(|spare| {
+            wanted
+                .iter()
+                .any(|&(position, size, _)| (spare.position, spare.size) == (position, size))
+        });
         *spares = keep;
         stale
     };
@@ -276,7 +278,7 @@ fn prewarm(app: &AppHandle) {
         }
     }
 
-    for (position, size) in wanted {
+    for (position, size, scale) in wanted {
         let have = app
             .state::<SpareState>()
             .lock()
@@ -286,7 +288,7 @@ fn prewarm(app: &AppHandle) {
             continue;
         }
         let label = next_label();
-        match create_window(app, &label, position, size) {
+        match create_window(app, &label, position, size, scale) {
             Ok(_) => app.state::<SpareState>().lock().push(Spare {
                 label,
                 position,
@@ -370,6 +372,9 @@ pub fn open(
     let mut spares = std::mem::take(&mut *app.state::<SpareState>().lock());
     let mut warm = Vec::new();
     let mut cold = Vec::new();
+    // The overlay on the display the pointer is on is shown last, so it
+    // takes the keyboard.
+    let mut pointer_label = None;
     for (monitor, image) in frames {
         let (position, size) = placement_for(&monitor, &placements);
         let spare = spares
@@ -385,10 +390,14 @@ pub fn open(
             }
             None => {
                 let label = next_label();
-                cold.push((label.clone(), position, size));
+                let scale = placement_scale(&monitor, &placements);
+                cold.push((label.clone(), position, size, scale));
                 label
             }
         };
+        if pointer_label.is_none() && crate::record_bar::pointer_on(app, &monitor) {
+            pointer_label = Some(label.clone());
+        }
         let image = Arc::new(image);
         session.frames.insert(
             label,
@@ -410,19 +419,34 @@ pub fn open(
     }
 
     let shown = (|| -> tauri::Result<()> {
+        let under_pointer = |label: &str| pointer_label.as_deref() == Some(label);
+        let mut last = None;
         for window in &warm {
             if INSTANT {
-                reveal(window)?;
+                if under_pointer(window.label()) {
+                    last = Some(window.clone());
+                } else {
+                    reveal(window)?;
+                }
             }
             // Its page has been waiting for this. One that is still loading
             // misses it, and asks for the selection itself once it is up.
             window.emit_to(window.label(), START_EVENT, ())?;
         }
-        for (label, position, size) in &cold {
-            let window = create_window(app, label, *position, *size)?;
+        for (label, position, size, scale) in &cold {
+            let window = create_window(app, label, *position, *size, *scale)?;
             if INSTANT {
-                reveal(&window)?;
+                if under_pointer(label) {
+                    last = Some(window);
+                } else {
+                    reveal(&window)?;
+                }
             }
+        }
+        // Shown last, so it is the key window and a key press reaches the
+        // overlay the user is looking at.
+        if let Some(window) = last {
+            reveal(&window)?;
         }
         Ok(())
     })();
@@ -604,6 +628,28 @@ pub(crate) fn placement_for(
     monitor: &MonitorInfo,
     placements: &[tauri::Monitor],
 ) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
+    match placement_monitor(monitor, placements) {
+        Some(m) => (*m.position(), *m.size()),
+        None => (
+            PhysicalPosition::new(monitor.x, monitor.y),
+            PhysicalSize::new(monitor.width, monitor.height),
+        ),
+    }
+}
+
+/// The scale of the display a monitor's overlay is placed on, to turn
+/// [`placement_for`] into points on macOS. xcap's own numbers, used when
+/// no Tauri monitor matches, are taken as they are.
+fn placement_scale(monitor: &MonitorInfo, placements: &[tauri::Monitor]) -> f64 {
+    placement_monitor(monitor, placements).map_or(1.0, tauri::Monitor::scale_factor)
+}
+
+/// The Tauri monitor that xcap's `monitor` is, by name, else by physical
+/// or logical position.
+fn placement_monitor<'a>(
+    monitor: &MonitorInfo,
+    placements: &'a [tauri::Monitor],
+) -> Option<&'a tauri::Monitor> {
     let by_name = placements
         .iter()
         .find(|m| m.name().is_some_and(|name| *name == monitor.name));
@@ -616,21 +662,47 @@ pub(crate) fn placement_for(
                     && (f64::from(pos.y) / scale).round() as i32 == monitor.y)
         })
     };
-    match by_name.or_else(by_position) {
-        Some(m) => (*m.position(), *m.size()),
-        None => (
-            PhysicalPosition::new(monitor.x, monitor.y),
-            PhysicalSize::new(monitor.width, monitor.height),
+    by_name.or_else(by_position)
+}
+
+/// A display's frame, given in physical pixels at the display's own
+/// `scale`, in logical points.
+///
+/// macOS: tao builds a monitor's physical frame from that monitor's scale,
+/// but turns a physical size or position for a window back into points
+/// with the scale of the screen the window is on now. Where the scales
+/// differ the window lands at half or double the right place, so overlays
+/// are placed in points instead. A scale that is not a positive number
+/// counts as 1.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn logical_frame(
+    position: PhysicalPosition<i32>,
+    size: PhysicalSize<u32>,
+    scale: f64,
+) -> (LogicalPosition<f64>, LogicalSize<f64>) {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    (
+        LogicalPosition::new(f64::from(position.x) / scale, f64::from(position.y) / scale),
+        LogicalSize::new(
+            f64::from(size.width) / scale,
+            f64::from(size.height) / scale,
         ),
-    }
+    )
 }
 
 /// Makes a hidden overlay covering a monitor and starts loading its page.
+/// `position` and `size` are the monitor's frame in physical pixels at its
+/// own `scale`.
 fn create_window(
     app: &AppHandle,
     label: &str,
     position: PhysicalPosition<i32>,
     size: PhysicalSize<u32>,
+    scale: f64,
 ) -> tauri::Result<WebviewWindow> {
     let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(PAGE.into()))
         .title("Grab-it capture")
@@ -640,7 +712,11 @@ fn create_window(
         .skip_taskbar(true)
         .shadow(false)
         .visible(false)
-        .focused(true);
+        .focused(true)
+        // A click on an overlay that is not the key window starts a drag
+        // rather than only making it key, so any display takes the first
+        // drag.
+        .accept_first_mouse(true);
     // See-through, so it can be on screen before its page has anything to
     // paint. Matches `INSTANT`. Not focused: wry activates Grab-it for a
     // focused webview as it is made, even in a hidden window, and the
@@ -670,8 +746,21 @@ fn create_window(
     // Sized before it is placed: macOS resizes a window around its
     // bottom-left corner, so resizing after placing it would push its top
     // edge off the screen by the difference in height.
-    window.set_size(size)?;
-    window.set_position(position)?;
+    //
+    // macOS places it in the display's points ([`logical_frame`]); Windows
+    // and Linux place it in pixels.
+    #[cfg(target_os = "macos")]
+    {
+        let (position, size) = logical_frame(position, size, scale);
+        window.set_size(size)?;
+        window.set_position(position)?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = scale;
+        window.set_size(size)?;
+        window.set_position(position)?;
+    }
 
     let app = app.clone();
     let label = label.to_owned();
@@ -2103,5 +2192,50 @@ mod tests {
         let resized = [monitor(0, "eDP-1", 2560), monitor(1, "DP-2", 2560)];
         assert_eq!(find_monitor(&wanted, &resized), None);
         assert_eq!(find_monitor(&wanted, &[]), None);
+    }
+
+    #[test]
+    fn overlays_are_placed_in_each_display_s_own_points() {
+        // The #207 layout: the main display at 2x, a 1x display above it
+        // and a 2x display to its right, each frame in pixels at its scale.
+        let one_x = logical_frame(
+            PhysicalPosition::new(640, -1080),
+            PhysicalSize::new(2560, 1080),
+            1.0,
+        );
+        assert_eq!(
+            one_x,
+            (
+                LogicalPosition::new(640.0, -1080.0),
+                LogicalSize::new(2560.0, 1080.0)
+            )
+        );
+        let two_x = logical_frame(
+            PhysicalPosition::new(6400, 0),
+            PhysicalSize::new(3840, 2160),
+            2.0,
+        );
+        assert_eq!(
+            two_x,
+            (
+                LogicalPosition::new(3200.0, 0.0),
+                LogicalSize::new(1920.0, 1080.0)
+            )
+        );
+    }
+
+    #[test]
+    fn a_scale_that_is_not_a_positive_number_counts_as_one() {
+        let frame = (
+            PhysicalPosition::new(-1920, 0),
+            PhysicalSize::new(1920, 1080),
+        );
+        let expected = (
+            LogicalPosition::new(-1920.0, 0.0),
+            LogicalSize::new(1920.0, 1080.0),
+        );
+        for scale in [0.0, -2.0, f64::NAN] {
+            assert_eq!(logical_frame(frame.0, frame.1, scale), expected);
+        }
     }
 }

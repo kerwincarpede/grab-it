@@ -289,7 +289,41 @@ pub fn pointer_on(app: &AppHandle, monitor: &MonitorInfo) -> bool {
         width: found.size().width,
         height: found.size().height,
     };
-    area.contains((pointer.x.floor() as i32, pointer.y.floor() as i32))
+    holds_pointer(app, (pointer.x, pointer.y), area, found.scale_factor())
+}
+
+/// macOS gives the pointer in pixels at the main display's scale, and each
+/// monitor in pixels at its own, so the two are compared in points.
+#[cfg(target_os = "macos")]
+fn holds_pointer(app: &AppHandle, pointer: (f64, f64), area: Area, scale: f64) -> bool {
+    let main_scale = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map_or(1.0, |main| main.scale_factor());
+    pointer_in_points(pointer, main_scale, area, scale)
+}
+
+/// Windows and Linux give the pointer and the monitors in the same pixels.
+#[cfg(not(target_os = "macos"))]
+fn holds_pointer(_app: &AppHandle, pointer: (f64, f64), area: Area, _scale: f64) -> bool {
+    area.contains((pointer.0.floor() as i32, pointer.1.floor() as i32))
+}
+
+/// Whether a pointer at `pointer`, in pixels at the main display's
+/// `main_scale`, is on a display whose frame `area` is in pixels at its own
+/// `scale`. Both are turned into points first, which is how macOS lays out
+/// displays of different scales.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn pointer_in_points(pointer: (f64, f64), main_scale: f64, area: Area, scale: f64) -> bool {
+    let main_scale = valid_scale(main_scale);
+    let scale = valid_scale(scale);
+    let (x, y) = (pointer.0 / main_scale, pointer.1 / main_scale);
+    let left = f64::from(area.x) / scale;
+    let top = f64::from(area.y) / scale;
+    let right = left + f64::from(area.width) / scale;
+    let bottom = top + f64::from(area.height) / scale;
+    x >= left && x < right && y >= top && y < bottom
 }
 
 /// A toolbar of `size` at `position` moved just outside `recorded` when
@@ -1068,5 +1102,43 @@ mod tests {
             serde_json::from_str::<Memory>("{}").unwrap(),
             Memory::default()
         );
+    }
+
+    #[test]
+    fn the_pointer_is_found_on_a_display_of_another_scale_in_points() {
+        // The #207 layout: the main display at 2x (0,0 3200x1800 points), a
+        // 1x display above it and a 2x display to its right, each frame in
+        // pixels at its own scale.
+        let main = Area {
+            x: 0,
+            y: 0,
+            width: 6400,
+            height: 3600,
+        };
+        let above = Area {
+            x: 640,
+            y: -1080,
+            width: 2560,
+            height: 1080,
+        };
+        let right = Area {
+            x: 6400,
+            y: 0,
+            width: 3840,
+            height: 2160,
+        };
+        // At 1000,-500 points, read as pixels at the main display's 2x.
+        let on_above = (2000.0, -1000.0);
+        assert!(pointer_in_points(on_above, 2.0, above, 1.0));
+        assert!(!pointer_in_points(on_above, 2.0, main, 2.0));
+        assert!(!pointer_in_points(on_above, 2.0, right, 2.0));
+        // At 4000,500 points.
+        let on_right = (8000.0, 1000.0);
+        assert!(pointer_in_points(on_right, 2.0, right, 2.0));
+        assert!(!pointer_in_points(on_right, 2.0, main, 2.0));
+        // At 3199,10 points, just inside the main display's right edge.
+        let on_main = (6398.0, 20.0);
+        assert!(pointer_in_points(on_main, 2.0, main, 2.0));
+        assert!(!pointer_in_points(on_main, 2.0, above, 1.0));
     }
 }
