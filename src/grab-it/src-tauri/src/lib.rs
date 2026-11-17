@@ -22,6 +22,7 @@ mod keychain;
 mod library;
 mod net;
 mod ocr;
+mod ocr_vision;
 mod overlay;
 #[cfg(target_os = "macos")]
 mod panel;

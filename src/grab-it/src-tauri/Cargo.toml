@@ -154,6 +154,18 @@ objc2-screen-capture-kit = { version = "0.3", default-features = false, features
     "objc2-core-media",
 ] }
 objc2-core-audio-types = "0.3"
+# Reads the text in captures with the system's own on-device recognition
+# (ocr_vision.rs), falling back to ocrs.
+objc2-vision = { version = "0.3", default-features = false, features = [
+    "std",
+    "VNRequest",
+    "VNRecognizeTextRequest",
+    "VNRequestHandler",
+    "VNObservation",
+    "VNTypes",
+    "objc2-core-graphics",
+    "objc2-core-foundation",
+] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 # The microphone for recordings (audio.rs): Core Audio and WASAPI. Linux
