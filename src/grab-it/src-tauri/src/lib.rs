@@ -1,4 +1,5 @@
 mod actions;
+mod agent;
 mod ai;
 mod ai_cli;
 mod audio;
@@ -6,6 +7,7 @@ mod capture;
 mod cli;
 mod codes;
 mod commands;
+mod control;
 mod editor;
 mod faces;
 mod ffmpeg;
@@ -51,6 +53,11 @@ use settings::{SETTINGS_FILE, Settings, SettingsStore};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // `grab-it shot` and the other subcommands talk to the running Grab-it
+    // and exit, before the single-instance plugin could hand them to it.
+    if let Some(code) = cli::run_command(std::env::args()) {
+        std::process::exit(code);
+    }
     let open_target = cli::parse_open_target(std::env::args()).unwrap_or_else(|err| {
         eprintln!("Grab-it: {err}");
         None
@@ -124,6 +131,9 @@ pub fn run() {
             commands::step_text_size,
             commands::set_recording,
             commands::set_retention,
+            commands::set_agent_access,
+            agent::agent_skill_status,
+            agent::install_agent_skill,
             hub::hub_capture,
             hub::hub_monitors,
             hub::hub_open,
@@ -282,6 +292,8 @@ pub fn run() {
             tray::create(handle)?;
             // Offers newer releases from GitHub.
             update::start(handle);
+            // Answers the grab-it command line, while Settings allows it.
+            control::start(handle);
             // Has a capture overlay loaded and waiting, so the first
             // selection appears as fast as any other.
             overlay::prewarm_later(handle);

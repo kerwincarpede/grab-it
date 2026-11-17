@@ -192,6 +192,8 @@ export interface Settings extends Preferences {
   recording?: RecordingSettings;
   /** Older backends leave it out: everything is kept forever. */
   retention?: Retention;
+  /** Settings › AI agents: the grab-it command line may capture. Older backends leave it out. */
+  agentAccess?: boolean;
 }
 
 /** Mirrors `Removal` in src-tauri/src/settings.rs: how cleanup removes items. */
@@ -560,6 +562,7 @@ export type SettingsSection =
   | "recording"
   | "storage"
   | "ai"
+  | "agents"
   | "hotkeys";
 
 export const SETTINGS_SECTIONS: { id: SettingsSection; title: string }[] = [
@@ -570,6 +573,7 @@ export const SETTINGS_SECTIONS: { id: SettingsSection; title: string }[] = [
   { id: "recording", title: "Recording" },
   { id: "storage", title: "Storage" },
   { id: "ai", title: "AI descriptions" },
+  { id: "agents", title: "AI agents" },
   { id: "hotkeys", title: "Hotkeys" },
 ];
 
@@ -581,6 +585,29 @@ export function hasDock(): boolean {
 /** Shows or hides the Dock icon; resolves to the settings as saved. */
 export function setShowInDock(enabled: boolean): Promise<Settings> {
   return invoke<Settings>("set_show_in_dock", { enabled });
+}
+
+/** Lets the grab-it command line capture, or stops it; resolves to the settings as saved. */
+export function setAgentAccess(enabled: boolean): Promise<Settings> {
+  return invoke<Settings>("set_agent_access", { enabled });
+}
+
+/** Mirrors `AgentSkill` in src-tauri/src/agent.rs: where the agent skill is installed. */
+export interface AgentSkill {
+  /** The SKILL.md files written; empty when it is not installed. */
+  installed: string[];
+  /** Whether every installed copy names Grab-it where it is now. */
+  current: boolean;
+}
+
+/** Where the agent skill is installed. */
+export function agentSkillStatus(): Promise<AgentSkill> {
+  return invoke<AgentSkill>("agent_skill_status");
+}
+
+/** Writes the agent skill into ~/.agents/skills and ~/.claude/skills; resolves to where it is now. */
+export function installAgentSkill(): Promise<AgentSkill> {
+  return invoke<AgentSkill>("install_agent_skill");
 }
 
 /** What each choice after a capture does, in the order Settings lists them. */

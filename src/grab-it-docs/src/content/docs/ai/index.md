@@ -26,3 +26,4 @@ Grab-it does this only once. If you turn describing off, it stays off.
 - [AI descriptions](/grab-it/ai/descriptions/): what's written for each capture, categories, and describing your whole library.
 - [Tidy up text](/grab-it/ai/tidy-text/): how Capture text gets cleaned up, and how to get the original back.
 - [Providers](/grab-it/ai/providers/): Claude Code, Codex and OpenAI-compatible endpoints, how to set each up, and what goes where.
+- [AI agents](/grab-it/ai/agents/): let Claude Code, Codex and other agents take screenshots with Grab-it.
