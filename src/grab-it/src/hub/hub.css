@@ -106,7 +106,16 @@ body:has(.hub) {
 }
 
 .hub-item.is-primary > .icon:first-child,
-.hub-item.is-primary /* A recording or step capture is running: choosing the item stops it. */
+.hub-item.is-primary .hub-key {
+  color: var(--on-accent);
+  opacity: 0.75;
+}
+
+.hub-item.is-primary:where(:hover) {
+  background: var(--accent-hover);
+}
+
+/* A recording or step capture is running: choosing the item stops it. */
 .hub-item.is-running,
 .hub-item.is-running > .icon:first-child {
   color: var(--danger);
@@ -140,15 +149,6 @@ body:has(.hub) {
   .hub-live {
     animation: none;
   }
-}
-
-.hub-key {
-  color: var(--on-accent);
-  opacity: 0.75;
-}
-
-.hub-item.is-primary:where(:hover) {
-  background: var(--accent-hover);
 }
 
 .hub-key {
