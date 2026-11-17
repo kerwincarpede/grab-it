@@ -27,7 +27,7 @@ The handle's tooltip shows its time. The status bar shows how long the trimmed c
 
 A clip is at least half a second long: the handles stop that close together. To keep the whole recording again, drag both handles back to the ends.
 
-The trim is saved when you let go of a handle, like every other edit, and the editor opens at the trimmed start next time.
+The trim is saved when you let go of a handle, like every other edit, and the editor opens at the trimmed start next time. To put the handles back where they were, [undo](/grab-it/video-editor/#undo-and-redo) the trim.
 
 ## Keys
 

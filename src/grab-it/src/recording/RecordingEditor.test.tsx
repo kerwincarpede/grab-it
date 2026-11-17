@@ -318,4 +318,77 @@ describe("RecordingEditor", () => {
     fireEvent.timeUpdate(video);
     await waitFor(() => expect(video.style.transform).toContain("scale(2)"));
   });
+
+  it("undoes and redoes a trim from the top bar, saving each step", async () => {
+    const backend = mockBackend();
+    render(<RecordingEditor />);
+    await loadVideo();
+    const undoButton = screen.getByRole("button", { name: "Undo" });
+    const redoButton = screen.getByRole("button", { name: "Redo" });
+    expect(undoButton).toBeDisabled();
+    expect(redoButton).toBeDisabled();
+
+    const start = screen.getByRole("slider", { name: "Trim start" });
+    fireEvent.keyDown(start, { key: "ArrowRight", shiftKey: true });
+    fireEvent.keyUp(start, { key: "ArrowRight" });
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, trim: { startMs: 1000, endMs: 12_000 } }));
+    expect(undoButton).toBeEnabled();
+
+    await userEvent.click(undoButton);
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1 }));
+    expect(screen.getByRole("slider", { name: "Trim start" })).toHaveAttribute("aria-valuenow", "0");
+    expect(screen.getByText("Clip 0:12.0")).toBeInTheDocument();
+    expect(undoButton).toBeDisabled();
+    expect(redoButton).toBeEnabled();
+
+    await userEvent.click(redoButton);
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, trim: { startMs: 1000, endMs: 12_000 } }));
+    expect(screen.getByRole("slider", { name: "Trim start" })).toHaveAttribute("aria-valuenow", "1000");
+    expect(redoButton).toBeDisabled();
+    expect(saved(backend)).toHaveLength(3);
+  });
+
+  it("undoes and redoes a backdrop with the keys", async () => {
+    const backend = mockBackend();
+    render(<RecordingEditor />);
+    await loadVideo();
+    await userEvent.click(screen.getByRole("button", { name: "Backdrop" }));
+    await userEvent.click(screen.getByRole("button", { name: "Sunset gradient" }));
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, backdrop: expect.objectContaining({ fill: "sunset" }) }));
+
+    fireEvent.keyDown(document.body, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1 }));
+    expect(screen.getByTestId("recording-stage")).not.toHaveAttribute("data-framed");
+
+    fireEvent.keyDown(document.body, { key: "Z", ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, backdrop: expect.objectContaining({ fill: "sunset" }) }));
+    expect(screen.getByTestId("recording-stage")).toHaveAttribute("data-framed", "true");
+
+    fireEvent.keyDown(document.body, { key: "z", metaKey: true });
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1 }));
+    fireEvent.keyDown(document.body, { key: "y", ctrlKey: true });
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, backdrop: expect.objectContaining({ fill: "sunset" }) }));
+  });
+
+  it("undoes adding a zoom and drops the redo on a new edit", async () => {
+    const backend = mockBackend({ version: 1, zooms: [AREA_ZOOM] });
+    render(<RecordingEditor />);
+    await loadVideo();
+    await userEvent.click(screen.getByRole("button", { name: "Zoom" }));
+    const added = { id: expect.any(String), startMs: 0, endMs: 2000, scale: 2, focus: { kind: "area", x: 0.5, y: 0.5 } };
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, zooms: [added, AREA_ZOOM] }));
+    expect(screen.getAllByTestId("zoom-segment")).toHaveLength(2);
+
+    fireEvent.keyDown(document.body, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, zooms: [AREA_ZOOM] }));
+    expect(screen.getAllByTestId("zoom-segment")).toHaveLength(1);
+    // Nothing earlier to undo: the sidecar as it opened is the oldest step.
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+
+    fireEvent.keyDown(screen.getByTestId("zoom-segment"), { key: "Delete" });
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1 }));
+    expect(screen.getByRole("button", { name: "Redo" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, zooms: [AREA_ZOOM] }));
+  });
 });

@@ -9,7 +9,7 @@ sidebar:
 
 ![The Backdrop panel in the video editor, with a gradient behind the recording.](../../../assets/video-editor/backdrop.png)
 
-Click **Backdrop** to open its panel. Click outside it or press `Esc` to close it. The preview shows each change straight away.
+Click **Backdrop** to open its panel. Click outside it or press `Esc` to close it. The preview shows each change straight away, and **Undo** takes it back. Renaming or deleting a preset can't be undone.
 
 ## Fill
 
