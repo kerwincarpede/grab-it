@@ -13,13 +13,10 @@ import { useBackdropImage } from "../editor/useBackdropImage";
 import type { BackdropSources } from "../editor/flatten";
 import {
   exportRecording,
-  fetchRecording,
   onExportProgress,
-  playsFromBlob,
   recordingInfo,
   recordingSource,
   saveEdits,
-  videoSrc,
   type AudioKind,
   type ExportClip,
   type ExportProgress,
@@ -48,6 +45,7 @@ import {
   type ClipAt,
 } from "./clips";
 import ClipTrack from "./ClipTrack";
+import RecordingVideo from "./RecordingVideo";
 import { chooseRecording, folderOf, isIn, probeVideo, type SourceMeta } from "./sources";
 import { clampTrim, emptyEdits, formatTime, isWhole, parseEdits, serializeEdits, trimOf, type RecordingEdits, type Trim } from "./edits";
 import { exportLayers, paintUnderlay, recordingLayout } from "./layout";
@@ -136,56 +134,6 @@ function spanOf(clips: Clip[], own: string, index: number, ownDurationMs: number
   return { offset: start - clip.startMs, low: start, high: start + clipLength(clip) };
 }
 
-/**
- * The URL the video plays `path` from: the grab-it-video scheme itself, or
- * on Linux a blob of the file fetched from it. Null while the blob is on
- * its way.
- *
- * Joined, the one preview plays several recordings in turn, each in a
- * fresh video element. Each recording's Blob is fetched once and kept
- * until the editor closes, and every visit to a recording mints its own
- * object URL from it, revoked when the preview moves on: WebKitGTK loads
- * neither a blob whose URL was revoked under a playing element nor a URL
- * that a torn-down element used.
- */
-function usePlayableSrc(path: string | null, onError: (message: string) => void): string | null {
-  const blob = playsFromBlob();
-  const [blobs, setBlobs] = useState<Record<string, Blob>>({});
-  /** Paths fetched or on their way; read only in effects. */
-  const fetching = useRef(new Set<string>());
-  const closed = useRef(false);
-  useEffect(() => {
-    if (!path || !blob || fetching.current.has(path)) return;
-    fetching.current.add(path);
-    fetchRecording(videoSrc(path))
-      .then((data) => {
-        if (!closed.current) setBlobs((known) => ({ ...known, [path]: data }));
-      })
-      .catch((err: unknown) => {
-        fetching.current.delete(path);
-        if (!closed.current) onError(`The recording cannot be played: ${errorText(err)}`);
-      });
-  }, [path, blob, onError]);
-  useEffect(() => {
-    closed.current = false;
-    const asked = fetching.current;
-    return () => {
-      closed.current = true;
-      asked.clear();
-    };
-  }, []);
-  const data = blob && path ? blobs[path] : undefined;
-  // A new URL each time the preview comes to this recording's Blob.
-  const url = useMemo(() => (data ? URL.createObjectURL(data) : null), [data]);
-  useEffect(() => {
-    if (!url) return;
-    return () => URL.revokeObjectURL(url);
-  }, [url]);
-  if (!path) return null;
-  if (!blob) return videoSrc(path);
-  return url;
-}
-
 /** Why a recording's sound shows as Mixed sound. */
 const MIXED_SOUND_HINT = "This recording's microphone and system sound are mixed into one track, so they can only be edited together.";
 
@@ -244,8 +192,8 @@ export default function RecordingEditor() {
   const [clipDraft, setClipDraft] = useState<Clip[] | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   /** Where to put the video once the recording it switches to has loaded. */
-  const pendingRef = useRef<{ sourceMs: number; play: boolean } | null>(null);
-  /** The recording the video has loaded. */
+  const pendingRef = useRef<{ source: string; sourceMs: number; play: boolean } | null>(null);
+  /** The recording whose position the player on show has taken. */
   const loadedRef = useRef<string | null>(null);
   const [currentMs, setCurrentMs] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -305,7 +253,9 @@ export default function RecordingEditor() {
   const at = positionIn(clips, own, currentMs);
   const currentSource = at?.clip.source ?? own;
   const pathOf = (source: string): string | null => (!info ? null : source === own ? info.path : (sourceInfo[source]?.path ?? null));
-  const src = usePlayableSrc(pathOf(currentSource), setMessage);
+  // Keep the DOM order stable even when the user reorders clips. Moving a
+  // playing element in the DOM can reset its media pipeline in WebKitGTK.
+  const previewSources = useMemo(() => [...new Set(clips.map((clip) => clip.source))].sort(), [clips]);
   const currentMeta = meta[currentSource] as SourceMeta | undefined;
   const cursorOf = (source: string) => (source === own ? (info?.cursor ?? null) : (sourceInfo[source]?.cursor ?? null));
   const cursor = cursorOf(currentSource);
@@ -370,38 +320,37 @@ export default function RecordingEditor() {
     const pos = positionIn(list, own, ms);
     if (!pos) return;
     if (video && loadedRef.current === pos.clip.source && video.dataset.source === pos.clip.source) {
+      pendingRef.current = null;
       try {
         video.currentTime = pos.sourceMs / 1000;
       } catch {
         // Not seekable yet: it opens at the start.
       }
     } else {
-      pendingRef.current = { sourceMs: pos.sourceMs, play: pendingRef.current?.play ?? false };
+      pendingRef.current = { source: pos.clip.source, sourceMs: pos.sourceMs, play: pendingRef.current?.play ?? playing };
     }
   };
 
   // --- Clips --------------------------------------------------------------
 
-  // Each other recording a clip plays is looked up once: its path, pointer
-  // path and size. One that is gone is marked missing.
+  // The mounted previews supply their own metadata. If the opened recording
+  // has no clips, its size is still needed for the output canvas.
   useEffect(() => {
     if (!info) return;
-    const needed = new Set(clips.map((clip) => clip.source));
-    // The opened recording sets the output: learn its size even when it does not play first.
-    if (currentSource !== own) needed.add(own);
-    for (const source of needed) {
-      if (requested.current.has(source) || meta[source] || (source === currentSource && source === own)) continue;
+    for (const source of previewSources) {
+      if (source === own || requested.current.has(source)) continue;
       requested.current.add(source);
-      const looking = source === own ? Promise.resolve(null) : recordingSource(source);
-      looking
-        .then(async (found) => {
-          if (found) setSourceInfo((known) => ({ ...known, [source]: found }));
-          const learned = await probeVideo(found?.path ?? info.path);
-          setMeta((known) => ({ ...known, [source]: learned }));
-        })
+      recordingSource(source)
+        .then((found) => setSourceInfo((known) => ({ ...known, [source]: found })))
         .catch(() => setMissing((gone) => new Set(gone).add(source)));
     }
-  }, [info, clips, own, currentSource, meta]);
+    if (!previewSources.includes(own) && !ownMeta && !requested.current.has(own)) {
+      requested.current.add(own);
+      probeVideo(info.path)
+        .then((learned) => setMeta((known) => ({ ...known, [own]: learned })))
+        .catch(() => setMissing((gone) => new Set(gone).add(own)));
+    }
+  }, [info, previewSources, own, ownMeta]);
 
   /** Keeps `next` as the sequence: one undo entry. */
   const commitClips = (next: Clip[]) => {
@@ -609,9 +558,19 @@ export default function RecordingEditor() {
     return now.at.index < now.clips.length - 1 && (video.ended || video.currentTime * 1000 >= now.at.clip.endMs);
   };
 
+  const startVideo = useCallback((video: HTMLVideoElement) => {
+    const failed = () => {
+      if (video === videoRef.current) setPlaying(false);
+    };
+    try {
+      void video.play()?.catch(failed);
+    } catch {
+      failed();
+    }
+  }, []);
+
   const play = () => {
     const video = videoRef.current;
-    if (!video) return;
     if (joined) {
       // From the first clip when at (or past) the end of the last.
       if (currentMs >= sequenceMs - 50) seek(0);
@@ -619,16 +578,12 @@ export default function RecordingEditor() {
         pendingRef.current.play = true;
         return;
       }
-    } else {
+    } else if (video) {
       // From the trimmed start when at (or past) the trimmed end.
       const now = video.currentTime * 1000;
       if (now < trim.startMs || now >= trim.endMs - 50) seek(trim.startMs);
     }
-    try {
-      void video.play()?.catch(() => setPlaying(false));
-    } catch {
-      setPlaying(false);
-    }
+    if (video) startVideo(video);
   };
 
   const toggle = () => (playing ? pause() : play());
@@ -646,7 +601,10 @@ export default function RecordingEditor() {
     let frame = 0;
     const step = () => {
       const video = videoRef.current;
-      if (!video) return;
+      if (!video) {
+        frame = requestAnimationFrame(step);
+        return;
+      }
       const ms = video.currentTime * 1000;
       const now = playRef.current;
       if (now.joined && now.at) {
@@ -670,16 +628,10 @@ export default function RecordingEditor() {
           setCurrentMs(start);
           if (next.source === loadedRef.current) {
             video.currentTime = next.startMs / 1000;
-            if (video.paused) {
-              try {
-                void video.play()?.catch(() => setPlaying(false));
-              } catch {
-                setPlaying(false);
-              }
-            }
+            if (video.paused) startVideo(video);
           } else {
             // The new recording plays from its clip's start once it loads.
-            pendingRef.current = { sourceMs: next.startMs, play: true };
+            pendingRef.current = { source: next.source, sourceMs: next.startMs, play: true };
           }
         } else {
           setCurrentMs(toSequence(now.clips, index, ms));
@@ -698,45 +650,41 @@ export default function RecordingEditor() {
     };
     frame = requestAnimationFrame(step);
     return () => cancelAnimationFrame(frame);
-  }, [playing]);
+  }, [playing, startVideo]);
 
-  const onMetadata = () => {
-    const video = videoRef.current;
-    if (!video) return;
+  const onVideoFailure = useCallback((source: string, message: string) => {
+    setMissing((gone) => new Set(gone).add(source));
+    setMessage(message);
+    if (videoRef.current?.dataset.source === source || pendingRef.current?.source === source) {
+      pendingRef.current = null;
+      setPlaying(false);
+    }
+  }, []);
+
+  const onMediaReady = (video: HTMLVideoElement) => {
     const source = video.dataset.source ?? own;
     const duration = Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : 0;
-    if (video.videoWidth > 0 && video.videoHeight > 0) {
-      setMeta((known) => ({ ...known, [source]: { durationMs: duration, width: video.videoWidth, height: video.videoHeight } }));
+    const known = meta[source];
+    const { videoWidth: width, videoHeight: height } = video;
+    if (duration > 0 && width > 0 && height > 0 && (known?.durationMs !== duration || known.width !== width || known.height !== height)) {
+      setMeta((previous) => ({ ...previous, [source]: { durationMs: duration, width, height } }));
     }
-    const first = loadedRef.current === null;
-    loadedRef.current = source;
+    if (video !== videoRef.current) return;
     const pending = pendingRef.current;
+    if (pending && pending.source !== source) return;
+    if (!pending && loadedRef.current === source) return;
+    loadedRef.current = source;
     pendingRef.current = null;
-    const goTo = (ms: number) => {
-      try {
-        video.currentTime = ms / 1000;
-      } catch {
-        // Not seekable yet: it opens at the start.
-      }
-    };
-    if (pending) {
-      goTo(pending.sourceMs);
-      if (pending.play) {
-        try {
-          void video.play()?.catch(() => setPlaying(false));
-        } catch {
-          setPlaying(false);
-        }
-      }
+    const sourceMs = pending?.sourceMs ?? (joined ? at?.sourceMs ?? 0 : trimOf(edits, duration).startMs);
+    try {
+      video.currentTime = sourceMs / 1000;
+    } catch {
+      // The first frame or canplay event retries a seek rejected during metadata loading.
+      pendingRef.current = { source, sourceMs, play: pending?.play ?? false };
       return;
     }
-    if (first && !joined && source === own) {
-      // Opens at the start of the trimmed stretch.
-      const start = trimOf(edits, duration).startMs;
-      if (start > 0) seek(start);
-    } else if (at && at.clip.source === source) {
-      goTo(at.sourceMs);
-    }
+    if (!pending && !joined) setCurrentMs(sourceMs);
+    if (pending?.play) startVideo(video);
   };
 
   // Space plays and pauses, unless a control has the keyboard. Ctrl/⌘ Z
@@ -1046,46 +994,33 @@ export default function RecordingEditor() {
           {backdrop && <canvas ref={canvasRef} className="recording-backdrop" aria-hidden="true" />}
           <div className="recording-frame" style={frameStyle} data-joined={joined ? "true" : undefined}>
             <div className="recording-fit" style={fitStyle}>
-            {src && (
-              <video
-                // A fresh element for each recording: WebKitGTK does not
-                // always load a new blob into an element that played another.
-                key={`${currentSource}\n${src}`}
-                ref={videoRef}
-                className="recording-video"
-                data-source={currentSource}
-                src={src}
-                // A blob is the page's own; the scheme needs CORS for the backdrop's canvas.
-                crossOrigin={src.startsWith("blob:") ? undefined : "anonymous"}
-                preload="auto"
-                playsInline
-                style={{ transform: viewTransform(view) }}
-                onLoadedMetadata={onMetadata}
-                // Should loadedmetadata come and go unseen, the first frame
-                // still hands the element its pending seek and play.
-                onLoadedData={(event) => {
-                  if (loadedRef.current !== event.currentTarget.dataset.source || pendingRef.current) onMetadata();
-                }}
-                onCanPlay={(event) => {
-                  if (loadedRef.current !== event.currentTarget.dataset.source || pendingRef.current) onMetadata();
-                }}
-                onPlay={() => setPlaying(true)}
-                onPause={() => {
-                  if (!handingOn()) setPlaying(false);
-                }}
-                onEnded={() => {
-                  if (!handingOn()) setPlaying(false);
-                }}
-                onSeeked={() => setFrameTick((tick) => tick + 1)}
-                onTimeUpdate={() => {
-                  if (playing || pendingRef.current) return;
-                  const ms = (videoRef.current?.currentTime ?? 0) * 1000;
-                  setCurrentMs(joined && at ? toSequence(clips, at.index, ms) : ms);
-                }}
-                onError={() => setMessage("The recording cannot be played.")}
-                onClick={toggle}
-              />
-            )}
+            {previewSources.map((source) => {
+              const path = pathOf(source);
+              if (!path) return null;
+              const active = source === currentSource;
+              return (
+                <RecordingVideo
+                  key={path}
+                  path={path}
+                  source={source}
+                  active={active}
+                  activeRef={videoRef}
+                  onReady={onMediaReady}
+                  onFailure={onVideoFailure}
+                  style={{ transform: viewTransform(view) }}
+                  onPlay={active ? () => setPlaying(true) : undefined}
+                  onPause={active ? () => { if (!handingOn()) setPlaying(false); } : undefined}
+                  onEnded={active ? () => { if (!handingOn()) setPlaying(false); } : undefined}
+                  onSeeked={active ? () => setFrameTick((tick) => tick + 1) : undefined}
+                  onTimeUpdate={active ? (event) => {
+                    if (playing || pendingRef.current) return;
+                    const ms = event.currentTarget.currentTime * 1000;
+                    setCurrentMs(joined && at ? toSequence(clips, at.index, ms) : ms);
+                  } : undefined}
+                  onClick={active ? toggle : undefined}
+                />
+              );
+            })}
             {picking && selectedZoom?.focus.kind === "area" && (
               <ZoomAreaPicker
                 scale={selectedZoom.scale}

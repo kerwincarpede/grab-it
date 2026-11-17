@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
@@ -106,16 +107,28 @@ afterEach(() => {
 const saved = (backend: Backend) => backend.calls.filter((call) => call.cmd === "recording_save_edits").map((call) => (call.payload as { edits: unknown }).edits);
 const lastSaved = (backend: Backend) => saved(backend)[saved(backend).length - 1];
 
+/** jsdom has no media decoder. Supply the metadata a loaded element would expose. */
+function setVideoMetadata(video: HTMLVideoElement, duration: number, width: number, height: number) {
+  Object.defineProperties(video, {
+    readyState: { configurable: true, value: HTMLMediaElement.HAVE_CURRENT_DATA },
+    duration: { configurable: true, value: duration },
+    videoWidth: { configurable: true, value: width },
+    videoHeight: { configurable: true, value: height },
+  });
+}
+
+async function previewVideo(source: string): Promise<HTMLVideoElement> {
+  return waitFor(() => {
+    const video = Array.from(screen.getByTestId("recording-stage").querySelectorAll("video")).find((element) => element.dataset.source === source);
+    if (!video) throw new Error(`Waiting for the preview of ${source}`);
+    return video;
+  });
+}
+
 /** Loads a 12-second 1920×1080 recording into the page's video. */
 async function loadVideo(): Promise<HTMLVideoElement> {
-  const video = await waitFor(() => {
-    const found = screen.getByTestId("recording-stage").querySelector("video");
-    if (!found) throw new Error("the video has not loaded yet");
-    return found;
-  });
-  Object.defineProperty(video, "duration", { configurable: true, value: 12 });
-  Object.defineProperty(video, "videoWidth", { configurable: true, value: 1920 });
-  Object.defineProperty(video, "videoHeight", { configurable: true, value: 1080 });
+  const video = await previewVideo(OWN);
+  setVideoMetadata(video, 12, 1920, 1080);
   fireEvent.loadedMetadata(video);
   await waitFor(() => expect(screen.getByRole("slider", { name: "Trim end" })).toHaveAttribute("aria-valuemax", "12000"));
   return video;
@@ -468,14 +481,8 @@ describe("RecordingEditor", () => {
 
     /** Loads the opened recording into the video when the sequence starts with it. */
     async function loadJoined(clips = 2): Promise<HTMLVideoElement> {
-      const video = await waitFor(() => {
-        const found = screen.getByTestId("recording-stage").querySelector("video");
-        if (!found) throw new Error("the video has not loaded yet");
-        return found;
-      });
-      Object.defineProperty(video, "duration", { configurable: true, value: 12 });
-      Object.defineProperty(video, "videoWidth", { configurable: true, value: 1920 });
-      Object.defineProperty(video, "videoHeight", { configurable: true, value: 1080 });
+      const video = await previewVideo(OWN);
+      setVideoMetadata(video, 12, 1920, 1080);
       fireEvent.loadedMetadata(video);
       await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(clips));
       return video;
@@ -550,6 +557,9 @@ describe("RecordingEditor", () => {
       const backend = mockBackend({ ...JOINED, zooms: [zoom] });
       render(<RecordingEditor />);
       await loadJoined();
+      const other = await previewVideo(OTHER);
+      setVideoMetadata(other, 6, 720, 720);
+      fireEvent.loadedMetadata(other);
       await waitFor(() => expect(screen.getByRole("button", { name: "Export" })).toBeEnabled());
       await userEvent.click(screen.getByRole("button", { name: "Export" }));
       const { plan } = await exportCall(backend);
@@ -652,56 +662,76 @@ describe("RecordingEditor", () => {
       expect((plan as { clips: { zooms: unknown[] }[] }).clips.map((clip) => clip.zooms)).toEqual([[zoom], []]);
     });
 
-    it("on Linux gives each visit to a recording a fresh element and object URL, from a Blob fetched once", async () => {
+    it("on Linux reuses both loaded players across repeated seeks and releases each URL when its source leaves", async () => {
       vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko)");
       const fetcher = vi.fn(async () => new Response(new Uint8Array(4), { status: 200 }));
       vi.stubGlobal("fetch", fetcher);
       let made = 0;
-      const minted: Blob[] = [];
-      const createObjectURL = vi.fn((blob: Blob) => {
-        minted.push(blob);
-        return `blob:tauri://localhost/${++made}`;
-      });
+      const createObjectURL = vi.fn(() => `blob:tauri://localhost/${++made}`);
       const revokeObjectURL = vi.fn();
       Object.assign(URL, { createObjectURL, revokeObjectURL });
+      const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
       mockBackend(JOINED);
-      const stageVideo = () => screen.getByTestId("recording-stage").querySelector("video");
-      const { unmount } = render(<RecordingEditor />);
+      const { unmount } = render(<StrictMode><RecordingEditor /></StrictMode>);
       const first = await loadJoined();
-      expect(first.getAttribute("src")).toBe("blob:tauri://localhost/1");
-      // 10 s over 100 px: 6 s is 2 s into the other recording.
+      const second = await previewVideo(OTHER);
+      const firstUrl = first.src;
+      const secondUrl = second.src;
+      expect(firstUrl).not.toBe(secondUrl);
+      expect(second).not.toBeVisible();
+      expect(second.hasAttribute("crossorigin")).toBe(false);
+
+      // 10 s over 100 px. The first clip keeps source seconds 1–5.
       const track = screen.getByTestId("timeline-track");
       placeAt(track, 100, 26);
-      fireEvent.pointerDown(track, { clientX: 60 });
-      fireEvent.pointerUp(track, { clientX: 60 });
-      const second = await waitFor(() => {
-        const found = stageVideo();
-        if (!found || found === first) throw new Error("still the first recording's element");
-        return found;
-      });
-      expect(second.dataset.source).toBe(OTHER);
-      expect(second.getAttribute("src")).toBe("blob:tauri://localhost/2");
-      expect(second.hasAttribute("crossorigin")).toBe(false);
-      // Its loadedmetadata goes unseen: the first frame still applies the seek.
-      Object.defineProperty(second, "currentTime", { configurable: true, writable: true, value: 0 });
-      Object.defineProperty(second, "duration", { configurable: true, value: 8 });
-      Object.defineProperty(second, "videoWidth", { configurable: true, value: 720 });
-      Object.defineProperty(second, "videoHeight", { configurable: true, value: 720 });
+      const seekTo = (clientX: number) => {
+        fireEvent.pointerDown(track, { clientX });
+        fireEvent.pointerUp(track, { clientX });
+      };
+      seekTo(60);
+      // The first frame still applies the seek if its loadedmetadata was missed.
+      setVideoMetadata(second, 6, 720, 720);
       fireEvent.canPlay(second);
       expect(second.currentTime).toBe(2);
-      // The first element's URL goes with it.
-      expect(revokeObjectURL.mock.calls.map(([url]) => url)).toEqual(["blob:tauri://localhost/1"]);
+      await userEvent.click(screen.getByRole("button", { name: "Play" }));
+      fireEvent.play(second);
+      Object.defineProperty(second, "paused", { configurable: true, value: false });
 
-      // Back in the opened recording: a new element and URL from the kept Blob, not fetched again.
-      fireEvent.pointerDown(track, { clientX: 10 });
-      fireEvent.pointerUp(track, { clientX: 10 });
-      await waitFor(() => expect(stageVideo()?.getAttribute("src")).toBe("blob:tauri://localhost/3"));
-      expect(stageVideo()).not.toBe(first);
+      for (const offset of [0, 1, 2]) {
+        seekTo(10 + offset);
+        expect(first).toBeVisible();
+        expect(second).not.toBeVisible();
+        expect(first.currentTime).toBeCloseTo(2 + offset / 10);
+        expect(play.mock.instances[play.mock.instances.length - 1]).toBe(first);
+        // The hidden player is paused and silent.
+        expect(pause.mock.instances[pause.mock.instances.length - 1]).toBe(second);
+        expect(second.muted).toBe(true);
+        expect(first.muted).toBe(false);
+        fireEvent.timeUpdate(second);
+        fireEvent.pause(second);
+        fireEvent.ended(second);
+        expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+        seekTo(60 + offset);
+        expect(second).toBeVisible();
+        expect(first).not.toBeVisible();
+        expect(second.currentTime).toBeCloseTo(2 + offset / 10);
+        expect(play.mock.instances[play.mock.instances.length - 1]).toBe(second);
+        expect(first.muted).toBe(true);
+        expect(second.muted).toBe(false);
+      }
+      // Each recording kept its one player throughout.
+      expect(screen.getByTestId("recording-stage").querySelectorAll("video")).toHaveLength(2);
       expect(fetcher).toHaveBeenCalledTimes(2);
-      expect(minted[2]).toBe(minted[0]);
-      expect(revokeObjectURL.mock.calls.map(([url]) => url)).toEqual(["blob:tauri://localhost/1", "blob:tauri://localhost/2"]);
+      expect(createObjectURL).toHaveBeenCalledTimes(2);
+      expect(revokeObjectURL).not.toHaveBeenCalled();
+      fireEvent.focus(screen.getByRole("option", { name: `${OTHER}, 0:06.0` }));
+      fireEvent.keyDown(document.body, { key: "Delete" });
+      expect(second).not.toBeInTheDocument();
+      expect(first).toBeVisible();
+      expect(revokeObjectURL.mock.calls).toEqual([[secondUrl]]);
       unmount();
-      expect(revokeObjectURL.mock.calls.map(([url]) => url)).toEqual(["blob:tauri://localhost/1", "blob:tauri://localhost/2", "blob:tauri://localhost/3"]);
+      expect(revokeObjectURL.mock.calls).toEqual([[secondUrl], [firstUrl]]);
       vi.unstubAllGlobals();
     });
 
