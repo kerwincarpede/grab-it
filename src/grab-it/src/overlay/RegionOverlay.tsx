@@ -611,10 +611,13 @@ function RegionOverlay() {
       else if (event.code === "Space" || event.key === " ") setMoving(false);
     }
     // A key released while another window has focus never reports its keyup.
+    // Another display's overlay takes the focus as the pointer moves onto it,
+    // so the crosshair and loupe go until the pointer comes back.
     function onBlur() {
       setSquare(false);
       setMoving(false);
       setGrab(null);
+      setPointer(null);
     }
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
@@ -908,6 +911,16 @@ function RegionOverlay() {
     flushSync(follow);
   }
 
+  /**
+   * The pointer left for another display: its crosshair, loupe and window
+   * highlight go with it rather than stay at the edge. A drag keeps them,
+   * as its moves still arrive here.
+   */
+  function onMouseLeave() {
+    if (drag || grab || gripping) return;
+    setPointer(null);
+  }
+
   function onMouseUp(event: MouseEvent) {
     if (event.button !== 0) return;
     if (gripping) {
@@ -1058,6 +1071,7 @@ function RegionOverlay() {
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
+      onMouseLeave={onMouseLeave}
       onContextMenu={(event) => {
         event.preventDefault();
         cancel();

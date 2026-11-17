@@ -36,6 +36,7 @@ use objc2::{
     runtime::{AnyClass, AnyObject, Bool, Imp, Sel},
     sel,
 };
+use objc2_core_foundation::{CGPoint, CGRect};
 use tauri::{AppHandle, WebviewWindow};
 
 /// `NSApplicationActivateIgnoringOtherApps`. macOS 14 ignores it, and
@@ -242,6 +243,55 @@ pub fn focus(window: &WebviewWindow) -> tauri::Result<()> {
     })
 }
 
+/// Makes the marked window the pointer is over key, when it is not
+/// already and no mouse button is held. Call on the main thread.
+///
+/// WebKit sends pointer moves only to the key window, so without this an
+/// overlay on another display draws no crosshair, loupe or window
+/// highlight until it is clicked. A held button is left alone: a drag
+/// belongs to the window it started in.
+pub fn focus_under_pointer(windows: &[WebviewWindow]) {
+    // SAFETY: on the main thread, as the caller promises; both are
+    // documented NSEvent class methods.
+    let (pressed, pointer) = unsafe {
+        let pressed: usize = msg_send![objc2::class!(NSEvent), pressedMouseButtons];
+        let pointer: CGPoint = msg_send![objc2::class!(NSEvent), mouseLocation];
+        (pressed, pointer)
+    };
+    if pressed != 0 {
+        return;
+    }
+    for window in windows {
+        let ns_window = ns_window(window);
+        if ns_window.is_null() || !is_marked(ns_window) {
+            continue;
+        }
+        // SAFETY: `ns_window` is this window's live NSWindow, used on the
+        // main thread; each selector is a documented NSWindow getter.
+        let (visible, key, frame) = unsafe {
+            let visible: Bool = msg_send![ns_window, isVisible];
+            let key: Bool = msg_send![ns_window, isKeyWindow];
+            let frame: CGRect = msg_send![ns_window, frame];
+            (visible.as_bool(), key.as_bool(), frame)
+        };
+        if !visible || !holds(frame, pointer) {
+            continue;
+        }
+        if !key {
+            let _ = focus(window);
+        }
+        return;
+    }
+}
+
+/// Whether `point` is in `frame`, both in screen points.
+fn holds(frame: CGRect, point: CGPoint) -> bool {
+    point.x >= frame.origin.x
+        && point.x < frame.origin.x + frame.size.width
+        && point.y >= frame.origin.y
+        && point.y < frame.origin.y + frame.size.height
+}
+
 /// Makes `previous`, the app that was active before the overlay opened,
 /// active again if Grab-it is the active app: something activated it after
 /// all (a window that could not be marked, or a click macOS let through).
@@ -286,4 +336,41 @@ pub fn reactivate(app: &AppHandle, previous: u32) {
             let _: bool = msg_send![running, activateWithOptions: ACTIVATE_IGNORING_OTHERS];
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use objc2_core_foundation::CGSize;
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> CGRect {
+        CGRect {
+            origin: CGPoint { x, y },
+            size: CGSize { width, height },
+        }
+    }
+
+    #[test]
+    fn a_point_is_held_by_the_frame_it_is_in() {
+        let main = rect(0.0, 0.0, 3360.0, 1890.0);
+        let beside = rect(3360.0, 561.0, 2056.0, 1329.0);
+        let pointer = CGPoint {
+            x: 4000.0,
+            y: 900.0,
+        };
+        assert!(!holds(main, pointer));
+        assert!(holds(beside, pointer));
+    }
+
+    #[test]
+    fn a_shared_edge_belongs_to_one_frame() {
+        let main = rect(0.0, 0.0, 3360.0, 1890.0);
+        let beside = rect(3360.0, 0.0, 2056.0, 1329.0);
+        let edge = CGPoint {
+            x: 3360.0,
+            y: 100.0,
+        };
+        assert!(!holds(main, edge));
+        assert!(holds(beside, edge));
+    }
 }

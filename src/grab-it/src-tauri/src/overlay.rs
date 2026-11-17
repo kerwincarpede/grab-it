@@ -457,6 +457,7 @@ pub fn open(
 
     trace(format_args!("overlay shown in {:?}", started.elapsed()));
 
+    follow_pointer(app, id);
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(READY_TIMEOUT);
@@ -464,6 +465,44 @@ pub fn open(
     });
     Ok(())
 }
+
+/// How often the pointer is checked for a move to another display's
+/// overlay: a frame at 60 Hz.
+#[cfg(target_os = "macos")]
+const FOLLOW_INTERVAL: Duration = Duration::from_millis(16);
+
+/// macOS: while session `id` is open, gives the overlay under the pointer
+/// the focus as the pointer moves from display to display
+/// ([`crate::panel::focus_under_pointer`]), so the crosshair, loupe and
+/// window highlight follow it.
+#[cfg(target_os = "macos")]
+fn follow_pointer(app: &AppHandle, id: u64) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(FOLLOW_INTERVAL);
+            let labels: Vec<String> = match &*app.state::<OverlayState>().lock() {
+                Phase::Open(session) if session.id == id => {
+                    session.frames.keys().cloned().collect()
+                }
+                _ => return,
+            };
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                let windows: Vec<WebviewWindow> = labels
+                    .iter()
+                    .filter_map(|label| handle.get_webview_window(label))
+                    .collect();
+                crate::panel::focus_under_pointer(&windows);
+            });
+        }
+    });
+}
+
+/// Windows and Linux send pointer moves to the window under the pointer,
+/// focused or not.
+#[cfg(not(target_os = "macos"))]
+fn follow_pointer(_app: &AppHandle, _id: u64) {}
 
 /// Prints how long the steps of opening an overlay took, when
 /// `GRAB_IT_TRACE_OVERLAY` is set.
