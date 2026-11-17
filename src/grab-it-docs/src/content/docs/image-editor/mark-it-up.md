@@ -74,4 +74,4 @@ Something you've just drawn stays selected, with handles, so you can adjust it s
 
 ## Zoom
 
-Scroll over the screenshot to zoom in or out around the pointer, from 5% up to 1600%. The status bar has **Zoom out**, **Zoom in**, the current zoom and **Fit**, which fits the whole screenshot in the window again. The editor never enlarges a small screenshot to fit; it shows it at 100%.
+Scroll over the screenshot to zoom in or out around the pointer, from 5% up to 1600%. The status bar has **Zoom out**, **Zoom in**, the current zoom and **Fit**, which fits the whole screenshot in the window again. 100% is the size the screenshot had on screen, so a capture from a Retina or other high-density display isn't shown at double size. The editor never enlarges a small screenshot to fit; it shows it at 100%.
