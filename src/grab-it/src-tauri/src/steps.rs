@@ -1011,7 +1011,10 @@ pub fn guide_save(steps: Vec<GuideStep>, app: AppHandle) -> Result<(), String> {
         let _writing = lock(&GUIDE_WRITE);
         write_guide(&path, &guide)?;
     }
-    renumber(&folder, &guide)
+    renumber(&folder, &guide)?;
+    // Renumbered badges change the steps' drawn thumbnails.
+    let _ = app.emit(crate::library::LIBRARY_CHANGED_EVENT, ());
+    Ok(())
 }
 
 /// Opens a step's capture in the editor.

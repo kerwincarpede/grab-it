@@ -59,7 +59,7 @@ function errorMessage(err: unknown): string {
 }
 
 function RecentShot({ shot }: { shot: Shot }) {
-  const { url } = useThumbnail(shot.id, `${shot.id}:${shot.path}`, true);
+  const { url } = useThumbnail(shot, true);
   return (
     <div className="hub-recent-item">
       <button

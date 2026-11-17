@@ -34,6 +34,10 @@ export interface Shot {
   bytes?: number | null;
   /** Starred Keep forever: cleanup never removes it. Older backends leave it out. */
   keep?: boolean;
+  /** When its annotations were last saved (ms since the Unix epoch); null for a capture never edited. Older backends leave it out. */
+  editedAt?: number | null;
+  /** It has edits and its saved thumbnail is missing or older than them, so the Library draws a new one. */
+  thumbStale?: boolean;
 }
 
 /** Stars or unstars the shot Keep forever. */
@@ -215,6 +219,42 @@ export function shotThumbnail(id: number): Promise<ArrayBuffer> {
   return invoke<ArrayBuffer>("library_thumbnail", { id });
 }
 
+/** A capture's original PNG bytes, to draw it with its edits. */
+export function shotImage(id: number): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>("library_image", { id });
+}
+
+/** A capture's saved annotations and scale. Mirrors `ShotAnnotations` in src-tauri/src/library.rs. */
+export interface ShotAnnotations {
+  /** The sidecar as saved; null when the capture has no edits. */
+  annotations: unknown;
+  /** The capture's pixels per point, when its meta.json records it. */
+  scaleFactor: number | null;
+  /** When the sidecar read was saved (ms since the Unix epoch); null without edits. */
+  editedAt: number | null;
+}
+
+/** A capture's saved annotations; rejects when the sidecar cannot be read. */
+export function shotAnnotations(id: number): Promise<ShotAnnotations> {
+  return invoke<ShotAnnotations>("library_annotations", { id });
+}
+
+/** Mirrors `THUMBNAIL_ID_HEADER` in src-tauri/src/library.rs. */
+export const THUMBNAIL_ID_HEADER = "x-grab-it-shot";
+/** Mirrors `THUMBNAIL_EDITED_HEADER` in src-tauri/src/library.rs. */
+export const THUMBNAIL_EDITED_HEADER = "x-grab-it-edited";
+
+/**
+ * Saves a capture drawn with its edits as its thumbnail; the backend fits it
+ * in the thumbnail size. `editedAt` is when the edits it was drawn from were
+ * saved: it rejects, keeping nothing, when they have been saved again since.
+ */
+export function saveShotThumbnail(id: number, png: Uint8Array, editedAt: number): Promise<void> {
+  return invoke<void>("library_save_thumbnail", png, {
+    headers: { [THUMBNAIL_ID_HEADER]: String(id), [THUMBNAIL_EDITED_HEADER]: String(editedAt) },
+  });
+}
+
 export function setShotTags(id: number, tags: string[]): Promise<Shot> {
   return invoke<Shot>("library_set_tags", { id, tags });
 }
@@ -373,7 +413,7 @@ export function openShot(id: number): Promise<void> {
   return invoke<void>("library_open", { id });
 }
 
-/** Copies the shot's original image to the clipboard. */
+/** Copies the shot's original image to the clipboard. For the image with its edits, see `copyFinished` in finished.ts. */
 export function copyShot(id: number): Promise<void> {
   return invoke<void>("library_copy", { id });
 }

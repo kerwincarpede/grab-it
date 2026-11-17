@@ -1,9 +1,43 @@
 import { useEffect, useState, type RefObject } from "react";
-import { shotThumbnail } from "./api";
+import { saveShotThumbnail, shotThumbnail, type Shot } from "./api";
+import { drawShot } from "./finished";
 
 /* Thumbnails load only when their tile nears the viewport, a few at a time,
    and stay cached as blob URLs so scrolling back, refreshing the list or
-   opening the details panel never fetches the same bytes twice. */
+   opening the details panel never fetches the same bytes twice. An edited
+   capture whose saved thumbnail is missing or older than its edits is drawn
+   with them here, saved to thumbs/ and reused from there afterwards. */
+
+/** What a thumbnail needs to know about its shot. */
+export type ThumbShot = Pick<Shot, "id" | "path" | "editedAt" | "thumbStale">;
+
+/** Cache key for a shot's thumbnail: a moved file or new edits get a fresh one. */
+export function thumbKey(shot: Pick<Shot, "id" | "path" | "editedAt">): string {
+  return `${shot.id}:${shot.path}:${shot.editedAt ?? ""}`;
+}
+
+/**
+ * A shot's thumbnail PNG. One that is out of date with its edits is drawn
+ * with them and saved, then read back fitted to the thumbnail size; should
+ * drawing fail, whatever thumbnail is saved is used. A drawing of edits
+ * saved again meanwhile is shown but not kept, so the next look draws it again.
+ */
+export async function loadThumbnail(shot: Pick<Shot, "id" | "thumbStale">): Promise<ArrayBuffer | Uint8Array> {
+  if (!shot.thumbStale) return shotThumbnail(shot.id);
+  let drawn: { png: Uint8Array; editedAt: number | null };
+  try {
+    drawn = await drawShot(shot.id);
+  } catch {
+    return shotThumbnail(shot.id);
+  }
+  if (drawn.editedAt === null) return drawn.png;
+  try {
+    await saveShotThumbnail(shot.id, drawn.png, drawn.editedAt);
+    return await shotThumbnail(shot.id);
+  } catch {
+    return drawn.png;
+  }
+}
 
 /** Thumbnail requests in flight at once; more queue up. */
 const MAX_IN_FLIGHT = 6;
@@ -22,7 +56,7 @@ interface Entry {
 const cache = new Map<string, Entry>();
 interface Job {
   key: string;
-  id: number;
+  shot: Pick<Shot, "id" | "thumbStale">;
   cancelled: boolean;
 }
 const queue: Job[] = [];
@@ -61,10 +95,10 @@ function pump() {
     const entry = cache.get(job.key);
     if (!entry) continue;
     inFlight += 1;
-    entry.promise = shotThumbnail(job.id)
+    entry.promise = loadThumbnail(job.shot)
       .then((bytes) => {
         if (typeof URL.createObjectURL !== "function") return;
-        entry.url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+        entry.url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "image/png" }));
       })
       .catch(() => {
         entry.failed = true;
@@ -88,11 +122,14 @@ export function resetThumbnails() {
 }
 
 /**
- * A shot's thumbnail as a blob URL, fetched once `wanted` turns true.
- * `key` changes when the shot's file does, so an edited capture refreshes.
+ * A shot's thumbnail as a blob URL, fetched (or drawn with its edits) once
+ * `wanted` turns true. Its key changes when the shot's file or edits do, so
+ * an edited capture refreshes.
  */
-export function useThumbnail(id: number, key: string, wanted: boolean): { url: string | null; failed: boolean } {
+export function useThumbnail(shot: ThumbShot, wanted: boolean): { url: string | null; failed: boolean } {
   const [, rerender] = useState(0);
+  const key = thumbKey(shot);
+  const { id, thumbStale } = shot;
   const entry = entryFor(key);
 
   useEffect(() => {
@@ -109,14 +146,14 @@ export function useThumbnail(id: number, key: string, wanted: boolean): { url: s
   useEffect(() => {
     const current = entryFor(key);
     if (!wanted || current.url || current.failed || current.promise) return;
-    const job: Job = { key, id, cancelled: false };
+    const job: Job = { key, shot: { id, thumbStale }, cancelled: false };
     queue.push(job);
     pump();
     return () => {
       // Scrolled away before its turn: skip it.
       job.cancelled = true;
     };
-  }, [id, key, wanted]);
+  }, [id, key, thumbStale, wanted]);
 
   return { url: entry.url, failed: entry.failed };
 }
