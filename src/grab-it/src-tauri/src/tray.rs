@@ -37,8 +37,9 @@ struct Hover {
 }
 
 /// How long before the first hover event a click still counts as on the
-/// icon: the event can arrive after the click that caused it.
-const HOVER_LEAD: Duration = Duration::from_millis(100);
+/// icon: the event can arrive after the click that caused it, so a click
+/// is only judged once this has passed.
+pub const HOVER_LEAD: Duration = Duration::from_millis(100);
 /// How long after the latest hover event the pointer is still taken to be
 /// over the icon. Leave can be missed, so hover runs out.
 const HOVER_LIMIT: Duration = Duration::from_secs(10);
