@@ -18,8 +18,9 @@ import {
   resample,
   type PaintLayer,
 } from "./flatten";
-import { backdropColors, sameBackdrop, type Backdrop, type LineShape } from "./model";
+import { backdropColors, sameBackdrop, type Backdrop, type MagnifyShape, type LineShape } from "./model";
 import { curvePoints } from "./tools";
+import { magnifyLinePoints, magnifyScene } from "./magnify";
 
 describe("flatten", () => {
   it("maps the crop to stage pixels at capture resolution", () => {
@@ -563,5 +564,47 @@ describe("balanced backdrop", () => {
     expect(backdropLayout(size, { ...backdrop, balance: undefined }, 1, { top: 0, right: 80, bottom: 0, left: 0 })).toMatchObject(even);
     expect(backdropLayout(size, backdrop, 1, null)).toMatchObject(even);
     expect(backdropLayout(size, backdrop)).toMatchObject(even);
+  });
+});
+
+
+describe("magnify lenses in exports", () => {
+  const lens: MagnifyShape = { id: "m", type: "magnify", x: 200, y: 100, width: 120, height: 120,
+    color: "#0090ff", strokeWidth: 4, spot: [60, 70], zoom: 3 };
+  function draw(shape: MagnifyShape) {
+    const calls: unknown[][] = [];
+    const record = (name: string) => (...args: unknown[]) => { calls.push([name, ...args]); };
+    const ctx = Object.fromEntries(["beginPath", "arc", "moveTo", "lineTo", "arcTo", "closePath", "save", "restore", "clip", "drawImage", "fillShape", "strokeShape"]
+      .map((name) => [name, record(name)]));
+    const image = {} as HTMLImageElement;
+    const node = {} as Konva.Shape;
+    magnifyScene(shape, image)(ctx as unknown as Konva.Context, node);
+    return { calls, image, node };
+  }
+  it("clips a round lens before sampling the zoomed original capture, then strokes its border", () => {
+    const { calls, image, node } = draw(lens);
+    expect(calls).toContainEqual(["arc", 60, 60, 60, 0, Math.PI * 2]);
+    expect(calls).toContainEqual(["drawImage", image, 40, 50, 40, 40, 0, 0, 120, 120]);
+    const order = calls.map(([name]) => name);
+    expect(order.indexOf("clip")).toBeLessThan(order.indexOf("drawImage"));
+    expect(order.indexOf("restore")).toBeLessThan(order.indexOf("strokeShape"));
+    expect(calls[calls.length - 1]).toEqual(["strokeShape", node]);
+  });
+  it("clips the rounded square outline, and samples a smaller source at 6x", () => {
+    const { calls, image } = draw({ ...lens, lens: "square", zoom: 6 });
+    expect(calls.filter(([name]) => name === "arcTo")).toHaveLength(4);
+    expect(calls.some(([name]) => name === "arc")).toBe(false);
+    expect(calls).toContainEqual(["drawImage", image, 50, 60, 20, 20, 0, 0, 120, 120]);
+    expect(calls.filter(([name]) => name === "clip")).toHaveLength(1);
+  });
+  it("ends the line at the round or rounded square edge, omitting it for an interior spot", () => {
+    const atLeft = { ...lens, spot: [0, 160] as [number, number] };
+    for (const value of [atLeft, { ...atLeft, lens: "square" as const }]) {
+      const points = magnifyLinePoints(value);
+      expect(points.slice(0, 2)).toEqual([0, 160]);
+      expect(points[2]).toBeCloseTo(200);
+      expect(points[3]).toBeCloseTo(160);
+    }
+    expect(magnifyLinePoints({ ...lens, spot: [260, 160] })).toEqual([]);
   });
 });

@@ -54,6 +54,12 @@ const TOOL_ICONS: Record<Tool, ReactNode> = {
       <path d="M12 16a2.8 2.8 0 002.8-2.8" />
     </>
   ),
+  magnify: (
+    <>
+      <circle cx="10" cy="10" r="6.5" />
+      <path d="M15 15l6 6M7 10h6M10 7v6" />
+    </>
+  ),
   spotlight: (
     <>
       <rect x="3" y="4" width="18" height="16" rx="2" strokeDasharray="2.5 2.5" />

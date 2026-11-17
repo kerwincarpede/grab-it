@@ -11,6 +11,7 @@ export type Tool =
   | "text"
   | "highlighter"
   | "blur"
+  | "magnify"
   | "spotlight"
   | "step"
   | "crop";
@@ -94,7 +95,17 @@ export interface StepShape {
   radius: number;
 }
 
-export type Shape = LineShape | PathShape | BoxShape | BlurShape | SpotlightShape | TextShape | StepShape;
+/** A square lens enlarging capture pixels around a separate, fixed spot. */
+export interface MagnifyShape extends Stroked, Rect {
+  type: "magnify";
+  spot: [number, number];
+  zoom: number;
+  /** Absent means round. */
+  lens?: "square";
+  line?: boolean;
+}
+
+export type Shape = LineShape | PathShape | BoxShape | MagnifyShape | BlurShape | SpotlightShape | TextShape | StepShape;
 export type ShapeType = Shape["type"];
 
 /** The output shapes a backdrop can pad the capture to; "auto" pads evenly. */
@@ -176,6 +187,9 @@ export interface Style {
   /** Text sits on a pill. */
   background?: boolean;
   blurMode?: BlurMode;
+  zoom?: number;
+  lens?: "round" | "square";
+  lensLine?: boolean;
 }
 
 export const COLORS = ["#e5484d", "#f5a524", "#30a46c", "#0090ff", "#8e4ec6", "#1f2328", "#ffffff"];
@@ -219,6 +233,7 @@ export function widthKind(tool: Tool | ShapeType): WidthKind | null {
     case "ellipse":
     case "freehand":
     case "highlighter":
+    case "magnify":
       return STROKE_KIND;
     case "text":
       return FONT_KIND;
@@ -261,6 +276,7 @@ export const TOOLS: { tool: Tool; label: string; key: string; group: number }[] 
   { tool: "step", label: "Step", key: "n", group: 2 },
   { tool: "highlighter", label: "Highlighter", key: "h", group: 2 },
   { tool: "blur", label: "Blur", key: "b", group: 3 },
+  { tool: "magnify", label: "Magnify", key: "z", group: 3 },
   { tool: "spotlight", label: "Spotlight", key: "s", group: 3 },
   { tool: "crop", label: "Crop", key: "c", group: 4 },
 ];

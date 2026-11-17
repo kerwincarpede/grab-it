@@ -36,6 +36,13 @@ export function isShape(value: unknown): value is Shape {
     case "rect":
     case "ellipse":
       return stroked && isRect(shape) && isOptional(shape.fill, isBool);
+    case "magnify":
+      return (
+        stroked && isRect(shape) && (shape.width as number) > 0 && shape.width === shape.height &&
+        isPoints(shape.spot, 2) && shape.spot.length === 2 &&
+        isNum(shape.zoom) && Number.isInteger(shape.zoom) && shape.zoom >= 2 && shape.zoom <= 6 &&
+        isOptional(shape.lens, (lens) => lens === "square") && isOptional(shape.line, isBool)
+      );
     case "blur":
       return (
         isRect(shape) &&
