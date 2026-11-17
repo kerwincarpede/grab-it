@@ -12,7 +12,8 @@ Grab-it is built with Rust and [Tauri 2](https://tauri.app/), with a React + Typ
 | `src/grab-it/src-tauri/` | Backend: Rust |
 | `.github/workflows/ci.yml` | Checks plus installer builds on Linux, Windows and macOS |
 | `.github/workflows/release.yml` | Release of every push to `main` |
-| `docs/` | User and developer docs; `docs/assets/` holds the README animation and the scripts that draw it and the docs site's tour animations |
+| `AGENTS.md` | The rules every change follows, and which standard to read for which task |
+| `docs/` | User and developer docs; `docs/standards/` holds the coding, data, writing and PR standards; `docs/assets/` holds the README animation and the scripts that draw it and the docs site's tour animations |
 
 ## Setup
 
