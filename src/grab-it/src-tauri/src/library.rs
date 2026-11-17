@@ -31,6 +31,7 @@ use crate::{
     capture::{self, CaptureMeta, ORIGINALS_DIR},
     commands::{SettingsState, lock},
     editor::EditorState,
+    ocr::OcrLine,
     record::RECORDINGS_DIR,
     windows,
 };
@@ -206,6 +207,9 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     CREATE INDEX shots_kind ON shots (kind, captured_at DESC, id DESC);",
     // 5: the Keep forever star. A starred item is never removed by cleanup.
     "ALTER TABLE shots ADD COLUMN keep INTEGER NOT NULL DEFAULT 0;",
+    // 6: where OCR found each line and word, as JSON (`ocr::OcrLine`s, in
+    // image pixels). NULL for recordings and for captures read before it.
+    "ALTER TABLE shots ADD COLUMN ocr_words TEXT;",
 ];
 
 /// `ai_state` values, for tests; the queries spell them out.
@@ -904,6 +908,47 @@ impl Library {
             return Err(LibraryError::NotFound(id));
         }
         Ok(())
+    }
+
+    /// Stores the lines OCR read in a shot: their text, searchable at once,
+    /// and their word boxes.
+    pub fn set_ocr_lines(&mut self, id: i64, lines: &[OcrLine]) -> LibraryResult<()> {
+        let words =
+            serde_json::to_string(lines).map_err(|err| LibraryError::Io(io::Error::other(err)))?;
+        let changed = self.conn.execute(
+            "UPDATE shots SET ocr_text = ?1, ocr_words = ?2, ocr_state = 1 WHERE id = ?3",
+            params![crate::ocr::lines_text(lines), words, id],
+        )?;
+        if changed == 0 {
+            return Err(LibraryError::NotFound(id));
+        }
+        Ok(())
+    }
+
+    /// The lines OCR read in a shot, with their word boxes; `None` for a
+    /// recording, a capture waiting for or failing OCR, or one read before
+    /// the boxes were stored.
+    pub fn lines(&self, id: i64) -> LibraryResult<Option<Vec<OcrLine>>> {
+        let words = self
+            .conn
+            .query_row(
+                "SELECT CASE WHEN ocr_state = 1 AND kind = 'image' THEN ocr_words END
+                 FROM shots WHERE id = ?1",
+                [id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .ok_or(LibraryError::NotFound(id))?;
+        let Some(words) = words else {
+            return Ok(None);
+        };
+        match serde_json::from_str(&words) {
+            Ok(lines) => Ok(Some(lines)),
+            Err(err) => {
+                eprintln!("Grab-it: the word boxes of shot {id} are unreadable: {err}");
+                Ok(None)
+            }
+        }
     }
 
     /// The text OCR found in a shot, or why there is none yet.
@@ -2385,6 +2430,16 @@ pub fn library_text(id: i64, state: State<'_, LibraryState>) -> Result<ShotText,
     state.lock().text(id).map_err(to_message)
 }
 
+/// The lines of text in a shot with their word boxes, in image pixels, or
+/// None when OCR has not read them (see [`Library::lines`]).
+#[tauri::command(async)]
+pub fn library_words(
+    id: i64,
+    state: State<'_, LibraryState>,
+) -> Result<Option<Vec<OcrLine>>, String> {
+    state.lock().lines(id).map_err(to_message)
+}
+
 /// The library id of the capture at `path`, or None when the library does
 /// not know it, so windows that only have a path can use the id commands.
 #[tauri::command(async)]
@@ -2410,10 +2465,11 @@ pub fn library_copy_text(id: i64, app: AppHandle) -> Result<String, String> {
             let image = image::open(&path)
                 .map_err(|err| format!("could not open {}: {err}", path.display()))?
                 .into_rgba8();
-            let text = crate::ocr::read_now(&app, &image)
+            let lines = crate::ocr::read_now(&app, &image)
                 .map_err(|err| format!("could not read the text: {err}"))?;
+            let text = crate::ocr::lines_text(&lines);
             // Stored before its codes are decoded, as the OCR queue does.
-            match crate::ocr::store_text(&library, id, &text, &image) {
+            match crate::ocr::store_text(&library, id, &lines, &image) {
                 Ok(stored) => {
                     let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
                     crate::ai::wake(&app);
@@ -2691,6 +2747,121 @@ mod tests {
         assert!(!crate::recording_editor::edits_path(&mp4).exists());
         assert!(!shot.thumb_path.exists());
         assert_eq!(library.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn a_library_read_before_word_boxes_keeps_its_text_without_them() {
+        let dir = TempDir::new().unwrap();
+        let db = dir.path().join(LIBRARY_FILE);
+        let png = shoot(dir.path(), 1, (40, 20));
+        {
+            let mut conn = Connection::open(&db).unwrap();
+            for (index, sql) in MIGRATIONS.iter().take(5).enumerate() {
+                let tx = conn.transaction().unwrap();
+                tx.execute_batch(sql).unwrap();
+                tx.pragma_update(None, "user_version", index as i64 + 1)
+                    .unwrap();
+                tx.commit().unwrap();
+            }
+            conn.execute(
+                "INSERT INTO shots (path, thumb_path, captured_at, ocr_text, ocr_state)
+                 VALUES (?1, '', 0, 'Read long ago', 1)",
+                [path_text(&fs::canonicalize(&png).unwrap())],
+            )
+            .unwrap();
+        }
+        let mut library = Library::open(&db).unwrap();
+        assert_eq!(library.schema_version().unwrap(), 6);
+        let id = library.list(0, MAX_PAGE).unwrap().shots[0].id;
+        assert_eq!(
+            library.text(id).unwrap(),
+            ShotText::Read {
+                text: "Read long ago".into()
+            }
+        );
+        // Not read again, and without boxes.
+        assert!(library.next_for_ocr().unwrap().is_none());
+        assert_eq!(library.lines(id).unwrap(), None);
+
+        let lines = vec![crate::ocr::tests::line("Read again")];
+        library.set_ocr_lines(id, &lines).unwrap();
+        assert_eq!(library.lines(id).unwrap(), Some(lines));
+    }
+
+    #[test]
+    fn ocr_lines_are_stored_with_their_text() {
+        use crate::capture::Rect;
+        use crate::ocr::{OcrLine, OcrWord};
+        let dir = TempDir::new().unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library
+            .add_capture(&shoot(dir.path(), 1, (200, 60)))
+            .unwrap();
+        // Unread: no boxes yet.
+        assert_eq!(library.lines(shot.id).unwrap(), None);
+
+        let word = |text: &str, x| OcrWord {
+            text: text.into(),
+            rect: Rect {
+                x,
+                y: 10,
+                width: 40,
+                height: 12,
+            },
+        };
+        let lines = vec![
+            OcrLine {
+                text: "Invoice 42".into(),
+                rect: Rect {
+                    x: 5,
+                    y: 10,
+                    width: 90,
+                    height: 12,
+                },
+                words: vec![word("Invoice", 5), word("42", 55)],
+            },
+            crate::ocr::tests::line("Due today"),
+        ];
+        library.set_ocr_lines(shot.id, &lines).unwrap();
+        assert_eq!(
+            library.text(shot.id).unwrap(),
+            ShotText::Read {
+                text: "Invoice 42\nDue today".into()
+            }
+        );
+        assert_eq!(library.lines(shot.id).unwrap(), Some(lines));
+        assert!(library.next_for_ocr().unwrap().is_none());
+
+        assert!(matches!(
+            library.set_ocr_lines(999, &[]),
+            Err(LibraryError::NotFound(999))
+        ));
+        assert!(matches!(
+            library.lines(999),
+            Err(LibraryError::NotFound(999))
+        ));
+    }
+
+    #[test]
+    fn shots_without_stored_lines_have_none() {
+        let dir = TempDir::new().unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let text_only = library
+            .add_capture(&shoot(dir.path(), 1, (10, 10)))
+            .unwrap();
+        let failed = library
+            .add_capture(&shoot(dir.path(), 2, (10, 10)))
+            .unwrap();
+        let gif = record_gif(dir.path(), "Grab-it 2026-03-07 09-05-02.gif");
+        let recording = library
+            .insert(&prepare_recording(&gif, Some(200), None).unwrap())
+            .unwrap();
+
+        library.set_ocr_text(text_only.id, "Typed in").unwrap();
+        library.mark_ocr_failed(failed.id).unwrap();
+        for id in [text_only.id, failed.id, recording.id] {
+            assert_eq!(library.lines(id).unwrap(), None, "shot {id}");
+        }
     }
 
     #[test]

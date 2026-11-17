@@ -231,6 +231,8 @@ The two ocrs models (about 12 MB) ship with the app. They are committed in `src-
 
 The Library's **Copy text** copies a capture's stored OCR text (`library_copy_text`). A capture OCR has not read yet, or could not read, is read on the spot, codes included, and the result stored, as the queue would.
 
+OCR also keeps where it found the text. Beside `ocr_text`, the `ocr_words` column of `shots` (migration 6) holds the lines OCR read as JSON: `[{text, x, y, width, height, words: [{text, x, y, width, height}]}]`, each box axis-aligned, in the pixels of the original PNG in `originals/` and clipped to it (`ocr::OcrLine`, `Library::set_ocr_lines`). Lines of one character are dropped, as from the text; the codes' values have no boxes. The frontend reads them with `shotWords(id)` in `src/library/api.ts` (the `library_words` command), which gives null for recordings, for captures waiting for or failing OCR and for captures read before word boxes were stored, which are not read again. Search and `shots_fts` use `ocr_text` only.
+
 The search index is a SQLite FTS5 table in `library.db`, kept in step with each capture's tags, notes, text and AI description as they change.
 
 ### AI descriptions (optional)

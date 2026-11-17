@@ -386,6 +386,29 @@ export function shotText(id: number): Promise<ShotText> {
   return invoke<ShotText>("library_text", { id });
 }
 
+/** A word OCR read, with its axis-aligned box in the image's pixels. Mirrors `OcrWord` in src-tauri/src/ocr.rs. */
+export interface OcrWord {
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** A line of text OCR read, with its box and its words. Mirrors `OcrLine` in src-tauri/src/ocr.rs. */
+export interface OcrLine extends OcrWord {
+  words: OcrWord[];
+}
+
+/**
+ * The lines of text in the shot with their word boxes, in the pixels of its
+ * original image. Null for recordings, for captures waiting for or failing
+ * OCR, and for captures read before word boxes were stored.
+ */
+export function shotWords(id: number): Promise<OcrLine[] | null> {
+  return invoke<OcrLine[] | null>("library_words", { id });
+}
+
 /**
  * Copies the text in the shot and resolves to it. A shot not read yet is
  * read first, which takes a few seconds. Rejects when there is no text.
