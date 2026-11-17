@@ -622,6 +622,24 @@ describe("EditorWindow", () => {
       await ready();
       expect(screen.getByRole("button", { name: "Pointer look" })).toBeDisabled();
     });
+
+    it("moves up with the image when a strip above it is cut out, and back down on Restore strips", async () => {
+      mockEditor(null, [], { pointer, stored: { showPointer: true } });
+      await ready();
+      await waitFor(() => expect(node()).toHaveAttribute("data-y", "77"));
+      fireEvent.keyDown(window, { key: "x" });
+      fireEvent.keyUp(window, { key: "x" });
+      // Rows 30 to 70 go: the hot spot at y 80 moves up to 40.
+      drag([50, 30], [300, 70]);
+      await waitFor(() => expect(node()).toHaveAttribute("data-y", "37"));
+      fireEvent.click(screen.getByRole("button", { name: "Restore strips" }));
+      await waitFor(() => expect(node()).toHaveAttribute("data-y", "77"));
+
+      // A strip over the hot spot takes the pointer with it.
+      drag([50, 60], [300, 100]);
+      await waitFor(() => expect(node()).toBeNull());
+      expect(pointerButton()).toHaveAttribute("aria-pressed", "false");
+    });
   });
 
   it("recolours the selected shape", async () => {
@@ -1069,6 +1087,7 @@ describe("EditorWindow", () => {
     expect(screen.queryByRole("button", { name: "Width" })).not.toBeInTheDocument();
   });
 
+  // Ninety clicks, each re-rendering the whole editor, outlast the default timeout under jsdom on a busy machine.
   it("opens a 2x capture at its on-screen size, calls it 100%, and zooms from 5% to 1600% of it", async () => {
     // 400 × 300 image pixels at 2x were 200 × 150 points on screen, which fit the 800 × 600 canvas.
     mockEditor(sidecar, [], { scaleFactor: 2 });
@@ -1093,7 +1112,7 @@ describe("EditorWindow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Fit" }));
     expect(zoom()).toBe("100%");
     expect(scale()).toBe(0.5);
-  });
+  }, 20_000);
 
   it("changes the width with ⌥-scroll over the canvas instead of zooming", async () => {
     mockEditor();

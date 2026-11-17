@@ -1,4 +1,5 @@
 import type { CapturedPointer } from "./api";
+import { pointerThroughCuts } from "./cut";
 import type { Annotations, PointerEdit, PointerLook } from "./model";
 
 /** Names the pointer's Konva node; also its selection id, which no shape id can take. */
@@ -90,13 +91,15 @@ export function pointerSprite(captured: CapturedPointer, state: PointerEdit, den
 
 /**
  * The pointer as the editor shows it: the user's edits when the sidecar has
- * them, else where it was captured at its own size, shown when
- * `showByDefault` (the "Show the pointer in new captures" setting) is on.
+ * them, else where it was captured (moved through the cuts) at its own
+ * size, shown when `showByDefault` (the "Show the pointer in new captures"
+ * setting) is on and no strip took it. Like shapes, it is in the pixels of
+ * the joined image.
  * `null` when the capture has no pointer.
  */
 export function pointerState(doc: Annotations, captured: CapturedPointer | null | undefined, showByDefault: boolean): PointerEdit | null {
   if (!captured) return null;
-  return doc.pointer ?? { shown: showByDefault, x: captured.x, y: captured.y, scale: 1 };
+  return doc.pointer ?? pointerThroughCuts({ shown: showByDefault, x: captured.x, y: captured.y, scale: 1 }, doc.cuts);
 }
 
 /** The box the pointer image (`sprite`) covers, in capture pixels, for a pointer at `state`. */

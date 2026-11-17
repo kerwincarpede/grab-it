@@ -26,6 +26,15 @@ describe("captured pointer", () => {
     expect(pointerState(doc, null, true)).toBeNull();
   });
 
+  it("starts moved through the cuts, and hidden when a strip took it", () => {
+    // 600 rows tall with the pointer at y 300: cutting rows 100 to 200 moves it up to 200.
+    const tall: CapturedPointer = { ...captured, x: 50, y: 300 };
+    const cut = { ...emptyAnnotations(), cuts: [{ axis: "y" as const, start: 100, end: 200, edge: "straight" as const }] };
+    expect(pointerState(cut, tall, true)).toEqual({ shown: true, x: 50, y: 200, scale: 1 });
+    const taken = { ...emptyAnnotations(), cuts: [{ axis: "y" as const, start: 250, end: 350, edge: "straight" as const }] };
+    expect(pointerState(taken, tall, true)).toEqual({ shown: false, x: 50, y: 250, scale: 1 });
+  });
+
   it("follows the user's edits once there are some, whatever the setting", () => {
     const doc = { ...emptyAnnotations(), pointer: { shown: false, x: 5, y: 6, scale: 2 } };
     expect(pointerState(doc, captured, true)).toEqual({ shown: false, x: 5, y: 6, scale: 2 });

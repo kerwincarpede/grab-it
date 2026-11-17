@@ -8,6 +8,7 @@ import {
   edgeProfile,
   joinedImage,
   joinedSize,
+  pointerThroughCuts,
   restoreStrips,
   restoreValue,
   seededRandom,
@@ -154,6 +155,29 @@ describe("cut out", () => {
     const restored = restoreStrips(cut);
     expect(restored.shapes[0]).toMatchObject({ y: 160, height: 40 });
     expect(restored.crop).toEqual(flush.crop);
+  });
+
+  it("moves an edited pointer with the image through a cut and back on restore", () => {
+    const pointed: Annotations = { version: 1, shapes: [], crop: null, pointer: { shown: true, x: 50, y: 300, scale: 1.5 } };
+    const cut = cutAnnotations(pointed, straight);
+    expect(cut.pointer).toEqual({ shown: true, x: 50, y: 240, scale: 1.5 });
+    expect(restoreStrips(cut).pointer).toEqual(pointed.pointer);
+    // Across the strip, it is untouched; flush with a jagged strip's end, it comes back there.
+    expect(cutAnnotations(pointed, { ...straight, axis: "x" }).pointer).toEqual(pointed.pointer);
+    const flush = { ...pointed, pointer: { shown: true, x: 50, y: 160, scale: 1 } };
+    expect(restoreStrips(cutAnnotations(flush, zigzag)).pointer).toEqual(flush.pointer);
+    // A strip that takes it hides it on the join, and Restore strips leaves it hidden, like a removed shape.
+    const inside = { ...pointed, pointer: { shown: true, x: 50, y: 130, scale: 1 } };
+    expect(cutAnnotations(inside, straight).pointer).toEqual({ shown: false, x: 50, y: 100, scale: 1 });
+    expect(restoreStrips(cutAnnotations(inside, straight)).pointer).toEqual({ shown: false, x: 50, y: 100, scale: 1 });
+    // A pointer never edited is left for pointerState to move.
+    expect(cutAnnotations(doc, straight)).not.toHaveProperty("pointer");
+    expect(pointerThroughCuts({ shown: true, x: 50, y: 300, scale: 1 }, [straight, { axis: "x", start: 10, end: 30, edge: "straight" }])).toEqual({
+      shown: true,
+      x: 30,
+      y: 240,
+      scale: 1,
+    });
   });
 
   it("leaves out stored cuts that do not fit the image the earlier cuts left", () => {

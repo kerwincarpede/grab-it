@@ -1,4 +1,4 @@
-import type { Annotations, Cut, CutEdge, Rect, Shape } from "./model";
+import type { Annotations, Cut, CutEdge, PointerEdit, Rect, Shape } from "./model";
 import { calloutBubble } from "./callout";
 import { textSize, type Orientation } from "./orient";
 import { cropToCapture, MIN_SIZE, normalizeRect } from "./tools";
@@ -175,6 +175,22 @@ export function restoreValue(value: number, cut: Cut): number {
   return value > cut.start && value >= cut.start + cutGap(cut.edge) ? value + cutShift(cut) : value;
 }
 
+/**
+ * The captured pointer through a cut: its hot spot moves back with the
+ * image past the strip, and one the strip took lands on the join, hidden.
+ */
+export function cutPointer(pointer: PointerEdit, cut: Cut): PointerEdit {
+  const value = cut.axis === "x" ? pointer.x : pointer.y;
+  const moved = shiftValue(value, cut);
+  const taken = value > cut.start && value < cut.end;
+  return { ...pointer, ...(cut.axis === "x" ? { x: moved } : { y: moved }), ...(taken ? { shown: false } : {}) };
+}
+
+/** The captured pointer, in the original capture's pixels, through every cut in order. */
+export function pointerThroughCuts(pointer: PointerEdit, cuts: Cut[] | undefined): PointerEdit {
+  return (cuts ?? []).reduce(cutPointer, pointer);
+}
+
 /** How far a shape reaches along `axis`: its lowest and highest coordinate. */
 function extent(shape: Shape, axis: "x" | "y"): [number, number] {
   const i = axis === "x" ? 0 : 1;
@@ -276,25 +292,30 @@ export function cutAnnotations(doc: Annotations, cut: Cut): Annotations {
     shapes,
     cuts: [...(doc.cuts ?? []), cut],
     crop: doc.crop ? mapRect(doc.crop, cut.axis, map) : (doc.crop ?? null),
+    // An edited pointer moves with the image; one never edited follows the cuts on its own (pointerState).
+    ...(doc.pointer ? { pointer: cutPointer(doc.pointer, cut) } : {}),
   };
 }
 
 /**
  * Restore strips: every cut undone, last to first, moving shapes and the
- * crop past each join forward again. Shapes that were shortened to a join
- * or removed stay as they are.
+ * crop (and an edited pointer) past each join forward again. Shapes that
+ * were shortened to a join or removed stay as they are, and a pointer the
+ * strip hid stays hidden.
  */
 export function restoreStrips(doc: Annotations): Annotations {
   const cuts = doc.cuts ?? [];
   if (cuts.length === 0) return doc;
   let shapes = doc.shapes;
   let crop = doc.crop ?? null;
+  let pointer = doc.pointer;
   for (const cut of [...cuts].reverse()) {
     const map = (value: number) => restoreValue(value, cut);
     shapes = shapes.map((shape) => mapShape(shape, cut.axis, map));
     if (crop) crop = mapRect(crop, cut.axis, map);
+    if (pointer) pointer = cut.axis === "x" ? { ...pointer, x: map(pointer.x) } : { ...pointer, y: map(pointer.y) };
   }
-  const next: Annotations = { ...doc, shapes, crop };
+  const next: Annotations = { ...doc, shapes, crop, ...(pointer ? { pointer } : {}) };
   delete next.cuts;
   return next;
 }
