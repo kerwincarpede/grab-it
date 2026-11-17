@@ -73,6 +73,20 @@ describe("cut out", () => {
     expect(cutAnnotations(lens, straight).shapes[0]).toMatchObject({ y: 140, width: 40, height: 40, spot: [30, 220] });
   });
 
+  it("moves a callout's text and tail on their own, and keeps one whose tail leaves the strip", () => {
+    const callouts: Annotations = {
+      version: 1,
+      shapes: [
+        { id: "past", type: "callout", color: "#e5484d", x: 40, y: 200, text: "Here", fontSize: 20, tail: { x: 10, y: 50 } },
+        { id: "points-out", type: "callout", color: "#e5484d", x: 40, y: 120, text: "Here", fontSize: 20, tail: { x: 10, y: 250 } },
+      ],
+    };
+    const cut = cutAnnotations(callouts, straight);
+    expect(cut.shapes[0]).toMatchObject({ x: 40, y: 140, tail: { x: 10, y: 50 } });
+    expect(cut.shapes[1]).toMatchObject({ y: 100, tail: { y: 190 } });
+    expect(restoreStrips(cut).shapes[0]).toEqual(callouts.shapes[0]);
+  });
+
   it("shifts along x for a vertical strip", () => {
     const cut: Cut = { axis: "x", start: 20, end: 40, edge: "straight" };
     const shifted = cutAnnotations(doc, cut);
