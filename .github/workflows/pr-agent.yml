@@ -1,10 +1,7 @@
 name: PR Agent
 
-# AI code review with PR-Agent (https://docs.pr-agent.ai), on request only:
-# adding the `ai-review` label to a PR reviews it once. To review again,
-# remove the label and add it back. Only the label event starts this
-# workflow, so pushes and comments don't queue skipped runs on every PR.
-# Needs the ANTHROPIC_KEY repository secret.
+# AI review (https://docs.pr-agent.ai) when the `ai-review` label is added.
+# Re-add the label to review again. Needs the ANTHROPIC_KEY secret.
 
 on:
   pull_request:
@@ -33,8 +30,7 @@ jobs:
           ANTHROPIC.KEY: ${{ secrets.ANTHROPIC_KEY }}
           config.model: anthropic/claude-opus-5-5
           config.fallback_models: '["anthropic/claude-sonnet-5"]'
-          # The label event runs the auto commands: review only. /describe
-          # would rewrite the PR body.
+          # Review only; /describe would rewrite the PR body.
           github_action_config.pr_actions: '["labeled"]'
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "false"
