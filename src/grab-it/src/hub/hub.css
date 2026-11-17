@@ -115,6 +115,42 @@ body:has(.hub) {
   background: var(--accent-hover);
 }
 
+/* A recording or step capture is running: choosing the item stops it. */
+.hub-item.is-running,
+.hub-item.is-running > .icon:first-child {
+  color: var(--danger);
+}
+
+.hub-item.is-running {
+  font-weight: 550;
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.hub-item.is-running:where(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+
+.hub-live {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  background: var(--danger);
+  border-radius: 50%;
+  animation: hub-pulse 1200ms ease-in-out infinite;
+}
+
+@keyframes hub-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hub-live {
+    animation: none;
+  }
+}
+
 .hub-key {
   margin-left: auto;
   color: var(--text-faint);

@@ -461,7 +461,7 @@ fn key_of(monitor: &Monitor) -> String {
     })
 }
 
-fn display_of(monitor: &Monitor) -> Display {
+pub(crate) fn display_of(monitor: &Monitor) -> Display {
     let work = monitor.work_area();
     Display {
         key: key_of(monitor),

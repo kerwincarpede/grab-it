@@ -24,21 +24,36 @@ import { getSettings, type Hotkeys } from "../settings/api";
 import { shortcutLabel } from "./keys";
 import { formatTime, listShots, openShot, type Shot } from "../library/api";
 import { useThumbnail } from "../library/thumbnails";
+import { IDLE, hubActivity, onHubActivity, type HubActivity } from "./api";
 
 /** Mirrors `HUB_SHOWN_EVENT` in src-tauri/src/hub.rs. */
 const HUB_SHOWN_EVENT = "hub-shown";
 /** How many recent captures the hub shows. */
 const RECENT = 3;
 
+interface Tool {
+  kind: CaptureKind;
+  title: string;
+  hotkey?: keyof Hotkeys;
+  icon: ReactNode;
+  /** What it says while it runs, when choosing it again stops it. */
+  stop?: { title: string; running: keyof HubActivity };
+}
+
 /** The captures under Capture region. */
-const TOOLS: { kind: CaptureKind; title: string; hotkey?: keyof Hotkeys; icon: ReactNode }[] = [
+const TOOLS: Tool[] = [
   { kind: "window", title: "Window", hotkey: "window", icon: <WindowIcon /> },
   { kind: "screen", title: "Screen", hotkey: "screen", icon: <ScreenIcon /> },
-  { kind: "record", title: "Record", icon: <RecordIcon /> },
+  { kind: "record", title: "Record", icon: <RecordIcon />, stop: { title: "Stop recording", running: "recording" } },
   { kind: "text", title: "Grab text", hotkey: "text", icon: <TextIcon /> },
   { kind: "colour", title: "Pick colour", hotkey: "colour", icon: <ColourIcon /> },
-  { kind: "steps", title: "Step capture", hotkey: "steps", icon: <StepsIcon /> },
+  { kind: "steps", title: "Step capture", hotkey: "steps", icon: <StepsIcon />, stop: { title: "Stop step capture", running: "steps" } },
 ];
+
+/** `found` as an activity, or nothing running when the backend sent something else. */
+function activityOf(found: HubActivity | null | undefined): HubActivity {
+  return { recording: found?.recording === true, steps: found?.steps === true };
+}
 
 const TIMED: { kind: CaptureKind; title: string; seconds: number }[] = [
   { kind: "region", title: "Region in 3 s", seconds: 3 },
@@ -86,6 +101,7 @@ function Hub() {
   const [panel, setPanel] = useState<Panel>(null);
   const [error, setError] = useState<string | null>(null);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
+  const [activity, setActivity] = useState<HubActivity>(IDLE);
 
   const load = useCallback(() => {
     getSettings()
@@ -99,6 +115,9 @@ function Hub() {
       .catch(() => {});
     updateStatus()
       .then((status) => setUpdate(status?.state ? status : null))
+      .catch(() => {});
+    hubActivity()
+      .then((found) => setActivity(activityOf(found)))
       .catch(() => {});
   }, []);
 
@@ -116,6 +135,10 @@ function Hub() {
       .then(keep)
       .catch(() => {});
     onUpdateStatus(({ status }) => setUpdate(status))
+      .then(keep)
+      .catch(() => {});
+    // A recording or step capture started or stopped while it is open.
+    onHubActivity((found) => setActivity(activityOf(found)))
       .then(keep)
       .catch(() => {});
     const onKey = (event: KeyboardEvent) => {
@@ -156,13 +179,17 @@ function Hub() {
           Capture region
           {hotkeys?.region && <kbd className="hub-key">{shortcutLabel(hotkeys.region)}</kbd>}
         </button>
-        {TOOLS.map(({ kind, title, hotkey, icon }) => (
-          <button type="button" key={kind} className="hub-item" onClick={() => run(startCapture(kind))}>
-            {icon}
-            {title}
-            {keyLabel(hotkey) && <kbd className="hub-key">{keyLabel(hotkey)}</kbd>}
-          </button>
-        ))}
+        {TOOLS.map(({ kind, title, hotkey, icon, stop }) => {
+          const running = stop !== undefined && activity[stop.running];
+          return (
+            <button type="button" key={kind} className={running ? "hub-item is-running" : "hub-item"} onClick={() => run(startCapture(kind))}>
+              {icon}
+              {running && stop ? stop.title : title}
+              {running && <span className="hub-live" aria-hidden="true" />}
+              {keyLabel(hotkey) && <kbd className="hub-key">{keyLabel(hotkey)}</kbd>}
+            </button>
+          );
+        })}
 
         <hr className="hub-sep" />
         <button type="button" className="hub-item" onClick={() => run(startCapture("repeat"))}>

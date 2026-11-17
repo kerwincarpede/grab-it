@@ -13,8 +13,11 @@ Step capture turns doing a task into a how-to guide. While it runs, every click 
 | --- | --- |
 | The tray | Choose **Step capture**. While it runs the item reads **Stop step capture**. |
 | A hotkey | Press `Ctrl + Alt + Shift + PrintScreen` (on macOS `⌘ ⇧ 8`), and again to stop. Change it in [Settings → Hotkeys](/grab-it/reference/settings/#hotkeys). |
-| The hub | Click **Step capture**. |
+| The hub | Click **Step capture**. While it runs the item reads **Stop step capture**, in red with a pulsing dot. |
+| The pill | Click **Stop** on the **Step capture** pill. |
 | The [command line](/grab-it/reference/command-line/) | `grab-it --open steps` starts one, and running it again stops it. |
+
+While a step capture runs, a small **Step capture** pill with a **Stop** button sits at the top centre of the display the pointer was on when it started, and the tray icon's tooltip reads **Grab-it — step capture on**. On Windows and macOS the pill is left out of the steps' captures. X11 can't keep a window out of captures, so there it shows in any step whose frame covers it. Clicking the pill isn't a step.
 
 Step capture watches the mouse across the whole desktop. On macOS it asks for **Input Monitoring** the first time, as **Show clicks** does for recordings. It can't run during a recording, and a recording can't start during a step capture.
 

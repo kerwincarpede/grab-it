@@ -1,11 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "floating",
-  "description": "Pins and the webcam bubble have no title bar, so they are dragged by their content; the recorded-area outline follows the recording's status",
+  "description": "Pins and the webcam bubble have no title bar, so they are dragged by their content; the recorded-area outline follows the recording's status; the step capture pill floats like the recording toolbar",
   "windows": [
     "pin-*",
     "webcam",
     "record-bar",
+    "steps-bar",
     "record-frame"
   ],
   "permissions": [

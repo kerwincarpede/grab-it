@@ -1,43 +1,50 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { describe, expect, it } from "vitest";
 import Hub from "./Hub";
 import { keyCaps, shortcutLabel } from "./keys";
 import { routeFromHash } from "../routes";
+import { HUB_ACTIVITY_EVENT, type HubActivity } from "./api";
 
-function backend({ monitors = 1, shots = 0 } = {}) {
+function backend({ monitors = 1, shots = 0, activity = { recording: false, steps: false } as HubActivity } = {}) {
   const calls: { cmd: string; payload?: InvokeArgs }[] = [];
-  mockIPC((cmd, payload) => {
-    calls.push({ cmd, payload });
-    switch (cmd) {
-      case "get_settings":
-        return {
-          saveFolder: "/tmp",
-          hotkeys: { allInOne: "", region: "Ctrl+Shift+R", window: "Alt+PrintScreen", screen: "", text: "", colour: "", library: "Ctrl+Shift+L", steps: "" },
-          afterCapture: "quickAccess",
-          copyToClipboard: true,
-        };
-      case "library_list":
-        return {
-          shots: Array.from({ length: shots }, (_, index) => ({
-            id: index + 1,
-            path: `/tmp/${index}.png`,
-            fileName: `${index}.png`,
-            windowTitle: `Shot ${index + 1}`,
-          })),
-          offset: 0,
-          total: shots,
-        };
-      case "library_thumbnail":
-        return new ArrayBuffer(0);
-      case "hub_monitors":
-        return Array.from({ length: monitors }, (_, index) => ({ index, label: `${index + 1}. Display` }));
-      default:
-        return null;
-    }
-  });
+  mockIPC(
+    (cmd, payload) => {
+      calls.push({ cmd, payload });
+      switch (cmd) {
+        case "get_settings":
+          return {
+            saveFolder: "/tmp",
+            hotkeys: { allInOne: "", region: "Ctrl+Shift+R", window: "Alt+PrintScreen", screen: "", text: "", colour: "", library: "Ctrl+Shift+L", steps: "" },
+            afterCapture: "quickAccess",
+            copyToClipboard: true,
+          };
+        case "library_list":
+          return {
+            shots: Array.from({ length: shots }, (_, index) => ({
+              id: index + 1,
+              path: `/tmp/${index}.png`,
+              fileName: `${index}.png`,
+              windowTitle: `Shot ${index + 1}`,
+            })),
+            offset: 0,
+            total: shots,
+          };
+        case "library_thumbnail":
+          return new ArrayBuffer(0);
+        case "hub_monitors":
+          return Array.from({ length: monitors }, (_, index) => ({ index, label: `${index + 1}. Display` }));
+        case "hub_activity":
+          return activity;
+        default:
+          return null;
+      }
+    },
+    { shouldMockEvents: true },
+  );
   return calls;
 }
 
@@ -118,6 +125,45 @@ describe("Hub", () => {
     backend();
     render(<Hub />);
     expect(await screen.findByText("Your captures will show up here.")).toBeInTheDocument();
+  });
+
+  it("says Stop recording while a recording runs, and stops it", async () => {
+    const calls = backend({ activity: { recording: true, steps: false } });
+    render(<Hub />);
+    await userEvent.click(await screen.findByRole("button", { name: "Stop recording" }));
+    expect(screen.getByRole("button", { name: /^Step capture/ })).toBeInTheDocument();
+    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "record", delaySeconds: undefined, monitor: undefined });
+  });
+
+  it("says Stop step capture while a step capture runs, and stops it", async () => {
+    const calls = backend({ activity: { recording: false, steps: true } });
+    render(<Hub />);
+    await userEvent.click(await screen.findByRole("button", { name: "Stop step capture" }));
+    expect(screen.getByRole("button", { name: /^Record/ })).toBeInTheDocument();
+    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "steps", delaySeconds: undefined, monitor: undefined });
+  });
+
+  it("updates as a recording starts and stops while it is open", async () => {
+    backend();
+    render(<Hub />);
+    // Loaded, so the first answer cannot land after the event.
+    await screen.findByText("Ctrl+Shift+R");
+    expect(screen.queryByRole("button", { name: "Stop recording" })).not.toBeInTheDocument();
+    await act(() => emit(HUB_ACTIVITY_EVENT, { recording: true, steps: false }));
+    expect(await screen.findByRole("button", { name: "Stop recording" })).toBeInTheDocument();
+    await act(() => emit(HUB_ACTIVITY_EVENT, { recording: false, steps: true }));
+    expect(await screen.findByRole("button", { name: "Stop step capture" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop recording" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Record/ })).toBeInTheDocument();
+  });
+
+  it("asks what is running each time it is shown", async () => {
+    const calls = backend();
+    render(<Hub />);
+    await screen.findByText("Ctrl+Shift+R");
+    expect(sent(calls, "hub_activity")).toHaveLength(1);
+    await act(() => emit("hub-shown"));
+    await waitFor(() => expect(sent(calls, "hub_activity")).toHaveLength(2));
   });
 
   it("is the hub route", () => {

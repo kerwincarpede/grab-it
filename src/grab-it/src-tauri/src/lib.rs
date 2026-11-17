@@ -39,6 +39,7 @@ mod scroll;
 mod search;
 mod settings;
 mod steps;
+mod steps_bar;
 mod storage;
 mod tidy;
 mod tray;
@@ -142,6 +143,7 @@ pub fn run() {
             hub::hub_check_updates,
             hub::hub_quit,
             hub::hub_hide,
+            hub::hub_activity,
             quick::quick_info,
             quick::quick_thumbnail,
             quick::quick_action,
@@ -168,6 +170,7 @@ pub fn run() {
             record_bar::record_bar_fit,
             record_bar::record_bar_reset,
             record_bar::record_bar_remember,
+            steps_bar::steps_bar_stop,
             webcam::known_cameras,
             webcam::remember_cameras,
             ffmpeg::ffmpeg_status,

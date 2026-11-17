@@ -517,8 +517,14 @@ fn begin(app: &AppHandle) {
         thread: Some(thread),
     });
     drop(session);
-    // No card is shown: it would be in the first step's frame.
+    // No card is shown: it would be in the first step's frame. The pill
+    // is left out of captures where the system allows.
     tray::set_steps(app, true);
+    crate::steps_bar::show(app);
+    // Stopped while the pill was opening: its close may have run first.
+    if !is_running() {
+        crate::steps_bar::close(app);
+    }
 }
 
 /// Stops the step capture under way and opens its guide. False when none
@@ -536,6 +542,7 @@ fn stop(app: &AppHandle, trigger: Trigger) -> bool {
     // Off the caller's thread: waiting for the last step, and making the
     // window, must not happen inside a menu or hotkey handler.
     std::thread::spawn(move || {
+        crate::steps_bar::close(&app);
         if let Some(thread) = session.thread.take() {
             let _ = thread.join();
         }

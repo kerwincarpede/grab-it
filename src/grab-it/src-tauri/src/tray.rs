@@ -18,6 +18,8 @@ const RECORD_LABEL: &str = "Record";
 const STOP_LABEL: &str = "Stop recording";
 const STEPS_LABEL: &str = "Step capture";
 const STOP_STEPS_LABEL: &str = "Stop step capture";
+const TOOLTIP: &str = "Grab-it";
+const STEPS_TOOLTIP: &str = "Grab-it — step capture on";
 
 /// The menu items whose text or state changes while Grab-it runs.
 pub struct TrayItems {
@@ -26,7 +28,8 @@ pub struct TrayItems {
     unlock: MenuItem<tauri::Wry>,
 }
 
-/// Makes the step capture item say what choosing it does now.
+/// Makes the step capture item say what choosing it does now, the
+/// icon's tooltip say whether one runs, and an open hub show it.
 pub fn set_steps(app: &AppHandle, running: bool) {
     if let Some(items) = app.try_state::<TrayItems>() {
         let label = if running {
@@ -38,9 +41,17 @@ pub fn set_steps(app: &AppHandle, running: bool) {
             eprintln!("Grab-it: could not update the tray menu: {err}");
         }
     }
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let tooltip = if running { STEPS_TOOLTIP } else { TOOLTIP };
+        if let Err(err) = tray.set_tooltip(Some(tooltip)) {
+            eprintln!("Grab-it: could not update the tray tooltip: {err}");
+        }
+    }
+    hub::activity_changed(app);
 }
 
-/// Makes the record item say what choosing it does now: start, or stop.
+/// Makes the record item say what choosing it does now: start, or stop,
+/// and an open hub show it.
 pub fn set_recording(app: &AppHandle, recording: bool) {
     if let Some(items) = app.try_state::<TrayItems>() {
         let label = if recording { STOP_LABEL } else { RECORD_LABEL };
@@ -48,7 +59,9 @@ pub fn set_recording(app: &AppHandle, recording: bool) {
             eprintln!("Grab-it: could not update the tray menu: {err}");
         }
     }
+    hub::activity_changed(app);
 }
+
 /// Enables Unlock pinned captures while any pin is locked.
 pub fn set_unlock_enabled(app: &AppHandle, enabled: bool) {
     if let Some(items) = app.try_state::<TrayItems>()
@@ -252,7 +265,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     )?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip("Grab-it")
+        .tooltip(TOOLTIP)
         .menu(&menu)
         // The click opens the hub; a right-click opens this menu.
         .show_menu_on_left_click(!CLICK_OPENS_HUB)
