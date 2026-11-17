@@ -8,14 +8,19 @@
 //! from the `grab-it-video` URI scheme ([`VIDEO_SCHEME`]), which serves only
 //! MP4s in the recordings folder, a range at a time.
 //!
+//! The edits can join other MP4s from the same recordings folder into a
+//! sequence of clips ([`ExportClip`]), each a stretch of its recording. The
+//! recording the editor opened sets the output size and frame rate; other
+//! recordings are fitted inside its video box with black bars.
+//!
 //! On export the page paints the backdrop (fill and shadow) and a mask of
 //! the video's rounded corners as PNGs at the output size. ffmpeg decodes
-//! the trimmed frames as raw RGBA at the size the video takes on the
-//! backdrop; each is laid over the backdrop through the mask ([`Composer`])
-//! and piped into the same H.264 encoder recordings use. The trimmed sound
-//! of the original is then added as AAC. With zooms, frames are decoded
-//! larger instead, and each is cut to its zoomed view ([`crate::zoom`])
-//! before it is laid over the backdrop.
+//! each clip in turn as raw RGBA at the size it takes on the backdrop;
+//! each frame is laid over the backdrop through the mask ([`Composer`])
+//! and piped into the same H.264 encoder recordings use. Each clip's
+//! trimmed sound is then joined in order and added as AAC. With zooms, a
+//! clip's frames are decoded larger instead, and each is cut to its zoomed
+//! view ([`crate::zoom`]) before it is laid over the backdrop.
 
 use std::{
     ffi::OsString,
@@ -51,8 +56,10 @@ use crate::{
 /// The URI scheme the page plays recordings from. Mirrors `VIDEO_SCHEME` in
 /// src/recording/api.ts.
 pub const VIDEO_SCHEME: &str = "grab-it-video";
-/// The edits sidecar format version this build reads and writes.
-pub const EDITS_VERSION: u64 = 1;
+/// The newest edits sidecar format version this build reads and writes:
+/// 2 adds `clips`. Version 1 (a trim of the recording itself) is still
+/// written whenever the sequence is that one clip.
+pub const EDITS_VERSION: u64 = 2;
 /// Ends the name of the edits sidecar beside an MP4.
 pub const EDITS_SUFFIX: &str = ".edits.json";
 /// The request header carrying the export plan as URI-encoded JSON.
@@ -91,11 +98,13 @@ pub fn edits_path(video: &Path) -> PathBuf {
 }
 
 /// Accepts `{version: 1, ...}` with an optional `trim` object holding
-/// `startMs` and `endMs` and an optional `zooms` list; any other fields
-/// are kept as they are. The page drops a zoom it cannot read on its own.
+/// `startMs` and `endMs` and an optional `zooms` list, or `{version: 2,
+/// ...}` which may also hold a `clips` list of `{id, source, startMs,
+/// endMs}`; any other fields are kept as they are. The page drops a zoom it
+/// cannot read on its own.
 pub fn validate_edits(value: &Value) -> Result<(), String> {
     let version = value.get("version").and_then(Value::as_u64);
-    if version != Some(EDITS_VERSION) {
+    if !matches!(version, Some(1..=EDITS_VERSION)) {
         return Err(format!(
             "unsupported edits version {}",
             value.get("version").unwrap_or(&Value::Null)
@@ -107,6 +116,14 @@ pub fn validate_edits(value: &Value) -> Result<(), String> {
     ) {
         return Err("the zooms must be a list".to_owned());
     }
+    match value.get("clips") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(clips)) if version == Some(2) => {
+            clips.iter().try_for_each(validate_clip)?;
+        }
+        Some(Value::Array(_)) => return Err("clips need edits version 2".to_owned()),
+        Some(_) => return Err("the clips must be a list".to_owned()),
+    }
     match value.get("trim") {
         None | Some(Value::Null) => Ok(()),
         Some(trim) => {
@@ -116,6 +133,24 @@ pub fn validate_edits(value: &Value) -> Result<(), String> {
                 _ => Err("the trim needs a startMs before its endMs".to_owned()),
             }
         }
+    }
+}
+
+/// One entry of a version 2 `clips` list: an id, the file name of a
+/// recording (no folders), and a stretch of it.
+fn validate_clip(clip: &Value) -> Result<(), String> {
+    let text = |key: &str| clip.get(key).and_then(Value::as_str).filter(|text| !text.is_empty());
+    if text("id").is_none() {
+        return Err("a clip needs an id".to_owned());
+    }
+    match text("source") {
+        Some(source) if !source.contains(['/', '\\']) && source != ".." => {}
+        _ => return Err("a clip needs the file name of a recording".to_owned()),
+    }
+    let ms = |key: &str| clip.get(key).and_then(Value::as_f64);
+    match (ms("startMs"), ms("endMs")) {
+        (Some(start), Some(end)) if start >= 0.0 && end > start => Ok(()),
+        _ => Err("a clip needs a startMs before its endMs".to_owned()),
     }
 }
 
@@ -387,6 +422,73 @@ pub fn recording_save_edits(
     write_edits(&path, &edits)
 }
 
+/// A recording a clip of the sequence plays. Mirrors `RecordingSource` in
+/// src/recording/api.ts.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingSource {
+    pub path: PathBuf,
+    pub file_name: String,
+    /// The frame rate it was recorded at.
+    pub fps: u32,
+    /// Its pointer path, for follow-the-pointer zooms.
+    pub cursor: Option<CursorPath>,
+    /// Whether it holds sound.
+    pub has_audio: bool,
+}
+
+/// The MP4 `file_name` names in `recordings`: a bare file name, never a
+/// path, of a file that is there.
+pub fn source_file(recordings: &Path, file_name: &str) -> Result<PathBuf, String> {
+    let bare = !file_name.is_empty()
+        && !file_name.contains(['/', '\\'])
+        && Path::new(file_name).file_name() == Some(std::ffi::OsStr::new(file_name));
+    let file = if bare {
+        allowed_video(recordings, &recordings.join(file_name))
+    } else {
+        None
+    };
+    file.ok_or_else(|| format!("{file_name} is not a recording in the recordings folder"))
+}
+
+/// The folder clips are taken from: the one holding the recording the
+/// editor opened, which is a recordings folder.
+fn recordings_of(original: &Path) -> Result<&Path, String> {
+    original
+        .parent()
+        .ok_or_else(|| "the recording has no folder".to_owned())
+}
+
+/// What the editor needs to play and export `file_name` from the
+/// recordings folder as a clip. Refuses any other file, or one that is
+/// gone. Whether it has sound is asked of ffmpeg; before ffmpeg is ready
+/// it is assumed to have some.
+#[tauri::command]
+pub async fn recording_source(
+    file_name: String,
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<'_, RecordingEditorState>,
+) -> Result<RecordingSource, String> {
+    let original = state.path_for(window.label())?;
+    let path = source_file(recordings_of(&original)?, &file_name)?;
+    let ffmpeg = ffmpeg::ready(&app).map(|ready| ready.path);
+    tauri::async_runtime::spawn_blocking(move || {
+        let has_audio = ffmpeg
+            .as_deref()
+            .is_none_or(|ffmpeg| ffmpeg::probe_file(ffmpeg, &path).audio);
+        RecordingSource {
+            fps: recording_fps(&path),
+            cursor: CursorPath::load(&path),
+            file_name,
+            has_audio,
+            path,
+        }
+    })
+    .await
+    .map_err(|err| format!("could not read the recording: {err}"))
+}
+
 // --- Serving the recording ------------------------------------------------
 
 /// The file a `grab-it-video` request names, when it is an MP4 directly in
@@ -563,17 +665,87 @@ pub fn preflight() -> Response<Vec<u8>> {
 
 // --- Exporting -------------------------------------------------------------
 
+/// One clip of an export: a stretch of a recording, fitted inside the
+/// video box. Mirrors `ExportClip` in src/recording/api.ts.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportClip {
+    /// The file name of its recording in the recordings folder.
+    pub source: String,
+    /// The stretch kept, in its recording's time.
+    pub start_ms: u64,
+    pub end_ms: u64,
+    /// Its recording's own size, which frames are cut from.
+    pub source_width: u32,
+    pub source_height: u32,
+    /// Where it sits inside the video box, and the size it takes there;
+    /// the rest of the box is black.
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    /// Its zooms, in its recording's time; none leaves every frame whole.
+    #[serde(default)]
+    pub zooms: Vec<Zoom>,
+}
+
+impl ExportClip {
+    /// Refuses a clip that could not be decoded into a `video` box.
+    pub fn check(&self, (video_width, video_height): (u32, u32)) -> Result<(), String> {
+        if self.width == 0
+            || self.height == 0
+            || self.x.saturating_add(self.width) > video_width
+            || self.y.saturating_add(self.height) > video_height
+        {
+            return Err(format!("{} does not fit inside the video", self.source));
+        }
+        if self.end_ms < self.start_ms.saturating_add(MIN_EXPORT_MS) {
+            return Err(format!("{} is trimmed too short to export", self.source));
+        }
+        let fits = |side: u32| (1..=MAX_SOURCE_SIDE).contains(&side);
+        if !fits(self.source_width) || !fits(self.source_height) {
+            return Err(format!("the export needs the size of {}", self.source));
+        }
+        self.zooms.iter().try_for_each(Zoom::check)
+    }
+
+    /// The size frames are decoded at: the size the clip takes in the
+    /// video box, or with zooms, as large as the deepest zoom needs to
+    /// stay sharp, up to its recording's own size.
+    pub fn decode_size(&self) -> (u32, u32) {
+        if self.zooms.is_empty() {
+            return (self.width, self.height);
+        }
+        let (source_w, source_h) = (f64::from(self.source_width), f64::from(self.source_height));
+        let needed = (f64::from(self.width) / source_w).max(f64::from(self.height) / source_h)
+            * zoom::max_scale(&self.zooms);
+        let factor = needed.min(1.0);
+        let side = |source: f64| ((source * factor).round() as u32).max(1);
+        (side(source_w), side(source_h))
+    }
+
+    /// How long it plays.
+    pub fn duration_ms(&self) -> u64 {
+        self.end_ms.saturating_sub(self.start_ms)
+    }
+
+    /// How many frames it gives at `fps`.
+    pub fn frames(&self, fps: u32) -> u64 {
+        (self.duration_ms() * u64::from(fps)).div_ceil(1000)
+    }
+}
+
 /// What an export makes, from the page. Mirrors `ExportPlan` in
 /// src/recording/api.ts. Sizes are in output pixels.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportPlan {
-    pub start_ms: u64,
-    pub end_ms: u64,
+    /// The sequence, played in order.
+    pub clips: Vec<ExportClip>,
     /// The output's size, even both ways.
     pub width: u32,
     pub height: u32,
-    /// Where the video's top-left corner goes, and the size it takes there.
+    /// Where the video box's top-left corner goes, and its size there.
     pub x: u32,
     pub y: u32,
     pub video_width: u32,
@@ -581,15 +753,6 @@ pub struct ExportPlan {
     /// How many bytes of the body are the backdrop PNG; the rest is the
     /// mask PNG. 0, with an empty body, when there is no backdrop.
     pub backdrop_bytes: usize,
-    /// The zooms, in the recording's time; none leaves every frame whole.
-    #[serde(default)]
-    pub zooms: Vec<Zoom>,
-    /// The recording's own size, which zoomed frames are cut from. Needed
-    /// only with zooms.
-    #[serde(default)]
-    pub source_width: u32,
-    #[serde(default)]
-    pub source_height: u32,
 }
 
 impl ExportPlan {
@@ -609,37 +772,22 @@ impl ExportPlan {
         {
             return Err("the video does not fit inside the export".to_owned());
         }
-        if self.end_ms < self.start_ms.saturating_add(MIN_EXPORT_MS) {
-            return Err("the trimmed recording is too short to export".to_owned());
+        if self.clips.is_empty() {
+            return Err("there is nothing to export".to_owned());
         }
-        if !self.zooms.is_empty() {
-            let fits = |side: u32| (1..=MAX_SOURCE_SIDE).contains(&side);
-            if !fits(self.source_width) || !fits(self.source_height) {
-                return Err("a zoomed export needs the recording's size".to_owned());
-            }
-        }
-        self.zooms.iter().try_for_each(Zoom::check)
+        self.clips
+            .iter()
+            .try_for_each(|clip| clip.check((self.video_width, self.video_height)))
     }
 
-    /// The size frames are decoded at: the size the video takes in the
-    /// export, or with zooms, as large as the deepest zoom needs to stay
-    /// sharp, up to the recording's own size.
-    pub fn decode_size(&self) -> (u32, u32) {
-        if self.zooms.is_empty() {
-            return (self.video_width, self.video_height);
-        }
-        let (source_w, source_h) = (f64::from(self.source_width), f64::from(self.source_height));
-        let needed = (f64::from(self.video_width) / source_w)
-            .max(f64::from(self.video_height) / source_h)
-            * zoom::max_scale(&self.zooms);
-        let factor = needed.min(1.0);
-        let side = |source: f64| ((source * factor).round() as u32).max(1);
-        (side(source_w), side(source_h))
-    }
-
-    /// How many frames the export holds at `fps`.
+    /// How many frames the export holds at `fps`, over all its clips.
     pub fn frames(&self, fps: u32) -> u64 {
-        ((self.end_ms - self.start_ms) * u64::from(fps)).div_ceil(1000)
+        self.clips.iter().map(|clip| clip.frames(fps)).sum()
+    }
+
+    /// How long the export plays.
+    pub fn duration_ms(&self) -> u64 {
+        self.clips.iter().map(ExportClip::duration_ms).sum()
     }
 }
 
@@ -656,24 +804,24 @@ fn seconds(ms: u64) -> String {
     format!("{}.{:03}", ms / 1000, ms % 1000)
 }
 
-/// ffmpeg's arguments to decode `plan`'s stretch of `input` as raw RGBA
-/// frames on stdout, scaled to [`ExportPlan::decode_size`], at a constant
+/// ffmpeg's arguments to decode `clip`'s stretch of `input` as raw RGBA
+/// frames on stdout, scaled to [`ExportClip::decode_size`], at a constant
 /// `fps`. Seeking before `-i` is exact when decoding.
-pub fn decode_args(input: &Path, plan: &ExportPlan, fps: u32) -> Vec<OsString> {
+pub fn decode_args(input: &Path, clip: &ExportClip, fps: u32) -> Vec<OsString> {
     let mut args: Vec<OsString> = ["-hide_banner", "-loglevel", "error", "-ss"]
         .into_iter()
         .map(OsString::from)
         .collect();
-    args.push(seconds(plan.start_ms).into());
+    args.push(seconds(clip.start_ms).into());
     args.push("-i".into());
     args.push(input.as_os_str().to_owned());
     let mut push = |arg: &str| args.push(OsString::from(arg));
     push("-t");
-    push(&seconds(plan.end_ms - plan.start_ms));
+    push(&seconds(clip.duration_ms()));
     for arg in ["-map", "0:v:0", "-an", "-vf"] {
         push(arg);
     }
-    let (width, height) = plan.decode_size();
+    let (width, height) = clip.decode_size();
     push(&format!(
         "scale={width}:{height}:flags=bicubic,fps={fps},format=rgba"
     ));
@@ -683,32 +831,54 @@ pub fn decode_args(input: &Path, plan: &ExportPlan, fps: u32) -> Vec<OsString> {
     args
 }
 
-/// ffmpeg's arguments to write `output` from the silent `video` with the
-/// sound of `original` over `plan`'s stretch, as AAC. A recording without
-/// sound gives a silent export (the `?` on its map).
-pub fn trim_audio_args(
-    video: &Path,
-    original: &Path,
-    plan: &ExportPlan,
-    output: &Path,
-) -> Vec<OsString> {
+/// One clip's sound: its recording, or `None` when that has none.
+pub struct ClipSound<'a> {
+    pub clip: &'a ExportClip,
+    pub file: Option<&'a Path>,
+}
+
+/// ffmpeg's arguments to write `output` from the silent `video` with each
+/// clip's stretch of its recording's sound, resampled to 48 kHz stereo
+/// and joined in order, as AAC. A clip whose recording has no sound is
+/// silence of its length.
+pub fn clip_sound_args(video: &Path, clips: &[ClipSound<'_>], output: &Path) -> Vec<OsString> {
     let mut args: Vec<OsString> = ["-hide_banner", "-loglevel", "error", "-y", "-i"]
         .into_iter()
         .map(OsString::from)
         .collect();
     args.push(video.as_os_str().to_owned());
-    args.push("-ss".into());
-    args.push(seconds(plan.start_ms).into());
-    args.push("-t".into());
-    args.push(seconds(plan.end_ms - plan.start_ms).into());
-    args.push("-i".into());
-    args.push(original.as_os_str().to_owned());
-    let mut push = |arg: &str| args.push(OsString::from(arg));
+    let mut filters = Vec::new();
+    let mut inputs = 0;
+    for (index, sound) in clips.iter().enumerate() {
+        let clip = sound.clip;
+        match sound.file {
+            Some(file) => {
+                args.push("-i".into());
+                args.push(file.as_os_str().to_owned());
+                inputs += 1;
+                filters.push(format!(
+                    "[{inputs}:a:0]atrim=start={}:end={},asetpts=PTS-STARTPTS,\
+                     aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a{index}]",
+                    seconds(clip.start_ms),
+                    seconds(clip.end_ms)
+                ));
+            }
+            None => filters.push(format!(
+                "anullsrc=r=48000:cl=stereo,atrim=duration={},\
+                 aformat=sample_fmts=fltp:channel_layouts=stereo[a{index}]",
+                seconds(clip.duration_ms())
+            )),
+        }
+    }
+    let joined: String = (0..clips.len()).map(|index| format!("[a{index}]")).collect();
+    filters.push(format!("{joined}concat=n={}:v=0:a=1[sound]", clips.len()));
+    args.push("-filter_complex".into());
+    args.push(filters.join(";").into());
     for arg in [
         "-map",
         "0:v:0",
         "-map",
-        "1:a:0?",
+        "[sound]",
         "-c:v",
         "copy",
         "-c:a",
@@ -719,10 +889,27 @@ pub fn trim_audio_args(
         "-movflags",
         "+faststart",
     ] {
-        push(arg);
+        args.push(arg.into());
     }
     args.push(output.as_os_str().to_owned());
     args
+}
+
+/// Draws a decoded clip frame into the black video box at the clip's
+/// place. `boxed` is `video_width` × `video_height` RGBA.
+pub fn place_in_box(frame: &[u8], clip: &ExportClip, boxed: &mut [u8], video_width: u32) {
+    let (bw, cw) = (video_width as usize, clip.width as usize);
+    let (cx, cy) = (clip.x as usize, clip.y as usize);
+    for row in 0..clip.height as usize {
+        let src = row * cw * 4;
+        let dst = ((cy + row) * bw + cx) * 4;
+        boxed[dst..dst + cw * 4].copy_from_slice(&frame[src..src + cw * 4]);
+    }
+}
+
+/// A box of opaque black pixels.
+fn black(width: u32, height: u32) -> Vec<u8> {
+    [0u8, 0, 0, 255].repeat(width as usize * height as usize)
 }
 
 /// Lays each decoded frame over the backdrop through the mask.
@@ -810,37 +997,104 @@ fn backdrop_and_mask(
     Ok(Some((decode(backdrop, "backdrop")?, decode(mask, "mask")?)))
 }
 
-/// One export to render.
-struct ExportJob<'a> {
-    original: &'a Path,
-    output: &'a Path,
-    plan: ExportPlan,
-    /// The backdrop and mask, or none for the video alone.
-    layers: Option<(RgbaImage, RgbaImage)>,
+/// The recording behind one clip of an export.
+struct ClipSource {
+    path: PathBuf,
     /// The pointer path follow-the-pointer zooms centre on.
     cursor: Option<CursorPath>,
+    has_audio: bool,
+}
+
+/// One export to render.
+struct ExportJob<'a> {
+    output: &'a Path,
+    plan: ExportPlan,
+    /// Each clip's recording, in the plan's order.
+    sources: Vec<ClipSource>,
+    /// The backdrop and mask, or none for the video alone.
+    layers: Option<(RgbaImage, RgbaImage)>,
+    /// The opened recording's frame rate, which every clip is decoded at.
     fps: u32,
     bits_per_pixel: f64,
 }
 
+/// Decodes `clip` of `input` at `fps` and calls `frame` with each frame,
+/// `clip.decode_size()` RGBA, until ffmpeg runs out. Returns how many
+/// frames there were.
+fn decode_clip(
+    ffmpeg_path: &Path,
+    input: &Path,
+    clip: &ExportClip,
+    fps: u32,
+    mut frame: impl FnMut(&[u8], u64) -> Result<(), String>,
+) -> Result<u64, String> {
+    let mut decoder = ffmpeg::command(ffmpeg_path)
+        .args(decode_args(input, clip, fps))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("could not start ffmpeg: {err}"))?;
+    let stderr = decoder.stderr.take().map(|mut stderr| {
+        thread::spawn(move || {
+            let mut text = String::new();
+            let _ = stderr.read_to_string(&mut text);
+            text
+        })
+    });
+    let mut stdout = decoder.stdout.take().ok_or("ffmpeg gave no frames")?;
+    let (width, height) = clip.decode_size();
+    let mut buffer = vec![0; width as usize * height as usize * 4];
+    let mut done: u64 = 0;
+    let decoded = loop {
+        match stdout.read_exact(&mut buffer) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break Ok(()),
+            Err(err) => break Err(format!("could not read the frames: {err}")),
+        }
+        if let Err(err) = frame(&buffer, done) {
+            break Err(err);
+        }
+        done += 1;
+    };
+    drop(stdout);
+    let status = ffmpeg::wait_for(&mut decoder, Duration::from_secs(10));
+    let said = stderr
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    decoded?;
+    match status {
+        Some(status) if status.success() => Ok(done),
+        _ => Err(format!(
+            "ffmpeg could not read {}: {}",
+            clip.source,
+            ffmpeg::last_line(&said).unwrap_or("it stopped")
+        )),
+    }
+}
+
 /// Renders `job` with `ready`'s ffmpeg, calling `progress` as frames are
-/// written. The silent video is written beside the output first and the
-/// sound added from it, so the output only ever holds a finished export.
+/// written. Each clip is decoded in turn into one encoder, at the opened
+/// recording's frame rate. The silent video is written beside the output
+/// first and the sound added from it, so the output only ever holds a
+/// finished export.
 fn render(
     ready: &ffmpeg::Ready,
     job: ExportJob<'_>,
     mut progress: impl FnMut(ExportProgress),
 ) -> Result<(), String> {
     let ExportJob {
-        original,
         output,
         plan,
+        sources,
         layers,
-        cursor,
         fps,
         bits_per_pixel,
     } = job;
     let plan = &plan;
+    if sources.len() != plan.clips.len() {
+        return Err("every clip needs its recording".to_owned());
+    }
     let composer = layers
         .map(|(backdrop, mask)| Composer::new(backdrop, &mask, plan))
         .transpose()?;
@@ -858,86 +1112,69 @@ fn render(
         };
         let mut video = Video::start(&ready.path, ready.encoder, &spec, &silent)
             .map_err(|err| err.to_string())?;
-        let mut decoder = ffmpeg::command(&ready.path)
-            .args(decode_args(original, plan, fps))
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|err| format!("could not start ffmpeg: {err}"))?;
-        let stderr = decoder.stderr.take().map(|mut stderr| {
-            thread::spawn(move || {
-                let mut text = String::new();
-                let _ = stderr.read_to_string(&mut text);
-                text
-            })
-        });
-        let mut stdout = decoder.stdout.take().ok_or("ffmpeg gave no frames")?;
         let total = plan.frames(fps);
-        let decoded_size = plan.decode_size();
-        let frame_len = decoded_size.0 as usize * decoded_size.1 as usize * 4;
-        let mut buffer = vec![0; frame_len];
-        let video_size = (plan.video_width, plan.video_height);
-        // Each zoomed frame's view, at the video's size in the export.
-        let mut zoomed = vec![0; plan.video_width as usize * plan.video_height as usize * 4];
+        let video_box = (plan.video_width, plan.video_height);
         let mut done: u64 = 0;
         let mut last_percent = None;
-        let decoded = loop {
-            match stdout.read_exact(&mut buffer) {
-                Ok(()) => {}
-                Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break Ok(()),
-                Err(err) => break Err(format!("could not read the frames: {err}")),
-            }
-            let shown: &[u8] = if plan.zooms.is_empty() {
-                &buffer
+        for (clip, source) in plan.clips.iter().zip(&sources) {
+            let decoded_size = clip.decode_size();
+            let clip_size = (clip.width, clip.height);
+            // Each zoomed frame's view, at the clip's size in the box.
+            let mut zoomed = vec![0; clip.width as usize * clip.height as usize * 4];
+            // The video box, black around a clip that does not fill it.
+            let fills = clip_size == video_box;
+            let mut boxed = if fills {
+                Vec::new()
             } else {
-                let ms = plan.start_ms as f64 + done as f64 * 1000.0 / f64::from(fps);
-                let view: View = zoom::view_at(&plan.zooms, ms, cursor.as_ref());
-                zoom::draw_view(&buffer, decoded_size, view, &mut zoomed, video_size);
-                &zoomed
+                black(plan.video_width, plan.video_height)
             };
-            let frame = match &composer {
-                Some(composer) => composer.compose(shown),
-                None => match RgbaImage::from_raw(plan.width, plan.height, shown.to_vec()) {
-                    Some(frame) => frame,
-                    None => break Err("a frame was the wrong size".to_owned()),
-                },
-            };
-            if let Err(err) = video.write(&frame) {
-                break Err(err.to_string());
+            let frames = decode_clip(&ready.path, &source.path, clip, fps, |buffer, index| {
+                let mut shown: &[u8] = if clip.zooms.is_empty() {
+                    buffer
+                } else {
+                    let ms = clip.start_ms as f64 + index as f64 * 1000.0 / f64::from(fps);
+                    let view: View = zoom::view_at(&clip.zooms, ms, source.cursor.as_ref());
+                    zoom::draw_view(buffer, decoded_size, view, &mut zoomed, clip_size);
+                    &zoomed
+                };
+                if !fills {
+                    place_in_box(shown, clip, &mut boxed, plan.video_width);
+                    shown = &boxed;
+                }
+                let frame = match &composer {
+                    Some(composer) => composer.compose(shown),
+                    None => RgbaImage::from_raw(plan.width, plan.height, shown.to_vec())
+                        .ok_or("a frame was the wrong size")?,
+                };
+                video.write(&frame).map_err(|err| err.to_string())?;
+                done += 1;
+                let percent = (done * 100).checked_div(total).unwrap_or(100);
+                if last_percent != Some(percent) {
+                    last_percent = Some(percent);
+                    progress(ExportProgress {
+                        done: done.min(total),
+                        total,
+                    });
+                }
+                Ok(())
+            })?;
+            if frames == 0 {
+                return Err(format!("the trimmed stretch of {} holds no frames", clip.source));
             }
-            done += 1;
-            let percent = (done * 100).checked_div(total).unwrap_or(100);
-            if last_percent != Some(percent) {
-                last_percent = Some(percent);
-                progress(ExportProgress {
-                    done: done.min(total),
-                    total,
-                });
-            }
-        };
-        drop(stdout);
-        let status = ffmpeg::wait_for(&mut decoder, Duration::from_secs(10));
-        let said = stderr
-            .and_then(|reader| reader.join().ok())
-            .unwrap_or_default();
-        decoded?;
-        match status {
-            Some(status) if status.success() => {}
-            _ => {
-                return Err(format!(
-                    "ffmpeg could not read the recording: {}",
-                    ffmpeg::last_line(&said).unwrap_or("it stopped")
-                ));
-            }
-        }
-        if done == 0 {
-            return Err("the trimmed stretch holds no frames".to_owned());
         }
         video.finish().map_err(|err| err.to_string())?;
+        let sounds: Vec<ClipSound<'_>> = plan
+            .clips
+            .iter()
+            .zip(&sources)
+            .map(|(clip, source)| ClipSound {
+                clip,
+                file: source.has_audio.then_some(source.path.as_path()),
+            })
+            .collect();
         ffmpeg::run(
             &ready.path,
-            trim_audio_args(&silent, original, plan, output),
+            clip_sound_args(&silent, &sounds, output),
             MUX_TIMEOUT,
         )
         .map_err(|err| format!("could not add the sound: {err}"))
@@ -991,8 +1228,28 @@ pub async fn recording_export(
     .map_err(|err| format!("the export stopped: {err}"))?
 }
 
-/// Renders `plan` of `original` beside it, then shows the export on the
-/// Quick Access card. Returns its path.
+/// The recording each clip of `plan` plays, from `recordings`. A clip of
+/// any other file, or of one that is gone, refuses the export.
+fn clip_sources(
+    ffmpeg_path: &Path,
+    recordings: &Path,
+    plan: &ExportPlan,
+) -> Result<Vec<ClipSource>, String> {
+    plan.clips
+        .iter()
+        .map(|clip| {
+            let path = source_file(recordings, &clip.source)?;
+            Ok(ClipSource {
+                cursor: CursorPath::load(&path),
+                has_audio: ffmpeg::probe_file(ffmpeg_path, &path).audio,
+                path,
+            })
+        })
+        .collect()
+}
+
+/// Renders `plan`'s sequence beside `original`, the recording the editor
+/// opened, then shows the export on the Quick Access card. Returns its path.
 fn export(
     app: &AppHandle,
     ready: &ffmpeg::Ready,
@@ -1006,19 +1263,16 @@ fn export(
         .try_state::<SettingsState>()
         .map(|state| lock(&state).get().recording.quality.bits_per_pixel())
         .unwrap_or_else(|| crate::settings::RecordingQuality::High.bits_per_pixel());
+    // Clips are looked for beside the opened recording, which is in the
+    // recordings folder the editor was opened from.
+    let sources = clip_sources(&ready.path, recordings_of(original)?, &plan)?;
     let output = edited_path(original);
-    let duration_ms = plan.end_ms - plan.start_ms;
-    let cursor = if plan.zooms.is_empty() {
-        None
-    } else {
-        CursorPath::load(original)
-    };
+    let duration_ms = plan.duration_ms();
     let job = ExportJob {
-        original,
         output: &output,
         plan,
+        sources,
         layers,
-        cursor,
         fps: export_fps(&ready.path, original),
         bits_per_pixel,
     };
@@ -1160,20 +1414,34 @@ mod tests {
             .join(" ")
     }
 
-    const PLAN: ExportPlan = ExportPlan {
-        start_ms: 1250,
-        end_ms: 9500,
-        width: 1080,
-        height: 1920,
-        x: 60,
-        y: 656,
-        video_width: 960,
-        video_height: 540,
-        backdrop_bytes: 10,
-        zooms: Vec::new(),
-        source_width: 0,
-        source_height: 0,
-    };
+    /// 1.25 s to 9.5 s of a 1920×1080 recording, filling a 960×540 box.
+    fn clip() -> ExportClip {
+        ExportClip {
+            source: "clip.mp4".to_owned(),
+            start_ms: 1250,
+            end_ms: 9500,
+            source_width: 1920,
+            source_height: 1080,
+            x: 0,
+            y: 0,
+            width: 960,
+            height: 540,
+            zooms: Vec::new(),
+        }
+    }
+
+    fn plan() -> ExportPlan {
+        ExportPlan {
+            clips: vec![clip()],
+            width: 1080,
+            height: 1920,
+            x: 60,
+            y: 656,
+            video_width: 960,
+            video_height: 540,
+            backdrop_bytes: 10,
+        }
+    }
 
     #[test]
     fn the_edits_sidecar_sits_beside_the_video() {
@@ -1205,7 +1473,7 @@ mod tests {
 
     #[test]
     fn unknown_or_broken_edits_are_refused() {
-        assert!(validate_edits(&json!({ "version": 2 })).is_err());
+        assert!(validate_edits(&json!({ "version": 3 })).is_err());
         assert!(validate_edits(&json!({})).is_err());
         assert!(validate_edits(&json!({ "version": 1 })).is_ok());
         assert!(validate_edits(&json!({ "version": 1, "trim": null })).is_ok());
@@ -1224,6 +1492,41 @@ mod tests {
         fs::write(dir.path().join("clip.edits.json"), "{").unwrap();
         assert!(read_edits(&video).is_err());
         assert!(write_edits(&video, &json!({ "version": 9 })).is_err());
+    }
+
+    #[test]
+    fn version_2_edits_hold_a_list_of_clips() {
+        let clip = |source: &str, start: f64, end: f64| {
+            json!({ "id": "c1", "source": source, "startMs": start, "endMs": end })
+        };
+        assert!(validate_edits(&json!({ "version": 2 })).is_ok());
+        assert!(
+            validate_edits(&json!({
+                "version": 2,
+                "clips": [clip("a.mp4", 0.0, 4000.0), clip("b.mp4", 500.0, 2500.0)],
+            }))
+            .is_ok()
+        );
+        // Clips are new in version 2.
+        assert!(
+            validate_edits(&json!({ "version": 1, "clips": [clip("a.mp4", 0.0, 1.0)] })).is_err()
+        );
+        assert!(validate_edits(&json!({ "version": 2, "clips": {} })).is_err());
+        // A clip names a file in the recordings folder, nothing further.
+        for source in ["../a.mp4", "sub/a.mp4", "C:\\a.mp4", ""] {
+            assert!(
+                validate_edits(&json!({ "version": 2, "clips": [clip(source, 0.0, 1.0)] }))
+                    .is_err(),
+                "{source}"
+            );
+        }
+        assert!(
+            validate_edits(&json!({ "version": 2, "clips": [clip("a.mp4", 5.0, 5.0)] })).is_err()
+        );
+        assert!(
+            validate_edits(&json!({ "version": 2, "clips": [{ "source": "a.mp4", "startMs": 0, "endMs": 1 }] }))
+                .is_err()
+        );
     }
 
     #[test]
@@ -1391,11 +1694,11 @@ mod tests {
 
     #[test]
     fn plans_must_fit_and_be_even() {
-        assert_eq!(PLAN.check(), Ok(()));
+        assert_eq!(plan().check(), Ok(()));
         assert!(
             ExportPlan {
                 width: 1081,
-                ..PLAN
+                ..plan()
             }
             .check()
             .is_err()
@@ -1403,33 +1706,55 @@ mod tests {
         assert!(
             ExportPlan {
                 height: 8192,
-                ..PLAN
+                ..plan()
             }
             .check()
             .is_err()
         );
-        assert!(ExportPlan { x: 200, ..PLAN }.check().is_err());
+        assert!(ExportPlan { x: 200, ..plan() }.check().is_err());
         assert!(
             ExportPlan {
                 video_height: 0,
-                ..PLAN
+                ..plan()
             }
             .check()
             .is_err()
         );
         assert!(
             ExportPlan {
-                end_ms: 1300,
-                ..PLAN
+                clips: Vec::new(),
+                ..plan()
             }
             .check()
             .is_err()
         );
-        assert_eq!(PLAN.frames(60), 495);
+        let with = |clip: ExportClip| ExportPlan {
+            clips: vec![self::clip(), clip],
+            ..plan()
+        };
+        // Every clip is long enough, fits in the box and has its size.
+        assert!(
+            with(ExportClip {
+                end_ms: 1300,
+                ..clip()
+            })
+            .check()
+            .is_err()
+        );
+        assert!(with(ExportClip { x: 2, ..clip() }).check().is_err());
+        assert!(
+            with(ExportClip {
+                source_width: 0,
+                ..clip()
+            })
+            .check()
+            .is_err()
+        );
+        assert_eq!(plan().frames(60), 495);
         assert_eq!(
-            ExportPlan {
+            ExportClip {
                 end_ms: 1251,
-                ..PLAN
+                ..clip()
             }
             .frames(30),
             1
@@ -1437,21 +1762,59 @@ mod tests {
     }
 
     #[test]
+    fn the_sequence_runs_over_all_its_clips() {
+        let second = ExportClip {
+            source: "other.mp4".to_owned(),
+            start_ms: 0,
+            end_ms: 2000,
+            source_width: 1280,
+            source_height: 1024,
+            x: 142,
+            y: 0,
+            width: 676,
+            height: 540,
+            zooms: Vec::new(),
+        };
+        let plan = ExportPlan {
+            clips: vec![clip(), second],
+            ..plan()
+        };
+        assert_eq!(plan.check(), Ok(()));
+        assert_eq!(plan.duration_ms(), 10_250);
+        assert_eq!(plan.frames(30), 248 + 60);
+        // A clip narrower than the box is decoded at its own size there.
+        assert_eq!(plan.clips[1].decode_size(), (676, 540));
+    }
+
+    #[test]
+    fn a_narrower_clip_sits_in_black_bars() {
+        let narrow = ExportClip {
+            x: 1,
+            y: 0,
+            width: 2,
+            height: 2,
+            ..clip()
+        };
+        let mut boxed = black(4, 2);
+        place_in_box(&[9u8; 16], &narrow, &mut boxed, 4);
+        let pixel = |x: usize, y: usize| &boxed[(y * 4 + x) * 4..(y * 4 + x) * 4 + 4];
+        assert_eq!(pixel(0, 0), [0, 0, 0, 255]);
+        assert_eq!(pixel(1, 0), [9, 9, 9, 9]);
+        assert_eq!(pixel(2, 1), [9, 9, 9, 9]);
+        assert_eq!(pixel(3, 1), [0, 0, 0, 255]);
+    }
+
+    #[test]
     fn trimmed_frames_are_decoded_at_the_size_they_take_on_the_backdrop() {
         assert_eq!(
-            strings(decode_args(Path::new("/rec/clip.mp4"), &PLAN, 60)),
+            strings(decode_args(Path::new("/rec/clip.mp4"), &clip(), 60)),
             "-hide_banner -loglevel error -ss 1.250 -i /rec/clip.mp4 -t 8.250 -map 0:v:0 -an \
              -vf scale=960:540:flags=bicubic,fps=60,format=rgba -f rawvideo -pix_fmt rgba pipe:1"
         );
     }
 
-    fn zoomed(zooms: Vec<Zoom>) -> ExportPlan {
-        ExportPlan {
-            zooms,
-            source_width: 1920,
-            source_height: 1080,
-            ..PLAN
-        }
+    fn zoomed(zooms: Vec<Zoom>) -> ExportClip {
+        ExportClip { zooms, ..clip() }
     }
 
     fn area_zoom(scale: f64) -> Zoom {
@@ -1464,43 +1827,37 @@ mod tests {
     }
 
     #[test]
-    fn zooms_come_with_the_plan() {
+    fn clips_come_with_the_plan() {
         let plan: ExportPlan = serde_json::from_str(
-            r#"{"startMs":0,"endMs":5000,"width":1920,"height":1080,"x":0,"y":0,
-                "videoWidth":1920,"videoHeight":1080,"backdropBytes":0,
-                "zooms":[{"id":"z1","startMs":1000,"endMs":3000,"scale":2,"focus":{"kind":"cursor"}}],
-                "sourceWidth":1920,"sourceHeight":1080}"#,
+            r#"{"clips":[{"source":"a.mp4","startMs":0,"endMs":5000,
+                "sourceWidth":1920,"sourceHeight":1080,"x":0,"y":0,"width":1920,"height":1080,
+                "zooms":[{"id":"z1","startMs":1000,"endMs":3000,"scale":2,"focus":{"kind":"cursor"}}]},
+                {"source":"b.mp4","startMs":500,"endMs":1500,
+                "sourceWidth":640,"sourceHeight":480,"x":240,"y":0,"width":1440,"height":1080}],
+                "width":1920,"height":1080,"x":0,"y":0,
+                "videoWidth":1920,"videoHeight":1080,"backdropBytes":0}"#,
         )
         .unwrap();
-        assert_eq!(plan.zooms.len(), 1);
+        assert_eq!(plan.clips.len(), 2);
+        assert_eq!(plan.clips[0].zooms.len(), 1);
+        assert!(plan.clips[1].zooms.is_empty());
         assert_eq!(plan.check(), Ok(()));
-        // A plan from before zooms still reads.
-        let plain: ExportPlan = serde_json::from_str(
-            r#"{"startMs":0,"endMs":5000,"width":2,"height":2,"x":0,"y":0,
-                "videoWidth":2,"videoHeight":2,"backdropBytes":0}"#,
-        )
-        .unwrap();
-        assert!(plain.zooms.is_empty());
     }
 
     #[test]
-    fn zoomed_plans_need_the_recordings_size_and_sound_zooms() {
-        assert_eq!(zoomed(vec![area_zoom(2.0)]).check(), Ok(()));
-        assert!(
-            ExportPlan {
-                source_width: 0,
-                ..zoomed(vec![area_zoom(2.0)])
-            }
-            .check()
-            .is_err()
-        );
-        assert!(zoomed(vec![area_zoom(12.0)]).check().is_err());
+    fn zoomed_clips_need_sound_zooms() {
+        let plan = |zooms| ExportPlan {
+            clips: vec![zoomed(zooms)],
+            ..plan()
+        };
+        assert_eq!(plan(vec![area_zoom(2.0)]).check(), Ok(()));
+        assert!(plan(vec![area_zoom(12.0)]).check().is_err());
     }
 
     #[test]
     fn zoomed_frames_are_decoded_large_enough_to_stay_sharp() {
-        // The video takes 960×540: no zoom needs only that.
-        assert_eq!(PLAN.decode_size(), (960, 540));
+        // The clip takes 960×540: no zoom needs only that.
+        assert_eq!(clip().decode_size(), (960, 540));
         // Twice as deep needs the full 1920×1080.
         assert_eq!(zoomed(vec![area_zoom(2.0)]).decode_size(), (1920, 1080));
         assert_eq!(zoomed(vec![area_zoom(1.5)]).decode_size(), (1440, 810));
@@ -1517,25 +1874,75 @@ mod tests {
     }
 
     #[test]
-    fn the_trimmed_sound_is_added_from_the_original() {
+    fn each_clips_sound_is_trimmed_and_joined_in_order() {
+        let first = clip();
+        let silent = ExportClip {
+            source: "quiet.mp4".to_owned(),
+            start_ms: 0,
+            end_ms: 2000,
+            ..clip()
+        };
+        let again = ExportClip {
+            start_ms: 0,
+            end_ms: 500,
+            ..clip()
+        };
+        let original = Path::new("/rec/clip.mp4");
+        let sounds = [
+            ClipSound {
+                clip: &first,
+                file: Some(original),
+            },
+            ClipSound {
+                clip: &silent,
+                file: None,
+            },
+            ClipSound {
+                clip: &again,
+                file: Some(original),
+            },
+        ];
         assert_eq!(
-            strings(trim_audio_args(
+            strings(clip_sound_args(
                 Path::new("/rec/clip (edited).exporting.mp4"),
-                Path::new("/rec/clip.mp4"),
-                &PLAN,
+                &sounds,
                 Path::new("/rec/clip (edited).mp4"),
             )),
             "-hide_banner -loglevel error -y -i /rec/clip (edited).exporting.mp4 \
-             -ss 1.250 -t 8.250 -i /rec/clip.mp4 -map 0:v:0 -map 1:a:0? -c:v copy \
-             -c:a aac -b:a 160k -shortest -movflags +faststart /rec/clip (edited).mp4"
+             -i /rec/clip.mp4 -i /rec/clip.mp4 -filter_complex \
+             [1:a:0]atrim=start=1.250:end=9.500,asetpts=PTS-STARTPTS,\
+             aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a0];\
+             anullsrc=r=48000:cl=stereo,atrim=duration=2.000,\
+             aformat=sample_fmts=fltp:channel_layouts=stereo[a1];\
+             [2:a:0]atrim=start=0.000:end=0.500,asetpts=PTS-STARTPTS,\
+             aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a2];\
+             [a0][a1][a2]concat=n=3:v=0:a=1[sound] \
+             -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k -shortest \
+             -movflags +faststart /rec/clip (edited).mp4"
         );
+    }
+
+    #[test]
+    fn clip_sources_are_bare_names_of_recordings() {
+        let dir = tempfile::tempdir().unwrap();
+        let recordings = dir.path().join("recordings");
+        fs::create_dir_all(recordings.join("sub")).unwrap();
+        fs::write(recordings.join("a.mp4"), b"video").unwrap();
+        fs::write(recordings.join("sub").join("b.mp4"), b"video").unwrap();
+        fs::write(recordings.join("a.gif"), b"gif").unwrap();
+        fs::write(dir.path().join("outside.mp4"), b"video").unwrap();
+        assert_eq!(
+            source_file(&recordings, "a.mp4"),
+            Ok(fs::canonicalize(recordings.join("a.mp4")).unwrap())
+        );
+        for refused in ["gone.mp4", "a.gif", "../outside.mp4", "sub/b.mp4", "", ".."] {
+            assert!(source_file(&recordings, refused).is_err(), "{refused}");
+        }
     }
 
     #[test]
     fn frames_are_laid_over_the_backdrop_through_the_mask() {
         let plan = ExportPlan {
-            start_ms: 0,
-            end_ms: 1000,
             width: 4,
             height: 2,
             x: 1,
@@ -1543,7 +1950,7 @@ mod tests {
             video_width: 2,
             video_height: 2,
             backdrop_bytes: 1,
-            ..PLAN
+            ..plan()
         };
         let backdrop = RgbaImage::from_pixel(4, 2, Rgba([0, 0, 200, 255]));
         let mut mask = RgbaImage::new(4, 2);
@@ -1579,7 +1986,7 @@ mod tests {
         let mask = png([255, 255, 255, 0]);
         let plan = ExportPlan {
             backdrop_bytes: backdrop.len(),
-            ..PLAN
+            ..plan()
         };
         let body = [backdrop.clone(), mask].concat();
         let (read_backdrop, read_mask) = backdrop_and_mask(&body, &plan).unwrap().unwrap();
@@ -1591,7 +1998,7 @@ mod tests {
                 &[],
                 &ExportPlan {
                     backdrop_bytes: 0,
-                    ..PLAN
+                    ..plan()
                 }
             ),
             Ok(None)

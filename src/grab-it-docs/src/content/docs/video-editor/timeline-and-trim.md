@@ -49,6 +49,8 @@ The status bar names the recording's sound:
 | `Delete` / `Backspace` | A zoom | Delete it |
 | `Esc` | A zoom | Deselect it |
 | Arrow keys | The zoom area | Move it a little, or more with `Shift` |
+| `Alt` + `←` `→` | A clip | Move it earlier or later |
+| `Delete` / `Backspace` | A clip | Remove it, unless it's the last |
 | `Esc` | The backdrop panel | Close it |
 
-See [Zooms](/grab-it/video-editor/zooms/) for the zoom row.
+See [Zooms](/grab-it/video-editor/zooms/) for the zoom row, and [Join recordings](/grab-it/video-editor/join-recordings/) for clips.

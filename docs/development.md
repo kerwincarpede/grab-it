@@ -227,7 +227,7 @@ Edits are kept in `<name>.edits.json` beside the MP4, saved as each change is le
 
 `trim` is absent while the whole recording is kept, `backdrop` is the capture sidecar's (see `Backdrop` in `src/editor/model.ts`), and `zooms` is absent without any (see [Zooms](#zooms)).
 
-**Export** saves `<name> (edited).mp4` beside the original (`(edited 2)` and so on when that is taken) and shows it on the Quick Access card. The page lays the video out on its backdrop as captures are (`recordingLayout` in `src/recording/layout.ts`: padding, then the aspect ratio), scaled so the longer side is at most 1920 px and both sides are even: a 1920×1080 recording at 9:16 exports at 1080×1920. It paints the fill and shadow, and a mask of the video's rounded corners, as PNGs at that size and sends them with the plan (`recording_export`). Rust then has ffmpeg decode the trimmed stretch (`-ss` and `-t` on the input) as raw RGBA at the size the video takes, at the frame rate in `<name>.cursor.json` (30 without one), lays each frame over the backdrop through the mask (`recording_editor::Composer`), and pipes it into the H.264 encoder and quality recordings use. The trimmed sound of the original is added last as AAC (`recording_editor::trim_audio_args`). The editor shows the frames written so far as the export runs. A transparent fill exports as black, since a video has no transparency.
+**Export** saves `<name> (edited).mp4` beside the original (`(edited 2)` and so on when that is taken) and shows it on the Quick Access card. The page lays the video out on its backdrop as captures are (`recordingLayout` in `src/recording/layout.ts`: padding, then the aspect ratio), scaled so the longer side is at most 1920 px and both sides are even: a 1920×1080 recording at 9:16 exports at 1080×1920. It paints the fill and shadow, and a mask of the video's rounded corners, as PNGs at that size and sends them with the plan (`recording_export`). Rust then has ffmpeg decode the trimmed stretch (`-ss` and `-t` on the input) as raw RGBA at the size the video takes, at the frame rate in `<name>.cursor.json` (30 without one), lays each frame over the backdrop through the mask (`recording_editor::Composer`), and pipes it into the H.264 encoder and quality recordings use. Each clip's trimmed sound is joined in order and added last as AAC (`recording_editor::clip_sound_args`; see [Joining recordings](#joining-recordings)). The editor shows the frames written so far as the export runs. A transparent fill exports as black, since a video has no transparency.
 
 #### Zooms
 
@@ -241,7 +241,33 @@ A zoom shows a stretch of the recording larger, 1.25× to 4× in quarter steps, 
 
 The view at each moment is worked out the same way in the page (`viewAt` in `src/recording/zooms.ts`) and in Rust (`zoom::view_at`); keep the two in step. A zoom eases in over its first 0.3 s and out over its last (half its length each when it is shorter than 0.6 s) along a smoothstep, its scale growing as `scale ^ strength`. The view's centre is the area's or the pointer's, moved just far enough that the zoomed view stays inside the frame. The preview shows it with a CSS transform on the video, inside the video's rounded box.
 
-On export the plan carries the zooms and the recording's size. Frames are then decoded larger than the place the video takes, as large as the deepest zoom needs up to the recording's own size (`ExportPlan::decode_size`), and each is cut to its view and scaled to that place (`zoom::draw_view`: bilinear, averaging up to 4×4 samples a pixel when shrinking) before it is laid over the backdrop.
+On export each clip of the plan carries its zooms and its recording's size. Frames are then decoded larger than the place the video takes, as large as the deepest zoom needs up to the recording's own size (`ExportClip::decode_size`), and each is cut to its view and scaled to that place (`zoom::draw_view`: bilinear, averaging up to 4×4 samples a pixel when shrinking) before it is laid over the backdrop.
+
+#### Joining recordings
+
+**Recording** in the top bar adds another MP4 from the recordings folder (the folder of the recording the editor opened) after the clip under the playhead; the file picker opens there, and a file from anywhere else is refused. The sequence is a list of clips (`src/recording/clips.ts`), each `{id, source, startMs, endMs}`: `source` is a file name in that folder and the times are in that recording. A clip starts in the sequence at the sum of the earlier clips' kept lengths; `toSource` and `toSequence` map between the two, and later timeline, sound and overlay work should use them, addressing media by (source, ms) and clips by id. The timeline then shows the clips end to end (`src/recording/ClipTrack.tsx`): dragging a clip's edge trims it within its recording, dragging it or Alt + ←/→ reorders it, and Delete removes it unless it is the last. Every edit is one undo entry.
+
+The sidecar holds the list only when the sequence is not a single clip of its own recording (`withClips`); otherwise it stays version 1 with `trim`, so an untouched or only trimmed recording reads in older builds:
+
+```json
+{
+  "version": 2,
+  "clips": [
+    { "id": "own", "source": "Grab-it 2026-03-07 09-05-01.mp4", "startMs": 1250, "endMs": 9500 },
+    { "id": "c2", "source": "Grab-it 2026-03-08 14-20-11.mp4", "startMs": 0, "endMs": 4000 }
+  ],
+  "zooms": [
+    { "id": "z1", "startMs": 2000, "endMs": 4500, "scale": 2, "focus": { "kind": "cursor" } },
+    { "id": "z2", "source": "Grab-it 2026-03-08 14-20-11.mp4", "startMs": 500, "endMs": 2500, "scale": 2, "focus": { "kind": "cursor" } }
+  ]
+}
+```
+
+With `clips`, `trim` is not written. A zoom keeps its recording's time and gains `source` (absent for the sidecar's own recording), so it moves with its clip; one outside its clip's kept stretch stays saved but is hidden. `validate_edits` reads versions 1 and 2 and refuses a clip whose source is not a bare file name. The Library gains nothing until Export.
+
+The recording the editor opened sets the output size, the video box on the backdrop and the frame rate, whatever the order; other recordings are fitted inside that box, centred, with black bars (`fitInside`). `recording_source` gives the page another recording's path, frame rate, pointer path and whether it has sound, refusing anything that is not an MP4 in the folder; a recording that is gone shows as missing and disables Export. The preview plays the clips in order, switching the video's source at each clip's end (on Linux each recording is a blob from `fetchRecording`).
+
+On export the plan holds the clips in order (`ExportClip`: source, stretch, the recording's size and its fitted box, its zooms). Rust resolves each source with `allowed_video`, decodes each clip in turn with its own `decode_args`, zooms and pointer path into one encoder at the opened recording's frame rate, and reports progress over all frames. The sound is one `filter_complex`: each clip's audio is `atrim`med, resampled to 48 kHz stereo and `concat`enated in order, and a recording without sound gives silence of the clip's length (`anullsrc`). Whether a recording has sound comes from `ffmpeg::Probe::audio`. Clips cut straight from one to the next.
 
 ### Search and OCR
 

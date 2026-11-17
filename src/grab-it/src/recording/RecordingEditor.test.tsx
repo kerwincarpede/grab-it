@@ -6,7 +6,20 @@ import { emit } from "@tauri-apps/api/event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import RecordingEditor from "./RecordingEditor";
 
+vi.mock("./sources", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./sources")>();
+  // jsdom loads no video, so each recording's metadata is made up here.
+  return { ...actual, probeVideo: vi.fn((path: string) => Promise.resolve(path.includes("Other") ? { durationMs: 6000, width: 720, height: 720 } : { durationMs: 12_000, width: 1920, height: 1080 })) };
+});
+
 const PATH = "/shots/recordings/Grab-it 2026-03-07 09-05-01.mp4";
+const OWN = "Grab-it 2026-03-07 09-05-01.mp4";
+const OTHER = "Other take.mp4";
+const OTHER_PATH = "/shots/recordings/Other take.mp4";
+/** What the file picker gives next. */
+let picked: string | null = null;
+/** Recordings `recording_source` refuses, as if gone. */
+let gone: string[] = [];
 
 interface Backend {
   calls: { cmd: string; payload?: InvokeArgs; headers?: Record<string, string> }[];
@@ -27,6 +40,13 @@ function mockBackend(edits: unknown = null, cursor: unknown = null, audio: strin
         return {};
       case "recording_save_edits":
         return null;
+      case "plugin:dialog|open":
+        return picked;
+      case "recording_source": {
+        const name = (payload as { fileName: string }).fileName;
+        if (gone.includes(name)) return Promise.reject(`${name} is not in the recordings folder`);
+        return { path: `/shots/recordings/${name}`, fileName: name, fps: 30, cursor: null, hasAudio: true };
+      }
       case "recording_export":
         return new Promise<string>((resolve, reject) => {
           backend.exported = { resolve, reject };
@@ -79,6 +99,8 @@ function stubCanvas(pngs: number[][]) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  picked = null;
+  gone = [];
 });
 
 const saved = (backend: Backend) => backend.calls.filter((call) => call.cmd === "recording_save_edits").map((call) => (call.payload as { edits: unknown }).edits);
@@ -174,7 +196,16 @@ describe("RecordingEditor", () => {
     await loadVideo();
     await userEvent.click(screen.getByRole("button", { name: "Export" }));
     const { plan, body } = await exportCall(backend);
-    expect(plan).toEqual({ startMs: 1500, endMs: 6000, width: 1920, height: 1080, x: 0, y: 0, videoWidth: 1920, videoHeight: 1080, backdropBytes: 0, zooms: [], sourceWidth: 1920, sourceHeight: 1080 });
+    expect(plan).toEqual({
+      clips: [{ source: OWN, startMs: 1500, endMs: 6000, sourceWidth: 1920, sourceHeight: 1080, x: 0, y: 0, width: 1920, height: 1080, zooms: [] }],
+      width: 1920,
+      height: 1080,
+      x: 0,
+      y: 0,
+      videoWidth: 1920,
+      videoHeight: 1080,
+      backdropBytes: 0,
+    });
     expect(body).toEqual([]);
 
     await emit("recording-export-progress", { done: 135, total: 270 });
@@ -201,7 +232,16 @@ describe("RecordingEditor", () => {
     await loadVideo();
     await userEvent.click(screen.getByRole("button", { name: "Export" }));
     const { plan, body } = await exportCall(backend);
-    expect(plan).toEqual({ startMs: 2000, endMs: 9500, width: 1080, height: 1920, x: 34, y: 676, videoWidth: 1012, videoHeight: 570, backdropBytes: 3, zooms: [], sourceWidth: 1920, sourceHeight: 1080 });
+    expect(plan).toEqual({
+      clips: [{ source: OWN, startMs: 2000, endMs: 9500, sourceWidth: 1920, sourceHeight: 1080, x: 0, y: 0, width: 1012, height: 570, zooms: [] }],
+      width: 1080,
+      height: 1920,
+      x: 34,
+      y: 676,
+      videoWidth: 1012,
+      videoHeight: 570,
+      backdropBytes: 3,
+    });
     expect(body).toEqual([1, 2, 3, 9, 9]);
   });
 
@@ -414,6 +454,127 @@ describe("RecordingEditor", () => {
       render(<RecordingEditor />);
       await screen.findByText("Grab-it 2026-03-07 09-05-01.mp4");
       expect(screen.queryByText(/Microphone|System sound|Mixed sound/)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("joining recordings", () => {
+    const JOINED = {
+      version: 2,
+      clips: [
+        { id: "a", source: OWN, startMs: 1000, endMs: 5000 },
+        { id: "b", source: OTHER, startMs: 0, endMs: 6000 },
+      ],
+    };
+
+    /** Loads the opened recording into the video when the sequence starts with it. */
+    async function loadJoined(clips = 2): Promise<HTMLVideoElement> {
+      const video = await waitFor(() => {
+        const found = screen.getByTestId("recording-stage").querySelector("video");
+        if (!found) throw new Error("the video has not loaded yet");
+        return found;
+      });
+      Object.defineProperty(video, "duration", { configurable: true, value: 12 });
+      Object.defineProperty(video, "videoWidth", { configurable: true, value: 1920 });
+      Object.defineProperty(video, "videoHeight", { configurable: true, value: 1080 });
+      fireEvent.loadedMetadata(video);
+      await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(clips));
+      return video;
+    }
+
+    it("adds a recording from the recordings folder after the clip under the playhead, and undoes it", async () => {
+      const backend = mockBackend();
+      render(<RecordingEditor />);
+      await loadVideo();
+      picked = OTHER_PATH;
+      await userEvent.click(screen.getByRole("button", { name: "Recording" }));
+      await waitFor(() =>
+        expect(lastSaved(backend)).toEqual({
+          version: 2,
+          clips: [
+            { id: "own", source: OWN, startMs: 0, endMs: 12_000 },
+            { id: expect.any(String), source: OTHER, startMs: 0, endMs: 6000 },
+          ],
+        }),
+      );
+      expect(screen.getAllByRole("option")).toHaveLength(2);
+      expect(screen.getByText("2 clips, 0:18.0")).toBeInTheDocument();
+      // The trim handles give way to each clip's edges.
+      expect(screen.queryByRole("slider", { name: "Trim start" })).not.toBeInTheDocument();
+
+      fireEvent.keyDown(document.body, { key: "z", ctrlKey: true });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1 }));
+      expect(screen.queryAllByRole("option")).toHaveLength(0);
+    });
+
+    it("refuses a recording from outside the recordings folder", async () => {
+      const backend = mockBackend();
+      render(<RecordingEditor />);
+      await loadVideo();
+      picked = "/home/me/Downloads/Other take.mp4";
+      await userEvent.click(screen.getByRole("button", { name: "Recording" }));
+      await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Only recordings in the recordings folder can be added."));
+      expect(saved(backend)).toEqual([]);
+      expect(backend.calls.some((call) => call.cmd === "recording_source")).toBe(false);
+    });
+
+    it("reopens a joined sequence and reorders it with Alt and the arrow keys, undoably", async () => {
+      const backend = mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      expect(screen.getAllByRole("option").map((option) => option.getAttribute("aria-label"))).toEqual([`${OWN}, 0:04.0`, `${OTHER}, 0:06.0`]);
+      fireEvent.focus(screen.getByRole("option", { name: `${OTHER}, 0:06.0` }));
+      fireEvent.keyDown(document.body, { key: "ArrowLeft", altKey: true });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [JOINED.clips[1], JOINED.clips[0]] }));
+      expect(screen.getAllByRole("option")[0]).toHaveAttribute("aria-label", `${OTHER}, 0:06.0`);
+
+      await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual(JOINED));
+    });
+
+    it("removes a clip, but never the last", async () => {
+      const backend = mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      fireEvent.focus(screen.getByRole("option", { name: `${OWN}, 0:04.0` }));
+      fireEvent.keyDown(document.body, { key: "Delete" });
+      // Another recording alone is still a sequence.
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [JOINED.clips[1]] }));
+      fireEvent.focus(screen.getByRole("option"));
+      fireEvent.keyDown(document.body, { key: "Delete" });
+      expect(screen.getAllByRole("option")).toHaveLength(1);
+      expect(saved(backend)).toHaveLength(1);
+    });
+
+    it("exports each clip fitted in the opened recording's box with its own zooms", async () => {
+      const zoom = { id: "z2", source: OTHER, startMs: 1000, endMs: 3000, scale: 2, focus: { kind: "area", x: 0.5, y: 0.5 } };
+      const backend = mockBackend({ ...JOINED, zooms: [zoom] });
+      render(<RecordingEditor />);
+      await loadJoined();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Export" })).toBeEnabled());
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan } = await exportCall(backend);
+      expect(plan).toEqual({
+        clips: [
+          { source: OWN, startMs: 1000, endMs: 5000, sourceWidth: 1920, sourceHeight: 1080, x: 0, y: 0, width: 1920, height: 1080, zooms: [] },
+          { source: OTHER, startMs: 0, endMs: 6000, sourceWidth: 720, sourceHeight: 720, x: 420, y: 0, width: 1080, height: 1080, zooms: [{ id: "z2", startMs: 1000, endMs: 3000, scale: 2, focus: { kind: "area", x: 0.5, y: 0.5 } }] },
+        ],
+        width: 1920,
+        height: 1080,
+        x: 0,
+        y: 0,
+        videoWidth: 1920,
+        videoHeight: 1080,
+        backdropBytes: 0,
+      });
+    });
+
+    it("marks a recording that is gone and holds Export back", async () => {
+      gone = [OTHER];
+      mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      await waitFor(() => expect(screen.getByRole("option", { name: `${OTHER} (missing), 0:06.0` })).toBeInTheDocument());
+      expect(screen.getByRole("button", { name: "Export" })).toBeDisabled();
     });
   });
 });

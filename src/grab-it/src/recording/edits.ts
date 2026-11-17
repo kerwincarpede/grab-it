@@ -1,5 +1,6 @@
 import type { Backdrop } from "../editor/model";
 import { parseBackdrop } from "../editor/sidecar";
+import { parseClips, type Clip } from "./clips";
 import { parseZooms, type Zoom } from "./zooms";
 
 /** The stretch of the recording kept, in milliseconds from its start. */
@@ -14,12 +15,18 @@ export interface Trim {
  * rendered on export. Absent fields mean unchanged.
  */
 export interface RecordingEdits {
-  version: 1;
-  /** Absent or null keeps the whole recording. */
+  /** 2 when `clips` is set, else 1; see `withClips` in ./clips. */
+  version: 1 | 2;
+  /** Absent or null keeps the whole recording. Ignored when `clips` is set. */
   trim?: Trim | null;
+  /**
+   * The joined sequence, in order; absent for one clip of the sidecar's
+   * own recording cut by `trim`. Written only with version 2.
+   */
+  clips?: Clip[];
   /** The same backdrop captures have; its aspect is the export's shape. */
   backdrop?: Backdrop | null;
-  /** Zoom segments, sorted and never overlapping; absent or empty for none. */
+  /** Zoom segments, sorted and never overlapping on one source; absent or empty for none. */
   zooms?: Zoom[];
 }
 
@@ -43,8 +50,15 @@ export function parseEdits(value: unknown): RecordingEdits {
   if (value === null || value === undefined) return emptyEdits();
   if (typeof value !== "object") throw new EditsError("the edits are not an object");
   const doc = value as Record<string, unknown>;
-  if (doc.version !== 1) throw new EditsError(`unsupported edits version ${String(doc.version)}`);
+  if (doc.version !== 1 && doc.version !== 2) throw new EditsError(`unsupported edits version ${String(doc.version)}`);
   const edits = emptyEdits();
+  if (doc.version === 2) {
+    const clips = parseClips(doc.clips);
+    if (clips.length > 0) {
+      edits.version = 2;
+      edits.clips = clips;
+    }
+  }
   const trim = doc.trim as Record<string, unknown> | null | undefined;
   if (trim && typeof trim === "object" && isNum(trim.startMs) && isNum(trim.endMs) && trim.startMs >= 0 && trim.endMs > trim.startMs) {
     edits.trim = { startMs: Math.round(trim.startMs), endMs: Math.round(trim.endMs) };
@@ -58,14 +72,19 @@ export function parseEdits(value: unknown): RecordingEdits {
 
 /** The JSON written to the sidecar: only what is set. */
 export function serializeEdits(edits: RecordingEdits): RecordingEdits {
+  const clips = edits.clips && edits.clips.length > 0 ? edits.clips : null;
   return {
-    version: 1,
-    ...(edits.trim ? { trim: { startMs: Math.round(edits.trim.startMs), endMs: Math.round(edits.trim.endMs) } } : {}),
+    version: clips ? 2 : 1,
+    ...(clips
+      ? { clips: clips.map((clip) => ({ id: clip.id, source: clip.source, startMs: Math.round(clip.startMs), endMs: Math.round(clip.endMs) })) }
+      : {}),
+    ...(!clips && edits.trim ? { trim: { startMs: Math.round(edits.trim.startMs), endMs: Math.round(edits.trim.endMs) } } : {}),
     ...(edits.backdrop ? { backdrop: edits.backdrop } : {}),
     ...(edits.zooms && edits.zooms.length > 0
       ? {
           zooms: edits.zooms.map((zoom) => ({
             id: zoom.id,
+            ...(zoom.source ? { source: zoom.source } : {}),
             startMs: Math.round(zoom.startMs),
             endMs: Math.round(zoom.endMs),
             scale: zoom.scale,

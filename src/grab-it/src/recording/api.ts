@@ -23,6 +23,17 @@ export interface RecordingInfo {
  */
 export type AudioKind = "microphone" | "system" | "mixed";
 
+/** Mirrors `RecordingSource` in src-tauri/src/recording_editor.rs: a recording a clip plays. */
+export interface RecordingSource {
+  path: string;
+  fileName: string;
+  fps: number;
+  /** Its pointer path, for follow-the-pointer zooms; null without one. */
+  cursor: CursorPath | null;
+  /** Whether it has a sound track. */
+  hasAudio: boolean;
+}
+
 /** Mirrors `VIDEO_SCHEME` in src-tauri/src/recording_editor.rs. */
 export const VIDEO_SCHEME = "grab-it-video";
 /** Mirrors `EXPORT_PLAN_HEADER` in src-tauri/src/recording_editor.rs. */
@@ -31,12 +42,34 @@ export const EXPORT_PLAN_HEADER = "x-recording-export";
 export const EXPORT_PROGRESS_EVENT = "recording-export-progress";
 
 /**
+ * One clip of an export. Mirrors `ExportClip` in
+ * src-tauri/src/recording_editor.rs.
+ */
+export interface ExportClip {
+  /** Its recording's file name in the recordings folder. */
+  source: string;
+  /** The stretch kept, in its recording's time. */
+  startMs: number;
+  endMs: number;
+  /** Its recording's own size, which frames are cut from. */
+  sourceWidth: number;
+  sourceHeight: number;
+  /** Where it sits inside the video box (see `fitInside`), black around it. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Its zooms, in its recording's time. */
+  zooms: Zoom[];
+}
+
+/**
  * What an export makes. Mirrors `ExportPlan` in
  * src-tauri/src/recording_editor.rs; sizes are in output pixels.
  */
 export interface ExportPlan {
-  startMs: number;
-  endMs: number;
+  /** The sequence, in order, at the opened recording's frame rate. */
+  clips: ExportClip[];
   /** The output's size, even both ways. */
   width: number;
   height: number;
@@ -47,11 +80,6 @@ export interface ExportPlan {
   videoHeight: number;
   /** How many bytes of the body are the backdrop PNG; the rest is the mask. 0 without a backdrop. */
   backdropBytes: number;
-  /** The zooms, in the recording's time; the export cuts each frame to its view. */
-  zooms: Zoom[];
-  /** The recording's own size, which zoomed frames are cut from. */
-  sourceWidth: number;
-  sourceHeight: number;
 }
 
 /** Mirrors `ExportProgress` in src-tauri/src/recording_editor.rs: frames written so far. */
@@ -62,6 +90,11 @@ export interface ExportProgress {
 
 export function recordingInfo(): Promise<RecordingInfo> {
   return invoke<RecordingInfo>("recording_info");
+}
+
+/** A recordings-folder MP4 by file name; refused for anything else or a file that is gone. */
+export function recordingSource(fileName: string): Promise<RecordingSource> {
+  return invoke<RecordingSource>("recording_source", { fileName });
 }
 
 /** Where the page plays `path` from: the recordings folder, served by `grab-it-video`. */

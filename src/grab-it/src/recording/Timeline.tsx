@@ -14,6 +14,8 @@ interface TimelineProps {
   onTrimCommit: (trim: Trim) => void;
   /** Rows under the track, lined up with it, such as the zooms. */
   children?: ReactNode;
+  /** False hides the trim handles: joined clips are trimmed on their own row. */
+  trimmable?: boolean;
 }
 
 type Edge = "start" | "end";
@@ -29,7 +31,7 @@ const percent = (ms: number, durationMs: number) => `${durationMs > 0 ? (ms / du
  * dimmed. Handles move with the pointer or the arrow keys, and keep their
  * trim when let go.
  */
-export default function Timeline({ durationMs, trim, currentMs, onSeek, onTrimPreview, onTrimCommit, children }: TimelineProps) {
+export default function Timeline({ durationMs, trim, currentMs, onSeek, onTrimPreview, onTrimCommit, children, trimmable = true }: TimelineProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<Edge | "seek" | null>(null);
   /** The trim as last previewed, committed when the handle is let go. */
@@ -143,8 +145,8 @@ export default function Timeline({ durationMs, trim, currentMs, onSeek, onTrimPr
         <div className="timeline-cut" style={{ left: percent(trim.endMs, durationMs), right: 0 }} />
         <div className="timeline-kept" style={{ left: percent(trim.startMs, durationMs), width: percent(trim.endMs - trim.startMs, durationMs) }} />
         <div className="timeline-playhead" data-testid="playhead" style={{ left: percent(currentMs, durationMs) }} />
-        {handle("start")}
-        {handle("end")}
+        {trimmable && handle("start")}
+        {trimmable && handle("end")}
       </div>
       {children}
     </div>

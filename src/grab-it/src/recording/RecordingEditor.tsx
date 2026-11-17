@@ -11,7 +11,43 @@ import { presetName } from "../editor/preferences";
 import { newId } from "../editor/tools";
 import { useBackdropImage } from "../editor/useBackdropImage";
 import type { BackdropSources } from "../editor/flatten";
-import { exportRecording, fetchRecording, onExportProgress, playsFromBlob, recordingInfo, saveEdits, videoSrc, type AudioKind, type ExportProgress, type RecordingInfo } from "./api";
+import {
+  exportRecording,
+  fetchRecording,
+  onExportProgress,
+  playsFromBlob,
+  recordingInfo,
+  recordingSource,
+  saveEdits,
+  videoSrc,
+  type AudioKind,
+  type ExportClip,
+  type ExportProgress,
+  type RecordingInfo,
+  type RecordingSource,
+} from "./api";
+import {
+  clipLength,
+  clipStarts,
+  clipsOf,
+  fileNameOf,
+  fitInside,
+  insertClip,
+  moveClip,
+  newClipId,
+  removeClip,
+  sequenceDuration,
+  tagZoom,
+  toSequence,
+  toSource,
+  withClips,
+  zoomOnSource,
+  zoomsIn,
+  type Clip,
+  type ClipAt,
+} from "./clips";
+import ClipTrack from "./ClipTrack";
+import { chooseRecording, folderOf, isIn, probeVideo, type SourceMeta } from "./sources";
 import { clampTrim, emptyEdits, formatTime, isWhole, parseEdits, serializeEdits, trimOf, type RecordingEdits, type Trim } from "./edits";
 import { exportLayers, paintUnderlay, recordingLayout } from "./layout";
 import { useBackdropPresets } from "./useBackdropPresets";
@@ -24,6 +60,7 @@ import {
   cursorAt,
   FULL_VIEW,
   MAX_ZOOM_SCALE,
+  MIN_ZOOM_MS,
   MIN_ZOOM_SCALE,
   removeZoom,
   updateZoom,
@@ -39,6 +76,12 @@ type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 const errorText = (err: unknown) => String(err instanceof Error ? err.message : err);
 const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+
+const AddIcon = () => (
+  <svg className="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" focusable="false">
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
 
 const PlayIcon = () => (
   <svg className="icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
@@ -64,6 +107,32 @@ function isEditingText(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable || target.matches("textarea, select")) return true;
   return target instanceof HTMLInputElement && !["range", "checkbox", "radio", "button", "color", "file"].includes(target.type);
+}
+
+/** Whether `clips` is more than one clip of the recording `own`: then the timeline is the joined sequence's. */
+const isJoined = (clips: Clip[], own: string) => clips.length > 1 || (clips.length === 1 && clips[0].source !== own);
+
+/**
+ * Where timeline time `ms` falls. Joined, the timeline is the sequence;
+ * otherwise it is the opened recording's own time, cut by its trim.
+ */
+function positionIn(clips: Clip[], own: string, ms: number): ClipAt | null {
+  if (clips.length === 0) return null;
+  if (!isJoined(clips, own)) return { index: 0, clip: clips[0], sourceMs: ms };
+  return toSource(clips, ms);
+}
+
+/** The timeline time of `sourceMs` in clip `index`. */
+function timelineMs(clips: Clip[], own: string, index: number, sourceMs: number): number {
+  return isJoined(clips, own) ? toSequence(clips, index, sourceMs) : sourceMs;
+}
+
+/** How far clip `index` is shifted onto the timeline, and the stretch it takes there. */
+function spanOf(clips: Clip[], own: string, index: number, ownDurationMs: number): { offset: number; low: number; high: number } {
+  if (!isJoined(clips, own)) return { offset: 0, low: 0, high: ownDurationMs };
+  const start = clipStarts(clips)[index] ?? 0;
+  const clip = clips[index];
+  return { offset: start - clip.startMs, low: start, high: start + clipLength(clip) };
 }
 
 /**
@@ -143,8 +212,19 @@ export default function RecordingEditor() {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [videoSize, setVideoSize] = useState<{ width: number; height: number } | null>(null);
-  const [durationMs, setDurationMs] = useState(0);
+  /** What each clip's recording is, by file name, once its metadata has loaded. */
+  const [meta, setMeta] = useState<Record<string, SourceMeta>>({});
+  /** The other recordings clips play, from `recording_source`. */
+  const [sourceInfo, setSourceInfo] = useState<Record<string, RecordingSource>>({});
+  /** Recordings that are gone or cannot be played; Export waits for them. */
+  const [missing, setMissing] = useState<ReadonlySet<string>>(() => new Set());
+  const requested = useRef(new Set<string>());
+  const [clipDraft, setClipDraft] = useState<Clip[] | null>(null);
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  /** Where to put the video once the recording it switches to has loaded. */
+  const pendingRef = useRef<{ sourceMs: number; play: boolean } | null>(null);
+  /** The recording the video has loaded. */
+  const loadedRef = useRef<string | null>(null);
   const [currentMs, setCurrentMs] = useState(0);
   const [playing, setPlaying] = useState(false);
   /** Bumped when a new frame shows, so the blurred backdrop follows it. */
@@ -162,7 +242,6 @@ export default function RecordingEditor() {
   const exporting = progress !== null;
 
   const presets = useBackdropPresets(setMessage);
-  const src = usePlayableSrc(info?.path ?? null, setMessage);
 
   useEffect(() => {
     let cancelled = false;
@@ -189,12 +268,51 @@ export default function RecordingEditor() {
     };
   }, []);
 
+  const own = info?.fileName ?? "";
+  const ownMeta = meta[own] as SourceMeta | undefined;
+  /** The opened recording's length; it sets the output's size and frame rate whatever the order. */
+  const durationMs = ownMeta?.durationMs ?? 0;
+  const videoSize = useMemo(() => (ownMeta ? { width: ownMeta.width, height: ownMeta.height } : null), [ownMeta]);
   const backdrop = backdropDraft !== undefined ? backdropDraft : (edits.backdrop ?? null);
   const savedTrim = trimOf(edits, durationMs);
-  const zooms = zoomDraft ?? edits.zooms ?? [];
+  const savedClips = useMemo(() => clipsOf(edits, own, durationMs), [edits, own, durationMs]);
+  const clips = clipDraft ?? savedClips;
+  const joined = isJoined(clips, own);
+  const sequenceMs = sequenceDuration(clips);
+  const timelineDuration = joined ? sequenceMs : durationMs;
+  const at = positionIn(clips, own, currentMs);
+  const currentSource = at?.clip.source ?? own;
+  const pathOf = (source: string): string | null => (!info ? null : source === own ? info.path : (sourceInfo[source]?.path ?? null));
+  const src = usePlayableSrc(pathOf(currentSource), setMessage);
+  const currentMeta = meta[currentSource] as SourceMeta | undefined;
+  const cursorOf = (source: string) => (source === own ? (info?.cursor ?? null) : (sourceInfo[source]?.cursor ?? null));
+  const cursor = cursorOf(currentSource);
+  const selectedClip = joined ? (clips.find((clip) => clip.id === selectedClipId) ?? null) : null;
+  const missingClip = clips.find((clip) => missing.has(clip.source)) ?? null;
+  /** Every clip's recording is there and its size known. */
+  const canExport = !missingClip && clips.every((clip) => meta[clip.source] !== undefined);
+
+  // Zooms keep their recording's time; the timeline shows each on its clip.
+  const allZooms = useMemo(() => edits.zooms ?? [], [edits.zooms]);
+  const shown = useMemo(() => {
+    const list: Zoom[] = [];
+    const owner = new Map<string, number>();
+    clips.forEach((clip, index) => {
+      const { offset, low, high } = spanOf(clips, own, index, durationMs);
+      const mine = joined ? zoomsIn(allZooms, clip, own) : allZooms.filter((zoom) => zoomOnSource(zoom, own, own));
+      for (const zoom of mine) {
+        if (owner.has(zoom.id)) continue;
+        owner.set(zoom.id, index);
+        const startMs = joined ? Math.max(low, zoom.startMs + offset) : zoom.startMs;
+        const endMs = joined ? Math.min(high, zoom.endMs + offset) : zoom.endMs;
+        list.push({ ...zoom, startMs, endMs });
+      }
+    });
+    return { list: list.sort((a, b) => a.startMs - b.startMs), owner };
+  }, [clips, own, durationMs, joined, allZooms]);
+  const zooms = zoomDraft ?? shown.list;
   const selectedZoom = zooms.find((zoom) => zoom.id === selectedZoomId) ?? null;
-  const cursor = info?.cursor ?? null;
-  const trim = trimDraft ?? savedTrim;
+  const trim = joined ? { startMs: 0, endMs: sequenceMs } : (trimDraft ?? savedTrim);
   const layout = useMemo(() => (videoSize ? recordingLayout(videoSize, backdrop) : null), [videoSize, backdrop]);
   const backdropImageEl = useBackdropImage(backdrop?.fill === BACKDROP_FILLS.image ? (backdrop.image ?? null) : null);
 
@@ -223,14 +341,118 @@ export default function RecordingEditor() {
     [history, save],
   );
 
-  const seek = (ms: number) => {
+  /** Moves the playhead to timeline time `ms` of `list`, switching recording when it must. */
+  const seek = (ms: number, list: Clip[] = clips) => {
     const video = videoRef.current;
     setCurrentMs(ms);
-    try {
-      if (video) video.currentTime = ms / 1000;
-    } catch {
-      // Not seekable yet: it opens at the start.
+    const pos = positionIn(list, own, ms);
+    if (!pos) return;
+    if (video && loadedRef.current === pos.clip.source && video.dataset.source === pos.clip.source) {
+      try {
+        video.currentTime = pos.sourceMs / 1000;
+      } catch {
+        // Not seekable yet: it opens at the start.
+      }
+    } else {
+      pendingRef.current = { sourceMs: pos.sourceMs, play: pendingRef.current?.play ?? false };
     }
+  };
+
+  // --- Clips --------------------------------------------------------------
+
+  // Each other recording a clip plays is looked up once: its path, pointer
+  // path and size. One that is gone is marked missing.
+  useEffect(() => {
+    if (!info) return;
+    const needed = new Set(clips.map((clip) => clip.source));
+    // The opened recording sets the output: learn its size even when it does not play first.
+    if (currentSource !== own) needed.add(own);
+    for (const source of needed) {
+      if (requested.current.has(source) || meta[source] || (source === currentSource && source === own)) continue;
+      requested.current.add(source);
+      const looking = source === own ? Promise.resolve(null) : recordingSource(source);
+      looking
+        .then(async (found) => {
+          if (found) setSourceInfo((known) => ({ ...known, [source]: found }));
+          const learned = await probeVideo(found?.path ?? info.path);
+          setMeta((known) => ({ ...known, [source]: learned }));
+        })
+        .catch(() => setMissing((gone) => new Set(gone).add(source)));
+    }
+  }, [info, clips, own, currentSource, meta]);
+
+  /** Keeps `next` as the sequence: one undo entry. */
+  const commitClips = (next: Clip[]) => {
+    setClipDraft(null);
+    commitEdits(withClips(edits, next, own, durationMs));
+  };
+
+  const latestRef = useRef({ clips, at, commitClips, seek, meta });
+  useEffect(() => {
+    latestRef.current = { clips, at, commitClips, seek, meta };
+  });
+
+  /** Asks for a recording in the recordings folder and joins it after the clip under the playhead. */
+  const addRecording = async () => {
+    if (!info || exporting) return;
+    const folder = folderOf(info.path);
+    let picked: string | null;
+    try {
+      picked = await chooseRecording(folder);
+    } catch (err) {
+      setMessage(`Could not choose a recording: ${errorText(err)}`);
+      return;
+    }
+    if (!picked) return;
+    if (!isIn(picked, folder)) {
+      setMessage("Only recordings in the recordings folder can be added.");
+      return;
+    }
+    const name = fileNameOf(picked);
+    try {
+      const found = name === own ? null : await recordingSource(name);
+      const learned = latestRef.current.meta[name] ?? (await probeVideo(found?.path ?? info.path));
+      if (found) setSourceInfo((known) => ({ ...known, [name]: found }));
+      setMeta((known) => ({ ...known, [name]: learned }));
+      requested.current.add(name);
+      setMissing((gone) => {
+        if (!gone.has(name)) return gone;
+        const left = new Set(gone);
+        left.delete(name);
+        return left;
+      });
+      const latest = latestRef.current;
+      const after = latest.at?.index ?? latest.clips.length - 1;
+      const clip: Clip = { id: newClipId(), source: name, startMs: 0, endMs: learned.durationMs };
+      const next = insertClip(latest.clips, after, clip);
+      latest.commitClips(next);
+      setSelectedClipId(clip.id);
+      setSelectedZoomId(null);
+      setMessage(null);
+      latest.seek(timelineMs(next, own, after + 1, 0), next);
+    } catch (err) {
+      setMessage(`Could not add ${name}: ${errorText(err)}`);
+    }
+  };
+
+  const moveSelectedClip = (by: number) => {
+    if (!selectedClip) return;
+    const from = clips.findIndex((clip) => clip.id === selectedClip.id);
+    const next = moveClip(clips, selectedClip.id, from + by);
+    if (next === clips) return;
+    commitClips(next);
+    const index = next.findIndex((clip) => clip.id === selectedClip.id);
+    seek(timelineMs(next, own, index, selectedClip.startMs), next);
+  };
+
+  const removeSelectedClip = () => {
+    if (!selectedClip || clips.length <= 1) return;
+    const index = clips.findIndex((clip) => clip.id === selectedClip.id);
+    const next = removeClip(clips, selectedClip.id);
+    commitClips(next);
+    setSelectedClipId(null);
+    const stay = Math.min(index, next.length - 1);
+    seek(timelineMs(next, own, stay, next[stay].startMs), next);
   };
 
   const commitTrim = (next: Trim) => {
@@ -248,11 +470,20 @@ export default function RecordingEditor() {
     setTrimDraft(null);
     setBackdropDraft(undefined);
     setZoomDraft(null);
+    setClipDraft(null);
     setHistory(next);
     save(next.present);
     if (durationMs > 0) {
-      const kept = trimOf(next.present, durationMs);
-      seek(Math.min(Math.max(currentMs, kept.startMs), kept.endMs));
+      const nextClips = clipsOf(next.present, own, durationMs);
+      if (isJoined(nextClips, own) || joined) {
+        // The playhead stays where it was in the clip it was on, else goes to the start.
+        const index = at ? nextClips.findIndex((clip) => clip.id === at.clip.id) : -1;
+        if (index >= 0 && at) seek(timelineMs(nextClips, own, index, at.sourceMs), nextClips);
+        else seek(timelineMs(nextClips, own, 0, nextClips[0].startMs), nextClips);
+      } else {
+        const kept = trimOf(next.present, durationMs);
+        seek(Math.min(Math.max(currentMs, kept.startMs), kept.endMs), nextClips);
+      }
     }
   };
 
@@ -266,15 +497,32 @@ export default function RecordingEditor() {
 
   // --- Zooms --------------------------------------------------------------
 
+  /** Keeps `next`, the zooms as the timeline shows them, in their recordings' time. */
   const commitZooms = (next: Zoom[]) => {
     setZoomDraft(null);
-    commitEdits({ ...edits, zooms: next });
+    const before = new Map(shown.list.map((zoom) => [zoom.id, zoom]));
+    const originals = new Map(allZooms.map((zoom) => [zoom.id, zoom]));
+    const placed = next.flatMap((zoom): Zoom[] => {
+      const index = shown.owner.get(zoom.id) ?? positionIn(clips, own, zoom.startMs)?.index ?? 0;
+      const clip = clips[index];
+      const { offset, low, high } = spanOf(clips, own, index, durationMs);
+      const was = before.get(zoom.id);
+      const original = originals.get(zoom.id);
+      // Unmoved, it keeps its own times, even the part its clip hides.
+      if (was && original && was.startMs === zoom.startMs && was.endMs === zoom.endMs) return [{ ...original, scale: zoom.scale, focus: zoom.focus }];
+      const startMs = Math.max(low, zoom.startMs) - offset;
+      const endMs = Math.min(high, zoom.endMs) - offset;
+      if (endMs - startMs < Math.min(MIN_ZOOM_MS, high - low)) return [];
+      return [tagZoom({ ...zoom, startMs, endMs }, clip.source, own)];
+    });
+    const kept = allZooms.filter((zoom) => !shown.owner.has(zoom.id));
+    commitEdits({ ...edits, zooms: [...kept, ...placed].sort((a, b) => a.startMs - b.startMs) });
   };
 
-  const canAddZoom = durationMs > 0 && addZoom(zooms, currentMs, durationMs) !== null;
+  const canAddZoom = timelineDuration > 0 && addZoom(zooms, currentMs, timelineDuration) !== null;
 
   const addZoomAt = (ms: number) => {
-    const added = addZoom(zooms, ms, durationMs);
+    const added = addZoom(zooms, ms, timelineDuration);
     if (!added) {
       setMessage("There is no room for a zoom there.");
       return;
@@ -288,7 +536,9 @@ export default function RecordingEditor() {
   const setZoomFocus = (zoom: Zoom, kind: ZoomFocus["kind"]) => {
     if (zoom.focus.kind === kind) return;
     // An area starts where the pointer was, when that is known.
-    const [x, y] = clampCentre(cursorAt(cursor, zoom.startMs) ?? [0.5, 0.5], zoom.scale);
+    const index = shown.owner.get(zoom.id) ?? at?.index ?? 0;
+    const { offset } = spanOf(clips, own, index, durationMs);
+    const [x, y] = clampCentre(cursorAt(cursorOf(clips[index]?.source ?? own), zoom.startMs - offset) ?? [0.5, 0.5], zoom.scale);
     commitZooms(updateZoom(zooms, zoom.id, { focus: kind === "cursor" ? { kind: "cursor" } : { kind: "area", x, y } }));
   };
 
@@ -321,9 +571,18 @@ export default function RecordingEditor() {
   const play = () => {
     const video = videoRef.current;
     if (!video) return;
-    // From the trimmed start when at (or past) the trimmed end.
-    const at = video.currentTime * 1000;
-    if (at < trim.startMs || at >= trim.endMs - 50) seek(trim.startMs);
+    if (joined) {
+      // From the first clip when at (or past) the end of the last.
+      if (currentMs >= sequenceMs - 50) seek(0);
+      if (pendingRef.current) {
+        pendingRef.current.play = true;
+        return;
+      }
+    } else {
+      // From the trimmed start when at (or past) the trimmed end.
+      const now = video.currentTime * 1000;
+      if (now < trim.startMs || now >= trim.endMs - 50) seek(trim.startMs);
+    }
     try {
       void video.play()?.catch(() => setPlaying(false));
     } catch {
@@ -334,9 +593,12 @@ export default function RecordingEditor() {
   const toggle = () => (playing ? pause() : play());
 
   // While playing, the playhead follows every frame and stops at the trimmed end.
+  // Joined, it goes on to the next clip at each clip's end, switching recording when it must.
   const endRef = useRef(trim.endMs);
+  const playRef = useRef({ clips, joined, own, at });
   useEffect(() => {
     endRef.current = trim.endMs;
+    playRef.current = { clips, joined, own, at };
   });
   useEffect(() => {
     if (!playing) return;
@@ -345,6 +607,36 @@ export default function RecordingEditor() {
       const video = videoRef.current;
       if (!video) return;
       const ms = video.currentTime * 1000;
+      const now = playRef.current;
+      if (now.joined && now.at) {
+        // Waiting for the next recording to load.
+        if (pendingRef.current) {
+          frame = requestAnimationFrame(step);
+          return;
+        }
+        const { index, clip } = now.at;
+        if (ms >= clip.endMs) {
+          const next = now.clips[index + 1] as Clip | undefined;
+          if (!next) {
+            video.pause();
+            setCurrentMs(sequenceDuration(now.clips));
+            return;
+          }
+          const start = clipStarts(now.clips)[index + 1];
+          playRef.current = { ...now, at: { index: index + 1, clip: next, sourceMs: next.startMs } };
+          setCurrentMs(start);
+          if (next.source === loadedRef.current) {
+            video.currentTime = next.startMs / 1000;
+          } else {
+            // The new recording plays from its clip's start once it loads.
+            pendingRef.current = { sourceMs: next.startMs, play: true };
+          }
+        } else {
+          setCurrentMs(toSequence(now.clips, index, ms));
+        }
+        frame = requestAnimationFrame(step);
+        return;
+      }
       if (ms >= endRef.current) {
         video.pause();
         video.currentTime = endRef.current / 1000;
@@ -361,19 +653,48 @@ export default function RecordingEditor() {
   const onMetadata = () => {
     const video = videoRef.current;
     if (!video) return;
-    if (video.videoWidth > 0 && video.videoHeight > 0) setVideoSize({ width: video.videoWidth, height: video.videoHeight });
+    const source = video.dataset.source ?? own;
     const duration = Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : 0;
-    setDurationMs(duration);
-    // Opens at the start of the trimmed stretch.
-    const start = trimOf(edits, duration).startMs;
-    if (start > 0) seek(start);
+    if (video.videoWidth > 0 && video.videoHeight > 0) {
+      setMeta((known) => ({ ...known, [source]: { durationMs: duration, width: video.videoWidth, height: video.videoHeight } }));
+    }
+    const first = loadedRef.current === null;
+    loadedRef.current = source;
+    const pending = pendingRef.current;
+    pendingRef.current = null;
+    const goTo = (ms: number) => {
+      try {
+        video.currentTime = ms / 1000;
+      } catch {
+        // Not seekable yet: it opens at the start.
+      }
+    };
+    if (pending) {
+      goTo(pending.sourceMs);
+      if (pending.play) {
+        try {
+          void video.play()?.catch(() => setPlaying(false));
+        } catch {
+          setPlaying(false);
+        }
+      }
+      return;
+    }
+    if (first && !joined && source === own) {
+      // Opens at the start of the trimmed stretch.
+      const start = trimOf(edits, duration).startMs;
+      if (start > 0) seek(start);
+    } else if (at && at.clip.source === source) {
+      goTo(at.sourceMs);
+    }
   };
 
   // Space plays and pauses, unless a control has the keyboard. Ctrl/⌘ Z
   // undoes, and Ctrl/⌘ Shift Z or Ctrl Y redoes, unless a field has the text.
-  const keysRef = useRef({ toggle, undoEdit, redoEdit });
+  // Alt and the arrow keys move the selected clip; Delete removes it.
+  const keysRef = useRef({ toggle, undoEdit, redoEdit, moveSelectedClip, removeSelectedClip, hasClip: false });
   useEffect(() => {
-    keysRef.current = { toggle, undoEdit, redoEdit };
+    keysRef.current = { toggle, undoEdit, redoEdit, moveSelectedClip, removeSelectedClip, hasClip: selectedClip !== null && !selectedZoom && !exporting };
   });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -385,6 +706,18 @@ export default function RecordingEditor() {
         if (key === "y" || event.shiftKey) keysRef.current.redoEdit();
         else keysRef.current.undoEdit();
         return;
+      }
+      if (keysRef.current.hasClip && !mod && !isTyping(event.target)) {
+        if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+          event.preventDefault();
+          keysRef.current.moveSelectedClip(event.key === "ArrowLeft" ? -1 : 1);
+          return;
+        }
+        if (!event.altKey && (event.key === "Delete" || event.key === "Backspace")) {
+          event.preventDefault();
+          keysRef.current.removeSelectedClip();
+          return;
+        }
       }
       if (event.key !== " " || isTyping(event.target)) return;
       event.preventDefault();
@@ -410,11 +743,11 @@ export default function RecordingEditor() {
     (): BackdropSources => {
       const video = videoRef.current;
       return {
-        capture: video && videoSize ? { image: video, area: { x: 0, y: 0, width: videoSize.width, height: videoSize.height } } : null,
+        capture: video && currentMeta ? { image: video, area: { x: 0, y: 0, width: currentMeta.width, height: currentMeta.height } } : null,
         image: backdropImageEl,
       };
     },
-    [videoSize, backdropImageEl],
+    [currentMeta, backdropImageEl],
   );
 
   // The preview paints the backdrop as the export does; the video plays on top.
@@ -453,7 +786,7 @@ export default function RecordingEditor() {
   // --- Export -------------------------------------------------------------
 
   const exportNow = async () => {
-    if (!videoSize || !layout || exporting) return;
+    if (!videoSize || !layout || exporting || !canExport) return;
     pause();
     setMessage(null);
     setProgress({ done: 0, total: 0 });
@@ -462,10 +795,26 @@ export default function RecordingEditor() {
       unlisten = await onExportProgress(setProgress).catch(() => null);
       const shape = recordingLayout(videoSize, edits.backdrop);
       const layers = edits.backdrop ? await exportLayers(shape, edits.backdrop, sources()) : null;
+      const exportClips = savedClips.map((clip): ExportClip => {
+        const size = meta[clip.source];
+        const box = clip.source === own ? { x: 0, y: 0, width: shape.videoWidth, height: shape.videoHeight } : fitInside(size.width, size.height, shape.videoWidth, shape.videoHeight);
+        return {
+          source: clip.source,
+          startMs: clip.startMs,
+          endMs: clip.endMs,
+          sourceWidth: size.width,
+          sourceHeight: size.height,
+          ...box,
+          zooms: (joined ? zoomsIn(allZooms, clip, own) : allZooms.filter((zoom) => zoomOnSource(zoom, own, own))).map((zoom) => {
+            const sent = { ...zoom };
+            delete sent.source;
+            return sent;
+          }),
+        };
+      });
       const saved = await exportRecording(
         {
-          startMs: savedTrim.startMs,
-          endMs: savedTrim.endMs,
+          clips: exportClips,
           width: shape.width,
           height: shape.height,
           x: shape.x,
@@ -473,9 +822,6 @@ export default function RecordingEditor() {
           videoWidth: shape.videoWidth,
           videoHeight: shape.videoHeight,
           backdropBytes: 0,
-          zooms: edits.zooms ?? [],
-          sourceWidth: videoSize.width,
-          sourceHeight: videoSize.height,
         },
         layers,
       );
@@ -498,14 +844,22 @@ export default function RecordingEditor() {
     );
   }
 
-  const clipMs = trim.endMs - trim.startMs;
-  const percent = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
-  const status = exporting ? `Exporting… ${percent}%` : (message ?? saveText(saveStatus));
   // The video's place on the preview, as shares of the output.
   const share = (part: number, whole: number) => `${(part / whole) * 100}%`;
+  const clipMs = joined ? sequenceMs : trim.endMs - trim.startMs;
+  const fit =
+    layout && currentMeta && currentSource !== own ? fitInside(currentMeta.width, currentMeta.height, layout.videoWidth, layout.videoHeight) : null;
+  const fitStyle = fit && layout ? { left: share(fit.x, layout.videoWidth), top: share(fit.y, layout.videoHeight), width: share(fit.width, layout.videoWidth), height: share(fit.height, layout.videoHeight) } : { inset: 0 };
+  const percent = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
+  const status = exporting ? `Exporting… ${percent}%` : (message ?? saveText(saveStatus));
   // While an area zoom is chosen, the whole frame shows with the area on it.
   const picking = selectedZoom?.focus.kind === "area" && !playing && !exporting;
-  const view = picking ? FULL_VIEW : viewAt(zooms, currentMs, cursor);
+  // The view comes from the current clip's zooms, in its recording's time.
+  const currentOffset = at ? spanOf(clips, own, at.index, durationMs).offset : 0;
+  const currentZooms = zooms
+    .filter((zoom) => !joined || (shown.owner.get(zoom.id) ?? positionIn(clips, own, zoom.startMs)?.index) === at?.index)
+    .map((zoom) => ({ ...zoom, startMs: zoom.startMs - currentOffset, endMs: zoom.endMs - currentOffset }));
+  const view = picking ? FULL_VIEW : viewAt(currentZooms, at?.sourceMs ?? currentMs, cursor);
   const frameStyle = layout
     ? {
         left: share(layout.x, layout.width),
@@ -566,6 +920,16 @@ export default function RecordingEditor() {
           <button
             type="button"
             className="text-button"
+            onClick={() => void addRecording()}
+            disabled={!info || readOnly || exporting}
+            title="Join a recording from the recordings folder after the clip under the playhead"
+          >
+            <AddIcon />
+            Recording
+          </button>
+          <button
+            type="button"
+            className="text-button"
             onClick={() => addZoomAt(currentMs)}
             disabled={!canAddZoom || exporting}
             title={canAddZoom ? "Zoom in from the playhead" : "Move the playhead clear of the other zooms to add one"}
@@ -612,7 +976,10 @@ export default function RecordingEditor() {
           </div>
         )}
         <div className="bar-group end">
-          <button type="button" className="primary" onClick={() => void exportNow()} disabled={!videoSize || exporting} title="Save the edited recording beside the original">
+          <button type="button" className="primary" onClick={() => void exportNow()}
+            disabled={!videoSize || exporting || !canExport}
+            title={missingClip ? `${missingClip.source} is missing, so the sequence cannot be exported` : "Save the edited recording beside the original"}
+          >
             <ExportIcon />
             {exporting ? "Exporting…" : "Export"}
           </button>
@@ -626,11 +993,13 @@ export default function RecordingEditor() {
           style={layout ? ({ aspectRatio: `${layout.width} / ${layout.height}`, "--stage-ratio": layout.width / layout.height } as CSSProperties) : undefined}
         >
           {backdrop && <canvas ref={canvasRef} className="recording-backdrop" aria-hidden="true" />}
-          <div className="recording-frame" style={frameStyle}>
+          <div className="recording-frame" style={frameStyle} data-joined={joined ? "true" : undefined}>
+            <div className="recording-fit" style={fitStyle}>
             {src && (
               <video
                 ref={videoRef}
                 className="recording-video"
+                data-source={currentSource}
                 src={src}
                 crossOrigin="anonymous"
                 preload="auto"
@@ -641,7 +1010,11 @@ export default function RecordingEditor() {
                 onPause={() => setPlaying(false)}
                 onEnded={() => setPlaying(false)}
                 onSeeked={() => setFrameTick((tick) => tick + 1)}
-                onTimeUpdate={() => !playing && setCurrentMs((videoRef.current?.currentTime ?? 0) * 1000)}
+                onTimeUpdate={() => {
+                  if (playing || pendingRef.current) return;
+                  const ms = (videoRef.current?.currentTime ?? 0) * 1000;
+                  setCurrentMs(joined && at ? toSequence(clips, at.index, ms) : ms);
+                }}
                 onError={() => setMessage("The recording cannot be played.")}
                 onClick={toggle}
               />
@@ -655,6 +1028,7 @@ export default function RecordingEditor() {
                 onCommit={(x, y) => setZoomArea(selectedZoom, x, y, true)}
               />
             )}
+            </div>
           </div>
         </div>
       </div>
@@ -663,10 +1037,11 @@ export default function RecordingEditor() {
           {playing ? <PauseIcon /> : <PlayIcon />}
         </button>
         <span className="recording-time" aria-label="Time">
-          {formatTime(currentMs)} / {formatTime(durationMs)}
+          {formatTime(currentMs)} / {formatTime(timelineDuration)}
         </span>
         <Timeline
-          durationMs={durationMs}
+          durationMs={timelineDuration}
+          trimmable={!joined}
           trim={trim}
           currentMs={currentMs}
           onSeek={seek}
@@ -677,11 +1052,40 @@ export default function RecordingEditor() {
           }}
           onTrimCommit={commitTrim}
         >
+          {joined && (
+            <ClipTrack
+              clips={clips}
+              durationMs={sequenceMs}
+              sourceDuration={(source) => meta[source]?.durationMs ?? 0}
+              missing={missing}
+              selectedId={selectedClip?.id ?? null}
+              onSelect={(id) => {
+                setSelectedClipId(id);
+                setSelectedZoomId(null);
+              }}
+              onTrimPreview={setClipDraft}
+              onTrimCommit={(next) => {
+                commitClips(next);
+                const pos = at ? next.findIndex((clip) => clip.id === at.clip.id) : -1;
+                if (pos >= 0 && at) seek(timelineMs(next, own, pos, at.sourceMs), next);
+              }}
+              onMove={(id, to) => {
+                const next = moveClip(clips, id, to);
+                if (next === clips) return;
+                commitClips(next);
+                const index = next.findIndex((clip) => clip.id === id);
+                seek(timelineMs(next, own, index, next[index].startMs), next);
+              }}
+            />
+          )}
           <ZoomTrack
-            durationMs={durationMs}
+            durationMs={timelineDuration}
             zooms={zooms}
             selectedId={selectedZoom?.id ?? null}
-            onSelect={setSelectedZoomId}
+            onSelect={(id) => {
+              setSelectedZoomId(id);
+              if (id) setSelectedClipId(null);
+            }}
             onPreview={setZoomDraft}
             onCommit={commitZooms}
             onAdd={addZoomAt}
@@ -696,7 +1100,7 @@ export default function RecordingEditor() {
       )}
       <footer className="editor-status">
         <span>{info?.fileName ?? "Loading…"}</span>
-        {durationMs > 0 && <span>Clip {formatTime(clipMs)}</span>}
+        {durationMs > 0 && (joined ? <span>{clips.length} clips, {formatTime(clipMs)}</span> : <span>Clip {formatTime(clipMs)}</span>)}
         {info && <SoundSources audio={info.audio} />}
         {layout && (
           <span>

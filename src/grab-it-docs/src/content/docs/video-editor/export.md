@@ -23,12 +23,12 @@ When it's done, the status bar says **Exported** and the file name, and the Quic
 
 ## What's in it
 
-- Only the part between the [trim handles](/grab-it/video-editor/timeline-and-trim/#trim).
+- Only the part between the [trim handles](/grab-it/video-editor/timeline-and-trim/#trim), or, once you [join recordings](/grab-it/video-editor/join-recordings/), each clip's kept part, in order.
 - The [backdrop](/grab-it/video-editor/backdrop/), at the size the status bar shows as **Output**.
 - The [zooms](/grab-it/video-editor/zooms/), eased exactly as in the preview.
-- The recording's sound, trimmed to match.
+- The recording's sound, trimmed to match. Joined clips each bring their own sound, and a recording without any is silent for its clip.
 
-It keeps the recording's frame rate, and uses the **Quality** in **Settings → Recording**.
+It keeps the frame rate of the recording you opened, and uses the **Quality** in **Settings → Recording**.
 
 ## Progress
 
