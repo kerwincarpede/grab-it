@@ -1545,12 +1545,12 @@ describe("EditorWindow", () => {
     fireEvent.contextMenu(colours().getByRole("button", { name: "Favourite colour #ff8800" }));
     expect(colours().queryByRole("button", { name: "Favourite colour #ff8800" })).not.toBeInTheDocument();
     await waitFor(() => expect(last(favorites)).toEqual(["#123abc"]));
+    // The editor's own saves leave the favourites to their command.
+    await waitFor(() => expect(last(saved)).toMatchObject({ color: "#123abc" }));
+    for (const preferences of saved) expect(preferences).not.toHaveProperty("favoriteColors");
     // The keys still pick the built-in swatches.
     fireEvent.keyDown(window, { key: "1" });
     expect(colours().getByRole("button", { name: "Colour #e5484d" })).toHaveAttribute("aria-pressed", "true");
-    // The editor's own saves leave the favourites to their command.
-    await waitFor(() => expect(saved.length).toBeGreaterThan(0));
-    for (const preferences of saved) expect(preferences).not.toHaveProperty("favoriteColors");
   });
 
   it("keeps at most 8 favourites", async () => {
