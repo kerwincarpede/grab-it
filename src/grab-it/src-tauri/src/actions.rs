@@ -314,11 +314,14 @@ pub fn finish_text(app: &AppHandle, image: &RgbaImage) {
     );
     let found = codes::decode(image);
     if !found.is_empty() {
-        let text = ocr::read_now(app, image).unwrap_or_else(|err| {
-            // The codes are what matter; the text around them is a bonus.
-            eprintln!("Grab-it: read a code, but OCR could not read the text: {err}");
-            String::new()
-        });
+        let text = ocr::read_now(app, image).map_or_else(
+            |err| {
+                // The codes are what matter; the text around them is a bonus.
+                eprintln!("Grab-it: read a code, but OCR could not read the text: {err}");
+                String::new()
+            },
+            |lines| ocr::lines_text(&lines),
+        );
         let outcome = code_outcome(found, &text);
         match app.clipboard().write_text(outcome.copy) {
             Ok(()) => {
@@ -331,7 +334,7 @@ pub fn finish_text(app: &AppHandle, image: &RgbaImage) {
     let ai = ai::current_settings(app);
     let tidies = ai.tidies_text();
     let read = match ocr::read_now(app, image) {
-        Ok(text) => text,
+        Ok(lines) => ocr::lines_text(&lines),
         // The AI may still read it.
         Err(err) if tidies => {
             eprintln!("Grab-it: OCR could not read the text, asking AI: {err}");

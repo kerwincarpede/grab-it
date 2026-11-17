@@ -87,6 +87,8 @@ ab_glyph = "0.2"
 rdev = { git = "https://github.com/Narsil/rdev", rev = "b7e201bf80be7b9632207366f277d29fe732b9c1", default-features = false, features = ["x11"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Already in the tree through wry; Copy as file also uses it to offer the
+# file's URI on the GTK clipboard (file_clipboard.rs).
 gtk = "0.18"
 ashpd = { version = "0.12", default-features = false, features = ["tokio"] }
 futures-util = "0.3"

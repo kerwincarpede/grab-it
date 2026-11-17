@@ -19,14 +19,15 @@ use std::{
     time::Duration,
 };
 
-use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
+use ocrs::{ImageSource, OcrEngine, OcrEngineParams, TextItem};
 use rten::Model;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use image::RgbaImage;
 
 use crate::{
+    capture::Rect,
     codes::{self, Code},
     library::{LIBRARY_CHANGED_EVENT, LibraryResult, LibraryState},
 };
@@ -139,34 +140,94 @@ impl Ocr {
         Ok(Self { engine })
     }
 
-    /// The text in a capture file, one line of text per line, and the
-    /// capture itself, for [`store_text`] to decode its codes from.
-    pub fn read_capture(&self, png: &Path) -> OcrResult<(String, RgbaImage)> {
+    /// The lines of text in a capture file, and the capture itself, for
+    /// [`store_text`] to decode its codes from.
+    pub fn read_capture(&self, png: &Path) -> OcrResult<(Vec<OcrLine>, RgbaImage)> {
         let image = image::open(png)?.into_rgba8();
-        let text = self.read_image(&image::DynamicImage::ImageRgba8(image.clone()).into_rgb8())?;
-        Ok((text, image))
+        let lines = self.read_image(&image::DynamicImage::ImageRgba8(image.clone()).into_rgb8())?;
+        Ok((lines, image))
     }
 
-    /// The text in an image already in memory, one line of text per line.
-    pub fn read_image(&self, image: &image::RgbImage) -> OcrResult<String> {
-        let source =
-            ImageSource::from_bytes(image.as_raw(), image.dimensions()).map_err(engine_error)?;
+    /// The lines of text in an image already in memory, top to bottom, with
+    /// their words and the boxes of both in the image's pixels.
+    pub fn read_image(&self, image: &image::RgbImage) -> OcrResult<Vec<OcrLine>> {
+        let size = image.dimensions();
+        let source = ImageSource::from_bytes(image.as_raw(), size).map_err(engine_error)?;
         let input = self.engine.prepare_input(source).map_err(engine_error)?;
         let words = self.engine.detect_words(&input).map_err(engine_error)?;
         let lines = self.engine.find_text_lines(&input, &words);
-        let text = self
+        let lines = self
             .engine
             .recognize_text(&input, &lines)
             .map_err(engine_error)?
             .into_iter()
             .flatten()
-            .map(|line| line.to_string().trim().to_owned())
-            // Single characters are mostly noise (icons, borders).
-            .filter(|line| line.chars().count() > 1)
-            .collect::<Vec<_>>()
-            .join("\n");
-        Ok(text)
+            .filter_map(|line| {
+                let text = line.to_string().trim().to_owned();
+                // Single characters are mostly noise (icons, borders).
+                (text.chars().count() > 1).then(|| OcrLine {
+                    text,
+                    rect: clamped(&line, size),
+                    words: line
+                        .words()
+                        .map(|word| OcrWord {
+                            text: word.to_string(),
+                            rect: clamped(&word, size),
+                        })
+                        .collect(),
+                })
+            })
+            .collect();
+        Ok(lines)
     }
+}
+
+/// A line of text OCR read, with its box and its words. Stored as JSON in
+/// the library's `ocr_words` column; mirrors `OcrLine` in
+/// src/library/api.ts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrLine {
+    pub text: String,
+    /// The line's axis-aligned box in the image's pixels.
+    #[serde(flatten)]
+    pub rect: Rect,
+    pub words: Vec<OcrWord>,
+}
+
+/// A word in an [`OcrLine`]. Mirrors `OcrWord` in src/library/api.ts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrWord {
+    pub text: String,
+    /// The word's axis-aligned box in the image's pixels.
+    #[serde(flatten)]
+    pub rect: Rect,
+}
+
+/// The bounding box of an ocrs line or word, clipped to an image of
+/// `size`: empty, at the nearest edge, when it lies wholly outside.
+fn clamped(item: &impl TextItem, (width, height): (u32, u32)) -> Rect {
+    let rect = item.bounding_rect();
+    let clamp_x = |x: i32| x.clamp(0, i32::try_from(width).unwrap_or(i32::MAX));
+    let clamp_y = |y: i32| y.clamp(0, i32::try_from(height).unwrap_or(i32::MAX));
+    let (left, right) = (clamp_x(rect.left()), clamp_x(rect.right()));
+    let (top, bottom) = (clamp_y(rect.top()), clamp_y(rect.bottom()));
+    Rect {
+        x: left,
+        y: top,
+        width: right.saturating_sub(left).max(0).unsigned_abs(),
+        height: bottom.saturating_sub(top).max(0).unsigned_abs(),
+    }
+}
+
+/// The plain text of `lines`, one line of text per line.
+pub fn lines_text(lines: &[OcrLine]) -> String {
+    lines
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `text` with the values of `codes` after it, one per line, as the
@@ -184,9 +245,10 @@ pub fn with_codes(text: &str, codes: &[Code]) -> String {
     }
 }
 
-/// Stores `text`, read from `image`, as the text of shot `id`, then decodes
-/// the codes in `image` and, when it holds any, stores the text again with
-/// their values ([`with_codes`]). Returns what is stored.
+/// Stores `lines`, read from `image`, as the text and word boxes of shot
+/// `id`, then decodes the codes in `image` and, when it holds any, stores
+/// the text again with their values ([`with_codes`]). Returns the text
+/// stored.
 ///
 /// The plain text is stored before decoding on purpose: release builds
 /// abort on a panic, so a capture that crashes rxing is by then already
@@ -195,15 +257,16 @@ pub fn with_codes(text: &str, codes: &[Code]) -> String {
 pub fn store_text(
     library: &LibraryState,
     id: i64,
-    text: &str,
+    lines: &[OcrLine],
     image: &RgbaImage,
 ) -> LibraryResult<String> {
-    library.lock().set_ocr_text(id, text)?;
+    library.lock().set_ocr_lines(id, lines)?;
+    let text = lines_text(lines);
     let codes = codes::decode(image);
     if codes.is_empty() {
-        return Ok(text.to_owned());
+        return Ok(text);
     }
-    let full = with_codes(text, &codes);
+    let full = with_codes(&text, &codes);
     library.lock().set_ocr_text(id, &full)?;
     Ok(full)
 }
@@ -286,9 +349,9 @@ impl TextOcr {
     }
 }
 
-/// Reads the text in `image` right now, loading the models first when this
-/// is the first text capture since Grab-it started.
-pub fn read_now(app: &AppHandle, image: &image::RgbaImage) -> OcrResult<String> {
+/// Reads the lines of text in `image` right now, loading the models first
+/// when this is the first text capture since Grab-it started.
+pub fn read_now(app: &AppHandle, image: &image::RgbaImage) -> OcrResult<Vec<OcrLine>> {
     let state = app.state::<TextOcr>();
     let engine = {
         let mut slot = state
@@ -399,7 +462,7 @@ fn run(app: &AppHandle, models: &Path, receiver: &Receiver<()>) {
         // responsive.
         let read = ocr.read_capture(&job.path);
         let saved = match read {
-            Ok((text, image)) => store_text(&library, job.id, &text, &image).map(|_| ()),
+            Ok((lines, image)) => store_text(&library, job.id, &lines, &image).map(|_| ()),
             Err(err) => {
                 eprintln!("Grab-it: could not OCR {}: {err}", job.path.display());
                 library.lock().mark_ocr_failed(job.id)
@@ -548,11 +611,114 @@ pub(crate) mod tests {
 
     #[test]
     fn ocr_reads_the_fixture_word() {
-        let (text, _) = engine().read_capture(&fixture_png()).unwrap();
+        let (lines, _) = engine().read_capture(&fixture_png()).unwrap();
+        let text = lines_text(&lines);
         assert!(
             text.to_lowercase().contains(FIXTURE_WORD),
             "OCR read {text:?}"
         );
+    }
+
+    #[test]
+    fn the_fixture_word_has_a_box_between_its_neighbours() {
+        let (lines, image) = engine().read_capture(&fixture_png()).unwrap();
+        let words: Vec<&OcrWord> = lines.iter().flat_map(|line| &line.words).collect();
+        let index = words
+            .iter()
+            .position(|word| word.text.to_lowercase() == FIXTURE_WORD)
+            .unwrap_or_else(|| panic!("no word {FIXTURE_WORD:?} in {lines:?}"));
+        assert!(
+            index > 0 && index + 1 < words.len(),
+            "{FIXTURE_WORD:?} is not between two words: {words:?}"
+        );
+        let (before, word, after) = (
+            &words[index - 1].rect,
+            &words[index].rect,
+            &words[index + 1].rect,
+        );
+
+        let (width, height) = image.dimensions();
+        assert!(word.width > 0 && word.height > 0, "{word:?}");
+        assert!(word.x >= 0 && word.y >= 0, "{word:?}");
+        assert!(word.x.unsigned_abs() + word.width <= width, "{word:?}");
+        assert!(word.y.unsigned_abs() + word.height <= height, "{word:?}");
+
+        assert!(
+            before.x + before.width as i32 <= word.x,
+            "{before:?} {word:?}"
+        );
+        assert!(word.x + word.width as i32 <= after.x, "{word:?} {after:?}");
+        // The line's box holds all three.
+        let line = lines
+            .iter()
+            .find(|line| line.words.iter().any(|w| w.rect == *word))
+            .unwrap();
+        assert!(line.rect.x <= before.x && line.rect.y <= word.y, "{line:?}");
+        assert!(
+            line.rect.x + line.rect.width as i32 >= after.x + after.width as i32,
+            "{line:?}"
+        );
+    }
+
+    #[test]
+    fn lines_join_into_text_one_per_line() {
+        assert_eq!(lines_text(&[]), "");
+        assert_eq!(
+            lines_text(&[line("Order pineapple"), line("today")]),
+            "Order pineapple\ntoday"
+        );
+    }
+
+    #[test]
+    fn lines_serialize_flat_and_camel_case() {
+        let stored = OcrLine {
+            text: "Hi there".into(),
+            rect: Rect {
+                x: 1,
+                y: 2,
+                width: 30,
+                height: 4,
+            },
+            words: vec![OcrWord {
+                text: "Hi".into(),
+                rect: Rect {
+                    x: 1,
+                    y: 2,
+                    width: 10,
+                    height: 4,
+                },
+            }],
+        };
+        let json = serde_json::json!([{
+            "text": "Hi there", "x": 1, "y": 2, "width": 30, "height": 4,
+            "words": [{ "text": "Hi", "x": 1, "y": 2, "width": 10, "height": 4 }],
+        }]);
+        assert_eq!(serde_json::to_value([&stored]).unwrap(), json);
+        assert_eq!(
+            serde_json::from_value::<Vec<OcrLine>>(json).unwrap(),
+            vec![stored]
+        );
+    }
+
+    /// A line of `text` whose words have no boxes, for storing.
+    pub fn line(text: &str) -> OcrLine {
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
+        OcrLine {
+            text: text.to_owned(),
+            rect,
+            words: text
+                .split(' ')
+                .map(|word| OcrWord {
+                    text: word.to_owned(),
+                    rect,
+                })
+                .collect(),
+        }
     }
 
     #[test]
@@ -616,11 +782,16 @@ pub(crate) mod tests {
             260,
         );
         image::imageops::overlay(&mut image, &qr, 70, 70);
-        let text = store_text(&library, id, "Your ticket", &image).unwrap();
+        let text = store_text(&library, id, &[line("Your ticket")], &image).unwrap();
         assert_eq!(text, "Your ticket\nhttps://example.com/ticket");
         assert_eq!(
             stored(&library, id),
             crate::library::ShotText::Read { text }
+        );
+        // The boxes are OCR's alone; codes have none.
+        assert_eq!(
+            library.lock().lines(id).unwrap(),
+            Some(vec![line("Your ticket")])
         );
     }
 
@@ -629,12 +800,14 @@ pub(crate) mod tests {
         use crate::codes::tests::canvas;
         let dir = tempfile::TempDir::new().unwrap();
         let (library, id) = library_with_a_capture(dir.path());
-        let text = store_text(&library, id, "Order pineapple today", &canvas(300, 200)).unwrap();
+        let lines = [line("Order pineapple today")];
+        let text = store_text(&library, id, &lines, &canvas(300, 200)).unwrap();
         assert_eq!(text, "Order pineapple today");
         assert_eq!(
             stored(&library, id),
             crate::library::ShotText::Read { text }
         );
+        assert_eq!(library.lock().lines(id).unwrap(), Some(lines.to_vec()));
     }
 
     #[test]
@@ -642,7 +815,7 @@ pub(crate) mod tests {
         use crate::codes::tests::canvas;
         let library = LibraryState::new(crate::library::Library::open_in_memory().unwrap());
         assert!(matches!(
-            store_text(&library, 42, "gone", &canvas(10, 10)),
+            store_text(&library, 42, &[line("gone")], &canvas(10, 10)),
             Err(crate::library::LibraryError::NotFound(42))
         ));
     }
@@ -654,7 +827,7 @@ pub(crate) mod tests {
         image::RgbImage::from_pixel(200, 80, image::Rgb([255, 255, 255]))
             .save(&blank)
             .unwrap();
-        assert_eq!(engine().read_capture(&blank).unwrap().0, "");
+        assert_eq!(engine().read_capture(&blank).unwrap().0, vec![]);
     }
 
     #[test]

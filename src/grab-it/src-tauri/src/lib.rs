@@ -197,6 +197,7 @@ pub fn run() {
             library::library_copy_file,
             library::library_export,
             library::library_text,
+            library::library_words,
             library::library_shot_id,
             library::library_copy_text,
             library::library_pin,
