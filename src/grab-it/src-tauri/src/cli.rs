@@ -193,7 +193,9 @@ where
         "help" | "--help" | "-h" => Command::Help,
         "displays" | "windows" => {
             if let Some(extra) = rest.first() {
-                return Err(format!("`{name}` takes no options, but was given `{extra}`"));
+                return Err(format!(
+                    "`{name}` takes no options, but was given `{extra}`"
+                ));
             }
             Command::Request(if name == "displays" {
                 Request::Displays
@@ -208,7 +210,13 @@ where
 }
 
 /// The options that take a value.
-const VALUE_OPTIONS: [&str; 5] = ["--display", "--window", "--region", "--delay", "--max-width"];
+const VALUE_OPTIONS: [&str; 5] = [
+    "--display",
+    "--window",
+    "--region",
+    "--delay",
+    "--max-width",
+];
 
 /// Splits `--name=value` and `--name value` into the name and its value.
 fn option_value<'a>(
@@ -263,7 +271,9 @@ fn parse_shot(args: &[String]) -> Result<ShotRequest, String> {
                     text.parse::<u32>()
                         .ok()
                         .filter(|width| *width > 0)
-                        .ok_or_else(|| format!("--max-width needs a width in pixels, not `{text}`"))?,
+                        .ok_or_else(|| {
+                            format!("--max-width needs a width in pixels, not `{text}`")
+                        })?,
                 );
                 None
             }
@@ -271,9 +281,7 @@ fn parse_shot(args: &[String]) -> Result<ShotRequest, String> {
         };
         if let Some(chosen) = chosen {
             if target.is_some() {
-                return Err(
-                    "shot takes one of --screen, --display, --window and --region".into(),
-                );
+                return Err("shot takes one of --screen, --display, --window and --region".into());
             }
             target = Some(chosen);
         }
@@ -379,7 +387,9 @@ fn ask(request: &Request) -> Result<serde_json::Value, String> {
 /// Starts Grab-it with no arguments, so it waits in the tray, and connects
 /// once it is listening.
 fn start_and_connect() -> Result<interprocess::local_socket::Stream, String> {
-    let exe = std::env::current_exe()
+    // In an AppImage, the AppImage itself: a program started from this
+    // process's own mount would quit when the mount goes with it.
+    let exe = control::executable()
         .map_err(|err| format!("could not find Grab-it to start it: {err}"))?;
     std::process::Command::new(&exe)
         .stdin(std::process::Stdio::null())
@@ -587,7 +597,11 @@ mod tests {
         );
         assert_eq!(command(&["help"]), Ok(Some(Command::Help)));
         assert_eq!(command(&["--help"]), Ok(Some(Command::Help)));
-        assert!(command(&["windows", "--all"]).unwrap_err().contains("--all"));
+        assert!(
+            command(&["windows", "--all"])
+                .unwrap_err()
+                .contains("--all")
+        );
     }
 
     #[test]
@@ -658,16 +672,33 @@ mod tests {
     #[test]
     fn bad_shot_arguments_are_errors() {
         assert!(shot(&["--window"]).unwrap_err().contains("needs a value"));
-        assert!(shot(&["--region", "1,2,3"]).unwrap_err().contains("x,y,width,height"));
+        assert!(
+            shot(&["--region", "1,2,3"])
+                .unwrap_err()
+                .contains("x,y,width,height")
+        );
         assert!(shot(&["--region", "0,0,0,10"]).is_err());
         assert!(shot(&["--region", "a,b,c,d"]).is_err());
-        assert!(shot(&["--annotate"]).unwrap_err().contains("unknown shot option"));
+        assert!(
+            shot(&["--annotate"])
+                .unwrap_err()
+                .contains("unknown shot option")
+        );
         assert!(shot(&["--screen=yes"]).is_err());
     }
 
     #[test]
     fn the_usage_lists_every_command() {
-        for word in ["displays", "windows", "shot", "--display", "--window", "--region", "--delay", "--max-width"] {
+        for word in [
+            "displays",
+            "windows",
+            "shot",
+            "--display",
+            "--window",
+            "--region",
+            "--delay",
+            "--max-width",
+        ] {
             assert!(USAGE.contains(word), "{word}");
         }
     }

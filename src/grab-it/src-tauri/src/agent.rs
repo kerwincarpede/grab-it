@@ -152,9 +152,7 @@ pub fn match_window<'a>(windows: &'a [WindowInfo], query: &str) -> Result<&'a Wi
             window.app_name.to_lowercase().contains(&needle)
                 || window.title.to_lowercase().contains(&needle)
         })
-        .ok_or_else(|| {
-            format!("no window matches `{query}`; run `grab-it windows` to list them")
-        })
+        .ok_or_else(|| format!("no window matches `{query}`; run `grab-it windows` to list them"))
 }
 
 /// Finds the monitor `query` names: its id from `grab-it displays`, else
@@ -173,9 +171,7 @@ pub fn match_display<'a>(
     monitors
         .iter()
         .find(|monitor| !needle.is_empty() && monitor.name.to_lowercase().contains(&needle))
-        .ok_or_else(|| {
-            format!("no display matches `{query}`; run `grab-it displays` to list them")
-        })
+        .ok_or_else(|| format!("no display matches `{query}`; run `grab-it displays` to list them"))
 }
 
 /// The monitor holding the most of `rect` (desktop coordinates), or None
@@ -198,11 +194,7 @@ pub fn monitor_for<'a>(monitors: &'a [MonitorInfo], rect: Rect) -> Option<&'a Mo
 
 /// `rect` (desktop coordinates) in the pixels of `monitor`'s image, which
 /// is `image_width` pixels wide, clipped to it. None when nothing is left.
-pub fn region_in_image(
-    monitor: &MonitorInfo,
-    rect: Rect,
-    image_size: (u32, u32),
-) -> Option<Rect> {
+pub fn region_in_image(monitor: &MonitorInfo, rect: Rect, image_size: (u32, u32)) -> Option<Rect> {
     if monitor.width == 0 {
         return None;
     }
@@ -447,7 +439,7 @@ fn home_and_exe(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
         .path()
         .home_dir()
         .map_err(|err| format!("could not find your home folder: {err}"))?;
-    let exe = std::env::current_exe()
+    let exe = crate::control::executable()
         .map_err(|err| format!("could not find Grab-it's own program: {err}"))?;
     Ok((home, exe))
 }
@@ -511,7 +503,10 @@ mod tests {
 
     #[test]
     fn windows_match_by_id_first() {
-        let windows = [window(7, "Terminal", "build"), window(42, "Firefox", "7 tabs")];
+        let windows = [
+            window(7, "Terminal", "build"),
+            window(42, "Firefox", "7 tabs"),
+        ];
         assert_eq!(match_window(&windows, "42").unwrap().id, 42);
         assert_eq!(match_window(&windows, " 7 ").unwrap().id, 7);
     }
@@ -541,18 +536,35 @@ mod tests {
 
     #[test]
     fn displays_match_by_id_or_name() {
-        let monitors = [monitor(0, "DELL U2720Q", 0, 1920), monitor(1, "Built-in", 1920, 1440)];
+        let monitors = [
+            monitor(0, "DELL U2720Q", 0, 1920),
+            monitor(1, "Built-in", 1920, 1440),
+        ];
         assert_eq!(match_display(&monitors, "1").unwrap().index, 1);
         assert_eq!(match_display(&monitors, "dell").unwrap().index, 0);
-        assert!(match_display(&monitors, "5").unwrap_err().contains("grab-it displays"));
+        assert!(
+            match_display(&monitors, "5")
+                .unwrap_err()
+                .contains("grab-it displays")
+        );
         assert!(match_display(&monitors, "").is_err());
     }
 
     #[test]
     fn a_region_belongs_to_the_display_holding_most_of_it() {
         let monitors = [monitor(0, "Left", 0, 1920), monitor(1, "Right", 1920, 1920)];
-        assert_eq!(monitor_for(&monitors, rect(100, 100, 200, 200)).unwrap().index, 0);
-        assert_eq!(monitor_for(&monitors, rect(1800, 0, 400, 100)).unwrap().index, 1);
+        assert_eq!(
+            monitor_for(&monitors, rect(100, 100, 200, 200))
+                .unwrap()
+                .index,
+            0
+        );
+        assert_eq!(
+            monitor_for(&monitors, rect(1800, 0, 400, 100))
+                .unwrap()
+                .index,
+            1
+        );
         assert!(monitor_for(&monitors, rect(-500, 0, 100, 100)).is_none());
     }
 
@@ -569,7 +581,10 @@ mod tests {
             region_in_image(&right, rect(3300, 0, 200, 100), (1440, 1080)),
             Some(rect(1380, 0, 60, 100))
         );
-        assert_eq!(region_in_image(&right, rect(0, 0, 100, 100), (1440, 1080)), None);
+        assert_eq!(
+            region_in_image(&right, rect(0, 0, 100, 100), (1440, 1080)),
+            None
+        );
     }
 
     #[test]
@@ -578,7 +593,10 @@ mod tests {
         assert_eq!((image.dimensions(), ratio), ((100, 50), 0.25));
         let (image, ratio) = fit_width(RgbaImage::new(80, 20), Some(100));
         assert_eq!((image.dimensions(), ratio), ((80, 20), 1.0));
-        assert_eq!(fit_width(RgbaImage::new(80, 20), None).0.dimensions(), (80, 20));
+        assert_eq!(
+            fit_width(RgbaImage::new(80, 20), None).0.dimensions(),
+            (80, 20)
+        );
     }
 
     #[test]
@@ -596,8 +614,7 @@ mod tests {
             captured_notice(Path::new("/p/originals/Grab-it 2026-11-17 09-00-00.png")),
             QuickItem::Notice {
                 title: "Captured by an agent".into(),
-                message: "Grab-it 2026-11-17 09-00-00.png is in the Library, tagged agent."
-                    .into(),
+                message: "Grab-it 2026-11-17 09-00-00.png is in the Library, tagged agent.".into(),
             }
         );
     }

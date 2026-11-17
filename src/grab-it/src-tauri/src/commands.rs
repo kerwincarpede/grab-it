@@ -144,7 +144,10 @@ pub fn set_show_in_dock(
 /// Turns Settings › AI agents' access switch on or off. The control
 /// connection reads it with every request, so it applies at once.
 #[tauri::command]
-pub fn set_agent_access(enabled: bool, state: State<'_, SettingsState>) -> Result<Settings, String> {
+pub fn set_agent_access(
+    enabled: bool,
+    state: State<'_, SettingsState>,
+) -> Result<Settings, String> {
     lock(&state)
         .set_agent_access(enabled)
         .map_err(|err| err.to_string())

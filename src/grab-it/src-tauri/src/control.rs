@@ -13,9 +13,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use interprocess::local_socket::{
-    GenericFilePath, ListenerOptions, Name, Stream, prelude::*,
-};
+use interprocess::local_socket::{GenericFilePath, ListenerOptions, Name, Stream, prelude::*};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
@@ -167,6 +165,25 @@ pub fn data_dir_from(env: impl Fn(&str) -> Option<PathBuf>) -> Option<PathBuf> {
     Some(base.join(IDENTIFIER))
 }
 
+/// Grab-it's own program, as agents and a fresh launch should run it. In
+/// an AppImage that is the AppImage itself (`$APPIMAGE`): the running
+/// program sits in a temporary mount that changes on every launch and goes
+/// away with the process that made it.
+pub fn executable() -> io::Result<PathBuf> {
+    Ok(executable_from(
+        std::env::var_os("APPIMAGE").map(PathBuf::from),
+        std::env::current_exe()?,
+    ))
+}
+
+/// [`executable`], given `$APPIMAGE` and the running program.
+pub fn executable_from(appimage: Option<PathBuf>, current: PathBuf) -> PathBuf {
+    match appimage {
+        Some(appimage) if appimage.is_absolute() => appimage,
+        _ => current,
+    }
+}
+
 /// Where the socket is: a file in the data folder on Linux and macOS.
 #[cfg(unix)]
 pub fn socket_path() -> Option<PathBuf> {
@@ -198,8 +215,8 @@ fn name(path: &Path) -> io::Result<Name<'_>> {
 
 /// Connects to the running app; fails when it is not running.
 pub fn connect() -> io::Result<Stream> {
-    let path = socket_path()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no data folder"))?;
+    let path =
+        socket_path().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no data folder"))?;
     Stream::connect(name(&path)?)
 }
 
@@ -252,8 +269,8 @@ fn listen() -> io::Result<interprocess::local_socket::Listener> {
     use interprocess::os::unix::local_socket::ListenerOptionsExt;
     use std::os::unix::fs::PermissionsExt;
 
-    let path = socket_path()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no data folder"))?;
+    let path =
+        socket_path().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no data folder"))?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -281,12 +298,11 @@ fn listen() -> io::Result<interprocess::local_socket::Listener> {
         local_socket::ListenerOptionsExt, security_descriptor::SecurityDescriptor,
     };
 
-    let path = socket_path()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no user name"))?;
+    let path =
+        socket_path().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no user name"))?;
     // Protected, so nothing is inherited: full access for the pipe's owner,
     // the user who started Grab-it, and no one else.
-    let sddl = widestring::U16CString::from_str("D:P(A;;GA;;;OW)")
-        .map_err(io::Error::other)?;
+    let sddl = widestring::U16CString::from_str("D:P(A;;GA;;;OW)").map_err(io::Error::other)?;
     let security = SecurityDescriptor::deserialize(&sddl)?;
     ListenerOptions::new()
         .name(name(&path)?)
@@ -309,7 +325,10 @@ fn serve(app: &AppHandle, stream: Stream) {
     });
     answer.push('\n');
     let stream = reader.get_mut();
-    if let Err(err) = stream.write_all(answer.as_bytes()).and_then(|()| stream.flush()) {
+    if let Err(err) = stream
+        .write_all(answer.as_bytes())
+        .and_then(|()| stream.flush())
+    {
         eprintln!("Grab-it: could not answer a command-line request: {err}");
     }
 }
@@ -349,7 +368,9 @@ mod tests {
 
     #[test]
     fn a_failed_request_replies_with_its_message() {
-        let reply = respond(r#"{"command":"displays"}"#, true, |_| Err("no monitors".into()));
+        let reply = respond(r#"{"command":"displays"}"#, true, |_| {
+            Err("no monitors".into())
+        });
         assert_eq!(reply.clone().into_result(), Err("no monitors".into()));
         assert_eq!(
             serde_json::to_value(&reply).unwrap(),
@@ -427,7 +448,9 @@ mod tests {
         } else {
             assert_eq!(
                 data_dir_from(env(&[("HOME", "/home/me")])),
-                Some(PathBuf::from("/home/me/.local/share/com.kerwincarpede.grabit"))
+                Some(PathBuf::from(
+                    "/home/me/.local/share/com.kerwincarpede.grabit"
+                ))
             );
             assert_eq!(
                 data_dir_from(env(&[("HOME", "/home/me"), ("XDG_DATA_HOME", "/data")])),
@@ -436,10 +459,30 @@ mod tests {
             // A relative XDG_DATA_HOME is ignored, as the spec says.
             assert_eq!(
                 data_dir_from(env(&[("HOME", "/home/me"), ("XDG_DATA_HOME", "data")])),
-                Some(PathBuf::from("/home/me/.local/share/com.kerwincarpede.grabit"))
+                Some(PathBuf::from(
+                    "/home/me/.local/share/com.kerwincarpede.grabit"
+                ))
             );
             assert_eq!(data_dir_from(env(&[])), None);
         }
+    }
+
+    #[test]
+    fn an_appimage_runs_as_the_appimage() {
+        let mounted = PathBuf::from("/tmp/.mount_GrabXy/usr/bin/grab-it");
+        assert_eq!(
+            executable_from(
+                Some(PathBuf::from("/home/me/Apps/Grab-it.AppImage")),
+                mounted.clone()
+            ),
+            PathBuf::from("/home/me/Apps/Grab-it.AppImage")
+        );
+        assert_eq!(executable_from(None, mounted.clone()), mounted);
+        // Only an absolute $APPIMAGE is trusted.
+        assert_eq!(
+            executable_from(Some(PathBuf::from("Grab-it.AppImage")), mounted.clone()),
+            mounted
+        );
     }
 
     #[test]
