@@ -14,6 +14,7 @@ const doc: Annotations = {
     { id: "b", type: "blur", x: 10, y: 10, width: 40, height: 20, pixelSize: 12 },
     { id: "t", type: "text", color: "#1f2328", x: 3, y: 4, text: "Look here", fontSize: 30 },
     { id: "s", type: "step", color: "#e5484d", x: 50, y: 50, radius: 20 },
+    { id: "g", type: "step", color: "#e5484d", x: 60, y: 70, radius: 20, number: 3 },
   ],
   crop: { x: 1, y: 2, width: 300, height: 200 },
 };
@@ -27,6 +28,15 @@ describe("annotations sidecar", () => {
   it("writes the documented {version: 1, shapes: [...]} shape", () => {
     const written = JSON.parse(JSON.stringify(serializeAnnotations({ version: 1, shapes: [] })));
     expect(written).toEqual({ version: 1, shapes: [], crop: null });
+  });
+
+  it("keeps a guide step's number and drops a step whose number makes no sense", () => {
+    const step = { id: "s", type: "step", color: "#e5484d", x: 1, y: 2, radius: 20 };
+    const parsed = parseAnnotations({
+      version: 1,
+      shapes: [{ ...step, number: 2 }, { ...step, id: "z", number: 0 }, { ...step, id: "h", number: 1.5 }],
+    });
+    expect(parsed.shapes.map((shape) => shape.id)).toEqual(["s"]);
   });
 
   it("starts empty when there is no sidecar", () => {

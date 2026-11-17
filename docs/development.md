@@ -53,7 +53,7 @@ npm run tauri dev
 
 Grab-it starts in the tray with no window open. Closing a window keeps the app running in the tray. The very first launch also opens a short welcome listing the hotkeys; the tray's **Shortcuts and tips…** shows it again.
 
-To open a window or start a capture directly, for example on a desktop without a tray host, pass `--open` with one of `settings`, `library`, `welcome`, `region`, `all-in-one`, `repeat`, `text`, `colour`, `record`, `editor <file>`, `quick <file>` or `pin <file>`. npm, the Tauri CLI and cargo each consume one `--`, so three are needed:
+To open a window or start a capture directly, for example on a desktop without a tray host, pass `--open` with one of `settings`, `library`, `welcome`, `region`, `all-in-one`, `repeat`, `text`, `colour`, `record`, `steps`, `editor <file>`, `quick <file>`, `pin <file>` or `guide <file>`. npm, the Tauri CLI and cargo each consume one `--`, so three are needed:
 
 ```sh
 npm run tauri dev -- -- -- --open settings

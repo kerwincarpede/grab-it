@@ -3,9 +3,9 @@
 //! The defaults are Ctrl+Alt+PrintScreen for All-in-one, PrintScreen,
 //! Alt+PrintScreen and Ctrl+PrintScreen for region, window and screen,
 //! Shift+PrintScreen to capture text, Ctrl+Shift+PrintScreen to pick a colour
-//! and Alt+Shift+PrintScreen to open the library; on macOS Cmd+Shift+A,
-//! Cmd+Shift+2, Cmd+Shift+W, Cmd+Shift+F, Cmd+Shift+1, Cmd+Shift+9 and
-//! Cmd+Shift+0. On Wayland they are bound through the GlobalShortcuts portal
+//! Alt+Shift+PrintScreen to open the library and Ctrl+Alt+Shift+PrintScreen
+//! for step capture; on macOS Cmd+Shift+A, Cmd+Shift+2, Cmd+Shift+W,
+//! Cmd+Shift+F, Cmd+Shift+1, Cmd+Shift+9, Cmd+Shift+0 and Cmd+Shift+8. On Wayland they are bound through the GlobalShortcuts portal
 //! (see `portal.rs`), since apps cannot grab keys there themselves.
 
 use std::{
@@ -39,6 +39,19 @@ pub struct Hotkeys {
     pub colour: String,
     /// Opens the Grab-it window on the library.
     pub library: String,
+    /// Starts a step capture, or stops it and opens its guide. Settings
+    /// from before step capture get the default.
+    #[serde(default = "default_steps")]
+    pub steps: String,
+}
+
+/// The step capture hotkey's default.
+pub fn default_steps() -> String {
+    if cfg!(target_os = "macos") {
+        "Cmd+Shift+8".into()
+    } else {
+        "Ctrl+Alt+Shift+PrintScreen".into()
+    }
 }
 
 /// What a hotkey does: start a capture or capture tool, or open the library.
@@ -76,6 +89,7 @@ impl Default for Hotkeys {
                 text: "Cmd+Shift+1".into(),
                 colour: "Cmd+Shift+9".into(),
                 library: "Cmd+Shift+0".into(),
+                steps: default_steps(),
             }
         } else {
             Self {
@@ -86,6 +100,7 @@ impl Default for Hotkeys {
                 text: "Shift+PrintScreen".into(),
                 colour: "Ctrl+Shift+PrintScreen".into(),
                 library: "Alt+Shift+PrintScreen".into(),
+                steps: default_steps(),
             }
         }
     }
@@ -93,7 +108,7 @@ impl Default for Hotkeys {
 
 impl Hotkeys {
     /// Each hotkey with what it does and its name in Settings.
-    pub fn entries(&self) -> [(HotkeyAction, &'static str, &str); 7] {
+    pub fn entries(&self) -> [(HotkeyAction, &'static str, &str); 8] {
         use HotkeyAction::{Capture, Library};
         [
             (
@@ -111,6 +126,7 @@ impl Hotkeys {
                 self.colour.as_str(),
             ),
             (Library, "Open library", self.library.as_str()),
+            (Capture(Action::Steps), "Step capture", self.steps.as_str()),
         ]
     }
 
@@ -124,6 +140,7 @@ impl Hotkeys {
             text: self.text.trim().to_owned(),
             colour: self.colour.trim().to_owned(),
             library: self.library.trim().to_owned(),
+            steps: self.steps.trim().to_owned(),
         };
         let mut seen: Vec<(Shortcut, &str)> = Vec::new();
         for (_, name, accelerator) in trimmed.entries() {
@@ -309,6 +326,7 @@ mod tests {
         if cfg!(target_os = "macos") {
             assert_eq!(defaults.region, "Cmd+Shift+2");
             assert_eq!(defaults.all_in_one, "Cmd+Shift+A");
+            assert_eq!(defaults.steps, "Cmd+Shift+8");
         } else {
             assert_eq!(defaults.all_in_one, "Ctrl+Alt+PrintScreen");
             assert_eq!(defaults.region, "PrintScreen");
@@ -317,7 +335,11 @@ mod tests {
             assert_eq!(defaults.text, "Shift+PrintScreen");
             assert_eq!(defaults.colour, "Ctrl+Shift+PrintScreen");
             assert_eq!(defaults.library, "Alt+Shift+PrintScreen");
+            assert_eq!(defaults.steps, "Ctrl+Alt+Shift+PrintScreen");
         }
+        assert!(defaults.entries().iter().any(|(action, name, _)| *action
+            == HotkeyAction::Capture(Action::Steps)
+            && *name == "Step capture"));
     }
 
     #[test]

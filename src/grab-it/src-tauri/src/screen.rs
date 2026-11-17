@@ -118,6 +118,33 @@ pub fn capture_window(id: u32) -> Result<RgbaImage, String> {
         .map_err(|e| err("could not capture the window", e))
 }
 
+/// The front-most of `windows` (listed front to back) that holds the point
+/// `x`, `y` in desktop coordinates.
+pub fn window_at(windows: &[WindowInfo], x: f64, y: f64) -> Option<&WindowInfo> {
+    windows.iter().find(|window| contains(&window.rect, x, y))
+}
+
+/// The monitor of `monitors` that holds the point `x`, `y`.
+pub fn monitor_at(monitors: &[MonitorInfo], x: f64, y: f64) -> Option<&MonitorInfo> {
+    monitors.iter().find(|monitor| {
+        contains(
+            &Rect {
+                x: monitor.x,
+                y: monitor.y,
+                width: monitor.width,
+                height: monitor.height,
+            },
+            x,
+            y,
+        )
+    })
+}
+
+fn contains(rect: &Rect, x: f64, y: f64) -> bool {
+    let (left, top) = (f64::from(rect.x), f64::from(rect.y));
+    x >= left && y >= top && x < left + f64::from(rect.width) && y < top + f64::from(rect.height)
+}
+
 /// The desktop as a selection finds it.
 #[derive(Debug, Default)]
 pub struct Desktop {
@@ -425,6 +452,49 @@ pub fn foreground_of(window: &WindowInfo) -> Foreground {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn window(id: u32, x: i32, y: i32, width: u32, height: u32) -> WindowInfo {
+        WindowInfo {
+            id,
+            app_name: format!("App {id}"),
+            title: String::new(),
+            rect: Rect {
+                x,
+                y,
+                width,
+                height,
+            },
+        }
+    }
+
+    #[test]
+    fn the_front_window_under_the_point_is_found() {
+        // Front to back: a small dialog over a large window.
+        let windows = [window(1, 100, 100, 200, 100), window(2, 0, 0, 800, 600)];
+        assert_eq!(window_at(&windows, 150.0, 150.0).map(|w| w.id), Some(1));
+        assert_eq!(window_at(&windows, 50.5, 20.0).map(|w| w.id), Some(2));
+        // The right and bottom edges are outside.
+        assert_eq!(window_at(&windows, 800.0, 10.0).map(|w| w.id), None);
+        assert_eq!(window_at(&windows, -1.0, 10.0).map(|w| w.id), None);
+    }
+
+    #[test]
+    fn the_monitor_under_the_point_is_found() {
+        let monitor = |index: usize, x: i32| MonitorInfo {
+            index,
+            name: String::new(),
+            x,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale_factor: 1.0,
+            is_primary: index == 0,
+        };
+        let monitors = [monitor(0, 0), monitor(1, -1920)];
+        assert_eq!(monitor_at(&monitors, -10.0, 5.0).map(|m| m.index), Some(1));
+        assert_eq!(monitor_at(&monitors, 10.0, 5.0).map(|m| m.index), Some(0));
+        assert!(monitor_at(&monitors, 10.0, 2000.0).is_none());
+    }
 
     fn listed(id: u32, pid: u32, layer: i32, app_name: &str) -> ListedWindow {
         ListedWindow {

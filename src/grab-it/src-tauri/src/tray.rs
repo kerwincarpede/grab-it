@@ -16,11 +16,28 @@ use crate::{
 const TRAY_ID: &str = "main";
 const RECORD_LABEL: &str = "Record";
 const STOP_LABEL: &str = "Stop recording";
+const STEPS_LABEL: &str = "Step capture";
+const STOP_STEPS_LABEL: &str = "Stop step capture";
 
 /// The menu items whose text or state changes while Grab-it runs.
 pub struct TrayItems {
     record: MenuItem<tauri::Wry>,
+    steps: MenuItem<tauri::Wry>,
     unlock: MenuItem<tauri::Wry>,
+}
+
+/// Makes the step capture item say what choosing it does now.
+pub fn set_steps(app: &AppHandle, running: bool) {
+    if let Some(items) = app.try_state::<TrayItems>() {
+        let label = if running {
+            STOP_STEPS_LABEL
+        } else {
+            STEPS_LABEL
+        };
+        if let Err(err) = items.steps.set_text(label) {
+            eprintln!("Grab-it: could not update the tray menu: {err}");
+        }
+    }
 }
 
 /// Makes the record item say what choosing it does now: start, or stop.
@@ -47,6 +64,7 @@ const MENU_SCREEN: &str = "capture-screen";
 const MENU_MONITOR_PREFIX: &str = "capture-monitor-";
 const MENU_REPEAT: &str = "capture-repeat";
 const MENU_RECORD: &str = "record-gif";
+const MENU_STEPS: &str = "step-capture";
 const MENU_TEXT: &str = "capture-text";
 const MENU_COLOUR: &str = "pick-colour";
 /// Timed captures are `timed-<region|screen>-<seconds>`.
@@ -68,6 +86,7 @@ fn action_for(id: &str) -> Option<Action> {
         MENU_SCREEN => Some(Action::Screen),
         MENU_REPEAT => Some(Action::Repeat),
         MENU_RECORD => Some(Action::Record),
+        MENU_STEPS => Some(Action::Steps),
         MENU_TEXT => Some(Action::Text),
         MENU_COLOUR => Some(Action::Colour),
         _ => id
@@ -179,6 +198,8 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let tools_separator = PredefinedMenuItem::separator(app)?;
     // One item for both: choosing it during a recording stops the recording.
     let record = MenuItem::with_id(app, MENU_RECORD, RECORD_LABEL, true, None::<&str>)?;
+    // Choosing it during a step capture stops it and opens the guide.
+    let steps = MenuItem::with_id(app, MENU_STEPS, STEPS_LABEL, true, None::<&str>)?;
     let text = MenuItem::with_id(app, MENU_TEXT, "Capture text", true, None::<&str>)?;
     let colour = MenuItem::with_id(app, MENU_COLOUR, "Pick a colour", true, None::<&str>)?;
     // Disabled until a pin is locked: a locked pin takes no clicks, so this
@@ -192,6 +213,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     )?;
     app.manage(TrayItems {
         record: record.clone(),
+        steps: steps.clone(),
         unlock: unlock.clone(),
     });
     let separator = PredefinedMenuItem::separator(app)?;
@@ -214,6 +236,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             &timed,
             &tools_separator,
             &record,
+            &steps,
             &text,
             &colour,
             &unlock,
@@ -301,6 +324,7 @@ mod tests {
     #[test]
     fn menu_ids_map_to_captures() {
         assert_eq!(action_for(MENU_ALL_IN_ONE), Some(Action::AllInOne));
+        assert_eq!(action_for(MENU_STEPS), Some(Action::Steps));
         assert_eq!(action_for(MENU_REGION), Some(Action::Region));
         assert_eq!(action_for(MENU_WINDOW), Some(Action::Window));
         assert_eq!(action_for(MENU_SCREEN), Some(Action::Screen));

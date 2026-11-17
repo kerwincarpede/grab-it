@@ -47,6 +47,10 @@ pub enum OpenTarget {
     Quick(PathBuf),
     /// Pins an image above other windows: `--open pin <file>`.
     Pin(PathBuf),
+    /// Starts a step capture, or stops the one under way.
+    Steps,
+    /// Opens a step guide in the Guide window: `--open guide <file>`.
+    Guide(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,7 +70,7 @@ impl fmt::Display for ArgsError {
             Self::UnknownTarget(name) => {
                 write!(
                     f,
-                    "unknown --open target `{name}`; expected `settings`, `library`, `welcome`, `region`, `all-in-one`, `repeat`, `record`, `text`, `colour`, `editor <file>`, `quick <file>` or `pin <file>`"
+                    "unknown --open target `{name}`; expected `settings`, `library`, `welcome`, `region`, `all-in-one`, `repeat`, `record`, `steps`, `text`, `colour`, `editor <file>`, `quick <file>`, `pin <file>` or `guide <file>`"
                 )
             }
             Self::MissingFile(target) => {
@@ -116,12 +120,14 @@ where
             "colour" | "color" => Ok(Some(OpenTarget::Colour)),
             "repeat" => Ok(Some(OpenTarget::Repeat)),
             "record" => Ok(Some(OpenTarget::Record)),
-            "editor" | "quick" | "pin" => match args.next() {
+            "steps" => Ok(Some(OpenTarget::Steps)),
+            "editor" | "quick" | "pin" | "guide" => match args.next() {
                 Some(file) if !file.as_ref().is_empty() => {
                     let file = PathBuf::from(file.as_ref());
                     Ok(Some(match name.as_str() {
                         "editor" => OpenTarget::Editor(file),
                         "quick" => OpenTarget::Quick(file),
+                        "guide" => OpenTarget::Guide(file),
                         _ => OpenTarget::Pin(file),
                     }))
                 }
@@ -668,6 +674,19 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Option<OpenTarget>, ArgsError> {
         parse_open_target(std::iter::once("grab-it").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn open_steps_and_a_guide() {
+        assert_eq!(parse(&["--open", "steps"]), Ok(Some(OpenTarget::Steps)));
+        assert_eq!(
+            parse(&["--open", "guide", "a.guide.json"]),
+            Ok(Some(OpenTarget::Guide(PathBuf::from("a.guide.json"))))
+        );
+        assert_eq!(
+            parse(&["--open", "guide"]),
+            Err(ArgsError::MissingFile("guide".into()))
+        );
     }
 
     #[test]

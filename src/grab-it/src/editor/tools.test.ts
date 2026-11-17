@@ -240,6 +240,17 @@ describe("step badges", () => {
       ["c", 2],
     ]);
   });
+
+  it("show a step's own number when it has one", () => {
+    const shapes: Shape[] = [
+      { id: "g", type: "step", color: "red", x: 0, y: 0, radius: 10, number: 4 },
+      { id: "a", type: "step", color: "red", x: 0, y: 0, radius: 10 },
+    ];
+    expect([...stepNumbers(shapes)]).toEqual([
+      ["g", 4],
+      ["a", 1],
+    ]);
+  });
 });
 
 describe("crop", () => {

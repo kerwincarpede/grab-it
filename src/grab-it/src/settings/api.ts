@@ -642,6 +642,8 @@ export interface Hotkeys {
   colour: string;
   /** Opens the Grab-it window on the library. */
   library: string;
+  /** Starts a step capture, or stops it and opens its guide. */
+  steps: string;
 }
 
 /** Mirrors `HotkeysUpdate` in src-tauri/src/commands.rs. */

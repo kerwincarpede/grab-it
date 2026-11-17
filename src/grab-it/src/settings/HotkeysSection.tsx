@@ -10,6 +10,7 @@ const FIELDS: { key: keyof Hotkeys; label: string }[] = [
   { key: "text", label: "Capture text" },
   { key: "colour", label: "Pick a colour" },
   { key: "library", label: "Open library" },
+  { key: "steps", label: "Step capture" },
 ];
 
 interface HotkeysSectionProps {

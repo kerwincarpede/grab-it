@@ -14,6 +14,7 @@ mod ffmpeg;
 mod file_clipboard;
 mod frame_overlays;
 mod frames;
+mod guide_export;
 mod hotkeys;
 mod hub;
 mod input;
@@ -37,6 +38,7 @@ mod screen;
 mod scroll;
 mod search;
 mod settings;
+mod steps;
 mod storage;
 mod tidy;
 mod tray;
@@ -240,7 +242,13 @@ pub fn run() {
             permissions::permission_prime_capture,
             permissions::permission_finish,
             permissions::permission_restart,
-            permissions::permission_open_settings
+            permissions::permission_open_settings,
+            steps::guide_info,
+            steps::guide_image,
+            steps::guide_save,
+            steps::guide_open_editor,
+            steps::guide_export,
+            steps::guide_copy
         ])
         .setup(move |app| {
             let mut store = open_settings(app)?;

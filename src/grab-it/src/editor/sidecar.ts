@@ -61,7 +61,13 @@ export function isShape(value: unknown): value is Shape {
         isOptional(shape.background, isBool)
       );
     case "step":
-      return isStr(shape.color) && isNum(shape.x) && isNum(shape.y) && isNum(shape.radius);
+      return (
+        isStr(shape.color) &&
+        isNum(shape.x) &&
+        isNum(shape.y) &&
+        isNum(shape.radius) &&
+        isOptional(shape.number, (number) => isNum(number) && Number.isInteger(number) && number > 0)
+      );
     default:
       return false;
   }

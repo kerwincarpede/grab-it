@@ -238,6 +238,7 @@ pub fn hub_capture(
         "record" => Action::Record,
         "text" => Action::Text,
         "colour" => Action::Colour,
+        "steps" => Action::Steps,
         other => return Err(format!("unknown capture: {other}")),
     };
     hide(&app);

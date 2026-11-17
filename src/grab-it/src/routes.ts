@@ -13,9 +13,10 @@ export type Route =
   | "webcam"
   | "recordbar"
   | "recordframe"
+  | "guide"
   | "home";
 
-const ROUTES: readonly Route[] = ["app", "hub", "settings", "overlay", "editor", "recording", "library", "quick", "pin", "welcome", "webcam", "recordbar", "recordframe"];
+const ROUTES: readonly Route[] = ["app", "hub", "settings", "overlay", "editor", "recording", "library", "quick", "pin", "welcome", "webcam", "recordbar", "recordframe", "guide"];
 
 /** True when `flag` follows the route in the hash (`#/overlay?instant`). */
 export function routeHasFlag(hash: string, flag: string): boolean {

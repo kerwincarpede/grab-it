@@ -18,6 +18,7 @@ import { viewFromHash } from "./app/api";
 // editor window; the overlay and the other windows open without it.
 const EditorWindow = lazy(() => import("./editor/EditorWindow"));
 const RecordingEditor = lazy(() => import("./recording/RecordingEditor"));
+const GuideWindow = lazy(() => import("./guide/GuideWindow"));
 
 interface AppProps {
   route?: Route;
@@ -59,6 +60,12 @@ function App({ route = routeFromHash(window.location.hash) }: AppProps) {
       return <RecordBar />;
     case "recordframe":
       return <RecordFrame />;
+    case "guide":
+      return (
+        <Suspense fallback={null}>
+          <GuideWindow />
+        </Suspense>
+      );
     default:
       return (
         <main className="window home">

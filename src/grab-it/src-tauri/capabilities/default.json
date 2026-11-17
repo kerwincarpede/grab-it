@@ -10,7 +10,8 @@
     "recording-*",
     "quick",
     "record-bar",
-    "pin-*"
+    "pin-*",
+    "guide"
   ],
   "permissions": [
     "core:default",
