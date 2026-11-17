@@ -870,6 +870,8 @@ mod tests {
         let old = aged(&mut library, dir.path(), ShotKind::Video, "old.mp4", 60);
         let cursor = crate::record::cursor_path(&old.path);
         std::fs::write(&cursor, "[]").unwrap();
+        let sound = crate::record::sound_path(&old.path);
+        std::fs::write(&sound, "m4a").unwrap();
         let kept = aged(&mut library, dir.path(), ShotKind::Video, "new.mp4", 10);
         let state = LibraryState::new(library);
 
@@ -887,6 +889,7 @@ mod tests {
         assert_eq!(removal, &Removal::Trash);
         assert_eq!(files[0], old.path, "the main file goes first");
         assert!(files.contains(&cursor));
+        assert!(files.contains(&sound));
         assert!(
             !files.contains(&old.thumb_path),
             "the thumbnail is not put in the Trash"

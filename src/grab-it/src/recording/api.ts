@@ -13,7 +13,15 @@ export interface RecordingInfo {
   fps: number;
   /** The pointer's smoothed path, which follow-the-pointer zooms centre on; null without `<recording>.cursor.json`. */
   cursor: CursorPath | null;
+  /** Each source of its sound, by kind; empty when it is silent. */
+  audio: AudioKind[];
 }
+
+/**
+ * What one source of a recording's sound is: `mixed` is the microphone and
+ * system sound in one track. Mirrors `AudioKind` in src-tauri/src/recording_editor.rs.
+ */
+export type AudioKind = "microphone" | "system" | "mixed";
 
 /** Mirrors `VIDEO_SCHEME` in src-tauri/src/recording_editor.rs. */
 export const VIDEO_SCHEME = "grab-it-video";

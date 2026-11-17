@@ -29,6 +29,14 @@ A clip is at least half a second long: the handles stop that close together. To 
 
 The trim is saved when you let go of a handle, like every other edit, and the editor opens at the trimmed start next time. To put the handles back where they were, [undo](/grab-it/video-editor/#undo-and-redo) the trim.
 
+## Sound
+
+The status bar names the recording's sound:
+
+- **Microphone · System sound**, or just one of them, when the recording [kept its sound apart](/grab-it/recording/options/#sound-kept-apart).
+- **Mixed sound** when the microphone and system sound are mixed into one track, so they can only be edited together. Recordings made before Grab-it kept the sound apart show this, and so does one whose separate sound file couldn't be saved. Hover over it to see why.
+- Nothing for a silent recording.
+
 ## Keys
 
 | Key | Where | What it does |

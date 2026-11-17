@@ -43,7 +43,7 @@ use crate::{
     editor::{EditorState, percent_decode},
     ffmpeg::{self, Video, VideoSpec},
     quick::{self, QuickItem},
-    record::{RECORDINGS_DIR, cursor_path},
+    record::{RECORDINGS_DIR, SoundSource, cursor_path, sound_path},
     settings::RecordingFormat,
     zoom::{self, CursorPath, View, Zoom},
 };
@@ -233,6 +233,97 @@ pub fn edited_path(original: &Path) -> PathBuf {
     }
 }
 
+/// What one source of a recording's sound is. Mirrors `AudioKind` in
+/// src/recording/api.ts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioKind {
+    Microphone,
+    System,
+    /// The microphone and system sound in one track, which can only be
+    /// edited together: recordings made before the sources were kept, or
+    /// whose sound sidecar could not be written.
+    Mixed,
+}
+
+impl From<SoundSource> for AudioKind {
+    fn from(source: SoundSource) -> Self {
+        match source {
+            SoundSource::Microphone => Self::Microphone,
+            SoundSource::System => Self::System,
+        }
+    }
+}
+
+/// One source of a recording's sound and where to read it: an audio
+/// stream of the MP4 or of its sound sidecar, lined up with the video.
+/// Waveforms and per-source mixing build on these.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioSource {
+    pub kind: AudioKind,
+    /// The file holding it.
+    pub file: PathBuf,
+    /// Its audio stream in `file`, as ffmpeg's `a:<stream>` counts.
+    pub stream: usize,
+}
+
+/// The sources in a recording's pointer sidecar's `audio`, or `None` when
+/// the sidecar, or its `audio`, is missing or unreadable.
+fn sidecar_audio(video: &Path) -> Option<Vec<SoundSource>> {
+    fs::read(cursor_path(video))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|mut value| value.get_mut("audio").map(Value::take))
+        .and_then(|audio| serde_json::from_value(audio).ok())
+}
+
+/// The sources of `video`'s sound. `ffmpeg` probes an older recording
+/// for whether it has sound at all; without it such a recording lists
+/// none.
+pub fn audio_sources(video: &Path, ffmpeg: Option<&Path>) -> Vec<AudioSource> {
+    audio_sources_with(video, || {
+        ffmpeg.is_some_and(|ffmpeg| ffmpeg::probe_file(ffmpeg, video).audio)
+    })
+}
+
+/// [`audio_sources`], with `has_audio` saying whether the MP4 has a sound
+/// stream. With the sound sidecar, each source in the pointer sidecar's
+/// `audio` is its stream there. Without it, the MP4's one track is that
+/// source, or mixed when it holds two. A recording made before `audio`
+/// was saved is mixed when it has sound.
+fn audio_sources_with(video: &Path, has_audio: impl FnOnce() -> bool) -> Vec<AudioSource> {
+    let in_video = |kind: AudioKind| AudioSource {
+        kind,
+        file: video.to_path_buf(),
+        stream: 0,
+    };
+    match sidecar_audio(video) {
+        Some(sources) => {
+            let sound = sound_path(video);
+            if !sources.is_empty() && sound.is_file() {
+                sources
+                    .into_iter()
+                    .enumerate()
+                    .map(|(stream, source)| AudioSource {
+                        kind: source.into(),
+                        file: sound.clone(),
+                        stream,
+                    })
+                    .collect()
+            } else {
+                match sources.as_slice() {
+                    [] => Vec::new(),
+                    [only] => vec![in_video((*only).into())],
+                    _ => vec![in_video(AudioKind::Mixed)],
+                }
+            }
+        }
+        None if has_audio() => vec![in_video(AudioKind::Mixed)],
+        None => Vec::new(),
+    }
+}
+
 /// Mirrors `RecordingInfo` in src/recording/api.ts.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -246,11 +337,15 @@ pub struct RecordingInfo {
     /// The pointer's smoothed path from `<recording>.cursor.json`, which
     /// follow-the-pointer zooms centre on; the export uses the same one.
     pub cursor: Option<CursorPath>,
+    /// Each source of its sound, by kind, in [`audio_sources`]' order:
+    /// empty when it is silent.
+    pub audio: Vec<AudioKind>,
 }
 
 #[tauri::command]
-pub fn recording_info(
+pub async fn recording_info(
     window: WebviewWindow,
+    app: AppHandle,
     state: State<'_, RecordingEditorState>,
 ) -> Result<RecordingInfo, String> {
     let path = state.path_for(window.label())?;
@@ -261,12 +356,24 @@ pub fn recording_info(
     let edits = read_edits(&path)?;
     let fps = recording_fps(&path);
     let cursor = CursorPath::load(&path);
+    let ffmpeg = ffmpeg::ready(&app).map(|ready| ready.path);
+    let video = path.clone();
+    // An older recording is probed by ffmpeg: off the async runtime.
+    let audio = tauri::async_runtime::spawn_blocking(move || {
+        audio_sources(&video, ffmpeg.as_deref())
+            .into_iter()
+            .map(|source| source.kind)
+            .collect()
+    })
+    .await
+    .map_err(|err| format!("could not read the recording's sound: {err}"))?;
     Ok(RecordingInfo {
         path,
         file_name,
         edits,
         fps,
         cursor,
+        audio,
     })
 }
 
@@ -946,6 +1053,105 @@ mod tests {
     use super::*;
     use image::Rgba;
     use serde_json::json;
+
+    /// A recording in a folder of its own, with a pointer sidecar holding
+    /// `cursor` when given, and a sound sidecar when `sound`.
+    fn recording_with(cursor: Option<&str>, sound: bool) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let video = dir.path().join("clip.mp4");
+        fs::write(&video, b"mp4").unwrap();
+        if let Some(cursor) = cursor {
+            fs::write(cursor_path(&video), cursor).unwrap();
+        }
+        if sound {
+            fs::write(sound_path(&video), b"m4a").unwrap();
+        }
+        (dir, video)
+    }
+
+    fn source(kind: AudioKind, file: &Path, stream: usize) -> AudioSource {
+        AudioSource {
+            kind,
+            file: file.to_path_buf(),
+            stream,
+        }
+    }
+
+    #[test]
+    fn kept_sources_are_read_from_the_sound_sidecar_in_order() {
+        let both = r#"{"version":1,"fps":30,"audio":["microphone","system"]}"#;
+        let (_dir, video) = recording_with(Some(both), true);
+        let sound = sound_path(&video);
+        assert_eq!(
+            audio_sources_with(&video, || panic!("not probed")),
+            [
+                source(AudioKind::Microphone, &sound, 0),
+                source(AudioKind::System, &sound, 1),
+            ]
+        );
+
+        let (_dir, video) = recording_with(Some(r#"{"audio":["microphone"]}"#), true);
+        assert_eq!(
+            audio_sources_with(&video, || panic!("not probed")),
+            [source(AudioKind::Microphone, &sound_path(&video), 0)]
+        );
+    }
+
+    #[test]
+    fn without_the_sound_sidecar_the_videos_one_track_is_used() {
+        // The sound sidecar failed: the two are mixed in the MP4.
+        let (_dir, video) = recording_with(Some(r#"{"audio":["microphone","system"]}"#), false);
+        assert_eq!(
+            audio_sources_with(&video, || panic!("not probed")),
+            [source(AudioKind::Mixed, &video, 0)]
+        );
+        // System sound alone has no sound sidecar: the MP4's track is it.
+        let (_dir, video) = recording_with(Some(r#"{"audio":["system"]}"#), false);
+        assert_eq!(
+            audio_sources_with(&video, || panic!("not probed")),
+            [source(AudioKind::System, &video, 0)]
+        );
+    }
+
+    #[test]
+    fn a_recording_whose_sound_failed_has_no_sources() {
+        let (_dir, video) = recording_with(Some(r#"{"audio":[]}"#), false);
+        assert!(audio_sources_with(&video, || panic!("not probed")).is_empty());
+    }
+
+    #[test]
+    fn an_older_recording_is_mixed_when_ffmpeg_hears_sound() {
+        let (_dir, video) = recording_with(Some(r#"{"version":1,"fps":30}"#), false);
+        assert_eq!(
+            audio_sources_with(&video, || true),
+            [source(AudioKind::Mixed, &video, 0)]
+        );
+        assert!(audio_sources_with(&video, || false).is_empty());
+        // No pointer sidecar, or one that cannot be read, is the same.
+        let (_dir, video) = recording_with(None, false);
+        assert_eq!(
+            audio_sources_with(&video, || true),
+            [source(AudioKind::Mixed, &video, 0)]
+        );
+        let (_dir, video) = recording_with(Some("not json"), true);
+        assert!(audio_sources_with(&video, || false).is_empty());
+        let (_dir, video) = recording_with(Some(r#"{"audio":["speaker"]}"#), true);
+        assert_eq!(
+            audio_sources_with(&video, || true),
+            [source(AudioKind::Mixed, &video, 0)]
+        );
+        // Without ffmpeg, nothing is probed.
+        assert!(audio_sources(&video, None).is_empty());
+    }
+
+    #[test]
+    fn audio_kinds_serialize_for_the_page() {
+        assert_eq!(
+            serde_json::to_value([AudioKind::Microphone, AudioKind::System, AudioKind::Mixed])
+                .unwrap(),
+            json!(["microphone", "system", "mixed"])
+        );
+    }
 
     fn strings(args: Vec<OsString>) -> String {
         args.into_iter()
