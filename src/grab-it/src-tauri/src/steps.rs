@@ -687,6 +687,26 @@ pub fn ripe<T>(
 /// [`STOP_CLICKS_OUTSIDE`].
 const STOP_CLICK_IS_OWN: bool = cfg!(any(target_os = "windows", target_os = "macos"));
 
+/// How long before the stop the click that stopped it can have been seen:
+/// the hub takes `HIDE_SETTLE` to hide, and the click is looked at only
+/// once the grab before it is done. An older last click is the user's, as
+/// when the tray menu was driven from the keyboard.
+const STOP_CLICK_LAG: Duration = Duration::from_secs(2);
+
+/// The click to drop as the one that stopped the session: the last click
+/// seen, `last_click`, when the session was stopped by a click on Grab-it's
+/// own hub or menu (`own`) and that click is recent enough to be it.
+pub fn stopping_click(
+    last_click: Option<Instant>,
+    trigger: Trigger,
+    stopped_at: Instant,
+    own: bool,
+) -> Option<Instant> {
+    let at = last_click?;
+    (own && trigger == Trigger::Click && stopped_at.saturating_duration_since(at) <= STOP_CLICK_LAG)
+        .then_some(at)
+}
+
 /// Drops the steps for the click seen at `at` from `held` and `waiting`.
 pub fn drop_click<T>(
     held: &mut VecDeque<Held<T>>,
@@ -798,11 +818,15 @@ fn run(
     // only looked at once the grab before it is done. After a full-monitor
     // grab, such as one for a click on the tray icon, that can be a second
     // later, when the hub has closed and the click seems to land on the
-    // window behind it. So it is dropped whatever it hit.
-    if trigger == Trigger::Click
-        && STOP_CLICK_IS_OWN
-        && let Some((at, _)) = last_click
-    {
+    // window behind it. So a recent last click is dropped whatever it hit;
+    // an older one is the user's, since the menu can be used from the
+    // keyboard with no click at all.
+    if let Some(at) = stopping_click(
+        last_click.map(|(at, _)| at),
+        trigger,
+        stopped_at,
+        STOP_CLICK_IS_OWN,
+    ) {
         drop_click(&mut held, &mut waiting, at);
     }
     let held = held
@@ -1475,6 +1499,37 @@ mod tests {
         // A click that took no step drops nothing.
         drop_click(&mut held, &mut waiting, at(4000));
         assert_eq!(waiting.len(), 1);
+    }
+
+    #[test]
+    fn only_a_recent_last_click_is_taken_as_the_stopping_one() {
+        let start = Instant::now();
+        let at = |millis: u64| start + Duration::from_millis(millis);
+        let stopped_at = at(10_000);
+        // The click on the hub or menu, seen just before the stop.
+        assert_eq!(
+            stopping_click(Some(at(9_000)), Trigger::Click, stopped_at, true),
+            Some(at(9_000))
+        );
+        assert_eq!(
+            stopping_click(Some(at(8_000)), Trigger::Click, stopped_at, true),
+            Some(at(8_000))
+        );
+        // A menu chosen from the keyboard: the last click is the user's.
+        assert_eq!(
+            stopping_click(Some(at(7_999)), Trigger::Click, stopped_at, true),
+            None
+        );
+        // Stopped by keys, on a panel's menu, or with no click at all.
+        assert_eq!(
+            stopping_click(Some(at(9_000)), Trigger::Keys, stopped_at, true),
+            None
+        );
+        assert_eq!(
+            stopping_click(Some(at(9_000)), Trigger::Click, stopped_at, false),
+            None
+        );
+        assert_eq!(stopping_click(None, Trigger::Click, stopped_at, true), None);
     }
 
     fn held_on(stopped_at: Instant, clicks: &[(u64, Option<Shell>)]) -> Vec<Held<u8>> {
