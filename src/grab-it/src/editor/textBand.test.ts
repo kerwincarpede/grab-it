@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PathShape } from "./model";
-import { BAND_REACH, bandReach, bandWindow, fitToBand, findTextBand, imageTextBand, textBand } from "./textBand";
+import { BAND_MIN_HEIGHT, BAND_REACH, bandReach, bandWindow, findTextBand, fitToBand, imageTextBand, textBand } from "./textBand";
 
 type Color = [number, number, number];
 const WHITE: Color = [255, 255, 255];
@@ -73,6 +73,23 @@ describe("textBand", () => {
     const { pixels, paint } = capture(200, 120);
     writeLine(paint, 20, 50, 60);
     expect(textBand(pixels, [15, 66, 110, 66], 30)).toEqual({ top: 50, bottom: 60 });
+  });
+
+  it("finds nothing over a thin rule, border or underline", () => {
+    const { pixels, paint } = capture(200, 120);
+    paint(0, 60, 200, 1);
+    expect(textBand(pixels, [15, 58, 110, 58], 30)).toBeNull();
+    paint(0, 80, 200, BAND_MIN_HEIGHT - 1);
+    expect(textBand(pixels, [15, 82, 110, 82], 30)).toBeNull();
+  });
+
+  it("looks for text only close to the drag", () => {
+    const { pixels, paint } = capture(200, 140);
+    writeLine(paint, 20, 30, 44);
+    const area = { x: 15, y: 20, width: 100, height: 100 };
+    // The line is 26 rows above the drag's middle: further than an eighth of the area.
+    expect(findTextBand(pixels, area, 70)).toBeNull();
+    expect(findTextBand(pixels, area, 70, 30)).toEqual({ top: 30, bottom: 44 });
   });
 
   it("finds nothing on a plain background", () => {

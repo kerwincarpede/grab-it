@@ -15,6 +15,8 @@ export const BAND_MIN_LENGTH = 8;
 export const INK_DIFFERENCE = 96;
 /** The least a fitted highlighter looks above and below its drag, in capture pixels; see `bandReach`. */
 export const BAND_REACH = 48;
+/** The thinnest band that counts as text, in capture pixels: anything thinner is a rule, border or underline. */
+export const BAND_MIN_HEIGHT = 5;
 /** Blank rows a line of text may have inside it (between an `i` and its dot) and still be one line. */
 export const BAND_GAP = 1;
 
@@ -60,11 +62,13 @@ export function bandWindow(points: number[], reach: number, size: { width: numbe
 /**
  * The line of text in `area` of `pixels` nearest row `middle`: the run of
  * rows whose pixels differ from the background (the area's most common
- * colour), allowing `BAND_GAP` blank rows inside it. Null when no row has
- * text, or when the run reaches the top or bottom of the area, which is a
- * picture or a block of text rather than one line.
+ * colour), allowing `BAND_GAP` blank rows inside it. Null when no row
+ * within `near` rows of `middle` has text (by default an eighth of the
+ * area's height, a quarter of its reach), when the run is thinner than
+ * `BAND_MIN_HEIGHT`, or when it reaches the top or bottom of the area,
+ * which is a picture or a block of text rather than one line.
  */
-export function findTextBand(pixels: Pixels, area: Rect, middle: number): Band | null {
+export function findTextBand(pixels: Pixels, area: Rect, middle: number, near = area.height / 8): Band | null {
   const { data, width } = pixels;
   const at = (x: number, y: number) => (y * width + x) * 4;
   // The background is the most common colour, read 4 bits a channel so slight shading counts as one colour.
@@ -96,7 +100,7 @@ export function findTextBand(pixels: Pixels, area: Rect, middle: number): Band |
   // The inked row nearest the drag's middle.
   const centre = Math.min(ink.length - 1, Math.max(0, Math.round(middle) - area.y));
   let seed = -1;
-  for (let offset = 0; offset < ink.length && seed < 0; offset += 1) {
+  for (let offset = 0; offset <= near && seed < 0; offset += 1) {
     if (ink[centre - offset]) seed = centre - offset;
     else if (ink[centre + offset]) seed = centre + offset;
   }
@@ -112,7 +116,7 @@ export function findTextBand(pixels: Pixels, area: Rect, middle: number): Band |
   };
   const first = grow(seed, -1);
   const last = grow(seed, 1);
-  if (first === 0 || last === ink.length - 1) return null;
+  if (first === 0 || last === ink.length - 1 || last + 1 - first < BAND_MIN_HEIGHT) return null;
   return { top: area.y + first, bottom: area.y + last + 1 };
 }
 
