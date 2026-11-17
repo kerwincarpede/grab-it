@@ -96,9 +96,6 @@ x11rb = { version = "0.13", features = ["xfixes"] }
 # Already in the tree through wry: turns on media streams so the webcam
 # bubble and Settings can use the camera (webcam.rs).
 webkit2gtk = "2.0"
-# Already in the tree through wry: Copy as file offers the file's URI on
-# the GTK clipboard (file_clipboard.rs).
-gtk = "0.18"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # The version xcap uses: draws the pointer into recordings (frames.rs),
