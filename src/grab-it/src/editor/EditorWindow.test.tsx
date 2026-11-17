@@ -209,6 +209,21 @@ vi.mock("react-konva", async () => {
   };
 });
 
+/** The editor's file-drop listener, so a test can drop files on it. */
+const dropListener = vi.hoisted(() => ({
+  handler: null as ((event: { payload: { type: string; paths?: string[]; position?: { x: number; y: number } } }) => void) | null,
+}));
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: (handler: typeof dropListener.handler) => {
+      dropListener.handler = handler;
+      return Promise.resolve(() => {
+        if (dropListener.handler === handler) dropListener.handler = null;
+      });
+    },
+  }),
+}));
+
 const FLATTENED = new Uint8Array([1, 2, 3]);
 const flattened = vi.hoisted(() => ({ calls: [] as unknown[], options: [] as unknown[], measured: [] as unknown[][] }));
 /** The capture's plain border as measured: an empty 80px margin on the right (jsdom cannot read pixels). */
@@ -326,6 +341,15 @@ function mockEditor(
         return new ArrayBuffer(4);
       case "editor_image":
         return new ArrayBuffer(8);
+      case "editor_add_image_file":
+        calls.push({ cmd, payload });
+        return "before-1700000000000.png";
+      case "editor_add_clipboard_image":
+        calls.push({ cmd, payload });
+        return "pasted-1700000000000.png";
+      case "editor_asset_image":
+        calls.push({ cmd, payload });
+        return new ArrayBuffer(4);
       case "editor_save_annotations":
         saved.push((payload as { annotations: Annotations }).annotations);
         return null;
@@ -891,6 +915,86 @@ describe("EditorWindow", () => {
     fireEvent.keyDown(window, { key: "ArrowDown" });
     await waitFor(() => expect(last(saved)?.shapes[4]).toMatchObject({ y: 53 }));
     expect(last(saved)?.shapes.find((shape) => shape.id === "s1")).toMatchObject({ x: 51, y: 40 });
+  });
+
+  it("adds a dropped image file at its own size, selected, and draws it", async () => {
+    const calls: { cmd: string; payload: unknown }[] = [];
+    const saved = mockEditor(sidecar, calls);
+    await ready();
+    await waitFor(() => expect(dropListener.handler).not.toBeNull());
+    dropListener.handler?.({ payload: { type: "over", position: { x: 10, y: 10 } } });
+    dropListener.handler?.({ payload: { type: "drop", paths: ["/home/me/before.png"], position: { x: 100, y: 100 } } });
+
+    await waitFor(() => expect(last(saved)?.shapes).toHaveLength(5));
+    expect(calls.filter((call) => call.cmd === "editor_add_image_file").map((call) => call.payload)).toEqual([{ path: "/home/me/before.png" }]);
+    // The mocked image element is 400×300; the shape sits in front of the others.
+    expect(last(saved)?.shapes[4]).toMatchObject({ type: "image", src: "before-1700000000000.png", width: 400, height: 300 });
+    const id = last(saved)?.shapes[4].id as string;
+    expect(document.querySelector(`[data-konva="Image"][data-id="${id}"]`)).not.toBeNull();
+    // Selected: it keeps its ratio from the corners, and Delete removes it.
+    expect(anchors()).toEqual(["top-left", "top-right", "bottom-left", "bottom-right"]);
+    fireEvent.keyDown(window, { key: "Delete" });
+    await waitFor(() => expect(last(saved)?.shapes).toHaveLength(4));
+  });
+
+  it("says so when a dropped file cannot be added", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "editor_add_image_file") throw "the image must be a PNG, JPEG, WebP or GIF image";
+      if (cmd === "editor_info") return { path: "/p/originals/shot.png", fileName: "shot.png", annotations: sidecar, scaleFactor: null };
+      if (cmd === "editor_image") return new ArrayBuffer(8);
+      if (cmd === "get_editor_preferences") return {};
+      return null;
+    });
+    await ready();
+    await waitFor(() => expect(dropListener.handler).not.toBeNull());
+    dropListener.handler?.({ payload: { type: "drop", paths: ["C:\\Users\\me\\notes.txt"], position: { x: 0, y: 0 } } });
+    expect(await screen.findByText(/Could not add notes\.txt/)).toBeInTheDocument();
+  });
+
+  it("pastes the clipboard's image just right of the capture and exports the grown canvas", async () => {
+    const calls: { cmd: string; payload: unknown }[] = [];
+    const saved = mockEditor({ version: 1, shapes: [], crop: null }, calls);
+    await ready();
+    fireEvent.keyDown(window, { key: "v", ctrlKey: true });
+
+    await waitFor(() =>
+      expect(last(saved)?.shapes).toEqual([
+        expect.objectContaining({ type: "image", src: "pasted-1700000000000.png", x: 400, y: 0, width: 400, height: 300 }),
+      ]),
+    );
+    expect(calls.map((call) => call.cmd)).toContain("editor_add_clipboard_image");
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    // The 400×300 capture and the 400×300 image beside it.
+    await waitFor(() => expect(last(flattened.calls)).toMatchObject({ crop: { x: 0, y: 0, width: 800, height: 300 } }));
+  });
+
+  it("reads a saved image from the capture's assets folder", async () => {
+    const calls: { cmd: string; payload: unknown }[] = [];
+    mockEditor({ version: 1, shapes: [{ id: "i1", type: "image", x: -50, y: 0, width: 40, height: 30, src: "kept.png" }], crop: null }, calls);
+    await ready();
+    await waitFor(() => expect(document.querySelector('[data-konva="Image"][data-id="i1"]')).not.toBeNull());
+    expect(calls.filter((call) => call.cmd === "editor_asset_image").map((call) => call.payload)).toEqual([{ name: "kept.png" }]);
+  });
+
+  it("brings the selected annotation forward and sends it backward", async () => {
+    const saved = mockEditor();
+    await ready();
+    const bar = within(screen.getByRole("toolbar", { name: "Style and actions" }));
+    expect(bar.getByRole("button", { name: "Bring forward" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="t1"]') as Element);
+
+    fireEvent.click(bar.getByRole("button", { name: "Bring forward" }));
+    await waitFor(() => expect(last(saved)?.shapes.map((shape) => shape.id)).toEqual(["a1", "s1", "t1", "s2"]));
+    fireEvent.keyDown(window, { key: "]", code: "BracketRight", ctrlKey: true, altKey: true });
+    await waitFor(() => expect(last(saved)?.shapes.map((shape) => shape.id)).toEqual(["a1", "s1", "s2", "t1"]));
+    // In front of everything: only Send backward is left.
+    expect(bar.getByRole("button", { name: "Bring forward" })).toBeDisabled();
+    fireEvent.keyDown(window, { key: "[", code: "BracketLeft", ctrlKey: true, altKey: true });
+    fireEvent.click(bar.getByRole("button", { name: "Send backward" }));
+    await waitFor(() => expect(last(saved)?.shapes.map((shape) => shape.id)).toEqual(["a1", "t1", "s1", "s2"]));
+    // Ordering does not turn the capture.
+    expect(last(saved)?.rotation).toBeUndefined();
   });
 
   it("leaves the arrow keys alone when nothing is selected", async () => {

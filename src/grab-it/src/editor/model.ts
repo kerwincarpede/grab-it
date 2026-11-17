@@ -123,7 +123,28 @@ export interface MagnifyShape extends Stroked, Rect {
   line?: boolean;
 }
 
-export type Shape = LineShape | PathShape | BoxShape | MagnifyShape | BlurShape | SpotlightShape | TextShape | CalloutShape | StepShape;
+/**
+ * An image added on top of the capture, by drop or paste. `src` is a file
+ * name inside `<capture>.assets/`, never a path. It may sit past the
+ * capture's edges; the canvas then grows to fit (see `canvasRect`).
+ */
+export interface ImageShape extends Rect {
+  id: string;
+  type: "image";
+  src: string;
+}
+
+export type Shape =
+  | LineShape
+  | PathShape
+  | BoxShape
+  | MagnifyShape
+  | BlurShape
+  | SpotlightShape
+  | TextShape
+  | CalloutShape
+  | StepShape
+  | ImageShape;
 export type ShapeType = Shape["type"];
 
 /** The output shapes a backdrop can pad the capture to; "auto" pads evenly. */
@@ -502,6 +523,26 @@ export function sameBackdrop(a: Backdrop | null | undefined, b: Backdrop | null 
 /** The colours a backdrop fill paints: one for a solid, several for a gradient. */
 export function backdropColors(fill: string): string[] {
   return BACKDROP_PRESETS.find((preset) => preset.id === fill)?.colors ?? [fill];
+}
+
+/**
+ * The area the editor shows and exports before any crop: the smallest box
+ * around the capture and every image, which starts at negative x or y when
+ * an image sits above or left of the capture. Derived, never saved.
+ */
+export function canvasRect(imageSize: { width: number; height: number }, shapes: Shape[]): Rect {
+  let left = 0;
+  let top = 0;
+  let right = imageSize.width;
+  let bottom = imageSize.height;
+  for (const shape of shapes) {
+    if (shape.type !== "image") continue;
+    left = Math.min(left, Math.floor(shape.x));
+    top = Math.min(top, Math.floor(shape.y));
+    right = Math.max(right, Math.ceil(shape.x + shape.width));
+    bottom = Math.max(bottom, Math.ceil(shape.y + shape.height));
+  }
+  return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 export function emptyAnnotations(): Annotations {

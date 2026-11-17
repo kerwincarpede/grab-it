@@ -125,6 +125,22 @@ export const ChevronDownIcon = () => (
   </Icon>
 );
 
+/** Two stacked squares, the front one raised. */
+export const BringForwardIcon = () => (
+  <Icon>
+    <path d="M14 14v5.5H4.5V10H10" />
+    <rect x="10" y="4.5" width="9.5" height="9.5" rx="1" fill="currentColor" fillOpacity="0.25" />
+  </Icon>
+);
+
+/** Two stacked squares, the back one lowered. */
+export const SendBackwardIcon = () => (
+  <Icon>
+    <rect x="4.5" y="10" width="9.5" height="9.5" rx="1" fill="currentColor" fillOpacity="0.25" />
+    <path d="M14 14h5.5V4.5H10V10" />
+  </Icon>
+);
+
 export const ZoomInIcon = () => (
   <Icon>
     <circle cx="11" cy="11" r="6.5" />

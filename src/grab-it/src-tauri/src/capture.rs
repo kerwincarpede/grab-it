@@ -16,6 +16,8 @@ pub use crate::pointer::CapturedPointer;
 pub const ORIGINALS_DIR: &str = "originals";
 pub const META_SUFFIX: &str = ".meta.json";
 pub const ANNOTATIONS_SUFFIX: &str = ".annotations.json";
+/// The folder beside a capture holding images added to it in the editor.
+pub const ASSETS_SUFFIX: &str = ".assets";
 
 /// What the user asked to capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,6 +209,13 @@ pub fn meta_path(png: &Path) -> PathBuf {
 /// The annotations sidecar: `<name>.png` gives `<name>.annotations.json`.
 pub fn annotations_path(png: &Path) -> PathBuf {
     sidecar_path(png, ANNOTATIONS_SUFFIX)
+}
+
+/// The folder of images added in the editor: `<name>.png` gives
+/// `<name>.assets/`. The sidecar names them, so it stays small and an image
+/// outlives the file it came from.
+pub fn assets_dir(png: &Path) -> PathBuf {
+    sidecar_path(png, ASSETS_SUFFIX)
 }
 
 /// `<name>.<ext>` gives `<name><suffix>`.
@@ -412,6 +421,14 @@ mod tests {
         assert_eq!(
             second.file_name().unwrap(),
             "Grab-it 2026-03-07 09-05-01 (2).png"
+        );
+    }
+
+    #[test]
+    fn assets_dir_sits_beside_the_png() {
+        assert_eq!(
+            assets_dir(Path::new("/x/originals/Grab-it 2026-03-07 09-05-01.png")),
+            PathBuf::from("/x/originals/Grab-it 2026-03-07 09-05-01.assets")
         );
     }
 

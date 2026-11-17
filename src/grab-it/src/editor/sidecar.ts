@@ -79,9 +79,16 @@ export function isShape(value: unknown): value is Shape {
         isNum(shape.radius) &&
         isOptional(shape.number, (number) => isNum(number) && Number.isInteger(number) && number > 0)
       );
+    case "image":
+      return isRect(shape) && (shape.width as number) > 0 && (shape.height as number) > 0 && isAssetName(shape.src);
     default:
       return false;
   }
+}
+
+/** A plain file name inside the capture's assets folder: no folders, no `..`. */
+function isAssetName(value: unknown): value is string {
+  return isStr(value) && value !== "" && value !== "." && value !== ".." && !/[/\\]/.test(value);
 }
 
 const clamp = (value: number, max: number) => Math.min(max, Math.max(0, value));

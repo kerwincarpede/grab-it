@@ -99,20 +99,29 @@ pub const BACKDROP_IMAGE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 /// Reads an image picked as a backdrop fill. Only image files are read,
 /// and only up to [`BACKDROP_IMAGE_MAX_BYTES`].
 pub fn read_backdrop_image(path: &Path) -> Result<Vec<u8>, String> {
-    let extension = path
-        .extension()
-        .map(|extension| extension.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
+    read_checked_image(path, "backdrop image")
+}
+
+/// Reads `path` when it is a PNG, JPEG, WebP or GIF of at most
+/// [`BACKDROP_IMAGE_MAX_BYTES`]. `what` names it in the errors.
+fn read_checked_image(path: &Path, what: &str) -> Result<Vec<u8>, String> {
+    let extension = image_extension(path);
     if !BACKDROP_IMAGE_EXTENSIONS.contains(&extension.as_str()) {
-        return Err("the backdrop must be a PNG, JPEG, WebP or GIF image".to_owned());
+        return Err(format!("the {what} must be a PNG, JPEG, WebP or GIF image"));
     }
     let size = fs::metadata(path)
         .map_err(|err| format!("could not open {}: {err}", path.display()))?
         .len();
     if size > BACKDROP_IMAGE_MAX_BYTES {
-        return Err("the backdrop image is too large".to_owned());
+        return Err(format!("the {what} is too large"));
     }
     fs::read(path).map_err(|err| format!("could not open {}: {err}", path.display()))
+}
+
+fn image_extension(path: &Path) -> String {
+    path.extension()
+        .map(|extension| extension.to_string_lossy().to_lowercase())
+        .unwrap_or_default()
 }
 
 /// The folder under the app data dir holding backdrop presets' own copies
@@ -133,16 +142,22 @@ pub fn save_preset_image(dir: &Path, source: &Path) -> Result<PathBuf, String> {
     if canonical_dir.is_some() && canonical_dir == source_dir {
         return Ok(source.to_path_buf());
     }
-    fs::create_dir_all(dir).map_err(|err| format!("could not create {}: {err}", dir.display()))?;
-    let stem = source
-        .file_stem()
+    let stem = file_stem_or(source, "backdrop");
+    save_fresh(dir, &stem, &image_extension(source), &bytes)
+        .map_err(|err| format!("could not save the preset image: {err}"))
+}
+
+fn file_stem_or(path: &Path, fallback: &str) -> String {
+    path.file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
         .filter(|stem| !stem.is_empty())
-        .unwrap_or_else(|| "backdrop".to_owned());
-    let extension = source
-        .extension()
-        .map(|extension| extension.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
+        .unwrap_or_else(|| fallback.to_owned())
+}
+
+/// Writes `bytes` into `dir` as `<stem>-<millis>.<extension>`, adding
+/// `-<n>` when that name is taken, and returns the new file's path.
+fn save_fresh(dir: &Path, stem: &str, extension: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+    fs::create_dir_all(dir).map_err(|err| format!("could not create {}: {err}", dir.display()))?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.as_millis())
@@ -162,15 +177,76 @@ pub fn save_preset_image(dir: &Path, source: &Path) -> Result<PathBuf, String> {
             Ok(mut file) => {
                 use std::io::Write;
                 return file
-                    .write_all(&bytes)
+                    .write_all(bytes)
                     .map(|()| target)
-                    .map_err(|err| format!("could not save the preset image: {err}"));
+                    .map_err(|err| err.to_string());
             }
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(format!("could not save the preset image: {err}")),
+            Err(err) => return Err(err.to_string()),
         }
     }
-    Err("could not name the preset image".to_owned())
+    Err("no free file name".to_owned())
+}
+
+/// Copies an image dropped on the editor into the capture's assets folder
+/// (see [`crate::capture::assets_dir`]), so it outlives the original, and
+/// returns the copy's file name. The image is checked as a backdrop image is.
+pub fn add_image_file(capture: &Path, source: &Path) -> Result<String, String> {
+    let bytes = read_checked_image(source, "image")?;
+    let stem = file_stem_or(source, "image");
+    save_asset(capture, &stem, &image_extension(source), &bytes)
+}
+
+/// Saves an RGBA image pasted into the editor as a PNG in the capture's
+/// assets folder and returns its file name.
+pub fn add_rgba_image(
+    capture: &Path,
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<String, String> {
+    let image = RgbaImage::from_raw(width, height, rgba.to_vec())
+        .filter(|_| width > 0 && height > 0)
+        .ok_or("the clipboard image is empty or malformed")?;
+    let mut png = io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|err| format!("could not encode the pasted image: {err}"))?;
+    save_asset(capture, "pasted", "png", &png.into_inner())
+}
+
+fn save_asset(capture: &Path, stem: &str, extension: &str, bytes: &[u8]) -> Result<String, String> {
+    let dir = crate::capture::assets_dir(capture);
+    let path = save_fresh(&dir, stem, extension, bytes)
+        .map_err(|err| format!("could not add the image: {err}"))?;
+    Ok(path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default())
+}
+
+/// Reads `name` from the capture's assets folder. Only a plain file name
+/// is accepted, and the file it names must still sit in that folder once
+/// links are followed, so the page cannot read anything else.
+pub fn read_asset(capture: &Path, name: &str) -> Result<Vec<u8>, String> {
+    let mut components = Path::new(name).components();
+    let plain = matches!(
+        (components.next(), components.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    );
+    if !plain {
+        return Err("not an image added to this capture".to_owned());
+    }
+    let dir = crate::capture::assets_dir(capture);
+    let path = dir.join(name);
+    let inside = match (fs::canonicalize(&dir), fs::canonicalize(&path)) {
+        (Ok(dir), Ok(file)) => file.parent() == Some(dir.as_path()),
+        _ => false,
+    };
+    if !inside {
+        return Err("the added image is missing".to_owned());
+    }
+    read_checked_image(&path, "image")
 }
 
 /// Reads `<capture>.annotations.json`. A missing file is `Ok(None)`; an
@@ -217,8 +293,8 @@ pub fn validate_annotations(value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Refuses an export that would overwrite the original capture or one of
-/// its sidecars.
+/// Refuses an export that would overwrite the original capture, one of
+/// its sidecars, or land in its assets folder.
 pub fn check_export_target(capture: &Path, target: &Path) -> Result<(), String> {
     let same = |a: &Path, b: &Path| {
         a == b
@@ -234,6 +310,12 @@ pub fn check_export_target(capture: &Path, target: &Path) -> Result<(), String> 
     ];
     if protected.iter().any(|path| same(path, target)) {
         return Err("export would overwrite the original capture; choose another file".to_owned());
+    }
+    let assets = crate::capture::assets_dir(capture);
+    if target.parent().is_some_and(|parent| same(parent, &assets)) {
+        return Err(
+            "export would overwrite an image added to the capture; choose another file".to_owned(),
+        );
     }
     Ok(())
 }
@@ -306,6 +388,46 @@ pub fn save_backdrop_preset_image(path: PathBuf, app: AppHandle) -> Result<PathB
         .map_err(|err| format!("could not find the app data folder: {err}"))?
         .join(BACKDROP_PRESETS_DIR);
     save_preset_image(&dir, &path)
+}
+
+/// Copies an image file dropped on the editor into its capture's assets
+/// folder; returns the copy's file name for the new image shape.
+#[tauri::command(async)]
+pub fn editor_add_image_file(
+    path: PathBuf,
+    window: WebviewWindow,
+    state: State<'_, EditorState>,
+) -> Result<String, String> {
+    let capture = state.path_for(window.label())?;
+    add_image_file(&capture, &path)
+}
+
+/// Saves the image on the clipboard into the editor's capture's assets
+/// folder as a PNG; returns its file name for the new image shape.
+#[tauri::command(async)]
+pub fn editor_add_clipboard_image(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<'_, EditorState>,
+) -> Result<String, String> {
+    let capture = state.path_for(window.label())?;
+    let image = app
+        .clipboard()
+        .read_image()
+        .map_err(|_| "the clipboard has no image".to_owned())?;
+    add_rgba_image(&capture, image.rgba(), image.width(), image.height())
+}
+
+/// The bytes of an image added to the editor's capture, by its file name
+/// in the capture's assets folder.
+#[tauri::command(async)]
+pub fn editor_asset_image(
+    name: String,
+    window: WebviewWindow,
+    state: State<'_, EditorState>,
+) -> Result<tauri::ipc::Response, String> {
+    let capture = state.path_for(window.label())?;
+    read_asset(&capture, &name).map(tauri::ipc::Response::new)
 }
 
 /// The original capture's PNG bytes.
@@ -600,6 +722,108 @@ mod tests {
         );
         assert!(check_export_target(capture, Path::new("/x/originals/shot.meta.json")).is_err());
         assert!(check_export_target(capture, Path::new("/x/export/shot.png")).is_ok());
+    }
+
+    #[test]
+    fn export_cannot_land_in_the_assets_folder() {
+        let capture = Path::new("/x/originals/shot.png");
+        assert!(
+            check_export_target(capture, Path::new("/x/originals/shot.assets/pasted-1.png"))
+                .is_err()
+        );
+        assert!(check_export_target(capture, Path::new("/x/originals/shot.assets.png")).is_ok());
+    }
+
+    #[test]
+    fn dropped_images_are_copied_into_the_assets_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let capture = dir.path().join("shot.png");
+        let photo = dir.path().join("Before.PNG");
+        fs::write(&photo, b"png").unwrap();
+
+        let first = add_image_file(&capture, &photo).unwrap();
+        let second = add_image_file(&capture, &photo).unwrap();
+        assert_ne!(first, second);
+        assert!(
+            first.starts_with("Before-") && first.ends_with(".png"),
+            "{first}"
+        );
+        // The copy outlives the original.
+        fs::remove_file(&photo).unwrap();
+        assert_eq!(read_asset(&capture, &first), Ok(b"png".to_vec()));
+        assert_eq!(
+            fs::read(crate::capture::assets_dir(&capture).join(&second)).unwrap(),
+            b"png"
+        );
+    }
+
+    #[test]
+    fn only_images_are_added() {
+        let dir = tempfile::tempdir().unwrap();
+        let capture = dir.path().join("shot.png");
+        let notes = dir.path().join("notes.txt");
+        fs::write(&notes, b"secret").unwrap();
+        assert!(add_image_file(&capture, &notes).is_err());
+        assert!(add_image_file(&capture, &dir.path().join("gone.png")).is_err());
+        assert!(!crate::capture::assets_dir(&capture).exists());
+    }
+
+    #[test]
+    fn pasted_images_are_saved_as_png() {
+        let dir = tempfile::tempdir().unwrap();
+        let capture = dir.path().join("shot.png");
+        let rgba = [255, 0, 0, 255].repeat(6);
+        let name = add_rgba_image(&capture, &rgba, 3, 2).unwrap();
+        assert!(
+            name.starts_with("pasted-") && name.ends_with(".png"),
+            "{name}"
+        );
+        let bytes = read_asset(&capture, &name).unwrap();
+        let decoded = image::load_from_memory(&bytes).unwrap().into_rgba8();
+        assert_eq!(decoded.dimensions(), (3, 2));
+        assert_eq!(decoded.get_pixel(2, 1), &image::Rgba([255, 0, 0, 255]));
+        assert!(add_rgba_image(&capture, &rgba, 4, 4).is_err());
+        assert!(add_rgba_image(&capture, &[], 0, 0).is_err());
+    }
+
+    #[test]
+    fn assets_are_read_only_from_the_capture_assets_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let capture = dir.path().join("shot.png");
+        fs::write(&capture, b"capture").unwrap();
+        fs::write(dir.path().join("other.png"), b"other").unwrap();
+        let assets = crate::capture::assets_dir(&capture);
+        fs::create_dir_all(assets.join("nested")).unwrap();
+        fs::write(assets.join("nested").join("deep.png"), b"deep").unwrap();
+        fs::write(assets.join("notes.txt"), b"secret").unwrap();
+
+        for name in [
+            "../other.png",
+            "../shot.png",
+            "nested/deep.png",
+            "",
+            ".",
+            "..",
+            "missing.png",
+            "notes.txt",
+        ] {
+            assert!(read_asset(&capture, name).is_err(), "{name}");
+        }
+        let absolute = dir.path().join("other.png");
+        assert!(read_asset(&capture, &absolute.to_string_lossy()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_asset_pointing_outside_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let capture = dir.path().join("shot.png");
+        let secret = dir.path().join("secret.png");
+        fs::write(&secret, b"secret").unwrap();
+        let assets = crate::capture::assets_dir(&capture);
+        fs::create_dir_all(&assets).unwrap();
+        std::os::unix::fs::symlink(&secret, assets.join("link.png")).unwrap();
+        assert!(read_asset(&capture, "link.png").is_err());
     }
 
     #[test]

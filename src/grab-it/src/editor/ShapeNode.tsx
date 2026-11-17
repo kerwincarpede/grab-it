@@ -26,6 +26,8 @@ interface ShapeNodeProps {
    * about their centres, so they read upright on the same spot.
    */
   orientation?: Orientation;
+  /** The loaded elements of added images, by their `src`. */
+  assets?: ReadonlyMap<string, HTMLImageElement>;
 }
 
 /**
@@ -155,7 +157,7 @@ function calloutScene(shape: CalloutShape, bubble: Box) {
 }
 
 /** One annotation as a Konva node, named by its id so the transformer can find it. */
-export default function ShapeNode({ shape, image, step, editable, onSelect, onChange, onMove, onEditText, orientation }: ShapeNodeProps) {
+export default function ShapeNode({ shape, image, step, editable, onSelect, onChange, onMove, onEditText, orientation, assets }: ShapeNodeProps) {
   const upright = orientation && !isIdentity(orientation) ? uprightTransform(orientation) : null;
   const common = {
     id: shape.id,
@@ -277,6 +279,12 @@ export default function ShapeNode({ shape, image, step, editable, onSelect, onCh
     }
     case "blur":
       return <BlurNode shape={shape} image={image} common={common} />;
+    case "image": {
+      const element = assets?.get(shape.src);
+      const box = normalizeRect(shape);
+      // Until it loads (or when its file is gone), a clear box keeps it selectable.
+      return element ? <KonvaImage {...common} image={element} {...box} /> : <Rect {...common} {...box} fill="transparent" />;
+    }
     case "spotlight":
       // Draws nothing itself (SpotlightDim shades around it); the clear fill takes clicks.
       return <Rect {...common} {...normalizeRect(shape)} fill="transparent" />;

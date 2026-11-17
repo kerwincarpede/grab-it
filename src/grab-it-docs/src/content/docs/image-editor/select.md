@@ -25,6 +25,7 @@ With a shape selected:
 | Nudge it | Arrow keys: 1 pixel, or 10 with `Shift` |
 | Duplicate it | `Ctrl/⌘ + D`: the copy lands a little down and to the right, selected |
 | Delete it | `Delete`, `Backspace`, or the trash button in the top bar |
+| Bring it forward or send it backward | **Bring forward** and **Send backward** next to the trash button, or `Ctrl/⌘ + Alt + ]` and `Ctrl/⌘ + Alt + [` |
 | Deselect it | `Esc` |
 
 You don't always need Select: something you've just drawn stays selected, and with any drawing tool a drag that starts on a shape moves it. Picking another tool deselects, so nothing you can't see gets restyled or deleted.

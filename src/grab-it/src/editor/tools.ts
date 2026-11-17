@@ -5,6 +5,7 @@ import {
   STROKE_WIDTHS,
   type Annotations,
   type CropAspect,
+  type ImageShape,
   type LineShape,
   type Point,
   type Rect,
@@ -509,12 +510,18 @@ export const ALL_ANCHORS = [...CORNER_ANCHORS, "top-center", "middle-left", "mid
 /**
  * The resize handles a shape offers. Text, callouts and step badges have a
  * single size (font size, radius), so a side handle could only stretch one
- * axis; they resize from the corners, keeping their ratio.
+ * axis; they resize from the corners, keeping their ratio, as added images do.
  */
 export function anchorsFor(shape: Shape | null): string[] {
-  return shape?.type === "text" || shape?.type === "callout" || shape?.type === "step" || shape?.type === "magnify"
-    ? CORNER_ANCHORS
-    : ALL_ANCHORS;
+  return keepsRatio(shape) ? CORNER_ANCHORS : ALL_ANCHORS;
+}
+
+/**
+ * Whether resizing keeps the shape's ratio. An added image keeps it too,
+ * though Shift frees it (see the Transformer's `shiftBehavior`).
+ */
+export function keepsRatio(shape: Shape | null): boolean {
+  return shape?.type === "text" || shape?.type === "callout" || shape?.type === "step" || shape?.type === "magnify" || shape?.type === "image";
 }
 
 /**
@@ -549,6 +556,16 @@ export function transformShape(shape: Shape, t: NodeTransform): Shape {
       return {
         ...shape,
         ...normalizeRect({ x: t.x, y: t.y, width: shape.width * t.scaleX, height: shape.height * t.scaleY }),
+      };
+    case "image":
+      return {
+        ...shape,
+        ...normalizeRect({
+          x: t.x,
+          y: t.y,
+          width: Math.max(MIN_SIZE, shape.width * Math.abs(t.scaleX)),
+          height: Math.max(MIN_SIZE, shape.height * Math.abs(t.scaleY)),
+        }),
       };
     case "magnify": {
       const side = Math.max(MIN_SIZE, shape.width * uniformScale(t));
@@ -678,14 +695,14 @@ export function stepNumbers(shapes: Shape[]): Map<string, number> {
 }
 
 /**
- * Applies the parts of `style` a shape has: colour (not blur or spotlight),
+ * Applies the parts of `style` a shape has: colour (not blur, spotlight or images),
  * stroke width on stroked shapes (widened for the highlighter), font size
  * on text and callouts, radius on steps, fill on boxes, background on text
  * and callouts, and the blur mode. A style that changes nothing returns the
  * same shape.
  */
 export function restyleShape(shape: Shape, style: Partial<Style>): Shape {
-  if (shape.type === "spotlight") return shape;
+  if (shape.type === "spotlight" || shape.type === "image") return shape;
   if (shape.type === "blur") {
     if (!style.blurMode || style.blurMode === (shape.mode ?? "pixelate")) return shape;
     return { ...shape, mode: style.blurMode };
@@ -851,6 +868,34 @@ export function replaceShape(doc: Annotations, shape: Shape): Annotations {
 
 export function deleteShape(doc: Annotations, id: string): Annotations {
   return { ...doc, shapes: doc.shapes.filter((shape) => shape.id !== id) };
+}
+
+/**
+ * Moves a shape one place up (1, in front of the next) or down (-1) the
+ * drawing order, which is its place in `doc.shapes`. At either end the
+ * document comes back unchanged.
+ */
+export function reorderShape(doc: Annotations, id: string, direction: 1 | -1): Annotations {
+  const from = doc.shapes.findIndex((shape) => shape.id === id);
+  const to = from + direction;
+  if (from < 0 || to < 0 || to >= doc.shapes.length) return doc;
+  const shapes = [...doc.shapes];
+  [shapes[from], shapes[to]] = [shapes[to], shapes[from]];
+  return { ...doc, shapes };
+}
+
+/** An added image at its own pixel size, centred on `at`. */
+export function imageAt(src: string, size: { width: number; height: number }, at: Point, id = newId()): ImageShape {
+  return { id, type: "image", src, x: Math.round(at.x - size.width / 2), y: Math.round(at.y - size.height / 2), ...size };
+}
+
+/**
+ * An added image at its own pixel size, level with the capture's top and
+ * just right of `canvas` (the capture and the images already added), so
+ * pasted images line up side by side.
+ */
+export function imageBeside(src: string, size: { width: number; height: number }, canvas: Rect, id = newId()): ImageShape {
+  return { id, type: "image", src, x: canvas.x + canvas.width, y: 0, ...size };
 }
 
 /* The right-click tool wheel (ToolWheel.tsx). */

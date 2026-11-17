@@ -68,6 +68,8 @@ Something you've just drawn stays selected, with handles, so you can adjust it s
 | `Delete` or `Backspace` | Delete the selected shape |
 | `Esc` | Deselect, and close any open panel or the wheel |
 | `Ctrl/⌘ + D` | Duplicate the selected shape |
+| `Ctrl/⌘ + Alt + ]` and `Ctrl/⌘ + Alt + [` | Bring the selected shape forward, or send it backward |
+| `Ctrl/⌘ + V` | Paste an image from the clipboard (see [Add images](/grab-it/image-editor/add-images/)) |
 | `Ctrl/⌘ + Z` | Undo |
 | `Ctrl/⌘ + Shift + Z` or `Ctrl/⌘ + Y` | Redo |
 | `Ctrl/⌘ + [` and `Ctrl/⌘ + ]` | Rotate the screenshot left or right |

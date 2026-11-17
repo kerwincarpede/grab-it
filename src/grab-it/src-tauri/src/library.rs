@@ -740,6 +740,7 @@ impl Library {
                 eprintln!("Grab-it: could not delete {}: {err}", extra.display());
             }
         }
+        remove_assets(&shot.path);
         self.forget(id)?;
         Ok(shot)
     }
@@ -1983,6 +1984,18 @@ fn write_image(
         .flush()
         .and_then(|()| writer.get_ref().sync_all())
         .map_err(|err| format!("could not export it: {err}"))
+}
+
+/// Deletes the images added to the capture at `png` in the editor, if it
+/// has any. A failure is logged, not returned: the capture is already gone.
+pub(crate) fn remove_assets(png: &Path) {
+    let dir = capture::assets_dir(png);
+    match fs::remove_dir_all(&dir) {
+        Err(err) if err.kind() != io::ErrorKind::NotFound => {
+            eprintln!("Grab-it: could not delete {}: {err}", dir.display());
+        }
+        _ => {}
+    }
 }
 
 pub(crate) fn remove_if_present(path: &Path) -> io::Result<()> {
@@ -3300,10 +3313,14 @@ mod tests {
         )
         .unwrap();
         library.set_tags(shot.id, &["x".into()]).unwrap();
+        let assets = capture::assets_dir(&png);
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(assets.join("added.png"), b"png").unwrap();
 
         library.delete(shot.id).unwrap();
 
         assert!(!png.exists());
+        assert!(!assets.exists());
         assert!(!capture::meta_path(&png).exists());
         assert!(!capture::annotations_path(&png).exists());
         assert!(!shot.thumb_path.exists());
