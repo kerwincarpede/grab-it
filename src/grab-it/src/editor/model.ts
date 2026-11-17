@@ -183,15 +183,20 @@ export interface Annotations {
   pointer?: PointerEdit;
 }
 
-/** Where the captured pointer is shown, and whether it is. */
+/** Where the captured pointer is shown, whether it is, and what it looks like. */
 export interface PointerEdit {
   shown: boolean;
   /** The hot spot, in capture pixels. */
   x: number;
   y: number;
-  /** Against the captured pointer's size. */
+  /** Against the size of the image it shows as: the captured pointer's, or the look's. */
   scale: number;
+  /** A built-in pointer drawn in place of the captured image; the captured image when absent. */
+  look?: PointerLook;
 }
+
+/** The built-in pointers the captured one can be swapped for. */
+export type PointerLook = "arrow" | "hand" | "text";
 
 /** What the next shape is drawn with. */
 export interface Style {

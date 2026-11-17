@@ -262,4 +262,18 @@ describe("pointer sidecars", () => {
     const doc = parseAnnotations({ version: 1, shapes: [], crop: null, pointer: { shown: 1 } });
     expect(doc).not.toHaveProperty("pointer");
   });
+
+  it("keeps a built-in look through a save and load", () => {
+    const edited: Annotations = { version: 1, shapes: [], crop: null, pointer: { shown: true, x: 10, y: 20, scale: 1, look: "hand" } };
+    const saved = serializeAnnotations(edited);
+    expect(saved.pointer).toEqual({ shown: true, x: 10, y: 20, scale: 1, look: "hand" });
+    expect(parseAnnotations(JSON.parse(JSON.stringify(saved)))).toEqual(edited);
+  });
+
+  it("shows the captured pointer when the look is absent or not one it knows", () => {
+    expect(parsePointer({ shown: true, x: 1, y: 2, scale: 1 })).not.toHaveProperty("look");
+    expect(parsePointer({ shown: true, x: 1, y: 2, scale: 1, look: "sparkle" })).toEqual({ shown: true, x: 1, y: 2, scale: 1 });
+    expect(parsePointer({ shown: true, x: 1, y: 2, scale: 1, look: 3 })).toEqual({ shown: true, x: 1, y: 2, scale: 1 });
+    for (const look of ["arrow", "hand", "text"]) expect(parsePointer({ shown: true, x: 1, y: 2, scale: 1, look })?.look).toBe(look);
+  });
 });

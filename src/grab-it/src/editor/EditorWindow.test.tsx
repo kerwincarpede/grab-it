@@ -579,6 +579,46 @@ describe("EditorWindow", () => {
       fireEvent.keyDown(window, { key: "z", ctrlKey: true });
       await waitFor(() => expect(node()).toHaveAttribute("data-x", "118"));
     });
+
+    it("swaps for a built-in look that points at the same place, and back", async () => {
+      const saved = mockEditor(null, [], { pointer, scaleFactor: 2 });
+      await ready();
+      expect(node()).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Pointer look" }));
+      const picker = within(screen.getByRole("dialog", { name: "Pointer look" }));
+      expect(picker.getByRole("button", { name: "Captured" })).toHaveAttribute("aria-pressed", "true");
+
+      // Picking a look shows the pointer, its fingertip on the captured hot spot (16, 3 at twice the density).
+      fireEvent.click(picker.getByRole("button", { name: "Hand" }));
+      await waitFor(() => expect(node()).not.toBeNull());
+      expect(node()).toHaveAttribute("data-x", "104");
+      expect(node()).toHaveAttribute("data-y", "77");
+      expect(picker.getByRole("button", { name: "Hand" })).toHaveAttribute("aria-pressed", "true");
+      expect(pointerButton()).toHaveAttribute("aria-pressed", "true");
+      await waitFor(() => expect(last(saved)?.pointer).toEqual({ shown: true, x: 120, y: 80, scale: 1, look: "hand" }));
+
+      fireEvent.click(picker.getByRole("button", { name: "Text" }));
+      await waitFor(() => expect(node()).toHaveAttribute("data-x", "110"));
+      expect(node()).toHaveAttribute("data-y", "60");
+
+      fireEvent.click(picker.getByRole("button", { name: "Captured" }));
+      await waitFor(() => expect(node()).toHaveAttribute("data-x", "118"));
+      await waitFor(() => expect(last(saved)?.pointer).toEqual({ shown: true, x: 120, y: 80, scale: 1 }));
+
+      // Each pick is one undo step.
+      fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+      await waitFor(() => expect(node()).toHaveAttribute("data-x", "110"));
+
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByRole("dialog", { name: "Pointer look" })).toBeNull();
+    });
+
+    it("has no look picker without a pointer in the capture", async () => {
+      mockEditor();
+      await ready();
+      expect(screen.getByRole("button", { name: "Pointer look" })).toBeDisabled();
+    });
   });
 
   it("recolours the selected shape", async () => {

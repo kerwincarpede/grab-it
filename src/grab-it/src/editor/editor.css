@@ -663,3 +663,44 @@
 .editor button[aria-busy="true"] {
   cursor: progress;
 }
+
+/* Pointer look picker: the backdrop panel's look, with a tile per look. */
+.pointer-anchor {
+  position: relative;
+}
+
+.editor .look-button {
+  width: 20px;
+}
+
+.pointer-panel {
+  width: 240px;
+}
+
+.pointer-looks {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.editor .pointer-looks button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  height: auto;
+  padding: 8px 0 6px;
+  border-radius: var(--ed-radius);
+  background: var(--ed-bg, transparent);
+  font-size: 12px;
+}
+
+.editor .pointer-looks button[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--ed-accent);
+}
+
+.pointer-looks img {
+  width: auto;
+  height: 24px;
+  object-fit: contain;
+}

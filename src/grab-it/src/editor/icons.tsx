@@ -99,6 +99,12 @@ export const PointerIcon = () => (
   </Icon>
 );
 
+export const ChevronDownIcon = () => (
+  <Icon>
+    <path d="M8 10l4 4 4-4" />
+  </Icon>
+);
+
 export const ZoomInIcon = () => (
   <Icon>
     <circle cx="11" cy="11" r="6.5" />
