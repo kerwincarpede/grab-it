@@ -52,6 +52,8 @@ interface Backend {
   codexPath: string | null;
   /** The editor section's auto-apply flag. */
   autoBackdrop?: boolean;
+  /** The editor section's pointer flag. */
+  showPointer?: boolean;
   appearance?: unknown;
   recording?: RecordingSettings;
   retention: Retention;
@@ -123,7 +125,10 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     afterCapture: backend.afterCapture,
     copyToClipboard: backend.copyToClipboard,
     ai: backend.ai,
-    editor: backend.autoBackdrop === undefined ? {} : { autoBackdrop: backend.autoBackdrop },
+    editor: {
+      ...(backend.autoBackdrop === undefined ? {} : { autoBackdrop: backend.autoBackdrop }),
+      ...(backend.showPointer === undefined ? {} : { showPointer: backend.showPointer }),
+    },
     appearance: backend.appearance,
     recording: backend.recording,
     retention: backend.retention,
@@ -209,6 +214,10 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
       case "set_auto_backdrop":
         if (backend.setError) throw backend.setError;
         backend.autoBackdrop = (payload as { enabled: boolean }).enabled;
+        return settings();
+      case "set_show_pointer":
+        if (backend.setError) throw backend.setError;
+        backend.showPointer = (payload as { enabled: boolean }).enabled;
         return settings();
       case "plugin:dialog|open":
         return backend.picked;
@@ -360,6 +369,24 @@ describe("SettingsWindow", () => {
     await userEvent.click(toggle);
     await waitFor(() => expect(toggle).not.toBeChecked());
     expect(backend.autoBackdrop).toBe(false);
+  });
+
+  it("turns showing the pointer in new captures on and off, off by default", async () => {
+    const backend = mockBackend();
+    render(<SettingsWindow />);
+    const toggle = await screen.findByRole("switch", { name: /Show the pointer in new captures/ });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect(toggle).not.toBeChecked();
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(backend.calls[backend.calls.length - 1]).toEqual({ cmd: "set_show_pointer", payload: { enabled: true } });
+    expect(screen.getByRole("status")).toHaveTextContent("Saved.");
+
+    await userEvent.click(toggle);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+    expect(backend.showPointer).toBe(false);
   });
 
   it("shows auto-apply as it is saved", async () => {

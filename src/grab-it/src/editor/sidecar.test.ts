@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Annotations } from "./model";
-import { parseAnnotations, parseBackdrop, serializeAnnotations, SidecarError } from "./sidecar";
+import { parseAnnotations, parseBackdrop, parsePointer, serializeAnnotations, SidecarError } from "./sidecar";
 
 const doc: Annotations = {
   version: 1,
@@ -235,5 +235,31 @@ describe("magnify sidecars", () => {
     { lens: "triangle" }, { line: "yes" }, { height: 50 }, { width: -100, height: -100 },
   ])("skips malformed magnify fields %j", (invalid) => {
     expect(parseAnnotations({ version: 1, shapes: [{ ...lens, ...invalid }] }).shapes).toEqual([]);
+  });
+});
+
+describe("pointer sidecars", () => {
+  it("keeps the pointer edits through a save and load", () => {
+    const edited: Annotations = { version: 1, shapes: [], crop: null, pointer: { shown: false, x: 10, y: 20, scale: 1.5 } };
+    const saved = serializeAnnotations(edited);
+    expect(saved.pointer).toEqual({ shown: false, x: 10, y: 20, scale: 1.5 });
+    expect(parseAnnotations(JSON.parse(JSON.stringify(saved)))).toEqual(edited);
+  });
+
+  it("leaves the pointer out until it is edited, so older sidecars still load", () => {
+    const plain = parseAnnotations({ version: 1, shapes: [], crop: null });
+    expect(plain).not.toHaveProperty("pointer");
+    expect(serializeAnnotations(plain)).not.toHaveProperty("pointer");
+  });
+
+  it("drops a pointer it does not understand on its own", () => {
+    expect(parsePointer({ shown: "yes", x: 1, y: 2, scale: 1 })).toBeNull();
+    expect(parsePointer({ shown: true, x: 1, y: 2, scale: 0 })).toBeNull();
+    expect(parsePointer({ shown: true, x: 1, y: 2 })).toBeNull();
+    expect(parsePointer(null)).toBeNull();
+    // Out of range sizes are brought into range.
+    expect(parsePointer({ shown: true, x: 1, y: 2, scale: 100 })?.scale).toBe(8);
+    const doc = parseAnnotations({ version: 1, shapes: [], crop: null, pointer: { shown: 1 } });
+    expect(doc).not.toHaveProperty("pointer");
   });
 });

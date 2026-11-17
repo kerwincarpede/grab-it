@@ -10,6 +10,22 @@ export interface EditorInfo {
   annotations: unknown;
   /** The capture's pixels per point, when its meta.json records it. */
   scaleFactor?: number | null;
+  /** The mouse pointer saved with the capture, when there is one. */
+  pointer?: CapturedPointer | null;
+}
+
+/** Mirrors `CapturedPointer` in src-tauri/src/pointer.rs. */
+export interface CapturedPointer {
+  /** The hot spot, in the capture's pixels. */
+  x: number;
+  y: number;
+  /** The hot spot within the pointer image. */
+  hotX: number;
+  hotY: number;
+  width: number;
+  height: number;
+  /** The pointer image as base64 PNG. */
+  image: string;
 }
 
 /** Mirrors `EXPORT_PATH_HEADER` in src-tauri/src/editor.rs. */

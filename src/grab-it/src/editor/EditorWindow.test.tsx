@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import EditorWindow from "./EditorWindow";
 import type { BackdropPreset, EditorPreferences } from "../settings/api";
 import type { OcrLine, ShotText } from "../library/api";
+import type { CapturedPointer } from "./api";
 import type { Annotations } from "./model";
 import { PREFERENCES_DELAY_MS } from "./preferences";
 import { AUTOSAVE_DELAY_MS } from "./useAnnotations";
@@ -262,6 +263,8 @@ interface PreferencesMock {
   words?: OcrLine[] | Error | Promise<OcrLine[]>;
   /** What `editor_faces` answers; no faces when unset. */
   faces?: { x: number; y: number; width: number; height: number }[];
+  /** The mouse pointer saved with the capture; none when unset. */
+  pointer?: CapturedPointer;
 }
 
 /** The capture's id in the mocked library. */
@@ -296,7 +299,13 @@ function mockEditor(
         calls.push({ cmd, payload });
         return PRESET_COPY;
       case "editor_info":
-        return { path: "/p/originals/shot.png", fileName: "shot.png", annotations, scaleFactor: preferences.scaleFactor ?? null };
+        return {
+          path: "/p/originals/shot.png",
+          fileName: "shot.png",
+          annotations,
+          scaleFactor: preferences.scaleFactor ?? null,
+          pointer: preferences.pointer ?? null,
+        };
       case "plugin:dialog|open":
         return preferences.picked ?? null;
       case "editor_backdrop_image":
@@ -489,6 +498,58 @@ describe("EditorWindow", () => {
 
     fireEvent.keyDown(window, { key: "z", ctrlKey: true, shiftKey: true });
     expect(shapeIds()).toEqual(["t1", "s1", "s2"]);
+  });
+
+  describe("captured pointer", () => {
+    const pointer: CapturedPointer = { x: 120, y: 80, hotX: 2, hotY: 3, width: 12, height: 20, image: "iVBORw0KGgo=" };
+    const node = () => document.querySelector('[data-id="captured-pointer"]');
+    const pointerButton = () => screen.getByRole("button", { name: "Pointer" });
+
+    it("is off without a pointer in the capture", async () => {
+      mockEditor();
+      await ready();
+      expect(pointerButton()).toBeDisabled();
+      expect(node()).toBeNull();
+    });
+
+    it("starts hidden unless the setting shows it, and the button shows it", async () => {
+      const saved = mockEditor(null, [], { pointer });
+      await ready();
+      expect(pointerButton()).toBeEnabled();
+      expect(pointerButton()).toHaveAttribute("aria-pressed", "false");
+      expect(node()).toBeNull();
+
+      fireEvent.click(pointerButton());
+      await waitFor(() => expect(node()).not.toBeNull());
+      expect(pointerButton()).toHaveAttribute("aria-pressed", "true");
+      await waitFor(() => expect(last(saved)?.pointer).toEqual({ shown: true, x: 120, y: 80, scale: 1 }));
+    });
+
+    it("moves with Select, resizes from its corners, hides with Delete, and undoes each", async () => {
+      const saved = mockEditor(null, [], { pointer, stored: { showPointer: true } });
+      await ready();
+      await waitFor(() => expect(node()).not.toBeNull());
+      // Drawn with its hot spot on the captured position.
+      expect(node()).toHaveAttribute("data-x", "118");
+      expect(node()).toHaveAttribute("data-y", "77");
+
+      fireEvent.click(screen.getByRole("button", { name: "Select" }));
+      fireEvent.mouseDown(node() as Element);
+      expect(anchors()).toEqual(["top-left", "top-right", "bottom-left", "bottom-right"]);
+
+      Object.assign(pointerAt, { x: 40, y: 60 });
+      fireEvent(node() as Element, new MouseEvent("dragend", { bubbles: true }));
+      await waitFor(() => expect(last(saved)?.pointer).toEqual({ shown: true, x: 42, y: 63, scale: 1 }));
+
+      fireEvent.keyDown(window, { key: "Delete" });
+      expect(node()).toBeNull();
+      await waitFor(() => expect(last(saved)?.pointer).toEqual({ shown: false, x: 42, y: 63, scale: 1 }));
+
+      fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+      await waitFor(() => expect(node()).toHaveAttribute("data-x", "40"));
+      fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+      await waitFor(() => expect(node()).toHaveAttribute("data-x", "118"));
+    });
   });
 
   it("recolours the selected shape", async () => {

@@ -50,6 +50,8 @@ Most changes save as soon as you make them. Hotkeys save when you press **Save h
 
 **Frame new captures with the last backdrop** (off by default): the [editor](/grab-it/image-editor/mark-it-up/) adds the backdrop you used last when it first opens a capture. The saved capture and its clipboard copy stay unframed.
 
+**Show the pointer in new captures** (off by default): the [editor](/grab-it/image-editor/pointer/) starts with the capture's mouse pointer shown, and the clipboard copy made when you capture has it drawn in. The saved capture never has it, and you can show or hide it in the editor whichever way this is set.
+
 ## Recording
 
 | Setting | Default | What it does |

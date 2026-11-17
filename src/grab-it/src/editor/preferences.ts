@@ -19,6 +19,11 @@ export interface EditorChoices {
    */
   autoBackdrop?: boolean;
   /**
+   * New captures start with their mouse pointer shown. Read only: the
+   * Settings window sets it, and saving the editor's choices keeps it.
+   */
+  showPointer?: boolean;
+  /**
    * The backdrops saved by name; absent when there are none. Read only:
    * presets are saved on their own, with `setBackdropPresets`.
    */
@@ -75,12 +80,13 @@ export function fromPreferences(stored: EditorPreferences | null | undefined): E
   }
   const choices: EditorChoices = { tool, style, widths, backdrop: parseBackdrop(prefs.backdrop) };
   if (prefs.autoBackdrop === true) choices.autoBackdrop = true;
+  if (prefs.showPointer === true) choices.showPointer = true;
   const presets = parseBackdropPresets(prefs.backdropPresets);
   if (presets.length > 0) choices.backdropPresets = presets;
   return choices;
 }
 
-/** The editor choices as they are stored; options that are off are left out, and so are `autoBackdrop` and the presets. */
+/** The editor choices as they are stored; options that are off are left out, and so are `autoBackdrop`, `showPointer` and the presets. */
 export function toPreferences(choices: EditorChoices): EditorPreferences {
   const widths: Record<string, number> = {};
   for (const [tool, width] of Object.entries(choices.widths)) {

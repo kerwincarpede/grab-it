@@ -11,6 +11,8 @@ use chrono::{DateTime, Local};
 use image::{RgbaImage, imageops};
 use serde::{Deserialize, Serialize};
 
+pub use crate::pointer::CapturedPointer;
+
 pub const ORIGINALS_DIR: &str = "originals";
 pub const META_SUFFIX: &str = ".meta.json";
 pub const ANNOTATIONS_SUFFIX: &str = ".annotations.json";
@@ -235,6 +237,11 @@ pub struct CaptureMeta {
     /// and when the platform could not say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale_factor: Option<f64>,
+    /// The mouse pointer as it was, kept apart from the pixels so the
+    /// editor can show, move or hide it. Absent in captures saved before
+    /// it was recorded, on Wayland, and when the pointer was outside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointer: Option<CapturedPointer>,
 }
 
 /// A usable scale factor: finite and positive, else `None`.
@@ -311,6 +318,27 @@ pub fn save_capture(
     scale_factor: Option<f64>,
     time: DateTime<Local>,
 ) -> Result<SavedCapture, SaveError> {
+    save_capture_with_pointer(
+        save_folder,
+        image,
+        mode,
+        foreground,
+        scale_factor,
+        None,
+        time,
+    )
+}
+
+/// [`save_capture`], keeping the mouse `pointer` in `meta.json`.
+pub fn save_capture_with_pointer(
+    save_folder: &Path,
+    image: &RgbaImage,
+    mode: CaptureMode,
+    foreground: &Foreground,
+    scale_factor: Option<f64>,
+    pointer: Option<CapturedPointer>,
+    time: DateTime<Local>,
+) -> Result<SavedCapture, SaveError> {
     let dir = save_folder.join(ORIGINALS_DIR);
     fs::create_dir_all(&dir)?;
     let path = unique_capture_path(&dir, &time);
@@ -325,6 +353,7 @@ pub fn save_capture(
         width: image.width(),
         height: image.height(),
         scale_factor: valid_scale(scale_factor),
+        pointer,
     };
     let meta_path = meta_path(&path);
     let mut json = serde_json::to_string_pretty(&meta)?;
@@ -589,6 +618,50 @@ mod tests {
         let meta = read_meta(&png).unwrap();
         assert_eq!(meta.width, 3);
         assert_eq!(meta.scale_factor, None);
+        assert_eq!(meta.pointer, None);
         assert!(read_meta(&dir.path().join("missing.png")).is_none());
+    }
+
+    #[test]
+    fn the_pointer_is_kept_in_meta_and_left_out_when_there_is_none() {
+        let dir = TempDir::new().unwrap();
+        let image = RgbaImage::from_pixel(3, 2, Rgba([0, 0, 0, 255]));
+        let pointer = CapturedPointer {
+            x: 2,
+            y: 1,
+            hot_x: 0,
+            hot_y: 0,
+            width: 12,
+            height: 19,
+            image: "iVBORw0KGgo=".into(),
+        };
+        let saved = save_capture_with_pointer(
+            dir.path(),
+            &image,
+            CaptureMode::Region,
+            &Foreground::default(),
+            None,
+            Some(pointer.clone()),
+            time(),
+        )
+        .unwrap();
+        let meta: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&saved.meta_path).unwrap()).unwrap();
+        assert_eq!(meta["pointer"]["x"], 2);
+        assert_eq!(meta["pointer"]["hotX"], 0);
+        assert_eq!(meta["pointer"]["width"], 12);
+        assert_eq!(read_meta(&saved.path).unwrap().pointer, Some(pointer));
+
+        let saved = save_capture(
+            dir.path(),
+            &image,
+            CaptureMode::Region,
+            &Foreground::default(),
+            None,
+            time(),
+        )
+        .unwrap();
+        let text = fs::read_to_string(&saved.meta_path).unwrap();
+        assert!(!text.contains("pointer"), "{text}");
     }
 }

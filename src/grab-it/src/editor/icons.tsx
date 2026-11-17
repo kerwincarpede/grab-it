@@ -93,6 +93,12 @@ export const TrashIcon = () => (
   </Icon>
 );
 
+export const PointerIcon = () => (
+  <Icon>
+    <path d="M6 3.5v15.5l4.2-4.1 2.9 6.3 2.6-1.2-2.9-6.2h5.7z" />
+  </Icon>
+);
+
 export const ZoomInIcon = () => (
   <Icon>
     <circle cx="11" cy="11" r="6.5" />

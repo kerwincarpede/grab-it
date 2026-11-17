@@ -16,12 +16,12 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::{
     ai::{self, AiError},
-    capture::{self, CaptureMode, Foreground, SavedCapture},
+    capture::{self, CaptureMode, CapturedPointer, Foreground, SavedCapture},
     codes::{self, Code},
     commands::{SettingsState, lock},
     ocr, overlay,
     overlay::Intent,
-    permissions,
+    permissions, pointer,
     quick::{self, QuickItem, TextTidy},
     record, screen,
     settings::AfterCapture,
@@ -163,7 +163,7 @@ pub fn start(app: &AppHandle, action: Action) {
                     std::thread::spawn(move || finish_text(&app, &image));
                 }
                 // The desktop portal does not say which monitor it captured.
-                Ok(Some(image)) => finish(&app, &image, mode, &Foreground::default(), None),
+                Ok(Some(image)) => finish(&app, &image, mode, &Foreground::default(), None, None),
                 // The user cancelled the desktop's picker.
                 Ok(None) => {}
                 Err(err) => report_failure(&app, &err),
@@ -197,23 +197,56 @@ pub fn start(app: &AppHandle, action: Action) {
             Action::AllInOne => overlay::open(&app, action.mode(), action.intent(), true),
             Action::Repeat => {
                 let foreground = screen::foreground();
-                overlay::capture_last_region(&app).map(|(image, scale)| {
-                    finish(&app, &image, CaptureMode::Region, &foreground, Some(scale))
+                overlay::capture_last_region(&app).map(|(image, scale, pointer)| {
+                    finish(
+                        &app,
+                        &image,
+                        CaptureMode::Region,
+                        &foreground,
+                        Some(scale),
+                        pointer,
+                    )
                 })
             }
             Action::Screen => {
                 let foreground = screen::foreground();
                 let scale = monitor_scale(None);
-                screen::capture_all()
-                    .map(|image| finish(&app, &image, CaptureMode::Screen, &foreground, scale))
+                let snapshot = pointer::snapshot();
+                screen::capture_all().map(|image| {
+                    let pointer = snapshot.as_ref().and_then(|snapshot| {
+                        let monitors = screen::monitors().ok()?;
+                        snapshot.place_on_desktop(&monitors, image.dimensions())
+                    });
+                    finish(
+                        &app,
+                        &image,
+                        CaptureMode::Screen,
+                        &foreground,
+                        scale,
+                        pointer,
+                    )
+                })
             }
             // Handled before the thread starts.
             Action::Steps => Ok(()),
             Action::Monitor(index) => {
                 let foreground = screen::foreground();
                 let scale = monitor_scale(Some(index));
-                screen::capture_monitor(index)
-                    .map(|image| finish(&app, &image, CaptureMode::Monitor, &foreground, scale))
+                let snapshot = pointer::snapshot();
+                screen::capture_monitor(index).map(|image| {
+                    let pointer = snapshot.as_ref().and_then(|snapshot| {
+                        let monitors = screen::monitors().ok()?;
+                        snapshot.place_on_monitor(monitors.get(index)?, image.dimensions(), None)
+                    });
+                    finish(
+                        &app,
+                        &image,
+                        CaptureMode::Monitor,
+                        &foreground,
+                        scale,
+                        pointer,
+                    )
+                })
             }
         };
         if let Err(err) = result {
@@ -237,27 +270,33 @@ pub(crate) fn monitor_scale(index: Option<usize>) -> Option<f64> {
 
 /// Saves a finished capture, copies it to the clipboard and shows it as
 /// the user chose in Settings. `scale_factor` is the source monitor's
-/// pixels per point, when known. Runs off the main thread, so creating a
-/// window is safe.
+/// pixels per point, when known, and `pointer` the mouse pointer in the
+/// image's pixels. Runs off the main thread, so creating a window is safe.
 pub fn finish(
     app: &AppHandle,
     image: &RgbaImage,
     mode: CaptureMode,
     foreground: &Foreground,
     scale_factor: Option<f64>,
+    pointer: Option<CapturedPointer>,
 ) {
-    let preferences = lock(&app.state::<SettingsState>())
-        .get()
-        .preferences
-        .clone();
-    match save(
-        app,
+    let (preferences, show_pointer) = {
+        let state = app.state::<SettingsState>();
+        let store = lock(&state);
+        let settings = store.get();
+        (
+            settings.preferences.clone(),
+            settings.editor.show_pointer.unwrap_or(false),
+        )
+    };
+    let shot = Capture {
         image,
         mode,
         foreground,
         scale_factor,
-        preferences.copy_to_clipboard,
-    ) {
+        pointer,
+    };
+    match save(app, shot, preferences.copy_to_clipboard, show_pointer) {
         Ok((saved, copied)) => {
             let _ = app.emit(CAPTURE_SAVED_EVENT, &saved);
             let item = QuickItem::capture(&saved.path, image.dimensions(), copied);
@@ -278,26 +317,58 @@ pub fn finish(
     }
 }
 
-/// Saves the capture and, when asked, copies it. The second value says
-/// whether the capture reached the clipboard.
+/// A finished capture on its way to disk.
+struct Capture<'a> {
+    image: &'a RgbaImage,
+    mode: CaptureMode,
+    foreground: &'a Foreground,
+    scale_factor: Option<f64>,
+    pointer: Option<CapturedPointer>,
+}
+
+/// Saves the capture and, when asked, copies it, with the pointer drawn
+/// in when `show_pointer` is on. The second value says whether the
+/// capture reached the clipboard.
 fn save(
     app: &AppHandle,
-    image: &RgbaImage,
-    mode: CaptureMode,
-    foreground: &Foreground,
-    scale_factor: Option<f64>,
+    shot: Capture<'_>,
     copy: bool,
+    show_pointer: bool,
 ) -> Result<(SavedCapture, bool), String> {
     let folder = lock(&app.state::<SettingsState>())
         .get()
         .save_folder
         .clone();
-    let saved = capture::save_capture(&folder, image, mode, foreground, scale_factor, Local::now())
-        .map_err(|err| err.to_string())?;
+    let Capture {
+        image,
+        mode,
+        foreground,
+        scale_factor,
+        pointer,
+    } = shot;
+    let clip_pointer = pointer.clone().filter(|_| show_pointer);
+    let saved = capture::save_capture_with_pointer(
+        &folder,
+        image,
+        mode,
+        foreground,
+        scale_factor,
+        pointer,
+        Local::now(),
+    )
+    .map_err(|err| err.to_string())?;
     crate::library::record_capture(app, &saved.path);
     if !copy {
         return Ok((saved, false));
     }
+    let drawn;
+    let image = match &clip_pointer {
+        Some(pointer) => {
+            drawn = crate::pointer::with_pointer(image, pointer);
+            &drawn
+        }
+        None => image,
+    };
     let clip = tauri::image::Image::new(image.as_raw(), image.width(), image.height());
     let copied = match app.clipboard().write_image(&clip) {
         Ok(()) => true,

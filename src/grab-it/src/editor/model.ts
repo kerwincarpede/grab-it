@@ -176,6 +176,21 @@ export interface Annotations {
   flipY?: boolean;
   /** Resizes the whole output, backdrop included; 1 when absent. */
   scale?: number;
+  /**
+   * The user's changes to the captured mouse pointer; absent until they
+   * first change it, when the pointer shows where it was captured.
+   */
+  pointer?: PointerEdit;
+}
+
+/** Where the captured pointer is shown, and whether it is. */
+export interface PointerEdit {
+  shown: boolean;
+  /** The hot spot, in capture pixels. */
+  x: number;
+  y: number;
+  /** Against the captured pointer's size. */
+  scale: number;
 }
 
 /** What the next shape is drawn with. */

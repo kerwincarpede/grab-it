@@ -1,6 +1,7 @@
-import type { Annotations, Backdrop, Rect, Shape } from "./model";
+import type { Annotations, Backdrop, PointerEdit, Rect, Shape } from "./model";
 import { BACKDROP_ASPECTS, BACKDROP_MAX_PADDING, BACKDROP_MAX_RADIUS, emptyAnnotations } from "./model";
 import { clampScale, normalizeRotation } from "./orient";
+import { clampPointerScale } from "./pointer";
 
 export class SidecarError extends Error {}
 
@@ -124,7 +125,21 @@ export function parseAnnotations(value: unknown): Annotations {
     crop: crop && typeof crop === "object" && isRect(crop) ? (crop as unknown as Rect) : null,
     ...(backdrop ? { backdrop } : {}),
     ...orientationFields(doc),
+    ...pointerField(doc.pointer),
   };
+}
+
+/** The user's pointer edits, kept only when every field makes sense. */
+export function parsePointer(value: unknown): PointerEdit | null {
+  if (typeof value !== "object" || value === null) return null;
+  const pointer = value as Record<string, unknown>;
+  if (!isBool(pointer.shown) || !isNum(pointer.x) || !isNum(pointer.y) || !isNum(pointer.scale) || pointer.scale <= 0) return null;
+  return { shown: pointer.shown, x: pointer.x, y: pointer.y, scale: clampPointerScale(pointer.scale) };
+}
+
+function pointerField(value: unknown): Pick<Annotations, "pointer"> {
+  const pointer = parsePointer(value);
+  return pointer ? { pointer } : {};
 }
 
 /**
@@ -147,7 +162,7 @@ function orientationFields(doc: Partial<Record<keyof Annotations, unknown>>): Pi
 
 /**
  * The JSON written to `<capture>.annotations.json`. `backdrop`, the
- * rotation, flips and scale are written only when set, so a capture without
+ * rotation, flips, scale and pointer are written only when set, so a capture without
  * them keeps the original layout.
  */
 export function serializeAnnotations(doc: Annotations): Annotations {
@@ -157,5 +172,6 @@ export function serializeAnnotations(doc: Annotations): Annotations {
     crop: doc.crop ?? null,
     ...(doc.backdrop ? { backdrop: doc.backdrop } : {}),
     ...orientationFields(doc),
+    ...pointerField(doc.pointer),
   };
 }
