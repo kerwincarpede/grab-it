@@ -1,0 +1,106 @@
+/*
+ * The step capture pill's window is see-through: the page paints only the
+ * pill. The colour scheme is pinned because a dark one makes the browser
+ * fill the page behind the root.
+ */
+:root.stepsbar-clear,
+:root.stepsbar-clear body {
+  color-scheme: light;
+  background: transparent;
+}
+
+/* Always the dark palette of the recording toolbar, so it reads over any desktop. */
+.stepsbar {
+  --sb-bg: #101113;
+  --sb-border: #2a2c31;
+  --sb-text: #ecedef;
+  --sb-accent: #8297ff;
+  --sb-rec: #ff4d4f;
+
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Room for the shadow; the window is sized to it (SIZE in steps_bar.rs). */
+  padding: 8px;
+  color: var(--sb-text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+.stepsbar-pill {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  height: 40px;
+  box-sizing: border-box;
+  padding: 0 5px 0 14px;
+  white-space: nowrap;
+  background: var(--sb-bg);
+  border-radius: 999px;
+  box-shadow:
+    inset 0 0 0 1px var(--sb-border),
+    0 4px 12px rgb(0 0 0 / 38%);
+}
+
+.stepsbar-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  background: var(--sb-rec);
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgb(255 77 79 / 22%);
+  animation: stepsbar-pulse 1200ms ease-in-out infinite;
+}
+
+.stepsbar-label {
+  margin-right: 4px;
+  font-weight: 600;
+}
+
+.stepsbar-stop {
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  height: 30px;
+  padding: 0 14px 0 11px;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  background: var(--sb-rec);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.stepsbar-stop:hover:not(:disabled) {
+  background: #ff6163;
+}
+
+.stepsbar-stop:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.stepsbar-stop:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+@keyframes stepsbar-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stepsbar-dot {
+    animation: none;
+  }
+}

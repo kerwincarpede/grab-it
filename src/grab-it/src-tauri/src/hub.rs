@@ -21,6 +21,9 @@ use crate::{
 pub const LABEL: &str = "hub";
 /// Emitted to the hub each time it is shown, so it can refresh.
 pub const HUB_SHOWN_EVENT: &str = "hub-shown";
+/// Emitted to the hub with a [`HubActivity`] when a recording or a step
+/// capture starts or stops. Mirrors `HUB_ACTIVITY_EVENT` in src/hub/api.ts.
+pub const HUB_ACTIVITY_EVENT: &str = "hub-activity";
 
 /// The hub's size in logical pixels.
 const WIDTH: f64 = 320.0;
@@ -352,6 +355,36 @@ pub fn hub_capture(
     let delay = HIDE_SETTLE + Duration::from_secs(delay_seconds.unwrap_or(0).min(60));
     actions::start_after(&app, action, delay);
     Ok(())
+}
+
+/// What is running, so the hub's Record and Step capture items can say
+/// Stop. Mirrors `HubActivity` in src/hub/api.ts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct HubActivity {
+    /// A recording is under way, counting down included.
+    recording: bool,
+    /// A step capture is under way.
+    steps: bool,
+}
+
+fn activity(app: &AppHandle) -> HubActivity {
+    HubActivity {
+        recording: crate::record::session(app).is_some(),
+        steps: crate::steps::is_running(),
+    }
+}
+
+/// Tells an open hub that a recording or a step capture started or
+/// stopped, so it updates at once.
+pub fn activity_changed(app: &AppHandle) {
+    if app.get_webview_window(LABEL).is_some() {
+        let _ = app.emit_to(LABEL, HUB_ACTIVITY_EVENT, activity(app));
+    }
+}
+
+#[tauri::command]
+pub fn hub_activity(app: AppHandle) -> HubActivity {
+    activity(&app)
 }
 
 /// A monitor the hub offers to capture.
