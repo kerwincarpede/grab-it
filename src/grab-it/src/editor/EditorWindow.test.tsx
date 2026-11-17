@@ -502,7 +502,7 @@ describe("EditorWindow", () => {
     mockEditor();
     await ready();
     const rail = within(screen.getByRole("toolbar", { name: "Annotation tools" }));
-    for (const name of ["Arrow", "Rectangle", "Ellipse", "Line", "Freehand", "Text", "Highlighter", "Blur", "Magnify", "Spotlight", "Step", "Crop", "Select", "Pan"]) {
+    for (const name of ["Arrow", "Rectangle", "Ellipse", "Line", "Freehand", "Text", "Highlighter", "Blur", "Magnify", "Spotlight", "Step", "Crop", "Cut out", "Select", "Pan"]) {
       expect(rail.getByRole("button", { name })).toBeInTheDocument();
     }
     // Icon buttons: the name is the label, the tooltip adds the key.
@@ -1891,7 +1891,6 @@ describe("EditorWindow", () => {
     expect(cropHandles()).not.toBeInTheDocument();
   });
 
-
   describe("callouts", () => {
     const withCallout: Annotations = {
       ...sidecar,
@@ -2021,6 +2020,115 @@ describe("EditorWindow", () => {
       fireEvent.keyDown(window, { key: "d", ctrlKey: true });
       await waitFor(() => expect(last(saved)?.shapes[5]).toMatchObject({ type: "callout", x: 112, y: 62, tail: { x: 52, y: 132 } }));
     });
+  });
+
+  it("cuts out a dragged strip, closing the gap, and undoes and restores it", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.keyDown(window, { key: "x" });
+    fireEvent.keyUp(window, { key: "x" });
+    expect(pressed("Cut out")).toHaveAttribute("aria-pressed", "true");
+    expect(pressed("Cut out")).toHaveAttribute("title", "Cut out (X)");
+    // Cut out has no colour: its pickers take the swatches' place.
+    expect(screen.queryByRole("group", { name: "Colour" })).not.toBeInTheDocument();
+    const directions = within(screen.getByRole("group", { name: "Strip direction" }));
+    expect(directions.getAllByRole("button").map((button) => button.textContent)).toEqual(["Horizontal", "Vertical"]);
+    expect(directions.getByRole("button", { name: "Horizontal" })).toHaveAttribute("aria-pressed", "true");
+    const edges = within(screen.getByRole("group", { name: "Cut edge" }));
+    expect(edges.getAllByRole("button").map((button) => button.textContent)).toEqual(["Straight", "Zigzag", "Torn"]);
+    expect(screen.getByRole("button", { name: "Restore strips" })).toBeDisabled();
+
+    // Rows 30 to 70 go: the steps inside go with them, the arrow crossing them shortens, and the text moves up.
+    drag([50, 30], [300, 70]);
+    expect(document.querySelector('[data-name="cut-strip"]')).not.toBeInTheDocument();
+    await waitFor(() => expect(last(saved)?.cuts).toEqual([{ axis: "y", start: 30, end: 70, edge: "straight" }]));
+    expect(last(saved)?.shapes.map((shape) => shape.id)).toEqual(["a1", "t1"]);
+    expect(last(saved)?.shapes[0]).toMatchObject({ points: [10, 10, 100, 40] });
+    expect(last(saved)?.shapes[1]).toMatchObject({ x: 20, y: 160 });
+    expect(screen.getByText("400×260")).toBeInTheDocument();
+
+    // One undo step brings the strip, the steps and the text back.
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(screen.getByText("400×300")).toBeInTheDocument();
+    expect(shapeIds()).toEqual(["a1", "t1", "s1", "s2"]);
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true, shiftKey: true });
+    expect(screen.getByText("400×260")).toBeInTheDocument();
+
+    // Restore strips puts the strip back and the text with it; the removed steps stay removed.
+    fireEvent.click(screen.getByRole("button", { name: "Restore strips" }));
+    await waitFor(() => expect(last(saved)).not.toHaveProperty("cuts"));
+    expect(last(saved)?.shapes.map((shape) => shape.id)).toEqual(["a1", "t1"]);
+    expect(last(saved)?.shapes[1]).toMatchObject({ y: 200 });
+    expect(screen.getByText("400×300")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore strips" })).toBeDisabled();
+  });
+
+  it("shades the strip while it is dragged, as wide as the capture", async () => {
+    mockEditor();
+    await ready();
+    fireEvent.click(pressed("Cut out"));
+    Object.assign(pointerAt, { x: 50, y: 100 });
+    fireEvent.mouseDown(stage());
+    Object.assign(pointerAt, { x: 60, y: 150 });
+    fireEvent.mouseMove(stage());
+    const strip = document.querySelector('[data-name="cut-strip"]');
+    expect(strip).toHaveAttribute("data-x", "0");
+    expect(strip).toHaveAttribute("data-y", "100");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(document.querySelector('[data-name="cut-strip"]')).not.toBeInTheDocument();
+  });
+
+  it("cuts a vertical strip with a torn edge, saving its pattern", async () => {
+    const saved = mockEditor({ version: 1, shapes: [{ id: "r", type: "rect", color: "#e5484d", strokeWidth: 4, x: 300, y: 10, width: 50, height: 50 }], crop: null });
+    await ready();
+    fireEvent.click(pressed("Cut out"));
+    fireEvent.click(screen.getByRole("button", { name: "Vertical" }));
+    fireEvent.click(screen.getByRole("button", { name: "Torn" }));
+    drag([100, 20], [200, 250]);
+    await waitFor(() => expect(last(saved)?.cuts?.[0]).toMatchObject({ axis: "x", start: 100, end: 200, edge: "torn" }));
+    expect(Number.isInteger(last(saved)?.cuts?.[0].seed)).toBe(true);
+    // A torn join leaves an 8px gap: the rectangle moves back by the strip less the gap.
+    expect(last(saved)?.shapes[0]).toMatchObject({ x: 208, width: 50 });
+    expect(screen.getByText("308×300")).toBeInTheDocument();
+  });
+
+  it("cuts a turned capture as it shows", async () => {
+    // 400×300 turned right shows 300 wide and 400 tall: a horizontal strip on show removes columns of the capture.
+    const saved = mockEditor({
+      version: 1,
+      shapes: [{ id: "r", type: "rect", color: "#e5484d", strokeWidth: 4, x: 200, y: 10, width: 50, height: 50 }],
+      crop: null,
+      rotation: 90,
+    });
+    await ready();
+    fireEvent.click(pressed("Cut out"));
+    drag([10, 100], [290, 160]);
+    await waitFor(() => expect(last(saved)?.cuts).toEqual([{ axis: "x", start: 100, end: 160, edge: "straight" }]));
+    expect(last(saved)?.shapes[0]).toMatchObject({ x: 140, y: 10 });
+    expect(last(saved)?.rotation).toBe(90);
+  });
+
+  it("cuts without snapping on ⌥-drag instead of drawing an arrow, and ignores a stray click or a strip at the edge", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.click(pressed("Cut out"));
+    drag([50, 100], [50, 101]);
+    drag([50, 0], [50, 40]);
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+
+    drag([50, 100], [50, 150], { altKey: true });
+    await waitFor(() => expect(last(saved)?.cuts).toEqual([{ axis: "y", start: 100, end: 150, edge: "straight" }]));
+    expect(last(saved)?.shapes).toHaveLength(4);
+    expect(pressed("Cut out")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("loads a capture's saved cuts and copies the joined image", async () => {
+    mockEditor({ ...sidecar, cuts: [{ axis: "y", start: 100, end: 160, edge: "zigzag" }] });
+    await ready();
+    expect(screen.getByText("400×248")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(flattened.options).toHaveLength(1));
+    expect(flattened.options[0]).toMatchObject({ seeThrough: true });
   });
 
   describe("backdrop presets", () => {

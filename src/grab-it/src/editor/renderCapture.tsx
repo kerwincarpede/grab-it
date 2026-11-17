@@ -3,6 +3,7 @@ import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { Group, Image as KonvaImage, Layer, Stage } from "react-konva";
 import { backdropImage } from "./api";
+import { hasCutGaps, joinedImage, joinedSize } from "./cut";
 import { flatten, measureBorders } from "./flatten";
 import { groupTransform, orientedCanvas } from "./orient";
 import { renderPlan } from "./render";
@@ -36,7 +37,7 @@ function nextFrame(): Promise<void> {
 
 /**
  * Draws a capture with its saved edits as a PNG, the way the editor's Copy
- * and Export draw it: shapes and blurs, then crop, rotation and flips, the
+ * and Export draw it: its cuts, shapes and blurs, then crop, rotation and flips, the
  * backdrop (with its image fill), then the output scale. `png` is the
  * original's bytes and `annotations` its sidecar, as saved. The drawing
  * happens on a hidden stage that is removed afterwards. An unknown sidecar
@@ -44,8 +45,10 @@ function nextFrame(): Promise<void> {
  */
 export async function renderCapture(png: ArrayBuffer, annotations: unknown, scaleFactor?: number | null): Promise<Uint8Array> {
   const doc = parseAnnotations(annotations);
-  const image = await loadImage(png);
-  const size = { width: image.naturalWidth || image.width, height: image.naturalHeight || image.height };
+  const original = await loadImage(png);
+  // Everything after the cuts works on the joined image, as in the editor.
+  const image = joinedImage(original, doc.cuts);
+  const size = joinedSize({ width: original.naturalWidth || original.width, height: original.naturalHeight || original.height }, doc.cuts);
   const plan = renderPlan(doc, size, scaleFactor);
   // A moved or unreadable backdrop image leaves the plain underlay showing, as in the editor.
   const fill = plan.backdropImage ? await backdropImage(plan.backdropImage).then(loadImage, () => null) : null;
@@ -103,6 +106,7 @@ export async function renderCapture(png: ArrayBuffer, annotations: unknown, scal
       capture: { image: shown, area: shown === image ? plan.crop : plan.shownCrop },
       image: fill,
       borders,
+      seeThrough: hasCutGaps(doc.cuts),
     });
   } finally {
     root.unmount();

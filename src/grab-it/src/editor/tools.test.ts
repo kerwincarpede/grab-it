@@ -167,6 +167,12 @@ describe("quick tool shortcuts", () => {
     expect(modifierTool({ ctrlKey: false, metaKey: false, altKey: true }, "select")).toBe("arrow");
   });
 
+  it("keeps ⌥ for unsnapped strips with the Cut out tool, and ⌘ still draws a rectangle", () => {
+    expect(modifierTool({ ctrlKey: false, metaKey: false, altKey: true }, "cut")).toBeNull();
+    expect(modifierTool({ ctrlKey: true, metaKey: false, altKey: false }, "cut")).toBe("rect");
+    expect(modifierTool({ ctrlKey: false, metaKey: true, altKey: true }, "cut")).toBe("rect");
+  });
+
   it("maps 1–7 to the swatches and ignores other keys", () => {
     expect(colorForKey("1")).toBe("#e5484d");
     expect(colorForKey("7")).toBe("#ffffff");

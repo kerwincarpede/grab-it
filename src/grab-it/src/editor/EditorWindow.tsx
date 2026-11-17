@@ -22,6 +22,18 @@ import { blursFor, findDetails, findWord, wordAt } from "./redact";
 import { imageEdges, NO_EDGES, orientEdges, type Edges } from "./edges";
 import { bandReach, fitToBand, imageTextBand } from "./textBand";
 import {
+  cutAnnotations,
+  cutFromStrip,
+  hasCutGaps,
+  joinedImage,
+  pointBeforeCuts,
+  rectsThroughCuts,
+  restoreStrips,
+  stripBox,
+  type CaptureImage,
+  type StripDirection,
+} from "./cut";
+import {
   backdropLayout,
   backdropPaint,
   blurredBackdrop,
@@ -50,6 +62,7 @@ import {
   PointerIcon,
   RedoIcon,
   ResizeIcon,
+  RestoreStripsIcon,
   RotateLeftIcon,
   RotateRightIcon,
   TextBackgroundIcon,
@@ -71,6 +84,7 @@ import {
   type BlurMode,
   type CalloutShape,
   type CropAspect,
+  type CutEdge,
   type LineShape,
   type MagnifyShape,
   type Point,
@@ -146,6 +160,7 @@ import {
   moveCrop,
   moveLineEnd,
   moveShape,
+  nearestLine,
   newId,
   nudgeDelta,
   releaseRestores,
@@ -187,6 +202,15 @@ const BLUR_MODES: { mode: BlurMode; label: string }[] = [
 /** How much ⌥-scroll moves one width step: about one mouse-wheel notch, or a short trackpad swipe. */
 const WIDTH_SCROLL_STEP = 40;
 const errorText = (err: unknown) => String(err instanceof Error ? err.message : err);
+const STRIP_DIRECTIONS: { direction: StripDirection; label: string }[] = [
+  { direction: "horizontal", label: "Horizontal" },
+  { direction: "vertical", label: "Vertical" },
+];
+const CUT_EDGES: { edge: CutEdge; label: string }[] = [
+  { edge: "straight", label: "Straight" },
+  { edge: "zigzag", label: "Zigzag" },
+  { edge: "torn", label: "Torn" },
+];
 /** The crop rect's Konva name: pressing on it moves the crop instead of starting a new one. */
 const CROP_BOX = "crop-box";
 
@@ -444,7 +468,15 @@ interface ToolHold {
 export default function EditorWindow() {
   const annotations = useAnnotations();
   const { doc, commit, adopt, info, undo: undoDoc, redo: redoDoc } = annotations;
-  const { image, error: imageError } = useCaptureImage(info !== null);
+  const { image: capture, error: imageError } = useCaptureImage(info !== null);
+  /**
+   * The capture with its cuts made. It stands in for the capture everywhere:
+   * shapes and the crop live in its pixels, and it is what shows, blurs and
+   * is exported.
+   */
+  const image = useMemo<CaptureImage | null>(() => (capture ? joinedImage(capture, doc.cuts) : null), [capture, doc.cuts]);
+  /** The cuts leave see-through gaps, which the backdrop shows through. */
+  const seeThrough = hasCutGaps(doc.cuts);
   const container = useRef<HTMLDivElement>(null);
   const size = useSize(container);
   const stageRef = useRef<Konva.Stage>(null);
@@ -482,6 +514,11 @@ export default function EditorWindow() {
   const [cropAspect, setCropAspect] = useState<CropAspect>("free");
   /** The crop mid-move or mid-resize, shown but not yet committed. */
   const [cropEdit, setCropEdit] = useState<Rect | null>(null);
+  /** Which way Cut out's strips run as the capture shows, and the edge their join gets. Chosen per session, never saved. */
+  const [cutDirection, setCutDirection] = useState<StripDirection>("horizontal");
+  const [cutEdge, setCutEdge] = useState<CutEdge>("straight");
+  /** A strip being marked, along the way it is dragged on show; `snap` is off while ⌥/Alt is held. */
+  const [cutDrag, setCutDrag] = useState<{ start: number; end: number; snap: boolean } | null>(null);
   const cropEditRef = useRef<Rect | null>(null);
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
@@ -596,10 +633,10 @@ export default function EditorWindow() {
   );
   /** A crop on show back in capture pixels, for `doc.crop`. */
   const shownToCapture = (shown: Rect): Rect => (imageSize ? cropToCapture(shown, imageSize, orientation) : shown);
-  /** Strong lines in the capture (capture pixels) that crops snap to, found once per image when the Crop tool is first picked. */
-  const [foundEdges, setFoundEdges] = useState<{ image: HTMLImageElement; edges: Edges } | null>(null);
+  /** Strong lines in the capture (capture pixels) that crops and strips snap to, found once per image when Crop or Cut out is first picked. */
+  const [foundEdges, setFoundEdges] = useState<{ image: CaptureImage; edges: Edges } | null>(null);
   // Adjusting state while rendering (not in an effect), so the first crop drag already snaps.
-  if (tool === "crop" && image && foundEdges?.image !== image) setFoundEdges({ image, edges: imageEdges(image) });
+  if ((tool === "crop" || tool === "cut") && image && foundEdges?.image !== image) setFoundEdges({ image, edges: imageEdges(image) });
   const captureEdges = foundEdges && foundEdges.image === image ? foundEdges.edges : NO_EDGES;
   /** The same lines as they show: crops are drawn, moved and resized on show. */
   const snapLines = useMemo(
@@ -621,14 +658,15 @@ export default function EditorWindow() {
   }, [balance, image, imageSize, doc.crop, rotation, flipX, flipY]);
   /**
    * The backdrop preview: the area that is exported (the crop, or the whole
-   * capture), where the backdrop sits around it, and the fit bounds. The
-   * crop tool shows the whole capture instead, so the crop can be redrawn.
+   * capture), where the backdrop sits around it, and the fit bounds. Crop
+   * and Cut out show the whole capture instead, so the crop can be redrawn
+   * and a strip marked anywhere.
    */
   const frame = useMemo(() => {
     if (!imageSize) return null;
     const o = { rotation, flipX, flipY };
     const whole = { x: 0, y: 0, ...displaySize(imageSize, o) };
-    if (!backdrop || tool === "crop") return { area: whole, bounds: whole, layout: null };
+    if (!backdrop || tool === "crop" || tool === "cut") return { area: whole, bounds: whole, layout: null };
     // The exported area as it shows, in display space.
     const area = doc.crop ? orientRect(doc.crop, imageSize, o) : whole;
     const layout = backdropLayout(area, backdrop, captureScale, borders);
@@ -654,6 +692,19 @@ export default function EditorWindow() {
       return null;
     }
   }, [shownCapture, frame, backdrop?.fill]);
+  /**
+   * With see-through gaps, the capture itself (as it shows, cropped) casts
+   * the backdrop's shadow instead of an opaque plate, so the backdrop shows
+   * through the gaps, as on export.
+   */
+  const shadowCaster = useMemo(() => {
+    if (!seeThrough || !image || !imageSize || !frame?.layout?.shadow) return null;
+    try {
+      return orientedCanvas(image, doc.crop ?? { x: 0, y: 0, ...imageSize }, imageSize, { rotation, flipX, flipY });
+    } catch {
+      return null;
+    }
+  }, [seeThrough, image, imageSize, frame, doc.crop, rotation, flipX, flipY]);
   /** What copy and export put out before Resize: the crop as it shows, framed by any backdrop. */
   const outputBase = useMemo(() => {
     if (!imageSize) return null;
@@ -673,6 +724,12 @@ export default function EditorWindow() {
     const ratio = cropDragRatio(cropRatio, drag.square);
     return drag.snap ? snapCropDrag(drag.start, drag.end, shown, ratio, snapLines, snapThreshold) : cropBox(drag.start, drag.end, shown, ratio);
   };
+  /** The strip a Cut out drag marks on show, its edges snapped to the capture's lines unless ⌥/Alt is held. */
+  const cutStripBox = (drag: { start: number; end: number; snap: boolean }, shown: { width: number; height: number }) => {
+    const lines = cutDirection === "horizontal" ? snapLines.y : snapLines.x;
+    const snap = (value: number) => (drag.snap ? (nearestLine(value, lines, snapThreshold) ?? value) : value);
+    return stripBox(snap(drag.start), snap(drag.end), cutDirection, shown);
+  };
   const selected = useMemo(() => doc.shapes.find((shape) => shape.id === selectedId) ?? null, [doc.shapes, selectedId]);
   /** The pointer saved with the capture, and where and whether it shows; null when there is none. */
   const captured = info?.pointer ?? null;
@@ -686,10 +743,10 @@ export default function EditorWindow() {
   const panning = tool === "pan" || spaceHeld;
   /**
    * Shapes can be selected, moved and resized: with Select, and with the
-   * drawing tools too (a drag that starts on a shape moves it). Crop and
-   * panning leave them alone.
+   * drawing tools too (a drag that starts on a shape moves it). Crop, Cut
+   * out and panning leave them alone.
    */
-  const editable = !panning && tool !== "crop";
+  const editable = !panning && tool !== "crop" && tool !== "cut";
 
   /** Arrows and lines get their own bend and end handles (LineHandles) instead of the box. */
   const lineSelected = hasLineHandles(selected);
@@ -824,7 +881,7 @@ export default function EditorWindow() {
     }
     // Right-click opens the tool wheel (see onContextMenu).
     if (event.evt.button !== 0) return;
-    // ⌘-drag draws a rectangle and ⌥-drag an arrow from any tool (⌥ with Crop crops unsnapped); Space still pans.
+    // ⌘-drag draws a rectangle and ⌥-drag an arrow from any tool (⌥ with Crop or Cut out works unsnapped); Space still pans.
     const override = modifierTool(event.evt, tool);
     if (spaceHeld || (panning && !override)) return;
     const at = pointer();
@@ -868,6 +925,13 @@ export default function EditorWindow() {
       setCropDrag({ start: shown, end: shown, square: event.evt.shiftKey, snap: !event.evt.altKey });
       return;
     }
+    if (drawWith === "cut") {
+      // Marked on show, along the way the strip is dragged.
+      const shown = shownPointer() ?? at;
+      const along = cutDirection === "horizontal" ? shown.y : shown.x;
+      setCutDrag({ start: along, end: along, snap: !event.evt.altKey });
+      return;
+    }
     const shape = beginShape(drawWith, at, drawStyle(drawWith));
     if (shape?.type === "step") {
       commit(addShape(doc, shape));
@@ -878,13 +942,17 @@ export default function EditorWindow() {
   };
 
   const onMouseMove = (event: Konva.KonvaEventObject<MouseEvent>) => {
-    if (!draft && !cropDrag && !calloutDrag) return;
+    if (!draft && !cropDrag && !calloutDrag && !cutDrag) return;
     const at = pointer();
     if (!at) return;
     if (calloutDrag) setCalloutDrag({ ...calloutDrag, end: shownPointer() ?? at });
     // Shift keeps lines to 45° steps and boxes square.
     if (draft) setDraft(dragShape(draft, at, event.evt.shiftKey));
     if (cropDrag) setCropDrag({ ...cropDrag, end: shownPointer() ?? at, square: event.evt.shiftKey, snap: !event.evt.altKey });
+    if (cutDrag) {
+      const shown = shownPointer() ?? at;
+      setCutDrag({ ...cutDrag, end: cutDirection === "horizontal" ? shown.y : shown.x, snap: !event.evt.altKey });
+    }
   };
 
   const onMouseUp = () => {
@@ -928,6 +996,19 @@ export default function EditorWindow() {
       if (shown.width >= MIN_SIZE && shown.height >= MIN_SIZE) commit({ ...doc, crop: shownToCapture(shown) });
       setCropDrag(null);
     }
+    if (cutDrag && shownSize && imageSize) {
+      // Marked on show, then cut in the joined image's pixels; a thin strip or one leaving nothing on a side is ignored.
+      const cut = cutFromStrip(cutStripBox(cutDrag, shownSize), imageSize, orientation, cutEdge);
+      if (cut) commit(cutAnnotations(doc, cut));
+      setCutDrag(null);
+    }
+  };
+
+  /** Restore strips: every strip put back, with the shapes past them, as one undo step. */
+  const restoreCuts = () => {
+    if (!doc.cuts?.length) return;
+    commit(restoreStrips(doc));
+    setSelectedId(null);
   };
 
   const zoomBy = (factor: number) => {
@@ -950,7 +1031,7 @@ export default function EditorWindow() {
    */
   const restoreTool = useCallback((previous: Tool) => {
     setTool(previous);
-    if (previous === "crop" || previous === "pan") setSelectedId(null);
+    if (previous === "crop" || previous === "cut" || previous === "pan") setSelectedId(null);
   }, []);
 
   const closeWheel = useCallback((event: PointerEvent) => {
@@ -970,6 +1051,7 @@ export default function EditorWindow() {
     setDraft(null);
     setCropDrag(null);
     setCalloutDrag(null);
+    setCutDrag(null);
     setWheelAt(clampWheel({ x: event.clientX - box.left, y: event.clientY - box.top }, size));
   };
 
@@ -1268,9 +1350,10 @@ export default function EditorWindow() {
         capture: shown ? { image: shown, area } : image ? { image, area } : null,
         image: backdropImageEl,
         borders,
+        seeThrough,
       });
     },
-    [doc.crop, backdrop, imageSize, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale, borders],
+    [doc.crop, backdrop, imageSize, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale, borders, seeThrough],
   );
 
   /** Copies the flattened image; false when it failed (and said so). */
@@ -1360,7 +1443,8 @@ export default function EditorWindow() {
     setFindingPrivate(true);
     try {
       const [lines, faces] = await Promise.all([captureWords(), editorFaces()]);
-      const rects = [...findDetails(lines).flatMap((detail) => detail.rects), ...faces];
+      // Found on the original capture: moved through the cuts onto the joined image.
+      const rects = rectsThroughCuts([...findDetails(lines).flatMap((detail) => detail.rects), ...faces], docRef.current.cuts);
       const ids = addBlurs(rects);
       // With nothing found the toggle stays off, so a later click looks again.
       if (ids.length === 0) setMessage("No private details found");
@@ -1376,8 +1460,10 @@ export default function EditorWindow() {
   const blurWord = async (at: Point) => {
     try {
       const lines = await captureWords();
-      const word = wordAt(lines, at);
-      if (word) addBlurs(findWord(lines, word));
+      // Words are found on the original capture, before its cuts.
+      const cuts = docRef.current.cuts;
+      const word = wordAt(lines, pointBeforeCuts(at, cuts));
+      if (word) addBlurs(rectsThroughCuts(findWord(lines, word), cuts));
     } catch (err) {
       setMessage(`Blur word failed: ${errorText(err)}`);
     }
@@ -1454,6 +1540,7 @@ export default function EditorWindow() {
         setDraft(null);
         setCropDrag(null);
         setCalloutDrag(null);
+        setCutDrag(null);
         setBackdropOpen(false);
         setResizeOpen(false);
         setLookOpen(false);
@@ -1498,6 +1585,8 @@ export default function EditorWindow() {
   const error = annotations.error ?? imageError;
   /** The crop as it shows: being drawn (the box that will be committed), mid-edit, or as saved. */
   const cropShown = (cropDrag && shownSize ? cropDragBox(cropDrag, shownSize) : null) ?? cropEdit ?? shownCrop;
+  /** The strip being marked, on show. */
+  const stripShown = cutDrag && shownSize ? cutStripBox(cutDrag, shownSize) : null;
   /** The same crop in capture pixels, for the dim drawn in the oriented group. */
   const crop = cropShown ? shownToCapture(cropShown) : null;
   const placed = doc.shapes.map((shape) => {
@@ -1549,8 +1638,8 @@ export default function EditorWindow() {
   return (
     <main className="editor" data-testid="editor" data-ready={image ? "true" : "false"}>
       <div className="editor-topbar" role="toolbar" aria-label="Style and actions">
-        {/* Crop has no colour; its ratio picker takes the space instead, so the bar stays on one line. */}
-        {optionsFor !== "crop" && (
+        {/* Crop and Cut out have no colour; their pickers take the space instead, so the bar stays on one line. */}
+        {optionsFor !== "crop" && optionsFor !== "cut" && (
           <div className="bar-group" role="group" aria-label="Colour">
             {COLORS.map((color) => (
               <button
@@ -1631,6 +1720,36 @@ export default function EditorWindow() {
               </button>
             ))}
           </div>
+        )}
+        {optionsFor === "cut" && (
+          <>
+            <div className="bar-group segmented" role="group" aria-label="Strip direction">
+              {STRIP_DIRECTIONS.map(({ direction, label }) => (
+                <button key={direction} type="button" aria-pressed={cutDirection === direction} onClick={() => setCutDirection(direction)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="bar-group segmented" role="group" aria-label="Cut edge">
+              {CUT_EDGES.map(({ edge, label }) => (
+                <button key={edge} type="button" aria-pressed={cutEdge === edge} onClick={() => setCutEdge(edge)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="bar-group">
+              <button
+                type="button"
+                className="text-button"
+                onClick={restoreCuts}
+                disabled={!doc.cuts?.length}
+                title="Put back every strip that was cut out"
+              >
+                <RestoreStripsIcon />
+                Restore strips
+              </button>
+            </div>
+          </>
         )}
         <div className="bar-group">
           <button type="button" className="icon-button" onClick={undoDoc} disabled={!annotations.canUndo} aria-label="Undo" title="Undo (Ctrl+Z)">
@@ -1865,7 +1984,19 @@ export default function EditorWindow() {
                     {paint.map((layer, i) => (
                       <PaintNode key={i} layer={layer} bounds={framed.bounds} blurred={blurredFill} image={backdropImageEl} />
                     ))}
-                    {framed.layout.shadow && (
+                    {framed.layout.shadow && shadowCaster && (
+                      <KonvaImage
+                        name="backdrop-shadow"
+                        image={shadowCaster}
+                        {...framed.area}
+                        cornerRadius={framed.layout.radius}
+                        shadowColor="#000000"
+                        shadowBlur={framed.layout.shadow.blur}
+                        shadowOffsetY={framed.layout.shadow.offsetY}
+                        shadowOpacity={framed.layout.shadow.opacity}
+                      />
+                    )}
+                    {framed.layout.shadow && !shadowCaster && (
                       <KonvaRect
                         {...framed.area}
                         cornerRadius={framed.layout.radius}
@@ -1970,6 +2101,19 @@ export default function EditorWindow() {
                     onMouseLeave={() => cropCursor("")}
                   />
                   </>
+                )}
+                {stripShown && (
+                  // The strip that will be cut out, shaded until it is let go.
+                  <KonvaRect
+                    name="cut-strip"
+                    {...stripShown}
+                    fill="black"
+                    opacity={0.45}
+                    stroke="#ffffff"
+                    strokeWidth={1 / currentView.scale}
+                    dash={[6 / currentView.scale, 4 / currentView.scale]}
+                    listening={false}
+                  />
                 )}
                 <Transformer
                   ref={transformerRef}

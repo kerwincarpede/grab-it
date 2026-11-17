@@ -62,6 +62,7 @@ While you're picking an area to capture or record:
 | `B` | Blur |
 | `S` | Spotlight |
 | `C` | Crop |
+| `X` | Cut out |
 
 Tap a tool key to switch to it. Hold it instead, and the old tool comes back when you let go.
 
@@ -75,6 +76,7 @@ Tap a tool key to switch to it. Hold it instead, and the old tool comes back whe
 | Hold `⌥` (`Alt`) and drag | Draw an arrow, whatever the tool |
 | Hold `Shift` while drawing | Keep lines and arrows to 45° steps, and boxes square (a square crop too) |
 | Hold `⌥` (`Alt`) while cropping | Turn off snapping to edges |
+| Hold `⌥` (`Alt`) while cutting out | Turn off snapping to edges |
 | Hold `Space` and drag | Pan around the capture |
 | Arrow keys | Nudge the selected shape 1 pixel; with `Shift`, 10 pixels |
 | `Delete` or `Backspace` | Delete the selected shape |

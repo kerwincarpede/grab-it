@@ -15,7 +15,8 @@ export type Tool =
   | "magnify"
   | "spotlight"
   | "step"
-  | "crop";
+  | "crop"
+  | "cut";
 
 export interface Point {
   x: number;
@@ -166,19 +167,39 @@ export interface Backdrop {
   balance?: boolean;
 }
 
+/** How the two parts either side of a cut-out strip meet. */
+export type CutEdge = "straight" | "zigzag" | "torn";
+
+/**
+ * A strip cut out of the capture, its two parts joined. `axis` is the
+ * direction `start` and `end` run along: "y" removes the rows from `start`
+ * to `end` (a horizontal strip), "x" the columns. Both are in the pixels of
+ * the image after the earlier cuts. A torn edge is drawn from `seed`, so it
+ * looks the same every time.
+ */
+export interface Cut {
+  axis: "x" | "y";
+  start: number;
+  end: number;
+  edge: CutEdge;
+  seed?: number;
+}
+
 /** A quarter turn clockwise, in degrees. */
 export type Rotation = 0 | 90 | 180 | 270;
 
 /**
- * The sidecar document. `crop`, the orientation, `scale` and `backdrop` are
- * non-destructive: applied on copy/export in the order crop, rotate and
- * flip, backdrop, then resize. Shapes and the crop stay in capture pixels.
- * The orientation and scale fields came later and are optional; absent
- * means unchanged.
+ * The sidecar document. `cuts`, `crop`, the orientation, `scale` and
+ * `backdrop` are non-destructive: applied on copy/export in the order cuts,
+ * crop, rotate and flip, backdrop, then resize. Shapes and the crop are in
+ * the pixels of the capture after its cuts. The cuts, orientation and scale
+ * fields came later and are optional; absent means unchanged.
  */
 export interface Annotations {
   version: 1;
   shapes: Shape[];
+  /** Strips cut out, in the order they were made; none when absent. */
+  cuts?: Cut[];
   crop?: Rect | null;
   backdrop?: Backdrop | null;
   /** Turns clockwise after the crop; 0 when absent. */
@@ -318,6 +339,7 @@ export const TOOLS: { tool: Tool; label: string; key: string; group: number }[] 
   { tool: "magnify", label: "Magnify", key: "z", group: 3 },
   { tool: "spotlight", label: "Spotlight", key: "s", group: 3 },
   { tool: "crop", label: "Crop", key: "c", group: 4 },
+  { tool: "cut", label: "Cut out", key: "x", group: 4 },
 ];
 
 export const BACKDROP_MAX_PADDING = 200;

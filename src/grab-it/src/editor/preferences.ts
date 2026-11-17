@@ -62,11 +62,11 @@ export function parseBackdropPresets(value: unknown): SavedBackdrop[] {
  * The stored preferences as editor choices. Each value is checked on its
  * own: anything missing or not understood (a tool from a newer version, a
  * width of zero) keeps today's default. Crop is never restored, since it
- * hides the backdrop of a capture that was just opened.
+ * hides the backdrop of a capture that was just opened; nor is Cut out.
  */
 export function fromPreferences(stored: EditorPreferences | null | undefined): EditorChoices {
   const prefs = stored ?? {};
-  const tool = TOOLS.find((entry) => entry.tool === prefs.tool && entry.tool !== "crop")?.tool ?? DEFAULT_CHOICES.tool;
+  const tool = TOOLS.find((entry) => entry.tool === prefs.tool && entry.tool !== "crop" && entry.tool !== "cut")?.tool ?? DEFAULT_CHOICES.tool;
   const style: EditorChoices["style"] = { color: isHex(prefs.color) ? prefs.color.toLowerCase() : DEFAULT_CHOICES.style.color };
   if (prefs.fill === true) style.fill = true;
   if (prefs.textBackground === true) style.background = true;

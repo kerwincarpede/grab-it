@@ -34,4 +34,4 @@ Resize scales the whole result, backdrop included. While it's set, the **Resize*
 
 ## In what order
 
-When you copy or export, the editor builds the image in this order: the [crop](/grab-it/image-editor/crop/), then rotate and flip, then the [backdrop](/grab-it/image-editor/backdrop/), then resize. So the crop turns with the screenshot: a 16:9 crop comes out 9:16 after a quarter turn. And a 50% resize halves the backdrop's padding too.
+When you copy or export, the editor builds the image in this order: the [cut-out strips](/grab-it/image-editor/cut-out/), then the [crop](/grab-it/image-editor/crop/), then rotate and flip, then the [backdrop](/grab-it/image-editor/backdrop/), then resize. So the crop turns with the screenshot: a 16:9 crop comes out 9:16 after a quarter turn. And a 50% resize halves the backdrop's padding too.
