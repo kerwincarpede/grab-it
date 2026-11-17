@@ -22,7 +22,7 @@ use std::{
     cell::Cell,
     sync::{
         Mutex, MutexGuard,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -73,7 +73,12 @@ pub struct UpdateState {
     /// [`UpdateStatus::Idle`].
     status: Mutex<Option<UpdateStatus>>,
     /// The update the last check found, ready for [`update_install`].
+    /// Its lock also orders a check's result against a channel switch.
     pending: Mutex<Option<Update>>,
+    /// How many times the user has switched channel. A check records its
+    /// result only if no switch came while it ran, and checks again if one
+    /// came while it still held [`UpdateState::busy`].
+    switches: AtomicU64,
 }
 
 /// Who asked for a check. Only a check the user asked for opens the
@@ -213,15 +218,22 @@ pub fn channel_switched(app: &AppHandle) {
     if state.installing.load(Ordering::SeqCst) {
         return;
     }
-    *lock(&state.pending) = None;
     *lock(&state.declined) = None;
-    set_status(
-        app,
-        UpdateStatus::Checking {
-            current: app.package_info().version.to_string(),
-        },
-        false,
-    );
+    {
+        // Under the same lock as a check's result, so the two never cross.
+        let mut pending = lock(&state.pending);
+        state.switches.fetch_add(1, Ordering::SeqCst);
+        *pending = None;
+        set_status(
+            app,
+            UpdateStatus::Checking {
+                current: app.package_info().version.to_string(),
+            },
+            false,
+        );
+    }
+    // If a check is running, this one finds it busy and leaves the new
+    // channel to it.
     let app = app.clone();
     std::thread::spawn(move || check(&app, Trigger::ChannelSwitch));
 }
@@ -298,14 +310,55 @@ pub fn update_later(app: AppHandle) {
 /// not run on the main thread.
 fn check(app: &AppHandle, trigger: Trigger) {
     let state = app.state::<UpdateState>();
-    let show = trigger == Trigger::User;
-    let report_failure = trigger != Trigger::Automatic;
-    if state.installing.load(Ordering::SeqCst) || state.busy.swap(true, Ordering::SeqCst) {
-        if show {
-            emit(app, current_status(app), true);
-        }
-        return;
+    let ran = run_while_busy(&state.busy, &state.installing, &state.switches, |first| {
+        // A switch that found this check busy is checked as its own.
+        let trigger = if first {
+            trigger
+        } else {
+            Trigger::ChannelSwitch
+        };
+        check_once(app, trigger)
+    });
+    if !ran && trigger == Trigger::User {
+        emit(app, current_status(app), true);
     }
+}
+
+/// Takes `busy` and runs `attempt`, which returns the switch count its
+/// result was recorded at. Runs it again, with `first` false, while a
+/// switch came after that, since that switch's own check found `busy`
+/// taken and left it here. False when another check or an install already
+/// had it.
+fn run_while_busy(
+    busy: &AtomicBool,
+    installing: &AtomicBool,
+    switches: &AtomicU64,
+    mut attempt: impl FnMut(bool) -> u64,
+) -> bool {
+    if installing.load(Ordering::SeqCst) || busy.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    let mut first = true;
+    loop {
+        let recorded_at = attempt(first);
+        busy.store(false, Ordering::SeqCst);
+        if switches.load(Ordering::SeqCst) == recorded_at
+            || installing.load(Ordering::SeqCst)
+            || busy.swap(true, Ordering::SeqCst)
+        {
+            return true;
+        }
+        first = false;
+    }
+}
+
+/// One check while holding [`UpdateState::busy`]. Fetches again whenever
+/// the user switched channel meanwhile, so what the old channel offered is
+/// never shown, and returns the switch count its result was recorded at.
+fn check_once(app: &AppHandle, trigger: Trigger) -> u64 {
+    let state = app.state::<UpdateState>();
+    let show = trigger == Trigger::User;
+    let mut report_failure = trigger != Trigger::Automatic;
     let current = app.package_info().version.to_string();
     let mut previous = current_status(app);
     // A background check leaves an update on show as it is meanwhile.
@@ -318,71 +371,73 @@ fn check(app: &AppHandle, trigger: Trigger) {
             show,
         );
     }
-    // Checked again if the user switched channel meanwhile, so what the
-    // old channel offered is never shown.
-    let found = loop {
+    loop {
+        let seen = state.switches.load(Ordering::SeqCst);
         let channel = chosen_channel(app);
         let found = tauri::async_runtime::block_on(find_update(app, channel));
-        if chosen_channel(app) == channel {
-            break found;
+        // An install started meanwhile owns the status now.
+        if state.installing.load(Ordering::SeqCst) {
+            return seen;
         }
-        // What was on show came from the old channel.
-        previous = UpdateStatus::Idle {
-            current: current.clone(),
-        };
-    };
-    // An install started meanwhile owns the status now.
-    if state.installing.load(Ordering::SeqCst) {
-        state.busy.store(false, Ordering::SeqCst);
-        return;
-    }
-    match found {
-        Ok(Some(update)) => {
-            // Found in the background or not, the update waits in the
-            // Grab-it window's sidebar; nothing pops up to announce it.
-            let declined = lock(&state.declined).clone();
-            let status = UpdateStatus::Available {
-                info: info_of(&update),
-                declined: declined.as_deref() == Some(update.version.as_str()),
+        let mut pending = lock(&state.pending);
+        if state.switches.load(Ordering::SeqCst) != seen {
+            // The user switched channel: what was on show came from the
+            // old one, and the new channel's result is theirs to see.
+            drop(pending);
+            report_failure = true;
+            previous = UpdateStatus::Idle {
+                current: current.clone(),
             };
-            *lock(&state.pending) = Some(update);
-            set_status(app, status, show);
+            continue;
         }
-        Ok(None) => {
-            *lock(&state.pending) = None;
-            set_status(
-                app,
-                UpdateStatus::UpToDate {
-                    current,
-                    checked_at: now_ms(),
-                },
-                show,
-            );
-        }
-        Err(err) => {
-            eprintln!("Grab-it: could not check for updates: {err}");
-            if report_failure {
+        match found {
+            Ok(Some(update)) => {
+                // Found in the background or not, the update waits in the
+                // Grab-it window's sidebar; nothing pops up to announce it.
+                let declined = lock(&state.declined).clone();
+                let status = UpdateStatus::Available {
+                    info: info_of(&update),
+                    declined: declined.as_deref() == Some(update.version.as_str()),
+                };
+                *pending = Some(update);
+                set_status(app, status, show);
+            }
+            Ok(None) => {
+                *pending = None;
                 set_status(
                     app,
-                    UpdateStatus::Failed {
+                    UpdateStatus::UpToDate {
                         current,
-                        message: err,
-                        info: None,
+                        checked_at: now_ms(),
                     },
                     show,
                 );
-            } else {
-                // A background failure is not worth reporting: put back
-                // what was there before the check.
-                let restored = match previous {
-                    UpdateStatus::Checking { current } => UpdateStatus::Idle { current },
-                    other => other,
-                };
-                set_status(app, restored, false);
+            }
+            Err(err) => {
+                eprintln!("Grab-it: could not check for updates: {err}");
+                if report_failure {
+                    set_status(
+                        app,
+                        UpdateStatus::Failed {
+                            current,
+                            message: err,
+                            info: None,
+                        },
+                        show,
+                    );
+                } else {
+                    // A background failure is not worth reporting: put
+                    // back what was there before the check.
+                    let restored = match previous {
+                        UpdateStatus::Checking { current } => UpdateStatus::Idle { current },
+                        other => other,
+                    };
+                    set_status(app, restored, false);
+                }
             }
         }
+        return seen;
     }
-    state.busy.store(false, Ordering::SeqCst);
 }
 
 /// Downloads and installs `update`, reporting progress, then restarts.
@@ -584,6 +639,55 @@ mod tests {
             config["plugins"]["updater"]["endpoints"][0],
             endpoint(UpdateChannel::Stable)
         );
+    }
+
+    #[test]
+    fn a_switch_while_busy_is_checked_before_busy_is_released() {
+        let busy = AtomicBool::new(false);
+        let installing = AtomicBool::new(false);
+        let switches = AtomicU64::new(0);
+        let mut runs = Vec::new();
+        let ran = run_while_busy(&busy, &installing, &switches, |first| {
+            runs.push(first);
+            let recorded_at = switches.load(Ordering::SeqCst);
+            // The user switches channel after the first result is recorded,
+            // and that switch's own check finds this one busy.
+            if first {
+                switches.fetch_add(1, Ordering::SeqCst);
+                assert!(!run_while_busy(&busy, &installing, &switches, |_| {
+                    panic!("a busy check must not run a second one")
+                }));
+            }
+            recorded_at
+        });
+        assert!(ran);
+        assert_eq!(runs, vec![true, false]);
+        assert!(!busy.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_check_without_a_switch_runs_once() {
+        let busy = AtomicBool::new(false);
+        let installing = AtomicBool::new(false);
+        let switches = AtomicU64::new(3);
+        let mut runs = 0;
+        assert!(run_while_busy(&busy, &installing, &switches, |_| {
+            runs += 1;
+            3
+        }));
+        assert_eq!(runs, 1);
+        assert!(!busy.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn no_check_runs_while_an_update_installs() {
+        let busy = AtomicBool::new(false);
+        let installing = AtomicBool::new(true);
+        let switches = AtomicU64::new(0);
+        assert!(!run_while_busy(&busy, &installing, &switches, |_| {
+            panic!("no check while installing")
+        }));
+        assert!(!busy.load(Ordering::SeqCst));
     }
 
     #[test]
