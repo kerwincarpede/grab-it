@@ -239,3 +239,33 @@ export const DeleteForeverIcon = () => (
     <path d="M4 7h16M6 7l1 12.5a1.5 1.5 0 001.5 1.5h7a1.5 1.5 0 001.5-1.5L18 7M9 7V4.5h6V7M10 11.5l4 4M14 11.5l-4 4" />
   </Icon>
 );
+
+/** A page with a folded corner: copies the file itself, to paste as an attachment. */
+export const CopyFileIcon = () => (
+  <Icon>
+    <path d="M14 3.5H7.5a2 2 0 00-2 2v13a2 2 0 002 2h9a2 2 0 002-2V8z" />
+    <path d="M14 3.5V8h4.5M9.5 13h5M9.5 16.5h3" />
+  </Icon>
+);
+
+/** An arrow out of a tray: saves a copy somewhere else. */
+export const ExportIcon = () => (
+  <Icon>
+    <path d="M12 15V4M8 7.5L12 3.5l4 4" />
+    <path d="M5 13v5.5A1.5 1.5 0 006.5 20h11a1.5 1.5 0 001.5-1.5V13" />
+  </Icon>
+);
+
+/** Points right: a menu entry that opens a submenu. */
+export const ChevronRightIcon = () => (
+  <Icon size={14}>
+    <path d="M9 6l6 6-6 6" />
+  </Icon>
+);
+
+/** A plus: adds something new. */
+export const PlusIcon = () => (
+  <Icon>
+    <path d="M12 5v14M5 12h14" />
+  </Icon>
+);

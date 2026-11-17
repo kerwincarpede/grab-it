@@ -2135,3 +2135,47 @@
   font-size: 11.5px;
   line-height: 1.35;
 }
+
+/* Add tag opens its submenu beside the menu, on whichever side has room. */
+.shot-menu-item.is-expanded {
+  background: var(--fill-hover);
+}
+
+.shot-menu-more {
+  display: flex;
+  margin-left: auto;
+  color: var(--text-faint);
+}
+
+.shot-menu-item .shot-menu-more .icon {
+  width: 13px;
+  height: 13px;
+  color: inherit;
+}
+
+.shot-menu.shot-menu-sub {
+  position: absolute;
+  left: calc(100% - 4px);
+  width: 210px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.shot-menu.shot-menu-sub.is-left {
+  right: calc(100% - 4px);
+  left: auto;
+}
+
+.shot-menu-check {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+}
+
+.shot-menu-item .shot-menu-check .icon {
+  color: inherit;
+}

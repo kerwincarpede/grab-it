@@ -1714,6 +1714,145 @@ fn copy_new(from: &Path, to: &Path) -> LibraryResult<()> {
     Ok(())
 }
 
+/// The JPEG quality screenshots are exported at.
+const JPEG_QUALITY: u8 = 92;
+
+/// The image format a screenshot exported to `target` is written in, by
+/// its extension: PNG, JPG or WebP.
+fn export_format(target: &Path) -> Option<image::ImageFormat> {
+    let extension = target.extension()?.to_string_lossy().to_ascii_lowercase();
+    match extension.as_str() {
+        "png" => Some(image::ImageFormat::Png),
+        "jpg" | "jpeg" => Some(image::ImageFormat::Jpeg),
+        "webp" => Some(image::ImageFormat::WebP),
+        _ => None,
+    }
+}
+
+/// Where an export of `shot` to `target` is written: `target` itself, or,
+/// when it is a folder, the shot's own file name there, as "<name> 2",
+/// "<name> 3" and so on when a file already has it.
+pub(crate) fn export_path(shot: &Shot, target: &Path) -> LibraryResult<PathBuf> {
+    if !target.is_dir() {
+        return Ok(target.to_path_buf());
+    }
+    let stem = shot
+        .path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let extension = shot
+        .path
+        .extension()
+        .map(|ext| format!(".{}", ext.to_string_lossy()))
+        .unwrap_or_default();
+    for n in 1..=MAX_COPIES {
+        let name = if n == 1 {
+            format!("{stem}{extension}")
+        } else {
+            format!("{stem} {n}{extension}")
+        };
+        let path = target.join(name);
+        if !path.exists() {
+            return Ok(path);
+        }
+    }
+    Err(LibraryError::NameTaken(format!(
+        "{stem} {MAX_COPIES}{extension}"
+    )))
+}
+
+/// Exports `shot`'s original file to `target`, a file or a folder (see
+/// [`export_path`]), and returns where it went. A screenshot is written as
+/// PNG, JPG or WebP by the target's extension; a recording is copied as it
+/// is, so its target keeps its extension. The shot's own file and sidecars
+/// are never written over ([`crate::editor::check_export_target`]); any other
+/// file there is, as the save dialog has asked. The export is written beside
+/// the target first, so a failure leaves nothing half-written.
+pub fn export_shot(shot: &Shot, target: &Path) -> Result<PathBuf, String> {
+    let target = export_path(shot, target).map_err(to_message)?;
+    crate::editor::check_export_target(&shot.path, &target)?;
+    let protected = extra_files(shot)
+        .into_iter()
+        .any(|path| path == target || same_file(&path, &target));
+    if protected {
+        return Err("export would overwrite the original capture; choose another file".to_owned());
+    }
+    let source_extension = shot
+        .path
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let target_extension = target
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let format = if shot.kind.is_recording() {
+        if target_extension != source_extension {
+            return Err(format!(
+                "A recording is exported as it is: give the file a .{source_extension} name."
+            ));
+        }
+        None
+    } else {
+        let format = export_format(&target).ok_or(
+            "A screenshot exports as .png, .jpg or .webp: give the file one of those names.",
+        )?;
+        // A PNG to PNG export is the original's bytes.
+        (format != image::ImageFormat::Png || source_extension != "png").then_some(format)
+    };
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = target.with_file_name(format!(".{name}.{}.export.tmp", std::process::id()));
+    let written = match format {
+        None => fs::copy(&shot.path, &tmp)
+            .map(|_| ())
+            .map_err(|err| format!("could not export it: {err}")),
+        Some(format) => image::open(&shot.path)
+            .map_err(|err| format!("could not open {}: {err}", shot.path.display()))
+            .and_then(|image| write_image(&image, format, &tmp)),
+    }
+    .and_then(|()| fs::rename(&tmp, &target).map_err(|err| format!("could not export it: {err}")));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written.map(|()| target)
+}
+
+/// Writes `image` to `path` as `format`: a JPG without its alpha, a WebP
+/// losslessly.
+fn write_image(
+    image: &image::DynamicImage,
+    format: image::ImageFormat,
+    path: &Path,
+) -> Result<(), String> {
+    use std::io::Write;
+    let fail = |err: image::ImageError| format!("could not export it: {err}");
+    let mut writer = io::BufWriter::new(
+        fs::File::create(path).map_err(|err| format!("could not export it: {err}"))?,
+    );
+    match format {
+        image::ImageFormat::Jpeg => image::DynamicImage::ImageRgb8(image.to_rgb8())
+            .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+                &mut writer,
+                JPEG_QUALITY,
+            ))
+            .map_err(fail)?,
+        image::ImageFormat::WebP => image::DynamicImage::ImageRgba8(image.to_rgba8())
+            .write_with_encoder(image::codecs::webp::WebPEncoder::new_lossless(&mut writer))
+            .map_err(fail)?,
+        _ => image
+            .write_with_encoder(image::codecs::png::PngEncoder::new(&mut writer))
+            .map_err(fail)?,
+    }
+    writer
+        .flush()
+        .and_then(|()| writer.get_ref().sync_all())
+        .map_err(|err| format!("could not export it: {err}"))
+}
+
 pub(crate) fn remove_if_present(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
@@ -2215,6 +2354,29 @@ fn existing_path(app: &AppHandle, id: i64) -> Result<PathBuf, String> {
 #[tauri::command(async)]
 pub fn library_copy(id: i64, app: AppHandle) -> Result<(), String> {
     crate::quick::copy_file(&app, &existing_image(&app, id)?)
+}
+
+/// Puts a shot's file on the clipboard as a file, screenshot or
+/// recording, to paste into a file manager or attach in another app.
+#[tauri::command(async)]
+pub fn library_copy_file(id: i64, app: AppHandle) -> Result<(), String> {
+    let path = existing_path(&app, id)?;
+    crate::file_clipboard::copy_files(&app, &[path])
+}
+
+/// Exports a shot's original file to `target`, a file or a folder, and
+/// returns the path written: a screenshot as PNG, JPG or WebP by the
+/// target's extension, a recording as a copy. See [`export_shot`].
+#[tauri::command(async)]
+pub fn library_export(
+    id: i64,
+    target: PathBuf,
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+) -> Result<PathBuf, String> {
+    existing_path(&app, id)?;
+    let shot = state.lock().get(id).map_err(to_message)?;
+    export_shot(&shot, &target)
 }
 
 /// The text in a shot, as far as OCR has got.
@@ -3382,5 +3544,145 @@ mod tests {
             state.trash(999, &remove),
             Err(LibraryError::NotFound(999))
         ));
+    }
+
+    #[test]
+    fn export_writes_a_screenshot_as_png_jpg_or_webp_by_extension() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (6, 4));
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        let out = dir.path().join("out");
+        fs::create_dir_all(&out).unwrap();
+
+        let as_png = export_shot(&shot, &out.join("a.png")).unwrap();
+        assert_eq!(as_png, out.join("a.png"));
+        assert_eq!(
+            fs::read(&as_png).unwrap(),
+            fs::read(&png).unwrap(),
+            "the original's bytes"
+        );
+
+        for (name, format) in [
+            ("b.jpg", image::ImageFormat::Jpeg),
+            ("c.JPEG", image::ImageFormat::Jpeg),
+            ("d.webp", image::ImageFormat::WebP),
+        ] {
+            let written = export_shot(&shot, &out.join(name)).unwrap();
+            let bytes = fs::read(&written).unwrap();
+            assert_eq!(image::guess_format(&bytes).unwrap(), format, "{name}");
+            let decoded = image::load_from_memory(&bytes).unwrap();
+            assert_eq!((decoded.width(), decoded.height()), (6, 4), "{name}");
+        }
+        let webp = image::open(out.join("d.webp")).unwrap().to_rgba8();
+        assert_eq!(
+            webp.get_pixel(0, 0),
+            &Rgba([10, 20, 30, 255]),
+            "WebP is lossless"
+        );
+        // Nothing is left beside the exports.
+        let mut names: Vec<String> = fs::read_dir(&out)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["a.png", "b.jpg", "c.JPEG", "d.webp"]);
+    }
+
+    #[test]
+    fn export_replaces_another_file_but_refuses_other_formats() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (4, 4));
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        let target = dir.path().join("there.png");
+        fs::write(&target, b"old").unwrap();
+
+        export_shot(&shot, &target).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), fs::read(&png).unwrap());
+
+        let gif = dir.path().join("x.gif");
+        assert!(export_shot(&shot, &gif).is_err());
+        assert!(export_shot(&shot, &dir.path().join("no-extension")).is_err());
+        assert!(!gif.exists());
+    }
+
+    #[test]
+    fn export_to_a_folder_takes_the_shots_name_or_the_next_free_one() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (4, 4));
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        let out = dir.path().join("out");
+        fs::create_dir_all(&out).unwrap();
+        let stem = png.file_stem().unwrap().to_string_lossy().into_owned();
+
+        let first = export_shot(&shot, &out).unwrap();
+        let second = export_shot(&shot, &out).unwrap();
+        let third = export_shot(&shot, &out).unwrap();
+
+        assert_eq!(first, out.join(format!("{stem}.png")));
+        assert_eq!(second, out.join(format!("{stem} 2.png")));
+        assert_eq!(third, out.join(format!("{stem} 3.png")));
+        assert_eq!(fs::read(&first).unwrap(), fs::read(&png).unwrap());
+        assert_eq!(fs::read(&second).unwrap(), fs::read(&png).unwrap());
+    }
+
+    #[test]
+    fn export_copies_a_recording_and_keeps_its_extension() {
+        let dir = TempDir::new().unwrap();
+        let mp4 = record_mp4(dir.path(), "a.mp4");
+        let mut library = Library::open_in_memory().unwrap();
+        library.rescan(dir.path()).unwrap();
+        let shot = library.list(0, MAX_PAGE).unwrap().shots.remove(0);
+        let out = dir.path().join("out");
+        fs::create_dir_all(&out).unwrap();
+
+        let copy = export_shot(&shot, &out.join("Demo.mp4")).unwrap();
+        assert_eq!(fs::read(&copy).unwrap(), fs::read(&mp4).unwrap());
+        let into_folder = export_shot(&shot, &out).unwrap();
+        assert_eq!(into_folder, out.join("a.mp4"));
+
+        assert!(export_shot(&shot, &out.join("Demo.png")).is_err());
+        assert!(!out.join("Demo.png").exists());
+    }
+
+    #[test]
+    fn export_never_overwrites_the_shot_or_its_sidecars() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (4, 4));
+        fs::write(capture::annotations_path(&png), "{}").unwrap();
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        let original = fs::read(&png).unwrap();
+        let thumbnail = fs::read(&shot.thumb_path).unwrap();
+
+        assert!(export_shot(&shot, &png).is_err());
+        // Another spelling of the same file.
+        let spelled = png
+            .parent()
+            .unwrap()
+            .join("..")
+            .join(ORIGINALS_DIR)
+            .join(png.file_name().unwrap());
+        assert!(export_shot(&shot, &spelled).is_err());
+        assert!(export_shot(&shot, &capture::meta_path(&png)).is_err());
+        assert!(export_shot(&shot, &capture::annotations_path(&png)).is_err());
+        assert!(export_shot(&shot, &shot.thumb_path).is_err());
+
+        let mp4 = record_mp4(dir.path(), "b.mp4");
+        library.rescan(dir.path()).unwrap();
+        let recording = library
+            .get(library.id_for_path(&mp4).unwrap().unwrap())
+            .unwrap();
+        assert!(export_shot(&recording, &crate::record::cursor_path(&mp4)).is_err());
+        assert!(export_shot(&recording, &crate::recording_editor::edits_path(&mp4)).is_err());
+
+        assert_eq!(fs::read(&png).unwrap(), original);
+        assert_eq!(fs::read(&shot.thumb_path).unwrap(), thumbnail);
+        assert_eq!(
+            fs::read_to_string(capture::annotations_path(&png)).unwrap(),
+            "{}"
+        );
     }
 }

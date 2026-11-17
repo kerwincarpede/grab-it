@@ -9,6 +9,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
 import "./library.css";
 import {
   CLI_NAMES,
@@ -19,14 +20,19 @@ import {
   PAGE_SIZE,
   SEARCH_DEBOUNCE_MS,
   aiStatus,
+  baseName,
   buildQuery,
   categoryLabel,
   clearAiDescription,
   copyShot,
+  copyShotFile,
   dayLabel,
   deleteShot,
   dismissAiNotice,
   duplicateShot,
+  exportFilters,
+  exportPath,
+  exportShot,
   filterOptions,
   formatCapturedAt,
   formatTime,
@@ -60,6 +66,8 @@ import {
   removeAiTag,
   setShotTags,
   shotText,
+  splitFileName,
+  suggestedTags,
   textCopied,
   trashShot,
   type AiStatus,
@@ -708,6 +716,15 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
   // Local so quick successive edits build on each other before the saves land.
   const [tags, setTags] = useState(shot.tags);
   const [notes, setNotes] = useState(shot.notes);
+  /** Tag saves still landing. */
+  const [tagSaves, setTagSaves] = useState(0);
+  // Tags changed elsewhere, as from the right-click menu, show here too,
+  // once this pane's own saves have landed.
+  const [shownTags, setShownTags] = useState(shot.tags);
+  if (shownTags !== shot.tags) {
+    setShownTags(shot.tags);
+    if (tagSaves === 0 && !sameTags(shot.tags, tags)) setTags(shot.tags);
+  }
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const saving = useRef<Promise<unknown>>(Promise.resolve());
@@ -728,11 +745,13 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
   function saveTags(next: string[]) {
     if (sameTags(next, tags)) return;
     setTags(next);
+    setTagSaves((count) => count + 1);
     // One save at a time, in order.
     saving.current = saving.current.then(() =>
       setShotTags(shot.id, next)
         .then(onUpdated)
-        .catch((err: unknown) => onError(errorMessage(err))),
+        .catch((err: unknown) => onError(errorMessage(err)))
+        .finally(() => setTagSaves((count) => count - 1)),
     );
   }
 
@@ -1556,6 +1575,22 @@ function LibraryWindow({
     }
   }, []);
 
+  /** Asks where to export a shot and exports it there; resolves to the path written, or null when cancelled. */
+  async function exportAs(shot: Shot): Promise<string | null> {
+    const filters = exportFilters(shot);
+    const { stem } = splitFileName(shot.fileName);
+    const chosen = await save({ defaultPath: `${stem}.${filters[0].extensions[0]}`, filters });
+    if (!chosen) return null;
+    const written = await exportShot(shot.id, exportPath(chosen, filters));
+    setError(null);
+    return written;
+  }
+
+  /** Saves tags set from the menu's Add tag submenu; rejects with the backend's reason so the menu can show it. */
+  async function saveMenuTags(shot: Shot, tags: string[]) {
+    updated(await setShotTags(shot.id, tags));
+  }
+
   function menuAction(shot: Shot, action: ShotMenuAction) {
     const say = (text: string) => setNotice({ text, key: Date.now() });
     const failed = (err: unknown) => setError(errorMessage(err));
@@ -1593,6 +1628,17 @@ function LibraryWindow({
         break;
       case "copyPath":
         copyShotPath(shot.id).then(() => say("Copied the file path"), failed);
+        break;
+      case "copyFile":
+        copyShotFile(shot.id).then(() => say("Copied as a file"), failed);
+        break;
+      case "export":
+        exportAs(shot).then((written) => {
+          if (written) say(`Exported to ${baseName(written)}`);
+        }, failed);
+        break;
+      case "tags":
+        // A submenu in the menu itself; see `saveMenuTags`.
         break;
       case "pin":
         tileAction(shot, "pin");
@@ -1644,6 +1690,8 @@ function LibraryWindow({
   const selected = selectedIndex >= 0 ? shots[selectedIndex] : null;
   // Looked up afresh so the menu follows changes (Keep forever) and goes with a deleted shot.
   const menuShot = menu ? shots.find((shot) => shot.id === menu.id) ?? null : null;
+  // Every tag in the library, those on the most loaded shots first.
+  const menuTags = useMemo(() => suggestedTags(options.tags, shots, [], options.tags.length), [options.tags, shots]);
 
   function step(delta: -1 | 1) {
     const next = shots[selectedIndex + delta];
@@ -1810,6 +1858,8 @@ function LibraryWindow({
           preview={<Thumbnail shot={menuShot} />}
           onAction={menuAction}
           onRename={rename}
+          tagOptions={menuTags}
+          onTags={saveMenuTags}
           onClose={closeMenu}
         />
       )}
