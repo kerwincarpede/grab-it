@@ -1626,12 +1626,11 @@ pub fn overlay_finish(
             if let Some(delay) = delay {
                 let scale = frame.monitor.scale_factor;
                 let area = picked.rect;
-                std::thread::spawn(move || {
-                    std::thread::sleep(delay);
+                crate::timer_bar::after(&app, delay, move |app| {
                     let snapshot = crate::pointer::snapshot();
                     match screen::capture_window(id) {
                         Ok(image) => actions::finish(
-                            &app,
+                            app,
                             &image,
                             CaptureMode::Window,
                             &foreground,
@@ -1640,7 +1639,7 @@ pub fn overlay_finish(
                                 snapshot.place_in_area(area, image.dimensions())
                             }),
                         ),
-                        Err(err) => actions::report_failure(&app, &err),
+                        Err(err) => actions::report_failure(app, &err),
                     }
                 });
                 return Ok(());

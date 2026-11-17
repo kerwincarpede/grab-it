@@ -1,0 +1,93 @@
+/*
+ * The timed capture pill's window is see-through: the page paints only the
+ * pill. The colour scheme is pinned because a dark one makes the browser
+ * fill the page behind the root.
+ */
+:root.timerbar-clear,
+:root.timerbar-clear body {
+  color-scheme: light;
+  background: transparent;
+}
+
+/* Always the dark palette of the recording toolbar, so it reads over any desktop. */
+.timerbar {
+  --tb-bg: #101113;
+  --tb-border: #2a2c31;
+  --tb-text: #ecedef;
+  --tb-muted: #a3a6ad;
+  --tb-rec: #ff4d4f;
+  --tb-fill: rgb(255 255 255 / 12%);
+  --tb-fill-hover: rgb(255 255 255 / 20%);
+
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Room for the shadow; the window is sized to it (SIZE in timer_bar.rs). */
+  padding: 8px;
+  color: var(--tb-text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+.timerbar-pill {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  height: 40px;
+  box-sizing: border-box;
+  padding: 0 5px 0 14px;
+  white-space: nowrap;
+  background: var(--tb-bg);
+  border-radius: 999px;
+  box-shadow:
+    inset 0 0 0 1px var(--tb-border),
+    0 4px 12px rgb(0 0 0 / 38%);
+}
+
+.timerbar-count {
+  min-width: 24px;
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--tb-rec);
+}
+
+.timerbar-note {
+  padding: 0 6px 0 2px;
+  color: var(--tb-muted);
+}
+
+.timerbar-cancel {
+  flex: none;
+  height: 30px;
+  padding: 0 14px;
+  color: var(--tb-text);
+  font: inherit;
+  font-weight: 600;
+  background: var(--tb-fill);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.timerbar-cancel:hover:not(:disabled) {
+  background: var(--tb-fill-hover);
+}
+
+.timerbar-cancel:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.timerbar-cancel:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

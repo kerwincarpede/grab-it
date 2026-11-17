@@ -352,7 +352,12 @@ pub fn hub_capture(
         other => return Err(format!("unknown capture: {other}")),
     };
     hide(&app);
-    let delay = HIDE_SETTLE + Duration::from_secs(delay_seconds.unwrap_or(0).min(60));
+    // A timed capture's countdown covers the hub hiding, so its pill
+    // counts the whole seconds asked for.
+    let delay = match delay_seconds.unwrap_or(0).min(60) {
+        0 => HIDE_SETTLE,
+        seconds => Duration::from_secs(seconds),
+    };
     actions::start_after(&app, action, delay);
     Ok(())
 }
