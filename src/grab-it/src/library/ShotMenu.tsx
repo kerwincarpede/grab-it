@@ -34,6 +34,7 @@ export type ShotMenuAction =
   | "openExternal"
   | "openWith"
   | "copy"
+  | "copyOriginal"
   | "copyFile"
   | "copyText"
   | "copyPath"
@@ -129,6 +130,8 @@ function shotMenuRows(shot: Shot, { aiOff, openWith }: { aiOff: boolean; openWit
     ...chooser,
     "separator",
     { action: "copy", label: "Copy image", icon: <CopyIcon /> },
+    // Copy image gives the capture with its edits; this gives it as captured.
+    ...(typeof shot.editedAt === "number" ? [{ action: "copyOriginal", label: "Copy original image", icon: <CopyIcon /> } as Entry] : []),
     copyFile,
     { action: "copyText", label: "Copy text in image", icon: <TextIcon /> },
     { action: "pin", label: "Pin to screen", icon: <PinIcon /> },

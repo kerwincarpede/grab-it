@@ -14,7 +14,7 @@ use std::{
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Manager, State, WebviewWindow, ipc::InvokeBody};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, ipc::InvokeBody};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use image::RgbaImage;
@@ -321,7 +321,10 @@ pub fn editor_save_annotations(
     state: State<'_, EditorState>,
 ) -> Result<(), String> {
     let path = state.path_for(window.label())?;
-    write_annotations(&path, &annotations)
+    write_annotations(&path, &annotations)?;
+    // The Library and hub redraw the capture's thumbnail with its edits.
+    let _ = window.emit(crate::library::LIBRARY_CHANGED_EVENT, ());
+    Ok(())
 }
 
 /// Copies the flattened PNG in the request body to the clipboard.

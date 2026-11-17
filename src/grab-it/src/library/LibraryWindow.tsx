@@ -50,7 +50,6 @@ import {
   openSettings,
   openShot,
   pendingAiNotice,
-  pinShot,
   playShot,
   copyShotText,
   copyShotPath,
@@ -103,6 +102,7 @@ import {
   TrashIcon,
 } from "./icons";
 import { useInView, useThumbnail } from "./thumbnails";
+import { copyFinished, pinFinished } from "./finished";
 import { tagStyle } from "./tagColor";
 import { DETAILS_WIDTH, clampDetailsWidth } from "./detailsWidth";
 import { CleanUpDialog, StoragePill } from "./storage";
@@ -149,8 +149,6 @@ interface SelectHow {
 const sameTags = (a: string[], b: string[]) =>
   a.length === b.length && a.every((tag, index) => tag === b[index]);
 
-/** Cache key for a shot's thumbnail: a re-saved file gets a fresh one. */
-const thumbKey = (shot: Shot) => `${shot.id}:${shot.path}`;
 
 const ROW_HEIGHT_KEY = "grab-it.library.rowHeight";
 const ROW_HEIGHT = { min: 120, max: 340, initial: 200 };
@@ -240,7 +238,7 @@ function DetailsResizer({ width, onWidth }: { width: number; onWidth: (width: nu
 function Thumbnail({ shot, className = "" }: { shot: Shot; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const near = useInView(ref);
-  const { url, failed } = useThumbnail(shot.id, thumbKey(shot), near);
+  const { url, failed } = useThumbnail(shot, near);
   const [shown, setShown] = useState(false);
   return (
     <div ref={ref} className={`thumb ${className}${url && shown ? " is-loaded" : ""}`}>
@@ -927,7 +925,7 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
                 <EditIcon />
                 Edit
               </button>
-              <button type="button" className="btn" onClick={() => void act(copyShot, "Copied to the clipboard")}>
+              <button type="button" className="btn" onClick={() => void act(() => copyFinished(shot), "Copied to the clipboard")}>
                 <CopyIcon />
                 Copy
               </button>
@@ -941,7 +939,7 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
               >
                 <TextIcon />
               </button>
-              <button type="button" className="btn btn-icon" aria-label="Pin" title="Pin to screen" onClick={() => void act(pinShot)}>
+              <button type="button" className="btn btn-icon" aria-label="Pin" title="Pin to screen" onClick={() => void act(() => pinFinished(shot))}>
                 <PinIcon />
               </button>
               <button type="button" className="btn btn-icon" aria-label="Show in folder" title="Show in folder" onClick={() => void act(revealShot)}>
@@ -1623,11 +1621,11 @@ function LibraryWindow({
   const tileAction = useCallback((shot: Shot, action: TileAction) => {
     const notice = (text: string) => setNotice({ text, key: Date.now() });
     const failed = (err: unknown) => setError(errorMessage(err));
-    if (action === "copy") copyShot(shot.id).then(() => notice("Copied to the clipboard"), failed);
+    if (action === "copy") copyFinished(shot).then(() => notice("Copied to the clipboard"), failed);
     else if (action === "text") copyShotText(shot.id).then((text) => notice(textCopied(text)), failed);
     else if (action === "play") playShot(shot.id).catch(failed);
     else if (action === "reveal") revealShot(shot.id).catch(failed);
-    else pinShot(shot.id).catch(failed);
+    else pinFinished(shot).catch(failed);
   }, []);
 
   const openMenu = useCallback((shot: Shot, x: number, y: number, from: HTMLElement) => {
@@ -1774,6 +1772,9 @@ function LibraryWindow({
         break;
       case "copy":
         tileAction(shot, "copy");
+        break;
+      case "copyOriginal":
+        copyShot(shot.id).then(() => say("Copied the original image"), failed);
         break;
       case "copyText":
         tileAction(shot, "text");
@@ -1942,7 +1943,7 @@ function LibraryWindow({
                 <ul className="grid">
                   {group.items.map((shot) => (
                     <Tile
-                      key={thumbKey(shot)}
+                      key={`${shot.id}:${shot.path}`}
                       shot={shot}
                       hit={hits[shot.id]}
                       selected={selectedIds.has(shot.id)}

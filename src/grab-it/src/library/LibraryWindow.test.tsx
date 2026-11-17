@@ -6,6 +6,9 @@ import type { Removal } from "../settings/api";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import LibraryWindow from "./LibraryWindow";
+
+// Drawing a capture with its edits needs a real canvas; the image it gives is stood in for.
+vi.mock("../editor/renderCapture", () => ({ renderCapture: vi.fn(async () => new Uint8Array([137, 80, 78, 71, 1])) }));
 import { DETAILS_WIDTH, clampDetailsWidth } from "./detailsWidth";
 import { resetThumbnails } from "./thumbnails";
 import {
@@ -262,6 +265,16 @@ function mockBackend(shots: Shot[]): Backend {
           if (!text.trim()) throw "No text found in this capture.";
           return text;
         }
+        case "library_image":
+          find(args.id as number);
+          return new Uint8Array([137, 80, 78, 71]).buffer;
+        case "library_annotations":
+          find(args.id as number);
+          return { annotations: { version: 1, shapes: [] }, scaleFactor: 2 };
+        case "editor_copy":
+        case "editor_pin":
+        case "library_save_thumbnail":
+          return null;
         case "library_open":
         case "library_copy":
         case "library_pin":
@@ -1270,6 +1283,38 @@ describe("LibraryWindow right-click menu", () => {
     await waitFor(() => expect(callsTo(backend, "library_delete")[0].payload).toEqual({ id: 1 }));
     expect(await screen.findByText("Capture deleted")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Grab-it 1.png" })).not.toBeInTheDocument();
+  });
+
+  it("copies and pins an edited capture with its edits, and offers its original too", async () => {
+    const backend = mockBackend([shot(1, { editedAt: 5_000 })]);
+    render(<LibraryWindow />);
+    let menu = await openMenu("Grab-it 1.png");
+    expect(labels(menu)).toContain("Copy original image");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Copy image" }));
+    await waitFor(() => expect(callsTo(backend, "editor_copy")).toHaveLength(1));
+    expect(callsTo(backend, "library_annotations")[0].payload).toEqual({ id: 1 });
+    expect(callsTo(backend, "library_copy")).toHaveLength(0);
+
+    menu = await openMenu("Grab-it 1.png");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Copy original image" }));
+    await waitFor(() => expect(callsTo(backend, "library_copy")[0].payload).toEqual({ id: 1 }));
+    expect(await screen.findByText("Copied the original image")).toBeInTheDocument();
+    expect(callsTo(backend, "editor_copy")).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Pin Grab-it 1.png" }));
+    await waitFor(() => expect(callsTo(backend, "editor_pin")).toHaveLength(1));
+    expect(callsTo(backend, "library_pin")).toHaveLength(0);
+  });
+
+  it("offers no Copy original image for a capture without edits and copies it directly", async () => {
+    const backend = mockBackend([shot(1, { editedAt: null })]);
+    render(<LibraryWindow />);
+    const menu = await openMenu("Grab-it 1.png");
+    expect(labels(menu)).not.toContain("Copy original image");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Copy image" }));
+    await waitFor(() => expect(callsTo(backend, "library_copy")[0].payload).toEqual({ id: 1 }));
+    expect(callsTo(backend, "editor_copy")).toHaveLength(0);
+    expect(callsTo(backend, "library_image")).toHaveLength(0);
   });
 
   it("is driven by the keyboard and closes with Escape, keeping the details open", async () => {
