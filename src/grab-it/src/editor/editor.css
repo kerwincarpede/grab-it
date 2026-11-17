@@ -658,3 +658,8 @@
   width: 15px;
   height: 15px;
 }
+
+/* Blur private details while it finds text and faces. */
+.editor button[aria-busy="true"] {
+  cursor: progress;
+}

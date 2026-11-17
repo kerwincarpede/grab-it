@@ -31,7 +31,7 @@ use std::{
     io::BufWriter,
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, MutexGuard,
+        Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -162,6 +162,47 @@ pub struct BarStatus {
     pub webcam: bool,
 }
 
+/// What an agent's recording (`grab-it record`) asks for in place of the
+/// settings: its format, frame rate and pointer, with no sound, webcam,
+/// countdown, clicks or keystrokes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentOptions {
+    pub format: RecordingFormat,
+    /// An MP4's frames a second: one of [`crate::settings::RECORDING_FPS`].
+    pub fps: u32,
+    pub show_cursor: bool,
+}
+
+impl AgentOptions {
+    /// `settings` with these options in place of the user's.
+    pub fn apply(&self, settings: RecordingSettings) -> RecordingSettings {
+        RecordingSettings {
+            format: self.format,
+            fps: self.fps,
+            show_cursor: self.show_cursor,
+            show_clicks: false,
+            show_keystrokes: false,
+            audio: crate::settings::RecordingAudio::None,
+            show_webcam: false,
+            countdown: 0,
+            ..settings
+        }
+    }
+}
+
+/// A recording that was saved: what `grab-it stop` and `grab-it record
+/// --for` print.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Finished {
+    pub path: PathBuf,
+    pub duration_ms: u64,
+    pub format: RecordingFormat,
+    /// The Library item's id, when an agent's recording was added.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
+}
+
 /// The recording under way: what it records, its controls and what the
 /// toolbar shows of it.
 pub struct Session {
@@ -171,12 +212,66 @@ pub struct Session {
     rect: Rect,
     recording: RecordingSettings,
     status: Mutex<BarStatus>,
+    /// The file it is written to.
+    path: PathBuf,
+    /// Set when an agent started it: it is then tagged agent and told in a
+    /// notice, not on the Quick Access card.
+    agent: Option<AgentOptions>,
+    /// How it ended, once it has: saved, or why not.
+    outcome: Mutex<Option<Result<Finished, String>>>,
+    ended: Condvar,
 }
 
 impl Session {
     /// What the toolbar shows now.
     pub fn status(&self) -> BarStatus {
         lock_status(&self.status).clone()
+    }
+
+    /// The file the recording is written to.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// What it is written as: an MP4, or a GIF.
+    pub fn format(&self) -> RecordingFormat {
+        lock_status(&self.status).format
+    }
+
+    /// Asks this recording to finish. A recording still counting down has
+    /// nothing to keep, so it is dropped.
+    pub fn request_stop(&self, app: &AppHandle) {
+        let counting = self.status().phase == Phase::Countdown;
+        if counting {
+            self.controls.discard.store(true, Ordering::SeqCst);
+        }
+        self.controls.stop.store(true, Ordering::SeqCst);
+        // Unpaused, so a paused recording finishes at once.
+        self.controls.paused.store(false, Ordering::SeqCst);
+        self.update(app, |status| status.phase = Phase::Saving);
+    }
+
+    /// Waits up to `timeout` for the recording to end, and says how it did;
+    /// None when it is still going.
+    pub fn wait(&self, timeout: Duration) -> Option<Result<Finished, String>> {
+        let outcome = self
+            .outcome
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (outcome, _) = self
+            .ended
+            .wait_timeout_while(outcome, timeout, |outcome| outcome.is_none())
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        outcome.clone()
+    }
+
+    /// Says how the recording ended, to whoever waits for it.
+    fn end(&self, outcome: Result<Finished, String>) {
+        *self
+            .outcome
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(outcome);
+        self.ended.notify_all();
     }
 
     /// Changes what the toolbar shows and tells it.
@@ -228,14 +323,7 @@ pub fn stop(app: &AppHandle) -> bool {
     let Some(session) = session(app) else {
         return false;
     };
-    let counting = session.status().phase == Phase::Countdown;
-    if counting {
-        session.controls.discard.store(true, Ordering::SeqCst);
-    }
-    session.controls.stop.store(true, Ordering::SeqCst);
-    // Unpaused, so a paused recording finishes at once.
-    session.controls.paused.store(false, Ordering::SeqCst);
-    session.update(app, |status| status.phase = Phase::Saving);
+    session.request_stop(app);
     true
 }
 
@@ -390,7 +478,11 @@ pub fn recording_file_name(
     }
 }
 
-fn unique_recording_path(dir: &Path, time: &DateTime<Local>, format: RecordingFormat) -> PathBuf {
+pub fn unique_recording_path(
+    dir: &Path,
+    time: &DateTime<Local>,
+    format: RecordingFormat,
+) -> PathBuf {
     let mut counter = 1;
     loop {
         let path = dir.join(recording_file_name(time, counter, format));
@@ -592,15 +684,32 @@ pub fn start(
     image_size: (u32, u32),
     rect: Rect,
 ) -> Result<(), crate::scroll::StartError> {
+    start_with(app, monitor, image_size, rect, None).map(|_| ())
+}
+
+/// [`start`], with `agent`'s options in place of the settings' format,
+/// frame rate, pointer, sound, webcam and countdown when an agent asked
+/// for the recording. Returns the recording under way.
+pub fn start_with(
+    app: &AppHandle,
+    monitor: &MonitorInfo,
+    image_size: (u32, u32),
+    rect: Rect,
+    agent: Option<AgentOptions>,
+) -> Result<Arc<Session>, crate::scroll::StartError> {
     let _gate = crate::scroll::start_lock();
     crate::scroll::ensure_idle(session(app).is_some(), crate::scroll::active(app))?;
     let (folder, recording) = {
         let state = app.state::<SettingsState>();
         let store = lock(&state);
         let settings = store.get();
+        let recording = settings.recording.clone();
         (
             settings.save_folder.join(RECORDINGS_DIR),
-            settings.recording.clone(),
+            match agent {
+                Some(options) => options.apply(recording),
+                None => recording,
+            },
         )
     };
     // MP4 needs ffmpeg; until it is ready, the recording is a GIF.
@@ -621,6 +730,10 @@ pub fn start(
         Output::Gif => RecordingFormat::Gif,
         Output::Mp4(..) => RecordingFormat::Mp4,
     };
+    let started = Local::now();
+    let path = fs::create_dir_all(&folder)
+        .map(|()| unique_recording_path(&folder, &started, format))
+        .map_err(|err| format!("could not create {}: {err}", folder.display()))?;
     let session = Arc::new(Session {
         controls: Arc::new(Controls::default()),
         monitor: monitor.clone(),
@@ -646,6 +759,10 @@ pub fn start(
             system: None,
             webcam: recording.show_webcam,
         }),
+        path: path.clone(),
+        agent,
+        outcome: Mutex::new(None),
+        ended: Condvar::new(),
     });
     let state = app.state::<RecordState>();
     {
@@ -705,19 +822,6 @@ pub fn start(
                 .to_owned(),
         );
     }
-    let started = Local::now();
-    let prepared = fs::create_dir_all(&folder)
-        .map(|()| unique_recording_path(&folder, &started, format))
-        .map_err(|err| format!("could not create {}: {err}", folder.display()));
-    let path = match prepared {
-        Ok(path) => path,
-        Err(err) => {
-            *state.lock() = None;
-            crate::tray::set_recording(app, false);
-            return Err(err.into());
-        }
-    };
-
     if recording.countdown > 0 {
         let ends = now_ms() + u64::from(recording.countdown) * 1000;
         lock_status(&session.status).countdown_ends_at = Some(ends);
@@ -737,9 +841,11 @@ pub fn start(
     }
 
     let handle = app.clone();
+    let recorder = Arc::clone(&session);
     let spawned = std::thread::Builder::new()
         .name("grab-it-record".into())
         .spawn(move || {
+            let session = recorder;
             let controls = Arc::clone(&session.controls);
             let counted = count_down(&controls, recording.countdown);
             let result = if counted {
@@ -806,10 +912,27 @@ pub fn start(
                 crate::record_bar::close(&handle);
                 crate::record_frame::close(&handle);
             }
-            match result {
+            let outcome = match result {
                 // Stopped during the countdown: nothing was recorded.
-                None => {}
-                Some(Ok(_)) if discard => remove_recording(&path),
+                None => Err("the recording was stopped before it began".to_owned()),
+                Some(Ok(_)) if discard => {
+                    remove_recording(&path);
+                    Err(if restart {
+                        "the recording was restarted from its toolbar".to_owned()
+                    } else {
+                        "the recording was discarded".to_owned()
+                    })
+                }
+                Some(Ok((duration, _))) if session.agent.is_some() => {
+                    let duration_ms = duration.as_millis() as u64;
+                    let id = crate::agent::add_recording(&handle, &path, duration_ms);
+                    Ok(Finished {
+                        path: path.clone(),
+                        duration_ms,
+                        format,
+                        id,
+                    })
+                }
                 Some(Ok((duration, note))) => {
                     crate::library::record_recording(&handle, &path, duration.as_millis() as u64);
                     let bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
@@ -820,23 +943,38 @@ pub fn start(
                                 .file_name()
                                 .map(|name| name.to_string_lossy().into_owned())
                                 .unwrap_or_default(),
-                            path,
+                            path: path.clone(),
                             duration_ms: duration.as_millis() as u64,
                             bytes,
                             format,
                             fallback: fallback.or(note),
                         },
                     );
+                    Ok(Finished {
+                        path: path.clone(),
+                        duration_ms: duration.as_millis() as u64,
+                        format,
+                        id: None,
+                    })
                 }
                 Some(Err(err)) => {
                     remove_recording(&path);
+                    let message = format!("the recording failed: {err}");
                     if !restart {
-                        actions::report_failure(&handle, &format!("the recording failed: {err}"));
+                        actions::report_failure(&handle, &message);
                     }
+                    Err(message)
                 }
-            }
+            };
+            session.end(outcome);
             if restart
-                && let Err(err) = start(&handle, &session.monitor, session.image_size, session.rect)
+                && let Err(err) = start_with(
+                    &handle,
+                    &session.monitor,
+                    session.image_size,
+                    session.rect,
+                    session.agent,
+                )
             {
                 crate::record_bar::close(&handle);
                 crate::record_frame::close(&handle);
@@ -853,7 +991,7 @@ pub fn start(
         crate::tray::set_recording(app, false);
         return Err(format!("could not start recording: {err}").into());
     }
-    Ok(())
+    Ok(session)
 }
 
 /// Waits `seconds` before a recording starts. False when it was stopped
@@ -1166,6 +1304,50 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
     use image::{AnimationDecoder, Rgba, codecs::gif::GifDecoder};
+
+    #[test]
+    fn an_agents_options_replace_the_settings_with_no_sound_webcam_or_countdown() {
+        let settings = RecordingSettings {
+            format: RecordingFormat::Gif,
+            fps: 30,
+            show_cursor: false,
+            show_clicks: true,
+            show_keystrokes: true,
+            audio: crate::settings::RecordingAudio::Both,
+            show_webcam: true,
+            countdown: 5,
+            ..RecordingSettings::default()
+        };
+        let options = AgentOptions {
+            format: RecordingFormat::Mp4,
+            fps: 60,
+            show_cursor: true,
+        };
+        let applied = options.apply(settings.clone());
+        assert_eq!(applied.format, RecordingFormat::Mp4);
+        assert_eq!(applied.fps, 60);
+        assert!(applied.show_cursor);
+        assert!(!applied.show_clicks && !applied.show_keystrokes && !applied.show_webcam);
+        assert_eq!(applied.audio, crate::settings::RecordingAudio::None);
+        assert_eq!(applied.countdown, 0);
+        // What the agent does not choose is the user's.
+        assert_eq!(applied.quality, settings.quality);
+        assert_eq!(applied.webcam_shape, settings.webcam_shape);
+    }
+
+    #[test]
+    fn a_finished_recording_is_a_json_line() {
+        let finished = Finished {
+            path: PathBuf::from("/p/recordings/Grab-it.mp4"),
+            duration_ms: 5021,
+            format: RecordingFormat::Mp4,
+            id: Some(4),
+        };
+        assert_eq!(
+            serde_json::to_string(&finished).unwrap(),
+            r#"{"path":"/p/recordings/Grab-it.mp4","durationMs":5021,"format":"mp4","id":4}"#
+        );
+    }
 
     #[test]
     fn the_card_says_which_sound_is_missing() {

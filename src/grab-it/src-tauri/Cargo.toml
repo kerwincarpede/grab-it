@@ -38,6 +38,8 @@ rusqlite = { version = "0.42", features = ["bundled"] }
 # loads the published .onnx models (the .rten ones are no longer hosted).
 ocrs = { version = "=0.12.2", default-features = false, features = ["onnx"] }
 rten = { version = "0.24", default-features = false, features = ["onnx_format"] }
+# Already in the tree through rten; builds the face detector's input (faces.rs).
+rten-tensor = "0.24"
 # `platform-verifier` checks certificates against the OS trust store
 # (net.rs), so roots installed by IT, such as a TLS-inspecting proxy's,
 # are trusted.
@@ -76,6 +78,10 @@ fs4 = "1"
 # Moves items cleanup removes to the system Trash (storage.rs): the Recycle
 # Bin on Windows, Finder's Trash on macOS, the freedesktop trash on Linux.
 trash = "5"
+# The control connection the grab-it command line talks to the running app
+# over (control.rs): a Unix socket on Linux and macOS, a named pipe on
+# Windows.
+interprocess = "2"
 # Draws the keystroke overlay's label into recordings (frame_overlays.rs), in
 # the cut-down DejaVu Sans Bold in fonts/.
 ab_glyph = "0.2"
@@ -106,12 +112,17 @@ webkit2gtk = "2.0"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    # Attaches the command line to the terminal it was run from (cli.rs).
+    "Win32_System_Console",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
 ] }
+# Already in the tree through interprocess: the control pipe's security
+# descriptor string (control.rs).
+widestring = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

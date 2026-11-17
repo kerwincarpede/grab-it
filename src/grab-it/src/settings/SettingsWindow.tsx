@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import AgentsSection from "./AgentsSection";
 import AiSection from "./AiSection";
 import HotkeysSection from "./HotkeysSection";
 import StorageSection from "./StorageSection";
@@ -46,6 +47,7 @@ import {
   onAppearanceChanged,
   hasDock,
   SETTINGS_SECTIONS,
+  setAgentAccess,
   setAutoBackdrop,
   setAutostart,
   setHotkeys,
@@ -460,6 +462,18 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     }
   }
 
+  async function changeAgentAccess(enabled: boolean) {
+    setBusy(true);
+    try {
+      setSettings(await setAgentAccess(enabled));
+      setStatus({ kind: "preferences-saved" });
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function changeAppearance(change: Partial<Appearance>) {
     setBusy(true);
     try {
@@ -492,7 +506,8 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     section === "capture" ||
     section === "editor" ||
     section === "recording" ||
-    section === "storage";
+    section === "storage" ||
+    section === "agents";
   const recording: RecordingSettings = { ...DEFAULT_RECORDING, ...settings?.recording };
   const recordingOff = busy || settings === null;
   const silent = recording.format === "gif";
@@ -1002,6 +1017,13 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
       )}
       {shows("ai") && settings && (
         <AiSection saved={settings.ai ?? DEFAULT_AI_PREFERENCES} disabled={busy} onSave={saveAi} />
+      )}
+      {shows("agents") && settings && (
+        <AgentsSection
+          access={settings.agentAccess ?? false}
+          disabled={busy}
+          onAccess={(enabled) => void changeAgentAccess(enabled)}
+        />
       )}
       {shows("hotkeys") && settings && (
         <HotkeysSection saved={settings.hotkeys} disabled={busy} onSave={saveHotkeys} />

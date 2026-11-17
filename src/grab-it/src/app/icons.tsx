@@ -123,6 +123,14 @@ export const SparkleIcon = ({ size }: IconProps) => (
   </Icon>
 );
 
+/** A terminal prompt: AI agents, which drive Grab-it from the command line. */
+export const TerminalIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M7 9l3 3-3 3M13 15h4" />
+  </Icon>
+);
+
 export const FolderIcon = ({ size }: IconProps) => (
   <Icon size={size}>
     <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />

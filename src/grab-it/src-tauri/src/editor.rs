@@ -17,7 +17,13 @@ use serde_json::Value;
 use tauri::{AppHandle, Manager, State, WebviewWindow, ipc::InvokeBody};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
-use crate::capture::annotations_path;
+use image::RgbaImage;
+
+use crate::{
+    capture::{Rect, annotations_path},
+    library::LibraryState,
+    ocr::OcrLine,
+};
 
 /// The sidecar format version this build reads and writes.
 pub const ANNOTATIONS_VERSION: u64 = 1;
@@ -352,10 +358,148 @@ pub fn editor_export(
     fs::write(&target, bytes).map_err(|err| format!("could not export: {err}"))
 }
 
+/// The lines of text the library stored for the capture at `png`, with
+/// their word boxes; `None` when the library does not know the capture or
+/// has no boxes for it (not read yet, or read before boxes were stored).
+pub fn stored_lines(library: &LibraryState, png: &Path) -> Option<Vec<OcrLine>> {
+    let library = library.lock();
+    let id = library.id_for_path(png).ok().flatten()?;
+    library.lines(id).ok().flatten()
+}
+
+/// The lines of text in the capture at `png`, with their word boxes in its
+/// pixels: the library's stored ones when it has them, else what `read`
+/// finds in the capture now.
+pub fn capture_lines(
+    library: Option<&LibraryState>,
+    png: &Path,
+    read: impl FnOnce(&RgbaImage) -> Result<Vec<OcrLine>, String>,
+) -> Result<Vec<OcrLine>, String> {
+    if let Some(lines) = library.and_then(|library| stored_lines(library, png)) {
+        return Ok(lines);
+    }
+    read(&open_capture(png)?)
+}
+
+fn open_capture(png: &Path) -> Result<RgbaImage, String> {
+    Ok(image::open(png)
+        .map_err(|err| format!("could not open {}: {err}", png.display()))?
+        .into_rgba8())
+}
+
+/// The editor's capture's lines of text and their word boxes, for Blur
+/// private details and the Blur tool's word click. Read now when the
+/// library has none stored; nothing leaves the computer.
+#[tauri::command(async)]
+pub fn editor_words(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<'_, EditorState>,
+) -> Result<Vec<OcrLine>, String> {
+    let path = state.path_for(window.label())?;
+    let library = app.try_state::<LibraryState>();
+    capture_lines(library.as_deref(), &path, |image| {
+        crate::ocr::read_now(&app, image).map_err(|err| err.to_string())
+    })
+}
+
+/// The faces in the editor's capture, in its pixels, for Blur private
+/// details.
+#[tauri::command(async)]
+pub fn editor_faces(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<'_, EditorState>,
+) -> Result<Vec<Rect>, String> {
+    let path = state.path_for(window.label())?;
+    let image = open_capture(&path)?;
+    crate::faces::detect_now(&app, &image).map_err(|err| err.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn word_line(text: &str, x: i32) -> OcrLine {
+        let rect = Rect {
+            x,
+            y: 10,
+            width: 40,
+            height: 12,
+        };
+        OcrLine {
+            text: text.to_owned(),
+            rect,
+            words: vec![crate::ocr::OcrWord {
+                text: text.to_owned(),
+                rect,
+            }],
+        }
+    }
+
+    /// A library holding a capture at `<dir>/originals/shot.png`.
+    fn library_with_capture(dir: &Path) -> (LibraryState, PathBuf, i64) {
+        let originals = dir.join(crate::capture::ORIGINALS_DIR);
+        fs::create_dir_all(&originals).unwrap();
+        let png = originals.join("Grab-it 2026-03-07 09-00-00.png");
+        RgbaImage::from_pixel(64, 32, image::Rgba([255, 255, 255, 255]))
+            .save(&png)
+            .unwrap();
+        let mut library = crate::library::Library::open_in_memory().unwrap();
+        let id = library.add_capture(&png).unwrap().id;
+        (LibraryState::new(library), png, id)
+    }
+
+    #[test]
+    fn stored_word_boxes_are_used_without_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let (library, png, id) = library_with_capture(dir.path());
+        let lines = vec![word_line("stored", 4)];
+        library.lock().set_ocr_lines(id, &lines).unwrap();
+        let read = capture_lines(Some(&library), &png, |_| {
+            panic!("the stored boxes should be used")
+        });
+        assert_eq!(read, Ok(lines));
+    }
+
+    #[test]
+    fn a_capture_without_stored_boxes_is_read_now() {
+        let dir = tempfile::tempdir().unwrap();
+        let (library, png, _) = library_with_capture(dir.path());
+        let mut seen = None;
+        let read = capture_lines(Some(&library), &png, |image| {
+            seen = Some(image.dimensions());
+            Ok(vec![word_line("fresh", 8)])
+        });
+        assert_eq!(read, Ok(vec![word_line("fresh", 8)]));
+        assert_eq!(seen, Some((64, 32)));
+    }
+
+    #[test]
+    fn a_capture_outside_the_library_is_read_now() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("loose.png");
+        RgbaImage::new(10, 10).save(&png).unwrap();
+        let library = LibraryState::new(crate::library::Library::open_in_memory().unwrap());
+        assert_eq!(
+            capture_lines(Some(&library), &png, |_| Ok(vec![word_line("loose", 0)])),
+            Ok(vec![word_line("loose", 0)])
+        );
+        assert_eq!(capture_lines(None, &png, |_| Ok(vec![])), Ok(vec![]));
+        assert!(capture_lines(None, &dir.path().join("gone.png"), |_| Ok(vec![])).is_err());
+    }
+
+    #[test]
+    fn reading_failures_reach_the_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("loose.png");
+        RgbaImage::new(10, 10).save(&png).unwrap();
+        assert_eq!(
+            capture_lines(None, &png, |_| Err("no models".to_owned())),
+            Err("no models".to_owned())
+        );
+    }
 
     #[test]
     fn label_for_matches_any_spelling_of_the_same_file() {

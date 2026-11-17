@@ -898,6 +898,10 @@ pub struct Settings {
     /// The macOS Permissions page's progress.
     #[serde(default)]
     pub permissions: PermissionSetup,
+    /// Settings › AI agents: the grab-it command line may capture. Off, the
+    /// control connection refuses every request.
+    #[serde(default)]
+    pub agent_access: bool,
 }
 
 impl Settings {
@@ -914,6 +918,7 @@ impl Settings {
             recording: RecordingSettings::default(),
             retention: Retention::default(),
             permissions: PermissionSetup::default(),
+            agent_access: false,
         }
     }
 }
@@ -938,6 +943,7 @@ struct StoredSettings {
     retention: Option<serde_json::Value>,
     /// Read leniently by [`PermissionSetup::from_stored`].
     permissions: Option<serde_json::Value>,
+    agent_access: Option<bool>,
 }
 
 /// Hotkeys on disk; a missing or empty one keeps its default.
@@ -1013,6 +1019,7 @@ impl StoredSettings {
                 .permissions
                 .map(PermissionSetup::from_stored)
                 .unwrap_or(defaults.permissions),
+            agent_access: self.agent_access.unwrap_or(defaults.agent_access),
         }
     }
 }
@@ -1076,6 +1083,7 @@ struct SettingsOnDisk<'a> {
     recording: &'a RecordingSettings,
     retention: Retention,
     permissions: PermissionSetup,
+    agent_access: bool,
 }
 
 #[derive(Serialize)]
@@ -1136,6 +1144,7 @@ impl<'a> SettingsOnDisk<'a> {
             recording: &settings.recording,
             retention: settings.retention,
             permissions: settings.permissions,
+            agent_access: settings.agent_access,
         }
     }
 }
@@ -1515,6 +1524,17 @@ impl SettingsStore {
         Ok(self.current.clone())
     }
 
+    /// Lets the grab-it command line capture, or stops it.
+    pub fn set_agent_access(&mut self, enabled: bool) -> Result<Settings, SettingsError> {
+        let next = Settings {
+            agent_access: enabled,
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
     /// Records the macOS Permissions page's progress.
     pub fn set_permission_setup(
         &mut self,
@@ -1657,9 +1677,27 @@ mod tests {
                 asked: true,
                 resume: true,
             },
+            agent_access: true,
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path, defaults(&dir)).unwrap(), settings);
+    }
+
+    #[test]
+    fn agent_access_is_off_by_default_and_remembered() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        assert!(!defaults(&dir).agent_access);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        assert!(!store.get().agent_access);
+        assert!(store.set_agent_access(true).unwrap().agent_access);
+        assert!(load(&path, defaults(&dir)).unwrap().agent_access);
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["agentAccess"], true);
+        // A file from before the setting existed keeps it off.
+        fs::write(&path, r#"{"showInDock": false}"#).unwrap();
+        assert!(!load(&path, defaults(&dir)).unwrap().agent_access);
     }
 
     #[test]
