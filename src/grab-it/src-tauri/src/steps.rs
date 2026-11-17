@@ -682,6 +682,21 @@ pub fn ripe<T>(
     ripe
 }
 
+/// Whether the click that stops a session by clicking is always on
+/// Grab-it's own hub or menu. On Linux it is on the panel's menu, one of
+/// [`STOP_CLICKS_OUTSIDE`].
+const STOP_CLICK_IS_OWN: bool = cfg!(any(target_os = "windows", target_os = "macos"));
+
+/// Drops the steps for the click seen at `at` from `held` and `waiting`.
+pub fn drop_click<T>(
+    held: &mut VecDeque<Held<T>>,
+    waiting: &mut VecDeque<Waiting<T>>,
+    at: Instant,
+) {
+    held.retain(|held| held.at != at);
+    waiting.retain(|waiting| waiting.at != at);
+}
+
 /// The session's loop. Each click's frame is grabbed as soon as the click
 /// is seen; a saver thread writes it, so slow saves never delay the next
 /// grab. The latest [`HELD_STEPS`] steps wait until later clicks,
@@ -779,6 +794,17 @@ fn run(
     } else {
         Trigger::Keys
     };
+    // The click that stopped it was on Grab-it's hub or menu, but it is
+    // only looked at once the grab before it is done. After a full-monitor
+    // grab, such as one for a click on the tray icon, that can be a second
+    // later, when the hub has closed and the click seems to land on the
+    // window behind it. So it is dropped whatever it hit.
+    if trigger == Trigger::Click
+        && STOP_CLICK_IS_OWN
+        && let Some((at, _)) = last_click
+    {
+        drop_click(&mut held, &mut waiting, at);
+    }
     let held = held
         .into_iter()
         .map(|held| Held {
@@ -1418,6 +1444,37 @@ mod tests {
         // With no hover, it is kept.
         assert_eq!(ripe(&mut waiting, click + lead * 2, |_| false), vec![3]);
         assert!(waiting.is_empty());
+    }
+
+    #[test]
+    fn the_stop_click_is_dropped_wherever_it_waits() {
+        let start = Instant::now();
+        let at = |millis: u64| start + Duration::from_millis(millis);
+        let mut held = VecDeque::from([Held {
+            at: at(2000),
+            shell: None,
+            step: 2,
+        }]);
+        let mut waiting = VecDeque::from([
+            Waiting {
+                at: at(1000),
+                maybe_icon: false,
+                step: 1,
+            },
+            Waiting {
+                at: at(3000),
+                maybe_icon: false,
+                step: 3,
+            },
+        ]);
+        drop_click(&mut held, &mut waiting, at(3000));
+        assert_eq!(held.len(), 1);
+        assert_eq!(waiting.iter().map(|w| w.step).collect::<Vec<_>>(), [1]);
+        drop_click(&mut held, &mut waiting, at(2000));
+        assert!(held.is_empty());
+        // A click that took no step drops nothing.
+        drop_click(&mut held, &mut waiting, at(4000));
+        assert_eq!(waiting.len(), 1);
     }
 
     fn held_on(stopped_at: Instant, clicks: &[(u64, Option<Shell>)]) -> Vec<Held<u8>> {
