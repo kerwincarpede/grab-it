@@ -65,4 +65,6 @@ They need **Input Monitoring** permission. Turn on Grab-it under **System Settin
 
 ## Still stuck?
 
-[Open an issue](https://github.com/kerwincarpede/grab-it/issues/new) and tell us what happened.
+In the tray menu, choose **Send feedback → Report a problem…**. Your browser opens a GitHub issue form with your Grab-it version and system already filled in; tell us what happened and submit it. **Suggest an idea…** opens the same kind of form for an idea.
+
+You can also [open an issue](https://github.com/kerwincarpede/grab-it/issues/new/choose) on GitHub yourself.
