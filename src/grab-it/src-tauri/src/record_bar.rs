@@ -681,12 +681,12 @@ fn moved(app: &AppHandle, position: PhysicalPosition<i32>) {
             width: size.0,
             height: size.1,
         };
+        let scale = app
+            .get_webview_window(LABEL)
+            .and_then(|window| window.scale_factor().ok())
+            .unwrap_or(1.0);
         let all = displays(&app);
-        let Some(display) = all
-            .iter()
-            .find(|display| display.work.contains(bar.centre()))
-            .or_else(|| all.iter().find(|display| display.work.overlaps(&bar)))
-        else {
+        let Some((bar, display)) = display_under(bar, scale, &all) else {
             return;
         };
         let spot = spot_of(bar, display);
@@ -742,14 +742,79 @@ fn pill_area(app: &AppHandle, window: &WebviewWindow) -> Option<(Area, Display)>
         width: pill.0,
         height: pill.1,
     };
+    let scale = window.scale_factor().unwrap_or(1.0);
     let all = displays(app);
-    let display = all
+    let (bar, display) = display_under(bar, scale, &all).or_else(|| Some((bar, all.first()?)))?;
+    Some((bar, display.clone()))
+}
+
+/// The display a toolbar covering `bar` is on, and `bar` in that
+/// display's pixels: the display holding its centre, else one it
+/// overlaps. `bar` was read from the window, in pixels at `scale`, the
+/// scale of the screen the window is on.
+///
+/// macOS gives each display's frame in pixels at its own scale, so frames
+/// of displays with different scales overlap in pixels, and the toolbar is
+/// found in points instead. Windows and Linux lay displays out in one
+/// space of pixels.
+fn display_under(bar: Area, scale: f64, displays: &[Display]) -> Option<(Area, &Display)> {
+    #[cfg(target_os = "macos")]
+    {
+        display_in_points(bar, scale, displays)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = scale;
+        displays
+            .iter()
+            .find(|display| display.work.contains(bar.centre()))
+            .or_else(|| displays.iter().find(|display| display.work.overlaps(&bar)))
+            .map(|display| (bar, display))
+    }
+}
+
+/// [`display_under`] with every frame in points, as macOS lays out
+/// displays of different scales.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn display_in_points(bar: Area, scale: f64, displays: &[Display]) -> Option<(Area, &Display)> {
+    let scale = valid_scale(scale);
+    // A rectangle in points: left, top, right, bottom.
+    let points = |area: Area, scale: f64| {
+        (
+            f64::from(area.x) / scale,
+            f64::from(area.y) / scale,
+            f64::from(area.right()) / scale,
+            f64::from(area.bottom()) / scale,
+        )
+    };
+    let (left, top, right, bottom) = points(bar, scale);
+    let (cx, cy) = ((left + right) / 2.0, (top + bottom) / 2.0);
+    let on = |display: &&Display| points(display.work, valid_scale(display.scale));
+    let found = displays
         .iter()
-        .find(|display| display.work.contains(bar.centre()))
-        .or_else(|| all.iter().find(|display| display.work.overlaps(&bar)))
-        .or_else(|| all.first())?
-        .clone();
-    Some((bar, display))
+        .find(|display| {
+            let (l, t, r, b) = on(display);
+            cx >= l && cx < r && cy >= t && cy < b
+        })
+        .or_else(|| {
+            displays.iter().find(|display| {
+                let (l, t, r, b) = on(display);
+                left < r && l < right && top < b && t < bottom
+            })
+        })?;
+    // The window's pixels, read at its screen's scale, in the display's.
+    let ratio = valid_scale(found.scale) / scale;
+    let px = |value: i32| (f64::from(value) * ratio).round() as i32;
+    let len = |value: u32| (f64::from(value) * ratio).round() as u32;
+    Some((
+        Area {
+            x: px(bar.x),
+            y: px(bar.y),
+            width: len(bar.width),
+            height: len(bar.height),
+        },
+        found,
+    ))
 }
 
 /// Where the menu opens. Mirrors `BarLayout` in src/recordbar/api.ts.
@@ -1126,6 +1191,81 @@ mod tests {
             serde_json::from_str::<Memory>("{}").unwrap(),
             Memory::default()
         );
+    }
+
+    #[test]
+    fn the_toolbar_is_found_on_a_display_of_another_scale_in_points() {
+        // A 2x main display at 0,0 3200x1800 points and a 1x display to its
+        // right at 3200,0 1920x1080 points: in pixels the 1x display's frame
+        // lies inside the main display's.
+        let main = display(
+            "main",
+            Area {
+                x: 0,
+                y: 0,
+                width: 6400,
+                height: 3600,
+            },
+            2.0,
+        );
+        let side = display(
+            "side",
+            Area {
+                x: 3200,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+            1.0,
+        );
+        let all = [main.clone(), side.clone()];
+        // Dragged to 4000,500 points on the 1x display, read at its 1x.
+        let on_side = Area {
+            x: 4000,
+            y: 500,
+            width: 300,
+            height: 60,
+        };
+        let (bar, found) = display_in_points(on_side, 1.0, &all).unwrap();
+        assert_eq!(found.key, "side");
+        assert_eq!(bar, on_side);
+        // At 1000,500 points on the main display, read at its 2x.
+        let on_main = Area {
+            x: 2000,
+            y: 1000,
+            width: 600,
+            height: 120,
+        };
+        let (bar, found) = display_in_points(on_main, 2.0, &all).unwrap();
+        assert_eq!(found.key, "main");
+        assert_eq!(bar, on_main);
+        // Read at the main display's 2x but sitting on the 1x display, as
+        // while it is dragged across: given in the 1x display's pixels.
+        let crossing = Area {
+            x: 8000,
+            y: 1000,
+            width: 600,
+            height: 120,
+        };
+        let (bar, found) = display_in_points(crossing, 2.0, &all).unwrap();
+        assert_eq!(found.key, "side");
+        assert_eq!(
+            bar,
+            Area {
+                x: 4000,
+                y: 500,
+                width: 300,
+                height: 60,
+            }
+        );
+        // Off every display.
+        let off = Area {
+            x: -5000,
+            y: -5000,
+            width: 300,
+            height: 60,
+        };
+        assert_eq!(display_in_points(off, 1.0, &all), None);
     }
 
     #[test]
