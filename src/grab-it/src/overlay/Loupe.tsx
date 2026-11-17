@@ -1,12 +1,13 @@
 import { useEffect, useRef } from "react";
 import { floatingPosition, imagePixelAt, toHex, type Point, type Size } from "./geometry";
+import "./loupe.css";
 
 /** Image pixels across the loupe; odd, so one pixel sits exactly in the centre. */
 const GRID = 15;
 /** CSS pixels each image pixel is drawn at. */
 const ZOOM = 8;
 const LENS = GRID * ZOOM;
-/** The lens plus the readout under it; must match overlay.css. */
+/** The lens plus the readout under it; must match loupe.css. */
 const PANEL: Size = { width: LENS, height: LENS + 46 };
 /** Gap between the cursor and the loupe. */
 const OFFSET = 20;
@@ -51,6 +52,12 @@ interface LoupeProps {
   /** Image pixels per CSS pixel. */
   scale: number;
   viewport: Size;
+  /**
+   * The image pixel to show, when the caller maps the cursor itself (the
+   * editor's capture is zoomed, turned and panned). Without it, the pixel
+   * under `pointer` at `scale`.
+   */
+  pixel?: Point;
 }
 
 /**
@@ -58,7 +65,7 @@ interface LoupeProps {
  * colour of the pixel under the cursor and the cursor's position in image
  * pixels.
  */
-function Loupe({ image, pointer, scale, viewport }: LoupeProps) {
+function Loupe({ image, pointer, scale, viewport, pixel: shownPixel }: LoupeProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const swatch = useRef<HTMLSpanElement>(null);
   const colour = useRef<HTMLSpanElement>(null);
@@ -66,7 +73,7 @@ function Loupe({ image, pointer, scale, viewport }: LoupeProps) {
   const size = image
     ? { width: image.naturalWidth, height: image.naturalHeight }
     : { width: viewport.width * scale, height: viewport.height * scale };
-  const pixel = imagePixelAt(pointer, scale, size);
+  const pixel = shownPixel ?? imagePixelAt(pointer, scale, size);
   const position = floatingPosition(pointer, PANEL, viewport, OFFSET);
 
   useEffect(() => {

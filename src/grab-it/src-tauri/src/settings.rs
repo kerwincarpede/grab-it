@@ -348,10 +348,41 @@ pub struct EditorPreferences {
     /// keep them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub backdrop_presets: Vec<BackdropPreset>,
+    /// Colours saved beside the built-in swatches, as `#rrggbb`, oldest
+    /// first. Set with [`SettingsStore::set_favorite_colors`]; the editor's
+    /// other saves keep them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub favorite_colors: Vec<String>,
 }
 
 /// The most backdrop presets kept; any after these are dropped.
 pub const MAX_BACKDROP_PRESETS: usize = 24;
+
+/// The most favourite colours kept; any after these are dropped. Mirrors
+/// `MAX_FAVORITE_COLORS` in src/settings/api.ts.
+pub const MAX_FAVORITE_COLORS: usize = 8;
+
+/// Favourite colours as they are kept: only `#rrggbb` values, lower-cased,
+/// each once, and at most [`MAX_FAVORITE_COLORS`].
+fn keep_favorite_colors<'a>(colors: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::new();
+    for color in colors {
+        let is_hex = color.len() == 7
+            && color.starts_with('#')
+            && color[1..].chars().all(|c| c.is_ascii_hexdigit());
+        if !is_hex {
+            continue;
+        }
+        let color = color.to_ascii_lowercase();
+        if !kept.contains(&color) {
+            kept.push(color);
+        }
+        if kept.len() == MAX_FAVORITE_COLORS {
+            break;
+        }
+    }
+    kept
+}
 
 /// A backdrop saved under a name. Mirrors `BackdropPreset` in
 /// src/settings/api.ts. Names need not be unique; `id` tells presets apart.
@@ -439,6 +470,13 @@ impl EditorPreferences {
                         .filter_map(BackdropPreset::from_stored)
                         .take(MAX_BACKDROP_PRESETS)
                         .collect()
+                })
+                .unwrap_or_default(),
+            favorite_colors: value
+                .get("favoriteColors")
+                .and_then(serde_json::Value::as_array)
+                .map(|colors| {
+                    keep_favorite_colors(colors.iter().filter_map(serde_json::Value::as_str))
                 })
                 .unwrap_or_default(),
         }
@@ -1441,8 +1479,8 @@ impl SettingsStore {
     }
 
     /// Remembers the annotation editor's choices. Auto-apply belongs to the
-    /// Settings window and presets have their own save, so the editor's
-    /// saves never change them.
+    /// Settings window, and presets and favourite colours have their own
+    /// saves, so the editor's saves never change them.
     pub fn set_editor_preferences(
         &mut self,
         editor: EditorPreferences,
@@ -1452,6 +1490,7 @@ impl SettingsStore {
                 auto_backdrop: self.current.editor.auto_backdrop,
                 show_pointer: self.current.editor.show_pointer,
                 backdrop_presets: self.current.editor.backdrop_presets.clone(),
+                favorite_colors: self.current.editor.favorite_colors.clone(),
                 ..editor
             },
             ..self.current.clone()
@@ -1477,6 +1516,24 @@ impl SettingsStore {
         save(&self.path, &next)?;
         self.current = next;
         Ok(self.current.editor.backdrop_presets.clone())
+    }
+
+    /// Replaces the saved favourite colours with `colors`, keeping the rest
+    /// of the editor's choices. Returns the colours as kept.
+    pub fn set_favorite_colors(
+        &mut self,
+        colors: Vec<String>,
+    ) -> Result<Vec<String>, SettingsError> {
+        let next = Settings {
+            editor: EditorPreferences {
+                favorite_colors: keep_favorite_colors(colors.iter().map(String::as_str)),
+                ..self.current.editor.clone()
+            },
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.editor.favorite_colors.clone())
     }
 
     /// Turns framing new captures with the last backdrop on or off,
@@ -3230,6 +3287,7 @@ mod tests {
             auto_backdrop: None,
             show_pointer: None,
             backdrop_presets: Vec::new(),
+            favorite_colors: Vec::new(),
         }
     }
 
@@ -3542,5 +3600,108 @@ mod tests {
         let kept = store.set_backdrop_presets(presets).unwrap();
         assert_eq!(kept.len(), MAX_BACKDROP_PRESETS);
         assert_eq!(kept[0].id, "p0");
+    }
+
+    #[test]
+    fn favorite_colors_are_read_key_by_key() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r##"{"editor": {"color": "#e5484d", "favoriteColors": ["#FF8800", 3, "red", "#ff8800", "#123abc"]}}"##,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.editor.favorite_colors, vec!["#ff8800", "#123abc"]);
+        assert_eq!(loaded.editor.color.as_deref(), Some("#e5484d"));
+
+        // A list of the wrong type costs only the favourites.
+        fs::write(
+            &path,
+            r##"{"editor": {"color": "#e5484d", "favoriteColors": "#ff8800"}}"##,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert!(loaded.editor.favorite_colors.is_empty());
+        assert_eq!(loaded.editor.color.as_deref(), Some("#e5484d"));
+    }
+
+    #[test]
+    fn at_most_8_favorite_colors_are_read() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let colors: Vec<String> = (0..12).map(|i| format!("#0000{i:02x}")).collect();
+        let text = serde_json::json!({"editor": {"favoriteColors": colors}}).to_string();
+        fs::write(&path, text).unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.editor.favorite_colors, colors[..MAX_FAVORITE_COLORS]);
+    }
+
+    #[test]
+    fn the_editors_saves_keep_the_favorite_colors() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        store.set_favorite_colors(vec!["#ff8800".into()]).unwrap();
+
+        // The editor saves its choices without the favourites; they stay.
+        let saved = store.set_editor_preferences(editor_preferences()).unwrap();
+        assert_eq!(saved.favorite_colors, vec!["#ff8800"]);
+        assert_eq!(saved.color, editor_preferences().color);
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.editor.favorite_colors, vec!["#ff8800"]);
+    }
+
+    #[test]
+    fn set_favorite_colors_replaces_the_whole_list() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        store.set_editor_preferences(editor_preferences()).unwrap();
+        store
+            .set_backdrop_presets(vec![preset("p1", "House")])
+            .unwrap();
+
+        let kept = store
+            .set_favorite_colors(vec!["#ff8800".into(), "#123ABC".into()])
+            .unwrap();
+        assert_eq!(kept, vec!["#ff8800", "#123abc"]);
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(json["editor"]["favoriteColors"][1], "#123abc");
+
+        let kept = store.set_favorite_colors(vec!["#123abc".into()]).unwrap();
+        assert_eq!(kept, vec!["#123abc"]);
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.editor.favorite_colors, vec!["#123abc"]);
+        // The editor's other choices and the presets are kept.
+        assert_eq!(loaded.editor.color, editor_preferences().color);
+        assert_eq!(loaded.editor.backdrop_presets, vec![preset("p1", "House")]);
+
+        // Removing the last one leaves no key behind.
+        assert!(store.set_favorite_colors(Vec::new()).unwrap().is_empty());
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(json["editor"].get("favoriteColors"), None);
+    }
+
+    #[test]
+    fn set_favorite_colors_keeps_at_most_8_distinct_hex_colours() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path, defaults(&dir));
+        let mut colors = vec![
+            "not a colour".to_owned(),
+            "#ggg000".to_owned(),
+            "#ff8800".to_owned(),
+            "#FF8800".to_owned(),
+        ];
+        colors.extend((0..12).map(|i| format!("#0000{i:02x}")));
+        let kept = store.set_favorite_colors(colors).unwrap();
+        assert_eq!(kept.len(), MAX_FAVORITE_COLORS);
+        assert_eq!(kept[0], "#ff8800");
+        assert_eq!(kept[1], "#000000");
     }
 }

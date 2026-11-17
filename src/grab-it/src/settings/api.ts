@@ -169,10 +169,15 @@ export interface EditorPreferences {
   showPointer?: boolean;
   /** Backdrops saved by name. Set with `setBackdropPresets`; the editor's other saves keep them. */
   backdropPresets?: BackdropPreset[];
+  /** Colours saved beside the built-in swatches, as `#rrggbb`. Set with `setFavoriteColors`; the editor's other saves keep them. */
+  favoriteColors?: string[];
 }
 
 /** Mirrors `MAX_BACKDROP_PRESETS` in src-tauri/src/settings.rs. */
 export const MAX_BACKDROP_PRESETS = 24;
+
+/** Mirrors `MAX_FAVORITE_COLORS` in src-tauri/src/settings.rs. */
+export const MAX_FAVORITE_COLORS = 8;
 
 /**
  * Mirrors `BackdropPreset` in src-tauri/src/settings.rs: a backdrop saved
@@ -707,6 +712,11 @@ export function setEditorPreferences(preferences: EditorPreferences): Promise<Ed
 /** Replaces the saved backdrop presets; resolves to them as kept. */
 export function setBackdropPresets<B>(presets: BackdropPreset<B>[]): Promise<BackdropPreset[]> {
   return invoke<BackdropPreset[]>("set_backdrop_presets", { presets });
+}
+
+/** Replaces the saved favourite colours; resolves to them as kept. */
+export function setFavoriteColors(colors: string[]): Promise<string[]> {
+  return invoke<string[]>("set_favorite_colors", { colors });
 }
 
 /** Turns framing new captures with the last backdrop on or off. */

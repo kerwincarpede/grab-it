@@ -9,7 +9,11 @@ The left of the top bar shows the style for the tool you're using. Change it wit
 
 ## Colour
 
-Seven swatches, in order: red, orange, green, blue, purple, black and white. Press `1` to `7` to pick one from the keyboard. The last swatch opens a colour picker for any other colour.
+Seven swatches, in order: red, orange, green, blue, purple, black and white. Press `1` to `7` to pick one from the keyboard. After them come your favourites, then **+**, the colour picker and the eyedropper.
+
+- **Favourites:** pick any colour, then click **+** to keep it as a swatch after the seven. You can keep up to 8, in every capture. Right-click a favourite to remove it. **+** does nothing for one of the seven or a colour you've already saved. `1` to `7` always pick the seven.
+- **Colour picker:** the round swatch after **+** opens a picker for any other colour.
+- **Eyedropper:** click the eyedropper, or press `I`, then click anywhere on the screenshot to use that colour. A loupe shows the pixels under the pointer as you move. Picking also recolours the selected shape, then you're back on the tool you had. Press `Esc`, or `I` again, to stop without picking.
 
 Blur, Spotlight and Crop have no colour. With Crop, the swatches make way for its [ratios](/grab-it/image-editor/crop/#ratios).
 
@@ -42,4 +46,4 @@ Some tools have one more option in the top bar:
 
 ## Remembered for next time
 
-The editor remembers your tool, colour, each tool's size, **Fill**, the text style, the blur style and your last backdrop, and opens with them the next time, in any capture.
+The editor remembers your tool, colour, each tool's size, **Fill**, the text style, the blur style, your favourite colours and your last backdrop, and opens with them the next time, in any capture.

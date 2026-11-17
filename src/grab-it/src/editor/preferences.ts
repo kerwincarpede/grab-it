@@ -1,4 +1,4 @@
-import { MAX_BACKDROP_PRESETS, type BackdropPreset, type EditorPreferences } from "../settings/api";
+import { MAX_BACKDROP_PRESETS, MAX_FAVORITE_COLORS, type BackdropPreset, type EditorPreferences } from "../settings/api";
 import { COLORS, TOOLS, widthKind, type Backdrop, type BlurMode, type Style, type Tool, type Widths } from "./model";
 import { parseBackdrop } from "./sidecar";
 import { textLook } from "./tools";
@@ -29,6 +29,11 @@ export interface EditorChoices {
    * presets are saved on their own, with `setBackdropPresets`.
    */
   backdropPresets?: SavedBackdrop[];
+  /**
+   * The colours saved beside the built-in swatches; absent when there are
+   * none. Read only: they are saved on their own, with `setFavoriteColors`.
+   */
+  favoriteColors?: string[];
 }
 
 /** A backdrop preset, its backdrop checked. */
@@ -60,6 +65,31 @@ export function parseBackdropPresets(value: unknown): SavedBackdrop[] {
 }
 
 /**
+ * The stored favourite colours: only `#rrggbb` values, lower-cased, each
+ * once, and at most `MAX_FAVORITE_COLORS`, as settings.rs keeps them.
+ */
+export function parseFavoriteColors(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const colors: string[] = [];
+  for (const entry of value as unknown[]) {
+    if (!isHex(entry)) continue;
+    const color = entry.toLowerCase();
+    if (!colors.includes(color)) colors.push(color);
+    if (colors.length === MAX_FAVORITE_COLORS) break;
+  }
+  return colors;
+}
+
+/**
+ * Whether `color` can be saved as a favourite: not a built-in swatch, not
+ * saved already, and with room left.
+ */
+export function canSaveFavorite(favorites: string[], color: string): boolean {
+  const normal = color.toLowerCase();
+  return isHex(color) && !COLORS.includes(normal) && !favorites.includes(normal) && favorites.length < MAX_FAVORITE_COLORS;
+}
+
+/**
  * The stored preferences as editor choices. Each value is checked on its
  * own: anything missing or not understood (a tool from a newer version, a
  * width of zero) keeps today's default. Crop is never restored, since it
@@ -85,12 +115,15 @@ export function fromPreferences(stored: EditorPreferences | null | undefined): E
   if (prefs.showPointer === true) choices.showPointer = true;
   const presets = parseBackdropPresets(prefs.backdropPresets);
   if (presets.length > 0) choices.backdropPresets = presets;
+  const favorites = parseFavoriteColors(prefs.favoriteColors);
+  if (favorites.length > 0) choices.favoriteColors = favorites;
   return choices;
 }
 
 /**
  * The editor choices as they are stored; `textStyle` only for Outline and
- * Shadow, and `autoBackdrop`, `showPointer` and the presets never.
+ * Shadow, and `autoBackdrop`, `showPointer`, the presets and the favourite
+ * colours never.
  */
 export function toPreferences(choices: EditorChoices): EditorPreferences {
   const look = textLook(choices.style);

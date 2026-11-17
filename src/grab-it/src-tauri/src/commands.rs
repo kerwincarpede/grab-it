@@ -207,6 +207,17 @@ pub fn set_backdrop_presets(
         .map_err(|err| err.to_string())
 }
 
+/// Replaces the editor's saved favourite colours; returns them as kept.
+#[tauri::command]
+pub fn set_favorite_colors(
+    colors: Vec<String>,
+    state: State<'_, SettingsState>,
+) -> Result<Vec<String>, String> {
+    lock(&state)
+        .set_favorite_colors(colors)
+        .map_err(|err| err.to_string())
+}
+
 /// Turns framing new captures with the last backdrop on or off.
 #[tauri::command]
 pub fn set_auto_backdrop(

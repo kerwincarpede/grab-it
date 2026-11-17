@@ -59,6 +59,7 @@ Something you've just drawn stays selected, with handles, so you can adjust it s
 | --- | --- |
 | Tool keys (`V` `M` `A` `L` `R` `E` `P` `T` `K` `N` `H` `B` `S` `C`) | Pick a tool; hold to use it once |
 | `1` to `7` | Pick a colour from the top bar, in order |
+| `I` | Pick a colour from the screenshot with the eyedropper |
 | `[` and `]` | Thinner or thicker (or smaller and larger text and badges) |
 | `Alt/⌥ + scroll` | Thinner or thicker |
 | Scroll | Zoom in or out around the pointer |
@@ -66,7 +67,7 @@ Something you've just drawn stays selected, with handles, so you can adjust it s
 | `Shift` while drawing | Straight lines at 45° steps; square boxes |
 | Arrow keys | Nudge the selected shape 1 pixel (with `Shift`, 10) |
 | `Delete` or `Backspace` | Delete the selected shape |
-| `Esc` | Deselect, and close any open panel or the wheel |
+| `Esc` | Put the eyedropper away; otherwise deselect, and close any open panel or the wheel |
 | `Ctrl/⌘ + D` | Duplicate the selected shape |
 | `Ctrl/⌘ + Alt + ]` and `Ctrl/⌘ + Alt + [` | Bring the selected shape forward, or send it backward |
 | `Ctrl/⌘ + V` | Paste an image from the clipboard (see [Add images](/grab-it/image-editor/add-images/)) |
