@@ -259,6 +259,45 @@ export function deleteShot(id: number): Promise<void> {
   return invoke<void>("library_delete", { id });
 }
 
+/** Moves the PNG or recording and its sidecars to the system Trash, and drops it from the library. */
+export function trashShot(id: number): Promise<void> {
+  return invoke<void>("library_trash", { id });
+}
+
+/**
+ * Renames the shot's file, with its sidecars and thumbnail, to `name`; the
+ * file keeps its extension. Resolves to the shot as it now is, and rejects
+ * with why when the name is taken or not allowed.
+ */
+export function renameShot(id: number, name: string): Promise<Shot> {
+  return invoke<Shot>("library_rename", { id, name });
+}
+
+/** Copies the shot beside itself as "<name> copy" and resolves to the copy. */
+export function duplicateShot(id: number): Promise<Shot> {
+  return invoke<Shot>("library_duplicate", { id });
+}
+
+/** Asks the system which app to open the shot's file with. */
+export function openShotWith(id: number): Promise<void> {
+  return invoke<void>("library_open_with", { id });
+}
+
+/** Whether this system can ask which app to open a file with; false when it cannot say. */
+export function openWithSupported(): Promise<boolean> {
+  return invoke<boolean>("library_open_with_supported").then(
+    (supported) => supported === true,
+    () => false,
+  );
+}
+
+/** A file name split into the part a rename edits and its extension (".png"), which it keeps. */
+export function splitFileName(fileName: string): { stem: string; extension: string } {
+  const dot = fileName.lastIndexOf(".");
+  if (dot <= 0) return { stem: fileName, extension: "" };
+  return { stem: fileName.slice(0, dot), extension: fileName.slice(dot) };
+}
+
 /** Opens the shot in its editor: a capture in the annotation editor, an MP4 in the recording editor; a GIF plays. */
 export function openShot(id: number): Promise<void> {
   return invoke<void>("library_open", { id });

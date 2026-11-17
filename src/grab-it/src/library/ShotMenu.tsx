@@ -1,16 +1,20 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { formatBytes, formatElapsed } from "../quick/api";
-import { isRecording, type Shot } from "./api";
+import { isRecording, splitFileName, type Shot } from "./api";
 import {
   CopyIcon,
+  DeleteForeverIcon,
+  DuplicateIcon,
   EditIcon,
   ExternalIcon,
   FolderIcon,
   FolderOpenIcon,
   InfoIcon,
   LinkIcon,
+  OpenWithIcon,
   PinIcon,
   PlayIcon,
+  RenameIcon,
   SparkleIcon,
   StarIcon,
   TextIcon,
@@ -22,6 +26,7 @@ export type ShotMenuAction =
   | "open"
   | "play"
   | "openExternal"
+  | "openWith"
   | "copy"
   | "copyText"
   | "copyPath"
@@ -31,6 +36,9 @@ export type ShotMenuAction =
   | "reveal"
   | "openFolder"
   | "details"
+  | "rename"
+  | "duplicate"
+  | "trash"
   | "delete";
 
 interface Entry {
@@ -53,8 +61,14 @@ function fileManager(): string {
 }
 
 /** The menu's rows for `shot`, separators between groups. */
-function shotMenuRows(shot: Shot, { aiOff }: { aiOff: boolean }): Row[] {
+function shotMenuRows(shot: Shot, { aiOff, openWith }: { aiOff: boolean; openWith: boolean }): Row[] {
   const recording = isRecording(shot);
+  // Only where the system has its own app chooser to show.
+  const chooser: Entry[] = openWith ? [{ action: "openWith", label: "Open with…", icon: <OpenWithIcon /> }] : [];
+  const edit: Row[] = [
+    { action: "rename", label: "Rename…", icon: <RenameIcon /> },
+    { action: "duplicate", label: "Duplicate", icon: <DuplicateIcon /> },
+  ];
   const keep: Entry = {
     action: "keep",
     label: shot.keep ? "Stop keeping forever" : "Keep forever",
@@ -65,33 +79,43 @@ function shotMenuRows(shot: Shot, { aiOff }: { aiOff: boolean }): Row[] {
     { action: "openFolder", label: "Open containing folder", icon: <FolderOpenIcon /> },
     { action: "copyPath", label: "Copy file path", icon: <LinkIcon /> },
   ];
-  const remove: Entry = {
-    action: "delete",
-    label: "Delete…",
-    icon: <TrashIcon />,
-    danger: true,
-    confirm: "Click again to delete",
-  };
+  // The Trash first: it can be undone there. Deleting for good asks again.
+  const remove: Row[] = [
+    { action: "trash", label: "Move to Trash", icon: <TrashIcon /> },
+    {
+      action: "delete",
+      label: "Delete permanently…",
+      icon: <DeleteForeverIcon />,
+      danger: true,
+      confirm: "Click again to delete for good",
+    },
+  ];
   if (recording) {
     return [
       { action: "play", label: "Play", icon: <PlayIcon /> },
       ...(shot.kind === "video" ? [{ action: "open", label: "Edit in recording editor", icon: <EditIcon /> } as Entry] : []),
+      ...chooser,
+      "separator",
+      ...edit,
       "separator",
       ...files,
       "separator",
       keep,
       { action: "details", label: "Show details", icon: <InfoIcon /> },
       "separator",
-      remove,
+      ...remove,
     ];
   }
   return [
     { action: "open", label: "Open in editor", icon: <EditIcon /> },
     { action: "openExternal", label: "Open in default app", icon: <ExternalIcon /> },
+    ...chooser,
     "separator",
     { action: "copy", label: "Copy image", icon: <CopyIcon /> },
     { action: "copyText", label: "Copy text in image", icon: <TextIcon /> },
     { action: "pin", label: "Pin to screen", icon: <PinIcon /> },
+    "separator",
+    ...edit,
     "separator",
     ...files,
     "separator",
@@ -99,7 +123,7 @@ function shotMenuRows(shot: Shot, { aiOff }: { aiOff: boolean }): Row[] {
     ...(aiOff ? [] : [{ action: "redescribe", label: "Describe again", icon: <SparkleIcon /> } as Entry]),
     { action: "details", label: "Show details", icon: <InfoIcon /> },
     "separator",
-    remove,
+    ...remove,
   ];
 }
 
@@ -126,20 +150,44 @@ interface ShotMenuProps {
   x: number;
   y: number;
   aiOff: boolean;
+  /** Offer Open with…: the system can ask which app to use. */
+  openWith?: boolean;
   /** A small preview for the header. */
   preview: ReactNode;
   onAction: (shot: Shot, action: ShotMenuAction) => void;
+  /** Renames the shot's file to `name` (without its extension); rejects with why it could not. */
+  onRename: (shot: Shot, name: string) => Promise<void>;
   onClose: () => void;
 }
 
+/** What a rejected rename says, for the line under the name field. */
+function renameFailure(err: unknown): string {
+  if (typeof err === "string") return err;
+  if (err instanceof Error) return err.message;
+  return "Could not rename it.";
+}
+
 /** The right-click menu for one shot in the Library. */
-export function ShotMenu({ shot, x, y, aiOff, preview, onAction, onClose }: ShotMenuProps) {
+export function ShotMenu({ shot, x, y, aiOff, openWith = false, preview, onAction, onRename, onClose }: ShotMenuProps) {
   const root = useRef<HTMLDivElement>(null);
+  const nameField = useRef<HTMLInputElement>(null);
   const [position, setPosition] = useState({ left: x, top: y, ready: false });
-  const rows = shotMenuRows(shot, { aiOff });
+  const rows = shotMenuRows(shot, { aiOff, openWith });
   const entries = rows.filter((row): row is Entry => row !== "separator");
   const [active, setActive] = useState(0);
   const [armed, setArmed] = useState<ShotMenuAction | null>(null);
+  /** Rename… turned its row into a name field: what is typed there. */
+  const [draft, setDraft] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const renaming = draft !== null;
+  const { stem, extension } = splitFileName(shot.fileName);
+
+  useEffect(() => {
+    if (!renaming) return;
+    nameField.current?.focus({ preventScroll: true });
+    nameField.current?.select();
+  }, [renaming]);
 
   // Kept inside the window: flipped left or up when it would run off an edge.
   useLayoutEffect(() => {
@@ -179,6 +227,12 @@ export function ShotMenu({ shot, x, y, aiOff, preview, onAction, onClose }: Shot
   }, [onClose]);
 
   function run(entry: Entry) {
+    if (entry.action === "rename") {
+      setArmed(null);
+      setRenameError(null);
+      setDraft(stem);
+      return;
+    }
     if (entry.confirm && armed !== entry.action) {
       setArmed(entry.action);
       return;
@@ -187,12 +241,50 @@ export function ShotMenu({ shot, x, y, aiOff, preview, onAction, onClose }: Shot
     onAction(shot, entry.action);
   }
 
+  function cancelRename() {
+    setDraft(null);
+    setRenameError(null);
+    root.current?.focus({ preventScroll: true });
+  }
+
+  function saveRename() {
+    if (draft === null || saving) return;
+    const name = draft.trim();
+    if (!name) {
+      setRenameError("Give it a name.");
+      return;
+    }
+    if (name === stem) {
+      onClose();
+      return;
+    }
+    setSaving(true);
+    onRename(shot, name).then(
+      () => onClose(),
+      (err: unknown) => {
+        setSaving(false);
+        setRenameError(renameFailure(err));
+        nameField.current?.focus({ preventScroll: true });
+      },
+    );
+  }
+
   function move(index: number) {
     setActive((index + entries.length) % entries.length);
     setArmed(null);
   }
 
   function onKeyDown(event: globalThis.KeyboardEvent) {
+    if (renaming) {
+      // The name field types; Enter saves and Escape goes back to the menu.
+      if (event.key === "Enter" || event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.key === "Enter") saveRename();
+        else cancelRename();
+      }
+      return;
+    }
     // While open the menu has the keyboard, whatever has focus (a right
     // click leaves it on the tile in some webviews).
     event.stopPropagation();
@@ -265,7 +357,7 @@ export function ShotMenu({ shot, x, y, aiOff, preview, onAction, onClose }: Shot
       ref={root}
       role="menu"
       aria-label={`Actions for ${shot.fileName}`}
-      aria-activedescendant={`shot-menu-${entries[active]?.action}`}
+      aria-activedescendant={renaming ? undefined : `shot-menu-${entries[active]?.action}`}
       tabIndex={-1}
       className={`shot-menu${position.ready ? " is-ready" : ""}`}
       style={{ left: position.left, top: position.top }}
@@ -280,6 +372,36 @@ export function ShotMenu({ shot, x, y, aiOff, preview, onAction, onClose }: Shot
       </div>
       {rows.map((row, rowIndex) => {
         if (row === "separator") return <div key={`sep-${rowIndex}`} role="separator" className="shot-menu-sep" />;
+        if (row.action === "rename" && draft !== null) {
+          return (
+            <div key="rename" className="shot-menu-rename" role="none">
+              <div className={`shot-menu-rename-row${renameError ? " is-invalid" : ""}`}>
+                {row.icon}
+                <input
+                  ref={nameField}
+                  className="shot-menu-rename-input"
+                  aria-label="New name"
+                  aria-invalid={renameError ? true : undefined}
+                  aria-describedby={renameError ? "shot-menu-rename-error" : undefined}
+                  value={draft}
+                  disabled={saving}
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(event) => {
+                    setDraft(event.target.value);
+                    setRenameError(null);
+                  }}
+                />
+                {extension && <span className="shot-menu-rename-ext">{extension}</span>}
+              </div>
+              {renameError && (
+                <div id="shot-menu-rename-error" className="shot-menu-rename-error" role="alert">
+                  {renameError}
+                </div>
+              )}
+            </div>
+          );
+        }
         const mine = order.get(row.action) ?? 0;
         const confirming = armed === row.action;
         return (

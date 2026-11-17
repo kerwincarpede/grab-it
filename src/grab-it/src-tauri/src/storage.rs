@@ -21,7 +21,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::commands::{SettingsState, lock};
 use crate::library::{
     LIBRARY_CHANGED_EVENT, Library, LibraryError, LibraryResult, LibraryState, SHOT_COLUMNS, Shot,
-    ShotKind, current_save_folder, extra_files, remove_if_present, shot_from_row,
+    ShotKind, current_save_folder, remove_if_present, shot_from_row, trashed_files,
 };
 use crate::settings::{Removal, Retention};
 
@@ -373,13 +373,7 @@ pub fn cleanup(
         if let Some(shot) = shot.filter(|shot| !is_protected(shot)) {
             // The thumbnail is Grab-it's own, made again if the item comes
             // back, so it is deleted rather than put in the Trash.
-            let mut files = vec![shot.path.clone()];
-            files.extend(
-                extra_files(&shot)
-                    .into_iter()
-                    .filter(|path| *path != shot.thumb_path),
-            );
-            match remove(&files, removal) {
+            match remove(&trashed_files(&shot), removal) {
                 Ok(()) => {
                     if let Err(err) = remove_if_present(&shot.thumb_path) {
                         eprintln!(
