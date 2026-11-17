@@ -9,7 +9,7 @@ import {
   STROKE_WIDTHS,
   widthFor,
   widthKind,
-  canvasRect,
+  canvasBounds,
   type ImageShape,
   type LineShape,
   type Shape,
@@ -70,6 +70,7 @@ import {
   tidyPath,
   transformShape,
   withAlpha,
+  withCaptureBorders,
 } from "./tools";
 import { IDENTITY, orientRect } from "./orient";
 
@@ -819,6 +820,53 @@ describe("crop snapping", () => {
   });
 });
 
+describe("crop on a grown canvas", () => {
+  // A 400×300 capture with an image to its left and one past its right, as they show.
+  const canvas = { x: -100, y: 0, width: 900, height: 340 };
+
+  it("lets a crop drag reach past the capture, up to the canvas", () => {
+    expect(cropBox({ x: -150, y: 10 }, { x: 900, y: 400 }, canvas)).toEqual({ x: -100, y: 10, width: 900, height: 330 });
+    expect(cropFromDrag({ x: 350, y: 0 }, { x: 450, y: 100 }, canvas)).toEqual({ x: 350, y: 0, width: 100, height: 100 });
+    // A ratio crop shrinks to fit the room left to the canvas edge it heads for.
+    expect(cropBox({ x: -50, y: 300 }, { x: -200, y: 200 }, canvas, 1)).toEqual({ x: -100, y: 250, width: 50, height: 50 });
+  });
+
+  it("moves and resizes a crop within the canvas", () => {
+    const crop = { x: 0, y: 0, width: 200, height: 100 };
+    expect(moveCrop(crop, { x: -300, y: 500 }, canvas)).toEqual({ x: -100, y: 240, width: 200, height: 100 });
+    expect(moveCrop(crop, { x: 750, y: 0 }, canvas)).toEqual({ x: 600, y: 0, width: 200, height: 100 });
+    expect(resizeCrop(crop, { x: -500, y: 0, width: 700, height: 100 }, canvas)).toEqual({ x: -100, y: 0, width: 300, height: 100 });
+  });
+
+  it("snaps to the canvas edges and the capture's own", () => {
+    const lines = withCaptureBorders({ x: [100], y: [] }, { width: 400, height: 300 });
+    expect(lines).toEqual({ x: [0, 100, 400], y: [0, 300] });
+    const right = { left: false, right: true, top: false, bottom: false };
+    // The capture's right border, then the canvas edge past it.
+    expect(snapCropEdges({ x: 10, y: 10, width: 393, height: 50 }, right, lines, 6, canvas)).toEqual({ x: 10, y: 10, width: 390, height: 50 });
+    expect(snapCropEdges({ x: 10, y: 10, width: 786, height: 50 }, right, lines, 6, canvas)).toEqual({ x: 10, y: 10, width: 790, height: 50 });
+    // A moved crop shifts onto the canvas's left edge, which is past the capture's.
+    expect(snapCropEdges({ x: -97, y: 50, width: 50, height: 20 }, ALL_SIDES, lines, 6, canvas)).toEqual({ x: -100, y: 50, width: 50, height: 20 });
+    expect(snapCropDrag({ x: -96, y: 3 }, { x: 397, y: 297 }, canvas, null, lines, 6)).toEqual({ x: -100, y: 0, width: 500, height: 300 });
+  });
+
+  it("keeps the capture's own bounds when nothing grows it", () => {
+    const image = { width: 400, height: 300 };
+    expect(cropBox({ x: -10, y: -10 }, { x: 500, y: 500 }, image)).toEqual({ x: 0, y: 0, width: 400, height: 300 });
+    expect(cropBox({ x: -10, y: -10 }, { x: 500, y: 500 }, { x: 0, y: 0, ...image })).toEqual({ x: 0, y: 0, width: 400, height: 300 });
+  });
+
+  it("maps a crop past a turned capture back to capture pixels", () => {
+    const capture = { width: 400, height: 300 };
+    const turned = { rotation: 90 as const, flipX: false, flipY: false };
+    // An image right of the capture shows below it once turned a quarter clockwise.
+    const crop = { x: 0, y: 0, width: 800, height: 300 };
+    const shown = orientRect(crop, capture, turned);
+    expect(shown).toEqual({ x: 0, y: 0, width: 300, height: 800 });
+    expect(cropToCapture(shown, capture, turned)).toEqual(crop);
+  });
+});
+
 describe("magnify lenses", () => {
   const style: Style = { color: "#0090ff", strokeWidth: 4 };
   const lens = { id: "m", type: "magnify" as const, x: 100, y: 120, width: 80, height: 80,
@@ -921,12 +969,12 @@ describe("added images", () => {
 
   it("grows the canvas to the capture and every image", () => {
     const size = { width: 400, height: 300 };
-    expect(canvasRect(size, [])).toEqual({ x: 0, y: 0, width: 400, height: 300 });
-    expect(canvasRect(size, [{ ...image, x: 400, y: 0, width: 400, height: 350 }])).toEqual({ x: 0, y: 0, width: 800, height: 350 });
-    expect(canvasRect(size, [{ ...image, x: -50.5, y: -10, width: 20, height: 20 }])).toEqual({ x: -51, y: -10, width: 451, height: 310 });
+    expect(canvasBounds(size, [])).toEqual({ x: 0, y: 0, width: 400, height: 300 });
+    expect(canvasBounds(size, [{ ...image, x: 400, y: 0, width: 400, height: 350 }])).toEqual({ x: 0, y: 0, width: 800, height: 350 });
+    expect(canvasBounds(size, [{ ...image, x: -50.5, y: -10, width: 20, height: 20 }])).toEqual({ x: -51, y: -10, width: 451, height: 310 });
     // Other shapes never grow it, and an image inside leaves it as it is.
     const rect: Shape = { id: "r", type: "rect", color: "#000000", strokeWidth: 2, x: 900, y: 900, width: 10, height: 10 };
-    expect(canvasRect(size, [rect, image])).toEqual({ x: 0, y: 0, width: 400, height: 300 });
+    expect(canvasBounds(size, [rect, image])).toEqual({ x: 0, y: 0, width: 400, height: 300 });
   });
 });
 

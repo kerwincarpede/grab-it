@@ -967,7 +967,78 @@ describe("EditorWindow", () => {
     expect(calls.map((call) => call.cmd)).toContain("editor_add_clipboard_image");
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
     // The 400×300 capture and the 400×300 image beside it.
-    await waitFor(() => expect(last(flattened.calls)).toMatchObject({ crop: { x: 0, y: 0, width: 800, height: 300 } }));
+    await waitFor(() => expect(last(flattened.calls)).toMatchObject({ crop: null }));
+    expect(last(flattened.options)).toMatchObject({ canvas: { x: 0, y: 0, width: 800, height: 300 } });
+  });
+
+  describe("side by side", () => {
+    /** A second 400×300 screenshot just right of the capture. */
+    const beside: Annotations = {
+      version: 1,
+      shapes: [{ id: "i1", type: "image", x: 400, y: 0, width: 400, height: 300, src: "after.png" }],
+      crop: null,
+    };
+    const parts = [
+      { x: 0, y: 0, width: 400, height: 300 },
+      { x: 400, y: 0, width: 400, height: 300 },
+    ];
+
+    it("exports both screenshots on the grown canvas", async () => {
+      mockEditor(beside);
+      await ready();
+      // The size label is the canvas, not the capture alone.
+      expect(screen.getByText("800×300")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+      await waitFor(() => expect(flattened.calls).toHaveLength(1));
+      expect(last(flattened.calls)).toMatchObject({ crop: null, backdrop: null, rotation: 0 });
+      expect(last(flattened.options)).toMatchObject({ canvas: { x: 0, y: 0, width: 800, height: 300 }, parts });
+    });
+
+    it("pads a backdrop around the whole canvas", async () => {
+      const backdrop = { fill: "ocean", padding: 40, radius: 8, shadow: true };
+      mockEditor({ ...beside, backdrop });
+      await ready();
+      expect(screen.getByText("Output 880×380")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+      await waitFor(() => expect(flattened.calls).toHaveLength(1));
+      expect(last(flattened.calls)).toMatchObject({ crop: null, backdrop });
+      // The whole canvas goes out, with what has pixels to cast the shadow.
+      expect(last(flattened.options)).toMatchObject({ canvas: { x: 0, y: 0, width: 800, height: 300 }, parts, borders: null });
+    });
+
+    it("turns the whole canvas", async () => {
+      mockEditor({ ...beside, rotation: 90 });
+      await ready();
+      // Turned a quarter, the pair shows one above the other.
+      expect(screen.getByText("Output 300×800")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+      await waitFor(() => expect(flattened.calls).toHaveLength(1));
+      expect(last(flattened.calls)).toMatchObject({ crop: null, rotation: 90 });
+      expect(last(flattened.options)).toMatchObject({ canvas: { x: 0, y: 0, width: 800, height: 300 } });
+    });
+
+    it("crops across both screenshots", async () => {
+      const saved = mockEditor(beside);
+      await ready();
+      fireEvent.click(pressed("Crop"));
+      // From inside the capture to well inside the image beside it.
+      drag([350, 0], [700, 300]);
+      await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 350, y: 0, width: 350, height: 300 }));
+      expect(screen.getByText("Crop 350×300")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+      await waitFor(() => expect(flattened.calls).toHaveLength(1));
+      expect(last(flattened.calls)).toMatchObject({ crop: { x: 350, y: 0, width: 350, height: 300 } });
+    });
+
+    it("crops past a turned capture up to the canvas edge", async () => {
+      const saved = mockEditor({ ...beside, rotation: 90 });
+      await ready();
+      fireEvent.click(pressed("Crop"));
+      // On show the canvas is 300×800; the drag runs past its bottom and is held to it.
+      drag([0, 200], [300, 900]);
+      // The bottom 600 on show is the capture's right 200 and the image beside it.
+      await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 200, y: 0, width: 600, height: 300 }));
+    });
   });
 
   it("reads a saved image from the capture's assets folder", async () => {

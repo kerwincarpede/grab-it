@@ -36,6 +36,8 @@ While Crop is picked, the crop has handles:
 
 Crop edges snap to the screenshot's borders and to strong edges inside it, such as window borders, panels and toolbars, so cropping to a window inside a screenshot lines up exactly. Hold **`Alt/⌥`** while you drag to crop without snapping.
 
+When you've [added images](/grab-it/image-editor/add-images/) past the screenshot's edge, the crop can take in any part of the grown canvas, and its edges snap to the canvas's edges too.
+
 The status bar shows the crop's size. When a [backdrop](/grab-it/image-editor/backdrop/) is on, the backdrop goes around the cropped area; the Crop tool shows the whole screenshot meanwhile, so you can redraw it.
 
 Cropping never throws anything away: reset it any time. See [Your original is safe](/grab-it/image-editor/non-destructive/).

@@ -40,13 +40,16 @@ import {
 import {
   backdropLayout,
   backdropPaint,
+  blurArea,
   blurredBackdrop,
   coverCrop,
   exportTarget,
   fallbackScale,
   flatten,
   measureBorders,
+  plateRects,
   roundedRectPath,
+  shadowPlate,
   type ExportFormat,
   type PaintLayer,
   type View,
@@ -100,7 +103,9 @@ import {
   type Style,
   type Tool,
   type Widths,
-  canvasRect,
+  canvasBounds,
+  coveredRects,
+  isGrown,
 } from "./model";
 import {
   displaySize,
@@ -186,6 +191,7 @@ import {
   stepStrokeWidth,
   STRAIGHTEN_SNAP,
   transformShape,
+  withCaptureBorders,
   type NodeTransform,
 } from "./tools";
 import { useAnnotations } from "./useAnnotations";
@@ -630,7 +636,10 @@ export default function EditorWindow() {
 
   const imageSize = useMemo(() => (image ? { width: image.width, height: image.height } : null), [image]);
   /** The capture and every added image: what shows and exports before a crop. */
-  const canvas = useMemo(() => (imageSize ? canvasRect(imageSize, doc.shapes) : null), [imageSize, doc.shapes]);
+  const canvas = useMemo(() => (imageSize ? canvasBounds(imageSize, doc.shapes) : null), [imageSize, doc.shapes]);
+  /** What has pixels on the canvas: the capture and every added image. The rest stays transparent. */
+  const parts = useMemo(() => (imageSize ? coveredRects(imageSize, doc.shapes) : null), [imageSize, doc.shapes]);
+  const grown = Boolean(canvas && imageSize && isGrown(canvas, imageSize));
   const { images: assetImages, seed: seedAssetImage, ready: assetsReady } = useAssetImages(doc.shapes);
   /** The latest canvas, for an image pasted after an await. */
   const canvasRef = useRef(canvas);
@@ -654,6 +663,15 @@ export default function EditorWindow() {
    * work on show, so a 16:9 crop looks 16:9 however the capture is turned.
    */
   const shownSize = useMemo(() => (imageSize ? displaySize(imageSize, { rotation, flipX, flipY }) : null), [imageSize, rotation, flipX, flipY]);
+  /**
+   * The canvas as it shows: what a crop is drawn, moved and resized inside.
+   * Display space stays anchored on the capture, so it starts at negative
+   * x or y when images sit above or left of the capture as it shows.
+   */
+  const shownCanvas = useMemo(
+    () => (imageSize && canvas ? orientRect(canvas, imageSize, { rotation, flipX, flipY }) : null),
+    [imageSize, canvas, rotation, flipX, flipY],
+  );
   /** Width over height for the picked crop aspect, Original being the capture as it shows; null for a Free crop. */
   const cropRatio = useMemo(() => cropAspectRatio(cropAspect, shownSize), [cropAspect, shownSize]);
   /** The saved crop as it shows. */
@@ -669,10 +687,12 @@ export default function EditorWindow() {
   if ((tool === "crop" || tool === "cut") && image && foundEdges?.image !== image) setFoundEdges({ image, edges: imageEdges(image) });
   const captureEdges = foundEdges && foundEdges.image === image ? foundEdges.edges : NO_EDGES;
   /** The same lines as they show: crops are drawn, moved and resized on show. */
-  const snapLines = useMemo(
-    () => (imageSize ? orientEdges(captureEdges, imageSize, { rotation, flipX, flipY }) : NO_EDGES),
-    [captureEdges, imageSize, rotation, flipX, flipY],
-  );
+  const snapLines = useMemo(() => {
+    if (!imageSize || !shownSize) return NO_EDGES;
+    const lines = orientEdges(captureEdges, imageSize, { rotation, flipX, flipY });
+    // On a grown canvas the capture's own borders are lines to snap to as well.
+    return grown ? withCaptureBorders(lines, shownSize) : lines;
+  }, [captureEdges, imageSize, shownSize, grown, rotation, flipX, flipY]);
   const backdrop = backdropDraft ?? doc.backdrop ?? null;
   /** Image pixels per point: the corner radius is in points. Older captures do not say, so the window's density stands in. */
   const captureScale = info?.scaleFactor && info.scaleFactor > 0 ? info.scaleFactor : fallbackScale();
@@ -683,13 +703,16 @@ export default function EditorWindow() {
    * mirrored as they are exported, measured only while Balance is on.
    */
   const borders = useMemo(() => {
-    if (!balance || !image || !imageSize) return null;
-    return measureBorders(image, doc.crop ?? { x: 0, y: 0, ...imageSize }, imageSize, { rotation, flipX, flipY });
-  }, [balance, image, imageSize, doc.crop, rotation, flipX, flipY]);
+    if (!balance || !image || !imageSize || !canvas) return null;
+    const area = doc.crop ?? canvas;
+    // Past the capture, its pixels alone cannot tell where the content sits: the backdrop pads evenly.
+    if (isGrown(area, imageSize)) return null;
+    return measureBorders(image, area, imageSize, { rotation, flipX, flipY });
+  }, [balance, image, imageSize, canvas, doc.crop, rotation, flipX, flipY]);
   /**
    * The backdrop preview: the area that is exported (the crop, or the whole
-   * capture), where the backdrop sits around it, and the fit bounds. Crop
-   * and Cut out show the whole capture instead, so the crop can be redrawn
+   * canvas), where the backdrop sits around it, and the fit bounds. Crop
+   * and Cut out show the whole canvas instead, so the crop can be redrawn
    * and a strip marked anywhere.
    */
   const frame = useMemo(() => {
@@ -715,13 +738,14 @@ export default function EditorWindow() {
   }, [image, imageSize, backdrop?.fill, rotation, flipX, flipY]);
   /** The blurred-capture fill for the preview, drawn as the export draws it. */
   const blurredFill = useMemo(() => {
-    if (!shownCapture || !frame?.layout || backdrop?.fill !== BACKDROP_FILLS.blur) return null;
+    if (!shownCapture || !shownSize || !frame?.layout || backdrop?.fill !== BACKDROP_FILLS.blur) return null;
     try {
-      return blurredBackdrop(shownCapture, frame.area, frame.layout);
+      // The capture's part of the area: added images and clear canvas are not blurred in.
+      return blurredBackdrop(shownCapture, blurArea(frame.area, shownSize), frame.layout);
     } catch {
       return null;
     }
-  }, [shownCapture, frame, backdrop?.fill]);
+  }, [shownCapture, shownSize, frame, backdrop?.fill]);
   /**
    * With see-through gaps, the capture itself (as it shows, cropped) casts
    * the backdrop's shadow instead of an opaque plate, so the backdrop shows
@@ -735,6 +759,19 @@ export default function EditorWindow() {
       return null;
     }
   }, [seeThrough, image, imageSize, frame, doc.crop, rotation, flipX, flipY]);
+  /**
+   * The shadow's plate when the exported area has clear parts: only the
+   * capture and the images cast it, as in the export (see `plateRects`).
+   * Null when the area is opaque all over and a plain rectangle casts it.
+   */
+  const clearParts = useMemo(() => {
+    if (!frame?.layout?.shadow || !parts || !imageSize) return null;
+    return plateRects(parts, frame.area, imageSize, { rotation, flipX, flipY });
+  }, [frame, parts, imageSize, rotation, flipX, flipY]);
+  const shadowShape = useMemo(
+    () => (clearParts && frame?.layout ? shadowPlate(frame.area, clearParts, frame.layout.radius) : null),
+    [clearParts, frame],
+  );
   /** What copy and export put out before Resize: the crop as it shows, framed by any backdrop. */
   const outputBase = useMemo(() => {
     if (!imageSize || !canvas) return null;
@@ -750,7 +787,7 @@ export default function EditorWindow() {
   /** How near a line, in capture pixels, a crop edge snaps to it: a few screen pixels at the current zoom. */
   const snapThreshold = CROP_SNAP_PX / currentView.scale;
   /** The box a crop drag covers on show, snapped to the capture's edges unless ⌥/Alt is held. */
-  const cropDragBox = (drag: { start: Point; end: Point; square: boolean; snap: boolean }, shown: { width: number; height: number }) => {
+  const cropDragBox = (drag: { start: Point; end: Point; square: boolean; snap: boolean }, shown: Rect) => {
     const ratio = cropDragRatio(cropRatio, drag.square);
     return drag.snap ? snapCropDrag(drag.start, drag.end, shown, ratio, snapLines, snapThreshold) : cropBox(drag.start, drag.end, shown, ratio);
   };
@@ -1019,9 +1056,9 @@ export default function EditorWindow() {
       }
       setDraft(null);
     }
-    if (cropDrag && shownSize) {
+    if (cropDrag && shownCanvas) {
       // Snapped on show, then saved in capture pixels.
-      const shown = cropDragBox(cropDrag, shownSize);
+      const shown = cropDragBox(cropDrag, shownCanvas);
       // Anything smaller was a stray click.
       if (shown.width >= MIN_SIZE && shown.height >= MIN_SIZE) commit({ ...doc, crop: shownToCapture(shown) });
       setCropDrag(null);
@@ -1110,22 +1147,22 @@ export default function EditorWindow() {
 
   const onCropDragMove = (event: Konva.KonvaEventObject<DragEvent>) => {
     const from = cropEditRef.current ?? shownCrop;
-    if (!from || !shownSize) return;
-    const moved = moveCrop(from, event.target.position(), shownSize);
-    placeCropBox(event.target, event.evt?.altKey ? moved : snapCropEdges(moved, ALL_SIDES, snapLines, snapThreshold, shownSize));
+    if (!from || !shownCanvas) return;
+    const moved = moveCrop(from, event.target.position(), shownCanvas);
+    placeCropBox(event.target, event.evt?.altKey ? moved : snapCropEdges(moved, ALL_SIDES, snapLines, snapThreshold, shownCanvas));
   };
 
   const onCropTransform = (event: Konva.KonvaEventObject<Event>) => {
     const from = cropEditRef.current ?? shownCrop;
-    if (!from || !shownSize) return;
+    if (!from || !shownCanvas) return;
     const node = event.target;
     const anchor = cropTransformerRef.current?.getActiveAnchor();
     const sides = anchor ? anchorSides(anchor) : null;
     const box = scaledBox(node);
-    const resized = resizeCrop(from, sides ? holdCropSides(from, box, sides) : box, shownSize, cropRatio);
+    const resized = resizeCrop(from, sides ? holdCropSides(from, box, sides) : box, shownCanvas, cropRatio);
     // ⌥/Alt resizes without snapping (and Konva's centred scaling is undone above).
     const unsnapped = (event.evt as MouseEvent | undefined)?.altKey;
-    placeCropBox(node, !sides || unsnapped ? resized : snapCropEdges(resized, sides, snapLines, snapThreshold, shownSize, cropRatio));
+    placeCropBox(node, !sides || unsnapped ? resized : snapCropEdges(resized, sides, snapLines, snapThreshold, shownCanvas, cropRatio));
   };
 
   /** Commits a finished move or resize of the crop, in capture pixels, as one change. */
@@ -1408,24 +1445,25 @@ export default function EditorWindow() {
       // An added image still being read would be left out of the output.
       await assetsReady();
       const layer = contentRef.current;
-      if (!layer || !imageSize || !canvas) throw new Error("The capture has not loaded yet.");
+      if (!layer || !imageSize || !canvas || !parts) throw new Error("The capture has not loaded yet.");
       const o = { rotation, flipX, flipY };
-      // The capture and every added image; uncovered canvas stays transparent.
-      const whole = canvas;
-      // The blurred fill blurs the capture as it shows: turned, then cropped.
+      // The blurred fill blurs the capture as it shows (turned, then cropped), and only the capture's part of the area.
       const shown = shownCapture && shownCapture !== image ? shownCapture : null;
-      const area = shown ? orientRect(doc.crop ?? whole, imageSize, o) : (doc.crop ?? whole);
-      // Without a crop, the area is the canvas once images reach past the capture.
-      const grown = whole.x < 0 || whole.y < 0 || whole.width > imageSize.width || whole.height > imageSize.height;
-      return flatten(layer, { crop: doc.crop ?? (grown ? whole : null), backdrop, rotation, flipX, flipY, scale: outputScale }, imageSize, currentView, format, {
+      const area = shown
+        ? blurArea(orientRect(doc.crop ?? canvas, imageSize, o), displaySize(imageSize, o))
+        : blurArea(doc.crop ?? canvas, imageSize);
+      // Without a crop the whole canvas goes out; what no image covers stays transparent.
+      return flatten(layer, { crop: doc.crop, backdrop, rotation, flipX, flipY, scale: outputScale }, imageSize, currentView, format, {
         scale: captureScale,
         capture: shown ? { image: shown, area } : image ? { image, area } : null,
         image: backdropImageEl,
         borders,
         seeThrough,
+        canvas,
+        parts,
       });
     },
-    [assetsReady, doc.crop, backdrop, imageSize, canvas, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale, borders, seeThrough],
+    [assetsReady, doc.crop, backdrop, imageSize, canvas, parts, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale, borders, seeThrough],
   );
 
   /** Copies the flattened image; false when it failed (and said so). */
@@ -1715,7 +1753,7 @@ export default function EditorWindow() {
 
   const error = annotations.error ?? imageError;
   /** The crop as it shows: being drawn (the box that will be committed), mid-edit, or as saved. */
-  const cropShown = (cropDrag && shownSize ? cropDragBox(cropDrag, shownSize) : null) ?? cropEdit ?? shownCrop;
+  const cropShown = (cropDrag && shownCanvas ? cropDragBox(cropDrag, shownCanvas) : null) ?? cropEdit ?? shownCrop;
   /** The strip being marked, on show. */
   const stripShown = cutDrag && shownSize ? cutStripBox(cutDrag, shownSize) : null;
   /** The same crop in capture pixels, for the dim drawn in the oriented group. */
@@ -2135,7 +2173,18 @@ export default function EditorWindow() {
                     {paint.map((layer, i) => (
                       <PaintNode key={i} layer={layer} bounds={framed.bounds} blurred={blurredFill} image={backdropImageEl} />
                     ))}
-                    {framed.layout.shadow && shadowCaster && (
+                    {framed.layout.shadow && clearParts && shadowShape && (
+                      <KonvaImage
+                        name="backdrop-shadow"
+                        image={shadowShape}
+                        {...framed.area}
+                        shadowColor="#000000"
+                        shadowBlur={framed.layout.shadow.blur}
+                        shadowOffsetY={framed.layout.shadow.offsetY}
+                        shadowOpacity={framed.layout.shadow.opacity}
+                      />
+                    )}
+                    {framed.layout.shadow && !clearParts && shadowCaster && (
                       <KonvaImage
                         name="backdrop-shadow"
                         image={shadowCaster}
@@ -2147,7 +2196,7 @@ export default function EditorWindow() {
                         shadowOpacity={framed.layout.shadow.opacity}
                       />
                     )}
-                    {framed.layout.shadow && !shadowCaster && (
+                    {framed.layout.shadow && !clearParts && !shadowCaster && (
                       <KonvaRect
                         {...framed.area}
                         cornerRadius={framed.layout.radius}
@@ -2224,14 +2273,13 @@ export default function EditorWindow() {
               </Layer>
               <Layer>
                 {/* The backdrop preview already shows only the crop. */}
-                {crop && cropShown && imageSize && !framed && (
+                {crop && cropShown && canvas && !framed && (
                   <>
                   <Group name="oriented-crop" {...groupAttrs}>
-                    {/* Dim everything outside the crop; the capture itself is untouched. */}
-                    <KonvaRect x={0} y={0} width={imageSize.width} height={crop.y} fill="black" opacity={0.5} listening={false} />
-                    <KonvaRect x={0} y={crop.y + crop.height} width={imageSize.width} height={imageSize.height - crop.y - crop.height} fill="black" opacity={0.5} listening={false} />
-                    <KonvaRect x={0} y={crop.y} width={crop.x} height={crop.height} fill="black" opacity={0.5} listening={false} />
-                    <KonvaRect x={crop.x + crop.width} y={crop.y} width={imageSize.width - crop.x - crop.width} height={crop.height} fill="black" opacity={0.5} listening={false} />
+                    {/* Dim the canvas (the capture and every image) outside the crop; the capture itself is untouched. */}
+                    {spotlightDim(canvas, [crop]).map((rect, i) => (
+                      <KonvaRect key={i} {...rect} fill="black" opacity={0.5} listening={false} />
+                    ))}
                   </Group>
                   {/* The outline, its handles and its drag stay upright on show, outside the turned group. */}
                   <KonvaRect
@@ -2372,9 +2420,10 @@ export default function EditorWindow() {
       </div>
       <footer className="editor-status">
         <span>{info?.fileName ?? "Loading…"}</span>
-        {imageSize && (
-          <span>
-            {imageSize.width}×{imageSize.height}
+        {canvas && (
+          // The canvas: the capture, grown to fit any images added past it.
+          <span title={grown && imageSize ? `Capture ${imageSize.width}×${imageSize.height}` : undefined}>
+            {canvas.width}×{canvas.height}
           </span>
         )}
         {shownCrop && <span>

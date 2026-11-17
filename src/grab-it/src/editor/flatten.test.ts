@@ -4,6 +4,7 @@ import {
   angleLine,
   backdropLayout,
   backdropPaint,
+  blurArea,
   blurredGeometry,
   BLURRED_SIZE,
   composeBackdrop,
@@ -15,10 +16,11 @@ import {
   NO_BORDERS,
   paintBackdrop,
   plainBorders,
+  plateRects,
   resample,
   type PaintLayer,
 } from "./flatten";
-import { backdropColors, canvasRect, sameBackdrop, type Backdrop, type MagnifyShape, type LineShape } from "./model";
+import { backdropColors, canvasBounds, sameBackdrop, type Backdrop, type MagnifyShape, type LineShape } from "./model";
 import { curvePoints } from "./tools";
 import { magnifyLinePoints, magnifyScene } from "./magnify";
 
@@ -55,7 +57,7 @@ describe("flatten", () => {
 
   it("exports a canvas grown past the capture by added images", () => {
     // A 400×300 capture with images above-left and to the right of it.
-    const canvas = canvasRect({ width: 400, height: 300 }, [
+    const canvas = canvasBounds({ width: 400, height: 300 }, [
       { id: "l", type: "image", src: "left.png", x: -50, y: -20, width: 60, height: 40 },
       { id: "r", type: "image", src: "right.png", x: 400, y: 0, width: 400, height: 300 },
     ]);
@@ -67,6 +69,52 @@ describe("flatten", () => {
       height: 160,
       pixelRatio: 2,
     });
+  });
+
+  it("exports the whole canvas when there is no crop", () => {
+    const canvas = { x: -50, y: 0, width: 850, height: 300 };
+    expect(exportArea(null, { width: 400, height: 300 }, { scale: 1, x: 0, y: 0 }, undefined, canvas)).toEqual({
+      x: -50,
+      y: 0,
+      width: 850,
+      height: 300,
+      pixelRatio: 1,
+    });
+    // A crop still wins, and a turned canvas turns about the capture.
+    expect(exportArea({ x: 0, y: 0, width: 10, height: 10 }, { width: 400, height: 300 }, { scale: 1, x: 0, y: 0 }, undefined, canvas)).toMatchObject({
+      width: 10,
+      height: 10,
+    });
+    expect(exportArea(null, { width: 400, height: 300 }, { scale: 1, x: 0, y: 0 }, { rotation: 90, flipX: false, flipY: false }, canvas)).toEqual({
+      x: 0,
+      y: -50,
+      width: 300,
+      height: 850,
+      pixelRatio: 1,
+    });
+  });
+
+  it("finds what casts the shadow on a canvas with clear parts", () => {
+    const capture = { width: 400, height: 300 };
+    const parts = [
+      { x: 0, y: 0, width: 400, height: 300 },
+      { x: 400, y: 0, width: 200, height: 100 },
+    ];
+    // The capture alone covers an area inside it.
+    expect(plateRects(parts, { x: 10, y: 10, width: 100, height: 100 }, capture)).toBeNull();
+    expect(plateRects(parts, { x: 0, y: 0, width: 600, height: 300 }, capture)).toEqual(parts);
+    // From the area's corner, turned as it shows.
+    expect(plateRects(parts, { x: 0, y: 0, width: 300, height: 600 }, capture, { rotation: 90, flipX: false, flipY: false })).toEqual([
+      { x: 0, y: 0, width: 300, height: 400 },
+      { x: 200, y: 400, width: 100, height: 200 },
+    ]);
+  });
+
+  it("blurs only the part of the area over the capture", () => {
+    expect(blurArea({ x: -100, y: 0, width: 900, height: 300 }, { width: 400, height: 300 })).toEqual({ x: 0, y: 0, width: 400, height: 300 });
+    expect(blurArea({ x: 300, y: 50, width: 400, height: 100 }, { width: 400, height: 300 })).toEqual({ x: 300, y: 50, width: 100, height: 100 });
+    // An area all past the capture blurs the whole capture.
+    expect(blurArea({ x: 500, y: 0, width: 100, height: 100 }, { width: 400, height: 300 })).toEqual({ x: 0, y: 0, width: 400, height: 300 });
   });
 
   it("picks PNG or JPG from the file name", () => {
@@ -299,6 +347,21 @@ describe("backdrop compose", () => {
     expect(calls[calls.length - 2]).toEqual(["drawImage", 20, 70]);
   });
 
+  it("casts the shadow from what has pixels only, leaving the clear parts clear", () => {
+    const covered = [
+      { x: 0, y: 0, width: 200, height: 300 },
+      { x: 200, y: 0, width: 200, height: 100 },
+    ];
+    const { calls } = compose({ fill: "transparent", padding: 20, radius: 10, shadow: true }, { covered });
+    // No black plate the size of the canvas: the shaped plate is drawn with the shadow instead.
+    expect(calls.filter((call) => call[0] === "fill")).toEqual([]);
+    expect(calls).toContainEqual(["fillRect", "#000000", 200, 0, 200, 100]);
+    expect(calls.filter((call) => call[0] === "drawImage")).toEqual([
+      ["drawImage", 20, 20],
+      ["drawImage", 20, 20],
+    ]);
+  });
+
   it("leaves a transparent backdrop unpainted", () => {
     const { calls } = compose({ fill: "transparent", padding: 20, radius: 10, shadow: false });
     expect(calls.filter((call) => call[0] === "fillRect")).toEqual([]);
@@ -410,7 +473,7 @@ describe("oriented and resized export", () => {
   afterEach(() => vi.restoreAllMocks());
 
   /** Flattens a fake layer; returns what it was asked to render and the size encoded. */
-  async function run(doc: Parameters<typeof flatten>[1], format: "png" | "jpg" = "png") {
+  async function run(doc: Parameters<typeof flatten>[1], format: "png" | "jpg" = "png", options: Parameters<typeof flatten>[5] = {}) {
     const { ctx, calls } = recordingContext();
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
     const encoded: { width: number; height: number; mime: string }[] = [];
@@ -428,7 +491,7 @@ describe("oriented and resized export", () => {
         return canvas;
       },
     };
-    await flatten(layer as never, doc, { width: 400, height: 300 }, { scale: 1, x: 0, y: 0 }, format);
+    await flatten(layer as never, doc, { width: 400, height: 300 }, { scale: 1, x: 0, y: 0 }, format, options);
     return { areas, encoded, calls };
   }
 
@@ -453,6 +516,22 @@ describe("oriented and resized export", () => {
     const grown = await run({ crop: { x: 0, y: 0, width: 800, height: 300 } });
     expect(grown.areas).toEqual([{ x: 0, y: 0, width: 800, height: 300, pixelRatio: 1 }]);
     expect(grown.encoded).toEqual([{ width: 800, height: 300, mime: "image/png" }]);
+  });
+
+  it("renders a grown canvas without a crop, and frames it whole", async () => {
+    const canvas = { x: 0, y: 0, width: 800, height: 300 };
+    const parts = [
+      { x: 0, y: 0, width: 400, height: 300 },
+      { x: 400, y: 0, width: 400, height: 200 },
+    ];
+    const plain = await run({ crop: null }, "png", { canvas, parts });
+    expect(plain.areas).toEqual([{ x: 0, y: 0, width: 800, height: 300, pixelRatio: 1 }]);
+    expect(plain.encoded).toEqual([{ width: 800, height: 300, mime: "image/png" }]);
+    const framed = await run({ crop: null, backdrop: { fill: "#ffffff", padding: 20, radius: 0, shadow: true } }, "png", { canvas, parts });
+    expect(framed.encoded).toEqual([{ width: 840, height: 340, mime: "image/png" }]);
+    // The shadow comes from the images and the capture, not a plate over the clear corner.
+    expect(framed.calls).toContainEqual(["fillRect", "#000000", 400, 0, 400, 200]);
+    expect(framed.calls.filter((call) => call[0] === "fill")).toEqual([]);
   });
 
   it("enlarges by a percentage", async () => {

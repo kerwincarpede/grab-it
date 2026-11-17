@@ -20,6 +20,21 @@ export const MAX_SCALE = 4;
 
 type Size = { width: number; height: number };
 
+/**
+ * The box a crop stays inside, on show: a capture's size (from 0, 0) or the
+ * canvas grown by added images, which may start at negative x or y.
+ * Display space stays anchored on the capture, so the capture's own lines
+ * keep their place as images move.
+ */
+export type Bounds = { x?: number; y?: number; width: number; height: number };
+
+/** The left, top, right and bottom edges of `bounds`. */
+export function boundsEdges(bounds: Bounds): { left: number; top: number; right: number; bottom: number } {
+  const left = bounds.x ?? 0;
+  const top = bounds.y ?? 0;
+  return { left, top, right: left + bounds.width, bottom: top + bounds.height };
+}
+
 /** The orientation a document asks for; absent fields mean unchanged. */
 export function orientationOf(doc: Pick<Annotations, "rotation" | "flipX" | "flipY">): Orientation {
   return { rotation: doc.rotation ?? 0, flipX: Boolean(doc.flipX), flipY: Boolean(doc.flipY) };
