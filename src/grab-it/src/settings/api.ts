@@ -157,6 +157,8 @@ export interface EditorPreferences {
   widths?: Record<string, number>;
   fill?: boolean;
   textBackground?: boolean;
+  /** `TextStyle` in editor/model.ts (`outline` or `shadow`); absent for plain text, and ignored while `textBackground` is on. */
+  textStyle?: string;
   /** `BlurMode` in editor/model.ts. */
   blurMode?: string;
   /** The last backdrop picked (`Backdrop` in editor/model.ts); checked by the editor as it reads it. */

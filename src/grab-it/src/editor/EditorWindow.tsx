@@ -93,6 +93,7 @@ import {
   type Rect,
   type Shape,
   type Style,
+  type TextLook,
   type Tool,
   type Widths,
 } from "./model";
@@ -175,6 +176,9 @@ import {
   stepNumbers,
   stepStrokeWidth,
   STRAIGHTEN_SNAP,
+  textLook,
+  textLookFields,
+  textLookStyle,
   transformShape,
   type NodeTransform,
 } from "./tools";
@@ -199,6 +203,13 @@ const MESSAGE_MS = 4000;
 const BLUR_MODES: { mode: BlurMode; label: string }[] = [
   { mode: "pixelate", label: "Pixelate" },
   { mode: "blur", label: "Smooth" },
+];
+/** The text style picker's choices; picking one sets `background` and `textStyle` together. */
+const TEXT_LOOKS: { look: TextLook; label: string; title: string }[] = [
+  { look: "plain", label: "Plain", title: "Plain text" },
+  { look: "pill", label: "Pill", title: "Text on a coloured pill" },
+  { look: "outline", label: "Outline", title: "Text with a contrasting outline" },
+  { look: "shadow", label: "Shadow", title: "Text with a soft drop shadow" },
 ];
 /** How much ⌥-scroll moves one width step: about one mouse-wheel notch, or a short trackpad swipe. */
 const WIDTH_SCROLL_STEP = 40;
@@ -868,7 +879,7 @@ export default function EditorWindow() {
           y: at.y,
           text: value,
           fontSize: widthFor(widths, "text"),
-          ...(style.background ? { background: true } : {}),
+          ...textLookFields(textLook(style)),
         }),
       );
     }
@@ -1151,7 +1162,7 @@ export default function EditorWindow() {
 
   /** Sets the colour or an option for the next shape and applies it to the selected one. */
   const changeStyle = useCallback(
-    (next: Partial<Pick<Style, "color" | "fill" | "background" | "blurMode" | "zoom" | "lens" | "lensLine">>) => {
+    (next: Partial<Pick<Style, "color" | "fill" | "background" | "textStyle" | "blurMode" | "zoom" | "lens" | "lensLine">>) => {
       setStyle((now) => ({ ...now, ...next }));
       restyleSelected(next);
     },
@@ -1636,7 +1647,8 @@ export default function EditorWindow() {
 
   const boxOptions = optionsFor === "rect" || optionsFor === "ellipse";
   const fillOn = selected?.type === "rect" || selected?.type === "ellipse" ? Boolean(selected.fill) : Boolean(style.fill);
-  const backgroundOn = selected?.type === "text" || selected?.type === "callout" ? Boolean(selected.background) : Boolean(style.background);
+  const shownLook = textLook(selected?.type === "text" ? selected : style);
+  const calloutFilled = selected?.type === "callout" ? Boolean(selected.background) : Boolean(style.background);
   const blurMode = (selected?.type === "blur" ? selected.mode : style.blurMode) ?? "pixelate";
   const lensZoom = selected?.type === "magnify" ? selected.zoom : (style.zoom ?? 2);
   const lens = (selected?.type === "magnify" ? selected.lens : style.lens) ?? "round";
@@ -1677,15 +1689,24 @@ export default function EditorWindow() {
             </button>
           </div>
         )}
-        {(optionsFor === "text" || optionsFor === "callout") && (
+        {optionsFor === "text" && (
+          <div className="bar-group segmented" role="group" aria-label="Text style">
+            {TEXT_LOOKS.map(({ look, label, title }) => (
+              <button key={look} type="button" title={title} aria-pressed={shownLook === look} onClick={() => changeStyle(textLookStyle(look))}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {optionsFor === "callout" && (
           <div className="bar-group">
             <button
               type="button"
               className="icon-button"
               aria-label="Text background"
-              title={optionsFor === "callout" ? "Fill the bubble with the colour" : "Text on a coloured background"}
-              aria-pressed={backgroundOn}
-              onClick={() => changeStyle({ background: !backgroundOn })}
+              title="Fill the bubble with the colour"
+              aria-pressed={calloutFilled}
+              onClick={() => changeStyle({ background: !calloutFilled })}
             >
               <TextBackgroundIcon />
             </button>

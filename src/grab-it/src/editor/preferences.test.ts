@@ -37,6 +37,22 @@ describe("editor preferences", () => {
     ).toEqual({ ...DEFAULT_CHOICES, widths: { arrow: 6 } });
   });
 
+  it("remembers an Outline or Shadow text style, with Pill winning over it", () => {
+    expect(fromPreferences({ textStyle: "outline" }).style).toEqual({ color: DEFAULT_CHOICES.style.color, textStyle: "outline" });
+    expect(fromPreferences({ textBackground: true, textStyle: "shadow" }).style).toEqual({ color: DEFAULT_CHOICES.style.color, background: true });
+    expect(fromPreferences({ textStyle: "neon" })).toEqual(DEFAULT_CHOICES);
+
+    const shadowed = { ...DEFAULT_CHOICES, style: { color: "#ffffff", textStyle: "shadow" as const } };
+    expect(toPreferences(shadowed)).toMatchObject({ textBackground: false, textStyle: "shadow" });
+    expect(fromPreferences(toPreferences(shadowed))).toEqual(shadowed);
+    // Pill and Plain store no text style.
+    expect(toPreferences({ ...DEFAULT_CHOICES, style: { color: "#ffffff", background: true, textStyle: "outline" } })).toMatchObject({
+      textBackground: true,
+    });
+    expect(toPreferences({ ...DEFAULT_CHOICES, style: { color: "#ffffff", background: true, textStyle: "outline" } })).not.toHaveProperty("textStyle");
+    expect(toPreferences(DEFAULT_CHOICES)).not.toHaveProperty("textStyle");
+  });
+
   it("never reopens on the crop or cut out tool", () => {
     expect(fromPreferences({ tool: "crop" }).tool).toBe("arrow");
     expect(fromPreferences({ tool: "cut" }).tool).toBe("arrow");

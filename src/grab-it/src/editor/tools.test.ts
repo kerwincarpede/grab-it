@@ -61,6 +61,9 @@ import {
   squareCorner,
   stepNumbers,
   stepStrokeWidth,
+  textLook,
+  textLookStyle,
+  textShadowColor,
   tidyPath,
   transformShape,
   withAlpha,
@@ -511,6 +514,27 @@ describe("style options", () => {
     expect(restyleShape(rect, { background: true })).toBe(rect);
   });
 
+  it("sets a text's look, keeping only the field the look uses", () => {
+    const outlined = restyleShape(text, textLookStyle("outline"));
+    expect(outlined).toEqual({ ...text, textStyle: "outline" });
+    const pill = restyleShape(outlined, textLookStyle("pill"));
+    expect(pill).toEqual({ ...text, background: true });
+    expect(restyleShape(pill, textLookStyle("shadow"))).toEqual({ ...text, textStyle: "shadow" });
+    expect(restyleShape(pill, textLookStyle("plain"))).toEqual(text);
+    // A look it already has changes nothing.
+    expect(restyleShape(pill, textLookStyle("pill"))).toBe(pill);
+    expect(restyleShape(text, textLookStyle("plain"))).toBe(text);
+    expect(restyleShape(rect, textLookStyle("outline"))).toBe(rect);
+  });
+
+  it("reads Pill over a text style, then the text style, then Plain", () => {
+    expect(textLook({})).toBe("plain");
+    expect(textLook({ background: false, textStyle: "shadow" })).toBe("shadow");
+    expect(textLook({ background: true, textStyle: "outline" })).toBe("pill");
+    expect(textLookStyle("plain")).toEqual({ background: false, textStyle: undefined });
+    expect(textLookStyle("outline")).toEqual({ background: false, textStyle: "outline" });
+  });
+
   it("switches the blur mode, leaving an unchanged blur alone", () => {
     expect(restyleShape(blur, { blurMode: "blur" })).toMatchObject({ mode: "blur" });
     expect(restyleShape(blur, { blurMode: "pixelate" })).toBe(blur);
@@ -561,6 +585,9 @@ describe("style options", () => {
     expect(contrastColor("#f5a524")).toBe("#1f2328");
     expect(contrastColor("#1f2328")).toBe("#ffffff");
     expect(contrastColor("#e5484d")).toBe("#ffffff");
+    expect(textShadowColor("#ffffff")).toBe("#000000");
+    expect(textShadowColor("#e5484d")).toBe("#000000");
+    expect(textShadowColor("#1f2328")).toBe("#ffffff");
   });
 });
 

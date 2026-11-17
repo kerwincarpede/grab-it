@@ -1,13 +1,13 @@
 import { useEffect, useRef } from "react";
 import Konva from "konva";
 import { Arrow, Circle, Ellipse, Group, Image as KonvaImage, Label, Line, Rect, Shape as KonvaShape, Tag, Text } from "react-konva";
-import { FILL_OPACITY, SPOTLIGHT_DIM, type BlurShape, type CalloutShape, type Rect as Box, type Shape } from "./model";
+import { FILL_OPACITY, SPOTLIGHT_DIM, type BlurShape, type CalloutShape, type Rect as Box, type Shape, type TextShape, type TextStyle } from "./model";
 import { calloutBubble, calloutOutline, calloutWedge, labelPadding, labelRadius } from "./callout";
 import { roundedRectPath } from "./flatten";
 import type { CaptureImage } from "./cut";
 import { lensPath, magnifyLinePoints, magnifyScene } from "./magnify";
 import { isIdentity, textSize, uprightTransform, type Orientation } from "./orient";
-import { contrastColor, curvePoints, normalizeRect, withAlpha, type NodeTransform } from "./tools";
+import { contrastColor, curvePoints, normalizeRect, textLook, textShadowColor, withAlpha, type NodeTransform } from "./tools";
 
 interface ShapeNodeProps {
   shape: Shape;
@@ -38,6 +38,33 @@ function takeTransform(node: Konva.Node, shape: Shape): NodeTransform {
   node.scale({ x: 1, y: 1 });
   if ("points" in shape) node.position({ x: 0, y: 0 });
   return transform;
+}
+
+/**
+ * The Konva props that draw Outline text (a contrasting stroke behind the
+ * fill) and Shadow text (a soft drop shadow); none for Plain or Pill. Neither
+ * moves the text, so x, y stay its corner whatever the style.
+ */
+function textLookProps(shape: Pick<TextShape, "color" | "fontSize" | "background" | "textStyle">): Partial<Konva.TextConfig> {
+  switch (textLook(shape)) {
+    case "outline":
+      return {
+        stroke: contrastColor(shape.color),
+        strokeWidth: Math.max(2, shape.fontSize * 0.12),
+        lineJoin: "round",
+        fillAfterStrokeEnabled: true,
+      };
+    case "shadow":
+      return {
+        shadowColor: textShadowColor(shape.color),
+        shadowOpacity: 0.6,
+        shadowBlur: shape.fontSize * 0.3,
+        shadowOffsetX: 0,
+        shadowOffsetY: shape.fontSize * 0.08,
+      };
+    default:
+      return {};
+  }
 }
 
 function BlurNode({ shape, image, common }: { shape: BlurShape; image: CaptureImage | null; common: object }) {
@@ -95,14 +122,17 @@ interface LabelText {
   color: string;
   /** On a rounded pill of the colour, in a contrasting text colour. */
   background?: boolean;
+  /** Outlined or shadowed when there is no pill; only Text sets it. */
+  textStyle?: TextStyle;
 }
 
 /**
- * Bold annotation text, in the colour or on a pill. `props` go on the outer
- * node. The pill is offset by its padding, so x, y stays the text's corner
+ * Bold annotation text, in the colour (outlined or shadowed by its text
+ * style) or on a pill. `props` go on the outer node. The pill is offset by its padding, so x, y stays the text's corner
  * and toggling the background does not move it.
  */
-function labelNode({ text, fontSize, color, background }: LabelText, props: object = {}) {
+function labelNode(label: LabelText, props: object = {}) {
+  const { text, fontSize, color, background } = label;
   if (background) {
     const padding = labelPadding(fontSize);
     return (
@@ -112,7 +142,7 @@ function labelNode({ text, fontSize, color, background }: LabelText, props: obje
       </Label>
     );
   }
-  return <Text {...props} text={text} fontSize={fontSize} fontStyle="bold" fill={color} />;
+  return <Text {...props} text={text} fontSize={fontSize} fontStyle="bold" fill={color} {...textLookProps(label)} />;
 }
 
 /** Text that turns back about its centre, so it reads upright on the same spot; unchanged when nothing is turned. */
