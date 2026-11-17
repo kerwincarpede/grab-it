@@ -79,8 +79,11 @@ const STEP_RADIUS: f64 = 20.0;
 /// by count; its stopping clicks are the ones on the taskbar or the tray's
 /// overflow flyout (see [`kept_at_stop`]), and the menu and the hub are
 /// Grab-it's own. macOS: none, since the status item, its menu and the hub
-/// are all Grab-it's. Linux: the click on the icon and the one on the menu
-/// item, both shown by the panel's tray host.
+/// are all Grab-it's, and a click on the status item that the window list
+/// misses is skipped by the icon's hover (see [`tray::pointer_over_icon`]),
+/// as is any click on the tray icon where it reports hover. Linux: the
+/// click on the icon and the one on the menu item, both shown by the
+/// panel's tray host, which reports no hover.
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const STOP_CLICKS_OUTSIDE: usize = 2;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -492,6 +495,8 @@ fn begin(app: &AppHandle) {
     if let Err(err) = write_guide(&guide, &Guide::default()) {
         return actions::report_failure(app, &err);
     }
+    // Hover on the icon from before the session says nothing about its clicks.
+    tray::reset_hover();
     let stop = Arc::new(AtomicBool::new(false));
     let stopped_by_click = Arc::new(AtomicBool::new(false));
     let thread = {
@@ -583,6 +588,9 @@ pub struct Grabbed {
     foreground: Foreground,
     /// The shell part its click hit, for telling stopping clicks apart.
     shell: Option<screen::Shell>,
+    /// Its click hit a popup or nothing, so it may have been on the tray
+    /// icon (see [`Waiting`]).
+    maybe_icon: bool,
 }
 
 /// A step to describe once it is saved, found again by its capture so a
@@ -640,10 +648,80 @@ pub fn kept_at_stop<T>(
     held.into_iter().map(|held| held.step).collect()
 }
 
+/// A step about to be saved, waiting until [`tray::HOVER_LEAD`] has passed
+/// since its click: the icon's hover event can arrive after a click on it,
+/// as when an auto-hidden macOS menu bar slides in under a still pointer
+/// and the icon's first event is its click.
+pub struct Waiting<T> {
+    /// When its click was seen.
+    pub at: Instant,
+    /// Whether a click on the icon would have hit what this one did.
+    pub maybe_icon: bool,
+    pub step: T,
+}
+
+/// Takes from the front of `waiting` the steps whose click is at least
+/// [`tray::HOVER_LEAD`] old at `now`, oldest first, dropping those that
+/// `over_icon` says were on the tray icon.
+pub fn ripe<T>(
+    waiting: &mut VecDeque<Waiting<T>>,
+    now: Instant,
+    over_icon: impl Fn(Instant) -> bool,
+) -> Vec<T> {
+    let mut ripe = Vec::new();
+    while let Some(next) = waiting.front() {
+        if now.saturating_duration_since(next.at) < tray::HOVER_LEAD {
+            break;
+        }
+        if let Some(next) = waiting.pop_front()
+            && !(next.maybe_icon && over_icon(next.at))
+        {
+            ripe.push(next.step);
+        }
+    }
+    ripe
+}
+
+/// Whether the click that stops a session by clicking is always on
+/// Grab-it's own hub or menu. On Linux it is on the panel's menu, one of
+/// [`STOP_CLICKS_OUTSIDE`].
+const STOP_CLICK_IS_OWN: bool = cfg!(any(target_os = "windows", target_os = "macos"));
+
+/// How long before the stop the click that stopped it can have been seen:
+/// the hub takes `HIDE_SETTLE` to hide, and the click is looked at only
+/// once the grab before it is done. An older last click is the user's, as
+/// when the tray menu was driven from the keyboard.
+const STOP_CLICK_LAG: Duration = Duration::from_secs(2);
+
+/// The click to drop as the one that stopped the session: the last click
+/// seen, `last_click`, when the session was stopped by a click on Grab-it's
+/// own hub or menu (`own`) and that click is recent enough to be it.
+pub fn stopping_click(
+    last_click: Option<Instant>,
+    trigger: Trigger,
+    stopped_at: Instant,
+    own: bool,
+) -> Option<Instant> {
+    let at = last_click?;
+    (own && trigger == Trigger::Click && stopped_at.saturating_duration_since(at) <= STOP_CLICK_LAG)
+        .then_some(at)
+}
+
+/// Drops the steps for the click seen at `at` from `held` and `waiting`.
+pub fn drop_click<T>(
+    held: &mut VecDeque<Held<T>>,
+    waiting: &mut VecDeque<Waiting<T>>,
+    at: Instant,
+) {
+    held.retain(|held| held.at != at);
+    waiting.retain(|waiting| waiting.at != at);
+}
+
 /// The session's loop. Each click's frame is grabbed as soon as the click
 /// is seen; a saver thread writes it, so slow saves never delay the next
 /// grab. The latest [`HELD_STEPS`] steps wait until later clicks,
-/// or the stop, say whether they are kept.
+/// or the stop, say whether they are kept; then each [`Waiting`] step
+/// waits for any late hover on the tray icon.
 fn run(
     app: &AppHandle,
     capture: &input::Capture,
@@ -680,7 +758,17 @@ fn run(
     let mut last: Option<LastStep> = None;
     let mut last_click: Option<(Instant, (f64, f64))> = None;
     let mut held: VecDeque<Held<Grabbed>> = VecDeque::new();
-    let mut handle = |events: Vec<input::InputEvent>, held: &mut VecDeque<Held<Grabbed>>| {
+    let mut waiting: VecDeque<Waiting<Grabbed>> = VecDeque::new();
+    let wait = |waiting: &mut VecDeque<Waiting<Grabbed>>, at: Instant, step: Grabbed| {
+        waiting.push_back(Waiting {
+            at,
+            maybe_icon: step.maybe_icon,
+            step,
+        });
+    };
+    let mut handle = |events: Vec<input::InputEvent>,
+                      held: &mut VecDeque<Held<Grabbed>>,
+                      waiting: &mut VecDeque<Waiting<Grabbed>>| {
         for event in events {
             let (InputKind::Click, Some(position)) = (&event.kind, event.position) else {
                 continue;
@@ -690,7 +778,7 @@ fn run(
             if double {
                 continue;
             }
-            match grab(position, last.as_ref()) {
+            match grab(position, event.at, last.as_ref()) {
                 Ok(Some((step, grabbed))) => {
                     last = Some(step);
                     held.push_back(Held {
@@ -700,7 +788,7 @@ fn run(
                     });
                     while held.len() > HELD_STEPS {
                         if let Some(oldest) = held.pop_front() {
-                            let _ = frames.send(oldest.step);
+                            wait(waiting, oldest.at, oldest.step);
                         }
                     }
                 }
@@ -710,20 +798,54 @@ fn run(
         }
     };
     while !stop.load(Ordering::SeqCst) {
-        handle(capture.take(), &mut held);
+        handle(capture.take(), &mut held, &mut waiting);
+        for step in ripe(&mut waiting, Instant::now(), tray::pointer_over_icon) {
+            let _ = frames.send(step);
+        }
         std::thread::sleep(POLL);
     }
     let stopped_at = Instant::now();
     // Clicks seen just before the stop, such as the one on the menu item
-    // that stopped it, are still looked at: Grab-it's own are skipped.
-    handle(capture.take(), &mut held);
+    // that stopped it, are still looked at: Grab-it's own, and those on
+    // its tray icon, are skipped.
+    handle(capture.take(), &mut held, &mut waiting);
     let trigger = if stopped_by_click.load(Ordering::SeqCst) {
         Trigger::Click
     } else {
         Trigger::Keys
     };
-    for kept in kept_at_stop(held.into(), trigger, stopped_at, STOP_CLICKS_OUTSIDE) {
-        let _ = frames.send(kept);
+    // The click that stopped it was on Grab-it's hub or menu, but it is
+    // only looked at once the grab before it is done. After a full-monitor
+    // grab, such as one for a click on the tray icon, that can be a second
+    // later, when the hub has closed and the click seems to land on the
+    // window behind it. So a recent last click is dropped whatever it hit;
+    // an older one is the user's, since the menu can be used from the
+    // keyboard with no click at all.
+    if let Some(at) = stopping_click(
+        last_click.map(|(at, _)| at),
+        trigger,
+        stopped_at,
+        STOP_CLICK_IS_OWN,
+    ) {
+        drop_click(&mut held, &mut waiting, at);
+    }
+    let held = held
+        .into_iter()
+        .map(|held| Held {
+            at: held.at,
+            shell: held.shell,
+            step: (held.at, held.step),
+        })
+        .collect();
+    for (at, kept) in kept_at_stop(held, trigger, stopped_at, STOP_CLICKS_OUTSIDE) {
+        wait(&mut waiting, at, kept);
+    }
+    if let Some(newest) = waiting.back() {
+        let ready = newest.at + tray::HOVER_LEAD;
+        std::thread::sleep(ready.saturating_duration_since(Instant::now()));
+    }
+    for step in ripe(&mut waiting, Instant::now(), tray::pointer_over_icon) {
+        let _ = frames.send(step);
     }
     drop(frames);
     // The guide is complete before the Guide window opens; the describer
@@ -733,14 +855,24 @@ fn run(
 
 /// Grabs the frame for a click at `position`: the window under it, or its
 /// monitor for a small window, a menu or popover, or the desktop. None for
-/// a click on Grab-it itself or one that repeats `last`.
+/// a click on Grab-it itself, on its tray icon, or one that repeats `last`.
 fn grab(
     position: (f64, f64),
+    at: Instant,
     last: Option<&LastStep>,
 ) -> Result<Option<(LastStep, Grabbed)>, String> {
     let (x, y) = position;
     let hit = screen::hit_test(x, y);
     if hit == screen::Hit::Own {
+        return Ok(None);
+    }
+    // The window list may not report the icon as Grab-it's, as with an
+    // auto-hidden macOS menu bar, so its hover events decide: now, and
+    // again once a late hover event would have arrived (see [`Waiting`]).
+    // A click that hit an ordinary window or the Windows shell is judged
+    // as before.
+    let maybe_icon = matches!(hit, screen::Hit::Popup | screen::Hit::Nothing);
+    if maybe_icon && tray::pointer_over_icon(at) {
         return Ok(None);
     }
     let shell = match hit {
@@ -802,6 +934,7 @@ fn grab(
             mode,
             foreground,
             shell,
+            maybe_icon,
         },
     )))
 }
@@ -1306,6 +1439,97 @@ mod tests {
     fn held(stopped_at: Instant, ago: &[u64]) -> Vec<Held<u8>> {
         let clicks: Vec<(u64, Option<Shell>)> = ago.iter().map(|secs| (*secs, None)).collect();
         held_on(stopped_at, &clicks)
+    }
+
+    #[test]
+    fn steps_wait_for_a_late_hover_on_the_tray_icon() {
+        let click = Instant::now();
+        let lead = tray::HOVER_LEAD;
+        let step = |at: Instant, maybe_icon: bool, step: u8| Waiting {
+            at,
+            maybe_icon,
+            step,
+        };
+        let mut waiting = VecDeque::from([
+            step(click, true, 1),
+            step(click, false, 2),
+            step(click + lead, true, 3),
+        ]);
+        // Nothing is judged before the hover could have arrived.
+        assert!(ripe(&mut waiting, click + lead / 2, |_| true).is_empty());
+        assert_eq!(waiting.len(), 3);
+        // The hover stretch began after the click, within the lead: the
+        // click was on the icon, so its step is dropped. One that hit a
+        // window is kept, and a later click still waits.
+        let hover_from = click + lead / 2;
+        let over = |at: Instant| hover_from.saturating_duration_since(at) <= lead;
+        assert_eq!(ripe(&mut waiting, click + lead, over), vec![2]);
+        assert_eq!(waiting.len(), 1);
+        // With no hover, it is kept.
+        assert_eq!(ripe(&mut waiting, click + lead * 2, |_| false), vec![3]);
+        assert!(waiting.is_empty());
+    }
+
+    #[test]
+    fn the_stop_click_is_dropped_wherever_it_waits() {
+        let start = Instant::now();
+        let at = |millis: u64| start + Duration::from_millis(millis);
+        let mut held = VecDeque::from([Held {
+            at: at(2000),
+            shell: None,
+            step: 2,
+        }]);
+        let mut waiting = VecDeque::from([
+            Waiting {
+                at: at(1000),
+                maybe_icon: false,
+                step: 1,
+            },
+            Waiting {
+                at: at(3000),
+                maybe_icon: false,
+                step: 3,
+            },
+        ]);
+        drop_click(&mut held, &mut waiting, at(3000));
+        assert_eq!(held.len(), 1);
+        assert_eq!(waiting.iter().map(|w| w.step).collect::<Vec<_>>(), [1]);
+        drop_click(&mut held, &mut waiting, at(2000));
+        assert!(held.is_empty());
+        // A click that took no step drops nothing.
+        drop_click(&mut held, &mut waiting, at(4000));
+        assert_eq!(waiting.len(), 1);
+    }
+
+    #[test]
+    fn only_a_recent_last_click_is_taken_as_the_stopping_one() {
+        let start = Instant::now();
+        let at = |millis: u64| start + Duration::from_millis(millis);
+        let stopped_at = at(10_000);
+        // The click on the hub or menu, seen just before the stop.
+        assert_eq!(
+            stopping_click(Some(at(9_000)), Trigger::Click, stopped_at, true),
+            Some(at(9_000))
+        );
+        assert_eq!(
+            stopping_click(Some(at(8_000)), Trigger::Click, stopped_at, true),
+            Some(at(8_000))
+        );
+        // A menu chosen from the keyboard: the last click is the user's.
+        assert_eq!(
+            stopping_click(Some(at(7_999)), Trigger::Click, stopped_at, true),
+            None
+        );
+        // Stopped by keys, on a panel's menu, or with no click at all.
+        assert_eq!(
+            stopping_click(Some(at(9_000)), Trigger::Keys, stopped_at, true),
+            None
+        );
+        assert_eq!(
+            stopping_click(Some(at(9_000)), Trigger::Click, stopped_at, false),
+            None
+        );
+        assert_eq!(stopping_click(None, Trigger::Click, stopped_at, true), None);
     }
 
     fn held_on(stopped_at: Instant, clicks: &[(u64, Option<Shell>)]) -> Vec<Held<u8>> {

@@ -1,6 +1,9 @@
 //! The tray icon and its menu.
 
-use std::time::Duration;
+use std::{
+    sync::{Mutex, MutexGuard},
+    time::{Duration, Instant},
+};
 
 use tauri::{
     AppHandle, Manager,
@@ -20,6 +23,77 @@ const STEPS_LABEL: &str = "Step capture";
 const STOP_STEPS_LABEL: &str = "Stop step capture";
 const TOOLTIP: &str = "Grab-it";
 const STEPS_TOOLTIP: &str = "Grab-it — step capture on";
+
+/// When the pointer was over the icon, as its hover events tell it. Linux
+/// trays report none, so it stays empty there.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Hover {
+    /// When the latest stretch over the icon began.
+    since: Option<Instant>,
+    /// The latest event that saw the pointer over the icon.
+    last: Option<Instant>,
+    /// When the pointer left the icon, ending that stretch.
+    left: Option<Instant>,
+}
+
+/// How long before the first hover event a click still counts as on the
+/// icon: the event can arrive after the click that caused it, so a click
+/// is only judged once this has passed.
+pub const HOVER_LEAD: Duration = Duration::from_millis(100);
+/// How long after the latest hover event the pointer is still taken to be
+/// over the icon. Leave can be missed, so hover runs out.
+const HOVER_LIMIT: Duration = Duration::from_secs(10);
+
+static HOVER: Mutex<Hover> = Mutex::new(Hover {
+    since: None,
+    last: None,
+    left: None,
+});
+
+fn hover() -> MutexGuard<'static, Hover> {
+    HOVER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+impl Hover {
+    /// An event at `now` saw the pointer over the icon.
+    fn over(&mut self, now: Instant) {
+        if self.since.is_none() || self.left.is_some() {
+            self.since = Some(now);
+            self.left = None;
+        }
+        self.last = Some(now);
+    }
+
+    /// The pointer left the icon at `now`.
+    fn leave(&mut self, now: Instant) {
+        self.left = Some(now);
+    }
+}
+
+/// Whether a click at `at` was on the icon by `hover`'s account.
+fn over_icon(hover: &Hover, at: Instant) -> bool {
+    let (Some(since), Some(last)) = (hover.since, hover.last) else {
+        return false;
+    };
+    since.saturating_duration_since(at) <= HOVER_LEAD
+        && hover.left.is_none_or(|left| at < left)
+        && at.saturating_duration_since(last) <= HOVER_LIMIT
+}
+
+/// Whether the pointer was over the tray icon at `at`, so a step capture
+/// can leave out clicks on the icon that the window list does not report
+/// as Grab-it's. Always false on Linux, whose trays report no hover.
+pub fn pointer_over_icon(at: Instant) -> bool {
+    over_icon(&hover(), at)
+}
+
+/// Forgets the icon's hover, so a stretch from before a step capture
+/// cannot make it skip a click.
+pub fn reset_hover() {
+    *hover() = Hover::default();
+}
 
 /// The menu items whose text or state changes while Grab-it runs.
 pub struct TrayItems {
@@ -293,6 +367,13 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         // The click opens the hub; a right-click opens this menu.
         .show_menu_on_left_click(!CLICK_OPENS_HUB)
         .on_tray_icon_event(|tray, event| {
+            match event {
+                TrayIconEvent::Enter { .. }
+                | TrayIconEvent::Move { .. }
+                | TrayIconEvent::Click { .. } => hover().over(Instant::now()),
+                TrayIconEvent::Leave { .. } => hover().leave(Instant::now()),
+                _ => {}
+            }
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
@@ -361,6 +442,41 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clicks_count_as_on_the_icon_only_while_hovered() {
+        let start = Instant::now();
+        let at = |millis: u64| start + Duration::from_millis(millis);
+        let mut hover = Hover::default();
+        // No hover yet.
+        assert!(!over_icon(&hover, at(1000)));
+
+        hover.over(at(1000));
+        hover.over(at(1500));
+        assert_eq!(hover.since, Some(at(1000)));
+        // An open stretch takes clicks in it.
+        assert!(over_icon(&hover, at(1000)));
+        assert!(over_icon(&hover, at(2000)));
+        // A click up to 100 ms before the first event counts, not earlier.
+        assert!(over_icon(&hover, at(900)));
+        assert!(!over_icon(&hover, at(899)));
+        // Hover runs out 10 s after the latest event.
+        assert!(over_icon(&hover, at(11_500)));
+        assert!(!over_icon(&hover, at(11_501)));
+
+        hover.leave(at(3000));
+        assert!(over_icon(&hover, at(2999)));
+        assert!(!over_icon(&hover, at(3000)));
+        assert!(!over_icon(&hover, at(4000)));
+
+        // Coming back opens a new stretch; the gap is not on the icon.
+        hover.over(at(5000));
+        assert_eq!(hover.since, Some(at(5000)));
+        assert_eq!(hover.left, None);
+        assert!(!over_icon(&hover, at(4000)));
+        assert!(over_icon(&hover, at(4950)));
+        assert!(over_icon(&hover, at(5200)));
+    }
 
     #[test]
     fn menu_ids_map_to_captures() {
