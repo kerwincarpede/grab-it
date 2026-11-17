@@ -270,7 +270,7 @@ function mockBackend(shots: Shot[]): Backend {
           return new Uint8Array([137, 80, 78, 71]).buffer;
         case "library_annotations":
           find(args.id as number);
-          return { annotations: { version: 1, shapes: [] }, scaleFactor: 2 };
+          return { annotations: { version: 1, shapes: [] }, scaleFactor: 2, editedAt: 5_000 };
         case "editor_copy":
         case "editor_pin":
         case "library_save_thumbnail":

@@ -234,6 +234,8 @@ pub enum LibraryError {
     /// An edited capture has no thumbnail yet; the Library draws one with
     /// its edits.
     NoThumbnail,
+    /// A thumbnail was drawn from edits that have since been saved again.
+    OutOfDate,
     /// The database was written by a newer Grab-it.
     TooNew(i64),
     /// A file cannot be given this name; says why.
@@ -254,6 +256,7 @@ impl fmt::Display for LibraryError {
                 "the recording's preview needs ffmpeg, which is not ready"
             ),
             Self::NoThumbnail => write!(f, "the edited capture has no thumbnail yet"),
+            Self::OutOfDate => write!(f, "the capture was edited again while it was drawn"),
             Self::TooNew(version) => write!(
                 f,
                 "the library was created by a newer Grab-it (schema {version})"
@@ -1550,11 +1553,31 @@ pub fn ensure_thumbnail(png: &Path, thumb: &Path) -> LibraryResult<()> {
     write_thumbnail(&image::open(png)?, thumb)
 }
 
-/// Saves the PNG `png`, an edited capture drawn with its edits, fitted
-/// inside [`THUMB_SIZE`], as the thumbnail `thumb`.
-pub fn save_thumbnail(png: &[u8], thumb: &Path) -> LibraryResult<()> {
+/// Saves the PNG `png`, the capture at `capture` drawn with the edits saved
+/// at `drawn_from` (ms, from [`ShotAnnotations::edited_at`]), fitted inside
+/// [`THUMB_SIZE`], as the thumbnail `thumb`. Edits saved again since are
+/// [`LibraryError::OutOfDate`] and nothing is written. The thumbnail is
+/// stamped with `drawn_from`, not the time it is written, so edits saved
+/// while it is written still leave it stale and it is drawn again.
+pub fn save_thumbnail(
+    capture: &Path,
+    png: &[u8],
+    thumb: &Path,
+    drawn_from: i64,
+) -> LibraryResult<()> {
+    let newer = |path: &Path| modified_at(path).is_some_and(|saved| saved > drawn_from);
+    let sidecar = capture::annotations_path(capture);
+    if newer(&sidecar) {
+        return Err(LibraryError::OutOfDate);
+    }
     let image = image::load_from_memory_with_format(png, image::ImageFormat::Png)?;
-    write_thumbnail(&image, thumb)
+    write_thumbnail(&image, thumb)?;
+    let stamp = UNIX_EPOCH + std::time::Duration::from_millis(drawn_from.max(0) as u64);
+    fs::File::options()
+        .write(true)
+        .open(thumb)
+        .and_then(|file| file.set_modified(stamp))?;
+    Ok(())
 }
 
 /// Saves `image`, fitted inside [`THUMB_SIZE`], as the PNG `thumb`.
@@ -2477,16 +2500,22 @@ pub struct ShotAnnotations {
     pub annotations: Option<serde_json::Value>,
     /// From the capture's `meta.json`; `None` when it was not recorded.
     pub scale_factor: Option<f64>,
+    /// When the sidecar read was saved (ms since the Unix epoch), to send
+    /// back with the thumbnail drawn from it; `None` without edits.
+    pub edited_at: Option<i64>,
 }
 
 /// Reads `png`'s annotations sidecar and scale. An unreadable or unknown
 /// sidecar is an error, so the original is never passed off as edited.
 pub fn shot_annotations(png: &Path) -> Result<ShotAnnotations, String> {
+    // Read before the sidecar, so a save in between only makes it look older.
+    let edited_at = modified_at(&capture::annotations_path(png));
     let annotations = crate::editor::read_annotations(png)?;
     let scale_factor = capture::valid_scale(read_meta(png).and_then(|meta| meta.scale_factor));
     Ok(ShotAnnotations {
         annotations,
         scale_factor,
+        edited_at,
     })
 }
 
@@ -2509,6 +2538,12 @@ pub fn library_save_thumbnail(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<i64>().ok())
         .ok_or("missing the capture's id")?;
+    let drawn_from = request
+        .headers()
+        .get(THUMBNAIL_EDITED_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or("missing when the edits were saved")?;
     let tauri::ipc::InvokeBody::Raw(png) = request.body() else {
         return Err("expected image bytes".to_owned());
     };
@@ -2520,11 +2555,14 @@ pub fn library_save_thumbnail(
     if shot.kind.is_recording() {
         return Err("That works on screenshots, not recordings.".into());
     }
-    save_thumbnail(png, &shot.thumb_path).map_err(to_message)
+    save_thumbnail(&shot.path, png, &shot.thumb_path, drawn_from).map_err(to_message)
 }
 
 /// The header [`library_save_thumbnail`] reads the capture's id from.
 pub const THUMBNAIL_ID_HEADER: &str = "x-grab-it-shot";
+/// The header [`library_save_thumbnail`] reads, in ms, when the edits it
+/// was drawn from were saved.
+pub const THUMBNAIL_EDITED_HEADER: &str = "x-grab-it-edited";
 
 /// Copies a shot's original image to the clipboard.
 #[tauri::command(async)]
@@ -3603,7 +3641,7 @@ mod tests {
         // The old thumbnail is still served while the new one is drawn.
         assert_eq!(library.thumbnail(shot.id).unwrap(), original);
 
-        save_thumbnail(&png_bytes((800, 400)), &edited.thumb_path).unwrap();
+        save_thumbnail(&png, &png_bytes((800, 400)), &edited.thumb_path, 2_000_000).unwrap();
 
         let saved = library.get(shot.id).unwrap();
         assert!(!saved.thumb_stale);
@@ -3626,10 +3664,51 @@ mod tests {
     }
 
     #[test]
+    fn a_thumbnail_drawn_from_edits_saved_again_since_is_not_kept() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (4, 4));
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        let sidecar = capture::annotations_path(&png);
+        fs::write(&sidecar, r#"{"version":1,"shapes":[]}"#).unwrap();
+        touch(&shot.thumb_path, 1_000);
+        touch(&sidecar, 2_000);
+        let read = shot_annotations(&png).unwrap();
+        assert_eq!(read.edited_at, Some(2_000_000));
+        // Saved again while the first edits were being drawn.
+        touch(&sidecar, 3_000);
+        let before = fs::read(&shot.thumb_path).unwrap();
+
+        assert!(matches!(
+            save_thumbnail(&png, &png_bytes((8, 8)), &shot.thumb_path, 2_000_000),
+            Err(LibraryError::OutOfDate)
+        ));
+        assert_eq!(fs::read(&shot.thumb_path).unwrap(), before);
+        assert!(library.get(shot.id).unwrap().thumb_stale);
+    }
+
+    #[test]
+    fn a_saved_thumbnail_is_stamped_with_the_edits_it_was_drawn_from() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (4, 4));
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        let sidecar = capture::annotations_path(&png);
+        fs::write(&sidecar, r#"{"version":1,"shapes":[]}"#).unwrap();
+        touch(&sidecar, 2_000);
+
+        save_thumbnail(&png, &png_bytes((8, 8)), &shot.thumb_path, 2_000_000).unwrap();
+        assert!(!library.get(shot.id).unwrap().thumb_stale);
+        // Edits saved after the check but before the write still leave it stale.
+        touch(&sidecar, 2_500);
+        assert!(library.get(shot.id).unwrap().thumb_stale);
+    }
+
+    #[test]
     fn a_saved_thumbnail_must_be_a_png() {
         let dir = TempDir::new().unwrap();
         let thumb = dir.path().join("thumbs").join("shot.png");
-        assert!(save_thumbnail(b"not a png", &thumb).is_err());
+        assert!(save_thumbnail(&dir.path().join("shot.png"), b"not a png", &thumb, 0).is_err());
         assert!(!thumb.exists());
     }
 

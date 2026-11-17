@@ -13,10 +13,15 @@ export function hasEdits(shot: Edited): boolean {
   return typeof shot.editedAt === "number";
 }
 
+/** A capture drawn with its saved edits, as PNG bytes, with when those edits were saved. */
+export async function drawShot(id: number): Promise<{ png: Uint8Array; editedAt: number | null }> {
+  const [image, saved] = await Promise.all([shotImage(id), shotAnnotations(id)]);
+  return { png: await renderCapture(image, saved.annotations, saved.scaleFactor), editedAt: saved.editedAt ?? null };
+}
+
 /** A capture drawn with its saved edits, as PNG bytes. */
 export async function renderShot(id: number): Promise<Uint8Array> {
-  const [png, saved] = await Promise.all([shotImage(id), shotAnnotations(id)]);
-  return renderCapture(png, saved.annotations, saved.scaleFactor);
+  return (await drawShot(id)).png;
 }
 
 /** Copies the shot as it is finished: with its edits when it has any, else the original. */

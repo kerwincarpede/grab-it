@@ -1,6 +1,6 @@
 import { useEffect, useState, type RefObject } from "react";
 import { saveShotThumbnail, shotThumbnail, type Shot } from "./api";
-import { renderShot } from "./finished";
+import { drawShot } from "./finished";
 
 /* Thumbnails load only when their tile nears the viewport, a few at a time,
    and stay cached as blob URLs so scrolling back, refreshing the list or
@@ -19,21 +19,23 @@ export function thumbKey(shot: Pick<Shot, "id" | "path" | "editedAt">): string {
 /**
  * A shot's thumbnail PNG. One that is out of date with its edits is drawn
  * with them and saved, then read back fitted to the thumbnail size; should
- * drawing fail, whatever thumbnail is saved is used.
+ * drawing fail, whatever thumbnail is saved is used. A drawing of edits
+ * saved again meanwhile is shown but not kept, so the next look draws it again.
  */
 export async function loadThumbnail(shot: Pick<Shot, "id" | "thumbStale">): Promise<ArrayBuffer | Uint8Array> {
   if (!shot.thumbStale) return shotThumbnail(shot.id);
-  let drawn: Uint8Array;
+  let drawn: { png: Uint8Array; editedAt: number | null };
   try {
-    drawn = await renderShot(shot.id);
+    drawn = await drawShot(shot.id);
   } catch {
     return shotThumbnail(shot.id);
   }
+  if (drawn.editedAt === null) return drawn.png;
   try {
-    await saveShotThumbnail(shot.id, drawn);
+    await saveShotThumbnail(shot.id, drawn.png, drawn.editedAt);
     return await shotThumbnail(shot.id);
   } catch {
-    return drawn;
+    return drawn.png;
   }
 }
 

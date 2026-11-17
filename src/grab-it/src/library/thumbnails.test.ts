@@ -17,7 +17,7 @@ function backend(fail: string[] = []) {
       case "library_image":
         return new Uint8Array([137, 80, 78, 71]).buffer;
       case "library_annotations":
-        return { annotations: { version: 1, shapes: [] }, scaleFactor: 2 };
+        return { annotations: { version: 1, shapes: [] }, scaleFactor: 2, editedAt: 5_000 };
       case "library_save_thumbnail":
         return null;
       default:
