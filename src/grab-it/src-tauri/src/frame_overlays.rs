@@ -362,6 +362,7 @@ mod tests {
             vec![InputEvent {
                 at: start,
                 kind: InputKind::Click,
+                position: None,
             }],
             Some((40, 40)),
         );
@@ -396,6 +397,7 @@ mod tests {
             vec![InputEvent {
                 at: Instant::now(),
                 kind: InputKind::Click,
+                position: None,
             }],
             None,
         );
@@ -410,6 +412,7 @@ mod tests {
             vec![InputEvent {
                 at: start,
                 kind: InputKind::Click,
+                position: None,
             }],
             Some((-5, 3)),
         );
@@ -427,10 +430,12 @@ mod tests {
                 InputEvent {
                     at: start,
                     kind: InputKind::Keys("A".into()),
+                    position: None,
                 },
                 InputEvent {
                     at: start + ms(100),
                     kind: InputKind::Keys("Ctrl Shift 4".into()),
+                    position: None,
                 },
             ],
             None,

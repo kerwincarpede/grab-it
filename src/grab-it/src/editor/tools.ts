@@ -578,11 +578,18 @@ export function moveShape(shape: Shape, dx: number, dy: number): Shape {
   return transformShape(shape, { x: shape.x + dx, y: shape.y + dy, scaleX: 1, scaleY: 1 });
 }
 
-/** Step badge numbers: 1, 2, 3... in the order the steps were added. */
+/**
+ * Step badge numbers: 1, 2, 3... in the order the steps were added. A step
+ * with its own `number` (a guide step's place) shows that number instead and is
+ * not counted.
+ */
 export function stepNumbers(shapes: Shape[]): Map<string, number> {
   const numbers = new Map<string, number>();
+  let counted = 0;
   for (const shape of shapes) {
-    if (shape.type === "step") numbers.set(shape.id, numbers.size + 1);
+    if (shape.type !== "step") continue;
+    if (shape.number !== undefined) numbers.set(shape.id, shape.number);
+    else numbers.set(shape.id, ++counted);
   }
   return numbers;
 }

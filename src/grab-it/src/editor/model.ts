@@ -85,7 +85,10 @@ export interface TextShape {
   background?: boolean;
 }
 
-/** A numbered badge centred on x, y; numbered by its order among steps. */
+/**
+ * A numbered badge centred on x, y; numbered by its order among steps, or
+ * by `number` when set (a step capture's place in its guide).
+ */
 export interface StepShape {
   id: string;
   type: "step";
@@ -93,6 +96,7 @@ export interface StepShape {
   x: number;
   y: number;
   radius: number;
+  number?: number;
 }
 
 /** A square lens enlarging capture pixels around a separate, fixed spot. */

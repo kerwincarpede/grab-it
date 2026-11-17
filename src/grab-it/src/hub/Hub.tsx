@@ -13,6 +13,7 @@ import {
   RepeatIcon,
   ScreenIcon,
   SlidersIcon,
+  StepsIcon,
   TextIcon,
   TimerIcon,
   WindowIcon,
@@ -36,6 +37,7 @@ const TOOLS: { kind: CaptureKind; title: string; hotkey?: keyof Hotkeys; icon: R
   { kind: "record", title: "Record", icon: <RecordIcon /> },
   { kind: "text", title: "Grab text", hotkey: "text", icon: <TextIcon /> },
   { kind: "colour", title: "Pick colour", hotkey: "colour", icon: <ColourIcon /> },
+  { kind: "steps", title: "Step capture", hotkey: "steps", icon: <StepsIcon /> },
 ];
 
 const TIMED: { kind: CaptureKind; title: string; seconds: number }[] = [

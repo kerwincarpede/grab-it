@@ -25,7 +25,7 @@ export function onNavigate(handler: (view: MainView) => void): Promise<UnlistenF
 }
 
 /** A capture the Grab-it window and the hub can start. */
-export type CaptureKind = "region" | "window" | "screen" | "monitor" | "repeat" | "record" | "text" | "colour";
+export type CaptureKind = "region" | "window" | "screen" | "monitor" | "repeat" | "record" | "text" | "colour" | "steps";
 
 /** Starts a capture; the hub hides first so it is not in the shot. */
 export function startCapture(kind: CaptureKind, options: { delaySeconds?: number; monitor?: number } = {}): Promise<void> {

@@ -19,6 +19,7 @@ const SETTINGS = {
     text: "Cmd+Shift+1",
     colour: "Cmd+Shift+9",
     library: "Cmd+Shift+0",
+    steps: "Cmd+Shift+8",
   },
   afterCapture: "quickAccess",
   copyToClipboard: true,

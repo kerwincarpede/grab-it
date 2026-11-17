@@ -53,7 +53,7 @@ npm run tauri dev
 
 Grab-it starts in the tray with no window open. Closing a window keeps the app running in the tray. The very first launch also opens a short welcome listing the hotkeys; the tray's **Shortcuts and tips…** shows it again.
 
-To open a window or start a capture directly, for example on a desktop without a tray host, pass `--open` with one of `settings`, `library`, `welcome`, `region`, `all-in-one`, `repeat`, `text`, `colour`, `record`, `editor <file>`, `quick <file>` or `pin <file>`. npm, the Tauri CLI and cargo each consume one `--`, so three are needed:
+To open a window or start a capture directly, for example on a desktop without a tray host, pass `--open` with one of `settings`, `library`, `welcome`, `region`, `all-in-one`, `repeat`, `text`, `colour`, `record`, `steps`, `editor <file>`, `quick <file>`, `pin <file>` or `guide <file>`. npm, the Tauri CLI and cargo each consume one `--`, so three are needed:
 
 ```sh
 npm run tauri dev -- -- -- --open settings
@@ -82,6 +82,8 @@ src-tauri/target/debug/grab-it frames <path from record> --count 9
 Each capture is copied to the clipboard and saved to `<save folder>/originals/` as `Grab-it YYYY-MM-DD HH-MM-SS.png`, with `<name>.meta.json` beside it holding the time, mode, size, foreground app and window title. The PNG is never modified.
 
 Annotations are saved in `<name>.annotations.json` beside the capture. Crop and backdrop are non-destructive and only applied on copy and export. Recordings go to `<save folder>/recordings/` as `Grab-it YYYY-MM-DD HH-MM-SS.mp4` (or `.gif`), with their edits in `<name>.edits.json` (see [Recording editor](#recording-editor)).
+
+A step capture (`steps.rs`) saves each step as an ordinary capture in `originals/`, with a `step` shape whose `number` is set in its annotations sidecar, and lists them in `<save folder>/guides/Grab-it Guide YYYY-MM-DD HH-MM-SS.guide.json`: `{"version": 1, "steps": [{"capture": …, "description": …}]}`, each `capture` a path from the save folder, in step order. Reordering or deleting a step in the Guide window rewrites the guide file and renumbers those `step` shapes in each remaining capture's sidecar; a deleted step's capture stays in the Library.
 
 Region and Window freeze every monitor and show it fullscreen. Each monitor is cropped at its own scale factor, so mixed-DPI setups capture sharp.
 

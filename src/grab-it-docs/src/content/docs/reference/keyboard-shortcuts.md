@@ -17,6 +17,7 @@ These work from any app, while Grab-it is running.
 | Capture every monitor | `Ctrl + PrintScreen` | `⌘ ⇧ F` |
 | Capture text | `Shift + PrintScreen` | `⌘ ⇧ 1` |
 | Pick a colour | `Ctrl + Shift + PrintScreen` | `⌘ ⇧ 9` |
+| Start or stop a [step capture](/grab-it/capture/step-capture/) | `Ctrl + Alt + Shift + PrintScreen` | `⌘ ⇧ 8` |
 | Open the Library | `Alt + Shift + PrintScreen` | `⌘ ⇧ 0` |
 
 **Record**, **Repeat last region**, **Timed capture** and **Choose a monitor** have no hotkey of their own; start them from the tray menu, from All-in-one, or from the [command line](/grab-it/reference/command-line/).

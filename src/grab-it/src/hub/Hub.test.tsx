@@ -15,7 +15,7 @@ function backend({ monitors = 1, shots = 0 } = {}) {
       case "get_settings":
         return {
           saveFolder: "/tmp",
-          hotkeys: { allInOne: "", region: "Ctrl+Shift+R", window: "Alt+PrintScreen", screen: "", text: "", colour: "", library: "Ctrl+Shift+L" },
+          hotkeys: { allInOne: "", region: "Ctrl+Shift+R", window: "Alt+PrintScreen", screen: "", text: "", colour: "", library: "Ctrl+Shift+L", steps: "" },
           afterCapture: "quickAccess",
           copyToClipboard: true,
         };
@@ -48,7 +48,7 @@ describe("Hub", () => {
   it("starts each capture by its kind", async () => {
     const calls = backend();
     render(<Hub />);
-    for (const name of [/^Capture region/, /^Window/, /^Screen/, /^Record/, /^Grab text/, /^Pick colour/]) {
+    for (const name of [/^Capture region/, /^Window/, /^Screen/, /^Record/, /^Grab text/, /^Pick colour/, /^Step capture/]) {
       await userEvent.click(screen.getByRole("button", { name }));
     }
     await userEvent.click(screen.getByRole("button", { name: "Repeat last region" }));
@@ -59,6 +59,7 @@ describe("Hub", () => {
       "record",
       "text",
       "colour",
+      "steps",
       "repeat",
     ]);
   });

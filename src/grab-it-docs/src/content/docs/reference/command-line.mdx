@@ -30,11 +30,13 @@ Launching Grab-it again with no `--open` opens the Library.
 | `text` | Starts Capture text: drag over text to copy it |
 | `colour` (or `color`) | Starts the colour picker |
 | `record` | Starts a recording, or stops the one under way |
+| `steps` | Starts a [step capture](/grab-it/capture/step-capture/), or stops the one under way and opens its guide |
 | `editor <file>` | Opens a capture in the image editor |
 | `quick <file>` | Shows a capture on the Quick Access card |
 | `pin <file>` | Pins an image above other windows |
+| `guide <file>` | Opens a step capture's `.guide.json` in the Guide window |
 
-`editor`, `quick` and `pin` need the file to open, such as `--open pin shot.png`. If the file doesn't exist, nothing opens.
+`editor`, `quick`, `pin` and `guide` need the file to open, such as `--open pin shot.png`. If the file doesn't exist, nothing opens.
 
 Grab-it ignores other arguments, and prints a message (on the terminal it was started from) for an unknown target or a missing file.
 

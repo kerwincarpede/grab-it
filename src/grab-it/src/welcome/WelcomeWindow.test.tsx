@@ -25,6 +25,7 @@ const HOTKEYS = {
   text: "Shift+PrintScreen",
   colour: "Ctrl+Shift+PrintScreen",
   library: "Alt+Shift+PrintScreen",
+  steps: "Ctrl+Alt+Shift+PrintScreen",
 };
 
 const NOTHING_ASKED: PermissionStatus = {

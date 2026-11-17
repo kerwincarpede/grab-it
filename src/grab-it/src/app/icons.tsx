@@ -61,6 +61,15 @@ export const RecordIcon = ({ size }: IconProps) => (
   </Icon>
 );
 
+/** Numbered steps: a guide made from clicks. */
+export const StepsIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <circle cx="6" cy="7" r="2.5" />
+    <circle cx="6" cy="17" r="2.5" />
+    <path d="M11 7h9M11 17h9" />
+  </Icon>
+);
+
 export const TextIcon = ({ size }: IconProps) => (
   <Icon size={size}>
     <path d="M4 7V5h16v2M9 19h6M12 5v14" />

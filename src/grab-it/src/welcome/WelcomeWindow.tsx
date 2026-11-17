@@ -14,6 +14,7 @@ import {
   ScreenIcon,
   SearchIcon,
   SparkleIcon,
+  StepsIcon,
   TextIcon,
   WindowIcon,
 } from "../app/icons";
@@ -43,6 +44,7 @@ const SHORTCUTS: { key: keyof Hotkeys; title: string; detail: string; icon: Reac
   { key: "text", title: "Capture text", detail: "Drag over text to copy it.", icon: <TextIcon /> },
   { key: "colour", title: "Pick a colour", detail: "Click a pixel to copy its hex code.", icon: <ColourIcon /> },
   { key: "library", title: "Open the library", detail: "Every capture, searchable, from anywhere.", icon: <GridIcon /> },
+  { key: "steps", title: "Step capture", detail: "Each click becomes a numbered step in a guide. Press again to stop.", icon: <StepsIcon /> },
 ];
 
 const TIP_ICONS: Record<string, ReactNode> = {

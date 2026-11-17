@@ -52,6 +52,9 @@ pub enum Action {
     Record,
     /// The region overlay with a toolbar offering every capture mode.
     AllInOne,
+    /// Start a step capture, saving each click as a guide step, or stop the
+    /// one under way and open its guide (see `steps.rs`).
+    Steps,
 }
 
 impl Action {
@@ -63,6 +66,7 @@ impl Action {
             | Self::Colour
             | Self::Record
             | Self::AllInOne => CaptureMode::Region,
+            Self::Steps => CaptureMode::Window,
             Self::Window => CaptureMode::Window,
             Self::Screen => CaptureMode::Screen,
             Self::Monitor(_) => CaptureMode::Monitor,
@@ -99,8 +103,18 @@ pub fn start_after(app: &AppHandle, action: Action, delay: Duration) {
 
 /// Starts a capture without blocking the caller (often the main thread).
 pub fn start(app: &AppHandle, action: Action) {
+    if action == Action::Steps {
+        crate::steps::toggle(app, crate::steps::Trigger::Keys);
+        return;
+    }
     // The same action that starts a recording ends it.
     if action.stops_recording() && record::stop(app) {
+        return;
+    }
+    // Refused before a region is picked; record::start_with refuses
+    // every other way of starting one too.
+    if action == Action::Record && crate::steps::is_running() {
+        report_failure(app, record::STEPS_RUNNING);
         return;
     }
     if !permissions::ensure_screen_capture(app) {
@@ -193,6 +207,8 @@ pub fn start(app: &AppHandle, action: Action) {
                 screen::capture_all()
                     .map(|image| finish(&app, &image, CaptureMode::Screen, &foreground, scale))
             }
+            // Handled before the thread starts.
+            Action::Steps => Ok(()),
             Action::Monitor(index) => {
                 let foreground = screen::foreground();
                 let scale = monitor_scale(Some(index));
@@ -559,6 +575,7 @@ mod tests {
             Action::Repeat,
             Action::Text,
             Action::Colour,
+            Action::Steps,
         ] {
             assert!(!action.stops_recording(), "{action:?} must not stop it");
         }

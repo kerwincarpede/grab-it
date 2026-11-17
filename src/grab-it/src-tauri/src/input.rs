@@ -26,10 +26,14 @@ use rdev::{Button, EventType, Key};
 const START_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// One click or key press.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InputEvent {
     pub at: Instant,
     pub kind: InputKind,
+    /// Where the pointer was for a click, in desktop coordinates: the last
+    /// place rdev reported it moving to, since its button events carry no
+    /// position. None for key presses and before the pointer first moved.
+    pub position: Option<(f64, f64)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,6 +262,8 @@ pub struct Collector {
     keys: bool,
     style: KeyStyle,
     held: Held,
+    /// The pointer's last reported place, for the clicks.
+    pointer: Option<(f64, f64)>,
     events: Vec<InputEvent>,
 }
 
@@ -268,6 +274,7 @@ impl Collector {
             keys,
             style,
             held: Held::default(),
+            pointer: None,
             events: Vec::new(),
         }
     }
@@ -284,8 +291,10 @@ impl Collector {
                 self.events.push(InputEvent {
                     at,
                     kind: InputKind::Click,
+                    position: self.pointer,
                 });
             }
+            EventType::MouseMove { x, y } => self.pointer = Some((x, y)),
             EventType::KeyPress(key) if modifier(key).is_some() => self.held.press(key),
             EventType::KeyRelease(key) if modifier(key).is_some() => self.held.release(key),
             EventType::KeyPress(key) if self.keys && !secure_input => {
@@ -293,6 +302,7 @@ impl Collector {
                     self.events.push(InputEvent {
                         at,
                         kind: InputKind::Keys(label),
+                        position: None,
                     });
                 }
             }
@@ -553,7 +563,8 @@ mod tests {
             clicks.take(),
             [InputEvent {
                 at,
-                kind: InputKind::Click
+                kind: InputKind::Click,
+                position: None,
             }]
         );
         assert!(clicks.take().is_empty());
@@ -562,6 +573,22 @@ mod tests {
         keys.add(&EventType::ButtonPress(Button::Left), at, false);
         keys.add(&EventType::KeyPress(Key::KeyA), at, false);
         assert_eq!(labels(&mut keys), ["A"]);
+    }
+
+    #[test]
+    fn a_click_is_placed_where_the_pointer_last_moved() {
+        let at = Instant::now();
+        let mut clicks = Collector::new(true, false, WORDS);
+        clicks.add(&EventType::ButtonPress(Button::Left), at, false);
+        clicks.add(&EventType::MouseMove { x: 10.0, y: 20.0 }, at, false);
+        clicks.add(&EventType::MouseMove { x: 15.5, y: 30.0 }, at, false);
+        clicks.add(&EventType::ButtonPress(Button::Left), at, false);
+        let positions: Vec<_> = clicks.take().into_iter().map(|e| e.position).collect();
+        assert_eq!(positions, [None, Some((15.5, 30.0))]);
+        // Moves are followed even while clicks are not collected.
+        let mut keys = Collector::new(false, true, WORDS);
+        keys.add(&EventType::MouseMove { x: 1.0, y: 1.0 }, at, false);
+        assert_eq!(keys.pointer, Some((1.0, 1.0)));
     }
 
     #[test]

@@ -169,6 +169,7 @@ fn shortcut_id(action: HotkeyAction) -> Option<&'static str> {
         HotkeyAction::Capture(Action::Screen) => Some("capture-screen"),
         HotkeyAction::Capture(Action::Text) => Some("capture-text"),
         HotkeyAction::Capture(Action::Colour) => Some("pick-colour"),
+        HotkeyAction::Capture(Action::Steps) => Some("step-capture"),
         HotkeyAction::Capture(Action::Monitor(_) | Action::Repeat | Action::Record) => None,
         HotkeyAction::Library => Some("open-library"),
     }
@@ -185,6 +186,7 @@ fn description(action: HotkeyAction) -> &'static str {
         HotkeyAction::Capture(Action::Text) => "Capture text",
         HotkeyAction::Capture(Action::Colour) => "Pick a colour",
         HotkeyAction::Capture(Action::Record) => "Record the screen",
+        HotkeyAction::Capture(Action::Steps) => "Start or stop a step capture",
         HotkeyAction::Library => "Open the Grab-it library",
     }
 }

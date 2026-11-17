@@ -957,6 +957,7 @@ struct StoredHotkeys {
     text: Option<String>,
     colour: Option<String>,
     library: Option<String>,
+    steps: Option<String>,
 }
 
 impl StoredHotkeys {
@@ -974,6 +975,7 @@ impl StoredHotkeys {
             text: pick(self.text, defaults.text),
             colour: pick(self.colour, defaults.colour),
             library: pick(self.library, defaults.library),
+            steps: pick(self.steps, defaults.steps),
         }
     }
 }
@@ -2340,6 +2342,16 @@ mod tests {
         assert_eq!(loaded.hotkeys.screen, Hotkeys::default().screen);
         // Settings from before All-in-one get its default.
         assert_eq!(loaded.hotkeys.all_in_one, Hotkeys::default().all_in_one);
+        // ...and so do those from before step capture.
+        assert_eq!(loaded.hotkeys.steps, Hotkeys::default().steps);
+        assert_eq!(
+            loaded.hotkeys.steps,
+            if cfg!(target_os = "macos") {
+                "Cmd+Shift+8"
+            } else {
+                "Ctrl+Alt+Shift+PrintScreen"
+            }
+        );
     }
 
     #[test]

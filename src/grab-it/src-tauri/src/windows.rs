@@ -57,6 +57,14 @@ pub fn open(app: &AppHandle, target: OpenTarget) -> tauri::Result<()> {
             actions::start(app, actions::Action::Record);
             Ok(())
         }
+        OpenTarget::Steps => {
+            actions::start(app, actions::Action::Steps);
+            Ok(())
+        }
+        OpenTarget::Guide(path) => match existing_file(&path) {
+            Some(path) => crate::steps::show_guide(app, &path),
+            None => Ok(()),
+        },
         OpenTarget::Editor(path) => match existing_file(&path) {
             Some(path) => show_editor(app, &path),
             None => Ok(()),
@@ -89,6 +97,30 @@ fn existing_file(path: &Path) -> Option<std::path::PathBuf> {
             None
         }
     }
+}
+
+/// The Guide window, which edits and exports a step capture's guide.
+pub const GUIDE_LABEL: &str = "guide";
+
+/// Shows the Guide window titled after `title`, reloading it when it is
+/// already open so it shows the guide now chosen (see `steps::show_guide`).
+pub fn show_guide(app: &AppHandle, title: &str) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(GUIDE_LABEL) {
+        window.set_title(&format!("{title} - Grab-it Guide"))?;
+        window.eval("window.location.reload()")?;
+        return bring_to_front(&window);
+    }
+    WebviewWindowBuilder::new(
+        app,
+        GUIDE_LABEL,
+        WebviewUrl::App("index.html#/guide".into()),
+    )
+    .title(format!("{title} - Grab-it Guide"))
+    .inner_size(900.0, 760.0)
+    .min_inner_size(560.0, 420.0)
+    .center()
+    .build()
+    .map(|_| ())
 }
 
 /// Opens `capture` in an editor window, or focuses the one already showing it.
