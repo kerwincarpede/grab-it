@@ -273,6 +273,63 @@ describe("RegionOverlay", () => {
     expect(screen.queryByTestId("overlay-guide-x")).not.toBeInTheDocument();
   });
 
+  it("clears the guide lines and loupe when the pointer leaves for another display", async () => {
+    mockOverlay();
+    render(<RegionOverlay />);
+    const overlay = await ready();
+
+    fireEvent.mouseMove(overlay, { clientX: 640, clientY: 480 });
+    expect(screen.getByTestId("overlay-loupe")).toBeInTheDocument();
+
+    fireEvent.mouseLeave(overlay);
+    expect(screen.queryByTestId("overlay-guide-x")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("overlay-loupe")).not.toBeInTheDocument();
+
+    fireEvent.mouseMove(overlay, { clientX: 600, clientY: 400 });
+    expect(screen.getByTestId("overlay-loupe")).toBeInTheDocument();
+  });
+
+  it("clears the guide lines, loupe and window highlight when another overlay takes the focus", async () => {
+    mockOverlay();
+    render(<RegionOverlay />);
+    const overlay = await ready();
+
+    fireEvent.mouseMove(overlay, { clientX: 150, clientY: 150 });
+    await waitFor(() =>
+      expect(screen.getByTestId("overlay-selection")).toHaveTextContent("Editor"),
+    );
+
+    fireEvent.blur(window);
+    expect(screen.queryByTestId("overlay-guide-x")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("overlay-loupe")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("overlay-selection")).not.toBeInTheDocument();
+  });
+
+  it("keeps a drag going when the pointer leaves the display", async () => {
+    const calls = mockOverlay();
+    render(<RegionOverlay />);
+    const overlay = await ready();
+
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(overlay, { clientX: 300, clientY: 200 });
+    fireEvent.mouseLeave(overlay);
+    fireEvent.mouseMove(overlay, { clientX: 400, clientY: 300 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 400, clientY: 300 });
+
+    await waitFor(() =>
+      expect(last(calls)).toEqual({
+        cmd: "overlay_finish",
+        payload: {
+          selection: {
+            kind: "region",
+            rect: { x: 100, y: 100, width: 300, height: 200 },
+            viewportWidth: 1000,
+          },
+        },
+      }),
+    );
+  });
+
   it("has no guide lines or loupe in window mode", async () => {
     mockOverlay({ mode: "window" });
     render(<RegionOverlay />);
