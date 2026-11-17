@@ -441,6 +441,9 @@ function mockEditor(
   return saved;
 }
 
+/** Time for the file's first test, which also pays for the editor's first render. */
+const COLD_START_TIMEOUT_MS = 20_000;
+
 const bytes = (payload: unknown) => Array.from(new Uint8Array(payload as ArrayBuffer));
 
 async function ready() {
@@ -511,6 +514,7 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
     URL.revokeObjectURL = vi.fn();
   });
 
+  // The first test in the file also renders the editor for the first time, which is slow on a busy machine.
   it("fits a highlighter drag over a line of text to it, and keeps the stroke where none is found", async () => {
     const saved = mockEditor({ version: 1, shapes: [], crop: null });
     await ready();
@@ -526,7 +530,7 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
     await waitFor(() => expect(last(saved)?.shapes).toHaveLength(2));
     expect(last(saved)!.shapes[1]).toMatchObject({ type: "highlighter", points: [20, 100, 120, 102] });
     expect(last(saved)!.shapes[1]).not.toMatchObject({ strokeWidth: 14 });
-  });
+  }, COLD_START_TIMEOUT_MS);
 
   it("draws with Z, selects the lens interior and saves its zoom, shape, line and spot", async () => {
     const saved = mockEditor({ version: 1, shapes: [], crop: null });

@@ -54,7 +54,7 @@ describe("editor preferences", () => {
   });
 
   it("remembers the last-picked stamp and its size", () => {
-    const choices = { ...DEFAULT_CHOICES, tool: "stamp" as const, style: { color: "#e5484d", stamp: "keycap:Ctrl" }, widths: { stamp: 80 } };
+    const choices = { ...DEFAULT_CHOICES, tool: "stamp" as const, style: { color: "#e5484d", blurMode: "pixelate" as const, stamp: "keycap:Ctrl" }, widths: { stamp: 80 } };
     const stored = toPreferences(choices);
     expect(stored).toMatchObject({ tool: "stamp", stamp: "keycap:Ctrl", widths: { stamp: 80 } });
     expect(fromPreferences(stored)).toEqual(choices);

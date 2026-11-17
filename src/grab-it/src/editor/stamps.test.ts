@@ -23,9 +23,10 @@ describe("stamp catalogue", () => {
   });
 
   it("names emoji after Noto's files and finds an SVG for every cursor and emoji", () => {
+    // Vite inlines small SVGs as data: URLs and links the rest.
     expect(stampDef("emoji-1f44d")?.label).toBe("Thumbs up");
     for (const stamp of STAMPS) {
-      if (stamp.kind === "cursor" || stamp.kind === "emoji") expect(stamp.url, stamp.name).toMatch(/\.svg/);
+      if (stamp.kind === "cursor" || stamp.kind === "emoji") expect(stamp.url, stamp.name).toMatch(/\.svg|^data:image\/svg\+xml/);
       if (stamp.kind === "icon") expect(stamp.parts?.length, stamp.name).toBeGreaterThan(0);
     }
     expect(stampDef("emoji-1f44d")?.url).toMatch(/emoji_u1f44d\.svg/);
