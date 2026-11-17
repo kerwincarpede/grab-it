@@ -507,12 +507,14 @@ export const CORNER_ANCHORS = ["top-left", "top-right", "bottom-left", "bottom-r
 export const ALL_ANCHORS = [...CORNER_ANCHORS, "top-center", "middle-left", "middle-right", "bottom-center"];
 
 /**
- * The resize handles a shape offers. Text and step badges have a single size
- * (font size, radius), so a side handle could only stretch one axis; they
- * resize from the corners, keeping their ratio.
+ * The resize handles a shape offers. Text, callouts and step badges have a
+ * single size (font size, radius), so a side handle could only stretch one
+ * axis; they resize from the corners, keeping their ratio.
  */
 export function anchorsFor(shape: Shape | null): string[] {
-  return shape?.type === "text" || shape?.type === "step" || shape?.type === "magnify" ? CORNER_ANCHORS : ALL_ANCHORS;
+  return shape?.type === "text" || shape?.type === "callout" || shape?.type === "step" || shape?.type === "magnify"
+    ? CORNER_ANCHORS
+    : ALL_ANCHORS;
 }
 
 /**
@@ -554,6 +556,12 @@ export function transformShape(shape: Shape, t: NodeTransform): Shape {
     }
     case "text":
       return { ...shape, x: t.x, y: t.y, fontSize: Math.max(6, shape.fontSize * uniformScale(t)) };
+    case "callout": {
+      // A move takes the tip along; a resize leaves it on what it points at.
+      const moved = t.scaleX === 1 && t.scaleY === 1;
+      const tail = moved ? { x: shape.tail.x + t.x - shape.x, y: shape.tail.y + t.y - shape.y } : shape.tail;
+      return { ...shape, x: t.x, y: t.y, fontSize: Math.max(6, shape.fontSize * uniformScale(t)), tail };
+    }
     case "step":
       return { ...shape, x: t.x, y: t.y, radius: Math.max(6, shape.radius * uniformScale(t)) };
   }
@@ -672,8 +680,9 @@ export function stepNumbers(shapes: Shape[]): Map<string, number> {
 /**
  * Applies the parts of `style` a shape has: colour (not blur or spotlight),
  * stroke width on stroked shapes (widened for the highlighter), font size
- * on text, radius on steps, fill on boxes, background on text and the blur
- * mode. A style that changes nothing returns the same shape.
+ * on text and callouts, radius on steps, fill on boxes, background on text
+ * and callouts, and the blur mode. A style that changes nothing returns the
+ * same shape.
  */
 export function restyleShape(shape: Shape, style: Partial<Style>): Shape {
   if (shape.type === "spotlight") return shape;
@@ -686,7 +695,7 @@ export function restyleShape(shape: Shape, style: Partial<Style>): Shape {
     const strokeWidth = next.type === "highlighter" ? highlighterWidth(style.strokeWidth) : style.strokeWidth;
     if (strokeWidth !== next.strokeWidth) next = { ...next, strokeWidth };
   }
-  if (style.fontSize && next.type === "text" && style.fontSize !== next.fontSize) {
+  if (style.fontSize && (next.type === "text" || next.type === "callout") && style.fontSize !== next.fontSize) {
     next = { ...next, fontSize: style.fontSize };
   }
   if (style.stepRadius && next.type === "step" && style.stepRadius !== next.radius) {
@@ -695,7 +704,7 @@ export function restyleShape(shape: Shape, style: Partial<Style>): Shape {
   if (style.fill !== undefined && (next.type === "rect" || next.type === "ellipse")) {
     next = { ...next, fill: style.fill };
   }
-  if (style.background !== undefined && next.type === "text") {
+  if (style.background !== undefined && (next.type === "text" || next.type === "callout")) {
     next = { ...next, background: style.background };
   }
   if (next.type === "magnify") {

@@ -263,3 +263,17 @@ describe("pointer sidecars", () => {
     expect(doc).not.toHaveProperty("pointer");
   });
 });
+
+describe("callout sidecars", () => {
+  const callout = { id: "c", type: "callout", color: "#e5484d", x: 40, y: 20, text: "Here", fontSize: 30, tail: { x: 10, y: 90 } };
+  it("round-trips a callout, with and without a background", () => {
+    const value = { version: 1, shapes: [callout, { ...callout, id: "filled", background: true }], crop: null };
+    expect(parseAnnotations(JSON.parse(JSON.stringify(value)))).toEqual(value);
+  });
+  it.each([
+    { tail: undefined }, { tail: [10, 90] }, { tail: { x: 10 } }, { tail: { x: "10", y: 90 } }, { tail: null },
+    { text: 5 }, { fontSize: "30" }, { background: "yes" },
+  ])("skips malformed callout fields %j", (invalid) => {
+    expect(parseAnnotations({ version: 1, shapes: [{ ...callout, ...invalid }] }).shapes).toEqual([]);
+  });
+});

@@ -29,6 +29,7 @@ vi.mock("react-konva", async () => {
       enabledAnchors,
       draggable,
       onMouseDown,
+      onDblClick,
       x,
       y,
       points,
@@ -46,6 +47,7 @@ vi.mock("react-konva", async () => {
       enabledAnchors?: string[];
       draggable?: boolean;
       onMouseDown?: () => void;
+      onDblClick?: () => void;
       x?: number;
       y?: number;
       points?: number[];
@@ -75,6 +77,7 @@ vi.mock("react-konva", async () => {
           "data-scale-x": scaleX,
           "data-scale-y": scaleY,
           onMouseDown: id ? () => onMouseDown?.() : undefined,
+          onDoubleClick: onDblClick ? () => onDblClick() : undefined,
           // A DOM drag stands in for a Konva drag: the node lands where `pointerAt` says.
           onDrag: onDragMove ? (event: { nativeEvent: MouseEvent }) => onDragMove(dragEvent(event.nativeEvent)) : undefined,
           onDragEnd: onDragEnd ? (event: { nativeEvent: MouseEvent }) => onDragEnd(dragEvent(event.nativeEvent)) : undefined,
@@ -1286,7 +1289,7 @@ describe("EditorWindow", () => {
     // The webview's own menu is suppressed.
     expect(fireEvent.contextMenu(canvas, { clientX: 300, clientY: 200 })).toBe(false);
     const wheel = within(screen.getByRole("menu", { name: "Tools" }));
-    expect(wheel.getAllByRole("menuitemradio")).toHaveLength(14);
+    expect(wheel.getAllByRole("menuitemradio")).toHaveLength(15);
     expect(wheel.getByRole("menuitemradio", { name: "Arrow" })).toHaveAttribute("aria-checked", "true");
     fireEvent.click(wheel.getByRole("menuitemradio", { name: "Spotlight" }));
     expect(screen.queryByRole("menu", { name: "Tools" })).not.toBeInTheDocument();
@@ -1846,6 +1849,138 @@ describe("EditorWindow", () => {
 
     fireEvent.click(pressed("Arrow"));
     expect(cropHandles()).not.toBeInTheDocument();
+  });
+
+
+  describe("callouts", () => {
+    const withCallout: Annotations = {
+      ...sidecar,
+      shapes: [...sidecar.shapes, { id: "c1", type: "callout", color: "#e5484d", x: 100, y: 50, text: "Look", fontSize: 24, tail: { x: 40, y: 120 } }],
+    };
+    const callout = (saved: Annotations[]) => last(saved)?.shapes.find((shape) => shape.id === "c1");
+    /** Types into the open text box and presses Enter. */
+    const type = (value: string) => {
+      const input = screen.getByRole("textbox", { name: "Text" });
+      fireEvent.change(input, { target: { value } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    };
+
+    it("offers Callout after Text, on K", async () => {
+      mockEditor();
+      await ready();
+      const rail = within(screen.getByRole("toolbar", { name: "Annotation tools" }));
+      const names = rail.getAllByRole("button").map((button) => button.getAttribute("aria-label"));
+      expect(names.indexOf("Callout")).toBe(names.indexOf("Text") + 1);
+      expect(rail.getByRole("button", { name: "Callout" })).toHaveAttribute("title", "Callout (K)");
+      fireEvent.keyDown(window, { key: "k" });
+      expect(pressed("Callout")).toHaveAttribute("aria-pressed", "true");
+      expect(widthButton("Text size")).toHaveTextContent("30px");
+      expect(screen.getByRole("button", { name: "Text background" })).toHaveAttribute("aria-pressed", "false");
+    });
+
+    it("points the tail where the drag starts and puts the bubble where it ends", async () => {
+      const saved = mockEditor({ version: 1, shapes: [], crop: null });
+      await ready();
+      fireEvent.keyDown(window, { key: "k" });
+      drag([60, 200], [150, 80]);
+      // While typing, a line shows where the tail will go.
+      expect(document.querySelector('[data-name="callout-preview"]')).toBeInTheDocument();
+      type("Save here");
+      await waitFor(() =>
+        expect(last(saved)?.shapes[0]).toMatchObject({ type: "callout", x: 150, y: 80, text: "Save here", fontSize: 30, tail: { x: 60, y: 200 } }),
+      );
+      expect(last(saved)?.shapes[0]).not.toHaveProperty("background");
+      expect(document.querySelector('[data-name="callout-preview"]')).not.toBeInTheDocument();
+      expect(document.querySelector('[data-name="callout-bubble"]')).toBeInTheDocument();
+      expect(document.querySelector('[data-text="Save here"]')).toBeInTheDocument();
+      // The new callout is selected, its tip ready to drag.
+      expect(handleAt("tail")).toEqual([60, 200]);
+    });
+
+    it("gives a plain click a tail below and left of the bubble", async () => {
+      const saved = mockEditor({ version: 1, shapes: [], crop: null });
+      await ready();
+      fireEvent.keyDown(window, { key: "k" });
+      drag([200, 100], [200, 100]);
+      type("Note");
+      await waitFor(() => expect(last(saved)?.shapes[0]).toMatchObject({ type: "callout", x: 200, y: 100, tail: { x: 170, y: 175 } }));
+    });
+
+    it("adds nothing when the text is left empty", async () => {
+      mockEditor({ version: 1, shapes: [], crop: null });
+      await ready();
+      fireEvent.keyDown(window, { key: "k" });
+      drag([60, 200], [150, 80]);
+      type("  ");
+      expect(screen.queryByRole("textbox", { name: "Text" })).not.toBeInTheDocument();
+      expect(document.querySelector('[data-name="callout-bubble"]')).not.toBeInTheDocument();
+      expect(document.querySelector('[data-name="callout-preview"]')).not.toBeInTheDocument();
+      expect(shapeIds()).toEqual([]);
+    });
+
+    it("edits the text on double-click, and clearing it deletes the callout", async () => {
+      const saved = mockEditor(withCallout);
+      await ready();
+      fireEvent.doubleClick(document.querySelector('[data-id="c1"]') as Element);
+      expect(screen.getByRole("textbox", { name: "Text" })).toHaveValue("Look");
+      type("Look again");
+      await waitFor(() => expect(callout(saved)).toMatchObject({ text: "Look again", x: 100, y: 50, tail: { x: 40, y: 120 } }));
+      fireEvent.doubleClick(document.querySelector('[data-id="c1"]') as Element);
+      type("");
+      await waitFor(() => expect(last(saved)?.shapes.map((shape) => shape.id)).not.toContain("c1"));
+    });
+
+    it("moves the tip from its handle as one undo step", async () => {
+      const saved = mockEditor(withCallout);
+      await ready();
+      expect(lineHandle("tail")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Select" }));
+      fireEvent.mouseDown(document.querySelector('[data-id="c1"]') as Element);
+      expect(handleAt("tail")).toEqual([40, 120]);
+      dragHandle("tail", [10, 260]);
+      await waitFor(() => expect(callout(saved)).toMatchObject({ x: 100, y: 50, tail: { x: 10, y: 260 } }));
+      expect(handleAt("tail")).toEqual([10, 260]);
+      fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(callout(saved)).toMatchObject({ tail: { x: 40, y: 120 } }));
+    });
+
+    it("moves the bubble and tip together, the handle following the drag", async () => {
+      const saved = mockEditor(withCallout);
+      await ready();
+      fireEvent.click(screen.getByRole("button", { name: "Select" }));
+      const node = document.querySelector('[data-id="c1"]') as Element;
+      fireEvent.mouseDown(node);
+      Object.assign(pointerAt, { x: 130, y: 60 });
+      fireEvent(node, new MouseEvent("drag", { bubbles: true }));
+      expect(handleAt("tail")).toEqual([70, 130]);
+      fireEvent(node, new MouseEvent("dragend", { bubbles: true }));
+      await waitFor(() => expect(callout(saved)).toMatchObject({ x: 130, y: 60, tail: { x: 70, y: 130 } }));
+    });
+
+    it("restyles the selected callout: background, text size and colour, from the corners only", async () => {
+      const saved = mockEditor(withCallout);
+      await ready();
+      fireEvent.click(screen.getByRole("button", { name: "Select" }));
+      fireEvent.mouseDown(document.querySelector('[data-id="c1"]') as Element);
+      expect(anchors()).toEqual(["top-left", "top-right", "bottom-left", "bottom-right"]);
+      expect(widthButton("Text size")).toHaveTextContent("24px");
+      fireEvent.click(screen.getByRole("button", { name: "Text background" }));
+      expect(screen.getByRole("button", { name: "Text background" })).toHaveAttribute("aria-pressed", "true");
+      await waitFor(() => expect(callout(saved)).toMatchObject({ background: true }));
+      fireEvent.keyDown(window, { key: "]" });
+      await waitFor(() => expect(callout(saved)).toMatchObject({ fontSize: 30 }));
+      fireEvent.click(screen.getByRole("button", { name: "Colour #0090ff" }));
+      await waitFor(() => expect(callout(saved)).toMatchObject({ color: "#0090ff", tail: { x: 40, y: 120 } }));
+    });
+
+    it("duplicates a callout with its tip", async () => {
+      const saved = mockEditor(withCallout);
+      await ready();
+      fireEvent.click(screen.getByRole("button", { name: "Select" }));
+      fireEvent.mouseDown(document.querySelector('[data-id="c1"]') as Element);
+      fireEvent.keyDown(window, { key: "d", ctrlKey: true });
+      await waitFor(() => expect(last(saved)?.shapes[5]).toMatchObject({ type: "callout", x: 112, y: 62, tail: { x: 52, y: 132 } }));
+    });
   });
 
   describe("backdrop presets", () => {

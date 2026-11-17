@@ -1,7 +1,9 @@
 import { useEffect, useRef } from "react";
 import Konva from "konva";
 import { Arrow, Circle, Ellipse, Group, Image as KonvaImage, Label, Line, Rect, Shape as KonvaShape, Tag, Text } from "react-konva";
-import { FILL_OPACITY, SPOTLIGHT_DIM, type BlurShape, type Rect as Box, type Shape } from "./model";
+import { FILL_OPACITY, SPOTLIGHT_DIM, type BlurShape, type CalloutShape, type Rect as Box, type Shape } from "./model";
+import { calloutBubble, calloutOutline, calloutWedge, labelPadding, labelRadius } from "./callout";
+import { roundedRectPath } from "./flatten";
 import { lensPath, magnifyLinePoints, magnifyScene } from "./magnify";
 import { isIdentity, textSize, uprightTransform, type Orientation } from "./orient";
 import { contrastColor, curvePoints, normalizeRect, withAlpha, type NodeTransform } from "./tools";
@@ -83,6 +85,72 @@ export function SpotlightDim({ dim }: { dim: Box[] }) {
       }}
     />
   );
+}
+
+/** One line of annotation text, as Text and Callout draw it. */
+interface LabelText {
+  text: string;
+  fontSize: number;
+  color: string;
+  /** On a rounded pill of the colour, in a contrasting text colour. */
+  background?: boolean;
+}
+
+/**
+ * Bold annotation text, in the colour or on a pill. `props` go on the outer
+ * node. The pill is offset by its padding, so x, y stays the text's corner
+ * and toggling the background does not move it.
+ */
+function labelNode({ text, fontSize, color, background }: LabelText, props: object = {}) {
+  if (background) {
+    const padding = labelPadding(fontSize);
+    return (
+      <Label {...props} offsetX={padding} offsetY={padding}>
+        <Tag fill={color} cornerRadius={labelRadius(fontSize)} />
+        <Text text={text} fontSize={fontSize} fontStyle="bold" fill={contrastColor(color)} padding={padding} />
+      </Label>
+    );
+  }
+  return <Text {...props} text={text} fontSize={fontSize} fontStyle="bold" fill={color} />;
+}
+
+/** Text that turns back about its centre, so it reads upright on the same spot; unchanged when nothing is turned. */
+function uprightLabel(label: LabelText, upright: ReturnType<typeof uprightTransform> | null) {
+  if (!upright) return labelNode(label);
+  const box = textSize(label.text, label.fontSize);
+  return (
+    <Group x={box.width / 2} y={box.height / 2} offsetX={box.width / 2} offsetY={box.height / 2} {...upright}>
+      {labelNode(label)}
+    </Group>
+  );
+}
+
+/**
+ * Draws a callout's bubble and tail as one shape, in the bubble's own
+ * pixels. Stroked first and filled over, the outline shows around both but
+ * not where they join. While the callout is resized (its group scaled), the
+ * tip stays on what it points at, as it will once the resize ends.
+ */
+function calloutScene(shape: CalloutShape, bubble: Box) {
+  return (ctx: Konva.Context, node: Konva.Shape) => {
+    const group = node.getParent();
+    const sx = group?.scaleX() || 1;
+    const sy = group?.scaleY() || 1;
+    const origin = group && (sx !== 1 || sy !== 1) ? { x: group.x(), y: group.y() } : shape;
+    const tip = { x: (shape.tail.x - origin.x) / sx - bubble.x, y: (shape.tail.y - origin.y) / sy - bubble.y };
+    const own = { x: 0, y: 0, width: bubble.width, height: bubble.height };
+    ctx.beginPath();
+    roundedRectPath(ctx, own, labelRadius(shape.fontSize));
+    const wedge = calloutWedge(own, tip, shape.fontSize);
+    if (wedge.length > 0) {
+      ctx.moveTo(wedge[0], wedge[1]);
+      ctx.lineTo(wedge[2], wedge[3]);
+      ctx.lineTo(wedge[4], wedge[5]);
+      ctx.closePath();
+    }
+    ctx.strokeShape(node);
+    ctx.fillShape(node);
+  };
 }
 
 /** One annotation as a Konva node, named by its id so the transformer can find it. */
@@ -215,46 +283,32 @@ export default function ShapeNode({ shape, image, step, editable, onSelect, onCh
       if (upright) {
         // The draggable group keeps x, y as the text's corner in capture
         // pixels; inside, the text turns back about its centre.
-        const box = textSize(shape.text, shape.fontSize);
-        const padding = shape.fontSize * 0.35;
         return (
           <Group {...common} x={shape.x} y={shape.y} onDblClick={() => onEditText(shape.id)}>
-            <Group x={box.width / 2} y={box.height / 2} offsetX={box.width / 2} offsetY={box.height / 2} {...upright}>
-              {shape.background ? (
-                <Label offsetX={padding} offsetY={padding}>
-                  <Tag fill={shape.color} cornerRadius={shape.fontSize * 0.4} />
-                  <Text text={shape.text} fontSize={shape.fontSize} fontStyle="bold" fill={contrastColor(shape.color)} padding={padding} />
-                </Label>
-              ) : (
-                <Text text={shape.text} fontSize={shape.fontSize} fontStyle="bold" fill={shape.color} />
-              )}
-            </Group>
+            {uprightLabel(shape, upright)}
           </Group>
         );
       }
-      if (shape.background) {
-        const padding = shape.fontSize * 0.35;
-        // The label sizes its pill to the text. Offset by the padding, so x, y
-        // stay the text's corner and toggling the background does not move it.
-        return (
-          <Label {...common} x={shape.x} y={shape.y} offsetX={padding} offsetY={padding} onDblClick={() => onEditText(shape.id)}>
-            <Tag fill={shape.color} cornerRadius={shape.fontSize * 0.4} />
-            <Text text={shape.text} fontSize={shape.fontSize} fontStyle="bold" fill={contrastColor(shape.color)} padding={padding} />
-          </Label>
-        );
-      }
+      return labelNode(shape, { ...common, x: shape.x, y: shape.y, onDblClick: () => onEditText(shape.id) });
+    case "callout": {
+      // Like text, x, y is the text's corner; the bubble sits around the
+      // text as it shows, and the tail points at the tip in capture pixels.
+      const bubble = calloutBubble(shape, upright ? (orientation?.rotation ?? 0) : 0);
+      const filled = Boolean(shape.background);
       return (
-        <Text
-          {...common}
-          x={shape.x}
-          y={shape.y}
-          text={shape.text}
-          fontSize={shape.fontSize}
-          fontStyle="bold"
-          fill={shape.color}
-          onDblClick={() => onEditText(shape.id)}
-        />
+        <Group {...common} x={shape.x} y={shape.y} onDblClick={() => onEditText(shape.id)}>
+          <KonvaShape
+            name="callout-bubble"
+            {...bubble}
+            fill={filled ? shape.color : "#ffffff"}
+            stroke={filled ? undefined : shape.color}
+            strokeWidth={calloutOutline(shape.fontSize)}
+            sceneFunc={calloutScene(shape, bubble)}
+          />
+          {uprightLabel({ text: shape.text, fontSize: shape.fontSize, color: filled ? contrastColor(shape.color) : shape.color }, upright)}
+        </Group>
       );
+    }
     case "step": {
       const label = String(step ?? "");
       // The badge is centred on x, y, so turning it back about 0, 0 keeps it in place.

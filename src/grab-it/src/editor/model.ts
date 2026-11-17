@@ -9,6 +9,7 @@ export type Tool =
   | "line"
   | "freehand"
   | "text"
+  | "callout"
   | "highlighter"
   | "blur"
   | "magnify"
@@ -86,6 +87,18 @@ export interface TextShape {
 }
 
 /**
+ * Text in a rounded bubble with a tail whose tip points at `tail`. The text
+ * fields mean what they mean on `TextShape`: x, y is the text's corner, and
+ * the bubble sits around the text. Without `background` the bubble is white,
+ * outlined in the colour, with the text in the colour.
+ */
+export interface CalloutShape extends Omit<TextShape, "type"> {
+  type: "callout";
+  /** Where the tail's tip points, in capture pixels. */
+  tail: Point;
+}
+
+/**
  * A numbered badge centred on x, y; numbered by its order among steps, or
  * by `number` when set (a step capture's place in its guide).
  */
@@ -109,7 +122,7 @@ export interface MagnifyShape extends Stroked, Rect {
   line?: boolean;
 }
 
-export type Shape = LineShape | PathShape | BoxShape | MagnifyShape | BlurShape | SpotlightShape | TextShape | StepShape;
+export type Shape = LineShape | PathShape | BoxShape | MagnifyShape | BlurShape | SpotlightShape | TextShape | CalloutShape | StepShape;
 export type ShapeType = Shape["type"];
 
 /** The output shapes a backdrop can pad the capture to; "auto" pads evenly. */
@@ -203,7 +216,7 @@ export interface Style {
   stepRadius?: number;
   /** Rectangles and ellipses are filled. */
   fill?: boolean;
-  /** Text sits on a pill. */
+  /** Text sits on a pill; a callout's bubble is filled with the colour. */
   background?: boolean;
   blurMode?: BlurMode;
   zoom?: number;
@@ -255,6 +268,7 @@ export function widthKind(tool: Tool | ShapeType): WidthKind | null {
     case "magnify":
       return STROKE_KIND;
     case "text":
+    case "callout":
       return FONT_KIND;
     case "step":
       return STEP_KIND;
@@ -292,6 +306,7 @@ export const TOOLS: { tool: Tool; label: string; key: string; group: number }[] 
   { tool: "ellipse", label: "Ellipse", key: "e", group: 1 },
   { tool: "freehand", label: "Freehand", key: "p", group: 1 },
   { tool: "text", label: "Text", key: "t", group: 2 },
+  { tool: "callout", label: "Callout", key: "k", group: 2 },
   { tool: "step", label: "Step", key: "n", group: 2 },
   { tool: "highlighter", label: "Highlighter", key: "h", group: 2 },
   { tool: "blur", label: "Blur", key: "b", group: 3 },

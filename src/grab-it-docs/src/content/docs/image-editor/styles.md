@@ -23,7 +23,7 @@ The button after the colours sets how big the tool draws. Click it for a preview
 | For | It's called | Steps (pixels) | To start with |
 | --- | --- | --- | --- |
 | Arrow, Line, Rectangle, Ellipse, Freehand, Highlighter | **Width** | 1, 2, 3, 4, 6, 8, 12, 16, 24 | 4 |
-| Text | **Text size** | 12, 16, 20, 24, 30, 36, 48, 64, 96 | 30 |
+| Text, Callout | **Text size** | 12, 16, 20, 24, 30, 36, 48, 64, 96 | 30 |
 | Step | **Badge size** | 10, 12, 14, 16, 20, 24, 30, 36, 48 | 20 |
 
 **Each tool keeps its own size.** A thick highlighter doesn't make your arrows thick. The [highlighter](/grab-it/image-editor/highlighter/) is always drawn wider than its width, to cover a line of text.
@@ -36,6 +36,7 @@ Some tools have one more option in the top bar:
 | --- | --- | --- |
 | Rectangle, Ellipse | **Fill** | Fills the shape with its colour, see-through |
 | Text | **Text background** | Puts the text on a rounded pill of its colour |
+| Callout | **Text background** | Fills the bubble with its colour instead of white |
 | Blur | **Pixelate** / **Smooth** | Blocks of colour, or a soft blur |
 | Crop | **Free**, **Original**, **16:9**, **4:3**, **1:1**, **9:16** | The crop's shape |
 

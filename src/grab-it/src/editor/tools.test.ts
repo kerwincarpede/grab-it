@@ -838,3 +838,42 @@ describe("magnify lenses", () => {
     expect(beginShape("magnify", { x: 0, y: 0 }, { ...style, zoom: 4, lens: "square", lensLine: true })).toMatchObject({ zoom: 4, lens: "square", line: true });
   });
 });
+
+describe("callouts", () => {
+  const callout: Shape = { id: "c", type: "callout", color: "red", x: 100, y: 50, text: "Here", fontSize: 20, tail: { x: 40, y: 120 } };
+
+  it("moves the bubble and the tip together", () => {
+    expect(moveShape(callout, 5, -5)).toMatchObject({ x: 105, y: 45, tail: { x: 45, y: 115 } });
+    expect(transformShape(callout, { x: 130, y: 60, scaleX: 1, scaleY: 1 })).toMatchObject({ x: 130, y: 60, tail: { x: 70, y: 130 } });
+  });
+
+  it("scales by font size on a resize, leaving the tip on its target", () => {
+    expect(transformShape(callout, { x: 90, y: 40, scaleX: 1.5, scaleY: 1.5 })).toMatchObject({
+      x: 90,
+      y: 40,
+      fontSize: 30,
+      tail: { x: 40, y: 120 },
+    });
+  });
+
+  it("duplicates with the tip, offset from the original", () => {
+    const copy = duplicateShape(callout, "copy");
+    expect(copy).toMatchObject({ id: "copy", x: 112, y: 62, tail: { x: 52, y: 132 } });
+    expect(callout).toMatchObject({ x: 100, tail: { x: 40, y: 120 } });
+  });
+
+  it("offers only corner handles", () => {
+    expect(anchorsFor(callout)).toEqual(CORNER_ANCHORS);
+  });
+
+  it("restyles colour, text size and background like text, ignoring stroke width and fill", () => {
+    expect(restyleShape(callout, { color: "blue", fontSize: 36, background: true })).toMatchObject({
+      color: "blue",
+      fontSize: 36,
+      background: true,
+      tail: { x: 40, y: 120 },
+    });
+    expect(restyleShape(callout, { strokeWidth: 12 })).toBe(callout);
+    expect(restyleShape(callout, { fill: true })).toBe(callout);
+  });
+});

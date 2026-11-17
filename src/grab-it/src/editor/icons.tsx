@@ -36,6 +36,12 @@ const TOOL_ICONS: Record<Tool, ReactNode> = {
   ellipse: <ellipse cx="12" cy="12" rx="8.5" ry="6.5" />,
   freehand: <path d="M3 17c3-7 5-9 7-6s2 6 4 4 3-7 7-8" />,
   text: <path d="M5 7V5h14v2M12 5v14M9 19h6" />,
+  callout: (
+    <>
+      <path d="M6 4h12a3 3 0 013 3v5a3 3 0 01-3 3h-6l-5 5v-5H6a3 3 0 01-3-3V7a3 3 0 013-3z" />
+      <path d="M8 9.5h8" />
+    </>
+  ),
   step: (
     <>
       <circle cx="12" cy="12" r="8.5" />
