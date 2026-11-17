@@ -114,9 +114,11 @@ vi.mock("react-konva", async () => {
     onMouseMove,
     onMouseUp,
     onWheel,
+    scaleX,
   }: {
     ref?: Ref<unknown>;
     children?: ReactNode;
+    scaleX?: number;
     onMouseDown?: Handler;
     onMouseMove?: Handler;
     onMouseUp?: Handler;
@@ -175,6 +177,8 @@ vi.mock("react-konva", async () => {
       "div",
       {
         "data-konva": "Stage",
+        // CSS pixels per image pixel, so tests can tell the zoom apart from its label.
+        "data-scale-x": scaleX,
         onMouseDown: forward(onMouseDown),
         onMouseMove: forward(onMouseMove),
         onMouseUp: forward(onMouseUp),
@@ -930,6 +934,32 @@ describe("EditorWindow", () => {
     // Tools without a width hide the control.
     fireEvent.keyDown(window, { key: "b" });
     expect(screen.queryByRole("button", { name: "Width" })).not.toBeInTheDocument();
+  });
+
+  it("opens a 2x capture at its on-screen size, calls it 100%, and zooms from 5% to 1600% of it", async () => {
+    // 400 × 300 image pixels at 2x were 200 × 150 points on screen, which fit the 800 × 600 canvas.
+    mockEditor(sidecar, [], { scaleFactor: 2 });
+    await ready();
+    const zoom = () => screen.getByLabelText("Zoom").textContent;
+    const scale = () => Number(stage().getAttribute("data-scale-x"));
+    await waitFor(() => expect(zoom()).toBe("100%"));
+    expect(scale()).toBe(0.5);
+
+    for (let i = 0; i < 30; i++) fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(zoom()).toBe("1600%");
+    expect(scale()).toBe(8);
+    fireEvent.wheel(stage(), { deltaY: -100 });
+    expect(zoom()).toBe("1600%");
+
+    for (let i = 0; i < 60; i++) fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
+    expect(zoom()).toBe("5%");
+    expect(scale()).toBeCloseTo(0.025);
+    fireEvent.wheel(stage(), { deltaY: 100 });
+    expect(zoom()).toBe("5%");
+
+    fireEvent.click(screen.getByRole("button", { name: "Fit" }));
+    expect(zoom()).toBe("100%");
+    expect(scale()).toBe(0.5);
   });
 
   it("changes the width with ⌥-scroll over the canvas instead of zooming", async () => {

@@ -138,10 +138,17 @@ import { useEditorPreferences } from "./useEditorPreferences";
 import { useBackdropImage } from "./useBackdropImage";
 import WidthControl from "./WidthControl";
 
+/** The zoom limits as the label shows them: relative to the capture's on-screen size. */
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 16;
 const ZOOM_STEP = 1.2;
-const clampZoom = (scale: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, scale));
+/**
+ * Keeps a view scale (CSS pixels per image pixel) within the zoom limits.
+ * The limits are in on-screen sizes, so a capture of `captureScale` image
+ * pixels per point is held to 5%-1600% of the size it had on screen.
+ */
+const clampZoom = (scale: number, captureScale: number) =>
+  Math.min(MAX_ZOOM / captureScale, Math.max(MIN_ZOOM / captureScale, scale));
 /** How long a "Copied" or "Exported" note stays in the status bar. */
 const MESSAGE_MS = 4000;
 const BLUR_MODES: { mode: BlurMode; label: string }[] = [
@@ -257,9 +264,16 @@ function useSize(ref: RefObject<HTMLDivElement | null>) {
   return size;
 }
 
-/** Centres `bounds` (display space: the capture as it shows) in the canvas, shrunk to fit but never enlarged. */
-function fitView(bounds: Rect, size: { width: number; height: number }): View {
-  const scale = clampZoom(Math.min(1, (size.width - 32) / bounds.width, (size.height - 32) / bounds.height));
+/**
+ * Centres `bounds` (display space: the capture as it shows) in the canvas,
+ * shrunk to fit but never shown larger than it was on screen: one image
+ * pixel per `1 / captureScale` CSS pixels at most.
+ */
+function fitView(bounds: Rect, size: { width: number; height: number }, captureScale: number): View {
+  const scale = clampZoom(
+    Math.min(1 / captureScale, (size.width - 32) / bounds.width, (size.height - 32) / bounds.height),
+    captureScale,
+  );
   return {
     scale,
     x: Math.round((size.width - bounds.width * scale) / 2 - bounds.x * scale),
@@ -580,7 +594,11 @@ export default function EditorWindow() {
     const layout = backdrop ? backdropLayout(area, backdrop, captureScale, borders) : area;
     return { width: layout.width, height: layout.height };
   }, [imageSize, doc.crop, backdrop, captureScale, rotation, flipX, flipY, borders]);
-  const currentView = useMemo(() => view ?? (frame ? fitView(frame.bounds, size) : { scale: 1, x: 0, y: 0 }), [view, frame, size]);
+  // Recomputed when the capture's scale arrives with its info, so it opens at its on-screen size.
+  const currentView = useMemo(
+    () => view ?? (frame ? fitView(frame.bounds, size, captureScale) : { scale: 1 / captureScale, x: 0, y: 0 }),
+    [view, frame, size, captureScale],
+  );
   /** How near a line, in capture pixels, a crop edge snaps to it: a few screen pixels at the current zoom. */
   const snapThreshold = CROP_SNAP_PX / currentView.scale;
   /** The box a crop drag covers on show, snapped to the capture's edges unless ⌥/Alt is held. */
@@ -790,7 +808,7 @@ export default function EditorWindow() {
   };
 
   const zoomBy = (factor: number) => {
-    const scale = clampZoom(currentView.scale * factor);
+    const scale = clampZoom(currentView.scale * factor, captureScale);
     const centre = { x: size.width / 2, y: size.height / 2 };
     const anchor = { x: (centre.x - currentView.x) / currentView.scale, y: (centre.y - currentView.y) / currentView.scale };
     setView({ scale, x: centre.x - anchor.x * scale, y: centre.y - anchor.y * scale });
@@ -974,7 +992,7 @@ export default function EditorWindow() {
     const stage = stageRef.current;
     const screen = stage?.getPointerPosition();
     if (!screen) return;
-    const scale = clampZoom(event.evt.deltaY < 0 ? currentView.scale * ZOOM_STEP : currentView.scale / ZOOM_STEP);
+    const scale = clampZoom(event.evt.deltaY < 0 ? currentView.scale * ZOOM_STEP : currentView.scale / ZOOM_STEP, captureScale);
     const anchor = { x: (screen.x - currentView.x) / currentView.scale, y: (screen.y - currentView.y) / currentView.scale };
     setView({ scale, x: screen.x - anchor.x * scale, y: screen.y - anchor.y * scale });
   };
@@ -1812,7 +1830,8 @@ export default function EditorWindow() {
             <ZoomOutIcon />
           </button>
           <span className="zoom" aria-label="Zoom">
-            {Math.round(currentView.scale * 100)}%
+            {/* 100% is the size the capture had on screen, not one image pixel per CSS pixel. */}
+            {Math.round(currentView.scale * captureScale * 100)}%
           </span>
           <button type="button" className="icon-button" onClick={() => zoomBy(ZOOM_STEP)} aria-label="Zoom in" title="Zoom in">
             <ZoomInIcon />
