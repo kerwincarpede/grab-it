@@ -4,7 +4,7 @@ Grab-it is a Tauri 2 desktop app for screenshots and screen recording on Windows
 
 ## Rules that are never broken
 
-- **Every merge to `main` ships.** Merges that touch code cut a release that installed copies offer as an update. Nothing lands with a failing check.
+- **Every merge to `main` ships.** Merges that touch code cut an Edge pre-release that copies on the Edge update channel offer at once; Stable copies get it once the owner promotes it with `promote.yml`. Nothing lands with a failing check.
 - **Three platforms, every time.** Code must build and behave on Windows, macOS and Linux (X11 and Wayland). Platform code sits behind `#[cfg(...)]` with a fallback for the others.
 - **Users' data survives every update.** Originals are never modified, saved files stay readable, and library migrations are append-only. See [saved data](docs/standards/saved-data.md).
 - **Nothing new leaves the computer silently.** No analytics or telemetry. Any new network request must be added to the [privacy page](src/grab-it-docs/src/content/docs/reference/privacy.md).

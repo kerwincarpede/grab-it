@@ -1,7 +1,9 @@
 name: Release
 
-# Every push to main is released, with the version read from the commits.
-# This run is also main's CI: ci.yml runs only for pull requests, so each
+# Every push to main is released as an Edge pre-release, with the version
+# read from the commits. Only copies on the Edge update channel offer it;
+# promote.yml makes a chosen Edge build the Stable release. This run is also
+# main's CI: ci.yml runs only for pull requests, so each
 # merge is checked and built once, and those builds are the release. To force
 # a bump instead: Actions → Release → Run workflow, or
 #   gh workflow run release.yml -f bump=minor
@@ -45,6 +47,8 @@ jobs:
   version:
     name: Version
     runs-on: ubuntu-24.04
+    # Only main may deploy to this environment, so a branch cannot release.
+    environment: release
     # Long enough to queue behind a few releases of about ten minutes each.
     timeout-minutes: 180
     permissions:
@@ -126,7 +130,11 @@ jobs:
           VERSION: ${{ steps.next.outputs.version }}
           TAG: v${{ steps.next.outputs.version }}
         run: |
+          # promote.py drops the "Edge build" paragraph when this release
+          # becomes Stable, so keep it on one line.
           body=$(cat <<'BODY'
+          **Edge build.** Copies of Grab-it on the Edge update channel (**Settings → General → Updates**) offer this update; Stable copies get it if it is promoted to Stable.
+
           ## Install
 
           **macOS and Linux:** install and open it with one command:
@@ -135,7 +143,7 @@ jobs:
           curl -fsSL https://kerwincarpede.github.io/grab-it/install.sh | sh
           ```
 
-          **Homebrew (macOS):**
+          **Homebrew (macOS):** installs the latest Stable release:
 
           ```sh
           brew install --cask kerwincarpede/tap/grab-it
@@ -209,6 +217,7 @@ jobs:
     name: Publish release
     needs: [version, ci]
     runs-on: ubuntu-24.04
+    environment: release
     permissions:
       contents: write
     steps:
@@ -234,7 +243,7 @@ jobs:
           # The release notes, this release's and recent ones', become the
           # list of changes Grab-it shows before updating.
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release.json
-          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" > history.json
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > history.json
           python3 .github/scripts/updater_manifest.py \
             --sigs sigs --release release.json --history history.json \
             --download-base "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
@@ -247,84 +256,66 @@ jobs:
             "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=latest.json" \
             > /dev/null
 
-      # Publishing the draft creates its tag on the released commit.
-      - name: Publish the draft release
+      # Publishing the draft creates its tag on the released commit. It is a
+      # pre-release and never the latest release, so Stable copies, which
+      # read releases/latest, do not see it.
+      - name: Publish the draft as a pre-release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.version.outputs.release_id }}
         run: |
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
-            -F draft=false -f make_latest=true \
+            -F draft=false -F prerelease=true -f make_latest=false \
             --jq '"Published \(.tag_name): \(.html_url)"'
 
-  # Homebrew users install the universal .dmg through the cask in
-  # kerwincarpede/homebrew-tap:
-  #   brew install --cask kerwincarpede/tap/grab-it
-  # Each release points the cask at its own .dmg. The push needs the
-  # HOMEBREW_TAP_TOKEN secret (fine-grained, contents: write on the tap);
-  # without it the release still goes out and the cask stays as it was.
-  homebrew:
-    name: Update the Homebrew cask
+  # Edge copies read latest.json from the rolling "edge" pre-release. Its
+  # tag has no "v", so version numbering ignores it, and latest.json is its
+  # only asset. A job of its own, so a failure here can be re-run without
+  # publishing the release again.
+  edge:
+    name: Update the edge channel
     needs: [version, publish]
     runs-on: ubuntu-24.04
+    environment: release
     permissions:
-      contents: read
+      contents: write
     steps:
-      - name: Check for the tap token
-        id: token
-        env:
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          if [ -z "$TAP_TOKEN" ]; then
-            echo "::notice::HOMEBREW_TAP_TOKEN is not set, so the Homebrew cask was not updated."
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: actions/checkout@v7
-        if: steps.token.outputs.present == 'true'
-
-      - name: Render the cask
-        if: steps.token.outputs.present == 'true'
+      # A replaced asset is deleted by id first, since an upload refuses a
+      # name already taken.
+      - name: Point the edge channel at this release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.version.outputs.version }}
           TAG: v${{ needs.version.outputs.version }}
         run: |
-          mkdir dmg
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p '*_universal.dmg' -D dmg
-          set -- dmg/*_universal.dmg
-          if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
-            echo "::error::Expected one universal .dmg on $TAG."
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p latest.json
+          if edge=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/edge" --jq .id 2> error.txt); then
+            echo "The edge release is $edge."
+          elif grep -q "HTTP 404" error.txt; then
+            edge=""
+          else
+            cat error.txt
             exit 1
           fi
-          name=$(basename "$1")
-          sha256=$(sha256sum "$1" | cut -d' ' -f1)
-          python3 .github/scripts/homebrew_cask.py \
-            --version "$VERSION" \
-            --url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$name" \
-            --sha256 "$sha256" \
-            > grab-it.rb
-          cat grab-it.rb
-
-      - name: Push the cask to the tap
-        if: steps.token.outputs.present == 'true'
-        env:
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          TAG: v${{ needs.version.outputs.version }}
-        run: |
-          git clone --depth 1 \
-            "https://x-access-token:$TAP_TOKEN@github.com/kerwincarpede/homebrew-tap.git" tap
-          mkdir -p tap/Casks
-          cp grab-it.rb tap/Casks/grab-it.rb
-          cd tap
-          git add Casks/grab-it.rb
-          if git diff --cached --quiet; then
-            echo "The cask already installs $TAG."
-            exit 0
+          if [ -z "$edge" ]; then
+            edge=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name=edge \
+              -f target_commitish="$GITHUB_SHA" \
+              -f name="Edge" \
+              -f body="Edge update channel. Grab-it copies on Edge read latest.json here to find the newest Edge release." \
+              -F prerelease=true \
+              -f make_latest=false \
+              --jq .id)
+            echo "Created the edge release ($edge)."
           fi
-          git -c user.name="github-actions[bot]" \
-              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -m "grab-it $TAG"
-          git push origin HEAD
+          gh api "repos/$GITHUB_REPOSITORY/releases/$edge/assets" \
+            --jq '.[] | select(.name == "latest.json") | .id' |
+            while read -r asset; do
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset"
+            done
+          curl --fail-with-body -sS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @latest.json \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$edge/assets?name=latest.json" \
+            > /dev/null
+          echo "Edge now offers $TAG."

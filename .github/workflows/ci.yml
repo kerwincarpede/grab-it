@@ -109,6 +109,10 @@ jobs:
 
   build:
     name: Build (${{ matrix.platform }})
+    # A release build (release.yml, main only) runs in the release
+    # environment, which holds the updater and macOS signing secrets. Other
+    # builds use no environment and get neither.
+    environment: ${{ inputs.release_id != '' && 'release' || '' }}
     permissions:
       contents: write
     strategy:

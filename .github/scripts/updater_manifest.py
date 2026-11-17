@@ -12,7 +12,9 @@ is downloaded from <download-base>/<name>.
 /releases/{id}` returns it) and --history the releases before it (as `GET
 /releases` returns them). Their generated notes become `changes`: what
 each recent version brought, newest first, so Grab-it can list everything
-an update brings, however many versions behind it is. `notes` repeats this
+an update brings, however many versions behind it is. Edge pre-releases
+count, so a Stable release lists the Edge versions since the last one; the
+rolling `edge` release, whose tag is not a version, does not. `notes` repeats this
 release's list as Markdown, for anything that reads only the standard
 fields.
 
@@ -50,7 +52,7 @@ REQUIRED = [
 ]
 
 # How many versions `changes` covers, this one included.
-HISTORY = 20
+HISTORY = 50
 
 # Conventional-commit types that change nothing a user sees.
 UNSEEN = {"build", "chore", "ci", "docs", "refactor", "style", "test"}
@@ -124,12 +126,20 @@ def version_key(version):
     return tuple(int(part) for part in re.findall(r"\d+", version)[:3])
 
 
+# Release tags: "v1.2.3". The rolling "edge" release is not one.
+VERSION_TAG = re.compile(r"^v\d+\.\d+\.\d+$")
+
+
+def is_version(release):
+    return bool(VERSION_TAG.match(release.get("tag_name", "")))
+
+
 def changes(release, history):
     earlier = [
         r
         for r in history
         if not r.get("draft")
-        and not r.get("prerelease")
+        and is_version(r)
         and r.get("id") != release.get("id")
         and version_key(version_of(r)) < version_key(version_of(release))
     ]

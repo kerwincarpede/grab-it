@@ -1,0 +1,172 @@
+name: Promote to Stable
+
+# Makes an Edge pre-release, as release.yml published it, the latest
+# release, which Stable copies of Grab-it update to. Nothing is rebuilt: the
+# Edge build's installers are the Stable ones. Run it from main:
+#   Actions → Promote to Stable → Run workflow, or
+#   gh workflow run promote.yml                  # the newest Edge release
+#   gh workflow run promote.yml -f version=0.9.3
+# The job waits in the stable environment until the owner approves it.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Edge version to promote, such as 0.9.3. Empty promotes the newest Edge release.
+        type: string
+        default: ''
+
+# One promotion at a time; a second waits rather than cancelling the first.
+concurrency:
+  group: promote
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # actions/checkout runs `git init`; naming the initial branch keeps git from
+  # printing its hint about the default branch name.
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+
+jobs:
+  # One job, so the stable environment asks for approval once. It holds
+  # HOMEBREW_TAP_TOKEN and only main may deploy to it.
+  promote:
+    name: Promote
+    runs-on: ubuntu-24.04
+    environment: stable
+    permissions:
+      contents: write
+    steps:
+      - name: Require main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Promotions run from main, not $GITHUB_REF."
+          exit 1
+
+      - uses: actions/checkout@v7
+
+      # Refuses a draft, and any version that is not newer than Stable.
+      - name: Choose the Edge release
+        id: chosen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[]' | jq -s . > releases.json
+          python3 .github/scripts/promote.py \
+            --releases releases.json --version "$VERSION" --body body.md \
+            > chosen.txt
+          cat chosen.txt
+          cat chosen.txt >> "$GITHUB_OUTPUT"
+
+      # Written again as release.yml's publish job writes it, so its
+      # `changes` cover every Edge release since the last Stable one.
+      - name: Rewrite the updater manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.chosen.outputs.id }}
+          TAG: ${{ steps.chosen.outputs.tag }}
+        run: |
+          mkdir sigs
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
+            --jq '.[] | select(.name | endswith(".sig")) | "\(.id) \(.name)"' |
+            while read -r id name; do
+              gh api -H "Accept: application/octet-stream" \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$id" > "sigs/$name"
+            done
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release.json
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > history.json
+          python3 .github/scripts/updater_manifest.py \
+            --sigs sigs --release release.json --history history.json \
+            --download-base "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
+            > latest.json
+          cat latest.json
+          # An upload refuses a name already taken, so the old one goes first.
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
+            --jq '.[] | select(.name == "latest.json") | .id' |
+            while read -r asset; do
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset"
+            done
+          curl --fail-with-body -sS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @latest.json \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=latest.json" \
+            > /dev/null
+
+      # Stable copies read releases/latest, so from here they offer it.
+      - name: Publish as the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.chosen.outputs.id }}
+        run: |
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            -F prerelease=false -f make_latest=true -F body=@body.md \
+            --jq '"Promoted \(.tag_name) to Stable: \(.html_url)"'
+
+      # Homebrew users install the universal .dmg through the cask in
+      # kerwincarpede/homebrew-tap:
+      #   brew install --cask kerwincarpede/tap/grab-it
+      # Each Stable release points the cask at its own .dmg. The push needs
+      # the HOMEBREW_TAP_TOKEN secret in the stable environment
+      # (fine-grained, contents: write on the tap); without it the release
+      # is still promoted and the cask stays as it was.
+      - name: Check for the tap token
+        id: token
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set, so the Homebrew cask was not updated."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Render the cask
+        if: steps.token.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.chosen.outputs.version }}
+          TAG: ${{ steps.chosen.outputs.tag }}
+        run: |
+          mkdir dmg
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p '*_universal.dmg' -D dmg
+          set -- dmg/*_universal.dmg
+          if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+            echo "::error::Expected one universal .dmg on $TAG."
+            exit 1
+          fi
+          name=$(basename "$1")
+          sha256=$(sha256sum "$1" | cut -d' ' -f1)
+          python3 .github/scripts/homebrew_cask.py \
+            --version "$VERSION" \
+            --url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$name" \
+            --sha256 "$sha256" \
+            > grab-it.rb
+          cat grab-it.rb
+
+      - name: Push the cask to the tap
+        if: steps.token.outputs.present == 'true'
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ steps.chosen.outputs.tag }}
+        run: |
+          git clone --depth 1 \
+            "https://x-access-token:$TAP_TOKEN@github.com/kerwincarpede/homebrew-tap.git" tap
+          mkdir -p tap/Casks
+          cp grab-it.rb tap/Casks/grab-it.rb
+          cd tap
+          git add Casks/grab-it.rb
+          if git diff --cached --quiet; then
+            echo "The cask already installs $TAG."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "grab-it $TAG"
+          git push origin HEAD
