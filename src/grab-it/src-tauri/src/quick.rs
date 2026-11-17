@@ -343,6 +343,10 @@ fn create_window(app: &AppHandle, corner: Corner) -> tauri::Result<()> {
         .visible_on_all_workspaces(true)
         // The card must not pull the keyboard away from the user's work.
         .focused(false)
+        // Because the card is never focused, macOS would spend the first
+        // click on activating it while another app is in front, so a button
+        // such as Done would need two clicks. Let that first click through.
+        .accept_first_mouse(true)
         .shadow(true)
         .visible(false)
         .build()?;
