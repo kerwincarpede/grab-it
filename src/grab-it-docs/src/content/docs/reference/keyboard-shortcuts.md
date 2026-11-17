@@ -94,9 +94,13 @@ See [Mark it up](/grab-it/image-editor/mark-it-up/) for what each tool does.
 
 ## Video editor
 
+`⌘` on macOS is `Ctrl` on Windows and Linux.
+
 | Key | What it does |
 | --- | --- |
 | `Space` | Play and pause |
+| `⌘ Z` | Undo the last trim, backdrop or zoom change |
+| `⌘ ⇧ Z` or `⌘ Y` | Redo |
 | Arrow keys on a trim handle | Move it 0.1 seconds; with `Shift`, 1 second |
 | `Home` and `End` on a trim handle | Move it to the start or end |
 | `←` and `→` on a zoom | Move it 0.1 seconds; with `Shift`, 1 second |

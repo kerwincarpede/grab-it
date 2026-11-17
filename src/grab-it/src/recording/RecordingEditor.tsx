@@ -4,7 +4,8 @@ import "./recording.css";
 import { MAX_BACKDROP_PRESETS } from "../settings/api";
 import { chooseBackdropImage, saveBackdropPresetImage } from "../editor/api";
 import BackdropPanel from "../editor/BackdropPanel";
-import { BackdropIcon, ExportIcon, TrashIcon, ZoomInIcon } from "../editor/icons";
+import { BackdropIcon, ExportIcon, RedoIcon, TrashIcon, UndoIcon, ZoomInIcon } from "../editor/icons";
+import { canRedo, canUndo, commit, initHistory, redo, undo, type History } from "../editor/history";
 import { BACKDROP_FILLS, type Backdrop } from "../editor/model";
 import { presetName } from "../editor/preferences";
 import { newId } from "../editor/tools";
@@ -58,6 +59,13 @@ function isTyping(target: EventTarget | null): boolean {
   return target.matches("input, textarea, select, button, [role='slider']") || target.isContentEditable;
 }
 
+/** Whether a key press edits text in a field, where Undo and Redo belong to the field. */
+function isEditingText(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable || target.matches("textarea, select")) return true;
+  return target instanceof HTMLInputElement && !["range", "checkbox", "radio", "button", "color", "file"].includes(target.type);
+}
+
 /**
  * The URL the video plays `path` from: the grab-it-video scheme itself, or
  * on Linux a blob of the file fetched from it, revoked when the path
@@ -109,7 +117,9 @@ function saveText(status: SaveStatus): string {
 export default function RecordingEditor() {
   const [info, setInfo] = useState<RecordingInfo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [edits, setEdits] = useState<RecordingEdits>(emptyEdits);
+  /** Every edit made in this window, one entry per commit; the present is what the sidecar holds. */
+  const [history, setHistory] = useState<History<RecordingEdits>>(() => initHistory(emptyEdits()));
+  const edits = history.present;
   /** A sidecar this version cannot read is never written over. */
   const [readOnly, setReadOnly] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
@@ -151,7 +161,7 @@ export default function RecordingEditor() {
         if (cancelled) return;
         setInfo(loaded);
         try {
-          setEdits(parseEdits(loaded.edits));
+          setHistory(initHistory(parseEdits(loaded.edits)));
         } catch (err) {
           setReadOnly(true);
           setMessage(`The edits cannot be read, so they will not be saved: ${errorText(err)}`);
@@ -172,9 +182,8 @@ export default function RecordingEditor() {
   const layout = useMemo(() => (videoSize ? recordingLayout(videoSize, backdrop) : null), [videoSize, backdrop]);
   const backdropImageEl = useBackdropImage(backdrop?.fill === BACKDROP_FILLS.image ? (backdrop.image ?? null) : null);
 
-  const commitEdits = useCallback(
+  const save = useCallback(
     (next: RecordingEdits) => {
-      setEdits(next);
       if (readOnly) return;
       setSaveStatus("saving");
       let saving: Promise<void>;
@@ -186,6 +195,16 @@ export default function RecordingEditor() {
       saving.then(() => setSaveStatus("saved")).catch(() => setSaveStatus("error"));
     },
     [readOnly],
+  );
+
+  /** One undo entry; an edit that leaves the sidecar as it was adds none. */
+  const commitEdits = useCallback(
+    (next: RecordingEdits) => {
+      if (JSON.stringify(serializeEdits(next)) === JSON.stringify(serializeEdits(history.present))) return;
+      setHistory(commit(history, next));
+      save(next);
+    },
+    [history, save],
   );
 
   const seek = (ms: number) => {
@@ -204,6 +223,25 @@ export default function RecordingEditor() {
     commitEdits({ ...edits, trim: isWhole(fitted, durationMs) ? null : fitted });
     seek(Math.min(Math.max(currentMs, fitted.startMs), fitted.endMs));
   };
+
+  // --- Undo ---------------------------------------------------------------
+
+  /** Moves to `next` in the history, saves what it holds and keeps the playhead inside its trim. */
+  const stepHistory = (next: History<RecordingEdits>) => {
+    if (next === history || exporting) return;
+    setTrimDraft(null);
+    setBackdropDraft(undefined);
+    setZoomDraft(null);
+    setHistory(next);
+    save(next.present);
+    if (durationMs > 0) {
+      const kept = trimOf(next.present, durationMs);
+      seek(Math.min(Math.max(currentMs, kept.startMs), kept.endMs));
+    }
+  };
+
+  const undoEdit = () => stepHistory(undo(history));
+  const redoEdit = () => stepHistory(redo(history));
 
   const commitBackdrop = (next: Backdrop | null) => {
     setBackdropDraft(undefined);
@@ -315,16 +353,26 @@ export default function RecordingEditor() {
     if (start > 0) seek(start);
   };
 
-  // Space plays and pauses, unless a control has the keyboard.
-  const toggleRef = useRef(toggle);
+  // Space plays and pauses, unless a control has the keyboard. Ctrl/⌘ Z
+  // undoes, and Ctrl/⌘ Shift Z or Ctrl Y redoes, unless a field has the text.
+  const keysRef = useRef({ toggle, undoEdit, redoEdit });
   useEffect(() => {
-    toggleRef.current = toggle;
+    keysRef.current = { toggle, undoEdit, redoEdit };
   });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      const mod = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+      if (mod && !event.altKey && (key === "z" || key === "y")) {
+        if (isEditingText(event.target)) return;
+        event.preventDefault();
+        if (key === "y" || event.shiftKey) keysRef.current.redoEdit();
+        else keysRef.current.undoEdit();
+        return;
+      }
       if (event.key !== " " || isTyping(event.target)) return;
       event.preventDefault();
-      toggleRef.current();
+      keysRef.current.toggle();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -455,6 +503,14 @@ export default function RecordingEditor() {
   return (
     <main className="editor recording-editor">
       <header className="editor-topbar">
+        <div className="bar-group">
+          <button type="button" className="icon-button" onClick={undoEdit} disabled={!canUndo(history) || exporting} aria-label="Undo" title="Undo (Ctrl+Z)">
+            <UndoIcon />
+          </button>
+          <button type="button" className="icon-button" onClick={redoEdit} disabled={!canRedo(history) || exporting} aria-label="Redo" title="Redo (Ctrl+Shift+Z)">
+            <RedoIcon />
+          </button>
+        </div>
         <div
           className="bar-group backdrop-anchor"
           ref={backdropRef}

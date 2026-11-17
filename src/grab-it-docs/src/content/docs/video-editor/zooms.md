@@ -63,4 +63,4 @@ Zooms belong to the recording, not the trimmed clip: [trimming](/grab-it/video-e
 
 ## Delete it
 
-Select the zoom and click the bin in the top bar, or press `Delete` or `Backspace`.
+Select the zoom and click the bin in the top bar, or press `Delete` or `Backspace`. **Undo** brings it back, as it does for adding, moving or changing a zoom.

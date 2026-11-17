@@ -45,3 +45,15 @@ describe("undo/redo", () => {
     expect(history.past).toHaveLength(HISTORY_LIMIT);
   });
 });
+
+describe("undo/redo over any document", () => {
+  it("keeps plain objects as its document", () => {
+    const first = { zooms: [] as string[] };
+    const second = { zooms: ["a"] };
+    let history = commit(initHistory(first), second);
+    history = undo(history);
+    expect(history.present).toBe(first);
+    expect(canRedo(history)).toBe(true);
+    expect(redo(history).present).toBe(second);
+  });
+});
