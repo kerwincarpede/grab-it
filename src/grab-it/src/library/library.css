@@ -2179,3 +2179,33 @@
 .shot-menu-item .shot-menu-check .icon {
   color: inherit;
 }
+
+/* Some of the selected shots have the tag: a dash rather than a check. */
+.shot-menu-mixed {
+  width: 8px;
+  height: 2px;
+  background: currentColor;
+  border-radius: 1px;
+}
+
+/* The bulk menu's header: the right-clicked shot with how many are selected. */
+.shot-menu-thumb.is-stack {
+  overflow: visible;
+  box-shadow: 3px -3px 0 -1px var(--surface), 3px -3px 0 0 var(--border);
+}
+
+.shot-menu-count {
+  position: absolute;
+  right: -6px;
+  bottom: -5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 16px;
+  color: var(--on-accent);
+  text-align: center;
+  background: var(--accent);
+  border-radius: 8px;
+}

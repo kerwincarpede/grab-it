@@ -9,7 +9,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
 import "./library.css";
 import {
   CLI_NAMES,
@@ -40,6 +40,7 @@ import {
   groupByDay,
   isRecording,
   isSearching,
+  itemCount,
   listShots,
   ocrStatus,
   onAiStatus,
@@ -114,6 +115,35 @@ function errorMessage(err: unknown): string {
   if (typeof err === "string") return err;
   if (err instanceof Error) return err.message;
   return "Something went wrong.";
+}
+
+/** Runs `run` on each of `items` in turn, carrying on past failures; says which worked and why the rest did not. */
+async function eachShot(items: Shot[], run: (item: Shot) => Promise<unknown>): Promise<{ done: Shot[]; errors: string[] }> {
+  const done: Shot[] = [];
+  const errors: string[] = [];
+  for (const item of items) {
+    try {
+      await run(item);
+      done.push(item);
+    } catch (err) {
+      errors.push(errorMessage(err));
+    }
+  }
+  return { done, errors };
+}
+
+/**
+ * One error for a bulk action some items failed: `what` says what could not
+ * be done to "2 of 5 items", and the first reason follows.
+ */
+function bulkFailure(errors: string[], total: number, what: (items: string) => string): string {
+  return `Could not ${what(`${errors.length} of ${itemCount(total)}`)}: ${errors[0]}`;
+}
+
+/** How a click on a tile selects: Ctrl/Cmd toggles it, Shift selects the range from the last one clicked. */
+interface SelectHow {
+  toggle: boolean;
+  range: boolean;
 }
 
 const sameTags = (a: string[], b: string[]) =>
@@ -552,7 +582,7 @@ interface TileProps {
   hit: SearchHit | undefined;
   selected: boolean;
   index: number;
-  onSelect: (id: number) => void;
+  onSelect: (id: number, how: SelectHow) => void;
   onOpen: (id: number) => void;
   onAction: (shot: Shot, action: TileAction) => void;
   /** Stars or unstars the shot Keep forever. */
@@ -597,7 +627,11 @@ const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, 
         aria-label={shot.fileName}
         // No tooltip over its own menu.
         title={menuOpen ? undefined : OPEN_HINTS[shot.kind ?? "image"]}
-        onClick={() => onSelect(shot.id)}
+        onClick={(event) => onSelect(shot.id, { toggle: event.metaKey || event.ctrlKey, range: event.shiftKey })}
+        // Shift-click selects tiles, not the text in them.
+        onMouseDown={(event) => {
+          if (event.shiftKey) event.preventDefault();
+        }}
         onDoubleClick={() => onOpen(shot.id)}
       >
         <span className="tile-frame">
@@ -1178,7 +1212,10 @@ function LibraryWindow({
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; key: number } | null>(null);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  /** The selected shots' ids, in the order they were selected; the details show while there is one. */
+  const [selection, setSelection] = useState<number[]>([]);
+  /** The tile a Shift-click selects the range from: the last one clicked without Shift. */
+  const anchor = useRef<number | null>(null);
   /** The shot whose right-click menu is open, and where. */
   const [menu, setMenu] = useState<{ id: number; x: number; y: number } | null>(null);
   /** The tile the menu opened from, to give focus back to. */
@@ -1487,7 +1524,7 @@ function LibraryWindow({
         event.preventDefault();
         searchBox.current?.focus();
       } else if (event.key === "Escape" && !event.defaultPrevented) {
-        setSelectedId(null);
+        setSelection([]);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -1526,7 +1563,7 @@ function LibraryWindow({
     setError(null);
     setShots((current) => current.filter((shot) => shot.id !== id));
     setTotal((count) => Math.max(0, count - 1));
-    setSelectedId(null);
+    setSelection((current) => current.filter((item) => item !== id));
     const what = gone && isRecording(gone) ? "Recording" : "Capture";
     setNotice({ text: trashed ? `${what} moved to the Trash` : `${what} deleted`, key: Date.now() });
   }
@@ -1537,6 +1574,39 @@ function LibraryWindow({
     setError(null);
     setShots((current) => current.map((item) => (item.id === renamed.id ? renamed : item)));
     setNotice({ text: `Renamed to ${renamed.fileName}`, key: Date.now() });
+  }, []);
+
+  /** The shots as shown, for selecting a range and for bulk tag saves that build on each other. */
+  const shownShots = useRef(shots);
+  useEffect(() => {
+    shownShots.current = shots;
+  });
+
+  /** Selects `id` alone, or nothing. */
+  const selectOnly = useCallback((id: number | null) => {
+    anchor.current = id;
+    setSelection(id === null ? [] : [id]);
+  }, []);
+
+  const select = useCallback((id: number, how: SelectHow) => {
+    const from = anchor.current;
+    if (how.range && from !== null) {
+      const order = shownShots.current.map((item) => item.id);
+      const start = order.indexOf(from);
+      const end = order.indexOf(id);
+      if (start >= 0 && end >= 0) {
+        const range = order.slice(Math.min(start, end), Math.max(start, end) + 1);
+        // Ctrl/Cmd+Shift adds the range to what is selected; Shift alone selects just it.
+        setSelection((current) => (how.toggle ? [...current, ...range.filter((item) => !current.includes(item))] : range));
+        return;
+      }
+    }
+    anchor.current = id;
+    if (how.toggle) {
+      setSelection((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+    } else {
+      setSelection([id]);
+    }
   }, []);
 
   const open = useCallback((id: number) => {
@@ -1589,6 +1659,88 @@ function LibraryWindow({
   /** Saves tags set from the menu's Add tag submenu; rejects with the backend's reason so the menu can show it. */
   async function saveMenuTags(shot: Shot, tags: string[]) {
     updated(await setShotTags(shot.id, tags));
+  }
+
+  /** Takes shots that are gone from the list and the selection, saying how many went. */
+  function removedMany(gone: Shot[], trashed: boolean) {
+    if (gone.length === 0) return;
+    const ids = new Set(gone.map((item) => item.id));
+    setShots((current) => current.filter((item) => !ids.has(item.id)));
+    setTotal((count) => Math.max(0, count - gone.length));
+    setSelection((current) => current.filter((item) => !ids.has(item)));
+    const what = itemCount(gone.length);
+    setNotice({ text: trashed ? `${what} moved to the Trash` : `${what} deleted`, key: Date.now() });
+  }
+
+  /** Adds and removes tags on each of `items`, from the bulk menu's Add tag submenu; rejects saying how many failed. */
+  async function saveBulkTags(items: Shot[], change: { add: string[]; remove: string[] }) {
+    const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+    const { errors } = await eachShot(items, async (item) => {
+      // The latest tags, as an earlier save may have changed them.
+      const current = shownShots.current.find((found) => found.id === item.id) ?? item;
+      const kept = current.tags.filter((tag) => !change.remove.some((removed) => same(removed, tag)));
+      const next = [...kept, ...change.add.filter((tag) => !kept.some((had) => same(had, tag)))];
+      if (sameTags(next, current.tags)) return;
+      const saved = await setShotTags(current.id, next);
+      shownShots.current = shownShots.current.map((found) => (found.id === saved.id ? saved : found));
+      updated(saved);
+    });
+    if (errors.length > 0) throw new Error(bulkFailure(errors, items.length, (what) => `tag ${what}`));
+  }
+
+  /** Runs a bulk menu action on every selected shot, one at a time; partial failures become one error. */
+  async function bulkAction(items: Shot[], action: ShotMenuAction) {
+    const say = (text: string) => setNotice({ text, key: Date.now() });
+    const report = (errors: string[], what: (items: string) => string) => {
+      if (errors.length > 0) setError(bulkFailure(errors, items.length, what));
+      else setError(null);
+    };
+    switch (action) {
+      case "trash": {
+        const { done, errors } = await eachShot(items, (item) => trashShot(item.id));
+        removedMany(done, true);
+        report(errors, (what) => `move ${what} to the Trash`);
+        break;
+      }
+      case "delete": {
+        const { done, errors } = await eachShot(items, (item) => deleteShot(item.id));
+        removedMany(done, false);
+        report(errors, (what) => `delete ${what}`);
+        break;
+      }
+      case "keep": {
+        // All kept already: stop keeping them all; otherwise keep them all.
+        const keep = !items.every((item) => item.keep === true);
+        const { errors } = await eachShot(
+          items.filter((item) => (item.keep === true) !== keep),
+          async (item) => {
+            const saved = await setShotKeep(item.id, keep);
+            setShots((current) => current.map((found) => (found.id === saved.id ? saved : found)));
+          },
+        );
+        report(errors, (what) => (keep ? `keep ${what} forever` : `stop keeping ${what} forever`));
+        break;
+      }
+      case "export": {
+        let folder: string | string[] | null;
+        try {
+          folder = await openDialog({ directory: true, title: `Export ${itemCount(items.length)} to` });
+        } catch (err) {
+          setError(errorMessage(err));
+          return;
+        }
+        if (typeof folder !== "string") return;
+        const target = folder;
+        // Each goes in the folder under its own name, numbered when the name is taken.
+        const { done, errors } = await eachShot(items, (item) => exportShot(item.id, target));
+        if (done.length > 0) say(`Exported ${itemCount(done.length)} to ${baseName(target)}`);
+        report(errors, (what) => `export ${what}`);
+        break;
+      }
+      default:
+        // Add tag is a submenu; see `saveBulkTags`. The bulk menu offers nothing else.
+        break;
+    }
   }
 
   function menuAction(shot: Shot, action: ShotMenuAction) {
@@ -1656,7 +1808,7 @@ function LibraryWindow({
         openShotFolder(shot.id).catch(failed);
         break;
       case "details":
-        setSelectedId(shot.id);
+        selectOnly(shot.id);
         break;
       case "delete":
         deleteShot(shot.id).then(() => deleted(shot.id), failed);
@@ -1678,7 +1830,7 @@ function LibraryWindow({
     event.preventDefault();
     next.focus();
     next.scrollIntoView?.({ block: "nearest" });
-    setSelectedId(Number(next.dataset.shotId));
+    selectOnly(Number(next.dataset.shotId));
   }
 
   // Text searches are ranked by relevance, so they stay in one run; otherwise by day.
@@ -1686,17 +1838,23 @@ function LibraryWindow({
     () => (query.text ? [{ day: -1, items: shots }] : groupByDay(shots)),
     [shots, query.text],
   );
-  const selectedIndex = shots.findIndex((shot) => shot.id === selectedId);
-  const selected = selectedIndex >= 0 ? shots[selectedIndex] : null;
+  const selectedIds = useMemo(() => new Set(selection), [selection]);
+  // In the order shown, as the bulk actions run.
+  const selectedShots = useMemo(() => shots.filter((shot) => selectedIds.has(shot.id)), [shots, selectedIds]);
+  // The details are for one shot: they hide while several are selected.
+  const selected = selectedShots.length === 1 ? selectedShots[0] : null;
+  const selectedIndex = selected ? shots.indexOf(selected) : -1;
   // Looked up afresh so the menu follows changes (Keep forever) and goes with a deleted shot.
   const menuShot = menu ? shots.find((shot) => shot.id === menu.id) ?? null : null;
+  // Right-clicking inside a multi-selection acts on all of it; anywhere else, on the one shot.
+  const menuSelection = menu && selectedIds.has(menu.id) && selectedShots.length > 1 ? selectedShots : undefined;
   // Every tag in the library, those on the most loaded shots first.
   const menuTags = useMemo(() => suggestedTags(options.tags, shots, [], options.tags.length), [options.tags, shots]);
 
   function step(delta: -1 | 1) {
     const next = shots[selectedIndex + delta];
     if (!next) return;
-    setSelectedId(next.id);
+    selectOnly(next.id);
     scroller.current
       ?.querySelector<HTMLElement>(`[data-shot-id="${next.id}"]`)
       ?.scrollIntoView?.({ block: "nearest" });
@@ -1787,9 +1945,9 @@ function LibraryWindow({
                       key={thumbKey(shot)}
                       shot={shot}
                       hit={hits[shot.id]}
-                      selected={shot.id === selectedId}
+                      selected={selectedIds.has(shot.id)}
                       index={tileIndex++}
-                      onSelect={setSelectedId}
+                      onSelect={select}
                       onOpen={open}
                       onAction={tileAction}
                       onKeep={toggleKeep}
@@ -1834,7 +1992,7 @@ function LibraryWindow({
             onDeleted={deleted}
             onError={setError}
             onNotice={(message) => setNotice({ text: message, key: Date.now() })}
-            onClose={() => setSelectedId(null)}
+            onClose={() => selectOnly(null)}
             canStep={{ back: selectedIndex > 0, forward: selectedIndex < shots.length - 1 }}
             onStep={step}
             width={detailsWidth}
@@ -1860,6 +2018,9 @@ function LibraryWindow({
           onRename={rename}
           tagOptions={menuTags}
           onTags={saveMenuTags}
+          selection={menuSelection}
+          onBulkAction={(items, action) => void bulkAction(items, action)}
+          onBulkTags={saveBulkTags}
           onClose={closeMenu}
         />
       )}

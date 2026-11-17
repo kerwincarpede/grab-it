@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { formatBytes, formatElapsed } from "../quick/api";
-import { isRecording, parseTags, splitFileName, type Shot } from "./api";
+import { isRecording, itemCount, parseTags, splitFileName, type Shot } from "./api";
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -146,6 +146,37 @@ function shotMenuRows(shot: Shot, { aiOff, openWith }: { aiOff: boolean; openWit
   ];
 }
 
+/** The menu's rows for several selected shots: what can be done to all of them at once. */
+function bulkMenuRows(shots: Shot[]): Row[] {
+  const kept = shots.every((item) => item.keep === true);
+  return [
+    { action: "tags", label: "Add tag", icon: <TagIcon />, submenu: true },
+    { action: "keep", label: kept ? "Stop keeping forever" : "Keep forever", icon: <StarIcon filled={kept} /> },
+    { action: "export", label: "Export to folder…", icon: <ExportIcon /> },
+    "separator",
+    { action: "trash", label: "Move to Trash", icon: <TrashIcon /> },
+    {
+      action: "delete",
+      label: "Delete permanently…",
+      icon: <DeleteForeverIcon />,
+      danger: true,
+      confirm: `Click again to delete ${shots.length} for good`,
+    },
+  ];
+}
+
+/** What the bulk menu's header says under the title: how many of each kind. */
+function bulkMeta(shots: Shot[]): string {
+  const recordings = shots.filter(isRecording).length;
+  const screenshots = shots.length - recordings;
+  return [
+    screenshots > 0 ? (screenshots === 1 ? "1 screenshot" : `${screenshots} screenshots`) : null,
+    recordings > 0 ? (recordings === 1 ? "1 recording" : `${recordings} recordings`) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 /** What the menu's header says under the title. */
 function headerMeta(shot: Shot): string {
   if (isRecording(shot)) {
@@ -186,6 +217,15 @@ interface ShotMenuProps {
   tagOptions?: string[];
   /** Saves the shot's tags as `tags`; rejects with why it could not. */
   onTags?: (shot: Shot, tags: string[]) => Promise<void>;
+  /**
+   * The selected shots, `shot` among them, when there are several: the
+   * menu then offers what can be done to all of them at once.
+   */
+  selection?: Shot[];
+  /** Runs `action` on every selected shot. */
+  onBulkAction?: (shots: Shot[], action: ShotMenuAction) => void;
+  /** Adds and removes tags on every selected shot; rejects with why it could not. */
+  onBulkTags?: (shots: Shot[], change: { add: string[]; remove: string[] }) => Promise<void>;
   onClose: () => void;
 }
 
@@ -197,6 +237,19 @@ function failure(err: unknown, fallback: string): string {
 }
 
 const hasTag = (tags: string[], tag: string) => tags.some((item) => item.toLowerCase() === tag.toLowerCase());
+
+/** Every tag on `shots`, those on the most first. */
+function tagsOn(shots: Shot[]): string[] {
+  const found = new Map<string, { tag: string; count: number; order: number }>();
+  for (const item of shots) {
+    for (const tag of item.tags) {
+      const known = found.get(tag.toLowerCase());
+      if (known) known.count += 1;
+      else found.set(tag.toLowerCase(), { tag, count: 1, order: found.size });
+    }
+  }
+  return [...found.values()].sort((a, b) => b.count - a.count || a.order - b.order).map(({ tag }) => tag);
+}
 
 /** The right-click menu for one shot in the Library. */
 export function ShotMenu({
@@ -210,15 +263,20 @@ export function ShotMenu({
   onRename,
   tagOptions = [],
   onTags,
+  selection,
+  onBulkAction,
+  onBulkTags,
   onClose,
 }: ShotMenuProps) {
+  /** Several shots are selected: the menu acts on all of them. */
+  const bulk = selection !== undefined && selection.length > 1 ? selection : null;
   const root = useRef<HTMLDivElement>(null);
   const nameField = useRef<HTMLInputElement>(null);
   const tagField = useRef<HTMLInputElement>(null);
   const tagsItem = useRef<HTMLDivElement>(null);
   const submenu = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y, ready: false });
-  const rows = shotMenuRows(shot, { aiOff, openWith });
+  const rows = bulk ? bulkMenuRows(bulk) : shotMenuRows(shot, { aiOff, openWith });
   const entries = rows.filter((row): row is Entry => row !== "separator");
   const [active, setActive] = useState(0);
   const [armed, setArmed] = useState<ShotMenuAction | null>(null);
@@ -232,6 +290,17 @@ export function ShotMenu({
   /** The tags the submenu has set while its saves are still landing; then the shot's own. */
   const [optimistic, setOptimistic] = useState<string[] | null>(null);
   const tags = optimistic ?? shot.tags;
+  /** In the bulk menu, tags just added to (true) or removed from (false) every shot while the saves land. */
+  const [bulkOverrides, setBulkOverrides] = useState<Record<string, boolean> | null>(null);
+  /** Whether every shot has `tag` ("true"), none ("false") or only some ("mixed"). */
+  function tagState(tag: string): "true" | "false" | "mixed" {
+    if (!bulk) return hasTag(tags, tag) ? "true" : "false";
+    const override = bulkOverrides?.[tag.toLowerCase()];
+    if (override !== undefined) return override ? "true" : "false";
+    const count = bulk.filter((item) => hasTag(item.tags, tag)).length;
+    if (count === bulk.length) return "true";
+    return count === 0 ? "false" : "mixed";
+  }
   /** The submenu's rows while it is open, so unchecking a tag leaves its row. */
   const [tagRows, setTagRows] = useState<string[] | null>(null);
   const tagsOpen = tagRows !== null;
@@ -306,7 +375,9 @@ export function ShotMenu({
   }, [onClose]);
 
   function openTags(active: number) {
-    if (!tagsOpen) setTagRows([...tags, ...tagOptions.filter((tag) => !hasTag(tags, tag)).slice(0, SUGGESTED_TAGS)]);
+    // In the bulk menu every tag on the selection is listed, those on the most first.
+    const own = bulk ? tagsOn(bulk) : tags;
+    if (!tagsOpen) setTagRows([...own, ...tagOptions.filter((tag) => !hasTag(own, tag)).slice(0, SUGGESTED_TAGS)]);
     setTagActive(active);
     setArmed(null);
   }
@@ -335,7 +406,34 @@ export function ShotMenu({
       });
   }
 
+  /** Adds and removes tags on every selected shot, one save at a time, in order. */
+  function saveBulkTags(change: { add: string[]; remove: string[] }) {
+    if (!bulk || !onBulkTags) return;
+    const shots = bulk;
+    setBulkOverrides((current) => {
+      const next = { ...current };
+      for (const tag of change.add) next[tag.toLowerCase()] = true;
+      for (const tag of change.remove) next[tag.toLowerCase()] = false;
+      return next;
+    });
+    setTagError(null);
+    pendingTags.current += 1;
+    tagSaves.current = tagSaves.current
+      .then(() => onBulkTags(shots, change))
+      .catch((err: unknown) => setTagError(failure(err, "Could not save the tags.")))
+      .finally(() => {
+        pendingTags.current -= 1;
+        if (pendingTags.current === 0) setBulkOverrides(null);
+      });
+  }
+
   function toggleTag(tag: string) {
+    if (bulk) {
+      // Checked means every shot has it: unchecking takes it off them all; otherwise it goes on them all.
+      if (tagState(tag) === "true") saveBulkTags({ add: [], remove: [tag] });
+      else saveBulkTags({ add: [tag], remove: [] });
+      return;
+    }
     saveTags(hasTag(tags, tag) ? tags.filter((item) => item.toLowerCase() !== tag.toLowerCase()) : [...tags, tag]);
   }
 
@@ -354,7 +452,7 @@ export function ShotMenu({
     if (tagDraft === null) return;
     const added: string[] = [];
     for (const tag of parseTags(tagDraft)) {
-      if (!hasTag(tags, tag) && !hasTag(added, tag)) added.push(tag);
+      if (tagState(tag) !== "true" && !hasTag(added, tag)) added.push(tag);
     }
     setTagDraft(null);
     root.current?.focus({ preventScroll: true });
@@ -364,7 +462,8 @@ export function ShotMenu({
     const listed = [...rows, ...added.filter((tag) => !hasTag(rows, tag))];
     setTagRows(listed);
     setTagActive(listed.length);
-    saveTags([...tags, ...added]);
+    if (bulk) saveBulkTags({ add: added, remove: [] });
+    else saveTags([...tags, ...added]);
   }
 
   /** Runs the submenu row at `index`: toggles a tag, or New tag… opens its field. */
@@ -441,7 +540,8 @@ export function ShotMenu({
       return;
     }
     onClose();
-    onAction(shot, entry.action);
+    if (bulk) onBulkAction?.(bulk, entry.action);
+    else onAction(shot, entry.action);
   }
 
   function cancelRename() {
@@ -585,7 +685,7 @@ export function ShotMenu({
     <div
       ref={root}
       role="menu"
-      aria-label={`Actions for ${shot.fileName}`}
+      aria-label={bulk ? `Actions for ${itemCount(bulk.length)}` : `Actions for ${shot.fileName}`}
       aria-activedescendant={
         renaming || typingTag
           ? undefined
@@ -599,10 +699,13 @@ export function ShotMenu({
       onContextMenu={(event) => event.preventDefault()}
     >
       <div className="shot-menu-head" aria-hidden="true">
-        <span className={`shot-menu-thumb${isRecording(shot) ? " is-recording" : ""}`}>{preview}</span>
+        <span className={`shot-menu-thumb${isRecording(shot) ? " is-recording" : ""}${bulk ? " is-stack" : ""}`}>
+          {preview}
+          {bulk && <span className="shot-menu-count">{bulk.length}</span>}
+        </span>
         <span className="shot-menu-title">
-          <span className="shot-menu-name">{shot.windowTitle || shot.fileName}</span>
-          <span className="shot-menu-meta">{headerMeta(shot)}</span>
+          <span className="shot-menu-name">{bulk ? `${itemCount(bulk.length)} selected` : shot.windowTitle || shot.fileName}</span>
+          <span className="shot-menu-meta">{bulk ? bulkMeta(bulk) : headerMeta(shot)}</span>
         </span>
       </div>
       {rows.map((row, rowIndex) => {
@@ -676,7 +779,7 @@ export function ShotMenu({
           style={{ top: subPosition.top }}
         >
           {tagRows.map((tag, index) => {
-            const checked = hasTag(tags, tag);
+            const checked = tagState(tag);
             return (
               <div
                 key={tag.toLowerCase()}
@@ -687,7 +790,10 @@ export function ShotMenu({
                 onMouseEnter={() => setTagActive(index)}
                 onClick={() => runTag(index)}
               >
-                <span className="shot-menu-check">{checked && <CheckIcon />}</span>
+                <span className="shot-menu-check">
+                  {checked === "true" && <CheckIcon />}
+                  {checked === "mixed" && <span className="shot-menu-mixed" aria-hidden="true" />}
+                </span>
                 <span className="shot-menu-label">{tag}</span>
               </div>
             );

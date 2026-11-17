@@ -351,6 +351,11 @@ export function suggestedTags(known: string[], shots: Pick<Shot, "tags">[], own:
     .map(({ tag }) => tag);
 }
 
+/** "3 items", or "1 item". */
+export function itemCount(count: number): string {
+  return count === 1 ? "1 item" : `${count} items`;
+}
+
 /** The last part of a path, for saying where a file went. */
 export function baseName(path: string): string {
   return path.split(/[\\/]/).pop() || path;

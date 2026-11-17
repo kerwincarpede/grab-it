@@ -83,6 +83,10 @@ interface Backend {
   openWith?: boolean;
   /** What the save dialog answers; cancelled when unset. */
   saveAs?: string | null;
+  /** The folder the open dialog answers; cancelled when unset. */
+  openFolder?: string | null;
+  /** Commands that fail for these shot ids, by command. */
+  failIds?: Record<string, number[]>;
   /** `library_set_tags` fails with this. */
   tagsFail?: string;
   /** Answers `library_clean_up`; nothing removed when unset. */
@@ -148,6 +152,7 @@ function mockBackend(shots: Shot[]): Backend {
       backend.calls.push({ cmd, payload });
       const args = payload as Record<string, unknown>;
       if (backend.fail) throw backend.fail;
+      if (backend.failIds?.[cmd]?.includes(args?.id as number)) throw `could not reach shot ${args.id}`;
       switch (cmd) {
         case "library_list": {
           const { offset, limit } = args as { offset: number; limit: number };
@@ -277,6 +282,8 @@ function mockBackend(shots: Shot[]): Backend {
           return args.target;
         case "plugin:dialog|save":
           return backend.saveAs ?? null;
+        case "plugin:dialog|open":
+          return backend.openFolder ?? null;
         case "library_search": {
           const { query, offset, limit } = args as { query: SearchQuery; offset: number; limit: number };
           const hits = search(backend, query);
@@ -1652,6 +1659,290 @@ describe("LibraryWindow right-click menu", () => {
     await waitFor(() => expect(callsTo(backend, "ai_status")).toHaveLength(1));
     const menu = await openMenu("Grab-it 1.png");
     await waitFor(() => expect(within(menu).queryByRole("menuitem", { name: "Describe again" })).not.toBeInTheDocument());
+  });
+});
+
+describe("LibraryWindow multi-select", () => {
+  const tile = (name: string) => screen.getByRole("button", { name });
+  /** The tiles selected, by file name, in the order shown. */
+  const selectedTiles = () =>
+    [...document.querySelectorAll<HTMLElement>(".tile-main[aria-pressed='true']")].map((item) => item.getAttribute("aria-label"));
+
+  /** Clicks `first` and Shift-clicks `last`, selecting both and every tile between. */
+  async function selectRange(first: string, last: string) {
+    fireEvent.click(await screen.findByRole("button", { name: first }));
+    fireEvent.click(tile(last), { shiftKey: true });
+  }
+
+  /** Right-clicks the tile for `name` and resolves to the menu that opens. */
+  function openMenu(name: string) {
+    fireEvent.contextMenu(tile(name), { clientX: 120, clientY: 80 });
+    return screen.getByRole("menu");
+  }
+
+  const labels = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((item) => item.textContent);
+
+  it("toggles with Ctrl or Cmd, selects a range with Shift, and clears with Escape", async () => {
+    mockBackend([shot(1), shot(2), shot(3), shot(4), shot(5)]);
+    render(<LibraryWindow />);
+    fireEvent.click(await screen.findByRole("button", { name: "Grab-it 4.png" }));
+    expect(selectedTiles()).toEqual(["Grab-it 4.png"]);
+    expect(screen.getByLabelText("Capture details")).toBeInTheDocument();
+
+    // Several selected: no details.
+    fireEvent.click(tile("Grab-it 2.png"), { ctrlKey: true });
+    expect(selectedTiles()).toEqual(["Grab-it 4.png", "Grab-it 2.png"]);
+    expect(screen.queryByLabelText("Capture details")).not.toBeInTheDocument();
+
+    // Toggled off again, one is left and its details come back.
+    fireEvent.click(tile("Grab-it 2.png"), { metaKey: true });
+    expect(selectedTiles()).toEqual(["Grab-it 4.png"]);
+    expect(screen.getByLabelText("Capture details")).toBeInTheDocument();
+
+    // Shift selects from the last tile clicked without it, either way; a Ctrl/Cmd-click counts.
+    fireEvent.click(tile("Grab-it 4.png"));
+    fireEvent.click(tile("Grab-it 1.png"), { shiftKey: true });
+    expect(selectedTiles()).toEqual(["Grab-it 4.png", "Grab-it 3.png", "Grab-it 2.png", "Grab-it 1.png"]);
+    fireEvent.click(tile("Grab-it 5.png"), { shiftKey: true });
+    expect(selectedTiles()).toEqual(["Grab-it 5.png", "Grab-it 4.png"]);
+    fireEvent.click(tile("Grab-it 2.png"), { metaKey: true });
+    fireEvent.click(tile("Grab-it 1.png"), { shiftKey: true });
+    expect(selectedTiles()).toEqual(["Grab-it 2.png", "Grab-it 1.png"]);
+    fireEvent.click(tile("Grab-it 4.png"), { shiftKey: true });
+    expect(selectedTiles()).toEqual(["Grab-it 4.png", "Grab-it 3.png", "Grab-it 2.png"]);
+    expect(screen.queryByLabelText("Capture details")).not.toBeInTheDocument();
+
+    // Ctrl/Cmd+Shift adds a range to what is selected.
+    fireEvent.click(tile("Grab-it 5.png"));
+    fireEvent.click(tile("Grab-it 4.png"), { shiftKey: true });
+    fireEvent.click(tile("Grab-it 1.png"), { ctrlKey: true });
+    fireEvent.click(tile("Grab-it 2.png"), { ctrlKey: true, shiftKey: true });
+    expect(selectedTiles()).toEqual(["Grab-it 5.png", "Grab-it 4.png", "Grab-it 2.png", "Grab-it 1.png"]);
+
+    await userEvent.keyboard("{Escape}");
+    expect(selectedTiles()).toEqual([]);
+
+    // A plain click selects just that tile.
+    await selectRange("Grab-it 5.png", "Grab-it 3.png");
+    fireEvent.click(tile("Grab-it 1.png"));
+    expect(selectedTiles()).toEqual(["Grab-it 1.png"]);
+    expect(screen.getByLabelText("Capture details")).toBeInTheDocument();
+  });
+
+  it("offers the bulk menu inside a multi-selection, and the usual one outside it", async () => {
+    mockBackend([shot(1), recording(2), shot(3), shot(4)]);
+    render(<LibraryWindow />);
+    await selectRange("Grab-it 3.png", "Grab-it 1.png");
+    const menu = openMenu("Grab-it 2.mp4");
+    expect(menu).toHaveAccessibleName("Actions for 3 items");
+    expect(labels(menu)).toEqual(["Add tag", "Keep forever", "Export to folder…", "Move to Trash", "Delete permanently…"]);
+    expect(within(menu).getByText("3 items selected")).toBeInTheDocument();
+    expect(within(menu).getByText("2 screenshots · 1 recording")).toBeInTheDocument();
+
+    // Escape closes the menu and keeps the selection.
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(selectedTiles()).toEqual(["Grab-it 3.png", "Grab-it 2.mp4", "Grab-it 1.png"]);
+
+    const single = openMenu("Grab-it 4.png");
+    expect(single).toHaveAccessibleName("Actions for Grab-it 4.png");
+    expect(labels(single)).toContain("Rename…");
+  });
+
+  it("moves every selected item to the Trash", async () => {
+    const backend = mockBackend([shot(1), shot(2), shot(3), shot(4)]);
+    render(<LibraryWindow />);
+    await selectRange("Grab-it 3.png", "Grab-it 1.png");
+    await userEvent.click(within(openMenu("Grab-it 2.png")).getByRole("menuitem", { name: "Move to Trash" }));
+
+    expect(await screen.findByText("3 items moved to the Trash")).toBeInTheDocument();
+    expect(callsTo(backend, "library_trash").map((call) => call.payload)).toEqual([{ id: 3 }, { id: 2 }, { id: 1 }]);
+    expect(screen.queryByRole("button", { name: "Grab-it 1.png" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Grab-it 3.png" })).not.toBeInTheDocument();
+    expect(tile("Grab-it 4.png")).toBeInTheDocument();
+    expect(selectedTiles()).toEqual([]);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("asks again before deleting every selected item permanently", async () => {
+    const backend = mockBackend([shot(1), shot(2), shot(3)]);
+    render(<LibraryWindow />);
+    await selectRange("Grab-it 3.png", "Grab-it 2.png");
+    const menu = openMenu("Grab-it 3.png");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Delete permanently…" }));
+    expect(callsTo(backend, "library_delete")).toHaveLength(0);
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Click again to delete 2 for good" }));
+
+    expect(await screen.findByText("2 items deleted")).toBeInTheDocument();
+    expect(callsTo(backend, "library_delete").map((call) => call.payload)).toEqual([{ id: 3 }, { id: 2 }]);
+    expect(tile("Grab-it 1.png")).toBeInTheDocument();
+  });
+
+  it("says in one error how many items could not be moved to the Trash", async () => {
+    const backend = mockBackend([shot(1), shot(2), shot(3)]);
+    backend.failIds = { library_trash: [2] };
+    render(<LibraryWindow />);
+    await selectRange("Grab-it 3.png", "Grab-it 1.png");
+    await userEvent.click(within(openMenu("Grab-it 1.png")).getByRole("menuitem", { name: "Move to Trash" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not move 1 of 3 items to the Trash: could not reach shot 2");
+    expect(screen.getByText("2 items moved to the Trash")).toBeInTheDocument();
+    // The one that failed stays, still selected.
+    expect(tile("Grab-it 2.png")).toBeInTheDocument();
+    expect(selectedTiles()).toEqual(["Grab-it 2.png"]);
+    expect(screen.queryByRole("button", { name: "Grab-it 1.png" })).not.toBeInTheDocument();
+  });
+
+  it("says how many items could not be deleted", async () => {
+    const backend = mockBackend([shot(1), shot(2), shot(3)]);
+    backend.failIds = { library_delete: [1, 3] };
+    render(<LibraryWindow />);
+    await selectRange("Grab-it 3.png", "Grab-it 1.png");
+    const menu = openMenu("Grab-it 1.png");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Delete permanently…" }));
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Click again to delete 3 for good" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not delete 2 of 3 items: could not reach shot 3");
+    expect(screen.queryByRole("button", { name: "Grab-it 2.png" })).not.toBeInTheDocument();
+  });
+
+  it("keeps every selected item forever, then stops keeping them all", async () => {
+    const backend = mockBackend([shot(1, { keep: true }), shot(2), shot(3)]);
+    render(<LibraryWindow />);
+    await selectRange("Grab-it 3.png", "Grab-it 1.png");
+    await userEvent.click(within(openMenu("Grab-it 2.png")).getByRole("menuitem", { name: "Keep forever" }));
+
+    // Only those not kept yet are changed.
+    await waitFor(() =>
+      expect(callsTo(backend, "library_set_keep").map((call) => call.payload)).toEqual([
+        { id: 3, keep: true },
+        { id: 2, keep: true },
+      ]),
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "Keep Grab-it 3.png forever" })).toHaveAttribute("aria-pressed", "true"));
+
+    await userEvent.click(within(openMenu("Grab-it 2.png")).getByRole("menuitem", { name: "Stop keeping forever" }));
+    await waitFor(() => expect(callsTo(backend, "library_set_keep")).toHaveLength(5));
+    expect(callsTo(backend, "library_set_keep").slice(2).map((call) => call.payload)).toEqual([
+      { id: 3, keep: false },
+      { id: 2, keep: false },
+      { id: 1, keep: false },
+    ]);
+  });
+
+  it("says how many items could not be kept forever", async () => {
+    const backend = mockBackend([shot(1), shot(2), shot(3)]);
+    backend.failIds = { library_set_keep: [3] };
+    render(<LibraryWindow />);
+    await selectRange("Grab-it 3.png", "Grab-it 1.png");
+    await userEvent.click(within(openMenu("Grab-it 2.png")).getByRole("menuitem", { name: "Keep forever" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not keep 1 of 3 items forever: could not reach shot 3");
+    expect(screen.getByRole("button", { name: "Keep Grab-it 1.png forever" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("exports every selected item to one folder", async () => {
+    const backend = mockBackend([shot(1), recording(2), shot(3)]);
+    backend.openFolder = "/home/me/Desktop/Shots";
+    render(<LibraryWindow />);
+    await selectRange("Grab-it 3.png", "Grab-it 1.png");
+    await userEvent.click(within(openMenu("Grab-it 1.png")).getByRole("menuitem", { name: "Export to folder…" }));
+
+    expect(await screen.findByText("Exported 3 items to Shots")).toBeInTheDocument();
+    expect(callsTo(backend, "plugin:dialog|open")).toHaveLength(1);
+    expect(callsTo(backend, "plugin:dialog|open")[0].payload).toMatchObject({ options: { directory: true } });
+    expect(callsTo(backend, "library_export").map((call) => call.payload)).toEqual([
+      { id: 3, target: "/home/me/Desktop/Shots" },
+      { id: 2, target: "/home/me/Desktop/Shots" },
+      { id: 1, target: "/home/me/Desktop/Shots" },
+    ]);
+    expect(callsTo(backend, "plugin:dialog|save")).toHaveLength(0);
+  });
+
+  it("exports nothing when the folder picker is cancelled", async () => {
+    const backend = mockBackend([shot(1), shot(2)]);
+    render(<LibraryWindow />);
+    await selectRange("Grab-it 2.png", "Grab-it 1.png");
+    await userEvent.click(within(openMenu("Grab-it 1.png")).getByRole("menuitem", { name: "Export to folder…" }));
+
+    await waitFor(() => expect(callsTo(backend, "plugin:dialog|open")).toHaveLength(1));
+    expect(callsTo(backend, "library_export")).toHaveLength(0);
+    expect(screen.queryByText(/Exported/)).not.toBeInTheDocument();
+  });
+
+  it("says how many items could not be exported", async () => {
+    const backend = mockBackend([shot(1), shot(2), shot(3)]);
+    backend.openFolder = "/home/me/Desktop/Shots";
+    backend.failIds = { library_export: [1] };
+    render(<LibraryWindow />);
+    await selectRange("Grab-it 3.png", "Grab-it 1.png");
+    await userEvent.click(within(openMenu("Grab-it 1.png")).getByRole("menuitem", { name: "Export to folder…" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not export 1 of 3 items: could not reach shot 1");
+    expect(screen.getByText("Exported 2 items to Shots")).toBeInTheDocument();
+  });
+
+  /** Waits for the library's tags, which the Add tag submenu offers. */
+  async function tagsLoaded(backend: Backend) {
+    await waitFor(() => expect(callsTo(backend, "library_filter_options").length).toBeGreaterThan(0));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  const tagsOf = (backend: Backend, id: number) => backend.shots.find((item) => item.id === id)?.tags;
+
+  it("adds a tag to every selected item, and takes it off them all", async () => {
+    const backend = mockBackend([shot(1, { tags: ["bug"] }), shot(2, { tags: ["bug", "ui"] }), shot(3), shot(4, { tags: ["docs"] })]);
+    render(<LibraryWindow />);
+    await tagsLoaded(backend);
+    await selectRange("Grab-it 3.png", "Grab-it 1.png");
+    const menu = openMenu("Grab-it 1.png");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Add tag" }));
+    const submenu = within(menu).getByRole("menu", { name: "Tags" });
+
+    // Tags on some of them are mixed, those on the most first; others are offered below.
+    const rows = within(submenu).getAllByRole("menuitemcheckbox");
+    expect(rows.map((row) => row.textContent)).toEqual(["bug", "ui", "docs"]);
+    expect(rows.map((row) => row.getAttribute("aria-checked"))).toEqual(["mixed", "mixed", "false"]);
+
+    await userEvent.click(within(submenu).getByRole("menuitemcheckbox", { name: "bug" }));
+    await waitFor(() => expect(within(submenu).getByRole("menuitemcheckbox", { name: "bug" })).toHaveAttribute("aria-checked", "true"));
+    // Only the one without it is saved.
+    await waitFor(() => expect(callsTo(backend, "library_set_tags").map((call) => call.payload)).toEqual([{ id: 3, tags: ["bug"] }]));
+
+    await userEvent.click(within(submenu).getByRole("menuitemcheckbox", { name: "bug" }));
+    await waitFor(() => expect(callsTo(backend, "library_set_tags")).toHaveLength(4));
+    expect(tagsOf(backend, 1)).toEqual([]);
+    expect(tagsOf(backend, 2)).toEqual(["ui"]);
+    expect(tagsOf(backend, 3)).toEqual([]);
+    expect(within(submenu).getByRole("menuitemcheckbox", { name: "bug" })).toHaveAttribute("aria-checked", "false");
+
+    // A new tag goes on them all.
+    await userEvent.click(within(submenu).getByRole("menuitem", { name: "New tag…" }));
+    await userEvent.type(within(submenu).getByRole("textbox", { name: "New tag" }), "Release{Enter}");
+    // Saved in the order shown, the last one last.
+    await waitFor(() => expect(tagsOf(backend, 1)).toEqual(["Release"]));
+    expect(tagsOf(backend, 3)).toEqual(["Release"]);
+    expect(tagsOf(backend, 2)).toEqual(["ui", "Release"]);
+    expect(tagsOf(backend, 4)).toEqual(["docs"]);
+    expect(within(submenu).getByRole("menuitemcheckbox", { name: "Release" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("says in the submenu how many items could not be tagged", async () => {
+    const backend = mockBackend([shot(1), shot(2), shot(3, { tags: ["bug"] })]);
+    backend.failIds = { library_set_tags: [2] };
+    render(<LibraryWindow />);
+    await tagsLoaded(backend);
+    await selectRange("Grab-it 2.png", "Grab-it 1.png");
+    const menu = openMenu("Grab-it 1.png");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Add tag" }));
+    const submenu = within(menu).getByRole("menu", { name: "Tags" });
+    await userEvent.click(within(submenu).getByRole("menuitemcheckbox", { name: "bug" }));
+
+    expect(await within(submenu).findByRole("alert")).toHaveTextContent("Could not tag 1 of 2 items: could not reach shot 2");
+    expect(tagsOf(backend, 1)).toEqual(["bug"]);
+    expect(within(submenu).getByRole("menuitemcheckbox", { name: "bug" })).toHaveAttribute("aria-checked", "mixed");
   });
 });
 
