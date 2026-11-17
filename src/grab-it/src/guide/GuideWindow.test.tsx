@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@tauri-apps/api/mocks";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import GuideWindow from "./GuideWindow";
 
 // The window draws steps on a canvas only once their image loads, which
@@ -28,11 +28,10 @@ function mockGuide() {
     if (cmd === "guide_image") return new ArrayBuffer(0);
     if (cmd === "guide_save") saved.push((args as { steps: unknown }).steps);
     return null;
-  });
+  }, { shouldMockEvents: true });
   return saved;
 }
 
-afterEach(() => clearMocks());
 
 describe("GuideWindow", () => {
   it("lists the steps with their descriptions", async () => {

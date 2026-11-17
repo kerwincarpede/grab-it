@@ -305,6 +305,9 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             id => {
                 if let Some((action, delay)) = timed_action_for(id) {
                     actions::start_after(app, action, delay);
+                } else if id == MENU_STEPS {
+                    // The clicks on the tray are seen by the session too.
+                    crate::steps::toggle(app, crate::steps::Trigger::Click);
                 } else if let Some(action) = action_for(id) {
                     actions::start(app, action);
                 }

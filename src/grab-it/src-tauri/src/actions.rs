@@ -104,7 +104,7 @@ pub fn start_after(app: &AppHandle, action: Action, delay: Duration) {
 /// Starts a capture without blocking the caller (often the main thread).
 pub fn start(app: &AppHandle, action: Action) {
     if action == Action::Steps {
-        crate::steps::toggle(app);
+        crate::steps::toggle(app, crate::steps::Trigger::Keys);
         return;
     }
     // The same action that starts a recording ends it.

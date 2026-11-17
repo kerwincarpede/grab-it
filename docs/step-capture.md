@@ -13,8 +13,9 @@ Step capture watches the mouse across the whole desktop. On macOS it asks for **
 
 ## What each click saves
 
-- The frame is taken when the button goes down, so it shows the screen just before the click.
-- Grab-it captures the window under the pointer. When that window is smaller than 400 × 300 points, as a menu or a small dialog is, it captures the whole monitor instead, for context.
+- The frame is taken as soon as the button goes down, so it shows the screen just before the click. Saving happens in the background and never delays the next click's frame.
+- Grab-it captures the window under the pointer. When you click a menu, a popover or a window smaller than 400 × 300 points, such as a small dialog, it captures the whole monitor instead, for context.
+- Clicks on Grab-it's own windows and menus are not steps. When you stop from the tray or the hub, the click that opened it is left out too.
 - Each step is an ordinary capture in `originals/`, listed in the Library like any other. Steps are not copied to the clipboard and do not open Quick Access.
 - The badge sits where you clicked and shows the step's place in the guide. Open the capture in the editor to move it or add more marks.
 - A double click counts as one step. A click within 24 pixels of the previous step's badge, in the same window, on a screen that has barely changed, is skipped as a repeat.

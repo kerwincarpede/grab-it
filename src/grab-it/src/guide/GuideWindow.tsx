@@ -179,13 +179,20 @@ export default function GuideWindow() {
         setSteps(info.steps.map((step) => ({ ...step, annotations: readAnnotations(step.annotations) })));
       })
       .catch((err: unknown) => setError(String(err)));
-    const unlisten = onGuideChanged(() => {
+    // Stopped at once on unmount, or as soon as it is listening if that
+    // comes later.
+    let disposed = false;
+    let stop: (() => void) | null = null;
+    onGuideChanged(() => {
       guideInfo()
         .then((info) => setSteps((current) => current && mergeDescriptions(current, info.steps, edited.current)))
         .catch(() => {});
-    });
+    })
+      .then((unlisten) => (disposed ? unlisten() : (stop = unlisten)))
+      .catch(() => {});
     return () => {
-      void unlisten.then((stop) => stop());
+      disposed = true;
+      stop?.();
     };
   }, []);
 

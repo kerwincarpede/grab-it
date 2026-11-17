@@ -499,7 +499,7 @@ mod tests {
 
     fn names(archive: &[u8]) -> Vec<String> {
         let zip = zip::ZipArchive::new(Cursor::new(archive)).unwrap();
-        zip.file_names().map(str::to_owned).collect()
+        zip.file_names().map(|name| name.unwrap().into_owned()).collect()
     }
 
     #[test]

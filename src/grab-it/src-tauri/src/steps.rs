@@ -399,6 +399,8 @@ fn with_marker(image: &RgbaImage, marker: (f64, f64), radius: f64) -> RgbaImage 
 /// The step capture under way.
 struct Session {
     stop: Arc<AtomicBool>,
+    /// Set when it was stopped by a click on the tray or the hub.
+    stopped_by_click: Arc<AtomicBool>,
     guide: PathBuf,
     thread: Option<JoinHandle<()>>,
 }
@@ -414,9 +416,18 @@ pub fn is_running() -> bool {
     lock(&SESSION).is_some()
 }
 
+/// How a step capture was started or stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trigger {
+    /// The hotkey or the command line.
+    Keys,
+    /// The tray menu or the hub, whose clicks the session also sees.
+    Click,
+}
+
 /// Starts a step capture, or stops the one under way and opens its guide.
-pub fn toggle(app: &AppHandle) {
-    if stop(app) {
+pub fn toggle(app: &AppHandle, trigger: Trigger) {
+    if stop(app, trigger) {
         return;
     }
     start(app);
@@ -459,13 +470,15 @@ fn begin(app: &AppHandle) {
         return actions::report_failure(app, &err);
     }
     let stop = Arc::new(AtomicBool::new(false));
+    let stopped_by_click = Arc::new(AtomicBool::new(false));
     let thread = {
         let app = app.clone();
         let stop = stop.clone();
+        let stopped_by_click = stopped_by_click.clone();
         let guide = guide.clone();
         std::thread::Builder::new()
             .name("grab-it-steps".into())
-            .spawn(move || run(&app, &capture, &stop, &folder, &guide))
+            .spawn(move || run(&app, &capture, &stop, &stopped_by_click, &folder, &guide))
     };
     let thread = match thread {
         Ok(thread) => thread,
@@ -476,6 +489,7 @@ fn begin(app: &AppHandle) {
     };
     *session = Some(Session {
         stop,
+        stopped_by_click,
         guide,
         thread: Some(thread),
     });
@@ -486,10 +500,13 @@ fn begin(app: &AppHandle) {
 
 /// Stops the step capture under way and opens its guide. False when none
 /// runs. A guide with no steps is removed.
-pub fn stop(app: &AppHandle) -> bool {
+fn stop(app: &AppHandle, trigger: Trigger) -> bool {
     let Some(mut session) = lock(&SESSION).take() else {
         return false;
     };
+    session
+        .stopped_by_click
+        .store(trigger == Trigger::Click, Ordering::SeqCst);
     session.stop.store(true, Ordering::SeqCst);
     tray::set_steps(app, false);
     let app = app.clone();
@@ -526,27 +543,76 @@ fn save_folder(app: &AppHandle) -> PathBuf {
         .clone()
 }
 
-/// A step to describe once it is saved.
+/// A frame grabbed for a click, to be saved by the saver.
+pub struct Grabbed {
+    image: RgbaImage,
+    marker: (f64, f64),
+    radius: f64,
+    image_per_point: f64,
+    mode: CaptureMode,
+    foreground: Foreground,
+}
+
+/// A step to describe once it is saved, found again by its capture so a
+/// reordered guide still gets the right text.
 struct DescribeJob {
-    index: usize,
+    capture: String,
     fallback: String,
     png: Vec<u8>,
 }
 
-/// The session's loop: takes a step for each click until stopped.
-fn run(app: &AppHandle, capture: &input::Capture, stop: &AtomicBool, folder: &Path, guide: &Path) {
+/// The step still waiting when the session stops: kept when it was
+/// stopped from the keyboard, dropped when it was stopped by clicking (the
+/// tray icon or the hub), since that click is the step.
+pub fn keep_pending<T>(pending: Option<T>, trigger: Trigger) -> Option<T> {
+    match trigger {
+        Trigger::Keys => pending,
+        Trigger::Click => None,
+    }
+}
+
+/// The session's loop. Each click's frame is grabbed as soon as the click
+/// is seen; a saver thread writes it, so slow saves never delay the next
+/// grab. The latest step waits until the next one, or the stop, says
+/// whether it is kept.
+fn run(
+    app: &AppHandle,
+    capture: &input::Capture,
+    stop: &AtomicBool,
+    stopped_by_click: &AtomicBool,
+    folder: &Path,
+    guide: &Path,
+) {
     let ai = ai::current_settings(app);
     let (jobs, queue) = mpsc::channel::<DescribeJob>();
-    let describer = ai.enabled.then(|| {
+    let describes = ai.enabled;
+    if describes {
         let app = app.clone();
         let guide = guide.to_path_buf();
-        std::thread::spawn(move || describe_steps(&app, &ai, &guide, &queue))
-    });
+        std::thread::spawn(move || describe_steps(&app, &ai, &guide, &queue));
+    }
+    let (frames, received) = mpsc::channel::<Grabbed>();
+    let saver = {
+        let app = app.clone();
+        let folder = folder.to_path_buf();
+        let guide = guide.to_path_buf();
+        std::thread::spawn(move || {
+            for (index, grabbed) in received.into_iter().enumerate() {
+                match save_step(&app, &folder, &guide, &grabbed, index + 1) {
+                    Ok(job) if describes => {
+                        let _ = jobs.send(job);
+                    }
+                    Ok(_) => {}
+                    Err(err) => eprintln!("Grab-it: could not save a step: {err}"),
+                }
+            }
+        })
+    };
     let mut last: Option<LastStep> = None;
     let mut last_click: Option<(Instant, (f64, f64))> = None;
-    let mut count = 0;
-    while !stop.load(Ordering::SeqCst) {
-        for event in capture.take() {
+    let mut pending: Option<Grabbed> = None;
+    let mut handle = |events: Vec<input::InputEvent>, pending: &mut Option<Grabbed>| {
+        for event in events {
             let (InputKind::Click, Some(position)) = (&event.kind, event.position) else {
                 continue;
             };
@@ -555,35 +621,52 @@ fn run(app: &AppHandle, capture: &input::Capture, stop: &AtomicBool, folder: &Pa
             if double {
                 continue;
             }
-            match take_step(app, folder, guide, position, last.as_ref(), count + 1) {
-                Ok(Some((step, job))) => {
-                    count += 1;
+            match grab(position, last.as_ref()) {
+                Ok(Some((step, grabbed))) => {
                     last = Some(step);
-                    if describer.is_some() {
-                        let _ = jobs.send(job);
+                    if let Some(previous) = pending.replace(grabbed) {
+                        let _ = frames.send(previous);
                     }
                 }
                 Ok(None) => {}
-                Err(err) => eprintln!("Grab-it: could not save a step: {err}"),
+                Err(err) => eprintln!("Grab-it: could not take a step: {err}"),
             }
         }
+    };
+    while !stop.load(Ordering::SeqCst) {
+        handle(capture.take(), &mut pending);
         std::thread::sleep(POLL);
     }
-    // The describer finishes the steps it was sent, then ends.
-    drop(jobs);
+    // Clicks seen just before the stop, such as the one on the menu item
+    // that stopped it, are still looked at: Grab-it's own are skipped.
+    handle(capture.take(), &mut pending);
+    let trigger = if stopped_by_click.load(Ordering::SeqCst) {
+        Trigger::Click
+    } else {
+        Trigger::Keys
+    };
+    if let Some(kept) = keep_pending(pending, trigger) {
+        let _ = frames.send(kept);
+    }
+    drop(handle);
+    drop(frames);
+    // The guide is complete before the Guide window opens; the describer
+    // finishes the steps it was sent, then ends.
+    let _ = saver.join();
 }
 
-/// Saves the step for a click at `position`, unless it repeats `last`.
-fn take_step(
-    app: &AppHandle,
-    folder: &Path,
-    guide: &Path,
+/// Grabs the frame for a click at `position`: the window under it, or its
+/// monitor for a small window, a menu or popover, or the desktop. None for
+/// a click on Grab-it itself or one that repeats `last`.
+fn grab(
     position: (f64, f64),
     last: Option<&LastStep>,
-    number: usize,
-) -> Result<Option<(LastStep, DescribeJob)>, String> {
+) -> Result<Option<(LastStep, Grabbed)>, String> {
     let (x, y) = position;
-    let desktop = screen::desktop();
+    let hit = screen::hit_test(x, y);
+    if hit == screen::Hit::Own {
+        return Ok(None);
+    }
     let monitors = screen::monitors()?;
     let monitor = screen::monitor_at(&monitors, x, y)
         .or_else(|| monitors.first())
@@ -595,21 +678,28 @@ fn take_step(
     } else {
         monitor.scale_factor
     };
-    let window = screen::window_at(&desktop.windows, x, y)
-        .filter(|window| !is_small(window.rect.width, window.rect.height, pixels_per_point))
-        .cloned();
-    let (image, area, window_id, foreground, mode) = match &window {
-        Some(window) => match screen::capture_window(window.id) {
-            Ok(image) => (
+    let window = match hit {
+        screen::Hit::Window(window)
+            if !is_small(window.rect.width, window.rect.height, pixels_per_point) =>
+        {
+            Some(window)
+        }
+        _ => None,
+    };
+    let window_frame = window.as_ref().and_then(|window| {
+        screen::capture_window(window.id).ok().map(|image| {
+            (
                 image,
                 window.rect,
                 Some(window.id),
                 screen::foreground_of(window),
                 CaptureMode::Window,
-            ),
-            Err(_) => monitor_step(&monitor, &desktop.foreground)?,
-        },
-        None => monitor_step(&monitor, &desktop.foreground)?,
+            )
+        })
+    });
+    let (image, area, window_id, foreground, mode) = match window_frame {
+        Some(frame) => frame,
+        None => monitor_step(&monitor, &screen::foreground())?,
     };
     let marker = marker_at(x, y, &area, image.dimensions());
     let thumb = thumbnail(&image);
@@ -618,51 +708,69 @@ fn take_step(
     }
     let image_per_point =
         f64::from(image.width()) * pixels_per_point / f64::from(area.width.max(1));
-    let radius = STEP_RADIUS * image_per_point.max(0.5);
-
-    let saved = capture::save_capture(
-        folder,
-        &image,
-        mode,
-        &foreground,
-        Some(image_per_point),
-        Local::now(),
-    )
-    .map_err(|err| err.to_string())?;
-    editor::write_annotations(
-        &saved.path,
-        &step_annotations(marker.0, marker.1, radius, number),
-    )?;
-    crate::library::record_capture(app, &saved.path);
-    let _ = app.emit(actions::CAPTURE_SAVED_EVENT, &saved);
-
-    let fallback = fallback_description(foreground.app.as_deref().unwrap_or(""));
-    let index = {
-        let _writing = lock(&GUIDE_WRITE);
-        let mut current = read_guide(guide).unwrap_or_default();
-        current.steps.push(GuideStep {
-            capture: relative_capture(folder, &saved.path),
-            description: fallback.clone(),
-        });
-        write_guide(guide, &current)?;
-        current.steps.len() - 1
-    };
-    let png = ai::fit_png(DynamicImage::ImageRgba8(with_marker(
-        &image, marker, radius,
-    )))
-    .unwrap_or_default();
     Ok(Some((
         LastStep {
             window: window_id,
             marker,
             thumb,
         },
-        DescribeJob {
-            index,
-            fallback,
-            png,
+        Grabbed {
+            image,
+            marker,
+            radius: STEP_RADIUS * image_per_point.max(0.5),
+            image_per_point,
+            mode,
+            foreground,
         },
     )))
+}
+
+/// Saves a grabbed step as capture `number` of the guide.
+fn save_step(
+    app: &AppHandle,
+    folder: &Path,
+    guide: &Path,
+    grabbed: &Grabbed,
+    number: usize,
+) -> Result<DescribeJob, String> {
+    let saved = capture::save_capture(
+        folder,
+        &grabbed.image,
+        grabbed.mode,
+        &grabbed.foreground,
+        Some(grabbed.image_per_point),
+        Local::now(),
+    )
+    .map_err(|err| err.to_string())?;
+    editor::write_annotations(
+        &saved.path,
+        &step_annotations(grabbed.marker.0, grabbed.marker.1, grabbed.radius, number),
+    )?;
+    crate::library::record_capture(app, &saved.path);
+    let _ = app.emit(actions::CAPTURE_SAVED_EVENT, &saved);
+
+    let fallback = fallback_description(grabbed.foreground.app.as_deref().unwrap_or(""));
+    let capture = relative_capture(folder, &saved.path);
+    {
+        let _writing = lock(&GUIDE_WRITE);
+        let mut current = read_guide(guide).unwrap_or_default();
+        current.steps.push(GuideStep {
+            capture: capture.clone(),
+            description: fallback.clone(),
+        });
+        write_guide(guide, &current)?;
+    }
+    let png = ai::fit_png(DynamicImage::ImageRgba8(with_marker(
+        &grabbed.image,
+        grabbed.marker,
+        grabbed.radius,
+    )))
+    .unwrap_or_default();
+    Ok(DescribeJob {
+        capture,
+        fallback,
+        png,
+    })
 }
 
 type Frame = (RgbaImage, Rect, Option<u32>, Foreground, CaptureMode);
@@ -676,6 +784,24 @@ fn monitor_step(monitor: &screen::MonitorInfo, foreground: &Foreground) -> Resul
         height: monitor.height,
     };
     Ok((image, area, None, foreground.clone(), CaptureMode::Monitor))
+}
+
+/// Puts the AI's `description` on the step showing `capture`, wherever it
+/// has moved, unless the user changed its text from `fallback`. True when
+/// it was applied.
+pub fn apply_description(
+    guide: &mut Guide,
+    capture: &str,
+    fallback: &str,
+    description: String,
+) -> bool {
+    match guide.steps.iter_mut().find(|step| step.capture == capture) {
+        Some(step) if step.description == fallback => {
+            step.description = description;
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Describes each step it is sent with the AI, on the step capture's own
@@ -712,7 +838,7 @@ fn describe_steps(
         let description = match reply {
             Ok(reply) => parse_step_description(&reply),
             Err(err) => {
-                eprintln!("Grab-it: could not describe step {}: {err}", job.index + 1);
+                eprintln!("Grab-it: could not describe {}: {err}", job.capture);
                 None
             }
         };
@@ -723,13 +849,10 @@ fn describe_steps(
         let Ok(mut current) = read_guide(guide) else {
             continue;
         };
-        if let Some(step) = current.steps.get_mut(job.index)
-            && step.description == job.fallback
+        if apply_description(&mut current, &job.capture, &job.fallback, description)
+            && write_guide(guide, &current).is_ok()
         {
-            step.description = description;
-            if write_guide(guide, &current).is_ok() {
-                let _ = app.emit(GUIDE_CHANGED_EVENT, guide);
-            }
+            let _ = app.emit(GUIDE_CHANGED_EVENT, guide);
         }
     }
 }
@@ -1051,6 +1174,54 @@ mod tests {
             (40.0, 10.0)
         ));
         assert!(!is_double_click(None, at, (10.0, 10.0)));
+    }
+
+    #[test]
+    fn a_description_finds_its_step_after_a_reorder() {
+        let step = |capture: &str| GuideStep {
+            capture: capture.into(),
+            description: "Click in Firefox".into(),
+        };
+        let mut guide = Guide {
+            version: 1,
+            steps: vec![
+                step("originals/a.png"),
+                step("originals/b.png"),
+                step("originals/c.png"),
+            ],
+        };
+        // The user moved c up and deleted a before b's description arrived.
+        guide.steps = vec![step("originals/c.png"), step("originals/b.png")];
+        assert!(apply_description(
+            &mut guide,
+            "originals/b.png",
+            "Click in Firefox",
+            "Click Save.".into()
+        ));
+        assert_eq!(guide.steps[0].description, "Click in Firefox");
+        assert_eq!(guide.steps[1].description, "Click Save.");
+        // A step the user edited, or one deleted, keeps what it has.
+        guide.steps[0].description = "Open the menu".into();
+        assert!(!apply_description(
+            &mut guide,
+            "originals/c.png",
+            "Click in Firefox",
+            "x".into()
+        ));
+        assert!(!apply_description(
+            &mut guide,
+            "originals/a.png",
+            "Click in Firefox",
+            "x".into()
+        ));
+        assert_eq!(guide.steps[0].description, "Open the menu");
+    }
+
+    #[test]
+    fn a_step_clicked_to_stop_the_capture_is_dropped() {
+        assert_eq!(keep_pending(Some(3), Trigger::Keys), Some(3));
+        assert_eq!(keep_pending(Some(3), Trigger::Click), None);
+        assert_eq!(keep_pending(None::<u8>, Trigger::Keys), None);
     }
 
     #[test]

@@ -118,12 +118,6 @@ pub fn capture_window(id: u32) -> Result<RgbaImage, String> {
         .map_err(|e| err("could not capture the window", e))
 }
 
-/// The front-most of `windows` (listed front to back) that holds the point
-/// `x`, `y` in desktop coordinates.
-pub fn window_at(windows: &[WindowInfo], x: f64, y: f64) -> Option<&WindowInfo> {
-    windows.iter().find(|window| contains(&window.rect, x, y))
-}
-
 /// The monitor of `monitors` that holds the point `x`, `y`.
 pub fn monitor_at(monitors: &[MonitorInfo], x: f64, y: f64) -> Option<&MonitorInfo> {
     monitors.iter().find(|monitor| {
@@ -138,6 +132,189 @@ pub fn monitor_at(monitors: &[MonitorInfo], x: f64, y: f64) -> Option<&MonitorIn
             y,
         )
     })
+}
+
+/// What a click landed on.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Hit {
+    /// One of Grab-it's own windows or menus.
+    Own,
+    /// A menu, popover or other window above the ordinary ones, or one the
+    /// window list does not hold.
+    Popup,
+    /// An ordinary app window.
+    Window(WindowInfo),
+    /// No window: the desktop.
+    Nothing,
+}
+
+/// A window for hit-testing: every visible one, Grab-it's own and popups
+/// included, front to back.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HitWindow {
+    pub info: WindowInfo,
+    pub own: bool,
+    pub popup: bool,
+}
+
+/// What the front-most of `windows` holding `x`, `y` is.
+pub fn classify(windows: &[HitWindow], x: f64, y: f64) -> Hit {
+    match windows
+        .iter()
+        .find(|window| contains(&window.info.rect, x, y))
+    {
+        None => Hit::Nothing,
+        Some(window) if window.own => Hit::Own,
+        Some(window) if window.popup => Hit::Popup,
+        Some(window) => Hit::Window(window.info.clone()),
+    }
+}
+
+/// What the click at `x`, `y` in desktop coordinates landed on. Called as
+/// soon as the click is seen, while a menu it landed on is still open.
+pub fn hit_test(x: f64, y: f64) -> Hit {
+    let own_pid = std::process::id();
+    #[cfg(target_os = "macos")]
+    {
+        let windows: Vec<HitWindow> = mac::list()
+            .into_iter()
+            .filter(|window| window.alpha > 0.0 && window.rect.width > 0 && window.rect.height > 0)
+            .map(|window| HitWindow {
+                own: window.pid == own_pid,
+                popup: window.layer != 0,
+                info: WindowInfo {
+                    id: window.id,
+                    app_name: window.app_name,
+                    title: window.title,
+                    rect: window.rect,
+                },
+            })
+            .collect();
+        classify(&windows, x, y)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Popups the window list leaves out, found at the point itself.
+        if let Some(hit) = native::popup_at(x, y, own_pid) {
+            return hit;
+        }
+        let Ok(all) = Window::all() else {
+            return Hit::Nothing;
+        };
+        let mut windows: Vec<(i32, HitWindow)> = all
+            .iter()
+            .filter(|window| !window.is_minimized().unwrap_or(false))
+            .filter_map(|window| {
+                let width = window.width().ok()?;
+                let height = window.height().ok()?;
+                if width == 0 || height == 0 {
+                    return None;
+                }
+                let hit = HitWindow {
+                    own: window.pid().ok() == Some(own_pid),
+                    popup: false,
+                    info: WindowInfo {
+                        id: window.id().ok()?,
+                        app_name: window.app_name().unwrap_or_default(),
+                        title: window.title().unwrap_or_default(),
+                        rect: Rect {
+                            x: window.x().ok()?,
+                            y: window.y().ok()?,
+                            width,
+                            height,
+                        },
+                    },
+                };
+                Some((window.z().unwrap_or(0), hit))
+            })
+            .collect();
+        windows.sort_by_key(|(z, _)| std::cmp::Reverse(*z));
+        let windows: Vec<HitWindow> = windows.into_iter().map(|(_, hit)| hit).collect();
+        classify(&windows, x, y)
+    }
+}
+
+/// Windows: the top-level window at the point, which holds menus that
+/// xcap's list may not.
+#[cfg(target_os = "windows")]
+mod native {
+    use windows::Win32::{
+        Foundation::POINT,
+        UI::WindowsAndMessaging::{
+            GA_ROOT, GetAncestor, GetWindowThreadProcessId, WindowFromPoint,
+        },
+    };
+
+    use super::Hit;
+
+    pub fn popup_at(x: f64, y: f64, own_pid: u32) -> Option<Hit> {
+        let point = POINT {
+            x: x.round() as i32,
+            y: y.round() as i32,
+        };
+        // SAFETY: these only read the window under a point and its owner.
+        unsafe {
+            let window = WindowFromPoint(point);
+            if window.0.is_null() {
+                return None;
+            }
+            let root = GetAncestor(window, GA_ROOT);
+            let root = if root.0.is_null() { window } else { root };
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(root, Some(&mut pid as *mut u32));
+            if pid == own_pid {
+                return Some(Hit::Own);
+            }
+            // A menu's own window class: xcap's list leaves it out.
+            let mut class = [0u16; 16];
+            let len = windows::Win32::UI::WindowsAndMessaging::GetClassNameW(root, &mut class);
+            let class = String::from_utf16_lossy(&class[..len.max(0) as usize]);
+            (class == "#32768").then_some(Hit::Popup)
+        }
+    }
+}
+
+/// X11: an override-redirect window at the pointer (a menu or popover),
+/// which xcap's list leaves out. Wayland has no step capture.
+#[cfg(target_os = "linux")]
+mod native {
+    use x11rb::{
+        connection::Connection as _,
+        protocol::xproto::{AtomEnum, ConnectionExt as _},
+    };
+
+    use super::Hit;
+
+    pub fn popup_at(_x: f64, _y: f64, own_pid: u32) -> Option<Hit> {
+        let (conn, screen) = x11rb::connect(None).ok()?;
+        let root = conn.setup().roots.get(screen)?.root;
+        // The pointer has barely moved since the click was seen.
+        let child = conn.query_pointer(root).ok()?.reply().ok()?.child;
+        if child == x11rb::NONE {
+            return None;
+        }
+        let attributes = conn.get_window_attributes(child).ok()?.reply().ok()?;
+        if !attributes.override_redirect {
+            return None;
+        }
+        let atom = conn
+            .intern_atom(false, b"_NET_WM_PID")
+            .ok()?
+            .reply()
+            .ok()?
+            .atom;
+        let pid = conn
+            .get_property(false, child, atom, AtomEnum::CARDINAL, 0, 1)
+            .ok()?
+            .reply()
+            .ok()
+            .and_then(|reply| reply.value32().and_then(|mut values| values.next()));
+        Some(if pid == Some(own_pid) {
+            Hit::Own
+        } else {
+            Hit::Popup
+        })
+    }
 }
 
 fn contains(rect: &Rect, x: f64, y: f64) -> bool {
@@ -469,13 +646,43 @@ mod tests {
 
     #[test]
     fn the_front_window_under_the_point_is_found() {
+        let ordinary = |info: WindowInfo| HitWindow {
+            info,
+            own: false,
+            popup: false,
+        };
         // Front to back: a small dialog over a large window.
-        let windows = [window(1, 100, 100, 200, 100), window(2, 0, 0, 800, 600)];
-        assert_eq!(window_at(&windows, 150.0, 150.0).map(|w| w.id), Some(1));
-        assert_eq!(window_at(&windows, 50.5, 20.0).map(|w| w.id), Some(2));
+        let windows = [
+            ordinary(window(1, 100, 100, 200, 100)),
+            ordinary(window(2, 0, 0, 800, 600)),
+        ];
+        let id = |x, y| match classify(&windows, x, y) {
+            Hit::Window(window) => Some(window.id),
+            _ => None,
+        };
+        assert_eq!(id(150.0, 150.0), Some(1));
+        assert_eq!(id(50.5, 20.0), Some(2));
         // The right and bottom edges are outside.
-        assert_eq!(window_at(&windows, 800.0, 10.0).map(|w| w.id), None);
-        assert_eq!(window_at(&windows, -1.0, 10.0).map(|w| w.id), None);
+        assert_eq!(id(800.0, 10.0), None);
+        assert_eq!(id(-1.0, 10.0), None);
+    }
+
+    #[test]
+    fn a_popup_over_a_large_window_is_told_apart() {
+        let hit = |info: WindowInfo, own: bool, popup: bool| HitWindow { info, own, popup };
+        // Front to back: a menu over the app's large window, and Grab-it's hub.
+        let windows = [
+            hit(window(9, 900, 0, 200, 200), true, false),
+            hit(window(3, 100, 100, 180, 240), false, true),
+            hit(window(2, 0, 0, 1600, 1000), false, false),
+        ];
+        assert_eq!(classify(&windows, 150.0, 150.0), Hit::Popup);
+        assert_eq!(
+            classify(&windows, 50.0, 50.0),
+            Hit::Window(window(2, 0, 0, 1600, 1000))
+        );
+        assert_eq!(classify(&windows, 950.0, 50.0), Hit::Own);
+        assert_eq!(classify(&windows, 5000.0, 50.0), Hit::Nothing);
     }
 
     #[test]

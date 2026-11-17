@@ -229,6 +229,16 @@ pub fn hub_capture(
     monitor: Option<usize>,
     app: AppHandle,
 ) -> Result<(), String> {
+    if kind == "steps" {
+        // Started or stopped once the hub is hidden; the clicks that opened
+        // it and pressed the button are not steps.
+        hide(&app);
+        std::thread::spawn(move || {
+            std::thread::sleep(HIDE_SETTLE);
+            crate::steps::toggle(&app, crate::steps::Trigger::Click);
+        });
+        return Ok(());
+    }
     let action = match kind.as_str() {
         "region" => Action::Region,
         "window" => Action::Window,
@@ -238,7 +248,6 @@ pub fn hub_capture(
         "record" => Action::Record,
         "text" => Action::Text,
         "colour" => Action::Colour,
-        "steps" => Action::Steps,
         other => return Err(format!("unknown capture: {other}")),
     };
     hide(&app);
