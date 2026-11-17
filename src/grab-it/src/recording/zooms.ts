@@ -13,7 +13,13 @@ export type ZoomFocus = { kind: "area"; x: number; y: number } | { kind: "cursor
 
 export interface Zoom {
   id: string;
-  /** In the recording's time, not the trimmed clip's. */
+  /**
+   * The recordings-folder file name of the recording the zoom is on;
+   * absent for the sidecar's own recording. Zooms keep their source's
+   * time, so they move with its clip.
+   */
+  source?: string;
+  /** In the source recording's time, not the joined sequence's. */
   startMs: number;
   endMs: number;
   /** How many times larger the zoomed area shows. */
@@ -83,6 +89,7 @@ export function parseZooms(value: unknown): Zoom[] {
     if (!focus || !isNum(zoom.startMs) || !isNum(zoom.endMs) || !isNum(zoom.scale) || zoom.startMs < 0 || zoom.endMs <= zoom.startMs) continue;
     zooms.push({
       id: typeof zoom.id === "string" && zoom.id ? zoom.id : newZoomId(),
+      ...(typeof zoom.source === "string" && zoom.source ? { source: zoom.source } : {}),
       startMs: Math.round(zoom.startMs),
       endMs: Math.round(zoom.endMs),
       scale: clampScale(zoom.scale),
@@ -90,10 +97,15 @@ export function parseZooms(value: unknown): Zoom[] {
     });
   }
   zooms.sort((a, b) => a.startMs - b.startMs);
+  // Zooms on different recordings never meet, so overlaps count per source.
   const kept: Zoom[] = [];
+  const lastEnd = new Map<string, number>();
   for (const zoom of zooms) {
-    const last = kept[kept.length - 1] as Zoom | undefined;
-    if (!last || zoom.startMs >= last.endMs) kept.push(zoom);
+    const key = zoom.source ?? "";
+    if (zoom.startMs >= (lastEnd.get(key) ?? 0)) {
+      kept.push(zoom);
+      lastEnd.set(key, zoom.endMs);
+    }
   }
   return kept;
 }

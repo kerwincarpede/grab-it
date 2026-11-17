@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
@@ -6,7 +7,20 @@ import { emit } from "@tauri-apps/api/event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import RecordingEditor from "./RecordingEditor";
 
+vi.mock("./sources", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./sources")>();
+  // jsdom loads no video, so each recording's metadata is made up here.
+  return { ...actual, probeVideo: vi.fn((path: string) => Promise.resolve(path.includes("Other") ? { durationMs: 6000, width: 720, height: 720 } : { durationMs: 12_000, width: 1920, height: 1080 })) };
+});
+
 const PATH = "/shots/recordings/Grab-it 2026-03-07 09-05-01.mp4";
+const OWN = "Grab-it 2026-03-07 09-05-01.mp4";
+const OTHER = "Other take.mp4";
+const OTHER_PATH = "/shots/recordings/Other take.mp4";
+/** What the file picker gives next. */
+let picked: string | null = null;
+/** Recordings `recording_source` refuses, as if gone. */
+let gone: string[] = [];
 
 interface Backend {
   calls: { cmd: string; payload?: InvokeArgs; headers?: Record<string, string> }[];
@@ -27,6 +41,13 @@ function mockBackend(edits: unknown = null, cursor: unknown = null, audio: strin
         return {};
       case "recording_save_edits":
         return null;
+      case "plugin:dialog|open":
+        return picked;
+      case "recording_source": {
+        const name = (payload as { fileName: string }).fileName;
+        if (gone.includes(name)) return Promise.reject(`${name} is not in the recordings folder`);
+        return { path: `/shots/recordings/${name}`, fileName: name, fps: 30, cursor: null, hasAudio: true };
+      }
       case "recording_export":
         return new Promise<string>((resolve, reject) => {
           backend.exported = { resolve, reject };
@@ -79,21 +100,35 @@ function stubCanvas(pngs: number[][]) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  picked = null;
+  gone = [];
 });
 
 const saved = (backend: Backend) => backend.calls.filter((call) => call.cmd === "recording_save_edits").map((call) => (call.payload as { edits: unknown }).edits);
 const lastSaved = (backend: Backend) => saved(backend)[saved(backend).length - 1];
 
+/** jsdom has no media decoder. Supply the metadata a loaded element would expose. */
+function setVideoMetadata(video: HTMLVideoElement, duration: number, width: number, height: number) {
+  Object.defineProperties(video, {
+    readyState: { configurable: true, value: HTMLMediaElement.HAVE_CURRENT_DATA },
+    duration: { configurable: true, value: duration },
+    videoWidth: { configurable: true, value: width },
+    videoHeight: { configurable: true, value: height },
+  });
+}
+
+async function previewVideo(source: string): Promise<HTMLVideoElement> {
+  return waitFor(() => {
+    const video = Array.from(screen.getByTestId("recording-stage").querySelectorAll("video")).find((element) => element.dataset.source === source);
+    if (!video) throw new Error(`Waiting for the preview of ${source}`);
+    return video;
+  });
+}
+
 /** Loads a 12-second 1920×1080 recording into the page's video. */
 async function loadVideo(): Promise<HTMLVideoElement> {
-  const video = await waitFor(() => {
-    const found = screen.getByTestId("recording-stage").querySelector("video");
-    if (!found) throw new Error("the video has not loaded yet");
-    return found;
-  });
-  Object.defineProperty(video, "duration", { configurable: true, value: 12 });
-  Object.defineProperty(video, "videoWidth", { configurable: true, value: 1920 });
-  Object.defineProperty(video, "videoHeight", { configurable: true, value: 1080 });
+  const video = await previewVideo(OWN);
+  setVideoMetadata(video, 12, 1920, 1080);
   fireEvent.loadedMetadata(video);
   await waitFor(() => expect(screen.getByRole("slider", { name: "Trim end" })).toHaveAttribute("aria-valuemax", "12000"));
   return video;
@@ -174,7 +209,16 @@ describe("RecordingEditor", () => {
     await loadVideo();
     await userEvent.click(screen.getByRole("button", { name: "Export" }));
     const { plan, body } = await exportCall(backend);
-    expect(plan).toEqual({ startMs: 1500, endMs: 6000, width: 1920, height: 1080, x: 0, y: 0, videoWidth: 1920, videoHeight: 1080, backdropBytes: 0, zooms: [], sourceWidth: 1920, sourceHeight: 1080 });
+    expect(plan).toEqual({
+      clips: [{ source: OWN, startMs: 1500, endMs: 6000, sourceWidth: 1920, sourceHeight: 1080, x: 0, y: 0, width: 1920, height: 1080, zooms: [] }],
+      width: 1920,
+      height: 1080,
+      x: 0,
+      y: 0,
+      videoWidth: 1920,
+      videoHeight: 1080,
+      backdropBytes: 0,
+    });
     expect(body).toEqual([]);
 
     await emit("recording-export-progress", { done: 135, total: 270 });
@@ -201,7 +245,16 @@ describe("RecordingEditor", () => {
     await loadVideo();
     await userEvent.click(screen.getByRole("button", { name: "Export" }));
     const { plan, body } = await exportCall(backend);
-    expect(plan).toEqual({ startMs: 2000, endMs: 9500, width: 1080, height: 1920, x: 34, y: 676, videoWidth: 1012, videoHeight: 570, backdropBytes: 3, zooms: [], sourceWidth: 1920, sourceHeight: 1080 });
+    expect(plan).toEqual({
+      clips: [{ source: OWN, startMs: 2000, endMs: 9500, sourceWidth: 1920, sourceHeight: 1080, x: 0, y: 0, width: 1012, height: 570, zooms: [] }],
+      width: 1080,
+      height: 1920,
+      x: 34,
+      y: 676,
+      videoWidth: 1012,
+      videoHeight: 570,
+      backdropBytes: 3,
+    });
     expect(body).toEqual([1, 2, 3, 9, 9]);
   });
 
@@ -414,6 +467,281 @@ describe("RecordingEditor", () => {
       render(<RecordingEditor />);
       await screen.findByText("Grab-it 2026-03-07 09-05-01.mp4");
       expect(screen.queryByText(/Microphone|System sound|Mixed sound/)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("joining recordings", () => {
+    const JOINED = {
+      version: 2,
+      clips: [
+        { id: "a", source: OWN, startMs: 1000, endMs: 5000 },
+        { id: "b", source: OTHER, startMs: 0, endMs: 6000 },
+      ],
+    };
+
+    /** Loads the opened recording into the video when the sequence starts with it. */
+    async function loadJoined(clips = 2): Promise<HTMLVideoElement> {
+      const video = await previewVideo(OWN);
+      setVideoMetadata(video, 12, 1920, 1080);
+      fireEvent.loadedMetadata(video);
+      await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(clips));
+      return video;
+    }
+
+    it("adds a recording from the recordings folder after the clip under the playhead, and undoes it", async () => {
+      const backend = mockBackend();
+      render(<RecordingEditor />);
+      await loadVideo();
+      picked = OTHER_PATH;
+      await userEvent.click(screen.getByRole("button", { name: "Recording" }));
+      await waitFor(() =>
+        expect(lastSaved(backend)).toEqual({
+          version: 2,
+          clips: [
+            { id: "own", source: OWN, startMs: 0, endMs: 12_000 },
+            { id: expect.any(String), source: OTHER, startMs: 0, endMs: 6000 },
+          ],
+        }),
+      );
+      expect(screen.getAllByRole("option")).toHaveLength(2);
+      expect(screen.getByText("2 clips, 0:18.0")).toBeInTheDocument();
+      // The trim handles give way to each clip's edges.
+      expect(screen.queryByRole("slider", { name: "Trim start" })).not.toBeInTheDocument();
+
+      fireEvent.keyDown(document.body, { key: "z", ctrlKey: true });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1 }));
+      expect(screen.queryAllByRole("option")).toHaveLength(0);
+    });
+
+    it("refuses a recording from outside the recordings folder", async () => {
+      const backend = mockBackend();
+      render(<RecordingEditor />);
+      await loadVideo();
+      picked = "/home/me/Downloads/Other take.mp4";
+      await userEvent.click(screen.getByRole("button", { name: "Recording" }));
+      await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Only recordings in the recordings folder can be added."));
+      expect(saved(backend)).toEqual([]);
+      expect(backend.calls.some((call) => call.cmd === "recording_source")).toBe(false);
+    });
+
+    it("reopens a joined sequence and reorders it with Alt and the arrow keys, undoably", async () => {
+      const backend = mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      expect(screen.getAllByRole("option").map((option) => option.getAttribute("aria-label"))).toEqual([`${OWN}, 0:04.0`, `${OTHER}, 0:06.0`]);
+      fireEvent.focus(screen.getByRole("option", { name: `${OTHER}, 0:06.0` }));
+      fireEvent.keyDown(document.body, { key: "ArrowLeft", altKey: true });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [JOINED.clips[1], JOINED.clips[0]] }));
+      expect(screen.getAllByRole("option")[0]).toHaveAttribute("aria-label", `${OTHER}, 0:06.0`);
+
+      await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual(JOINED));
+    });
+
+    it("removes a clip, but never the last", async () => {
+      const backend = mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      fireEvent.focus(screen.getByRole("option", { name: `${OWN}, 0:04.0` }));
+      fireEvent.keyDown(document.body, { key: "Delete" });
+      // Another recording alone is still a sequence.
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [JOINED.clips[1]] }));
+      fireEvent.focus(screen.getByRole("option"));
+      fireEvent.keyDown(document.body, { key: "Delete" });
+      expect(screen.getAllByRole("option")).toHaveLength(1);
+      expect(saved(backend)).toHaveLength(1);
+    });
+
+    it("exports each clip fitted in the opened recording's box with its own zooms", async () => {
+      const zoom = { id: "z2", source: OTHER, startMs: 1000, endMs: 3000, scale: 2, focus: { kind: "area", x: 0.5, y: 0.5 } };
+      const backend = mockBackend({ ...JOINED, zooms: [zoom] });
+      render(<RecordingEditor />);
+      await loadJoined();
+      const other = await previewVideo(OTHER);
+      setVideoMetadata(other, 6, 720, 720);
+      fireEvent.loadedMetadata(other);
+      await waitFor(() => expect(screen.getByRole("button", { name: "Export" })).toBeEnabled());
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan } = await exportCall(backend);
+      expect(plan).toEqual({
+        clips: [
+          { source: OWN, startMs: 1000, endMs: 5000, sourceWidth: 1920, sourceHeight: 1080, x: 0, y: 0, width: 1920, height: 1080, zooms: [] },
+          { source: OTHER, startMs: 0, endMs: 6000, sourceWidth: 720, sourceHeight: 720, x: 420, y: 0, width: 1080, height: 1080, zooms: [{ id: "z2", startMs: 1000, endMs: 3000, scale: 2, focus: { kind: "area", x: 0.5, y: 0.5 } }] },
+        ],
+        width: 1920,
+        height: 1080,
+        x: 0,
+        y: 0,
+        videoWidth: 1920,
+        videoHeight: 1080,
+        backdropBytes: 0,
+      });
+    });
+
+    it("trims a clip by dragging its edge, undoably", async () => {
+      const backend = mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      // 10 s over 100 px: 100 ms a pixel, kept from when the drag began.
+      placeAt(screen.getByRole("listbox", { name: "Clips" }), 100, 26);
+      const edge = screen.getByRole("option", { name: `${OTHER}, 0:06.0` }).querySelector(".clip-edge.end") as HTMLElement;
+      fireEvent.pointerDown(edge, { clientX: 100 });
+      fireEvent.pointerMove(edge, { clientX: 90 });
+      fireEvent.pointerMove(edge, { clientX: 80 });
+      fireEvent.pointerUp(edge, { clientX: 80 });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [JOINED.clips[0], { ...JOINED.clips[1], endMs: 4000 }] }));
+      expect(saved(backend)).toHaveLength(1);
+
+      await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual(JOINED));
+    });
+
+    it("reorders a clip by dragging it, undoably", async () => {
+      const backend = mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      placeAt(screen.getByRole("listbox", { name: "Clips" }), 100, 26);
+      const first = screen.getByRole("option", { name: `${OWN}, 0:04.0` });
+      fireEvent.pointerDown(first, { clientX: 10 });
+      fireEvent.pointerMove(first, { clientX: 90 });
+      fireEvent.pointerUp(first, { clientX: 90 });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [JOINED.clips[1], JOINED.clips[0]] }));
+
+      await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual(JOINED));
+    });
+
+    it("plays on into the next clip when the first runs to its recording's end", async () => {
+      const clips = [
+        { id: "a", source: OWN, startMs: 8000, endMs: 12_000 },
+        { id: "b", source: OWN, startMs: 0, endMs: 2000 },
+      ];
+      mockBackend({ version: 2, clips });
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+      const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+      render(<RecordingEditor />);
+      const video = await loadJoined();
+      await userEvent.click(screen.getByRole("button", { name: "Play" }));
+      fireEvent.play(video);
+      // The video stops on its last frame, short of the clip's 12 s end.
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 11.98 });
+      Object.defineProperty(video, "ended", { configurable: true, value: true });
+      Object.defineProperty(video, "paused", { configurable: true, value: true });
+      fireEvent.pause(video);
+      fireEvent.ended(video);
+      expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+      act(() => frames.splice(0).forEach((frame) => frame(0)));
+      // On to the second clip's start, playing again.
+      expect(video.currentTime).toBe(0);
+      expect(play).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    });
+
+    it("gives a zoom in two clips of one recording to the first only, in the preview and the export", async () => {
+      const zoom = { id: "z3", startMs: 2500, endMs: 3500, scale: 2, focus: { kind: "area", x: 0.5, y: 0.5 } };
+      const backend = mockBackend({
+        version: 2,
+        clips: [
+          { id: "a", source: OWN, startMs: 1000, endMs: 5000 },
+          { id: "c", source: OWN, startMs: 2000, endMs: 6000 },
+        ],
+        zooms: [zoom],
+      });
+      render(<RecordingEditor />);
+      await loadJoined();
+      expect(screen.getAllByTestId("zoom-segment")).toHaveLength(1);
+      await waitFor(() => expect(screen.getByRole("button", { name: "Export" })).toBeEnabled());
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan } = await exportCall(backend);
+      expect((plan as { clips: { zooms: unknown[] }[] }).clips.map((clip) => clip.zooms)).toEqual([[zoom], []]);
+    });
+
+    it("on Linux reuses both loaded players across repeated seeks and releases each URL when its source leaves", async () => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko)");
+      const fetcher = vi.fn(async () => new Response(new Uint8Array(4), { status: 200 }));
+      vi.stubGlobal("fetch", fetcher);
+      let made = 0;
+      const createObjectURL = vi.fn(() => `blob:tauri://localhost/${++made}`);
+      const revokeObjectURL = vi.fn();
+      Object.assign(URL, { createObjectURL, revokeObjectURL });
+      const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+      mockBackend(JOINED);
+      const { unmount } = render(<StrictMode><RecordingEditor /></StrictMode>);
+      const first = await loadJoined();
+      const second = await previewVideo(OTHER);
+      const firstUrl = first.src;
+      const secondUrl = second.src;
+      expect(firstUrl).not.toBe(secondUrl);
+      expect(second).not.toBeVisible();
+      expect(second.hasAttribute("crossorigin")).toBe(false);
+
+      // 10 s over 100 px. The first clip keeps source seconds 1–5.
+      const track = screen.getByTestId("timeline-track");
+      placeAt(track, 100, 26);
+      const seekTo = (clientX: number) => {
+        fireEvent.pointerDown(track, { clientX });
+        fireEvent.pointerUp(track, { clientX });
+      };
+      seekTo(60);
+      // The first frame still applies the seek if its loadedmetadata was missed.
+      setVideoMetadata(second, 6, 720, 720);
+      fireEvent.canPlay(second);
+      expect(second.currentTime).toBe(2);
+      await userEvent.click(screen.getByRole("button", { name: "Play" }));
+      fireEvent.play(second);
+      Object.defineProperty(second, "paused", { configurable: true, value: false });
+
+      for (const offset of [0, 1, 2]) {
+        seekTo(10 + offset);
+        expect(first).toBeVisible();
+        expect(second).not.toBeVisible();
+        expect(first.currentTime).toBeCloseTo(2 + offset / 10);
+        expect(play.mock.instances[play.mock.instances.length - 1]).toBe(first);
+        // The hidden player is paused and silent.
+        expect(pause.mock.instances[pause.mock.instances.length - 1]).toBe(second);
+        expect(second.muted).toBe(true);
+        expect(first.muted).toBe(false);
+        fireEvent.timeUpdate(second);
+        fireEvent.pause(second);
+        fireEvent.ended(second);
+        expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+        seekTo(60 + offset);
+        expect(second).toBeVisible();
+        expect(first).not.toBeVisible();
+        expect(second.currentTime).toBeCloseTo(2 + offset / 10);
+        expect(play.mock.instances[play.mock.instances.length - 1]).toBe(second);
+        expect(first.muted).toBe(true);
+        expect(second.muted).toBe(false);
+      }
+      // Each recording kept its one player throughout.
+      expect(screen.getByTestId("recording-stage").querySelectorAll("video")).toHaveLength(2);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      expect(createObjectURL).toHaveBeenCalledTimes(2);
+      expect(revokeObjectURL).not.toHaveBeenCalled();
+      fireEvent.focus(screen.getByRole("option", { name: `${OTHER}, 0:06.0` }));
+      fireEvent.keyDown(document.body, { key: "Delete" });
+      expect(second).not.toBeInTheDocument();
+      expect(first).toBeVisible();
+      expect(revokeObjectURL.mock.calls).toEqual([[secondUrl]]);
+      unmount();
+      expect(revokeObjectURL.mock.calls).toEqual([[secondUrl], [firstUrl]]);
+      vi.unstubAllGlobals();
+    });
+
+    it("marks a recording that is gone and holds Export back", async () => {
+      gone = [OTHER];
+      mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      await waitFor(() => expect(screen.getByRole("option", { name: `${OTHER} (missing), 0:06.0` })).toBeInTheDocument());
+      expect(screen.getByRole("button", { name: "Export" })).toBeDisabled();
     });
   });
 });

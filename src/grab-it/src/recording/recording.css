@@ -50,6 +50,13 @@
   transform-origin: 0 0;
 }
 
+/* A recording another clip is showing stays laid out, so WebKitGTK keeps its player ready to show again. */
+.recording-video[hidden] {
+  display: block;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 /* Choosing a zoom's area: the area, with the rest of the frame dimmed. */
 .zoom-picker {
   position: absolute;
@@ -141,6 +148,10 @@
   background: var(--ed-accent);
   cursor: ew-resize;
   touch-action: none;
+}
+
+.timeline-handle[hidden] {
+  display: none;
 }
 
 .timeline-handle.start {
@@ -293,4 +304,79 @@
   .recording-progress > div {
     transition: none;
   }
+}
+
+/* --- Joined clips ------------------------------------------------------- */
+
+.clip-track {
+  position: relative;
+  height: 28px;
+  margin-top: 6px;
+}
+
+.clip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  overflow: hidden;
+  border: 1px solid #5b8def;
+  border-radius: 6px;
+  background: rgba(91, 141, 239, 0.28);
+  color: var(--ed-text);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.clip[aria-selected="true"] {
+  box-shadow: 0 0 0 2px var(--ed-text);
+}
+
+.clip[data-missing="true"] {
+  border-style: dashed;
+  border-color: #e5534b;
+  background: rgba(229, 83, 75, 0.18);
+}
+
+.clip:focus-visible {
+  outline: 2px solid var(--ed-accent);
+  outline-offset: 2px;
+}
+
+.clip-name {
+  overflow: hidden;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.clip-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.clip-edge.start {
+  left: 0;
+}
+
+.clip-edge.end {
+  right: 0;
+}
+
+.recording-fit {
+  position: absolute;
+  overflow: hidden;
+  background: #000000;
+}
+
+.recording-frame[data-joined="true"] {
+  background: #000000;
 }

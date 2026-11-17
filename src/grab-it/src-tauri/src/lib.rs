@@ -202,6 +202,7 @@ pub fn run() {
             editor::editor_faces,
             recording_editor::recording_info,
             recording_editor::recording_save_edits,
+            recording_editor::recording_source,
             recording_editor::recording_export,
             library::library_list,
             library::library_thumbnail,

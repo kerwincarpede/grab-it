@@ -100,13 +100,15 @@ See [Mark it up](/grab-it/image-editor/mark-it-up/) for what each tool does.
 | Key | What it does |
 | --- | --- |
 | `Space` | Play and pause |
-| `⌘ Z` | Undo the last trim, backdrop or zoom change |
+| `⌘ Z` | Undo the last trim, clip, backdrop or zoom change |
 | `⌘ ⇧ Z` or `⌘ Y` | Redo |
 | Arrow keys on a trim handle | Move it 0.1 seconds; with `Shift`, 1 second |
 | `Home` and `End` on a trim handle | Move it to the start or end |
 | `←` and `→` on a zoom | Move it 0.1 seconds; with `Shift`, 1 second |
 | `Delete` or `Backspace` on a zoom | Remove it |
 | `Esc` on a zoom | Deselect it |
+| `⌥ ←` and `⌥ →` (`Alt` on Windows and Linux) on a clip | Move it earlier or later in the sequence |
+| `Delete` or `Backspace` on a clip | Remove it, unless it's the last |
 | Arrow keys in the zoom area | Move the zoomed-in area; with `Shift`, ten times as far |
 
 Double-click the zoom track to add a zoom. See [Video editor](/grab-it/video-editor/).
