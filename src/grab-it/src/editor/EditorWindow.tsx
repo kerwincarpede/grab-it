@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
 import type Konva from "konva";
-import { Circle, Group, Image as KonvaImage, Layer, Rect as KonvaRect, Stage, Transformer } from "react-konva";
+import { Circle, Group, Image as KonvaImage, Layer, Line, Rect as KonvaRect, Stage, Transformer } from "react-konva";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import "./editor.css";
@@ -16,6 +16,7 @@ import {
   saveBackdropPresetImage,
 } from "./api";
 import BackdropPanel from "./BackdropPanel";
+import { defaultTailOffset } from "./callout";
 import { copyShotText, hasShotText, textCopied, watchShotText, type OcrLine, type ShotText } from "../library/api";
 import { blursFor, findDetails, findWord, wordAt } from "./redact";
 import { imageEdges, NO_EDGES, orientEdges, type Edges } from "./edges";
@@ -68,6 +69,7 @@ import {
   widthKind,
   type Backdrop,
   type BlurMode,
+  type CalloutShape,
   type CropAspect,
   type LineShape,
   type MagnifyShape,
@@ -189,12 +191,17 @@ const errorText = (err: unknown) => String(err instanceof Error ? err.message : 
 const CROP_BOX = "crop-box";
 
 interface TextDraft {
-  /** Set when editing an existing text shape. */
+  /** Set when editing an existing text or callout. */
   id?: string;
   /** The text's top-left corner as it shows: in display space, not capture pixels. */
   at: Point;
   value: string;
+  /** Set for a new callout: where its tail points, in capture pixels. */
+  tail?: Point;
 }
+
+/** A press-and-drag moving less than this, in screen pixels, places a callout with the default tail. */
+const CALLOUT_CLICK_PX = 4;
 
 function useCaptureImage(ready: boolean) {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
@@ -460,7 +467,14 @@ export default function EditorWindow() {
   const [bending, setBending] = useState<LineShape | null>(null);
   /** A lens's spot mid-drag, committed once when its handle is released. */
   const [spotting, setSpotting] = useState<MagnifyShape | null>(null);
-  /** A selected line or lens mid-drag, so its handles or connector follow it. */
+  /** A callout's tip mid-drag, committed once when its handle is released. */
+  const [tailing, setTailing] = useState<CalloutShape | null>(null);
+  /**
+   * A callout being placed: pressed on its target (`tip`, capture pixels),
+   * dragged to where the bubble goes. `start` and `end` are on show.
+   */
+  const [calloutDrag, setCalloutDrag] = useState<{ tip: Point; start: Point; end: Point } | null>(null);
+  /** A selected line, lens or callout mid-drag, so its handles or connector follow it. */
   const [moving, setMoving] = useState<{ id: string; transform: NodeTransform } | null>(null);
   /** A crop being drawn; `square` is Shift, which squares a Free crop, and `snap` is off while ⌥/Alt is held. */
   const [cropDrag, setCropDrag] = useState<{ start: Point; end: Point; square: boolean; snap: boolean } | null>(null);
@@ -759,9 +773,26 @@ export default function EditorWindow() {
     // Upright text keeps the corner it shows at, however long it grows.
     const corner = (fontSize: number) =>
       imageSize ? textCorner(textDraft.at, value, fontSize, imageSize, orientation) : textDraft.at;
-    if (existing && existing.type === "text") {
+    if (existing && (existing.type === "text" || existing.type === "callout")) {
       const edited = isIdentity(orientation) ? { ...existing, text: value } : { ...existing, text: value, ...corner(existing.fontSize) };
       commit(value ? replaceShape(doc, edited) : deleteShape(doc, existing.id));
+    } else if (value && textDraft.tail) {
+      const fontSize = widthFor(widths, "callout");
+      const at = corner(fontSize);
+      const callout: CalloutShape = {
+        id: newId(),
+        type: "callout",
+        color: style.color,
+        x: at.x,
+        y: at.y,
+        text: value,
+        fontSize,
+        ...(style.background ? { background: true } : {}),
+        tail: textDraft.tail,
+      };
+      commit(addShape(doc, callout));
+      // Selected, so its tip can be dragged onto the target straight away.
+      setSelectedId(callout.id);
     } else if (value) {
       const at = corner(widthFor(widths, "text"));
       commit(
@@ -825,6 +856,12 @@ export default function EditorWindow() {
       textAt.current = shownPointer() ?? at;
       return;
     }
+    if (drawWith === "callout") {
+      // Pressed on the target; the bubble goes where the drag ends.
+      const shown = shownPointer() ?? at;
+      setCalloutDrag({ tip: at, start: shown, end: shown });
+      return;
+    }
     if (drawWith === "crop") {
       // Drawn on show: see `shownSize`.
       const shown = shownPointer() ?? at;
@@ -841,9 +878,10 @@ export default function EditorWindow() {
   };
 
   const onMouseMove = (event: Konva.KonvaEventObject<MouseEvent>) => {
-    if (!draft && !cropDrag) return;
+    if (!draft && !cropDrag && !calloutDrag) return;
     const at = pointer();
     if (!at) return;
+    if (calloutDrag) setCalloutDrag({ ...calloutDrag, end: shownPointer() ?? at });
     // Shift keeps lines to 45° steps and boxes square.
     if (draft) setDraft(dragShape(draft, at, event.evt.shiftKey));
     if (cropDrag) setCropDrag({ ...cropDrag, end: shownPointer() ?? at, square: event.evt.shiftKey, snap: !event.evt.altKey });
@@ -857,6 +895,16 @@ export default function EditorWindow() {
     if (textAt.current) {
       setTextDraft({ at: textAt.current, value: "" });
       textAt.current = null;
+    }
+    if (calloutDrag) {
+      const end = shownPointer() ?? calloutDrag.end;
+      const clicked = Math.hypot(end.x - calloutDrag.start.x, end.y - calloutDrag.start.y) * currentView.scale < CALLOUT_CLICK_PX;
+      // A plain click puts the bubble there, with its tail pointing down and to the left as it shows.
+      const offset = defaultTailOffset(widthFor(widths, "callout"));
+      const shownTip = { x: end.x + offset.x, y: end.y + offset.y };
+      const tail = clicked ? (imageSize ? toCapture(shownTip, imageSize, orientation) : shownTip) : calloutDrag.tip;
+      setTextDraft({ at: end, value: "", tail });
+      setCalloutDrag(null);
     }
     if (draft) {
       const finished = finishShape(draft);
@@ -921,6 +969,7 @@ export default function EditorWindow() {
     const box = event.currentTarget.getBoundingClientRect();
     setDraft(null);
     setCropDrag(null);
+    setCalloutDrag(null);
     setWheelAt(clampWheel({ x: event.clientX - box.left, y: event.clientY - box.top }, size));
   };
 
@@ -988,9 +1037,9 @@ export default function EditorWindow() {
     if (shape) commit(replaceShape(doc, transformShape(shape, transform)));
   };
 
-  /** Follows a selected line or lens while its annotation node is dragged. */
+  /** Follows a selected line, lens or callout while its annotation node is dragged. */
   const moveShapeLive = (id: string, transform: NodeTransform) => {
-    if (id === selectedId && (lineSelected || selected?.type === "magnify")) setMoving({ id, transform });
+    if (id === selectedId && (lineSelected || selected?.type === "magnify" || selected?.type === "callout")) setMoving({ id, transform });
   };
 
   /** Ends a bend or end-handle drag: one undo step, unless nothing changed. */
@@ -1026,7 +1075,7 @@ export default function EditorWindow() {
   const width = widthKind(optionsFor);
   /** The width on show: the selected shape's own, else the tool's remembered one. */
   const shownWidth = Math.round(
-    selected?.type === "text"
+    selected?.type === "text" || selected?.type === "callout"
       ? selected.fontSize
       : selected?.type === "step"
         ? selected.radius
@@ -1404,6 +1453,7 @@ export default function EditorWindow() {
         setSelectedId(null);
         setDraft(null);
         setCropDrag(null);
+        setCalloutDrag(null);
         setBackdropOpen(false);
         setResizeOpen(false);
         setLookOpen(false);
@@ -1453,10 +1503,27 @@ export default function EditorWindow() {
   const placed = doc.shapes.map((shape) => {
     if (bending?.id === shape.id) return bending;
     if (spotting?.id === shape.id) return spotting;
+    if (tailing?.id === shape.id) return tailing;
     if (shape.type === "magnify" && moving?.id === shape.id) return transformShape(shape, moving.transform);
     return shape;
   });
   const spotLens = selected?.type === "magnify" && editable ? (spotting?.id === selected.id ? spotting : selected) : null;
+  /** The selected callout as its tip handle shows it: mid-move, or as saved. Its group draws the move itself. */
+  const tailBase =
+    selected?.type === "callout" && editable
+      ? moving?.id === selected.id
+        ? (transformShape(selected, moving.transform) as CalloutShape)
+        : selected
+      : null;
+  const tailShown = tailBase && tailing?.id === tailBase.id ? tailing : tailBase;
+  /** The line from a new callout's tip to where its bubble goes, while it is dragged or typed. */
+  const calloutPreview = (() => {
+    const shownCorner = calloutDrag?.end ?? (textDraft?.tail ? textDraft.at : null);
+    const tip = calloutDrag?.tip ?? textDraft?.tail;
+    if (!shownCorner || !tip) return null;
+    const corner = imageSize ? toCapture(shownCorner, imageSize, orientation) : shownCorner;
+    return [tip.x, tip.y, corner.x, corner.y];
+  })();
   const shapes = draft ? [...placed, draft] : placed;
   /** The selected arrow or line as its handles show it: mid-drag, mid-bend, or as saved. */
   const handleBase =
@@ -1473,7 +1540,7 @@ export default function EditorWindow() {
 
   const boxOptions = optionsFor === "rect" || optionsFor === "ellipse";
   const fillOn = selected?.type === "rect" || selected?.type === "ellipse" ? Boolean(selected.fill) : Boolean(style.fill);
-  const backgroundOn = selected?.type === "text" ? Boolean(selected.background) : Boolean(style.background);
+  const backgroundOn = selected?.type === "text" || selected?.type === "callout" ? Boolean(selected.background) : Boolean(style.background);
   const blurMode = (selected?.type === "blur" ? selected.mode : style.blurMode) ?? "pixelate";
   const lensZoom = selected?.type === "magnify" ? selected.zoom : (style.zoom ?? 2);
   const lens = (selected?.type === "magnify" ? selected.lens : style.lens) ?? "round";
@@ -1514,13 +1581,13 @@ export default function EditorWindow() {
             </button>
           </div>
         )}
-        {optionsFor === "text" && (
+        {(optionsFor === "text" || optionsFor === "callout") && (
           <div className="bar-group">
             <button
               type="button"
               className="icon-button"
               aria-label="Text background"
-              title="Text on a coloured background"
+              title={optionsFor === "callout" ? "Fill the bubble with the colour" : "Text on a coloured background"}
               aria-pressed={backgroundOn}
               onClick={() => changeStyle({ background: !backgroundOn })}
             >
@@ -1853,13 +1920,23 @@ export default function EditorWindow() {
                         onMove={moveShapeLive}
                         onEditText={(id) => {
                           const text = doc.shapes.find((candidate) => candidate.id === id);
-                          if (text?.type === "text" && imageSize) {
+                          if ((text?.type === "text" || text?.type === "callout") && imageSize) {
                             setTextDraft({ id, at: shownTextCorner(text, imageSize, orientation), value: text.text });
                           }
                         }}
                       />
                     </Fragment>
                   ))}
+                  {calloutPreview && (
+                    <Line
+                      name="callout-preview"
+                      points={calloutPreview}
+                      stroke={style.color}
+                      strokeWidth={2 / currentView.scale}
+                      dash={[6 / currentView.scale, 4 / currentView.scale]}
+                      listening={false}
+                    />
+                  )}
                 </Group>
               </Layer>
               <Layer>
@@ -1898,8 +1975,8 @@ export default function EditorWindow() {
                   ref={transformerRef}
                   rotateEnabled={false}
                   ignoreStroke
-                  flipEnabled={selected?.type !== "magnify" && !pointerSelected}
-                  keepRatio={pointerSelected || selected?.type === "text" || selected?.type === "step" || selected?.type === "magnify"}
+                  flipEnabled={selected?.type !== "magnify" && selected?.type !== "callout" && !pointerSelected}
+                  keepRatio={pointerSelected || selected?.type === "text" || selected?.type === "callout" || selected?.type === "step" || selected?.type === "magnify"}
                   enabledAnchors={pointerSelected ? CORNER_ANCHORS : anchorsFor(selected)}
                 />
                 {handleBase && (
@@ -1930,6 +2007,28 @@ export default function EditorWindow() {
                         setSpotting(null);
                         if (selected?.type === "magnify" && (at.x !== selected.spot[0] || at.y !== selected.spot[1])) {
                           commit(replaceShape(doc, { ...spotLens, spot: [at.x, at.y] }));
+                        }
+                      }}
+                    />
+                  </Group>
+                )}
+                {tailShown && tailBase && (
+                  // In capture pixels like the tail, so a dragged tip maps back through the turn and mirror.
+                  <Group name="oriented-handles" {...groupAttrs}>
+                    <Circle name={`${LINE_HANDLE} ${LINE_HANDLE}-tail`}
+                      x={tailShown.tail.x} y={tailShown.tail.y}
+                      radius={LINE_HANDLE_RADIUS / currentView.scale}
+                      fill="#ffffff" stroke={HANDLE_COLOR} strokeWidth={1.5 / currentView.scale} draggable
+                      onDragMove={(event: Konva.KonvaEventObject<DragEvent>) => {
+                        const at = event.target.position();
+                        setTailing({ ...tailBase, tail: { x: at.x, y: at.y } });
+                      }}
+                      onDragEnd={(event: Konva.KonvaEventObject<DragEvent>) => {
+                        event.cancelBubble = true;
+                        const at = event.target.position();
+                        setTailing(null);
+                        if (selected?.type === "callout" && (at.x !== selected.tail.x || at.y !== selected.tail.y)) {
+                          commit(replaceShape(doc, { ...selected, tail: { x: at.x, y: at.y } }));
                         }
                       }}
                     />

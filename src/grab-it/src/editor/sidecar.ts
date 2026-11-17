@@ -17,6 +17,21 @@ function isRect(value: Record<string, unknown>): boolean {
   return isNum(value.x) && isNum(value.y) && isNum(value.width) && isNum(value.height);
 }
 
+const isPoint = (value: unknown): boolean =>
+  typeof value === "object" && value !== null && isNum((value as Record<string, unknown>).x) && isNum((value as Record<string, unknown>).y);
+
+/** The fields text and callouts share. */
+function isTextFields(shape: Record<string, unknown>): boolean {
+  return (
+    isStr(shape.color) &&
+    isNum(shape.x) &&
+    isNum(shape.y) &&
+    isStr(shape.text) &&
+    isNum(shape.fontSize) &&
+    isOptional(shape.background, isBool)
+  );
+}
+
 /** True when `value` is a shape this version can draw. */
 export function isShape(value: unknown): value is Shape {
   if (typeof value !== "object" || value === null) return false;
@@ -53,14 +68,9 @@ export function isShape(value: unknown): value is Shape {
     case "spotlight":
       return isRect(shape);
     case "text":
-      return (
-        isStr(shape.color) &&
-        isNum(shape.x) &&
-        isNum(shape.y) &&
-        isStr(shape.text) &&
-        isNum(shape.fontSize) &&
-        isOptional(shape.background, isBool)
-      );
+      return isTextFields(shape);
+    case "callout":
+      return isTextFields(shape) && isPoint(shape.tail);
     case "step":
       return (
         isStr(shape.color) &&

@@ -56,6 +56,7 @@ While you're picking an area to capture or record:
 | `E` | Ellipse |
 | `P` | Freehand |
 | `T` | Text |
+| `K` | Callout |
 | `N` | Step (numbered badge) |
 | `H` | Highlighter |
 | `B` | Blur |

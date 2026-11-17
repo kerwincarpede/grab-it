@@ -23,6 +23,7 @@ Click **Annotate** and the editor opens, with your screenshot in the middle.
 | [Ellipse](/grab-it/image-editor/ellipse/) | `E` | Circling something (can be filled) |
 | [Freehand](/grab-it/image-editor/freehand/) | `P` | Doodles and ticks |
 | [Text](/grab-it/image-editor/text/) | `T` | Notes and labels, with an optional background |
+| [Callout](/grab-it/image-editor/callout/) | `K` | A note with a tail pointing at what it's about |
 | [Step](/grab-it/image-editor/step/) | `N` | Numbered steps (1, 2, 3…) for how-to guides |
 | [Highlighter](/grab-it/image-editor/highlighter/) | `H` | Highlighting text |
 | [Blur](/grab-it/image-editor/blur/) | `B` | Hiding emails, names and passwords |
@@ -55,7 +56,7 @@ Something you've just drawn stays selected, with handles, so you can adjust it s
 
 | Key | What it does |
 | --- | --- |
-| Tool keys (`V` `M` `A` `L` `R` `E` `P` `T` `N` `H` `B` `S` `C`) | Pick a tool; hold to use it once |
+| Tool keys (`V` `M` `A` `L` `R` `E` `P` `T` `K` `N` `H` `B` `S` `C`) | Pick a tool; hold to use it once |
 | `1` to `7` | Pick a colour from the top bar, in order |
 | `[` and `]` | Thinner or thicker (or smaller and larger text and badges) |
 | `Alt/⌥ + scroll` | Thinner or thicker |
