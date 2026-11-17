@@ -96,15 +96,27 @@ const CARD = /(?<![\d-])\d(?:[ -]?\d){12,18}(?![\d-])/g;
 const PHONE = /(?<![\w+.-])(?:\+\d{1,3}[ .-]?)?(?:\(\d{1,4}\)[ .-]?)?\d{1,4}(?:[ .-]?\d{2,4}){1,5}(?![\w-])/g;
 /** Dates and times look like phone numbers but are not private. */
 const DATE_LIKE = /^(?:\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}[-./]\d{1,2}[-./]\d{2,4})$/;
+/**
+ * Street suffixes, capitalised or in capitals. UI words that end street
+ * names too (Close, Row) are left out, so "Step 2 Click Close" is not one.
+ */
 const STREET_SUFFIXES = [
   "Street", "St", "Avenue", "Ave", "Road", "Rd", "Boulevard", "Blvd", "Lane", "Ln", "Drive", "Dr",
   "Court", "Ct", "Place", "Pl", "Way", "Terrace", "Ter", "Parkway", "Pkwy", "Highway", "Hwy",
-  "Circle", "Cir", "Square", "Sq", "Close", "Crescent", "Cres", "Alley", "Row",
-];
-/** A house number, one to four words of street name and a suffix: `221B Baker Street`. */
+  "Circle", "Cir", "Square", "Sq", "Crescent", "Cres", "Alley",
+].flatMap((suffix) => [suffix, suffix.toUpperCase()]);
+/** A space within a line, or one line break. */
+const ADDRESS_GAP = String.raw`(?:[ \t]+|[ \t]*\n[ \t]*)`;
+/** A capitalised street-name word, or an ordinal such as 5th. */
+const STREET_WORD = String.raw`(?:[A-Z][\w.'-]*|\d+(?:st|nd|rd|th))`;
+/**
+ * A house number, one to four capitalised words of street name and a
+ * capitalised suffix: `221B Baker Street`, `350 5th Avenue`. At most one
+ * line break; see `findDetails`.
+ */
 const ADDRESS = new RegExp(
-  String.raw`(?<![\w-])\d{1,6}[A-Za-z]?\s+(?:[A-Za-z][\w.'-]*\s+){1,4}(?:${STREET_SUFFIXES.join("|")})\b\.?`,
-  "gi",
+  String.raw`(?<![\w-])\d{1,6}[A-Za-z]?${ADDRESS_GAP}(?:${STREET_WORD}${ADDRESS_GAP}){1,4}(?:${STREET_SUFFIXES.join("|")})\b\.?`,
+  "g",
 );
 
 /** The digits in `text`. */
@@ -155,7 +167,7 @@ export function findDetails(lines: OcrLine[]): Detail[] {
     const digits = digitCount(match);
     return digits >= 7 && digits <= 15 && !DATE_LIKE.test(match);
   }).filter((phone) => !taken.some((span) => overlaps(span, phone)));
-  const addresses = spans(text, ADDRESS, "address", () => true);
+  const addresses = spans(text, ADDRESS, "address", (match) => match.split("\n").length <= 2);
   return [...emails, ...cards, ...phones, ...addresses]
     .sort((a, b) => a.start - b.start)
     .map((span) => ({

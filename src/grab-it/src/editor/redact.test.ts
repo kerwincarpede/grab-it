@@ -70,6 +70,22 @@ describe("findDetails", () => {
     ]);
   });
 
+  it("finds addresses with an ordinal or in capitals", () => {
+    const found = findDetails(lines("Meet at 350 5th Avenue", "12 HIGH ST"));
+    expect(found.map((detail) => detail.text)).toEqual(["350 5th Avenue", "12 HIGH ST"]);
+  });
+
+  it.each([
+    ["Saved 2 files to Drive"],
+    ["Step 2 Click Close"],
+    ["You have 3 new messages in your drive"],
+    ["all 4 of them went that way"],
+    ["Inbox 12", "Settings", "Close"],
+    ["Inbox 12", "Archive", "Shared", "Drive"],
+  ])("does not take ordinary text for an address: %s", (...texts: string[]) => {
+    expect(findDetails(lines(...texts))).toEqual([]);
+  });
+
   it("gives a match across two lines one rect per line", () => {
     const found = findDetails(lines("at 10 Downing", "Street please"));
     expect(found).toHaveLength(1);

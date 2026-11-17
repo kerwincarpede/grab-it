@@ -6,11 +6,27 @@ Grab-it finds faces for the editor's Blur private details with the
 
 | File | SHA-256 |
 | --- | --- |
-| `version-RFB-320.onnx` | `34cd7e60aeff28744c657de7a3dc64e872d506741de66987f3426f2b79f88017` |
+| `version-RFB-320.onnx` | `dc64d1dcc24c426d15a88e27091add475fc201763f866792f3ad09ebaeb0d1dc` |
 
-The file is an unmodified copy of `models/onnx/version-RFB-320.onnx` in that
-repository. This licence covers the model file only; the rest of Grab-it is
-under its own licence.
+The file is `models/onnx/version-RFB-320.onnx` from that repository
+(SHA-256 `34cd7e60aeff28744c657de7a3dc64e872d506741de66987f3426f2b79f88017`),
+converted so rten can load it: rten does not support the opset 9 `Slice`
+that takes its starts, ends and axes as attributes. The weights are
+unchanged. The conversion, with onnx 1.23.2 and onnxsim 0.8.1:
+
+```python
+import onnx, onnxsim
+from onnx import version_converter
+
+model = onnx.load("version-RFB-320.onnx")
+model = version_converter.convert_version(model, 11)
+model, ok = onnxsim.simplify(model)
+assert ok
+onnx.save(model, "version-RFB-320.onnx")
+```
+
+This licence covers the model file only; the rest of Grab-it is under its
+own licence.
 
 MIT License
 

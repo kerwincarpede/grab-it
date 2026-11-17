@@ -22,9 +22,22 @@ use crate::capture::Rect;
 pub const MODELS_DIR: &str = "face-models";
 /// Overrides the models directory, for trying another copy of the model.
 pub const MODELS_DIR_ENV: &str = "GRAB_IT_FACE_MODELS";
-/// The UltraFace RFB-320 model, an unmodified copy of `models/onnx/` in the
-/// UltraFace repository. Its SHA-256 is pinned in the tests.
+/// The UltraFace RFB-320 model from `models/onnx/` in the UltraFace
+/// repository, upgraded from ONNX opset 9 to 11 and simplified so rten can
+/// load it (see `face-models/LICENSE.md`). Its SHA-256 is pinned in the
+/// tests.
 pub const MODEL: &str = "version-RFB-320.onnx";
+/// The model's input.
+const INPUT_NODE: &str = "input";
+/// The model's class scores, `[1, priors, 2]`: background, then face.
+const SCORES_NODE: &str = "scores";
+/// The model's raw box offsets from its priors, `[1, priors, 4]`, before the
+/// graph decodes them. rten 0.24 panics running the model's own decoding
+/// (an in-place `Mul` on a sliced tensor), so [`decode`] does it here.
+const LOCATIONS_NODE: &str = "460";
+/// How UltraFace scales its box offsets.
+const CENTER_VARIANCE: f32 = 0.1;
+const SIZE_VARIANCE: f32 = 0.2;
 
 /// The model's input size.
 const INPUT_WIDTH: u32 = 320;
@@ -104,6 +117,55 @@ impl Detection {
     }
 }
 
+/// UltraFace RFB-320's prior boxes, `[centre x, centre y, width, height]`
+/// normalised to its input, in the order its outputs list them: per
+/// feature map (strides 8, 16, 32 and 64), row by row, then by size.
+pub fn priors() -> Vec<[f32; 4]> {
+    const FEATURE_MAPS: [(u32, u32); 4] = [(40, 30), (20, 15), (10, 8), (5, 4)];
+    const MIN_BOXES: [&[f32]; 4] = [
+        &[10., 16., 24.],
+        &[32., 48.],
+        &[64., 96.],
+        &[128., 192., 256.],
+    ];
+    let mut priors = Vec::new();
+    for ((columns, rows), sizes) in FEATURE_MAPS.into_iter().zip(MIN_BOXES) {
+        for row in 0..rows {
+            for column in 0..columns {
+                for size in sizes {
+                    priors.push(
+                        [
+                            (column as f32 + 0.5) / columns as f32,
+                            (row as f32 + 0.5) / rows as f32,
+                            size / INPUT_WIDTH as f32,
+                            size / INPUT_HEIGHT as f32,
+                        ]
+                        .map(|value| value.clamp(0., 1.)),
+                    );
+                }
+            }
+        }
+    }
+    priors
+}
+
+/// The box the model's `offsets` from `prior` describe, as the UltraFace
+/// graph decodes it.
+pub fn decode(offsets: [f32; 4], prior: [f32; 4], score: f32) -> Detection {
+    let [cx, cy, width, height] = prior;
+    let centre_x = offsets[0] * CENTER_VARIANCE * width + cx;
+    let centre_y = offsets[1] * CENTER_VARIANCE * height + cy;
+    let half_width = (offsets[2] * SIZE_VARIANCE).exp() * width / 2.;
+    let half_height = (offsets[3] * SIZE_VARIANCE).exp() * height / 2.;
+    Detection {
+        x1: centre_x - half_width,
+        y1: centre_y - half_height,
+        x2: centre_x + half_width,
+        y2: centre_y + half_height,
+        score,
+    }
+}
+
 /// The detections scoring at least [`MIN_SCORE`], best first, without any
 /// overlapping a better one by more than [`NMS_IOU`].
 pub fn suppress(mut detections: Vec<Detection>) -> Vec<Detection> {
@@ -149,42 +211,40 @@ impl Faces {
             }
         }
 
-        // UltraFace names its input `input` and its outputs `scores` and
-        // `boxes`; another export of it may only keep their order.
-        let node = |name: &str, ids: &[rten::NodeId], index: usize| {
+        let node = |name: &str| {
             self.model
                 .node_id(name)
-                .ok()
-                .or_else(|| ids.get(index).copied())
-                .ok_or_else(|| FaceError::Model(format!("{MODEL}: no node {name:?}")))
+                .map_err(|err| FaceError::Model(format!("{MODEL}: {err}")))
         };
-        let (inputs, outputs) = (self.model.input_ids(), self.model.output_ids());
-        let [scores, boxes] = self
+        let [scores, locations] = self
             .model
             .run_n(
-                vec![(node("input", inputs, 0)?, input.into())],
-                [node("scores", outputs, 0)?, node("boxes", outputs, 1)?],
+                vec![(node(INPUT_NODE)?, input.into())],
+                [node(SCORES_NODE)?, node(LOCATIONS_NODE)?],
                 None,
             )
             .map_err(|err| FaceError::Engine(err.to_string()))?;
         let scores: NdTensor<f32, 3> = scores
             .try_into()
             .map_err(|_| FaceError::Engine("unexpected scores output".into()))?;
-        let boxes: NdTensor<f32, 3> = boxes
+        let locations: NdTensor<f32, 3> = locations
             .try_into()
-            .map_err(|_| FaceError::Engine("unexpected boxes output".into()))?;
-        let count = scores.size(1).min(boxes.size(1));
-        if scores.size(2) < 2 || boxes.size(2) < 4 {
+            .map_err(|_| FaceError::Engine("unexpected box output".into()))?;
+        let priors = priors();
+        if scores.size(1) != priors.len()
+            || locations.size(1) != priors.len()
+            || scores.size(2) < 2
+            || locations.size(2) < 4
+        {
             return Err(FaceError::Engine("unexpected output shape".into()));
         }
-        let detections = (0..count)
-            .map(|i| Detection {
-                x1: boxes[[0, i, 0]],
-                y1: boxes[[0, i, 1]],
-                x2: boxes[[0, i, 2]],
-                y2: boxes[[0, i, 3]],
+        let detections = priors
+            .iter()
+            .enumerate()
+            .map(|(i, prior)| {
+                let offsets = [0, 1, 2, 3].map(|k| locations[[0, i, k]]);
                 // Column 0 is the background class, 1 a face.
-                score: scores[[0, i, 1]],
+                decode(offsets, *prior, scores[[0, i, 1]])
             })
             .collect();
         Ok(suppress(detections)
@@ -263,7 +323,7 @@ mod tests {
 
     /// The SHA-256 of the bundled model. Also listed in
     /// `face-models/LICENSE.md`.
-    const MODEL_SHA256: &str = "34cd7e60aeff28744c657de7a3dc64e872d506741de66987f3426f2b79f88017";
+    const MODEL_SHA256: &str = "dc64d1dcc24c426d15a88e27091add475fc201763f866792f3ad09ebaeb0d1dc";
 
     #[test]
     fn models_dir_defaults_to_the_resource_dir() {
@@ -355,6 +415,22 @@ mod tests {
             suppress(vec![apart, weak, overlapping, best]),
             vec![best, apart]
         );
+    }
+
+    #[test]
+    fn there_is_a_prior_for_every_box_the_model_outputs() {
+        let priors = priors();
+        assert_eq!(priors.len(), 4420);
+        assert_eq!(priors[0], [0.0125, 1. / 60., 10. / 320., 10. / 240.]);
+        assert_eq!(priors[2][2], 24. / 320.);
+        // The largest boxes are clipped to the input.
+        assert_eq!(priors[4419][3], 1.);
+    }
+
+    #[test]
+    fn zero_offsets_decode_to_the_prior() {
+        let decoded = decode([0.; 4], [0.5, 0.5, 0.2, 0.4], 0.9);
+        assert_eq!(decoded, detection(0.4, 0.3, 0.6, 0.7, 0.9));
     }
 
     #[test]
