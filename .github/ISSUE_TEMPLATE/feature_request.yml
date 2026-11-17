@@ -1,0 +1,23 @@
+name: Suggest an idea
+description: Something Grab-it could do, or do better.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What's your idea?
+      description: What you'd like Grab-it to do, and what it would help you with.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Grab-it version
+      description: Filled in when you use **Send feedback** in the tray menu.
+      placeholder: "0.1.0"
+  - type: input
+    id: os
+    attributes:
+      label: System
+      description: Your operating system and, on Linux, X11 or Wayland.
+      placeholder: "Linux x86_64 (Wayland)"

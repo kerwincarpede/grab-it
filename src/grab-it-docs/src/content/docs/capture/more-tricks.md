@@ -24,6 +24,7 @@ Click the Grab-it icon in the menu bar or tray for every capture. On Windows and
 | **Unlock pinned captures** | Makes locked pins clickable again (see below) |
 | **Show last capture** | Brings the Quick Access card back |
 | **Open Grab-it…** | Opens the [Library](/grab-it/library/) |
+| **Send feedback** | **Report a problem…** or **Suggest an idea…** opens a GitHub issue form with your Grab-it version and system filled in; see [Still stuck?](/grab-it/reference/troubleshooting/#still-stuck) |
 | **Settings…**, **Shortcuts and tips…**, **Check for updates…**, **Quit Grab-it** | What they say |
 
 ## 📌 Pin

@@ -10,7 +10,7 @@ use tauri::{
 
 use crate::{
     actions::{self, Action},
-    hub, pin, quick, screen, update, windows,
+    feedback, hub, pin, quick, screen, update, windows,
 };
 
 const TRAY_ID: &str = "main";
@@ -88,6 +88,8 @@ const MENU_LIBRARY: &str = "library";
 const MENU_SETTINGS: &str = "settings";
 const MENU_WELCOME: &str = "welcome";
 const MENU_UPDATES: &str = "check-updates";
+const MENU_REPORT_PROBLEM: &str = "feedback-problem";
+const MENU_SUGGEST_IDEA: &str = "feedback-idea";
 const MENU_QUIT: &str = "quit";
 
 /// The capture a menu item starts, if any.
@@ -139,6 +141,25 @@ fn timed_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
         submenu.append(&item)?;
     }
     Ok(submenu)
+}
+
+/// Send feedback: each item opens a GitHub issue form in the browser.
+fn feedback_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
+    let problem = MenuItem::with_id(
+        app,
+        MENU_REPORT_PROBLEM,
+        "Report a problem…",
+        true,
+        None::<&str>,
+    )?;
+    let idea = MenuItem::with_id(
+        app,
+        MENU_SUGGEST_IDEA,
+        "Suggest an idea…",
+        true,
+        None::<&str>,
+    )?;
+    Submenu::with_items(app, "Send feedback", true, &[&problem, &idea])
 }
 
 /// The Monitor submenu's label for one monitor.
@@ -235,6 +256,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
     let welcome = MenuItem::with_id(app, MENU_WELCOME, "Shortcuts and tips…", true, None::<&str>)?;
     let updates = MenuItem::with_id(app, MENU_UPDATES, "Check for updates…", true, None::<&str>)?;
+    let feedback_menu = feedback_submenu(app)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit Grab-it", true, None::<&str>)?;
     let menu = Menu::with_items(
@@ -259,6 +281,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             &settings,
             &welcome,
             &updates,
+            &feedback_menu,
             &separator2,
             &quit,
         ],
@@ -293,6 +316,8 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                 }
             }
             MENU_UPDATES => update::user_check(app),
+            MENU_REPORT_PROBLEM => feedback::open(app, feedback::Form::Problem),
+            MENU_SUGGEST_IDEA => feedback::open(app, feedback::Form::Idea),
             MENU_UNLOCK => pin::unlock_all(app),
             MENU_LIBRARY => {
                 if let Err(err) = windows::show_library(app) {
@@ -355,6 +380,10 @@ mod tests {
         assert_eq!(action_for(MENU_LAST), None);
         assert_eq!(action_for(MENU_UPDATES), None);
         assert_eq!(action_for(MENU_UNLOCK), None);
+        assert_eq!(action_for(MENU_REPORT_PROBLEM), None);
+        assert_eq!(action_for(MENU_SUGGEST_IDEA), None);
+        assert_eq!(timed_action_for(MENU_REPORT_PROBLEM), None);
+        assert_eq!(timed_action_for(MENU_SUGGEST_IDEA), None);
     }
 
     #[test]

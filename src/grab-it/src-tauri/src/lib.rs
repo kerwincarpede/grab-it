@@ -10,6 +10,7 @@ mod commands;
 mod control;
 mod editor;
 mod faces;
+mod feedback;
 mod ffmpeg;
 mod file_clipboard;
 mod frame_overlays;

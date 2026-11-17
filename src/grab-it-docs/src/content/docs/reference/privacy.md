@@ -22,7 +22,7 @@ Grab-it has no account, no analytics and no tracking. Your captures stay on your
 | ffmpeg | Once, the first time you record an MP4, if your computer has no ffmpeg that works (not on macOS) | A pinned FFmpeg-Builds release on GitHub, checked against a checksum built into Grab-it |
 | Your screenshots, with their text, app and window title | Only with AI descriptions on, for each capture described or text tidied, and for each click in a [step capture](/grab-it/capture/step-capture/): its screenshot with the step's badge drawn on it | Your chosen [AI provider](/grab-it/ai/providers/#what-goes-where) |
 
-**Show in folder**, **Open link** on a scanned QR code, and the links in Grab-it open in your own apps and browser, and only when you click them.
+**Show in folder**, **Open link** on a scanned QR code, **Send feedback** in the tray menu, and the links in Grab-it open in your own apps and browser, and only when you click them. **Send feedback** puts your Grab-it version and system (such as *Linux x86_64 (Wayland)*) in the GitHub form's address; nothing is sent until you submit the form.
 
 ## AI
 
