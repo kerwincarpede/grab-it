@@ -449,12 +449,15 @@ fn parse_record(args: &[String]) -> Result<RecordRequest, String> {
     })
 }
 
+/// An option as given: its name, its value, and the whole argument.
+type GivenOption<'a> = (&'a str, Option<&'a str>, &'a String);
+
 /// The video a command names, and its options; an error when it names
 /// none or more than one.
 fn video_and_options<'a>(
     command: &str,
     args: &'a [String],
-) -> Result<(PathBuf, Vec<(&'a str, Option<&'a str>, &'a String)>), String> {
+) -> Result<(PathBuf, Vec<GivenOption<'a>>), String> {
     let mut video = None;
     let mut options = Vec::new();
     let mut rest = args.iter();
