@@ -277,4 +277,3 @@ describe("pointer sidecars", () => {
     for (const look of ["arrow", "hand", "text"]) expect(parsePointer({ shown: true, x: 1, y: 2, scale: 1, look })?.look).toBe(look);
   });
 });
-

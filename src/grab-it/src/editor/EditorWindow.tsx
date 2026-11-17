@@ -640,7 +640,7 @@ export default function EditorWindow() {
     const ratio = cropDragRatio(cropRatio, drag.square);
     return drag.snap ? snapCropDrag(drag.start, drag.end, shown, ratio, snapLines, snapThreshold) : cropBox(drag.start, drag.end, shown, ratio);
   };
-  const selected = doc.shapes.find((shape) => shape.id === selectedId) ?? null;
+  const selected = useMemo(() => doc.shapes.find((shape) => shape.id === selectedId) ?? null, [doc.shapes, selectedId]);
   /** The pointer saved with the capture, and where and whether it shows; null when there is none. */
   const captured = info?.pointer ?? null;
   const capturePointer = useMemo(() => pointerState(doc, captured, pointerByDefault), [doc, captured, pointerByDefault]);
