@@ -517,12 +517,36 @@ fn pill_size(app: &AppHandle, display: &Display) -> (u32, u32) {
 }
 
 /// Moves and sizes the window, noting that the move is Grab-it's own.
-fn place(app: &AppHandle, window: &WebviewWindow, position: (i32, i32), size: (u32, u32)) {
+/// `position` and `size` are in physical pixels at the `scale` of the
+/// display it is placed on.
+fn place(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    position: (i32, i32),
+    size: (u32, u32),
+    scale: f64,
+) {
     lock(&app.state::<RecordBarState>().layout).placed_at = Some(Instant::now());
+    let position = PhysicalPosition::new(position.0, position.1);
+    let size = PhysicalSize::new(size.0, size.1);
     // Sized before it is placed: macOS resizes a window around its
     // bottom-left corner (see overlay.rs).
-    let _ = window.set_size(PhysicalSize::new(size.0, size.1));
-    let _ = window.set_position(PhysicalPosition::new(position.0, position.1));
+    //
+    // macOS places it in the display's points, since it turns pixels back
+    // into points with the scale of the screen the window is on now
+    // (see `overlay::logical_frame`). Windows and Linux place it in pixels.
+    #[cfg(target_os = "macos")]
+    {
+        let (position, size) = crate::overlay::logical_frame(position, size, scale);
+        let _ = window.set_size(size);
+        let _ = window.set_position(position);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = scale;
+        let _ = window.set_size(size);
+        let _ = window.set_position(position);
+    }
 }
 
 /// Opens the toolbar for a recording of `rect`, an area of `monitor`'s
@@ -613,7 +637,7 @@ fn create(
             .shadow(false)
             .visible(false)
             .build()?;
-    place(app, &window, position, size);
+    place(app, &window, position, size, scale);
     let handle = app.clone();
     window.on_window_event(move |event| {
         if let WindowEvent::Moved(position) = event {
@@ -777,7 +801,7 @@ pub fn record_bar_fit(
         Some(menu) => (anchored, (pill.0, pill.1 + menu)),
         None => (anchored, pill),
     };
-    place(&app, &window, position, size);
+    place(&app, &window, position, size, scale);
     Ok(BarLayout { up })
 }
 
@@ -849,7 +873,7 @@ pub fn record_bar_reset(app: AppHandle) {
         Some(menu) if up => position.1 - menu as i32,
         _ => position.1,
     };
-    place(&app, &window, (position.0, y), size);
+    place(&app, &window, (position.0, y), size, display.scale);
 }
 
 #[cfg(test)]

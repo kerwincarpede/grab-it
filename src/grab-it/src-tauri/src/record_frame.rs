@@ -14,6 +14,8 @@
 //! countdown ends, so they are not recorded.
 
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
+#[cfg(target_os = "macos")]
+use tauri::{LogicalPosition, LogicalSize};
 
 use crate::{capture::Rect, screen::MonitorInfo, settings::RecordingSource};
 
@@ -84,6 +86,36 @@ pub fn frame_around(origin: (i32, i32), size: (u32, u32), margin: u32) -> ((i32,
     (
         (origin.0 - margin as i32, origin.1 - margin as i32),
         (size.0 + 2 * margin, size.1 + 2 * margin),
+    )
+}
+
+/// The window's frame, from its top-left corner and size in physical
+/// pixels at the recorded monitor's `scale`, in the units it is placed in:
+/// the display's points on macOS, which turns pixels back into points with
+/// the scale of the screen the window is on now (see
+/// `overlay::logical_frame`), and pixels elsewhere.
+#[cfg(target_os = "macos")]
+fn placed_frame(
+    position: (i32, i32),
+    size: (u32, u32),
+    scale: f64,
+) -> (LogicalPosition<f64>, LogicalSize<f64>) {
+    crate::overlay::logical_frame(
+        PhysicalPosition::new(position.0, position.1),
+        PhysicalSize::new(size.0, size.1),
+        scale,
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn placed_frame(
+    position: (i32, i32),
+    size: (u32, u32),
+    _scale: f64,
+) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
+    (
+        PhysicalPosition::new(position.0, position.1),
+        PhysicalSize::new(size.0, size.1),
     )
 }
 
@@ -160,11 +192,12 @@ fn create(
         .shadow(false)
         .visible(false)
         .build()?;
-    // Sized again in physical pixels, for a monitor whose scale differs
-    // from the one the window was built on, and before it is placed:
-    // macOS resizes a window around its bottom-left corner (see overlay.rs).
-    window.set_size(PhysicalSize::new(frame_size.0, frame_size.1))?;
-    window.set_position(PhysicalPosition::new(position.0, position.1))?;
+    // Sized again, for a monitor whose scale differs from the one the
+    // window was built on, and before it is placed: macOS resizes a window
+    // around its bottom-left corner (see overlay.rs).
+    let (position, frame_size) = placed_frame(position, frame_size, scale);
+    window.set_size(frame_size)?;
+    window.set_position(position)?;
     window.show()?;
     // Clicks pass straight through to what is recorded. Set once it is
     // shown: GTK applies it to the window the system has made by then.
@@ -264,6 +297,39 @@ mod tests {
         assert_eq!(
             page_url(Shape::Screen, 0.0, false),
             "index.html#/recordframe?shape=screen&margin=0&protected=0"
+        );
+    }
+
+    #[test]
+    fn the_frame_on_a_display_of_another_scale_is_placed_in_its_points() {
+        // The #207 layout: the main display at 2x, a 1x display above it at
+        // 640,-1080 points (2560x1080 pixels) and a 2x display to its right
+        // at 3200,0 points (3840x2160 pixels), each frame in pixels at its
+        // own scale.
+        let frame_on = |origin: (i32, i32), size: (u32, u32), region: Rect, scale: f64| {
+            let (area_origin, area_size) = crate::webcam::screen_area(region, size, origin, size);
+            let (position, frame_size) =
+                frame_around(area_origin, area_size, margin_px(Shape::Region, scale));
+            let (position, frame_size) = crate::overlay::logical_frame(
+                PhysicalPosition::new(position.0, position.1),
+                PhysicalSize::new(frame_size.0, frame_size.1),
+                scale,
+            );
+            (
+                (position.x, position.y),
+                (frame_size.width, frame_size.height),
+            )
+        };
+        // On the 1x display, not at half its place and size as when its
+        // pixels were read at the main display's 2x.
+        assert_eq!(
+            frame_on((640, -1080), (2560, 1080), rect(100, 50, 1280, 720), 1.0),
+            ((734.0, -1036.0), (1292.0, 732.0))
+        );
+        // On the 2x display, in points with the 6-point margin.
+        assert_eq!(
+            frame_on((6400, 0), (3840, 2160), rect(200, 100, 1000, 500), 2.0),
+            ((3294.0, 44.0), (512.0, 262.0))
         );
     }
 }
