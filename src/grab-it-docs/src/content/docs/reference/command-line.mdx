@@ -1,6 +1,6 @@
 ---
 title: Command line
-description: Open a Grab-it window or start a capture with --open, and take screenshots from a terminal, a script or an AI agent with grab-it shot.
+description: Open a Grab-it window or start a capture with --open, and take screenshots, record the screen and make GIFs from a terminal, a script or an AI agent.
 sidebar:
   order: 3
 ---
@@ -40,7 +40,7 @@ Grab-it ignores other arguments, and prints a message (on the terminal it was st
 
 ## Commands
 
-The commands ask the running Grab-it to list your displays and windows or take a screenshot, and print the result as one line of JSON. They're made for [AI agents](/grab-it/ai/agents/) and scripts. Turn on **Settings → AI agents → Let AI agents use Grab-it** first: while it's off, every command fails with a message saying so.
+The commands ask the running Grab-it to list your displays and windows, take a screenshot, record the screen, or make a GIF or contact sheet of a video, and print the result as one line of JSON. They're made for [AI agents](/grab-it/ai/agents/) and scripts. Turn on **Settings → AI agents → Let AI agents use Grab-it** first: while it's off, every command fails with a message saying so.
 
 If Grab-it isn't running, a command starts it in the tray and waits up to 15 seconds for it. Errors go to stderr, with exit code 1 when Grab-it couldn't do what was asked and 2 for a mistake in the command itself.
 
@@ -49,6 +49,10 @@ If Grab-it isn't running, a command starts it in the tray and waits up to 15 sec
 | `grab-it displays` | `{"displays":[…]}`: each display's `id`, `name`, `x`, `y`, `width`, `height`, `scaleFactor` and `primary` |
 | `grab-it windows` | `{"windows":[…]}`: each window's `id`, `app`, `title`, `x`, `y`, `width` and `height`, front to back |
 | `grab-it shot` | `{"path":…,"width":…,"height":…,"id":…}`: the saved PNG, its size in pixels and its Library item |
+| `grab-it record` | `{"path":…,"format":…,"recording":true}` as it starts, or with `--for`, `{"path":…,"durationMs":…,"format":…,"id":…}` once it's saved |
+| `grab-it stop` | `{"path":…,"durationMs":…,"format":…,"id":…}`: the recording it ended, once it's saved |
+| `grab-it gif <video>` | `{"path":…,"width":…,"height":…,"durationMs":…,"id":…}`: the GIF it made |
+| `grab-it frames <video>` | `{"path":…,"width":…,"height":…,"frames":…,"id":…}`: the contact sheet it made |
 | `grab-it help` | Every command and option |
 
 ```sh
@@ -60,18 +64,18 @@ grab-it shot --window firefox --max-width 1280
 
 Rectangles are in desktop coordinates, the same ones `--region` takes.
 
-### What `shot` captures
+### What `shot` and `record` capture
 
-Give one of these; with none, `shot` captures every display.
+Give one of these; with none, `shot` captures every display and `record` the main one.
 
 | Option | Captures |
 | --- | --- |
-| `--screen` | Every display, stitched into one image |
+| `--screen` | Every display, stitched into one image. A recording is of one display, so `record` takes the main one. |
 | `--display <id or name>` | One display: an `id` from `grab-it displays`, or text in its name |
 | `--window <id or text>` | One window: an `id` from `grab-it windows`, or text in its app's name or title, ignoring case. With several matches, the frontmost wins. |
 | `--region <x,y,w,h>` | A rectangle, such as `--region 0,0,800,600`, from the display that holds most of it |
 
-And any of these:
+And for `shot`, any of these:
 
 | Option | What it does |
 | --- | --- |
@@ -82,8 +86,54 @@ Options take their value after a space or an `=`: `--window=Firefox`.
 
 Shots are saved to your save folder and Library like any capture, tagged **agent**. They aren't copied to the clipboard, and Quick Access and the editor don't open: a short **Captured by an agent** notice shows instead.
 
+### Recording
+
+```sh
+grab-it record --window firefox --for 5
+# {"path":"/home/me/Pictures/Grab-it/recordings/Grab-it 2026-11-17 09-00-00.mp4","durationMs":5012,"format":"mp4","id":43}
+grab-it record --region 0,0,1280,720
+# {"path":"/home/me/Pictures/Grab-it/recordings/Grab-it 2026-11-17 09-01-00.mp4","format":"mp4","recording":true}
+grab-it stop
+# {"path":"/home/me/Pictures/Grab-it/recordings/Grab-it 2026-11-17 09-01-00.mp4","durationMs":8400,"format":"mp4","id":44}
+```
+
+Without `--for`, `record` answers as soon as it starts, and the recording runs until `grab-it stop` or the **Stop** button on the [recording toolbar](/grab-it/recording/toolbar/). With `--for`, `record` waits for it to be saved and prints it, sooner if you stop it first. Only one recording runs at a time.
+
+| Option | What it does |
+| --- | --- |
+| `--format <mp4 or gif>` | Records an MP4, the default, or a GIF. A GIF stops by itself after a minute. Until ffmpeg is ready, an MP4 is saved as a GIF: `format` says which. |
+| `--fps <30 or 60>` | An MP4's frames a second; 30 if you don't say |
+| `--cursor` | Draws the pointer in |
+| `--for <seconds>` | Stops after that long, up to an hour |
+
+These recordings ignore your [recording options](/grab-it/recording/options/) for sound, the webcam, the countdown, clicks and keystrokes: they're silent, with no webcam or countdown. They're saved to `recordings` in your save folder and to the Library, tagged **agent**, with a short **Recorded by an agent** notice instead of Quick Access.
+
+### GIFs and contact sheets
+
+`gif` and `frames` take any video file, such as the `path` of a recording.
+
+```sh
+grab-it gif "Grab-it 2026-11-17 09-00-00.mp4" --start 1 --end 4 --width 800
+# {"path":"/home/me/Pictures/Grab-it/recordings/Grab-it 2026-11-17 09-02-00.gif","width":800,"height":450,"durationMs":3000,"id":45}
+grab-it frames "Grab-it 2026-11-17 09-00-00.mp4" --count 9
+# {"path":"/home/me/Pictures/Grab-it/originals/Grab-it 2026-11-17 09-03-00.png","width":1464,"height":848,"frames":9,"id":46}
+```
+
+`gif` makes an animated GIF, with a palette picked for the video, in `recordings` in your save folder:
+
+| Option | What it does |
+| --- | --- |
+| `--start <seconds>` | Where the GIF starts in the video |
+| `--end <seconds>` | Where it ends |
+| `--fps <frames>` | Frames a second, up to 50; 10 if you don't say |
+| `--width <pixels>` | Its width, keeping its shape; the video's own, up to 1280, if you don't say |
+
+`frames` makes one PNG contact sheet: `--count` frames spread evenly through the video (12 if you don't say, up to 100), in a grid. It's how an agent, which can't watch a video, sees what a recording shows.
+
+Both use Grab-it's ffmpeg, and fail with a message while it's still being set up. GIFs and contact sheets go in the Library tagged **agent** too.
+
 :::note[Linux on Wayland]
-Only your desktop may read the screen on Wayland, so `displays`, `windows` and `shot` fail there with a message saying so. Use an X11 session.
+Only your desktop may read the screen on Wayland, so `displays`, `windows`, `shot`, `record` and `stop` fail there with a message saying so. Use an X11 session. `gif` and `frames` still work.
 :::
 
 ## Where Grab-it is

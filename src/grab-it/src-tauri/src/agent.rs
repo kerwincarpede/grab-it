@@ -1,6 +1,6 @@
 //! What the `grab-it` command line asks the running app to do, once
-//! `control.rs` has let a request in: list the displays and windows, and
-//! take screenshots.
+//! `control.rs` has let a request in: list the displays and windows, take
+//! screenshots, record, and make GIFs and contact sheets of videos.
 //!
 //! Agent captures are saved to the Library like any other and tagged
 //! `agent`, but never copied to the clipboard or opened in Quick Access or
@@ -8,6 +8,7 @@
 //! Install skill button writes the skill that teaches agents the commands.
 
 use std::{
+    ffi::OsString,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -20,10 +21,12 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{
     capture::{self, CaptureMode, Foreground, Rect},
-    control::{Request, ShotRequest, ShotTarget},
+    control::{FramesRequest, GifRequest, RecordRequest, Request, ShotRequest, ShotTarget},
     library::{self, LibraryState},
     quick::{self, QuickItem},
+    record::{self, AgentOptions},
     screen::{self, MonitorInfo, WindowInfo},
+    settings::RecordingFormat,
 };
 
 /// The tag every agent capture gets in the Library.
@@ -33,12 +36,36 @@ pub const MAX_DELAY_MS: u64 = 60_000;
 /// What capturing on Wayland fails with: only the desktop may read the
 /// screen there, and it asks the user each time.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub const WAYLAND: &str = "Grab-it cannot capture from the command line on Wayland: only the desktop may read the screen there. Sign in to an X11 session to use displays, windows and shot.";
+pub const WAYLAND: &str = "Grab-it cannot capture from the command line on Wayland: only the desktop may read the screen there. Sign in to an X11 session to use displays, windows, shot and record.";
+/// The longest `record --for`, in milliseconds: an hour.
+pub const MAX_RECORD_MS: u64 = 60 * 60 * 1000;
+/// How long `stop` and `record --for` wait for a stopped recording to be
+/// saved: an MP4 is rewritten to finish it, and its sound muxed in.
+const SAVE_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long making a GIF or a contact sheet may take.
+const ENCODE_TIMEOUT: Duration = Duration::from_secs(600);
+/// A GIF's frames a second when `--fps` is not given.
+pub const GIF_FPS: u32 = 10;
+/// The most frames a second a GIF may have.
+pub const MAX_GIF_FPS: u32 = 50;
+/// A GIF wider than this is scaled down when `--width` is not given.
+pub const GIF_MAX_WIDTH: u32 = 1280;
+/// How many frames a contact sheet shows when `--count` is not given.
+pub const FRAMES_COUNT: u32 = 12;
+/// The most frames a contact sheet shows.
+pub const MAX_FRAMES: u32 = 100;
+/// Each frame's width on a contact sheet, in pixels.
+const TILE_WIDTH: u32 = 480;
+/// The space around and between a contact sheet's frames, in pixels.
+const TILE_GAP: u32 = 8;
 
 /// Runs one request. Called on the control connection's own thread, so it
 /// may wait and may show the notice window.
 pub fn run(app: &AppHandle, request: Request) -> Result<Value, String> {
-    refuse_on_wayland()?;
+    // GIFs and contact sheets are made from files, so work on Wayland too.
+    if !matches!(request, Request::Gif(_) | Request::Frames(_)) {
+        refuse_on_wayland()?;
+    }
     match request {
         Request::Displays => {
             let displays = screen::monitors()?;
@@ -50,6 +77,21 @@ pub fn run(app: &AppHandle, request: Request) -> Result<Value, String> {
         Request::Shot(shot) => {
             let saved = take_shot(app, &shot)?;
             serde_json::to_value(saved).map_err(|err| err.to_string())
+        }
+        Request::Record(request) => start_recording(app, &request),
+        Request::Stop => {
+            let session = record::session(app)
+                .ok_or("nothing is recording; start a recording with `grab-it record`")?;
+            session.request_stop(app);
+            finished(&session)
+        }
+        Request::Gif(request) => {
+            let made = make_gif(app, &request)?;
+            serde_json::to_value(made).map_err(|err| err.to_string())
+        }
+        Request::Frames(request) => {
+            let made = make_frames(app, &request)?;
+            serde_json::to_value(made).map_err(|err| err.to_string())
         }
     }
 }
@@ -329,10 +371,329 @@ fn grab(target: &ShotTarget) -> Result<(RgbaImage, CaptureMode, Foreground, Opti
     }
 }
 
+/// What `grab-it record` prints when it returns as the recording starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Recording {
+    /// The file it is being written to.
+    pub path: PathBuf,
+    pub format: RecordingFormat,
+    pub recording: bool,
+}
+
+/// The display a recording of `target` is on, the size of that display's
+/// image, and the part of the image to record.
+fn recording_area(target: &ShotTarget) -> Result<(MonitorInfo, (u32, u32), Rect), String> {
+    let monitors = screen::monitors()?;
+    let (monitor, rect) = match target {
+        ShotTarget::Screen => (
+            monitors
+                .iter()
+                .find(|monitor| monitor.is_primary)
+                .or_else(|| monitors.first())
+                .ok_or("there is no display to record")?,
+            None,
+        ),
+        ShotTarget::Display { display } => (match_display(&monitors, display)?, None),
+        ShotTarget::Window { window } => {
+            let windows = screen::desktop().windows;
+            let window = match_window(&windows, window)?;
+            let monitor =
+                monitor_for(&monitors, window.rect).ok_or("the window is off every display")?;
+            (monitor, Some(window.rect))
+        }
+        ShotTarget::Region {
+            x,
+            y,
+            width,
+            height,
+        } => {
+            let rect = Rect {
+                x: *x,
+                y: *y,
+                width: *width,
+                height: *height,
+            };
+            let monitor = monitor_for(&monitors, rect).ok_or_else(|| {
+                "the region is off every display; run `grab-it displays` to see where they are"
+                    .to_string()
+            })?;
+            (monitor, Some(rect))
+        }
+    };
+    // The size of the display's image, which a recording's area is in.
+    let size = screen::capture_monitor(monitor.index)?.dimensions();
+    let area = match rect {
+        None => Rect {
+            x: 0,
+            y: 0,
+            width: size.0,
+            height: size.1,
+        },
+        Some(rect) => region_in_image(monitor, rect, size).ok_or("the area is off the display")?,
+    };
+    Ok((monitor.clone(), size, area))
+}
+
+/// Starts the recording `request` asks for. Without `--for` replies at
+/// once with the file it is written to; with it, stops it after that long
+/// and replies once it is saved.
+fn start_recording(app: &AppHandle, request: &RecordRequest) -> Result<Value, String> {
+    if !crate::permissions::ensure_screen_capture(app) {
+        return Err("Grab-it needs the Screen Recording permission to record the screen. Turn it on in System Settings › Privacy & Security › Screen Recording, then try again.".into());
+    }
+    let (monitor, size, area) = recording_area(&request.target)?;
+    let options = AgentOptions {
+        format: request.format,
+        fps: request.fps,
+        show_cursor: request.cursor,
+    };
+    let session =
+        record::start_with(app, &monitor, size, area, Some(options)).map_err(|err| match err {
+            crate::scroll::StartError::Busy => "a recording or scrolling capture is already under way; end it with `grab-it stop` first".to_string(),
+            crate::scroll::StartError::Failed(message) => message,
+        })?;
+    let Some(for_ms) = request.for_ms else {
+        return serde_json::to_value(Recording {
+            path: session.path().to_owned(),
+            format: session.format(),
+            recording: true,
+        })
+        .map_err(|err| err.to_string());
+    };
+    // Stopped sooner from its toolbar, or a GIF's minute ran out.
+    if let Some(outcome) = session.wait(Duration::from_millis(for_ms.min(MAX_RECORD_MS))) {
+        let finished = outcome?;
+        return serde_json::to_value(finished).map_err(|err| err.to_string());
+    }
+    session.request_stop(app);
+    finished(&session)
+}
+
+/// Waits for a stopped recording to be saved, and what it was saved as.
+fn finished(session: &record::Session) -> Result<Value, String> {
+    let finished = session
+        .wait(SAVE_TIMEOUT)
+        .ok_or("the recording is taking a long time to save; look for it in the Library")??;
+    serde_json::to_value(finished).map_err(|err| err.to_string())
+}
+
+/// Adds an agent's recording to the Library tagged `agent`, and says so in
+/// a notice. Returns its id, or None when the Library could not take it.
+pub fn add_recording(app: &AppHandle, video: &Path, duration_ms: u64) -> Option<i64> {
+    library::record_recording(app, video, duration_ms);
+    let id = tag_agent(app, video);
+    quick::show(app, notice("Recorded by an agent", video));
+    id
+}
+
+/// What `grab-it gif` and `grab-it frames` print: the file made and its
+/// Library item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Made {
+    pub path: PathBuf,
+    pub width: u32,
+    pub height: u32,
+    /// How long a GIF runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// How many frames a contact sheet shows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frames: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
+}
+
+/// The ffmpeg that makes GIFs and contact sheets, once it is ready.
+fn ffmpeg_for_video(app: &AppHandle) -> Result<PathBuf, String> {
+    match crate::ffmpeg::ready(app) {
+        Some(ready) => Ok(ready.path),
+        None => {
+            crate::ffmpeg::prepare_in_background(app);
+            Err("Grab-it needs ffmpeg for that and is still getting it ready; try again in a minute, or see Settings › Recording".into())
+        }
+    }
+}
+
+/// The video `video` names, when it is a file.
+fn existing_video(video: &Path) -> Result<(), String> {
+    if video.is_file() {
+        Ok(())
+    } else {
+        Err(format!("there is no video at {}", video.display()))
+    }
+}
+
+/// Seconds, as ffmpeg takes them, from milliseconds.
+fn seconds(ms: u64) -> String {
+    format!("{}.{:03}", ms / 1000, ms % 1000)
+}
+
+/// The ffmpeg arguments that turn `request`'s video into the GIF at
+/// `output`: trimmed to its start and end, at its frame rate and width
+/// (else at most [`GIF_MAX_WIDTH`] wide), with a palette made for it
+/// (palettegen) and used (paletteuse), looping forever.
+pub fn gif_args(request: &GifRequest, output: &Path) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec!["-hide_banner".into(), "-loglevel".into(), "error".into()];
+    let start = request.start_ms.unwrap_or(0);
+    if start > 0 {
+        args.push("-ss".into());
+        args.push(seconds(start).into());
+    }
+    if let Some(end) = request.end_ms {
+        args.push("-t".into());
+        args.push(seconds(end.saturating_sub(start)).into());
+    }
+    args.push("-i".into());
+    args.push(request.video.clone().into());
+    let width = match request.width {
+        Some(width) => width.to_string(),
+        None => format!("'min(iw,{GIF_MAX_WIDTH})'"),
+    };
+    args.push("-vf".into());
+    args.push(
+        format!(
+            "fps={},scale={width}:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+            request.fps
+        )
+        .into(),
+    );
+    args.push("-loop".into());
+    args.push("0".into());
+    args.push("-y".into());
+    args.push(output.as_os_str().to_owned());
+    args
+}
+
+/// Makes the GIF `request` asks for in `<save folder>/recordings/`, and
+/// adds it to the Library tagged `agent`.
+fn make_gif(app: &AppHandle, request: &GifRequest) -> Result<Made, String> {
+    let ffmpeg = ffmpeg_for_video(app)?;
+    existing_video(&request.video)?;
+    let folder = library::current_save_folder(app).join(record::RECORDINGS_DIR);
+    std::fs::create_dir_all(&folder)
+        .map_err(|err| format!("could not create {}: {err}", folder.display()))?;
+    let output = record::unique_recording_path(&folder, &Local::now(), RecordingFormat::Gif);
+    crate::ffmpeg::run(&ffmpeg, gif_args(request, &output), ENCODE_TIMEOUT).map_err(|err| {
+        let _ = std::fs::remove_file(&output);
+        format!("could not make a GIF of {}: {err}", request.video.display())
+    })?;
+    let (width, height) = image::image_dimensions(&output)
+        .map_err(|err| format!("the GIF ffmpeg made is unreadable: {err}"))?;
+    let duration_ms = crate::ffmpeg::probe_file(&ffmpeg, &output).duration_ms;
+    library::record_recording(app, &output, duration_ms.unwrap_or(0));
+    let id = tag_agent(app, &output);
+    quick::show(app, notice("Made by an agent", &output));
+    Ok(Made {
+        path: output,
+        width,
+        height,
+        duration_ms,
+        frames: None,
+        id,
+    })
+}
+
+/// The columns and rows a contact sheet of `count` frames has: as square
+/// as it can be, wider than tall.
+pub fn sheet_layout(count: u32) -> (u32, u32) {
+    let count = count.max(1);
+    let columns = (f64::from(count).sqrt().ceil() as u32).max(1);
+    (columns, count.div_ceil(columns))
+}
+
+/// The ffmpeg arguments that make a contact sheet at `output` of `count`
+/// frames spread evenly through a video `duration_ms` long: one from the
+/// middle of each equal part, scaled to [`TILE_WIDTH`] and laid out by the
+/// tile filter.
+pub fn frames_args(video: &Path, duration_ms: u64, count: u32, output: &Path) -> Vec<OsString> {
+    let count = count.max(1);
+    let interval = (duration_ms / u64::from(count)).max(1);
+    let (columns, rows) = sheet_layout(count);
+    vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-ss".into(),
+        seconds(interval / 2).into(),
+        "-i".into(),
+        video.into(),
+        "-vf".into(),
+        format!(
+            "fps=1000/{interval},scale={TILE_WIDTH}:-2:flags=lanczos,tile={columns}x{rows}:nb_frames={count}:padding={TILE_GAP}:margin={TILE_GAP}"
+        )
+        .into(),
+        "-frames:v".into(),
+        "1".into(),
+        "-y".into(),
+        output.as_os_str().to_owned(),
+    ]
+}
+
+/// Makes the contact sheet `request` asks for, saves it with the captures
+/// and adds it to the Library tagged `agent`.
+fn make_frames(app: &AppHandle, request: &FramesRequest) -> Result<Made, String> {
+    let ffmpeg = ffmpeg_for_video(app)?;
+    existing_video(&request.video)?;
+    let duration_ms = crate::ffmpeg::probe_file(&ffmpeg, &request.video)
+        .duration_ms
+        .filter(|ms| *ms > 0)
+        .ok_or_else(|| format!("could not tell how long {} runs", request.video.display()))?;
+    let sheet = std::env::temp_dir().join(format!(
+        "grab-it-frames-{}-{}.png",
+        std::process::id(),
+        Local::now().timestamp_millis()
+    ));
+    let made = crate::ffmpeg::run(
+        &ffmpeg,
+        frames_args(&request.video, duration_ms, request.count, &sheet),
+        ENCODE_TIMEOUT,
+    )
+    .map_err(|err| err.to_string())
+    .and_then(|()| image::open(&sheet).map_err(|err| err.to_string()));
+    let _ = std::fs::remove_file(&sheet);
+    let image = made
+        .map_err(|err| {
+            format!(
+                "could not make a contact sheet of {}: {err}",
+                request.video.display()
+            )
+        })?
+        .to_rgba8();
+    let folder = library::current_save_folder(app);
+    let saved = capture::save_capture(
+        &folder,
+        &image,
+        CaptureMode::Screen,
+        &Foreground::default(),
+        None,
+        Local::now(),
+    )
+    .map_err(|err| err.to_string())?;
+    let id = add_to_library(app, &saved.path);
+    let _ = app.emit(crate::actions::CAPTURE_SAVED_EVENT, &saved);
+    quick::show(app, notice("Made by an agent", &saved.path));
+    Ok(Made {
+        path: saved.path,
+        width: image.width(),
+        height: image.height(),
+        duration_ms: None,
+        frames: Some(request.count),
+        id,
+    })
+}
+
 /// Adds the capture to the Library and tags it `agent`, keeping any tags
 /// it has. Returns its id, or None when the Library could not take it.
 fn add_to_library(app: &AppHandle, png: &Path) -> Option<i64> {
     library::record_capture(app, png);
+    tag_agent(app, png)
+}
+
+/// Tags the Library item for `path` `agent`, keeping any tags it has.
+/// Returns its id, or None when it is not in the Library.
+fn tag_agent(app: &AppHandle, png: &Path) -> Option<i64> {
     let state = app.try_state::<LibraryState>()?;
     let mut shots = state.lock();
     let id = shots.id_for_path(png).ok().flatten()?;
@@ -357,12 +718,17 @@ pub fn with_agent_tag(mut tags: Vec<String>) -> Vec<String> {
 
 /// The notice an agent capture shows in place of Quick Access.
 pub fn captured_notice(path: &Path) -> QuickItem {
+    notice("Captured by an agent", path)
+}
+
+/// A notice titled `title` saying `path` is in the Library, tagged agent.
+pub fn notice(title: &str, path: &Path) -> QuickItem {
     let file = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     QuickItem::Notice {
-        title: "Captured by an agent".into(),
+        title: title.into(),
         message: format!("{file} is in the Library, tagged agent."),
     }
 }
@@ -643,6 +1009,153 @@ mod tests {
         );
     }
 
+    fn strings(args: Vec<OsString>) -> Vec<String> {
+        args.into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn a_gif_is_trimmed_and_encoded_through_a_palette() {
+        let request = GifRequest {
+            video: PathBuf::from("/v/demo.mp4"),
+            start_ms: Some(1500),
+            end_ms: Some(4000),
+            fps: 12,
+            width: Some(640),
+        };
+        assert_eq!(
+            strings(gif_args(&request, Path::new("/s/recordings/out.gif"))),
+            [
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-ss",
+                "1.500",
+                "-t",
+                "2.500",
+                "-i",
+                "/v/demo.mp4",
+                "-vf",
+                "fps=12,scale=640:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+                "-loop",
+                "0",
+                "-y",
+                "/s/recordings/out.gif",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_untrimmed_gif_is_kept_to_a_sensible_width() {
+        let request = GifRequest {
+            video: PathBuf::from("/v/demo.mp4"),
+            start_ms: None,
+            end_ms: None,
+            fps: GIF_FPS,
+            width: None,
+        };
+        let args = strings(gif_args(&request, Path::new("/o.gif")));
+        assert!(!args.contains(&"-ss".to_string()) && !args.contains(&"-t".to_string()));
+        assert!(
+            args.iter()
+                .any(|arg| arg.starts_with("fps=10,scale='min(iw,1280)':-1"))
+        );
+        // Only an end: the GIF runs from the start to it.
+        let request = GifRequest {
+            end_ms: Some(3000),
+            ..request
+        };
+        let args = strings(gif_args(&request, Path::new("/o.gif")));
+        assert_eq!(&args[3..6], ["-t", "3.000", "-i"]);
+    }
+
+    #[test]
+    fn contact_sheets_are_as_square_as_they_can_be() {
+        assert_eq!(sheet_layout(1), (1, 1));
+        assert_eq!(sheet_layout(4), (2, 2));
+        assert_eq!(sheet_layout(10), (4, 3));
+        assert_eq!(sheet_layout(12), (4, 3));
+        assert_eq!(sheet_layout(16), (4, 4));
+        assert_eq!(sheet_layout(0), (1, 1));
+    }
+
+    #[test]
+    fn a_contact_sheet_takes_a_frame_from_the_middle_of_each_part() {
+        // 12 s in 6 parts: a frame every 2 s, the first at 1 s.
+        assert_eq!(
+            strings(frames_args(
+                Path::new("/v/demo.mp4"),
+                12_000,
+                6,
+                Path::new("/t/sheet.png")
+            )),
+            [
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-ss",
+                "1.000",
+                "-i",
+                "/v/demo.mp4",
+                "-vf",
+                "fps=1000/2000,scale=480:-2:flags=lanczos,tile=3x2:nb_frames=6:padding=8:margin=8",
+                "-frames:v",
+                "1",
+                "-y",
+                "/t/sheet.png",
+            ]
+        );
+    }
+
+    #[test]
+    fn recording_and_video_replies_are_json_lines() {
+        let recording = Recording {
+            path: PathBuf::from("/p/recordings/a.mp4"),
+            format: RecordingFormat::Mp4,
+            recording: true,
+        };
+        assert_eq!(
+            serde_json::to_string(&recording).unwrap(),
+            r#"{"path":"/p/recordings/a.mp4","format":"mp4","recording":true}"#
+        );
+        let gif = Made {
+            path: PathBuf::from("/p/recordings/a.gif"),
+            width: 640,
+            height: 360,
+            duration_ms: Some(2500),
+            frames: None,
+            id: Some(3),
+        };
+        assert_eq!(
+            serde_json::to_string(&gif).unwrap(),
+            r#"{"path":"/p/recordings/a.gif","width":640,"height":360,"durationMs":2500,"id":3}"#
+        );
+        let sheet = Made {
+            path: PathBuf::from("/p/originals/a.png"),
+            width: 1960,
+            height: 832,
+            duration_ms: None,
+            frames: Some(12),
+            id: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&sheet).unwrap(),
+            r#"{"path":"/p/originals/a.png","width":1960,"height":832,"frames":12}"#
+        );
+    }
+
+    #[test]
+    fn recordings_and_made_files_have_their_own_notices() {
+        assert_eq!(
+            notice("Recorded by an agent", Path::new("/p/recordings/a.mp4")),
+            QuickItem::Notice {
+                title: "Recorded by an agent".into(),
+                message: "a.mp4 is in the Library, tagged agent.".into(),
+            }
+        );
+    }
+
     #[test]
     fn the_skill_names_this_grab_it_and_its_commands() {
         let text = skill_text(Path::new("/opt/Grab-it/grab-it"));
@@ -650,6 +1163,12 @@ mod tests {
         assert!(text.contains(r#""/opt/Grab-it/grab-it" displays"#));
         assert!(text.contains(r#""/opt/Grab-it/grab-it" windows"#));
         assert!(text.contains(r#""/opt/Grab-it/grab-it" shot"#));
+        for command in ["record", "stop", "gif", "frames"] {
+            assert!(
+                text.contains(&format!(r#""/opt/Grab-it/grab-it" {command}"#)),
+                "{command}"
+            );
+        }
         assert!(text.starts_with("---\nname: grab-it\n"));
     }
 

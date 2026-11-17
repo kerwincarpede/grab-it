@@ -3,7 +3,8 @@
 //! `--open <target>` opens a window directly at startup. It lets the app be
 //! driven without a tray host, for example under `xvfb-run` for screenshots.
 //!
-//! The subcommands (`grab-it displays`, `windows`, `shot`) are the command
+//! The subcommands (`grab-it displays`, `windows`, `shot`, `record`,
+//! `stop`, `gif` and `frames`) are the command
 //! line agents and scripts use: they ask the running Grab-it over the
 //! control connection (see `control.rs`), starting it in the tray first
 //! when it is not running, and print one JSON line with the result.
@@ -15,7 +16,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::control::{self, Request, ShotRequest, ShotTarget};
+use crate::{
+    control::{self, FramesRequest, GifRequest, RecordRequest, Request, ShotRequest, ShotTarget},
+    settings::{RECORDING_FPS, RecordingFormat},
+};
 
 /// A window that `--open` can show at startup.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,9 +153,21 @@ Commands:
                            and rectangle
   shot [target] [options]  Take a screenshot and add it to the Library,
                            tagged agent; prints its path, width and height
+  record [target] [options]
+                           Record an MP4 or GIF into the Library, tagged
+                           agent; prints its path at once, or with --for
+                           its path and durationMs once it is saved
+  stop                     End the recording under way; prints its path
+                           and durationMs once it is saved
+  gif <video> [options]    Make an animated GIF of a video; prints its path,
+                           width, height and durationMs
+  frames <video> [--count <n>]
+                           Make one PNG contact sheet of n evenly spaced
+                           frames (default 12, up to 100)
 
-Shot targets (one; the default is --screen):
-  --screen                 Every display, stitched into one image
+Targets for shot and record (one; the default is --screen):
+  --screen                 Every display, stitched into one image (record:
+                           the main display)
   --display <id|name>      One display, by id or text in its name
   --window <id|text>       One window, by id or text in its app or title
   --region <x,y,w,h>       A rectangle in desktop coordinates
@@ -159,6 +175,20 @@ Shot targets (one; the default is --screen):
 Shot options:
   --delay <seconds>        Wait before capturing (up to 60)
   --max-width <pixels>     Scale the shot down to at most this width
+
+Record options (no sound, webcam or countdown):
+  --format <mp4|gif>       What to record as (default mp4; a GIF is at most
+                           a minute long)
+  --fps <30|60>            An MP4's frames a second (default 30)
+  --cursor                 Draw the pointer in
+  --for <seconds>          Stop after this long (up to an hour) and wait for
+                           the file; without it, end with `grab-it stop`
+
+Gif options:
+  --start <seconds>        Where the GIF starts in the video
+  --end <seconds>          Where it ends
+  --fps <n>                Frames a second (default 10, up to 50)
+  --width <pixels>         Its width (default the video's, up to 1280)
 
 Other:
   --open <target>          Open a window at startup, such as settings
@@ -204,18 +234,34 @@ where
             })
         }
         "shot" => Command::Request(Request::Shot(parse_shot(rest)?)),
+        "record" => Command::Request(Request::Record(parse_record(rest)?)),
+        "stop" => {
+            if let Some(extra) = rest.first() {
+                return Err(format!("`stop` takes no options, but was given `{extra}`"));
+            }
+            Command::Request(Request::Stop)
+        }
+        "gif" => Command::Request(Request::Gif(parse_gif(rest)?)),
+        "frames" => Command::Request(Request::Frames(parse_frames(rest)?)),
         _ => return Ok(None),
     };
     Ok(Some(command))
 }
 
 /// The options that take a value.
-const VALUE_OPTIONS: [&str; 5] = [
+const VALUE_OPTIONS: [&str; 12] = [
     "--display",
     "--window",
     "--region",
     "--delay",
     "--max-width",
+    "--format",
+    "--fps",
+    "--for",
+    "--start",
+    "--end",
+    "--width",
+    "--count",
 ];
 
 /// Splits `--name=value` and `--name value` into the name and its value.
@@ -233,6 +279,43 @@ fn option_value<'a>(
     (name, inline)
 }
 
+/// The value an option was given, trimmed; an error when it has none.
+fn needs(name: &str, value: Option<&str>) -> Result<String, String> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(str::trim)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{name} needs a value; see `grab-it help`"))
+}
+
+/// The target `name` chooses, for shot and record; None when `name` is
+/// not a target option.
+fn target_option(name: &str, value: Option<&str>) -> Option<Result<ShotTarget, String>> {
+    Some(match name {
+        "--screen" if value.is_some() => Err("--screen takes no value".into()),
+        "--screen" => Ok(ShotTarget::Screen),
+        "--display" => needs(name, value).map(|display| ShotTarget::Display { display }),
+        "--window" => needs(name, value).map(|window| ShotTarget::Window { window }),
+        "--region" => needs(name, value).and_then(|text| parse_region(&text)),
+        _ => return None,
+    })
+}
+
+/// Keeps `chosen` as the one target; an error when there already is one.
+fn choose_target(
+    target: &mut Option<ShotTarget>,
+    chosen: ShotTarget,
+    command: &str,
+) -> Result<(), String> {
+    if target.is_some() {
+        return Err(format!(
+            "{command} takes one of --screen, --display, --window and --region"
+        ));
+    }
+    *target = Some(chosen);
+    Ok(())
+}
+
 fn parse_shot(args: &[String]) -> Result<ShotRequest, String> {
     let mut target: Option<ShotTarget> = None;
     let mut delay_ms = 0;
@@ -240,30 +323,14 @@ fn parse_shot(args: &[String]) -> Result<ShotRequest, String> {
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         let (name, value) = option_value(arg, &mut rest);
-        let needs = |value: Option<&str>| {
-            value
-                .filter(|value| !value.trim().is_empty())
-                .map(str::trim)
-                .map(str::to_owned)
-                .ok_or_else(|| format!("{name} needs a value; see `grab-it help`"))
-        };
-        let chosen = match name {
-            "--screen" => {
-                if value.is_some() {
-                    return Err("--screen takes no value".into());
-                }
-                Some(ShotTarget::Screen)
-            }
-            "--display" => Some(ShotTarget::Display {
-                display: needs(value)?,
-            }),
-            "--window" => Some(ShotTarget::Window {
-                window: needs(value)?,
-            }),
-            "--region" => Some(parse_region(&needs(value)?)?),
+        if let Some(chosen) = target_option(name, value) {
+            choose_target(&mut target, chosen?, "shot")?;
+            continue;
+        }
+        let needs = |value: Option<&str>| needs(name, value);
+        match name {
             "--delay" => {
                 delay_ms = parse_delay(&needs(value)?)?;
-                None
             }
             "--max-width" => {
                 let text = needs(value)?;
@@ -275,15 +342,8 @@ fn parse_shot(args: &[String]) -> Result<ShotRequest, String> {
                             format!("--max-width needs a width in pixels, not `{text}`")
                         })?,
                 );
-                None
             }
             _ => return Err(format!("unknown shot option `{arg}`; see `grab-it help`")),
-        };
-        if let Some(chosen) = chosen {
-            if target.is_some() {
-                return Err("shot takes one of --screen, --display, --window and --region".into());
-            }
-            target = Some(chosen);
         }
     }
     Ok(ShotRequest {
@@ -315,15 +375,177 @@ fn parse_region(text: &str) -> Result<ShotTarget, String> {
     })
 }
 
-/// Seconds, whole or not, up to [`crate::agent::MAX_DELAY_MS`].
-fn parse_delay(text: &str) -> Result<u64, String> {
+/// Seconds, whole or not, as milliseconds, for the option `name`.
+fn parse_seconds(name: &str, text: &str) -> Result<u64, String> {
     let seconds = text
         .trim_end_matches('s')
         .parse::<f64>()
         .ok()
         .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
-        .ok_or_else(|| format!("--delay needs a number of seconds, not `{text}`"))?;
-    let ms = (seconds * 1000.0).round() as u64;
+        .ok_or_else(|| format!("{name} needs a number of seconds, not `{text}`"))?;
+    Ok((seconds * 1000.0).round() as u64)
+}
+
+/// A whole number from `low` to `high`, for the option `name`.
+fn parse_number(name: &str, text: &str, low: u32, high: u32) -> Result<u32, String> {
+    text.parse::<u32>()
+        .ok()
+        .filter(|number| (low..=high).contains(number))
+        .ok_or_else(|| format!("{name} needs a whole number from {low} to {high}, not `{text}`"))
+}
+
+fn parse_record(args: &[String]) -> Result<RecordRequest, String> {
+    let mut target: Option<ShotTarget> = None;
+    let mut format = RecordingFormat::Mp4;
+    let mut fps = RECORDING_FPS[0];
+    let mut cursor = false;
+    let mut for_ms = None;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        let (name, value) = option_value(arg, &mut rest);
+        if let Some(chosen) = target_option(name, value) {
+            choose_target(&mut target, chosen?, "record")?;
+            continue;
+        }
+        match name {
+            "--format" => {
+                let text = needs(name, value)?;
+                format = match text.to_ascii_lowercase().as_str() {
+                    "mp4" => RecordingFormat::Mp4,
+                    "gif" => RecordingFormat::Gif,
+                    _ => return Err(format!("--format is mp4 or gif, not `{text}`")),
+                };
+            }
+            "--fps" => {
+                let text = needs(name, value)?;
+                fps = text
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|fps| RECORDING_FPS.contains(fps))
+                    .ok_or_else(|| format!("--fps is 30 or 60, not `{text}`"))?;
+            }
+            "--cursor" => {
+                if value.is_some() {
+                    return Err("--cursor takes no value".into());
+                }
+                cursor = true;
+            }
+            "--for" => {
+                let ms = parse_seconds(name, &needs(name, value)?)?;
+                if ms == 0 || ms > crate::agent::MAX_RECORD_MS {
+                    return Err("--for needs a number of seconds above 0, up to an hour".into());
+                }
+                for_ms = Some(ms);
+            }
+            _ => return Err(format!("unknown record option `{arg}`; see `grab-it help`")),
+        }
+    }
+    Ok(RecordRequest {
+        target: target.unwrap_or(ShotTarget::Screen),
+        format,
+        fps,
+        cursor,
+        for_ms,
+    })
+}
+
+/// The video a command names, and its options; an error when it names
+/// none or more than one.
+fn video_and_options<'a>(
+    command: &str,
+    args: &'a [String],
+) -> Result<(PathBuf, Vec<(&'a str, Option<&'a str>, &'a String)>), String> {
+    let mut video = None;
+    let mut options = Vec::new();
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        if !arg.starts_with("--") {
+            if video.is_some() {
+                return Err(format!(
+                    "{command} takes one video, but was also given `{arg}`"
+                ));
+            }
+            video = Some(PathBuf::from(arg));
+            continue;
+        }
+        let (name, value) = option_value(arg, &mut rest);
+        options.push((name, value, arg));
+    }
+    let video = video
+        .filter(|video| !video.as_os_str().is_empty())
+        .ok_or_else(|| {
+            format!("{command} needs a video, for example `grab-it {command} demo.mp4`")
+        })?;
+    Ok((video, options))
+}
+
+fn parse_gif(args: &[String]) -> Result<GifRequest, String> {
+    let (video, options) = video_and_options("gif", args)?;
+    let mut request = GifRequest {
+        video,
+        start_ms: None,
+        end_ms: None,
+        fps: crate::agent::GIF_FPS,
+        width: None,
+    };
+    for (name, value, arg) in options {
+        let text = || needs(name, value);
+        match name {
+            "--start" => request.start_ms = Some(parse_seconds(name, &text()?)?),
+            "--end" => request.end_ms = Some(parse_seconds(name, &text()?)?),
+            "--fps" => request.fps = parse_number(name, &text()?, 1, crate::agent::MAX_GIF_FPS)?,
+            "--width" => request.width = Some(parse_number(name, &text()?, 16, 7680)?),
+            _ => return Err(format!("unknown gif option `{arg}`; see `grab-it help`")),
+        }
+    }
+    if let (Some(start), Some(end)) = (request.start_ms, request.end_ms)
+        && end <= start
+    {
+        return Err("--end needs to be after --start".into());
+    }
+    if request.end_ms == Some(0) {
+        return Err("--end needs to be after the video's start".into());
+    }
+    Ok(request)
+}
+
+fn parse_frames(args: &[String]) -> Result<FramesRequest, String> {
+    let (video, options) = video_and_options("frames", args)?;
+    let mut count = crate::agent::FRAMES_COUNT;
+    for (name, value, arg) in options {
+        match name {
+            "--count" => {
+                count = parse_number(name, &needs(name, value)?, 1, crate::agent::MAX_FRAMES)?
+            }
+            _ => return Err(format!("unknown frames option `{arg}`; see `grab-it help`")),
+        }
+    }
+    Ok(FramesRequest { video, count })
+}
+
+/// Makes the video a request names absolute, from the folder the command
+/// was run in, since the app runs in a folder of its own.
+fn absolute_video(request: Request) -> Result<Request, String> {
+    let absolute = |video: PathBuf| {
+        std::path::absolute(&video)
+            .map_err(|err| format!("could not find {}: {err}", video.display()))
+    };
+    Ok(match request {
+        Request::Gif(gif) => Request::Gif(GifRequest {
+            video: absolute(gif.video.clone())?,
+            ..gif
+        }),
+        Request::Frames(frames) => Request::Frames(FramesRequest {
+            video: absolute(frames.video.clone())?,
+            ..frames
+        }),
+        other => other,
+    })
+}
+
+/// Seconds, whole or not, up to [`crate::agent::MAX_DELAY_MS`].
+fn parse_delay(text: &str) -> Result<u64, String> {
+    let ms = parse_seconds("--delay", text)?;
     if ms > crate::agent::MAX_DELAY_MS {
         return Err(format!(
             "--delay is at most {} seconds",
@@ -351,18 +573,20 @@ where
             print!("{USAGE}");
             0
         }
-        Ok(Some(Command::Request(request))) => match ask(&request) {
-            Ok(result) => {
-                let mut out = std::io::stdout().lock();
-                let _ = writeln!(out, "{result}");
-                let _ = out.flush();
-                0
+        Ok(Some(Command::Request(request))) => {
+            match absolute_video(request).and_then(|request| ask(&request)) {
+                Ok(result) => {
+                    let mut out = std::io::stdout().lock();
+                    let _ = writeln!(out, "{result}");
+                    let _ = out.flush();
+                    0
+                }
+                Err(message) => {
+                    eprintln!("grab-it: {message}");
+                    1
+                }
             }
-            Err(message) => {
-                eprintln!("grab-it: {message}");
-                1
-            }
-        },
+        }
         Err(message) => {
             eprintln!("grab-it: {message}");
             2
@@ -687,12 +911,205 @@ mod tests {
         assert!(shot(&["--screen=yes"]).is_err());
     }
 
+    fn request(args: &[&str]) -> Result<Request, String> {
+        match command(args)? {
+            Some(Command::Request(request)) => Ok(request),
+            other => panic!("not a request: {other:?}"),
+        }
+    }
+
+    fn record(args: &[&str]) -> Result<RecordRequest, String> {
+        let mut all = vec!["record"];
+        all.extend_from_slice(args);
+        match request(&all)? {
+            Request::Record(record) => Ok(record),
+            other => panic!("not a recording: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_recording_is_an_mp4_of_the_screen_by_default() {
+        assert_eq!(
+            record(&[]),
+            Ok(RecordRequest {
+                target: ShotTarget::Screen,
+                format: RecordingFormat::Mp4,
+                fps: 30,
+                cursor: false,
+                for_ms: None,
+            })
+        );
+    }
+
+    #[test]
+    fn record_takes_the_shot_targets_and_its_own_options() {
+        assert_eq!(
+            record(&[
+                "--window",
+                "Firefox",
+                "--format=gif",
+                "--fps",
+                "60",
+                "--cursor",
+                "--for",
+                "5"
+            ]),
+            Ok(RecordRequest {
+                target: ShotTarget::Window {
+                    window: "Firefox".into()
+                },
+                format: RecordingFormat::Gif,
+                fps: 60,
+                cursor: true,
+                for_ms: Some(5000),
+            })
+        );
+        assert_eq!(
+            record(&["--region", "0,0,640,480", "--for=2.5s"]).unwrap(),
+            RecordRequest {
+                target: ShotTarget::Region {
+                    x: 0,
+                    y: 0,
+                    width: 640,
+                    height: 480
+                },
+                format: RecordingFormat::Mp4,
+                fps: 30,
+                cursor: false,
+                for_ms: Some(2500),
+            }
+        );
+    }
+
+    #[test]
+    fn bad_record_arguments_are_errors() {
+        assert!(
+            record(&["--format", "webm"])
+                .unwrap_err()
+                .contains("mp4 or gif")
+        );
+        assert!(record(&["--fps", "24"]).unwrap_err().contains("30 or 60"));
+        assert!(record(&["--for", "0"]).is_err());
+        assert!(record(&["--for", "3601"]).unwrap_err().contains("an hour"));
+        assert!(record(&["--cursor=yes"]).is_err());
+        assert!(
+            record(&["--screen", "--display", "1"])
+                .unwrap_err()
+                .contains("record takes one of")
+        );
+        assert!(
+            record(&["--delay", "1"])
+                .unwrap_err()
+                .contains("unknown record option")
+        );
+    }
+
+    #[test]
+    fn stop_takes_no_options() {
+        assert_eq!(request(&["stop"]), Ok(Request::Stop));
+        assert!(command(&["stop", "--now"]).unwrap_err().contains("--now"));
+    }
+
+    #[test]
+    fn gif_takes_a_video_and_its_trim_rate_and_width() {
+        assert_eq!(
+            request(&[
+                "gif", "demo.mp4", "--start", "1.5", "--end=4", "--fps", "15", "--width", "800"
+            ]),
+            Ok(Request::Gif(GifRequest {
+                video: PathBuf::from("demo.mp4"),
+                start_ms: Some(1500),
+                end_ms: Some(4000),
+                fps: 15,
+                width: Some(800),
+            }))
+        );
+        // The video may come after the options.
+        assert_eq!(
+            request(&["gif", "--fps", "12", "/v/a.mp4"]),
+            Ok(Request::Gif(GifRequest {
+                video: PathBuf::from("/v/a.mp4"),
+                start_ms: None,
+                end_ms: None,
+                fps: 12,
+                width: None,
+            }))
+        );
+    }
+
+    #[test]
+    fn bad_gif_arguments_are_errors() {
+        assert!(request(&["gif"]).unwrap_err().contains("needs a video"));
+        assert!(
+            request(&["gif", "a.mp4", "b.mp4"])
+                .unwrap_err()
+                .contains("one video")
+        );
+        assert!(
+            request(&["gif", "a.mp4", "--start", "4", "--end", "2"])
+                .unwrap_err()
+                .contains("after --start")
+        );
+        assert!(request(&["gif", "a.mp4", "--fps", "0"]).is_err());
+        assert!(request(&["gif", "a.mp4", "--fps", "51"]).is_err());
+        assert!(request(&["gif", "a.mp4", "--width", "wide"]).is_err());
+        assert!(
+            request(&["gif", "a.mp4", "--loop"])
+                .unwrap_err()
+                .contains("unknown gif option")
+        );
+    }
+
+    #[test]
+    fn frames_takes_a_video_and_a_count() {
+        assert_eq!(
+            request(&["frames", "a.mp4"]),
+            Ok(Request::Frames(FramesRequest {
+                video: PathBuf::from("a.mp4"),
+                count: 12,
+            }))
+        );
+        assert_eq!(
+            request(&["frames", "a.mp4", "--count=9"]),
+            Ok(Request::Frames(FramesRequest {
+                video: PathBuf::from("a.mp4"),
+                count: 9,
+            }))
+        );
+        assert!(request(&["frames", "a.mp4", "--count", "0"]).is_err());
+        assert!(request(&["frames", "a.mp4", "--count", "101"]).is_err());
+        assert!(request(&["frames"]).unwrap_err().contains("needs a video"));
+    }
+
+    #[test]
+    fn videos_are_sent_as_absolute_paths() {
+        let Request::Gif(gif) = absolute_video(request(&["gif", "demo.mp4"]).unwrap()).unwrap()
+        else {
+            panic!("not a gif");
+        };
+        assert!(gif.video.is_absolute());
+        assert!(gif.video.ends_with("demo.mp4"));
+        assert_eq!(absolute_video(Request::Stop), Ok(Request::Stop));
+    }
+
     #[test]
     fn the_usage_lists_every_command() {
         for word in [
             "displays",
             "windows",
             "shot",
+            "record",
+            "stop",
+            "gif",
+            "frames",
+            "--format",
+            "--fps",
+            "--cursor",
+            "--for",
+            "--start",
+            "--end",
+            "--width",
+            "--count",
             "--display",
             "--window",
             "--region",

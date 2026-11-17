@@ -18,7 +18,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
 
-use crate::commands::{SettingsState, lock};
+use crate::{
+    commands::{SettingsState, lock},
+    settings::RecordingFormat,
+};
 
 /// The app's identifier in tauri.conf.json, which names its data folder.
 pub const IDENTIFIER: &str = "com.kerwincarpede.grabit";
@@ -41,6 +44,61 @@ pub enum Request {
     Windows,
     /// Takes a screenshot and adds it to the Library.
     Shot(ShotRequest),
+    /// Starts recording, and with `forMs` waits for it to be saved.
+    Record(RecordRequest),
+    /// Ends the recording under way and waits for it to be saved.
+    Stop,
+    /// Makes an animated GIF of a video.
+    Gif(GifRequest),
+    /// Makes a contact sheet of a video's frames.
+    Frames(FramesRequest),
+}
+
+/// What `grab-it record` records, and how.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordRequest {
+    /// As for a shot; the screen is the main display, since a recording is
+    /// of one display.
+    pub target: ShotTarget,
+    pub format: RecordingFormat,
+    /// An MP4's frames a second, 30 or 60.
+    pub fps: u32,
+    /// Whether the pointer is drawn in.
+    #[serde(default)]
+    pub cursor: bool,
+    /// Stops after this many milliseconds and replies once it is saved;
+    /// without it the reply comes as soon as recording starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub for_ms: Option<u64>,
+}
+
+/// What `grab-it gif` turns into a GIF.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GifRequest {
+    /// The video, as an absolute path.
+    pub video: PathBuf,
+    /// Where the GIF starts in the video, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_ms: Option<u64>,
+    /// Where it ends, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<u64>,
+    pub fps: u32,
+    /// Its width in pixels, keeping the video's shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+}
+
+/// What `grab-it frames` makes a contact sheet of.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FramesRequest {
+    /// The video, as an absolute path.
+    pub video: PathBuf,
+    /// How many evenly spaced frames the sheet shows.
+    pub count: u32,
 }
 
 /// What `grab-it shot` captures, and how.
@@ -422,6 +480,54 @@ mod tests {
                 max_width: None,
             })
         );
+    }
+
+    #[test]
+    fn recording_and_video_requests_round_trip() {
+        let requests = [
+            (
+                Request::Record(RecordRequest {
+                    target: ShotTarget::Window {
+                        window: "Firefox".into(),
+                    },
+                    format: RecordingFormat::Mp4,
+                    fps: 60,
+                    cursor: true,
+                    for_ms: Some(5000),
+                }),
+                json!({
+                    "command": "record",
+                    "target": {"kind": "window", "window": "Firefox"},
+                    "format": "mp4",
+                    "fps": 60,
+                    "cursor": true,
+                    "forMs": 5000,
+                }),
+            ),
+            (Request::Stop, json!({"command": "stop"})),
+            (
+                Request::Gif(GifRequest {
+                    video: PathBuf::from("/v/a.mp4"),
+                    start_ms: Some(1000),
+                    end_ms: None,
+                    fps: 10,
+                    width: Some(640),
+                }),
+                json!({"command": "gif", "video": "/v/a.mp4", "startMs": 1000, "fps": 10, "width": 640}),
+            ),
+            (
+                Request::Frames(FramesRequest {
+                    video: PathBuf::from("/v/a.mp4"),
+                    count: 9,
+                }),
+                json!({"command": "frames", "video": "/v/a.mp4", "count": 9}),
+            ),
+        ];
+        for (request, expected) in requests {
+            let text = serde_json::to_string(&request).unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), expected);
+            assert_eq!(serde_json::from_str::<Request>(&text).unwrap(), request);
+        }
     }
 
     #[test]
