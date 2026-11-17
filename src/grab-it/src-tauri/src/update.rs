@@ -3,6 +3,11 @@
 //! brings and installs it when asked; the tray's and the hub's "Check for
 //! updates…" check on demand.
 //!
+//! Settings › Updates picks the channel: Stable reads the latest release's
+//! `latest.json`, Edge the rolling `edge` release's. Only a newer version
+//! counts as an update, so moving from Edge back to Stable waits until
+//! Stable passes the Edge version this copy has.
+//!
 //! The release workflow publishes `latest.json` next to the installers,
 //! each package signed with the key whose public half is in
 //! `tauri.conf.json`; the updater refuses anything else. Its `changes` list
@@ -17,17 +22,21 @@ use std::{
     cell::Cell,
     sync::{
         Mutex, MutexGuard,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Url};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::windows;
+use crate::{
+    commands::{SettingsState, lock as lock_settings},
+    settings::UpdateChannel,
+    windows,
+};
 
 /// Emitted to every window with an [`UpdateEvent`] whenever the status
 /// changes.
@@ -42,6 +51,14 @@ const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 const MAX_CHANGE_CHARS: usize = 100;
 /// Download progress is sent at most this often.
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
+/// Stable's manifest: the one on the release GitHub marks as latest. Copies
+/// from before channels existed read it from `tauri.conf.json`.
+const STABLE_ENDPOINT: &str =
+    "https://github.com/kerwincarpede/grab-it/releases/latest/download/latest.json";
+/// Edge's manifest: the rolling `edge` pre-release, which every merge to
+/// main refreshes.
+const EDGE_ENDPOINT: &str =
+    "https://github.com/kerwincarpede/grab-it/releases/download/edge/latest.json";
 
 #[derive(Default)]
 pub struct UpdateState {
@@ -56,15 +73,23 @@ pub struct UpdateState {
     /// [`UpdateStatus::Idle`].
     status: Mutex<Option<UpdateStatus>>,
     /// The update the last check found, ready for [`update_install`].
+    /// Its lock also orders a check's result against a channel switch.
     pending: Mutex<Option<Update>>,
+    /// How many times the user has switched channel. A check records its
+    /// result only if no switch came while it ran, and checks again if one
+    /// came while it still held [`UpdateState::busy`].
+    switches: AtomicU64,
 }
 
 /// Who asked for a check. Only a check the user asked for opens the
-/// Updates dialog and reports a failure.
+/// Updates dialog; a check after switching channel reports a failure too,
+/// but in the sidebar only.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Trigger {
     Automatic,
     User,
+    /// The user picked another channel in Settings.
+    ChannelSwitch,
 }
 
 /// What one version brought, as `latest.json` lists it. Mirrors
@@ -171,6 +196,68 @@ pub fn user_check(app: &AppHandle) {
     });
 }
 
+/// Where `channel`'s `latest.json` is.
+pub fn endpoint(channel: UpdateChannel) -> &'static str {
+    match channel {
+        UpdateChannel::Stable => STABLE_ENDPOINT,
+        UpdateChannel::Edge => EDGE_ENDPOINT,
+    }
+}
+
+/// Whether an update is downloading or installing, when the channel must
+/// not change under it.
+pub fn installing(app: &AppHandle) -> bool {
+    app.state::<UpdateState>().installing.load(Ordering::SeqCst)
+}
+
+/// After the user picked another channel: forgets the update the old
+/// channel offered and checks the new one off the main thread. A check
+/// still running notices the switch and checks again.
+pub fn channel_switched(app: &AppHandle) {
+    let state = app.state::<UpdateState>();
+    if state.installing.load(Ordering::SeqCst) {
+        return;
+    }
+    *lock(&state.declined) = None;
+    {
+        // Under the same lock as a check's result, so the two never cross.
+        let mut pending = lock(&state.pending);
+        state.switches.fetch_add(1, Ordering::SeqCst);
+        *pending = None;
+        set_status(
+            app,
+            UpdateStatus::Checking {
+                current: app.package_info().version.to_string(),
+            },
+            false,
+        );
+    }
+    // If a check is running, this one finds it busy and leaves the new
+    // channel to it.
+    let app = app.clone();
+    std::thread::spawn(move || check(&app, Trigger::ChannelSwitch));
+}
+
+/// The channel Settings has picked; Stable before settings are loaded.
+fn chosen_channel(app: &AppHandle) -> UpdateChannel {
+    app.try_state::<SettingsState>()
+        .map(|state| lock_settings(&state).get().update_channel)
+        .unwrap_or_default()
+}
+
+/// Asks `channel`'s manifest for a version newer than this copy.
+async fn find_update(app: &AppHandle, channel: UpdateChannel) -> Result<Option<Update>, String> {
+    let url = Url::parse(endpoint(channel)).map_err(|err| err.to_string())?;
+    app.updater_builder()
+        .endpoints(vec![url])
+        .map_err(|err| err.to_string())?
+        .build()
+        .map_err(|err| err.to_string())?
+        .check()
+        .await
+        .map_err(|err| err.to_string())
+}
+
 /// The current status.
 #[tauri::command]
 pub fn update_status(app: AppHandle) -> UpdateStatus {
@@ -223,15 +310,57 @@ pub fn update_later(app: AppHandle) {
 /// not run on the main thread.
 fn check(app: &AppHandle, trigger: Trigger) {
     let state = app.state::<UpdateState>();
-    let show = trigger == Trigger::User;
-    if state.installing.load(Ordering::SeqCst) || state.busy.swap(true, Ordering::SeqCst) {
-        if show {
-            emit(app, current_status(app), true);
-        }
-        return;
+    let ran = run_while_busy(&state.busy, &state.installing, &state.switches, |first| {
+        // A switch that found this check busy is checked as its own.
+        let trigger = if first {
+            trigger
+        } else {
+            Trigger::ChannelSwitch
+        };
+        check_once(app, trigger)
+    });
+    if !ran && trigger == Trigger::User {
+        emit(app, current_status(app), true);
     }
+}
+
+/// Takes `busy` and runs `attempt`, which returns the switch count its
+/// result was recorded at. Runs it again, with `first` false, while a
+/// switch came after that, since that switch's own check found `busy`
+/// taken and left it here. False when another check or an install already
+/// had it.
+fn run_while_busy(
+    busy: &AtomicBool,
+    installing: &AtomicBool,
+    switches: &AtomicU64,
+    mut attempt: impl FnMut(bool) -> u64,
+) -> bool {
+    if installing.load(Ordering::SeqCst) || busy.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    let mut first = true;
+    loop {
+        let recorded_at = attempt(first);
+        busy.store(false, Ordering::SeqCst);
+        if switches.load(Ordering::SeqCst) == recorded_at
+            || installing.load(Ordering::SeqCst)
+            || busy.swap(true, Ordering::SeqCst)
+        {
+            return true;
+        }
+        first = false;
+    }
+}
+
+/// One check while holding [`UpdateState::busy`]. Fetches again whenever
+/// the user switched channel meanwhile, so what the old channel offered is
+/// never shown, and returns the switch count its result was recorded at.
+fn check_once(app: &AppHandle, trigger: Trigger) -> u64 {
+    let state = app.state::<UpdateState>();
+    let show = trigger == Trigger::User;
+    let mut report_failure = trigger != Trigger::Automatic;
     let current = app.package_info().version.to_string();
-    let previous = current_status(app);
+    let mut previous = current_status(app);
     // A background check leaves an update on show as it is meanwhile.
     if show || !matches!(previous, UpdateStatus::Available { .. }) {
         set_status(
@@ -242,65 +371,73 @@ fn check(app: &AppHandle, trigger: Trigger) {
             show,
         );
     }
-    let found = tauri::async_runtime::block_on(async {
-        app.updater()
-            .map_err(|err| err.to_string())?
-            .check()
-            .await
-            .map_err(|err| err.to_string())
-    });
-    // An install started meanwhile owns the status now.
-    if state.installing.load(Ordering::SeqCst) {
-        state.busy.store(false, Ordering::SeqCst);
-        return;
-    }
-    match found {
-        Ok(Some(update)) => {
-            // Found in the background or not, the update waits in the
-            // Grab-it window's sidebar; nothing pops up to announce it.
-            let declined = lock(&state.declined).clone();
-            let status = UpdateStatus::Available {
-                info: info_of(&update),
-                declined: declined.as_deref() == Some(update.version.as_str()),
+    loop {
+        let seen = state.switches.load(Ordering::SeqCst);
+        let channel = chosen_channel(app);
+        let found = tauri::async_runtime::block_on(find_update(app, channel));
+        // An install started meanwhile owns the status now.
+        if state.installing.load(Ordering::SeqCst) {
+            return seen;
+        }
+        let mut pending = lock(&state.pending);
+        if state.switches.load(Ordering::SeqCst) != seen {
+            // The user switched channel: what was on show came from the
+            // old one, and the new channel's result is theirs to see.
+            drop(pending);
+            report_failure = true;
+            previous = UpdateStatus::Idle {
+                current: current.clone(),
             };
-            *lock(&state.pending) = Some(update);
-            set_status(app, status, show);
+            continue;
         }
-        Ok(None) => {
-            *lock(&state.pending) = None;
-            set_status(
-                app,
-                UpdateStatus::UpToDate {
-                    current,
-                    checked_at: now_ms(),
-                },
-                show,
-            );
-        }
-        Err(err) => {
-            eprintln!("Grab-it: could not check for updates: {err}");
-            if show {
+        match found {
+            Ok(Some(update)) => {
+                // Found in the background or not, the update waits in the
+                // Grab-it window's sidebar; nothing pops up to announce it.
+                let declined = lock(&state.declined).clone();
+                let status = UpdateStatus::Available {
+                    info: info_of(&update),
+                    declined: declined.as_deref() == Some(update.version.as_str()),
+                };
+                *pending = Some(update);
+                set_status(app, status, show);
+            }
+            Ok(None) => {
+                *pending = None;
                 set_status(
                     app,
-                    UpdateStatus::Failed {
+                    UpdateStatus::UpToDate {
                         current,
-                        message: err,
-                        info: None,
+                        checked_at: now_ms(),
                     },
-                    true,
+                    show,
                 );
-            } else {
-                // A background failure is not worth reporting: put back
-                // what was there before the check.
-                let restored = match previous {
-                    UpdateStatus::Checking { current } => UpdateStatus::Idle { current },
-                    other => other,
-                };
-                set_status(app, restored, false);
+            }
+            Err(err) => {
+                eprintln!("Grab-it: could not check for updates: {err}");
+                if report_failure {
+                    set_status(
+                        app,
+                        UpdateStatus::Failed {
+                            current,
+                            message: err,
+                            info: None,
+                        },
+                        show,
+                    );
+                } else {
+                    // A background failure is not worth reporting: put
+                    // back what was there before the check.
+                    let restored = match previous {
+                        UpdateStatus::Checking { current } => UpdateStatus::Idle { current },
+                        other => other,
+                    };
+                    set_status(app, restored, false);
+                }
             }
         }
+        return seen;
     }
-    state.busy.store(false, Ordering::SeqCst);
 }
 
 /// Downloads and installs `update`, reporting progress, then restarts.
@@ -476,6 +613,81 @@ mod tests {
             version: version.into(),
             items: items.iter().map(|item| item.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn each_channel_reads_its_own_manifest() {
+        assert_eq!(
+            endpoint(UpdateChannel::Stable),
+            "https://github.com/kerwincarpede/grab-it/releases/latest/download/latest.json"
+        );
+        assert_eq!(
+            endpoint(UpdateChannel::Edge),
+            "https://github.com/kerwincarpede/grab-it/releases/download/edge/latest.json"
+        );
+        for channel in [UpdateChannel::Stable, UpdateChannel::Edge] {
+            let url = Url::parse(endpoint(channel)).unwrap();
+            assert_eq!(url.scheme(), "https");
+        }
+    }
+
+    #[test]
+    fn stable_is_the_endpoint_older_copies_use() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(
+            config["plugins"]["updater"]["endpoints"][0],
+            endpoint(UpdateChannel::Stable)
+        );
+    }
+
+    #[test]
+    fn a_switch_while_busy_is_checked_before_busy_is_released() {
+        let busy = AtomicBool::new(false);
+        let installing = AtomicBool::new(false);
+        let switches = AtomicU64::new(0);
+        let mut runs = Vec::new();
+        let ran = run_while_busy(&busy, &installing, &switches, |first| {
+            runs.push(first);
+            let recorded_at = switches.load(Ordering::SeqCst);
+            // The user switches channel after the first result is recorded,
+            // and that switch's own check finds this one busy.
+            if first {
+                switches.fetch_add(1, Ordering::SeqCst);
+                assert!(!run_while_busy(&busy, &installing, &switches, |_| {
+                    panic!("a busy check must not run a second one")
+                }));
+            }
+            recorded_at
+        });
+        assert!(ran);
+        assert_eq!(runs, vec![true, false]);
+        assert!(!busy.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_check_without_a_switch_runs_once() {
+        let busy = AtomicBool::new(false);
+        let installing = AtomicBool::new(false);
+        let switches = AtomicU64::new(3);
+        let mut runs = 0;
+        assert!(run_while_busy(&busy, &installing, &switches, |_| {
+            runs += 1;
+            3
+        }));
+        assert_eq!(runs, 1);
+        assert!(!busy.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn no_check_runs_while_an_update_installs() {
+        let busy = AtomicBool::new(false);
+        let installing = AtomicBool::new(true);
+        let switches = AtomicU64::new(0);
+        assert!(!run_while_busy(&busy, &installing, &switches, |_| {
+            panic!("no check while installing")
+        }));
+        assert!(!busy.load(Ordering::SeqCst));
     }
 
     #[test]

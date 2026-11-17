@@ -39,14 +39,20 @@ const UPDATE = {
 function backend({
   update = { state: "idle", current: "0.2.1" } as unknown,
   storage = null as unknown,
+  updateChannel = undefined as string | undefined,
 } = {}) {
   const calls: { cmd: string; payload?: InvokeArgs }[] = [];
+  let channel = updateChannel;
+  const settings = () => (channel === undefined ? SETTINGS : { ...SETTINGS, updateChannel: channel });
   mockIPC(
     (cmd, payload) => {
       calls.push({ cmd, payload });
       switch (cmd) {
         case "get_settings":
-          return SETTINGS;
+          return settings();
+        case "set_update_channel":
+          channel = (payload as { channel: string }).channel;
+          return settings();
         case "library_sidebar":
           return {
             total: 3,
@@ -252,6 +258,40 @@ describe("AppWindow", () => {
     const captures = calls.filter(({ cmd }) => cmd === "hub_capture").map(({ payload }) => (payload as { kind: string }).kind);
     expect(captures).toEqual(["region", "record"]);
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("shows no channel by the version on Stable", async () => {
+    const calls = backend({ updateChannel: "stable" });
+    render(<AppWindow />);
+    expect(await screen.findByText("v0.2.1")).toBeInTheDocument();
+    await waitFor(() => expect(calls.some(({ cmd }) => cmd === "get_settings")).toBe(true));
+    expect(screen.queryByText("Edge")).not.toBeInTheDocument();
+  });
+
+  it("shows an Edge badge by the version on Edge", async () => {
+    backend({ updateChannel: "edge" });
+    render(<AppWindow />);
+    expect(await screen.findByText("v0.2.1")).toBeInTheDocument();
+    expect(await screen.findByText("Edge")).toHaveClass("version-channel");
+  });
+
+  it("shows the Edge badge once Settings switches to Edge", async () => {
+    const calls = backend();
+    render(<AppWindow />);
+    expect(await screen.findByText("v0.2.1")).toBeInTheDocument();
+    expect(screen.queryByText("Edge")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    const dialog = screen.getByRole("dialog", { name: "Settings" });
+    const channel = await within(dialog).findByRole("combobox", { name: "Update channel" });
+    await waitFor(() => expect(channel).toBeEnabled());
+    expect(channel).toHaveValue("stable");
+    await userEvent.selectOptions(channel, "Edge");
+    await waitFor(() => expect(channel).toHaveValue("edge"));
+    expect(calls.find(({ cmd }) => cmd === "set_update_channel")?.payload).toEqual({ channel: "edge" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Close Settings" }));
+
+    expect(await screen.findByText("Edge")).toHaveClass("version-channel");
   });
 
   it("checks for updates from the sidebar", async () => {

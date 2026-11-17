@@ -18,6 +18,7 @@ Most changes save as soon as you make them. Hotkeys save when you press **Save h
 | **Show Grab-it in the Dock** (macOS) | On | Click the Dock icon to open the Grab-it window. Off, Grab-it lives in the menu bar only. |
 | **Start Grab-it when you sign in** | Off | It waits in the menu bar or tray, ready for your hotkeys. |
 | **Save folder** | `Pictures/Grab-it` | New captures are saved here; click **Change…** to pick another. Earlier captures stay where they are and stay in your Library. Recordings go in its `recordings` folder. |
+| **Update channel** | Stable | Which releases Grab-it updates to. **Stable** gets releases that have been tried out first; **Edge** gets every change as soon as it is built, and shows an **Edge** badge by the version. Leaving Edge keeps your version until Stable passes it. See [Updates](/grab-it/get-started/updates/#stable-and-edge). |
 
 ## Appearance
 

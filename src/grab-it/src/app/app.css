@@ -165,6 +165,18 @@ kbd.nav-count {
   border-radius: 50%;
 }
 
+/* This copy is on the Edge channel. */
+.version-channel {
+  padding: 0 5px;
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-edge);
+  border-radius: 4px;
+}
+
 /* Checks for updates now. Spins while a check runs. */
 .app-window .version-check {
   width: 22px;

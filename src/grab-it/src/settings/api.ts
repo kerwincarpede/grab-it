@@ -194,7 +194,26 @@ export interface Settings extends Preferences {
   retention?: Retention;
   /** Settings › AI agents: the grab-it command line may capture. Older backends leave it out. */
   agentAccess?: boolean;
+  /** Settings › Updates: which releases the updater checks. Older backends leave it out: Stable. */
+  updateChannel?: UpdateChannel;
 }
+
+/** Mirrors `UpdateChannel` in src-tauri/src/settings.rs: which releases Grab-it updates to. */
+export type UpdateChannel = "stable" | "edge";
+
+/** The update channels in the order Settings lists them. */
+export const UPDATE_CHANNELS: { value: UpdateChannel; title: string; hint: string }[] = [
+  {
+    value: "stable",
+    title: "Stable",
+    hint: "Releases that have been tried out first. Best for everyday use.",
+  },
+  {
+    value: "edge",
+    title: "Edge",
+    hint: "Every change as soon as it is built. New features come first, and so can new bugs.",
+  },
+];
 
 /** Mirrors `Removal` in src-tauri/src/settings.rs: how cleanup removes items. */
 export type Removal = "trash" | "permanent";
@@ -590,6 +609,14 @@ export function setShowInDock(enabled: boolean): Promise<Settings> {
 /** Lets the grab-it command line capture, or stops it; resolves to the settings as saved. */
 export function setAgentAccess(enabled: boolean): Promise<Settings> {
   return invoke<Settings>("set_agent_access", { enabled });
+}
+
+/**
+ * Switches between Stable and Edge; resolves to the settings as saved. The
+ * backend forgets the update the old channel offered and checks the new one.
+ */
+export function setUpdateChannel(channel: UpdateChannel): Promise<Settings> {
+  return invoke<Settings>("set_update_channel", { channel });
 }
 
 /** Mirrors `AgentSkill` in src-tauri/src/agent.rs: where the agent skill is installed. */

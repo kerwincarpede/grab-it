@@ -329,7 +329,7 @@ While `agentAccess` in `settings.json` is `false` (the default) every request is
 - macOS: `~/Library/Application Support/com.kerwincarpede.grabit/`
 - Windows: `%APPDATA%\com.kerwincarpede.grabit\`
 
-It holds the save folder (default `~/Pictures/Grab-it/`), the hotkeys, what happens after a capture, whether captures are copied to the clipboard, and the [AI description](#ai-descriptions-optional) settings. Changing the save folder only affects new captures.
+It holds the save folder (default `~/Pictures/Grab-it/`), the hotkeys, what happens after a capture, whether captures are copied to the clipboard, the [AI description](#ai-descriptions-optional) settings and the [update channel](#updates). Changing the save folder only affects new captures.
 
 **Start Grab-it when you sign in** is kept by the operating system rather than in `settings.json`: a login item on macOS, a registry entry on Windows, and an autostart entry on Linux.
 
@@ -385,7 +385,11 @@ A run opens a draft release, builds the installers into it, and publishes it (cr
 
 ### Updates
 
-Installed copies update themselves from these releases with Tauri's [updater plugin](https://v2.tauri.app/plugin/updater/) (`src/grab-it/src-tauri/src/update.rs`). They read `latest.json` from the latest release (`releases/latest/download/latest.json`), compare its version with their own, and offer to download and install the package for their platform and installer type. A release builds those packages because CI turns on `bundle.createUpdaterArtifacts` when it stamps the version: the `.app.tar.gz` on macOS, and the `.AppImage`, `.deb`, `.rpm`, `.msi` and `-setup.exe` themselves elsewhere, each with a `.sig`. The publish job then writes `latest.json` from those signatures ([`.github/scripts/updater_manifest.py`](../.github/scripts/updater_manifest.py)) and refuses to publish a release that is missing macOS, Linux or Windows.
+Installed copies update themselves from these releases with Tauri's [updater plugin](https://v2.tauri.app/plugin/updater/) (`src/grab-it/src-tauri/src/update.rs`). They read `latest.json` from their update channel, compare its version with their own, and offer to download and install the package for their platform and installer type.
+
+The channel is **Settings → General → Updates** (`updateChannel` in `settings.json`). Stable, the default, reads the latest release (`releases/latest/download/latest.json`, the endpoint in `tauri.conf.json` that older copies use). Edge reads the rolling `edge` pre-release (`releases/download/edge/latest.json`); until that release has a `latest.json`, Edge checks fail. `update::check` builds its updater with the channel's endpoint each time and leaves the public key in `tauri.conf.json` alone. Only a newer version counts as an update, so a copy moving from Edge back to Stable waits until Stable passes its version. Switching channel (`set_update_channel`) forgets any update the old channel found and checks the new one at once. That check reports a failure in the sidebar without opening the Updates dialog, and a check still running when the channel changes checks again. On Edge, the Grab-it window's sidebar shows an **Edge** badge next to the version.
+
+A release builds those packages because CI turns on `bundle.createUpdaterArtifacts` when it stamps the version: the `.app.tar.gz` on macOS, and the `.AppImage`, `.deb`, `.rpm`, `.msi` and `-setup.exe` themselves elsewhere, each with a `.sig`. The publish job then writes `latest.json` from those signatures ([`.github/scripts/updater_manifest.py`](../.github/scripts/updater_manifest.py)) and refuses to publish a release that is missing macOS, Linux or Windows.
 
 `latest.json` also carries `changes`: the user-facing entries of the generated release notes ("What's Changed") of this release and the 19 before it. The update prompt lists those newer than the installed version, so someone several versions behind sees everything the update brings. Entries come from the pull request titles, without their Conventional Commits prefix; `ci`, `docs`, `chore`, `build`, `refactor`, `style` and `test` changes are left out, so write `feat:` and `fix:` titles for a user to read.
 

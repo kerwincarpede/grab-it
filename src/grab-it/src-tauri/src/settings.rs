@@ -874,6 +874,25 @@ impl PermissionSetup {
     }
 }
 
+/// Which releases Grab-it updates to. Mirrors `UpdateChannel` in
+/// src/settings/api.ts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UpdateChannel {
+    /// Releases the owner has promoted. Every copy starts here.
+    #[default]
+    Stable,
+    /// Every merge to main, as soon as it is built.
+    Edge,
+}
+
+impl UpdateChannel {
+    /// Read from the settings file: anything it does not know is Stable.
+    fn from_stored(value: serde_json::Value) -> Self {
+        serde_json::from_value(value).unwrap_or_default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -902,6 +921,9 @@ pub struct Settings {
     /// control connection refuses every request.
     #[serde(default)]
     pub agent_access: bool,
+    /// Settings › Updates: which releases the updater checks.
+    #[serde(default)]
+    pub update_channel: UpdateChannel,
 }
 
 impl Settings {
@@ -919,6 +941,7 @@ impl Settings {
             retention: Retention::default(),
             permissions: PermissionSetup::default(),
             agent_access: false,
+            update_channel: UpdateChannel::Stable,
         }
     }
 }
@@ -944,6 +967,8 @@ struct StoredSettings {
     /// Read leniently by [`PermissionSetup::from_stored`].
     permissions: Option<serde_json::Value>,
     agent_access: Option<bool>,
+    /// Read leniently by [`UpdateChannel::from_stored`].
+    update_channel: Option<serde_json::Value>,
 }
 
 /// Hotkeys on disk; a missing or empty one keeps its default.
@@ -1022,6 +1047,10 @@ impl StoredSettings {
                 .map(PermissionSetup::from_stored)
                 .unwrap_or(defaults.permissions),
             agent_access: self.agent_access.unwrap_or(defaults.agent_access),
+            update_channel: self
+                .update_channel
+                .map(UpdateChannel::from_stored)
+                .unwrap_or(defaults.update_channel),
         }
     }
 }
@@ -1086,6 +1115,7 @@ struct SettingsOnDisk<'a> {
     retention: Retention,
     permissions: PermissionSetup,
     agent_access: bool,
+    update_channel: UpdateChannel,
 }
 
 #[derive(Serialize)]
@@ -1147,6 +1177,7 @@ impl<'a> SettingsOnDisk<'a> {
             retention: settings.retention,
             permissions: settings.permissions,
             agent_access: settings.agent_access,
+            update_channel: settings.update_channel,
         }
     }
 }
@@ -1537,6 +1568,21 @@ impl SettingsStore {
         Ok(self.current.clone())
     }
 
+    /// Changes which releases the updater checks. Checking the new channel
+    /// is up to the caller.
+    pub fn set_update_channel(
+        &mut self,
+        channel: UpdateChannel,
+    ) -> Result<Settings, SettingsError> {
+        let next = Settings {
+            update_channel: channel,
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
     /// Records the macOS Permissions page's progress.
     pub fn set_permission_setup(
         &mut self,
@@ -1680,6 +1726,7 @@ mod tests {
                 resume: true,
             },
             agent_access: true,
+            update_channel: UpdateChannel::Edge,
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path, defaults(&dir)).unwrap(), settings);
@@ -1700,6 +1747,44 @@ mod tests {
         // A file from before the setting existed keeps it off.
         fs::write(&path, r#"{"showInDock": false}"#).unwrap();
         assert!(!load(&path, defaults(&dir)).unwrap().agent_access);
+    }
+
+    #[test]
+    fn update_channel_is_stable_by_default_and_remembered() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        assert_eq!(defaults(&dir).update_channel, UpdateChannel::Stable);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        assert_eq!(store.get().update_channel, UpdateChannel::Stable);
+        assert_eq!(
+            store
+                .set_update_channel(UpdateChannel::Edge)
+                .unwrap()
+                .update_channel,
+            UpdateChannel::Edge
+        );
+        assert_eq!(
+            load(&path, defaults(&dir)).unwrap().update_channel,
+            UpdateChannel::Edge
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["updateChannel"], "edge");
+        // A file from before the setting existed stays on Stable.
+        fs::write(&path, r#"{"showInDock": false}"#).unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.update_channel, UpdateChannel::Stable);
+        assert!(!loaded.show_in_dock);
+        // A channel this build does not know is read as Stable, and the
+        // rest of the file still loads.
+        fs::write(
+            &path,
+            r#"{"showInDock": false, "updateChannel": "nightly"}"#,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(loaded.update_channel, UpdateChannel::Stable);
+        assert!(!loaded.show_in_dock);
     }
 
     #[test]
