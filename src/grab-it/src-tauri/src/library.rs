@@ -1670,6 +1670,7 @@ pub(crate) fn extra_files(shot: &Shot) -> Vec<PathBuf> {
     if shot.kind.is_recording() {
         extras.push(crate::record::cursor_path(&shot.path));
         extras.push(crate::recording_editor::edits_path(&shot.path));
+        extras.push(crate::record::sound_path(&shot.path));
     }
     extras
 }
@@ -2796,6 +2797,7 @@ mod tests {
         fs::write(&path, b"not really a video").unwrap();
         fs::write(crate::record::cursor_path(&path), b"{}").unwrap();
         fs::write(crate::recording_editor::edits_path(&path), b"{}").unwrap();
+        fs::write(crate::record::sound_path(&path), b"not really sound").unwrap();
         path
     }
 
@@ -2914,6 +2916,7 @@ mod tests {
         assert!(!mp4.exists());
         assert!(!crate::record::cursor_path(&mp4).exists());
         assert!(!crate::recording_editor::edits_path(&mp4).exists());
+        assert!(!crate::record::sound_path(&mp4).exists());
         assert!(!shot.thumb_path.exists());
         assert_eq!(library.count().unwrap(), 0);
     }
@@ -3824,8 +3827,10 @@ mod tests {
         assert_eq!(renamed.kind, ShotKind::Video);
         assert!(crate::record::cursor_path(&renamed.path).is_file());
         assert!(crate::recording_editor::edits_path(&renamed.path).is_file());
+        assert!(crate::record::sound_path(&renamed.path).is_file());
         assert!(!mp4.exists());
         assert!(!crate::record::cursor_path(&mp4).exists());
+        assert!(!crate::record::sound_path(&mp4).exists());
     }
 
     #[test]
@@ -3988,6 +3993,7 @@ mod tests {
         assert_eq!(copy.bytes, shot.bytes);
         assert!(crate::record::cursor_path(&copy.path).is_file());
         assert!(crate::recording_editor::edits_path(&copy.path).is_file());
+        assert!(crate::record::sound_path(&copy.path).is_file());
     }
 
     #[test]

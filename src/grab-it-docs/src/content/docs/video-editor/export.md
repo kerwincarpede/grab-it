@@ -44,9 +44,10 @@ The editor never changes your recording. Your edits live in a small file beside 
 Grab-it 2026-03-07 09-05-01.mp4
 Grab-it 2026-03-07 09-05-01.edits.json   your trim, backdrop and zooms
 Grab-it 2026-03-07 09-05-01.cursor.json  where the pointer was, for Follow cursor
+Grab-it 2026-03-07 09-05-01.sound.m4a    the microphone and system sound, kept apart
 ```
 
-The edits file is saved every time you change something, so closing the editor loses nothing: open the recording again and your trim, backdrop and zooms are back. To start over, delete the `.edits.json` file. Delete the `.cursor.json` file and **Follow cursor** zooms can no longer follow the pointer.
+The edits file is saved every time you change something, so closing the editor loses nothing: open the recording again and your trim, backdrop and zooms are back. To start over, delete the `.edits.json` file. Delete the `.cursor.json` file and **Follow cursor** zooms can no longer follow the pointer. The `.sound.m4a` file is there only for recordings made with the microphone; delete it and the editor shows the sound as **Mixed sound**.
 
 :::note
 If a newer version of Grab-it wrote an edits file this one can't read, the editor says so and won't save over it, so the newer edits aren't lost.

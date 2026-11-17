@@ -14,7 +14,7 @@ interface Backend {
   exported?: { resolve: (path: string) => void; reject: (err: string) => void };
 }
 
-function mockBackend(edits: unknown = null, cursor: unknown = null): Backend {
+function mockBackend(edits: unknown = null, cursor: unknown = null, audio: string[] = []): Backend {
   const backend: Backend = { calls: [] };
   mockConvertFileSrc("linux");
   mockIPC(
@@ -22,7 +22,7 @@ function mockBackend(edits: unknown = null, cursor: unknown = null): Backend {
       backend.calls.push({ cmd, payload });
       switch (cmd) {
       case "recording_info":
-        return { path: PATH, fileName: "Grab-it 2026-03-07 09-05-01.mp4", edits, fps: 60, cursor };
+        return { path: PATH, fileName: "Grab-it 2026-03-07 09-05-01.mp4", edits, fps: 60, cursor, audio };
       case "get_editor_preferences":
         return {};
       case "recording_save_edits":
@@ -390,5 +390,30 @@ describe("RecordingEditor", () => {
     expect(screen.getByRole("button", { name: "Redo" })).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "Undo" }));
     await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, zooms: [AREA_ZOOM] }));
+  });
+
+  describe("names the recording's sound in the status bar", () => {
+    it("lists each source kept apart", async () => {
+      mockBackend(null, null, ["microphone", "system"]);
+      render(<RecordingEditor />);
+      expect(await screen.findByText("Microphone · System sound")).toBeInTheDocument();
+      expect(screen.queryByText("Mixed sound")).not.toBeInTheDocument();
+    });
+
+    it("says why mixed sound can only be edited together", async () => {
+      mockBackend(null, null, ["mixed"]);
+      render(<RecordingEditor />);
+      expect(await screen.findByText("Mixed sound")).toHaveAttribute(
+        "title",
+        "This recording's microphone and system sound are mixed into one track, so they can only be edited together.",
+      );
+    });
+
+    it("says nothing for a silent recording", async () => {
+      mockBackend();
+      render(<RecordingEditor />);
+      await screen.findByText("Grab-it 2026-03-07 09-05-01.mp4");
+      expect(screen.queryByText(/Microphone|System sound|Mixed sound/)).not.toBeInTheDocument();
+    });
   });
 });

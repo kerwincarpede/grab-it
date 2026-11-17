@@ -37,7 +37,13 @@ A GIF is silent, so the chip says **No sound** and can't be changed.
 
 ## System sound
 
-The speaker icon records what your computer plays, such as a video's sound or a notification. With the microphone on too, both are mixed into one track.
+The speaker icon records what your computer plays, such as a video's sound or a notification. With the microphone on too, both are mixed into the MP4's one sound track, so it plays the same anywhere.
+
+## Sound kept apart
+
+Whenever an MP4 is recorded with the microphone, Grab-it also keeps its sound unmixed in a file beside it, named after it with `.sound.m4a` on the end: the microphone, and the system sound when that was recorded too, each on its own and lined up with the video. The [video editor](/grab-it/video-editor/timeline-and-trim/#sound) names them in its status bar. The file is renamed, copied, deleted and cleaned up with its recording.
+
+Recordings made with system sound alone have no such file, since their one track already is that sound. Recordings made before Grab-it kept the sound apart have only their mixed track.
 
 It's offered on Windows, Linux and macOS 13 or later. A GIF is silent, so it's turned off for one.
 

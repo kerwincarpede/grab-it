@@ -43,7 +43,7 @@ use image::{
     codecs::gif::{GifEncoder, Repeat},
     imageops::{self, FilterType},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::{
@@ -66,6 +66,9 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(100);
 const GIF_FPS: u32 = 10;
 /// Ends the name of the pointer sidecar beside an MP4.
 pub const CURSOR_SUFFIX: &str = ".cursor.json";
+/// Ends the name of the sound sidecar beside an MP4 recorded with the
+/// microphone: each source of its sound, unmixed.
+pub const SOUND_SUFFIX: &str = ".sound.m4a";
 /// How long the desktop gets to repaint after the overlay closes.
 const SETTLE_DELAY: Duration = Duration::from_millis(200);
 /// How long quitting waits for a recording to write its last frames. An
@@ -621,6 +624,11 @@ pub struct CursorTrack {
     /// `[x, y]` from the frame's top-left corner, which may lie outside
     /// it, or null where it could not be told.
     pub positions: Vec<Option<[i32; 2]>>,
+    /// The sources the MP4's sound holds, in the order of the sound
+    /// sidecar's streams: empty when it is silent, its sound having
+    /// failed. Absent in recordings made before sources were kept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio: Option<Vec<SoundSource>>,
     /// The grabbed frames' size, which the video may be scaled from.
     #[serde(skip)]
     grabbed: (u32, u32),
@@ -634,6 +642,7 @@ impl CursorTrack {
             height: spec.output.1,
             fps: spec.fps,
             positions: Vec::new(),
+            audio: None,
             grabbed: spec.input,
         }
     }
@@ -666,6 +675,30 @@ impl CursorTrack {
 /// `<name>.cursor.json`.
 pub fn cursor_path(video: &Path) -> PathBuf {
     capture::sidecar_path(video, CURSOR_SUFFIX)
+}
+
+/// The sound sidecar of a recording: `<name>.mp4` gives
+/// `<name>.sound.m4a`.
+pub fn sound_path(video: &Path) -> PathBuf {
+    capture::sidecar_path(video, SOUND_SUFFIX)
+}
+
+/// One source of a recording's sound, as `<name>.cursor.json`'s `audio`
+/// names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SoundSource {
+    Microphone,
+    System,
+}
+
+impl SoundSource {
+    fn of(input: &Input) -> Self {
+        match input {
+            Input::Microphone(_) => Self::Microphone,
+            Input::System => Self::System,
+        }
+    }
 }
 
 /// Why a recording cannot start while a step capture runs.
@@ -1022,10 +1055,11 @@ fn count_down(controls: &Controls, seconds: u32) -> bool {
     !controls.stopped()
 }
 
-/// Deletes a recording thrown away, with its pointer sidecar.
+/// Deletes a recording thrown away, with its pointer and sound sidecars.
 fn remove_recording(path: &Path) {
     let _ = fs::remove_file(path);
     let _ = fs::remove_file(cursor_path(path));
+    let _ = fs::remove_file(sound_path(path));
 }
 
 /// What the card says when a recording was saved without its sound.
@@ -1060,7 +1094,9 @@ fn final_note(failed: &[(&str, String)], kept: bool, muxed: Result<(), String>) 
 /// frame rate: a frame time that goes by while a grab is under way
 /// repeats the frame before. Draws `overlays` into each frame grabbed.
 /// Saves where the pointer was beside it, and muxes in the sound of
-/// `inputs`, mixed into one track when there are two. `refused` is the
+/// `inputs`, mixed into one track when there are two. With the
+/// microphone, each source is also kept unmixed in the sound sidecar.
+/// `refused` is the
 /// sound that was not allowed or not available, by what it is and why.
 /// Returns how long the video runs, and why it is missing sound when some
 /// was refused or failed.
@@ -1179,6 +1215,7 @@ fn record_mp4(
     let mut captured = Vec::new();
     for sound in sounds {
         let what = sound.what();
+        let source = SoundSource::of(sound.input());
         let prepared = sound.stop().and_then(|sound| {
             let offset = audio::offset(started, sound.first_sample);
             // The sound runs on through the frame times the video dropped:
@@ -1186,7 +1223,7 @@ fn record_mp4(
             sound
                 .cut(pacer.gaps(), offset)
                 .map_err(|err| format!("could not cut the sound to the video: {err}"))?;
-            Ok((sound, offset))
+            Ok((source, sound, offset))
         });
         match prepared {
             Ok(track) => captured.push(track),
@@ -1196,23 +1233,38 @@ fn record_mp4(
             }
         }
     }
+    // In the sound sidecar's stream order: the microphone first.
+    captured.sort_by_key(|(source, _, _)| *source);
+    let sources: Vec<SoundSource> = captured.iter().map(|(source, _, _)| *source).collect();
     let kept = !captured.is_empty();
     let muxed = if kept {
         let tracks: Vec<ffmpeg::AudioTrack<'_>> = captured
             .iter()
-            .map(|(sound, offset)| ffmpeg::AudioTrack {
+            .map(|(_, sound, offset)| ffmpeg::AudioTrack {
                 wav: &sound.wav,
                 offset: *offset,
             })
             .collect();
         // The video is kept, silent.
-        ffmpeg::add_audio(&ready.path, path, &tracks, pacer.duration()).map_err(|err| {
-            eprintln!("Grab-it: the recording has no sound: {err}");
-            err.to_string()
-        })
+        let muxed =
+            ffmpeg::add_audio(&ready.path, path, &tracks, pacer.duration()).map_err(|err| {
+                eprintln!("Grab-it: the recording has no sound: {err}");
+                err.to_string()
+            });
+        // Written from the same WAVs before they are dropped. The video
+        // is fine without it: its sound is then only the mixed track.
+        if muxed.is_ok()
+            && sources.contains(&SoundSource::Microphone)
+            && let Err(err) =
+                ffmpeg::write_sound(&ready.path, &tracks, pacer.duration(), &sound_path(path))
+        {
+            eprintln!("Grab-it: no sound sidecar: {err}");
+        }
+        muxed
     } else {
         Ok(())
     };
+    track.audio = Some(if muxed.is_ok() { sources } else { Vec::new() });
     let note = final_note(&failed, kept, muxed);
     // The video is fine without it.
     if let Err(err) = track.save(path) {
@@ -1614,6 +1666,59 @@ mod tests {
             )),
             PathBuf::from("/shots/recordings/Grab-it 2026-03-07 09-05-01.cursor.json")
         );
+    }
+
+    #[test]
+    fn the_sound_sidecar_sits_beside_the_video() {
+        assert_eq!(
+            sound_path(Path::new(
+                "/shots/recordings/Grab-it 2026-03-07 09-05-01.mp4"
+            )),
+            PathBuf::from("/shots/recordings/Grab-it 2026-03-07 09-05-01.sound.m4a")
+        );
+    }
+
+    #[test]
+    fn the_sound_sources_are_saved_in_stream_order_and_absent_before() {
+        let spec = VideoSpec {
+            input: (640, 360),
+            output: (640, 360),
+            fps: 30,
+            bits_per_pixel: 0.2,
+        };
+        let json = |track: &CursorTrack| serde_json::to_value(track).unwrap();
+        let mut track = CursorTrack::new(&spec);
+        // Not set: no `audio` at all, as recordings made before it read.
+        assert!(json(&track).get("audio").is_none());
+        track.audio = Some(vec![SoundSource::Microphone, SoundSource::System]);
+        assert_eq!(
+            json(&track)["audio"],
+            serde_json::json!(["microphone", "system"])
+        );
+        // A recording whose sound failed holds none.
+        track.audio = Some(Vec::new());
+        assert_eq!(json(&track)["audio"], serde_json::json!([]));
+        // The microphone sorts first, as the sound sidecar's streams do.
+        let mut sources = [SoundSource::System, SoundSource::Microphone];
+        sources.sort();
+        assert_eq!(sources, [SoundSource::Microphone, SoundSource::System]);
+        assert_eq!(
+            serde_json::from_str::<Vec<SoundSource>>(r#"["system"]"#).unwrap(),
+            [SoundSource::System]
+        );
+    }
+
+    #[test]
+    fn a_thrown_away_recording_takes_its_sidecars_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let video = dir.path().join("clip.mp4");
+        for path in [&video, &cursor_path(&video), &sound_path(&video)] {
+            fs::write(path, b"x").unwrap();
+        }
+        remove_recording(&video);
+        assert!(!video.exists());
+        assert!(!cursor_path(&video).exists());
+        assert!(!sound_path(&video).exists());
     }
 
     #[test]

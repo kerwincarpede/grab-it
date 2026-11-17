@@ -11,7 +11,7 @@ import { presetName } from "../editor/preferences";
 import { newId } from "../editor/tools";
 import { useBackdropImage } from "../editor/useBackdropImage";
 import type { BackdropSources } from "../editor/flatten";
-import { exportRecording, fetchRecording, onExportProgress, playsFromBlob, recordingInfo, saveEdits, videoSrc, type ExportProgress, type RecordingInfo } from "./api";
+import { exportRecording, fetchRecording, onExportProgress, playsFromBlob, recordingInfo, saveEdits, videoSrc, type AudioKind, type ExportProgress, type RecordingInfo } from "./api";
 import { clampTrim, emptyEdits, formatTime, isWhole, parseEdits, serializeEdits, trimOf, type RecordingEdits, type Trim } from "./edits";
 import { exportLayers, paintUnderlay, recordingLayout } from "./layout";
 import { useBackdropPresets } from "./useBackdropPresets";
@@ -93,6 +93,22 @@ function usePlayableSrc(path: string | null, onError: (message: string) => void)
   if (!path) return null;
   if (!blob) return videoSrc(path);
   return loaded && loaded.path === path ? loaded.url : null;
+}
+
+/** Why a recording's sound shows as Mixed sound. */
+const MIXED_SOUND_HINT = "This recording's microphone and system sound are mixed into one track, so they can only be edited together.";
+
+const SOURCE_NAMES: Record<AudioKind, string> = {
+  microphone: "Microphone",
+  system: "System sound",
+  mixed: "Mixed sound",
+};
+
+/** The status bar's line naming a recording's sound sources; nothing for a silent one. */
+function SoundSources({ audio }: { audio: AudioKind[] }) {
+  if (audio.length === 0) return null;
+  if (audio.includes("mixed")) return <span title={MIXED_SOUND_HINT}>{SOURCE_NAMES.mixed}</span>;
+  return <span>{audio.map((kind) => SOURCE_NAMES[kind]).join(" · ")}</span>;
 }
 
 function saveText(status: SaveStatus): string {
@@ -681,6 +697,7 @@ export default function RecordingEditor() {
       <footer className="editor-status">
         <span>{info?.fileName ?? "Loading…"}</span>
         {durationMs > 0 && <span>Clip {formatTime(clipMs)}</span>}
+        {info && <SoundSources audio={info.audio} />}
         {layout && (
           <span>
             Output {layout.width}×{layout.height}

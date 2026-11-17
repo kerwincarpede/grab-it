@@ -843,6 +843,34 @@ pub struct AudioTrack<'a> {
 /// The channels and rate each WAV is brought to before two are mixed.
 const MIX_FORMAT: &str = "aformat=sample_rates=48000:channel_layouts=stereo";
 
+/// Adds each WAV of `tracks` to `args` as an input, its start cut by
+/// `-ss` when it started before the first frame. Returns how long each
+/// is to be delayed instead, in whole milliseconds.
+fn push_audio_inputs(args: &mut Vec<OsString>, tracks: &[AudioTrack<'_>]) -> Vec<i64> {
+    let mut delays = Vec::with_capacity(tracks.len());
+    for track in tracks {
+        let millis = (track.offset * 1000.0).round() as i64;
+        if millis < 0 {
+            args.push("-ss".into());
+            args.push(format!("{:.3}", millis.unsigned_abs() as f64 / 1000.0).into());
+        }
+        args.push("-i".into());
+        args.push(track.wav.as_os_str().to_owned());
+        delays.push(millis.max(0));
+    }
+    delays
+}
+
+/// The filter that delays a sound by `millis` with silence, followed by a
+/// comma, or nothing for no delay.
+fn delay(millis: i64) -> String {
+    if millis > 0 {
+        format!("adelay=delays={millis}:all=1,")
+    } else {
+        String::new()
+    }
+}
+
 /// ffmpeg's arguments to mux the WAVs `tracks` into the MP4 `video` as one
 /// AAC track (ffmpeg's own `aac` encoder), writing `output`. The video is
 /// copied as it is. Each WAV is shifted by its offset: sound that started
@@ -861,25 +889,7 @@ pub fn mux_args(
         .map(OsString::from)
         .collect();
     args.push(video.as_os_str().to_owned());
-    // Each track's delay, in whole milliseconds.
-    let mut delays = Vec::with_capacity(tracks.len());
-    for track in tracks {
-        let millis = (track.offset * 1000.0).round() as i64;
-        if millis < 0 {
-            args.push("-ss".into());
-            args.push(format!("{:.3}", millis.unsigned_abs() as f64 / 1000.0).into());
-        }
-        args.push("-i".into());
-        args.push(track.wav.as_os_str().to_owned());
-        delays.push(millis.max(0));
-    }
-    let delay = |millis: i64| {
-        if millis > 0 {
-            format!("adelay=delays={millis}:all=1,")
-        } else {
-            String::new()
-        }
-    };
+    let delays = push_audio_inputs(&mut args, tracks);
     let mut push = |arg: &str| args.push(OsString::from(arg));
     if let &[millis] = delays.as_slice() {
         for arg in ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af"] {
@@ -950,6 +960,56 @@ pub fn add_audio(
     result
 }
 
+/// ffmpeg's arguments to write the WAVs `tracks` to `output`, an M4A
+/// holding each as its own AAC stream, in their order and unmixed. Each
+/// is shifted by its offset and padded or cut to `duration` as
+/// [`mux_args`] does, so every stream lines up with the video, but is
+/// otherwise left as it was heard: no filter, no change of rate or
+/// channels.
+pub fn sound_args(tracks: &[AudioTrack<'_>], duration: Duration, output: &Path) -> Vec<OsString> {
+    let mut args: Vec<OsString> = ["-hide_banner", "-loglevel", "error", "-y"]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+    let delays = push_audio_inputs(&mut args, tracks);
+    let graph = delays
+        .iter()
+        .enumerate()
+        .map(|(index, millis)| format!("[{index}:a]{}apad[s{index}]", delay(*millis)))
+        .collect::<Vec<_>>()
+        .join(";");
+    args.push("-filter_complex".into());
+    args.push(graph.into());
+    for index in 0..delays.len() {
+        args.push("-map".into());
+        args.push(format!("[s{index}]").into());
+    }
+    for arg in ["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-t"] {
+        args.push(arg.into());
+    }
+    args.push(format!("{:.3}", duration.as_secs_f64()).into());
+    for arg in ["-movflags", "+faststart"] {
+        args.push(arg.into());
+    }
+    args.push(output.as_os_str().to_owned());
+    args
+}
+
+/// Writes the WAVs `tracks` to `output` as [`sound_args`] says. On
+/// failure nothing is left at `output`.
+pub fn write_sound(
+    ffmpeg: &Path,
+    tracks: &[AudioTrack<'_>],
+    duration: Duration,
+    output: &Path,
+) -> FfmpegResult<()> {
+    let result = run(ffmpeg, sound_args(tracks, duration, output), FINISH_TIMEOUT);
+    if result.is_err() {
+        let _ = fs::remove_file(output);
+    }
+    result
+}
+
 /// Runs `ffmpeg` with `args` to the end, for up to `timeout`. Fails with
 /// the last line it printed when it fails.
 pub(crate) fn run(ffmpeg: &Path, args: Vec<OsString>, timeout: Duration) -> FfmpegResult<()> {
@@ -1014,10 +1074,13 @@ pub struct Probe {
     pub duration_ms: Option<u64>,
     /// Its first video stream's size, when ffmpeg says.
     pub size: Option<(u32, u32)>,
+    /// Whether it has a sound stream.
+    pub audio: bool,
 }
 
-/// Reads `Duration: 00:00:46.12` and the first video stream's `1920x1080`
-/// from what `ffmpeg -i` prints about a file.
+/// Reads `Duration: 00:00:46.12`, the first video stream's `1920x1080`
+/// and whether there is an `Audio:` stream from what `ffmpeg -i` prints
+/// about a file.
 pub fn parse_probe(said: &str) -> Probe {
     let duration_ms = said.lines().find_map(|line| {
         let rest = line.trim().strip_prefix("Duration:")?;
@@ -1040,7 +1103,14 @@ pub fn parse_probe(said: &str) -> Probe {
                 (width > 0 && height > 0).then_some((width, height))
             })
         });
-    Probe { duration_ms, size }
+    let audio = said
+        .lines()
+        .any(|line| line.contains("Stream #") && line.contains("Audio:"));
+    Probe {
+        duration_ms,
+        size,
+        audio,
+    }
 }
 
 /// What ffmpeg says `video` holds; empty when it cannot say.
@@ -1398,6 +1468,7 @@ At least one output file must be specified";
             Probe {
                 duration_ms: Some(62_500),
                 size: Some((1920, 1080)),
+                audio: true,
             }
         );
     }
@@ -1412,9 +1483,23 @@ At least one output file must be specified";
             Probe {
                 duration_ms: None,
                 size: Some((640, 360)),
+                audio: false,
             }
         );
         assert_eq!(parse_probe(""), Probe::default());
+    }
+
+    #[test]
+    fn a_probe_tells_a_silent_video_from_one_with_sound() {
+        let silent = "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'a.mp4':
+  Metadata:
+    title           : Audio: none
+  Duration: 00:00:05.00, start: 0.000000, bitrate: 900 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p, 1280x720, 30 fps";
+        assert!(!parse_probe(silent).audio);
+        let sound =
+            format!("{silent}\n  Stream #0:1[0x2](und): Audio: aac (LC), 48000 Hz, stereo, fltp");
+        assert!(parse_probe(&sound).audio);
     }
 
     #[test]
@@ -1807,6 +1892,70 @@ At least one output file must be specified";
             both.join(" ")
                 .contains("-i /tmp/mic.wav -ss 0.500 -i /tmp/system.wav")
         );
+    }
+
+    #[test]
+    fn the_microphone_alone_is_kept_as_one_aligned_stream() {
+        let args = |offset: f64| {
+            sound_args(
+                &[AudioTrack {
+                    wav: Path::new("/tmp/mic.wav"),
+                    offset,
+                }],
+                Duration::from_millis(12_345),
+                Path::new("/rec/clip.sound.m4a"),
+            )
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect::<Vec<_>>()
+            .join(" ")
+        };
+        // Started 250 ms before the first frame: its start is cut.
+        assert_eq!(
+            args(-0.25),
+            "-hide_banner -loglevel error -y -ss 0.250 -i /tmp/mic.wav \
+             -filter_complex [0:a]apad[s0] -map [s0] -c:a aac -b:a 160k -t 12.345 \
+             -movflags +faststart /rec/clip.sound.m4a"
+        );
+        // Started 120 ms after: delayed by as much, and never resampled.
+        let later = args(0.12);
+        assert!(
+            later.contains("-i /tmp/mic.wav -filter_complex [0:a]adelay=delays=120:all=1,apad[s0]"),
+            "{later}"
+        );
+        assert!(!later.contains("aformat"), "{later}");
+    }
+
+    #[test]
+    fn the_microphone_and_system_sound_are_kept_as_separate_streams() {
+        let args = sound_args(
+            &[
+                AudioTrack {
+                    wav: Path::new("/tmp/mic.wav"),
+                    offset: -0.25,
+                },
+                AudioTrack {
+                    wav: Path::new("/tmp/system.wav"),
+                    offset: 0.12,
+                },
+            ],
+            Duration::from_millis(12_345),
+            Path::new("/rec/clip.sound.m4a"),
+        )
+        .into_iter()
+        .map(|arg| arg.into_string().unwrap())
+        .collect::<Vec<_>>();
+        assert_eq!(
+            args.join(" "),
+            "-hide_banner -loglevel error -y -ss 0.250 -i /tmp/mic.wav -i /tmp/system.wav \
+             -filter_complex [0:a]apad[s0];[1:a]adelay=delays=120:all=1,apad[s1] \
+             -map [s0] -map [s1] -c:a aac -b:a 160k -t 12.345 \
+             -movflags +faststart /rec/clip.sound.m4a"
+        );
+        // Not mixed: two streams, in the order given, and no video.
+        assert!(!args.iter().any(|arg| arg.contains("amix")));
+        assert_eq!(args.iter().filter(|arg| *arg == "-map").count(), 2);
+        assert!(!args.iter().any(|arg| arg.contains(":v")));
     }
 
     #[test]

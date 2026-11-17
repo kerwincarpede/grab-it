@@ -778,6 +778,7 @@ fn delete_recording(app: &AppHandle, path: &Path) -> Result<(), String> {
     }
     fs::remove_file(path).map_err(|err| format!("could not delete the recording: {err}"))?;
     let _ = fs::remove_file(crate::record::cursor_path(path));
+    let _ = fs::remove_file(crate::record::sound_path(path));
     let _ = fs::remove_file(crate::recording_editor::edits_path(path));
     Ok(())
 }
