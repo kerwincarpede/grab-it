@@ -15,6 +15,7 @@
 //! (input.rs), which Wayland does not allow.
 
 use std::{
+    collections::VecDeque,
     fs,
     path::{Component, Path, PathBuf},
     sync::{
@@ -72,6 +73,21 @@ const DOUBLE_CLICK_DISTANCE: f64 = 4.0;
 /// default step size.
 const STEP_COLOR: &str = "#e5484d";
 const STEP_RADIUS: f64 = 20.0;
+/// How many of the clicks that stop a step capture from the tray or the
+/// hub land outside Grab-it, so are taken as steps before the stop is
+/// seen. Windows: the click on the tray icon, which belongs to Explorer;
+/// the menu and the hub are Grab-it's own. macOS: none, since the status
+/// item, its menu and the hub are all Grab-it's. Linux: the click on the
+/// icon and the one on the menu item, both shown by the panel's tray host.
+#[cfg(target_os = "windows")]
+const STOP_CLICKS_OUTSIDE: usize = 1;
+#[cfg(target_os = "macos")]
+const STOP_CLICKS_OUTSIDE: usize = 0;
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const STOP_CLICKS_OUTSIDE: usize = 2;
+/// A step is taken for one of those clicks only when it was clicked this
+/// soon before the stop: an older one is the user's.
+const STOP_GESTURE: Duration = Duration::from_secs(15);
 /// How long the AI may take over one step's description.
 const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(120);
 /// The longest description kept from the AI.
@@ -561,20 +577,44 @@ struct DescribeJob {
     png: Vec<u8>,
 }
 
-/// The step still waiting when the session stops: kept when it was
-/// stopped from the keyboard, dropped when it was stopped by clicking (the
-/// tray icon or the hub), since that click is the step.
-pub fn keep_pending<T>(pending: Option<T>, trigger: Trigger) -> Option<T> {
-    match trigger {
-        Trigger::Keys => pending,
-        Trigger::Click => None,
+/// A step held back until the next click, or the stop, shows it was not
+/// one of the clicks that stopped the capture.
+pub struct Held<T> {
+    /// When its click was seen.
+    pub at: Instant,
+    pub step: T,
+}
+
+/// The held steps kept when the session stops at `stopped_at`, oldest
+/// first. Stopped from the keyboard, all of them. Stopped by clicking, the
+/// last `outside` are the stopping clicks that landed outside Grab-it
+/// (those on Grab-it were never taken), so they are dropped, unless one was
+/// clicked longer than [`STOP_GESTURE`] before the stop and so is the
+/// user's.
+pub fn kept_at_stop<T>(
+    mut held: Vec<Held<T>>,
+    trigger: Trigger,
+    stopped_at: Instant,
+    outside: usize,
+) -> Vec<T> {
+    if trigger == Trigger::Click {
+        let mut dropped = 0;
+        while dropped < outside
+            && held
+                .last()
+                .is_some_and(|last| stopped_at.saturating_duration_since(last.at) <= STOP_GESTURE)
+        {
+            held.pop();
+            dropped += 1;
+        }
     }
+    held.into_iter().map(|held| held.step).collect()
 }
 
 /// The session's loop. Each click's frame is grabbed as soon as the click
 /// is seen; a saver thread writes it, so slow saves never delay the next
-/// grab. The latest step waits until the next one, or the stop, says
-/// whether it is kept.
+/// grab. The latest [`STOP_CLICKS_OUTSIDE`] steps wait until later clicks,
+/// or the stop, say whether they are kept.
 fn run(
     app: &AppHandle,
     capture: &input::Capture,
@@ -610,8 +650,8 @@ fn run(
     };
     let mut last: Option<LastStep> = None;
     let mut last_click: Option<(Instant, (f64, f64))> = None;
-    let mut pending: Option<Grabbed> = None;
-    let mut handle = |events: Vec<input::InputEvent>, pending: &mut Option<Grabbed>| {
+    let mut held: VecDeque<Held<Grabbed>> = VecDeque::new();
+    let mut handle = |events: Vec<input::InputEvent>, held: &mut VecDeque<Held<Grabbed>>| {
         for event in events {
             let (InputKind::Click, Some(position)) = (&event.kind, event.position) else {
                 continue;
@@ -624,8 +664,14 @@ fn run(
             match grab(position, last.as_ref()) {
                 Ok(Some((step, grabbed))) => {
                     last = Some(step);
-                    if let Some(previous) = pending.replace(grabbed) {
-                        let _ = frames.send(previous);
+                    held.push_back(Held {
+                        at: event.at,
+                        step: grabbed,
+                    });
+                    while held.len() > STOP_CLICKS_OUTSIDE {
+                        if let Some(oldest) = held.pop_front() {
+                            let _ = frames.send(oldest.step);
+                        }
                     }
                 }
                 Ok(None) => {}
@@ -634,21 +680,21 @@ fn run(
         }
     };
     while !stop.load(Ordering::SeqCst) {
-        handle(capture.take(), &mut pending);
+        handle(capture.take(), &mut held);
         std::thread::sleep(POLL);
     }
+    let stopped_at = Instant::now();
     // Clicks seen just before the stop, such as the one on the menu item
     // that stopped it, are still looked at: Grab-it's own are skipped.
-    handle(capture.take(), &mut pending);
+    handle(capture.take(), &mut held);
     let trigger = if stopped_by_click.load(Ordering::SeqCst) {
         Trigger::Click
     } else {
         Trigger::Keys
     };
-    if let Some(kept) = keep_pending(pending, trigger) {
+    for kept in kept_at_stop(held.into(), trigger, stopped_at, STOP_CLICKS_OUTSIDE) {
         let _ = frames.send(kept);
     }
-    drop(handle);
     drop(frames);
     // The guide is complete before the Guide window opens; the describer
     // finishes the steps it was sent, then ends.
@@ -1217,11 +1263,57 @@ mod tests {
         assert_eq!(guide.steps[0].description, "Open the menu");
     }
 
+    fn held(stopped_at: Instant, ago: &[u64]) -> Vec<Held<u8>> {
+        ago.iter()
+            .enumerate()
+            .map(|(n, secs)| Held {
+                at: stopped_at - Duration::from_secs(*secs),
+                step: n as u8 + 1,
+            })
+            .collect()
+    }
+
     #[test]
-    fn a_step_clicked_to_stop_the_capture_is_dropped() {
-        assert_eq!(keep_pending(Some(3), Trigger::Keys), Some(3));
-        assert_eq!(keep_pending(Some(3), Trigger::Click), None);
-        assert_eq!(keep_pending(None::<u8>, Trigger::Keys), None);
+    fn a_step_capture_stopped_from_the_keyboard_keeps_every_step() {
+        let now = Instant::now();
+        assert_eq!(
+            kept_at_stop(held(now, &[9, 2, 1]), Trigger::Keys, now, 2),
+            vec![1, 2, 3]
+        );
+        assert!(kept_at_stop(held(now, &[]), Trigger::Keys, now, 2).is_empty());
+    }
+
+    #[test]
+    fn stopping_clicks_on_grab_it_drop_no_step() {
+        // macOS: the status item, its menu and the hub are Grab-it's, so
+        // none of the stopping clicks was taken and the last step is real.
+        let now = Instant::now();
+        assert_eq!(
+            kept_at_stop(held(now, &[1]), Trigger::Click, now, 0),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn stopping_clicks_outside_grab_it_are_dropped() {
+        let now = Instant::now();
+        // Linux: the tray icon and the menu item, both the tray host's.
+        assert_eq!(
+            kept_at_stop(held(now, &[8, 3, 1]), Trigger::Click, now, 2),
+            vec![1]
+        );
+        // Windows: the tray icon, which is Explorer's.
+        assert_eq!(
+            kept_at_stop(held(now, &[8, 1]), Trigger::Click, now, 1),
+            vec![1]
+        );
+        // A step clicked well before the stop is the user's, kept even
+        // when fewer stopping clicks were taken than expected.
+        assert_eq!(
+            kept_at_stop(held(now, &[60, 1]), Trigger::Click, now, 2),
+            vec![1]
+        );
+        assert!(kept_at_stop(held(now, &[2, 1]), Trigger::Click, now, 2).is_empty());
     }
 
     #[test]
