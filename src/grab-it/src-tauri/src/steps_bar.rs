@@ -29,16 +29,22 @@ fn valid_scale(scale: f64) -> f64 {
 /// at the top centre of its work area, the spot the recording toolbar
 /// opens at when it has none saved.
 pub fn placement(display: &Display) -> ((i32, i32), (u32, u32)) {
+    placement_of(SIZE, display)
+}
+
+/// Where a pill window of `size` points opens on `display`, in physical
+/// pixels: the top centre of its work area. The timer pill shares it.
+pub(crate) fn placement_of(size: (f64, f64), display: &Display) -> ((i32, i32), (u32, u32)) {
     let scale = valid_scale(display.scale);
     let size = (
-        (SIZE.0 * scale).round() as u32,
-        (SIZE.1 * scale).round() as u32,
+        (size.0 * scale).round() as u32,
+        (size.1 * scale).round() as u32,
     );
     (record_bar::position_at(None, size, display), size)
 }
 
 /// The display the pointer is on, else the primary one, else the first.
-fn pointer_display(app: &AppHandle) -> Option<Display> {
+pub(crate) fn pointer_display(app: &AppHandle) -> Option<Display> {
     let monitors = app.available_monitors().unwrap_or_default();
     let listed = crate::screen::monitors().unwrap_or_default();
     listed
@@ -67,30 +73,63 @@ pub fn show(app: &AppHandle) {
 }
 
 fn create(app: &AppHandle, display: &Display) -> tauri::Result<()> {
+    open_pill(
+        app,
+        Pill {
+            label: LABEL,
+            route: "stepsbar".into(),
+            title: "Grab-it step capture",
+            size: SIZE,
+        },
+        display,
+        placement(display),
+    )
+}
+
+/// A pill window to open: its label, the page route after `#/`, its title
+/// and its size in points.
+pub(crate) struct Pill {
+    pub label: &'static str,
+    pub route: String,
+    pub title: &'static str,
+    pub size: (f64, f64),
+}
+
+/// Opens `pill` on `display` at `placement` (its top-left corner and size
+/// in physical pixels): see-through, on top, unfocused and kept out of
+/// screen captures where the system allows. The timer pill opens the same
+/// way.
+pub(crate) fn open_pill(
+    app: &AppHandle,
+    pill: Pill,
+    display: &Display,
+    placement: ((i32, i32), (u32, u32)),
+) -> tauri::Result<()> {
     let scale = valid_scale(display.scale);
-    let (position, size) = placement(display);
-    let window =
-        WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html#/stepsbar".into()))
-            .title("Grab-it step capture")
-            .inner_size(SIZE.0, SIZE.1)
-            .decorations(false)
-            // See-through, so only the rounded pill shows.
-            .transparent(true)
-            // As the recording toolbar: GTK keeps a window that may not be
-            // resized no smaller than the webview's minimum.
-            .resizable(cfg!(target_os = "linux"))
-            .min_inner_size(1.0, 1.0)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .visible_on_all_workspaces(true)
-            // Left out of screen captures where the system allows, so it is
-            // not in the steps.
-            .content_protected(true)
-            // It must not pull the keyboard away from the task being shown.
-            .focused(false)
-            .shadow(false)
-            .visible(false)
-            .build()?;
+    let (position, size) = placement;
+    let url = WebviewUrl::App(format!("index.html#/{}", pill.route).into());
+    let window = WebviewWindowBuilder::new(app, pill.label, url)
+        .title(pill.title)
+        .inner_size(pill.size.0, pill.size.1)
+        .decorations(false)
+        // See-through, so only the rounded pill shows.
+        .transparent(true)
+        // As the recording toolbar: GTK keeps a window that may not be
+        // resized no smaller than the webview's minimum.
+        .resizable(cfg!(target_os = "linux"))
+        .min_inner_size(1.0, 1.0)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible_on_all_workspaces(true)
+        // Left out of screen captures where the system allows, so it is
+        // not in the shot.
+        .content_protected(true)
+        // It must not pull the keyboard away from the task being shown,
+        // or close a menu that is about to be captured.
+        .focused(false)
+        .shadow(false)
+        .visible(false)
+        .build()?;
     let position = PhysicalPosition::new(position.0, position.1);
     let size = PhysicalSize::new(size.0, size.1);
     // Sized before it is placed, and on macOS in the display's points, as

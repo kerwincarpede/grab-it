@@ -92,13 +92,10 @@ impl Action {
 }
 
 /// Starts `action` after `delay`, leaving time to open a menu or hover a
-/// tooltip that a capture taken at once would miss.
+/// tooltip that a capture taken at once would miss. A delay of a second
+/// or more is counted down by the timer pill, which can cancel it.
 pub fn start_after(app: &AppHandle, action: Action, delay: Duration) {
-    let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(delay);
-        start(&app, action);
-    });
+    crate::timer_bar::after(app, delay, move |app| start(app, action));
 }
 
 /// Starts a capture without blocking the caller (often the main thread).

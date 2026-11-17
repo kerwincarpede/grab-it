@@ -44,6 +44,7 @@ mod steps;
 mod steps_bar;
 mod storage;
 mod tidy;
+mod timer_bar;
 mod tray;
 mod update;
 mod webcam;
@@ -175,6 +176,7 @@ pub fn run() {
             record_bar::record_bar_reset,
             record_bar::record_bar_remember,
             steps_bar::steps_bar_stop,
+            timer_bar::timer_bar_cancel,
             webcam::known_cameras,
             webcam::remember_cameras,
             ffmpeg::ffmpeg_status,

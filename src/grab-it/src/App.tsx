@@ -11,6 +11,7 @@ import WebcamBubble from "./webcam/WebcamBubble";
 import RecordBar from "./recordbar/RecordBar";
 import RecordFrame from "./recordframe/RecordFrame";
 import StepsBar from "./stepsbar/StepsBar";
+import TimerBar from "./timerbar/TimerBar";
 import AppWindow from "./app/AppWindow";
 import Hub from "./hub/Hub";
 import { viewFromHash } from "./app/api";
@@ -63,6 +64,8 @@ function App({ route = routeFromHash(window.location.hash) }: AppProps) {
       return <RecordFrame />;
     case "stepsbar":
       return <StepsBar />;
+    case "timerbar":
+      return <TimerBar />;
     case "guide":
       return (
         <Suspense fallback={null}>
