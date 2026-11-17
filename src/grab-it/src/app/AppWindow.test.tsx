@@ -283,10 +283,11 @@ describe("AppWindow", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     const dialog = screen.getByRole("dialog", { name: "Settings" });
-    const updates = await within(dialog).findByRole("group", { name: "Updates" });
-    await waitFor(() => expect(within(updates).getByRole("radio", { name: "Stable" })).toBeChecked());
-    await userEvent.click(within(updates).getByRole("radio", { name: "Edge" }));
-    await waitFor(() => expect(within(updates).getByRole("radio", { name: "Edge" })).toBeChecked());
+    const channel = await within(dialog).findByRole("combobox", { name: "Update channel" });
+    await waitFor(() => expect(channel).toBeEnabled());
+    expect(channel).toHaveValue("stable");
+    await userEvent.selectOptions(channel, "Edge");
+    await waitFor(() => expect(channel).toHaveValue("edge"));
     expect(calls.find(({ cmd }) => cmd === "set_update_channel")?.payload).toEqual({ channel: "edge" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Close Settings" }));
 
