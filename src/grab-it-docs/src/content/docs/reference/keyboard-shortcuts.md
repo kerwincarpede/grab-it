@@ -1,6 +1,6 @@
 ---
 title: Keyboard shortcuts
-description: Every Grab-it hotkey on Windows, Linux and macOS, and the keys in the capture overlay, editor, video editor, pins and Library.
+description: Every Grab-it hotkey on Windows, Linux and macOS, and the keys in the capture overlay, editor, video editor, pins, Guide window and Library.
 sidebar:
   order: 1
 ---
@@ -115,6 +115,15 @@ Double-click the zoom track to add a zoom. See [Video editor](/grab-it/video-edi
 | `⌘` + scroll | Fade it in and out |
 | `⌘ C` | Copy it |
 | Arrow keys | Move it 1 pixel; with `Shift`, 10 pixels |
+
+## Guide window
+
+| Key | What it does |
+| --- | --- |
+| `⌘ Z` (`Ctrl Z` on Windows and Linux) | Bring back the last deleted step. Inside a description, it undoes your typing instead. |
+| `Esc` | Close a step's large image |
+
+See [The Guide window](/grab-it/capture/step-capture/#the-guide-window).
 
 ## Grab-it window and Library
 

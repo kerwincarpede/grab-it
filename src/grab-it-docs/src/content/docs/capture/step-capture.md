@@ -46,7 +46,9 @@ Stopping a step capture opens its guide. Each step shows its capture, with its b
 | --- | --- |
 | Reorder the steps | **Move up** and **Move down**. The badges are renumbered to match. |
 | Change a description | Edit it in place. It's saved when you leave the field. |
+| See a step's image large | Click the image. Press `Esc` or click outside it to close it. |
 | Remove a step | **Delete**. The step leaves the guide only; its capture stays in the Library. |
+| Bring a deleted step back | **Undo** in the notice that appears, or press `⌘ Z` (`Ctrl Z` on Windows and Linux). Each press brings back the last step you deleted, in its old place, while the Guide window is open. |
 | Mark up a step | **Open in editor**. Reopen the guide afterwards to see your changes in the export. |
 | Copy the guide | **Copy** puts it on the clipboard as formatted text with its images, and as Markdown text for apps that take only text. |
 

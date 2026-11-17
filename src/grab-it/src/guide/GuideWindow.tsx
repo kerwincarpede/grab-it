@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type Konva from "konva";
 import { Image as KonvaImage, Layer, Stage } from "react-konva";
+import "../app/app.css";
 import "./guide.css";
+import Dialog from "../app/Dialog";
 import ShapeNode from "../editor/ShapeNode";
 import { flatten } from "../editor/flatten";
 import { stepNumbers } from "../editor/tools";
@@ -19,6 +21,7 @@ import {
 } from "./api";
 import {
   EXPORT_FORMATS,
+  insertStep,
   mergeDescriptions,
   moveStep,
   numbered,
@@ -31,6 +34,20 @@ import {
 } from "./model";
 
 const noop = () => {};
+
+/** How long the "Step N deleted." toast stays up. */
+const TOAST_MS = 8000;
+
+/** True when `target` takes typing, where ⌘ Z / Ctrl Z belongs to the field. */
+function inTextField(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && (target.isContentEditable || target.closest("input, textarea, select") !== null);
+}
+
+/** A step taken out of the guide, and where it was, so Undo can put it back. */
+interface DeletedStep {
+  step: GuideStep;
+  index: number;
+}
 
 /** Loads a step's capture as an image element. */
 function useStepImage(capture: string, exists: boolean) {
@@ -77,6 +94,7 @@ function StepCard({ step, number, count, onFlattened, onDescription, onCommit, o
   const { image, failed } = useStepImage(step.capture, step.exists);
   const layer = useRef<Konva.Layer>(null);
   const [thumb, setThumb] = useState<string | null>(null);
+  const [viewing, setViewing] = useState(false);
   const doc = useMemo(() => numbered(step.annotations, number), [step.annotations, number]);
   const badges = useMemo(() => stepNumbers(doc.shapes), [doc.shapes]);
 
@@ -111,7 +129,9 @@ function StepCard({ step, number, count, onFlattened, onDescription, onCommit, o
       </div>
       <div className="guide-step-image">
         {thumb ? (
-          <img src={thumb} alt={`Step ${number}`} />
+          <button type="button" className="guide-step-view" aria-label={`View step ${number} larger`} onClick={() => setViewing(true)}>
+            <img src={thumb} alt="" />
+          </button>
         ) : (
           <div className="guide-step-placeholder">{failed ? "Capture not found" : "Loading…"}</div>
         )}
@@ -138,11 +158,17 @@ function StepCard({ step, number, count, onFlattened, onDescription, onCommit, o
           <button type="button" className="btn btn-small" disabled={!step.exists} onClick={() => void openInEditor(step.capture)}>
             Open in editor
           </button>
-          <button type="button" className="btn btn-small btn-danger" onClick={onDelete} aria-label={`Delete step ${number}`}>
+          <button type="button" className="btn btn-small" onClick={onDelete} aria-label={`Delete step ${number}`}>
             Delete
           </button>
         </div>
       </div>
+      {viewing && thumb && (
+        <Dialog title={`Step ${number}`} className="guide-view" onClose={() => setViewing(false)}>
+          <img className="guide-view-image" src={thumb} alt={`Step ${number}`} />
+          {step.description.trim() && <p className="guide-view-text">{step.description.trim()}</p>}
+        </Dialog>
+      )}
       {image && (
         // Drawn off screen at capture size, for flattening.
         <div className="guide-step-stage" aria-hidden="true">
@@ -167,6 +193,9 @@ export default function GuideWindow() {
   const [notice, setNotice] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // A new object on every Delete, so the toast's timer starts again.
+  const [toast, setToast] = useState<{ number: number } | null>(null);
+  const deleted = useRef<DeletedStep[]>([]);
   const flattened = useRef(new Map<string, Uint8Array>());
   const edited = useRef(new Set<string>());
   const menu = useRef<HTMLDivElement>(null);
@@ -204,6 +233,39 @@ export default function GuideWindow() {
     setSteps(next);
     saveGuide(savedSteps(next)).catch((err: unknown) => setError(String(err)));
   }, []);
+
+  const remove = (index: number) => {
+    if (!steps) return;
+    deleted.current.push({ step: steps[index], index });
+    persist(removeStep(steps, index));
+    setToast({ number: index + 1 });
+  };
+
+  /** Puts the most recently deleted step back in its place and saves. */
+  const undo = useCallback(() => {
+    if (!steps) return;
+    const last = deleted.current.pop();
+    if (!last) return;
+    persist(insertStep(steps, last.index, last.step));
+    setToast(null);
+  }, [steps, persist]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), TOAST_MS);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== "z") return;
+      if (inTextField(event.target) || deleted.current.length === 0) return;
+      event.preventDefault();
+      undo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo]);
 
   /** The steps flattened for export, or null (after saying why) when one is not ready. */
   const exportSteps = useCallback((): ExportStep[] | null => {
@@ -320,10 +382,18 @@ export default function GuideWindow() {
               }}
               onCommit={() => persist(steps)}
               onMove={(to) => persist(moveStep(steps, index, to))}
-              onDelete={() => persist(removeStep(steps, index))}
+              onDelete={() => remove(index)}
             />
           ))}
         </ol>
+      )}
+      {toast && (
+        <div className="guide-toast" role="status">
+          <span>Step {toast.number} deleted.</span>
+          <button type="button" className="guide-toast-undo" onClick={undo}>
+            Undo
+          </button>
+        </div>
       )}
     </main>
   );
