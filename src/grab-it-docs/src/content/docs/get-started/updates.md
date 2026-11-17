@@ -9,7 +9,7 @@ Once installed, Grab-it keeps itself up to date. About half a minute after it st
 
 ## Stable and Edge
 
-Grab-it updates from one of two channels. Pick one in **Settings → General → Updates**:
+Grab-it updates from one of two channels. Pick one with **Update channel** in **Settings → General → Updates**:
 
 - **Stable**, the default: releases that have been tried out first. Best for everyday use.
 - **Edge**: every change as soon as it is built. New features come first, and so can new bugs. The Grab-it window's sidebar shows an **Edge** badge next to the version.

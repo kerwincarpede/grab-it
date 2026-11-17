@@ -1035,25 +1035,29 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
             Updates
           </h2>
           <div className="group">
-            <div className="row is-stacked">
-              <fieldset className="segmented" aria-labelledby="updates-heading" disabled={busy || settings === null}>
-                {UPDATE_CHANNELS.map((choice) => (
-                  <label key={choice.value}>
-                    <input
-                      type="radio"
-                      name="update-channel"
-                      value={choice.value}
-                      checked={settings !== null && updateChannel === choice.value}
-                      onChange={() => void changeUpdateChannel(choice.value)}
-                    />
-                    {choice.title}
-                  </label>
-                ))}
-              </fieldset>
-              {updateChannelChoice && <span className="row-hint">{updateChannelChoice.hint}</span>}
-              <span className="row-hint">
-                Switching from Edge to Stable never installs an older version: Grab-it waits until Stable catches up.
+            <div className="row">
+              <span className="row-text">
+                <label className="row-title" htmlFor="update-channel">
+                  Update channel
+                </label>
+                {updateChannelChoice && <span className="row-hint">{updateChannelChoice.hint}</span>}
+                <span className="row-hint">
+                  Switching from Edge to Stable never installs an older version: Grab-it waits until Stable catches up.
+                </span>
               </span>
+              <select
+                id="update-channel"
+                className="row-field"
+                value={updateChannel}
+                disabled={busy || settings === null}
+                onChange={(event) => void changeUpdateChannel(event.target.value as UpdateChannel)}
+              >
+                {UPDATE_CHANNELS.map((choice) => (
+                  <option key={choice.value} value={choice.value}>
+                    {choice.title}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
         </section>

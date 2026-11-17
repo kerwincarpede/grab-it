@@ -1464,16 +1464,16 @@ describe("SettingsWindow updates", () => {
   it("starts on Stable and switches to Edge at once", async () => {
     const backend = mockBackend();
     render(<SettingsWindow section="general" />);
-    const updates = await screen.findByRole("group", { name: "Updates" });
-    const stable = within(updates).getByRole("radio", { name: "Stable" });
-    await waitFor(() => expect(stable).toBeChecked());
-    expect(within(updates).getByRole("radio", { name: "Edge" })).not.toBeChecked();
+    const channel = await screen.findByRole("combobox", { name: "Update channel" });
+    await waitFor(() => expect(channel).toBeEnabled());
+    expect(channel).toHaveValue("stable");
+    expect(within(channel).getAllByRole("option").map((option) => option.textContent)).toEqual(["Stable", "Edge"]);
     expect(screen.getByText(/Releases that have been tried out first/)).toBeInTheDocument();
     expect(screen.getByText(/Grab-it waits until Stable catches up/)).toBeInTheDocument();
 
-    await userEvent.click(within(updates).getByRole("radio", { name: "Edge" }));
+    await userEvent.selectOptions(channel, "Edge");
 
-    await waitFor(() => expect(within(updates).getByRole("radio", { name: "Edge" })).toBeChecked());
+    await waitFor(() => expect(channel).toHaveValue("edge"));
     expect(backend.updateChannel).toBe("edge");
     expect(backend.calls.find((call) => call.cmd === "set_update_channel")?.payload).toEqual({ channel: "edge" });
     expect(screen.getByText(/Every change as soon as it is built/)).toBeInTheDocument();
@@ -1483,27 +1483,29 @@ describe("SettingsWindow updates", () => {
   it("shows a saved Edge choice and switches back to Stable", async () => {
     const backend = mockBackend({ updateChannel: "edge" });
     render(<SettingsWindow section="general" />);
-    const updates = await screen.findByRole("group", { name: "Updates" });
-    await waitFor(() => expect(within(updates).getByRole("radio", { name: "Edge" })).toBeChecked());
+    const channel = await screen.findByRole("combobox", { name: "Update channel" });
+    await waitFor(() => expect(channel).toHaveValue("edge"));
+    await waitFor(() => expect(channel).toBeEnabled());
 
-    await userEvent.click(within(updates).getByRole("radio", { name: "Stable" }));
+    await userEvent.selectOptions(channel, "Stable");
 
-    await waitFor(() => expect(within(updates).getByRole("radio", { name: "Stable" })).toBeChecked());
+    await waitFor(() => expect(channel).toHaveValue("stable"));
     expect(backend.updateChannel).toBe("stable");
   });
 
   it("keeps the channel and says why when it cannot switch", async () => {
     mockBackend({ setError: "Wait for the update to finish installing, then switch." });
     render(<SettingsWindow section="general" />);
-    const updates = await screen.findByRole("group", { name: "Updates" });
-    await waitFor(() => expect(within(updates).getByRole("radio", { name: "Stable" })).toBeChecked());
+    const channel = await screen.findByRole("combobox", { name: "Update channel" });
+    await waitFor(() => expect(channel).toBeEnabled());
+    expect(channel).toHaveValue("stable");
 
-    await userEvent.click(within(updates).getByRole("radio", { name: "Edge" }));
+    await userEvent.selectOptions(channel, "Edge");
 
     expect(await screen.findByText("Wait for the update to finish installing, then switch.")).toBe(
       screen.getByRole("status"),
     );
-    expect(within(updates).getByRole("radio", { name: "Stable" })).toBeChecked();
+    expect(channel).toHaveValue("stable");
   });
 });
 
