@@ -6,6 +6,7 @@ import {
   GridIcon,
   KeyboardIcon,
   RecordIcon,
+  RefreshIcon,
   RegionIcon,
   ScreenIcon,
   SlidersIcon,
@@ -189,18 +190,23 @@ function UpdateSlot({ status, onOpen, onCheck }: { status: UpdateStatus | null; 
     );
   }
   const version = currentVersion(status);
+  const checking = status?.state === "checking";
   return (
-    <p className="version">
+    <div className="version">
       <span className="version-dot" aria-hidden="true" />
       {version && <span>v{version}</span>}
-      {status?.state === "upToDate" ? (
-        <span className="version-note">Up to date</span>
-      ) : (
-        <button type="button" className="link-button version-note" disabled={status?.state === "checking"} onClick={onCheck}>
-          {status?.state === "checking" ? "Checking…" : "Check for updates"}
-        </button>
-      )}
-    </p>
+      <button
+        type="button"
+        className="icon-button version-check"
+        aria-label={checking ? "Checking for updates" : "Check for updates"}
+        title={checking ? "Checking for updates…" : "Check for updates"}
+        aria-busy={checking}
+        disabled={checking}
+        onClick={onCheck}
+      >
+        <RefreshIcon size={13} />
+      </button>
+    </div>
   );
 }
 

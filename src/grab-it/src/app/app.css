@@ -152,7 +152,7 @@ kbd.nav-count {
   align-items: center;
   gap: 7px;
   margin: 4px 0 0;
-  padding: 4px 10px 0;
+  padding: 2px 4px 0 10px;
   color: var(--text-faint);
   font-size: 12px;
 }
@@ -165,15 +165,20 @@ kbd.nav-count {
   border-radius: 50%;
 }
 
-.version-note {
+/* Checks for updates now. Spins while a check runs. */
+.app-window .version-check {
+  width: 22px;
+  height: 22px;
   margin-left: auto;
   color: var(--text-faint);
-  font-size: 12px;
-  font-weight: 450;
 }
 
-.version .link-button:where(:hover:not(:disabled)) {
-  color: var(--text-muted);
+.app-window .version-check:disabled {
+  opacity: 1;
+}
+
+.version-check[aria-busy="true"] .icon {
+  animation: spin 0.8s linear infinite;
 }
 
 /* An update waiting: the version line becomes a small card. */
