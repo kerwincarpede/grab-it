@@ -42,7 +42,7 @@ describe("editor preferences", () => {
     expect(fromPreferences({ textBackground: true, textStyle: "shadow" }).style).toEqual({ color: DEFAULT_CHOICES.style.color, background: true });
     expect(fromPreferences({ textStyle: "neon" })).toEqual(DEFAULT_CHOICES);
 
-    const shadowed = { ...DEFAULT_CHOICES, style: { color: "#ffffff", textStyle: "shadow" as const } };
+    const shadowed = { ...DEFAULT_CHOICES, style: { color: "#ffffff", textStyle: "shadow" as const, blurMode: "pixelate" as const } };
     expect(toPreferences(shadowed)).toMatchObject({ textBackground: false, textStyle: "shadow" });
     expect(fromPreferences(toPreferences(shadowed))).toEqual(shadowed);
     // Pill and Plain store no text style.

@@ -1238,7 +1238,7 @@ describe("EditorWindow", () => {
     await ready();
     fireEvent.keyDown(window, { key: "t" });
     fireEvent.click(within(screen.getByRole("group", { name: "Text style" })).getByRole("button", { name: "Outline" }));
-    await waitFor(() => expect(saved.at(-1)).toMatchObject({ textBackground: false, textStyle: "outline" }));
+    await waitFor(() => expect(last(saved)).toMatchObject({ textBackground: false, textStyle: "outline" }));
   });
 
   it("opens with the text style saved last time", async () => {
