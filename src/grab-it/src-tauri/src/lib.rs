@@ -361,9 +361,9 @@ fn second_launch(app: &tauri::AppHandle, args: Vec<String>) {
     });
 }
 
-/// macOS: the Welcome window opens on its Permissions page while one is
-/// missing, and reopens after Allow all's restart to finish setup. Other
-/// systems need no permission.
+/// macOS: the Welcome window opens on its Permissions page while Screen
+/// Recording is not allowed, and reopens after Allow all's restart to finish
+/// setup. Other systems need no permission.
 fn permissions_need_welcome(app: &tauri::AppHandle) -> bool {
     #[cfg(target_os = "macos")]
     {

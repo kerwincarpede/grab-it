@@ -261,29 +261,16 @@ impl PermissionStatus {
         resume: false,
         asked_this_launch: false,
     };
-
-    fn all(&self) -> [Access; 4] {
-        [
-            self.screen_recording,
-            self.input_monitoring,
-            self.microphone,
-            self.camera,
-        ]
-    }
-
-    /// Something the Permissions page is for: Screen Recording is off, or a
-    /// permission was never asked for. A declined Microphone or Camera is
-    /// not: the per-feature checks offer System Settings for those.
-    pub fn missing(&self) -> bool {
-        self.screen_recording != Access::Allowed || self.all().contains(&Access::NotAsked)
-    }
 }
 
-/// True when launch should open the Welcome window: something is missing,
-/// or Allow all ran and setup is waiting to be finished after a restart.
+/// True when launch should open the Welcome window: Screen Recording, which
+/// every capture needs, is not allowed, or Allow all ran and setup is waiting
+/// to be finished after a restart. Microphone, Camera and Input Monitoring
+/// never asked for do not reopen it, so Skip for now sticks: the per-feature
+/// checks ask for those when a feature first needs them.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn should_open_welcome(status: &PermissionStatus) -> bool {
-    status.missing() || status.resume
+    status.screen_recording != Access::Allowed || status.resume
 }
 
 /// Allow all ran in this process.
@@ -637,17 +624,23 @@ mod tests {
     }
 
     #[test]
-    fn welcome_opens_while_any_permission_was_never_asked() {
-        let camera = PermissionStatus {
+    fn welcome_opens_while_screen_recording_was_never_asked() {
+        let status = PermissionStatus {
+            screen_recording: Access::NotAsked,
+            ..PermissionStatus::ALL_ALLOWED
+        };
+        assert!(should_open_welcome(&status));
+    }
+
+    #[test]
+    fn microphone_camera_or_input_monitoring_never_asked_does_not_reopen_it() {
+        let status = PermissionStatus {
+            input_monitoring: Access::NotAsked,
+            microphone: Access::NotAsked,
             camera: Access::NotAsked,
             ..PermissionStatus::ALL_ALLOWED
         };
-        let input = PermissionStatus {
-            input_monitoring: Access::NotAsked,
-            ..PermissionStatus::ALL_ALLOWED
-        };
-        assert!(should_open_welcome(&camera));
-        assert!(should_open_welcome(&input));
+        assert!(!should_open_welcome(&status));
     }
 
     #[test]
@@ -668,7 +661,6 @@ mod tests {
             ..PermissionStatus::ALL_ALLOWED
         };
         assert!(should_open_welcome(&status));
-        assert!(!status.missing());
     }
 
     #[test]

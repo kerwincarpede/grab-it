@@ -24,10 +24,10 @@ export const PERMISSIONS: readonly Permission[] = ["screenRecording", "inputMoni
 export const NEEDS_RESTART: readonly Permission[] = ["screenRecording", "inputMonitoring"];
 
 /**
- * Something the Permissions page is for, as `PermissionStatus::missing`
- * decides: Screen Recording is off, or a permission was never asked for. A
- * null status, as off macOS or from a backend without the command, is
- * nothing missing.
+ * Something the Permissions page is for: Screen Recording is off, or a
+ * permission was never asked for. Launch reopens setup on less, only while
+ * Screen Recording is not allowed (`should_open_welcome`). A null status, as
+ * off macOS or from a backend without the command, is nothing missing.
  */
 export function permissionsMissing(status: PermissionStatus | null | undefined): boolean {
   if (!status) return false;
