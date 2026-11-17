@@ -68,6 +68,64 @@ describe("GuideWindow", () => {
     expect((saved[1] as { description: string }[])[0].description).toBe("Click Save in the toolbar");
   });
 
+  it("puts a deleted step back in its place from the toast's Undo", async () => {
+    const saved = mockGuide();
+    render(<GuideWindow />);
+    fireEvent.click(await screen.findByRole("button", { name: "Delete step 2" }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(screen.getByRole("status")).toHaveTextContent("Step 2 deleted.");
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(saved).toHaveLength(2));
+    expect(saved[1]).toEqual([
+      { capture: "originals/a.png", description: "Open the File menu" },
+      { capture: "originals/b.png", description: "Click Save" },
+      { capture: "originals/c.png", description: "Click Close" },
+    ]);
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
+
+  it("restores deleted steps in reverse order with Ctrl Z", async () => {
+    const saved = mockGuide();
+    render(<GuideWindow />);
+    fireEvent.click(await screen.findByRole("button", { name: "Delete step 1" }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Delete step 2" }));
+    await waitFor(() => expect(saved).toHaveLength(2));
+    expect(saved[1]).toEqual([{ capture: "originals/b.png", description: "Click Save" }]);
+
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(saved).toHaveLength(3));
+    expect(saved[2]).toEqual([
+      { capture: "originals/b.png", description: "Click Save" },
+      { capture: "originals/c.png", description: "Click Close" },
+    ]);
+
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(saved).toHaveLength(4));
+    expect(saved[3]).toEqual([
+      { capture: "originals/a.png", description: "Open the File menu" },
+      { capture: "originals/b.png", description: "Click Save" },
+      { capture: "originals/c.png", description: "Click Close" },
+    ]);
+
+    // Nothing left to restore.
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(saved).toHaveLength(4);
+  });
+
+  it("leaves Ctrl Z to a description being edited", async () => {
+    const saved = mockGuide();
+    render(<GuideWindow />);
+    fireEvent.click(await screen.findByRole("button", { name: "Delete step 1" }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    const text = screen.getByDisplayValue("Click Save");
+    fireEvent.keyDown(text, { key: "z", ctrlKey: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(saved).toHaveLength(1);
+    expect(screen.queryByDisplayValue("Open the File menu")).not.toBeInTheDocument();
+  });
+
   it("offers the four export formats", async () => {
     mockGuide();
     render(<GuideWindow />);

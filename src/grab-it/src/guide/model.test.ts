@@ -3,6 +3,7 @@ import type { Annotations } from "../editor/model";
 import {
   EXPORT_FORMATS,
   exportName,
+  insertStep,
   mergeDescriptions,
   moveStep,
   numbered,
@@ -30,6 +31,16 @@ describe("guide steps", () => {
 
   it("delete one step from the guide only", () => {
     expect(removeStep(["a", "b", "c"], 1)).toEqual(["a", "c"]);
+  });
+
+  it("put a deleted step back in its place", () => {
+    const steps = ["a", "b", "c"];
+    for (let index = 0; index < steps.length; index++) {
+      expect(insertStep(removeStep(steps, index), index, steps[index])).toEqual(steps);
+    }
+    expect(insertStep(["a"], 5, "b")).toEqual(["a", "b"]);
+    expect(insertStep(["a"], -1, "b")).toEqual(["b", "a"]);
+    expect(insertStep([], 0, "a")).toEqual(["a"]);
   });
 
   it("save each capture and its trimmed description in order", () => {

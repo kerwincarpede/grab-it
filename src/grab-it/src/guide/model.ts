@@ -45,6 +45,13 @@ export function removeStep<T>(steps: readonly T[], index: number): T[] {
   return steps.filter((_, at) => at !== index);
 }
 
+/** `steps` with `step` put back at `index`, undoing `removeStep`. Past the end adds it last. */
+export function insertStep<T>(steps: readonly T[], index: number, step: T): T[] {
+  const next = [...steps];
+  next.splice(Math.min(Math.max(index, 0), next.length), 0, step);
+  return next;
+}
+
 /**
  * The annotations with each guide badge (a step shape with a number)
  * numbered `number`, as saving writes them, so thumbnails match at once.
