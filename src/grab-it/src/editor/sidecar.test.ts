@@ -112,6 +112,8 @@ describe("annotations sidecar", () => {
         { id: "r", type: "rect", color: "#30a46c", strokeWidth: 4, x: 5, y: 6, width: 7, height: 8, fill: true },
         { id: "b", type: "blur", x: 10, y: 10, width: 40, height: 20, pixelSize: 12, mode: "blur" },
         { id: "t", type: "text", color: "#1f2328", x: 3, y: 4, text: "Look here", fontSize: 30, background: true },
+        { id: "o", type: "text", color: "#ffffff", x: 3, y: 40, text: "Outlined", fontSize: 30, textStyle: "outline" },
+        { id: "d", type: "text", color: "#ffffff", x: 3, y: 80, text: "Shadowed", fontSize: 30, textStyle: "shadow" },
         { id: "s", type: "spotlight", x: 10, y: 10, width: 40, height: 20 },
       ],
       crop: null,
@@ -168,6 +170,7 @@ describe("annotations sidecar", () => {
         { id: "r", type: "rect", color: "#30a46c", strokeWidth: 4, x: 5, y: 6, width: 7, height: 8, fill: "yes" },
         { id: "b", type: "blur", x: 10, y: 10, width: 40, height: 20, pixelSize: 12, mode: "smear" },
         { id: "t", type: "text", color: "#1f2328", x: 3, y: 4, text: "Look", fontSize: 30, background: 1 },
+        { id: "o", type: "text", color: "#1f2328", x: 3, y: 4, text: "Look", fontSize: 30, textStyle: "neon" },
         { id: "s", type: "spotlight", x: 10, y: 10, width: "wide", height: 20 },
       ],
     });

@@ -22,7 +22,7 @@ Click **Annotate** and the editor opens, with your screenshot in the middle.
 | [Rectangle](/grab-it/image-editor/rectangle/) | `R` | Boxing in the important bit (can be filled) |
 | [Ellipse](/grab-it/image-editor/ellipse/) | `E` | Circling something (can be filled) |
 | [Freehand](/grab-it/image-editor/freehand/) | `P` | Doodles and ticks |
-| [Text](/grab-it/image-editor/text/) | `T` | Notes and labels, with an optional background |
+| [Text](/grab-it/image-editor/text/) | `T` | Notes and labels, plain, on a pill, outlined or shadowed |
 | [Callout](/grab-it/image-editor/callout/) | `K` | A note with a tail pointing at what it's about |
 | [Step](/grab-it/image-editor/step/) | `N` | Numbered steps (1, 2, 3…) for how-to guides |
 | [Highlighter](/grab-it/image-editor/highlighter/) | `H` | Highlighting text |

@@ -1,6 +1,7 @@
 import { MAX_BACKDROP_PRESETS, type BackdropPreset, type EditorPreferences } from "../settings/api";
 import { COLORS, TOOLS, widthKind, type Backdrop, type BlurMode, type Style, type Tool, type Widths } from "./model";
 import { parseBackdrop } from "./sidecar";
+import { textLook } from "./tools";
 
 /** Wait this long after the last change before saving the editor preferences. */
 export const PREFERENCES_DELAY_MS = 300;
@@ -8,8 +9,8 @@ export const PREFERENCES_DELAY_MS = 300;
 /** The choices the editor remembers between sessions. */
 export interface EditorChoices {
   tool: Tool;
-  /** Colour, fill, text background and blur style; widths live in `widths`. */
-  style: Pick<Style, "color" | "fill" | "background" | "blurMode">;
+  /** Colour, fill, text style (pill or not) and blur style; widths live in `widths`. */
+  style: Pick<Style, "color" | "fill" | "background" | "textStyle" | "blurMode">;
   widths: Widths;
   /** The last backdrop picked: new backdrops start from it. */
   backdrop: Backdrop | null;
@@ -70,6 +71,7 @@ export function fromPreferences(stored: EditorPreferences | null | undefined): E
   const style: EditorChoices["style"] = { color: isHex(prefs.color) ? prefs.color.toLowerCase() : DEFAULT_CHOICES.style.color };
   if (prefs.fill === true) style.fill = true;
   if (prefs.textBackground === true) style.background = true;
+  else if (prefs.textStyle === "outline" || prefs.textStyle === "shadow") style.textStyle = prefs.textStyle;
   if (prefs.blurMode === "blur" || prefs.blurMode === "pixelate") style.blurMode = prefs.blurMode as BlurMode;
   const widths: Widths = {};
   for (const [name, width] of Object.entries(prefs.widths ?? {})) {
@@ -86,8 +88,12 @@ export function fromPreferences(stored: EditorPreferences | null | undefined): E
   return choices;
 }
 
-/** The editor choices as they are stored; options that are off are left out, and so are `autoBackdrop`, `showPointer` and the presets. */
+/**
+ * The editor choices as they are stored; `textStyle` only for Outline and
+ * Shadow, and `autoBackdrop`, `showPointer` and the presets never.
+ */
 export function toPreferences(choices: EditorChoices): EditorPreferences {
+  const look = textLook(choices.style);
   const widths: Record<string, number> = {};
   for (const [tool, width] of Object.entries(choices.widths)) {
     if (typeof width === "number") widths[tool] = Math.round(width);
@@ -97,7 +103,8 @@ export function toPreferences(choices: EditorChoices): EditorPreferences {
     tool: choices.tool,
     widths,
     fill: Boolean(choices.style.fill),
-    textBackground: Boolean(choices.style.background),
+    textBackground: look === "pill",
+    ...(look === "outline" || look === "shadow" ? { textStyle: look } : {}),
     blurMode: choices.style.blurMode ?? "pixelate",
     ...(choices.backdrop ? { backdrop: choices.backdrop } : {}),
   };

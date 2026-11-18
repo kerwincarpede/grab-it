@@ -75,6 +75,12 @@ export interface SpotlightShape extends Rect {
   type: "spotlight";
 }
 
+/** How text other than Plain or Pill is drawn: with a contrasting outline or a soft drop shadow. */
+export type TextStyle = "outline" | "shadow";
+
+/** The looks the text style picker offers; Pill is `background`, Outline and Shadow are `textStyle`. */
+export type TextLook = "plain" | "pill" | TextStyle;
+
 export interface TextShape {
   id: string;
   type: "text";
@@ -83,8 +89,10 @@ export interface TextShape {
   y: number;
   text: string;
   fontSize: number;
-  /** Drawn on a rounded pill of the colour, in a contrasting text colour. */
+  /** Drawn on a rounded pill of the colour, in a contrasting text colour. Wins over `textStyle`. */
   background?: boolean;
+  /** Drawn with an outline or a drop shadow; ignored when `background` is set. */
+  textStyle?: TextStyle;
 }
 
 /**
@@ -93,7 +101,7 @@ export interface TextShape {
  * the bubble sits around the text. Without `background` the bubble is white,
  * outlined in the colour, with the text in the colour.
  */
-export interface CalloutShape extends Omit<TextShape, "type"> {
+export interface CalloutShape extends Omit<TextShape, "type" | "textStyle"> {
   type: "callout";
   /** Where the tail's tip points, in capture pixels. */
   tail: Point;
@@ -265,6 +273,8 @@ export interface Style {
   fill?: boolean;
   /** Text sits on a pill; a callout's bubble is filled with the colour. */
   background?: boolean;
+  /** Text is outlined or shadowed; ignored when `background` is set. */
+  textStyle?: TextStyle;
   blurMode?: BlurMode;
   zoom?: number;
   lens?: "round" | "square";

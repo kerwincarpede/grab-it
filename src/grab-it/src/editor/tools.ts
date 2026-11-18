@@ -11,6 +11,8 @@ import {
   type Rect,
   type Shape,
   type Style,
+  type TextLook,
+  type TextShape,
   type Tool,
 } from "./model";
 import { toCapture, type Orientation } from "./orient";
@@ -697,9 +699,9 @@ export function stepNumbers(shapes: Shape[]): Map<string, number> {
 /**
  * Applies the parts of `style` a shape has: colour (not blur, spotlight or images),
  * stroke width on stroked shapes (widened for the highlighter), font size
- * on text and callouts, radius on steps, fill on boxes, background on text
- * and callouts, and the blur mode. A style that changes nothing returns the
- * same shape.
+ * on text and callouts, radius on steps, fill on boxes, the look (`background`
+ * and `textStyle`, set together) on text, background on callouts, and the
+ * blur mode. A style that changes nothing returns the same shape.
  */
 export function restyleShape(shape: Shape, style: Partial<Style>): Shape {
   if (shape.type === "spotlight" || shape.type === "image") return shape;
@@ -721,7 +723,16 @@ export function restyleShape(shape: Shape, style: Partial<Style>): Shape {
   if (style.fill !== undefined && (next.type === "rect" || next.type === "ellipse")) {
     next = { ...next, fill: style.fill };
   }
-  if (style.background !== undefined && (next.type === "text" || next.type === "callout")) {
+  if ((style.background !== undefined || style.textStyle !== undefined) && next.type === "text") {
+    const look = textLook(style);
+    if (look !== textLook(next)) {
+      // Only the field the look uses is kept, so a plain text matches one saved before text styles.
+      const plain: TextShape = { ...next };
+      delete plain.background;
+      delete plain.textStyle;
+      next = { ...plain, ...textLookFields(look) };
+    }
+  } else if (style.background !== undefined && next.type === "callout") {
     next = { ...next, background: style.background };
   }
   if (next.type === "magnify") {
@@ -730,6 +741,24 @@ export function restyleShape(shape: Shape, style: Partial<Style>): Shape {
     if (style.lensLine !== undefined) next = { ...next, line: style.lensLine || undefined };
   }
   return next;
+}
+
+/** The look of a text shape or of the next text: Pill when it has a background (whatever its `textStyle`), else its text style, else Plain. */
+export function textLook(text: Pick<TextShape, "background" | "textStyle">): TextLook {
+  if (text.background) return "pill";
+  return text.textStyle === "outline" || text.textStyle === "shadow" ? text.textStyle : "plain";
+}
+
+/** The `background` and `textStyle` that give `look`, for the next text: the one it does not use is cleared. */
+export function textLookStyle(look: TextLook): Pick<Style, "background" | "textStyle"> {
+  return { background: look === "pill", textStyle: look === "outline" || look === "shadow" ? look : undefined };
+}
+
+/** The fields a text shape stores for `look`: none for Plain. */
+export function textLookFields(look: TextLook): Pick<TextShape, "background" | "textStyle"> {
+  if (look === "pill") return { background: true };
+  if (look === "outline" || look === "shadow") return { textStyle: look };
+  return {};
 }
 
 /** A copy with a new id, offset so it does not hide the original. */
@@ -856,6 +885,14 @@ export function contrastColor(color: string): string {
   const [r, g, b] = channels;
   // Perceived brightness (ITU-R BT.601).
   return (r * 299 + g * 587 + b * 114) / 1000 > 160 ? "#1f2328" : "#ffffff";
+}
+
+/** The drop shadow behind Shadow text: black, or white behind text too dark for a black shadow to show. */
+export function textShadowColor(color: string): string {
+  const channels = hexChannels(color);
+  if (!channels) return "#000000";
+  const [r, g, b] = channels;
+  return (r * 299 + g * 587 + b * 114) / 1000 < 64 ? "#ffffff" : "#000000";
 }
 
 export function addShape(doc: Annotations, shape: Shape): Annotations {

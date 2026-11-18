@@ -322,6 +322,11 @@ pub struct EditorPreferences {
     /// Text sits on a coloured pill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_background: Option<bool>,
+    /// How text without a pill is drawn: `outline` or `shadow`, by the
+    /// frontend's `TextStyle`; absent for plain text. Ignored while
+    /// `text_background` is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_style: Option<String>,
     /// `pixelate` or `blur`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blur_mode: Option<String>,
@@ -417,6 +422,7 @@ impl EditorPreferences {
             widths,
             fill: flag("fill"),
             text_background: flag("textBackground"),
+            text_style: text("textStyle"),
             blur_mode: text("blurMode"),
             backdrop: value
                 .get("backdrop")
@@ -3216,6 +3222,7 @@ mod tests {
             ]),
             fill: Some(true),
             text_background: Some(false),
+            text_style: Some("outline".into()),
             blur_mode: Some("blur".into()),
             backdrop: Some(serde_json::json!({
                 "fill": "aurora", "padding": 48, "radius": 36, "shadow": true, "aspect": "16:9"
@@ -3259,6 +3266,7 @@ mod tests {
         let json: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(json["editor"]["textBackground"], false);
+        assert_eq!(json["editor"]["textStyle"], "outline");
         assert_eq!(json["editor"]["blurMode"], "blur");
         assert_eq!(json["editor"]["widths"]["text"], 48);
         assert_eq!(json["editor"]["backdrop"]["aspect"], "16:9");
@@ -3301,6 +3309,7 @@ mod tests {
                 "editor": {
                     "color": "#e5484d",
                     "fill": "yes",
+                    "textStyle": 3,
                     "widths": {"arrow": 6, "line": -2, "rect": 2.5, "text": "big"},
                     "backdrop": {"fill": "ocean"},
                     "autoBackdrop": "on"

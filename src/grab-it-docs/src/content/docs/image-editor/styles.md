@@ -1,6 +1,6 @@
 ---
 title: Colours and sizes
-description: Colours, widths, text and badge sizes, fills, text backgrounds and blur styles.
+description: Colours, widths, text and badge sizes, fills, text styles and blur styles.
 sidebar:
   order: 2
 ---
@@ -35,11 +35,11 @@ Some tools have one more option in the top bar:
 | Tool | Option | What it does |
 | --- | --- | --- |
 | Rectangle, Ellipse | **Fill** | Fills the shape with its colour, see-through |
-| Text | **Text background** | Puts the text on a rounded pill of its colour |
+| Text | **Plain**, **Pill**, **Outline**, **Shadow** | How the text is drawn; see [Text styles](/grab-it/image-editor/text/#text-styles) |
 | Callout | **Text background** | Fills the bubble with its colour instead of white |
 | Blur | **Pixelate** / **Smooth** | Blocks of colour, or a soft blur |
 | Crop | **Free**, **Original**, **16:9**, **4:3**, **1:1**, **9:16** | The crop's shape |
 
 ## Remembered for next time
 
-The editor remembers your tool, colour, each tool's size, **Fill**, **Text background**, the blur style and your last backdrop, and opens with them the next time, in any capture.
+The editor remembers your tool, colour, each tool's size, **Fill**, the text style, the blur style and your last backdrop, and opens with them the next time, in any capture.

@@ -39,6 +39,8 @@ vi.mock("react-konva", async () => {
       scaleY,
       onDragMove,
       onDragEnd,
+      stroke,
+      shadowColor,
     }: {
       children?: ReactNode;
       id?: string;
@@ -57,6 +59,8 @@ vi.mock("react-konva", async () => {
       scaleY?: number;
       onDragMove?: (event: unknown) => void;
       onDragEnd?: (event: unknown) => void;
+      stroke?: string;
+      shadowColor?: string;
     }) =>
       // Only annotations (which have ids) take clicks; the Stage's handler
       // needs real Konva events.
@@ -76,6 +80,8 @@ vi.mock("react-konva", async () => {
           "data-rotation": rotation,
           "data-scale-x": scaleX,
           "data-scale-y": scaleY,
+          "data-stroke": stroke,
+          "data-shadow": shadowColor,
           onMouseDown: id ? () => onMouseDown?.() : undefined,
           onDoubleClick: onDblClick ? () => onDblClick() : undefined,
           // A DOM drag stands in for a Konva drag: the node lands where `pointerAt` says.
@@ -876,15 +882,50 @@ describe("EditorWindow", () => {
     expect(screen.queryByRole("group", { name: "Blur style" })).not.toBeInTheDocument();
   });
 
-  it("puts a background behind the selected text", async () => {
+  it("changes the selected text's style", async () => {
     const saved = mockEditor();
     await ready();
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.mouseDown(document.querySelector('[data-id="t1"]') as Element);
-    fireEvent.click(screen.getByRole("button", { name: "Text background" }));
-    expect(screen.getByRole("button", { name: "Text background" })).toHaveAttribute("aria-pressed", "true");
+    const styles = within(screen.getByRole("group", { name: "Text style" }));
+    const savedText = () => last(saved)?.shapes.find((shape) => shape.id === "t1");
+    expect(styles.getByRole("button", { name: "Plain" })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(styles.getByRole("button", { name: "Pill" }));
+    expect(styles.getByRole("button", { name: "Pill" })).toHaveAttribute("aria-pressed", "true");
+    expect(styles.getByRole("button", { name: "Plain" })).toHaveAttribute("aria-pressed", "false");
     expect(document.querySelector('[data-konva="Label"][data-id="t1"] [data-text="Click here"]')).toBeInTheDocument();
-    await waitFor(() => expect(last(saved)?.shapes.find((shape) => shape.id === "t1")).toMatchObject({ background: true }));
+    await waitFor(() => expect(savedText()).toMatchObject({ background: true }));
+
+    // Outline clears the pill, and draws the text with a contrasting stroke.
+    fireEvent.click(styles.getByRole("button", { name: "Outline" }));
+    expect(styles.getByRole("button", { name: "Outline" })).toHaveAttribute("aria-pressed", "true");
+    expect(document.querySelector('[data-konva="Label"][data-id="t1"]')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-konva="Text"][data-id="t1"]')).toHaveAttribute("data-stroke", "#ffffff");
+    await waitFor(() => expect(savedText()).toMatchObject({ textStyle: "outline" }));
+    expect(savedText()).not.toHaveProperty("background");
+
+    fireEvent.click(styles.getByRole("button", { name: "Shadow" }));
+    expect(document.querySelector('[data-konva="Text"][data-id="t1"]')).toHaveAttribute("data-shadow");
+    expect(document.querySelector('[data-konva="Text"][data-id="t1"]')).not.toHaveAttribute("data-stroke");
+    await waitFor(() => expect(savedText()).toMatchObject({ textStyle: "shadow" }));
+
+    // Plain stores neither, so the text matches one saved before text styles.
+    fireEvent.click(styles.getByRole("button", { name: "Plain" }));
+    await waitFor(() => expect(savedText()).not.toHaveProperty("textStyle"));
+    expect(savedText()).not.toHaveProperty("background");
+  });
+
+  it("draws a text saved with both a pill and a text style as Pill", async () => {
+    mockEditor({
+      ...sidecar,
+      shapes: [{ id: "t2", type: "text", color: "#0090ff", x: 20, y: 20, text: "Both", fontSize: 24, background: true, textStyle: "outline" }],
+    });
+    await ready();
+    expect(document.querySelector('[data-konva="Label"][data-id="t2"] [data-text="Both"]')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="t2"]') as Element);
+    expect(within(screen.getByRole("group", { name: "Text style" })).getByRole("button", { name: "Pill" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("dims the capture around its spotlights", async () => {
@@ -1305,7 +1346,7 @@ describe("EditorWindow", () => {
     expect(screen.getByRole("button", { name: "Fill" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.keyDown(window, { key: "t" });
     expect(widthButton("Text size")).toHaveTextContent("48px");
-    expect(screen.getByRole("button", { name: "Text background" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(screen.getByRole("group", { name: "Text style" })).getByRole("button", { name: "Pill" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.keyDown(window, { key: "b" });
     expect(screen.getByRole("button", { name: "Smooth" })).toHaveAttribute("aria-pressed", "true");
   });
@@ -1330,6 +1371,23 @@ describe("EditorWindow", () => {
       textBackground: false,
       blurMode: "pixelate",
     });
+  });
+
+  it("remembers the text style picked", async () => {
+    const saved: EditorPreferences[] = [];
+    mockEditor(sidecar, [], { stored: {}, saved });
+    await ready();
+    fireEvent.keyDown(window, { key: "t" });
+    fireEvent.click(within(screen.getByRole("group", { name: "Text style" })).getByRole("button", { name: "Outline" }));
+    await waitFor(() => expect(last(saved)).toMatchObject({ textBackground: false, textStyle: "outline" }));
+  });
+
+  it("opens with the text style saved last time", async () => {
+    mockEditor(sidecar, [], { stored: { tool: "text", textStyle: "shadow" } });
+    await ready();
+    await waitFor(() =>
+      expect(within(screen.getByRole("group", { name: "Text style" })).getByRole("button", { name: "Shadow" })).toHaveAttribute("aria-pressed", "true"),
+    );
   });
 
   it("keeps today's defaults and saves nothing when preferences cannot load", async () => {

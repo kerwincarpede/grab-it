@@ -68,7 +68,7 @@ export function isShape(value: unknown): value is Shape {
     case "spotlight":
       return isRect(shape);
     case "text":
-      return isTextFields(shape);
+      return isTextFields(shape) && isOptional(shape.textStyle, (textStyle) => textStyle === "outline" || textStyle === "shadow");
     case "callout":
       return isTextFields(shape) && isPoint(shape.tail);
     case "step":
