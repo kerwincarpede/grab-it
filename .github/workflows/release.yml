@@ -19,16 +19,19 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Version bump. "auto" reads the conventional commits since the last tag.
+        description: Version bump. "auto" reads each merge’s conventional commit message.
         type: choice
         options: [auto, patch, minor, major]
         default: auto
 
-# No concurrency group: GitHub keeps only one waiting run per group and
-# cancels the rest, which would skip merges that land while a release runs.
-# Instead every run waits in its first step for the earlier ones to finish
-# (see "Wait for earlier releases"), so each merge is built and released in
-# turn and each run sees the tag the previous one published.
+# Each merge keeps its own run. Only the short reservation job is serial;
+# two installer pipelines can run together without occupying runners to wait.
+
+# A duplicate dispatch for the same commit waits instead of deleting a draft
+# that another attempt is still uploading to.
+concurrency:
+  group: release-commit-${{ github.sha }}
+  queue: max
 
 permissions:
   contents: read
@@ -41,22 +44,23 @@ env:
   GIT_CONFIG_VALUE_0: main
 
 jobs:
-  # Work out the next version from the git tags and open a draft release for
-  # it. The draft becomes public, and its tag is created, only once the checks
-  # and every installer build pass (see "publish").
+  # Reserve a version with a draft, then release the queue immediately.
+  # The tag is created only once all checks and installers pass.
   version:
     name: Version
     runs-on: ubuntu-24.04
     # Only main may deploy to this environment, so a branch cannot release.
     environment: release
-    # Long enough to queue behind a few releases of about ten minutes each.
-    timeout-minutes: 180
+    concurrency:
+      group: release-version
+      queue: max
+    timeout-minutes: 10
     permissions:
-      actions: read
       contents: write
     outputs:
       version: ${{ steps.next.outputs.version }}
       release_id: ${{ steps.draft.outputs.release_id }}
+      lane: ${{ steps.next.outputs.lane }}
     steps:
       - name: Require main
         if: github.ref != 'refs/heads/main'
@@ -64,64 +68,22 @@ jobs:
           echo "::error::Releases are made from main, not $GITHUB_REF."
           exit 1
 
-      # Releases go out one at a time, in the order their runs started. Runs
-      # are numbered in that order, so wait until no lower-numbered run of
-      # this workflow is still queued or running. Checkout comes after, so
-      # the tags it fetches include the release the previous run published.
-      - name: Wait for earlier releases
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          while :; do
-            earlier=$(gh run list -R "$GITHUB_REPOSITORY" -w release.yml -L 100 \
-              --json number,status,url \
-              --jq "[.[] | select(.number < $GITHUB_RUN_NUMBER and .status != \"completed\")] | sort_by(.number) | .[].url")
-            [ -z "$earlier" ] && break
-            echo "Waiting for:"; echo "$earlier"
-            sleep 30
-          done
-
       - uses: actions/checkout@v7
         with:
-          # The version is computed from the tags and the commits since them.
           fetch-depth: 0
-
-      # Conventional commits drive the "auto" bump: "feat!:" or
-      # "BREAKING CHANGE:" is major, "feat:" is minor, anything else is patch.
-      - name: Compute the next semantic version
-        id: semver
-        uses: PaulHatch/semantic-version@v6.0.7
-        with:
-          tag_prefix: v
-          search_commit_body: true
 
       - name: Choose the release version
         id: next
         env:
-          # Empty on a push, which bumps as "auto" does.
+          GH_TOKEN: ${{ github.token }}
           BUMP: ${{ inputs.bump || 'auto' }}
-          IS_TAGGED: ${{ steps.semver.outputs.is_tagged }}
-          SEMVER: ${{ steps.semver.outputs.version }}
-          PREVIOUS: ${{ steps.semver.outputs.previous_version }}
         run: |
-          if [ "$IS_TAGGED" = true ]; then
-            echo "::error::$GITHUB_SHA is already released; push new commits to main first."
-            exit 1
-          fi
-          if ! git tag -l 'v[0-9]*' | grep -q .; then
-            # No release tag yet: the first release takes the app's version.
-            version="$(jq -r .version src/grab-it/src-tauri/tauri.conf.json)"
-          else
-            IFS=. read -r major minor patch <<< "$PREVIOUS"
-            case "$BUMP" in
-              major) version="$((major + 1)).0.0" ;;
-              minor) version="$major.$((minor + 1)).0" ;;
-              patch) version="$major.$minor.$((patch + 1))" ;;
-              *) version="$SEMVER" ;;
-            esac
-          fi
-          echo "Releasing v$version ($BUMP bump from v$PREVIOUS)"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[]' | jq -s . > releases.json
+          python3 .github/scripts/release_version.py \
+            --releases releases.json --sha "$GITHUB_SHA" --bump "$BUMP" \
+            >> "$GITHUB_OUTPUT"
+          echo "lane=$((GITHUB_RUN_NUMBER % 2))" >> "$GITHUB_OUTPUT"
 
       - name: Open a draft release
         id: draft
@@ -166,8 +128,7 @@ jobs:
           BODY
           )
 
-          # Drop drafts an earlier, unfinished run (or an earlier try) left
-          # for this tag, then open this run's draft.
+          # A retry keeps its reserved version and replaces its unfinished draft.
           open_draft() {
             drafts=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
               --jq ".[] | select(.draft and .tag_name == \"$TAG\") | .id") || return 1
@@ -205,6 +166,9 @@ jobs:
   ci:
     name: CI
     needs: version
+    concurrency:
+      group: release-build-${{ needs.version.outputs.lane }}
+      queue: max
     permissions:
       contents: write
     uses: ./.github/workflows/ci.yml
@@ -267,55 +231,3 @@ jobs:
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
             -F draft=false -F prerelease=true -f make_latest=false \
             --jq '"Published \(.tag_name): \(.html_url)"'
-
-  # Edge copies read latest.json from the rolling "edge" pre-release. Its
-  # tag has no "v", so version numbering ignores it, and latest.json is its
-  # only asset. A job of its own, so a failure here can be re-run without
-  # publishing the release again.
-  edge:
-    name: Update the edge channel
-    needs: [version, publish]
-    runs-on: ubuntu-24.04
-    environment: release
-    permissions:
-      contents: write
-    steps:
-      # A replaced asset is deleted by id first, since an upload refuses a
-      # name already taken.
-      - name: Point the edge channel at this release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: v${{ needs.version.outputs.version }}
-        run: |
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p latest.json
-          if edge=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/edge" --jq .id 2> error.txt); then
-            echo "The edge release is $edge."
-          elif grep -q "HTTP 404" error.txt; then
-            edge=""
-          else
-            cat error.txt
-            exit 1
-          fi
-          if [ -z "$edge" ]; then
-            edge=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
-              -f tag_name=edge \
-              -f target_commitish="$GITHUB_SHA" \
-              -f name="Edge" \
-              -f body="Edge update channel. Grab-it copies on Edge read latest.json here to find the newest Edge release." \
-              -F prerelease=true \
-              -f make_latest=false \
-              --jq .id)
-            echo "Created the edge release ($edge)."
-          fi
-          gh api "repos/$GITHUB_REPOSITORY/releases/$edge/assets" \
-            --jq '.[] | select(.name == "latest.json") | .id' |
-            while read -r asset; do
-              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset"
-            done
-          curl --fail-with-body -sS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data-binary @latest.json \
-            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$edge/assets?name=latest.json" \
-            > /dev/null
-          echo "Edge now offers $TAG."
