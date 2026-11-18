@@ -453,7 +453,10 @@ function holdKey(key: string, ms: number, during?: () => void) {
   now.mockRestore();
 }
 
-describe("EditorWindow", () => {
+// Each test mounts the whole editor and takes about a second alone; in a
+// full run beside the other files a slow one can pass the default 5s, and
+// its own waits (asyncUtilTimeout in src/test/setup.ts) need room inside it.
+describe("EditorWindow", { timeout: 20_000 }, () => {
   beforeEach(() => {
     flattened.calls = [];
     flattened.options = [];
