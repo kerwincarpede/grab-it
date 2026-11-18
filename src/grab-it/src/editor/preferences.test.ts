@@ -37,8 +37,9 @@ describe("editor preferences", () => {
     ).toEqual({ ...DEFAULT_CHOICES, widths: { arrow: 6 } });
   });
 
-  it("never reopens on the crop tool", () => {
+  it("never reopens on the crop or cut out tool", () => {
     expect(fromPreferences({ tool: "crop" }).tool).toBe("arrow");
+    expect(fromPreferences({ tool: "cut" }).tool).toBe("arrow");
     expect(fromPreferences({ tool: "select" }).tool).toBe("select");
   });
 

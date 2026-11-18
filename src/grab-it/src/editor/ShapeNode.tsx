@@ -4,13 +4,14 @@ import { Arrow, Circle, Ellipse, Group, Image as KonvaImage, Label, Line, Rect, 
 import { FILL_OPACITY, SPOTLIGHT_DIM, type BlurShape, type CalloutShape, type Rect as Box, type Shape } from "./model";
 import { calloutBubble, calloutOutline, calloutWedge, labelPadding, labelRadius } from "./callout";
 import { roundedRectPath } from "./flatten";
+import type { CaptureImage } from "./cut";
 import { lensPath, magnifyLinePoints, magnifyScene } from "./magnify";
 import { isIdentity, textSize, uprightTransform, type Orientation } from "./orient";
 import { contrastColor, curvePoints, normalizeRect, withAlpha, type NodeTransform } from "./tools";
 
 interface ShapeNodeProps {
   shape: Shape;
-  image: HTMLImageElement | null;
+  image: CaptureImage | null;
   /** The badge number for step shapes. */
   step?: number;
   /** Selectable and draggable (Select or a drawing tool is active). */
@@ -39,7 +40,7 @@ function takeTransform(node: Konva.Node, shape: Shape): NodeTransform {
   return transform;
 }
 
-function BlurNode({ shape, image, common }: { shape: BlurShape; image: HTMLImageElement | null; common: object }) {
+function BlurNode({ shape, image, common }: { shape: BlurShape; image: CaptureImage | null; common: object }) {
   const ref = useRef<Konva.Image>(null);
   const rect = normalizeRect(shape);
   const smooth = shape.mode === "blur";

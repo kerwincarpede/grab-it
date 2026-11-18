@@ -1,4 +1,5 @@
 import type Konva from "konva";
+import type { CaptureImage } from "./cut";
 import type { MagnifyShape } from "./model";
 import { roundedRectPath } from "./flatten";
 
@@ -12,7 +13,7 @@ export function lensPath(ctx: Konva.Context, shape: MagnifyShape) {
 }
 
 /** Shared by the editor and the content layer's export canvas. */
-export function magnifyScene(shape: MagnifyShape, image: HTMLImageElement | null) {
+export function magnifyScene(shape: MagnifyShape, image: CaptureImage | null) {
   return (ctx: Konva.Context, node: Konva.Shape) => {
     const side = Math.abs(shape.width);
     if (side < 1) return;

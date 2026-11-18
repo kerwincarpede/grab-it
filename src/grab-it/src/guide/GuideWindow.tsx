@@ -5,6 +5,7 @@ import "../app/app.css";
 import "./guide.css";
 import Dialog from "../app/Dialog";
 import ShapeNode from "../editor/ShapeNode";
+import { joinedImage, joinedSize, validCuts } from "../editor/cut";
 import { flatten } from "../editor/flatten";
 import { stepNumbers } from "../editor/tools";
 import { useOutsideClick } from "../library/useOutsideClick";
@@ -97,12 +98,19 @@ function StepCard({ step, number, count, onFlattened, onDescription, onCommit, o
   const [viewing, setViewing] = useState(false);
   const doc = useMemo(() => numbered(step.annotations, number), [step.annotations, number]);
   const badges = useMemo(() => stepNumbers(doc.shapes), [doc.shapes]);
+  /** The capture with the editor's cuts made: shapes and the crop live in its pixels, as in the editor and on export. */
+  const joined = useMemo(() => {
+    if (!image) return null;
+    const original = { width: image.naturalWidth, height: image.naturalHeight };
+    const cuts = validCuts(original, doc.cuts);
+    return { image: joinedImage(image, cuts), size: joinedSize(original, cuts) };
+  }, [image, doc.cuts]);
 
   useEffect(() => {
-    if (!image || !layer.current) return;
+    if (!joined || !layer.current) return;
     let cancelled = false;
     let url: string | null = null;
-    const size = { width: image.naturalWidth, height: image.naturalHeight };
+    const size = joined.size;
     const frame = requestAnimationFrame(() => {
       if (!layer.current) return;
       layer.current.draw();
@@ -120,7 +128,7 @@ function StepCard({ step, number, count, onFlattened, onDescription, onCommit, o
       cancelAnimationFrame(frame);
       if (url) URL.revokeObjectURL(url);
     };
-  }, [image, doc, step.capture, onFlattened]);
+  }, [joined, doc, step.capture, onFlattened]);
 
   return (
     <li className="guide-step">
@@ -169,14 +177,14 @@ function StepCard({ step, number, count, onFlattened, onDescription, onCommit, o
           {step.description.trim() && <p className="guide-view-text">{step.description.trim()}</p>}
         </Dialog>
       )}
-      {image && (
-        // Drawn off screen at capture size, for flattening.
+      {joined && (
+        // Drawn off screen at the joined capture's size, for flattening.
         <div className="guide-step-stage" aria-hidden="true">
-          <Stage width={image.naturalWidth} height={image.naturalHeight} listening={false}>
+          <Stage width={joined.size.width} height={joined.size.height} listening={false}>
             <Layer ref={layer}>
-              <KonvaImage image={image} />
+              <KonvaImage image={joined.image} />
               {doc.shapes.map((shape) => (
-                <ShapeNode key={shape.id} shape={shape} image={image} step={badges.get(shape.id)} editable={false} onSelect={noop} onChange={noop} onEditText={noop} />
+                <ShapeNode key={shape.id} shape={shape} image={joined.image} step={badges.get(shape.id)} editable={false} onSelect={noop} onChange={noop} onEditText={noop} />
               ))}
             </Layer>
           </Stage>

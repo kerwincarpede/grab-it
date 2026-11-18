@@ -5,7 +5,7 @@ sidebar:
   order: 33
 ---
 
-The editor **never changes your screenshot**. Everything you do, every arrow, blur, crop, turn, backdrop and resize, is kept separately and only applied when you copy, export or pin. So you can always come back and move an arrow, take out a blur or undo a crop, even weeks later.
+The editor **never changes your screenshot**. Everything you do, every arrow, blur, crop, cut-out strip, turn, backdrop and resize, is kept separately and only applied when you copy, export or pin. So you can always come back and move an arrow, take out a blur or undo a crop, even weeks later.
 
 ## Saved as you go
 
@@ -15,7 +15,7 @@ To pick up where you left off, open the capture again from the [Library](/grab-i
 
 ## Undo
 
-`Ctrl/⌘ + Z` undoes, and `Ctrl/⌘ + Shift + Z` or `Ctrl/⌘ + Y` redoes, up to 200 steps back. The top bar has **Undo** and **Redo** buttons too. Each drawing, move, style change, crop, turn, backdrop change and resize is one step.
+`Ctrl/⌘ + Z` undoes, and `Ctrl/⌘ + Shift + Z` or `Ctrl/⌘ + Y` redoes, up to 200 steps back. The top bar has **Undo** and **Redo** buttons too. Each drawing, move, style change, crop, cut, turn, backdrop change and resize is one step.
 
 ## What stays unchanged
 

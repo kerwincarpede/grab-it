@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Annotations } from "./model";
+import type { Annotations, Cut } from "./model";
 import { parseAnnotations, parseBackdrop, parsePointer, serializeAnnotations, SidecarError } from "./sidecar";
 
 const doc: Annotations = {
@@ -289,5 +289,35 @@ describe("callout sidecars", () => {
     { text: 5 }, { fontSize: "30" }, { background: "yes" },
   ])("skips malformed callout fields %j", (invalid) => {
     expect(parseAnnotations({ version: 1, shapes: [{ ...callout, ...invalid }] }).shapes).toEqual([]);
+  });
+});
+
+describe("cut sidecars", () => {
+  const cuts: Cut[] = [
+    { axis: "y", start: 100, end: 160, edge: "straight" },
+    { axis: "x", start: 20, end: 40, edge: "torn", seed: 12345 },
+    { axis: "y", start: 10, end: 30, edge: "zigzag" },
+  ];
+
+  it("round-trips the cuts in order", () => {
+    const value: Annotations = { version: 1, shapes: [], cuts, crop: null };
+    expect(parseAnnotations(JSON.parse(JSON.stringify(serializeAnnotations(value))))).toEqual(value);
+  });
+
+  it("loads a sidecar from before cuts without any, and writes none back", () => {
+    const parsed = parseAnnotations({ version: 1, shapes: [], crop: null });
+    expect(parsed).not.toHaveProperty("cuts");
+    expect(serializeAnnotations({ ...parsed, cuts: [] })).not.toHaveProperty("cuts");
+  });
+
+  it.each([
+    { axis: "z" }, { start: "1" }, { start: -5 }, { start: 0 }, { start: 100.5 }, { end: 159.5 }, { end: 100 }, { end: Number.NaN }, { edge: "wavy" }, { seed: 1.5 }, { seed: "x" },
+  ])("drops a malformed cut %j on its own", (invalid) => {
+    const parsed = parseAnnotations({ version: 1, shapes: [], cuts: [cuts[0], { ...cuts[0], ...invalid }, cuts[2]] });
+    expect(parsed.cuts).toEqual([cuts[0], cuts[2]]);
+  });
+
+  it("ignores cuts that are not a list", () => {
+    expect(parseAnnotations({ version: 1, shapes: [], cuts: "yes" })).not.toHaveProperty("cuts");
   });
 });

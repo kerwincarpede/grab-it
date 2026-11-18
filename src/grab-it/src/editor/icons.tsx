@@ -73,7 +73,21 @@ const TOOL_ICONS: Record<Tool, ReactNode> = {
     </>
   ),
   crop: <path d="M7 2.5V17h14.5M2.5 7H17v14.5" />,
+  cut: (
+    <>
+      <path d="M4 4h16v4.5M4 4v4.5M4 20h16v-4.5M4 20v-4.5" />
+      <path d="M2.5 10.5l3 1.5 3-1.5 3 1.5 3-1.5 3 1.5 3-1.5M2.5 13.5l3 1.5 3-1.5 3 1.5 3-1.5 3 1.5 3-1.5" />
+    </>
+  ),
 };
+
+/** Restore strips: the two parts pulled back apart. */
+export const RestoreStripsIcon = () => (
+  <Icon>
+    <path d="M4 3h16v5M4 3v5M4 21h16v-5M4 21v-5" />
+    <path d="M12 10.5V7.5M10 9l2-1.5L14 9M12 13.5v3M10 15l2 1.5 2-1.5" />
+  </Icon>
+);
 
 export function ToolIcon({ tool }: { tool: Tool }) {
   return <Icon>{TOOL_ICONS[tool]}</Icon>;

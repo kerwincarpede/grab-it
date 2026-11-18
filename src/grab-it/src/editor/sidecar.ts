@@ -1,4 +1,4 @@
-import type { Annotations, Backdrop, PointerEdit, Rect, Shape } from "./model";
+import type { Annotations, Backdrop, Cut, PointerEdit, Rect, Shape } from "./model";
 import { BACKDROP_ASPECTS, BACKDROP_MAX_PADDING, BACKDROP_MAX_RADIUS, emptyAnnotations } from "./model";
 import { clampScale, normalizeRotation } from "./orient";
 import { clampPointerScale, isPointerLook } from "./pointer";
@@ -116,6 +116,36 @@ export function parseBackdrop(value: unknown): Backdrop | null {
   return parsed;
 }
 
+/** True when `value` is a cut this version can make: a strip of at least one pixel, with an edge it knows. */
+export function isCut(value: unknown): value is Cut {
+  if (typeof value !== "object" || value === null) return false;
+  const cut = value as Record<string, unknown>;
+  return (
+    (cut.axis === "x" || cut.axis === "y") &&
+    isNum(cut.start) &&
+    isNum(cut.end) &&
+    Number.isInteger(cut.start) &&
+    Number.isInteger(cut.end) &&
+    cut.start > 0 &&
+    cut.end > cut.start &&
+    (cut.edge === "straight" || cut.edge === "zigzag" || cut.edge === "torn") &&
+    isOptional(cut.seed, (seed) => isNum(seed) && Number.isInteger(seed))
+  );
+}
+
+/** The well-formed cuts, in order; a malformed one is dropped on its own. Written only when there are some. */
+function cutsField(value: unknown): Pick<Annotations, "cuts"> {
+  if (!Array.isArray(value)) return {};
+  const cuts = value.filter(isCut).map((cut): Cut => ({
+    axis: cut.axis,
+    start: cut.start,
+    end: cut.end,
+    edge: cut.edge,
+    ...(cut.seed !== undefined ? { seed: cut.seed } : {}),
+  }));
+  return cuts.length > 0 ? { cuts } : {};
+}
+
 /**
  * Reads a sidecar. `null` or `undefined` (no sidecar yet) gives an empty
  * document. An unknown version throws, so it is never overwritten; unknown
@@ -132,6 +162,7 @@ export function parseAnnotations(value: unknown): Annotations {
   return {
     version: 1,
     shapes: doc.shapes.filter(isShape),
+    ...cutsField(doc.cuts),
     crop: crop && typeof crop === "object" && isRect(crop) ? (crop as unknown as Rect) : null,
     ...(backdrop ? { backdrop } : {}),
     ...orientationFields(doc),
@@ -177,14 +208,15 @@ function orientationFields(doc: Partial<Record<keyof Annotations, unknown>>): Pi
 }
 
 /**
- * The JSON written to `<capture>.annotations.json`. `backdrop`, the
- * rotation, flips, scale and pointer are written only when set, so a capture without
+ * The JSON written to `<capture>.annotations.json`. `cuts`, `backdrop`,
+ * the rotation, flips, scale and pointer are written only when set, so a capture without
  * them keeps the original layout.
  */
 export function serializeAnnotations(doc: Annotations): Annotations {
   return {
     version: 1,
     shapes: doc.shapes,
+    ...cutsField(doc.cuts),
     crop: doc.crop ?? null,
     ...(doc.backdrop ? { backdrop: doc.backdrop } : {}),
     ...orientationFields(doc),

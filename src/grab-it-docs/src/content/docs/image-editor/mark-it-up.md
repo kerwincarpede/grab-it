@@ -29,8 +29,9 @@ Click **Annotate** and the editor opens, with your screenshot in the middle.
 | [Blur](/grab-it/image-editor/blur/) | `B` | Hiding emails, names and passwords |
 | [Spotlight](/grab-it/image-editor/spotlight/) | `S` | Dimming everything except what matters |
 | [Crop](/grab-it/image-editor/crop/) | `C` | Trimming the edges, free or to a ratio |
+| [Cut out](/grab-it/image-editor/cut-out/) | `X` | Removing a strip from the middle and joining the parts |
 
-The editor remembers the tool, colour and sizes you used last, and opens with them next time (except Crop, so a capture never opens hidden behind a crop).
+The editor remembers the tool, colour and sizes you used last, and opens with them next time (except Crop and Cut out, so a capture never opens hidden behind a crop).
 
 ### Hold a key to use a tool once
 
@@ -45,7 +46,7 @@ Tap a tool's key and that tool stays picked. **Hold** the key instead, draw, and
 Whatever tool you're using:
 
 - **`Ctrl/⌘`-drag** draws a rectangle.
-- **`Alt/⌥`-drag** draws an arrow (with Crop, it crops without snapping instead).
+- **`Alt/⌥`-drag** draws an arrow (with Crop or Cut out, it crops or cuts without snapping instead).
 - Hold **`Space`** and drag to pan.
 
 ### Edit what you've drawn

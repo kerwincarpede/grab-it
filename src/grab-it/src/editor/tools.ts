@@ -752,11 +752,12 @@ export function releaseRestores(heldMs: number, used: boolean): boolean {
 /**
  * The tool a modified drag draws over the `active` tool: ⌘ (Ctrl
  * elsewhere) a rectangle, ⌥ (Alt) an arrow. Null for a plain drag, and for
- * ⌥ with the Crop tool, where it crops without snapping instead.
+ * ⌥ with the Crop or Cut out tool, where it crops or cuts without snapping
+ * instead.
  */
 export function modifierTool(event: { ctrlKey: boolean; metaKey: boolean; altKey: boolean }, active?: Tool): Tool | null {
   if (event.ctrlKey || event.metaKey) return "rect";
-  if (event.altKey && active !== "crop") return "arrow";
+  if (event.altKey && active !== "crop" && active !== "cut") return "arrow";
   return null;
 }
 

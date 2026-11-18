@@ -482,6 +482,12 @@ export interface ComposeOptions extends BackdropSources {
   scale?: number;
   /** The plain border of the exported capture, for a balanced backdrop. */
   borders?: PlainBorders | null;
+  /**
+   * The capture has see-through gaps (a zigzag or torn cut): its own pixels
+   * cast the shadow instead of an opaque plate, so the backdrop shows
+   * through the gaps.
+   */
+  seeThrough?: boolean;
 }
 
 /** Draws the flattened capture on its backdrop: fill, shadow, then the capture with rounded corners. */
@@ -498,6 +504,26 @@ export function composeBackdrop(source: HTMLCanvasElement, backdrop: Backdrop, o
   paintBackdrop(ctx, backdropPaint(backdrop, layout), layout, { capture, image: options.image });
 
   const place = { x: layout.x, y: layout.y, width: source.width, height: source.height };
+  if (layout.shadow && options.seeThrough) {
+    // The capture with its corners rounded, drawn once with the shadow it casts.
+    const rounded = document.createElement("canvas");
+    rounded.width = source.width;
+    rounded.height = source.height;
+    const own = rounded.getContext("2d");
+    if (own) {
+      own.beginPath();
+      roundedRectPath(own, { x: 0, y: 0, width: source.width, height: source.height }, layout.radius);
+      own.clip();
+      own.drawImage(source, 0, 0);
+      ctx.save();
+      ctx.shadowColor = `rgba(0, 0, 0, ${layout.shadow.opacity})`;
+      ctx.shadowBlur = layout.shadow.blur;
+      ctx.shadowOffsetY = layout.shadow.offsetY;
+      ctx.drawImage(rounded, layout.x, layout.y);
+      ctx.restore();
+      return canvas;
+    }
+  }
   if (layout.shadow) {
     // An opaque plate the size of the capture casts the shadow; the capture covers it.
     ctx.save();
