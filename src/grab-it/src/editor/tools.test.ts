@@ -52,7 +52,6 @@ import {
   reorderShape,
   holdCropSides,
   HOLD_MS,
-  keepsRatio,
   MIN_STAMP_SIZE,
   modifierTool,
   moveCrop,

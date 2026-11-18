@@ -187,7 +187,6 @@ import {
   fitCropToRatio,
   hasLineHandles,
   holdCropSides,
-  keepsRatio,
   MIN_SIZE,
   modifierTool,
   moveCrop,
