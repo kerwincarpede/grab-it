@@ -252,16 +252,13 @@ pub fn start(app: &AppHandle, action: Action) {
     });
 }
 
-/// The pixels per point of monitor `index`, or for `None` of the densest
-/// monitor (which a stitched capture of every screen is drawn at).
+/// The editor scale for monitor `index`, or for a stitched capture of
+/// every monitor when `index` is `None`.
 pub(crate) fn monitor_scale(index: Option<usize>) -> Option<f64> {
     let monitors = screen::monitors().ok()?;
     match index {
         Some(index) => monitors.get(index).map(|monitor| monitor.scale_factor),
-        None => monitors
-            .iter()
-            .map(|monitor| monitor.scale_factor)
-            .reduce(f64::max),
+        None => capture::stitched_scale(monitors.iter().map(|monitor| monitor.scale_factor)),
     }
 }
 

@@ -205,24 +205,7 @@ fn try_open(
             .visible(false);
     let window = allow_camera(builder).build()?;
     enable_media_streams(&window)?;
-    // Sized again, for a monitor whose scale differs from the one the
-    // window was built on, and before it is placed: macOS resizes a window
-    // around its bottom-left corner (see overlay.rs).
-    //
-    // macOS places it in the display's points, since it turns pixels back
-    // into points with the scale of the screen the window is on now (see
-    // `overlay::logical_frame`). Windows and Linux place it in pixels.
-    #[cfg(target_os = "macos")]
-    {
-        let (position, size) = crate::overlay::logical_frame(position, size, monitor.scale_factor);
-        window.set_size(size)?;
-        window.set_position(position)?;
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        window.set_size(size)?;
-        window.set_position(position)?;
-    }
+    crate::overlay::place_window(&window, position, size, monitor.scale_factor)?;
     window.show()?;
     Ok(())
 }
