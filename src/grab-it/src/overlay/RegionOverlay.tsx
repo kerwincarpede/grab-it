@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useEffectEvent,
   useMemo,
@@ -63,20 +64,11 @@ import {
 import { drawBackdrop } from "./backdrop";
 import Loupe from "./Loupe";
 import RecordSetup from "./RecordSetup";
-import {
-  ChooserToolbar,
-  RATIOS,
-  SizeFields,
-  TIMER_KEY,
-  TIMER_STEPS,
-  TOOLS,
-  toolbarLayout,
-  type RatioId,
-  type Tool,
-} from "./ChooserToolbar";
+import { ChooserToolbar, SizeFields } from "./ChooserToolbar";
+import { RATIOS, TIMER_KEY, TIMER_STEPS, TOOLS, toolbarLayout, type RatioId, type Tool } from "./chooser";
 import { SOURCES, useRecordingOptions } from "./recordSources";
-import { getSettings, type Hotkeys, type RecordingSource } from "../settings/api";
-import { shortcutLabel } from "../hub/keys";
+import type { RecordingSource } from "../settings/api";
+import { effectiveHotkeys, type BindingLabels } from "../app/api";
 import "./overlay.css";
 
 interface PickableWindow {
@@ -154,14 +146,6 @@ const FIRST_STEPS: Record<OverlayIntent | "window", string> = {
   scroll: "Drag an area or click a window first.",
 };
 
-/** Each global shortcut as this platform writes it; unset ones are left out. */
-function globalLabels(hotkeys: Partial<Hotkeys> | undefined): Partial<Record<keyof Hotkeys, string>> {
-  const labels: Partial<Record<keyof Hotkeys, string>> = {};
-  for (const [key, accelerator] of Object.entries(hotkeys ?? {}) as [keyof Hotkeys, string][]) {
-    if (typeof accelerator === "string" && accelerator.trim() !== "") labels[key] = shortcutLabel(accelerator);
-  }
-  return labels;
-}
 
 /**
  * An adjustable selection being changed: by a handle, or moved as a whole
@@ -354,11 +338,19 @@ function RegionOverlay() {
   const [timer, setTimer] = useState(0);
   const toolbar = useRef<HTMLDivElement>(null);
   // Each mode's global shortcut, for the toolbar's tooltips.
-  const [hotkeys, setHotkeys] = useState<Partial<Hotkeys> | undefined>(undefined);
+  // As the tray, hub and Library show them: only those registered, or the desktop's own on Wayland.
+  const [hotkeys, setHotkeys] = useState<BindingLabels>({});
   // The toolbar's copy of the loupe's colour, written as the loupe draws.
   const colourText = useRef<HTMLSpanElement>(null);
   const colourSwatch = useRef<HTMLSpanElement>(null);
-  const colourReadout = useMemo(() => ({ text: colourText, swatch: colourSwatch }), []);
+  // Written straight to the DOM, as the loupe writes its own, so a pointer
+  // move renders the overlay once.
+  const showColour = useCallback((hex: string | null) => {
+    const text = colourText.current;
+    const swatch = colourSwatch.current;
+    if (text) text.textContent = hex ?? "—";
+    if (swatch) swatch.style.backgroundColor = hex ?? "transparent";
+  }, []);
   // All-in-one's adjustable selection. Undefined until the user changes it,
   // so the last region (`info.lastRegion`) is shown at the current scale.
   const [picked, setPicked] = useState<Box | null | undefined>(undefined);
@@ -430,9 +422,9 @@ function RegionOverlay() {
   useEffect(() => {
     if (!loadsHotkeys) return;
     let cancelled = false;
-    getSettings()
-      .then((settings) => {
-        if (!cancelled) setHotkeys(settings.hotkeys);
+    effectiveHotkeys()
+      .then((labels) => {
+        if (!cancelled) setHotkeys(labels ?? {});
       })
       .catch(() => {
         // The tooltips leave the global shortcuts out.
@@ -803,6 +795,9 @@ function RegionOverlay() {
   }
 
   function onMouseMove(event: MouseEvent) {
+    // Over a toolbar the pointer keeps where it last pointed, so the main
+    // button acts on the window or pixel chosen, not on what lies under it.
+    if (!drag && !grab && !gripping && onToolbar(event)) return;
     const point = pointOf(event);
     const follow = () => {
       if (gripping) setSetupAt(gripped(gripping, point));
@@ -1128,7 +1123,7 @@ function RegionOverlay() {
           pointer={pointer}
           scale={scale}
           viewport={view}
-          readout={intent === "color" ? colourReadout : undefined}
+          onColour={intent === "color" ? showColour : undefined}
         />
       )}
       {allInOne && (
@@ -1146,7 +1141,7 @@ function RegionOverlay() {
           }
           ready={ready}
           mainUse={ready ? MAIN_USES[intent] : FIRST_STEPS[pointsAtWindow ? "window" : intent]}
-          globals={globalLabels(hotkeys)}
+          globals={hotkeys}
           layout={layout}
           edge={toolbarEdge}
           offset={toolbarEdge === "top" ? top : TOOLBAR_BOTTOM}

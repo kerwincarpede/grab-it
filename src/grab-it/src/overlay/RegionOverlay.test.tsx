@@ -45,10 +45,10 @@ function mockOverlay(
         return new ArrayBuffer(8);
       // The recording options beside a recording's area.
       case "get_settings":
-        return {
-          recording: { ...DEFAULT_RECORDING, audio: "microphone", ...recording },
-          hotkeys: { allInOne: "Ctrl+Alt+PrintScreen", region: "Ctrl+Shift+2", window: "", screen: "Ctrl+Shift+3", text: "", colour: "", library: "", steps: "" },
-        };
+        return { recording: { ...DEFAULT_RECORDING, audio: "microphone", ...recording } };
+      // The shortcuts the desktop registered, as the tray and hub show them.
+      case "effective_hotkeys":
+        return { allInOne: "Ctrl+Alt+PrintScreen", region: "Ctrl+Shift+2", screen: "Ctrl+Shift+3" };
       case "recording_microphones":
         return [{ id: "usb", name: "USB Microphone", isDefault: false }];
       case "recording_system_audio":
@@ -982,6 +982,45 @@ describe("RegionOverlay", () => {
       );
     });
 
+    it("clicks the main button for the window or pixel pointed at, not the one under the toolbar", async () => {
+      const calls = mockOverlay({ allInOne: true });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      fireEvent.keyDown(window, { key: "5", code: "Digit5" });
+      fireEvent.mouseMove(overlay, { clientX: 240, clientY: 120 });
+      const main = screen.getByTestId("overlay-confirm");
+      // On its way to the button the pointer crosses the toolbar.
+      fireEvent.mouseMove(main, { clientX: 520, clientY: 30 });
+      expect(main).not.toHaveAttribute("aria-disabled");
+      fireEvent.click(main);
+      await waitFor(() =>
+        expect(last(calls).payload).toEqual({
+          selection: { kind: "point", x: 240, y: 120, viewportWidth: 1000 },
+          choice: { intent: "color", mode: "region", delaySeconds: 0 },
+        }),
+      );
+    });
+
+    it("captures the window pointed at from the main button in Window", async () => {
+      const calls = mockOverlay({ allInOne: true });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      fireEvent.keyDown(window, { key: "2", code: "Digit2" });
+      fireEvent.mouseMove(overlay, { clientX: 150, clientY: 150 });
+      const main = screen.getByTestId("overlay-confirm");
+      fireEvent.mouseMove(main, { clientX: 520, clientY: 30 });
+      expect(main).not.toHaveAttribute("aria-disabled");
+      fireEvent.click(main);
+      await waitFor(() =>
+        expect(last(calls).payload).toEqual({
+          selection: { kind: "window", id: 7 },
+          choice: { intent: "capture", mode: "window", delaySeconds: 0 },
+        }),
+      );
+    });
+
     it("moves between a group's buttons with the arrow keys, and leaves the toolbar on the first Esc", async () => {
       const calls = mockOverlay({ allInOne: true });
       render(<RegionOverlay />);
@@ -1028,7 +1067,7 @@ describe("RegionOverlay", () => {
           .map((button) => button.textContent);
 
       it("shows every label and the ratios in a row when there is room", async () => {
-        Object.defineProperty(window, "innerWidth", { configurable: true, value: 1400 });
+        Object.defineProperty(window, "innerWidth", { configurable: true, value: 1500 });
         mockOverlay({ allInOne: true });
         render(<RegionOverlay />);
         const overlay = await ready();
@@ -1041,6 +1080,7 @@ describe("RegionOverlay", () => {
       });
 
       it("shrinks unselected modes to icon and key, and folds the ratios into a menu", async () => {
+        Object.defineProperty(window, "innerWidth", { configurable: true, value: 1100 });
         mockOverlay({ allInOne: true });
         render(<RegionOverlay />);
         const overlay = await ready();
@@ -1055,12 +1095,12 @@ describe("RegionOverlay", () => {
         expect(within(toolbar).getByRole("button", { name: "Aspect ratio" })).toHaveTextContent("Free");
       });
 
-      it("puts the selection's controls on a second row near 720 px", async () => {
-        Object.defineProperty(window, "innerWidth", { configurable: true, value: 700 });
+      it("puts the selection's controls on a second row where one row cannot hold them", async () => {
         mockOverlay({ allInOne: true });
         render(<RegionOverlay />);
         const overlay = await ready();
         const toolbar = screen.getByRole("toolbar", { name: "Capture & record" });
+        // 1000 px cannot fit the modes, a held region's size and the actions in one row.
         expect(toolbar).toHaveAttribute("data-layout", "stacked");
         dragOver(overlay, [300, 300], [500, 400]);
         expect(within(toolbar).getByTestId("overlay-toolbar-middle")).toContainElement(

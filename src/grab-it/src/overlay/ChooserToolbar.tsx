@@ -1,87 +1,20 @@
 import { useId, useState, type KeyboardEvent, type ReactElement, type ReactNode, type Ref } from "react";
-import {
-  CloseIcon,
-  ColourIcon,
-  RecordIcon,
-  RegionIcon,
-  ScreenIcon,
-  ScrollIcon,
-  TextIcon,
-  TimerIcon,
-  WindowIcon,
-} from "../app/icons";
-import type { Hotkeys } from "../settings/api";
+import { CloseIcon, TimerIcon } from "../app/icons";
+import type { CaptureKind } from "../app/api";
 import type { Size } from "./geometry";
 import { ChipMenu } from "./RecordSetup";
-
-/**
- * Capture & record's modes, in the order of their number keys. Screen
- * captures as soon as it is picked; the others say what the next selection
- * is for.
- */
-export type Tool = "region" | "window" | "screen" | "text" | "color" | "record" | "scroll";
-
-interface ToolInfo {
-  tool: Tool;
-  label: string;
-  icon: ReactNode;
-  /** Its own global shortcut in Settings → Hotkeys, if it has one. */
-  hotkey?: keyof Hotkeys;
-  /** One line on what it does, for its tooltip. */
-  use: string;
-}
-
-/** What to capture (keys 1 to 3), then the tools (4 to 7). */
-export const TARGETS: ToolInfo[] = [
-  { tool: "region", label: "Region", icon: <RegionIcon />, hotkey: "region", use: "Drag an area, or click a window." },
-  { tool: "window", label: "Window", icon: <WindowIcon />, hotkey: "window", use: "Click a window, or press Enter for the one under the pointer." },
-  { tool: "screen", label: "Screen", icon: <ScreenIcon />, hotkey: "screen", use: "Captures every monitor at once." },
-];
-export const TOOL_ITEMS: ToolInfo[] = [
-  { tool: "text", label: "Text", icon: <TextIcon />, hotkey: "text", use: "Drag over text or a code to copy it." },
-  { tool: "color", label: "Colour", icon: <ColourIcon />, hotkey: "colour", use: "Click a pixel, or press Enter, to copy its colour." },
-  { tool: "record", label: "Record", icon: <RecordIcon />, use: "Choose what to record, then start a recording." },
-  { tool: "scroll", label: "Scroll", icon: <ScrollIcon />, use: "Choose an area or window and stitch it as it scrolls." },
-];
-export const TOOLS: ToolInfo[] = [...TARGETS, ...TOOL_ITEMS];
-
-/** The Timer's settings in seconds, in the order a click steps through them. */
-export const TIMER_STEPS = [0, 3, 5, 10];
-/** The Timer's number key, after the modes'. */
-export const TIMER_KEY = TOOLS.length + 1;
-
-/** Capture & record's aspect ratio presets: width over height, or none. */
-export type RatioId = "free" | "16:9" | "4:3" | "1:1";
-export const RATIOS: { id: RatioId; label: string; value: number | null }[] = [
-  { id: "free", label: "Free", value: null },
-  { id: "16:9", label: "16:9", value: 16 / 9 },
-  { id: "4:3", label: "4:3", value: 4 / 3 },
-  { id: "1:1", label: "1:1", value: 1 },
-];
-
-/**
- * How much room the toolbar has: all labels (`wide`), unselected modes as
- * icon and key (`compact`), the ratios in one menu as well (`folded`), and
- * the middle section on a second row (`stacked`).
- */
-export type ToolbarLayout = "wide" | "compact" | "folded" | "stacked";
-
-export function toolbarLayout(width: number): ToolbarLayout {
-  if (width < 720) return "stacked";
-  if (width < 1024) return "folded";
-  if (width < 1280) return "compact";
-  return "wide";
-}
-
-/** What a tooltip says: the item's name, its key here, its global shortcut and its use. */
-export interface TipText {
-  name: string;
-  /** The key in this chooser. */
-  keyLabel?: string;
-  /** The global shortcut, already formatted for this platform. */
-  global?: string;
-  use: string;
-}
+import {
+  RATIOS,
+  TARGETS,
+  TIMER_KEY,
+  TOOL_ITEMS,
+  TOOLS,
+  type RatioId,
+  type TipText,
+  type Tool,
+  type ToolInfo,
+  type ToolbarLayout,
+} from "./chooser";
 
 /**
  * An item with a tooltip that shows on hover and on keyboard focus. The
@@ -242,8 +175,8 @@ export interface ChooserToolbarProps {
   ready: boolean;
   /** What the main button's tooltip says. */
   mainUse: string;
-  /** Each mode's global shortcut, formatted, by Hotkeys key. */
-  globals: Partial<Record<keyof Hotkeys, string>>;
+  /** Each mode's global shortcut as the desktop registered it, by capture kind. */
+  globals: Partial<Record<CaptureKind, string>>;
   layout: ToolbarLayout;
   edge: "top" | "bottom";
   /** Pixels from that edge. */
