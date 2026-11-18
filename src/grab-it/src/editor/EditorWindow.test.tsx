@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type { ReactNode, Ref } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -874,8 +875,10 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
   it("sets a session default using the keyboard and uses it for Arrow and Alt-drag", async () => {
     const saved = mockEditor();
     await ready();
+    const user = userEvent.setup();
     const picker = widthButton("Style");
-    fireEvent.click(picker);
+    picker.focus();
+    await user.keyboard(" ");
     const dialog = screen.getByRole("dialog", { name: "Arrow style" });
     expect(within(dialog).getAllByRole("button")).toHaveLength(12);
     const classic = within(dialog).getByRole("button", { name: "Classic", pressed: true });
@@ -884,11 +887,11 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
     expect(picker).toHaveFocus();
     expect(screen.queryByRole("dialog", { name: "Arrow style" })).toBeNull();
 
-    fireEvent.click(picker);
+    await user.keyboard(" ");
     const open = screen.getByRole("button", { name: "Open" });
-    fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+    await user.keyboard("{ArrowRight}");
     expect(open).toHaveFocus();
-    fireEvent.click(open);
+    await user.keyboard(" ");
     expect(picker).toHaveFocus();
     drag([20, 40], [180, 70]);
     await waitFor(() => expect(last(saved)?.shapes[4]).toMatchObject({ type: "arrow", arrowStyle: "open" }));

@@ -43,6 +43,20 @@ describe("arrow geometry", () => {
     expect(centreline).toBe("M 0 0 Q 0 80 100 0");
   });
 
+  it("keeps the shaft attached when a curved arrow doubles back at the tip", () => {
+    const { parts } = arrowGeometry({ ...arrow, points: [0, 0, 100, 0], control: [110, 0] });
+    expect(parts[0].path).toBe("M 0 0 Q 110 0 100 0");
+    expect(parts[1].path).toBe("M 118 -9 L 100 0 L 118 9 Z");
+  });
+
+  it("keeps the shaft's width when a short Elbow leg limits only the head", () => {
+    const { parts } = arrowGeometry({
+      ...arrow, strokeWidth: 12, arrowStyle: "elbow", points: [0, 0, 200, 50], elbow: { axis: "y", at: 49.9 },
+    });
+    expect(parts[0].strokeWidth).toBe(12);
+    expect(parts[1].path).toContain(" L 200 50 L ");
+  });
+
   it("slides the middle segment off a straight baseline and translates the whole route", () => {
     const line: LineShape = { ...arrow, arrowStyle: "elbow", points: [10, 20, 120, 20] };
     const bent = bendElbow(line, { x: 70, y: 49 });

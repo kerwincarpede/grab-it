@@ -86,7 +86,14 @@ export default function ArrowStylePicker({ value, color, onPick }: {
   }, [open]);
 
   return (
-    <div className="bar-group" ref={anchor}>
+    <div
+      className="bar-group"
+      ref={anchor}
+      onKeyDown={(event) => {
+        // Space activates these buttons and must not reach the canvas pan shortcut.
+        if (event.key === " ") event.stopPropagation();
+      }}
+    >
       <button
         ref={trigger}
         type="button"

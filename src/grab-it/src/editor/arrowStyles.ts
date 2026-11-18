@@ -99,7 +99,8 @@ function straightShaft(points: Point[]): Shaft {
     const index = stops.findIndex((stop) => at <= stop);
     const segment = segments[index === -1 ? segments.length - 1 : index];
     if (!segment) return { point: points[0], tangent: { x: 1, y: 0 } };
-    const start = stops[(index === -1 ? segments.length - 1 : index) - 1] ?? 0;
+    if (at >= length) return { point: segment.end, tangent: segment.tangent };
+    const start = stops[index - 1] ?? 0;
     return { point: mix(segment.start, segment.end, (at - start) / segment.length), tangent: segment.tangent };
   };
   return {
@@ -231,16 +232,20 @@ export function arrowGeometry(shape: LineShape): ArrowGeometry {
     const twice = style === "double-ended";
     const size = fit(headSize * (needle ? 1.3 : 1), twice ? 0.29 : 0.45);
     const half = Math.min(size * (needle ? 0.24 : 0.5), headSize / 2);
-    const from = twice ? size * 0.7 : 0;
-    const to = length - size * 0.7;
+    // On a tight bend the point at a fixed arc distance can lie outside
+    // the triangle, or even on its opposite side. Draw the curve through
+    // the tip so the shaft stays attached when the end doubles back.
+    const trim = shape.control && !isElbow(shape) ? 0 : size * 0.7;
+    const from = twice ? trim : 0;
+    const to = length - trim;
     if (style === "dashed") {
       const count = Math.max(2, Math.min(100, Math.round(to / Math.max(6, width * 4))));
       const spacing = to / count;
       for (let i = 0; i < count; i++) {
-        stroke(path(i * spacing, (i + 0.58) * spacing), Math.min(width, spacing * 0.25));
+        stroke(path((i + 0.42) * spacing, (i + 1) * spacing), Math.min(width, spacing * 0.25));
       }
     } else {
-      stroke(path(from, to), needle ? width * 0.55 : style === "elbow" ? Math.min(width, size * 0.7) : width);
+      stroke(path(from, to), needle ? width * 0.55 : width);
     }
     if (twice) triangle(tail, { x: -tail.tangent.x, y: -tail.tangent.y }, size, half);
     if (style === "dot-tail") {
