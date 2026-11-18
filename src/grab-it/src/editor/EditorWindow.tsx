@@ -2102,7 +2102,6 @@ export default function EditorWindow() {
         {(optionsFor === "arrow" || tool === "arrow") && (
           <ArrowStylePicker
             value={selected?.type === "arrow" ? arrowStyle(selected.arrowStyle) : nextArrowStyle}
-            color={selected?.type === "arrow" ? selected.color : style.color}
             onPick={(preset) => {
               if (selected?.type === "arrow") restyleSelected({ arrowStyle: preset });
               else setNextArrowStyle(preset);

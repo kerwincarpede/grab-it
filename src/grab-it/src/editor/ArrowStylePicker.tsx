@@ -3,11 +3,11 @@ import { ARROW_STYLES, ARROW_STYLE_GROUPS, arrowGeometry, type ArrowStyle } from
 
 const OPTION_STEP: Partial<Record<string, number>> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
 
-function ArrowPreview({ style, color, compact = false }: { style: ArrowStyle; color: string; compact?: boolean }) {
+function ArrowPreview({ style, compact = false }: { style: ArrowStyle; compact?: boolean }) {
   const { parts } = arrowGeometry({
     id: "preview",
     type: "arrow",
-    color,
+    color: "currentColor",
     strokeWidth: 2,
     arrowStyle: style,
     points: style === "elbow" ? [9, 7, 63, 25] : [9, 16, 63, 16],
@@ -19,8 +19,8 @@ function ArrowPreview({ style, color, compact = false }: { style: ArrowStyle; co
         <path
           key={index}
           d={path}
-          fill={strokeWidth === undefined ? color : "none"}
-          stroke={strokeWidth === undefined ? "none" : color}
+          fill={strokeWidth === undefined ? "currentColor" : "none"}
+          stroke={strokeWidth === undefined ? "none" : "currentColor"}
           strokeWidth={strokeWidth}
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -30,9 +30,8 @@ function ArrowPreview({ style, color, compact = false }: { style: ArrowStyle; co
   );
 }
 
-export default function ArrowStylePicker({ value, color, onPick }: {
+export default function ArrowStylePicker({ value, onPick }: {
   value: ArrowStyle;
-  color: string;
   onPick: (style: ArrowStyle) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -104,7 +103,7 @@ export default function ArrowStylePicker({ value, color, onPick }: {
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        <ArrowPreview style={value} color={color} compact />
+        <ArrowPreview style={value} compact />
         <span>Style</span>
       </button>
       {open && (
@@ -142,7 +141,7 @@ export default function ArrowStylePicker({ value, color, onPick }: {
                       closeAndFocus();
                     }}
                   >
-                    <ArrowPreview style={id} color={color} />
+                    <ArrowPreview style={id} />
                     <span>{label}</span>
                   </button>
                 ))}

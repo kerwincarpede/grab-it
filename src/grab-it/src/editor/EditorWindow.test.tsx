@@ -901,6 +901,25 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
     await waitFor(() => expect(last(saved)?.shapes[5]).toMatchObject({ type: "arrow", arrowStyle: "open" }));
   });
 
+  it("uses the button foreground for style previews while drawing in the chosen colour", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Colour #1f2328" }));
+    const picker = widthButton("Style");
+    expect(picker.querySelector("path[fill='currentColor']")).toBeInTheDocument();
+
+    fireEvent.click(picker);
+    const dialog = screen.getByRole("dialog", { name: "Arrow style" });
+    expect(within(dialog).getByRole("button", { name: "Classic", pressed: true }).querySelector("path[fill='currentColor']")).toBeInTheDocument();
+    const outline = within(dialog).getByRole("button", { name: "Outline" });
+    expect(outline.querySelector("path[stroke='currentColor']")).toBeInTheDocument();
+    fireEvent.click(outline);
+    drag([20, 30], [180, 70]);
+    await waitFor(() => expect(last(saved)?.shapes[4]).toMatchObject({
+      type: "arrow", arrowStyle: "outline", color: "#1f2328",
+    }));
+  });
+
   it("restyles a curve in one undo step and edits an elbow after rotating and flipping the capture", async () => {
     const saved = mockEditor();
     await ready();
