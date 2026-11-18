@@ -1,17 +1,19 @@
 ---
-title: All-in-one
+title: Capture & record…
 description: One shortcut for every capture mode, with a Timer, resize handles, exact sizes and ratio locks.
 sidebar:
   order: 10
 ---
 
-**All-in-one** is one shortcut for everything. Press `Ctrl + Alt + PrintScreen` (on macOS `⌘ ⇧ A`), or pick **All-in-one** in the tray menu. The screen freezes, with a toolbar at the top.
+Open **Capture & record…** from the tray menu, the hub below **Capture region**, or **More captures** in the Library. Its global shortcut is `Ctrl + Alt + PrintScreen` by default (`⌘ ⇧ A` on macOS). The menus show the shortcut currently bound on your desktop.
 
-![The All-in-one toolbar above a held region, with its size fields and ratio locks.](../../../assets/capture/all-in-one-toolbar.png)
+The screen freezes with a toolbar at the top. Press the same shortcut again to cancel without capturing. A third press opens a fresh chooser.
+
+![The Capture & record… toolbar above a held region, with its size fields and ratio locks.](../../../assets/capture/all-in-one-toolbar.png)
 
 ## Modes
 
-Click a mode, or press its number. You can switch modes as often as you like before you capture.
+Click a mode, or press its number while the chooser is open. You can switch modes as often as you like before you capture.
 
 | Key | Mode | What it does |
 | --- | --- | --- |
@@ -62,7 +64,7 @@ The last region you captured starts out selected on the monitor it was on, ready
 
 ## Record
 
-**Record** shows the recording setup toolbar under the mode toolbar. Pick a region, a window or a screen and the recording options, then press **Record** or `Enter`. Press the All-in-one shortcut again to stop the recording. See [Record your screen](/grab-it/recording/record/).
+**Record** shows the recording setup toolbar under the mode toolbar. Pick a region, a window or a screen and the recording options, then press **Record** or `Enter`. Press the Capture & record… shortcut again to stop the recording. See [Record your screen](/grab-it/recording/record/).
 
 ## Scroll
 
@@ -77,5 +79,5 @@ On macOS, automatic scrolling asks for **Accessibility** permission. If you don'
 Scroll capture is not available on Wayland.
 
 :::note
-On Wayland your desktop's own picker shows instead of All-in-one's toolbar, as for a region. See [Wayland](/grab-it/capture/wayland/).
+On Wayland your desktop's own picker shows instead of the chooser toolbar, as for a region. See [Wayland](/grab-it/capture/wayland/).
 :::

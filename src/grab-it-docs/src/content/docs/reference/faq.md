@@ -31,7 +31,7 @@ Yes. Run a model with [Ollama](https://ollama.com) and pick the **Ollama** prese
 
 ## How do I record my screen?
 
-Pick **Record** from the tray menu or All-in-one. See [Record your screen](/grab-it/recording/record/).
+Pick **Record** from the tray menu or Capture & record…. See [Record your screen](/grab-it/recording/record/).
 
 ## Can I script Grab-it?
 

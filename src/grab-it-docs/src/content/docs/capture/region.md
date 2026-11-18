@@ -36,7 +36,7 @@ A press that barely moves (less than a few pixels) is a click, not a drag. Hover
 
 ## What you get
 
-The capture is copied, saved and shown on the [Quick Access card](/grab-it/capture/first-capture/#the-quick-access-card), as every capture is. Grab-it also remembers the area, so [Repeat last region](/grab-it/capture/repeat/) can capture it again, and [All-in-one](/grab-it/capture/all-in-one/) offers it as its starting selection.
+The capture is copied, saved and shown on the [Quick Access card](/grab-it/capture/first-capture/#the-quick-access-card), as every capture is. Grab-it also remembers the area, so [Repeat last region](/grab-it/capture/repeat/) can capture it again, and [Capture & record…](/grab-it/capture/all-in-one/) offers it as its starting selection.
 
 On monitors with different scale factors (a Retina laptop next to a regular screen, say), each region is captured at its own monitor's full resolution.
 

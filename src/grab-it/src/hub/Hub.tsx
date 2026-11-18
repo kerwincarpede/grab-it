@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "../app/app.css";
 import "./hub.css";
 import Logo from "../app/Logo";
 import {
+  AllInOneIcon,
   ChevronRightIcon,
   ColourIcon,
   OpenIcon,
@@ -19,9 +20,7 @@ import {
   WindowIcon,
 } from "../app/icons";
 import { openMain, startCapture, type CaptureKind } from "../app/api";
-import { checkForUpdate, onUpdateStatus, pendingUpdate, updateStatus, type UpdateStatus } from "../app/updates";
-import { getSettings, type Hotkeys } from "../settings/api";
-import { shortcutLabel } from "./keys";
+import { useEffectiveHotkeys } from "../app/useEffectiveHotkeys";
 import { formatTime, listShots, openShot, type Shot } from "../library/api";
 import { useThumbnail } from "../library/thumbnails";
 import { IDLE, hubActivity, onHubActivity, type HubActivity } from "./api";
@@ -34,7 +33,6 @@ const RECENT = 3;
 interface Tool {
   kind: CaptureKind;
   title: string;
-  hotkey?: keyof Hotkeys;
   icon: ReactNode;
   /** What it says while it runs, when choosing it again stops it. */
   stop?: { title: string; running: keyof HubActivity };
@@ -42,12 +40,13 @@ interface Tool {
 
 /** The captures under Capture region. */
 const TOOLS: Tool[] = [
-  { kind: "window", title: "Window", hotkey: "window", icon: <WindowIcon /> },
-  { kind: "screen", title: "Screen", hotkey: "screen", icon: <ScreenIcon /> },
+  { kind: "allInOne", title: "Capture & record…", icon: <AllInOneIcon /> },
+  { kind: "window", title: "Window", icon: <WindowIcon /> },
+  { kind: "screen", title: "Screen", icon: <ScreenIcon /> },
   { kind: "record", title: "Record", icon: <RecordIcon />, stop: { title: "Stop recording", running: "recording" } },
-  { kind: "text", title: "Grab text", hotkey: "text", icon: <TextIcon /> },
-  { kind: "colour", title: "Pick colour", hotkey: "colour", icon: <ColourIcon /> },
-  { kind: "steps", title: "Step capture", hotkey: "steps", icon: <StepsIcon />, stop: { title: "Stop step capture", running: "steps" } },
+  { kind: "text", title: "Grab text", icon: <TextIcon /> },
+  { kind: "colour", title: "Pick colour", icon: <ColourIcon /> },
+  { kind: "steps", title: "Step capture", icon: <StepsIcon />, stop: { title: "Stop step capture", running: "steps" } },
 ];
 
 /** `found` as an activity, or nothing running when the backend sent something else. */
@@ -95,26 +94,20 @@ type Panel = "timed" | "monitor" | null;
 
 /** The window under the tray icon: capture, see what you just took, open Grab-it. */
 function Hub() {
-  const [hotkeys, setHotkeys] = useState<Hotkeys | null>(null);
+  const hotkeys = useEffectiveHotkeys();
+  const primary = useRef<HTMLButtonElement>(null);
   const [recent, setRecent] = useState<Shot[]>([]);
   const [monitors, setMonitors] = useState<HubMonitor[]>([]);
   const [panel, setPanel] = useState<Panel>(null);
   const [error, setError] = useState<string | null>(null);
-  const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [activity, setActivity] = useState<HubActivity>(IDLE);
 
   const load = useCallback(() => {
-    getSettings()
-      .then((settings) => setHotkeys(settings?.hotkeys ?? null))
-      .catch(() => {});
     listShots(0, RECENT)
       .then((page) => setRecent(Array.isArray(page?.shots) ? page.shots : []))
       .catch(() => {});
     invoke<HubMonitor[]>("hub_monitors")
       .then((found) => setMonitors(Array.isArray(found) ? found : []))
-      .catch(() => {});
-    updateStatus()
-      .then((status) => setUpdate(status?.state ? status : null))
       .catch(() => {});
     hubActivity()
       .then((found) => setActivity(activityOf(found)))
@@ -122,19 +115,18 @@ function Hub() {
   }, []);
 
   useEffect(() => {
+    primary.current?.focus();
     load();
     let disposed = false;
     const stops: (() => void)[] = [];
     const keep = (stop: () => void) => (disposed ? stop() : stops.push(stop));
     // Shown again: start from the top, with fresh captures.
     listen(HUB_SHOWN_EVENT, () => {
+      primary.current?.focus();
       setPanel(null);
       setError(null);
       load();
     })
-      .then(keep)
-      .catch(() => {});
-    onUpdateStatus(({ status }) => setUpdate(status))
       .then(keep)
       .catch(() => {});
     // A recording or step capture started or stopped while it is open.
@@ -156,16 +148,14 @@ function Hub() {
     action.catch((err: unknown) => setError(errorMessage(err)));
   }
 
-  const keyLabel = (hotkey?: keyof Hotkeys) => (hotkey && hotkeys?.[hotkey] ? shortcutLabel(hotkeys[hotkey]) : "");
   const toggle = (next: Panel) => setPanel((current) => (current === next ? null : next));
-  const waiting = pendingUpdate(update);
 
   return (
     <main className="hub">
       <header className="hub-head">
         <Logo size={22} />
         <span className="hub-name">Grab-it</span>
-        <button type="button" className="hub-icon" aria-label="Open Grab-it" title={hotkeys?.library ? `Open Grab-it (${shortcutLabel(hotkeys.library)})` : "Open Grab-it"} onClick={() => run(openMain("library"))}>
+        <button type="button" className="hub-icon" aria-label="Open Grab-it" title={hotkeys?.library ? `Open Grab-it (${hotkeys.library})` : "Open Grab-it"} onClick={() => run(openMain("library"))}>
           <OpenIcon size={15} />
         </button>
         <button type="button" className="hub-icon" aria-label="Settings" title="Settings" onClick={() => run(openMain("settings"))}>
@@ -174,19 +164,19 @@ function Hub() {
       </header>
 
       <div className="hub-scroll">
-        <button type="button" className="hub-item is-primary" onClick={() => run(startCapture("region"))}>
+        <button type="button" ref={primary} className="hub-item is-primary" onClick={() => run(startCapture("region"))}>
           <RegionIcon />
           Capture region
-          {hotkeys?.region && <kbd className="hub-key">{shortcutLabel(hotkeys.region)}</kbd>}
+          {hotkeys?.region && <kbd className="hub-key">{hotkeys.region}</kbd>}
         </button>
-        {TOOLS.map(({ kind, title, hotkey, icon, stop }) => {
+        {TOOLS.map(({ kind, title, icon, stop }) => {
           const running = stop !== undefined && activity[stop.running];
           return (
             <button type="button" key={kind} className={running ? "hub-item is-running" : "hub-item"} onClick={() => run(startCapture(kind))}>
               {icon}
               {running && stop ? stop.title : title}
               {running && <span className="hub-live" aria-hidden="true" />}
-              {keyLabel(hotkey) && <kbd className="hub-key">{keyLabel(hotkey)}</kbd>}
+              {hotkeys[kind] && <kbd className="hub-key">{hotkeys[kind]}</kbd>}
             </button>
           );
         })}
@@ -251,22 +241,10 @@ function Hub() {
         </p>
       )}
 
-      {waiting && (
-        <button type="button" className="hub-update" onClick={() => run(checkForUpdate())}>
-          {update?.state === "installing" ? `Installing Grab-it ${waiting.version}…` : `Grab-it ${waiting.version} is ready`}
-          {update?.state !== "installing" && <span>Update</span>}
-        </button>
-      )}
-
       <footer className="hub-foot">
         <button type="button" className="link-button" onClick={() => run(openMain("welcome"))}>
           Shortcuts
         </button>
-        {!waiting && (
-          <button type="button" className="link-button" onClick={() => run(checkForUpdate())}>
-            Check for updates
-          </button>
-        )}
         <button type="button" className="link-button hub-quit" onClick={() => void invoke("hub_quit")}>
           Quit
         </button>

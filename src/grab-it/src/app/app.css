@@ -299,6 +299,7 @@ button.update-card {
   z-index: 30;
   display: flex;
   flex-direction: column;
+  width: max-content;
   min-width: 190px;
   padding: 4px;
   background: var(--pop);
@@ -322,12 +323,21 @@ button.update-card {
   border-radius: 6px;
 }
 
+.capture-menu .capture-key {
+  margin-left: auto;
+}
+
 .capture-menu button .icon {
   color: var(--text-muted);
 }
 
 .capture-menu button:where(:hover, :focus-visible) {
   background: var(--fill-hover);
+}
+
+.capture-split button:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
 }
 
 /* ── Content ─────────────────────────────────────────────────────────── */

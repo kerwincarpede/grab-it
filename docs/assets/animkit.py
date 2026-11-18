@@ -132,6 +132,8 @@ def mode_icon(name, cx, cy):
         return f'<path {s} d="M{cx-6} {cy-5}h12M{cx} {cy-5}v11"/>'
     if name == "Colour":
         return f'<path {s} d="M{cx-5} {cy+6}l1-4 7-7 3 3-7 7z"/>'
+    if name == "Scroll":
+        return f'<rect {s} x="{cx-6}" y="{cy-7}" width="12" height="14" rx="2"/><path {s} d="M{cx} {cy-4}v8m-3-3 3 3 3-3"/>'
     if name == "Record":
         return f'<circle {s} cx="{cx}" cy="{cy}" r="6"/>'
     return f'<circle {s} cx="{cx}" cy="{cy + 1}" r="6"/><path {s} d="M{cx} {cy - 2}v3M{cx - 2} {cy - 7}h4"/>'

@@ -48,6 +48,8 @@ function backend({
     (cmd, payload) => {
       calls.push({ cmd, payload });
       switch (cmd) {
+        case "effective_hotkeys":
+          return { allInOne: "⌘⇧A", region: "⌘⇧2", window: "⌘⇧W" };
         case "get_settings":
           return settings();
         case "set_update_channel":
@@ -94,7 +96,7 @@ describe("AppWindow", () => {
     expect(screen.getByRole("heading", { name: "All captures" })).toBeInTheDocument();
     expect(await screen.findByText("v0.2.1")).toBeInTheDocument();
     // The region hotkey shows on the button, but is not part of its name.
-    await waitFor(() => expect(capture).toHaveTextContent("Cmd+Shift+2"));
+    await waitFor(() => expect(capture).toHaveTextContent("⌘⇧2"));
   });
 
   it("lists the apps captures came from and filters by one", async () => {
@@ -258,6 +260,30 @@ describe("AppWindow", () => {
     const captures = calls.filter(({ cmd }) => cmd === "hub_capture").map(({ payload }) => (payload as { kind: string }).kind);
     expect(captures).toEqual(["region", "record"]);
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("opens the chooser from More captures and refreshes shortcuts while the menu is open", async () => {
+    const calls = backend();
+    render(<AppWindow />);
+    const more = screen.getByRole("button", { name: "More captures" });
+    more.focus();
+    await userEvent.keyboard("{Enter}");
+    const chooser = screen.getByRole("menuitem", { name: /^Capture & record…/ });
+    await waitFor(() => expect(chooser).toHaveTextContent("⌘⇧A"));
+    expect(chooser).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    const captureWindow = screen.getByRole("menuitem", { name: /^Capture window/ });
+    expect(captureWindow).toHaveFocus();
+    expect(captureWindow).toHaveTextContent("⌘⇧W");
+    expect(screen.getByRole("menuitem", { name: "Capture screen" })).toBeInTheDocument();
+    await act(() => emit("effective-hotkeys-changed", { allInOne: "Ctrl+Alt+A" }));
+    expect(chooser).toHaveTextContent("Ctrl+Alt+A");
+    await userEvent.keyboard("{Escape}");
+    expect(more).toHaveFocus();
+    await userEvent.keyboard("{Enter}{Enter}");
+    expect(calls.filter(({ cmd }) => cmd === "hub_capture").map(({ payload }) => payload)).toEqual([
+      { kind: "allInOne", delaySeconds: undefined, monitor: undefined },
+    ]);
   });
 
   it("shows no channel by the version on Stable", async () => {

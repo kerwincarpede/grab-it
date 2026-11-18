@@ -91,7 +91,7 @@ const HINTS: Record<OverlayIntent, string> = {
   capture: "Drag to capture a region, or click a window. Esc cancels.",
   text: "Drag over the text to copy it. Esc cancels.",
   color: "Click to copy the colour under the cursor. Esc cancels.",
-  scroll: "Drag to choose an area or click a window, then scroll by hand. Esc cancels.",
+  scroll: "Drag an area or click a window, then press Enter to start scrolling. Esc cancels.",
   record: "Drag to choose the area to record, or click a window. Esc cancels.",
 };
 /** The Record overlay's hint for each source, before and after a pick. */
@@ -428,7 +428,8 @@ function Toolbar({ tool, timer, hidden, top, onTool, onTimer }: ToolbarProps) {
           type="button"
           className="overlay-tool"
           aria-pressed={each === "screen" ? undefined : each === tool}
-          title={`${label} (${at + 1})`}
+          aria-keyshortcuts={String(at + 1)}
+          title={`${label} (${at + 1} in this chooser)`}
           onClick={() => onTool(each)}
         >
           {icon}
@@ -443,7 +444,8 @@ function Toolbar({ tool, timer, hidden, top, onTool, onTimer }: ToolbarProps) {
         data-testid="overlay-timer"
         data-active={timed && timer > 0 ? "true" : "false"}
         disabled={!timed}
-        title={`Timer (${TIMER_KEY})`}
+        aria-keyshortcuts={String(TIMER_KEY)}
+        title={`Timer (${TIMER_KEY} in this chooser)`}
         onClick={onTimer}
       >
         <TimerIcon />
@@ -462,7 +464,7 @@ function Toolbar({ tool, timer, hidden, top, onTool, onTimer }: ToolbarProps) {
  * Esc or right-click cancels.
  *
  * Opened by All-in-one, a toolbar at the top switches between those modes
- * in place, keys 1 to 6 pick them and 7 steps the Timer through off, 3, 5
+ * in place, keys 1 to 7 pick them and 8 steps the Timer through off, 3, 5
  * and 10 s. Screen captures every monitor as frozen the moment it is
  * picked. With the Timer on, the overlay closes on the selection and the
  * backend captures the same area live once the time is up.
@@ -601,7 +603,7 @@ function RegionOverlay() {
         // Tracked here as well as on mouse events so the selection snaps to a
         // square the moment Shift goes down, before the cursor moves again.
         setSquare(true);
-      } else if ((event.code === "Space" || event.key === " ") && !isField(event.target)) {
+      } else if ((event.code === "Space" || event.key === " ") && !isField(event.target) && !(event.target instanceof HTMLButtonElement)) {
         event.preventDefault();
         setMoving(true);
       }
@@ -819,7 +821,7 @@ function RegionOverlay() {
     }
     if (isField(event.target)) return;
     if (event.key === "Enter") {
-      if (!held) return;
+      if (!held || event.target instanceof HTMLButtonElement) return;
       event.preventDefault();
       confirmHeld();
       return;
@@ -1250,7 +1252,7 @@ function RegionOverlay() {
           </li>
           {allInOne && (
             <li>
-              <kbd>1</kbd>–<kbd>{TIMER_KEY}</kbd> Mode
+              <kbd>1</kbd>–<kbd>{TIMER_KEY}</kbd> In this chooser
             </li>
           )}
           {source && !allInOne && (

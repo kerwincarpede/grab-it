@@ -422,7 +422,7 @@ describe("SettingsWindow", () => {
     expect(screen.getByLabelText("Window")).toHaveValue("Alt+PrintScreen");
     expect(screen.getByLabelText("Screen")).toHaveValue("Ctrl+PrintScreen");
     expect(screen.getByLabelText("Open library")).toHaveValue("Alt+Shift+PrintScreen");
-    expect(screen.getByLabelText("All-in-one")).toHaveValue("Ctrl+Alt+PrintScreen");
+    expect(screen.getByLabelText("Capture & record…")).toHaveValue("Ctrl+Alt+PrintScreen");
     expect(screen.getByLabelText("Step capture")).toHaveValue("Ctrl+Alt+Shift+PrintScreen");
     expect(screen.getByRole("button", { name: "Save hotkeys" })).toBeDisabled();
   });

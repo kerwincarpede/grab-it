@@ -24,12 +24,12 @@ const panel = (glow: string, corner: string) =>
 <div style="flex: 1 1 300px; min-width: 0; max-width: 380px">
 <p style="margin: 0; display: inline-flex; align-items: center; gap: 8px; font-family: var(--gi-font-mono); font-size: 12.5px; color: var(--gi-hue-capture)"><span class="gi-pulse" style="width: 7px; height: 7px; border-radius: 50%; background: var(--gi-hue-capture); box-shadow: 0 0 12px var(--gi-hue-capture)"></span>01 · CAPTURE</p>
 <h3 id="t-capture" style="margin: 14px 0 0; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 650">One shortcut for every capture</h3>
-<p style="margin: 16px 0 0; color: var(--gi-muted)">All-in-one freezes the screen and puts every mode on one toolbar: a region, a window, a whole screen, some text or a colour, a recording or a timer.</p>
+<p style="margin: 16px 0 0; color: var(--gi-muted)">Capture & record… freezes the screen and puts every mode on one toolbar: a region, a window, a whole screen, some text or a colour, a recording or a timer.</p>
 <p style="margin: 12px 0 0; color: var(--gi-muted)">Set an exact size or lock a ratio, read the text or the link in a QR code, and pick any colour off the screen.</p>
 <a class="gi-link" href="/grab-it/capture/" style="display: inline-flex; align-items: center; gap: 6px; margin-top: 20px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-capture)">Capture guide <span aria-hidden="true" style="color: var(--gi-hue-capture)">→</span></a>
 </div>
 <div style="flex: 1.5 1 480px; min-width: 0">
-<TourAnimation client:visible src={captureSvg} alt="The All-in-one toolbar opens over a frozen screen. A region is dragged around a card, locked to 4:3 and captured to the Quick Access card. Then Text mode reads the link in a QR code, and Colour mode picks the blue of a chart bar with a magnifying loupe." />
+<TourAnimation client:visible src={captureSvg} alt="The Capture & record… toolbar opens over a frozen screen. A region is dragged around a card, locked to 4:3 and captured to the Quick Access card. Then Text mode reads the link in a QR code, and Colour mode picks the blue of a chart bar with a magnifying loupe." />
 </div>
 </section>
 
@@ -57,7 +57,7 @@ const panel = (glow: string, corner: string) =>
 </div>
 </div>
 <div style="flex: 1.5 1 480px; min-width: 0">
-<TourAnimation client:visible src={videoSvg} alt="Record mode is picked on the All-in-one toolbar and a window is chosen, with the webcam, clicks and keys on. After a countdown it records, showing a ring for each click and a label for a shortcut. In the video editor the start is trimmed, a zoom is added that follows the cursor, playback zooms in on each click, and Export saves a new MP4." />
+<TourAnimation client:visible src={videoSvg} alt="Record mode is picked on the Capture & record… toolbar and a window is chosen, with the webcam, clicks and keys on. After a countdown it records, showing a ring for each click and a label for a shortcut. In the video editor the start is trimmed, a zoom is added that follows the cursor, playback zooms in on each click, and Export saves a new MP4." />
 </div>
 </section>
 

@@ -322,7 +322,7 @@ fn hub_position(
 }
 
 /// Starts a capture from the hub once it has hidden. `kind` is `region`,
-/// `window`, `screen`, `monitor`, `repeat`, `record`, `text` or `colour`.
+/// `allInOne`, `window`, `screen`, `monitor`, `repeat`, `record`, `text`, `colour` or `steps`.
 #[tauri::command]
 pub fn hub_capture(
     kind: String,
@@ -341,6 +341,7 @@ pub fn hub_capture(
         return Ok(());
     }
     let action = match kind.as_str() {
+        "allInOne" => Action::AllInOne,
         "region" => Action::Region,
         "window" => Action::Window,
         "screen" => Action::Screen,
@@ -352,6 +353,10 @@ pub fn hub_capture(
         other => return Err(format!("unknown capture: {other}")),
     };
     hide(&app);
+    if action == Action::AllInOne && delay_seconds.unwrap_or(0) == 0 {
+        actions::chooser_after_hiding(&app, HIDE_SETTLE);
+        return Ok(());
+    }
     // A timed capture's countdown covers the hub hiding, so its pill
     // counts the whole seconds asked for.
     let delay = match delay_seconds.unwrap_or(0).min(60) {

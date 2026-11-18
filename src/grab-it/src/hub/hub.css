@@ -272,42 +272,6 @@ body:has(.hub) {
   border-radius: 6px;
 }
 
-.hub-update {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 9px;
-  margin: 6px 2px 0;
-  padding: 8px 10px;
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 450;
-  text-align: left;
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-edge);
-  border-radius: 7px;
-}
-
-.hub-update::before {
-  content: "";
-  flex: none;
-  width: 6px;
-  height: 6px;
-  background: var(--accent);
-  border-radius: 50%;
-}
-
-.hub-update span {
-  margin-left: auto;
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.hub-update:where(:hover) {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-}
-
 .hub-foot {
   display: flex;
   flex: none;
@@ -330,4 +294,9 @@ body:has(.hub) {
 
 .hub-quit {
   margin-left: auto;
+}
+
+.hub button:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
 }

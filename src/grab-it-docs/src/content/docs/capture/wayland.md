@@ -23,7 +23,7 @@ Your desktop's own screenshot picker shows instead of Grab-it's overlay:
 | --- | --- |
 | **Region**, **Window**, **Monitor**, **Text** | The desktop's picker asks for the area, window or monitor |
 | **Screen** | Captures straight away, with no picker |
-| **All-in-one** | The desktop's picker shows instead, as for Region; there's no toolbar |
+| **Capture & record…** | The desktop's picker shows instead, as for Region; there's no toolbar |
 | **Pick a colour** | The desktop's own colour picker shows |
 | **Repeat last region** | Not available: the desktop always asks you to pick |
 | **Record** | Not available yet |

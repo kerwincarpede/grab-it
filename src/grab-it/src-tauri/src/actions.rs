@@ -100,12 +100,34 @@ pub fn start_after(app: &AppHandle, action: Action, delay: Duration) {
 
 /// Starts a capture without blocking the caller (often the main thread).
 pub fn start(app: &AppHandle, action: Action) {
+    dispatch(app, action, false, Duration::ZERO);
+}
+
+/// The global chooser binding also dismisses a chooser already on screen.
+pub fn start_from_hotkey(app: &AppHandle, action: Action) {
+    dispatch(app, action, action == Action::AllInOne, Duration::ZERO);
+}
+
+/// Claims the chooser immediately and freezes the screen after the hub has hidden.
+pub fn chooser_after_hiding(app: &AppHandle, settle: Duration) {
+    #[cfg(target_os = "linux")]
+    if crate::portal::is_wayland() {
+        start_after(app, Action::AllInOne, settle);
+        return;
+    }
+    dispatch(app, Action::AllInOne, false, settle);
+}
+
+fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool, settle: Duration) {
     if action == Action::Steps {
         crate::steps::toggle(app, crate::steps::Trigger::Keys);
         return;
     }
     // The same action that starts a recording ends it.
     if action.stops_recording() && record::stop(app) {
+        return;
+    }
+    if toggle_chooser && overlay::cancel_chooser(app) {
         return;
     }
     // Refused before a region is picked; record::start_with refuses
@@ -171,28 +193,40 @@ pub fn start(app: &AppHandle, action: Action) {
 
     // Claimed before the thread starts, so a second press while the
     // monitors are still freezing does not open a second overlay.
-    let uses_overlay = matches!(
-        action,
-        Action::Region
-            | Action::Window
-            | Action::Text
-            | Action::Colour
-            | Action::Record
-            | Action::AllInOne
-    );
-    if uses_overlay && !overlay::begin(app) {
-        return;
+    enum CaptureJob {
+        Overlay(u64),
+        Repeat,
+        Screen,
+        Monitor(usize),
     }
-
+    let chooser = action == Action::AllInOne;
+    let job = match action {
+        Action::Region
+        | Action::Window
+        | Action::Text
+        | Action::Colour
+        | Action::Record
+        | Action::AllInOne => {
+            let Some(id) = overlay::begin(app, chooser) else {
+                return;
+            };
+            CaptureJob::Overlay(id)
+        }
+        Action::Repeat => CaptureJob::Repeat,
+        Action::Screen => CaptureJob::Screen,
+        Action::Monitor(index) => CaptureJob::Monitor(index),
+        Action::Steps => return,
+    };
     let app = app.clone();
     std::thread::spawn(move || {
-        let result = match action {
-            Action::Region | Action::Window | Action::Text | Action::Colour | Action::Record => {
-                overlay::open(&app, action.mode(), action.intent(), false)
+        let result = match job {
+            CaptureJob::Overlay(id) => {
+                if !settle.is_zero() {
+                    std::thread::sleep(settle);
+                }
+                overlay::open(&app, action.mode(), action.intent(), chooser, id)
             }
-            // Starts as a region capture; its toolbar switches mode in place.
-            Action::AllInOne => overlay::open(&app, action.mode(), action.intent(), true),
-            Action::Repeat => {
+            CaptureJob::Repeat => {
                 let foreground = screen::foreground();
                 overlay::capture_last_region(&app).map(|(image, scale, pointer)| {
                     finish(
@@ -205,7 +239,7 @@ pub fn start(app: &AppHandle, action: Action) {
                     )
                 })
             }
-            Action::Screen => {
+            CaptureJob::Screen => {
                 let foreground = screen::foreground();
                 let scale = monitor_scale(None);
                 let snapshot = pointer::snapshot();
@@ -224,9 +258,7 @@ pub fn start(app: &AppHandle, action: Action) {
                     )
                 })
             }
-            // Handled before the thread starts.
-            Action::Steps => Ok(()),
-            Action::Monitor(index) => {
+            CaptureJob::Monitor(index) => {
                 let foreground = screen::foreground();
                 let scale = monitor_scale(Some(index));
                 let snapshot = pointer::snapshot();

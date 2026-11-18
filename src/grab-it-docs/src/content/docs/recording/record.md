@@ -9,17 +9,17 @@ sidebar:
 
 Start a recording in any of these ways:
 
-![Record picked in the All-in-one toolbar, with the recording options above the region.](../../../assets/recording/record-setup.png)
+![Record picked in the Capture & record… toolbar, with the recording options above the region.](../../../assets/recording/record-setup.png)
 
 - click the Grab-it icon in the menu bar or tray and choose **Record**,
-- press the All-in-one shortcut and pick **Record** (or press `6`),
+- press the Capture & record… shortcut and pick **Record** (or press `6`),
 - or start Grab-it with `--open record`, for example from a script.
 
 The screen freezes, as it does for a screenshot, with the recording setup toolbar at the top.
 
 ## Pick what to record
 
-The setup toolbar starts with three choices. Press `1`, `2` or `3` to switch between them (in All-in-one the number keys pick modes instead, so click them):
+The setup toolbar starts with three choices. Press `1`, `2` or `3` to switch between them (in Capture & record… the number keys pick modes instead, so click them):
 
 - **Region**: drag an area. It stays selected so you can adjust it: drag a handle to resize it, drag inside it to move it, or set an exact size or a ratio in the chip beside it. Drag anywhere else to start a new one.
 - **Window**: click a window to record the area it covers. Click another to switch.
@@ -32,7 +32,7 @@ The rest of the toolbar sets the format, sound, webcam, clicks, keys and countdo
 When you're ready, press **Record** or `Enter`. Press **×** or `Esc` to cancel.
 
 :::tip
-When you start Record on its own (from the tray's **Record** or `--open record`), drag the setup toolbar by its grip (the dots at its left end) to move it off the area you want to record. Started from the All-in-one toolbar, it has no grip. The recording toolbar opens in the same place, and so does the setup toolbar next time.
+When you start Record on its own (from the tray's **Record** or `--open record`), drag the setup toolbar by its grip (the dots at its left end) to move it off the area you want to record. Started from the Capture & record… toolbar, it has no grip. The recording toolbar opens in the same place, and so does the setup toolbar next time.
 :::
 
 ## While it records
@@ -48,7 +48,7 @@ On Windows and macOS the recording toolbar and the outline are left out of the v
 Stop the recording in any of these ways:
 
 - press **Stop** on the recording toolbar,
-- press the All-in-one shortcut again, if that's how you started it,
+- press the Capture & record… shortcut again, if that's how you started it,
 - or choose **Stop recording** in the tray menu (the **Record** item changes to it while you record).
 
 A GIF also stops by itself after one minute.

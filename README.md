@@ -18,7 +18,7 @@ One key to capture, a few clicks to explain, and it's already on your clipboard.
 
 <br><br>
 
-<img src="docs/assets/demo.gif" alt="Animation in five parts. Capture: the All-in-one toolbar opens, a region is dragged and sized, and the capture lands on the Quick Access card. Mark it up: an arrow, a box, numbered steps, a blur and a note are added, the capture goes on a gradient backdrop and is copied. Copy text: the code on a screen share is selected and copied as text, tidied up by AI. Record and edit: the screen is recorded, then trimmed in the video editor with a zoom that follows the cursor, and exported. Find it again: searching the Library for invoice finds a receipt by the text inside it, with an AI description and tags." width="100%">
+<img src="docs/assets/demo.gif" alt="Animation in five parts. Capture: the Capture & record… toolbar opens, a region is dragged and sized, and the capture lands on the Quick Access card. Mark it up: an arrow, a box, numbered steps, a blur and a note are added, the capture goes on a gradient backdrop and is copied. Copy text: the code on a screen share is selected and copied as text, tidied up by AI. Record and edit: the screen is recorded, then trimmed in the video editor with a zoom that follows the cursor, and exported. Find it again: searching the Library for invoice finds a receipt by the text inside it, with an AI description and tags." width="100%">
 
 **[Get started in 2 minutes](https://kerwincarpede.github.io/grab-it/get-started/)**
 
@@ -43,7 +43,7 @@ Want to point something out first? Click **Annotate** on the card that pops up. 
 <td width="50%" valign="top">
 
 ### Capture anything
-A region, a window, one monitor or all of them, with a magnifier for pixel-perfect edges. The **All-in-one** toolbar (`Ctrl Alt PrintScreen`, `⌘ ⇧ A`) puts every mode in one place, with exact sizes, ratio locks and a timer. Repeat your last region in one click, or pick any colour off the screen.
+A region, a window, one monitor or all of them, with a magnifier for pixel-perfect edges. The **Capture & record…** toolbar (`Ctrl Alt PrintScreen`, `⌘ ⇧ A`) opens from the tray, hub or Library. Press the shortcut again to dismiss it. While it’s open, keys `1`–`7` choose a mode and `8` cycles the timer. Press `Enter` to confirm a held selection. Repeat your last region in one click, or pick any colour off the screen.
 
 </td>
 <td width="50%" valign="top">

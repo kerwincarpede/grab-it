@@ -1,6 +1,6 @@
 //! Global hotkeys for the captures, the two capture tools and the library.
 //!
-//! The defaults are Ctrl+Alt+PrintScreen for All-in-one, PrintScreen,
+//! The defaults are Ctrl+Alt+PrintScreen for Capture & record…, PrintScreen,
 //! Alt+PrintScreen and Ctrl+PrintScreen for region, window and screen,
 //! Shift+PrintScreen to capture text, Ctrl+Shift+PrintScreen to pick a colour
 //! Alt+Shift+PrintScreen to open the library and Ctrl+Alt+Shift+PrintScreen
@@ -9,6 +9,7 @@
 //! (see `portal.rs`), since apps cannot grab keys there themselves.
 
 use std::{
+    collections::BTreeMap,
     str::FromStr,
     sync::{
         Mutex,
@@ -17,7 +18,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use crate::{
@@ -64,7 +65,7 @@ pub enum HotkeyAction {
 /// Does what a hotkey press asks. Never blocks the caller.
 pub fn run(app: &AppHandle, action: HotkeyAction) {
     match action {
-        HotkeyAction::Capture(action) => actions::start(app, action),
+        HotkeyAction::Capture(action) => actions::start_from_hotkey(app, action),
         HotkeyAction::Library => {
             // Off the calling thread: creating a window from inside an event
             // handler can deadlock.
@@ -113,7 +114,7 @@ impl Hotkeys {
         [
             (
                 Capture(Action::AllInOne),
-                "All-in-one",
+                "Capture & record…",
                 self.all_in_one.as_str(),
             ),
             (Capture(Action::Region), "Region", self.region.as_str()),
@@ -162,6 +163,7 @@ impl Hotkeys {
 #[derive(Default)]
 pub struct HotkeyState {
     bound: Mutex<Vec<(Shortcut, HotkeyAction)>>,
+    labels: Mutex<BindingLabels>,
     /// Set while Settings records a hotkey, so pressing a current hotkey
     /// there records it instead of starting a capture.
     paused: AtomicBool,
@@ -171,6 +173,80 @@ impl HotkeyState {
     fn bound(&self) -> std::sync::MutexGuard<'_, Vec<(Shortcut, HotkeyAction)>> {
         self.bound.lock().unwrap_or_else(|p| p.into_inner())
     }
+}
+
+/// Platform-formatted shortcuts accepted by the system, keyed like Hotkeys.
+pub type BindingLabels = BTreeMap<String, String>;
+
+impl HotkeyAction {
+    fn binding_key(self) -> Option<&'static str> {
+        match self {
+            Self::Capture(Action::AllInOne) => Some("allInOne"),
+            Self::Capture(Action::Region) => Some("region"),
+            Self::Capture(Action::Window) => Some("window"),
+            Self::Capture(Action::Screen) => Some("screen"),
+            Self::Capture(Action::Text) => Some("text"),
+            Self::Capture(Action::Colour) => Some("colour"),
+            Self::Capture(Action::Steps) => Some("steps"),
+            Self::Library => Some("library"),
+            Self::Capture(_) => None,
+        }
+    }
+}
+
+fn native_label(accelerator: &str) -> String {
+    accelerator
+        .split('+')
+        .map(str::trim)
+        .map(|key| {
+            if cfg!(target_os = "macos") {
+                match key.to_ascii_lowercase().as_str() {
+                    "cmd" | "command" | "cmdorctrl" | "super" | "commandorcontrol" => "⌘",
+                    "shift" => "⇧",
+                    "alt" | "option" => "⌥",
+                    "ctrl" | "control" => "⌃",
+                    _ => key,
+                }
+            } else if key.eq_ignore_ascii_case("CmdOrCtrl")
+                || key.eq_ignore_ascii_case("CommandOrControl")
+            {
+                "Ctrl"
+            } else {
+                key
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(if cfg!(target_os = "macos") { "" } else { "+" })
+}
+
+#[tauri::command]
+pub fn effective_hotkeys(state: State<'_, HotkeyState>) -> BindingLabels {
+    state
+        .labels
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+}
+
+fn binding_labels(bindings: Vec<(HotkeyAction, String)>) -> BindingLabels {
+    bindings
+        .into_iter()
+        .filter_map(|(action, label)| {
+            if label.trim().is_empty() {
+                return None;
+            }
+            Some((action.binding_key()?.to_owned(), label))
+        })
+        .collect()
+}
+
+fn publish_labels(app: &AppHandle, bindings: Vec<(HotkeyAction, String)>) {
+    let labels = binding_labels(bindings);
+    if let Some(state) = app.try_state::<HotkeyState>() {
+        *state.labels.lock().unwrap_or_else(|p| p.into_inner()) = labels.clone();
+    }
+    crate::tray::set_chooser_binding(app, labels.get("allInOne").map(String::as_str));
+    let _ = app.emit("effective-hotkeys-changed", &labels);
 }
 
 fn is_paused(app: &AppHandle) -> bool {
@@ -197,6 +273,7 @@ pub fn pause(app: &AppHandle) {
         eprintln!("Grab-it: could not pause hotkeys: {err}");
     }
     state.bound().clear();
+    publish_labels(app, Vec::new());
 }
 
 /// Undoes [`pause`], registering the saved hotkeys again.
@@ -268,6 +345,7 @@ pub fn apply(app: &AppHandle, hotkeys: &Hotkeys) -> Vec<String> {
     }
     let mut problems = Vec::new();
     let mut bound = Vec::new();
+    let mut labels = Vec::new();
     for (action, name, accelerator) in hotkeys.entries() {
         let shortcut = match Shortcut::from_str(accelerator) {
             Ok(shortcut) => shortcut,
@@ -277,7 +355,10 @@ pub fn apply(app: &AppHandle, hotkeys: &Hotkeys) -> Vec<String> {
             }
         };
         match shortcuts.register(shortcut) {
-            Ok(()) => bound.push((shortcut, action)),
+            Ok(()) => {
+                bound.push((shortcut, action));
+                labels.push((action, native_label(accelerator)));
+            }
             Err(err) => problems.push(format!(
                 "{name} hotkey `{accelerator}` could not be registered: {err}"
             )),
@@ -286,6 +367,7 @@ pub fn apply(app: &AppHandle, hotkeys: &Hotkeys) -> Vec<String> {
     if let Some(state) = app.try_state::<HotkeyState>() {
         *state.bound() = bound;
     }
+    publish_labels(app, labels);
     problems
 }
 
@@ -298,14 +380,17 @@ pub fn start(app: &AppHandle, hotkeys: &Hotkeys) {
         let handle = app.clone();
         let hotkeys = hotkeys.clone();
         tauri::async_runtime::spawn(async move {
-            let on_press = move |action: HotkeyAction| {
+            let on_press = |action: HotkeyAction| {
                 if !is_paused(&handle) {
                     run(&handle, action);
                 }
             };
-            if let Err(err) = crate::portal::run_global_shortcuts(hotkeys, on_press).await {
+            let on_bound = |bindings| publish_labels(&handle, bindings);
+            if let Err(err) = crate::portal::run_global_shortcuts(hotkeys, on_press, on_bound).await
+            {
                 eprintln!("Grab-it: {err}. Use the tray menu to capture.");
             }
+            publish_labels(&handle, Vec::new());
         });
         return;
     }
@@ -340,6 +425,27 @@ mod tests {
         assert!(defaults.entries().iter().any(|(action, name, _)| *action
             == HotkeyAction::Capture(Action::Steps)
             && *name == "Step capture"));
+    }
+
+    #[test]
+    fn hints_only_include_live_bindings_and_preserve_desktop_labels() {
+        let bindings = binding_labels(vec![
+            (
+                HotkeyAction::Capture(Action::AllInOne),
+                "Desktop shortcut A".into(),
+            ),
+            (HotkeyAction::Capture(Action::Screen), String::new()),
+        ]);
+        assert_eq!(
+            bindings,
+            BTreeMap::from([("allInOne".into(), "Desktop shortcut A".into())])
+        );
+        let expected = if cfg!(target_os = "macos") {
+            "⌘⇧2"
+        } else {
+            "Ctrl+Shift+2"
+        };
+        assert_eq!(native_label("CmdOrCtrl+Shift+2"), expected);
     }
 
     #[test]
@@ -391,7 +497,7 @@ mod tests {
         };
         assert_eq!(
             all_in_one_clash.validated(),
-            Err("Region and All-in-one use the same hotkey.".into())
+            Err("Region and Capture & record… use the same hotkey.".into())
         );
 
         let library_clash = Hotkeys {

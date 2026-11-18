@@ -11,7 +11,7 @@ Click the Grab-it icon in the menu bar or tray for every capture. On Windows and
 
 | Item | What it does |
 | --- | --- |
-| **All-in-one** | Every mode from one toolbar; see [All-in-one](/grab-it/capture/all-in-one/) |
+| **Capture & record…** | Every mode from one toolbar; see [Capture & record…](/grab-it/capture/all-in-one/) |
 | **Capture region** | Drag a region or click a window; see [Region](/grab-it/capture/region/) |
 | **Capture window** | Click a window; see [Window](/grab-it/capture/window/) |
 | **Capture screen (all monitors)** | Every monitor in one image; see [Screen and monitor](/grab-it/capture/screen/) |

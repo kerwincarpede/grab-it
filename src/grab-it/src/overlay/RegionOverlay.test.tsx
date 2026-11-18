@@ -584,6 +584,9 @@ describe("RegionOverlay", () => {
       const names = within(toolbar)
         .getAllByRole("button")
         .map((button) => button.textContent);
+      expect(within(toolbar).getAllByRole("button").map((button) => button.getAttribute("aria-keyshortcuts"))).toEqual(
+        ["1", "2", "3", "4", "5", "6", "7", "8"],
+      );
       expect(names).toEqual([
         "Region1",
         "Window2",
@@ -600,7 +603,7 @@ describe("RegionOverlay", () => {
       expect(toolbar.style.top).toBe("52px");
       const hint = screen.getByRole("status").closest(".overlay-hint") as HTMLElement;
       expect(hint.style.top).toBe("104px");
-      expect(screen.getByRole("list", { name: "Keyboard shortcuts" })).toHaveTextContent("1–8 Mode");
+      expect(screen.getByRole("list", { name: "Keyboard shortcuts" })).toHaveTextContent("1–8 In this chooser");
     });
 
     it("captures a dragged region with what the toolbar chose", async () => {

@@ -17,8 +17,8 @@ The tray menu's **Monitor** submenu lists each monitor by number, name and size,
 
 On Wayland, where Grab-it may not be able to list your monitors, the submenu shows **Choose a monitor…** instead, and your desktop asks which one to capture.
 
-## From All-in-one
+## From Capture & record…
 
-**Screen** in the [All-in-one](/grab-it/capture/all-in-one/) toolbar (key `3`) captures every monitor as it was frozen, the moment you pick it.
+**Screen** in the [Capture & record…](/grab-it/capture/all-in-one/) toolbar (key `3`) captures every monitor as it was frozen, the moment you pick it.
 
 Want to wait a moment first? **Timed capture → Screen in 5 seconds** in the tray menu does just that. See [Timed capture](/grab-it/capture/timed/).

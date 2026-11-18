@@ -97,9 +97,22 @@ pub fn reset_hover() {
 
 /// The menu items whose text or state changes while Grab-it runs.
 pub struct TrayItems {
+    chooser: MenuItem<tauri::Wry>,
     record: MenuItem<tauri::Wry>,
     steps: MenuItem<tauri::Wry>,
     unlock: MenuItem<tauri::Wry>,
+}
+
+/// Shows the global shortcut without installing a competing menu accelerator.
+pub fn set_chooser_binding(app: &AppHandle, binding: Option<&str>) {
+    if let Some(items) = app.try_state::<TrayItems>() {
+        let mut title = String::from("Capture && record…");
+        if let Some(label) = binding {
+            title.push_str("    ");
+            title.push_str(&label.replace('&', "&&"));
+        }
+        let _ = items.chooser.set_text(title);
+    }
 }
 
 /// Makes the step capture item say what choosing it does now, the
@@ -290,7 +303,13 @@ pub fn quit(app: &AppHandle) {
 const CLICK_OPENS_HUB: bool = cfg!(not(target_os = "linux"));
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
-    let all_in_one = MenuItem::with_id(app, MENU_ALL_IN_ONE, "All-in-one", true, None::<&str>)?;
+    let all_in_one = MenuItem::with_id(
+        app,
+        MENU_ALL_IN_ONE,
+        "Capture && record…",
+        true,
+        None::<&str>,
+    )?;
     let region = MenuItem::with_id(app, MENU_REGION, "Capture region", true, None::<&str>)?;
     let window = MenuItem::with_id(app, MENU_WINDOW, "Capture window", true, None::<&str>)?;
     let screen_item = MenuItem::with_id(
@@ -320,10 +339,13 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     app.manage(TrayItems {
+        chooser: all_in_one.clone(),
         record: record.clone(),
         steps: steps.clone(),
         unlock: unlock.clone(),
     });
+    let bindings = crate::hotkeys::effective_hotkeys(app.state());
+    set_chooser_binding(app, bindings.get("allInOne").map(String::as_str));
     let separator = PredefinedMenuItem::separator(app)?;
     let last = MenuItem::with_id(app, MENU_LAST, "Show last capture", true, None::<&str>)?;
     let library = MenuItem::with_id(app, MENU_LIBRARY, "Open Grab-it…", true, None::<&str>)?;
@@ -336,8 +358,8 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &all_in_one,
             &region,
+            &all_in_one,
             &window,
             &screen_item,
             &monitors,
