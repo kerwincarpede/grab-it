@@ -12,7 +12,7 @@ import {
   type Point,
   type Rect,
 } from "./model";
-import { displaySize, displayTransform, IDENTITY, isIdentity, orientationOf, orientedCanvas, orientRect, scaledSize, type Orientation } from "./orient";
+import { displaySize, IDENTITY, isIdentity, orientationOf, orientedCanvas, orientRect, scaledSize, type Orientation } from "./orient";
 
 export interface View {
   scale: number;
@@ -506,34 +506,6 @@ export interface ComposeOptions extends BackdropSources {
 export function reachesPast(area: Rect, image: { width: number; height: number }, orientation: Orientation = IDENTITY): boolean {
   const shown = displaySize(image, orientation);
   return area.x < 0 || area.y < 0 || area.x + area.width > shown.width || area.y + area.height > shown.height;
-}
-
-/** One image drawn on the canvas, and where, in capture pixels. */
-export interface CanvasPart {
-  source: CanvasImageSource;
-  rect: Rect;
-}
-
-/**
- * The capture and added images (`parts`) inside `area` (on show), turned
- * and mirrored as they show, on a canvas of their own: what the preview's
- * shadow follows. Null without a 2D canvas.
- */
-export function partsCanvas(parts: CanvasPart[], area: Rect, image: { width: number; height: number }, orientation: Orientation = IDENTITY): HTMLCanvasElement | null {
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(area.width));
-  canvas.height = Math.max(1, Math.round(area.height));
-  let ctx: CanvasRenderingContext2D | null;
-  try {
-    ctx = canvas.getContext("2d");
-  } catch {
-    return null;
-  }
-  if (!ctx) return null;
-  const [a, b, c, d, e, f] = displayTransform(image, orientation);
-  ctx.setTransform(a, b, c, d, e - area.x, f - area.y);
-  for (const part of parts) ctx.drawImage(part.source, part.rect.x, part.rect.y, part.rect.width, part.rect.height);
-  return canvas;
 }
 
 /**

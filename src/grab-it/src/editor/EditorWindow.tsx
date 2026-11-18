@@ -47,13 +47,12 @@ import {
   fallbackScale,
   flatten,
   measureBorders,
-  partsCanvas,
+  exportArea,
   reachesPast,
   roundedRectPath,
   shadowPlate,
   shadowShift,
   type ExportFormat,
-  type CanvasPart,
   type PaintLayer,
   type View,
 } from "./flatten";
@@ -765,21 +764,13 @@ export default function EditorWindow() {
    * otherwise a plain rectangle casts it.
    */
   const clearParts = Boolean(frame?.layout?.shadow && imageSize && reachesPast(frame.area, imageSize, { rotation, flipX, flipY }));
-  /** The silhouette of the capture and the loaded images in the exported area, which casts the shadow (see `shadowPlate`). */
-  const shadowShape = useMemo(() => {
-    if (!clearParts || !frame?.layout || !image || !imageSize) return null;
-    const drawn: CanvasPart[] = [{ source: image, rect: { x: 0, y: 0, ...imageSize } }];
-    for (const shape of doc.shapes) {
-      const element = shape.type === "image" ? assetImages.get(shape.src) : undefined;
-      if (shape.type === "image" && element) drawn.push({ source: element, rect: shape });
-    }
-    try {
-      const content = partsCanvas(drawn, frame.area, imageSize, { rotation, flipX, flipY });
-      return content ? shadowPlate(content, frame.area, frame.layout.radius) : null;
-    } catch {
-      return null;
-    }
-  }, [clearParts, frame, image, imageSize, doc.shapes, assetImages, rotation, flipX, flipY]);
+  /**
+   * The silhouette of everything the exported area shows (the content
+   * layer: the capture, the images and every annotation), which casts the
+   * shadow as the export's does (see `shadowPlate`). Rendered after the
+   * layer draws, at screen resolution: the shadow is blurred anyway.
+   */
+  const [shadowShape, setShadowShape] = useState<HTMLCanvasElement | null>(null);
   /** What copy and export put out before Resize: the crop as it shows, framed by any backdrop. */
   const outputBase = useMemo(() => {
     if (!imageSize || !canvas) return null;
@@ -1810,6 +1801,27 @@ export default function EditorWindow() {
   const lensZoom = selected?.type === "magnify" ? selected.zoom : (style.zoom ?? 2);
   const lens = (selected?.type === "magnify" ? selected.lens : style.lens) ?? "round";
   const lensLine = Boolean(selected?.type === "magnify" ? selected.line : style.lensLine);
+
+  // Follows the content layer, so a shape drawn into a clear corner casts its shadow in the preview as on export.
+  useEffect(() => {
+    let frameId = 0;
+    const draw = () => {
+      const layer = contentRef.current;
+      if (!clearParts || !frame?.layout || !imageSize || !canvas || !layer) {
+        setShadowShape(null);
+        return;
+      }
+      try {
+        const area = exportArea(doc.crop, imageSize, currentView, orientation, canvas);
+        const content = layer.toCanvas({ ...area, pixelRatio: 1 });
+        setShadowShape(shadowPlate(content, content, frame.layout.radius * currentView.scale));
+      } catch {
+        setShadowShape(null);
+      }
+    };
+    frameId = window.requestAnimationFrame(draw);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [clearParts, frame, imageSize, canvas, doc, draft, assetImages, image, currentView, orientation]);
 
   return (
     <main className="editor" data-testid="editor" data-ready={image ? "true" : "false"}>

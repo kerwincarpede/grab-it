@@ -84,16 +84,6 @@ function shift(size: Size, o: Orientation): Point {
   return { x: -Math.min(...corners.map((c) => c.x)) || 0, y: -Math.min(...corners.map((c) => c.y)) || 0 };
 }
 
-/**
- * The turn, mirror and shift from capture pixels to display space, as a
- * canvas transform `[a, b, c, d, e, f]` (see `setTransform`).
- */
-export function displayTransform(size: Size, o: Orientation): [number, number, number, number, number, number] {
-  const [a, b, c, d] = linear(o);
-  const by = shift(size, o);
-  return [a, b, c, d, by.x, by.y];
-}
-
 /** A capture point (in a capture of `size`) on show. */
 export function toDisplay(p: Point, size: Size, o: Orientation): Point {
   const at = apply(linear(o), p);

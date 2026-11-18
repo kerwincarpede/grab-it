@@ -6,13 +6,15 @@ import EditorWindow from "./EditorWindow";
 import type { BackdropPreset, EditorPreferences } from "../settings/api";
 import type { OcrLine, ShotText } from "../library/api";
 import type { CapturedPointer } from "./api";
-import type { Annotations } from "./model";
+import type { Annotations, Shape } from "./model";
 import { PREFERENCES_DELAY_MS } from "./preferences";
 import { AUTOSAVE_DELAY_MS } from "./useAnnotations";
 
 /** Where the mocked stage reports the pointer, in capture pixels. */
 const pointerAt = vi.hoisted(() => ({ x: 0, y: 0 }));
 /** Where the editor last put a dragged node itself (a line handle snapping into place). */
+/** What the content layer was rendered over, outside flatten (which is mocked): the preview's shadow silhouette. */
+const layerRenders = vi.hoisted(() => ({ areas: [] as { x: number; y: number; width: number; height: number; pixelRatio: number }[] }));
 const placed = vi.hoisted(() => ({ at: null as { x: number; y: number } | null }));
 
 // jsdom has no canvas, so Konva nodes render as plain elements that keep
@@ -104,7 +106,17 @@ vi.mock("react-konva", async () => {
   const LayerNode = node("Layer");
   // The editor needs a layer to flatten (flatten itself is mocked below).
   const Layer = ({ ref, ...props }: { ref?: Ref<unknown>; children?: ReactNode; name?: string }) => {
-    useImperativeHandle(ref, () => ({ findOne: () => undefined }), []);
+    useImperativeHandle(
+      ref,
+      () => ({
+        findOne: () => undefined,
+        toCanvas: (area: { x: number; y: number; width: number; height: number; pixelRatio: number }) => {
+          layerRenders.areas.push(area);
+          return document.createElement("canvas");
+        },
+      }),
+      [],
+    );
     return createElement(LayerNode, props);
   };
   type Handler = ((event: unknown) => void) | undefined;
@@ -442,6 +454,7 @@ describe("EditorWindow", () => {
   beforeEach(() => {
     flattened.calls = [];
     flattened.options = [];
+    layerRenders.areas = [];
     flattened.measured = [];
     textBands.band = null;
     textBands.asked = [];
@@ -999,6 +1012,28 @@ describe("EditorWindow", () => {
       expect(last(flattened.calls)).toMatchObject({ crop: null, backdrop });
       // The whole canvas goes out, framed whole.
       expect(last(flattened.options)).toMatchObject({ canvas: { x: 0, y: 0, width: 800, height: 300 }, borders: null });
+    });
+
+    it("casts the preview's shadow from the whole content layer, annotations included, as the export does", async () => {
+      const backdrop = { fill: "ocean", padding: 40, radius: 8, shadow: true };
+      // A shorter image beside the capture leaves a clear corner, with an arrow drawn into it.
+      const arrow: Shape = { id: "a9", type: "arrow", points: [450, 250, 700, 280], color: "#e5484d", strokeWidth: 4 };
+      mockEditor({ ...beside, shapes: [{ id: "i1", type: "image", x: 400, y: 0, width: 400, height: 200, src: "after.png" }, arrow], backdrop });
+      await ready();
+      // The silhouette comes from the content layer (where the arrow is drawn), over the exported 800×300 area at screen resolution.
+      await waitFor(() => expect(layerRenders.areas.length).toBeGreaterThan(0));
+      const area = layerRenders.areas[layerRenders.areas.length - 1];
+      expect(area.pixelRatio).toBe(1);
+      expect(area.width / area.height).toBeCloseTo(800 / 300);
+    });
+
+    it("keeps the plain shadow plate for a capture with nothing past it", async () => {
+      const arrow: Shape = { id: "a9", type: "arrow", points: [50, 50, 300, 280], color: "#e5484d", strokeWidth: 4 };
+      mockEditor({ version: 1, shapes: [arrow], crop: null, backdrop: { fill: "ocean", padding: 40, radius: 8, shadow: true } });
+      await ready();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // The capture is opaque all over: no silhouette is rendered from the content layer.
+      expect(layerRenders.areas).toEqual([]);
     });
 
     it("turns the whole canvas", async () => {
