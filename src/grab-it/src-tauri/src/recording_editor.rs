@@ -750,11 +750,6 @@ impl ExportClip {
     pub fn duration_ms(&self) -> u64 {
         self.end_ms.saturating_sub(self.start_ms)
     }
-
-    /// How many frames it gives at `fps`.
-    pub fn frames(&self, fps: u32) -> u64 {
-        (self.duration_ms() * u64::from(fps)).div_ceil(1000)
-    }
 }
 
 /// A stretch of the sequence with no clip: the backdrop with a black video
@@ -1922,10 +1917,10 @@ mod tests {
         );
         assert_eq!(plan().frames(60), 495);
         assert_eq!(
-            ExportClip {
+            ExportEntry::from(ExportClip {
                 end_ms: 1251,
                 ..clip()
-            }
+            })
             .frames(30),
             1
         );
