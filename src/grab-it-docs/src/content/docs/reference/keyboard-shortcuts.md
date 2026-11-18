@@ -34,10 +34,12 @@ While you're picking an area to capture or record:
 
 | Key | What it does |
 | --- | --- |
-| `Esc` | Cancel |
+| `Esc` | Cancel. In Capture & record…, the first `Esc` leaves the toolbar if you're in it |
 | Hold `Shift` while dragging | Make the selection a square |
 | Hold `Space` while dragging | Move the selection instead of resizing it |
 | `Enter` | Capture (or record) the adjusted selection, in Capture & record… and Record |
+| `Enter` | In Capture & record…: capture the window under the pointer in **Window**, or copy the colour under it in **Colour** |
+| `Tab`, then `←` `→` | In Capture & record…: move into the toolbar, then between the buttons of a group |
 | `1` to `7` | In Capture & record…: Region, Window, Screen, Text, Colour, Record, Scroll |
 | `8` | In Capture & record…: step the timer through off, 3, 5 and 10 seconds |
 | `1` to `3` | When recording: Region, Window, Screen |

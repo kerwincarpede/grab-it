@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import { floatingPosition, imagePixelAt, toHex, type Point, type Size } from "./geometry";
 import "./loupe.css";
 
@@ -58,6 +58,8 @@ interface LoupeProps {
    * under `pointer` at `scale`.
    */
   pixel?: Point;
+  /** Elsewhere to show the colour too, such as Capture & record's toolbar in Colour. */
+  readout?: { text: RefObject<HTMLElement | null>; swatch: RefObject<HTMLElement | null> };
 }
 
 /**
@@ -65,7 +67,7 @@ interface LoupeProps {
  * colour of the pixel under the cursor and the cursor's position in image
  * pixels.
  */
-function Loupe({ image, pointer, scale, viewport, pixel: shownPixel }: LoupeProps) {
+function Loupe({ image, pointer, scale, viewport, pixel: shownPixel, readout }: LoupeProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const swatch = useRef<HTMLSpanElement>(null);
   const colour = useRef<HTMLSpanElement>(null);
@@ -85,7 +87,9 @@ function Loupe({ image, pointer, scale, viewport, pixel: shownPixel }: LoupeProp
     // putting it in state would render the overlay twice per pointer move.
     if (colour.current) colour.current.textContent = hex ?? UNKNOWN_COLOUR;
     if (swatch.current) swatch.current.style.backgroundColor = hex ?? "transparent";
-  }, [image, pixel.x, pixel.y]);
+    if (readout?.text.current) readout.text.current.textContent = hex ?? UNKNOWN_COLOUR;
+    if (readout?.swatch.current) readout.swatch.current.style.backgroundColor = hex ?? "transparent";
+  }, [image, pixel.x, pixel.y, readout]);
 
   return (
     <div

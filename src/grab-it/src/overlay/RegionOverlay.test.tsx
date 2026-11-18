@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RegionOverlay from "./RegionOverlay";
 import { CHOICE_EVENT, START_EVENT, type OverlayInfo } from "./api";
@@ -44,7 +45,10 @@ function mockOverlay(
         return new ArrayBuffer(8);
       // The recording options beside a recording's area.
       case "get_settings":
-        return { recording: { ...DEFAULT_RECORDING, audio: "microphone", ...recording } };
+        return {
+          recording: { ...DEFAULT_RECORDING, audio: "microphone", ...recording },
+          hotkeys: { allInOne: "Ctrl+Alt+PrintScreen", region: "Ctrl+Shift+2", window: "", screen: "Ctrl+Shift+3", text: "", colour: "", library: "", steps: "" },
+        };
       case "recording_microphones":
         return [{ id: "usb", name: "USB Microphone", isDefault: false }];
       case "recording_system_audio":
@@ -575,35 +579,60 @@ describe("RegionOverlay", () => {
       expect(screen.getByRole("status")).toHaveTextContent("Drag to capture a region");
     });
 
-    it("shows every mode with Region picked and the Timer off", async () => {
+    it("shows one toolbar: modes 1–3, modes 4–7, Timer 8, a dimmed main button and Cancel", async () => {
       mockOverlay({ allInOne: true, topInset: 0.05 });
       render(<RegionOverlay />);
       await ready();
 
-      const toolbar = screen.getByRole("toolbar", { name: "Capture mode" });
-      const names = within(toolbar)
-        .getAllByRole("button")
-        .map((button) => button.textContent);
-      expect(within(toolbar).getAllByRole("button").map((button) => button.getAttribute("aria-keyshortcuts"))).toEqual(
-        ["1", "2", "3", "4", "5", "6", "7", "8"],
-      );
-      expect(names).toEqual([
-        "Region1",
-        "Window2",
-        "Screen3",
-        "Text4",
-        "Colour5",
-        "Record6",
-        "Scroll7",
-        "Timer off8",
-      ]);
+      const toolbar = screen.getByRole("toolbar", { name: "Capture & record" });
+      const names = (group: string) =>
+        within(within(toolbar).getByRole("group", { name: group }))
+          .getAllByRole("button")
+          .map((button) => button.getAttribute("aria-label") ?? button.textContent);
+      expect(names("What to capture")).toEqual(["Region", "Window", "Screen"]);
+      expect(names("Tools")).toEqual(["Text", "Colour", "Record", "Scroll"]);
+      expect(names("Actions")).toEqual(["Timer off", "Capture↵", "Cancel"]);
+      expect(
+        within(toolbar)
+          .getAllByRole("button")
+          .slice(0, 8)
+          .map((button) => button.getAttribute("aria-keyshortcuts")),
+      ).toEqual(["1", "2", "3", "4", "5", "6", "7", "8"]);
       expect(within(toolbar).getByRole("button", { name: "Region" })).toHaveAttribute("aria-pressed", "true");
       expect(within(toolbar).getByRole("button", { name: "Window" })).toHaveAttribute("aria-pressed", "false");
-      // The toolbar sits below the menu bar, and the hint below the toolbar.
+      expect(within(toolbar).getByRole("button", { name: "Timer off" })).toHaveAttribute("aria-pressed", "false");
+      // Dimmed, not disabled, so its tooltip still says what to do first.
+      const main = within(toolbar).getByRole("button", { name: "Capture" });
+      expect(main).toBeEnabled();
+      expect(main).toHaveAttribute("aria-disabled", "true");
+      expect(main).toHaveAccessibleDescription(/Drag an area or click a window first\./);
+      // Below the menu bar, with no hint line under it.
       expect(toolbar.style.top).toBe("52px");
-      const hint = screen.getByRole("status").closest(".overlay-hint") as HTMLElement;
-      expect(hint.style.top).toBe("104px");
-      expect(screen.getByRole("list", { name: "Keyboard shortcuts" })).toHaveTextContent("1–8 In this chooser");
+      expect(toolbar).toHaveAttribute("data-edge", "top");
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      expect(screen.queryByRole("list", { name: "Keyboard shortcuts" })).not.toBeInTheDocument();
+    });
+
+    it("explains every item in a tooltip, with its key and global shortcut", async () => {
+      mockOverlay({ allInOne: true });
+      render(<RegionOverlay />);
+      await ready();
+      const toolbar = screen.getByRole("toolbar", { name: "Capture & record" });
+
+      const region = within(toolbar).getByRole("button", { name: "Region" });
+      await waitFor(() => expect(region).toHaveAccessibleDescription(/Ctrl\+Shift\+2 from anywhere/));
+      expect(region).toHaveAccessibleDescription(/^Region\s*1/);
+      expect(region).toHaveAccessibleDescription(/Drag an area, or click a window\./);
+      // An unset global shortcut is left out.
+      expect(within(toolbar).getByRole("button", { name: "Window" })).not.toHaveAccessibleDescription(/from anywhere/);
+      expect(within(toolbar).getByRole("button", { name: "Record" })).toHaveAccessibleDescription(/^Record\s*6/);
+      expect(within(toolbar).getByRole("button", { name: "Timer off" })).toHaveAccessibleDescription(/^Timer\s*8/);
+      expect(within(toolbar).getByRole("button", { name: "Cancel" })).toHaveAccessibleDescription(/^Cancel\s*Esc/);
+      // Every item has one.
+      for (const button of within(toolbar).getAllByRole("button")) {
+        expect(button.getAttribute("aria-describedby")).toBeTruthy();
+        expect(document.getElementById(button.getAttribute("aria-describedby") ?? "")).toHaveAttribute("role", "tooltip");
+      }
     });
 
     it("captures a dragged region with what the toolbar chose", async () => {
@@ -640,7 +669,6 @@ describe("RegionOverlay", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Window" }));
       expect(overlay).toHaveAttribute("data-mode", "window");
-      expect(screen.getByRole("status")).toHaveTextContent("Click a window to capture it");
       expect(screen.getByRole("button", { name: "Window" })).toHaveAttribute("aria-pressed", "true");
 
       // A drag no longer selects a region.
@@ -669,7 +697,6 @@ describe("RegionOverlay", () => {
 
       fireEvent.keyDown(window, { key: "4", code: "Digit4" });
       expect(overlay).toHaveAttribute("data-intent", "text");
-      expect(screen.getByRole("status")).toHaveTextContent("Drag over the text to copy it");
       fireEvent.keyDown(window, { key: "6", code: "Numpad6" });
       expect(overlay).toHaveAttribute("data-intent", "record");
       // With a modifier the key is someone else's.
@@ -753,16 +780,20 @@ describe("RegionOverlay", () => {
       await ready();
 
       const timer = screen.getByTestId("overlay-timer");
-      expect(timer).toHaveTextContent("Timer off");
+      expect(timer).toHaveAccessibleName("Timer off");
       fireEvent.click(timer);
-      expect(timer).toHaveTextContent("Timer 3 s");
-      expect(timer).toHaveAttribute("data-active", "true");
+      expect(timer).toHaveAccessibleName("Timer 3 s");
+      expect(timer).toHaveTextContent("3 s");
+      // A set Timer is the grey pill, and the main button says when it captures.
+      expect(timer).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByTestId("overlay-confirm")).toHaveAccessibleName("Capture in 3 s");
       fireEvent.keyDown(window, { key: "8", code: "Digit8" });
-      expect(timer).toHaveTextContent("Timer 5 s");
+      expect(timer).toHaveAccessibleName("Timer 5 s");
       fireEvent.click(timer);
-      expect(timer).toHaveTextContent("Timer 10 s");
+      expect(timer).toHaveAccessibleName("Timer 10 s");
       fireEvent.click(timer);
-      expect(timer).toHaveTextContent("Timer off");
+      expect(timer).toHaveAccessibleName("Timer off");
+      expect(screen.getByTestId("overlay-confirm")).toHaveAccessibleName("Capture");
       fireEvent.click(timer);
       fireEvent.click(timer);
 
@@ -775,19 +806,27 @@ describe("RegionOverlay", () => {
       );
     });
 
-    it("disables the Timer for text, colour and recording", async () => {
+    it("names the main button for each mode, and hides the Timer where it does nothing", async () => {
       const calls = mockOverlay({ allInOne: true });
       render(<RegionOverlay />);
       const overlay = await ready();
 
-      const timer = screen.getByTestId("overlay-timer");
-      fireEvent.click(timer);
-      for (const name of ["Text", "Colour", "Record"]) {
-        fireEvent.click(screen.getByRole("button", { name }));
-        expect(timer).toBeDisabled();
-        expect(timer).toHaveAttribute("data-active", "false");
+      fireEvent.click(screen.getByTestId("overlay-timer"));
+      const main = () => screen.queryByTestId("overlay-confirm");
+      for (const [key, label] of [
+        ["4", "Copy text"],
+        ["5", "Copy colour"],
+        ["7", "Start scrolling"],
+      ]) {
+        fireEvent.keyDown(window, { key, code: `Digit${key}` });
+        expect(main()).toHaveAccessibleName(label);
+        expect(screen.queryByTestId("overlay-timer")).not.toBeInTheDocument();
       }
-      // Key 8 leaves it alone too.
+      // Record keeps its own setup toolbar, with its Record and countdown, for now.
+      fireEvent.keyDown(window, { key: "6", code: "Digit6" });
+      expect(main()).not.toBeInTheDocument();
+      expect(screen.queryByTestId("overlay-timer")).not.toBeInTheDocument();
+      // Key 8 leaves the Timer alone too.
       fireEvent.keyDown(window, { key: "8", code: "Digit8" });
 
       fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 50 });
@@ -801,10 +840,10 @@ describe("RegionOverlay", () => {
       );
 
       // Back on Region the Timer is as it was. The setup toolbar has a Region of its own.
-      const modes = screen.getByRole("toolbar", { name: "Capture mode" });
+      const modes = screen.getByRole("toolbar", { name: "Capture & record" });
       fireEvent.click(within(modes).getByRole("button", { name: "Region" }));
-      expect(timer).toBeEnabled();
-      expect(timer).toHaveTextContent("Timer 3 s");
+      expect(screen.getByTestId("overlay-timer")).toHaveAccessibleName("Timer 3 s");
+      expect(main()).toHaveAccessibleName("Capture in 3 s");
     });
 
     it("shares a new mode or Timer with the other monitors' overlays", async () => {
@@ -853,7 +892,7 @@ describe("RegionOverlay", () => {
       // The Timer it set applies once back on a screenshot mode.
       await emit(CHOICE_EVENT, { intent: "capture", mode: "window", delaySeconds: 5 });
       await waitFor(() => expect(overlay).toHaveAttribute("data-mode", "window"));
-      expect(screen.getByTestId("overlay-timer")).toHaveTextContent("Timer 5 s");
+      expect(screen.getByTestId("overlay-timer")).toHaveAccessibleName("Timer 5 s");
     });
 
     it("starts on the choice another monitor made before this page loaded", async () => {
@@ -866,7 +905,7 @@ describe("RegionOverlay", () => {
 
       expect(overlay).toHaveAttribute("data-mode", "window");
       expect(screen.getByRole("button", { name: "Window" })).toHaveAttribute("aria-pressed", "true");
-      expect(screen.getByTestId("overlay-timer")).toHaveTextContent("Timer 5 s");
+      expect(screen.getByTestId("overlay-timer")).toHaveAccessibleName("Timer 5 s");
       expect(calls.map((c) => c.cmd)).not.toContain("overlay_choose");
 
       fireEvent.mouseMove(overlay, { clientX: 150, clientY: 150 });
@@ -897,6 +936,151 @@ describe("RegionOverlay", () => {
       fireEvent.mouseDown(overlay, { button: 0, clientX: 300, clientY: 250 });
       fireEvent.mouseMove(overlay, { clientX: 100, clientY: 50 });
       expect(toolbar).toHaveAttribute("data-hidden", "true");
+    });
+
+    it("captures the window under the pointer on Enter in Window", async () => {
+      const calls = mockOverlay({ allInOne: true });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      fireEvent.keyDown(window, { key: "2", code: "Digit2" });
+      const main = screen.getByTestId("overlay-confirm");
+      expect(main).toHaveAttribute("aria-disabled", "true");
+      expect(main).toHaveAccessibleDescription(/Point at a window first\./);
+      // Nothing under the pointer: Enter does nothing.
+      fireEvent.mouseMove(overlay, { clientX: 900, clientY: 700 });
+      fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
+      expect(calls.map((c) => c.cmd)).not.toContain("overlay_finish");
+
+      fireEvent.mouseMove(overlay, { clientX: 150, clientY: 150 });
+      expect(main).not.toHaveAttribute("aria-disabled");
+      fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
+      await waitFor(() =>
+        expect(last(calls).payload).toEqual({
+          selection: { kind: "window", id: 7 },
+          choice: { intent: "capture", mode: "window", delaySeconds: 0 },
+        }),
+      );
+    });
+
+    it("copies the pixel under the pointer on Enter in Colour, showing its value in the toolbar", async () => {
+      const calls = mockOverlay({ allInOne: true });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+
+      fireEvent.keyDown(window, { key: "5", code: "Digit5" });
+      expect(screen.getByTestId("overlay-toolbar-middle")).toContainElement(screen.getByTestId("overlay-toolbar-colour"));
+      fireEvent.mouseMove(overlay, { clientX: 240, clientY: 120 });
+      // jsdom has no canvas to read, so the colour reads as unknown.
+      expect(screen.getByTestId("overlay-toolbar-colour")).toHaveTextContent("—");
+      fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
+      await waitFor(() =>
+        expect(last(calls).payload).toEqual({
+          selection: { kind: "point", x: 240, y: 120, viewportWidth: 1000 },
+          choice: { intent: "color", mode: "region", delaySeconds: 0 },
+        }),
+      );
+    });
+
+    it("moves between a group's buttons with the arrow keys, and leaves the toolbar on the first Esc", async () => {
+      const calls = mockOverlay({ allInOne: true });
+      render(<RegionOverlay />);
+      await ready();
+      const toolbar = screen.getByRole("toolbar", { name: "Capture & record" });
+
+      const region = within(toolbar).getByRole("button", { name: "Region" });
+      region.focus();
+      fireEvent.keyDown(region, { key: "ArrowRight" });
+      expect(within(toolbar).getByRole("button", { name: "Window" })).toHaveFocus();
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowRight" });
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowRight" });
+      // Round the end of the group, never into the next one.
+      expect(region).toHaveFocus();
+      fireEvent.keyDown(region, { key: "ArrowLeft" });
+      expect(within(toolbar).getByRole("button", { name: "Screen" })).toHaveFocus();
+
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: "Escape" });
+      expect(toolbar).not.toContainElement(document.activeElement as HTMLElement);
+      expect(calls.map((c) => c.cmd)).not.toContain("overlay_cancel");
+      fireEvent.keyDown(window, { key: "Escape" });
+      await waitFor(() => expect(last(calls).cmd).toBe("overlay_cancel"));
+    });
+
+    it("reaches the toolbar with Tab", async () => {
+      mockOverlay({ allInOne: true });
+      render(<RegionOverlay />);
+      await ready();
+      const user = userEvent.setup();
+      await user.tab();
+      expect(screen.getByRole("button", { name: "Region" })).toHaveFocus();
+    });
+
+    describe("on narrower displays", () => {
+      function dragOver(overlay: HTMLElement, from: [number, number], to: [number, number]) {
+        fireEvent.mouseDown(overlay, { button: 0, clientX: from[0], clientY: from[1] });
+        fireEvent.mouseMove(overlay, { clientX: to[0], clientY: to[1] });
+        fireEvent.mouseUp(overlay, { button: 0, clientX: to[0], clientY: to[1] });
+      }
+
+      const widths = (toolbar: HTMLElement) =>
+        within(within(toolbar).getByRole("group", { name: "Tools" }))
+          .getAllByRole("button")
+          .map((button) => button.textContent);
+
+      it("shows every label and the ratios in a row when there is room", async () => {
+        Object.defineProperty(window, "innerWidth", { configurable: true, value: 1400 });
+        mockOverlay({ allInOne: true });
+        render(<RegionOverlay />);
+        const overlay = await ready();
+        const toolbar = screen.getByRole("toolbar", { name: "Capture & record" });
+        expect(toolbar).toHaveAttribute("data-layout", "wide");
+        expect(widths(toolbar)).toEqual(["Text4", "Colour5", "Record6", "Scroll7"]);
+
+        dragOver(overlay, [300, 300], [500, 400]);
+        expect(within(toolbar).getByRole("group", { name: "Aspect ratio" })).toBeInTheDocument();
+      });
+
+      it("shrinks unselected modes to icon and key, and folds the ratios into a menu", async () => {
+        mockOverlay({ allInOne: true });
+        render(<RegionOverlay />);
+        const overlay = await ready();
+        const toolbar = screen.getByRole("toolbar", { name: "Capture & record" });
+        expect(toolbar).toHaveAttribute("data-layout", "folded");
+        expect(widths(toolbar)).toEqual(["4", "5", "6", "7"]);
+        // The picked mode keeps its label.
+        expect(within(toolbar).getByRole("button", { name: "Region" })).toHaveTextContent("Region1");
+
+        dragOver(overlay, [300, 300], [500, 400]);
+        expect(within(toolbar).queryByRole("group", { name: "Aspect ratio" })).not.toBeInTheDocument();
+        expect(within(toolbar).getByRole("button", { name: "Aspect ratio" })).toHaveTextContent("Free");
+      });
+
+      it("puts the selection's controls on a second row near 720 px", async () => {
+        Object.defineProperty(window, "innerWidth", { configurable: true, value: 700 });
+        mockOverlay({ allInOne: true });
+        render(<RegionOverlay />);
+        const overlay = await ready();
+        const toolbar = screen.getByRole("toolbar", { name: "Capture & record" });
+        expect(toolbar).toHaveAttribute("data-layout", "stacked");
+        dragOver(overlay, [300, 300], [500, 400]);
+        expect(within(toolbar).getByTestId("overlay-toolbar-middle")).toContainElement(
+          screen.getByRole("textbox", { name: "Width" }),
+        );
+      });
+
+      it("moves to the bottom edge when a held selection is under it", async () => {
+        mockOverlay({ allInOne: true });
+        render(<RegionOverlay />);
+        const overlay = await ready();
+        const toolbar = screen.getByRole("toolbar", { name: "Capture & record" });
+
+        dragOver(overlay, [300, 300], [500, 400]);
+        expect(toolbar).toHaveAttribute("data-edge", "top");
+        dragOver(overlay, [300, 20], [500, 200]);
+        expect(toolbar).toHaveAttribute("data-edge", "bottom");
+        expect(toolbar.style.bottom).toBe("12px");
+        expect(toolbar.style.top).toBe("");
+      });
     });
   });
 
@@ -930,10 +1114,13 @@ describe("RegionOverlay", () => {
         "translate(300px, 250px) translate(-50%, -50%)",
       );
       expect(sizeOf()).toEqual(["200", "200"]);
-      expect(screen.getByRole("status")).toHaveTextContent("Drag the handles to adjust");
-      expect(screen.getByRole("list", { name: "Keyboard shortcuts" })).toHaveTextContent("Enter Capture");
+      // The size is in the toolbar, not beside the selection, and the main button is ready.
+      const toolbar = screen.getByRole("toolbar");
+      expect(within(toolbar).getByTestId("overlay-size-width")).toBeInTheDocument();
+      expect(screen.queryByTestId("overlay-size-panel")).not.toBeInTheDocument();
+      expect(within(toolbar).getByRole("button", { name: "Capture" })).not.toHaveAttribute("aria-disabled");
       // The toolbar is back once the drag is over.
-      expect(screen.getByRole("toolbar")).toHaveAttribute("data-hidden", "false");
+      expect(toolbar).toHaveAttribute("data-hidden", "false");
 
       fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
       await waitFor(() =>
@@ -1071,16 +1258,21 @@ describe("RegionOverlay", () => {
       const overlay = await ready();
       dragOver(overlay, [100, 100], [420, 200]);
 
-      const ratios = screen.getByRole("group", { name: "Aspect ratio" });
-      expect(
-        within(ratios)
-          .getAllByRole("button")
-          .map((button) => button.textContent),
-      ).toEqual(["Free", "16:9", "4:3", "1:1"]);
-      expect(within(ratios).getByRole("button", { name: "Free" })).toHaveAttribute("aria-pressed", "true");
-
-      fireEvent.click(within(ratios).getByRole("button", { name: "16:9" }));
-      expect(within(ratios).getByRole("button", { name: "16:9" })).toHaveAttribute("aria-pressed", "true");
+      // 1000 px wide: the ratios are folded into one menu.
+      const pick = (name: string) => {
+        fireEvent.click(screen.getByRole("button", { name: "Aspect ratio" }));
+        fireEvent.click(screen.getByRole("menuitemradio", { name }));
+      };
+      fireEvent.click(screen.getByRole("button", { name: "Aspect ratio" }));
+      expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual([
+        "Free",
+        "16:9",
+        "4:3",
+        "1:1",
+      ]);
+      expect(screen.getByRole("menuitemradio", { name: "Free" })).toHaveAttribute("aria-checked", "true");
+      fireEvent.click(screen.getByRole("menuitemradio", { name: "16:9" }));
+      expect(screen.getByRole("button", { name: "Aspect ratio" })).toHaveTextContent("16:9");
       expect(sizeOf()).toEqual(["320", "180"]);
 
       // A handle keeps the shape.
@@ -1097,10 +1289,7 @@ describe("RegionOverlay", () => {
       dragOver(overlay, [700, 500], [860, 510]);
       expect(sizeOf()).toEqual(["160", "90"]);
 
-      // The panel was put away during the drag; it is a new one now.
-      fireEvent.click(
-        within(screen.getByRole("group", { name: "Aspect ratio" })).getByRole("button", { name: "1:1" }),
-      );
+      pick("1:1");
       expect(sizeOf()).toEqual(["160", "160"]);
 
       // A typed size has its own shape: back to Free.
@@ -1108,9 +1297,7 @@ describe("RegionOverlay", () => {
       fireEvent.change(width, { target: { value: "100" } });
       fireEvent.keyDown(width, { key: "Enter" });
       expect(sizeOf()).toEqual(["100", "160"]);
-      expect(
-        within(screen.getByRole("group", { name: "Aspect ratio" })).getByRole("button", { name: "Free" }),
-      ).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("button", { name: "Aspect ratio" })).toHaveTextContent("Free");
     });
 
     it("starts from the last region, in image pixels, and captures it on Enter", async () => {
@@ -1167,7 +1354,7 @@ describe("RegionOverlay", () => {
       fireEvent.mouseUp(overlay, { button: 0, clientX: 150, clientY: 150 });
       expect(finishes(calls)).toHaveLength(0);
       expect(overlay).toHaveAttribute("data-selected", "false");
-      expect(screen.queryByTestId("overlay-size-panel")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("overlay-size-width")).not.toBeInTheDocument();
       // Enter has nothing to capture now.
       fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
       expect(finishes(calls)).toHaveLength(0);
@@ -1187,7 +1374,7 @@ describe("RegionOverlay", () => {
 
       fireEvent.keyDown(window, { key: "2", code: "Digit2" });
       expect(overlay).toHaveAttribute("data-selected", "false");
-      expect(screen.queryByTestId("overlay-size-panel")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("overlay-size-width")).not.toBeInTheDocument();
       fireEvent.keyDown(window, { key: "4", code: "Digit4" });
       expect(overlay).toHaveAttribute("data-selected", "true");
       expect(screen.getByRole("button", { name: "Copy text" })).toBeInTheDocument();
@@ -1607,11 +1794,12 @@ describe("RegionOverlay", () => {
 
       fireEvent.keyDown(window, { key: "6", code: "Digit6" });
       const bar = await setupBar();
-      // 52 px down for the menu bar, then the mode toolbar's room.
-      expect(bar.style.transform).toBe("translate3d(500px, 127px, 0) translate(-50%, -50%)");
+      // 52 px down for the menu bar, then the toolbar's room.
+      expect(bar.style.transform).toBe("translate3d(500px, 133px, 0) translate(-50%, -50%)");
       expect(screen.queryByTestId("overlay-setup-grip")).not.toBeInTheDocument();
+      // Record keeps its hint line for now.
       const hint = screen.getByRole("status").closest(".overlay-hint") as HTMLElement;
-      expect(hint.style.top).toBe("158px");
+      expect(hint.style.top).toBe("164px");
 
       // The number keys still pick modes.
       fireEvent.keyDown(window, { key: "1", code: "Digit1" });

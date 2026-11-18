@@ -11,7 +11,7 @@ import random
 import sys
 from pathlib import Path
 
-from animkit import (MONO, Anim, dashboard, head, logo, mode_icon, qlen, text_w, th_code, th_dash, th_figma,
+from animkit import (MONO, Anim, chooser_toolbar, dashboard, head, logo, mode_icon, qlen, text_w, th_code, th_dash, th_figma,
                      th_receipt, th_rec, th_term, tile_bg, tr)
 
 W, H = 720, 450
@@ -132,46 +132,28 @@ def key_badge(A, name, label, x, y, t):
                 (t + .55, "opacity:1;transform:scale(1)"), (t + .75, "opacity:0;transform:scale(1.1)")], f"#{name}")
 
 
-MODES = [("Region", "1"), ("Window", "2"), ("Screen", "3"), ("Text", "4"), ("Colour", "5"), ("Record", "6"), ("Scroll", "7"), ("Timer off", "8")]
+TB_SCALE = .72
 
 
-def toolbar(A, wins, picks, hints, y=8):
-    """Capture &amp; record…'s mode toolbar. picks: {mode: [(start, end)]} for the highlight; hints: [(text, [(start, end)])]."""
-    fs = 11
-    widths = [round(24 + text_w(m, fs) + 23) for m, _ in MODES]
-    tb_w = sum(widths) + 3 * (len(MODES) - 1) + 10
-    assert tb_w < W - 10, tb_w
-    x0 = W / 2 - tb_w / 2
-    out = [f'<rect x="{x0}" y="{y}" width="{tb_w}" height="32" rx="10" fill="#16181d" stroke="#2c313b"/>']
-    xs, mx = {}, x0 + 5
-    for (m, _), w in zip(MODES, widths):
-        xs[m] = (mx, w)
-        mx += w + 3
-    for m in picks:
-        hx, hw = xs[m]
-        out.append(f'<rect id="hl{m}" x="{hx}" y="{y + 4}" width="{hw}" height="24" rx="7" fill="#0090ff"/>')
-    for (m, n), w in zip(MODES, widths):
-        hx, _ = xs[m]
-        cy = y + 16
-        out.append(f'<g transform="translate({hx + 13} {cy}) scale(.85) translate({-(hx + 13)} {-cy})">{mode_icon(m, hx + 13, cy)}</g>')
-        out.append(f'<text x="{hx + 24}" y="{cy + 4}" class="t" font-size="{fs}" fill="#f3f4f7">{m}</text>')
-        out.append(f'<rect x="{hx + w - 20}" y="{cy - 7}" width="14" height="14" rx="3.5" fill="#fff" opacity=".14"/>')
-        out.append(f'<text x="{hx + w - 13}" y="{cy + 3.5}" class="t" font-size="9.5" fill="#c9ceda" text-anchor="middle">{n}</text>')
-    for i, (text, _) in enumerate(hints):
-        hw = text_w(text, 11.5) + 28
-        out.append(f'<g id="hint{i}"><rect x="{W / 2 - hw / 2}" y="{y + 39}" width="{hw}" height="24" rx="7" fill="#16181d" opacity=".94"/>'
-                   f'<text x="{W / 2}" y="{y + 55}" class="t" font-size="11.5" fill="#e6e8ee" text-anchor="middle">{text}</text></g>')
+def toolbar(A, wins, states, y=8):
+    """Capture &amp; record…'s toolbar, drawn at TB_SCALE. wins: when it is on screen. states: [(picked mode,
+    chooser_toolbar options, [(start, end)])], one drawing each, shown in its windows. Returns, for each
+    state, every mode's and ratio's (x, width) on the canvas."""
+    cx, out, placed = W / 2, [], []
+    for i, (picked, options, _) in enumerate(states):
+        svg, _, width, places = chooser_toolbar(cx, y, picked, **options)
+        assert width * TB_SCALE < W - 10, width
+        out.append(f'<g id="tb{i}"><g transform="translate({cx} {y}) scale({TB_SCALE}) translate({-cx} {-y})">{svg}</g></g>')
+        placed.append({k: (cx + (x - cx) * TB_SCALE, w * TB_SCALE) for k, (x, w) in places.items()})
     A.body.append(f'<g id="aio">{"".join(out)}</g>')
     fr = []
     for a, b in wins:
         fr += [(a, "opacity:0;transform:translateY(-50px)"), (a + .3, "opacity:1;transform:translateY(0)"),
                (b - .2, "opacity:1;transform:translateY(0)"), (b, "opacity:0;transform:translateY(0)")]
     A.kf("aio", fr, "#aio", "cubic-bezier(.2,.9,.3,1.1)")
-    for m, ws in picks.items():
-        A.show(f"#hl{m}", f"hl{m}", ws, fade=.12)
-    for i, (_, ws) in enumerate(hints):
-        A.show(f"#hint{i}", f"hint{i}", ws, fade=.12)
-    return xs
+    for i, (_, _, ws) in enumerate(states):
+        A.show(f"#tb{i}", f"tb{i}", ws, fade=.08)
+    return placed
 
 
 def card(x, y, w, h, inner, id_):
@@ -257,39 +239,7 @@ def tour_capture():
     A.show("#hd0", "hd0", [(2.95, 3.55)], fade=.1)
     A.show("#hd1", "hd1", [(3.8, 4.65)], fade=.1)
 
-    # The size chip, inside the selection's top-left corner, follows the top edge.
-    CX0, CY0 = SX + 8, SY + 8
-    labels = [("Free", 30), ("16:9", 32), ("4:3", 28), ("1:1", 26)]
-    chip_w = 118 + sum(w + 2 for _, w in labels) + 6 + text_w("Capture", 11) * 1.1 + 10
-    chip = [f'<rect x="{CX0}" y="{CY0}" width="{chip_w:.0f}" height="28" rx="8" fill="#16181d" stroke="#2c313b"/>',
-            f'<rect x="{CX0 + 5}" y="{CY0 + 5}" width="40" height="18" rx="4.5" fill="#23262d"/>',
-            f'<text x="{CX0 + 25}" y="{CY0 + 18}" class="t" font-size="11" fill="#e6e8ee" text-anchor="middle">1016</text>',
-            f'<text x="{CX0 + 52}" y="{CY0 + 18}" class="t" font-size="11" fill="#8b93a1" text-anchor="middle">×</text>',
-            f'<rect x="{CX0 + 59}" y="{CY0 + 5}" width="36" height="18" rx="4.5" fill="#23262d"/>',
-            f'<text id="h0" x="{CX0 + 77}" y="{CY0 + 18}" class="t" font-size="11" fill="#e6e8ee" text-anchor="middle">848</text>',
-            f'<text id="h1" x="{CX0 + 77}" y="{CY0 + 18}" class="t" font-size="11" fill="#e6e8ee" text-anchor="middle">762</text>',
-            f'<text x="{CX0 + 100}" y="{CY0 + 18}" class="t" font-size="10" fill="#8b93a1">px</text>']
-    lx = CX0 + 118
-    pos = {}
-    for lab, w in labels:
-        pos[lab] = (lx, w)
-        lx += w + 2
-    chip.append(f'<rect id="rFree" x="{pos["Free"][0]}" y="{CY0 + 4}" width="{pos["Free"][1]}" height="20" rx="5.5" fill="#0090ff"/>')
-    chip.append(f'<rect id="r43" x="{pos["4:3"][0]}" y="{CY0 + 4}" width="{pos["4:3"][1]}" height="20" rx="5.5" fill="#0090ff"/>')
-    for lab, (x, w) in pos.items():
-        chip.append(f'<text x="{x + w / 2}" y="{CY0 + 18}" class="t b" font-size="11" fill="#e6e8ee" text-anchor="middle">{lab}</text>')
-    chip.append(f'<text x="{lx + 6}" y="{CY0 + 18}" class="t b" font-size="11" fill="#e6e8ee">Capture</text>')
-    A.body.append(f'<g id="chip">{"".join(chip)}</g>')
-    A.kf("chip", [(2.95, "opacity:0;transform:translateY(0)"), (3.1, "opacity:1;transform:translateY(0)"),
-                  (3.55, "opacity:1;transform:translateY(0)"), (3.8, f"opacity:1;transform:translateY({dy:.1f}px)"),
-                  (4.5, f"opacity:1;transform:translateY({dy:.1f}px)"), (4.65, f"opacity:0;transform:translateY({dy:.1f}px)")],
-         "#chip", "ease-in-out")
-    A.show("#h0", "h0", [(0, 3.6)], fade=.02)
-    A.show("#h1", "h1", [(3.6, A.T)], fade=.02)
-    A.show("#rFree", "rFree", [(0, 3.6)], fade=.02)
-    A.show("#r43", "r43", [(3.6, A.T)], fade=.02)
-    R43 = (pos["4:3"][0] + 15, CY0 + 14)
-    A.click(*R43, 3.55)
+    # The size and ratios are in the toolbar's middle section while the region is held; 4:3 is clicked there.
     key_badge(A, "enter", "Enter", SX + SW / 2, SY + SH / 2, 4.3)
 
     # Copy text, here the link inside a QR code.
@@ -319,13 +269,18 @@ def tour_capture():
                    (13.1, f"opacity:1;{tr(*BAR)}"), (13.7, f"opacity:1;{tr(*BAR)}"), (13.85, f"opacity:0;{tr(*BAR)}")],
          "#loupe", "cubic-bezier(.45,0,.3,1)")
 
-    xs = toolbar(A, [(1.35, 4.65), (7.45, 9.65), (11.75, 14.1)],
-                 {"Region": [(1.35, 8.0)], "Text": [(8.0, 11.75)], "Colour": [(12.15, A.T)]},
-                 [("1–8 in this chooser. Drag a region, then press Enter.", [(1.35, 8.0)]),
-                  ("Drag over text or a code to copy it.", [(8.0, 11.75)]),
-                  ("Click a pixel to copy its colour.", [(12.15, A.T)])])
+    placed = toolbar(A, [(1.35, 4.65), (7.45, 9.65), (11.75, 14.1)],
+                     [("Region", {"main": "Capture"}, [(0, 2.95), (4.65, 8.0)]),
+                      ("Region", {"main": "Capture", "ready": True, "size": (1016, 848)}, [(2.95, 3.6)]),
+                      ("Region", {"main": "Capture", "ready": True, "size": (1016, 762), "ratio": "4:3"}, [(3.6, 4.65)]),
+                      ("Text", {"main": "Copy text", "timer": None}, [(8.0, 8.85)]),
+                      ("Text", {"main": "Copy text", "ready": True, "timer": None}, [(8.85, 12.15)]),
+                      ("Colour", {"main": "Copy colour", "ready": True, "timer": None, "colour": "#4C8DFF"}, [(12.15, A.T)])])
+    rx, rw = placed[1]["4:3"]
+    R43 = (rx + rw / 2, 8 + 20 * TB_SCALE)
+    A.click(*R43, 3.55)
     for lab, t, m in (("4", 7.95, "Text"), ("5", 12.1, "Colour")):
-        hx, hw = xs[m]
+        hx, hw = placed[0][m]
         key_badge(A, f"k{lab}", lab, hx + hw / 2, 92, t)
 
     A.body.append(f'<rect id="flash" width="{W}" height="{H}" fill="#fff"/>')
@@ -381,7 +336,7 @@ def tour_capture():
                (6.6, QA_ANN, 0), (8.95, (TX + TW, TY + TH), 0), (9.0, (TX + TW, TY + TH), 1), (10.0, (67, 393), 1),
                (11.2, (67, 393), 1), (11.4, (67, 393), 0)])
     write("capture", A, "Capture &amp; record…",
-          "The Capture &amp; record… toolbar opens over a frozen screen. A region is dragged out, locked to 16:9 and captured to the Quick Access card. "
+          "The Capture &amp; record… toolbar opens over a frozen screen. A region is dragged out, locked to 4:3 in the toolbar and captured to the Quick Access card. "
           "Then Text mode reads the link in a QR code, and Colour mode picks the blue of a chart bar with a magnifying loupe.",
           defs=f'<clipPath id="scanclip"><rect x="{TX}" y="{TY}" width="{TW}" height="{TH}"/></clipPath>'
                f'<clipPath id="loupeclip"><circle r="38"/></clipPath>'
@@ -628,7 +583,7 @@ def tour_video():
     A.body.append(f'<rect id="winhl" x="{wx}" y="{wy}" width="{ww}" height="{wh}" rx="11" fill="#4c8dff" fill-opacity=".14" stroke="#4c8dff" stroke-width="2.5"/>')
     A.show("#winhl", "winhl", [(2.35, 3.25)], fade=.12)
 
-    # The recording setup bar under the mode toolbar.
+    # The recording setup bar under the Capture &amp; record… toolbar.
     ic = 'fill="none" stroke="#e6e8ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"'
     by = 46
     items = []
@@ -679,8 +634,9 @@ def tour_video():
     WINDOW_BTN = (bx + 5 + 68 + 35, by + 16)
     A.show("#segsel0", "segsel0", [(0, 1.9)], fade=.05)
     A.show("#segsel1", "segsel1", [(1.9, A.T)], fade=.05)
-    xs = toolbar(A, [(1.1, 3.25)], {"Record": [(1.45, A.T)]}, [("1–8 in this chooser", [(1.1, 1.45)])])
-    hx, hw_ = xs["Record"]
+    placed = toolbar(A, [(1.1, 3.25)], [("Region", {"main": "Capture"}, [(0, 1.45)]),
+                                        ("Record", {"timer": None}, [(1.45, A.T)])])
+    hx, hw_ = placed[0]["Record"]
     key_badge(A, "k6", "6", hx + hw_ / 2, 104, 1.4)
 
     # Countdown, then the recording.

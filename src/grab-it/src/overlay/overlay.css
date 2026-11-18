@@ -286,7 +286,8 @@
  * light `--surface` background otherwise showed under white digits; native
  * styling is turned off so WebKitGTK's light theme does not draw one either.
  */
-.overlay-size-panel .overlay-size-input {
+.overlay-size-panel .overlay-size-input,
+.overlay-toolbar .overlay-size-input {
   width: 56px;
   height: 28px;
   box-sizing: border-box;
@@ -307,14 +308,17 @@
 }
 
 .overlay-size-panel .overlay-size-input:focus,
-.overlay-size-panel .overlay-size-input:focus-visible {
+.overlay-size-panel .overlay-size-input:focus-visible,
+.overlay-toolbar .overlay-size-input:focus,
+.overlay-toolbar .overlay-size-input:focus-visible {
   background: #1c1e22;
   border-color: var(--overlay-accent);
   outline: none;
   box-shadow: 0 0 0 2px rgb(47 129 247 / 35%);
 }
 
-.overlay-size-panel .overlay-size-input::selection {
+.overlay-size-panel .overlay-size-input::selection,
+.overlay-toolbar .overlay-size-input::selection {
   color: #fff;
   -webkit-text-fill-color: #fff;
   background: var(--overlay-accent);
@@ -473,26 +477,34 @@
   color: #ec7a80;
 }
 
-/* All-in-one's mode toolbar, above the hint. */
+/*
+ * Capture & record's toolbar, in the recording toolbar's pill and palette
+ * (as .overlay-setup): 50px tall, 8px above and below its 34px buttons and
+ * 6px at the sides. The picked mode, a set Timer and on toggles are a grey
+ * pill; only the main button is coloured.
+ */
 .overlay-toolbar {
   position: absolute;
-  top: 12px;
   left: 50%;
+  z-index: 4;
   display: flex;
+  flex-wrap: nowrap;
   gap: 2px;
   align-items: center;
+  box-sizing: border-box;
   max-width: calc(100% - 32px);
-  padding: 4px;
+  height: 50px;
+  padding: 8px 6px;
   color: #ecedef;
   font-family: "Instrument Sans Variable", system-ui, -apple-system, sans-serif;
   font-size: 13px;
   line-height: 18px;
   white-space: nowrap;
-  background: rgb(23 24 27 / 92%);
-  border: 1px solid #2a2c31;
-  border-radius: 10px;
-  box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
-  backdrop-filter: blur(16px) saturate(140%);
+  background: #101113;
+  border-radius: 999px;
+  box-shadow:
+    inset 0 0 0 1px #2a2c31,
+    0 12px 32px rgb(0 0 0 / 40%);
   cursor: default;
   transform: translateX(-50%);
   transition: opacity 120ms ease-out;
@@ -502,6 +514,185 @@
 .overlay[data-shown="false"] .overlay-toolbar {
   opacity: 0;
   pointer-events: none;
+}
+
+.overlay-toolbar .overlay-tool {
+  height: 34px;
+  border-radius: 999px;
+}
+
+.overlay-toolbar-group {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.overlay-toolbar-middle {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin: 0 4px;
+  padding: 0 8px;
+  border-inline: 1px solid #2a2c31;
+}
+
+.overlay-toolbar-actions {
+  margin-left: auto;
+}
+
+/* The picked colour's hex value, copied from the loupe as it draws. */
+.overlay-toolbar-colour {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  font: 500 12.5px/18px ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.overlay-toolbar-colour .overlay-loupe-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 25%);
+}
+
+/* About 720px: the middle section takes a second row inside the same panel. */
+.overlay-toolbar[data-layout="stacked"]:has(.overlay-toolbar-middle) {
+  flex-wrap: wrap;
+  row-gap: 8px;
+  height: auto;
+  border-radius: 25px;
+}
+
+.overlay-toolbar[data-layout="stacked"] .overlay-toolbar-middle {
+  order: 1;
+  flex-basis: 100%;
+  justify-content: center;
+  margin: 0;
+  padding: 8px 0 0;
+  border-inline: 0;
+  border-top: 1px solid #2a2c31;
+}
+
+/* The main button: blue with a glow when it can act, dimmed until then. */
+.overlay-main {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  height: 34px;
+  margin-left: 4px;
+  padding: 0 10px 0 14px;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  background: var(--overlay-accent);
+  border: 0;
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px rgb(47 129 247 / 28%), 0 0 18px rgb(47 129 247 / 45%);
+  cursor: pointer;
+}
+
+.overlay-main:hover:not([aria-disabled="true"]) {
+  background: #4a93f8;
+}
+
+.overlay-main:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.overlay-main[aria-disabled="true"] {
+  color: rgb(255 255 255 / 55%);
+  background: rgb(47 129 247 / 32%);
+  box-shadow: none;
+  cursor: default;
+}
+
+.overlay-main kbd {
+  min-width: 16px;
+  padding: 0 3px;
+  font: 500 11px/16px ui-monospace, "SF Mono", Menlo, monospace;
+  text-align: center;
+  background: rgb(255 255 255 / 22%);
+  border-radius: 4px;
+}
+
+/*
+ * Tooltips: every toolbar item explains itself on hover and on keyboard
+ * focus, in place of a hint line. Below the toolbar, or above it at the
+ * bottom edge.
+ */
+.overlay-tip-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.overlay-tip {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: max-content;
+  max-width: 260px;
+  padding: 7px 10px;
+  color: #c9ccd2;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: normal;
+  background: #17181b;
+  border: 1px solid #2a2c31;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(-50%);
+  transition:
+    opacity 120ms ease-out,
+    visibility 0s linear 120ms;
+  pointer-events: none;
+}
+
+.overlay-toolbar[data-edge="bottom"] .overlay-tip {
+  top: auto;
+  bottom: calc(100% + 10px);
+}
+
+.overlay-tip-anchor:hover > .overlay-tip,
+.overlay-tip-anchor:has(> :focus-visible) > .overlay-tip {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 400ms;
+}
+
+.overlay-tip-anchor:has(> :focus-visible) > .overlay-tip {
+  transition-delay: 0s;
+}
+
+/* No tooltips while a menu is open over them. */
+.overlay-toolbar:has([aria-expanded="true"]) .overlay-tip {
+  display: none;
+}
+
+.overlay-tip-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  color: #fff;
+}
+
+.overlay-tip-head kbd {
+  padding: 0 5px;
+  color: #c9ccd2;
+  font: 500 11px/16px ui-monospace, "SF Mono", Menlo, monospace;
+  background: rgb(255 255 255 / 8%);
+  border-radius: 4px;
+}
+
+.overlay-tip-global {
+  color: #8d919a;
 }
 
 .overlay-tool {
@@ -522,10 +713,11 @@
   background: rgb(255 255 255 / 8%);
 }
 
+/* On is a neutral grey pill, never the accent: only a main button is coloured. */
 .overlay-tool[aria-pressed="true"],
 .overlay-tool[data-active="true"] {
   color: #fff;
-  background: var(--overlay-accent);
+  background: #34373f;
 }
 
 .overlay-tool:disabled {
@@ -599,6 +791,7 @@
   .overlay-window,
   .overlay-hint,
   .overlay-toolbar,
+  .overlay-tip,
   .overlay-backdrop,
   .overlay[data-dragging="false"] .overlay-dim-piece,
   .overlay[data-dragging="false"] .overlay-dim-corner {
@@ -631,6 +824,7 @@
 }
 
 .overlay-size-panel .overlay-chip,
+.overlay-toolbar .overlay-chip,
 .overlay-setup .overlay-chip {
   display: inline-flex;
   gap: 6px;
@@ -646,6 +840,7 @@
 
 .overlay-size-panel .overlay-chip[aria-pressed="true"],
 .overlay-size-panel .overlay-chip[aria-haspopup="menu"]:not(:disabled),
+.overlay-toolbar .overlay-chip[aria-haspopup="menu"]:not(:disabled),
 .overlay-setup .overlay-chip[aria-haspopup="menu"]:not(:disabled) {
   color: #ecedef;
   background: rgb(255 255 255 / 6%);
@@ -944,4 +1139,8 @@
   .overlay-setup {
     transition: none;
   }
+}
+
+.overlay-toolbar .overlay-chip {
+  border-radius: 999px;
 }
