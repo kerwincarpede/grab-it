@@ -1,4 +1,7 @@
-//! OCR of captures with [ocrs](https://github.com/robertknight/ocrs).
+//! OCR of captures: with the system's own recognition where there is one
+//! (Vision on macOS, see [`crate::ocr_vision`]), else with
+//! [ocrs](https://github.com/robertknight/ocrs), which is also the fallback
+//! when the system's engine fails.
 //!
 //! The two ocrs models ship with Grab-it as Tauri resources, in
 //! `ocr-models/` under the resource directory (from `src-tauri/ocr-models/`,
@@ -149,8 +152,22 @@ impl Ocr {
     }
 
     /// The lines of text in an image already in memory, top to bottom, with
-    /// their words and the boxes of both in the image's pixels.
+    /// their words and the boxes of both in the image's pixels. Read with
+    /// the system's engine when there is one, else, or when it fails, with
+    /// ocrs.
     pub fn read_image(&self, image: &image::RgbImage) -> OcrResult<Vec<OcrLine>> {
+        match crate::ocr_vision::read(image) {
+            Some(Ok(lines)) => return Ok(lines),
+            Some(Err(err)) => {
+                eprintln!("Grab-it: Vision could not read the text, reading it with ocrs: {err}");
+            }
+            None => {}
+        }
+        self.read_with_ocrs(image)
+    }
+
+    /// [`Ocr::read_image`] with ocrs alone.
+    fn read_with_ocrs(&self, image: &image::RgbImage) -> OcrResult<Vec<OcrLine>> {
         let size = image.dimensions();
         let source = ImageSource::from_bytes(image.as_raw(), size).map_err(engine_error)?;
         let input = self.engine.prepare_input(source).map_err(engine_error)?;
@@ -607,6 +624,16 @@ pub(crate) mod tests {
         assert!(dir.join("notes.txt").is_file());
         // Nothing to remove is fine too.
         remove_downloaded_models(&data.path().join("nowhere"));
+    }
+
+    #[test]
+    fn ocrs_reads_the_fixture_word() {
+        let image = image::open(fixture_png()).unwrap().into_rgb8();
+        let text = lines_text(&engine().read_with_ocrs(&image).unwrap());
+        assert!(
+            text.to_lowercase().contains(FIXTURE_WORD),
+            "ocrs read {text:?}"
+        );
     }
 
     #[test]
