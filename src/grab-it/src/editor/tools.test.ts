@@ -1110,6 +1110,6 @@ describe("stamps", () => {
   it("has its own size control", () => {
     expect(widthKind("stamp")).toMatchObject({ label: "Stamp size", preview: "stamp", presets: STAMP_SIZES, fallback: DEFAULT_STAMP_SIZE });
     expect(widthFor({}, "stamp")).toBe(48);
-    expect(TOOLS.find((entry) => entry.tool === "stamp")?.key).toBe("i");
+    expect(TOOLS.find((entry) => entry.tool === "stamp")?.key).toBe("g");
   });
 });

@@ -5,7 +5,7 @@ sidebar:
   order: 18.5
 ---
 
-**Key: `I`**
+**Key: `G`**
 
 Pick a stamp from the stamp button in the top bar, then click the screenshot to drop it there, centred on the pointer. It's quicker than a text label for marking something as right, wrong or important.
 

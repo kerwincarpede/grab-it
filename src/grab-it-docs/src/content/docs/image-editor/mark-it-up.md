@@ -25,7 +25,7 @@ Click **Annotate** and the editor opens, with your screenshot in the middle.
 | [Text](/grab-it/image-editor/text/) | `T` | Notes and labels, plain, on a pill, outlined or shadowed |
 | [Callout](/grab-it/image-editor/callout/) | `K` | A note with a tail pointing at what it's about |
 | [Step](/grab-it/image-editor/step/) | `N` | Numbered steps (1, 2, 3…) for how-to guides |
-| [Stamp](/grab-it/image-editor/stamp/) | `I` | Check marks, crosses, pointers, keys and emoji |
+| [Stamp](/grab-it/image-editor/stamp/) | `G` | Check marks, crosses, pointers, keys and emoji |
 | [Highlighter](/grab-it/image-editor/highlighter/) | `H` | Highlighting text |
 | [Blur](/grab-it/image-editor/blur/) | `B` | Hiding emails, names and passwords |
 | [Spotlight](/grab-it/image-editor/spotlight/) | `S` | Dimming everything except what matters |
@@ -58,7 +58,7 @@ Something you've just drawn stays selected, with handles, so you can adjust it s
 
 | Key | What it does |
 | --- | --- |
-| Tool keys (`V` `M` `A` `L` `R` `E` `P` `T` `K` `N` `I` `H` `B` `S` `C`) | Pick a tool; hold to use it once |
+| Tool keys (`V` `M` `A` `L` `R` `E` `P` `T` `K` `N` `G` `H` `B` `S` `C`) | Pick a tool; hold to use it once |
 | `1` to `7` | Pick a colour from the top bar, in order |
 | `I` | Pick a colour from the screenshot with the eyedropper |
 | `[` and `]` | Thinner or thicker (or smaller and larger text, badges and stamps) |

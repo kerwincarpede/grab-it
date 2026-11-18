@@ -397,7 +397,7 @@ export const TOOLS: { tool: Tool; label: string; key: string; group: number }[] 
   { tool: "text", label: "Text", key: "t", group: 2 },
   { tool: "callout", label: "Callout", key: "k", group: 2 },
   { tool: "step", label: "Step", key: "n", group: 2 },
-  { tool: "stamp", label: "Stamp", key: "i", group: 2 },
+  { tool: "stamp", label: "Stamp", key: "g", group: 2 },
   { tool: "highlighter", label: "Highlighter", key: "h", group: 2 },
   { tool: "blur", label: "Blur", key: "b", group: 3 },
   { tool: "magnify", label: "Magnify", key: "z", group: 3 },

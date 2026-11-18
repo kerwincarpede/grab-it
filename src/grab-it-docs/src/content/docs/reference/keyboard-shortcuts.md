@@ -58,7 +58,7 @@ While you're picking an area to capture or record:
 | `T` | Text |
 | `K` | Callout |
 | `N` | Step (numbered badge) |
-| `I` | Stamp (icons, pointers, keys and emoji) |
+| `G` | Stamp (icons, pointers, keys and emoji) |
 | `H` | Highlighter |
 | `B` | Blur |
 | `S` | Spotlight |

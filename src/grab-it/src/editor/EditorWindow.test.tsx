@@ -2821,13 +2821,13 @@ describe("stamps", () => {
   const stampOf = (saved: Annotations[], id?: string) =>
     last(saved)?.shapes.find((shape) => shape.type === "stamp" && (id === undefined || shape.id === id));
 
-  it("places the picked stamp centred on a click with I, and keeps it selected", async () => {
+  it("places the picked stamp centred on a click with G, and keeps it selected", async () => {
     const saved = mockEditor({ version: 1, shapes: [], crop: null });
     await ready();
-    fireEvent.keyDown(window, { key: "i" });
-    fireEvent.keyUp(window, { key: "i" });
+    fireEvent.keyDown(window, { key: "g" });
+    fireEvent.keyUp(window, { key: "g" });
     expect(pressed("Stamp")).toHaveAttribute("aria-pressed", "true");
-    expect(pressed("Stamp")).toHaveAttribute("title", "Stamp (I)");
+    expect(pressed("Stamp")).toHaveAttribute("title", "Stamp (G)");
     expect(widthButton("Stamp size")).toHaveTextContent("48px");
     pickStamp("Star");
     expect(topBar().getByRole("button", { name: "Choose stamp" })).toHaveAttribute("title", "Stamp: Star");
@@ -2888,8 +2888,8 @@ describe("stamps", () => {
   it("asks for a blank keycap's label, and edits it on a double-click", async () => {
     const saved = mockEditor({ version: 1, shapes: [], crop: null });
     await ready();
-    fireEvent.keyDown(window, { key: "i" });
-    fireEvent.keyUp(window, { key: "i" });
+    fireEvent.keyDown(window, { key: "g" });
+    fireEvent.keyUp(window, { key: "g" });
     pickStamp("Blank key");
     click(120, 80);
     const box = screen.getByRole("textbox", { name: "Text" });
@@ -2911,8 +2911,8 @@ describe("stamps", () => {
   it("places a keycap preset straight away, and drops a blank one left empty", async () => {
     const saved = mockEditor({ version: 1, shapes: [], crop: null });
     await ready();
-    fireEvent.keyDown(window, { key: "i" });
-    fireEvent.keyUp(window, { key: "i" });
+    fireEvent.keyDown(window, { key: "g" });
+    fireEvent.keyUp(window, { key: "g" });
     pickStamp("Blank key");
     click(10, 10);
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Text" }), { key: "Enter" });
