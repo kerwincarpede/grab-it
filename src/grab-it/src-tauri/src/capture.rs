@@ -127,6 +127,20 @@ pub struct Tile<'a> {
     pub image: &'a RgbaImage,
 }
 
+/// The editor scale for a stitched capture. macOS draws every tile at
+/// the highest density. Elsewhere tiles keep their physical pixels, so a
+/// mixed-scale desktop opens at one image pixel per point.
+pub(crate) fn stitched_scale(mut scales: impl Iterator<Item = f64>) -> Option<f64> {
+    let first = scales.next()?;
+    if cfg!(target_os = "macos") {
+        Some(scales.fold(first, f64::max))
+    } else if scales.all(|scale| scale == first) {
+        Some(first)
+    } else {
+        Some(1.0)
+    }
+}
+
 /// Where each tile lands in the stitched image, and the image's size.
 ///
 /// The output uses the densest monitor's pixels per desktop unit, so no
@@ -507,6 +521,15 @@ mod tests {
         assert_eq!(cropped.get_pixel(0, 0), &Rgba([255, 0, 0, 255]));
         assert_eq!(crop(&image, rect(3, 3, 5, 5)).unwrap().dimensions(), (1, 1));
         assert!(crop(&image, rect(-5, 0, 5, 4)).is_none());
+    }
+
+    #[test]
+    fn stitched_capture_scale_matches_the_monitor_layout() {
+        assert_eq!(stitched_scale([].into_iter()), None);
+        assert_eq!(stitched_scale([1.5, 1.5].into_iter()), Some(1.5));
+        let mixed = Some(if cfg!(target_os = "macos") { 1.5 } else { 1.0 });
+        assert_eq!(stitched_scale([1.5, 1.0].into_iter()), mixed);
+        assert_eq!(stitched_scale([1.0, 1.5].into_iter()), mixed);
     }
 
     #[test]

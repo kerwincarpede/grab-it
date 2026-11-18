@@ -744,6 +744,27 @@ pub(crate) fn logical_frame(
     )
 }
 
+/// Places a window in the target monitor's physical pixel frame.
+pub(crate) fn place_window(
+    window: &WebviewWindow,
+    position: PhysicalPosition<i32>,
+    size: PhysicalSize<u32>,
+    scale: f64,
+) -> tauri::Result<()> {
+    // Moving to a different DPI on Windows can resize the window. Move it
+    // first so the final size and position apply at the destination DPI.
+    #[cfg(target_os = "windows")]
+    window.set_position(position)?;
+    // macOS resizes around the bottom-left corner. Set the size in the
+    // monitor's points before placing the top-left corner.
+    #[cfg(target_os = "macos")]
+    let (position, size) = logical_frame(position, size, scale);
+    #[cfg(not(target_os = "macos"))]
+    let _ = scale;
+    window.set_size(size)?;
+    window.set_position(position)
+}
+
 /// Makes a hidden overlay covering a monitor and starts loading its page.
 /// `position` and `size` are the monitor's frame in physical pixels at its
 /// own `scale`.
@@ -792,25 +813,7 @@ fn create_window(
     // Placed after the level change, so the window keeps the monitor's
     // full size, menu bar area included, and the region scale (image width
     // over viewport width) holds vertically too.
-    //
-    // Sized before it is placed: macOS resizes a window around its
-    // bottom-left corner, so resizing after placing it would push its top
-    // edge off the screen by the difference in height.
-    //
-    // macOS places it in the display's points ([`logical_frame`]); Windows
-    // and Linux place it in pixels.
-    #[cfg(target_os = "macos")]
-    {
-        let (position, size) = logical_frame(position, size, scale);
-        window.set_size(size)?;
-        window.set_position(position)?;
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = scale;
-        window.set_size(size)?;
-        window.set_position(position)?;
-    }
+    place_window(&window, position, size, scale)?;
 
     let app = app.clone();
     let label = label.to_owned();
@@ -1212,7 +1215,7 @@ fn opens_editor(
 }
 
 /// Every frozen monitor joined into one image, following the desktop
-/// layout, with the densest monitor's scale factor it is drawn at.
+/// layout, with the editor scale for the combined image.
 fn stitch_frames(frames: &HashMap<String, Frame>) -> Result<(RgbaImage, Option<f64>), String> {
     let tiles: Vec<capture::Tile<'_>> = frames
         .values()
@@ -1225,10 +1228,7 @@ fn stitch_frames(frames: &HashMap<String, Frame>) -> Result<(RgbaImage, Option<f
         })
         .collect();
     let image = capture::stitch(&tiles).ok_or("no monitors found")?;
-    let scale = frames
-        .values()
-        .map(|frame| frame.monitor.scale_factor)
-        .reduce(f64::max);
+    let scale = capture::stitched_scale(frames.values().map(|frame| frame.monitor.scale_factor));
     Ok((image, scale))
 }
 
@@ -2127,7 +2127,8 @@ mod tests {
         assert_eq!(image.dimensions(), (4, 2));
         assert_eq!(image.get_pixel(0, 0).0[0], 1);
         assert_eq!(image.get_pixel(3, 1).0[0], 2);
-        assert_eq!(scale, Some(2.0));
+        let expected_scale = if cfg!(target_os = "macos") { 2.0 } else { 1.0 };
+        assert_eq!(scale, Some(expected_scale));
         assert!(stitch_frames(&HashMap::new()).is_err());
     }
 

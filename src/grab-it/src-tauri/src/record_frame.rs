@@ -14,8 +14,6 @@
 //! countdown ends, so they are not recorded.
 
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
-#[cfg(target_os = "macos")]
-use tauri::{LogicalPosition, LogicalSize};
 
 use crate::{capture::Rect, screen::MonitorInfo, settings::RecordingSource};
 
@@ -86,36 +84,6 @@ pub fn frame_around(origin: (i32, i32), size: (u32, u32), margin: u32) -> ((i32,
     (
         (origin.0 - margin as i32, origin.1 - margin as i32),
         (size.0 + 2 * margin, size.1 + 2 * margin),
-    )
-}
-
-/// The window's frame, from its top-left corner and size in physical
-/// pixels at the recorded monitor's `scale`, in the units it is placed in:
-/// the display's points on macOS, which turns pixels back into points with
-/// the scale of the screen the window is on now (see
-/// `overlay::logical_frame`), and pixels elsewhere.
-#[cfg(target_os = "macos")]
-fn placed_frame(
-    position: (i32, i32),
-    size: (u32, u32),
-    scale: f64,
-) -> (LogicalPosition<f64>, LogicalSize<f64>) {
-    crate::overlay::logical_frame(
-        PhysicalPosition::new(position.0, position.1),
-        PhysicalSize::new(size.0, size.1),
-        scale,
-    )
-}
-
-#[cfg(not(target_os = "macos"))]
-fn placed_frame(
-    position: (i32, i32),
-    size: (u32, u32),
-    _scale: f64,
-) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
-    (
-        PhysicalPosition::new(position.0, position.1),
-        PhysicalSize::new(size.0, size.1),
     )
 }
 
@@ -192,12 +160,12 @@ fn create(
         .shadow(false)
         .visible(false)
         .build()?;
-    // Sized again, for a monitor whose scale differs from the one the
-    // window was built on, and before it is placed: macOS resizes a window
-    // around its bottom-left corner (see overlay.rs).
-    let (position, frame_size) = placed_frame(position, frame_size, scale);
-    window.set_size(frame_size)?;
-    window.set_position(position)?;
+    crate::overlay::place_window(
+        &window,
+        PhysicalPosition::new(position.0, position.1),
+        PhysicalSize::new(frame_size.0, frame_size.1),
+        scale,
+    )?;
     window.show()?;
     // Clicks pass straight through to what is recorded. Set once it is
     // shown: GTK applies it to the window the system has made by then.

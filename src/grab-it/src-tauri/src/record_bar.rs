@@ -529,24 +529,7 @@ fn place(
     lock(&app.state::<RecordBarState>().layout).placed_at = Some(Instant::now());
     let position = PhysicalPosition::new(position.0, position.1);
     let size = PhysicalSize::new(size.0, size.1);
-    // Sized before it is placed: macOS resizes a window around its
-    // bottom-left corner (see overlay.rs).
-    //
-    // macOS places it in the display's points, since it turns pixels back
-    // into points with the scale of the screen the window is on now
-    // (see `overlay::logical_frame`). Windows and Linux place it in pixels.
-    #[cfg(target_os = "macos")]
-    {
-        let (position, size) = crate::overlay::logical_frame(position, size, scale);
-        let _ = window.set_size(size);
-        let _ = window.set_position(position);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = scale;
-        let _ = window.set_size(size);
-        let _ = window.set_position(position);
-    }
+    let _ = crate::overlay::place_window(window, position, size, scale);
 }
 
 /// Opens the toolbar for a recording of `rect`, an area of `monitor`'s
