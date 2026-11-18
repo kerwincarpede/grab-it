@@ -3,6 +3,7 @@ import { DEFAULT_RECORDING } from "../settings/api";
 import {
   audioWith,
   cameraLabel,
+  countdownText,
   microphoneLabel,
   nextCountdown,
   withCamera,
@@ -60,5 +61,10 @@ describe("the recording options", () => {
     expect(cameraLabel({ ...DEFAULT_RECORDING, showWebcam: true }, cameras)).toBe("Default camera");
     expect(cameraLabel({ ...DEFAULT_RECORDING, showWebcam: true, camera: "usb" }, cameras)).toBe("Logitech C920");
     expect(cameraLabel({ ...DEFAULT_RECORDING, showWebcam: true, camera: "gone" }, cameras)).toBe("Saved camera");
+  });
+
+  it("names the countdown off or by its seconds", () => {
+    expect(countdownText(0)).toEqual({ text: "Off", label: "No countdown" });
+    expect(countdownText(5)).toEqual({ text: "5 s", label: "Countdown 5 s" });
   });
 });

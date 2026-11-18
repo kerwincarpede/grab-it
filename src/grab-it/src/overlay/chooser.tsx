@@ -75,13 +75,3 @@ export function toolbarLayout(width: number): ToolbarLayout {
   if (width < 1440) return "compact";
   return "wide";
 }
-
-/** What a tooltip says: the item's name, its key here, its global shortcut and its use. */
-export interface TipText {
-  name: string;
-  /** The key in this chooser. */
-  keyLabel?: string;
-  /** The global shortcut, already formatted for this platform. */
-  global?: string;
-  use: string;
-}

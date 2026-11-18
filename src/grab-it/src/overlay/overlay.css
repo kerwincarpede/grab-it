@@ -626,6 +626,26 @@
   cursor: default;
 }
 
+/* Record's main button: the setup toolbar's red, with its dot. */
+.overlay-main[data-tone="record"] {
+  background: #ff4d4f;
+  box-shadow: 0 0 0 3px rgb(255 77 79 / 28%), 0 0 18px rgb(255 77 79 / 45%);
+}
+
+.overlay-main[data-tone="record"]:hover:not([aria-disabled="true"]) {
+  background: #ff6163;
+}
+
+.overlay-main[data-tone="record"][aria-disabled="true"] {
+  background: rgb(255 77 79 / 32%);
+  box-shadow: none;
+}
+
+/* While Record is on, its icon keeps a red dot as the sources take the grey pill. */
+.overlay-mode[data-tool="record"][aria-pressed="true"] .record-dot {
+  fill: #ff4d4f;
+}
+
 .overlay-main kbd {
   min-width: 16px;
   padding: 0 3px;
@@ -673,7 +693,8 @@
   pointer-events: none;
 }
 
-.overlay-toolbar[data-edge="bottom"] .overlay-tip {
+.overlay-toolbar[data-edge="bottom"] .overlay-tip,
+.overlay-setup[data-up="true"] .overlay-tip {
   top: auto;
   bottom: calc(100% + 10px);
 }
@@ -690,7 +711,8 @@
 }
 
 /* No tooltips while a menu is open over them. */
-.overlay-toolbar:has([aria-expanded="true"]) .overlay-tip {
+.overlay-toolbar:has([aria-expanded="true"]) .overlay-tip,
+.overlay-setup:has([aria-expanded="true"]) .overlay-tip {
   display: none;
 }
 
@@ -867,8 +889,15 @@
 }
 
 .overlay-size-panel .overlay-chip:disabled,
+.overlay-toolbar .overlay-chip:disabled,
 .overlay-setup .overlay-chip:disabled {
   opacity: 0.55;
+}
+
+/* A chip shrunk to its icon, for a toolbar short of room. */
+.overlay-chip[data-icon-only="true"] {
+  gap: 2px;
+  padding: 0 6px 0 8px;
 }
 
 .overlay-chip-list {
@@ -1079,7 +1108,7 @@
   cursor: pointer;
 }
 
-.overlay-setup-record:hover:not(:disabled) {
+.overlay-setup-record:hover:not([aria-disabled="true"]) {
   background: #ff6163;
 }
 
@@ -1088,8 +1117,8 @@
   outline-offset: 2px;
 }
 
-/* Dimmed until there is something to record. */
-.overlay-setup-record:disabled {
+/* Dimmed until there is something to record; its tooltip says what to do first. */
+.overlay-setup-record[aria-disabled="true"] {
   color: rgb(255 255 255 / 55%);
   background: rgb(255 77 79 / 32%);
   box-shadow: none;

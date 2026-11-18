@@ -271,22 +271,36 @@ CHOOSER_MODES = [("Region", "1"), ("Window", "2"), ("Screen", "3"), None,
 
 
 def chooser_toolbar(cx, y, picked, main=None, ready=False, size=None, ratio="Free", timer="Timer", timer_on=False,
-                    colour=None):
+                    colour=None, record=None):
     """Capture &amp; record…'s one toolbar, centred on cx with its top at y: modes 1–3 and 4–7, the
     picked one labelled in a grey pill, then the selection's size and ratios when `size` is (w, h),
     or the hex value when `colour` is, the Timer (None hides it), the main button (dimmed until `ready`;
     None hides it) and ×.
+    With Record picked, `record` is {"source": "Region" | "Window" | "Screen", "on": {"sound", "clicks",
+    "keys"} that are on}: the source is a grey pill too, Record's dot is red, the middle holds the format,
+    the microphone and webcam as icons and the three toggles, the Timer is the countdown and the main
+    button is red.
     Returns (svg, left x, width, {mode: (x, width)})."""
     h, bh, pad, gap = 40, 30, 5, 2
+    labelled = {picked} | ({record["source"]} if record else set())
     parts = []  # (kind, payload, width)
     for mode in CHOOSER_MODES:
         if mode is None:
             parts.append(("sep", None, 9))
             continue
         name, _ = mode
-        w = round(28 + text_w(name, 12.5) + 24) if name == picked else 44
+        w = round(28 + text_w(name, 12.5) + 24) if name in labelled else 44
         parts.append(("mode", mode, w))
-    if size:
+    if record:
+        parts.append(("sep", None, 9))
+        parts.append(("chip", "MP4 · 30 fps", round(text_w("MP4 · 30 fps", 12) + 30)))
+        parts.append(("iconchip", "mic", 38))
+        parts.append(("iconchip", "cam", 38))
+        parts.append(("sep", None, 9))
+        for toggle in ("sound", "clicks", "keys"):
+            parts.append(("toggle", toggle, 30))
+        parts.append(("sep", None, 9))
+    elif size:
         parts.append(("sep", None, 9))
         parts.append(("field", str(size[0]), 44))
         parts.append(("times", None, 10))
@@ -304,7 +318,7 @@ def chooser_toolbar(cx, y, picked, main=None, ready=False, size=None, ratio="Fre
     if timer is not None:
         parts.append(("timer", timer, round(26 + text_w(timer, 12.5) + 24)))
     if main is not None:
-        parts.append(("main", main, round(16 + text_w(main, 12.5) * 1.05 + 30)))
+        parts.append(("main", main, round(16 + text_w(main, 12.5) * 1.05 + 30 + (12 if record else 0))))
     parts.append(("cancel", None, 30))
     width = pad * 2 + sum(w for _, _, w in parts) + gap * (len(parts) - 1)
     left = cx - width / 2
@@ -319,12 +333,14 @@ def chooser_toolbar(cx, y, picked, main=None, ready=False, size=None, ratio="Fre
         elif kind == "mode":
             name, key = data
             places[name] = (x, w)
-            if name == picked:
+            if name in labelled:
                 out.append(f'<rect x="{x}" y="{top}" width="{w}" height="{bh}" rx="{bh / 2}" fill="#34373f"/>')
                 out.append(mode_icon(name, x + 15, cy))
                 out.append(f'<text x="{x + 28}" y="{cy + 4.5}" class="t" font-size="12.5" fill="#fff">{name}</text>')
             else:
                 out.append(mode_icon(name, x + 14, cy))
+            if name == "Record" and record:
+                out.append(f'<circle cx="{x + 15}" cy="{cy}" r="2.6" fill="#ff4d4f"/>')
             out.append(f'<rect x="{x + w - 21}" y="{cy - 8}" width="15" height="16" rx="4" fill="#ffffff" opacity=".12"/>')
             out.append(f'<text x="{x + w - 13.5}" y="{cy + 4}" class="t" font-size="10.5" fill="#c9ceda" text-anchor="middle">{key}</text>')
         elif kind == "field":
@@ -334,6 +350,36 @@ def chooser_toolbar(cx, y, picked, main=None, ready=False, size=None, ratio="Fre
             out.append(f'<text x="{x + w / 2}" y="{cy + 4.5}" class="t" font-size="12" fill="#8b93a1" text-anchor="middle">×</text>')
         elif kind == "unit":
             out.append(f'<text x="{x + 2}" y="{cy + 4}" class="t" font-size="11" fill="#8b93a1">px</text>')
+        elif kind == "chip":
+            places[data] = (x, w)
+            out.append(f'<rect x="{x}" y="{cy - 12}" width="{w}" height="24" rx="12" fill="#ffffff" fill-opacity=".06"/>')
+            out.append(f'<text x="{x + 10}" y="{cy + 4.5}" class="t" font-size="12" fill="#e6e8ee">{data}</text>')
+            out.append(f'<path d="M{x + w - 15} {cy - 1.5}l3 3 3-3" fill="none" stroke="#8b93a1" stroke-width="1.4" stroke-linecap="round"/>')
+        elif kind == "iconchip":
+            places[data] = (x, w)
+            ic = 'fill="none" stroke="#e6e8ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"'
+            out.append(f'<rect x="{x}" y="{cy - 12}" width="{w}" height="24" rx="12" fill="#ffffff" fill-opacity=".06"/>')
+            ix = x + 13
+            if data == "mic":
+                out.append(f'<rect {ic} x="{ix - 2.5}" y="{cy - 6}" width="5" height="8" rx="2.5"/>'
+                           f'<path {ic} d="M{ix - 5} {cy}a5 5 0 0 0 10 0M{ix} {cy + 5}v2"/>')
+            else:
+                out.append(f'<rect {ic} x="{ix - 6}" y="{cy - 4}" width="9" height="8" rx="2"/>'
+                           f'<path {ic} d="M{ix + 3} {cy - 1.5}l3.5-2v7l-3.5-2"/>')
+            out.append(f'<path d="M{x + w - 14} {cy - 1.5}l3 3 3-3" fill="none" stroke="#8b93a1" stroke-width="1.4" stroke-linecap="round"/>')
+        elif kind == "toggle":
+            places[data] = (x, w)
+            ic = 'fill="none" stroke="#e6e8ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"'
+            if data in record["on"]:
+                out.append(f'<rect x="{x}" y="{top}" width="{w}" height="{bh}" rx="{bh / 2}" fill="#34373f"/>')
+            tx = x + w / 2
+            if data == "sound":
+                out.append(f'<path {ic} d="M{tx - 6} {cy - 2}h3l4-3v10l-4-3h-3zM{tx + 3} {cy - 2}a3.5 3.5 0 0 1 0 5"/>')
+            elif data == "clicks":
+                out.append(f'<path {ic} d="M{tx - 4} {cy - 6}l8 4-3 1-1 3zM{tx + 4} {cy + 2}l3 3"/>')
+            else:
+                out.append(f'<rect {ic} x="{tx - 7}" y="{cy - 5}" width="14" height="10" rx="2"/>'
+                           f'<path {ic} d="M{tx - 4} {cy - 2}h1M{tx} {cy - 2}h1M{tx + 4} {cy - 2}h1M{tx - 3} {cy + 2}h6"/>')
         elif kind == "colour":
             out.append(f'<rect x="{x + 4}" y="{cy - 7}" width="14" height="14" rx="4" fill="{data}" stroke="#fff" stroke-opacity=".25"/>')
             out.append(f'<text x="{x + 24}" y="{cy + 4.5}" {MONO} font-size="12" fill="#e6e8ee">{data}</text>')
@@ -350,9 +396,15 @@ def chooser_toolbar(cx, y, picked, main=None, ready=False, size=None, ratio="Fre
             out.append(f'<rect x="{x + w - 21}" y="{cy - 8}" width="15" height="16" rx="4" fill="#ffffff" opacity=".12"/>')
             out.append(f'<text x="{x + w - 13.5}" y="{cy + 4}" class="t" font-size="10.5" fill="#c9ceda" text-anchor="middle">8</text>')
         elif kind == "main":
-            glow = ' stroke="#2f81f7" stroke-opacity=".3" stroke-width="3"' if ready else ""
-            out.append(f'<rect x="{x}" y="{top}" width="{w}" height="{bh}" rx="{bh / 2}" fill="#2f81f7" opacity="{1 if ready else .35}"{glow}/>')
-            out.append(f'<text x="{x + 14}" y="{cy + 4.5}" class="t b" font-size="12.5" fill="#fff" opacity="{1 if ready else .6}">{data}</text>')
+            places["main"] = (x, w)
+            tone = "#ff4d4f" if record else "#2f81f7"
+            glow = f' stroke="{tone}" stroke-opacity=".3" stroke-width="3"' if ready else ""
+            out.append(f'<rect x="{x}" y="{top}" width="{w}" height="{bh}" rx="{bh / 2}" fill="{tone}" opacity="{1 if ready else .35}"{glow}/>')
+            lx = x + 14
+            if record:
+                out.append(f'<circle cx="{x + 16}" cy="{cy}" r="4" fill="#fff" opacity="{1 if ready else .6}"/>')
+                lx = x + 26
+            out.append(f'<text x="{lx}" y="{cy + 4.5}" class="t b" font-size="12.5" fill="#fff" opacity="{1 if ready else .6}">{data}</text>')
             out.append(f'<text x="{x + w - 15}" y="{cy + 4}" {MONO} font-size="10" fill="#fff" opacity=".7" text-anchor="middle">⏎</text>')
         elif kind == "cancel":
             out.append(f'<path d="M{x + 11} {cy - 4}l8 8M{x + 19} {cy - 4}l-8 8" stroke="#8b93a1" stroke-width="1.6" stroke-linecap="round"/>')

@@ -22,6 +22,8 @@ import {
 } from "../settings/api";
 import {
   cameraLabel,
+  COUNTDOWN_USE,
+  countdownText,
   microphoneLabel,
   nextCountdown,
   withCamera,
@@ -29,6 +31,7 @@ import {
   withSystemSound,
 } from "./recordOptions";
 import { SOURCES, type RecordingOptions } from "./recordSources";
+import { Tipped, type TipText } from "./Tipped";
 
 type FormatChoice = "mp4-30" | "mp4-60" | "gif";
 
@@ -57,7 +60,8 @@ type ChipRow =
   | { kind: "action"; key: string; title: string; icon?: ReactNode; busy?: boolean; onPick: () => void };
 
 interface ChipMenuProps {
-  label: ReactNode;
+  /** What the chip says; left out, it shows its icon alone. */
+  label?: ReactNode;
   icon?: ReactNode;
   title: string;
   disabled?: boolean;
@@ -65,11 +69,13 @@ interface ChipMenuProps {
   up: boolean;
   /** Marks the option picked with a check, and lines the others up with it. */
   checks?: boolean;
+  /** Its tooltip; without one, the title is. */
+  tip?: TipText;
   options: ChipRow[];
 }
 
 /** A chip that opens a short list to pick from. */
-export function ChipMenu({ label, icon, title, disabled, up, checks = false, options }: ChipMenuProps) {
+export function ChipMenu({ label, icon, title, disabled, up, checks = false, tip, options }: ChipMenuProps) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -80,22 +86,27 @@ export function ChipMenu({ label, icon, title, disabled, up, checks = false, opt
     window.addEventListener("mousedown", close);
     return () => window.removeEventListener("mousedown", close);
   }, [open]);
+  const chip = (describedBy?: string) => (
+    <button
+      type="button"
+      className="overlay-tool overlay-chip"
+      data-icon-only={label === undefined ? "true" : undefined}
+      aria-haspopup="menu"
+      aria-expanded={open}
+      aria-label={title}
+      aria-describedby={describedBy}
+      title={tip ? undefined : title}
+      disabled={disabled}
+      onClick={() => setOpen((was) => !was)}
+    >
+      {icon}
+      {label !== undefined && <span>{label}</span>}
+      <ChevronDownIcon size={12} />
+    </button>
+  );
   return (
     <div className="overlay-chip-menu" ref={root}>
-      <button
-        type="button"
-        className="overlay-tool overlay-chip"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={title}
-        title={title}
-        disabled={disabled}
-        onClick={() => setOpen((was) => !was)}
-      >
-        {icon}
-        <span>{label}</span>
-        <ChevronDownIcon size={12} />
-      </button>
+      {tip ? <Tipped tip={tip}>{chip}</Tipped> : chip()}
       {open && (
         <div
           className="overlay-chip-list"
@@ -165,42 +176,185 @@ interface IconToggleProps {
   icon: ReactNode;
   on: boolean;
   disabled?: boolean;
-  /** The tooltip, when it says more than the label. */
-  title?: string;
+  /** What its tooltip says it does. */
+  use: string;
   onToggle: () => void;
 }
 
 /** An option as an icon, tinted when on; its tooltip names it. */
-function IconToggle({ label, icon, on, disabled, title, onToggle }: IconToggleProps) {
+function IconToggle({ label, icon, on, disabled, use, onToggle }: IconToggleProps) {
   return (
-    <button
-      type="button"
-      className="overlay-tool overlay-setup-icon"
-      aria-pressed={on}
-      aria-label={label}
-      disabled={disabled}
-      title={title ?? `${label} · ${on ? "on" : "off"}`}
-      onClick={onToggle}
-    >
-      {icon}
-    </button>
+    <Tipped tip={{ name: `${label} · ${on ? "on" : "off"}`, use }}>
+      {(describedBy) => (
+        <button
+          type="button"
+          className="overlay-tool overlay-setup-icon"
+          aria-pressed={on}
+          aria-label={label}
+          aria-describedby={describedBy}
+          disabled={disabled}
+          onClick={onToggle}
+        >
+          {icon}
+        </button>
+      )}
+    </Tipped>
+  );
+}
+
+interface RecordOptionsFieldsProps {
+  options: RecordingOptions;
+  /** Lists and tooltips open above, for a toolbar in the lower half. */
+  up: boolean;
+  /** The microphone and webcam chips as icons alone, for a toolbar short of room. */
+  iconsOnly: boolean;
+}
+
+/**
+ * Settings → Recording's most used options, each with a tooltip: the
+ * format, the microphone, the webcam, and the system sound, clicks and
+ * keys as icons. In the Record overlay's setup toolbar and in the middle
+ * of Capture & record's toolbar while Record is on.
+ */
+export function RecordOptionsFields({ options, up, iconsOnly }: RecordOptionsFieldsProps) {
+  const { recording, microphones, cameras, refreshingCameras, refreshCameras, system, error, save } = options;
+  if (!recording) {
+    return <span className="overlay-record-note">{error ?? "Loading recording options…"}</span>;
+  }
+  const gif = recording.format === "gif";
+  const silent = "A GIF is silent.";
+  const micOn = recordsMicrophone(recording.audio);
+  const micOptions = [
+    { key: "none", title: "No microphone", selected: !micOn, onPick: () => save(withMicrophone(recording, { kind: "none" })) },
+    {
+      key: "default",
+      title: "Default microphone",
+      selected: micOn && recording.microphone === null,
+      onPick: () => save(withMicrophone(recording, { kind: "default" })),
+    },
+    ...microphones.map((mic) => ({
+      key: mic.id,
+      title: mic.name,
+      selected: micOn && recording.microphone === mic.id,
+      onPick: () => save(withMicrophone(recording, { kind: "device", id: mic.id })),
+    })),
+  ];
+  const micLabel = gif ? "No sound" : microphoneLabel(recording, microphones);
+  const micUse = gif ? silent : "Picks the microphone that records your voice.";
+  const webcamOn = recording.showWebcam;
+  const webcamLabel = cameraLabel(recording, cameras);
+  const webcamUse = "Picks the webcam shown in a bubble over the recording.";
+  const cameraSection: ChipRow[] =
+    cameras.length === 0
+      ? []
+      : [
+          { kind: "separator", key: "cameras-separator" },
+          { kind: "heading", key: "cameras-heading", title: "Cameras" },
+          ...cameras.map((camera) => ({
+            key: `camera-${camera.id}`,
+            title: camera.name,
+            selected: webcamOn && recording.camera === camera.id,
+            onPick: () => save(withCamera(recording, { kind: "device", id: camera.id })),
+          })),
+        ];
+  const cameraRows: ChipRow[] = [
+    { key: "none", title: "No webcam", selected: !webcamOn, onPick: () => save(withCamera(recording, { kind: "none" })) },
+    {
+      key: "default",
+      title: "Default camera",
+      selected: webcamOn && recording.camera === null,
+      onPick: () => save(withCamera(recording, { kind: "default" })),
+    },
+    ...cameraSection,
+    { kind: "separator", key: "refresh-separator" },
+    {
+      kind: "action",
+      key: "refresh",
+      title: "Refresh camera list",
+      icon: <RestartIcon size={14} />,
+      busy: refreshingCameras,
+      onPick: refreshCameras,
+    },
+  ];
+  const format = FORMAT_CHOICES.find((choice) => choice.value === formatChoice(recording))?.title;
+  return (
+    <div className="overlay-record-setup" data-testid="overlay-record-setup" role="group" aria-label="Recording options">
+      <ChipMenu
+        title="Format"
+        up={up}
+        label={format}
+        tip={{ name: "Format", use: "MP4 at 30 or 60 fps, or a silent GIF of up to a minute." }}
+        options={FORMAT_CHOICES.map((choice) => ({
+          key: choice.value,
+          title: choice.title,
+          selected: choice.value === formatChoice(recording),
+          onPick: () => save(withFormat(recording, choice.value)),
+        }))}
+      />
+      <ChipMenu
+        title="Microphone"
+        up={up}
+        disabled={gif}
+        icon={micOn && !gif ? <MicIcon size={14} /> : <MicOffIcon size={14} />}
+        label={iconsOnly ? undefined : micLabel}
+        // Shrunk to its icon, the chip's tooltip names the choice.
+        tip={{ name: "Microphone", use: iconsOnly ? `${micLabel}. ${micUse}` : micUse }}
+        options={micOptions}
+      />
+      <ChipMenu
+        title="Camera"
+        up={up}
+        checks
+        icon={webcamOn ? <CameraIcon size={14} /> : <CameraOffIcon size={14} />}
+        label={iconsOnly ? undefined : webcamLabel}
+        tip={{ name: "Webcam", use: iconsOnly ? `${webcamLabel}. ${webcamUse}` : webcamUse }}
+        options={cameraRows}
+      />
+      <span className="overlay-toolbar-gap" aria-hidden="true" />
+      {system && (
+        <IconToggle
+          label="System sound"
+          icon={<SpeakerIcon size={16} />}
+          on={!gif && recordsSystemSound(recording.audio)}
+          disabled={gif}
+          use={gif ? silent : "Records what your computer plays."}
+          onToggle={() => save(withSystemSound(recording, !recordsSystemSound(recording.audio)))}
+        />
+      )}
+      <IconToggle
+        label="Clicks"
+        icon={<ClickIcon size={16} />}
+        on={recording.showClicks}
+        use="Draws a ring where you click."
+        onToggle={() => save({ ...recording, showClicks: !recording.showClicks })}
+      />
+      <IconToggle
+        label="Keys"
+        icon={<KeyboardIcon size={16} />}
+        on={recording.showKeystrokes}
+        use="Shows the keys you press at the bottom of the recording."
+        onToggle={() => save({ ...recording, showKeystrokes: !recording.showKeystrokes })}
+      />
+      {error && (
+        <span className="overlay-record-note overlay-record-error" role="alert">
+          {error}
+        </span>
+      )}
+    </div>
   );
 }
 
 interface RecordSetupProps {
   options: RecordingOptions;
-  /** What is being recorded; the source buttons switch it. */
+  /** What is being recorded; the source buttons and keys 1 to 3 switch it. */
   source: RecordingSource;
-  /** Number keys 1 to 3 switch the source; All-in-one keeps them for its modes. */
-  numbered: boolean;
   /** Something is picked, so Record can start. */
   canRecord: boolean;
-  /** Lists open above their chips, for a toolbar in the lower half. */
+  /** Lists and tooltips open above, for a toolbar in the lower half. */
   up: boolean;
   /** Places the toolbar; it follows the grip by this alone. */
   transform: string;
-  /** Left out where the toolbar cannot be moved. */
-  onGrip?: (event: MouseEvent) => void;
+  onGrip: (event: MouseEvent) => void;
   onSource: (source: RecordingSource) => void;
   onRecord: () => void;
   onCancel: () => void;
@@ -208,174 +362,21 @@ interface RecordSetupProps {
 
 /**
  * The Record overlay's setup toolbar, in the recording toolbar's look: a
- * grip to move it, what to record (Region, Window or Screen), the format,
- * the microphone, the camera, the system sound, clicks and keys as icons,
- * the countdown, Record and Cancel.
+ * grip to move it, what to record (Region, Window or Screen), the
+ * recording options, the countdown, Record and Cancel. Every item has a
+ * tooltip, in place of a hint line. Capture & record shows the same
+ * options in its own toolbar instead.
  */
-function RecordSetup({
-  options,
-  source,
-  numbered,
-  canRecord,
-  up,
-  transform,
-  onGrip,
-  onSource,
-  onRecord,
-  onCancel,
-}: RecordSetupProps) {
-  const { recording, microphones, cameras, refreshingCameras, refreshCameras, system, error, save } = options;
-
-  const sources = (
-    <div className="overlay-setup-sources" role="group" aria-label="What to record">
-      {SOURCES.map(({ source: each, label, icon }, at) => (
-        <button
-          key={each}
-          type="button"
-          className="overlay-tool"
-          aria-pressed={each === source}
-          title={numbered ? `${label} (${at + 1})` : label}
-          onClick={() => onSource(each)}
-        >
-          {icon}
-          <span>{label}</span>
-          {numbered && <kbd aria-hidden="true">{at + 1}</kbd>}
-        </button>
-      ))}
-    </div>
-  );
-
-  let settings: ReactNode;
-  if (!recording) {
-    settings = <span className="overlay-record-note">{error ?? "Loading recording options…"}</span>;
-  } else {
-    const gif = recording.format === "gif";
-    const silent = gif ? "A GIF is silent" : undefined;
-    const micOn = recordsMicrophone(recording.audio);
-    const micOptions = [
-      { key: "none", title: "No microphone", selected: !micOn, onPick: () => save(withMicrophone(recording, { kind: "none" })) },
-      {
-        key: "default",
-        title: "Default microphone",
-        selected: micOn && recording.microphone === null,
-        onPick: () => save(withMicrophone(recording, { kind: "default" })),
-      },
-      ...microphones.map((mic) => ({
-        key: mic.id,
-        title: mic.name,
-        selected: micOn && recording.microphone === mic.id,
-        onPick: () => save(withMicrophone(recording, { kind: "device", id: mic.id })),
-      })),
-    ];
-    const webcamOn = recording.showWebcam;
-    const cameraSection: ChipRow[] =
-      cameras.length === 0
-        ? []
-        : [
-            { kind: "separator", key: "cameras-separator" },
-            { kind: "heading", key: "cameras-heading", title: "Cameras" },
-            ...cameras.map((camera) => ({
-              key: `camera-${camera.id}`,
-              title: camera.name,
-              selected: webcamOn && recording.camera === camera.id,
-              onPick: () => save(withCamera(recording, { kind: "device", id: camera.id })),
-            })),
-          ];
-    const cameraRows: ChipRow[] = [
-      { key: "none", title: "No webcam", selected: !webcamOn, onPick: () => save(withCamera(recording, { kind: "none" })) },
-      {
-        key: "default",
-        title: "Default camera",
-        selected: webcamOn && recording.camera === null,
-        onPick: () => save(withCamera(recording, { kind: "default" })),
-      },
-      ...cameraSection,
-      { kind: "separator", key: "refresh-separator" },
-      {
-        kind: "action",
-        key: "refresh",
-        title: "Refresh camera list",
-        icon: <RestartIcon size={14} />,
-        busy: refreshingCameras,
-        onPick: refreshCameras,
-      },
-    ];
-    settings = (
-      <div className="overlay-record-setup" data-testid="overlay-record-setup" role="group" aria-label="Recording options">
-        <ChipMenu
-          title="Format"
-          up={up}
-          label={FORMAT_CHOICES.find((choice) => choice.value === formatChoice(recording))?.title}
-          options={FORMAT_CHOICES.map((choice) => ({
-            key: choice.value,
-            title: choice.title,
-            selected: choice.value === formatChoice(recording),
-            onPick: () => save(withFormat(recording, choice.value)),
-          }))}
-        />
-        <ChipMenu
-          title="Microphone"
-          up={up}
-          disabled={gif}
-          icon={micOn && !gif ? <MicIcon size={14} /> : <MicOffIcon size={14} />}
-          label={gif ? "No sound" : microphoneLabel(recording, microphones)}
-          options={micOptions}
-        />
-        <ChipMenu
-          title="Camera"
-          up={up}
-          checks
-          icon={webcamOn ? <CameraIcon size={14} /> : <CameraOffIcon size={14} />}
-          label={cameraLabel(recording, cameras)}
-          options={cameraRows}
-        />
-        <span className="overlay-toolbar-gap" aria-hidden="true" />
-        {system && (
-          <IconToggle
-            label="System sound"
-            icon={<SpeakerIcon size={16} />}
-            on={!gif && recordsSystemSound(recording.audio)}
-            disabled={gif}
-            title={silent}
-            onToggle={() => save(withSystemSound(recording, !recordsSystemSound(recording.audio)))}
-          />
-        )}
-        <IconToggle
-          label="Clicks"
-          icon={<ClickIcon size={16} />}
-          on={recording.showClicks}
-          onToggle={() => save({ ...recording, showClicks: !recording.showClicks })}
-        />
-        <IconToggle
-          label="Keys"
-          icon={<KeyboardIcon size={16} />}
-          on={recording.showKeystrokes}
-          onToggle={() => save({ ...recording, showKeystrokes: !recording.showKeystrokes })}
-        />
-        <button
-          type="button"
-          className="overlay-tool overlay-setup-countdown"
-          aria-pressed={recording.countdown > 0}
-          aria-label={recording.countdown === 0 ? "No countdown" : `Countdown ${recording.countdown} s`}
-          title="Countdown before recording: off, 3, 5 or 10 s"
-          onClick={() => save({ ...recording, countdown: nextCountdown(recording.countdown) })}
-        >
-          <TimerIcon size={16} />
-          <span>{recording.countdown === 0 ? "Off" : `${recording.countdown} s`}</span>
-        </button>
-        {error && (
-          <span className="overlay-record-note overlay-record-error" role="alert">
-            {error}
-          </span>
-        )}
-      </div>
-    );
-  }
+function RecordSetup({ options, source, canRecord, up, transform, onGrip, onSource, onRecord, onCancel }: RecordSetupProps) {
+  const { recording, save } = options;
+  const first = SOURCES.find((each) => each.source === source)?.first ?? "";
+  const countdown = recording ? countdownText(recording.countdown) : null;
 
   return (
     <div
       className="overlay-setup"
       data-testid="overlay-setup"
+      data-up={up ? "true" : "false"}
       role="toolbar"
       aria-label="Record"
       style={{ transform }}
@@ -385,45 +386,95 @@ function RecordSetup({
         if ((event.target as HTMLElement).closest("button")) event.preventDefault();
       }}
     >
-      {onGrip && (
-        <span
-          className="overlay-setup-grip"
-          data-testid="overlay-setup-grip"
-          title="Drag to move"
-          aria-hidden="true"
-          onMouseDown={(event) => {
-            if (event.button !== 0) return;
-            event.preventDefault();
-            onGrip(event);
-          }}
-        >
-          <GripIcon size={14} />
-        </span>
-      )}
-      {sources}
+      <Tipped tip={{ name: "Move", use: "Drag to move this toolbar. The recording toolbar opens where you leave it." }}>
+        {() => (
+          <span
+            className="overlay-setup-grip"
+            data-testid="overlay-setup-grip"
+            aria-hidden="true"
+            onMouseDown={(event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              onGrip(event);
+            }}
+          >
+            <GripIcon size={14} />
+          </span>
+        )}
+      </Tipped>
+      <div className="overlay-setup-sources" role="group" aria-label="What to record">
+        {SOURCES.map(({ source: each, label, icon, use }, at) => (
+          <Tipped key={each} tip={{ name: label, keyLabel: String(at + 1), use }}>
+            {(describedBy) => (
+              <button
+                type="button"
+                className="overlay-tool"
+                aria-pressed={each === source}
+                aria-describedby={describedBy}
+                aria-keyshortcuts={String(at + 1)}
+                onClick={() => onSource(each)}
+              >
+                {icon}
+                <span>{label}</span>
+                <kbd aria-hidden="true">{at + 1}</kbd>
+              </button>
+            )}
+          </Tipped>
+        ))}
+      </div>
       <span className="overlay-toolbar-gap" aria-hidden="true" />
-      {settings}
-      <button
-        type="button"
-        className="overlay-setup-record"
-        data-testid="overlay-record"
-        disabled={!canRecord}
-        title="Record (Enter)"
-        onClick={onRecord}
-      >
-        <span className="overlay-setup-dot" aria-hidden="true" />
-        <span>Record</span>
-        <kbd aria-hidden="true">↵</kbd>
-      </button>
-      <button
-        type="button"
-        className="overlay-tool overlay-setup-icon"
-        aria-label="Cancel"
-        title="Cancel (Esc)"
-        onClick={onCancel}
-      >
-        <CloseIcon size={14} />
-      </button>
+      <RecordOptionsFields options={options} up={up} iconsOnly={false} />
+      {recording && countdown && (
+        <Tipped tip={{ name: "Countdown", use: COUNTDOWN_USE }}>
+          {(describedBy) => (
+            <button
+              type="button"
+              className="overlay-tool overlay-setup-countdown"
+              aria-pressed={recording.countdown > 0}
+              aria-label={countdown.label}
+              aria-describedby={describedBy}
+              onClick={() => save({ ...recording, countdown: nextCountdown(recording.countdown) })}
+            >
+              <TimerIcon size={16} />
+              <span>{countdown.text}</span>
+            </button>
+          )}
+        </Tipped>
+      )}
+      <Tipped tip={{ name: "Record", keyLabel: "Enter", use: canRecord ? "Starts recording." : first }}>
+        {(describedBy) => (
+          <button
+            type="button"
+            className="overlay-setup-record"
+            data-testid="overlay-record"
+            // Dimmed, not disabled, so its tooltip still says what to do first.
+            aria-disabled={canRecord ? undefined : "true"}
+            aria-describedby={describedBy}
+            aria-keyshortcuts="Enter"
+            onClick={() => {
+              if (canRecord) onRecord();
+            }}
+          >
+            <span className="overlay-setup-dot" aria-hidden="true" />
+            <span>Record</span>
+            <kbd aria-hidden="true">↵</kbd>
+          </button>
+        )}
+      </Tipped>
+      <Tipped tip={{ name: "Cancel", keyLabel: "Esc", use: "Closes without recording." }}>
+        {(describedBy) => (
+          <button
+            type="button"
+            className="overlay-tool overlay-setup-icon"
+            aria-label="Cancel"
+            aria-describedby={describedBy}
+            aria-keyshortcuts="Escape"
+            onClick={onCancel}
+          >
+            <CloseIcon size={14} />
+          </button>
+        )}
+      </Tipped>
     </div>
   );
 }

@@ -583,61 +583,22 @@ def tour_video():
     A.body.append(f'<rect id="winhl" x="{wx}" y="{wy}" width="{ww}" height="{wh}" rx="11" fill="#4c8dff" fill-opacity=".14" stroke="#4c8dff" stroke-width="2.5"/>')
     A.show("#winhl", "winhl", [(2.35, 3.25)], fade=.12)
 
-    # The recording setup bar under the Capture &amp; record… toolbar.
+    # Record stays in the Capture &amp; record… toolbar: Region, Window and Screen pick what to record,
+    # its options fill the middle, the countdown takes the Timer's place and the main button is a red Record.
     ic = 'fill="none" stroke="#e6e8ee" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"'
-    by = 46
-    items = []
-    x = 0
-    def seg(label, w, icon=""):
-        nonlocal x
-        items.append((x, w, label, icon))
-        x += w + 2
-    seg("Region", 66); seg("Window", 70); seg("Screen", 66)
-    x += 8; seg("MP4 · 30 fps ▾", 96); seg("Default mic ▾", 92)
-    x += 8
-    toggles_x = x
-    x += 5 * 26 + 8
-    rec_x = x
-    x += 76
-    bar_w = x + 30
-    bx = W / 2 - bar_w / 2
-    bar = [f'<rect x="{bx}" y="{by}" width="{bar_w}" height="32" rx="16" fill="#16181d" stroke="#2c313b"/>',
-           f'<rect id="segsel0" x="{bx + 5}" y="{by + 4}" width="66" height="24" rx="12" fill="#4c8dff"/>',
-           f'<rect id="segsel1" x="{bx + 5 + 68}" y="{by + 4}" width="70" height="24" rx="12" fill="#4c8dff"/>']
-    for ix, w, label, _ in items:
-        bar.append(f'<text x="{bx + 5 + ix + w / 2}" y="{by + 20}" class="t" font-size="11" fill="#e6e8ee" text-anchor="middle">{label}</text>')
-    tx = bx + 5 + toggles_x
-    icons = [f'<path {ic} d="M{tx + 7} {by + 13}h3l4-3v12l-4-3h-3zM{tx + 17} {by + 13}a4 4 0 0 1 0 6"/>',
-             f'<rect {ic} x="{tx + 31}" y="{by + 11}" width="10" height="10" rx="2"/><path {ic} d="M{tx + 41} {by + 14}l4-2v8l-4-2"/>',
-             f'<path {ic} d="M{tx + 58} {by + 10}l8 4-3 1-1 3zM{tx + 66} {by + 20}l3 3"/>',
-             f'<rect {ic} x="{tx + 82}" y="{by + 11}" width="14" height="10" rx="2"/><path {ic} d="M{tx + 85} {by + 14}h1M{tx + 89} {by + 14}h1M{tx + 93} {by + 14}h1M{tx + 86} {by + 18}h6"/>',
-             f'<circle {ic} cx="{tx + 113}" cy="{by + 16}" r="5"/><path {ic} d="M{tx + 113} {by + 13}v3h2"/>']
-    for i, icon in enumerate(icons):
-        on = i in (1, 2, 3)
-        if on:
-            bar.append(f'<rect x="{tx + i * 26}" y="{by + 4}" width="24" height="24" rx="7" fill="#4c8dff" fill-opacity=".28"/>')
-        bar.append(icon)
-    bar.append(f'<text x="{tx + 122}" y="{by + 20}" class="t" font-size="10.5" fill="#e6e8ee">3 s</text>')
-    rx_ = bx + 5 + rec_x
-    REC = (rx_ + 36, by + 16)
-    bar.append(f'<rect x="{rx_}" y="{by + 4}" width="72" height="24" rx="12" fill="#ff4b4b"/>'
-               f'<circle cx="{rx_ + 13}" cy="{by + 16}" r="4" fill="#fff"/>'
-               f'<text x="{rx_ + 22}" y="{by + 20}" class="t b" font-size="11" fill="#fff">Record</text>'
-               f'<path d="M{bx + bar_w - 18} {by + 12}l8 8M{bx + bar_w - 10} {by + 12}l-8 8" stroke="#9aa3b2" stroke-width="1.5" stroke-linecap="round"/>')
-    hint = "Click a window to record it. Enter records."
-    hw = text_w(hint, 11) + 26
-    bar.append(f'<rect x="{W / 2 - hw / 2}" y="{by + 38}" width="{hw}" height="22" rx="7" fill="#16181d" opacity=".94"/>'
-               f'<text x="{W / 2}" y="{by + 53}" class="t" font-size="11" fill="#e6e8ee" text-anchor="middle">{hint}</text>')
-    A.body.append(f'<g id="setup">{"".join(bar)}</g>')
-    A.kf("setup", [(1.35, "opacity:0;transform:translateY(-14px)"), (1.6, "opacity:1;transform:translateY(0)"),
-                   (3.05, "opacity:1;transform:translateY(0)"), (3.25, "opacity:0;transform:translateY(0)")], "#setup", "ease-out")
-    WINDOW_BTN = (bx + 5 + 68 + 35, by + 16)
-    A.show("#segsel0", "segsel0", [(0, 1.9)], fade=.05)
-    A.show("#segsel1", "segsel1", [(1.9, A.T)], fade=.05)
+    rec = {"timer": "3 s", "timer_on": True, "main": "Record"}
+    on = {"clicks", "keys"}
     placed = toolbar(A, [(1.1, 3.25)], [("Region", {"main": "Capture"}, [(0, 1.45)]),
-                                        ("Record", {"timer": None}, [(1.45, A.T)])])
+                                        ("Record", {**rec, "record": {"source": "Region", "on": on}}, [(1.45, 1.9)]),
+                                        ("Record", {**rec, "record": {"source": "Window", "on": on}}, [(1.9, 2.55)]),
+                                        ("Record", {**rec, "ready": True, "record": {"source": "Window", "on": on}},
+                                         [(2.55, A.T)])])
     hx, hw_ = placed[0]["Record"]
     key_badge(A, "k6", "6", hx + hw_ / 2, 104, 1.4)
+    wbx, wbw = placed[1]["Window"]
+    WINDOW_BTN = (wbx + wbw / 2, 8 + 20 * TB_SCALE)
+    mx, mw = placed[3]["main"]
+    REC = (mx + mw / 2, 8 + 20 * TB_SCALE)
 
     # Countdown, then the recording.
     cx, cy = wx + ww / 2, wy + wh / 2
@@ -849,7 +810,8 @@ def tour_video():
     A.click(*REC, 3.1)
     reset_cover(A, 18.4)
     write("video", A, "Recording and the video editor",
-          "Record mode is picked on the Capture &amp; record… toolbar, a window is chosen with the webcam, clicks and keys on, and a countdown starts the recording. "
+          "Record is picked on the Capture &amp; record… toolbar, which turns Region, Window and Screen into what to record and shows the recording options in the same toolbar. "
+          "A window is chosen with clicks and keys on, and a countdown starts the recording. "
           "Clicks show as rings and a shortcut as a key label. In the video editor the start is trimmed, a zoom is added and set to follow the cursor, "
           "playback zooms in on each click, and Export saves a new MP4.",
           defs=f'<clipPath id="vclip"><rect x="{VX}" y="{VY}" width="{VW}" height="{VH:.1f}" rx="8"/></clipPath>'
