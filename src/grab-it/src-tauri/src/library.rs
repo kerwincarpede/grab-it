@@ -740,6 +740,7 @@ impl Library {
                 eprintln!("Grab-it: could not delete {}: {err}", extra.display());
             }
         }
+        remove_assets(&shot.path);
         self.forget(id)?;
         Ok(shot)
     }
@@ -761,7 +762,17 @@ impl Library {
         let Some(target) = self.rename_target(&shot, name)? else {
             return Ok(shot);
         };
+        // Images added in the editor move with the capture, so its sidecar still finds them.
+        let (assets_from, assets_to) = (
+            capture::assets_dir(&shot.path),
+            capture::assets_dir(&target.path),
+        );
+        let has_assets = assets_from.try_exists()?;
         fs::rename(&shot.path, &target.path)?;
+        if has_assets && let Err(err) = fs::rename(&assets_from, &assets_to) {
+            fs::rename(&target.path, &shot.path)?;
+            return Err(err.into());
+        }
         for (from, to) in extra_files(&shot).into_iter().zip(extra_files(&target)) {
             if from.exists()
                 && let Err(err) = fs::rename(&from, &to)
@@ -789,6 +800,9 @@ impl Library {
                 if to.exists() {
                     let _ = fs::rename(&to, &from);
                 }
+            }
+            if has_assets {
+                let _ = fs::rename(&assets_to, &assets_from);
             }
             return Err(err.into());
         }
@@ -861,6 +875,15 @@ impl Library {
         if taken(
             target.path.as_path(),
             current.map(|shot| shot.path.as_path()),
+        ) {
+            return Ok(false);
+        }
+        // A folder of added images under the new name would be taken over.
+        if taken(
+            &capture::assets_dir(&target.path),
+            current
+                .map(|shot| capture::assets_dir(&shot.path))
+                .as_deref(),
         ) {
             return Ok(false);
         }
@@ -1794,6 +1817,13 @@ fn same_file(a: &Path, b: &Path) -> bool {
 /// is left behind. Touches only files, so it runs without the lock.
 pub fn copy_files(shot: &Shot, target: &Shot) -> LibraryResult<PreparedShot> {
     copy_new(&shot.path, &target.path)?;
+    if let Err(err) = copy_assets(
+        &capture::assets_dir(&shot.path),
+        &capture::assets_dir(&target.path),
+    ) {
+        fs::remove_file(&target.path)?;
+        return Err(err);
+    }
     for (from, to) in extra_files(shot).into_iter().zip(extra_files(target)) {
         if from.is_file()
             && let Err(err) = fs::copy(&from, &to)
@@ -1821,6 +1851,28 @@ pub fn copy_files(shot: &Shot, target: &Shot) -> LibraryResult<PreparedShot> {
             .ok()
             .or(shot.bytes),
     })
+}
+
+/// Copies the images added to a capture in the editor (a flat folder) to
+/// its copy's folder, so the copy's sidecar finds them.
+fn copy_assets(from: &Path, to: &Path) -> LibraryResult<()> {
+    let mut entries = match fs::read_dir(from) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+    fs::create_dir(to)?;
+    let result = entries.try_for_each(|entry| -> LibraryResult<()> {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            copy_new(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        Ok(())
+    });
+    if result.is_err() {
+        fs::remove_dir_all(to)?;
+    }
+    result
 }
 
 /// Copies `from` to `to`, which must not exist yet; a half-written copy
@@ -1983,6 +2035,18 @@ fn write_image(
         .flush()
         .and_then(|()| writer.get_ref().sync_all())
         .map_err(|err| format!("could not export it: {err}"))
+}
+
+/// Deletes the images added to the capture at `png` in the editor, if it
+/// has any. A failure is logged, not returned: the capture is already gone.
+pub(crate) fn remove_assets(png: &Path) {
+    let dir = capture::assets_dir(png);
+    match fs::remove_dir_all(&dir) {
+        Err(err) if err.kind() != io::ErrorKind::NotFound => {
+            eprintln!("Grab-it: could not delete {}: {err}", dir.display());
+        }
+        _ => {}
+    }
 }
 
 pub(crate) fn remove_if_present(path: &Path) -> io::Result<()> {
@@ -3300,10 +3364,14 @@ mod tests {
         )
         .unwrap();
         library.set_tags(shot.id, &["x".into()]).unwrap();
+        let assets = capture::assets_dir(&png);
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(assets.join("added.png"), b"png").unwrap();
 
         library.delete(shot.id).unwrap();
 
         assert!(!png.exists());
+        assert!(!assets.exists());
         assert!(!capture::meta_path(&png).exists());
         assert!(!capture::annotations_path(&png).exists());
         assert!(!shot.thumb_path.exists());
@@ -3770,8 +3838,17 @@ mod tests {
         .unwrap();
         library.set_tags(shot.id, &["bug".into()]).unwrap();
         library.set_notes(shot.id, "login page").unwrap();
+        let assets = capture::assets_dir(&png);
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(assets.join("added.png"), b"added").unwrap();
 
         let renamed = library.rename(shot.id, "  Login bug  ").unwrap();
+
+        assert!(!assets.exists());
+        assert_eq!(
+            fs::read(capture::assets_dir(&renamed.path).join("added.png")).unwrap(),
+            b"added"
+        );
 
         assert_eq!(renamed.id, shot.id);
         assert_eq!(renamed.file_name, "Login bug.png");
@@ -3891,6 +3968,22 @@ mod tests {
     }
 
     #[test]
+    fn rename_refuses_a_name_whose_assets_folder_exists() {
+        let dir = TempDir::new().unwrap();
+        let png = shoot(dir.path(), 1, (4, 4));
+        let mut library = Library::open_in_memory().unwrap();
+        let shot = library.add_capture(&png).unwrap();
+        let stray = capture::assets_dir(&png.with_file_name("Login bug.png"));
+        fs::create_dir_all(&stray).unwrap();
+
+        assert!(matches!(
+            library.rename(shot.id, "Login bug"),
+            Err(LibraryError::NameTaken(_))
+        ));
+        assert!(png.is_file());
+    }
+
+    #[test]
     fn rename_refuses_a_name_too_long_for_a_sidecar_and_touches_nothing() {
         let dir = TempDir::new().unwrap();
         let png = shoot(dir.path(), 1, (4, 4));
@@ -3953,10 +4046,21 @@ mod tests {
         library.set_tags(shot.id, &["bug".into()]).unwrap();
         library.set_notes(shot.id, "login page").unwrap();
         library.set_keep(shot.id, true).unwrap();
+        let assets = capture::assets_dir(&png);
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(assets.join("added.png"), b"added").unwrap();
         let state = LibraryState::new(library);
         let stem = png.file_stem().unwrap().to_string_lossy().into_owned();
 
         let copy = state.duplicate(shot.id).unwrap();
+        assert_eq!(
+            fs::read(capture::assets_dir(&copy.path).join("added.png")).unwrap(),
+            b"added"
+        );
+        assert!(
+            assets.join("added.png").is_file(),
+            "the original keeps its images"
+        );
         let again = state.duplicate(shot.id).unwrap();
 
         assert_ne!(copy.id, shot.id);

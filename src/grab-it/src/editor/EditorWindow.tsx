@@ -1,11 +1,14 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
 import type Konva from "konva";
 import { Circle, Group, Image as KonvaImage, Layer, Line, Rect as KonvaRect, Stage, Transformer } from "react-konva";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import "./editor.css";
 import { getEditorPreferences, MAX_BACKDROP_PRESETS, setBackdropPresets } from "../settings/api";
 import {
+  addClipboardImage,
+  addImageFile,
   chooseBackdropImage,
   copyImage,
   editorFaces,
@@ -70,6 +73,8 @@ import {
   ToolIcon,
   TrashIcon,
   UndoIcon,
+  BringForwardIcon,
+  SendBackwardIcon,
   ZoomInIcon,
   ZoomOutIcon,
 } from "./icons";
@@ -95,6 +100,7 @@ import {
   type Style,
   type Tool,
   type Widths,
+  canvasRect,
 } from "./model";
 import {
   displaySize,
@@ -152,6 +158,10 @@ import {
   deleteShape,
   dragShape,
   duplicateShape,
+  imageAt,
+  imageBeside,
+  keepsRatio,
+  reorderShape,
   finishShape,
   fitCropToRatio,
   hasLineHandles,
@@ -181,6 +191,7 @@ import {
 import { useAnnotations } from "./useAnnotations";
 import { useEditorPreferences } from "./useEditorPreferences";
 import { useBackdropImage } from "./useBackdropImage";
+import { loadAssetImage, useAssetImages } from "./useAssetImages";
 import WidthControl from "./WidthControl";
 
 /** The zoom limits as the label shows them: relative to the capture's on-screen size. */
@@ -212,6 +223,10 @@ const CUT_EDGES: { edge: CutEdge; label: string }[] = [
   { edge: "zigzag", label: "Zigzag" },
   { edge: "torn", label: "Torn" },
 ];
+/** How far apart, in capture pixels, several images dropped at once land. */
+const DROP_FAN = 24;
+/** The last part of a path, on any platform. */
+const fileNameOf = (path: string) => path.split(/[\\/]/).pop() || path;
 /** The crop rect's Konva name: pressing on it moves the crop instead of starting a new one. */
 const CROP_BOX = "crop-box";
 
@@ -614,6 +629,14 @@ export default function EditorWindow() {
   });
 
   const imageSize = useMemo(() => (image ? { width: image.width, height: image.height } : null), [image]);
+  /** The capture and every added image: what shows and exports before a crop. */
+  const canvas = useMemo(() => (imageSize ? canvasRect(imageSize, doc.shapes) : null), [imageSize, doc.shapes]);
+  const { images: assetImages, seed: seedAssetImage, ready: assetsReady } = useAssetImages(doc.shapes);
+  /** The latest canvas, for an image pasted after an await. */
+  const canvasRef = useRef(canvas);
+  useEffect(() => {
+    canvasRef.current = canvas;
+  }, [canvas]);
   /**
    * How the capture is turned and mirrored. Display space is the capture as
    * it shows, top-left at 0, 0; shapes and the crop stay in capture pixels.
@@ -670,15 +693,15 @@ export default function EditorWindow() {
    * and a strip marked anywhere.
    */
   const frame = useMemo(() => {
-    if (!imageSize) return null;
+    if (!imageSize || !canvas) return null;
     const o = { rotation, flipX, flipY };
-    const whole = { x: 0, y: 0, ...displaySize(imageSize, o) };
+    const whole = orientRect(canvas, imageSize, o);
     if (!backdrop || tool === "crop" || tool === "cut") return { area: whole, bounds: whole, layout: null };
     // The exported area as it shows, in display space.
     const area = doc.crop ? orientRect(doc.crop, imageSize, o) : whole;
     const layout = backdropLayout(area, backdrop, captureScale, borders);
     return { area, bounds: { x: area.x - layout.x, y: area.y - layout.y, width: layout.width, height: layout.height }, layout };
-  }, [imageSize, backdrop, tool, doc.crop, captureScale, rotation, flipX, flipY, borders]);
+  }, [imageSize, canvas, backdrop, tool, doc.crop, captureScale, rotation, flipX, flipY, borders]);
   /** The capture as it shows, for the blurred fill: the image itself when nothing is turned. */
   const shownCapture = useMemo(() => {
     if (!image || !imageSize || backdrop?.fill !== BACKDROP_FILLS.blur) return image;
@@ -714,11 +737,11 @@ export default function EditorWindow() {
   }, [seeThrough, image, imageSize, frame, doc.crop, rotation, flipX, flipY]);
   /** What copy and export put out before Resize: the crop as it shows, framed by any backdrop. */
   const outputBase = useMemo(() => {
-    if (!imageSize) return null;
-    const area = orientRect(doc.crop ?? { x: 0, y: 0, ...imageSize }, imageSize, { rotation, flipX, flipY });
+    if (!imageSize || !canvas) return null;
+    const area = orientRect(doc.crop ?? canvas, imageSize, { rotation, flipX, flipY });
     const layout = backdrop ? backdropLayout(area, backdrop, captureScale, borders) : area;
     return { width: layout.width, height: layout.height };
-  }, [imageSize, doc.crop, backdrop, captureScale, rotation, flipX, flipY, borders]);
+  }, [imageSize, canvas, doc.crop, backdrop, captureScale, rotation, flipX, flipY, borders]);
   // Recomputed when the capture's scale arrives with its info, so it opens at its on-screen size.
   const currentView = useMemo(
     () => view ?? (frame ? fitView(frame.bounds, size, captureScale) : { scale: 1 / captureScale, x: 0, y: 0 }),
@@ -1248,6 +1271,43 @@ export default function EditorWindow() {
     setSelectedId(copy.id);
   }, [selected, doc, commit]);
 
+  /** Moves the selected annotation one place in front of (1) or behind (-1) the next. */
+  const reorderSelected = useCallback(
+    (direction: 1 | -1) => {
+      if (!selectedId) return;
+      const next = reorderShape(doc, selectedId, direction);
+      if (next !== doc) commit(next);
+    },
+    [selectedId, doc, commit],
+  );
+  const selectedIndex = selectedId ? doc.shapes.findIndex((shape) => shape.id === selectedId) : -1;
+
+  /**
+   * Adds an image saved in the capture's assets folder as `src` at its own
+   * pixel size, placed by `place`, and selects it.
+   */
+  const addImage = useCallback(
+    async (src: string, place: (size: { width: number; height: number }) => Shape) => {
+      const element = await loadAssetImage(src);
+      seedAssetImage(src, element);
+      const shape = place({ width: element.naturalWidth || element.width, height: element.naturalHeight || element.height });
+      // Added once its file is copied, so it goes into the document as it is by then.
+      commit(addShape(docRef.current, shape));
+      setSelectedId(shape.id);
+    },
+    [commit, seedAssetImage],
+  );
+
+  /** Pastes the clipboard's image just right of the capture and any images added before. */
+  const pasteImage = useCallback(async () => {
+    try {
+      const src = await addClipboardImage();
+      await addImage(src, (shown) => imageBeside(src, shown, canvasRef.current ?? { x: 0, y: 0, width: 0, height: 0 }));
+    } catch (err) {
+      setMessage(`Could not paste: ${errorText(err)}`);
+    }
+  }, [addImage]);
+
   const nudgeSelected = useCallback(
     (by: Point) => {
       // Arrow keys move on screen; shapes live in capture pixels.
@@ -1345,14 +1405,19 @@ export default function EditorWindow() {
 
   const render = useCallback(
     async (format: ExportFormat) => {
+      // An added image still being read would be left out of the output.
+      await assetsReady();
       const layer = contentRef.current;
-      if (!layer || !imageSize) throw new Error("The capture has not loaded yet.");
+      if (!layer || !imageSize || !canvas) throw new Error("The capture has not loaded yet.");
       const o = { rotation, flipX, flipY };
-      const whole = { x: 0, y: 0, ...imageSize };
+      // The capture and every added image; uncovered canvas stays transparent.
+      const whole = canvas;
       // The blurred fill blurs the capture as it shows: turned, then cropped.
       const shown = shownCapture && shownCapture !== image ? shownCapture : null;
       const area = shown ? orientRect(doc.crop ?? whole, imageSize, o) : (doc.crop ?? whole);
-      return flatten(layer, { crop: doc.crop, backdrop, rotation, flipX, flipY, scale: outputScale }, imageSize, currentView, format, {
+      // Without a crop, the area is the canvas once images reach past the capture.
+      const grown = whole.x < 0 || whole.y < 0 || whole.width > imageSize.width || whole.height > imageSize.height;
+      return flatten(layer, { crop: doc.crop ?? (grown ? whole : null), backdrop, rotation, flipX, flipY, scale: outputScale }, imageSize, currentView, format, {
         scale: captureScale,
         capture: shown ? { image: shown, area } : image ? { image, area } : null,
         image: backdropImageEl,
@@ -1360,7 +1425,7 @@ export default function EditorWindow() {
         seeThrough,
       });
     },
-    [doc.crop, backdrop, imageSize, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale, borders, seeThrough],
+    [assetsReady, doc.crop, backdrop, imageSize, canvas, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale, borders, seeThrough],
   );
 
   /** Copies the flattened image; false when it failed (and said so). */
@@ -1532,6 +1597,13 @@ export default function EditorWindow() {
         // Always prevented: the webview's own Ctrl+D (bookmark) has no place here.
         event.preventDefault();
         duplicateSelected();
+      } else if (mod && !event.altKey && !event.shiftKey && key === "v") {
+        event.preventDefault();
+        void pasteImage();
+      } else if (mod && event.altKey && (event.code === "BracketLeft" || event.code === "BracketRight" || event.key === "[" || event.key === "]")) {
+        // Ctrl+Alt+] and [ bring the selected annotation forward and send it backward.
+        event.preventDefault();
+        reorderSelected(event.code === "BracketRight" || event.key === "]" ? 1 : -1);
       } else if (mod && !event.altKey && (event.key === "[" || event.key === "]" || event.code === "BracketLeft" || event.code === "BracketRight")) {
         // Ctrl+[ and Ctrl+] turn the capture; only the bare keys change the width.
         event.preventDefault();
@@ -1587,7 +1659,59 @@ export default function EditorWindow() {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [undoDoc, redoDoc, copy, copyAndClose, removeSelected, duplicateSelected, nudgeSelected, selectedId, changeStyle, stepWidth, pickTool, restoreTool, tool, image, rotateBy]);
+  }, [undoDoc, redoDoc, copy, copyAndClose, removeSelected, duplicateSelected, nudgeSelected, reorderSelected, pasteImage, selectedId, changeStyle, stepWidth, pickTool, restoreTool, tool, image, rotateBy]);
+
+  // A dropped image file goes on the capture, centred where it was dropped.
+  const dropView = useRef({ view: currentView, imageSize, orientation });
+  useEffect(() => {
+    dropView.current = { view: currentView, imageSize, orientation };
+  }, [currentView, imageSize, orientation]);
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let gone = false;
+    const onDrop = async (paths: string[], at: { x: number; y: number }) => {
+      const { view: shownView, imageSize: captureSize, orientation: turned } = dropView.current;
+      if (!captureSize) return;
+      const box = container.current?.getBoundingClientRect();
+      const ratio = window.devicePixelRatio || 1;
+      const shown = {
+        x: (at.x / ratio - (box?.left ?? 0) - shownView.x) / shownView.scale,
+        y: (at.y / ratio - (box?.top ?? 0) - shownView.y) / shownView.scale,
+      };
+      const centre = toCapture(shown, captureSize, turned);
+      let offset = 0;
+      for (const path of paths) {
+        try {
+          const src = await addImageFile(path);
+          // Several files dropped at once fan out, so none hides another.
+          const by = offset;
+          offset += DROP_FAN;
+          await addImage(src, (size) => imageAt(src, size, { x: centre.x + by, y: centre.y + by }));
+        } catch (err) {
+          setMessage(`Could not add ${fileNameOf(path)}: ${errorText(err)}`);
+        }
+      }
+    };
+    let listening: Promise<() => void>;
+    try {
+      listening = getCurrentWebview().onDragDropEvent((event) => {
+        if (event.payload.type === "drop") void onDrop(event.payload.paths, event.payload.position);
+      });
+    } catch (err) {
+      listening = Promise.reject(err);
+    }
+    listening
+      .then((stop) => {
+        if (gone) stop();
+        else unlisten = stop;
+      })
+      // Outside Tauri (tests without a webview) there is nothing to listen to.
+      .catch(() => undefined);
+    return () => {
+      gone = true;
+      unlisten?.();
+    };
+  }, [addImage]);
 
   const error = annotations.error ?? imageError;
   /** The crop as it shows: being drawn (the box that will be committed), mid-edit, or as saved. */
@@ -1776,6 +1900,26 @@ export default function EditorWindow() {
             if (event.key === "Escape") setLookOpen(false);
           }}
         >
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => reorderSelected(1)}
+            disabled={selectedIndex < 0 || selectedIndex === doc.shapes.length - 1}
+            aria-label="Bring forward"
+            title="Bring forward (Ctrl+Alt+])"
+          >
+            <BringForwardIcon />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => reorderSelected(-1)}
+            disabled={selectedIndex <= 0}
+            aria-label="Send backward"
+            title="Send backward (Ctrl+Alt+[)"
+          >
+            <SendBackwardIcon />
+          </button>
           <button
             type="button"
             className="icon-button"
@@ -2050,6 +2194,7 @@ export default function EditorWindow() {
                       <ShapeNode
                         shape={shape}
                         image={image}
+                        assets={assetImages}
                         step={steps.get(shape.id)}
                         editable={editable && shape !== draft}
                         orientation={oriented ? orientation : undefined}
@@ -2126,8 +2271,9 @@ export default function EditorWindow() {
                   ref={transformerRef}
                   rotateEnabled={false}
                   ignoreStroke
-                  flipEnabled={selected?.type !== "magnify" && selected?.type !== "callout" && !pointerSelected}
-                  keepRatio={pointerSelected || selected?.type === "text" || selected?.type === "callout" || selected?.type === "step" || selected?.type === "magnify"}
+                  flipEnabled={selected?.type !== "magnify" && selected?.type !== "callout" && selected?.type !== "image" && !pointerSelected}
+                  keepRatio={pointerSelected || keepsRatio(selected)}
+                  shiftBehavior={selected?.type === "image" ? "inverted" : "default"}
                   enabledAnchors={pointerSelected ? CORNER_ANCHORS : anchorsFor(selected)}
                 />
                 {handleBase && (

@@ -18,7 +18,7 @@ import {
   resample,
   type PaintLayer,
 } from "./flatten";
-import { backdropColors, sameBackdrop, type Backdrop, type MagnifyShape, type LineShape } from "./model";
+import { backdropColors, canvasRect, sameBackdrop, type Backdrop, type MagnifyShape, type LineShape } from "./model";
 import { curvePoints } from "./tools";
 import { magnifyLinePoints, magnifyScene } from "./magnify";
 
@@ -51,6 +51,22 @@ describe("flatten", () => {
     expect(
       exportArea(null, { width: 400, height: 300 }, { scale: 0.5, x: 10, y: 0 }, { rotation: 270, flipX: true, flipY: false }),
     ).toEqual({ x: 10, y: 0, width: 150, height: 200, pixelRatio: 2 });
+  });
+
+  it("exports a canvas grown past the capture by added images", () => {
+    // A 400×300 capture with images above-left and to the right of it.
+    const canvas = canvasRect({ width: 400, height: 300 }, [
+      { id: "l", type: "image", src: "left.png", x: -50, y: -20, width: 60, height: 40 },
+      { id: "r", type: "image", src: "right.png", x: 400, y: 0, width: 400, height: 300 },
+    ]);
+    expect(canvas).toEqual({ x: -50, y: -20, width: 850, height: 320 });
+    expect(exportArea(canvas, { width: 400, height: 300 }, { scale: 0.5, x: 100, y: 50 })).toEqual({
+      x: 75,
+      y: 40,
+      width: 425,
+      height: 160,
+      pixelRatio: 2,
+    });
   });
 
   it("picks PNG or JPG from the file name", () => {
@@ -431,6 +447,12 @@ describe("oriented and resized export", () => {
     // 300×400 turned, 400×500 framed, halved.
     expect(encoded).toEqual([{ width: 200, height: 250, mime: "image/jpeg" }]);
     expect(calls).toContainEqual(["drawImage", 0, 0, 200, 250]);
+  });
+
+  it("renders the whole grown canvas, images included", async () => {
+    const grown = await run({ crop: { x: 0, y: 0, width: 800, height: 300 } });
+    expect(grown.areas).toEqual([{ x: 0, y: 0, width: 800, height: 300, pixelRatio: 1 }]);
+    expect(grown.encoded).toEqual([{ width: 800, height: 300, mime: "image/png" }]);
   });
 
   it("enlarges by a percentage", async () => {

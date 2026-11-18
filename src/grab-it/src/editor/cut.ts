@@ -243,6 +243,9 @@ function mapShape(shape: Shape, axis: "x" | "y", map: (value: number) => number)
       return axis === "x"
         ? { ...shape, x: map(shape.x), tail: { ...shape.tail, x: map(shape.tail.x) } }
         : { ...shape, y: map(shape.y), tail: { ...shape.tail, y: map(shape.tail.y) } };
+    case "image":
+      // An added image is not the capture's pixels: it moves whole, never cut.
+      return axis === "x" ? { ...shape, x: map(shape.x) } : { ...shape, y: map(shape.y) };
     case "magnify": {
       // A lens stays square: its centre moves, and its spot.
       const half = shape.width / 2;
@@ -276,13 +279,15 @@ function mapRect(rect: Rect, axis: "x" | "y", map: (value: number) => number): R
 /**
  * The document with `cut` made: the cut added, every shape past the strip
  * moved back to close the gap, a shape wholly inside the strip removed,
- * one crossing it shortened to the join, and the crop shrunk by its overlap
+ * one crossing it shortened to the join (an added image only moves, by its
+ * corner, keeping its size), and the crop shrunk by its overlap
  * with the strip (gone when nothing of it is left).
  */
 export function cutAnnotations(doc: Annotations, cut: Cut): Annotations {
   const map = (value: number) => shiftValue(value, cut);
   const shapes = doc.shapes
     .filter((shape) => {
+      if (shape.type === "image") return true;
       const [low, high] = extent(shape, cut.axis);
       return !(low >= cut.start && high <= cut.end);
     })

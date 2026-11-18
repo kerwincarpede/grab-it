@@ -46,6 +46,24 @@ export function backdropImage(path: string): Promise<ArrayBuffer> {
 }
 
 /**
+ * Copies an image file dropped on the editor into the capture's assets
+ * folder. Resolves to the copy's file name, the new image shape's `src`.
+ */
+export function addImageFile(path: string): Promise<string> {
+  return invoke<string>("editor_add_image_file", { path });
+}
+
+/** Saves the clipboard's image into the capture's assets folder; resolves to its file name. */
+export function addClipboardImage(): Promise<string> {
+  return invoke<string>("editor_add_clipboard_image");
+}
+
+/** The bytes of an image added to the capture, by its file name in the assets folder. */
+export function assetImage(name: string): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>("editor_asset_image", { name });
+}
+
+/**
  * Keeps a preset's own copy of a backdrop image, so the preset still works
  * when the original is moved. Resolves to the copy's path; an image that is
  * already a preset's copy comes back as it is.

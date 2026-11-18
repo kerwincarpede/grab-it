@@ -9,6 +9,8 @@ import {
   STROKE_WIDTHS,
   widthFor,
   widthKind,
+  canvasRect,
+  type ImageShape,
   type LineShape,
   type Shape,
   type Style,
@@ -40,6 +42,10 @@ import {
   hasLineHandles,
   HIGHLIGHTER_WIDTH,
   highlighterWidth,
+  imageAt,
+  imageBeside,
+  keepsRatio,
+  reorderShape,
   holdCropSides,
   HOLD_MS,
   modifierTool,
@@ -881,5 +887,64 @@ describe("callouts", () => {
     });
     expect(restyleShape(callout, { strokeWidth: 12 })).toBe(callout);
     expect(restyleShape(callout, { fill: true })).toBe(callout);
+  });
+});
+
+describe("added images", () => {
+  const image: ImageShape = { id: "i", type: "image", src: "added.png", x: 10, y: 20, width: 200, height: 100 };
+
+  it("moves, resizes from the corners keeping its ratio, and duplicates", () => {
+    expect(moveShape(image, 5, -5)).toMatchObject({ x: 15, y: 15, width: 200, height: 100 });
+    expect(transformShape(image, { x: 0, y: 0, scaleX: 2, scaleY: 2 })).toMatchObject({ x: 0, y: 0, width: 400, height: 200 });
+    // Shift frees the ratio: the Transformer then scales the axes apart.
+    expect(transformShape(image, { x: 0, y: 0, scaleX: 0.5, scaleY: 2 })).toMatchObject({ width: 100, height: 200 });
+    expect(keepsRatio(image)).toBe(true);
+    expect(anchorsFor(image)).toEqual(CORNER_ANCHORS);
+    const copy = duplicateShape(image, "j") as ImageShape;
+    expect(copy).toMatchObject({ id: "j", type: "image", src: "added.png", width: 200, height: 100 });
+    expect(copy.x).toBeGreaterThan(image.x);
+    expect(nudgeDelta("ArrowLeft", false)).toEqual({ x: -1, y: 0 });
+  });
+
+  it("ignores colours and widths", () => {
+    expect(restyleShape(image, { color: "#ffffff", strokeWidth: 8 })).toBe(image);
+  });
+
+  it("is placed centred on a drop, or just right of the canvas on paste", () => {
+    expect(imageAt("a.png", { width: 100, height: 50 }, { x: 300, y: 200 }, "a")).toEqual({
+      id: "a", type: "image", src: "a.png", x: 250, y: 175, width: 100, height: 50,
+    });
+    expect(imageBeside("b.png", { width: 80, height: 60 }, { x: -20, y: -10, width: 420, height: 310 }, "b")).toEqual({
+      id: "b", type: "image", src: "b.png", x: 400, y: 0, width: 80, height: 60,
+    });
+  });
+
+  it("grows the canvas to the capture and every image", () => {
+    const size = { width: 400, height: 300 };
+    expect(canvasRect(size, [])).toEqual({ x: 0, y: 0, width: 400, height: 300 });
+    expect(canvasRect(size, [{ ...image, x: 400, y: 0, width: 400, height: 350 }])).toEqual({ x: 0, y: 0, width: 800, height: 350 });
+    expect(canvasRect(size, [{ ...image, x: -50.5, y: -10, width: 20, height: 20 }])).toEqual({ x: -51, y: -10, width: 451, height: 310 });
+    // Other shapes never grow it, and an image inside leaves it as it is.
+    const rect: Shape = { id: "r", type: "rect", color: "#000000", strokeWidth: 2, x: 900, y: 900, width: 10, height: 10 };
+    expect(canvasRect(size, [rect, image])).toEqual({ x: 0, y: 0, width: 400, height: 300 });
+  });
+});
+
+describe("drawing order", () => {
+  const doc = {
+    ...emptyAnnotations(),
+    shapes: ["a", "b", "c"].map((id): Shape => ({ id, type: "spotlight", x: 0, y: 0, width: 10, height: 10 })),
+  };
+  const ids = (shapes: Shape[]) => shapes.map((shape) => shape.id);
+
+  it("brings a shape forward and sends it backward one place", () => {
+    expect(ids(reorderShape(doc, "a", 1).shapes)).toEqual(["b", "a", "c"]);
+    expect(ids(reorderShape(doc, "c", -1).shapes)).toEqual(["a", "c", "b"]);
+  });
+
+  it("leaves the document as it is at either end or for an unknown shape", () => {
+    expect(reorderShape(doc, "c", 1)).toBe(doc);
+    expect(reorderShape(doc, "a", -1)).toBe(doc);
+    expect(reorderShape(doc, "zz", 1)).toBe(doc);
   });
 });

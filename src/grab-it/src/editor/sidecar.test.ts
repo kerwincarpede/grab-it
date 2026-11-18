@@ -39,6 +39,24 @@ describe("annotations sidecar", () => {
     expect(parsed.shapes.map((shape) => shape.id)).toEqual(["s"]);
   });
 
+  it("round-trips an added image and skips one whose file name is a path", () => {
+    const image = { id: "i", type: "image", x: -20, y: 4, width: 320, height: 200, src: "added-1.png" };
+    const parsed = parseAnnotations({
+      version: 1,
+      shapes: [
+        image,
+        { ...image, id: "up", src: "../shot.png" },
+        { ...image, id: "abs", src: "/home/me/secret.png" },
+        { ...image, id: "win", src: "C:\\x\\y.png" },
+        { ...image, id: "empty", src: "" },
+        { ...image, id: "flat", height: 0 },
+        { ...image, id: "nosrc", src: undefined },
+      ],
+    });
+    expect(parsed.shapes).toEqual([image]);
+    expect(parseAnnotations(JSON.parse(JSON.stringify(serializeAnnotations(parsed))))).toEqual(parsed);
+  });
+
   it("starts empty when there is no sidecar", () => {
     expect(parseAnnotations(null)).toEqual({ version: 1, shapes: [], crop: null });
   });

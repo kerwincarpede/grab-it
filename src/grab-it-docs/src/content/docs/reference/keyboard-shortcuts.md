@@ -81,6 +81,8 @@ Tap a tool key to switch to it. Hold it instead, and the old tool comes back whe
 | Arrow keys | Nudge the selected shape 1 pixel; with `Shift`, 10 pixels |
 | `Delete` or `Backspace` | Delete the selected shape |
 | `⌘ D` | Duplicate the selected shape |
+| `⌘ ⌥ ]` and `⌘ ⌥ [` | Bring the selected shape or image forward, and send it backward |
+| `⌘ V` | Paste an image from the clipboard (see [Add images](/grab-it/image-editor/add-images/)) |
 | `Esc` | Deselect, and close any open panel |
 
 **The whole capture**

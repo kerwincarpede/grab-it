@@ -803,18 +803,42 @@ fn delete_capture(app: &AppHandle, path: &Path) -> Result<(), String> {
             library.lock().delete(id).map_err(|err| err.to_string())?;
             let _ = app.emit(crate::library::LIBRARY_CHANGED_EVENT, ());
         }
-        None => {
-            fs::remove_file(path).map_err(|err| format!("could not delete the capture: {err}"))?;
-            let _ = fs::remove_file(crate::capture::meta_path(path));
-            let _ = fs::remove_file(crate::capture::annotations_path(path));
-        }
+        None => delete_loose_capture(path)?,
     }
+    Ok(())
+}
+
+/// Deletes a capture the library does not know, with its sidecars and the
+/// images added to it in the editor.
+fn delete_loose_capture(path: &Path) -> Result<(), String> {
+    fs::remove_file(path).map_err(|err| format!("could not delete the capture: {err}"))?;
+    let _ = fs::remove_file(crate::capture::meta_path(path));
+    let _ = fs::remove_file(crate::capture::annotations_path(path));
+    crate::library::remove_assets(path);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_loose_capture_goes_with_its_sidecars_and_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("shot.png");
+        fs::write(&png, b"png").unwrap();
+        fs::write(crate::capture::annotations_path(&png), b"{}").unwrap();
+        let assets = crate::capture::assets_dir(&png);
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(assets.join("added.png"), b"png").unwrap();
+
+        delete_loose_capture(&png).unwrap();
+
+        assert!(!png.exists());
+        assert!(!crate::capture::annotations_path(&png).exists());
+        assert!(!assets.exists());
+        assert!(delete_loose_capture(&png).is_err());
+    }
 
     /// Run explicitly under Xvfb + dbus-run-session with xdotool installed:
     /// cargo test gtk_drag_serves_a_delayed_drop -- --ignored --test-threads=1

@@ -208,6 +208,24 @@ describe("cut out", () => {
   });
 });
 
+describe("added images and cuts", () => {
+  const image = { id: "i", type: "image" as const, src: "added.png", x: 0, y: 0, width: 50, height: 40 };
+
+  it("moves an added image by its corner, keeping its size and never removing it", () => {
+    const shapes = [
+      { ...image, id: "past", y: 200 },
+      { ...image, id: "inside", y: 110, height: 20 },
+      { ...image, id: "across", y: 90, height: 100 },
+    ];
+    const cut = cutAnnotations({ version: 1, shapes, crop: null }, straight);
+    expect(cut.shapes).toEqual([
+      expect.objectContaining({ id: "past", y: shiftValue(200, straight), height: 40 }),
+      expect.objectContaining({ id: "inside", y: shiftValue(110, straight), height: 20 }),
+      expect.objectContaining({ id: "across", y: 90, height: 100 }),
+    ]);
+  });
+});
+
 describe("joining the parts", () => {
   afterEach(() => vi.restoreAllMocks());
 
