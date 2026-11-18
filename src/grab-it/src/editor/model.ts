@@ -547,20 +547,7 @@ export function canvasBounds(imageSize: { width: number; height: number }, shape
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
-/**
- * What has pixels on the canvas, in capture pixels: the capture, then every
- * added image. Whatever of `canvasBounds` none of these cover stays
- * transparent, and only these cast a backdrop's shadow.
- */
-export function coveredRects(imageSize: { width: number; height: number }, shapes: Shape[]): Rect[] {
-  const rects: Rect[] = [{ x: 0, y: 0, width: imageSize.width, height: imageSize.height }];
-  for (const shape of shapes) {
-    if (shape.type === "image") rects.push({ x: shape.x, y: shape.y, width: shape.width, height: shape.height });
-  }
-  return rects;
-}
-
-/** Whether a canvas reaches past the capture of `imageSize`, so part of it may be uncovered. */
+/** Whether a canvas reaches past the capture of `imageSize`, so part of it may be clear. */
 export function isGrown(canvas: Rect, imageSize: { width: number; height: number }): boolean {
   return canvas.x < 0 || canvas.y < 0 || canvas.x + canvas.width > imageSize.width || canvas.y + canvas.height > imageSize.height;
 }

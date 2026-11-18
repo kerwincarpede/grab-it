@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canvasBounds, coveredRects, isGrown, type Shape } from "./model";
+import { canvasBounds, isGrown, type Shape } from "./model";
 
 const capture = { width: 400, height: 300 };
 const image = (x: number, y: number, width: number, height: number): Shape => ({ id: `${x},${y}`, type: "image", src: "a.png", x, y, width, height });
@@ -27,15 +27,6 @@ describe("canvasBounds", () => {
 
   it("stays the capture for an image inside it, and shrinks back when it moves in", () => {
     expect(canvasBounds(capture, [image(10, 10, 100, 100)])).toEqual({ x: 0, y: 0, width: 400, height: 300 });
-  });
-});
-
-describe("coveredRects", () => {
-  it("lists the capture, then every image", () => {
-    expect(coveredRects(capture, [image(400, 0, 200, 100)])).toEqual([
-      { x: 0, y: 0, width: 400, height: 300 },
-      { x: 400, y: 0, width: 200, height: 100 },
-    ]);
   });
 });
 

@@ -47,10 +47,13 @@ import {
   fallbackScale,
   flatten,
   measureBorders,
-  plateRects,
+  partsCanvas,
+  reachesPast,
   roundedRectPath,
   shadowPlate,
+  shadowShift,
   type ExportFormat,
+  type CanvasPart,
   type PaintLayer,
   type View,
 } from "./flatten";
@@ -104,7 +107,6 @@ import {
   type Tool,
   type Widths,
   canvasBounds,
-  coveredRects,
   isGrown,
 } from "./model";
 import {
@@ -637,8 +639,6 @@ export default function EditorWindow() {
   const imageSize = useMemo(() => (image ? { width: image.width, height: image.height } : null), [image]);
   /** The capture and every added image: what shows and exports before a crop. */
   const canvas = useMemo(() => (imageSize ? canvasBounds(imageSize, doc.shapes) : null), [imageSize, doc.shapes]);
-  /** What has pixels on the canvas: the capture and every added image. The rest stays transparent. */
-  const parts = useMemo(() => (imageSize ? coveredRects(imageSize, doc.shapes) : null), [imageSize, doc.shapes]);
   const grown = Boolean(canvas && imageSize && isGrown(canvas, imageSize));
   const { images: assetImages, seed: seedAssetImage, ready: assetsReady } = useAssetImages(doc.shapes);
   /** The latest canvas, for an image pasted after an await. */
@@ -760,18 +760,26 @@ export default function EditorWindow() {
     }
   }, [seeThrough, image, imageSize, frame, doc.crop, rotation, flipX, flipY]);
   /**
-   * The shadow's plate when the exported area has clear parts: only the
-   * capture and the images cast it, as in the export (see `plateRects`).
-   * Null when the area is opaque all over and a plain rectangle casts it.
+   * Whether the exported area has clear parts (it reaches past the
+   * capture). The shadow then follows what has pixels, as in the export;
+   * otherwise a plain rectangle casts it.
    */
-  const clearParts = useMemo(() => {
-    if (!frame?.layout?.shadow || !parts || !imageSize) return null;
-    return plateRects(parts, frame.area, imageSize, { rotation, flipX, flipY });
-  }, [frame, parts, imageSize, rotation, flipX, flipY]);
-  const shadowShape = useMemo(
-    () => (clearParts && frame?.layout ? shadowPlate(frame.area, clearParts, frame.layout.radius) : null),
-    [clearParts, frame],
-  );
+  const clearParts = Boolean(frame?.layout?.shadow && imageSize && reachesPast(frame.area, imageSize, { rotation, flipX, flipY }));
+  /** The silhouette of the capture and the loaded images in the exported area, which casts the shadow (see `shadowPlate`). */
+  const shadowShape = useMemo(() => {
+    if (!clearParts || !frame?.layout || !image || !imageSize) return null;
+    const drawn: CanvasPart[] = [{ source: image, rect: { x: 0, y: 0, ...imageSize } }];
+    for (const shape of doc.shapes) {
+      const element = shape.type === "image" ? assetImages.get(shape.src) : undefined;
+      if (shape.type === "image" && element) drawn.push({ source: element, rect: shape });
+    }
+    try {
+      const content = partsCanvas(drawn, frame.area, imageSize, { rotation, flipX, flipY });
+      return content ? shadowPlate(content, frame.area, frame.layout.radius) : null;
+    } catch {
+      return null;
+    }
+  }, [clearParts, frame, image, imageSize, doc.shapes, assetImages, rotation, flipX, flipY]);
   /** What copy and export put out before Resize: the crop as it shows, framed by any backdrop. */
   const outputBase = useMemo(() => {
     if (!imageSize || !canvas) return null;
@@ -1445,7 +1453,7 @@ export default function EditorWindow() {
       // An added image still being read would be left out of the output.
       await assetsReady();
       const layer = contentRef.current;
-      if (!layer || !imageSize || !canvas || !parts) throw new Error("The capture has not loaded yet.");
+      if (!layer || !imageSize || !canvas) throw new Error("The capture has not loaded yet.");
       const o = { rotation, flipX, flipY };
       // The blurred fill blurs the capture as it shows (turned, then cropped), and only the capture's part of the area.
       const shown = shownCapture && shownCapture !== image ? shownCapture : null;
@@ -1460,10 +1468,9 @@ export default function EditorWindow() {
         borders,
         seeThrough,
         canvas,
-        parts,
       });
     },
-    [assetsReady, doc.crop, backdrop, imageSize, canvas, parts, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale, borders, seeThrough],
+    [assetsReady, doc.crop, backdrop, imageSize, canvas, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale, borders, seeThrough],
   );
 
   /** Copies the flattened image; false when it failed (and said so). */
@@ -2174,15 +2181,21 @@ export default function EditorWindow() {
                       <PaintNode key={i} layer={layer} bounds={framed.bounds} blurred={blurredFill} image={backdropImageEl} />
                     ))}
                     {framed.layout.shadow && clearParts && shadowShape && (
-                      <KonvaImage
-                        name="backdrop-shadow"
-                        image={shadowShape}
-                        {...framed.area}
-                        shadowColor="#000000"
-                        shadowBlur={framed.layout.shadow.blur}
-                        shadowOffsetY={framed.layout.shadow.offsetY}
-                        shadowOpacity={framed.layout.shadow.opacity}
-                      />
+                      // The silhouette sits off to the left, outside the backdrop's clip; only its shadow lands under the canvas.
+                      <Group name="backdrop-shadow" clipX={framed.bounds.x} clipY={framed.bounds.y} clipWidth={framed.bounds.width} clipHeight={framed.bounds.height}>
+                        <KonvaImage
+                          image={shadowShape}
+                          x={framed.area.x - shadowShift(framed.area.width, framed.layout.shadow.blur)}
+                          y={framed.area.y}
+                          width={framed.area.width}
+                          height={framed.area.height}
+                          shadowColor="#000000"
+                          shadowBlur={framed.layout.shadow.blur}
+                          shadowOffsetX={shadowShift(framed.area.width, framed.layout.shadow.blur)}
+                          shadowOffsetY={framed.layout.shadow.offsetY}
+                          shadowOpacity={framed.layout.shadow.opacity}
+                        />
+                      </Group>
                     )}
                     {framed.layout.shadow && !clearParts && shadowCaster && (
                       <KonvaImage

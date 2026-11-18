@@ -978,11 +978,6 @@ describe("EditorWindow", () => {
       shapes: [{ id: "i1", type: "image", x: 400, y: 0, width: 400, height: 300, src: "after.png" }],
       crop: null,
     };
-    const parts = [
-      { x: 0, y: 0, width: 400, height: 300 },
-      { x: 400, y: 0, width: 400, height: 300 },
-    ];
-
     it("exports both screenshots on the grown canvas", async () => {
       mockEditor(beside);
       await ready();
@@ -991,7 +986,7 @@ describe("EditorWindow", () => {
       fireEvent.click(screen.getByRole("button", { name: "Copy" }));
       await waitFor(() => expect(flattened.calls).toHaveLength(1));
       expect(last(flattened.calls)).toMatchObject({ crop: null, backdrop: null, rotation: 0 });
-      expect(last(flattened.options)).toMatchObject({ canvas: { x: 0, y: 0, width: 800, height: 300 }, parts });
+      expect(last(flattened.options)).toMatchObject({ canvas: { x: 0, y: 0, width: 800, height: 300 } });
     });
 
     it("pads a backdrop around the whole canvas", async () => {
@@ -1002,8 +997,8 @@ describe("EditorWindow", () => {
       fireEvent.click(screen.getByRole("button", { name: "Copy" }));
       await waitFor(() => expect(flattened.calls).toHaveLength(1));
       expect(last(flattened.calls)).toMatchObject({ crop: null, backdrop });
-      // The whole canvas goes out, with what has pixels to cast the shadow.
-      expect(last(flattened.options)).toMatchObject({ canvas: { x: 0, y: 0, width: 800, height: 300 }, parts, borders: null });
+      // The whole canvas goes out, framed whole.
+      expect(last(flattened.options)).toMatchObject({ canvas: { x: 0, y: 0, width: 800, height: 300 }, borders: null });
     });
 
     it("turns the whole canvas", async () => {
@@ -1068,7 +1063,8 @@ describe("EditorWindow", () => {
     await waitFor(() => expect(calls.map((call) => call.cmd)).toEqual(["editor_asset_image", "editor_copy", "plugin:window|close"]));
     // By then the image is drawn, and the output takes it in.
     expect(document.querySelector('[data-konva="Image"][data-id="i1"]')).not.toBeNull();
-    expect(last(flattened.calls)).toMatchObject({ crop: { x: 0, y: 0, width: 440, height: 300 } });
+    expect(last(flattened.calls)).toMatchObject({ crop: null });
+    expect(last(flattened.options)).toMatchObject({ canvas: { x: 0, y: 0, width: 440, height: 300 } });
   });
 
   it("copies without an added image whose file is gone", async () => {

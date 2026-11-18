@@ -12,7 +12,7 @@ import {
   type Point,
   type Rect,
 } from "./model";
-import { displaySize, IDENTITY, isIdentity, orientationOf, orientedCanvas, orientRect, scaledSize, type Orientation } from "./orient";
+import { displaySize, displayTransform, IDENTITY, isIdentity, orientationOf, orientedCanvas, orientRect, scaledSize, type Orientation } from "./orient";
 
 export interface View {
   scale: number;
@@ -491,36 +491,59 @@ export interface ComposeOptions extends BackdropSources {
    */
   seeThrough?: boolean;
   /**
-   * Where the source has pixels, in its own pixels, when it is not opaque
-   * all over (a canvas grown by added images; see `plateRects`). Only these
-   * cast the shadow, so what nothing covers stays clear.
+   * The source has clear parts (a canvas grown past the capture by added
+   * images): the shadow then follows its own alpha (see `shadowPlate`), so
+   * what nothing covers stays clear.
    */
-  covered?: Rect[] | null;
+  clear?: boolean;
 }
 
 /**
- * The parts of a canvas that have pixels (`parts`, in capture pixels: the
- * capture and every added image) inside the exported `area` (on show),
- * placed from the area's corner. Null when the capture alone covers the
- * area, as it does without added images past it: the whole area is then
- * opaque.
+ * Whether the exported `area` (on show) reaches past the capture of
+ * `image`, so parts of it may be clear. Without added images past the
+ * capture it never does, and the whole area is opaque.
  */
-export function plateRects(parts: Rect[], area: Rect, image: { width: number; height: number }, orientation: Orientation = IDENTITY): Rect[] | null {
+export function reachesPast(area: Rect, image: { width: number; height: number }, orientation: Orientation = IDENTITY): boolean {
   const shown = displaySize(image, orientation);
-  const inside = area.x >= 0 && area.y >= 0 && area.x + area.width <= shown.width && area.y + area.height <= shown.height;
-  if (inside) return null;
-  return parts.map((part) => {
-    const at = orientRect(part, image, orientation);
-    return { ...at, x: at.x - area.x, y: at.y - area.y };
-  });
+  return area.x < 0 || area.y < 0 || area.x + area.width > shown.width || area.y + area.height > shown.height;
+}
+
+/** One image drawn on the canvas, and where, in capture pixels. */
+export interface CanvasPart {
+  source: CanvasImageSource;
+  rect: Rect;
 }
 
 /**
- * An opaque plate of `size` that is black only where `rects` cover it,
- * rounded at its corners by `radius`: what casts the shadow under a canvas
- * with clear parts. Null without a 2D canvas.
+ * The capture and added images (`parts`) inside `area` (on show), turned
+ * and mirrored as they show, on a canvas of their own: what the preview's
+ * shadow follows. Null without a 2D canvas.
  */
-export function shadowPlate(size: { width: number; height: number }, rects: Rect[], radius: number): HTMLCanvasElement | null {
+export function partsCanvas(parts: CanvasPart[], area: Rect, image: { width: number; height: number }, orientation: Orientation = IDENTITY): HTMLCanvasElement | null {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(area.width));
+  canvas.height = Math.max(1, Math.round(area.height));
+  let ctx: CanvasRenderingContext2D | null;
+  try {
+    ctx = canvas.getContext("2d");
+  } catch {
+    return null;
+  }
+  if (!ctx) return null;
+  const [a, b, c, d, e, f] = displayTransform(image, orientation);
+  ctx.setTransform(a, b, c, d, e - area.x, f - area.y);
+  for (const part of parts) ctx.drawImage(part.source, part.rect.x, part.rect.y, part.rect.width, part.rect.height);
+  return canvas;
+}
+
+/**
+ * A black silhouette of `source` (`size` pixels), rounded at its corners by
+ * `radius`: black wherever the source has pixels, as see-through as they
+ * are, and clear elsewhere. It casts the shadow under a canvas with clear
+ * parts, so a transparent margin in an added image casts none. Null
+ * without a 2D canvas.
+ */
+export function shadowPlate(source: CanvasImageSource, size: { width: number; height: number }, radius: number): HTMLCanvasElement | null {
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(size.width));
   canvas.height = Math.max(1, Math.round(size.height));
@@ -534,9 +557,21 @@ export function shadowPlate(size: { width: number; height: number }, rects: Rect
   ctx.beginPath();
   roundedRectPath(ctx, { x: 0, y: 0, width: size.width, height: size.height }, radius);
   ctx.clip();
+  ctx.drawImage(source, 0, 0, size.width, size.height);
+  // Keeps the source's alpha, in black.
+  ctx.globalCompositeOperation = "source-in";
   ctx.fillStyle = "#000000";
-  for (const rect of rects) ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+  ctx.fillRect(0, 0, size.width, size.height);
   return canvas;
+}
+
+/**
+ * How far left the silhouette is drawn, its shadow offset back by as much:
+ * past its own blurred shadow, so only the shadow shows and the
+ * silhouette never darkens see-through pixels drawn over it.
+ */
+export function shadowShift(width: number, blur: number): number {
+  return Math.ceil(width + blur * 3 + 1);
 }
 
 /**
@@ -587,14 +622,16 @@ export function composeBackdrop(source: HTMLCanvasElement, backdrop: Backdrop, o
       return canvas;
     }
   }
-  const plate = layout.shadow && options.covered ? shadowPlate(source, options.covered, layout.radius) : null;
+  const plate = layout.shadow && options.clear ? shadowPlate(source, source, layout.radius) : null;
   if (layout.shadow && plate) {
-    // Only what has pixels casts the shadow; a black plate would show through the clear parts.
+    // Only what has pixels casts the shadow, as see-through as it is: a solid plate would show through the clear parts.
+    const shift = shadowShift(source.width, layout.shadow.blur);
     ctx.save();
     ctx.shadowColor = `rgba(0, 0, 0, ${layout.shadow.opacity})`;
     ctx.shadowBlur = layout.shadow.blur;
+    ctx.shadowOffsetX = shift;
     ctx.shadowOffsetY = layout.shadow.offsetY;
-    ctx.drawImage(plate, layout.x, layout.y);
+    ctx.drawImage(plate, layout.x - shift, layout.y);
     ctx.restore();
   } else if (layout.shadow) {
     // An opaque plate the size of the capture casts the shadow; the capture covers it.
@@ -660,11 +697,9 @@ export function onWhite(source: HTMLCanvasElement): HTMLCanvasElement {
 }
 
 /** How to flatten: the backdrop's options, and the canvas when added images grow it. */
-export interface FlattenOptions extends Omit<ComposeOptions, "covered"> {
+export interface FlattenOptions extends Omit<ComposeOptions, "clear"> {
   /** What is exported without a crop, in capture pixels (see `canvasBounds`); the capture by default. */
   canvas?: Rect;
-  /** What has pixels, in capture pixels: the capture and every added image (see `coveredRects`). */
-  parts?: Rect[];
 }
 
 /**
@@ -683,12 +718,12 @@ export async function flatten(
   format: ExportFormat,
   options: FlattenOptions = {},
 ): Promise<Uint8Array> {
-  const { canvas: whole, parts, ...compose } = options;
+  const { canvas: whole, ...compose } = options;
   const orientation = orientationOf(doc);
   const flat = layer.toCanvas(exportArea(doc.crop, image, view, orientation, whole));
   const area = orientRect(doc.crop ?? whole ?? { x: 0, y: 0, width: image.width, height: image.height }, image, orientation);
-  const covered = doc.backdrop && parts ? plateRects(parts, area, image, orientation) : null;
-  const framed = doc.backdrop ? composeBackdrop(flat, doc.backdrop, { ...compose, covered }) : flat;
+  const clear = reachesPast(area, image, orientation);
+  const framed = doc.backdrop ? composeBackdrop(flat, doc.backdrop, { ...compose, clear }) : flat;
   const resized = resample(framed, doc.scale ?? 1);
   const canvas = format === "jpg" ? onWhite(resized) : resized;
   const mime = format === "jpg" ? "image/jpeg" : "image/png";

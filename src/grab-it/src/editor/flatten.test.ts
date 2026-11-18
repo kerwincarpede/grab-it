@@ -16,7 +16,9 @@ import {
   NO_BORDERS,
   paintBackdrop,
   plainBorders,
-  plateRects,
+  reachesPast,
+  shadowPlate,
+  shadowShift,
   resample,
   type PaintLayer,
 } from "./flatten";
@@ -94,20 +96,57 @@ describe("flatten", () => {
     });
   });
 
-  it("finds what casts the shadow on a canvas with clear parts", () => {
+  it("tells an area past the capture, which may have clear parts", () => {
     const capture = { width: 400, height: 300 };
-    const parts = [
-      { x: 0, y: 0, width: 400, height: 300 },
-      { x: 400, y: 0, width: 200, height: 100 },
-    ];
-    // The capture alone covers an area inside it.
-    expect(plateRects(parts, { x: 10, y: 10, width: 100, height: 100 }, capture)).toBeNull();
-    expect(plateRects(parts, { x: 0, y: 0, width: 600, height: 300 }, capture)).toEqual(parts);
-    // From the area's corner, turned as it shows.
-    expect(plateRects(parts, { x: 0, y: 0, width: 300, height: 600 }, capture, { rotation: 90, flipX: false, flipY: false })).toEqual([
-      { x: 0, y: 0, width: 300, height: 400 },
-      { x: 200, y: 400, width: 100, height: 200 },
-    ]);
+    expect(reachesPast({ x: 10, y: 10, width: 100, height: 100 }, capture)).toBe(false);
+    expect(reachesPast({ x: 0, y: 0, width: 400, height: 300 }, capture)).toBe(false);
+    expect(reachesPast({ x: 0, y: 0, width: 600, height: 300 }, capture)).toBe(true);
+    expect(reachesPast({ x: -1, y: 0, width: 100, height: 100 }, capture)).toBe(true);
+    // Turned, the capture shows 300×400.
+    expect(reachesPast({ x: 0, y: 0, width: 300, height: 400 }, capture, { rotation: 90, flipX: false, flipY: false })).toBe(false);
+    expect(reachesPast({ x: 0, y: 0, width: 400, height: 300 }, capture, { rotation: 90, flipX: false, flipY: false })).toBe(true);
+  });
+
+  it("makes the shadow's silhouette from the content's own alpha", () => {
+    // A 4×1 strip: opaque, half see-through, clear (an image's transparent margin), opaque.
+    const alpha = [1, 0.5, 0, 1];
+    const pixels = new WeakMap<object, { alpha: number[]; color: string[] }>();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
+      const own = { alpha: new Array(this.width).fill(0), color: new Array(this.width).fill("") };
+      pixels.set(this, own);
+      const ctx = {
+        globalCompositeOperation: "source-over",
+        fillStyle: "",
+        beginPath: () => undefined,
+        moveTo: () => undefined,
+        lineTo: () => undefined,
+        arcTo: () => undefined,
+        closePath: () => undefined,
+        clip: () => undefined,
+        drawImage: (source: { alpha: number[] }) => {
+          source.alpha.forEach((a, x) => {
+            own.alpha[x] = a + own.alpha[x] * (1 - a);
+            own.color[x] = "content";
+          });
+        },
+        // Only `source-in` is used: the colour, kept to what is already there.
+        fillRect: () => {
+          if (ctx.globalCompositeOperation !== "source-in") throw new Error("the plate must keep the content's alpha");
+          own.color = own.color.map((_, x) => (own.alpha[x] > 0 ? ctx.fillStyle : ""));
+        },
+      };
+      return ctx as unknown as CanvasRenderingContext2D;
+    } as never);
+    try {
+      const plate = shadowPlate({ alpha } as unknown as CanvasImageSource, { width: 4, height: 1 }, 0);
+      expect(plate).not.toBeNull();
+      const drawn = pixels.get(plate as HTMLCanvasElement);
+      // Black only where there are pixels, and only as solid as they are: nothing under the clear margin.
+      expect(drawn?.alpha).toEqual([1, 0.5, 0, 1]);
+      expect(drawn?.color).toEqual(["#000000", "#000000", "", "#000000"]);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("blurs only the part of the area over the capture", () => {
@@ -348,18 +387,19 @@ describe("backdrop compose", () => {
   });
 
   it("casts the shadow from what has pixels only, leaving the clear parts clear", () => {
-    const covered = [
-      { x: 0, y: 0, width: 200, height: 300 },
-      { x: 200, y: 0, width: 200, height: 100 },
-    ];
-    const { calls } = compose({ fill: "transparent", padding: 20, radius: 10, shadow: true }, { covered });
-    // No black plate the size of the canvas: the shaped plate is drawn with the shadow instead.
+    const { canvas, calls } = compose({ fill: "transparent", padding: 20, radius: 10, shadow: true }, { clear: true });
+    const shift = shadowShift(400, 18);
+    // No solid plate the size of the canvas: a silhouette of the source, filled black inside its own alpha.
     expect(calls.filter((call) => call[0] === "fill")).toEqual([]);
-    expect(calls).toContainEqual(["fillRect", "#000000", 200, 0, 200, 100]);
+    expect(calls).toContainEqual(["fillRect", "#000000", 0, 0, 400, 300]);
+    // The silhouette is drawn out of sight, past its own shadow, then the source itself.
     expect(calls.filter((call) => call[0] === "drawImage")).toEqual([
-      ["drawImage", 20, 20],
+      ["drawImage", 0, 0, 400, 300],
+      ["drawImage", 20 - shift, 20],
       ["drawImage", 20, 20],
     ]);
+    expect(shift).toBeGreaterThan(400 + 18 * 2);
+    expect([canvas.width, canvas.height]).toEqual([440, 340]);
   });
 
   it("leaves a transparent backdrop unpainted", () => {
@@ -520,17 +560,13 @@ describe("oriented and resized export", () => {
 
   it("renders a grown canvas without a crop, and frames it whole", async () => {
     const canvas = { x: 0, y: 0, width: 800, height: 300 };
-    const parts = [
-      { x: 0, y: 0, width: 400, height: 300 },
-      { x: 400, y: 0, width: 400, height: 200 },
-    ];
-    const plain = await run({ crop: null }, "png", { canvas, parts });
+    const plain = await run({ crop: null }, "png", { canvas });
     expect(plain.areas).toEqual([{ x: 0, y: 0, width: 800, height: 300, pixelRatio: 1 }]);
     expect(plain.encoded).toEqual([{ width: 800, height: 300, mime: "image/png" }]);
-    const framed = await run({ crop: null, backdrop: { fill: "#ffffff", padding: 20, radius: 0, shadow: true } }, "png", { canvas, parts });
+    const framed = await run({ crop: null, backdrop: { fill: "#ffffff", padding: 20, radius: 0, shadow: true } }, "png", { canvas });
     expect(framed.encoded).toEqual([{ width: 840, height: 340, mime: "image/png" }]);
-    // The shadow comes from the images and the capture, not a plate over the clear corner.
-    expect(framed.calls).toContainEqual(["fillRect", "#000000", 400, 0, 400, 200]);
+    // The shadow follows the content's silhouette, not a solid plate over the clear parts.
+    expect(framed.calls).toContainEqual(["drawImage", 20 - shadowShift(800, 18), 20]);
     expect(framed.calls.filter((call) => call[0] === "fill")).toEqual([]);
   });
 
