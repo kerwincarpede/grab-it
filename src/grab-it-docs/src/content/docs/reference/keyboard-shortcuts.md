@@ -58,6 +58,7 @@ While you're picking an area to capture or record:
 | `T` | Text |
 | `K` | Callout |
 | `N` | Step (numbered badge) |
+| `G` | Stamp (icons, pointers, keys and emoji) |
 | `H` | Highlighter |
 | `B` | Blur |
 | `S` | Spotlight |
@@ -72,10 +73,11 @@ Tap a tool key to switch to it. Hold it instead, and the old tool comes back whe
 | --- | --- |
 | `1` to `7` | Pick a colour swatch, in the order of the bar |
 | `I` | Pick a colour from the capture with the eyedropper; click to use it |
-| `[` and `]` | Thinner and thicker (smaller and bigger for text and steps) |
+| `[` and `]` | Thinner and thicker (smaller and bigger for text, steps and stamps) |
 | Hold `⌘` and drag | Draw a rectangle, whatever the tool |
 | Hold `⌥` (`Alt`) and drag | Draw an arrow, whatever the tool |
 | Hold `Shift` while drawing | Keep lines and arrows to 45° steps, and boxes square (a square crop too) |
+| Hold `Shift` while turning a stamp | Turn it in 15° steps |
 | Hold `⌥` (`Alt`) while cropping | Turn off snapping to edges |
 | Hold `⌥` (`Alt`) while cutting out | Turn off snapping to edges |
 | Hold `Space` and drag | Pan around the capture |

@@ -1,6 +1,7 @@
 import {
   COLORS,
   CROP_ASPECTS,
+  DEFAULT_STAMP_SIZE,
   DEFAULT_STEP_RADIUS,
   STROKE_WIDTHS,
   type Annotations,
@@ -10,12 +11,14 @@ import {
   type Point,
   type Rect,
   type Shape,
+  type StampShape,
   type Style,
   type TextLook,
   type TextShape,
   type Tool,
 } from "./model";
 import { boundsEdges, toCapture, type Bounds, type Orientation } from "./orient";
+import { DEFAULT_STAMP, KEYCAP, stampPick, takesColor, type StampPick } from "./stamps";
 
 /** How far a duplicate lands from its original, in capture pixels. */
 export const DUPLICATE_OFFSET = 12;
@@ -78,9 +81,42 @@ export function beginShape(tool: Tool, at: Point, style: Style, id = newId()): S
       return { id, type: "spotlight", x: at.x, y: at.y, width: 0, height: 0 };
     case "step":
       return { id, type: "step", color, x: at.x, y: at.y, radius: style.stepRadius ?? DEFAULT_STEP_RADIUS };
+    case "stamp": {
+      // A keycap with no label is placed by the editor once its label is typed.
+      const pick = pickedStamp(style);
+      return needsLabel(pick) ? null : placeStamp(pick, at, style, id);
+    }
     default:
       return null;
   }
+}
+
+/** The stamp the Stamp tool places with `style`: the picked one, else `DEFAULT_STAMP`. */
+export function pickedStamp(style: Pick<Style, "stamp">): StampPick {
+  return stampPick(style.stamp) ?? { name: DEFAULT_STAMP };
+}
+
+/** A keycap picked without a label: placing it asks for one. */
+export function needsLabel(pick: StampPick): boolean {
+  return pick.name === KEYCAP.name && !pick.label;
+}
+
+/**
+ * A stamp centred on `at`, at the style's stamp size. Only stamps that take
+ * a colour get one, and only a keycap gets a label; optional fields are
+ * written only when set.
+ */
+export function placeStamp(pick: StampPick, at: Point, style: Pick<Style, "color" | "stampSize">, id = newId()): StampShape {
+  return {
+    id,
+    type: "stamp",
+    name: pick.name,
+    x: at.x,
+    y: at.y,
+    size: style.stampSize ?? DEFAULT_STAMP_SIZE,
+    ...(takesColor(pick.name) ? { color: style.color } : {}),
+    ...(pick.name === KEYCAP.name && pick.label ? { label: pick.label } : {}),
+  };
 }
 
 /** The angle a constrained line snaps to: every 45°. */
@@ -533,6 +569,8 @@ export interface NodeTransform {
   y: number;
   scaleX: number;
   scaleY: number;
+  /** A stamp's rotation, in degrees, when the Transformer turned it. */
+  rotation?: number;
 }
 
 /** Transformer anchors at the corners only. */
@@ -541,9 +579,10 @@ export const CORNER_ANCHORS = ["top-left", "top-right", "bottom-left", "bottom-r
 export const ALL_ANCHORS = [...CORNER_ANCHORS, "top-center", "middle-left", "middle-right", "bottom-center"];
 
 /**
- * The resize handles a shape offers. Text, callouts and step badges have a
- * single size (font size, radius), so a side handle could only stretch one
- * axis; they resize from the corners, keeping their ratio, as added images do.
+ * The resize handles a shape offers. Text, callouts, step badges and stamps
+ * have a single size (font size, radius, longer side), so a side handle
+ * could only stretch one axis; they resize from the corners, keeping their
+ * ratio, as added images do.
  */
 export function anchorsFor(shape: Shape | null): string[] {
   return keepsRatio(shape) ? CORNER_ANCHORS : ALL_ANCHORS;
@@ -554,7 +593,26 @@ export function anchorsFor(shape: Shape | null): string[] {
  * though Shift frees it (see the Transformer's `shiftBehavior`).
  */
 export function keepsRatio(shape: Shape | null): boolean {
-  return shape?.type === "text" || shape?.type === "callout" || shape?.type === "step" || shape?.type === "magnify" || shape?.type === "image";
+  return (
+    shape?.type === "text" ||
+    shape?.type === "callout" ||
+    shape?.type === "step" ||
+    shape?.type === "magnify" ||
+    shape?.type === "image" ||
+    shape?.type === "stamp"
+  );
+}
+
+/** The smallest a stamp is resized to, in capture pixels. */
+export const MIN_STAMP_SIZE = 8;
+
+/** A stamp's rotation between 0 and 360, to a hundredth of a degree; absent when it is upright. */
+export function withStampRotation(shape: StampShape, degrees: number): StampShape {
+  const turned = Math.round((((degrees % 360) + 360) % 360) * 100) / 100;
+  const next = { ...shape };
+  if (turned === 0 || turned === 360 || !Number.isFinite(turned)) delete next.rotation;
+  else next.rotation = turned;
+  return next;
 }
 
 /**
@@ -614,6 +672,10 @@ export function transformShape(shape: Shape, t: NodeTransform): Shape {
     }
     case "step":
       return { ...shape, x: t.x, y: t.y, radius: Math.max(6, shape.radius * uniformScale(t)) };
+    case "stamp": {
+      const next = { ...shape, x: t.x, y: t.y, size: Math.max(MIN_STAMP_SIZE, shape.size * uniformScale(t)) };
+      return t.rotation === undefined ? next : withStampRotation(next, t.rotation);
+    }
   }
 }
 
@@ -732,10 +794,12 @@ export function stepNumbers(shapes: Shape[]): Map<string, number> {
  * stroke width on stroked shapes (widened for the highlighter), font size
  * on text and callouts, radius on steps, fill on boxes, the look (`background`
  * and `textStyle`, set together) on text, background on callouts, and the
- * blur mode. A style that changes nothing returns the same shape.
+ * blur mode; stamps take theirs from `restyleStamp`. A style that changes
+ * nothing returns the same shape.
  */
 export function restyleShape(shape: Shape, style: Partial<Style>): Shape {
   if (shape.type === "spotlight" || shape.type === "image") return shape;
+  if (shape.type === "stamp") return restyleStamp(shape, style);
   if (shape.type === "blur") {
     if (!style.blurMode || style.blurMode === (shape.mode ?? "pixelate")) return shape;
     return { ...shape, mode: style.blurMode };
@@ -790,6 +854,32 @@ export function textLookFields(look: TextLook): Pick<TextShape, "background" | "
   if (look === "pill") return { background: true };
   if (look === "outline" || look === "shadow") return { textStyle: look };
   return {};
+}
+
+/**
+ * Applies the parts of `style` a stamp has: the picked stamp (`stamp`), its
+ * size, and a colour on stamps that take one. Picking another stamp keeps
+ * the size and rotation; a keycap preset sets the label, and a blank keycap
+ * keeps a keycap's label but cannot turn another stamp into one, since it
+ * would have nothing to show. A stamp that starts taking a colour gets
+ * `style.color`, or the first swatch. Nothing changed returns the same shape.
+ */
+export function restyleStamp(shape: StampShape, style: Partial<Style>): StampShape {
+  let next = shape;
+  const pick = style.stamp ? stampPick(style.stamp) : null;
+  if (pick && !(needsLabel(pick) && shape.name !== KEYCAP.name)) {
+    const label = pick.name === KEYCAP.name ? (pick.label ?? shape.label) : undefined;
+    if (pick.name !== shape.name || label !== shape.label) {
+      next = { ...shape, name: pick.name };
+      if (label) next.label = label;
+      else delete next.label;
+      if (!takesColor(pick.name)) delete next.color;
+      else if (!next.color) next.color = style.color ?? COLORS[0];
+    }
+  }
+  if (style.color && takesColor(next.name) && next.color !== style.color) next = { ...next, color: style.color };
+  if (style.stampSize && style.stampSize !== next.size) next = { ...next, size: style.stampSize };
+  return next;
 }
 
 /** A copy with a new id, offset so it does not hide the original. */

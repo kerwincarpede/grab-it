@@ -15,6 +15,9 @@ const doc: Annotations = {
     { id: "t", type: "text", color: "#1f2328", x: 3, y: 4, text: "Look here", fontSize: 30 },
     { id: "s", type: "step", color: "#e5484d", x: 50, y: 50, radius: 20 },
     { id: "g", type: "step", color: "#e5484d", x: 60, y: 70, radius: 20, number: 3 },
+    { id: "c", type: "stamp", name: "check", x: 80, y: 90, size: 48, color: "#30a46c" },
+    { id: "k", type: "stamp", name: "keycap", x: 80, y: 90, size: 64, rotation: 15, color: "#1f2328", label: "Ctrl" },
+    { id: "m", type: "stamp", name: "emoji-1f44d", x: 10, y: 20, size: 32 },
   ],
   crop: { x: 1, y: 2, width: 300, height: 200 },
 };
@@ -55,6 +58,29 @@ describe("annotations sidecar", () => {
     });
     expect(parsed.shapes).toEqual([image]);
     expect(parseAnnotations(JSON.parse(JSON.stringify(serializeAnnotations(parsed))))).toEqual(parsed);
+  });
+
+  it("keeps stamps by name and skips one this version does not bundle", () => {
+    const stamp = { id: "c", type: "stamp", name: "check", x: 1, y: 2, size: 48 };
+    const parsed = parseAnnotations({
+      version: 1,
+      shapes: [
+        stamp,
+        { ...stamp, id: "new", name: "sparkle-from-a-newer-version" },
+        { ...stamp, id: "nameless", name: undefined },
+        { ...stamp, id: "flat", size: 0 },
+        { ...stamp, id: "turned", rotation: "45" },
+        { ...stamp, id: "label", name: "keycap", label: 3 },
+        { ...stamp, id: "long", name: "keycap", label: "x".repeat(41) },
+      ],
+    });
+    expect(parsed.shapes).toEqual([stamp]);
+  });
+
+  it("writes a stamp's optional fields only when set", () => {
+    const stamp = { id: "c", type: "stamp" as const, name: "cursor-arrow", x: 1, y: 2, size: 48 };
+    const written = JSON.parse(JSON.stringify(serializeAnnotations({ version: 1, shapes: [stamp] })));
+    expect(written.shapes[0]).toEqual(stamp);
   });
 
   it("starts empty when there is no sidecar", () => {

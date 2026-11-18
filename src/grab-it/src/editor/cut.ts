@@ -1,6 +1,7 @@
 import type { Annotations, Cut, CutEdge, PointerEdit, Rect, Shape } from "./model";
 import { calloutBubble } from "./callout";
 import { textSize, type Orientation } from "./orient";
+import { stampBox } from "./stamps";
 import { cropToCapture, MIN_SIZE, normalizeRect } from "./tools";
 
 /**
@@ -215,6 +216,16 @@ function extent(shape: Shape, axis: "x" | "y"): [number, number] {
     }
     case "step":
       return axis === "x" ? [shape.x - shape.radius, shape.x + shape.radius] : [shape.y - shape.radius, shape.y + shape.radius];
+    case "stamp": {
+      // The box it covers once turned, around its centre.
+      const box = stampBox(shape);
+      const turn = ((shape.rotation ?? 0) * Math.PI) / 180;
+      const cos = Math.abs(Math.cos(turn));
+      const sin = Math.abs(Math.sin(turn));
+      const half = (axis === "x" ? box.width * cos + box.height * sin : box.width * sin + box.height * cos) / 2;
+      const centre = axis === "x" ? shape.x : shape.y;
+      return [centre - half, centre + half];
+    }
     default: {
       const rect = normalizeRect(shape);
       return axis === "x" ? [rect.x, rect.x + rect.width] : [rect.y, rect.y + rect.height];
@@ -237,6 +248,8 @@ function mapShape(shape: Shape, axis: "x" | "y", map: (value: number) => number)
       return { ...shape, points: shape.points.map((value, k) => (k % 2 === i ? map(value) : value)) };
     case "text":
     case "step":
+    case "stamp":
+      // A stamp moves by its centre, keeping its size.
       return axis === "x" ? { ...shape, x: map(shape.x) } : { ...shape, y: map(shape.y) };
     case "callout":
       // The text's corner and the tail's tip move on their own.

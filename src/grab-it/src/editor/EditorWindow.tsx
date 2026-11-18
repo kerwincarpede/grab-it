@@ -126,6 +126,7 @@ import {
   textCorner,
   toCapture,
   toCaptureDelta,
+  toDisplay,
   withOrientation,
   withScale,
   type Orientation,
@@ -155,6 +156,8 @@ import {
 } from "./pointer";
 import ResizePanel from "./ResizePanel";
 import ShapeNode, { SpotlightDim } from "./ShapeNode";
+import StampPicker from "./StampPicker";
+import { DEFAULT_STAMP, KEYCAP, MAX_KEYCAP_LABEL, pickId, stampBox, takesColor } from "./stamps";
 import ToolWheel from "./ToolWheel";
 import {
   addShape,
@@ -190,8 +193,11 @@ import {
   moveLineEnd,
   moveShape,
   nearestLine,
+  needsLabel,
   newId,
   nudgeDelta,
+  pickedStamp,
+  placeStamp,
   releaseRestores,
   replaceShape,
   resizeCrop,
@@ -214,6 +220,7 @@ import { useAnnotations } from "./useAnnotations";
 import { useEditorPreferences } from "./useEditorPreferences";
 import { useBackdropImage } from "./useBackdropImage";
 import { loadAssetImage, useAssetImages } from "./useAssetImages";
+import { useStampImages } from "./useStampImage";
 import WidthControl from "./WidthControl";
 
 /** The zoom limits as the label shows them: relative to the capture's on-screen size. */
@@ -260,17 +267,22 @@ const fileNameOf = (path: string) => path.split(/[\\/]/).pop() || path;
 const CROP_BOX = "crop-box";
 
 interface TextDraft {
-  /** Set when editing an existing text or callout. */
+  /** Set when editing an existing text, a callout, or a keycap's label. */
   id?: string;
   /** The text's top-left corner as it shows: in display space, not capture pixels. */
   at: Point;
   value: string;
   /** Set for a new callout: where its tail points, in capture pixels. */
   tail?: Point;
+  /** A blank keycap waiting for its label: where it goes, centred, in capture pixels. */
+  keycap?: Point;
 }
 
 /** A press-and-drag moving less than this, in screen pixels, places a callout with the default tail. */
 const CALLOUT_CLICK_PX = 4;
+
+/** Every 15°, for the Transformer to snap a stamp's rotation to while Shift is held. */
+const ROTATION_SNAPS = Array.from({ length: 24 }, (_, i) => i * 15);
 
 function useCaptureImage(ready: boolean) {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
@@ -573,6 +585,8 @@ export default function EditorWindow() {
   const cropEditRef = useRef<Rect | null>(null);
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
+  /** Shift is down: a stamp's rotate handle snaps to 15° steps. */
+  const [shiftHeld, setShiftHeld] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   /** The ids of the blurs Blur private details added while on, with the capture they are for; null while off. */
   const [privateFor, setPrivateFor] = useState<{ path: string | null; ids: string[] } | null>(null);
@@ -669,12 +683,14 @@ export default function EditorWindow() {
     strokeWidth: widthFor(widths, drawWith),
     fontSize: widthFor(widths, "text"),
     stepRadius: widthFor(widths, "step"),
+    stampSize: widthFor(widths, "stamp"),
   });
 
   const imageSize = useMemo(() => (image ? { width: image.width, height: image.height } : null), [image]);
   /** The capture and every added image: what shows and exports before a crop. */
   const canvas = useMemo(() => (imageSize ? canvasBounds(imageSize, doc.shapes) : null), [imageSize, doc.shapes]);
   const grown = Boolean(canvas && imageSize && isGrown(canvas, imageSize));
+  const { images: stampImages, ready: stampsReady } = useStampImages(doc.shapes);
   const { images: assetImages, seed: seedAssetImage, ready: assetsReady } = useAssetImages(doc.shapes);
   /** The latest canvas, for an image pasted after an await. */
   const canvasRef = useRef(canvas);
@@ -922,13 +938,33 @@ export default function EditorWindow() {
 
   /** Where a text click started, until mouse up opens the text box. */
   const textAt = useRef<Point | null>(null);
+  /** Where a blank keycap goes, on show and in capture pixels, until mouse up asks for its label. */
+  const keycapAt = useRef<{ shown: Point; at: Point } | null>(null);
   // Enter and the blur that follows must not commit the same draft twice.
   const committedDraft = useRef<TextDraft | null>(null);
   const commitText = useCallback(() => {
     if (!textDraft || committedDraft.current === textDraft) return;
     committedDraft.current = textDraft;
     const value = textDraft.value.trim();
+    const label = value.slice(0, MAX_KEYCAP_LABEL);
     const existing = textDraft.id ? doc.shapes.find((shape) => shape.id === textDraft.id) : undefined;
+    // A keycap's label: an empty one removes the keycap, as it does a text.
+    if (existing?.type === "stamp") {
+      if (!label) commit(deleteShape(doc, existing.id));
+      else if (label !== existing.label) commit(replaceShape(doc, { ...existing, label }));
+      setTextDraft(null);
+      return;
+    }
+    if (textDraft.keycap) {
+      if (label) {
+        const keycap = placeStamp({ name: KEYCAP.name, label }, textDraft.keycap, { color: style.color, stampSize: widthFor(widths, "stamp") });
+        commit(addShape(doc, keycap));
+        // Placed stamps stay selected, ready to drag.
+        setSelectedId(keycap.id);
+      }
+      setTextDraft(null);
+      return;
+    }
     // Upright text keeps the corner it shows at, however long it grows.
     const corner = (fontSize: number) =>
       imageSize ? textCorner(textDraft.at, value, fontSize, imageSize, orientation) : textDraft.at;
@@ -1026,6 +1062,11 @@ export default function EditorWindow() {
       setCalloutDrag({ tip: at, start: shown, end: shown });
       return;
     }
+    if (drawWith === "stamp" && needsLabel(pickedStamp(style))) {
+      // A blank keycap asks for its label first, in the text box, opened on mouse up like text.
+      keycapAt.current = { shown: shownPointer() ?? at, at };
+      return;
+    }
     if (drawWith === "crop") {
       // Drawn on show: see `shownSize`.
       const shown = shownPointer() ?? at;
@@ -1040,7 +1081,8 @@ export default function EditorWindow() {
       return;
     }
     const shape = beginShape(drawWith, at, drawStyle(drawWith));
-    if (shape?.type === "step") {
+    if (shape?.type === "step" || shape?.type === "stamp") {
+      // Badges and stamps are placed by a click, and stay selected so they can be dragged straight away.
       commit(addShape(doc, shape));
       setSelectedId(shape.id);
     } else {
@@ -1081,6 +1123,10 @@ export default function EditorWindow() {
       const tail = clicked ? (imageSize ? toCapture(shownTip, imageSize, orientation) : shownTip) : calloutDrag.tip;
       setTextDraft({ at: end, value: "", tail });
       setCalloutDrag(null);
+    }
+    if (keycapAt.current) {
+      setTextDraft({ at: keycapAt.current.shown, value: "", keycap: keycapAt.current.at });
+      keycapAt.current = null;
     }
     if (draft) {
       const finished = finishShape(draft);
@@ -1330,8 +1376,22 @@ export default function EditorWindow() {
 
   const removeFavorite = (color: string) => changeFavorites((colors) => colors.filter((candidate) => candidate !== color));
 
+  /**
+   * Sets the stamp the Stamp tool places and swaps a selected stamp for it.
+   * A stamp that had no colour (an emoji) takes the drawing colour when it
+   * becomes one that has.
+   */
+  const pickStampId = (id: string) => {
+    setStyle((now) => ({ ...now, stamp: id }));
+    if (selected?.type === "stamp") restyleSelected(selected.color ? { stamp: id } : { stamp: id, color: style.color });
+  };
+
   // Options for the active tool, or for the selected shape when there is one.
   const optionsFor = selected?.type ?? tool;
+  /** The stamp on show in the picker: the selected stamp, else the one the Stamp tool places. */
+  const shownStamp = selected?.type === "stamp" ? pickId({ name: selected.name, label: selected.label }) : (style.stamp ?? DEFAULT_STAMP);
+  /** Crop and Cut out have no colour, and neither do cursor and emoji stamps: the swatches are hidden for them. */
+  const colourless = optionsFor === "crop" || optionsFor === "cut" || (optionsFor === "stamp" && !takesColor(pickedStamp({ stamp: shownStamp }).name));
   /** What the width control sets: a stroke width, a font size, a badge size, or nothing. */
   const width = widthKind(optionsFor);
   /** The width on show: the selected shape's own, else the tool's remembered one. */
@@ -1340,9 +1400,11 @@ export default function EditorWindow() {
       ? selected.fontSize
       : selected?.type === "step"
         ? selected.radius
-        : selected && "strokeWidth" in selected && selected.type !== "highlighter"
-          ? selected.strokeWidth
-          : widthFor(widths, optionsFor),
+        : selected?.type === "stamp"
+          ? selected.size
+          : selected && "strokeWidth" in selected && selected.type !== "highlighter"
+            ? selected.strokeWidth
+            : widthFor(widths, optionsFor),
   );
 
   /** Remembers `next` as this tool's (or shape type's) width and resizes the selected shape. */
@@ -1350,7 +1412,15 @@ export default function EditorWindow() {
     (next: number) => {
       if (!width) return;
       setWidths((now) => ({ ...now, [optionsFor]: next }));
-      restyleSelected(width.preview === "text" ? { fontSize: next } : width.preview === "step" ? { stepRadius: next } : { strokeWidth: next });
+      restyleSelected(
+        width.preview === "text"
+          ? { fontSize: next }
+          : width.preview === "step"
+            ? { stepRadius: next }
+            : width.preview === "stamp"
+              ? { stampSize: next }
+              : { strokeWidth: next },
+      );
     },
     [width, optionsFor, restyleSelected],
   );
@@ -1554,8 +1624,7 @@ export default function EditorWindow() {
 
   const render = useCallback(
     async (format: ExportFormat) => {
-      // An added image still being read would be left out of the output.
-      await assetsReady();
+      await Promise.all([assetsReady(), stampsReady()]);
       const layer = contentRef.current;
       if (!layer || !imageSize || !canvas) throw new Error("The capture has not loaded yet.");
       const o = { rotation, flipX, flipY };
@@ -1574,7 +1643,7 @@ export default function EditorWindow() {
         canvas,
       });
     },
-    [assetsReady, doc.crop, backdrop, imageSize, canvas, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale, borders, seeThrough],
+    [assetsReady, stampsReady, doc.crop, backdrop, imageSize, canvas, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale, borders, seeThrough],
   );
 
   /** Copies the flattened image; false when it failed (and said so). */
@@ -1720,6 +1789,7 @@ export default function EditorWindow() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Shift") setShiftHeld(true);
       const mod = event.ctrlKey || event.metaKey;
       // Before the typing check: it works from any control, and must not also press a focused button.
       if (mod && event.key === "Enter") {
@@ -1801,10 +1871,14 @@ export default function EditorWindow() {
     };
     const onKeyUp = (event: KeyboardEvent) => {
       if (event.key === " ") setSpaceHeld(false);
+      if (event.key === "Shift") setShiftHeld(false);
       if (hold.current?.key === event.key.toLowerCase()) endHold();
     };
     // A key let go in another window never reports its key up.
-    const onBlur = () => endHold();
+    const onBlur = () => {
+      endHold();
+      setShiftHeld(false);
+    };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
@@ -1945,8 +2019,11 @@ export default function EditorWindow() {
   return (
     <main className="editor" data-testid="editor" data-ready={image ? "true" : "false"}>
       <div className="editor-topbar" role="toolbar" aria-label="Style and actions">
+        {optionsFor === "stamp" && (
+          <StampPicker value={shownStamp} color={(selected?.type === "stamp" ? selected.color : undefined) ?? style.color} onPick={pickStampId} />
+        )}
         {/* Crop and Cut out have no colour; their pickers take the space instead, so the bar stays on one line. */}
-        {optionsFor !== "crop" && optionsFor !== "cut" && (
+        {!colourless && (
           <div className="bar-group" role="group" aria-label="Colour">
             {COLORS.map((color) => (
               <button
@@ -2010,7 +2087,14 @@ export default function EditorWindow() {
             </button>
           </div>
         )}
-        {width && <WidthControl kind={width} value={shownWidth} color={selected && "color" in selected ? selected.color : style.color} onChange={changeWidth} />}
+        {width && (
+          <WidthControl
+            kind={width}
+            value={shownWidth}
+            color={(selected && "color" in selected ? selected.color : undefined) ?? style.color}
+            onChange={changeWidth}
+          />
+        )}
         {boxOptions && (
           <div className="bar-group">
             <button type="button" className="icon-button" aria-label="Fill" title="Fill the shape" aria-pressed={fillOn} onClick={() => changeStyle({ fill: !fillOn })}>
@@ -2443,6 +2527,7 @@ export default function EditorWindow() {
                         shape={shape}
                         image={image}
                         assets={assetImages}
+                        stampImages={stampImages}
                         step={steps.get(shape.id)}
                         editable={editable && shape !== draft}
                         orientation={oriented ? orientation : undefined}
@@ -2453,6 +2538,11 @@ export default function EditorWindow() {
                           const text = doc.shapes.find((candidate) => candidate.id === id);
                           if ((text?.type === "text" || text?.type === "callout") && imageSize) {
                             setTextDraft({ id, at: shownTextCorner(text, imageSize, orientation), value: text.text });
+                          } else if (text?.type === "stamp" && text.name === KEYCAP.name && imageSize) {
+                            // The text box opens over the keycap's top-left corner as it shows.
+                            const centre = toDisplay({ x: text.x, y: text.y }, imageSize, orientation);
+                            const box = stampBox(text);
+                            setTextDraft({ id, at: { x: centre.x - box.width / 2, y: centre.y - box.height / 2 }, value: text.label ?? "" });
                           }
                         }}
                       />
@@ -2516,11 +2606,14 @@ export default function EditorWindow() {
                 )}
                 <Transformer
                   ref={transformerRef}
-                  rotateEnabled={false}
+                  // Only stamps turn; Shift snaps them to 15° steps, and never unlocks their ratio.
+                  rotateEnabled={selected?.type === "stamp"}
+                  rotationSnaps={selected?.type === "stamp" && shiftHeld ? ROTATION_SNAPS : []}
+                  rotationSnapTolerance={7.5}
+                  shiftBehavior={selected?.type === "stamp" ? "none" : selected?.type === "image" ? "inverted" : "default"}
                   ignoreStroke
-                  flipEnabled={selected?.type !== "magnify" && selected?.type !== "callout" && selected?.type !== "image" && !pointerSelected}
+                  flipEnabled={selected?.type !== "magnify" && selected?.type !== "callout" && selected?.type !== "image" && selected?.type !== "stamp" && !pointerSelected}
                   keepRatio={pointerSelected || keepsRatio(selected)}
-                  shiftBehavior={selected?.type === "image" ? "inverted" : "default"}
                   enabledAnchors={pointerSelected ? CORNER_ANCHORS : anchorsFor(selected)}
                 />
                 {handleBase && (

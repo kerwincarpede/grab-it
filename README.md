@@ -49,7 +49,7 @@ A region, a window, one monitor or all of them, with a magnifier for pixel-perfe
 <td width="50%" valign="top">
 
 ### Mark it up
-Arrows, boxes, numbered steps, text, highlights, freehand and spotlights, each one keystroke away. Blur or pixelate anything private, crop, then put it on a gradient with padding, rounded corners and a shadow. Your original is never changed, so you can reopen a capture and move that arrow weeks later.
+Arrows, boxes, numbered steps, text, highlights, freehand, spotlights and stamps (check marks, pointers, keys and emoji), each one keystroke away. Blur or pixelate anything private, crop, then put it on a gradient with padding, rounded corners and a shadow. Your original is never changed, so you can reopen a capture and move that arrow weeks later.
 
 </td>
 </tr>
@@ -135,4 +135,4 @@ Bug reports, ideas and pull requests are all welcome. [Open an issue](https://gi
 
 ## License
 
-[MIT](LICENSE). Grab-it ships the [ocrs](https://github.com/robertknight/ocrs) text-recognition models, which are under their own licence: Ocrs models (https://github.com/robertknight/ocrs-models), trained on the HierText dataset by Google Research. Licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). See [`ocr-models/LICENSE.md`](src/grab-it/src-tauri/ocr-models/LICENSE.md). It also ships the [UltraFace](https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB) RFB-320 face-detection model, under the [MIT licence](src/grab-it/src-tauri/face-models/LICENSE.md), for Blur private details.
+[MIT](LICENSE). Grab-it ships the [ocrs](https://github.com/robertknight/ocrs) text-recognition models, which are under their own licence: Ocrs models (https://github.com/robertknight/ocrs-models), trained on the HierText dataset by Google Research. Licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). See [`ocr-models/LICENSE.md`](src/grab-it/src-tauri/ocr-models/LICENSE.md). It also ships the [UltraFace](https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB) RFB-320 face-detection model, under the [MIT licence](src/grab-it/src-tauri/face-models/LICENSE.md), for Blur private details, and emoji from [Noto Emoji](https://github.com/googlefonts/noto-emoji) under the [Apache License 2.0](src/grab-it/src/editor/stamps/LICENSE) for stamps.

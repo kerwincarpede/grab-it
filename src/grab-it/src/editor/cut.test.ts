@@ -87,6 +87,23 @@ describe("cut out", () => {
     expect(restoreStrips(cut).shapes[0]).toEqual(callouts.shapes[0]);
   });
 
+  it("moves a stamp by its centre, and removes one wholly inside the strip", () => {
+    const stamps: Annotations = {
+      version: 1,
+      shapes: [
+        { id: "past", type: "stamp", name: "check", x: 50, y: 200, size: 48, color: "#e5484d" },
+        { id: "inside", type: "stamp", name: "emoji-1f44d", x: 50, y: 130, size: 24 },
+        // Turned 45°, its corners reach past the strip, so it stays.
+        { id: "turned", type: "stamp", name: "check", x: 50, y: 130, size: 56, rotation: 45, color: "#e5484d" },
+      ],
+    };
+    const cut = cutAnnotations(stamps, straight);
+    expect(cut.shapes.map((shape) => shape.id)).toEqual(["past", "turned"]);
+    expect(cut.shapes[0]).toEqual({ ...stamps.shapes[0], y: 140 });
+    expect(cut.shapes[1]).toMatchObject({ x: 50, y: 100, size: 56, rotation: 45 });
+    expect(restoreStrips(cut).shapes[0]).toEqual(stamps.shapes[0]);
+  });
+
   it("shifts along x for a vertical strip", () => {
     const cut: Cut = { axis: "x", start: 20, end: 40, edge: "straight" };
     const shifted = cutAnnotations(doc, cut);

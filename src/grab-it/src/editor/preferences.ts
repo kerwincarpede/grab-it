@@ -1,6 +1,7 @@
 import { MAX_BACKDROP_PRESETS, MAX_FAVORITE_COLORS, type BackdropPreset, type EditorPreferences } from "../settings/api";
 import { COLORS, TOOLS, widthKind, type Backdrop, type BlurMode, type Style, type Tool, type Widths } from "./model";
 import { parseBackdrop } from "./sidecar";
+import { stampPick } from "./stamps";
 import { textLook } from "./tools";
 
 /** Wait this long after the last change before saving the editor preferences. */
@@ -9,8 +10,8 @@ export const PREFERENCES_DELAY_MS = 300;
 /** The choices the editor remembers between sessions. */
 export interface EditorChoices {
   tool: Tool;
-  /** Colour, fill, text style (pill or not) and blur style; widths live in `widths`. */
-  style: Pick<Style, "color" | "fill" | "background" | "textStyle" | "blurMode">;
+  /** Colour, fill, text style (pill or not), blur style and the picked stamp; widths live in `widths`. */
+  style: Pick<Style, "color" | "fill" | "background" | "textStyle" | "blurMode" | "stamp">;
   widths: Widths;
   /** The last backdrop picked: new backdrops start from it. */
   backdrop: Backdrop | null;
@@ -92,8 +93,9 @@ export function canSaveFavorite(favorites: string[], color: string): boolean {
 /**
  * The stored preferences as editor choices. Each value is checked on its
  * own: anything missing or not understood (a tool from a newer version, a
- * width of zero) keeps today's default. Crop is never restored, since it
- * hides the backdrop of a capture that was just opened; nor is Cut out.
+ * width of zero, a stamp this version does not bundle) keeps today's
+ * default. Crop is never restored, since it hides the backdrop of a
+ * capture that was just opened; nor is Cut out.
  */
 export function fromPreferences(stored: EditorPreferences | null | undefined): EditorChoices {
   const prefs = stored ?? {};
@@ -103,6 +105,8 @@ export function fromPreferences(stored: EditorPreferences | null | undefined): E
   if (prefs.textBackground === true) style.background = true;
   else if (prefs.textStyle === "outline" || prefs.textStyle === "shadow") style.textStyle = prefs.textStyle;
   if (prefs.blurMode === "blur" || prefs.blurMode === "pixelate") style.blurMode = prefs.blurMode as BlurMode;
+  // A stamp this version does not bundle keeps the default.
+  if (stampPick(prefs.stamp)) style.stamp = prefs.stamp;
   const widths: Widths = {};
   for (const [name, width] of Object.entries(prefs.widths ?? {})) {
     const entry = TOOLS.find((candidate) => candidate.tool === name);
@@ -139,6 +143,7 @@ export function toPreferences(choices: EditorChoices): EditorPreferences {
     textBackground: look === "pill",
     ...(look === "outline" || look === "shadow" ? { textStyle: look } : {}),
     blurMode: choices.style.blurMode ?? "pixelate",
+    ...(choices.style.stamp ? { stamp: choices.style.stamp } : {}),
     ...(choices.backdrop ? { backdrop: choices.backdrop } : {}),
   };
 }

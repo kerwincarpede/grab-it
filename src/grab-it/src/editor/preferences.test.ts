@@ -53,6 +53,19 @@ describe("editor preferences", () => {
     expect(toPreferences(DEFAULT_CHOICES)).not.toHaveProperty("textStyle");
   });
 
+  it("remembers the last-picked stamp and its size", () => {
+    const choices = { ...DEFAULT_CHOICES, tool: "stamp" as const, style: { color: "#e5484d", blurMode: "pixelate" as const, stamp: "keycap:Ctrl" }, widths: { stamp: 80 } };
+    const stored = toPreferences(choices);
+    expect(stored).toMatchObject({ tool: "stamp", stamp: "keycap:Ctrl", widths: { stamp: 80 } });
+    expect(fromPreferences(stored)).toEqual(choices);
+    expect(toPreferences(DEFAULT_CHOICES)).not.toHaveProperty("stamp");
+  });
+
+  it("keeps the default stamp for one this version does not bundle", () => {
+    expect(fromPreferences({ stamp: "sparkle" }).style).not.toHaveProperty("stamp");
+    expect(fromPreferences({ stamp: "emoji-1f44d" }).style.stamp).toBe("emoji-1f44d");
+  });
+
   it("never reopens on the crop or cut out tool", () => {
     expect(fromPreferences({ tool: "crop" }).tool).toBe("arrow");
     expect(fromPreferences({ tool: "cut" }).tool).toBe("arrow");

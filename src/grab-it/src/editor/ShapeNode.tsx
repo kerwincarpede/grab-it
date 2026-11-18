@@ -1,12 +1,13 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import Konva from "konva";
-import { Arrow, Circle, Ellipse, Group, Image as KonvaImage, Label, Line, Rect, Shape as KonvaShape, Tag, Text } from "react-konva";
-import { FILL_OPACITY, SPOTLIGHT_DIM, type BlurShape, type CalloutShape, type Rect as Box, type Shape, type TextShape, type TextStyle } from "./model";
+import { Arrow, Circle, Ellipse, Group, Image as KonvaImage, Label, Line, Path, Rect, Shape as KonvaShape, Tag, Text } from "react-konva";
+import { COLORS, FILL_OPACITY, SPOTLIGHT_DIM, type BlurShape, type CalloutShape, type Rect as Box, type Shape, type StampShape, type TextShape, type TextStyle } from "./model";
 import { calloutBubble, calloutOutline, calloutWedge, labelPadding, labelRadius } from "./callout";
 import { roundedRectPath } from "./flatten";
 import type { CaptureImage } from "./cut";
 import { lensPath, magnifyLinePoints, magnifyScene } from "./magnify";
 import { isIdentity, textSize, uprightTransform, type Orientation } from "./orient";
+import { KEYCAP_FONT, stampBox, stampDef, type IconPart } from "./stamps";
 import { contrastColor, curvePoints, normalizeRect, textLook, textShadowColor, withAlpha, type NodeTransform } from "./tools";
 
 interface ShapeNodeProps {
@@ -26,6 +27,7 @@ interface ShapeNodeProps {
    * about their centres, so they read upright on the same spot.
    */
   orientation?: Orientation;
+  stampImages?: ReadonlyMap<string, HTMLImageElement>;
   /** The loaded elements of added images, by their `src`. */
   assets?: ReadonlyMap<string, HTMLImageElement>;
 }
@@ -36,7 +38,9 @@ interface ShapeNodeProps {
  * whose unchanged x/y props react-konva would not re-apply.
  */
 function takeTransform(node: Konva.Node, shape: Shape): NodeTransform {
-  const transform = { x: node.x(), y: node.y(), scaleX: node.scaleX(), scaleY: node.scaleY() };
+  const transform: NodeTransform = { x: node.x(), y: node.y(), scaleX: node.scaleX(), scaleY: node.scaleY() };
+  // Only stamps turn; the Transformer's rotate handle is off for everything else.
+  if (shape.type === "stamp") transform.rotation = node.rotation();
   node.scale({ x: 1, y: 1 });
   if ("points" in shape) node.position({ x: 0, y: 0 });
   return transform;
@@ -94,6 +98,98 @@ function BlurNode({ shape, image, common }: { shape: BlurShape; image: CaptureIm
       pixelSize={shape.pixelSize}
       blurRadius={shape.pixelSize}
     />
+  );
+}
+
+/** The white edge that keeps an icon readable on any capture, in 24px grid units. */
+const ICON_EDGE = 1.5;
+const ICON_STROKE = 3;
+
+/** One part of an icon on its 24px grid (see `IconPart`). */
+function IconPartNode({ part, color }: { part: IconPart; color: string }) {
+  const round = { lineCap: "round" as const, lineJoin: "round" as const };
+  switch (part.paint) {
+    case "stroke":
+      return (
+        <>
+          <Path data={part.d} stroke="#ffffff" strokeWidth={ICON_STROKE + ICON_EDGE * 2} {...round} />
+          <Path data={part.d} stroke={color} strokeWidth={ICON_STROKE} {...round} />
+        </>
+      );
+    case "fill":
+      return <Path data={part.d} fill={color} stroke="#ffffff" strokeWidth={ICON_EDGE} {...round} />;
+    case "mark":
+      return <Path data={part.d} stroke={contrastColor(color)} strokeWidth={2.4} {...round} />;
+  }
+}
+
+/**
+ * A stamp centred on its x, y and turned by its rotation. Inside, it undoes
+ * the capture's turn and mirror about its centre (like step badges), so
+ * emoji and keycap labels never show mirrored. Icons are drawn in the
+ * stamp's colour; cursors and emoji are images that draw once loaded; the
+ * keycap is a cap in the colour with its label in a contrasting colour.
+ */
+function StampNode({ shape, stampImages, common, upright, onEditText }: {
+  shape: StampShape;
+  stampImages?: ReadonlyMap<string, HTMLImageElement>;
+  common: object;
+  upright: ReturnType<typeof uprightTransform> | null;
+  onEditText: (id: string) => void;
+}) {
+  const def = stampDef(shape.name);
+  const image = def?.url ? stampImages?.get(def.url) : undefined;
+  if (!def) return null;
+  const { width, height } = stampBox(shape);
+  const color = shape.color ?? COLORS[0];
+  const corner = { x: -width / 2, y: -height / 2 };
+  let content: ReactNode = null;
+  if (def.kind === "icon") {
+    content = (
+      <Group {...corner} scaleX={width / 24} scaleY={height / 24}>
+        {def.parts?.map((part, i) => <IconPartNode key={i} part={part} color={color} />)}
+      </Group>
+    );
+  } else if (def.kind === "keycap") {
+    const radius = height * 0.18;
+    const face = height * 0.86;
+    content = (
+      <>
+        <Rect {...corner} width={width} height={height} cornerRadius={radius} fill={color} />
+        {/* The darker lip along the bottom. */}
+        <Rect {...corner} width={width} height={height} cornerRadius={radius} fill="rgba(0, 0, 0, 0.3)" />
+        <Rect {...corner} width={width} height={face} cornerRadius={radius} fill={color} stroke="rgba(255, 255, 255, 0.35)" strokeWidth={Math.max(1, height * 0.03)} />
+        <Text
+          {...corner}
+          width={width}
+          height={face}
+          text={shape.label ?? ""}
+          fontSize={height * KEYCAP_FONT}
+          fontStyle="bold"
+          fill={contrastColor(color)}
+          align="center"
+          verticalAlign="middle"
+          wrap="none"
+        />
+      </>
+    );
+  } else if (image) {
+    content = <KonvaImage image={image} {...corner} width={width} height={height} />;
+  }
+  return (
+    <Group
+      {...common}
+      x={shape.x}
+      y={shape.y}
+      rotation={shape.rotation ?? 0}
+      onDblClick={def.kind === "keycap" ? () => onEditText(shape.id) : undefined}
+    >
+      <Group {...(upright ?? {})}>
+        {/* A clear box, so the whole stamp takes a click and the handles fit it. */}
+        <Rect {...corner} width={width} height={height} fill="transparent" />
+        {content}
+      </Group>
+    </Group>
   );
 }
 
@@ -187,7 +283,7 @@ function calloutScene(shape: CalloutShape, bubble: Box) {
 }
 
 /** One annotation as a Konva node, named by its id so the transformer can find it. */
-export default function ShapeNode({ shape, image, step, editable, onSelect, onChange, onMove, onEditText, orientation, assets }: ShapeNodeProps) {
+export default function ShapeNode({ shape, image, step, editable, onSelect, onChange, onMove, onEditText, orientation, assets, stampImages }: ShapeNodeProps) {
   const upright = orientation && !isIdentity(orientation) ? uprightTransform(orientation) : null;
   const common = {
     id: shape.id,
@@ -371,5 +467,7 @@ export default function ShapeNode({ shape, image, step, editable, onSelect, onCh
         </Group>
       );
     }
+    case "stamp":
+      return <StampNode shape={shape} stampImages={stampImages} common={common} upright={upright} onEditText={onEditText} />;
   }
 }

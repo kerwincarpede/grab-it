@@ -15,6 +15,7 @@ export type Tool =
   | "magnify"
   | "spotlight"
   | "step"
+  | "stamp"
   | "crop"
   | "cut";
 
@@ -142,6 +143,24 @@ export interface ImageShape extends Rect {
   src: string;
 }
 
+/**
+ * A bundled stamp (stamps.ts), stored by `name`, centred on x, y. `size` is
+ * its longer side; `rotation` is in degrees, clockwise, relative to the
+ * capture. `color` is set on stamps that take one (icons and the keycap);
+ * cursors and emoji keep their own colours. `label` is a keycap's text.
+ */
+export interface StampShape {
+  id: string;
+  type: "stamp";
+  name: string;
+  x: number;
+  y: number;
+  size: number;
+  rotation?: number;
+  color?: string;
+  label?: string;
+}
+
 export type Shape =
   | LineShape
   | PathShape
@@ -152,7 +171,8 @@ export type Shape =
   | TextShape
   | CalloutShape
   | StepShape
-  | ImageShape;
+  | ImageShape
+  | StampShape;
 export type ShapeType = Shape["type"];
 
 /** The output shapes a backdrop can pad the capture to; "auto" pads evenly. */
@@ -269,6 +289,10 @@ export interface Style {
   fontSize?: number;
   /** Step badge radius; `DEFAULT_STEP_RADIUS` when absent. */
   stepRadius?: number;
+  /** Stamp size (its longer side); `DEFAULT_STAMP_SIZE` when absent. */
+  stampSize?: number;
+  /** The stamp picker entry the Stamp tool places (`stampPick` in stamps.ts); `DEFAULT_STAMP` when absent. */
+  stamp?: string;
   /** Rectangles and ellipses are filled. */
   fill?: boolean;
   /** Text sits on a pill; a callout's bubble is filled with the colour. */
@@ -290,11 +314,14 @@ export const DEFAULT_FONT_SIZE = 30;
 /** Step badge radii; the default matches what the old default width gave badges. */
 export const STEP_RADII = [10, 12, 14, 16, 20, 24, 30, 36, 48];
 export const DEFAULT_STEP_RADIUS = 20;
+/** Stamp sizes: the longer side, in capture pixels. */
+export const STAMP_SIZES = [24, 32, 40, 48, 64, 80, 96, 128, 160];
+export const DEFAULT_STAMP_SIZE = 48;
 export const DEFAULT_STYLE: Style = { color: COLORS[0], strokeWidth: DEFAULT_STROKE_WIDTH };
 
 /**
  * Each tool's own width, by tool: the stroke width for stroked tools, the
- * font size for text and the badge radius for steps. A missing tool uses
+ * font size for text, the badge radius for steps and the size of stamps. A missing tool uses
  * its default.
  */
 export type Widths = Partial<Record<Tool, number>>;
@@ -303,8 +330,8 @@ export type Widths = Partial<Record<Tool, number>>;
 export interface WidthKind {
   /** Names the control: "Width" for strokes, "Size" for text and badges. */
   label: string;
-  /** What the width popover previews: a line, a line of text or a badge. */
-  preview: "stroke" | "text" | "step";
+  /** What the width popover previews: a line, a line of text, a badge or a stamp. */
+  preview: "stroke" | "text" | "step" | "stamp";
   presets: number[];
   fallback: number;
 }
@@ -312,6 +339,7 @@ export interface WidthKind {
 const STROKE_KIND: WidthKind = { label: "Width", preview: "stroke", presets: STROKE_WIDTHS, fallback: DEFAULT_STROKE_WIDTH };
 const FONT_KIND: WidthKind = { label: "Text size", preview: "text", presets: FONT_SIZES, fallback: DEFAULT_FONT_SIZE };
 const STEP_KIND: WidthKind = { label: "Badge size", preview: "step", presets: STEP_RADII, fallback: DEFAULT_STEP_RADIUS };
+const STAMP_KIND: WidthKind = { label: "Stamp size", preview: "stamp", presets: STAMP_SIZES, fallback: DEFAULT_STAMP_SIZE };
 
 /** The width a tool (or a shape of that type) takes, or null when it has none (blur, crop…). */
 export function widthKind(tool: Tool | ShapeType): WidthKind | null {
@@ -329,6 +357,8 @@ export function widthKind(tool: Tool | ShapeType): WidthKind | null {
       return FONT_KIND;
     case "step":
       return STEP_KIND;
+    case "stamp":
+      return STAMP_KIND;
     default:
       return null;
   }
@@ -367,6 +397,7 @@ export const TOOLS: { tool: Tool; label: string; key: string; group: number }[] 
   { tool: "text", label: "Text", key: "t", group: 2 },
   { tool: "callout", label: "Callout", key: "k", group: 2 },
   { tool: "step", label: "Step", key: "n", group: 2 },
+  { tool: "stamp", label: "Stamp", key: "g", group: 2 },
   { tool: "highlighter", label: "Highlighter", key: "h", group: 2 },
   { tool: "blur", label: "Blur", key: "b", group: 3 },
   { tool: "magnify", label: "Magnify", key: "z", group: 3 },

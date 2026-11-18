@@ -1,6 +1,6 @@
 ---
 title: Colours and sizes
-description: Colours, widths, text and badge sizes, fills, text styles and blur styles.
+description: Colours, widths, text, badge and stamp sizes, fills, text styles and blur styles.
 sidebar:
   order: 2
 ---
@@ -15,7 +15,7 @@ Seven swatches, in order: red, orange, green, blue, purple, black and white. Pre
 - **Colour picker:** the round swatch after **+** opens a picker for any other colour.
 - **Eyedropper:** click the eyedropper, or press `I`, then click anywhere on the screenshot to use that colour. A loupe shows the pixels under the pointer as you move. Picking also recolours the selected shape, then you're back on the tool you had. Press `Esc`, or `I` again, to stop without picking.
 
-Blur, Spotlight and Crop have no colour. With Crop, the swatches make way for its [ratios](/grab-it/image-editor/crop/#ratios).
+Blur, Spotlight and Crop have no colour, and neither do pointer and emoji [stamps](/grab-it/image-editor/stamp/). With Crop, the swatches make way for its [ratios](/grab-it/image-editor/crop/#ratios).
 
 ## Width and size
 
@@ -29,6 +29,7 @@ The button after the colours sets how big the tool draws. Click it for a preview
 | Arrow, Line, Rectangle, Ellipse, Freehand, Highlighter | **Width** | 1, 2, 3, 4, 6, 8, 12, 16, 24 | 4 |
 | Text, Callout | **Text size** | 12, 16, 20, 24, 30, 36, 48, 64, 96 | 30 |
 | Step | **Badge size** | 10, 12, 14, 16, 20, 24, 30, 36, 48 | 20 |
+| Stamp | **Stamp size** | 24, 32, 40, 48, 64, 80, 96, 128, 160 | 48 |
 
 **Each tool keeps its own size.** A thick highlighter doesn't make your arrows thick. The [highlighter](/grab-it/image-editor/highlighter/) is always drawn wider than its width, to cover a line of text.
 
@@ -42,8 +43,9 @@ Some tools have one more option in the top bar:
 | Text | **Plain**, **Pill**, **Outline**, **Shadow** | How the text is drawn; see [Text styles](/grab-it/image-editor/text/#text-styles) |
 | Callout | **Text background** | Fills the bubble with its colour instead of white |
 | Blur | **Pixelate** / **Smooth** | Blocks of colour, or a soft blur |
+| Stamp | The stamp button | Which stamp to drop: an icon, a pointer, a key or an emoji |
 | Crop | **Free**, **Original**, **16:9**, **4:3**, **1:1**, **9:16** | The crop's shape |
 
 ## Remembered for next time
 
-The editor remembers your tool, colour, each tool's size, **Fill**, the text style, the blur style, your favourite colours and your last backdrop, and opens with them the next time, in any capture.
+The editor remembers your tool, colour, each tool's size, **Fill**, the text style, the blur style, your favourite colours, the stamp you picked and your last backdrop, and opens with them the next time, in any capture.

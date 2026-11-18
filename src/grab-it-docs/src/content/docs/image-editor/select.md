@@ -14,7 +14,8 @@ Select is for changing what you've already drawn. Click a shape to select it; cl
 A selected shape shows handles:
 
 - **Drag the shape** to move it.
-- **Drag a handle** to resize it. Text and step badges resize from their corners only, keeping their shape.
+- **Drag a handle** to resize it. Text, step badges and stamps resize from their corners only, keeping their shape.
+- **Stamps** also have a handle that turns them. See [Stamp](/grab-it/image-editor/stamp/).
 - **Arrows and lines** have their own handles instead: one on each end, and one in the middle that bends the line into a curve. See [Arrow](/grab-it/image-editor/arrow/).
 
 With a shape selected:

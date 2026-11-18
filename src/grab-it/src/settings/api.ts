@@ -161,6 +161,8 @@ export interface EditorPreferences {
   textStyle?: string;
   /** `BlurMode` in editor/model.ts. */
   blurMode?: string;
+  /** The stamp the Stamp tool places: a pick id (`pickId` in editor/stamps.ts). */
+  stamp?: string;
   /** The last backdrop picked (`Backdrop` in editor/model.ts); checked by the editor as it reads it. */
   backdrop?: unknown;
   /** Frame captures that have no annotations yet with `backdrop`. Set from Settings; the editor never writes it. */

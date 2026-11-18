@@ -33,13 +33,18 @@ export async function loadAssetImage(name: string): Promise<HTMLImageElement> {
  * and the editor has drawn it, so Copy and Export never leave one out.
  */
 export function useAssetImages(shapes: Shape[]) {
-  const [images, setImages] = useState<ReadonlyMap<string, HTMLImageElement>>(new Map());
-  const [failed, setFailed] = useState<ReadonlySet<string>>(new Set());
-  const requested = useRef(new Set<string>());
   const srcs = useMemo(
     () => [...new Set(shapes.flatMap((shape) => (shape.type === "image" ? [shape.src] : [])))],
     [shapes],
   );
+  return useImageResources(srcs, loadAssetImage);
+}
+
+/** Waits for the loaded images to be committed to the canvas before resolving ready. */
+export function useImageResources(srcs: string[], load: (src: string) => Promise<HTMLImageElement | null>) {
+  const [images, setImages] = useState<ReadonlyMap<string, HTMLImageElement>>(new Map());
+  const [failed, setFailed] = useState<ReadonlySet<string>>(new Set());
+  const requested = useRef(new Set<string>());
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -51,22 +56,27 @@ export function useAssetImages(shapes: Shape[]) {
     for (const src of srcs) {
       if (requested.current.has(src)) continue;
       requested.current.add(src);
-      let reading: Promise<HTMLImageElement>;
+      let reading: Promise<HTMLImageElement | null>;
       try {
-        reading = loadAssetImage(src);
+        reading = load(src);
       } catch (err) {
         reading = Promise.reject(err);
       }
       reading
         .then((img) => {
-          if (mounted.current) setImages((current) => new Map(current).set(src, img));
+          if (!mounted.current) return;
+          if (!img) {
+            setFailed((current) => new Set(current).add(src));
+            return;
+          }
+          setImages((current) => new Map(current).set(src, img));
         })
         // A missing or unreadable image draws nothing.
         .catch(() => {
           if (mounted.current) setFailed((current) => new Set(current).add(src));
         });
     }
-  }, [srcs]);
+  }, [srcs, load]);
   const pending = srcs.some((src) => !images.has(src) && !failed.has(src));
   // Read by `ready`, which outlives the render that made it.
   const pendingRef = useRef(pending);
