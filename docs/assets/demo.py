@@ -7,7 +7,7 @@ Everything is driven by CSS keyframes sharing one cycle of T seconds, so the SVG
 also plays inside an <img>. Times below are in seconds into that cycle.
 
 The story, one chapter per caption at the bottom:
-  1. Capture        All-in-one toolbar, drag a region, exact size, Quick Access card
+  1. Capture        Capture &amp; record… toolbar, drag a region, exact size, Quick Access card
   2. Mark it up     arrow, box, steps, blur, a note and a backdrop, then copy
   3. Copy text      read the code off a screen share, tidied up by AI
   4. Record & edit  record the screen, trim it, zoom in on the click, export
@@ -62,7 +62,7 @@ body.append(f"""
 show("#trayglow", "trayglow", [(.7, 1.9)], fade=.4, on="opacity:.9")
 
 # ================================================================ 1. capture ===
-# The All-in-one shortcut.
+# The Capture &amp; record… shortcut.
 caps = [("Ctrl", 74), ("Alt", 62), ("PrtSc", 96)]
 gap = 30
 x = -(sum(w for _, w in caps) + gap * (len(caps) - 1)) / 2
@@ -78,7 +78,7 @@ body.append(f"""
 <g id="keys"><g transform="translate(480 262)">
   <rect x="-150" y="-50" width="300" height="120" rx="20" fill="#0b0d12" opacity=".55"/>
   {''.join(keyparts)}
-  <text y="52" class="t" font-size="12" fill="#c9ceda" text-anchor="middle">All-in-one  ·  ⌘ ⇧ A on a Mac</text>
+  <text y="52" class="t" font-size="12" fill="#c9ceda" text-anchor="middle">Capture &amp; record…  ·  ⌘ ⇧ A on a Mac</text>
 </g></g>""")
 css.append("#keys{transform-origin:480px 262px}")
 kf("keys", [(.15, "opacity:0;transform:scale(.7)"), (.45, "opacity:1;transform:scale(1.04)"), (.6, "opacity:1;transform:scale(1)"),
@@ -149,8 +149,8 @@ kf("sel2", [(13.5, "opacity:0;transform:scale(0)"), (13.52, "opacity:1;transform
             (14.75, "opacity:0;transform:scale(1)")], "#sel2", "ease-in-out")
 kf("scanbar", [(14.22, "transform:translateX(0)"), (14.7, f"transform:translateX({TW + 60}px)")], "#scanbar", "ease-in-out")
 
-# All-in-one toolbar.
-MODES = [("Region", "1"), ("Window", "2"), ("Screen", "3"), ("Text", "4"), ("Colour", "5"), ("Record", "6"), ("Timer off", "7")]
+# Capture &amp; record… toolbar.
+MODES = [("Region", "1"), ("Window", "2"), ("Screen", "3"), ("Text", "4"), ("Colour", "5"), ("Record", "6"), ("Scroll", "7"), ("Timer off", "8")]
 
 
 
@@ -186,8 +186,8 @@ def hint(id_, text, width):
             f'<text x="480" y="{TB_Y + 61}" class="t" font-size="12" fill="#e6e8ee" text-anchor="middle">{text}</text></g>')
 
 
-tb.append(hint("hint1", "Drag over an area, or click a window. Enter captures.", 336))
-tb.append(hint("hint2", "Drag over the text to copy it.", 200))
+tb.append(hint("hint1", "1–8 in this chooser. Drag a region, then press Enter.", 336))
+tb.append(hint("hint2", "Drag over the text, then press Enter to copy.", 295))
 body.append(f'<g id="aio">{"".join(tb)}</g>')
 kf("aio", [(1.2, "opacity:0;transform:translateY(-60px)"), (1.55, "opacity:1;transform:translateY(0)"),
            (3.75, "opacity:1;transform:translateY(0)"), (3.95, "opacity:0;transform:translateY(0)"),
@@ -876,7 +876,7 @@ style = """
 
 svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" role="img" aria-labelledby="title desc">
 <title id="title">Grab-it in action</title>
-<desc id="desc">Capture part of the screen from the All-in-one toolbar, annotate it with an arrow, a box, numbered steps, a blur and a note on a gradient backdrop, and copy it. Copy the code off a screen share as text, tidied up by AI. Record the screen, trim the recording, zoom in on a click and export it. Then search the Library for "invoice" to find a receipt by the text inside it, with an AI description and tags.</desc>
+<desc id="desc">Capture part of the screen from the Capture &amp; record… toolbar, annotate it with an arrow, a box, numbered steps, a blur and a note on a gradient backdrop, and copy it. Copy the code off a screen share as text, tidied up by AI. Record the screen, trim the recording, zoom in on a click and export it. Then search the Library for "invoice" to find a receipt by the text inside it, with an AI description and tags.</desc>
 <style>{style}</style>
 {defs}
 <rect width="{W}" height="{H}" rx="20" fill="#0d1016"/>

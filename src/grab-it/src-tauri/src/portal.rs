@@ -5,7 +5,7 @@
 use std::{fs, os::fd::AsFd, path::Path};
 
 use ashpd::desktop::{
-    global_shortcuts::{GlobalShortcuts, NewShortcut},
+    global_shortcuts::{GlobalShortcuts, NewShortcut, Shortcut},
     open_uri::OpenFileRequest,
     screenshot::Screenshot,
 };
@@ -128,10 +128,11 @@ pub fn portal_trigger(accelerator: &str) -> String {
 /// `on_activated` with what each press does. Runs until the session ends.
 /// An error means the portal is missing or refused, and only the tray can
 /// start captures.
-pub async fn run_global_shortcuts<F>(hotkeys: Hotkeys, on_activated: F) -> Result<(), String>
-where
-    F: Fn(HotkeyAction) + Send + 'static,
-{
+pub async fn run_global_shortcuts(
+    hotkeys: Hotkeys,
+    on_activated: impl Fn(HotkeyAction) + Send + Sync,
+    on_bound: impl Fn(Vec<(HotkeyAction, String)>) + Send + Sync,
+) -> Result<(), String> {
     let fail = |err: ashpd::Error| format!("the GlobalShortcuts portal is not available: {err}");
     let portal = GlobalShortcuts::new().await.map_err(fail)?;
     let session = portal.create_session().await.map_err(fail)?;
@@ -146,17 +147,36 @@ where
             )
         })
         .collect();
-    portal
+    let changed = portal.receive_shortcuts_changed().await.map_err(fail)?;
+    let activated = portal.receive_activated().await.map_err(fail)?;
+    let mut closed = session.receive_closed().await.map_err(fail)?;
+    let bound = portal
         .bind_shortcuts(&session, &shortcuts, None)
         .await
         .and_then(|request| request.response())
         .map_err(fail)?;
-    let mut activated = portal.receive_activated().await.map_err(fail)?;
-    while let Some(event) = activated.next().await {
+    let labels = |shortcuts: &[Shortcut]| {
+        shortcuts
+            .iter()
+            .filter_map(|shortcut| {
+                Some((
+                    action_for_id(shortcut.id())?,
+                    shortcut.trigger_description().to_owned(),
+                ))
+            })
+            .collect()
+    };
+    on_bound(labels(bound.shortcuts()));
+    let updates = changed.map(|event| on_bound(labels(event.shortcuts())));
+    let presses = activated.map(|event| {
         if let Some(action) = action_for_id(event.shortcut_id()) {
             on_activated(action);
         }
-    }
+    });
+    futures_util::stream::select(updates, presses)
+        .take_until(closed.next())
+        .for_each(|()| async {})
+        .await;
     Ok(())
 }
 
@@ -179,7 +199,7 @@ fn shortcut_id(action: HotkeyAction) -> Option<&'static str> {
 fn description(action: HotkeyAction) -> &'static str {
     match action {
         // The portal picks the area itself, so this captures a region there.
-        HotkeyAction::Capture(Action::AllInOne) => "All-in-one capture",
+        HotkeyAction::Capture(Action::AllInOne) => "Capture & record…",
         HotkeyAction::Capture(Action::Region | Action::Repeat) => "Capture a region",
         HotkeyAction::Capture(Action::Window) => "Capture a window",
         HotkeyAction::Capture(Action::Screen | Action::Monitor(_)) => "Capture the screen",

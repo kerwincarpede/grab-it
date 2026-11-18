@@ -13,6 +13,6 @@ sidebar:
 
 `Esc` or right-click cancels. Nothing is saved.
 
-**Colour** in the [All-in-one](/grab-it/capture/all-in-one/) toolbar (key `5`) does the same.
+**Colour** in the [Capture & record…](/grab-it/capture/all-in-one/) toolbar (key `5`) does the same.
 
 On Wayland, your desktop's own colour picker shows instead. See [Wayland](/grab-it/capture/wayland/).

@@ -32,9 +32,9 @@ Drag over a QR code or barcode, no phone needed. Grab-it looks for codes before 
 
 Codes found this way aren't tidied by AI; they're copied exactly as they are.
 
-## From All-in-one
+## From Capture & record…
 
-**Text** in the [All-in-one](/grab-it/capture/all-in-one/) toolbar (key `4`) does the same. There, the area you drag stays selected, so you can adjust it and then press **Copy text** or `Enter`.
+**Text** in the [Capture & record…](/grab-it/capture/all-in-one/) toolbar (key `4`) does the same. There, the area you drag stays selected, so you can adjust it and then press **Copy text** or `Enter`.
 
 :::tip
 Every screenshot you save has its text read in the background too, so you can search for it in the [Library](/grab-it/library/) later.

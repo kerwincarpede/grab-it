@@ -18,6 +18,7 @@ import {
   TextIcon,
   WindowIcon,
 } from "../app/icons";
+import { useEffectiveHotkeys } from "../app/useEffectiveHotkeys";
 import { keyCaps } from "../hub/keys";
 import { onAiStatus } from "../library/api";
 import { aiProvider, getSettings, type Hotkeys } from "../settings/api";
@@ -37,7 +38,7 @@ function openTarget(target: string): Promise<void> {
 
 /** The hotkeys in the order they are listed, with what each one does. */
 const SHORTCUTS: { key: keyof Hotkeys; title: string; detail: string; icon: ReactNode }[] = [
-  { key: "allInOne", title: "All-in-one", detail: "Every capture mode on one toolbar.", icon: <AllInOneIcon /> },
+  { key: "allInOne", title: "Capture & record…", detail: "Open the chooser. Press again to cancel, or to stop a recording.", icon: <AllInOneIcon /> },
   { key: "region", title: "Capture a region", detail: "Drag an area, or click a window.", icon: <RegionIcon /> },
   { key: "window", title: "Capture a window", detail: "Hover a window and click it.", icon: <WindowIcon /> },
   { key: "screen", title: "Capture the screen", detail: "Every monitor at once.", icon: <ScreenIcon /> },
@@ -135,7 +136,7 @@ function WelcomeWindow({ onClose }: { onClose?: () => void } = {}) {
 
 /** The hotkeys and tips: what Grab-it does and how to reach it. */
 function HotkeysPage({ onClose }: { onClose?: () => void }) {
-  const [hotkeys, setHotkeys] = useState<Hotkeys | null>(null);
+  const hotkeys = useEffectiveHotkeys();
   const [claudeDescribes, setClaudeDescribes] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -146,7 +147,6 @@ function HotkeysPage({ onClose }: { onClose?: () => void }) {
       getSettings()
         .then((settings) => {
           if (cancelled) return;
-          setHotkeys(settings.hotkeys);
           setClaudeDescribes(settings.ai?.enabled === true && aiProvider(settings.ai) === "claudeCode");
         })
         .catch(() => {

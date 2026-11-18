@@ -145,6 +145,7 @@ pub fn run() {
             agent::agent_skill_status,
             agent::install_agent_skill,
             hub::hub_capture,
+            hotkeys::effective_hotkeys,
             hub::hub_monitors,
             hub::hub_open,
             hub::hub_check_updates,

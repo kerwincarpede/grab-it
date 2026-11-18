@@ -76,6 +76,7 @@ function mockBackend(
       if (options.afterAllowAll) options.permissions = options.afterAllowAll;
       return options.permissions ?? null;
     }
+    if (cmd === "effective_hotkeys") return options.failSettings ? {} : HOTKEYS;
     if (cmd === "get_settings") {
       if (options.failSettings) throw "no settings";
       return {
@@ -105,7 +106,7 @@ describe("WelcomeWindow", () => {
     const library = screen.getByLabelText("Alt+Shift+PrintScreen").closest("li") as HTMLElement;
     expect(within(library).getByText("Open the library")).toBeInTheDocument();
     const allInOne = screen.getByLabelText("Ctrl+Alt+PrintScreen").closest("li") as HTMLElement;
-    expect(within(allInOne).getByText("All-in-one")).toBeInTheDocument();
+    expect(within(allInOne).getByText("Capture & record…")).toBeInTheDocument();
   });
 
   it("mentions AI descriptions only while Claude Code describes captures", async () => {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import "./app.css";
 import {
+  AllInOneIcon,
   ChevronDownIcon,
   ColourIcon,
   GridIcon,
@@ -38,10 +39,11 @@ import {
 } from "../settings/api";
 import { onLibraryChanged, sidebarSummary, type KindFilter, type SidebarSummary } from "../library/api";
 import { tagStyle } from "../library/tagColor";
-import { shortcutLabel } from "../hub/keys";
+import { useEffectiveHotkeys } from "./useEffectiveHotkeys";
 
 /** The other captures, under the New capture button. */
 const MORE_CAPTURES: { kind: CaptureKind; title: string; icon: ReactNode }[] = [
+  { kind: "allInOne", title: "Capture & record…", icon: <AllInOneIcon /> },
   { kind: "window", title: "Capture window", icon: <WindowIcon /> },
   { kind: "screen", title: "Capture screen", icon: <ScreenIcon /> },
   { kind: "record", title: "Record", icon: <RecordIcon /> },
@@ -109,14 +111,18 @@ function NavItem({ current = false, icon, count, hint, children, onClick }: NavI
 }
 
 /** The New capture button and its menu of the other captures. */
-function CaptureButton({ hotkey, onError }: { hotkey: string | null; onError: (message: string) => void }) {
+function CaptureButton({ onError }: { onError: (message: string) => void }) {
+  const hotkeys = useEffectiveHotkeys();
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
+  const more = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open) return;
+    box.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
     const close = (event: Event) => {
       if (event instanceof KeyboardEvent ? event.key === "Escape" : !box.current?.contains(event.target as Node)) {
+        if (event instanceof KeyboardEvent) more.current?.focus();
         setOpen(false);
       }
     };
@@ -138,14 +144,15 @@ function CaptureButton({ hotkey, onError }: { hotkey: string | null; onError: (m
       <button type="button" className="capture-main" title="Capture a region" onClick={() => capture("region")}>
         <RegionIcon size={15} />
         New capture
-        {hotkey && (
+        {hotkeys.region && (
           <kbd className="capture-key" aria-hidden="true">
-            {shortcutLabel(hotkey)}
+            {hotkeys.region}
           </kbd>
         )}
       </button>
       <button
         type="button"
+        ref={more}
         className="capture-more"
         aria-label="More captures"
         aria-haspopup="menu"
@@ -155,11 +162,33 @@ function CaptureButton({ hotkey, onError }: { hotkey: string | null; onError: (m
         <ChevronDownIcon size={13} />
       </button>
       {open && (
-        <div className="capture-menu" role="menu">
+        <div
+          className="capture-menu"
+          role="menu"
+          aria-label="More captures"
+          onBlur={(event) => {
+            if (!box.current?.contains(event.relatedTarget)) setOpen(false);
+          }}
+          onKeyDown={(event) => {
+            const items = Array.from(event.currentTarget.querySelectorAll("button"));
+            const index = items.indexOf(document.activeElement as HTMLButtonElement);
+            let next: number;
+            switch (event.key) {
+              case "ArrowDown": next = (index + 1) % items.length; break;
+              case "ArrowUp": next = (index + items.length - 1) % items.length; break;
+              case "Home": next = 0; break;
+              case "End": next = items.length - 1; break;
+              default: return;
+            }
+            event.preventDefault();
+            items[next].focus();
+          }}
+        >
           {MORE_CAPTURES.map(({ kind, title, icon }) => (
             <button type="button" role="menuitem" key={kind} onClick={() => capture(kind)}>
               {icon}
               {title}
+              {hotkeys[kind] && <kbd className="capture-key">{hotkeys[kind]}</kbd>}
             </button>
           ))}
         </div>
@@ -239,11 +268,9 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
   const [summary, setSummary] = useState<SidebarSummary | null>(null);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [regionHotkey, setRegionHotkey] = useState<string | null>(null);
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel>("stable");
 
-  // Read again whenever a dialog closes, so a hotkey or update channel
-  // changed in Settings shows.
+  // Read the channel again after Settings closes.
   const settingsOpen = open?.kind === "settings";
   useEffect(() => {
     if (settingsOpen) return;
@@ -251,11 +278,10 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
     getSettings()
       .then((settings) => {
         if (cancelled) return;
-        setRegionHotkey(settings?.hotkeys?.region || null);
         setUpdateChannel(settings?.updateChannel === "edge" ? "edge" : "stable");
       })
       .catch(() => {
-        // The button works without its hotkey label.
+        // The version still shows when the channel cannot be read.
       });
     return () => {
       cancelled = true;
@@ -433,7 +459,7 @@ function AppWindow({ initialView = "library" }: { initialView?: MainView }) {
           onTagFilter={pickTag}
           kindFilter={place.kind}
           onKindFilter={pickKind}
-          toolbarEnd={<CaptureButton hotkey={regionHotkey} onError={setError} />}
+          toolbarEnd={<CaptureButton onError={setError} />}
           onOpenSettings={openSettingsOn}
         />
       </div>

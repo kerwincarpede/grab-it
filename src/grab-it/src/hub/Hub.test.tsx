@@ -15,13 +15,8 @@ function backend({ monitors = 1, shots = 0, activity = { recording: false, steps
     (cmd, payload) => {
       calls.push({ cmd, payload });
       switch (cmd) {
-        case "get_settings":
-          return {
-            saveFolder: "/tmp",
-            hotkeys: { allInOne: "", region: "Ctrl+Shift+R", window: "Alt+PrintScreen", screen: "", text: "", colour: "", library: "Ctrl+Shift+L", steps: "" },
-            afterCapture: "quickAccess",
-            copyToClipboard: true,
-          };
+        case "effective_hotkeys":
+          return { allInOne: "Ctrl+Alt+A", region: "Ctrl+Shift+R", window: "Alt+PrintScreen", library: "Ctrl+Shift+L" };
         case "library_list":
           return {
             shots: Array.from({ length: shots }, (_, index) => ({
@@ -55,12 +50,13 @@ describe("Hub", () => {
   it("starts each capture by its kind", async () => {
     const calls = backend();
     render(<Hub />);
-    for (const name of [/^Capture region/, /^Window/, /^Screen/, /^Record/, /^Grab text/, /^Pick colour/, /^Step capture/]) {
+    for (const name of [/^Capture region/, /^Capture & record…/, /^Window/, /^Screen/, /^Record/, /^Grab text/, /^Pick colour/, /^Step capture/]) {
       await userEvent.click(screen.getByRole("button", { name }));
     }
     await userEvent.click(screen.getByRole("button", { name: "Repeat last region" }));
     expect(sent(calls, "hub_capture").map((payload) => (payload as { kind: string }).kind)).toEqual([
       "region",
+      "allInOne",
       "window",
       "screen",
       "record",
@@ -76,6 +72,34 @@ describe("Hub", () => {
     render(<Hub />);
     expect(await screen.findByText("Ctrl+Shift+R")).toBeInTheDocument();
     expect(screen.getByText("Alt+PrintScreen")).toBeInTheDocument();
+  });
+
+  it("keeps region first and activates the chooser by keyboard with its live binding", async () => {
+    const calls = backend();
+    render(<Hub />);
+    const chooser = await screen.findByRole("button", { name: /Capture & record… Ctrl\+Alt\+A/ });
+    expect(screen.getByRole("button", { name: /^Capture region/ })).toHaveFocus();
+    await userEvent.tab();
+    expect(chooser).toHaveFocus();
+    await act(() => emit("effective-hotkeys-changed", { allInOne: "⌘⇧A" }));
+    expect(chooser).toHaveTextContent("⌘⇧A");
+    await act(() => emit("effective-hotkeys-changed", {}));
+    expect(chooser).toHaveAccessibleName("Capture & record…");
+    await userEvent.keyboard("{Enter}");
+    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "allInOne", delaySeconds: undefined, monitor: undefined });
+    expect(screen.queryByRole("button", { name: "Check for updates" })).not.toBeInTheDocument();
+  });
+
+  it("tabs into a nested action and activates it", async () => {
+    const calls = backend();
+    render(<Hub />);
+    const timed = screen.getByRole("button", { name: "Timed" });
+    timed.focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Region in 3 s" })).toHaveFocus();
+    await userEvent.keyboard(" ");
+    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "region", delaySeconds: 3, monitor: undefined });
   });
 
   it("offers timed captures", async () => {

@@ -11,7 +11,7 @@ These work from any app, while Grab-it is running.
 
 | Action | Windows & Linux | macOS |
 | --- | --- | --- |
-| All-in-one: pick any mode from a toolbar | `Ctrl + Alt + PrintScreen` | `⌘ ⇧ A` |
+| Open or dismiss **Capture & record…** | `Ctrl + Alt + PrintScreen` | `⌘ ⇧ A` |
 | Capture a region (or click a window) | `PrintScreen` | `⌘ ⇧ 2` |
 | Capture a window | `Alt + PrintScreen` | `⌘ ⇧ W` |
 | Capture every monitor | `Ctrl + PrintScreen` | `⌘ ⇧ F` |
@@ -20,7 +20,9 @@ These work from any app, while Grab-it is running.
 | Start or stop a [step capture](/grab-it/capture/step-capture/) | `Ctrl + Alt + Shift + PrintScreen` | `⌘ ⇧ 8` |
 | Open the Library | `Alt + Shift + PrintScreen` | `⌘ ⇧ 0` |
 
-**Record**, **Repeat last region**, **Timed capture** and **Choose a monitor** have no hotkey of their own; start them from the tray menu, from All-in-one, or from the [command line](/grab-it/reference/command-line/).
+In the hub, use `Tab` or `Shift Tab` to focus an action and `Enter` or `Space` to choose it. This also works for **Repeat last region**, the delays under **Timed** and individual monitors under **Monitor**. In the Library, open **More captures** and use the arrow keys to move between options.
+
+The global chooser shortcut cancels an open chooser. Press it again to reopen. During recording, it stops the recording. On Wayland the desktop provides its own capture picker.
 
 Don't like these? Change them in [Settings → Hotkeys](/grab-it/reference/settings/#hotkeys): click a field and press the keys you want. If another app already uses a hotkey, Settings tells you, and the tray menu always works. **Shortcuts and tips** in the Grab-it window's sidebar shows your current hotkeys at any time.
 
@@ -35,9 +37,9 @@ While you're picking an area to capture or record:
 | `Esc` | Cancel |
 | Hold `Shift` while dragging | Make the selection a square |
 | Hold `Space` while dragging | Move the selection instead of resizing it |
-| `Enter` | Capture (or record) the adjusted selection, in All-in-one and Record |
-| `1` to `7` | In All-in-one: Region, Window, Screen, Text, Colour, Record, Scroll |
-| `8` | In All-in-one: step the timer through off, 3, 5 and 10 seconds |
+| `Enter` | Capture (or record) the adjusted selection, in Capture & record… and Record |
+| `1` to `7` | In Capture & record…: Region, Window, Screen, Text, Colour, Record, Scroll |
+| `8` | In Capture & record…: step the timer through off, 3, 5 and 10 seconds |
 | `1` to `3` | When recording: Region, Window, Screen |
 
 ## Image editor

@@ -131,7 +131,10 @@ enum Phase {
     #[default]
     Idle,
     /// A capture was started and the monitors are being frozen.
-    Opening,
+    Opening {
+        id: u64,
+        chooser: bool,
+    },
     Open(Session),
 }
 
@@ -314,27 +317,45 @@ pub fn is_open(app: &AppHandle) -> bool {
         .is_some_and(|state| !matches!(*state.lock(), Phase::Idle))
 }
 
-/// Claims the overlay for a new selection. False when one is already
-/// starting or on screen, so a second hotkey press or tray click does
-/// nothing instead of replacing it. Call [`open`] after a true result.
-pub fn begin(app: &AppHandle) -> bool {
-    let state = app.state::<OverlayState>();
-    let mut phase = state.lock();
-    if matches!(*phase, Phase::Idle) {
-        *phase = Phase::Opening;
-        true
-    } else {
-        false
+/// Claims a new session before its capture thread starts.
+pub fn begin(app: &AppHandle, chooser: bool) -> Option<u64> {
+    app.state::<OverlayState>().lock().begin(chooser)
+}
+
+impl Phase {
+    fn begin(&mut self, chooser: bool) -> Option<u64> {
+        if !matches!(self, Self::Idle) {
+            return None;
+        }
+        let id = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
+        *self = Self::Opening { id, chooser };
+        Some(id)
+    }
+
+    fn take_chooser(&mut self) -> Option<Phase> {
+        let chooser = match self {
+            Self::Opening { chooser, .. } => *chooser,
+            Self::Open(session) => session.all_in_one,
+            Self::Idle => false,
+        };
+        chooser.then(|| std::mem::take(self))
+    }
+
+    fn opening(&self, claim: u64) -> bool {
+        matches!(self, Self::Opening { id, .. } if *id == claim)
     }
 }
 
-/// Releases a claim from [`begin`] that never got its overlays.
-fn abandon(app: &AppHandle) {
+/// Dismisses only the chooser claimed by an earlier invocation.
+pub fn cancel_chooser(app: &AppHandle) -> bool {
     let state = app.state::<OverlayState>();
-    let mut phase = state.lock();
-    if matches!(*phase, Phase::Opening) {
-        *phase = Phase::Idle;
+    let Some(previous) = state.lock().take_chooser() else {
+        return false;
+    };
+    if let Phase::Open(session) = previous {
+        dismiss(app, &session, true);
     }
+    true
 }
 
 /// Freezes every monitor and shows an overlay on each. Expects a claim
@@ -345,6 +366,7 @@ pub fn open(
     mode: CaptureMode,
     intent: Intent,
     all_in_one: bool,
+    id: u64,
 ) -> Result<(), String> {
     // The windows are listed beside the capture, not ahead of it, so the
     // overlay waits only for the slower of the two. Both are done before an
@@ -358,7 +380,12 @@ pub fn open(
     let frames = match screen::capture_monitors() {
         Ok(frames) => frames,
         Err(err) => {
-            abandon(app);
+            let state = app.state::<OverlayState>();
+            let mut phase = state.lock();
+            if !phase.opening(id) {
+                return Ok(());
+            }
+            *phase = Phase::Idle;
             return Err(err);
         }
     };
@@ -367,7 +394,6 @@ pub fn open(
     let desktop = listing.join().unwrap_or_default();
     let placements = app.available_monitors().unwrap_or_default();
 
-    let id = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
     let mut session = Session {
         id,
         mode,
@@ -380,7 +406,14 @@ pub fn open(
         windows: desktop.windows,
         pointer,
     };
-    let mut spares = std::mem::take(&mut *app.state::<SpareState>().lock());
+    let mut spares = {
+        let state = app.state::<OverlayState>();
+        let phase = state.lock();
+        if !phase.opening(id) {
+            return Ok(());
+        }
+        std::mem::take(&mut *app.state::<SpareState>().lock())
+    };
     let mut warm = Vec::new();
     let mut cold = Vec::new();
     // The overlay on the display the pointer is on is shown last, so it
@@ -420,7 +453,24 @@ pub fn open(
             },
         );
     }
-    *app.state::<OverlayState>().lock() = Phase::Open(session);
+    {
+        let state = app.state::<OverlayState>();
+        let mut phase = state.lock();
+        if !phase.opening(id) {
+            drop(phase);
+            for window in warm {
+                let _ = window.destroy();
+            }
+            for spare in spares {
+                if let Some(window) = app.get_webview_window(&spare.label) {
+                    let _ = window.destroy();
+                }
+            }
+            prewarm_later(app);
+            return Ok(());
+        }
+        *phase = Phase::Open(session);
+    }
 
     // Spares left over sit where no monitor is any more.
     for spare in spares {
@@ -446,6 +496,11 @@ pub fn open(
         }
         for (label, position, size, scale) in &cold {
             let window = create_window(app, label, *position, *size, *scale)?;
+            if !matches!(&*app.state::<OverlayState>().lock(), Phase::Open(session) if session.id == id)
+            {
+                let _ = window.destroy();
+                continue;
+            }
             if INSTANT {
                 if under_pointer(label) {
                     last = Some(window);
@@ -462,7 +517,9 @@ pub fn open(
         Ok(())
     })();
     if let Err(err) = shown {
-        close(app);
+        if take_session(app, |s| s.id == id, |_| true).is_none() {
+            return Ok(());
+        }
         return Err(format!("could not show the capture overlay: {err}"));
     }
 
@@ -656,8 +713,7 @@ fn settle(app: &AppHandle, id: u64) {
         }
     };
     if INSTANT {
-        if !responded {
-            close(app);
+        if !responded && take_session(app, |s| s.id == id, |_| true).is_some() {
             actions::report_failure(app, "The capture overlay did not respond. Try again.");
         }
         return;
@@ -831,14 +887,7 @@ fn forget(app: &AppHandle, label: &str) {
     app.state::<SpareState>()
         .lock()
         .retain(|spare| spare.label != label);
-    let current = {
-        let state = app.state::<OverlayState>();
-        let phase = state.lock();
-        matches!(&*phase, Phase::Open(session) if session.frames.contains_key(label))
-    };
-    if current {
-        close(app);
-    }
+    let _ = take_session(app, |s| s.frames.contains_key(label), |_| true);
 }
 
 /// macOS: `always_on_top` puts the overlay at the floating level, under the
@@ -942,12 +991,6 @@ fn render_at_display_rate(window: &WebviewWindow) -> tauri::Result<()> {
     })
 }
 
-/// Removes every overlay and forgets the frozen images, and gives the
-/// focus back to the app the user was in.
-pub fn close(app: &AppHandle) {
-    let _ = take_session(app, |_| true);
-}
-
 /// macOS: makes the app that was active when `session` opened active
 /// again, in case something activated Grab-it meanwhile
 /// ([`crate::panel::reactivate`]). Elsewhere the window manager gives the
@@ -963,24 +1006,32 @@ fn give_back_focus(app: &AppHandle, session: &Session) {
 
 /// Ends the selection: takes its session and removes its overlays, giving
 /// the focus back first when `give_back` says so for the session.
-fn take_session(app: &AppHandle, give_back: impl FnOnce(&Session) -> bool) -> Option<Session> {
+fn take_session(
+    app: &AppHandle,
+    matches: impl FnOnce(&Session) -> bool,
+    give_back: impl FnOnce(&Session) -> bool,
+) -> Option<Session> {
     // Taken before the windows go, so their `Destroyed` events find nothing.
     let session = {
         let state = app.state::<OverlayState>();
         let mut phase = state.lock();
         match std::mem::take(&mut *phase) {
-            Phase::Open(session) => session,
+            Phase::Open(session) if matches(&session) => session,
             other => {
-                // Idle, or another capture still freezing the monitors.
                 *phase = other;
                 return None;
             }
         }
     };
+    dismiss(app, &session, give_back(&session));
+    Some(session)
+}
+
+fn dismiss(app: &AppHandle, session: &Session, give_back: bool) {
     // Before the windows go, so an active Grab-it does not move the focus
     // to another of its windows on the way.
-    if give_back(&session) {
-        give_back_focus(app, &session);
+    if give_back {
+        give_back_focus(app, session);
     }
     for label in session.frames.keys() {
         if let Some(window) = app.get_webview_window(label) {
@@ -989,7 +1040,6 @@ fn take_session(app: &AppHandle, give_back: impl FnOnce(&Session) -> bool) -> Op
     }
     // A page is not reused, so the next selection starts from a clean one.
     prewarm_later(app);
-    Some(session)
 }
 
 /// A window the overlay can highlight, relative to the overlay's monitor in
@@ -1450,8 +1500,8 @@ pub fn overlay_choose(
 }
 
 #[tauri::command]
-pub fn overlay_cancel(app: AppHandle) {
-    close(&app);
+pub fn overlay_cancel(app: AppHandle, window: WebviewWindow) {
+    let _ = take_session(&app, |s| s.frames.contains_key(window.label()), |_| true);
 }
 
 /// Closes the overlays and saves the selection. An All-in-one overlay
@@ -1468,15 +1518,19 @@ pub fn overlay_finish(
         .get()
         .preferences
         .after_capture;
-    let session = take_session(&app, |session| {
-        let Resolved { intent, delay, .. } = resolve(
-            session.all_in_one,
-            session.intent,
-            session.mode,
-            choice.or(session.choice),
-        );
-        !opens_editor(intent, delay, &selection, after_capture)
-    })
+    let session = take_session(
+        &app,
+        |s| s.frames.contains_key(window.label()),
+        |session| {
+            let Resolved { intent, delay, .. } = resolve(
+                session.all_in_one,
+                session.intent,
+                session.mode,
+                choice.or(session.choice),
+            );
+            !opens_editor(intent, delay, &selection, after_capture)
+        },
+    )
     .ok_or("no capture in progress")?;
     let frame = session
         .frames
@@ -1713,6 +1767,42 @@ mod tests {
                 width,
                 height,
             },
+        }
+    }
+
+    #[test]
+    fn a_cancelled_opening_cannot_replace_the_reopened_chooser() {
+        let mut phase = Phase::Idle;
+        assert!(phase.take_chooser().is_none());
+        let first = phase.begin(true).unwrap();
+        assert!(phase.take_chooser().is_some());
+        let reopened = phase.begin(true).unwrap();
+        assert!(!phase.opening(first));
+        assert!(phase.opening(reopened));
+    }
+
+    #[test]
+    fn only_the_chooser_can_be_dismissed_by_its_shortcut() {
+        let mut phase = Phase::Idle;
+        let direct = phase.begin(false).unwrap();
+        assert!(phase.take_chooser().is_none());
+        assert!(phase.opening(direct));
+
+        for chooser in [false, true] {
+            let mut phase = Phase::Open(Session {
+                id: 1,
+                mode: CaptureMode::Region,
+                intent: Intent::Record,
+                all_in_one: chooser,
+                choice: None,
+                foreground: Foreground::default(),
+                previous_app: None,
+                frames: HashMap::new(),
+                windows: Vec::new(),
+                pointer: None,
+            });
+            assert_eq!(phase.take_chooser().is_some(), chooser);
+            assert_eq!(matches!(phase, Phase::Idle), chooser);
         }
     }
 

@@ -99,7 +99,7 @@ Most changes save as soon as you make them. Hotkeys save when you press **Save h
 
 ## Hotkeys
 
-**Capture hotkeys** lists **All-in-one**, **Region**, **Window**, **Screen**, **Capture text**, **Pick a colour**, **Open library** and **Step capture**. Click a field and press the new keys; `Tab` moves to the next field as usual. While a field has focus your hotkeys are paused, so pressing one records it instead of taking a capture.
+**Capture hotkeys** lists **Capture & record…**, **Region**, **Window**, **Screen**, **Capture text**, **Pick a colour**, **Open library** and **Step capture**. Click a field and press the new keys; `Tab` moves to the next field as usual. While a field has focus your hotkeys are paused, so pressing one records it instead of taking a capture.
 
 Press **Save hotkeys** to use them, or **Revert** to go back. Grab-it refuses an empty hotkey, one it can't use, or the same keys for two actions. If another app already holds a hotkey, Settings says which one couldn't be registered; the tray menu always works.
 

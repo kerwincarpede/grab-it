@@ -93,7 +93,7 @@ def desktop(A, extra=""):
 </g>""")
 
 
-def keycaps(A, name, wins, label="All-in-one  ·  ⌘ ⇧ A on a Mac", cx=360, cy=210):
+def keycaps(A, name, wins, label="Capture &amp; record…  ·  ⌘ ⇧ A on a Mac", cx=360, cy=210):
     """Ctrl + Alt + PrtSc, popping in and pressed once in each (start, end) window."""
     caps = [("Ctrl", 66), ("Alt", 56), ("PrtSc", 86)]
     gap = 26
@@ -132,13 +132,13 @@ def key_badge(A, name, label, x, y, t):
                 (t + .55, "opacity:1;transform:scale(1)"), (t + .75, "opacity:0;transform:scale(1.1)")], f"#{name}")
 
 
-MODES = [("Region", "1"), ("Window", "2"), ("Screen", "3"), ("Text", "4"), ("Colour", "5"), ("Record", "6"), ("Timer off", "7")]
+MODES = [("Region", "1"), ("Window", "2"), ("Screen", "3"), ("Text", "4"), ("Colour", "5"), ("Record", "6"), ("Scroll", "7"), ("Timer off", "8")]
 
 
 def toolbar(A, wins, picks, hints, y=8):
-    """All-in-one's mode toolbar. picks: {mode: [(start, end)]} for the highlight; hints: [(text, [(start, end)])]."""
-    fs = 11.5
-    widths = [round(24 + text_w(m, fs) + 28) for m, _ in MODES]
+    """Capture &amp; record…'s mode toolbar. picks: {mode: [(start, end)]} for the highlight; hints: [(text, [(start, end)])]."""
+    fs = 11
+    widths = [round(24 + text_w(m, fs) + 23) for m, _ in MODES]
     tb_w = sum(widths) + 3 * (len(MODES) - 1) + 10
     assert tb_w < W - 10, tb_w
     x0 = W / 2 - tb_w / 2
@@ -321,7 +321,7 @@ def tour_capture():
 
     xs = toolbar(A, [(1.35, 4.65), (7.45, 9.65), (11.75, 14.1)],
                  {"Region": [(1.35, 8.0)], "Text": [(8.0, 11.75)], "Colour": [(12.15, A.T)]},
-                 [("Drag over an area, or click a window. Enter captures.", [(1.35, 8.0)]),
+                 [("1–8 in this chooser. Drag a region, then press Enter.", [(1.35, 8.0)]),
                   ("Drag over text or a code to copy it.", [(8.0, 11.75)]),
                   ("Click a pixel to copy its colour.", [(12.15, A.T)])])
     for lab, t, m in (("4", 7.95, "Text"), ("5", 12.1, "Colour")):
@@ -380,8 +380,8 @@ def tour_capture():
                (4.25, (SX + SW - 30, SY + SH - 20), 1), (4.6, (SX + SW - 30, SY + SH - 20), 1), (5.4, QA_ANN, 1), (6.4, QA_ANN, 1),
                (6.6, QA_ANN, 0), (8.95, (TX + TW, TY + TH), 0), (9.0, (TX + TW, TY + TH), 1), (10.0, (67, 393), 1),
                (11.2, (67, 393), 1), (11.4, (67, 393), 0)])
-    write("capture", A, "All-in-one capture",
-          "The All-in-one toolbar opens over a frozen screen. A region is dragged out, locked to 16:9 and captured to the Quick Access card. "
+    write("capture", A, "Capture &amp; record…",
+          "The Capture &amp; record… toolbar opens over a frozen screen. A region is dragged out, locked to 16:9 and captured to the Quick Access card. "
           "Then Text mode reads the link in a QR code, and Colour mode picks the blue of a chart bar with a magnifying loupe.",
           defs=f'<clipPath id="scanclip"><rect x="{TX}" y="{TY}" width="{TW}" height="{TH}"/></clipPath>'
                f'<clipPath id="loupeclip"><circle r="38"/></clipPath>'
@@ -679,7 +679,7 @@ def tour_video():
     WINDOW_BTN = (bx + 5 + 68 + 35, by + 16)
     A.show("#segsel0", "segsel0", [(0, 1.9)], fade=.05)
     A.show("#segsel1", "segsel1", [(1.9, A.T)], fade=.05)
-    xs = toolbar(A, [(1.1, 3.25)], {"Record": [(1.45, A.T)]}, [])
+    xs = toolbar(A, [(1.1, 3.25)], {"Record": [(1.45, A.T)]}, [("1–8 in this chooser", [(1.1, 1.45)])])
     hx, hw_ = xs["Record"]
     key_badge(A, "k6", "6", hx + hw_ / 2, 104, 1.4)
 
@@ -893,7 +893,7 @@ def tour_video():
     A.click(*REC, 3.1)
     reset_cover(A, 18.4)
     write("video", A, "Recording and the video editor",
-          "Record mode is picked on the All-in-one toolbar, a window is chosen with the webcam, clicks and keys on, and a countdown starts the recording. "
+          "Record mode is picked on the Capture &amp; record… toolbar, a window is chosen with the webcam, clicks and keys on, and a countdown starts the recording. "
           "Clicks show as rings and a shortcut as a key label. In the video editor the start is trimmed, a zoom is added and set to follow the cursor, "
           "playback zooms in on each click, and Export saves a new MP4.",
           defs=f'<clipPath id="vclip"><rect x="{VX}" y="{VY}" width="{VW}" height="{VH:.1f}" rx="8"/></clipPath>'
