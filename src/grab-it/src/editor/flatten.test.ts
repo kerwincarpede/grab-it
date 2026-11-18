@@ -26,9 +26,9 @@ import {
   resample,
   type PaintLayer,
 } from "./flatten";
-import { backdropColors, canvasBounds, sameBackdrop, type Backdrop, type MagnifyShape, type LineShape, type StampShape } from "./model";
+import { backdropColors, canvasBounds, sameBackdrop, type Backdrop, type MagnifyShape, type LineShape, type Shape, type StampShape } from "./model";
 import ShapeNode from "./ShapeNode";
-import { curvePoints } from "./tools";
+import { ARROW_STYLES } from "./arrowStyles";
 import { magnifyLinePoints, magnifyScene } from "./magnify";
 
 describe("flatten", () => {
@@ -448,69 +448,87 @@ describe("backdrop compose", () => {
   });
 });
 
-/**
- * Exports render the content layer as ShapeNode draws it, so a curved arrow
- * exports as Konva draws it from `curvePoints`: one bezier segment, its head
- * turned along the curve's end rather than from start to end.
- */
-describe("curved arrows in exports", () => {
+/** Mounts an annotation on a real Konva layer with a recording 2D context. */
+function drawnShape(shape: Shape) {
+  const noop = () => undefined;
+  const calls: unknown[][] = [];
+  const drawing = new Set(["moveTo", "lineTo", "quadraticCurveTo", "closePath", "arc", "ellipse", "fill", "stroke"]);
+  const ctx = new Proxy({} as Record<string | symbol, unknown>, {
+    get: (target, key) => {
+      if (key in target) return target[key];
+      if (key === "getImageData") return () => ({ data: new Uint8ClampedArray(400).fill(255) });
+      if (key === "measureText") return () => ({ width: 10 });
+      if (typeof key === "string" && drawing.has(key)) {
+        return (...args: unknown[]) => {
+          calls.push(key === "fill" || key === "stroke" ? [key, target[`${key}Style`]] : [key, ...args]);
+        };
+      }
+      return noop;
+    },
+    set: (target, key, value) => {
+      target[key] = value;
+      return true;
+    },
+  });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  let layer: Konva.Layer | null = null;
+  flushSync(() =>
+    root.render(
+      createElement(
+        Stage,
+        { width: 400, height: 300 },
+        createElement(
+          Layer,
+          { ref: (node: Konva.Layer | null) => { layer = node; } },
+          createElement(ShapeNode, { shape, image: null, editable: false, onSelect: noop, onChange: noop, onEditText: noop }),
+        ),
+      ),
+    ),
+  );
+  const drawn = layer as Konva.Layer | null;
+  return { layer: drawn, node: drawn?.findOne(`#${shape.id}`), calls, cleanup: () => { root.unmount(); host.remove(); } };
+}
+
+describe("arrows in exports", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const arrow: LineShape = { id: "a", type: "arrow", color: "#e5484d", strokeWidth: 4, points: [20, 60, 220, 110] };
+
   function drawArrow(shape: LineShape) {
-    const calls: unknown[][] = [];
-    const record = (name: string) => (...args: unknown[]) => calls.push([name, ...args]);
-    const ctx = {
-      beginPath: record("beginPath"),
-      moveTo: record("moveTo"),
-      lineTo: record("lineTo"),
-      bezierCurveTo: record("bezierCurveTo"),
-      closePath: record("closePath"),
-      save: record("save"),
-      restore: record("restore"),
-      translate: record("translate"),
-      rotate: record("rotate"),
-      setLineDash: record("setLineDash"),
-      strokeShape: record("strokeShape"),
-      fillStrokeShape: record("fillStrokeShape"),
-    };
-    // jsdom has no 2D canvas; Konva probes one for its hit colours when a shape is made.
-    const probe = {
-      clearRect: () => undefined,
-      fillRect: () => undefined,
-      getImageData: () => ({ data: new Uint8ClampedArray(400).map((_, i) => (i % 4 === 3 ? 255 : 40)) }),
-    };
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(probe as unknown as CanvasRenderingContext2D);
-    const arrow = new Konva.Arrow({
-      points: curvePoints(shape),
-      bezier: Boolean(shape.control),
-      stroke: shape.color,
-      fill: shape.color,
-      strokeWidth: shape.strokeWidth,
-      pointerLength: 10,
-      pointerWidth: 10,
-    });
-    (arrow as unknown as { _sceneFunc: (context: unknown) => void })._sceneFunc(ctx);
-    return calls;
+    const { layer, calls, cleanup } = drawnShape(shape);
+    try {
+      if (!layer) throw new Error("Konva export layer did not mount");
+      calls.length = 0;
+      layer.toCanvas({ x: 0, y: 0, width: 400, height: 300, pixelRatio: 1 });
+      return calls.slice();
+    } finally {
+      cleanup();
+    }
   }
 
-  const arrow: LineShape = { id: "a", type: "arrow", color: "#e5484d", strokeWidth: 4, points: [0, 0, 100, 0] };
-
-  it("draws a curved arrow as one bezier with its head along the end tangent", () => {
-    const calls = drawArrow({ ...arrow, control: [50, -60] });
-    const curves = calls.filter((call) => call[0] === "bezierCurveTo");
-    expect(curves).toHaveLength(1);
-    expect(curves[0].slice(5)).toEqual([100, 0]);
-    expect(calls).toContainEqual(["translate", 100, 0]);
-    const angle = calls.find((call) => call[0] === "rotate")?.[1] as number;
-    // The quadratic's end tangent runs from the control (50, -60) to the end (100, 0).
-    const tangent = (Math.atan2(60, 50) + Math.PI * 2) % (Math.PI * 2);
-    expect(angle).toBeCloseTo(tangent);
-    expect(angle).not.toBeCloseTo(0);
+  it("paints twelve distinct arrow presets on the layer Copy and Export flatten", () => {
+    const drawings = ARROW_STYLES.map(({ id: arrowStyle }) => drawArrow({ ...arrow, arrowStyle }));
+    expect(new Set(drawings.map((calls) => JSON.stringify(calls))).size).toBe(12);
+    drawings.forEach((calls, index) => {
+      const { id } = ARROW_STYLES[index];
+      const paint = calls.filter(([op]) => op === "fill" || op === "stroke");
+      expect(paint.length, id).toBeGreaterThan(0);
+      expect(paint.every(([, color]) => color === arrow.color), id).toBe(true);
+      expect(calls).toContainEqual(["lineTo", 220, 110]);
+      if (id === "outline") expect(paint).toEqual([["stroke", arrow.color]]);
+    });
   });
 
-  it("draws a straight arrow as before", () => {
-    const calls = drawArrow(arrow);
-    expect(calls.filter((call) => call[0] === "bezierCurveTo")).toEqual([]);
-    expect(calls).toContainEqual(["lineTo", 100, 0]);
-    expect(calls.find((call) => call[0] === "rotate")?.[1]).toBeCloseTo(0);
+  it("paints the curve through the tip with its filled head pointing along the end tangent", () => {
+    const calls = drawArrow({ ...arrow, control: [220, 50] });
+    expect(calls).toContainEqual(["quadraticCurveTo", 220, 50, 220, 110]);
+    // This curve ends pointing straight down, with the horizontal head base above it.
+    expect(calls).toContainEqual(["moveTo", 211, 92]);
+    expect(calls).toContainEqual(["lineTo", 229, 92]);
+    expect(calls).toContainEqual(["fill", arrow.color]);
   });
 });
 
@@ -758,46 +776,9 @@ describe("magnify lenses in exports", () => {
 describe("rotated stamps in exports", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  /** Draws `shape` on a real Konva layer (jsdom has no 2D canvas, so drawing calls do nothing); returns its node. */
-  function drawStamp(shape: StampShape) {
-    const noop = () => undefined;
-    const ctx = new Proxy({} as Record<string | symbol, unknown>, {
-      get: (target, key) => {
-        if (key in target) return target[key];
-        if (key === "getImageData") return () => ({ data: new Uint8ClampedArray(400).fill(255) });
-        if (key === "measureText") return () => ({ width: 10 });
-        return noop;
-      },
-      set: (target, key, value) => {
-        target[key] = value;
-        return true;
-      },
-    });
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
-    const host = document.createElement("div");
-    document.body.appendChild(host);
-    const root = createRoot(host);
-    let layer: Konva.Layer | null = null;
-    flushSync(() =>
-      root.render(
-        createElement(
-          Stage,
-          { width: 400, height: 300 },
-          createElement(
-            Layer,
-            { ref: (node: Konva.Layer | null) => { layer = node; } },
-            createElement(ShapeNode, { shape, image: null, editable: false, onSelect: noop, onChange: noop, onEditText: noop }),
-          ),
-        ),
-      ),
-    );
-    const node = (layer as Konva.Layer | null)?.findOne(`#${shape.id}`);
-    return { node, cleanup: () => { root.unmount(); host.remove(); } };
-  }
-
   it("turns a stamp about its centre, keeping its size", () => {
     const stamp: StampShape = { id: "k", type: "stamp", name: "check", x: 100, y: 80, size: 48, rotation: 45, color: "#30a46c" };
-    const { node, cleanup } = drawStamp(stamp);
+    const { node, cleanup } = drawnShape(stamp);
     try {
       expect(node?.rotation()).toBe(45);
       expect(node?.position()).toEqual({ x: 100, y: 80 });
@@ -813,7 +794,7 @@ describe("rotated stamps in exports", () => {
   });
 
   it("draws an upright stamp's box at its size", () => {
-    const { node, cleanup } = drawStamp({ id: "u", type: "stamp", name: "cursor-arrow", x: 50, y: 50, size: 64 });
+    const { node, cleanup } = drawnShape({ id: "u", type: "stamp", name: "cursor-arrow", x: 50, y: 50, size: 64 });
     try {
       expect(node?.rotation()).toBe(0);
       const box = node!.getClientRect({ skipStroke: true });

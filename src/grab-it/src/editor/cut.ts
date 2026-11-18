@@ -1,3 +1,4 @@
+import { elbowRoute, isElbow } from "./arrowStyles";
 import type { Annotations, Cut, CutEdge, PointerEdit, Rect, Shape } from "./model";
 import { calloutBubble } from "./callout";
 import { textSize, type Orientation } from "./orient";
@@ -201,7 +202,14 @@ function extent(shape: Shape, axis: "x" | "y"): [number, number] {
     case "freehand":
     case "highlighter": {
       const values = shape.points.filter((_, k) => k % 2 === i);
-      if ((shape.type === "arrow" || shape.type === "line") && shape.control) values.push(shape.control[i]);
+      if (shape.type === "arrow" || shape.type === "line") {
+        if (isElbow(shape)) {
+          const route = elbowRoute(shape);
+          if (route.axis === axis) values.push(route.at);
+        } else if (shape.control) {
+          values.push(shape.control[i]);
+        }
+      }
       return [Math.min(...values), Math.max(...values)];
     }
     case "text": {
@@ -241,7 +249,13 @@ function mapShape(shape: Shape, axis: "x" | "y", map: (value: number) => number)
     case "arrow":
     case "line": {
       const points = shape.points.map((value, k) => (k % 2 === i ? map(value) : value));
-      return shape.control ? { ...shape, points, control: pair(shape.control) } : { ...shape, points };
+      const moved = { ...shape, points };
+      if (shape.control) moved.control = pair(shape.control);
+      if (isElbow(shape)) {
+        const route = elbowRoute(shape);
+        moved.elbow = route.axis === axis ? { ...route, at: map(route.at) } : route;
+      }
+      return moved;
     }
     case "freehand":
     case "highlighter":

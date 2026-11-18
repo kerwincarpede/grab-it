@@ -222,6 +222,8 @@ import { useBackdropImage } from "./useBackdropImage";
 import { loadAssetImage, useAssetImages } from "./useAssetImages";
 import { useStampImages } from "./useStampImage";
 import WidthControl from "./WidthControl";
+import ArrowStylePicker from "./ArrowStylePicker";
+import { arrowStyle, bendElbow, elbowMidpoint, isElbow, type ArrowStyle } from "./arrowStyles";
 
 /** The zoom limits as the label shows them: relative to the capture's on-screen size. */
 const MIN_ZOOM = 0.05;
@@ -463,11 +465,11 @@ function LineHandles({
   onPreview: (shape: LineShape) => void;
   onCommit: (shape: LineShape) => void;
 }) {
-  /** Where each handle sits on a line: its ends, and the curve's midpoint. */
+  /** Where each handle sits: the endpoints and the curve or elbow midpoint. */
   const places: Record<string, (line: LineShape) => Point> = {
     start: (line) => ({ x: line.points[0], y: line.points[1] }),
     end: (line) => ({ x: line.points[2], y: line.points[3] }),
-    bend: curveMidpoint,
+    bend: (line) => isElbow(line) ? elbowMidpoint(line) : curveMidpoint(line),
   };
   const handle = (key: string, fill: string, update: (to: Point, shift: boolean) => LineShape) => {
     const at = places[key](shape);
@@ -508,7 +510,7 @@ function LineHandles({
     <>
       {handle("start", "#ffffff", moveEnd(0))}
       {handle("end", "#ffffff", moveEnd(1))}
-      {handle("bend", HANDLE_COLOR, (to) => bendLine(base, to, STRAIGHTEN_SNAP / scale))}
+      {handle("bend", HANDLE_COLOR, (to) => isElbow(base) ? bendElbow(base, to) : bendLine(base, to, STRAIGHTEN_SNAP / scale))}
     </>
   );
 }
@@ -555,6 +557,7 @@ export default function EditorWindow() {
   const [tool, setTool] = useState<Tool>(DEFAULT_CHOICES.tool);
   /** Colour and options for the next shape; each tool's width is in `widths`. */
   const [style, setStyle] = useState<Omit<Style, "strokeWidth">>(DEFAULT_CHOICES.style);
+  const [nextArrowStyle, setNextArrowStyle] = useState<ArrowStyle>("classic");
   const [widths, setWidths] = useState<Widths>(DEFAULT_CHOICES.widths);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Shape | null>(null);
@@ -681,6 +684,7 @@ export default function EditorWindow() {
   const drawStyle = (drawWith: Tool): Style => ({
     ...style,
     strokeWidth: widthFor(widths, drawWith),
+    arrowStyle: nextArrowStyle,
     fontSize: widthFor(widths, "text"),
     stepRadius: widthFor(widths, "step"),
     stampSize: widthFor(widths, "stamp"),
@@ -2093,6 +2097,15 @@ export default function EditorWindow() {
             value={shownWidth}
             color={(selected && "color" in selected ? selected.color : undefined) ?? style.color}
             onChange={changeWidth}
+          />
+        )}
+        {(optionsFor === "arrow" || tool === "arrow") && (
+          <ArrowStylePicker
+            value={selected?.type === "arrow" ? arrowStyle(selected.arrowStyle) : nextArrowStyle}
+            onPick={(preset) => {
+              if (selected?.type === "arrow") restyleSelected({ arrowStyle: preset });
+              else setNextArrowStyle(preset);
+            }}
           />
         )}
         {boxOptions && (

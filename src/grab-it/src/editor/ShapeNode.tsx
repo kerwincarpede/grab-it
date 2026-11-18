@@ -1,7 +1,8 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import Konva from "konva";
-import { Arrow, Circle, Ellipse, Group, Image as KonvaImage, Label, Line, Path, Rect, Shape as KonvaShape, Tag, Text } from "react-konva";
+import { Circle, Ellipse, Group, Image as KonvaImage, Label, Line, Path, Rect, Shape as KonvaShape, Tag, Text } from "react-konva";
 import { COLORS, FILL_OPACITY, SPOTLIGHT_DIM, type BlurShape, type CalloutShape, type Rect as Box, type Shape, type StampShape, type TextShape, type TextStyle } from "./model";
+import { arrowGeometry } from "./arrowStyles";
 import { calloutBubble, calloutOutline, calloutWedge, labelPadding, labelRadius } from "./callout";
 import { roundedRectPath } from "./flatten";
 import type { CaptureImage } from "./cut";
@@ -304,23 +305,22 @@ export default function ShapeNode({ shape, image, step, editable, onSelect, onCh
   };
 
   switch (shape.type) {
-    case "arrow":
-      // A curve is one cubic segment; Konva aims the head along its last control point, the end tangent.
+    case "arrow": {
+      const { parts, centreline } = arrowGeometry(shape);
+      const hitWidth = Math.max(12, shape.strokeWidth);
       return (
-        <Arrow
-          {...common}
-          points={curvePoints(shape)}
-          bezier={Boolean(shape.control)}
-          stroke={shape.color}
-          fill={shape.color}
-          strokeWidth={shape.strokeWidth}
-          pointerLength={shape.strokeWidth * 3 + 6}
-          pointerWidth={shape.strokeWidth * 3 + 6}
-          lineCap="round"
-          lineJoin="round"
-          hitStrokeWidth={Math.max(12, shape.strokeWidth)}
-        />
+        <Group {...common}>
+          {editable && centreline && <Path data={centreline} stroke="transparent" strokeWidth={1} hitStrokeWidth={hitWidth} />}
+          {parts.map(({ path, strokeWidth }, index) =>
+            strokeWidth === undefined ? (
+              <Path key={index} data={path} fill={shape.color} />
+            ) : (
+              <Path key={index} data={path} stroke={shape.color} strokeWidth={strokeWidth} lineCap="round" lineJoin="round" hitStrokeWidth={hitWidth} />
+            ),
+          )}
+        </Group>
       );
+    }
     case "line":
       return (
         <Line

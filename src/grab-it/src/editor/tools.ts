@@ -1,3 +1,4 @@
+import { arrowStyle } from "./arrowStyles";
 import {
   COLORS,
   CROP_ASPECTS,
@@ -52,7 +53,10 @@ export function beginShape(tool: Tool, at: Point, style: Style, id = newId()): S
   switch (tool) {
     case "arrow":
     case "line":
-      return { id, type: tool, color, strokeWidth, points: [at.x, at.y, at.x, at.y] };
+      return {
+        id, type: tool, color, strokeWidth, points: [at.x, at.y, at.x, at.y],
+        ...(tool === "arrow" && style.arrowStyle && style.arrowStyle !== "classic" ? { arrowStyle: style.arrowStyle } : {}),
+      };
     case "freehand":
       return { id, type: "freehand", color, strokeWidth, points: [at.x, at.y] };
     case "highlighter":
@@ -630,9 +634,16 @@ export function transformShape(shape: Shape, t: NodeTransform): Shape {
     case "arrow":
     case "line": {
       const points = shape.points.map((value, i) => (i % 2 === 0 ? t.x + value * t.scaleX : t.y + value * t.scaleY));
-      if (!shape.control) return { ...shape, points };
-      const [cx, cy] = shape.control;
-      return { ...shape, points, control: [t.x + cx * t.scaleX, t.y + cy * t.scaleY] };
+      const moved = { ...shape, points };
+      if (shape.control) {
+        const [cx, cy] = shape.control;
+        moved.control = [t.x + cx * t.scaleX, t.y + cy * t.scaleY];
+      }
+      if (shape.elbow) {
+        const { axis, at } = shape.elbow;
+        moved.elbow = { axis, at: axis === "x" ? t.x + at * t.scaleX : t.y + at * t.scaleY };
+      }
+      return moved;
     }
     case "freehand":
     case "highlighter":
@@ -829,6 +840,11 @@ export function restyleShape(shape: Shape, style: Partial<Style>): Shape {
     }
   } else if (style.background !== undefined && next.type === "callout") {
     next = { ...next, background: style.background };
+  }
+  if (next.type === "arrow" && style.arrowStyle && style.arrowStyle !== arrowStyle(next.arrowStyle)) {
+    next = { ...next, arrowStyle: style.arrowStyle };
+    if (style.arrowStyle === "classic") delete next.arrowStyle;
+    if (style.arrowStyle !== "elbow") delete next.elbow;
   }
   if (next.type === "magnify") {
     if (style.zoom !== undefined) next = { ...next, zoom: style.zoom };
