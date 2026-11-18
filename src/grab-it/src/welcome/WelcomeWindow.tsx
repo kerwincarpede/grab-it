@@ -38,7 +38,7 @@ function openTarget(target: string): Promise<void> {
 
 /** The hotkeys in the order they are listed, with what each one does. */
 const SHORTCUTS: { key: keyof Hotkeys; title: string; detail: string; icon: ReactNode }[] = [
-  { key: "allInOne", title: "Capture & record…", detail: "Open the chooser. Press again to cancel, or to stop a recording.", icon: <AllInOneIcon /> },
+  { key: "allInOne", title: "Capture & record…", detail: "Press again to close the chooser or stop a recording. On Wayland, cancel in the desktop picker. Recording is unavailable there.", icon: <AllInOneIcon /> },
   { key: "region", title: "Capture a region", detail: "Drag an area, or click a window.", icon: <RegionIcon /> },
   { key: "window", title: "Capture a window", detail: "Hover a window and click it.", icon: <WindowIcon /> },
   { key: "screen", title: "Capture the screen", detail: "Every monitor at once.", icon: <ScreenIcon /> },

@@ -268,10 +268,13 @@ describe("AppWindow", () => {
     const more = screen.getByRole("button", { name: "More captures" });
     more.focus();
     await userEvent.keyboard("{Enter}");
-    const chooser = await screen.findByRole("menuitem", { name: /Capture & record… ⌘⇧A/ });
+    const chooser = screen.getByRole("menuitem", { name: /^Capture & record…/ });
+    await waitFor(() => expect(chooser).toHaveTextContent("⌘⇧A"));
     expect(chooser).toHaveFocus();
     await userEvent.keyboard("{ArrowDown}");
-    expect(screen.getByRole("menuitem", { name: /Capture window ⌘⇧W/ })).toHaveFocus();
+    const captureWindow = screen.getByRole("menuitem", { name: /^Capture window/ });
+    expect(captureWindow).toHaveFocus();
+    expect(captureWindow).toHaveTextContent("⌘⇧W");
     expect(screen.getByRole("menuitem", { name: "Capture screen" })).toBeInTheDocument();
     await act(() => emit("effective-hotkeys-changed", { allInOne: "Ctrl+Alt+A" }));
     expect(chooser).toHaveTextContent("Ctrl+Alt+A");

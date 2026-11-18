@@ -368,6 +368,9 @@ pub fn open(
     all_in_one: bool,
     id: u64,
 ) -> Result<(), String> {
+    if !app.state::<OverlayState>().lock().opening(id) {
+        return Ok(());
+    }
     // The windows are listed beside the capture, not ahead of it, so the
     // overlay waits only for the slower of the two. Both are done before an
     // overlay takes the focus from the window the user was in.
@@ -1481,6 +1484,9 @@ pub fn overlay_choose(
         };
         if !session.all_in_one {
             return Err("this overlay has no toolbar".into());
+        }
+        if !session.frames.contains_key(window.label()) {
+            return Err("this window is not part of the current chooser".into());
         }
         session.choice = Some(choice);
         session

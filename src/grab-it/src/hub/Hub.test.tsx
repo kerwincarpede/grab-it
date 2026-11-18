@@ -77,7 +77,8 @@ describe("Hub", () => {
   it("keeps region first and activates the chooser by keyboard with its live binding", async () => {
     const calls = backend();
     render(<Hub />);
-    const chooser = await screen.findByRole("button", { name: /Capture & record… Ctrl\+Alt\+A/ });
+    const chooser = screen.getByRole("button", { name: /^Capture & record…/ });
+    await waitFor(() => expect(chooser).toHaveTextContent("Ctrl+Alt+A"));
     expect(screen.getByRole("button", { name: /^Capture region/ })).toHaveFocus();
     await userEvent.tab();
     expect(chooser).toHaveFocus();
