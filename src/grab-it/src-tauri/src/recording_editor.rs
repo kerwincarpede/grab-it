@@ -1653,14 +1653,11 @@ mod tests {
         assert!(validate_edits(&json!({ "version": 3, "clips": [clip.clone()] })).is_ok());
         // Gaps are new in version 3.
         assert!(
-            validate_edits(&json!({ "version": 2, "clips": [clip.clone(), gap(1500.0)] }))
-                .is_err()
+            validate_edits(&json!({ "version": 2, "clips": [clip.clone(), gap(1500.0)] })).is_err()
         );
         assert!(validate_edits(&json!({ "version": 3, "clips": [gap(0.0)] })).is_err());
         assert!(validate_edits(&json!({ "version": 3, "clips": [gap(-5.0)] })).is_err());
-        assert!(
-            validate_edits(&json!({ "version": 3, "clips": [{ "gapMs": 1000 }] })).is_err()
-        );
+        assert!(validate_edits(&json!({ "version": 3, "clips": [{ "gapMs": 1000 }] })).is_err());
         assert!(
             validate_edits(&json!({ "version": 3, "clips": [{ "id": "g", "gapMs": "1" }] }))
                 .is_err()
