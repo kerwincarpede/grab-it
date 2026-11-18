@@ -338,7 +338,7 @@ pub fn pin_nudge(
         .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pin_copy(
     window: WebviewWindow,
     app: AppHandle,

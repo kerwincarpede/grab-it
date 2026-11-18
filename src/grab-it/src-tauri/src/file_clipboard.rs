@@ -1,4 +1,4 @@
-//! Puts files on the system clipboard as files, so pasting into a file
+//! Copies images and files. File copies put files on the system clipboard as files, so pasting into a file
 //! manager, a chat or a mail app attaches them rather than their pixels.
 //!
 //! - macOS: file URLs written to the general pasteboard (`NSPasteboard`).
@@ -8,7 +8,36 @@
 
 use std::path::PathBuf;
 
+use image::RgbaImage;
 use tauri::AppHandle;
+
+#[cfg(any(target_os = "macos", test))]
+fn png_bytes(image: &RgbaImage) -> Result<Vec<u8>, String> {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .map_err(|err| format!("could not encode the clipboard image: {err}"))?;
+    Ok(bytes.into_inner())
+}
+
+/// Copies pixels to the clipboard. Call from a worker thread because macOS
+/// waits for the main thread to publish the pasteboard item.
+pub fn copy_image(app: &AppHandle, image: &RgbaImage) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let png = png_bytes(image)?;
+        let tiff = mac::tiff_bytes(&png);
+        on_main_thread(app, move || mac::write_image(png, tiff))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        use tauri_plugin_clipboard_manager::ClipboardExt;
+        let clip = tauri::image::Image::new(image.as_raw(), image.width(), image.height());
+        app.clipboard()
+            .write_image(&clip)
+            .map_err(|err| format!("could not copy to the clipboard: {err}"))
+    }
+}
 
 /// Puts `paths` on the clipboard as files.
 pub fn copy_files(app: &AppHandle, paths: &[PathBuf]) -> Result<(), String> {
@@ -165,9 +194,40 @@ mod linux {
 mod mac {
     use std::path::PathBuf;
 
-    use objc2::runtime::ProtocolObject;
-    use objc2_app_kit::{NSPasteboard, NSPasteboardWriting};
-    use objc2_foundation::{NSArray, NSString, NSURL};
+    use objc2::{AnyThread, rc::autoreleasepool, runtime::ProtocolObject};
+    use objc2_app_kit::{
+        NSImage, NSPasteboard, NSPasteboardItem, NSPasteboardTypePNG, NSPasteboardTypeTIFF,
+        NSPasteboardWriting,
+    };
+    use objc2_foundation::{NSArray, NSData, NSString, NSURL};
+
+    /// Converts on the calling worker, keeping the NSImage local to that thread.
+    pub fn tiff_bytes(png: &[u8]) -> Option<Vec<u8>> {
+        autoreleasepool(|_| {
+            let image = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(png))?;
+            Some(image.TIFFRepresentation()?.to_vec())
+        })
+    }
+
+    /// Publishes both formats as one image, in paste preference order.
+    pub fn write_image(png: Vec<u8>, tiff: Option<Vec<u8>>) -> Result<(), String> {
+        let item = NSPasteboardItem::new();
+        // SAFETY: AppKit provides these immutable pasteboard type constants.
+        if !item.setData_forType(&NSData::from_vec(png), unsafe { NSPasteboardTypePNG }) {
+            return Err("could not put the PNG on the clipboard".into());
+        }
+        if let Some(tiff) = tiff {
+            item.setData_forType(&NSData::from_vec(tiff), unsafe { NSPasteboardTypeTIFF });
+        }
+        let objects = NSArray::from_slice(&[ProtocolObject::from_ref(&*item)]);
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        if pasteboard.writeObjects(&objects) {
+            Ok(())
+        } else {
+            Err("could not copy the image to the clipboard".into())
+        }
+    }
 
     /// Writes the files' URLs to the general pasteboard. Runs on the main
     /// thread.
@@ -260,6 +320,14 @@ mod win {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn clipboard_png_preserves_the_pixels() {
+        let image = RgbaImage::from_raw(2, 1, vec![20, 30, 40, 0, 90, 80, 70, 128]).unwrap();
+        let png = png_bytes(&image).unwrap();
+        let decoded = image::load_from_memory_with_format(&png, image::ImageFormat::Png).unwrap();
+        assert_eq!(decoded.into_rgba8(), image);
+    }
 
     #[test]
     fn file_uris_escape_spaces_and_non_ascii_names() {

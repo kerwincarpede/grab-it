@@ -750,10 +750,7 @@ pub fn copy_file(app: &AppHandle, path: &Path) -> Result<(), String> {
     let image = image::open(path)
         .map_err(|err| format!("could not open {}: {err}", path.display()))?
         .into_rgba8();
-    let clip = tauri::image::Image::new(image.as_raw(), image.width(), image.height());
-    app.clipboard()
-        .write_image(&clip)
-        .map_err(|err| format!("could not copy to the clipboard: {err}"))
+    crate::file_clipboard::copy_image(app, &image)
 }
 
 /// Deletes a recording with its sidecars, closing its editor first.
