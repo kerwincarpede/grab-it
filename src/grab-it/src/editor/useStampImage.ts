@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useMemo } from "react";
 import type { Shape } from "./model";
+import { useImageResources } from "./useAssetImages";
 import { stampDef } from "./stamps";
 
 /** Bundled stamp images, loaded once each and shared by every stamp that shows them. */
@@ -33,32 +34,26 @@ export function loadStampImage(url: string): Promise<HTMLImageElement | null> {
   return pending;
 }
 
-/** Loads the images of every cursor and emoji stamp in `shapes`, so a drawing made straight after shows them. */
-export async function loadStampImages(shapes: Shape[]): Promise<void> {
+function stampUrls(shapes: Shape[]): string[] {
   const urls = new Set<string>();
   for (const shape of shapes) {
     const url = shape.type === "stamp" ? stampDef(shape.name)?.url : undefined;
     if (url) urls.add(url);
   }
-  await Promise.all([...urls].map(loadStampImage));
+  return [...urls];
 }
 
-/** A bundled stamp image for drawing; null until it loads, or for a stamp that has none. */
-export function useStampImage(url: string | null | undefined): HTMLImageElement | null {
-  const [image, setImage] = useState<{ url: string; image: HTMLImageElement } | null>(() => {
-    const cached = url ? loaded.get(url) : undefined;
-    return url && cached ? { url, image: cached } : null;
-  });
-  useEffect(() => {
-    if (!url || loaded.has(url)) return;
-    let cancelled = false;
-    void loadStampImage(url).then((img) => {
-      if (!cancelled && img) setImage({ url, image: img });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [url]);
-  if (!url) return null;
-  return image?.url === url ? image.image : (loaded.get(url) ?? null);
+/** Preloads image stamps before drawing a capture on a hidden stage. */
+export async function loadStampImages(shapes: Shape[]): Promise<ReadonlyMap<string, HTMLImageElement>> {
+  const images = new Map<string, HTMLImageElement>();
+  await Promise.all(stampUrls(shapes).map(async (url) => {
+    const img = await loadStampImage(url);
+    if (img) images.set(url, img);
+  }));
+  return images;
+}
+
+export function useStampImages(shapes: Shape[]) {
+  const urls = useMemo(() => stampUrls(shapes), [shapes]);
+  return useImageResources(urls, loadStampImage);
 }

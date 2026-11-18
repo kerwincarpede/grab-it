@@ -220,6 +220,7 @@ import { useAnnotations } from "./useAnnotations";
 import { useEditorPreferences } from "./useEditorPreferences";
 import { useBackdropImage } from "./useBackdropImage";
 import { loadAssetImage, useAssetImages } from "./useAssetImages";
+import { useStampImages } from "./useStampImage";
 import WidthControl from "./WidthControl";
 
 /** The zoom limits as the label shows them: relative to the capture's on-screen size. */
@@ -689,6 +690,7 @@ export default function EditorWindow() {
   /** The capture and every added image: what shows and exports before a crop. */
   const canvas = useMemo(() => (imageSize ? canvasBounds(imageSize, doc.shapes) : null), [imageSize, doc.shapes]);
   const grown = Boolean(canvas && imageSize && isGrown(canvas, imageSize));
+  const { images: stampImages, ready: stampsReady } = useStampImages(doc.shapes);
   const { images: assetImages, seed: seedAssetImage, ready: assetsReady } = useAssetImages(doc.shapes);
   /** The latest canvas, for an image pasted after an await. */
   const canvasRef = useRef(canvas);
@@ -1622,8 +1624,7 @@ export default function EditorWindow() {
 
   const render = useCallback(
     async (format: ExportFormat) => {
-      // An added image still being read would be left out of the output.
-      await assetsReady();
+      await Promise.all([assetsReady(), stampsReady()]);
       const layer = contentRef.current;
       if (!layer || !imageSize || !canvas) throw new Error("The capture has not loaded yet.");
       const o = { rotation, flipX, flipY };
@@ -1642,7 +1643,7 @@ export default function EditorWindow() {
         canvas,
       });
     },
-    [assetsReady, doc.crop, backdrop, imageSize, canvas, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale, borders, seeThrough],
+    [assetsReady, stampsReady, doc.crop, backdrop, imageSize, canvas, currentView, captureScale, image, shownCapture, backdropImageEl, rotation, flipX, flipY, outputScale, borders, seeThrough],
   );
 
   /** Copies the flattened image; false when it failed (and said so). */
@@ -2526,6 +2527,7 @@ export default function EditorWindow() {
                         shape={shape}
                         image={image}
                         assets={assetImages}
+                        stampImages={stampImages}
                         step={steps.get(shape.id)}
                         editable={editable && shape !== draft}
                         orientation={oriented ? orientation : undefined}

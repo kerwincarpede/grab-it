@@ -55,7 +55,7 @@ export async function renderCapture(png: ArrayBuffer, annotations: unknown, scal
   // A moved or unreadable backdrop image leaves the plain underlay showing, as in the editor.
   const fill = plan.backdropImage ? await backdropImage(plan.backdropImage).then(loadImage, () => null) : null;
   // Cursor and emoji stamps are images: loaded first, so the one drawing below has them.
-  await loadStampImages(doc.shapes);
+  const stampImages = await loadStampImages(doc.shapes);
   const borders = plan.measureBorders ? measureBorders(image, plan.crop, size, plan.orientation) : null;
   const shown = plan.blurredFill && plan.oriented ? (orientedCanvas(image, { x: 0, y: 0, ...size }, size, plan.orientation) ?? image) : image;
   const badges = stepNumbers(doc.shapes);
@@ -87,6 +87,7 @@ export async function renderCapture(png: ArrayBuffer, annotations: unknown, scal
                 <ShapeNode
                   key={shape.id}
                   shape={shape}
+                  stampImages={stampImages}
                   image={image}
                   step={badges.get(shape.id)}
                   editable={false}

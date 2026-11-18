@@ -9,7 +9,6 @@ import { lensPath, magnifyLinePoints, magnifyScene } from "./magnify";
 import { isIdentity, textSize, uprightTransform, type Orientation } from "./orient";
 import { KEYCAP_FONT, stampBox, stampDef, type IconPart } from "./stamps";
 import { contrastColor, curvePoints, normalizeRect, textLook, textShadowColor, withAlpha, type NodeTransform } from "./tools";
-import { useStampImage } from "./useStampImage";
 
 interface ShapeNodeProps {
   shape: Shape;
@@ -28,6 +27,7 @@ interface ShapeNodeProps {
    * about their centres, so they read upright on the same spot.
    */
   orientation?: Orientation;
+  stampImages?: ReadonlyMap<string, HTMLImageElement>;
   /** The loaded elements of added images, by their `src`. */
   assets?: ReadonlyMap<string, HTMLImageElement>;
 }
@@ -130,14 +130,15 @@ function IconPartNode({ part, color }: { part: IconPart; color: string }) {
  * stamp's colour; cursors and emoji are images that draw once loaded; the
  * keycap is a cap in the colour with its label in a contrasting colour.
  */
-function StampNode({ shape, common, upright, onEditText }: {
+function StampNode({ shape, stampImages, common, upright, onEditText }: {
   shape: StampShape;
+  stampImages?: ReadonlyMap<string, HTMLImageElement>;
   common: object;
   upright: ReturnType<typeof uprightTransform> | null;
   onEditText: (id: string) => void;
 }) {
   const def = stampDef(shape.name);
-  const image = useStampImage(def?.url);
+  const image = def?.url ? stampImages?.get(def.url) : undefined;
   if (!def) return null;
   const { width, height } = stampBox(shape);
   const color = shape.color ?? COLORS[0];
@@ -282,7 +283,7 @@ function calloutScene(shape: CalloutShape, bubble: Box) {
 }
 
 /** One annotation as a Konva node, named by its id so the transformer can find it. */
-export default function ShapeNode({ shape, image, step, editable, onSelect, onChange, onMove, onEditText, orientation, assets }: ShapeNodeProps) {
+export default function ShapeNode({ shape, image, step, editable, onSelect, onChange, onMove, onEditText, orientation, assets, stampImages }: ShapeNodeProps) {
   const upright = orientation && !isIdentity(orientation) ? uprightTransform(orientation) : null;
   const common = {
     id: shape.id,
@@ -467,6 +468,6 @@ export default function ShapeNode({ shape, image, step, editable, onSelect, onCh
       );
     }
     case "stamp":
-      return <StampNode shape={shape} common={common} upright={upright} onEditText={onEditText} />;
+      return <StampNode shape={shape} stampImages={stampImages} common={common} upright={upright} onEditText={onEditText} />;
   }
 }

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type { ReactNode, Ref } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1164,6 +1164,33 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
     await ready();
     await waitFor(() => expect(document.querySelector('[data-konva="Image"][data-id="i1"]')).not.toBeNull());
     expect(calls.filter((call) => call.cmd === "editor_asset_image").map((call) => call.payload)).toEqual([{ name: "kept.png" }]);
+  });
+
+  it("waits for a saved cursor stamp to appear on the layer before copying", async () => {
+    let finish: (() => void) | undefined;
+    vi.stubGlobal("Image", class extends LoadedImage {
+      override set src(url: string) {
+        if (url === "blob:capture") super.src = url;
+        else finish = () => this.onload?.();
+      }
+    });
+    const calls: { cmd: string; payload: unknown }[] = [];
+    mockEditor({ version: 1, shapes: [{ id: "cursor", type: "stamp", name: "cursor-text", x: 50, y: 50, size: 32 }], crop: null }, calls);
+    await ready();
+    await waitFor(() => expect(finish).toBeDefined());
+    const selector = '[data-id="cursor"] [data-konva="Image"]';
+    const snapshot = vi.spyOn(await import("./flatten"), "flatten").mockImplementationOnce(async () => {
+      expect(document.querySelector(selector)).not.toBeNull();
+      return FLATTENED;
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await act(async () => {});
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(document.querySelector(selector)).toBeNull();
+    await act(async () => finish?.());
+    await waitFor(() => expect(calls.some(({ cmd }) => cmd === "editor_copy")).toBe(true));
+    expect(snapshot).toHaveBeenCalledOnce();
+    snapshot.mockRestore();
   });
 
   it("waits for an added image still being read before copying and closing", async () => {
