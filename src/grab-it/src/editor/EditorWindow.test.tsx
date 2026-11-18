@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type { ReactNode, Ref } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import EditorWindow from "./EditorWindow";
 import type { BackdropPreset, EditorPreferences } from "../settings/api";
 import type { OcrLine, ShotText } from "../library/api";
@@ -305,6 +305,8 @@ interface PreferencesMock {
   shotText?: ShotText;
   /** Collects every list of backdrop presets written. */
   presets?: BackdropPreset[][];
+  /** Collects every list of favourite colours written. */
+  favorites?: string[][];
   /** What `editor_words` answers (an Error makes it fail); no words when unset. */
   words?: OcrLine[] | Error | Promise<OcrLine[]>;
   /** What `editor_asset_image` answers; four bytes at once when unset. */
@@ -342,6 +344,13 @@ function mockEditor(
         preferences.presets?.push(presets);
         if (!(preferences.stored instanceof Error)) preferences.stored = { ...preferences.stored, backdropPresets: presets };
         return presets;
+      }
+      case "set_favorite_colors": {
+        // Stored, so the next read sees them, as settings.json would.
+        const colors = (payload as { colors: string[] }).colors;
+        preferences.favorites?.push(colors);
+        if (!(preferences.stored instanceof Error)) preferences.stored = { ...preferences.stored, favoriteColors: colors };
+        return colors;
       }
       case "save_backdrop_preset_image":
         calls.push({ cmd, payload });
@@ -456,7 +465,10 @@ function holdKey(key: string, ms: number, during?: () => void) {
   now.mockRestore();
 }
 
-describe("EditorWindow", () => {
+// Each test mounts the whole editor and takes about a second alone; in a
+// full run beside the other files a slow one can pass the default 5s, and
+// its own waits (asyncUtilTimeout in src/test/setup.ts) need room inside it.
+describe("EditorWindow", { timeout: 20_000 }, () => {
   beforeEach(() => {
     flattened.calls = [];
     flattened.options = [];
@@ -1610,6 +1622,157 @@ describe("EditorWindow", () => {
     expect(screen.getByRole("button", { name: "Colour #30a46c" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.keyDown(window, { key: "7" });
     expect(screen.getByRole("button", { name: "Colour #ffffff" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("saves the colour on show as a favourite after the swatches, and removes one on right-click", async () => {
+    const favorites: string[][] = [];
+    const saved: EditorPreferences[] = [];
+    mockEditor(sidecar, [], { stored: { favoriteColors: ["#ff8800"] }, favorites, saved });
+    await ready();
+    const colours = () => within(screen.getByRole("group", { name: "Colour" }));
+    const favourite = await waitFor(() => colours().getByRole("button", { name: "Favourite colour #ff8800" }));
+    const save = colours().getByRole("button", { name: "Save colour as favourite" });
+    // A built-in colour is not saved again.
+    expect(save).toBeDisabled();
+
+    fireEvent.click(favourite);
+    expect(favourite).toHaveAttribute("aria-pressed", "true");
+    // Saved already.
+    expect(save).toBeDisabled();
+
+    fireEvent.change(colours().getByLabelText("Custom colour"), { target: { value: "#123abc" } });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    expect(colours().getByRole("button", { name: "Favourite colour #123abc" })).toHaveAttribute("aria-pressed", "true");
+    expect(save).toBeDisabled();
+    await waitFor(() => expect(favorites).toEqual([["#ff8800", "#123abc"]]));
+
+    fireEvent.contextMenu(colours().getByRole("button", { name: "Favourite colour #ff8800" }));
+    expect(colours().queryByRole("button", { name: "Favourite colour #ff8800" })).not.toBeInTheDocument();
+    await waitFor(() => expect(last(favorites)).toEqual(["#123abc"]));
+    // The editor's own saves leave the favourites to their command.
+    await waitFor(() => expect(last(saved)).toMatchObject({ color: "#123abc" }));
+    for (const preferences of saved) expect(preferences).not.toHaveProperty("favoriteColors");
+    // The keys still pick the built-in swatches.
+    fireEvent.keyDown(window, { key: "1" });
+    expect(colours().getByRole("button", { name: "Colour #e5484d" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("keeps at most 8 favourites", async () => {
+    const full = Array.from({ length: 8 }, (_, i) => `#0000${i.toString(16).padStart(2, "0")}`);
+    mockEditor(sidecar, [], { stored: { color: "#123abc", favoriteColors: full } });
+    await ready();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Favourite colour #000007" })).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Save colour as favourite" })).toBeDisabled();
+  });
+
+  describe("eyedropper", () => {
+    /** The canvas reads every pixel as #1a2b3c (jsdom has no canvas). */
+    function mockCanvas() {
+      const context = {
+        imageSmoothingEnabled: true,
+        fillStyle: "",
+        fillRect: vi.fn(),
+        drawImage: vi.fn(),
+        getImageData: vi.fn(() => ({ data: new Uint8ClampedArray([26, 43, 60, 255]) })),
+      };
+      canvas.spy = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
+      return context;
+    }
+    const canvas: { spy: { mockRestore: () => void } | null } = { spy: null };
+
+    afterEach(() => {
+      canvas.spy?.mockRestore();
+      canvas.spy = null;
+    });
+
+    const dropper = () => screen.getByRole("button", { name: "Pick colour from capture" });
+    const moveTo = (at: [number, number]) => {
+      Object.assign(pointerAt, { x: at[0], y: at[1] });
+      fireEvent.mouseMove(stage());
+    };
+    const clickAt = (at: [number, number]) => {
+      Object.assign(pointerAt, { x: at[0], y: at[1] });
+      fireEvent.mouseDown(stage());
+      fireEvent.mouseUp(stage());
+    };
+
+    it("picks a colour from the capture with a loupe, then goes back to the tool", async () => {
+      mockCanvas();
+      const saved = mockEditor();
+      await ready();
+      fireEvent.click(pressed("Rectangle"));
+      fireEvent.click(dropper());
+      expect(dropper()).toHaveAttribute("aria-pressed", "true");
+
+      moveTo([120.4, 80.6]);
+      expect(screen.getByTestId("overlay-loupe")).toBeInTheDocument();
+      expect(screen.getByTestId("overlay-position")).toHaveTextContent("120, 80");
+      // Off the capture the loupe goes, and a click there takes nothing.
+      moveTo([500, 80]);
+      expect(screen.queryByTestId("overlay-loupe")).not.toBeInTheDocument();
+      clickAt([500, 80]);
+      expect(dropper()).toHaveAttribute("aria-pressed", "true");
+
+      clickAt([120, 80]);
+      expect(dropper()).toHaveAttribute("aria-pressed", "false");
+      expect(screen.queryByTestId("overlay-loupe")).not.toBeInTheDocument();
+      expect(pressed("Rectangle")).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByLabelText("Custom colour")).toHaveValue("#1a2b3c");
+      // The click picked; it drew nothing.
+      expect(shapeIds()).toEqual(["a1", "t1", "s1", "s2"]);
+
+      // The next shape is drawn in the picked colour.
+      drag([20, 20], [80, 60]);
+      await waitFor(() => expect(last(last(saved)?.shapes ?? [])).toMatchObject({ type: "rect", color: "#1a2b3c" }));
+    });
+
+    it("recolours the selected shape with the picked colour, keeping it selected", async () => {
+      mockCanvas();
+      const saved = mockEditor();
+      await ready();
+      fireEvent.click(pressed("Select"));
+      fireEvent.mouseDown(document.querySelector('[data-id="t1"]') as Element);
+      fireEvent.keyDown(window, { key: "i" });
+      expect(dropper()).toHaveAttribute("aria-pressed", "true");
+
+      clickAt([300, 150]);
+      await waitFor(() => expect(last(saved)?.shapes.find((shape) => shape.id === "t1")).toMatchObject({ color: "#1a2b3c" }));
+      expect(pressed("Select")).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+    });
+
+    it("cancels on Esc, keeping the colour and the selection", async () => {
+      mockCanvas();
+      mockEditor();
+      await ready();
+      fireEvent.click(pressed("Select"));
+      fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+      fireEvent.keyDown(window, { key: "i" });
+      moveTo([120, 80]);
+      expect(screen.getByTestId("overlay-loupe")).toBeInTheDocument();
+
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(dropper()).toHaveAttribute("aria-pressed", "false");
+      expect(screen.queryByTestId("overlay-loupe")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Colour #e5484d" })).toHaveAttribute("aria-pressed", "true");
+      // With the eyedropper away, a click no longer picks.
+      clickAt([120, 80]);
+      expect(screen.getByLabelText("Custom colour")).toHaveValue("#e5484d");
+    });
+
+    it("puts the eyedropper away when a tool is picked, or I is pressed again", async () => {
+      mockEditor();
+      await ready();
+      fireEvent.keyDown(window, { key: "i" });
+      expect(dropper()).toHaveAttribute("aria-pressed", "true");
+      fireEvent.keyDown(window, { key: "i" });
+      expect(dropper()).toHaveAttribute("aria-pressed", "false");
+      fireEvent.click(dropper());
+      fireEvent.click(pressed("Arrow"));
+      expect(dropper()).toHaveAttribute("aria-pressed", "false");
+    });
   });
 
   it("keeps a just-drawn shape selected, so it can be restyled or deleted", async () => {

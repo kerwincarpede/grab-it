@@ -130,6 +130,7 @@ pub fn run() {
             commands::set_auto_backdrop,
             commands::set_show_pointer,
             commands::set_backdrop_presets,
+            commands::set_favorite_colors,
             commands::dismiss_ai_notice,
             commands::open_target,
             commands::get_autostart,

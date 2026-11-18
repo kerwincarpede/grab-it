@@ -197,6 +197,14 @@ export const BackdropIcon = () => (
   </Icon>
 );
 
+export const EyedropperIcon = () => (
+  <Icon>
+    <path d="M14.5 5.5l4 4" />
+    <path d="M16.5 3.5a2.1 2.1 0 013 3l-2 2-3-3z" />
+    <path d="M15.5 8.5L7 17l-3 1 1-3 8.5-8.5" />
+  </Icon>
+);
+
 export const FillIcon = () => (
   <Icon>
     <rect x="4" y="5" width="16" height="14" rx="2" />

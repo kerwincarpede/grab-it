@@ -71,6 +71,7 @@ Tap a tool key to switch to it. Hold it instead, and the old tool comes back whe
 | Key | What it does |
 | --- | --- |
 | `1` to `7` | Pick a colour swatch, in the order of the bar |
+| `I` | Pick a colour from the capture with the eyedropper; click to use it |
 | `[` and `]` | Thinner and thicker (smaller and bigger for text and steps) |
 | Hold `⌘` and drag | Draw a rectangle, whatever the tool |
 | Hold `⌥` (`Alt`) and drag | Draw an arrow, whatever the tool |
@@ -83,7 +84,7 @@ Tap a tool key to switch to it. Hold it instead, and the old tool comes back whe
 | `⌘ D` | Duplicate the selected shape |
 | `⌘ ⌥ ]` and `⌘ ⌥ [` | Bring the selected shape or image forward, and send it backward |
 | `⌘ V` | Paste an image from the clipboard (see [Add images](/grab-it/image-editor/add-images/)) |
-| `Esc` | Deselect, and close any open panel |
+| `Esc` | Put the eyedropper away; otherwise deselect, and close any open panel |
 
 **The whole capture**
 

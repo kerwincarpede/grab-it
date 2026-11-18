@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CHOICES, fromPreferences, parseBackdropPresets, toPreferences } from "./preferences";
+import { canSaveFavorite, DEFAULT_CHOICES, fromPreferences, parseBackdropPresets, parseFavoriteColors, toPreferences } from "./preferences";
 
 describe("editor preferences", () => {
   it("falls back to today's defaults when nothing is stored", () => {
@@ -124,5 +124,28 @@ describe("editor preferences", () => {
     const backdrop = { fill: "ocean", padding: 64, radius: 36, shadow: true };
     const stored = Array.from({ length: 30 }, (_, i) => ({ id: `p${i}`, name: `Preset ${i}`, backdrop }));
     expect(parseBackdropPresets(stored)).toHaveLength(24);
+  });
+
+  it("reads favourite colours, lower-cased and each once, but never writes them", () => {
+    const stored = ["#FF8800", 3, "red", "#ff8800", "#123abc"];
+    expect(parseFavoriteColors(stored)).toEqual(["#ff8800", "#123abc"]);
+    expect(fromPreferences({ favoriteColors: stored as never }).favoriteColors).toEqual(["#ff8800", "#123abc"]);
+    expect(fromPreferences({ favoriteColors: [] })).toEqual(DEFAULT_CHOICES);
+    expect(parseFavoriteColors("#ff8800")).toEqual([]);
+    expect(toPreferences({ ...DEFAULT_CHOICES, favoriteColors: ["#ff8800"] })).not.toHaveProperty("favoriteColors");
+  });
+
+  it("keeps at most 8 favourite colours", () => {
+    const stored = Array.from({ length: 12 }, (_, i) => `#0000${i.toString(16).padStart(2, "0")}`);
+    expect(parseFavoriteColors(stored)).toEqual(stored.slice(0, 8));
+  });
+
+  it("saves a favourite only when it is new, not built in, and there is room", () => {
+    expect(canSaveFavorite([], "#FF8800")).toBe(true);
+    expect(canSaveFavorite(["#ff8800"], "#FF8800")).toBe(false);
+    // The built-in red.
+    expect(canSaveFavorite([], "#E5484D")).toBe(false);
+    const full = Array.from({ length: 8 }, (_, i) => `#0000${i.toString(16).padStart(2, "0")}`);
+    expect(canSaveFavorite(full, "#ff8800")).toBe(false);
   });
 });

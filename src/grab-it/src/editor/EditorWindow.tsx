@@ -5,7 +5,8 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import "./editor.css";
-import { getEditorPreferences, MAX_BACKDROP_PRESETS, setBackdropPresets } from "../settings/api";
+import { getEditorPreferences, MAX_BACKDROP_PRESETS, MAX_FAVORITE_COLORS, setBackdropPresets, setFavoriteColors } from "../settings/api";
+import Loupe from "../overlay/Loupe";
 import {
   addClipboardImage,
   addImageFile,
@@ -21,6 +22,7 @@ import {
 import BackdropPanel from "./BackdropPanel";
 import { defaultTailOffset } from "./callout";
 import { copyShotText, hasShotText, textCopied, watchShotText, type OcrLine, type ShotText } from "../library/api";
+import { capturePixel, pixelColor } from "./eyedropper";
 import { blursFor, findDetails, findWord, wordAt } from "./redact";
 import { imageEdges, NO_EDGES, orientEdges, type Edges } from "./edges";
 import { bandReach, fitToBand, imageTextBand } from "./textBand";
@@ -63,6 +65,7 @@ import {
   CopyTextIcon,
   CropResetIcon,
   ExportIcon,
+  EyedropperIcon,
   FillIcon,
   FitIcon,
   FlipHorizontalIcon,
@@ -127,7 +130,15 @@ import {
   withScale,
   type Orientation,
 } from "./orient";
-import { DEFAULT_CHOICES, parseBackdropPresets, presetName, type EditorChoices, type SavedBackdrop } from "./preferences";
+import {
+  canSaveFavorite,
+  DEFAULT_CHOICES,
+  parseBackdropPresets,
+  parseFavoriteColors,
+  presetName,
+  type EditorChoices,
+  type SavedBackdrop,
+} from "./preferences";
 import {
   builtInImage,
   changePointerLook,
@@ -592,6 +603,18 @@ export default function EditorWindow() {
    * settings.json holds it at that moment, never on this window's copy.
    */
   const presetsQueue = useRef<Promise<void>>(Promise.resolve());
+  /**
+   * The colours saved beside the built-in swatches; null until settings.json
+   * is read. Kept like the presets: on show at once, and each change made
+   * again on the stored list, one after another.
+   */
+  const [favorites, setFavorites] = useState<string[] | null>(null);
+  const favoritesRef = useRef<string[] | null>(null);
+  const favoritesQueue = useRef<Promise<void>>(Promise.resolve());
+  /** The eyedropper is out: the next click on the capture takes its colour. The tool stays as it was. */
+  const [eyedropper, setEyedropper] = useState(false);
+  /** Where the eyedropper's loupe is: the pointer on the canvas (CSS pixels) and the capture pixel under it. */
+  const [dropperAt, setDropperAt] = useState<{ pointer: Point; pixel: Point } | null>(null);
   const autoApplied = useRef(false);
   /** "Show the pointer in new captures": whether a pointer not yet edited shows. */
   const [pointerByDefault, setPointerByDefault] = useState(false);
@@ -615,6 +638,8 @@ export default function EditorWindow() {
     setPointerByDefault(choices.showPointer === true);
     presetsRef.current = choices.backdropPresets ?? [];
     setPresets(presetsRef.current);
+    favoritesRef.current = choices.favoriteColors ?? [];
+    setFavorites(favoritesRef.current);
   }, []);
   const choices = useMemo(() => ({ tool, style, widths, backdrop: lastBackdrop }), [tool, style, widths, lastBackdrop]);
   useEditorPreferences(choices, restoreChoices);
@@ -823,7 +848,7 @@ export default function EditorWindow() {
    * drawing tools too (a drag that starts on a shape moves it). Crop, Cut
    * out and panning leave them alone.
    */
-  const editable = !panning && tool !== "crop" && tool !== "cut";
+  const editable = !panning && tool !== "crop" && tool !== "cut" && !eyedropper;
 
   /** Arrows and lines get their own bend and end handles (LineHandles) instead of the box. */
   const lineSelected = hasLineHandles(selected);
@@ -958,6 +983,11 @@ export default function EditorWindow() {
     }
     // Right-click opens the tool wheel (see onContextMenu).
     if (event.evt.button !== 0) return;
+    // The eyedropper takes the click, whatever is under it; Space still pans.
+    if (eyedropper && !spaceHeld) {
+      pickColorAt();
+      return;
+    }
     // ⌘-drag draws a rectangle and ⌥-drag an arrow from any tool (⌥ with Crop or Cut out works unsnapped); Space still pans.
     const override = modifierTool(event.evt, tool);
     if (spaceHeld || (panning && !override)) return;
@@ -1019,6 +1049,7 @@ export default function EditorWindow() {
   };
 
   const onMouseMove = (event: Konva.KonvaEventObject<MouseEvent>) => {
+    if (eyedropper) followDropper();
     if (!draft && !cropDrag && !calloutDrag && !cutDrag) return;
     const at = pointer();
     if (!at) return;
@@ -1099,6 +1130,8 @@ export default function EditorWindow() {
   const pickTool = useCallback((next: Tool) => {
     setTool(next);
     setWheelAt(null);
+    setEyedropper(false);
+    setDropperAt(null);
     if (next !== "select") setSelectedId(null);
   }, []);
 
@@ -1227,6 +1260,75 @@ export default function EditorWindow() {
     },
     [restyleSelected],
   );
+
+  /** Puts the eyedropper away, leaving the tool and the selection as they were. */
+  const stopEyedropper = useCallback(() => {
+    setEyedropper(false);
+    setDropperAt(null);
+  }, []);
+
+  /** Takes out the eyedropper, or puts it away when it is already out. */
+  const toggleEyedropper = useCallback(() => {
+    if (eyedropper) {
+      stopEyedropper();
+      return;
+    }
+    setEyedropper(true);
+    setWheelAt(null);
+  }, [eyedropper, stopEyedropper]);
+
+  /** Moves the eyedropper's loupe to the capture pixel under the pointer; off the capture it hides. */
+  const followDropper = () => {
+    const onCanvas = stageRef.current?.getPointerPosition();
+    const at = pointer();
+    const pixel = at && imageSize ? capturePixel(at, imageSize) : null;
+    setDropperAt(onCanvas && pixel ? { pointer: onCanvas, pixel } : null);
+  };
+
+  /**
+   * Takes the colour of the capture pixel under the pointer, for the next
+   * shape and the selected one, and puts the eyedropper away. A click off
+   * the capture takes nothing and keeps it out.
+   */
+  const pickColorAt = () => {
+    const at = pointer();
+    const pixel = at && imageSize ? capturePixel(at, imageSize) : null;
+    if (!pixel || !image) return;
+    const color = pixelColor(image, pixel);
+    stopEyedropper();
+    if (color) changeStyle({ color });
+    else setMessage("Could not read the colour there.");
+  };
+
+  /** Shows the favourites another editor window may have changed since they were read. */
+  const showFavorites = (next: string[]) => {
+    favoritesRef.current = next;
+    setFavorites(next);
+  };
+
+  /**
+   * Changes the favourite colours with `update`: on show straight away, then
+   * made again on the stored list and written whole to settings.json, so a
+   * change in another editor window is never lost.
+   */
+  const changeFavorites = (update: (colors: string[]) => string[]) => {
+    if (!favoritesRef.current) return;
+    showFavorites(update(favoritesRef.current));
+    favoritesQueue.current = favoritesQueue.current
+      .then(async () => {
+        const stored = parseFavoriteColors((await getEditorPreferences()).favoriteColors);
+        showFavorites(parseFavoriteColors(await setFavoriteColors(update(stored))));
+      })
+      .catch((err: unknown) => setMessage(`Could not save favourites: ${errorText(err)}`));
+  };
+
+  /** Saves the colour on show as a favourite, after the others; a built-in or saved colour is left alone. */
+  const saveFavorite = () => {
+    const color = style.color.toLowerCase();
+    changeFavorites((colors) => (canSaveFavorite(colors, color) ? [...colors, color] : colors));
+  };
+
+  const removeFavorite = (color: string) => changeFavorites((colors) => colors.filter((candidate) => candidate !== color));
 
   // Options for the active tool, or for the selected shape when there is one.
   const optionsFor = selected?.type ?? tool;
@@ -1661,6 +1763,9 @@ export default function EditorWindow() {
         nudgeSelected(nudge);
       } else if (event.key === "Delete" || event.key === "Backspace") {
         removeSelected();
+      } else if (event.key === "Escape" && eyedropper) {
+        // Esc puts the eyedropper away and nothing else: the selection stays.
+        stopEyedropper();
       } else if (event.key === "Escape") {
         setSelectedId(null);
         setDraft(null);
@@ -1678,6 +1783,8 @@ export default function EditorWindow() {
         stepWidth(event.key === "[" ? -1 : 1);
       } else if (swatch) {
         changeStyle({ color: swatch });
+      } else if (!mod && !event.altKey && key === "i") {
+        if (!event.repeat && image) toggleEyedropper();
       } else if (!mod && !event.altKey) {
         const match = TOOLS.find((entry) => entry.key === key);
         // A held key repeats: only the first press switches and starts the hold.
@@ -1706,7 +1813,7 @@ export default function EditorWindow() {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [undoDoc, redoDoc, copy, copyAndClose, removeSelected, duplicateSelected, nudgeSelected, reorderSelected, pasteImage, selectedId, changeStyle, stepWidth, pickTool, restoreTool, tool, image, rotateBy]);
+  }, [undoDoc, redoDoc, copy, copyAndClose, removeSelected, duplicateSelected, nudgeSelected, reorderSelected, pasteImage, selectedId, changeStyle, stepWidth, pickTool, restoreTool, tool, image, rotateBy, eyedropper, stopEyedropper, toggleEyedropper]);
 
   // A dropped image file goes on the capture, centred where it was dropped.
   const dropView = useRef({ view: currentView, imageSize, orientation });
@@ -1852,6 +1959,36 @@ export default function EditorWindow() {
                 onClick={() => changeStyle({ color })}
               />
             ))}
+            {favorites?.map((color) => (
+              <button
+                key={color}
+                type="button"
+                className="swatch favorite"
+                style={{ background: color }}
+                aria-label={`Favourite colour ${color}`}
+                title={`${color} (right-click to remove)`}
+                aria-pressed={style.color === color}
+                onClick={() => changeStyle({ color })}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  removeFavorite(color);
+                }}
+              />
+            ))}
+            <button
+              type="button"
+              className="swatch add-favorite"
+              aria-label="Save colour as favourite"
+              title={
+                favorites && favorites.length >= MAX_FAVORITE_COLORS
+                  ? `Up to ${MAX_FAVORITE_COLORS} favourites: right-click one to remove it`
+                  : "Save this colour as a favourite"
+              }
+              disabled={!favorites || !canSaveFavorite(favorites, style.color)}
+              onClick={saveFavorite}
+            >
+              +
+            </button>
             <input
               className="swatch custom"
               aria-label="Custom colour"
@@ -1860,6 +1997,17 @@ export default function EditorWindow() {
               value={style.color}
               onChange={(event) => changeStyle({ color: event.target.value })}
             />
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Pick colour from capture"
+              title="Pick a colour from the capture (I)"
+              aria-pressed={eyedropper}
+              disabled={!image}
+              onClick={toggleEyedropper}
+            >
+              <EyedropperIcon />
+            </button>
           </div>
         )}
         {width && <WidthControl kind={width} value={shownWidth} color={selected && "color" in selected ? selected.color : style.color} onChange={changeWidth} />}
@@ -2184,7 +2332,12 @@ export default function EditorWindow() {
             </Fragment>
           ))}
         </div>
-        <div ref={container} className={`editor-canvas tool-${panning ? "pan" : tool}`} onContextMenu={onContextMenu}>
+        <div
+          ref={container}
+          className={`editor-canvas tool-${panning ? "pan" : tool}${eyedropper && !panning ? " picking" : ""}`}
+          onContextMenu={onContextMenu}
+          onMouseLeave={() => setDropperAt(null)}
+        >
           {error && <p className="editor-error">{error}</p>}
           {image && (
             <Stage
@@ -2438,6 +2591,9 @@ export default function EditorWindow() {
                 )}
               </Layer>
             </Stage>
+          )}
+          {eyedropper && dropperAt && image && (
+            <Loupe image={image} pointer={dropperAt.pointer} pixel={dropperAt.pixel} scale={1} viewport={size} />
           )}
           {wheelAt && <ToolWheel at={wheelAt} active={tool} onPick={pickTool} onClose={closeWheel} />}
           {textDraft && (

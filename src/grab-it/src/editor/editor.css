@@ -192,6 +192,22 @@
     0 0 0 4px var(--ed-accent);
 }
 
+/* Saves the colour on show as a favourite, after the saved ones. */
+.editor .swatch.add-favorite {
+  display: inline-grid;
+  place-items: center;
+  border: 1px dashed var(--ed-muted);
+  background: none;
+  color: var(--ed-muted);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.editor .swatch.add-favorite:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .editor input[type="color"] {
   overflow: hidden;
   background: none;
@@ -547,6 +563,15 @@
 
 .editor-canvas.tool-pan {
   cursor: grab;
+}
+
+/* The eyedropper is out: its loupe shows the pixel under the crosshair. */
+.editor-canvas.picking {
+  cursor: crosshair;
+}
+
+.editor-canvas .overlay-loupe {
+  z-index: 4;
 }
 
 /* The right-click tool wheel: a ring of tools centred on the pointer. */
