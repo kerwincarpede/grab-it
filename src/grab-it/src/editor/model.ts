@@ -134,7 +134,7 @@ export interface MagnifyShape extends Stroked, Rect {
 /**
  * An image added on top of the capture, by drop or paste. `src` is a file
  * name inside `<capture>.assets/`, never a path. It may sit past the
- * capture's edges; the canvas then grows to fit (see `canvasRect`).
+ * capture's edges; the canvas then grows to fit (see `canvasBounds`).
  */
 export interface ImageShape extends Rect {
   id: string;
@@ -542,7 +542,7 @@ export function backdropColors(fill: string): string[] {
  * around the capture and every image, which starts at negative x or y when
  * an image sits above or left of the capture. Derived, never saved.
  */
-export function canvasRect(imageSize: { width: number; height: number }, shapes: Shape[]): Rect {
+export function canvasBounds(imageSize: { width: number; height: number }, shapes: Shape[]): Rect {
   let left = 0;
   let top = 0;
   let right = imageSize.width;
@@ -555,6 +555,11 @@ export function canvasRect(imageSize: { width: number; height: number }, shapes:
     bottom = Math.max(bottom, Math.ceil(shape.y + shape.height));
   }
   return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+/** Whether a canvas reaches past the capture of `imageSize`, so part of it may be clear. */
+export function isGrown(canvas: Rect, imageSize: { width: number; height: number }): boolean {
+  return canvas.x < 0 || canvas.y < 0 || canvas.x + canvas.width > imageSize.width || canvas.y + canvas.height > imageSize.height;
 }
 
 export function emptyAnnotations(): Annotations {

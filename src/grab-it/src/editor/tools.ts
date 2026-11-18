@@ -15,7 +15,7 @@ import {
   type TextShape,
   type Tool,
 } from "./model";
-import { toCapture, type Orientation } from "./orient";
+import { boundsEdges, toCapture, type Bounds, type Orientation } from "./orient";
 
 /** How far a duplicate lands from its original, in capture pixels. */
 export const DUPLICATE_OFFSET = 12;
@@ -258,26 +258,29 @@ export function cropDragRatio(ratio: number | null, shift: boolean): number | nu
 
 /**
  * The box a crop drag from `start` to `end` covers, in whole pixels inside
- * the image. With a `ratio` (width over height) the box keeps it from the
- * start corner, its longer side following the pointer, and shrinks to fit
- * when it would leave the image. May be empty; see `cropFromDrag`.
+ * `bounds` (the capture, or the canvas grown by added images). With a
+ * `ratio` (width over height) the box keeps it from the start corner, its
+ * longer side following the pointer, and shrinks to fit when it would leave
+ * the bounds. May be empty; see `cropFromDrag`.
  */
-export function cropBox(start: Point, end: Point, image: Size, ratio: number | null = null): Rect {
+export function cropBox(start: Point, end: Point, bounds: Bounds, ratio: number | null = null): Rect {
+  const { left, top, right: maxX, bottom: maxY } = boundsEdges(bounds);
+  const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, Math.round(value)));
   if (!ratio) {
     const rect = normalizeRect({ x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y });
-    const x = Math.min(image.width, Math.max(0, Math.round(rect.x)));
-    const y = Math.min(image.height, Math.max(0, Math.round(rect.y)));
-    const right = Math.max(x, Math.min(image.width, Math.round(rect.x + rect.width)));
-    const bottom = Math.max(y, Math.min(image.height, Math.round(rect.y + rect.height)));
+    const x = clamp(rect.x, left, maxX);
+    const y = clamp(rect.y, top, maxY);
+    const right = clamp(rect.x + rect.width, x, maxX);
+    const bottom = clamp(rect.y + rect.height, y, maxY);
     return { x, y, width: right - x, height: bottom - y };
   }
-  const sx = Math.min(image.width, Math.max(0, Math.round(start.x)));
-  const sy = Math.min(image.height, Math.max(0, Math.round(start.y)));
+  const sx = clamp(start.x, left, maxX);
+  const sy = clamp(start.y, top, maxY);
   const dx = end.x - sx;
   const dy = end.y - sy;
-  // The room left between the start corner and the image edge the drag heads for.
-  const roomX = dx < 0 ? sx : image.width - sx;
-  const roomY = dy < 0 ? sy : image.height - sy;
+  // The room left between the start corner and the edge the drag heads for.
+  const roomX = dx < 0 ? sx - left : maxX - sx;
+  const roomY = dy < 0 ? sy - top : maxY - sy;
   const exact = Math.min(Math.max(Math.abs(dx), Math.abs(dy) * ratio), roomX, roomY * ratio);
   const width = Math.min(roomX, Math.round(exact));
   const height = Math.min(roomY, Math.round(exact / ratio));
@@ -285,11 +288,11 @@ export function cropBox(start: Point, end: Point, image: Size, ratio: number | n
 }
 
 /**
- * A finished crop drag, clipped to the image, or null for a stray click.
+ * A finished crop drag, clipped to `bounds`, or null for a stray click.
  * With a `ratio` the crop keeps it (see `cropBox`).
  */
-export function cropFromDrag(start: Point, end: Point, image: Size, ratio: number | null = null): Rect | null {
-  const box = cropBox(start, end, image, ratio);
+export function cropFromDrag(start: Point, end: Point, bounds: Bounds, ratio: number | null = null): Rect | null {
+  const box = cropBox(start, end, bounds, ratio);
   return box.width < MIN_SIZE || box.height < MIN_SIZE ? null : box;
 }
 
@@ -306,19 +309,20 @@ export function fitCropToRatio(crop: Rect, ratio: number): Rect {
   };
 }
 
-/** A crop moved so its corner is at `to`, kept whole inside the image and in whole pixels. */
-export function moveCrop(crop: Rect, to: Point, image: Size): Rect {
-  const clamp = (value: number, max: number) => Math.min(Math.max(0, max), Math.max(0, Math.round(value)));
-  return { ...crop, x: clamp(to.x, image.width - crop.width), y: clamp(to.y, image.height - crop.height) };
+/** A crop moved so its corner is at `to`, kept whole inside `bounds` and in whole pixels. */
+export function moveCrop(crop: Rect, to: Point, bounds: Bounds): Rect {
+  const { left, top, right, bottom } = boundsEdges(bounds);
+  const clamp = (value: number, min: number, max: number) => Math.min(Math.max(min, max), Math.max(min, Math.round(value)));
+  return { ...crop, x: clamp(to.x, left, right - crop.width), y: clamp(to.y, top, bottom - crop.height) };
 }
 
 /**
  * Where a crop resized from `from` to the handle box `box` ends up: the
- * edges that stayed put hold still, the box is clipped to the image, and
+ * edges that stayed put hold still, the box is clipped to `bounds`, and
  * with a `ratio` it keeps that ratio, shrinking to fit. A resize that would
  * leave the crop smaller than `MIN_SIZE` keeps `from`.
  */
-export function resizeCrop(from: Rect, box: Rect, image: Size, ratio: number | null = null): Rect {
+export function resizeCrop(from: Rect, box: Rect, bounds: Bounds, ratio: number | null = null): Rect {
   const next = normalizeRect(box);
   const right = next.x + next.width;
   const bottom = next.y + next.height;
@@ -327,7 +331,7 @@ export function resizeCrop(from: Rect, box: Rect, image: Size, ratio: number | n
   const topHeld = Math.abs(next.y - from.y) <= Math.abs(bottom - (from.y + from.height));
   const start = { x: leftHeld ? next.x : right, y: topHeld ? next.y : bottom };
   const end = { x: leftHeld ? right : next.x, y: topHeld ? bottom : next.y };
-  return cropFromDrag(start, end, image, ratio) ?? from;
+  return cropFromDrag(start, end, bounds, ratio) ?? from;
 }
 
 /** Crop edges snap to a line within this many screen pixels (divide by the view scale for capture pixels). */
@@ -379,23 +383,32 @@ export function nearestLine(value: number, lines: number[], threshold: number): 
   return best;
 }
 
-/** The lines along one axis a crop snaps to: the image's two borders plus those found in it. */
-function axisLines(found: number[], limit: number): number[] {
-  return [0, ...found.filter((line) => line > 0 && line < limit), limit];
+/** The lines along one axis a crop snaps to: the bounds' two edges plus those found between them. */
+function axisLines(found: number[], min: number, max: number): number[] {
+  return [min, ...found.filter((line) => line > min && line < max), max];
 }
 
 /**
  * One axis of a free snap: `start` and `size` along it, with either side,
  * or both (a move), drawn to the nearest line. A snap that would leave the
- * image or the crop smaller than `MIN_SIZE` is dropped.
+ * bounds (`min` to `max`) or the crop smaller than `MIN_SIZE` is dropped.
  */
-function snapSpan(start: number, size: number, moveStart: boolean, moveEnd: boolean, lines: number[], threshold: number, limit: number): [number, number] {
+function snapSpan(
+  start: number,
+  size: number,
+  moveStart: boolean,
+  moveEnd: boolean,
+  lines: number[],
+  threshold: number,
+  min: number,
+  max: number,
+): [number, number] {
   const end = start + size;
   if (moveStart && moveEnd) {
     const toStart = nearestLine(start, lines, threshold);
     const toEnd = nearestLine(end, lines, threshold);
     const shifts = [toStart === null ? null : toStart - start, toEnd === null ? null : toEnd - end]
-      .filter((shift): shift is number => shift !== null && start + shift >= 0 && end + shift <= limit)
+      .filter((shift): shift is number => shift !== null && start + shift >= min && end + shift <= max)
       .sort((a, b) => Math.abs(a) - Math.abs(b));
     return shifts.length ? [start + shifts[0], size] : [start, size];
   }
@@ -411,20 +424,21 @@ function snapSpan(start: number, size: number, moveStart: boolean, moveEnd: bool
 
 /**
  * The crop with its `moving` sides snapped to the nearest of `lines` or
- * the image borders within `threshold` capture pixels. A crop being moved
+ * the edges of `bounds` within `threshold` pixels. A crop being moved
  * (both sides of an axis) shifts to whichever side is nearer a line. With a
  * `ratio` (width over height), only the dragged side snaps and the other
  * follows from the ratio; at a corner the nearer snap wins, and a snap that
- * would leave the image is dropped. Without a snap the crop is unchanged.
+ * would leave the bounds is dropped. Without a snap the crop is unchanged.
  */
-export function snapCropEdges(crop: Rect, moving: CropSides, lines: SnapLines, threshold: number, image: Size, ratio: number | null = null): Rect {
-  const xs = axisLines(lines.x, image.width);
-  const ys = axisLines(lines.y, image.height);
+export function snapCropEdges(crop: Rect, moving: CropSides, lines: SnapLines, threshold: number, bounds: Bounds, ratio: number | null = null): Rect {
+  const edges = boundsEdges(bounds);
+  const xs = axisLines(lines.x, edges.left, edges.right);
+  const ys = axisLines(lines.y, edges.top, edges.bottom);
   const moveX = moving.left && moving.right;
   const moveY = moving.top && moving.bottom;
   if (!ratio || moveX || moveY) {
-    const [x, width] = snapSpan(crop.x, crop.width, moving.left, moving.right, xs, threshold, image.width);
-    const [y, height] = snapSpan(crop.y, crop.height, moving.top, moving.bottom, ys, threshold, image.height);
+    const [x, width] = snapSpan(crop.x, crop.width, moving.left, moving.right, xs, threshold, edges.left, edges.right);
+    const [y, height] = snapSpan(crop.y, crop.height, moving.top, moving.bottom, ys, threshold, edges.top, edges.bottom);
     return { x, y, width, height };
   }
   const left = crop.x;
@@ -439,7 +453,12 @@ export function snapCropEdges(crop: Rect, moving: CropSides, lines: SnapLines, t
     height,
   });
   const inside = (rect: Rect) =>
-    rect.width >= MIN_SIZE && rect.height >= MIN_SIZE && rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= image.width && rect.y + rect.height <= image.height;
+    rect.width >= MIN_SIZE &&
+    rect.height >= MIN_SIZE &&
+    rect.x >= edges.left &&
+    rect.y >= edges.top &&
+    rect.x + rect.width <= edges.right &&
+    rect.y + rect.height <= edges.bottom;
   const candidates: { rect: Rect; distance: number }[] = [];
   if (moving.left || moving.right) {
     const edge = moving.left ? left : right;
@@ -463,20 +482,32 @@ export function snapCropEdges(crop: Rect, moving: CropSides, lines: SnapLines, t
 
 /**
  * A crop drag from `start` to `end` (see `cropBox`) snapped to `lines` and
- * the image borders within `threshold`: the start corner snaps, then the
+ * the edges of `bounds` within `threshold`: the start corner snaps, then the
  * dragged sides (see `snapCropEdges`). A drag too small to be a crop is
  * left as it is, so a stray click near a corner stays a stray click.
  */
-export function snapCropDrag(start: Point, end: Point, image: Size, ratio: number | null, lines: SnapLines, threshold: number): Rect {
-  const raw = cropBox(start, end, image, ratio);
+export function snapCropDrag(start: Point, end: Point, bounds: Bounds, ratio: number | null, lines: SnapLines, threshold: number): Rect {
+  const raw = cropBox(start, end, bounds, ratio);
   if (raw.width < MIN_SIZE || raw.height < MIN_SIZE) return raw;
+  const edges = boundsEdges(bounds);
   const from = {
-    x: nearestLine(start.x, axisLines(lines.x, image.width), threshold) ?? start.x,
-    y: nearestLine(start.y, axisLines(lines.y, image.height), threshold) ?? start.y,
+    x: nearestLine(start.x, axisLines(lines.x, edges.left, edges.right), threshold) ?? start.x,
+    y: nearestLine(start.y, axisLines(lines.y, edges.top, edges.bottom), threshold) ?? start.y,
   };
-  const box = cropBox(from, end, image, ratio);
+  const box = cropBox(from, end, bounds, ratio);
   const sides = { left: end.x < from.x, right: end.x >= from.x, top: end.y < from.y, bottom: end.y >= from.y };
-  return snapCropEdges(box, sides, lines, threshold, image, ratio);
+  return snapCropEdges(box, sides, lines, threshold, bounds, ratio);
+}
+
+/**
+ * Snap lines with the capture's own borders added, for a canvas grown past
+ * it: the capture's edge is where a crop of one screenshot most often ends.
+ * `shown` is the capture as it shows (display space starts at its corner).
+ */
+export function withCaptureBorders(lines: SnapLines, shown: Size): SnapLines {
+  const ascending = (a: number, b: number) => a - b;
+  const add = (found: number[], max: number) => [...new Set([...found, 0, max])].sort(ascending);
+  return { x: add(lines.x, shown.width), y: add(lines.y, shown.height) };
 }
 
 /**

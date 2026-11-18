@@ -12,7 +12,7 @@ import {
   type Point,
   type Rect,
 } from "./model";
-import { IDENTITY, isIdentity, orientationOf, orientedCanvas, orientRect, scaledSize, type Orientation } from "./orient";
+import { displaySize, IDENTITY, isIdentity, orientationOf, orientedCanvas, orientRect, scaledSize, type Orientation } from "./orient";
 
 export interface View {
   scale: number;
@@ -25,15 +25,17 @@ export type ExportFormat = "png" | "jpg";
 /**
  * The area to flatten, in stage (screen) pixels, and the ratio that maps it
  * back to capture pixels. The crop is in capture pixels; what is flattened
- * is the crop as it shows, turned and mirrored by `orientation`.
+ * is the crop as it shows, turned and mirrored by `orientation`. Without a
+ * crop it is the whole `canvas` (see `canvasBounds`), the capture by default.
  */
 export function exportArea(
   crop: Rect | null | undefined,
   image: { width: number; height: number },
   view: View,
   orientation: Orientation = IDENTITY,
+  canvas: Rect = { x: 0, y: 0, width: image.width, height: image.height },
 ) {
-  const area = orientRect(crop ?? { x: 0, y: 0, width: image.width, height: image.height }, image, orientation);
+  const area = orientRect(crop ?? canvas, image, orientation);
   return {
     x: view.x + area.x * view.scale,
     y: view.y + area.y * view.scale,
@@ -488,6 +490,74 @@ export interface ComposeOptions extends BackdropSources {
    * through the gaps.
    */
   seeThrough?: boolean;
+  /**
+   * The source has clear parts (a canvas grown past the capture by added
+   * images): the shadow then follows its own alpha (see `shadowPlate`), so
+   * what nothing covers stays clear.
+   */
+  clear?: boolean;
+}
+
+/**
+ * Whether the exported `area` (on show) reaches past the capture of
+ * `image`, so parts of it may be clear. Without added images past the
+ * capture it never does, and the whole area is opaque.
+ */
+export function reachesPast(area: Rect, image: { width: number; height: number }, orientation: Orientation = IDENTITY): boolean {
+  const shown = displaySize(image, orientation);
+  return area.x < 0 || area.y < 0 || area.x + area.width > shown.width || area.y + area.height > shown.height;
+}
+
+/**
+ * A black silhouette of `source` (`size` pixels), rounded at its corners by
+ * `radius`: black wherever the source has pixels, as see-through as they
+ * are, and clear elsewhere. It casts the shadow under a canvas with clear
+ * parts, so a transparent margin in an added image casts none. Null
+ * without a 2D canvas.
+ */
+export function shadowPlate(source: CanvasImageSource, size: { width: number; height: number }, radius: number): HTMLCanvasElement | null {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(size.width));
+  canvas.height = Math.max(1, Math.round(size.height));
+  let ctx: CanvasRenderingContext2D | null;
+  try {
+    ctx = canvas.getContext("2d");
+  } catch {
+    return null;
+  }
+  if (!ctx) return null;
+  ctx.beginPath();
+  roundedRectPath(ctx, { x: 0, y: 0, width: size.width, height: size.height }, radius);
+  ctx.clip();
+  ctx.drawImage(source, 0, 0, size.width, size.height);
+  // Keeps the source's alpha, in black.
+  ctx.globalCompositeOperation = "source-in";
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, size.width, size.height);
+  return canvas;
+}
+
+/**
+ * How far left the silhouette is drawn, its shadow offset back by as much:
+ * past its own blurred shadow, so only the shadow shows and the
+ * silhouette never darkens see-through pixels drawn over it.
+ */
+export function shadowShift(width: number, blur: number): number {
+  return Math.ceil(width + blur * 3 + 1);
+}
+
+/**
+ * The part of `area` the blurred fill blurs: where it overlaps the capture
+ * (`capture`, the capture's size in the same space), as the blur shows the
+ * capture's colours only. The whole capture when they do not overlap.
+ */
+export function blurArea(area: Rect, capture: { width: number; height: number }): Rect {
+  const left = Math.max(0, area.x);
+  const top = Math.max(0, area.y);
+  const right = Math.min(capture.width, area.x + area.width);
+  const bottom = Math.min(capture.height, area.y + area.height);
+  if (right <= left || bottom <= top) return { x: 0, y: 0, width: capture.width, height: capture.height };
+  return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 /** Draws the flattened capture on its backdrop: fill, shadow, then the capture with rounded corners. */
@@ -524,7 +594,18 @@ export function composeBackdrop(source: HTMLCanvasElement, backdrop: Backdrop, o
       return canvas;
     }
   }
-  if (layout.shadow) {
+  const plate = layout.shadow && options.clear ? shadowPlate(source, source, layout.radius) : null;
+  if (layout.shadow && plate) {
+    // Only what has pixels casts the shadow, as see-through as it is: a solid plate would show through the clear parts.
+    const shift = shadowShift(source.width, layout.shadow.blur);
+    ctx.save();
+    ctx.shadowColor = `rgba(0, 0, 0, ${layout.shadow.opacity})`;
+    ctx.shadowBlur = layout.shadow.blur;
+    ctx.shadowOffsetX = shift;
+    ctx.shadowOffsetY = layout.shadow.offsetY;
+    ctx.drawImage(plate, layout.x - shift, layout.y);
+    ctx.restore();
+  } else if (layout.shadow) {
     // An opaque plate the size of the capture casts the shadow; the capture covers it.
     ctx.save();
     ctx.shadowColor = `rgba(0, 0, 0, ${layout.shadow.opacity})`;
@@ -587,12 +668,19 @@ export function onWhite(source: HTMLCanvasElement): HTMLCanvasElement {
   return canvas;
 }
 
+/** How to flatten: the backdrop's options, and the canvas when added images grow it. */
+export interface FlattenOptions extends Omit<ComposeOptions, "clear"> {
+  /** What is exported without a crop, in capture pixels (see `canvasBounds`); the capture by default. */
+  canvas?: Rect;
+}
+
 /**
  * Renders the capture and its annotations (the content layer only, never
  * the selection handles) at capture resolution, cropped, turned and
  * mirrored as the layer shows it, then framed by the backdrop when there is
- * one, then resized by `scale`. A transparent backdrop stays transparent in
- * a PNG.
+ * one, then resized by `scale`. Without a crop the whole canvas is
+ * rendered; what no image covers stays transparent in a PNG, as a
+ * transparent backdrop does.
  */
 export async function flatten(
   layer: Konva.Layer,
@@ -600,10 +688,14 @@ export async function flatten(
   image: { width: number; height: number },
   view: View,
   format: ExportFormat,
-  options: ComposeOptions = {},
+  options: FlattenOptions = {},
 ): Promise<Uint8Array> {
-  const flat = layer.toCanvas(exportArea(doc.crop, image, view, orientationOf(doc)));
-  const framed = doc.backdrop ? composeBackdrop(flat, doc.backdrop, options) : flat;
+  const { canvas: whole, ...compose } = options;
+  const orientation = orientationOf(doc);
+  const flat = layer.toCanvas(exportArea(doc.crop, image, view, orientation, whole));
+  const area = orientRect(doc.crop ?? whole ?? { x: 0, y: 0, width: image.width, height: image.height }, image, orientation);
+  const clear = reachesPast(area, image, orientation);
+  const framed = doc.backdrop ? composeBackdrop(flat, doc.backdrop, { ...compose, clear }) : flat;
   const resized = resample(framed, doc.scale ?? 1);
   const canvas = format === "jpg" ? onWhite(resized) : resized;
   const mime = format === "jpg" ? "image/jpeg" : "image/png";

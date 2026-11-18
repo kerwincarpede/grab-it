@@ -6,13 +6,15 @@ import EditorWindow from "./EditorWindow";
 import type { BackdropPreset, EditorPreferences } from "../settings/api";
 import type { OcrLine, ShotText } from "../library/api";
 import type { CapturedPointer } from "./api";
-import type { Annotations } from "./model";
+import type { Annotations, Shape } from "./model";
 import { PREFERENCES_DELAY_MS } from "./preferences";
 import { AUTOSAVE_DELAY_MS } from "./useAnnotations";
 
 /** Where the mocked stage reports the pointer, in capture pixels. */
 const pointerAt = vi.hoisted(() => ({ x: 0, y: 0 }));
 /** Where the editor last put a dragged node itself (a line handle snapping into place). */
+/** What the content layer was rendered over, outside flatten (which is mocked): the preview's shadow silhouette. */
+const layerRenders = vi.hoisted(() => ({ areas: [] as { x: number; y: number; width: number; height: number; pixelRatio: number }[] }));
 const placed = vi.hoisted(() => ({ at: null as { x: number; y: number } | null }));
 
 // jsdom has no canvas, so Konva nodes render as plain elements that keep
@@ -110,7 +112,17 @@ vi.mock("react-konva", async () => {
   const LayerNode = node("Layer");
   // The editor needs a layer to flatten (flatten itself is mocked below).
   const Layer = ({ ref, ...props }: { ref?: Ref<unknown>; children?: ReactNode; name?: string }) => {
-    useImperativeHandle(ref, () => ({ findOne: () => undefined }), []);
+    useImperativeHandle(
+      ref,
+      () => ({
+        findOne: () => undefined,
+        toCanvas: (area: { x: number; y: number; width: number; height: number; pixelRatio: number }) => {
+          layerRenders.areas.push(area);
+          return document.createElement("canvas");
+        },
+      }),
+      [],
+    );
     return createElement(LayerNode, props);
   };
   type Handler = ((event: unknown) => void) | undefined;
@@ -448,6 +460,7 @@ describe("EditorWindow", () => {
   beforeEach(() => {
     flattened.calls = [];
     flattened.options = [];
+    layerRenders.areas = [];
     flattened.measured = [];
     textBands.band = null;
     textBands.asked = [];
@@ -1008,7 +1021,95 @@ describe("EditorWindow", () => {
     expect(calls.map((call) => call.cmd)).toContain("editor_add_clipboard_image");
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
     // The 400×300 capture and the 400×300 image beside it.
-    await waitFor(() => expect(last(flattened.calls)).toMatchObject({ crop: { x: 0, y: 0, width: 800, height: 300 } }));
+    await waitFor(() => expect(last(flattened.calls)).toMatchObject({ crop: null }));
+    expect(last(flattened.options)).toMatchObject({ canvas: { x: 0, y: 0, width: 800, height: 300 } });
+  });
+
+  describe("side by side", () => {
+    /** A second 400×300 screenshot just right of the capture. */
+    const beside: Annotations = {
+      version: 1,
+      shapes: [{ id: "i1", type: "image", x: 400, y: 0, width: 400, height: 300, src: "after.png" }],
+      crop: null,
+    };
+    it("exports both screenshots on the grown canvas", async () => {
+      mockEditor(beside);
+      await ready();
+      // The size label is the canvas, not the capture alone.
+      expect(screen.getByText("800×300")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+      await waitFor(() => expect(flattened.calls).toHaveLength(1));
+      expect(last(flattened.calls)).toMatchObject({ crop: null, backdrop: null, rotation: 0 });
+      expect(last(flattened.options)).toMatchObject({ canvas: { x: 0, y: 0, width: 800, height: 300 } });
+    });
+
+    it("pads a backdrop around the whole canvas", async () => {
+      const backdrop = { fill: "ocean", padding: 40, radius: 8, shadow: true };
+      mockEditor({ ...beside, backdrop });
+      await ready();
+      expect(screen.getByText("Output 880×380")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+      await waitFor(() => expect(flattened.calls).toHaveLength(1));
+      expect(last(flattened.calls)).toMatchObject({ crop: null, backdrop });
+      // The whole canvas goes out, framed whole.
+      expect(last(flattened.options)).toMatchObject({ canvas: { x: 0, y: 0, width: 800, height: 300 }, borders: null });
+    });
+
+    it("casts the preview's shadow from the whole content layer, annotations included, as the export does", async () => {
+      const backdrop = { fill: "ocean", padding: 40, radius: 8, shadow: true };
+      // A shorter image beside the capture leaves a clear corner, with an arrow drawn into it.
+      const arrow: Shape = { id: "a9", type: "arrow", points: [450, 250, 700, 280], color: "#e5484d", strokeWidth: 4 };
+      mockEditor({ ...beside, shapes: [{ id: "i1", type: "image", x: 400, y: 0, width: 400, height: 200, src: "after.png" }, arrow], backdrop });
+      await ready();
+      // The silhouette comes from the content layer (where the arrow is drawn), over the exported 800×300 area at screen resolution.
+      await waitFor(() => expect(layerRenders.areas.length).toBeGreaterThan(0));
+      const area = layerRenders.areas[layerRenders.areas.length - 1];
+      expect(area.pixelRatio).toBe(1);
+      expect(area.width / area.height).toBeCloseTo(800 / 300);
+    });
+
+    it("keeps the plain shadow plate for a capture with nothing past it", async () => {
+      const arrow: Shape = { id: "a9", type: "arrow", points: [50, 50, 300, 280], color: "#e5484d", strokeWidth: 4 };
+      mockEditor({ version: 1, shapes: [arrow], crop: null, backdrop: { fill: "ocean", padding: 40, radius: 8, shadow: true } });
+      await ready();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // The capture is opaque all over: no silhouette is rendered from the content layer.
+      expect(layerRenders.areas).toEqual([]);
+    });
+
+    it("turns the whole canvas", async () => {
+      mockEditor({ ...beside, rotation: 90 });
+      await ready();
+      // Turned a quarter, the pair shows one above the other.
+      expect(screen.getByText("Output 300×800")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+      await waitFor(() => expect(flattened.calls).toHaveLength(1));
+      expect(last(flattened.calls)).toMatchObject({ crop: null, rotation: 90 });
+      expect(last(flattened.options)).toMatchObject({ canvas: { x: 0, y: 0, width: 800, height: 300 } });
+    });
+
+    it("crops across both screenshots", async () => {
+      const saved = mockEditor(beside);
+      await ready();
+      fireEvent.click(pressed("Crop"));
+      // From inside the capture to well inside the image beside it.
+      drag([350, 0], [700, 300]);
+      await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 350, y: 0, width: 350, height: 300 }));
+      expect(screen.getByText("Crop 350×300")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+      await waitFor(() => expect(flattened.calls).toHaveLength(1));
+      expect(last(flattened.calls)).toMatchObject({ crop: { x: 350, y: 0, width: 350, height: 300 } });
+    });
+
+    it("crops past a turned capture up to the canvas edge", async () => {
+      const saved = mockEditor({ ...beside, rotation: 90 });
+      await ready();
+      fireEvent.click(pressed("Crop"));
+      // On show the canvas is 300×800; the drag runs past its bottom and is held to it.
+      drag([0, 200], [300, 900]);
+      // The bottom 600 on show is the capture's right 200 and the image beside it.
+      await waitFor(() => expect(last(saved)?.crop).toEqual({ x: 200, y: 0, width: 600, height: 300 }));
+    });
   });
 
   it("reads a saved image from the capture's assets folder", async () => {
@@ -1038,7 +1139,8 @@ describe("EditorWindow", () => {
     await waitFor(() => expect(calls.map((call) => call.cmd)).toEqual(["editor_asset_image", "editor_copy", "plugin:window|close"]));
     // By then the image is drawn, and the output takes it in.
     expect(document.querySelector('[data-konva="Image"][data-id="i1"]')).not.toBeNull();
-    expect(last(flattened.calls)).toMatchObject({ crop: { x: 0, y: 0, width: 440, height: 300 } });
+    expect(last(flattened.calls)).toMatchObject({ crop: null });
+    expect(last(flattened.options)).toMatchObject({ canvas: { x: 0, y: 0, width: 440, height: 300 } });
   });
 
   it("copies without an added image whose file is gone", async () => {

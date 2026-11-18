@@ -24,9 +24,15 @@ Images and annotations are drawn in the order you added them, the newest on top.
 
 ## The canvas grows to fit
 
-Move an image past the edge of the screenshot and the canvas grows to take it in. It always fits the screenshot and every image, and shrinks again as you move them back. Copy and export put out the whole canvas, unless you [crop](/grab-it/image-editor/crop/) it.
+Move an image past the edge of the screenshot and the canvas grows to take it in. It always fits the screenshot and every image, and shrinks again as you move them back. The status bar shows the canvas's size; hover over it to see the screenshot's own. Copy and export put out the whole canvas, unless you [crop](/grab-it/image-editor/crop/) it.
 
-Where nothing covers the canvas it stays transparent in a PNG and on the clipboard, and white in a JPEG. A [backdrop](/grab-it/image-editor/backdrop/) pads around the whole canvas.
+The rest of the editor works on the whole canvas too:
+
+- **Crop** reaches past the screenshot, up to the canvas's edges, and its edges snap to the screenshot's borders as well as the canvas's.
+- **Rotate and flip** turn the whole canvas, so a pair side by side turns into one above the other.
+- **A [backdrop](/grab-it/image-editor/backdrop/)** pads around the whole canvas. Its shadow falls only under the screenshot and the images, **Blurred capture** blurs the screenshot alone, and **Balance** pads evenly once the canvas reaches past the screenshot.
+
+Where nothing covers the canvas it stays transparent in a PNG and on the clipboard, and white in a JPEG. With a backdrop, the backdrop shows through there.
 
 [Blur](/grab-it/image-editor/blur/) and [Spotlight](/grab-it/image-editor/spotlight/) act on the screenshot only, not on added images.
 
