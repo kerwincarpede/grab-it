@@ -824,3 +824,52 @@
   height: 24px;
   object-fit: contain;
 }
+
+.arrow-style-panel {
+  position: fixed;
+  z-index: 10;
+  box-sizing: border-box;
+  display: grid;
+  gap: 12px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--ed-border);
+  border-radius: 12px;
+  background: var(--ed-raised);
+  box-shadow: var(--ed-shadow);
+}
+
+.arrow-style-section {
+  display: grid;
+  gap: 6px;
+}
+
+.arrow-style-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(80px, 100%), 1fr));
+  gap: 6px;
+}
+
+.editor .arrow-style-grid button {
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+  min-height: 48px;
+  height: auto;
+  padding: 2px;
+  background: var(--ed-surface);
+  font-size: 11px;
+}
+
+.editor .arrow-style-grid button:hover:not(:disabled) {
+  background: var(--ed-hover);
+}
+
+.editor .arrow-style-grid button[aria-pressed="true"] {
+  border-color: var(--ed-accent);
+  background: var(--ed-accent-soft);
+}
+
+.arrow-style-grid svg {
+  max-width: 100%;
+}

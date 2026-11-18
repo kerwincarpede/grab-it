@@ -37,6 +37,7 @@ vi.mock("react-konva", async () => {
       x,
       y,
       points,
+      data,
       bezier,
       rotation,
       scaleX,
@@ -62,6 +63,7 @@ vi.mock("react-konva", async () => {
       x?: number;
       y?: number;
       points?: number[];
+      data?: string;
       bezier?: boolean;
       rotation?: number;
       scaleX?: number;
@@ -90,6 +92,7 @@ vi.mock("react-konva", async () => {
           "data-x": x,
           "data-y": y,
           "data-points": points?.join(" "),
+          "data-path": data,
           "data-bezier": bezier === undefined ? undefined : String(bezier),
           "data-rotation": rotation,
           "data-scale-x": scaleX,
@@ -840,33 +843,97 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
     await ready();
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
-    const arrow = () => document.querySelector('[data-id="a1"]') as Element;
+    const shaft = () => document.querySelector('[data-id="a1"] [data-path]')?.getAttribute("data-path");
     const savedArrow = () => last(saved)?.shapes.find((shape) => shape.id === "a1");
 
     // A live drag previews the curve without saving it.
     Object.assign(pointerAt, { x: 55, y: 15 });
     fireEvent.drag(lineHandle("bend"));
-    expect(arrow()).toHaveAttribute("data-bezier", "true");
+    expect(shaft()).toBe("M 10 10 Q 55 -15 100 80");
     expect(handleAt("bend")).toEqual([55, 15]);
     fireEvent.dragEnd(lineHandle("bend"));
     // The curve runs through the handle: control = 2H − (P0 + P2) / 2.
     await waitFor(() => expect(savedArrow()).toMatchObject({ points: [10, 10, 100, 80], control: [55, -15] }));
-    expect(arrow().getAttribute("data-points")?.split(" ")).toHaveLength(8);
 
     // Back within a few pixels of the straight line's middle, it goes straight.
     dragHandle("bend", [57, 47]);
     await waitFor(() => expect(savedArrow()).not.toHaveProperty("control"));
     // The handle is put back on the line, not left under the pointer.
     expect(placed.at).toEqual({ x: 55, y: 45 });
-    expect(arrow()).toHaveAttribute("data-bezier", "false");
+    expect(shaft()).toBe("M 10 10 L 100 80");
     expect(handleAt("bend")).toEqual([55, 45]);
 
     fireEvent.keyDown(window, { key: "z", ctrlKey: true });
     expect(handleAt("bend")).toEqual([55, 15]);
-    expect(arrow()).toHaveAttribute("data-bezier", "true");
+    expect(shaft()).toBe("M 10 10 Q 55 -15 100 80");
     fireEvent.keyDown(window, { key: "z", ctrlKey: true });
     expect(handleAt("bend")).toEqual([55, 45]);
-    expect(arrow()).toHaveAttribute("data-bezier", "false");
+    expect(shaft()).toBe("M 10 10 L 100 80");
+  });
+
+  it("sets a session default using the keyboard and uses it for Arrow and Alt-drag", async () => {
+    const saved = mockEditor();
+    await ready();
+    const picker = widthButton("Style");
+    fireEvent.click(picker);
+    const dialog = screen.getByRole("dialog", { name: "Arrow style" });
+    expect(within(dialog).getAllByRole("button")).toHaveLength(12);
+    const classic = within(dialog).getByRole("button", { name: "Classic", pressed: true });
+    expect(classic).toHaveFocus();
+    fireEvent.keyDown(classic, { key: "Escape" });
+    expect(picker).toHaveFocus();
+    expect(screen.queryByRole("dialog", { name: "Arrow style" })).toBeNull();
+
+    fireEvent.click(picker);
+    const open = screen.getByRole("button", { name: "Open" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+    expect(open).toHaveFocus();
+    fireEvent.click(open);
+    expect(picker).toHaveFocus();
+    drag([20, 40], [180, 70]);
+    await waitFor(() => expect(last(saved)?.shapes[4]).toMatchObject({ type: "arrow", arrowStyle: "open" }));
+
+    fireEvent.click(pressed("Select"));
+    drag([40, 100], [180, 130], { altKey: true });
+    await waitFor(() => expect(last(saved)?.shapes[5]).toMatchObject({ type: "arrow", arrowStyle: "open" }));
+  });
+
+  it("restyles a curve in one undo step and edits an elbow after rotating and flipping the capture", async () => {
+    const saved = mockEditor();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Rotate right" }));
+    fireEvent.click(screen.getByRole("button", { name: "Flip horizontal" }));
+    fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+    dragHandle("bend", [55, 15]);
+    const savedArrow = () => last(saved)?.shapes.find((shape) => shape.id === "a1");
+    await waitFor(() => expect(savedArrow()).toHaveProperty("control", [55, -15]));
+
+    const pick = (name: string) => {
+      fireEvent.click(widthButton("Style"));
+      fireEvent.click(within(screen.getByRole("dialog", { name: "Arrow style" })).getByRole("button", { name }));
+    };
+    pick("Outline");
+    expect(handleAt("bend")).toEqual([55, 15]);
+    await waitFor(() => expect(savedArrow()).toMatchObject({ arrowStyle: "outline", control: [55, -15] }));
+    fireEvent.keyDown(window, { ctrlKey: true, key: "z" });
+    await waitFor(() => expect(savedArrow()).not.toHaveProperty("arrowStyle"));
+    fireEvent.keyDown(window, { ctrlKey: true, key: "y" });
+    await waitFor(() => expect(savedArrow()).toHaveProperty("arrowStyle", "outline"));
+
+    pick("Elbow");
+    expect(handleAt("bend")).toEqual([55, 45]);
+    dragHandle("bend", [80, 110]);
+    expect(handleAt("bend")).toEqual([55, 110]);
+    expect(handleAt("start")).toEqual([10, 10]);
+    expect(handleAt("end")).toEqual([100, 80]);
+    await waitFor(() => expect(savedArrow()).toMatchObject({
+      arrowStyle: "elbow", elbow: { axis: "y", at: 110 }, points: [10, 10, 100, 80],
+      color: "#e5484d", strokeWidth: 4,
+    }));
+    fireEvent.keyDown(window, { ctrlKey: true, key: "z" });
+    expect(handleAt("bend")).toEqual([55, 45]);
+    fireEvent.keyDown(window, { ctrlKey: true, key: "y" });
+    expect(handleAt("bend")).toEqual([55, 110]);
   });
 
   it("moves an arrow's end from its handle, keeping the bend, as one undo step", async () => {

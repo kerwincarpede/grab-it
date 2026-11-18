@@ -1,3 +1,4 @@
+import { ARROW_STYLES, arrowGeometry } from "./arrowStyles";
 import { describe, expect, it } from "vitest";
 import type { Annotations, Cut } from "./model";
 import { parseAnnotations, parseBackdrop, parsePointer, serializeAnnotations, SidecarError } from "./sidecar";
@@ -100,6 +101,26 @@ describe("annotations sidecar", () => {
       crop: { x: "bad" },
     });
     expect(parsed).toEqual({ version: 1, shapes: [doc.shapes[0]], crop: null });
+  });
+
+  it("reopens all arrow styles and falls back to Classic for an unrecognised preset", () => {
+    const base = { id: "a", type: "arrow" as const, color: "#e5484d", strokeWidth: 4, points: [10, 20, 130, 80] };
+    const shapes = ARROW_STYLES.map(({ id }) => ({
+      ...base, id,
+      ...(id !== "classic" ? { arrowStyle: id } : {}),
+      ...(id === "elbow" ? { elbow: { axis: "x" as const, at: 37 } } : {}),
+    }));
+    const original: Annotations = { version: 1, shapes, crop: null };
+    expect(parseAnnotations(JSON.parse(JSON.stringify(serializeAnnotations(original))))).toEqual(original);
+    const reopened = parseAnnotations({
+      version: 1,
+      shapes: [
+        { ...base, arrowStyle: "future" },
+        { ...base, id: "bad-elbow", arrowStyle: "elbow", elbow: { axis: "y", at: "23" } },
+      ],
+    });
+    expect(reopened.shapes).toEqual([base, { ...base, id: "bad-elbow", arrowStyle: "elbow" }]);
+    expect(arrowGeometry({ ...base })).toEqual(arrowGeometry({ ...base, arrowStyle: "classic" }));
   });
 
   it("round-trips a curved arrow and line, and loads straight ones from before curves", () => {

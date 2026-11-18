@@ -1,3 +1,5 @@
+import type { ArrowStyle } from "./arrowStyles";
+
 /** Annotation shapes, in capture pixels. Stored in `<capture>.annotations.json`. */
 
 export type Tool =
@@ -46,6 +48,15 @@ export interface LineShape extends Stroked {
   points: number[];
   /** The quadratic curve's control point, `[cx, cy]`. */
   control?: [number, number];
+  /** The arrow preset. Missing means Classic. */
+  arrowStyle?: ArrowStyle;
+  /** The axis and capture coordinate of an Elbow's middle segment. */
+  elbow?: ElbowRoute;
+}
+
+export interface ElbowRoute {
+  axis: "x" | "y";
+  at: number;
 }
 
 /** A drawn path: `[x1, y1, x2, y2, ...]`. */
@@ -285,6 +296,7 @@ export type PointerLook = "arrow" | "hand" | "text";
 export interface Style {
   color: string;
   strokeWidth: number;
+  arrowStyle?: ArrowStyle;
   /** Text font size; `DEFAULT_FONT_SIZE` when absent. */
   fontSize?: number;
   /** Step badge radius; `DEFAULT_STEP_RADIUS` when absent. */

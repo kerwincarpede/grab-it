@@ -1,5 +1,6 @@
 import type { Annotations, Backdrop, Cut, PointerEdit, Rect, Shape } from "./model";
 import { BACKDROP_ASPECTS, BACKDROP_MAX_PADDING, BACKDROP_MAX_RADIUS, emptyAnnotations } from "./model";
+import { arrowStyle } from "./arrowStyles";
 import { clampScale, normalizeRotation } from "./orient";
 import { clampPointerScale, isPointerLook } from "./pointer";
 import { isStampName, MAX_KEYCAP_LABEL } from "./stamps";
@@ -166,6 +167,20 @@ function cutsField(value: unknown): Pick<Annotations, "cuts"> {
   return cuts.length > 0 ? { cuts } : {};
 }
 
+/** Optional style fields from newer builds must never cost the user the arrow. */
+function parseArrowFields(shape: Shape): Shape {
+  if (shape.type !== "arrow") return shape;
+  const { arrowStyle: savedStyle, elbow, ...base } = shape;
+  const style = arrowStyle(savedStyle);
+  return {
+    ...base,
+    ...(style === "classic" ? {} : { arrowStyle: style }),
+    ...(style === "elbow" && elbow && (elbow.axis === "x" || elbow.axis === "y") && isNum(elbow.at)
+      ? { elbow: { axis: elbow.axis, at: elbow.at } }
+      : {}),
+  };
+}
+
 /**
  * Reads a sidecar. `null` or `undefined` (no sidecar yet) gives an empty
  * document. An unknown version throws, so it is never overwritten; unknown
@@ -181,7 +196,7 @@ export function parseAnnotations(value: unknown): Annotations {
   const backdrop = parseBackdrop(doc.backdrop);
   return {
     version: 1,
-    shapes: doc.shapes.filter(isShape),
+    shapes: doc.shapes.filter(isShape).map(parseArrowFields),
     ...cutsField(doc.cuts),
     crop: crop && typeof crop === "object" && isRect(crop) ? (crop as unknown as Rect) : null,
     ...(backdrop ? { backdrop } : {}),
