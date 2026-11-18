@@ -27,7 +27,7 @@ function context2d(canvas: HTMLCanvasElement): CanvasRenderingContext2D | null {
  * Draws the pixels around `centre` one-to-one onto the tiny canvas (CSS scales
  * it up with crisp pixels) and returns the centre pixel's colour.
  */
-function drawLens(canvas: HTMLCanvasElement, image: HTMLImageElement, centre: Point) {
+function drawLens(canvas: HTMLCanvasElement, image: HTMLImageElement | HTMLCanvasElement, centre: Point) {
   const context = context2d(canvas);
   if (!context) return null;
   context.imageSmoothingEnabled = false;
@@ -45,8 +45,8 @@ function drawLens(canvas: HTMLCanvasElement, image: HTMLImageElement, centre: Po
 }
 
 interface LoupeProps {
-  /** The frozen monitor, once loaded. */
-  image: HTMLImageElement | null;
+  /** The frozen monitor, or the editor's capture (a canvas once cut), once loaded. */
+  image: HTMLImageElement | HTMLCanvasElement | null;
   /** The cursor, in CSS pixels. */
   pointer: Point;
   /** Image pixels per CSS pixel. */
@@ -71,7 +71,9 @@ function Loupe({ image, pointer, scale, viewport, pixel: shownPixel }: LoupeProp
   const colour = useRef<HTMLSpanElement>(null);
 
   const size = image
-    ? { width: image.naturalWidth, height: image.naturalHeight }
+    ? image instanceof HTMLCanvasElement
+      ? { width: image.width, height: image.height }
+      : { width: image.naturalWidth, height: image.naturalHeight }
     : { width: viewport.width * scale, height: viewport.height * scale };
   const pixel = shownPixel ?? imagePixelAt(pointer, scale, size);
   const position = floatingPosition(pointer, PANEL, viewport, OFFSET);
