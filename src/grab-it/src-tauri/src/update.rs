@@ -4,8 +4,8 @@
 //! updates…" check on demand.
 //!
 //! Settings › Updates picks the channel: Stable reads the latest release's
-//! `latest.json`, Edge the rolling `edge` release's. Only a newer version
-//! counts as an update, so moving from Edge back to Stable waits until
+//! `latest.json`, Edge the newest published version's immutable manifest.
+//! Only a newer version counts as an update, so moving back to Stable waits until
 //! Stable passes the Edge version this copy has.
 //!
 //! The release workflow publishes `latest.json` next to the installers,
@@ -55,10 +55,77 @@ const PROGRESS_EVERY: Duration = Duration::from_millis(100);
 /// from before channels existed read it from `tauri.conf.json`.
 const STABLE_ENDPOINT: &str =
     "https://github.com/kerwincarpede/grab-it/releases/latest/download/latest.json";
-/// Edge's manifest: the rolling `edge` pre-release, which every merge to
-/// main refreshes.
-const EDGE_ENDPOINT: &str =
-    "https://github.com/kerwincarpede/grab-it/releases/download/edge/latest.json";
+/// Releases can finish out of order. Discover the highest published version
+/// rather than trying to overwrite an asset on an immutable rolling release.
+const RELEASES_API: &str = "https://api.github.com/repos/kerwincarpede/grab-it/releases";
+const RELEASE_PAGE_SIZE: usize = 100;
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    draft: bool,
+    assets: Vec<GithubAsset>,
+}
+
+#[derive(Deserialize)]
+struct GithubAsset {
+    name: String,
+}
+
+fn edge_candidate(releases: &[GithubRelease]) -> Option<Version> {
+    releases
+        .iter()
+        .filter(|release| {
+            !release.draft
+                && release
+                    .assets
+                    .iter()
+                    .any(|asset| asset.name == "latest.json")
+        })
+        .filter_map(|release| release.tag_name.strip_prefix('v'))
+        .filter_map(|tag| Version::parse(tag).ok())
+        .filter(|version| version.pre.is_empty() && version.build.is_empty())
+        .max()
+}
+
+/// Discover Edge on the thread already running the update check. Bound the
+/// whole paginated request, including slow responses, and use the OS trust store.
+fn edge_endpoint() -> Result<String, String> {
+    let started = Instant::now();
+    let mut newest = None;
+    for page in 1.. {
+        let remaining = DISCOVERY_TIMEOUT
+            .checked_sub(started.elapsed())
+            .ok_or("Timed out finding the newest Edge release")?;
+        let agent = ureq::Agent::config_builder()
+            .tls_config(crate::net::tls_config())
+            .timeout_global(Some(remaining))
+            .build()
+            .new_agent();
+        let text = agent
+            .get(format!(
+                "{RELEASES_API}?per_page={RELEASE_PAGE_SIZE}&page={page}"
+            ))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "Grab-it updater")
+            .call()
+            .map_err(|err| format!("Could not find Edge releases: {err}"))?
+            .into_body()
+            .read_to_string()
+            .map_err(|err| err.to_string())?;
+        let releases: Vec<GithubRelease> =
+            serde_json::from_str(&text).map_err(|err| err.to_string())?;
+        newest = newest.max(edge_candidate(&releases));
+        if releases.len() < RELEASE_PAGE_SIZE {
+            break;
+        }
+    }
+    let version = newest.ok_or("There is no published Edge update yet")?;
+    Ok(format!(
+        "https://github.com/kerwincarpede/grab-it/releases/download/v{version}/latest.json"
+    ))
+}
 
 #[derive(Default)]
 pub struct UpdateState {
@@ -196,11 +263,12 @@ pub fn user_check(app: &AppHandle) {
     });
 }
 
-/// Where `channel`'s `latest.json` is.
-pub fn endpoint(channel: UpdateChannel) -> &'static str {
+/// Where `channel`'s `latest.json` is. Edge discovers published versions;
+/// Stable keeps the endpoint used by copies from before channels existed.
+fn endpoint(channel: UpdateChannel) -> Result<String, String> {
     match channel {
-        UpdateChannel::Stable => STABLE_ENDPOINT,
-        UpdateChannel::Edge => EDGE_ENDPOINT,
+        UpdateChannel::Stable => Ok(STABLE_ENDPOINT.into()),
+        UpdateChannel::Edge => edge_endpoint(),
     }
 }
 
@@ -247,7 +315,7 @@ fn chosen_channel(app: &AppHandle) -> UpdateChannel {
 
 /// Asks `channel`'s manifest for a version newer than this copy.
 async fn find_update(app: &AppHandle, channel: UpdateChannel) -> Result<Option<Update>, String> {
-    let url = Url::parse(endpoint(channel)).map_err(|err| err.to_string())?;
+    let url = Url::parse(&endpoint(channel)?).map_err(|err| err.to_string())?;
     app.updater_builder()
         .endpoints(vec![url])
         .map_err(|err| err.to_string())?
@@ -616,19 +684,28 @@ mod tests {
     }
 
     #[test]
-    fn each_channel_reads_its_own_manifest() {
+    fn stable_keeps_its_manifest_endpoint() {
         assert_eq!(
-            endpoint(UpdateChannel::Stable),
+            endpoint(UpdateChannel::Stable).unwrap(),
             "https://github.com/kerwincarpede/grab-it/releases/latest/download/latest.json"
         );
-        assert_eq!(
-            endpoint(UpdateChannel::Edge),
-            "https://github.com/kerwincarpede/grab-it/releases/download/edge/latest.json"
-        );
-        for channel in [UpdateChannel::Stable, UpdateChannel::Edge] {
-            let url = Url::parse(endpoint(channel)).unwrap();
-            assert_eq!(url.scheme(), "https");
-        }
+        let url = Url::parse(&endpoint(UpdateChannel::Stable).unwrap()).unwrap();
+        assert_eq!(url.scheme(), "https");
+    }
+
+    #[test]
+    fn edge_uses_version_order_and_ignores_drafts_and_incomplete_releases() {
+        let releases: Vec<GithubRelease> = serde_json::from_value(json!([
+            {"tag_name":"v0.10.0", "draft":false, "assets":[{"name":"latest.json"}]},
+            {"tag_name":"v0.9.0", "draft":false, "assets":[{"name":"latest.json"}]},
+            {"tag_name":"v0.11.0", "draft":true, "assets":[{"name":"latest.json"}]},
+            {"tag_name":"v0.12.0", "draft":false, "assets":[]},
+            {"tag_name":"edge", "draft":false, "assets":[{"name":"latest.json"}]},
+            {"tag_name":"v1.0.0-beta.1", "draft":false, "assets":[{"name":"latest.json"}]}
+        ]))
+        .unwrap();
+        assert_eq!(edge_candidate(&releases), Some(Version::new(0, 10, 0)));
+        assert_eq!(edge_candidate(&[]), None);
     }
 
     #[test]
@@ -637,7 +714,7 @@ mod tests {
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         assert_eq!(
             config["plugins"]["updater"]["endpoints"][0],
-            endpoint(UpdateChannel::Stable)
+            endpoint(UpdateChannel::Stable).unwrap()
         );
     }
 

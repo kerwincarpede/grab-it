@@ -16,6 +16,10 @@ Grab-it updates from one of two channels. Pick one with **Update channel** in **
 
 Switching channel forgets any update the old channel offered and checks the new one straight away. Grab-it never installs an older version, so moving from Edge back to Stable keeps the version you have until Stable passes it.
 
+:::note[Older Edge copies]
+If checking for updates on Edge fails, [download the newest versioned release from GitHub](https://github.com/kerwincarpede/grab-it/releases) and install it once. Older Edge copies read an update address that cannot be repaired because GitHub locked that release. Current copies find the newest published version directly.
+:::
+
 ## Packages
 
 Updates install the same kind of package you installed: the `.deb` or `.rpm` asks for your password, like `apt` or `dnf` would.

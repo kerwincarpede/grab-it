@@ -75,9 +75,7 @@ jobs:
 
       - name: Install Linux build dependencies
         working-directory: .
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y $LINUX_DEPS $XCAP_DEPS
+        run: sudo python3 .github/scripts/install_linux_deps.py $LINUX_DEPS $XCAP_DEPS
 
       - uses: actions/setup-node@v7
         with:
@@ -125,9 +123,7 @@ jobs:
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y $LINUX_DEPS $XCAP_DEPS
+        run: sudo python3 .github/scripts/install_linux_deps.py $LINUX_DEPS $XCAP_DEPS
 
       - uses: actions/setup-node@v7
         with:

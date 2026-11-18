@@ -18,7 +18,7 @@ on:
 # One promotion at a time; a second waits rather than cancelling the first.
 concurrency:
   group: promote
-  cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
@@ -63,40 +63,16 @@ jobs:
           cat chosen.txt
           cat chosen.txt >> "$GITHUB_OUTPUT"
 
-      # Written again as release.yml's publish job writes it, so its
-      # `changes` cover every Edge release since the last Stable one.
-      - name: Rewrite the updater manifest
+      # Published releases are immutable. Validate and reuse the manifest
+      # uploaded before publication rather than trying to replace its asset.
+      - name: Check the published updater manifest
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_ID: ${{ steps.chosen.outputs.id }}
           TAG: ${{ steps.chosen.outputs.tag }}
+          VERSION: ${{ steps.chosen.outputs.version }}
         run: |
-          mkdir sigs
-          gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
-            --jq '.[] | select(.name | endswith(".sig")) | "\(.id) \(.name)"' |
-            while read -r id name; do
-              gh api -H "Accept: application/octet-stream" \
-                "repos/$GITHUB_REPOSITORY/releases/assets/$id" > "sigs/$name"
-            done
-          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release.json
-          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > history.json
-          python3 .github/scripts/updater_manifest.py \
-            --sigs sigs --release release.json --history history.json \
-            --download-base "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
-            > latest.json
-          cat latest.json
-          # An upload refuses a name already taken, so the old one goes first.
-          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
-            --jq '.[] | select(.name == "latest.json") | .id' |
-            while read -r asset; do
-              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset"
-            done
-          curl --fail-with-body -sS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data-binary @latest.json \
-            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=latest.json" \
-            > /dev/null
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p latest.json
+          python3 .github/scripts/check_manifest.py latest.json "$VERSION"
 
       # Stable copies read releases/latest, so from here they offer it.
       - name: Publish as the latest release
