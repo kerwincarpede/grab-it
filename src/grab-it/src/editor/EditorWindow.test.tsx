@@ -1846,7 +1846,7 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
     // The webview's own menu is suppressed.
     expect(fireEvent.contextMenu(canvas, { clientX: 300, clientY: 200 })).toBe(false);
     const wheel = within(screen.getByRole("menu", { name: "Tools" }));
-    expect(wheel.getAllByRole("menuitemradio")).toHaveLength(16);
+    expect(wheel.getAllByRole("menuitemradio")).toHaveLength(17);
     expect(wheel.getByRole("menuitemradio", { name: "Arrow" })).toHaveAttribute("aria-checked", "true");
     fireEvent.click(wheel.getByRole("menuitemradio", { name: "Spotlight" }));
     expect(screen.queryByRole("menu", { name: "Tools" })).not.toBeInTheDocument();
