@@ -1021,6 +1021,73 @@ describe("RegionOverlay", () => {
       );
     });
 
+    describe("from the main button after a path across the screen", () => {
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(0);
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      /** Rests at `from`, then crosses bare desktop to the main button without stopping. */
+      function travel(overlay: HTMLElement, main: HTMLElement, from: [number, number]) {
+        fireEvent.mouseMove(overlay, { clientX: from[0], clientY: from[1] });
+        vi.advanceTimersByTime(300);
+        for (const [x, y] of [
+          [700, 500],
+          [750, 300],
+          [800, 120],
+          [820, 60],
+        ]) {
+          fireEvent.mouseMove(overlay, { clientX: x, clientY: y });
+          vi.advanceTimersByTime(16);
+        }
+        fireEvent.mouseMove(main, { clientX: 840, clientY: 30 });
+        vi.advanceTimersByTime(16);
+        fireEvent.mouseMove(main, { clientX: 842, clientY: 31 });
+      }
+
+      it("copies the pixel the pointer rested on in Colour", async () => {
+        const calls = mockOverlay({ allInOne: true });
+        render(<RegionOverlay />);
+        const overlay = await ready();
+
+        fireEvent.keyDown(window, { key: "5", code: "Digit5" });
+        const main = screen.getByTestId("overlay-confirm");
+        travel(overlay, main, [240, 520]);
+        // The loupe stays on the rested pixel while the pointer is over the toolbar.
+        expect(screen.getByTestId("overlay-loupe")).toHaveStyle({ transform: "translate3d(260px, 540px, 0)" });
+        fireEvent.click(main);
+        await waitFor(() =>
+          expect(last(calls).payload).toEqual({
+            selection: { kind: "point", x: 240, y: 520, viewportWidth: 1000 },
+            choice: { intent: "color", mode: "region", delaySeconds: 0 },
+          }),
+        );
+      });
+
+      it("captures the window the pointer rested on in Window", async () => {
+        const calls = mockOverlay({ allInOne: true });
+        render(<RegionOverlay />);
+        const overlay = await ready();
+
+        fireEvent.keyDown(window, { key: "2", code: "Digit2" });
+        const main = screen.getByTestId("overlay-confirm");
+        travel(overlay, main, [150, 150]);
+        // The rested window stays highlighted, though the path crossed bare desktop.
+        expect(screen.getByTestId("overlay-selection")).toHaveTextContent("Editor");
+        expect(main).not.toHaveAttribute("aria-disabled");
+        fireEvent.click(main);
+        await waitFor(() =>
+          expect(last(calls).payload).toEqual({
+            selection: { kind: "window", id: 7 },
+            choice: { intent: "capture", mode: "window", delaySeconds: 0 },
+          }),
+        );
+      });
+    });
+
     it("moves between a group's buttons with the arrow keys, and leaves the toolbar on the first Esc", async () => {
       const calls = mockOverlay({ allInOne: true });
       render(<RegionOverlay />);
@@ -1106,6 +1173,50 @@ describe("RegionOverlay", () => {
         expect(within(toolbar).getByTestId("overlay-toolbar-middle")).toContainElement(
           screen.getByRole("textbox", { name: "Width" }),
         );
+      });
+
+      it("is as wide as its content up to 16 px from each edge, with every mode's icon", async () => {
+        // jsdom lays nothing out, but it does cascade the overlay's styles.
+        const style = document.createElement("style");
+        // Vitest leaves stylesheets out, so the test reads it as text. The
+        // page has no Node types, so these are named here.
+        const fs = await vi.importActual<{ readFileSync: (path: string, encoding: "utf8") => string }>("node:fs");
+        const here = (import.meta as ImportMeta & { dirname: string }).dirname;
+        style.textContent = fs.readFileSync(`${here}/overlay.css`, "utf8");
+        document.head.append(style);
+        try {
+          mockOverlay({ allInOne: true });
+          render(<RegionOverlay />);
+          await ready();
+          const toolbar = screen.getByRole("toolbar", { name: "Capture & record" });
+          expect(toolbar).toHaveAttribute("data-layout", "stacked");
+          // Centred between both sides: left: 50% would leave it half the screen.
+          const placed = getComputedStyle(toolbar);
+          expect({
+            left: placed.left,
+            right: placed.right,
+            width: placed.width,
+            maxWidth: placed.maxWidth,
+            marginLeft: placed.marginLeft,
+            marginRight: placed.marginRight,
+            transform: placed.transform,
+          }).toEqual({
+            left: "0px",
+            right: "0px",
+            width: "max-content",
+            maxWidth: "calc(100% - 32px)",
+            marginLeft: "auto",
+            marginRight: "auto",
+            transform: "none",
+          });
+          for (const mode of toolbar.querySelectorAll(".overlay-mode")) {
+            const icon = mode.querySelector(":scope > svg");
+            expect(icon).not.toBeNull();
+            expect(icon).toHaveStyle({ width: "16px", height: "16px" });
+          }
+        } finally {
+          style.remove();
+        }
       });
 
       it("moves to the bottom edge when a held selection is under it", async () => {

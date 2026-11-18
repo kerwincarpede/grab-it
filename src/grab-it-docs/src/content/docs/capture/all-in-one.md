@@ -18,7 +18,7 @@ From left to right:
 - **Region**, **Window** and **Screen**: what to capture.
 - **Text**, **Colour**, **Record** and **Scroll**: the tools.
 - A middle section that changes with what you're doing: the selection's width, height and ratio once you've selected a region, or the colour under the pointer in **Colour**.
-- **Timer**, then the main button, named for the mode: **Capture**, **Capture in 3 s**, **Copy text**, **Copy colour** or **Start scrolling**. It's dimmed until there's something to act on.
+- **Timer**, then the main button, named for the mode: **Capture**, **Capture in 3 s**, **Copy text**, **Copy colour** or **Start scrolling**. It's dimmed until there's something to act on. In **Window** and **Colour** it acts on the window or pixel you last paused on, so the pointer can cross the screen to reach it.
 - **×** to cancel.
 
 Point at any item, or move to it with `Tab`, to see a tooltip with its name, its key in the chooser, its global shortcut if it has one, and what it does. A dimmed main button's tooltip says what to do first, for example *Drag an area or click a window first.*

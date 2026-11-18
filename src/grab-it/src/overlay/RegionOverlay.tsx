@@ -65,6 +65,7 @@ import { drawBackdrop } from "./backdrop";
 import Loupe from "./Loupe";
 import RecordSetup from "./RecordSetup";
 import { ChooserToolbar, SizeFields } from "./ChooserToolbar";
+import { EMPTY_TRAIL, movedTo, pointedAt, reachedToolbar } from "./pointerRest";
 import { RATIOS, TIMER_KEY, TIMER_STEPS, TOOLS, toolbarLayout, type RatioId, type Tool } from "./chooser";
 import { SOURCES, useRecordingOptions } from "./recordSources";
 import type { RecordingSource } from "../settings/api";
@@ -307,7 +308,8 @@ function SizePanel({ size, ratio, transform, onSize, onRatio }: SizePanelProps) 
  * resize it and room inside to move it; the toolbar's middle section takes
  * an exact size in image pixels and ratio presets, and Enter or the main
  * button confirms. In Window, Enter captures the window under the pointer;
- * in Colour, the pixel under it. The last region starts out selected when
+ * in Colour, the pixel under it. Over the toolbar the pointer stands for
+ * where it last rested, so the main button acts on that. The last region starts out selected when
  * it was on this monitor, and a drag elsewhere replaces it.
  *
  * The page is usually loaded ahead of time in a hidden spare window, and
@@ -320,6 +322,8 @@ function RegionOverlay() {
   const [error, setError] = useState<string | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [pointer, setPointer] = useState<Point | null>(null);
+  // Where the pointer rested, which it stands for while over a toolbar.
+  const trail = useRef(EMPTY_TRAIL);
   const [square, setSquare] = useState(false);
   const [moving, setMoving] = useState(false);
   // A hidden window was shown once the frozen image was painted.
@@ -491,6 +495,7 @@ function RegionOverlay() {
       setMoving(false);
       setGrab(null);
       setPointer(null);
+      trail.current = EMPTY_TRAIL;
     }
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
@@ -795,10 +800,17 @@ function RegionOverlay() {
   }
 
   function onMouseMove(event: MouseEvent) {
-    // Over a toolbar the pointer keeps where it last pointed, so the main
-    // button acts on the window or pixel chosen, not on what lies under it.
-    if (!drag && !grab && !gripping && onToolbar(event)) return;
+    // Over a toolbar the pointer stands for where it last rested, so the
+    // main button acts on the window or pixel pointed at, not on what lies
+    // under the toolbar or what the pointer crossed on its way there.
+    if (!drag && !grab && !gripping && onToolbar(event)) {
+      trail.current = reachedToolbar(trail.current, event.timeStamp);
+      const target = pointedAt(trail.current);
+      if (target) setPointer(target);
+      return;
+    }
     const point = pointOf(event);
+    trail.current = movedTo(trail.current, point, event.timeStamp);
     const follow = () => {
       if (gripping) setSetupAt(gripped(gripping, point));
       if (grab) setPicked(grabbed(grab, point, event.shiftKey));
@@ -824,6 +836,7 @@ function RegionOverlay() {
   function onMouseLeave() {
     if (drag || grab || gripping) return;
     setPointer(null);
+    trail.current = EMPTY_TRAIL;
   }
 
   function onMouseUp(event: MouseEvent) {

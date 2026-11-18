@@ -482,18 +482,25 @@
  * (as .overlay-setup): 50px tall, 8px above and below its 34px buttons and
  * 6px at the sides. The picked mode, a set Timer and on toggles are a grey
  * pill; only the main button is coloured.
+ *
+ * Centred by its margins between both sides, not by left: 50%, which would
+ * leave it only half the screen to fit in: as wide as its content, up to
+ * 16px from each edge.
  */
 .overlay-toolbar {
   position: absolute;
-  left: 50%;
+  right: 0;
+  left: 0;
   z-index: 4;
   display: flex;
   flex-wrap: nowrap;
   gap: 2px;
   align-items: center;
   box-sizing: border-box;
+  width: max-content;
   max-width: calc(100% - 32px);
   height: 50px;
+  margin: 0 auto;
   padding: 8px 6px;
   color: #ecedef;
   font-family: "Instrument Sans Variable", system-ui, -apple-system, sans-serif;
@@ -506,7 +513,6 @@
     inset 0 0 0 1px #2a2c31,
     0 12px 32px rgb(0 0 0 / 40%);
   cursor: default;
-  transform: translateX(-50%);
   transition: opacity 120ms ease-out;
 }
 
@@ -519,6 +525,13 @@
 .overlay-toolbar .overlay-tool {
   height: 34px;
   border-radius: 999px;
+}
+
+/* Every mode's icon at the same size, drawn with or without its own. */
+.overlay-toolbar .overlay-mode > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
 }
 
 .overlay-toolbar-group {
