@@ -15,13 +15,14 @@ export interface Trim {
  * rendered on export. Absent fields mean unchanged.
  */
 export interface RecordingEdits {
-  /** 2 when `clips` is set, else 1; see `withClips` in ./clips. */
-  version: 1 | 2;
+  /** 3 when `clips` holds a gap, 2 when `clips` is set, else 1; see `withClips` in ./clips. */
+  version: 1 | 2 | 3;
   /** Absent or null keeps the whole recording. Ignored when `clips` is set. */
   trim?: Trim | null;
   /**
    * The joined sequence, in order; absent for one clip of the sidecar's
-   * own recording cut by `trim`. Written only with version 2.
+   * own recording cut by `trim`. Written with version 2, or 3 when it
+   * holds a gap (`{id, gapMs}` in the sidecar).
    */
   clips?: Clip[];
   /** The same backdrop captures have; its aspect is the export's shape. */
@@ -50,12 +51,12 @@ export function parseEdits(value: unknown): RecordingEdits {
   if (value === null || value === undefined) return emptyEdits();
   if (typeof value !== "object") throw new EditsError("the edits are not an object");
   const doc = value as Record<string, unknown>;
-  if (doc.version !== 1 && doc.version !== 2) throw new EditsError(`unsupported edits version ${String(doc.version)}`);
+  if (doc.version !== 1 && doc.version !== 2 && doc.version !== 3) throw new EditsError(`unsupported edits version ${String(doc.version)}`);
   const edits = emptyEdits();
-  if (doc.version === 2) {
-    const clips = parseClips(doc.clips);
+  if (doc.version === 2 || doc.version === 3) {
+    const clips = parseClips(doc.clips, doc.version === 3);
     if (clips.length > 0) {
-      edits.version = 2;
+      edits.version = clips.some((clip) => clip.gap) ? 3 : 2;
       edits.clips = clips;
     }
   }
@@ -70,13 +71,29 @@ export function parseEdits(value: unknown): RecordingEdits {
   return edits;
 }
 
+/** A gap as the sidecar holds it (version 3). */
+export interface SavedGap {
+  id: string;
+  gapMs: number;
+}
+
+/** The sidecar's JSON: `RecordingEdits` with gaps written as `SavedGap`. */
+export type SidecarEdits = Omit<RecordingEdits, "clips"> & { clips?: (Clip | SavedGap)[] };
+
 /** The JSON written to the sidecar: only what is set. */
-export function serializeEdits(edits: RecordingEdits): RecordingEdits {
+export function serializeEdits(edits: RecordingEdits): SidecarEdits {
   const clips = edits.clips && edits.clips.length > 0 ? edits.clips : null;
+  const gaps = clips?.some((clip) => clip.gap) ?? false;
   return {
-    version: clips ? 2 : 1,
+    version: gaps ? 3 : clips ? 2 : 1,
     ...(clips
-      ? { clips: clips.map((clip) => ({ id: clip.id, source: clip.source, startMs: Math.round(clip.startMs), endMs: Math.round(clip.endMs) })) }
+      ? {
+          clips: clips.map((clip) =>
+            clip.gap
+              ? { id: clip.id, gapMs: Math.round(clip.endMs - clip.startMs) }
+              : { id: clip.id, source: clip.source, startMs: Math.round(clip.startMs), endMs: Math.round(clip.endMs) },
+          ),
+        }
       : {}),
     ...(!clips && edits.trim ? { trim: { startMs: Math.round(edits.trim.startMs), endMs: Math.round(edits.trim.endMs) } } : {}),
     ...(edits.backdrop ? { backdrop: edits.backdrop } : {}),

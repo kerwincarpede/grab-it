@@ -11,7 +11,9 @@
 //! The edits can join other MP4s from the same recordings folder into a
 //! sequence of clips ([`ExportClip`]), each a stretch of its recording. The
 //! recording the editor opened sets the output size and frame rate; other
-//! recordings are fitted inside its video box with black bars.
+//! recordings are fitted inside its video box with black bars. A gap
+//! ([`ExportGap`]) between clips renders as the backdrop with a black video
+//! box, and silence.
 //!
 //! On export the page paints the backdrop (fill and shadow) and a mask of
 //! the video's rounded corners as PNGs at the output size. ffmpeg decodes
@@ -57,9 +59,11 @@ use crate::{
 /// src/recording/api.ts.
 pub const VIDEO_SCHEME: &str = "grab-it-video";
 /// The newest edits sidecar format version this build reads and writes:
-/// 2 adds `clips`. Version 1 (a trim of the recording itself) is still
-/// written whenever the sequence is that one clip.
-pub const EDITS_VERSION: u64 = 2;
+/// 2 adds `clips`, and 3 lets them hold gaps (`{id, gapMs}`). The page
+/// writes the oldest version that holds its edits: 1 (a trim of the
+/// recording itself) whenever the sequence is that one clip, 2 for clips
+/// without gaps.
+pub const EDITS_VERSION: u64 = 3;
 /// Ends the name of the edits sidecar beside an MP4.
 pub const EDITS_SUFFIX: &str = ".edits.json";
 /// The request header carrying the export plan as URI-encoded JSON.
@@ -100,8 +104,9 @@ pub fn edits_path(video: &Path) -> PathBuf {
 /// Accepts `{version: 1, ...}` with an optional `trim` object holding
 /// `startMs` and `endMs` and an optional `zooms` list, or `{version: 2,
 /// ...}` which may also hold a `clips` list of `{id, source, startMs,
-/// endMs}`; any other fields are kept as they are. The page drops a zoom it
-/// cannot read on its own.
+/// endMs}`, or `{version: 3, ...}` whose `clips` may also hold gaps of
+/// `{id, gapMs}`; any other fields are kept as they are. The page drops a
+/// zoom it cannot read on its own.
 pub fn validate_edits(value: &Value) -> Result<(), String> {
     let version = value.get("version").and_then(Value::as_u64);
     if !matches!(version, Some(1..=EDITS_VERSION)) {
@@ -118,8 +123,11 @@ pub fn validate_edits(value: &Value) -> Result<(), String> {
     }
     match value.get("clips") {
         None | Some(Value::Null) => {}
-        Some(Value::Array(clips)) if version == Some(2) => {
-            clips.iter().try_for_each(validate_clip)?;
+        Some(Value::Array(clips)) if version >= Some(2) => {
+            let gaps = version >= Some(3);
+            clips
+                .iter()
+                .try_for_each(|clip| validate_clip(clip, gaps))?;
         }
         Some(Value::Array(_)) => return Err("clips need edits version 2".to_owned()),
         Some(_) => return Err("the clips must be a list".to_owned()),
@@ -137,8 +145,9 @@ pub fn validate_edits(value: &Value) -> Result<(), String> {
 }
 
 /// One entry of a version 2 `clips` list: an id, the file name of a
-/// recording (no folders), and a stretch of it.
-fn validate_clip(clip: &Value) -> Result<(), String> {
+/// recording (no folders), and a stretch of it. With `gaps` (version 3) it
+/// may instead be an id and a `gapMs` length.
+fn validate_clip(clip: &Value, gaps: bool) -> Result<(), String> {
     let text = |key: &str| {
         clip.get(key)
             .and_then(Value::as_str)
@@ -146,6 +155,15 @@ fn validate_clip(clip: &Value) -> Result<(), String> {
     };
     if text("id").is_none() {
         return Err("a clip needs an id".to_owned());
+    }
+    if let Some(gap) = clip.get("gapMs") {
+        if !gaps {
+            return Err("gaps need edits version 3".to_owned());
+        }
+        return match gap.as_f64() {
+            Some(ms) if ms > 0.0 => Ok(()),
+            _ => Err("a gap needs a gapMs above 0".to_owned()),
+        };
     }
     match text("source") {
         Some(source) if !source.contains(['/', '\\']) && source != ".." => {}
@@ -732,6 +750,59 @@ impl ExportClip {
     pub fn duration_ms(&self) -> u64 {
         self.end_ms.saturating_sub(self.start_ms)
     }
+}
+
+/// A stretch of the sequence with no clip: the backdrop with a black video
+/// box, and silence. Mirrors `ExportGap` in src/recording/api.ts.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExportGap {
+    /// How long it lasts.
+    pub gap_ms: u64,
+}
+
+/// One entry of an export's sequence: a gap or a clip. Mirrors
+/// `ExportEntry` in src/recording/api.ts.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum ExportEntry {
+    Gap(ExportGap),
+    Clip(ExportClip),
+}
+
+impl From<ExportClip> for ExportEntry {
+    fn from(clip: ExportClip) -> Self {
+        Self::Clip(clip)
+    }
+}
+
+impl ExportEntry {
+    /// The clip, or `None` for a gap.
+    pub fn clip(&self) -> Option<&ExportClip> {
+        match self {
+            Self::Clip(clip) => Some(clip),
+            Self::Gap(_) => None,
+        }
+    }
+
+    /// Refuses an entry that could not be rendered into a `video` box.
+    pub fn check(&self, video: (u32, u32)) -> Result<(), String> {
+        match self {
+            Self::Clip(clip) => clip.check(video),
+            Self::Gap(gap) if gap.gap_ms < MIN_EXPORT_MS => {
+                Err("a gap is too short to export".to_owned())
+            }
+            Self::Gap(_) => Ok(()),
+        }
+    }
+
+    /// How long it plays.
+    pub fn duration_ms(&self) -> u64 {
+        match self {
+            Self::Clip(clip) => clip.duration_ms(),
+            Self::Gap(gap) => gap.gap_ms,
+        }
+    }
 
     /// How many frames it gives at `fps`.
     pub fn frames(&self, fps: u32) -> u64 {
@@ -744,8 +815,8 @@ impl ExportClip {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportPlan {
-    /// The sequence, played in order.
-    pub clips: Vec<ExportClip>,
+    /// The sequence, played in order: clips and the gaps between them.
+    pub clips: Vec<ExportEntry>,
     /// The output's size, even both ways.
     pub width: u32,
     pub height: u32,
@@ -776,22 +847,22 @@ impl ExportPlan {
         {
             return Err("the video does not fit inside the export".to_owned());
         }
-        if self.clips.is_empty() {
+        if !self.clips.iter().any(|entry| entry.clip().is_some()) {
             return Err("there is nothing to export".to_owned());
         }
         self.clips
             .iter()
-            .try_for_each(|clip| clip.check((self.video_width, self.video_height)))
+            .try_for_each(|entry| entry.check((self.video_width, self.video_height)))
     }
 
-    /// How many frames the export holds at `fps`, over all its clips.
+    /// How many frames the export holds at `fps`, over all its clips and gaps.
     pub fn frames(&self, fps: u32) -> u64 {
-        self.clips.iter().map(|clip| clip.frames(fps)).sum()
+        self.clips.iter().map(|entry| entry.frames(fps)).sum()
     }
 
     /// How long the export plays.
     pub fn duration_ms(&self) -> u64 {
-        self.clips.iter().map(ExportClip::duration_ms).sum()
+        self.clips.iter().map(ExportEntry::duration_ms).sum()
     }
 }
 
@@ -835,17 +906,41 @@ pub fn decode_args(input: &Path, clip: &ExportClip, fps: u32) -> Vec<OsString> {
     args
 }
 
-/// One clip's sound: its recording, or `None` when that has none.
+/// One entry's sound: a stretch of its recording, or with no `file`
+/// (a gap, or a recording without sound) silence as long as the stretch.
 pub struct ClipSound<'a> {
-    pub clip: &'a ExportClip,
+    pub start_ms: u64,
+    pub end_ms: u64,
     pub file: Option<&'a Path>,
+}
+
+impl<'a> ClipSound<'a> {
+    /// `entry`'s sound: `file` for a clip, silence for a gap.
+    pub fn of(entry: &ExportEntry, file: Option<&'a Path>) -> Self {
+        match entry {
+            ExportEntry::Clip(clip) => Self {
+                start_ms: clip.start_ms,
+                end_ms: clip.end_ms,
+                file,
+            },
+            ExportEntry::Gap(gap) => Self {
+                start_ms: 0,
+                end_ms: gap.gap_ms,
+                file: None,
+            },
+        }
+    }
+
+    fn duration_ms(&self) -> u64 {
+        self.end_ms.saturating_sub(self.start_ms)
+    }
 }
 
 /// ffmpeg's arguments to write `output` from the silent `video` with each
 /// clip's stretch of its recording's sound, resampled to 48 kHz stereo
 /// and joined in order, as AAC. Each clip's sound is exactly its length:
 /// padded with silence where its recording's sound stops early, and
-/// silence throughout when its recording has none.
+/// silence throughout when its recording has none or it is a gap.
 pub fn clip_sound_args(video: &Path, clips: &[ClipSound<'_>], output: &Path) -> Vec<OsString> {
     let mut args: Vec<OsString> = ["-hide_banner", "-loglevel", "error", "-y", "-i"]
         .into_iter()
@@ -854,9 +949,8 @@ pub fn clip_sound_args(video: &Path, clips: &[ClipSound<'_>], output: &Path) -> 
     args.push(video.as_os_str().to_owned());
     let mut filters = Vec::new();
     let mut inputs = 0;
-    for (index, sound) in clips.iter().enumerate() {
-        let clip = sound.clip;
-        match sound.file {
+    for (index, clip) in clips.iter().enumerate() {
+        match clip.file {
             Some(file) => {
                 args.push("-i".into());
                 args.push(file.as_os_str().to_owned());
@@ -1021,8 +1115,8 @@ struct ClipSource {
 struct ExportJob<'a> {
     output: &'a Path,
     plan: ExportPlan,
-    /// Each clip's recording, in the plan's order.
-    sources: Vec<ClipSource>,
+    /// Each clip's recording, in the plan's order; `None` for a gap.
+    sources: Vec<Option<ClipSource>>,
     /// The backdrop and mask, or none for the video alone.
     layers: Option<(RgbaImage, RgbaImage)>,
     /// The opened recording's frame rate, which every clip is decoded at.
@@ -1128,7 +1222,41 @@ fn render(
         let video_box = (plan.video_width, plan.video_height);
         let mut done: u64 = 0;
         let mut last_percent = None;
-        for (clip, source) in plan.clips.iter().zip(&sources) {
+        // A gap's frame: the backdrop with a black video box, or all black.
+        let gap_frame = || -> Result<RgbaImage, String> {
+            let boxed = black(plan.video_width, plan.video_height);
+            match &composer {
+                Some(composer) => Ok(composer.compose(&boxed)),
+                None => RgbaImage::from_raw(plan.width, plan.height, boxed)
+                    .ok_or_else(|| "a frame was the wrong size".to_owned()),
+            }
+        };
+        let mut report = |done: u64| {
+            let percent = (done * 100).checked_div(total).unwrap_or(100);
+            if last_percent != Some(percent) {
+                last_percent = Some(percent);
+                progress(ExportProgress {
+                    done: done.min(total),
+                    total,
+                });
+            }
+        };
+        for (entry, source) in plan.clips.iter().zip(&sources) {
+            let (clip, source) = match (entry, source) {
+                (ExportEntry::Clip(clip), Some(source)) => (clip, source),
+                (ExportEntry::Gap(_), _) => {
+                    let frame = gap_frame()?;
+                    for _ in 0..entry.frames(fps) {
+                        video.write(&frame).map_err(|err| err.to_string())?;
+                        done += 1;
+                        report(done);
+                    }
+                    continue;
+                }
+                (ExportEntry::Clip(_), None) => {
+                    return Err("every clip needs its recording".to_owned());
+                }
+            };
             let decoded_size = clip.decode_size();
             let clip_size = (clip.width, clip.height);
             // Each zoomed frame's view, at the clip's size in the box.
@@ -1160,14 +1288,7 @@ fn render(
                 };
                 video.write(&frame).map_err(|err| err.to_string())?;
                 done += 1;
-                let percent = (done * 100).checked_div(total).unwrap_or(100);
-                if last_percent != Some(percent) {
-                    last_percent = Some(percent);
-                    progress(ExportProgress {
-                        done: done.min(total),
-                        total,
-                    });
-                }
+                report(done);
                 Ok(())
             })?;
             if frames == 0 {
@@ -1182,9 +1303,11 @@ fn render(
             .clips
             .iter()
             .zip(&sources)
-            .map(|(clip, source)| ClipSound {
-                clip,
-                file: source.has_audio.then_some(source.path.as_path()),
+            .map(|(entry, source)| {
+                let file = source
+                    .as_ref()
+                    .and_then(|source| source.has_audio.then_some(source.path.as_path()));
+                ClipSound::of(entry, file)
             })
             .collect();
         ffmpeg::run(
@@ -1243,22 +1366,26 @@ pub async fn recording_export(
     .map_err(|err| format!("the export stopped: {err}"))?
 }
 
-/// The recording each clip of `plan` plays, from `recordings`. A clip of
-/// any other file, or of one that is gone, refuses the export.
+/// The recording each clip of `plan` plays, from `recordings`; `None` for
+/// a gap. A clip of any other file, or of one that is gone, refuses the
+/// export.
 fn clip_sources(
     ffmpeg_path: &Path,
     recordings: &Path,
     plan: &ExportPlan,
-) -> Result<Vec<ClipSource>, String> {
+) -> Result<Vec<Option<ClipSource>>, String> {
     plan.clips
         .iter()
-        .map(|clip| {
+        .map(|entry| {
+            let Some(clip) = entry.clip() else {
+                return Ok(None);
+            };
             let path = source_file(recordings, &clip.source)?;
-            Ok(ClipSource {
+            Ok(Some(ClipSource {
                 cursor: CursorPath::load(&path),
                 has_audio: ffmpeg::probe_file(ffmpeg_path, &path).audio,
                 path,
-            })
+            }))
         })
         .collect()
 }
@@ -1447,7 +1574,7 @@ mod tests {
 
     fn plan() -> ExportPlan {
         ExportPlan {
-            clips: vec![clip()],
+            clips: vec![clip().into()],
             width: 1080,
             height: 1920,
             x: 60,
@@ -1488,7 +1615,7 @@ mod tests {
 
     #[test]
     fn unknown_or_broken_edits_are_refused() {
-        assert!(validate_edits(&json!({ "version": 3 })).is_err());
+        assert!(validate_edits(&json!({ "version": 4 })).is_err());
         assert!(validate_edits(&json!({})).is_err());
         assert!(validate_edits(&json!({ "version": 1 })).is_ok());
         assert!(validate_edits(&json!({ "version": 1, "trim": null })).is_ok());
@@ -1507,6 +1634,29 @@ mod tests {
         fs::write(dir.path().join("clip.edits.json"), "{").unwrap();
         assert!(read_edits(&video).is_err());
         assert!(write_edits(&video, &json!({ "version": 9 })).is_err());
+    }
+
+    #[test]
+    fn version_3_clips_may_hold_gaps() {
+        let clip = json!({ "id": "c1", "source": "a.mp4", "startMs": 0, "endMs": 4000 });
+        let gap = |ms: f64| json!({ "id": "g1", "gapMs": ms });
+        assert!(validate_edits(&json!({ "version": 3 })).is_ok());
+        assert!(
+            validate_edits(&json!({ "version": 3, "clips": [clip.clone(), gap(1500.0)] })).is_ok()
+        );
+        // A version 3 sidecar without gaps is still fine.
+        assert!(validate_edits(&json!({ "version": 3, "clips": [clip.clone()] })).is_ok());
+        // Gaps are new in version 3.
+        assert!(
+            validate_edits(&json!({ "version": 2, "clips": [clip.clone(), gap(1500.0)] })).is_err()
+        );
+        assert!(validate_edits(&json!({ "version": 3, "clips": [gap(0.0)] })).is_err());
+        assert!(validate_edits(&json!({ "version": 3, "clips": [gap(-5.0)] })).is_err());
+        assert!(validate_edits(&json!({ "version": 3, "clips": [{ "gapMs": 1000 }] })).is_err());
+        assert!(
+            validate_edits(&json!({ "version": 3, "clips": [{ "id": "g", "gapMs": "1" }] }))
+                .is_err()
+        );
     }
 
     #[test]
@@ -1744,7 +1894,7 @@ mod tests {
             .is_err()
         );
         let with = |clip: ExportClip| ExportPlan {
-            clips: vec![self::clip(), clip],
+            clips: vec![self::clip().into(), clip.into()],
             ..plan()
         };
         // Every clip is long enough, fits in the box and has its size.
@@ -1767,12 +1917,72 @@ mod tests {
         );
         assert_eq!(plan().frames(60), 495);
         assert_eq!(
-            ExportClip {
+            ExportEntry::from(ExportClip {
                 end_ms: 1251,
                 ..clip()
-            }
+            })
             .frames(30),
             1
+        );
+    }
+
+    #[test]
+    fn gaps_come_with_the_plan_and_count_their_frames() {
+        let plan: ExportPlan = serde_json::from_str(
+            r#"{"clips":[{"gapMs":1000},{"source":"a.mp4","startMs":0,"endMs":5000,
+                "sourceWidth":1920,"sourceHeight":1080,"x":0,"y":0,"width":1920,"height":1080},
+                {"gapMs":2500}],
+                "width":1920,"height":1080,"x":0,"y":0,
+                "videoWidth":1920,"videoHeight":1080,"backdropBytes":0}"#,
+        )
+        .unwrap();
+        assert_eq!(plan.clips[0], ExportEntry::Gap(ExportGap { gap_ms: 1000 }));
+        assert!(plan.clips[1].clip().is_some());
+        assert_eq!(plan.check(), Ok(()));
+        assert_eq!(plan.duration_ms(), 8500);
+        assert_eq!(plan.frames(30), 30 + 150 + 75);
+        // A plan of gaps alone has nothing to show, and a gap has a length.
+        let gaps = ExportPlan {
+            clips: vec![ExportEntry::Gap(ExportGap { gap_ms: 1000 })],
+            ..plan.clone()
+        };
+        assert!(gaps.check().is_err());
+        let short = ExportPlan {
+            clips: vec![
+                plan.clips[1].clone(),
+                ExportEntry::Gap(ExportGap { gap_ms: 0 }),
+            ],
+            ..plan
+        };
+        assert!(short.check().is_err());
+    }
+
+    #[test]
+    fn a_gap_plays_silence() {
+        let first = clip();
+        let original = Path::new("/rec/clip.mp4");
+        let gap = ExportEntry::Gap(ExportGap { gap_ms: 1500 });
+        let sounds = [
+            ClipSound::of(&first.into(), Some(original)),
+            // A gap is silent even when handed a file.
+            ClipSound::of(&gap, Some(original)),
+        ];
+        assert_eq!(
+            strings(clip_sound_args(
+                Path::new("/rec/clip (edited).exporting.mp4"),
+                &sounds,
+                Path::new("/rec/clip (edited).mp4"),
+            )),
+            "-hide_banner -loglevel error -y -i /rec/clip (edited).exporting.mp4 \
+             -i /rec/clip.mp4 -filter_complex \
+             [1:a:0]atrim=start=1.250:end=9.500,asetpts=PTS-STARTPTS,\
+             aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,\
+             apad,atrim=duration=8.250[a0];\
+             anullsrc=r=48000:cl=stereo,atrim=duration=1.500,\
+             aformat=sample_fmts=fltp:channel_layouts=stereo[a1];\
+             [a0][a1]concat=n=2:v=0:a=1[sound] \
+             -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k -shortest \
+             -movflags +faststart /rec/clip (edited).mp4"
         );
     }
 
@@ -1791,14 +2001,14 @@ mod tests {
             zooms: Vec::new(),
         };
         let plan = ExportPlan {
-            clips: vec![clip(), second],
+            clips: vec![clip().into(), second.into()],
             ..plan()
         };
         assert_eq!(plan.check(), Ok(()));
         assert_eq!(plan.duration_ms(), 10_250);
         assert_eq!(plan.frames(30), 248 + 60);
         // A clip narrower than the box is decoded at its own size there.
-        assert_eq!(plan.clips[1].decode_size(), (676, 540));
+        assert_eq!(plan.clips[1].clip().unwrap().decode_size(), (676, 540));
     }
 
     #[test]
@@ -1854,15 +2064,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan.clips.len(), 2);
-        assert_eq!(plan.clips[0].zooms.len(), 1);
-        assert!(plan.clips[1].zooms.is_empty());
+        assert_eq!(plan.clips[0].clip().unwrap().zooms.len(), 1);
+        assert!(plan.clips[1].clip().unwrap().zooms.is_empty());
         assert_eq!(plan.check(), Ok(()));
     }
 
     #[test]
     fn zoomed_clips_need_sound_zooms() {
         let plan = |zooms| ExportPlan {
-            clips: vec![zoomed(zooms)],
+            clips: vec![zoomed(zooms).into()],
             ..plan()
         };
         assert_eq!(plan(vec![area_zoom(2.0)]).check(), Ok(()));
@@ -1904,18 +2114,9 @@ mod tests {
         };
         let original = Path::new("/rec/clip.mp4");
         let sounds = [
-            ClipSound {
-                clip: &first,
-                file: Some(original),
-            },
-            ClipSound {
-                clip: &silent,
-                file: None,
-            },
-            ClipSound {
-                clip: &again,
-                file: Some(original),
-            },
+            ClipSound::of(&first.into(), Some(original)),
+            ClipSound::of(&silent.into(), None),
+            ClipSound::of(&again.into(), Some(original)),
         ];
         assert_eq!(
             strings(clip_sound_args(

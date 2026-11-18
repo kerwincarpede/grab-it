@@ -445,6 +445,94 @@ describe("RecordingEditor", () => {
     await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, zooms: [AREA_ZOOM] }));
   });
 
+  it("splits the recording at the playhead with S and the Split button, one undo step each", async () => {
+    const backend = mockBackend();
+    render(<RecordingEditor />);
+    await loadVideo();
+    // 12 s over 120 px: 100 ms a pixel.
+    const track = screen.getByTestId("timeline-track");
+    placeAt(track, 120, 26);
+    // Within half a second of an edge, Split is off.
+    fireEvent.pointerDown(track, { clientX: 3 });
+    fireEvent.pointerUp(track, { clientX: 3 });
+    expect(screen.getByRole("button", { name: "Split" })).toBeDisabled();
+    fireEvent.keyDown(document.body, { key: "s" });
+    expect(saved(backend)).toEqual([]);
+
+    fireEvent.pointerDown(track, { clientX: 60 });
+    fireEvent.pointerUp(track, { clientX: 60 });
+    expect(screen.getByRole("button", { name: "Split" })).toBeEnabled();
+    fireEvent.keyDown(document.body, { key: "s" });
+    await waitFor(() =>
+      expect(lastSaved(backend)).toEqual({
+        version: 2,
+        clips: [
+          { id: "own", source: OWN, startMs: 0, endMs: 6000 },
+          { id: expect.any(String), source: OWN, startMs: 6000, endMs: 12_000 },
+        ],
+      }),
+    );
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+    // The playhead stays on the line between the two parts.
+    expect(screen.getByLabelText("Time")).toHaveTextContent("0:06.0 / 0:12.0");
+
+    // 12 s over 120 px still: split the second part at 9 s.
+    const joinedTrack = screen.getByTestId("timeline-track");
+    placeAt(joinedTrack, 120, 26);
+    fireEvent.pointerDown(joinedTrack, { clientX: 90 });
+    fireEvent.pointerUp(joinedTrack, { clientX: 90 });
+    await userEvent.click(screen.getByRole("button", { name: "Split" }));
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3));
+    expect(saved(backend)).toHaveLength(2);
+
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1 }));
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+
+  it("keeps zooms on their recording's time through a split and a gap, and exports without the cut", async () => {
+    const zoom = { id: "z1", startMs: 7000, endMs: 8000, scale: 2, focus: { kind: "area", x: 0.5, y: 0.5 } };
+    const backend = mockBackend({ version: 1, zooms: [zoom] });
+    render(<RecordingEditor />);
+    await loadVideo();
+    const track = screen.getByTestId("timeline-track");
+    placeAt(track, 120, 26);
+    fireEvent.pointerDown(track, { clientX: 20 });
+    fireEvent.pointerUp(track, { clientX: 20 });
+    fireEvent.keyDown(document.body, { key: "s" });
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
+    const joinedTrack = screen.getByTestId("timeline-track");
+    placeAt(joinedTrack, 120, 26);
+    fireEvent.pointerDown(joinedTrack, { clientX: 40 });
+    fireEvent.pointerUp(joinedTrack, { clientX: 40 });
+    fireEvent.keyDown(document.body, { key: "s" });
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3));
+    // Ripple delete the middle part, 2 s to 4 s.
+    fireEvent.focus(screen.getAllByRole("option")[1]);
+    fireEvent.keyDown(document.body, { key: "Delete" });
+    await waitFor(() =>
+      expect(lastSaved(backend)).toEqual({
+        version: 2,
+        clips: [
+          { id: "own", source: OWN, startMs: 0, endMs: 2000 },
+          { id: expect.any(String), source: OWN, startMs: 4000, endMs: 12_000 },
+        ],
+        zooms: [zoom],
+      }),
+    );
+    expect(saved(backend)).toHaveLength(3);
+    await userEvent.click(screen.getByRole("button", { name: "Export" }));
+    const { plan } = await exportCall(backend);
+    const entries = (plan as { clips: { startMs: number; endMs: number; zooms: unknown[] }[] }).clips;
+    expect(entries.map((clip) => [clip.startMs, clip.endMs])).toEqual([
+      [0, 2000],
+      [4000, 12_000],
+    ]);
+    expect(entries[1].zooms).toEqual([zoom]);
+  });
+
   describe("names the recording's sound in the status bar", () => {
     it("lists each source kept apart", async () => {
       mockBackend(null, null, ["microphone", "system"]);
@@ -733,6 +821,140 @@ describe("RecordingEditor", () => {
       unmount();
       expect(revokeObjectURL.mock.calls).toEqual([[secondUrl], [firstUrl]]);
       vi.unstubAllGlobals();
+    });
+
+    it("duplicates the selected clip right after itself, with the button and Ctrl+D, one undo step each", async () => {
+      const backend = mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      fireEvent.focus(screen.getByRole("option", { name: `${OTHER}, 0:06.0` }));
+      await userEvent.click(screen.getByRole("button", { name: "Duplicate" }));
+      const copy = { ...JOINED.clips[1], id: expect.any(String) };
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [...JOINED.clips, copy] }));
+      expect(screen.getAllByRole("option")).toHaveLength(3);
+      // The copy is selected, so Ctrl+D copies it again.
+      fireEvent.keyDown(document.body, { key: "d", ctrlKey: true });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [...JOINED.clips, copy, copy] }));
+      expect(saved(backend)).toHaveLength(2);
+
+      await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [...JOINED.clips, copy] }));
+      await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual(JOINED));
+    });
+
+    it("leaves a gap with Shift+Delete and the button, and Delete closes it", async () => {
+      const zoom = { id: "z2", source: OTHER, startMs: 1000, endMs: 3000, scale: 2, focus: { kind: "area", x: 0.5, y: 0.5 } };
+      const backend = mockBackend({ ...JOINED, zooms: [zoom] });
+      render(<RecordingEditor />);
+      await loadJoined();
+      fireEvent.focus(screen.getByRole("option", { name: `${OWN}, 0:04.0` }));
+      fireEvent.keyDown(document.body, { key: "Delete", shiftKey: true });
+      // Later clips stay where they were, and zooms keep their recording's time.
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 3, clips: [{ id: expect.any(String), gapMs: 4000 }, JOINED.clips[1]], zooms: [zoom] }));
+      const gap = screen.getByRole("option", { name: "Gap, 0:04.0" });
+      expect(gap).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByText("2 clips, 0:10.0")).toBeInTheDocument();
+      // The last clip that plays a recording cannot be deleted either way.
+      fireEvent.focus(screen.getByRole("option", { name: `${OTHER}, 0:06.0` }));
+      expect(screen.getByRole("button", { name: "Leave gap" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+      fireEvent.keyDown(document.body, { key: "Delete", shiftKey: true });
+      expect(saved(backend)).toHaveLength(1);
+
+      fireEvent.focus(screen.getByRole("option", { name: "Gap, 0:04.0" }));
+      expect(screen.queryByRole("button", { name: "Duplicate" })).not.toBeInTheDocument();
+      fireEvent.keyDown(document.body, { key: "Delete" });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [JOINED.clips[1]], zooms: [zoom] }));
+
+      await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 3, clips: [{ id: expect.any(String), gapMs: 4000 }, JOINED.clips[1]], zooms: [zoom] }));
+      await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ ...JOINED, zooms: [zoom] }));
+    });
+
+    it("ripple deletes the selected clip with the Delete button", async () => {
+      const backend = mockBackend({ ...JOINED, clips: [...JOINED.clips, { id: "c", source: OWN, startMs: 6000, endMs: 8000 }] });
+      render(<RecordingEditor />);
+      await loadJoined(3);
+      fireEvent.focus(screen.getByRole("option", { name: `${OTHER}, 0:06.0` }));
+      await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [JOINED.clips[0], { id: "c", source: OWN, startMs: 6000, endMs: 8000 }] }));
+      expect(screen.getByText("2 clips, 0:06.0")).toBeInTheDocument();
+    });
+
+    it("merges a gap moved next to another, keeping it selected and the playhead on it", async () => {
+      const third = { id: "c", source: OWN, startMs: 6000, endMs: 8000 };
+      const backend = mockBackend({ version: 3, clips: [JOINED.clips[0], { id: "g1", gapMs: 1000 }, JOINED.clips[1], { id: "g2", gapMs: 500 }, third] });
+      render(<RecordingEditor />);
+      await loadJoined(5);
+      fireEvent.focus(screen.getByRole("option", { name: "Gap, 0:00.5" }));
+      fireEvent.keyDown(document.body, { key: "ArrowLeft", altKey: true });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 3, clips: [JOINED.clips[0], { id: "g1", gapMs: 1500 }, JOINED.clips[1], third] }));
+      expect(screen.getByRole("option", { name: "Gap, 0:01.5" })).toHaveAttribute("aria-selected", "true");
+      // The playhead is at the merged gap's start, after the first clip.
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:04.0 / 0:13.5");
+    });
+
+    it("exports a gap as its length, between the clips", async () => {
+      const backend = mockBackend({ version: 3, clips: [JOINED.clips[0], { id: "g", gapMs: 1500 }, JOINED.clips[1]] });
+      render(<RecordingEditor />);
+      await loadJoined(3);
+      expect(screen.getByRole("option", { name: "Gap, 0:01.5" })).toBeInTheDocument();
+      const other = await previewVideo(OTHER);
+      setVideoMetadata(other, 6, 720, 720);
+      fireEvent.loadedMetadata(other);
+      await waitFor(() => expect(screen.getByRole("button", { name: "Export" })).toBeEnabled());
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan } = await exportCall(backend);
+      const entries = (plan as { clips: Record<string, unknown>[] }).clips;
+      expect(entries).toHaveLength(3);
+      expect(entries[0]).toMatchObject({ source: OWN, startMs: 1000, endMs: 5000 });
+      expect(entries[1]).toEqual({ gapMs: 1500 });
+      expect(entries[2]).toMatchObject({ source: OTHER, startMs: 0, endMs: 6000 });
+    });
+
+    it("plays a gap as a black box on the frame clock, then the next clip", async () => {
+      const clips = [
+        { id: "a", source: OWN, startMs: 8000, endMs: 12_000 },
+        { id: "g", gapMs: 1000 },
+        { id: "b", source: OWN, startMs: 0, endMs: 2000 },
+      ];
+      mockBackend({ version: 3, clips });
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+      render(<RecordingEditor />);
+      const video = await loadJoined(3);
+      const runFrames = () => act(() => frames.splice(0).forEach((frame) => frame(now)));
+      await userEvent.click(screen.getByRole("button", { name: "Play" }));
+      fireEvent.play(video);
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 12 });
+      Object.defineProperty(video, "paused", { configurable: true, value: true });
+      runFrames();
+      // Into the gap: the video waits, hidden and paused, and the playhead runs on.
+      expect(screen.getByTestId("recording-fit")).toHaveAttribute("data-gap", "true");
+      expect(pause).toHaveBeenCalled();
+      fireEvent.pause(video);
+      expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:04.0 / 0:07.0");
+      now = 500;
+      runFrames();
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:04.5 / 0:07.0");
+      expect(play).toHaveBeenCalledTimes(1);
+      now = 1100;
+      runFrames();
+      // On to the next clip, playing its recording from its start.
+      expect(screen.getByTestId("recording-fit")).not.toHaveAttribute("data-gap");
+      expect(video.currentTime).toBe(0);
+      expect(play).toHaveBeenCalledTimes(2);
     });
 
     it("marks a recording that is gone and holds Export back", async () => {

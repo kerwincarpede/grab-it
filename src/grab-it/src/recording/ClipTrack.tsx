@@ -1,5 +1,5 @@
 import { useRef, useState, type PointerEvent } from "react";
-import { clipLength, clipStarts, toSource, trimClip, type Clip } from "./clips";
+import { clipLength, clipStarts, isGap, toSource, trimClip, type Clip } from "./clips";
 import { formatTime } from "./edits";
 
 interface ClipTrackProps {
@@ -23,12 +23,17 @@ interface ClipTrackProps {
 /** An edge drag keeps the row's width and the sequence's length from when it began. */
 type Drag = { kind: "start" | "end"; id: string; x: number; ms: number; width: number; durationMs: number } | { kind: "move"; id: string; moved: boolean };
 
+/** The edges a clip is trimmed by; a gap has none. */
+const EDGES = ["start", "end"] as const;
+const NO_EDGES: readonly (typeof EDGES)[number][] = [];
+
 const percent = (ms: number, durationMs: number) => `${durationMs > 0 ? (ms / durationMs) * 100 : 0}%`;
 
 /**
  * The joined sequence: each clip end to end at its kept length, named by
  * its recording. Click to select, drag its body to reorder, or drag an
- * edge to trim or restore it within its recording.
+ * edge to trim or restore it within its recording. A gap shows as an
+ * empty block that can be selected and deleted, but not trimmed.
  */
 export default function ClipTrack({ clips, durationMs, sourceDuration, missing, selectedId, onSelect, onTrimPreview, onTrimCommit, onMove }: ClipTrackProps) {
   const rowRef = useRef<HTMLDivElement>(null);
@@ -87,8 +92,10 @@ export default function ClipTrack({ clips, durationMs, sourceDuration, missing, 
   return (
     <div className="clip-track" ref={rowRef} role="listbox" aria-label="Clips" aria-orientation="horizontal">
       {clips.map((clip, index) => {
-        const gone = missing.has(clip.source);
-        const label = `${clip.source}${gone ? " (missing)" : ""}, ${formatTime(clipLength(clip))}`;
+        const gap = isGap(clip);
+        const edges = gap ? NO_EDGES : EDGES;
+        const gone = !gap && missing.has(clip.source);
+        const label = gap ? `Gap, ${formatTime(clipLength(clip))}` : `${clip.source}${gone ? " (missing)" : ""}, ${formatTime(clipLength(clip))}`;
         return (
           <div
             key={clip.id}
@@ -97,8 +104,9 @@ export default function ClipTrack({ clips, durationMs, sourceDuration, missing, 
             tabIndex={0}
             aria-selected={clip.id === selectedId}
             aria-label={label}
-            title={`${label}. Drag to reorder; Alt+Left or Right moves it, Delete removes it`}
+            title={gap ? `${label}. Delete closes it` : `${label}. Drag to reorder; Alt+Left or Right moves it, Delete removes it, Shift+Delete leaves a gap`}
             data-missing={gone ? "true" : undefined}
+            data-gap={gap ? "true" : undefined}
             style={{ left: percent(starts[index], durationMs), width: percent(clipLength(clip), durationMs) }}
             onPointerDown={(event) => begin(event, { kind: "move", id: clip.id, moved: false })}
             onPointerMove={move}
@@ -106,8 +114,8 @@ export default function ClipTrack({ clips, durationMs, sourceDuration, missing, 
             onPointerCancel={end}
             onFocus={() => onSelect(clip.id)}
           >
-            <span className="clip-name">{gone ? `Missing: ${clip.source}` : clip.source}</span>
-            {(["start", "end"] as const).map((edge) => (
+            <span className="clip-name">{gap ? "Gap" : gone ? `Missing: ${clip.source}` : clip.source}</span>
+            {edges.map((edge) => (
               <div
                 key={edge}
                 className={`clip-edge ${edge}`}

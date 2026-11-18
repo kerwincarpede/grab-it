@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { RecordingEdits } from "./edits";
+import type { SidecarEdits } from "./edits";
 import type { CursorPath, Zoom } from "./zooms";
 
 /** Mirrors `RecordingInfo` in src-tauri/src/recording_editor.rs. */
@@ -64,12 +64,26 @@ export interface ExportClip {
 }
 
 /**
+ * A stretch with no clip: the backdrop with a black video box, and
+ * silence. Mirrors `ExportGap` in src-tauri/src/recording_editor.rs.
+ */
+export interface ExportGap {
+  gapMs: number;
+}
+
+/** One entry of an export's sequence. Mirrors `ExportEntry` in src-tauri/src/recording_editor.rs. */
+export type ExportEntry = ExportClip | ExportGap;
+
+/** Whether `entry` is a gap. */
+export const isExportGap = (entry: ExportEntry): entry is ExportGap => "gapMs" in entry;
+
+/**
  * What an export makes. Mirrors `ExportPlan` in
  * src-tauri/src/recording_editor.rs; sizes are in output pixels.
  */
 export interface ExportPlan {
-  /** The sequence, in order, at the opened recording's frame rate. */
-  clips: ExportClip[];
+  /** The sequence, in order, at the opened recording's frame rate: clips and gaps. */
+  clips: ExportEntry[];
   /** The output's size, even both ways. */
   width: number;
   height: number;
@@ -137,7 +151,7 @@ export async function fetchRecording(url: string, fetcher: typeof fetch = fetch)
   }
 }
 
-export function saveEdits(edits: RecordingEdits): Promise<void> {
+export function saveEdits(edits: SidecarEdits): Promise<void> {
   return invoke<void>("recording_save_edits", { edits });
 }
 

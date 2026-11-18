@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  canRemove,
+  canSplit,
   clipsOf,
+  duplicateClip,
+  gapOf,
+  leaveGap,
+  mergeGaps,
+  movedIndex,
+  splitClip,
   clipStarts,
   fitInside,
   insertClip,
@@ -103,6 +111,75 @@ describe("clips", () => {
     expect(moveClip([A, B], "b", 9)).toEqual([A, B]);
     expect(removeClip([A, B], "a")).toEqual([B]);
     expect(removeClip([A], "a")).toEqual([A]);
+  });
+
+  it("splits a clip at the playhead into two that meet there, each long enough", () => {
+    expect(splitClip([A, B], 0, 3000, "a2")).toEqual([{ ...A, endMs: 3000 }, { ...A, id: "a2", startMs: 3000 }, B]);
+    // Each part keeps at least half a second.
+    expect(canSplit([A], 0, 1499)).toBe(false);
+    expect(canSplit([A], 0, 1500)).toBe(true);
+    expect(canSplit([A], 0, 4501)).toBe(false);
+    expect(splitClip([A], 0, 4800, "a2")).toEqual([A]);
+    expect(canSplit([gapOf("g", 4000)], 0, 2000)).toBe(false);
+  });
+
+  it("duplicates a clip right after itself under a new id, never a gap", () => {
+    expect(duplicateClip([A, B], "a", "a2")).toEqual([A, { ...A, id: "a2" }, B]);
+    const gap = gapOf("g", 1000);
+    expect(duplicateClip([A, gap], "g", "g2")).toEqual([A, gap]);
+  });
+
+  it("leaves a gap the length of a deleted clip, merging it with neighbouring gaps", () => {
+    expect(leaveGap([A, B, C], "b", "g")).toEqual([A, gapOf("g", 2000), C]);
+    expect(leaveGap([A, gapOf("g", 1000), B], "b", "x")).toEqual([A, gapOf("g", 3000)]);
+    // Never the last clip that plays a recording.
+    expect(leaveGap([A, gapOf("g", 1000)], "a", "x")).toEqual([A, gapOf("g", 1000)]);
+    expect(canRemove([A, gapOf("g", 1000)], "a")).toBe(false);
+    expect(canRemove([A, gapOf("g", 1000)], "g")).toBe(true);
+  });
+
+  it("closes a gap or a clip with a ripple delete, merging the gaps it leaves side by side", () => {
+    expect(removeClip([A, gapOf("g", 1000), B], "g")).toEqual([A, B]);
+    expect(removeClip([gapOf("g", 1000), A, gapOf("h", 500), B], "a")).toEqual([gapOf("g", 1500), B]);
+    expect(mergeGaps([A, B])).toEqual([A, B]);
+  });
+
+  it("merges a gap moved next to another, and finds where it went", () => {
+    const g1 = gapOf("g1", 1000);
+    const g2 = gapOf("g2", 500);
+    const next = moveClip([A, g1, B, g2, C], "g2", 2);
+    expect(next).toEqual([A, gapOf("g1", 1500), B, C]);
+    expect(movedIndex(next, "g2", 2)).toBe(1);
+    // Moved up against a gap after it, it keeps its own id.
+    const after = moveClip([A, g1, B, g2, C], "g1", 2);
+    expect(after).toEqual([A, B, gapOf("g1", 1500), C]);
+    expect(movedIndex(after, "g1", 2)).toBe(2);
+  });
+
+  it("keeps a gap's time in the sequence", () => {
+    const clips = [A, gapOf("g", 1500), B];
+    expect(sequenceDuration(clips)).toBe(7500);
+    expect(clipStarts(clips)).toEqual([0, 4000, 5500]);
+    expect(toSource(clips, 4500)?.index).toBe(1);
+    expect(toSource(clips, 5500)).toEqual({ index: 2, clip: B, sourceMs: 0 });
+    expect(zoomsIn([zoom("z", 0, 99_000)], clips[1], OWN)).toEqual([]);
+  });
+
+  it("writes and reads gaps as version 3, and a sequence without them as before", () => {
+    const gapped = withClips({ version: 1 }, [A, gapOf("g", 1500), B], OWN, 8000);
+    expect(gapped.version).toBe(3);
+    const written = JSON.parse(JSON.stringify(serializeEdits(gapped)));
+    expect(written).toEqual({ version: 3, clips: [A, { id: "g", gapMs: 1500 }, B] });
+    expect(parseEdits(written)).toEqual(gapped);
+    // Closing the gap writes version 2 again, and one clip version 1.
+    expect(serializeEdits(withClips(gapped, [A, B], OWN, 8000)).version).toBe(2);
+    expect(serializeEdits(withClips(gapped, [A], OWN, 8000)).version).toBe(1);
+    // A gap needs version 3; gaps alone hold nothing to play.
+    expect(parseClips([A, { id: "g", gapMs: 1500 }])).toEqual([A]);
+    expect(parseClips([{ id: "g", gapMs: 1500 }], true)).toEqual([]);
+    expect(parseClips([A, { id: "g", gapMs: 0 }, { id: "h", gapMs: 500 }, { id: "i", gapMs: 500 }], true)).toEqual([A, gapOf("h", 1000)]);
+    expect(parseEdits({ version: 3, clips: [A, B] }).version).toBe(2);
+    expect(() => parseEdits({ version: 4 })).toThrow();
   });
 
   it("trims a clip within its recording, keeping it long enough", () => {
