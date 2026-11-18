@@ -593,7 +593,7 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
     mockEditor();
     await ready();
     const rail = within(screen.getByRole("toolbar", { name: "Annotation tools" }));
-    for (const name of ["Arrow", "Rectangle", "Ellipse", "Line", "Freehand", "Text", "Highlighter", "Blur", "Magnify", "Spotlight", "Step", "Stamp", "Crop", "Cut out", "Select", "Pan"]) {
+    for (const name of ["Arrow", "Rectangle", "Ellipse", "Line", "Freehand", "Text", "Callout", "Highlighter", "Blur", "Magnify", "Spotlight", "Step", "Stamp", "Crop", "Cut out", "Select", "Pan"]) {
       expect(rail.getByRole("button", { name })).toBeInTheDocument();
     }
     // Icon buttons: the name is the label, the tooltip adds the key.
