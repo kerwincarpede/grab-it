@@ -4,7 +4,7 @@ import "./recording.css";
 import { MAX_BACKDROP_PRESETS } from "../settings/api";
 import { chooseBackdropImage, saveBackdropPresetImage } from "../editor/api";
 import BackdropPanel from "../editor/BackdropPanel";
-import { BackdropIcon, ExportIcon, RedoIcon, TrashIcon, UndoIcon, ZoomInIcon } from "../editor/icons";
+import { BackdropIcon, CopyIcon, ExportIcon, RedoIcon, TrashIcon, UndoIcon, ZoomInIcon } from "../editor/icons";
 import { canRedo, canUndo, commit, initHistory, redo, undo, type History } from "../editor/history";
 import { BACKDROP_FILLS, type Backdrop } from "../editor/model";
 import { presetName } from "../editor/preferences";
@@ -18,22 +18,28 @@ import {
   recordingSource,
   saveEdits,
   type AudioKind,
-  type ExportClip,
+  type ExportEntry,
   type ExportProgress,
   type RecordingInfo,
   type RecordingSource,
 } from "./api";
 import {
+  canRemove,
+  canSplit,
   clipLength,
   clipStarts,
   clipsOf,
+  duplicateClip,
   fileNameOf,
   fitInside,
   insertClip,
+  isGap,
+  leaveGap,
   moveClip,
   newClipId,
   removeClip,
   sequenceDuration,
+  splitClip,
   tagZoom,
   toSequence,
   toSource,
@@ -88,6 +94,19 @@ const PlayIcon = () => (
   </svg>
 );
 
+const SplitIcon = () => (
+  <svg className="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" focusable="false">
+    <path d="M12 3v18M4 8h5v8H4M20 8h-5v8h5" />
+  </svg>
+);
+
+const GapIcon = () => (
+  <svg className="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" focusable="false">
+    <path d="M3 7h4v10H3M21 7h-4v10h4" />
+    <path d="M10 12h4" strokeDasharray="2 2" />
+  </svg>
+);
+
 const PauseIcon = () => (
   <svg className="icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
     <rect x="6" y="4.5" width="4" height="15" rx="1" />
@@ -132,6 +151,13 @@ function spanOf(clips: Clip[], own: string, index: number, ownDurationMs: number
   const start = clipStarts(clips)[index] ?? 0;
   const clip = clips[index];
   return { offset: start - clip.startMs, low: start, high: start + clipLength(clip) };
+}
+
+/** The recording of clip `index`, or over a gap of the nearest clip before it, else after it. */
+function sourceNear(clips: Clip[], index: number): string | null {
+  for (let i = index; i >= 0; i--) if (!isGap(clips[i])) return clips[i].source;
+  for (let i = index + 1; i < clips.length; i++) if (!isGap(clips[i])) return clips[i].source;
+  return null;
 }
 
 /** Why a recording's sound shows as Mixed sound. */
@@ -191,6 +217,10 @@ export default function RecordingEditor() {
   const requested = useRef(new Set<string>());
   const [clipDraft, setClipDraft] = useState<Clip[] | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  /** While playing over a gap: when its clock started and the playhead then. */
+  const gapClockRef = useRef<{ at: number; ms: number } | null>(null);
+  /** Whether playback is going through a gap, so the paused video is not a stop. */
+  const throughGapRef = useRef(false);
   /** Where to put the video once the recording it switches to has loaded. */
   const pendingRef = useRef<{ source: string; sourceMs: number; play: boolean } | null>(null);
   /** The recording whose position the player on show has taken. */
@@ -251,18 +281,21 @@ export default function RecordingEditor() {
   const sequenceMs = sequenceDuration(clips);
   const timelineDuration = joined ? sequenceMs : durationMs;
   const at = positionIn(clips, own, currentMs);
-  const currentSource = at?.clip.source ?? own;
+  /** Over a gap nothing plays: the video box is black and the sound silent. */
+  const onGap = at ? isGap(at.clip) : false;
+  // Over a gap the player of the nearest clip stays on show, hidden, so it is ready.
+  const currentSource = at ? (sourceNear(clips, at.index) ?? own) : own;
   const pathOf = (source: string): string | null => (!info ? null : source === own ? info.path : (sourceInfo[source]?.path ?? null));
   // Keep the DOM order stable even when the user reorders clips. Moving a
   // playing element in the DOM can reset its media pipeline in WebKitGTK.
-  const previewSources = useMemo(() => [...new Set(clips.map((clip) => clip.source))].sort(), [clips]);
+  const previewSources = useMemo(() => [...new Set(clips.filter((clip) => !isGap(clip)).map((clip) => clip.source))].sort(), [clips]);
   const currentMeta = meta[currentSource] as SourceMeta | undefined;
   const cursorOf = (source: string) => (source === own ? (info?.cursor ?? null) : (sourceInfo[source]?.cursor ?? null));
   const cursor = cursorOf(currentSource);
   const selectedClip = joined ? (clips.find((clip) => clip.id === selectedClipId) ?? null) : null;
-  const missingClip = clips.find((clip) => missing.has(clip.source)) ?? null;
+  const missingClip = clips.find((clip) => !isGap(clip) && missing.has(clip.source)) ?? null;
   /** Every clip's recording is there and its size known. */
-  const canExport = !missingClip && clips.every((clip) => meta[clip.source] !== undefined);
+  const canExport = !missingClip && clips.every((clip) => isGap(clip) || meta[clip.source] !== undefined);
 
   // Zooms keep their recording's time; the timeline shows each on its clip.
   const allZooms = useMemo(() => edits.zooms ?? [], [edits.zooms]);
@@ -319,12 +352,33 @@ export default function RecordingEditor() {
     setCurrentMs(ms);
     const pos = positionIn(list, own, ms);
     if (!pos) return;
+    if (isGap(pos.clip)) {
+      // Nothing plays over a gap; when playing, its clock runs on to the next clip.
+      pendingRef.current = null;
+      gapClockRef.current = null;
+      if (playing) {
+        throughGapRef.current = true;
+        video?.pause();
+      }
+      return;
+    }
+    // Leaving a gap while playing starts the video again.
+    const resume = throughGapRef.current && playing;
+    throughGapRef.current = false;
+    gapClockRef.current = null;
     if (video && loadedRef.current === pos.clip.source && video.dataset.source === pos.clip.source) {
       pendingRef.current = null;
       try {
         video.currentTime = pos.sourceMs / 1000;
       } catch {
         // Not seekable yet: it opens at the start.
+      }
+      if (resume && video.paused) {
+        try {
+          void video.play()?.catch(() => setPlaying(false));
+        } catch {
+          setPlaying(false);
+        }
       }
     } else {
       pendingRef.current = { source: pos.clip.source, sourceMs: pos.sourceMs, play: pendingRef.current?.play ?? playing };
@@ -416,14 +470,58 @@ export default function RecordingEditor() {
     seek(timelineMs(next, own, index, selectedClip.startMs), next);
   };
 
+  /** Deletes the selected clip or gap and closes the stretch it took (a ripple delete). */
   const removeSelectedClip = () => {
-    if (!selectedClip || clips.length <= 1) return;
+    if (!selectedClip || !canRemove(clips, selectedClip.id)) return;
     const index = clips.findIndex((clip) => clip.id === selectedClip.id);
+    const start = clipStarts(clips)[index];
     const next = removeClip(clips, selectedClip.id);
     commitClips(next);
     setSelectedClipId(null);
-    const stay = Math.min(index, next.length - 1);
-    seek(timelineMs(next, own, stay, next[stay].startMs), next);
+    // The playhead goes to where the removed stretch was, now the start of what followed it.
+    const pos = toSource(next, Math.min(start, sequenceDuration(next)));
+    if (pos) seek(timelineMs(next, own, pos.index, pos.sourceMs), next);
+  };
+
+  /** Deletes the selected clip and leaves a gap of its length; on a gap, closes it. */
+  const leaveGapForSelected = () => {
+    if (!selectedClip || !canRemove(clips, selectedClip.id)) return;
+    if (isGap(selectedClip)) {
+      removeSelectedClip();
+      return;
+    }
+    const gapId = newClipId();
+    const next = leaveGap(clips, selectedClip.id, gapId);
+    if (next === clips) return;
+    commitClips(next);
+    // A gap merged into one before it keeps that one's id.
+    const gap = next.find((clip) => clip.id === gapId) ?? toSource(next, currentMs)?.clip;
+    setSelectedClipId(gap && isGap(gap) ? gap.id : null);
+  };
+
+  /** Copies the selected clip right after itself, and selects the copy. */
+  const duplicateSelectedClip = () => {
+    if (!selectedClip || isGap(selectedClip)) return;
+    const copyId = newClipId();
+    const next = duplicateClip(clips, selectedClip.id, copyId);
+    if (next === clips) return;
+    commitClips(next);
+    setSelectedClipId(copyId);
+    setSelectedZoomId(null);
+    const index = next.findIndex((clip) => clip.id === copyId);
+    seek(timelineMs(next, own, index, next[index].startMs), next);
+  };
+
+  /** Whether the clip under the playhead can be split there, each part long enough. */
+  const canSplitHere = at !== null && !exporting && durationMs > 0 && canSplit(clips, at.index, at.sourceMs);
+
+  /** Splits the clip under the playhead in two that meet at the playhead. */
+  const splitAtPlayhead = () => {
+    if (!at || !canSplitHere) return;
+    const next = splitClip(clips, at.index, at.sourceMs);
+    if (next === clips) return;
+    commitClips(next);
+    seek(timelineMs(next, own, at.index + 1, at.sourceMs), next);
   };
 
   const commitTrim = (next: Trim) => {
@@ -476,6 +574,8 @@ export default function RecordingEditor() {
     const placed = next.flatMap((zoom): Zoom[] => {
       const index = shown.owner.get(zoom.id) ?? positionIn(clips, own, zoom.startMs)?.index ?? 0;
       const clip = clips[index];
+      // A gap shows nothing to zoom on.
+      if (isGap(clip)) return [];
       const { offset, low, high } = spanOf(clips, own, index, durationMs);
       const was = before.get(zoom.id);
       const original = originals.get(zoom.id);
@@ -490,10 +590,11 @@ export default function RecordingEditor() {
     commitEdits({ ...edits, zooms: [...kept, ...placed].sort((a, b) => a.startMs - b.startMs) });
   };
 
-  const canAddZoom = timelineDuration > 0 && addZoom(zooms, currentMs, timelineDuration) !== null;
+  const canAddZoom = timelineDuration > 0 && !onGap && addZoom(zooms, currentMs, timelineDuration) !== null;
 
   const addZoomAt = (ms: number) => {
-    const added = addZoom(zooms, ms, timelineDuration);
+    const target = positionIn(clips, own, ms);
+    const added = target && isGap(target.clip) ? null : addZoom(zooms, ms, timelineDuration);
     if (!added) {
       setMessage("There is no room for a zoom there.");
       return;
@@ -540,6 +641,8 @@ export default function RecordingEditor() {
   const pause = () => {
     // A recording still loading for the next clip must not start once it has.
     if (pendingRef.current) pendingRef.current.play = false;
+    throughGapRef.current = false;
+    gapClockRef.current = null;
     videoRef.current?.pause();
     setPlaying(false);
   };
@@ -553,6 +656,7 @@ export default function RecordingEditor() {
   const handingOn = () => {
     const now = playRef.current;
     const video = videoRef.current;
+    if (throughGapRef.current) return true;
     if (!now.joined || !now.at || !video) return false;
     if (pendingRef.current) return pendingRef.current.play;
     return now.at.index < now.clips.length - 1 && (video.ended || video.currentTime * 1000 >= now.at.clip.endMs);
@@ -573,7 +677,16 @@ export default function RecordingEditor() {
     const video = videoRef.current;
     if (joined) {
       // From the first clip when at (or past) the end of the last.
-      if (currentMs >= sequenceMs - 50) seek(0);
+      const from = currentMs >= sequenceMs - 50 ? 0 : currentMs;
+      if (from !== currentMs) seek(0);
+      // Over a gap the playhead runs on its own clock; the video waits for the next clip.
+      const pos = positionIn(clips, own, from);
+      if (pos && isGap(pos.clip)) {
+        throughGapRef.current = true;
+        gapClockRef.current = null;
+        setPlaying(true);
+        return;
+      }
       if (pendingRef.current) {
         pendingRef.current.play = true;
         return;
@@ -591,16 +704,71 @@ export default function RecordingEditor() {
   // While playing, the playhead follows every frame and stops at the trimmed end.
   // Joined, it goes on to the next clip at each clip's end, switching recording when it must.
   const endRef = useRef(trim.endMs);
-  const playRef = useRef({ clips, joined, own, at });
+  const playRef = useRef({ clips, joined, own, at, ms: currentMs });
   useEffect(() => {
     endRef.current = trim.endMs;
-    playRef.current = { clips, joined, own, at };
+    playRef.current = { clips, joined, own, at, ms: currentMs };
   });
   useEffect(() => {
     if (!playing) return;
     let frame = 0;
+    /** Goes on from clip `index` to the one after it, which starts at sequence time `start`. */
+    const enter = (video: HTMLVideoElement | null, index: number, start: number): boolean => {
+      const now = playRef.current;
+      const next = now.clips[index + 1] as Clip | undefined;
+      if (!next) {
+        throughGapRef.current = false;
+        gapClockRef.current = null;
+        video?.pause();
+        setCurrentMs(sequenceDuration(now.clips));
+        setPlaying(false);
+        return false;
+      }
+      playRef.current = { ...now, at: { index: index + 1, clip: next, sourceMs: next.startMs }, ms: start };
+      setCurrentMs(start);
+      if (isGap(next)) {
+        // Silence and a black box until the next clip: the video waits, paused.
+        throughGapRef.current = true;
+        gapClockRef.current = { at: performance.now(), ms: start };
+        video?.pause();
+        return true;
+      }
+      throughGapRef.current = false;
+      gapClockRef.current = null;
+      if (video && next.source === loadedRef.current) {
+        video.currentTime = next.startMs / 1000;
+        if (video.paused) startVideo(video);
+      } else {
+        // The new recording plays from its clip's start once it loads.
+        pendingRef.current = { source: next.source, sourceMs: next.startMs, play: true };
+      }
+      return true;
+    };
     const step = () => {
       const video = videoRef.current;
+      const gapNow = playRef.current;
+      if (gapNow.joined && gapNow.at && isGap(gapNow.at.clip)) {
+        // A gap plays on the frame clock, from wherever the playhead is in it.
+        // A clip that has just become a gap under the playhead stops its video.
+        if (video && !video.paused) {
+          throughGapRef.current = true;
+          video.pause();
+        }
+        const time = performance.now();
+        const clock = gapClockRef.current && gapClockRef.current.ms <= gapNow.ms ? gapClockRef.current : { at: time, ms: gapNow.ms };
+        gapClockRef.current = clock;
+        const ms = clock.ms + (time - clock.at);
+        const start = clipStarts(gapNow.clips)[gapNow.at.index];
+        const end = start + clipLength(gapNow.at.clip);
+        if (ms < end) {
+          playRef.current = { ...gapNow, ms };
+          setCurrentMs(ms);
+        } else if (!enter(video, gapNow.at.index, end)) {
+          return;
+        }
+        frame = requestAnimationFrame(step);
+        return;
+      }
       if (!video) {
         frame = requestAnimationFrame(step);
         return;
@@ -617,22 +785,12 @@ export default function RecordingEditor() {
         // A clip that keeps its recording's end may never reach `endMs`:
         // the video ends a little before, on its last frame.
         if (ms >= clip.endMs || video.ended) {
-          const next = now.clips[index + 1] as Clip | undefined;
-          if (!next) {
+          if (index === now.clips.length - 1) {
             video.pause();
             setCurrentMs(sequenceDuration(now.clips));
             return;
           }
-          const start = clipStarts(now.clips)[index + 1];
-          playRef.current = { ...now, at: { index: index + 1, clip: next, sourceMs: next.startMs } };
-          setCurrentMs(start);
-          if (next.source === loadedRef.current) {
-            video.currentTime = next.startMs / 1000;
-            if (video.paused) startVideo(video);
-          } else {
-            // The new recording plays from its clip's start once it loads.
-            pendingRef.current = { source: next.source, sourceMs: next.startMs, play: true };
-          }
+          if (!enter(video, index, clipStarts(now.clips)[index + 1])) return;
         } else {
           setCurrentMs(toSequence(now.clips, index, ms));
         }
@@ -689,10 +847,21 @@ export default function RecordingEditor() {
 
   // Space plays and pauses, unless a control has the keyboard. Ctrl/⌘ Z
   // undoes, and Ctrl/⌘ Shift Z or Ctrl Y redoes, unless a field has the text.
-  // Alt and the arrow keys move the selected clip; Delete removes it.
-  const keysRef = useRef({ toggle, undoEdit, redoEdit, moveSelectedClip, removeSelectedClip, hasClip: false });
+  // Alt and the arrow keys move the selected clip; Delete removes it and
+  // Shift Delete leaves a gap. S splits at the playhead; Ctrl/⌘ D duplicates.
+  const keysRef = useRef({ toggle, undoEdit, redoEdit, moveSelectedClip, removeSelectedClip, leaveGapForSelected, duplicateSelectedClip, splitAtPlayhead, hasClip: false });
   useEffect(() => {
-    keysRef.current = { toggle, undoEdit, redoEdit, moveSelectedClip, removeSelectedClip, hasClip: selectedClip !== null && !selectedZoom && !exporting };
+    keysRef.current = {
+      toggle,
+      undoEdit,
+      redoEdit,
+      moveSelectedClip,
+      removeSelectedClip,
+      leaveGapForSelected,
+      duplicateSelectedClip,
+      splitAtPlayhead,
+      hasClip: selectedClip !== null && !selectedZoom && !exporting,
+    };
   });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -705,6 +874,16 @@ export default function RecordingEditor() {
         else keysRef.current.undoEdit();
         return;
       }
+      if (mod && !event.altKey && !event.shiftKey && key === "d" && keysRef.current.hasClip && !isTyping(event.target)) {
+        event.preventDefault();
+        keysRef.current.duplicateSelectedClip();
+        return;
+      }
+      if (!mod && !event.altKey && !event.shiftKey && key === "s" && !isTyping(event.target)) {
+        event.preventDefault();
+        keysRef.current.splitAtPlayhead();
+        return;
+      }
       if (keysRef.current.hasClip && !mod && !isTyping(event.target)) {
         if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
           event.preventDefault();
@@ -713,7 +892,8 @@ export default function RecordingEditor() {
         }
         if (!event.altKey && (event.key === "Delete" || event.key === "Backspace")) {
           event.preventDefault();
-          keysRef.current.removeSelectedClip();
+          if (event.shiftKey) keysRef.current.leaveGapForSelected();
+          else keysRef.current.removeSelectedClip();
           return;
         }
       }
@@ -794,7 +974,8 @@ export default function RecordingEditor() {
       const shape = recordingLayout(videoSize, edits.backdrop);
       const layers = edits.backdrop ? await exportLayers(shape, edits.backdrop, sources()) : null;
       const owners = zoomOwners(savedClips, allZooms, own);
-      const exportClips = savedClips.map((clip, index): ExportClip => {
+      const exportClips = savedClips.map((clip, index): ExportEntry => {
+        if (isGap(clip)) return { gapMs: clipLength(clip) };
         const size = meta[clip.source];
         const box = clip.source === own ? { x: 0, y: 0, width: shape.videoWidth, height: shape.videoHeight } : fitInside(size.width, size.height, shape.videoWidth, shape.videoHeight);
         return {
@@ -931,12 +1112,54 @@ export default function RecordingEditor() {
             className="text-button"
             onClick={() => addZoomAt(currentMs)}
             disabled={!canAddZoom || exporting}
-            title={canAddZoom ? "Zoom in from the playhead" : "Move the playhead clear of the other zooms to add one"}
+            title={canAddZoom ? "Zoom in from the playhead" : onGap ? "Move the playhead onto a clip to add a zoom" : "Move the playhead clear of the other zooms to add one"}
           >
             <ZoomInIcon />
             Zoom
           </button>
+          <button
+            type="button"
+            className="text-button"
+            onClick={splitAtPlayhead}
+            disabled={!canSplitHere}
+            title={canSplitHere ? "Split the clip at the playhead (S)" : "Move the playhead at least half a second inside a clip to split it"}
+          >
+            <SplitIcon />
+            Split
+          </button>
         </div>
+        {selectedClip && !selectedZoom && (
+          <div className="bar-group" role="group" aria-label={isGap(selectedClip) ? "Gap" : `Clip ${selectedClip.source}`}>
+            {!isGap(selectedClip) && (
+              <button type="button" className="text-button" onClick={duplicateSelectedClip} disabled={exporting} title="Copy the clip right after itself (Ctrl+D)">
+                <CopyIcon />
+                Duplicate
+              </button>
+            )}
+            <button
+              type="button"
+              className="text-button"
+              onClick={removeSelectedClip}
+              disabled={exporting || !canRemove(clips, selectedClip.id)}
+              title={canRemove(clips, selectedClip.id) ? (isGap(selectedClip) ? "Close the gap (Delete)" : "Delete the clip and close the gap it leaves (Delete)") : "The last clip cannot be deleted"}
+            >
+              <TrashIcon />
+              Delete
+            </button>
+            {!isGap(selectedClip) && (
+              <button
+                type="button"
+                className="text-button"
+                onClick={leaveGapForSelected}
+                disabled={exporting || !canRemove(clips, selectedClip.id)}
+                title={canRemove(clips, selectedClip.id) ? "Delete the clip and leave a gap of its length (Shift+Delete)" : "The last clip cannot be deleted"}
+              >
+                <GapIcon />
+                Leave gap
+              </button>
+            )}
+          </div>
+        )}
         {selectedZoom && (
           <div className="bar-group zoom-controls" role="group" aria-label={zoomLabel(selectedZoom)}>
             <div className="bar-group segmented" role="group" aria-label="Zoom on">
@@ -993,7 +1216,7 @@ export default function RecordingEditor() {
         >
           {backdrop && <canvas ref={canvasRef} className="recording-backdrop" aria-hidden="true" />}
           <div className="recording-frame" style={frameStyle} data-joined={joined ? "true" : undefined}>
-            <div className="recording-fit" style={fitStyle}>
+            <div className="recording-fit" style={fitStyle} data-gap={onGap ? "true" : undefined} data-testid="recording-fit">
             {previewSources.map((source) => {
               const path = pathOf(source);
               if (!path) return null;
@@ -1013,7 +1236,7 @@ export default function RecordingEditor() {
                   onEnded={active ? () => { if (!handingOn()) setPlaying(false); } : undefined}
                   onSeeked={active ? () => setFrameTick((tick) => tick + 1) : undefined}
                   onTimeUpdate={active ? (event) => {
-                    if (playing || pendingRef.current) return;
+                    if (playing || pendingRef.current || onGap) return;
                     const ms = event.currentTarget.currentTime * 1000;
                     setCurrentMs(joined && at ? toSequence(clips, at.index, ms) : ms);
                   } : undefined}

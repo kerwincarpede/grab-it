@@ -1,6 +1,6 @@
 ---
 title: Timeline and trim
-description: Play, pause and seek a recording, and cut its start and end.
+description: Play, pause and seek a recording, cut its start and end, and split, duplicate and delete parts of it.
 sidebar:
   order: 1
 ---
@@ -29,6 +29,19 @@ A clip is at least half a second long: the handles stop that close together. To 
 
 The trim is saved when you let go of a handle, like every other edit, and the editor opens at the trimmed start next time. To put the handles back where they were, [undo](/grab-it/video-editor/#undo-and-redo) the trim.
 
+## Split, duplicate and delete
+
+To cut a mistake out of the middle of a recording, split it on each side of the mistake and delete the part in between.
+
+- **Split** in the top bar, or `S`, cuts the clip under the playhead in two at the playhead. Each part is at least half a second long, so **Split** is off closer than that to either end of a clip. After the first split the timeline shows the clips end to end, as when you [join recordings](/grab-it/video-editor/join-recordings/).
+- Click a clip to select it. **Duplicate**, or `Ctrl D` (`⌘ D` on macOS), puts a copy of it right after it.
+- **Delete**, or `Delete`, removes the selected clip and closes up the space it leaves, so what came after moves up.
+- **Leave gap**, or `Shift Delete`, removes the selected clip and leaves a gap of the same length, so everything after it stays where it was.
+
+A gap shows on the timeline as an empty block. It plays as the backdrop with a black video box and no sound, in the preview and in the export. Click a gap to select it, and press `Delete` or click **Delete** to close it. Gaps side by side become one gap.
+
+The last clip can't be deleted. Zooms stay on the moment of the recording they were made on, whatever you split, copy or delete. Each of these edits is saved at once, and you can [undo](/grab-it/video-editor/#undo-and-redo) it.
+
 ## Sound
 
 The status bar names the recording's sound:
@@ -49,8 +62,12 @@ The status bar names the recording's sound:
 | `Delete` / `Backspace` | A zoom | Delete it |
 | `Esc` | A zoom | Deselect it |
 | Arrow keys | The zoom area | Move it a little, or more with `Shift` |
+| `S` | Anywhere but a control | Split the clip under the playhead |
 | `Alt` + `←` `→` | A clip | Move it earlier or later |
-| `Delete` / `Backspace` | A clip | Remove it, unless it's the last |
+| `Ctrl D` (`⌘ D`) | A clip | Duplicate it |
+| `Delete` / `Backspace` | A clip | Delete it and close the space, unless it's the last |
+| `Shift Delete` | A clip | Delete it and leave a gap, unless it's the last |
+| `Delete` / `Backspace` | A gap | Close it |
 | `Esc` | The backdrop panel | Close it |
 
 See [Zooms](/grab-it/video-editor/zooms/) for the zoom row, and [Join recordings](/grab-it/video-editor/join-recordings/) for clips.

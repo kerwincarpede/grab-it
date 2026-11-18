@@ -263,11 +263,30 @@ The sidecar holds the list only when the sequence is not a single clip of its ow
 }
 ```
 
-With `clips`, `trim` is not written. A zoom keeps its recording's time and gains `source` (absent for the sidecar's own recording), so it moves with its clip; one outside its clip's kept stretch stays saved but is hidden. `validate_edits` reads versions 1 and 2 and refuses a clip whose source is not a bare file name. The Library gains nothing until Export.
+With `clips`, `trim` is not written. A zoom keeps its recording's time and gains `source` (absent for the sidecar's own recording), so it moves with its clip; one outside its clip's kept stretch stays saved but is hidden. `validate_edits` reads versions 1 to 3 and refuses a clip whose source is not a bare file name. The Library gains nothing until Export.
 
 The recording the editor opened sets the output size, the video box on the backdrop and the frame rate, whatever the order; other recordings are fitted inside that box, centred, with black bars (`fitInside`). `recording_source` gives the page another recording's path, frame rate, pointer path and whether it has sound, refusing anything that is not an MP4 in the folder; a recording that is gone shows as missing and disables Export. The preview keeps one video element for each recording in the sequence. At a cut it seeks the next clip's player to its start and continues playback. Other players stay mounted and paused so repeated seeks can reuse the same media and, on Linux, the same blob URL.
 
-On export the plan holds the clips in order (`ExportClip`: source, stretch, the recording's size and its fitted box, its zooms). Rust resolves each source with `allowed_video`, decodes each clip in turn with its own `decode_args`, zooms and pointer path into one encoder at the opened recording's frame rate, and reports progress over all frames. The sound is one `filter_complex`: each clip's audio is `atrim`med, resampled to 48 kHz stereo and `concat`enated in order, and a recording without sound gives silence of the clip's length (`anullsrc`). Whether a recording has sound comes from `ffmpeg::Probe::audio`. Clips cut straight from one to the next.
+On export the plan holds the clips in order (`ExportClip`: source, stretch, the recording's size and its fitted box, its zooms), and gaps as `{gapMs}` (`ExportGap`; the two are `ExportEntry`). Rust resolves each source with `allowed_video`, decodes each clip in turn with its own `decode_args`, zooms and pointer path into one encoder at the opened recording's frame rate, and reports progress over all frames. The sound is one `filter_complex`: each clip's audio is `atrim`med, resampled to 48 kHz stereo and `concat`enated in order, and a recording without sound gives silence of the clip's length (`anullsrc`). Whether a recording has sound comes from `ffmpeg::Probe::audio`. Clips cut straight from one to the next.
+
+#### Splitting and gaps
+
+**Split** (`S`) cuts the clip under the playhead into two clips of its recording that meet at the playhead's time in it (`splitClip`); the first keeps its id. Each part keeps at least `MIN_CLIP_MS`, so Split is off nearer an edge, and splitting a recording that was one clip makes it a sequence. With a clip selected, **Duplicate** (Ctrl/⌘ D) inserts a copy under a new id after it, **Delete** (`Delete`/`Backspace`) removes it and closes the stretch it took (`removeClip`), and **Leave gap** (`Shift` + `Delete`) puts a gap of its length in its place (`leaveGap`). A sequence keeps at least one clip of a recording, so both deletes are off on the last one. A gap is selectable on the timeline and either delete closes it. Neighbouring gaps merge into one (`mergeGaps`), and gaps at the start or end stay. Selecting a clip or gap clears the zoom selection and the other way round, so one key acts once. Each edit is one undo entry and saves the sidecar.
+
+In memory a gap is a `Clip` with `gap: true`, no `source`, and `endMs` its length from `startMs` 0, so `clipStarts`, `toSource` and the rest work unchanged; no zoom is ever on it. The sidecar holds it as `{id, gapMs}`, and a sidecar with a gap is written as version 3, which builds that read only versions 1 and 2 refuse, and so never write over. A sequence without gaps is still written as version 1 or 2:
+
+```json
+{
+  "version": 3,
+  "clips": [
+    { "id": "own", "source": "Grab-it 2026-03-07 09-05-01.mp4", "startMs": 0, "endMs": 4000 },
+    { "id": "g1", "gapMs": 1500 },
+    { "id": "c2", "source": "Grab-it 2026-03-07 09-05-01.mp4", "startMs": 6000, "endMs": 12000 }
+  ]
+}
+```
+
+The preview shows a gap as the backdrop with a black video box: every player is paused and hidden, and while playing, the playhead runs on a `requestAnimationFrame` clock (`performance.now`) until the next clip, whose player then seeks and plays. The export renders a gap's frames (`ExportEntry::frames`, counted in the total and progress) as the backdrop with a black video box, or all black without a backdrop, and its sound as `anullsrc` silence of its length.
 
 ### Search and OCR
 

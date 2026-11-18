@@ -9,19 +9,36 @@
  *
  * The sidecar holds `clips` (version 2) only when the sequence is not a
  * single clip of its own recording; otherwise it keeps the version 1
- * `trim`, so a sidecar older builds read stays readable by them.
+ * `trim`, so a sidecar older builds read stays readable by them. A
+ * sequence holding a gap, a stretch with no clip, is written as version 3,
+ * which builds without gaps refuse and so never write over.
+ *
+ * In memory a gap is a `Clip` with `gap: true`, no source, and `endMs` its
+ * length from a `startMs` of 0, so lengths and sequence times work for
+ * both; the sidecar holds it as `{id, gapMs}`.
  */
 import { MIN_CLIP_MS, isWhole, trimOf, type RecordingEdits } from "./edits";
 import type { Zoom } from "./zooms";
 
 export interface Clip {
   id: string;
-  /** The file name of its recording, in `<save folder>/recordings/`. */
+  /** The file name of its recording, in `<save folder>/recordings/`; empty for a gap. */
   source: string;
-  /** The stretch kept, in its recording's time. */
+  /** The stretch kept, in its recording's time; for a gap, 0 and its length. */
   startMs: number;
   endMs: number;
+  /** Set on a gap: the backdrop with a black video box, and silence. */
+  gap?: true;
 }
+
+/** Whether `clip` is a gap rather than a stretch of a recording. */
+export const isGap = (clip: Clip) => clip.gap === true;
+
+/** A gap `ms` long. */
+export const gapOf = (id: string, ms: number): Clip => ({ id, source: "", startMs: 0, endMs: Math.max(1, Math.round(ms)), gap: true });
+
+/** The clips that play a recording, without the gaps. */
+export const sourceClips = (clips: Clip[]) => clips.filter((clip) => !isGap(clip));
 
 /** Where a sequence time falls: the clip, its index, and the time in its recording. */
 export interface ClipAt {
@@ -41,9 +58,11 @@ export function newClipId(): string {
 
 /**
  * Reads the sidecar's `clips`: an entry that is not understood is dropped
- * on its own, and so is a second clip with an id already taken.
+ * on its own, and so is a second clip with an id already taken. Gaps
+ * (`{id, gapMs}`) are read only with `gaps` (version 3); neighbouring ones
+ * are merged.
  */
-export function parseClips(value: unknown): Clip[] {
+export function parseClips(value: unknown, gaps = false): Clip[] {
   if (!Array.isArray(value)) return [];
   const clips: Clip[] = [];
   const ids = new Set<string>();
@@ -51,12 +70,19 @@ export function parseClips(value: unknown): Clip[] {
     if (!entry || typeof entry !== "object") continue;
     const clip = entry as Record<string, unknown>;
     if (typeof clip.id !== "string" || !clip.id || ids.has(clip.id)) continue;
+    if ("gapMs" in clip) {
+      if (!gaps || !isNum(clip.gapMs) || clip.gapMs <= 0) continue;
+      ids.add(clip.id);
+      clips.push(gapOf(clip.id, clip.gapMs));
+      continue;
+    }
     if (typeof clip.source !== "string" || !clip.source || /[\\/]/.test(clip.source)) continue;
     if (!isNum(clip.startMs) || !isNum(clip.endMs) || clip.startMs < 0 || clip.endMs <= clip.startMs) continue;
     ids.add(clip.id);
     clips.push({ id: clip.id, source: clip.source, startMs: Math.round(clip.startMs), endMs: Math.round(clip.endMs) });
   }
-  return clips;
+  // A sequence of gaps alone has nothing to play.
+  return sourceClips(clips).length > 0 ? mergeGaps(clips) : [];
 }
 
 /**
@@ -71,19 +97,19 @@ export function clipsOf(edits: RecordingEdits, own: string, ownDurationMs: numbe
 
 /**
  * `edits` holding `clips`: a single clip of `own` is written as the
- * version 1 trim (none when it keeps all `ownDurationMs`), anything else
- * as version 2 `clips`.
+ * version 1 trim (none when it keeps all `ownDurationMs`), a sequence with
+ * a gap as version 3 `clips`, anything else as version 2 `clips`.
  */
 export function withClips(edits: RecordingEdits, clips: Clip[], own: string, ownDurationMs: number): RecordingEdits {
   const rest = { ...edits };
   delete rest.clips;
   delete rest.trim;
-  if (clips.length === 1 && clips[0].source === own) {
+  if (clips.length === 1 && clips[0].source === own && !isGap(clips[0])) {
     const { startMs, endMs } = clips[0];
     const trim = { startMs, endMs };
     return { ...rest, version: 1, ...(isWhole(trim, ownDurationMs) ? {} : { trim }) };
   }
-  return { ...rest, version: 2, clips };
+  return { ...rest, version: clips.some(isGap) ? 3 : 2, clips };
 }
 
 /** How long a clip plays. */
@@ -160,13 +186,74 @@ export function moveClip(clips: Clip[], id: string, to: number): Clip[] {
   const target = clamp(to, 0, clips.length - 1);
   if (target === from) return clips;
   const rest = clips.filter((clip) => clip.id !== id);
-  return [...rest.slice(0, target), clips[from], ...rest.slice(target)];
+  return mergeGaps([...rest.slice(0, target), clips[from], ...rest.slice(target)]);
 }
 
-/** `clips` without clip `id`; the last clip is never removed. */
+/** `clips` with each run of neighbouring gaps made one, keeping the first's id. */
+export function mergeGaps(clips: Clip[]): Clip[] {
+  const merged: Clip[] = [];
+  for (const clip of clips) {
+    const last = merged[merged.length - 1] as Clip | undefined;
+    if (last && isGap(last) && isGap(clip)) merged[merged.length - 1] = gapOf(last.id, clipLength(last) + clipLength(clip));
+    else merged.push(clip);
+  }
+  return merged.length === clips.length && merged.every((clip, index) => clip === clips[index]) ? clips : merged;
+}
+
+/** Whether clip `id` may be deleted: a gap always, a clip unless it is the last that plays a recording. */
+export function canRemove(clips: Clip[], id: string): boolean {
+  const clip = clips.find((each) => each.id === id);
+  if (!clip) return false;
+  return isGap(clip) || sourceClips(clips).length > 1;
+}
+
+/**
+ * `clips` without clip `id`, closing the stretch it took (a ripple
+ * delete). The last clip that plays a recording is never removed.
+ */
 export function removeClip(clips: Clip[], id: string): Clip[] {
-  if (clips.length <= 1) return clips;
-  return clips.filter((clip) => clip.id !== id);
+  if (!canRemove(clips, id)) return clips;
+  return mergeGaps(clips.filter((clip) => clip.id !== id));
+}
+
+/**
+ * `clips` with clip `id` replaced by a gap of its length, so later clips
+ * stay where they were. Neighbouring gaps merge; a gap is left as it is,
+ * and the last clip that plays a recording is never removed.
+ */
+export function leaveGap(clips: Clip[], id: string, gapId: string = newClipId()): Clip[] {
+  const clip = clips.find((each) => each.id === id);
+  if (!clip || isGap(clip) || !canRemove(clips, id)) return clips;
+  return mergeGaps(clips.map((each) => (each.id === id ? gapOf(gapId, clipLength(clip)) : each)));
+}
+
+/**
+ * Whether clip `index` can be split at `sourceMs` in its recording: each
+ * part keeps at least `MIN_CLIP_MS`. A gap is never split.
+ */
+export function canSplit(clips: Clip[], index: number, sourceMs: number): boolean {
+  const clip = clips[index] as Clip | undefined;
+  if (!clip || isGap(clip)) return false;
+  return sourceMs - clip.startMs >= MIN_CLIP_MS && clip.endMs - sourceMs >= MIN_CLIP_MS;
+}
+
+/**
+ * `clips` with clip `index` split at `sourceMs` into two clips of its
+ * recording that meet there: the first keeps its id. Unchanged when
+ * `canSplit` is false.
+ */
+export function splitClip(clips: Clip[], index: number, sourceMs: number, secondId: string = newClipId()): Clip[] {
+  if (!canSplit(clips, index, sourceMs)) return clips;
+  const clip = clips[index];
+  const at = Math.round(sourceMs);
+  return [...clips.slice(0, index), { ...clip, endMs: at }, { ...clip, id: secondId, startMs: at }, ...clips.slice(index + 1)];
+}
+
+/** `clips` with a copy of clip `id`, under a new id, right after it. A gap is not copied. */
+export function duplicateClip(clips: Clip[], id: string, copyId: string = newClipId()): Clip[] {
+  const index = clips.findIndex((clip) => clip.id === id);
+  if (index < 0 || isGap(clips[index])) return clips;
+  return insertClip(clips, index, { ...clips[index], id: copyId });
 }
 
 /**
