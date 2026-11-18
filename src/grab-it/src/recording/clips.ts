@@ -189,6 +189,17 @@ export function moveClip(clips: Clip[], id: string, to: number): Clip[] {
   return mergeGaps([...rest.slice(0, target), clips[from], ...rest.slice(target)]);
 }
 
+/**
+ * Where clip `id` is in `next`, the result of `moveClip` to index `to`. A
+ * gap moved up against a gap before it merges into that one, which keeps
+ * its id: then the index is that merged gap's.
+ */
+export function movedIndex(next: Clip[], id: string, to: number): number {
+  const index = next.findIndex((clip) => clip.id === id);
+  if (index >= 0) return index;
+  return clamp(to - 1, 0, next.length - 1);
+}
+
 /** `clips` with each run of neighbouring gaps made one, keeping the first's id. */
 export function mergeGaps(clips: Clip[]): Clip[] {
   const merged: Clip[] = [];

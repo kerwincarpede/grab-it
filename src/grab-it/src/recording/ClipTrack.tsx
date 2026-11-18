@@ -23,6 +23,10 @@ interface ClipTrackProps {
 /** An edge drag keeps the row's width and the sequence's length from when it began. */
 type Drag = { kind: "start" | "end"; id: string; x: number; ms: number; width: number; durationMs: number } | { kind: "move"; id: string; moved: boolean };
 
+/** The edges a clip is trimmed by; a gap has none. */
+const EDGES = ["start", "end"] as const;
+const NO_EDGES: readonly (typeof EDGES)[number][] = [];
+
 const percent = (ms: number, durationMs: number) => `${durationMs > 0 ? (ms / durationMs) * 100 : 0}%`;
 
 /**
@@ -89,6 +93,7 @@ export default function ClipTrack({ clips, durationMs, sourceDuration, missing, 
     <div className="clip-track" ref={rowRef} role="listbox" aria-label="Clips" aria-orientation="horizontal">
       {clips.map((clip, index) => {
         const gap = isGap(clip);
+        const edges = gap ? NO_EDGES : EDGES;
         const gone = !gap && missing.has(clip.source);
         const label = gap ? `Gap, ${formatTime(clipLength(clip))}` : `${clip.source}${gone ? " (missing)" : ""}, ${formatTime(clipLength(clip))}`;
         return (
@@ -110,7 +115,7 @@ export default function ClipTrack({ clips, durationMs, sourceDuration, missing, 
             onFocus={() => onSelect(clip.id)}
           >
             <span className="clip-name">{gap ? "Gap" : gone ? `Missing: ${clip.source}` : clip.source}</span>
-            {!gap && (["start", "end"] as const).map((edge) => (
+            {edges.map((edge) => (
               <div
                 key={edge}
                 className={`clip-edge ${edge}`}

@@ -883,6 +883,19 @@ describe("RecordingEditor", () => {
       expect(screen.getByText("2 clips, 0:06.0")).toBeInTheDocument();
     });
 
+    it("merges a gap moved next to another, keeping it selected and the playhead on it", async () => {
+      const third = { id: "c", source: OWN, startMs: 6000, endMs: 8000 };
+      const backend = mockBackend({ version: 3, clips: [JOINED.clips[0], { id: "g1", gapMs: 1000 }, JOINED.clips[1], { id: "g2", gapMs: 500 }, third] });
+      render(<RecordingEditor />);
+      await loadJoined(5);
+      fireEvent.focus(screen.getByRole("option", { name: "Gap, 0:00.5" }));
+      fireEvent.keyDown(document.body, { key: "ArrowLeft", altKey: true });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 3, clips: [JOINED.clips[0], { id: "g1", gapMs: 1500 }, JOINED.clips[1], third] }));
+      expect(screen.getByRole("option", { name: "Gap, 0:01.5" })).toHaveAttribute("aria-selected", "true");
+      // The playhead is at the merged gap's start, after the first clip.
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:04.0 / 0:13.5");
+    });
+
     it("exports a gap as its length, between the clips", async () => {
       const backend = mockBackend({ version: 3, clips: [JOINED.clips[0], { id: "g", gapMs: 1500 }, JOINED.clips[1]] });
       render(<RecordingEditor />);

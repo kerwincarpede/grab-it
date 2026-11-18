@@ -34,6 +34,7 @@ import {
   fitInside,
   insertClip,
   isGap,
+  movedIndex,
   leaveGap,
   moveClip,
   newClipId,
@@ -466,8 +467,9 @@ export default function RecordingEditor() {
     const next = moveClip(clips, selectedClip.id, from + by);
     if (next === clips) return;
     commitClips(next);
-    const index = next.findIndex((clip) => clip.id === selectedClip.id);
-    seek(timelineMs(next, own, index, selectedClip.startMs), next);
+    const index = movedIndex(next, selectedClip.id, from + by);
+    setSelectedClipId(next[index].id);
+    seek(timelineMs(next, own, index, next[index].startMs), next);
   };
 
   /** Deletes the selected clip or gap and closes the stretch it took (a ripple delete). */
@@ -1298,7 +1300,8 @@ export default function RecordingEditor() {
                 const next = moveClip(clips, id, to);
                 if (next === clips) return;
                 commitClips(next);
-                const index = next.findIndex((clip) => clip.id === id);
+                const index = movedIndex(next, id, to);
+                setSelectedClipId(next[index].id);
                 seek(timelineMs(next, own, index, next[index].startMs), next);
               }}
             />

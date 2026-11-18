@@ -7,6 +7,7 @@ import {
   gapOf,
   leaveGap,
   mergeGaps,
+  movedIndex,
   splitClip,
   clipStarts,
   fitInside,
@@ -141,6 +142,18 @@ describe("clips", () => {
     expect(removeClip([A, gapOf("g", 1000), B], "g")).toEqual([A, B]);
     expect(removeClip([gapOf("g", 1000), A, gapOf("h", 500), B], "a")).toEqual([gapOf("g", 1500), B]);
     expect(mergeGaps([A, B])).toEqual([A, B]);
+  });
+
+  it("merges a gap moved next to another, and finds where it went", () => {
+    const g1 = gapOf("g1", 1000);
+    const g2 = gapOf("g2", 500);
+    const next = moveClip([A, g1, B, g2, C], "g2", 2);
+    expect(next).toEqual([A, gapOf("g1", 1500), B, C]);
+    expect(movedIndex(next, "g2", 2)).toBe(1);
+    // Moved up against a gap after it, it keeps its own id.
+    const after = moveClip([A, g1, B, g2, C], "g1", 2);
+    expect(after).toEqual([A, B, gapOf("g1", 1500), C]);
+    expect(movedIndex(after, "g1", 2)).toBe(2);
   });
 
   it("keeps a gap's time in the sequence", () => {
