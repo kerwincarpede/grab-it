@@ -85,7 +85,11 @@ export function isInstantOverlay(hash: string = window.location.hash): boolean {
   return routeFromHash(hash) === "overlay" && routeHasFlag(hash, "instant");
 }
 
-/** Windows shows its capture overlays together once their images are ready. */
+/**
+ * True in a Windows overlay (`#/overlay?windows`): a see-through window laid
+ * over the frozen screen, which the backend already has on show. The
+ * overlays are shown together once every page is up, ahead of their images.
+ */
 export function isWindowsOverlay(hash: string = window.location.hash): boolean {
   return routeFromHash(hash) === "overlay" && routeHasFlag(hash, "windows");
 }
@@ -125,7 +129,7 @@ export function imageType(bytes: ArrayBuffer): string {
   return head[0] === 0x42 && head[1] === 0x4d ? "image/bmp" : "image/png";
 }
 
-/** The frozen image is ready for the backend to show. */
+/** This overlay is ready for the backend to show. */
 export function overlayReady(): Promise<void> {
   return invoke<void>("overlay_ready");
 }

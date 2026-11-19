@@ -380,9 +380,11 @@ Ranked by likely payoff. Each says how to measure it with the bench.
    canvas. It doesn't cost frames here, but it is power on battery, and
    possibly frames on slower Macs.
 5. **BMP on Windows and Linux.** Chromium's and WebKitGTK's BMP decoders
-   should take V5 bit fields with alpha. On those platforms the overlay is
-   hidden until its image is painted, so a faster decode shortens the
-   visible pause directly. Verify there before switching `encode_for_page`.
+   should take V5 bit fields with alpha. On X11 the overlay is hidden until
+   its image is painted, so a faster decode shortens the visible pause
+   directly. On Windows the frozen screen is shown natively first
+   (`freeze.rs`), and the image only gates the loupe and the hover blur.
+   Verify there before switching `encode_for_page`.
 6. **Verify by hand.** None of this has been felt with a real trackpad, or
    seen in Safari's Web Inspector (Develop menu, then the overlay's
    webview, in a `npm run tauri dev` build). A Timelines recording while

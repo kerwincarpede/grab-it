@@ -17,8 +17,10 @@
 //!   monitors are frozen. The frozen image is still being sent to the page
 //!   then, and slides in under the dim unnoticed, being the same picture as
 //!   the desktop behind it.
-//! - On Windows the overlays stay hidden until all pages have their images
-//!   ready. Their backgrounds are transparent during the handoff to WebView2.
+//! - On Windows each monitor is put on screen the moment it is captured,
+//!   in a bare window of its own ([`crate::freeze`]), so the desktop stops
+//!   where it was captured. The see-through overlays are shown over those
+//!   together, once every page is up, and their images follow as on macOS.
 //! - On X11 each overlay waits for its own frozen image ([`overlay_ready`]).
 
 use std::{
@@ -83,7 +85,8 @@ struct Frame {
     /// `image` for the page ([`encode_for_page`]), being written from the
     /// moment the monitor froze.
     encoded: Encoded,
-    /// On Windows the page has its image ready. On macOS it has asked what to show.
+    /// On Windows the page is ready to be shown. On macOS it has asked what
+    /// to show.
     responded: bool,
 }
 
@@ -129,6 +132,11 @@ struct Session {
     /// The mouse pointer as the monitors froze.
     /// Boxed, so an open session stays small beside the other phases.
     pointer: Option<Box<crate::pointer::Snapshot>>,
+    /// Windows: the frozen screens on show under the overlays, or `None`
+    /// when they could not be shown and the overlays lie over the live
+    /// desktop until their images arrive.
+    #[cfg(target_os = "windows")]
+    freeze: Option<crate::freeze::Freeze>,
 }
 
 #[derive(Default)]
@@ -385,7 +393,15 @@ pub fn open(
         trace(format_args!("windows listed in {:?}", started.elapsed()));
         listed
     });
-    let frames = match screen::capture_monitors() {
+    // Windows: read ahead of the frozen screens, which the pointer is over
+    // once they show.
+    #[cfg(target_os = "windows")]
+    let pointer = crate::pointer::snapshot().map(Box::new);
+    #[cfg(target_os = "windows")]
+    let (captured, freeze) = freeze_monitors(app);
+    #[cfg(not(target_os = "windows"))]
+    let captured = screen::capture_monitors();
+    let frames = match captured {
         Ok(frames) => frames,
         Err(err) => {
             let state = app.state::<OverlayState>();
@@ -397,6 +413,7 @@ pub fn open(
             return Err(err);
         }
     };
+    #[cfg(not(target_os = "windows"))]
     let pointer = crate::pointer::snapshot().map(Box::new);
     trace(format_args!("monitors frozen in {:?}", started.elapsed()));
     let desktop = listing.join().unwrap_or_default();
@@ -413,6 +430,8 @@ pub fn open(
         frames: HashMap::new(),
         windows: desktop.windows,
         pointer,
+        #[cfg(target_os = "windows")]
+        freeze,
     };
     let mut spares = {
         let state = app.state::<OverlayState>();
@@ -546,6 +565,26 @@ pub fn open(
         settle(&app, id);
     });
     Ok(())
+}
+
+/// Windows: freezes every monitor with its frozen screen on show
+/// ([`crate::freeze`]). If that fails the monitors are still captured, and
+/// the overlays open over the live desktop.
+#[cfg(target_os = "windows")]
+#[allow(clippy::type_complexity)]
+fn freeze_monitors(
+    app: &AppHandle,
+) -> (
+    Result<Vec<(MonitorInfo, RgbaImage)>, String>,
+    Option<crate::freeze::Freeze>,
+) {
+    match crate::freeze::capture_monitors(app) {
+        Ok((frames, freeze)) => (Ok(frames), Some(freeze)),
+        Err(err) => {
+            eprintln!("Grab-it: could not show the frozen screen: {err}");
+            (screen::capture_monitors(), None)
+        }
+    }
 }
 
 /// How often the pointer is checked for a move to another display's
@@ -866,15 +905,22 @@ fn create_window(
         // rather than only making it key, so any display takes the first
         // drag.
         .accept_first_mouse(true);
-    // Keep the desktop visible until WebKit or WebView2 presents its
-    // first frame. Take focus only when the overlay is shown, since
-    // wry can activate Grab-it while building a focused spare.
+    // See-through: on macOS the desktop shows through until the frozen
+    // image arrives, and on Windows the frozen screen under it does. Take
+    // focus only when the overlay is shown, since wry can activate Grab-it
+    // while building a focused spare.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     let builder = builder.transparent(true).focused(false);
     // The setup toolbar's Refresh camera list opens a camera for a moment
     // to read the cameras' names.
     let builder = crate::webcam::allow_camera(builder);
     let window = builder.build()?;
+    // Shown and closed in one frame: Windows otherwise fades a window in
+    // and out, which over a whole screen is the desktop dimming.
+    #[cfg(target_os = "windows")]
+    if let Ok(hwnd) = window.hwnd() {
+        crate::freeze::without_transitions(hwnd.0);
+    }
     if let Err(err) = crate::webcam::enable_media_streams(&window) {
         eprintln!("Grab-it: could not let the overlay list the cameras: {err}");
     }
@@ -1052,6 +1098,12 @@ fn dismiss(app: &AppHandle, session: &Session, give_back: bool) {
     // to another of its windows on the way.
     if give_back {
         give_back_focus(app, session);
+    }
+    // Ahead of the overlays, which show the same picture: the other way
+    // round the screen would flash to it without its tint.
+    #[cfg(target_os = "windows")]
+    if let Some(freeze) = &session.freeze {
+        freeze.close();
     }
     for label in session.frames.keys() {
         if let Some(window) = app.get_webview_window(label) {
@@ -1474,8 +1526,9 @@ pub fn overlay_image(
     Ok(tauri::ipc::Response::new(encoded))
 }
 
-/// The page has its frozen image ready. On Windows wait for every page
-/// before showing the overlays.
+/// The page is ready to be shown: on X11 with its frozen image, on Windows
+/// as soon as it knows what to show, the frozen screen being on show under
+/// it. On Windows wait for every page before showing the overlays.
 #[tauri::command]
 pub fn overlay_ready(window: WebviewWindow, state: State<'_, OverlayState>) -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -1529,7 +1582,7 @@ fn windows_overlay_ready(window: WebviewWindow, state: &OverlayState) -> Result<
 
 #[cfg(target_os = "windows")]
 fn reveal_windows_overlays(app: &AppHandle, id: u64) -> Result<(), String> {
-    let monitors = {
+    let (monitors, order) = {
         let state = app.state::<OverlayState>();
         let phase = state.lock();
         let Phase::Open(session) = &*phase else {
@@ -1538,11 +1591,15 @@ fn reveal_windows_overlays(app: &AppHandle, id: u64) -> Result<(), String> {
         if session.id != id {
             return Ok(());
         }
-        session
+        let monitors = session
             .frames
             .iter()
             .map(|(label, frame)| (label.clone(), frame.monitor.clone()))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        (
+            monitors,
+            session.freeze.as_ref().map(crate::freeze::Freeze::order),
+        )
     };
     let cursor = app.cursor_position().ok();
     let mut windows = Vec::with_capacity(monitors.len());
@@ -1565,6 +1622,13 @@ fn reveal_windows_overlays(app: &AppHandle, id: u64) -> Result<(), String> {
     }
     if let Some((window, _)) = windows.get(focus.unwrap_or(0)) {
         window.set_focus().map_err(|err| err.to_string())?;
+    }
+    if let Some(order) = order {
+        for (window, monitor) in &windows {
+            if let Ok(hwnd) = window.hwnd() {
+                order.keep_under(monitor.index, hwnd.0);
+            }
+        }
     }
     for (window, _) in &windows {
         window
@@ -1966,6 +2030,8 @@ mod tests {
                 frames: HashMap::new(),
                 windows: Vec::new(),
                 pointer: None,
+                #[cfg(target_os = "windows")]
+                freeze: None,
             });
             assert_eq!(phase.take_chooser().is_some(), chooser);
             assert_eq!(matches!(phase, Phase::Idle), chooser);

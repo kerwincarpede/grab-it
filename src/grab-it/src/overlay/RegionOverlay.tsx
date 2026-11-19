@@ -475,9 +475,12 @@ function RegionOverlay() {
       unlisten?.();
     };
   }, [windows]);
-  // A hidden window waits for its decoded image. An error is reported too,
-  // or it would never be seen. Windows tints the overlays after all are shown.
-  const readyToShow = (info !== null && (image !== null || instant)) || error !== null;
+  // A hidden window waits for its decoded image, except on Windows, where
+  // the frozen screen is already on show under this see-through page. An
+  // error is reported too, or it would never be seen. Windows tints the
+  // overlays after all are shown.
+  const readyToShow =
+    (info !== null && (image !== null || instant || windows)) || error !== null;
   useEffect(() => {
     if (!readyToShow || reported.current || (windows && hasRevealListener === null)) return;
     reported.current = true;
@@ -1171,7 +1174,8 @@ function RegionOverlay() {
           />
         </>
       )}
-      {!windowMode && !screenSource && pointer && (
+      {/* On Windows the page is shown ahead of its image: no empty loupe meanwhile. */}
+      {!windowMode && !screenSource && pointer && !(windows && image === null) && (
         <Loupe
           image={image}
           pointer={pointer}
