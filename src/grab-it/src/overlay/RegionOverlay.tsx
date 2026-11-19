@@ -63,7 +63,8 @@ import {
 } from "./geometry";
 import { drawBackdrop } from "./backdrop";
 import Loupe from "./Loupe";
-import RecordSetup from "./RecordSetup";
+import RecordSetup, { RecordOptionsFields } from "./RecordSetup";
+import { nextCountdown } from "./recordOptions";
 import { ChooserToolbar, SizeFields } from "./ChooserToolbar";
 import { EMPTY_TRAIL, movedTo, pointedAt, reachedToolbar } from "./pointerRest";
 import { RATIOS, TIMER_KEY, TIMER_STEPS, TOOLS, toolbarLayout, type RatioId, type Tool } from "./chooser";
@@ -103,8 +104,6 @@ const SIZE_CHIP: Size = { width: 300, height: 46 };
 /** Half the setup toolbar's height, and room for the hint beside it, in CSS px. */
 const SETUP_HALF = 23;
 const SETUP_HINT_GAP = 10;
-/** Room the setup toolbar takes under Capture & record's toolbar, gap included. */
-const SETUP_ROOM = 54;
 /** How near the edge the setup toolbar's centre may be dragged. */
 const SETUP_EDGE = 40;
 /**
@@ -118,6 +117,12 @@ const TOOLBAR_ROOM = 58;
 const TOOLBAR_ROW = 44;
 /** The toolbar's gap from the bottom edge, when it moves there out of a selection's way. */
 const TOOLBAR_BOTTOM = 12;
+/**
+ * Room Record's options take in the toolbar, in CSS px: Record lays the
+ * toolbar out as a display this much narrower would, so its options shrink
+ * and then move to a second row sooner.
+ */
+const RECORD_ROOM = 400;
 
 /** What confirms each kind of selection: the main button's label, and the key tip's. */
 const CONFIRM_LABELS: Record<OverlayIntent, string> = {
@@ -268,8 +273,8 @@ interface SizePanelProps {
 /**
  * Beside the Record overlay's adjustable region: its width and height in
  * image pixels, which take an exact size, and the ratio presets. Placed by
- * a transform, as it follows the selection. Capture & record shows these in
- * its toolbar instead.
+ * a transform, as it follows the selection. Also beside a recording's
+ * region in Capture & record, whose toolbar shows these for screenshots.
  */
 function SizePanel({ size, ratio, transform, onSize, onRatio }: SizePanelProps) {
   return (
@@ -302,7 +307,10 @@ function SizePanel({ size, ratio, transform, onSize, onRatio }: SizePanelProps) 
  * 3, 5 and 10 s. Screen captures every monitor as frozen the moment it is
  * picked. With the Timer on, the overlay closes on the selection and the
  * backend captures the same area live once the time is up. Tooltips on the
- * toolbar take the place of the hint line, which stays for Record.
+ * toolbar take the place of the hint line. Record stays in the same
+ * toolbar: 1 to 3 pick what to record, its options fill the middle, 8 is
+ * the countdown and the main button is a red Record. The Record overlay
+ * opened on its own has a setup toolbar instead, with tooltips too.
  *
  * In Capture & record a released drag stays selected, with handles that
  * resize it and room inside to move it; the toolbar's middle section takes
@@ -361,8 +369,8 @@ function RegionOverlay() {
   const [grab, setGrab] = useState<Grab | null>(null);
   const [ratio, setRatio] = useState<RatioId>("free");
   const sizePanel = useRef<HTMLDivElement>(null);
-  // The Record overlay's setup toolbar: the window or display picked, and
-  // where its centre was dragged to (null until it is).
+  // A recording's window or display picked, and where the Record overlay's
+  // setup toolbar's centre was dragged to (null until it is).
   const setup = useRef<HTMLDivElement>(null);
   const [windowPick, setWindowPick] = useState<PickableWindow | null>(null);
   const [screenPick, setScreenPick] = useState<boolean | undefined>(undefined);
@@ -617,7 +625,9 @@ function RegionOverlay() {
     });
   }
 
-  function chooseTool(next: Tool) {
+  function chooseTool(chosen: Tool) {
+    // Record again goes back to screenshots of what it was recording.
+    const next: Tool = chosen === "record" && tool === "record" ? (source === "window" ? "window" : "region") : chosen;
     if (next === "screen") {
       // Nothing to select: every monitor, as frozen.
       finish({ kind: "screen" });
@@ -684,7 +694,17 @@ function RegionOverlay() {
     if (current && current.source !== next) recording.save({ ...current, source: next });
   }
 
+  /** Record's countdown, one step on, saved for the next recording too. */
+  function stepCountdown() {
+    const current = recording.recording;
+    if (current) recording.save({ ...current, countdown: nextCountdown(current.countdown) });
+  }
+
   function stepTimer() {
+    if (intent === "record") {
+      stepCountdown();
+      return;
+    }
     if (!isTimed(tool)) return;
     const seconds = TIMER_STEPS[(TIMER_STEPS.indexOf(timer) + 1) % TIMER_STEPS.length];
     setTimer(seconds);
@@ -742,7 +762,9 @@ function RegionOverlay() {
     const digit = digitOf(event);
     if (digit === null || digit > TIMER_KEY) return;
     event.preventDefault();
-    if (digit === TIMER_KEY) stepTimer();
+    // In Record, 1 to 3 pick what to record.
+    if (intent === "record" && digit <= SOURCES.length) chooseSource(SOURCES[digit - 1].source);
+    else if (digit === TIMER_KEY) stepTimer();
     else chooseTool(TOOLS[digit - 1].tool);
   });
   useEffect(() => {
@@ -927,46 +949,44 @@ function RegionOverlay() {
   const placement = highlight
     ? labelPlacement(
         highlight,
-        dragging ? SIZE_LABEL : held ? (allInOne ? SIZE_LABEL : SIZE_CHIP) : TITLE_LABEL,
+        dragging ? SIZE_LABEL : held ? (allInOne && intent !== "record" ? SIZE_LABEL : SIZE_CHIP) : TITLE_LABEL,
         view,
       )
     : null;
   const heldSize = held ? imageSize(held, scale) : null;
 
-  // The setup toolbar: in every Record overlay on the display the pointer
-  // is on (or with a pick of its own), centred where the recording toolbar
-  // opens; in All-in-one, under the mode toolbar.
   const top = hintTop(info?.topInset, view.height);
-  const layout = toolbarLayout(view.width);
-  const sizeInToolbar = allInOne && held !== null && !dragging && heldSize !== null && (source === null || source === "region");
-  const toolbarRoom = TOOLBAR_ROOM + (layout === "stacked" && sizeInToolbar ? TOOLBAR_ROW : 0);
+  const layout = toolbarLayout(view.width - (allInOne && intent === "record" ? RECORD_ROOM : 0));
+  // Capture & record's size fields; Record keeps its size chip beside the
+  // region, as the Record overlay does, and fills the middle with its options.
+  const sizeInToolbar = allInOne && intent !== "record" && held !== null && !dragging && heldSize !== null;
+  const secondRow = layout === "stacked" && (sizeInToolbar || intent === "record");
+  const toolbarRoom = TOOLBAR_ROOM + (secondRow ? TOOLBAR_ROW : 0);
   // A held selection under the toolbar sends it to the bottom edge, if the
-  // selection leaves room there. Record keeps it at the top, over its setup.
+  // selection leaves room there.
   const toolbarEdge: "top" | "bottom" =
     allInOne &&
-    intent !== "record" &&
     held !== null &&
     held.y < top + toolbarRoom &&
     held.y + held.height <= view.height - TOOLBAR_BOTTOM - toolbarRoom
       ? "bottom"
       : "top";
+  // The Record overlay's setup toolbar: on the display the pointer is on
+  // (or with a pick of its own), centred where the recording toolbar opens.
+  // Capture & record shows Record in its own toolbar.
   const showSetup =
-    info !== null && intent === "record" && (allInOne || info.pointerHere !== false || held !== null);
-  const setupCentre: Point = allInOne
-    ? { x: view.width / 2, y: top + TOOLBAR_ROOM + SETUP_HALF }
-    : (setupAt ?? info?.barCentre ?? { x: view.width / 2, y: top + SETUP_HALF });
+    info !== null && !allInOne && intent === "record" && (info.pointerHere !== false || held !== null);
+  const setupCentre: Point = setupAt ?? info?.barCentre ?? { x: view.width / 2, y: top + SETUP_HALF };
   const setupLow = setupCentre.y > view.height / 2;
-  // The hint goes under the setup toolbar, or over it in the lower half.
+  // The hint (an error, there) goes under the setup toolbar, or over it in the lower half.
   const hintAt: { top: number; left?: number } = !showSetup
-    ? { top: top + (allInOne ? TOOLBAR_ROOM : 0) }
-    : allInOne
-      ? { top: top + TOOLBAR_ROOM + SETUP_ROOM }
-      : {
-          top: setupLow
-            ? setupCentre.y - SETUP_HALF - SETUP_HINT_GAP - 34
-            : setupCentre.y + SETUP_HALF + SETUP_HINT_GAP,
-          left: setupCentre.x,
-        };
+    ? { top: top + (allInOne ? toolbarRoom : 0) }
+    : {
+        top: setupLow
+          ? setupCentre.y - SETUP_HALF - SETUP_HINT_GAP - 34
+          : setupCentre.y + SETUP_HALF + SETUP_HINT_GAP,
+        left: setupCentre.x,
+      };
   // The picked window's or display's name, with its size in image pixels.
   const nameTag =
     held && heldSize && source === "window" && windowPick
@@ -974,9 +994,10 @@ function RegionOverlay() {
       : held && heldSize && source === "screen"
         ? `${info?.monitorName || "This display"} · ${heldSize.width} × ${heldSize.height}`
         : null;
-  // Capture & record explains itself in tooltips; the hint line stays for
-  // an error, for Record and for an overlay opened for one mode.
-  const showHint = !allInOne || intent === "record" || error !== null;
+  // A toolbar explains itself in tooltips; the hint line stays for an
+  // error, for an overlay opened for one mode, and for a Record overlay's
+  // display that has no setup toolbar until it is clicked.
+  const showHint = error !== null || (!allInOne && (intent !== "record" || !showSetup));
   const hintText =
     error ??
     (source
@@ -1087,7 +1108,7 @@ function RegionOverlay() {
           {nameTag}
         </span>
       )}
-      {!allInOne && held && !dragging && placement && heldSize && source === "region" && (
+      {(!allInOne || intent === "record") && held && !dragging && placement && heldSize && source === "region" && (
         <div ref={sizePanel}>
           <SizePanel
             size={heldSize}
@@ -1145,15 +1166,17 @@ function RegionOverlay() {
           tool={tool}
           timer={timer}
           showTimer={isTimed(tool)}
-          mainLabel={
-            intent === "record"
-              ? null
-              : intent === "capture" && timer > 0
-                ? `Capture in ${timer} s`
-                : CONFIRM_LABELS[intent]
-          }
+          source={source}
+          countdown={recording.recording?.countdown ?? null}
+          mainLabel={intent === "capture" && timer > 0 ? `Capture in ${timer} s` : CONFIRM_LABELS[intent]}
           ready={ready}
-          mainUse={ready ? MAIN_USES[intent] : FIRST_STEPS[pointsAtWindow ? "window" : intent]}
+          mainUse={
+            ready
+              ? MAIN_USES[intent]
+              : source
+                ? (SOURCES.find((each) => each.source === source)?.first ?? FIRST_STEPS.record)
+                : FIRST_STEPS[pointsAtWindow ? "window" : intent]
+          }
           globals={hotkeys}
           layout={layout}
           edge={toolbarEdge}
@@ -1169,6 +1192,8 @@ function RegionOverlay() {
                 onSize={applySize}
                 onRatio={chooseRatio}
               />
+            ) : intent === "record" ? (
+              <RecordOptionsFields options={recording} up={toolbarEdge === "bottom"} iconsOnly={layout !== "wide"} />
             ) : intent === "color" ? (
               <span className="overlay-toolbar-colour" data-testid="overlay-toolbar-colour">
                 <span ref={colourSwatch} className="overlay-loupe-swatch" aria-hidden="true" />
@@ -1177,7 +1202,9 @@ function RegionOverlay() {
             ) : null
           }
           onTool={chooseTool}
+          onSource={chooseSource}
           onTimer={stepTimer}
+          onCountdown={stepCountdown}
           onMain={confirmMain}
           onCancel={cancel}
         />
@@ -1187,15 +1214,10 @@ function RegionOverlay() {
           <RecordSetup
             options={recording}
             source={source}
-            numbered={!allInOne}
             canRecord={held !== null && isDrag(held)}
             up={setupLow}
             transform={`translate3d(${setupCentre.x}px, ${setupCentre.y}px, 0) translate(-50%, -50%)`}
-            onGrip={
-              allInOne
-                ? undefined
-                : (event) => setGripping({ from: pointOf(event), centre: setupCentre })
-            }
+            onGrip={(event) => setGripping({ from: pointOf(event), centre: setupCentre })}
             onSource={chooseSource}
             onRecord={confirmHeld}
             onCancel={cancel}

@@ -41,6 +41,16 @@ export function nextCountdown(seconds: number): number {
   return RECORDING_COUNTDOWNS[(at + 1) % RECORDING_COUNTDOWNS.length];
 }
 
+/** What the countdown button's tooltip says it does. */
+export const COUNTDOWN_USE = "Waits off, 3, 5 or 10 s before recording starts.";
+
+/** What the countdown button says, and its name, for `seconds`. */
+export function countdownText(seconds: number): { text: string; label: string } {
+  return seconds === 0
+    ? { text: "Off", label: "No countdown" }
+    : { text: `${seconds} s`, label: `Countdown ${seconds} s` };
+}
+
 /** What the microphone chip says. */
 export function microphoneLabel(recording: RecordingSettings, microphones: Microphone[]): string {
   if (!recordsMicrophone(recording.audio)) return "No microphone";

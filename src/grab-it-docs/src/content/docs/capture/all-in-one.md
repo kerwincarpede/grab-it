@@ -17,8 +17,8 @@ From left to right:
 
 - **Region**, **Window** and **Screen**: what to capture.
 - **Text**, **Colour**, **Record** and **Scroll**: the tools.
-- A middle section that changes with what you're doing: the selection's width, height and ratio once you've selected a region, or the colour under the pointer in **Colour**.
-- **Timer**, then the main button, named for the mode: **Capture**, **Capture in 3 s**, **Copy text**, **Copy colour** or **Start scrolling**. It's dimmed until there's something to act on. In **Window** and **Colour** it acts on the window or pixel you last paused on, so the pointer can cross the screen to reach it.
+- A middle section that changes with what you're doing: the selection's width, height and ratio once you've selected a region, the colour under the pointer in **Colour**, or the recording options in **Record**.
+- **Timer** (the countdown in **Record**), then the main button, named for the mode: **Capture**, **Capture in 3 s**, **Copy text**, **Copy colour**, **Start scrolling** or a red **Record**. It's dimmed until there's something to act on. In **Window** and **Colour** it acts on the window or pixel you last paused on, so the pointer can cross the screen to reach it.
 - **×** to cancel.
 
 Point at any item, or move to it with `Tab`, to see a tooltip with its name, its key in the chooser, its global shortcut if it has one, and what it does. A dimmed main button's tooltip says what to do first, for example *Drag an area or click a window first.*
@@ -38,7 +38,7 @@ Click a mode, or press its number while the chooser is open. You can switch mode
 | `3` | **Screen** | Captures every monitor straight away, as it was frozen ([Screen and monitor](/grab-it/capture/screen/)) |
 | `4` | **Text** | Drag over text or a code to copy it ([Text and codes](/grab-it/capture/text-and-codes/)) |
 | `5` | **Colour** | Click a pixel, or press `Enter`, to copy the colour under the pointer ([Pick a colour](/grab-it/capture/colour/)) |
-| `6` | **Record** | Choose what to record and start a recording ([Recording](/grab-it/recording/record/)) |
+| `6` | **Record** | Choose what to record and start a recording (see below) |
 | `7` | **Scroll** | Choose an area or window and stitch a scrolling capture (see below) |
 | `8` | **Timer** | Steps through off, 3, 5 and 10 seconds (see below) |
 
@@ -46,7 +46,7 @@ Click a mode, or press its number while the chooser is open. You can switch mode
 
 ## The Timer
 
-The **Timer** button, beside the main button, shows *Timer*, or the delay it's set to, like *5 s*. Each click (or press of `8`) steps it on: off, 3 s, 5 s, 10 s, then off again. While it's set, the main button reads **Capture in 5 s**. It works with **Region**, **Window** and **Screen**, and is hidden for **Text**, **Colour**, **Record** and **Scroll**.
+The **Timer** button, beside the main button, shows *Timer*, or the delay it's set to, like *5 s*. Each click (or press of `8`) steps it on: off, 3 s, 5 s, 10 s, then off again. While it's set, the main button reads **Capture in 5 s**. It works with **Region**, **Window** and **Screen**, and is hidden for **Text**, **Colour** and **Scroll**. In **Record** the same button is the recording's countdown, still on `8`.
 
 With the Timer on, you pick the area first. The overlay then closes, and when the time is up Grab-it captures that area **as the screen looks then**. Handy for opening a menu inside the area you chose. See [Timed capture](/grab-it/capture/timed/).
 
@@ -80,7 +80,14 @@ The last region you captured starts out selected on the monitor it was on, ready
 
 ## Record
 
-**Record** shows the recording setup toolbar under the Capture & record… toolbar, with a hint under it. Pick a region, a window or a screen and the recording options, then press **Record** or `Enter`. Press the Capture & record… shortcut again to stop the recording. See [Record your screen](/grab-it/recording/record/).
+**Record** stays in the same toolbar, with a red dot on its icon. While it's on:
+
+- **Region**, **Window** and **Screen** (or `1`, `2` and `3`) pick what to record. A region keeps its size and ratio chip beside it.
+- The middle of the toolbar holds the format, microphone, webcam, system sound, clicks and keys. See [Recording options](/grab-it/recording/options/).
+- The **Timer** button is the countdown, on `8`.
+- The main button is a red **Record**. Press it or `Enter` to start.
+
+Press **Record** or `6` again to go back to screenshots, or pick another tool. Press the Capture & record… shortcut again to stop the recording. See [Record your screen](/grab-it/recording/record/).
 
 ## Scroll
 

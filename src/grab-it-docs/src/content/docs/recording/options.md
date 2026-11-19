@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-The recording setup toolbar holds the options you change most. Hover an icon for its name and whether it's on; an option that's on is tinted. Every change is saved to **Settings → Recording**, so the next recording starts the same way, and Settings has a few more.
+The recording setup toolbar holds the options you change most, and so does the middle of the Capture & record… toolbar while **Record** is on. Point at an item for a tooltip with its name, whether it's on and what it does; an option that's on is tinted (a grey pill in Capture & record…). When the Capture & record… toolbar is short of room, the microphone and webcam chips shrink to their icons, and their tooltips name the choice. Every change is saved to **Settings → Recording**, so the next recording starts the same way, and Settings has a few more.
 
 ![The recording options: Region, Window or Screen, the format, the microphone, sound, webcam, clicks, keys and countdown.](../../../assets/recording/options-bar.png)
 
@@ -75,7 +75,7 @@ On macOS, keys typed into a password field are left out. Windows and Linux can't
 
 ## Countdown
 
-The timer button steps through **Off**, **3 s**, **5 s** and **10 s**. With a countdown, the recording toolbar counts down and the number shows big in the middle of the area, giving you time to get ready. Press **Cancel** on the toolbar during the countdown and nothing is recorded.
+The countdown button steps through **Off**, **3 s**, **5 s** and **10 s**. In Capture & record… it's in the Timer's place, and `8` steps it too. With a countdown, the recording toolbar counts down and the number shows big in the middle of the area, giving you time to get ready. Press **Cancel** on the toolbar during the countdown and nothing is recorded.
 
 ## Only in Settings
 

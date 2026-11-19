@@ -1,5 +1,6 @@
-import { useId, useState, type KeyboardEvent, type ReactElement, type ReactNode, type Ref } from "react";
+import { useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { CloseIcon, TimerIcon } from "../app/icons";
+import type { RecordingSource } from "../settings/api";
 import type { CaptureKind } from "../app/api";
 import type { Size } from "./geometry";
 import { ChipMenu } from "./RecordSetup";
@@ -10,32 +11,14 @@ import {
   TOOL_ITEMS,
   TOOLS,
   type RatioId,
-  type TipText,
   type Tool,
   type ToolInfo,
   type ToolbarLayout,
 } from "./chooser";
 
-/**
- * An item with a tooltip that shows on hover and on keyboard focus. The
- * tooltip describes the item, so screen readers read it too.
- */
-export function Tipped({ tip, children }: { tip: TipText; children: (describedBy: string) => ReactElement }) {
-  const id = useId();
-  return (
-    <span className="overlay-tip-anchor">
-      {children(id)}
-      <span id={id} role="tooltip" className="overlay-tip">
-        <span className="overlay-tip-head">
-          <strong>{tip.name}</strong>
-          {tip.keyLabel && <kbd>{tip.keyLabel}</kbd>}
-        </span>
-        {tip.global && <span className="overlay-tip-global">{tip.global} from anywhere</span>}
-        <span className="overlay-tip-use">{tip.use}</span>
-      </span>
-    </span>
-  );
-}
+import { COUNTDOWN_USE, countdownText } from "./recordOptions";
+import { SOURCES } from "./recordSources";
+import { Tipped } from "./Tipped";
 
 /** A typed size: a whole number of image pixels, at least one. */
 function parseLength(text: string): number | null {
@@ -113,6 +96,7 @@ export function SizeFields({ size, ratio, folded, up, onSize, onRatio }: SizeFie
           title="Aspect ratio"
           up={up}
           checks
+          tip={{ name: "Aspect ratio", use: "Keeps the selection at a shape, or Free for any." }}
           label={current.label}
           options={RATIOS.map(({ id, label }) => ({
             key: id,
@@ -167,10 +151,17 @@ function arrowWithinGroup(event: KeyboardEvent<HTMLDivElement>) {
 export interface ChooserToolbarProps {
   tool: Tool;
   timer: number;
-  /** Shown at all: the Timer for screenshots, the main button outside Record. */
+  /** The Timer is shown: for screenshots. */
   showTimer: boolean;
-  /** The main button's label, or null where it has none (Record, for now). */
-  mainLabel: string | null;
+  /**
+   * While Record is on: what to record, which keys 1 to 3 and Region,
+   * Window and Screen pick. Null outside Record.
+   */
+  source: RecordingSource | null;
+  /** Record's countdown in seconds, in the Timer's place on 8; null until it is known. */
+  countdown: number | null;
+  /** The main button's label, named for the mode. */
+  mainLabel: string;
   /** The main button can act; dimmed until then, its tooltip says what to do first. */
   ready: boolean;
   /** What the main button's tooltip says. */
@@ -186,7 +177,9 @@ export interface ChooserToolbarProps {
   middle: ReactNode;
   barRef: Ref<HTMLDivElement>;
   onTool: (tool: Tool) => void;
+  onSource: (source: RecordingSource) => void;
   onTimer: () => void;
+  onCountdown: () => void;
   onMain: () => void;
   onCancel: () => void;
 }
@@ -196,11 +189,17 @@ export interface ChooserToolbarProps {
  * capture (1 to 3), the tools (4 to 7), a middle section that changes with
  * the state, the Timer (8), the main button named for the mode, and Cancel.
  * Every item has a tooltip. It never follows the pointer.
+ *
+ * With Record on, Region, Window and Screen pick what to record, Record
+ * keeps its red dot, the middle holds the recording options, the Timer's
+ * place is the countdown and the main button is a red Record.
  */
 export function ChooserToolbar({
   tool,
   timer,
   showTimer,
+  source,
+  countdown,
   mainLabel,
   ready,
   mainUse,
@@ -212,20 +211,30 @@ export function ChooserToolbar({
   middle,
   barRef,
   onTool,
+  onSource,
   onTimer,
+  onCountdown,
   onMain,
   onCancel,
 }: ChooserToolbarProps) {
   const compact = layout !== "wide";
+  const recording = source !== null;
 
   function modeButton({ tool: each, label, icon, hotkey, use }: ToolInfo) {
     const key = TOOLS.findIndex((info) => info.tool === each) + 1;
-    const picked = each === tool;
+    // In Record, the targets say what to record; their global shortcuts take screenshots.
+    const target = recording ? SOURCES.find((info) => info.source === each) : undefined;
+    const picked = target ? target.source === source : each === tool;
+    const tip = target
+      ? { name: label, keyLabel: String(key), use: target.use }
+      : {
+          name: label,
+          keyLabel: String(key),
+          global: hotkey ? globals[hotkey] : undefined,
+          use: each === "record" && recording ? `${use} Press ${key} again for screenshots.` : use,
+        };
     return (
-      <Tipped
-        key={each}
-        tip={{ name: label, keyLabel: String(key), global: hotkey ? globals[hotkey] : undefined, use }}
-      >
+      <Tipped key={each} tip={tip}>
         {(describedBy) => (
           <button
             type="button"
@@ -233,9 +242,10 @@ export function ChooserToolbar({
             data-tool={each}
             aria-label={label}
             aria-describedby={describedBy}
-            aria-pressed={each === "screen" ? undefined : picked}
+            // Screen captures at once, so it is a toggle only for a recording.
+            aria-pressed={each === "screen" && !target ? undefined : picked}
             aria-keyshortcuts={String(key)}
-            onClick={() => onTool(each)}
+            onClick={() => (target ? onSource(target.source) : onTool(each))}
           >
             {icon}
             {(!compact || picked) && <span>{label}</span>}
@@ -264,7 +274,7 @@ export function ChooserToolbar({
       }}
       onKeyDown={arrowWithinGroup}
     >
-      <div className="overlay-toolbar-group" role="group" aria-label="What to capture">
+      <div className="overlay-toolbar-group" role="group" aria-label={recording ? "What to record" : "What to capture"}>
         {TARGETS.map(modeButton)}
       </div>
       <span className="overlay-toolbar-gap" aria-hidden="true" />
@@ -277,7 +287,27 @@ export function ChooserToolbar({
         </div>
       )}
       <div className="overlay-toolbar-group overlay-toolbar-actions" role="group" aria-label="Actions">
-        {showTimer && (
+        {recording && countdown !== null && (
+          <Tipped tip={{ name: "Countdown", keyLabel: String(TIMER_KEY), use: COUNTDOWN_USE }}>
+            {(describedBy) => (
+              <button
+                type="button"
+                className="overlay-tool"
+                data-testid="overlay-countdown"
+                aria-label={countdownText(countdown).label}
+                aria-describedby={describedBy}
+                aria-pressed={countdown > 0}
+                aria-keyshortcuts={String(TIMER_KEY)}
+                onClick={onCountdown}
+              >
+                <TimerIcon />
+                <span>{countdownText(countdown).text}</span>
+                <kbd aria-hidden="true">{TIMER_KEY}</kbd>
+              </button>
+            )}
+          </Tipped>
+        )}
+        {showTimer && !recording && (
           <Tipped
             tip={{ name: "Timer", keyLabel: String(TIMER_KEY), use: "Waits off, 3, 5 or 10 s before capturing." }}
           >
@@ -299,26 +329,26 @@ export function ChooserToolbar({
             )}
           </Tipped>
         )}
-        {mainLabel !== null && (
-          <Tipped tip={{ name: mainLabel, keyLabel: "Enter", use: mainUse }}>
-            {(describedBy) => (
-              <button
-                type="button"
-                className="overlay-main"
-                data-testid="overlay-confirm"
-                aria-disabled={ready ? undefined : "true"}
-                aria-describedby={describedBy}
-                aria-keyshortcuts="Enter"
-                onClick={() => {
-                  if (ready) onMain();
-                }}
-              >
-                <span>{mainLabel}</span>
-                <kbd aria-hidden="true">↵</kbd>
-              </button>
-            )}
-          </Tipped>
-        )}
+        <Tipped tip={{ name: mainLabel, keyLabel: "Enter", use: mainUse }}>
+          {(describedBy) => (
+            <button
+              type="button"
+              className="overlay-main"
+              data-testid="overlay-confirm"
+              data-tone={recording ? "record" : undefined}
+              aria-disabled={ready ? undefined : "true"}
+              aria-describedby={describedBy}
+              aria-keyshortcuts="Enter"
+              onClick={() => {
+                if (ready) onMain();
+              }}
+            >
+              {recording && <span className="overlay-setup-dot" aria-hidden="true" />}
+              <span>{mainLabel}</span>
+              <kbd aria-hidden="true">↵</kbd>
+            </button>
+          )}
+        </Tipped>
         <Tipped tip={{ name: "Cancel", keyLabel: "Esc", use: "Closes the chooser without capturing." }}>
           {(describedBy) => (
             <button

@@ -9,17 +9,19 @@ sidebar:
 
 Start a recording in any of these ways:
 
-![Record picked in the Capture & record… toolbar, with the recording options above the region.](../../../assets/recording/record-setup.png)
+![Record picked in the Capture & record… toolbar, with the recording options in the middle of it.](../../../assets/recording/record-setup.png)
 
 - click the Grab-it icon in the menu bar or tray and choose **Record**,
 - press the Capture & record… shortcut and pick **Record** (or press `6`),
 - or start Grab-it with `--open record`, for example from a script.
 
-The screen freezes, as it does for a screenshot, with the recording setup toolbar at the top.
+The screen freezes, as it does for a screenshot. Record on its own shows the recording setup toolbar at the top. In Capture & record…, Record stays in that toolbar instead: there's no second toolbar.
+
+Point at any item, or move to it with `Tab`, to see a tooltip with its name, its key and what it does.
 
 ## Pick what to record
 
-The setup toolbar starts with three choices. Press `1`, `2` or `3` to switch between them (in Capture & record… the number keys pick modes instead, so click them):
+There are three choices. Press `1`, `2` or `3` to switch between them, or click them. In Capture & record…, **Region**, **Window** and **Screen** in its toolbar pick what to record while **Record** is on:
 
 - **Region**: drag an area. It stays selected so you can adjust it: drag a handle to resize it, drag inside it to move it, or set an exact size or a ratio in the chip beside it. Drag anywhere else to start a new one.
 - **Window**: click a window to record the area it covers. Click another to switch.
@@ -27,12 +29,12 @@ The setup toolbar starts with three choices. Press `1`, `2` or `3` to switch bet
 
 Record opens on the choice you used last.
 
-The rest of the toolbar sets the format, sound, webcam, clicks, keys and countdown. Each change is saved to **Settings → Recording** straight away, so the next recording starts the same way. See [Recording options](/grab-it/recording/options/).
+The rest of the toolbar sets the format, sound, webcam, clicks, keys and countdown. In Capture & record… they're in the middle of its toolbar, and the countdown takes the Timer's place on `8`. Each change is saved to **Settings → Recording** straight away, so the next recording starts the same way. See [Recording options](/grab-it/recording/options/).
 
-When you're ready, press **Record** or `Enter`. Press **×** or `Esc` to cancel.
+When you're ready, press **Record** or `Enter`. **Record** is dimmed until you've picked something, and its tooltip says what to pick. Press **×** or `Esc` to cancel. In Capture & record…, press **Record** or `6` again to go back to screenshots.
 
 :::tip
-When you start Record on its own (from the tray's **Record** or `--open record`), drag the setup toolbar by its grip (the dots at its left end) to move it off the area you want to record. Started from the Capture & record… toolbar, it has no grip. The recording toolbar opens in the same place, and so does the setup toolbar next time.
+When you start Record on its own (from the tray's **Record** or `--open record`), drag the setup toolbar by its grip (the dots at its left end) to move it off the area you want to record. Capture & record… has no setup toolbar to move: Record stays in its own toolbar. The recording toolbar opens in the same place, and so does the setup toolbar next time.
 :::
 
 ## While it records

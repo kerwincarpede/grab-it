@@ -15,11 +15,33 @@ import {
   type RecordingSource,
 } from "../settings/api";
 
-/** The setup toolbar's sources, in the order of their number keys. */
-export const SOURCES: { source: RecordingSource; label: string; icon: ReactNode }[] = [
-  { source: "region", label: "Region", icon: <RegionIcon size={16} /> },
-  { source: "window", label: "Window", icon: <WindowIcon size={16} /> },
-  { source: "screen", label: "Screen", icon: <ScreenIcon size={16} /> },
+/**
+ * What a recording can record, in the order of their number keys: its
+ * tooltip's line on what it does, and what Record's tooltip asks for
+ * first until something is picked.
+ */
+export const SOURCES: { source: RecordingSource; label: string; icon: ReactNode; use: string; first: string }[] = [
+  {
+    source: "region",
+    label: "Region",
+    icon: <RegionIcon size={16} />,
+    use: "Drag an area to record, or click a window.",
+    first: "Drag an area or click a window first.",
+  },
+  {
+    source: "window",
+    label: "Window",
+    icon: <WindowIcon size={16} />,
+    use: "Click a window to record it.",
+    first: "Click a window first.",
+  },
+  {
+    source: "screen",
+    label: "Screen",
+    icon: <ScreenIcon size={16} />,
+    use: "Records the whole display.",
+    first: "Click this display first.",
+  },
 ];
 
 /** The recording settings, loaded once `enabled`, and how to change them. */

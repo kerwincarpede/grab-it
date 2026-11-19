@@ -41,8 +41,8 @@ While you're picking an area to capture or record:
 | `Enter` | In Capture & record…: capture the window under the pointer in **Window**, or copy the colour under it in **Colour** |
 | `Tab`, then `←` `→` | In Capture & record…: move into the toolbar, then between the buttons of a group |
 | `1` to `7` | In Capture & record…: Region, Window, Screen, Text, Colour, Record, Scroll |
-| `8` | In Capture & record…: step the timer through off, 3, 5 and 10 seconds |
-| `1` to `3` | When recording: Region, Window, Screen |
+| `8` | In Capture & record…: step the timer through off, 3, 5 and 10 seconds, or Record's countdown |
+| `1` to `3` | When recording, in Record and in Capture & record…'s **Record**: record a region, a window or the screen |
 
 ## Image editor
 
