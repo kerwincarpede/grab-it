@@ -26,6 +26,7 @@ mod library;
 mod net;
 mod ocr;
 mod ocr_vision;
+mod ocr_windows;
 mod overlay;
 #[cfg(target_os = "macos")]
 mod panel;
