@@ -16,6 +16,8 @@ import {
   finishOverlay,
   imageType,
   isInstantOverlay,
+  isWindowsOverlay,
+  onOverlayRevealed,
   onOverlayChoice,
   onOverlayStart,
   overlayImage,
@@ -453,19 +455,38 @@ function RegionOverlay() {
 
   // A see-through window is on screen from the start, ahead of its image.
   const instant = isInstantOverlay();
-  // A hidden window is shown once the frozen image is painted, so it swaps
-  // in for the live desktop without a blank frame. An error is reported
-  // too, or it would never be seen.
-  const painted = (info !== null && (image !== null || instant)) || error !== null;
+  const windows = isWindowsOverlay();
+  const [hasRevealListener, setHasRevealListener] = useState<boolean | null>(null);
   useEffect(() => {
-    if (!painted || reported.current) return;
+    if (!windows) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    onOverlayRevealed(() => setRevealed(true)).then((stop) => {
+      if (cancelled) stop();
+      else {
+        unlisten = stop;
+        setHasRevealListener(true);
+      }
+    }).catch(() => {
+      if (!cancelled) setHasRevealListener(false);
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [windows]);
+  // A hidden window waits for its decoded image. An error is reported too,
+  // or it would never be seen. Windows tints the overlays after all are shown.
+  const readyToShow = (info !== null && (image !== null || instant)) || error !== null;
+  useEffect(() => {
+    if (!readyToShow || reported.current || (windows && hasRevealListener === null)) return;
     reported.current = true;
     overlayReady()
-      .catch(() => {
-        // The backend shows the window after a timeout regardless.
-      })
-      .finally(() => setRevealed(true));
-  }, [painted]);
+      .catch(() => {})
+      .finally(() => {
+        if (!hasRevealListener) setRevealed(true);
+      });
+  }, [hasRevealListener, readyToShow, windows]);
   // On screen with a selection to draw; until then nothing is dimmed.
   const shown = revealed || (instant && info !== null);
 
@@ -1038,8 +1059,7 @@ function RegionOverlay() {
           draggable={false}
           onLoad={(event) => {
             const img = event.currentTarget;
-            // Decoded before it counts as painted, so showing the window
-            // never catches it half drawn.
+            // Decode before asking the backend to show the window.
             const decoded = typeof img.decode === "function" ? img.decode() : Promise.resolve();
             decoded.catch(() => {}).finally(() => setImage(img));
           }}

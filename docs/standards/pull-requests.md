@@ -21,4 +21,3 @@
 - Every check in CI is green. That covers the checks in [AGENTS.md](../../AGENTS.md) and the installer builds on all three platforms.
 - A code PR merged to `main` is released right away (see "Releases" in [development.md](../development.md)). Merge only what is ready for users.
 - Version bumps are automatic. Don't edit the version in `tauri.conf.json` or `Cargo.toml` by hand.
-- For an AI review, add the `ai-review` label. To review again after more pushes, remove the label and add it back (see `.github/workflows/pr-agent.yml`).

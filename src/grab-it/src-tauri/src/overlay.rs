@@ -17,9 +17,9 @@
 //!   monitors are frozen. The frozen image is still being sent to the page
 //!   then, and slides in under the dim unnoticed, being the same picture as
 //!   the desktop behind it.
-//! - Elsewhere an overlay stays hidden until its page has the frozen image
-//!   on screen ([`overlay_ready`]), so it replaces the live desktop with an
-//!   identical picture instead of flashing an empty webview first.
+//! - On Windows the overlays stay hidden until all pages have their images
+//!   ready. Their backgrounds are transparent during the handoff to WebView2.
+//! - On X11 each overlay waits for its own frozen image ([`overlay_ready`]).
 
 use std::{
     collections::HashMap,
@@ -56,14 +56,19 @@ const START_EVENT: &str = "overlay-start";
 /// `CHOICE_EVENT` in src/overlay/api.ts.
 const CHOICE_EVENT: &str = "overlay-choice";
 
+/// Sent when the Windows overlays have been shown together.
+#[cfg(target_os = "windows")]
+const REVEALED_EVENT: &str = "overlay-revealed";
+
 /// Whether overlays are see-through and shown the moment the monitors are
 /// frozen, ahead of their frozen image.
 const INSTANT: bool = cfg!(target_os = "macos");
 
-/// The overlay's page. It learns from the address whether its window is
-/// see-through, before it paints anything.
+/// The overlay's page. It learns how its window is shown before first paint.
 const PAGE: &str = if INSTANT {
     "index.html#/overlay?instant"
+} else if cfg!(target_os = "windows") {
+    "index.html#/overlay?windows"
 } else {
     "index.html#/overlay"
 };
@@ -78,7 +83,7 @@ struct Frame {
     /// `image` for the page ([`encode_for_page`]), being written from the
     /// moment the monitor froze.
     encoded: Encoded,
-    /// The overlay's page has asked what to show, so it is alive.
+    /// On Windows the page has its image ready. On macOS it has asked what to show.
     responded: bool,
 }
 
@@ -423,7 +428,13 @@ pub fn open(
     // takes the keyboard.
     let mut pointer_label = None;
     for (monitor, image) in frames {
-        let (position, size) = placement_for(&monitor, &placements);
+        let (position, size) = if cfg!(target_os = "windows") {
+            // xcap supplies the physical pixel rectangle of the frozen
+            // image. Windows display names differ between xcap and Tao.
+            physical_frame(&monitor)
+        } else {
+            placement_for(&monitor, &placements)
+        };
         let spare = spares
             .iter()
             .position(|spare| spare.position == position && spare.size == size)
@@ -526,7 +537,7 @@ pub fn open(
         return Err(format!("could not show the capture overlay: {err}"));
     }
 
-    trace(format_args!("overlay shown in {:?}", started.elapsed()));
+    trace(format_args!("overlay requested in {:?}", started.elapsed()));
 
     follow_pointer(app, id);
     let app = app.clone();
@@ -682,7 +693,11 @@ fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, String> {
 }
 
 /// How long an overlay's page may take to respond.
-const READY_TIMEOUT: Duration = Duration::from_millis(1500);
+const READY_TIMEOUT: Duration = Duration::from_millis(if cfg!(target_os = "windows") {
+    4000
+} else {
+    1500
+});
 
 /// Shows and focuses an overlay that is still hidden. On macOS it takes
 /// the keyboard without activating Grab-it ([`crate::panel`]).
@@ -700,27 +715,27 @@ fn reveal(window: &WebviewWindow) -> tauri::Result<()> {
 /// Deals with a session `id` whose pages have had their time (a script
 /// error, a stalled image), so it is not left holding the claim.
 ///
-/// Overlays still hidden are shown. A see-through one is on screen already,
-/// and if its page never came up it is an invisible sheet swallowing every
-/// click with no way to dismiss it, so the selection is ended instead.
+/// On X11 show any remaining overlays so errors can be seen. On Windows
+/// leave stalled overlays hidden. On macOS end the selection if a page
+/// never came up, as the windows are already taking input.
 fn settle(app: &AppHandle, id: u64) {
-    let (labels, responded): (Vec<String>, bool) = {
-        let state = app.state::<OverlayState>();
-        let phase = state.lock();
-        match &*phase {
-            Phase::Open(session) if session.id == id => (
-                session.frames.keys().cloned().collect(),
-                session.frames.values().all(|frame| frame.responded),
-            ),
-            _ => return,
-        }
-    };
-    if INSTANT {
-        if !responded && take_session(app, |s| s.id == id, |_| true).is_some() {
+    if INSTANT || cfg!(target_os = "windows") {
+        let has_stalled = |session: &Session| {
+            session.id == id && session.frames.values().any(|frame| !frame.responded)
+        };
+        if take_session(app, has_stalled, |_| true).is_some() {
             actions::report_failure(app, "The capture overlay did not respond. Try again.");
         }
         return;
     }
+    let labels: Vec<String> = {
+        let state = app.state::<OverlayState>();
+        let phase = state.lock();
+        match &*phase {
+            Phase::Open(session) if session.id == id => session.frames.keys().cloned().collect(),
+            _ => return,
+        }
+    };
     for label in labels {
         if let Some(window) = app.get_webview_window(&label) {
             let _ = reveal(&window);
@@ -739,11 +754,15 @@ pub(crate) fn placement_for(
 ) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
     match placement_monitor(monitor, placements) {
         Some(m) => (*m.position(), *m.size()),
-        None => (
-            PhysicalPosition::new(monitor.x, monitor.y),
-            PhysicalSize::new(monitor.width, monitor.height),
-        ),
+        None => physical_frame(monitor),
     }
+}
+
+fn physical_frame(monitor: &MonitorInfo) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
+    (
+        PhysicalPosition::new(monitor.x, monitor.y),
+        PhysicalSize::new(monitor.width, monitor.height),
+    )
 }
 
 /// The scale of the display a monitor's overlay is placed on, to turn
@@ -847,12 +866,10 @@ fn create_window(
         // rather than only making it key, so any display takes the first
         // drag.
         .accept_first_mouse(true);
-    // See-through, so it can be on screen before its page has anything to
-    // paint. Matches `INSTANT`. Not focused: wry activates Grab-it for a
-    // focused webview as it is made, even in a hidden window, and the
-    // spares are made in the background. `panel::focus` gives the page the
-    // keyboard when the overlay shows.
-    #[cfg(target_os = "macos")]
+    // Keep the desktop visible until WebKit or WebView2 presents its
+    // first frame. Take focus only when the overlay is shown, since
+    // wry can activate Grab-it while building a focused spare.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let builder = builder.transparent(true).focused(false);
     // The setup toolbar's Refresh camera list opens a camera for a moment
     // to read the cameras' names.
@@ -1324,7 +1341,9 @@ pub fn overlay_info(
         .map(|frame| frame.monitor.clone())
         .collect();
     let frame = session.frames.get_mut(window.label())?;
-    frame.responded = true;
+    if INSTANT {
+        frame.responded = true;
+    }
     Some(OverlayInfo {
         mode: session.mode,
         intent: session.intent,
@@ -1455,17 +1474,158 @@ pub fn overlay_image(
     Ok(tauri::ipc::Response::new(encoded))
 }
 
-/// The page has the frozen image on screen: show its window.
+/// The page has its frozen image ready. On Windows wait for every page
+/// before showing the overlays.
 #[tauri::command]
 pub fn overlay_ready(window: WebviewWindow, state: State<'_, OverlayState>) -> Result<(), String> {
-    let current = matches!(
-        &*state.lock(),
-        Phase::Open(session) if session.frames.contains_key(window.label())
-    );
-    if !current {
-        return Err("no capture in progress".into());
+    #[cfg(target_os = "windows")]
+    {
+        windows_overlay_ready(window, &state)
     }
-    reveal(&window).map_err(|err| err.to_string())
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let current = matches!(
+            &*state.lock(),
+            Phase::Open(session) if session.frames.contains_key(window.label())
+        );
+        if !current {
+            return Err("no capture in progress".into());
+        }
+        reveal(&window).map_err(|err| err.to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_overlay_ready(window: WebviewWindow, state: &OverlayState) -> Result<(), String> {
+    let id = {
+        let mut phase = state.lock();
+        let Phase::Open(session) = &mut *phase else {
+            return Err("no capture in progress".into());
+        };
+        let frame = session
+            .frames
+            .get_mut(window.label())
+            .ok_or("this window is not a capture overlay")?;
+        if std::mem::replace(&mut frame.responded, true)
+            || !session.frames.values().all(|frame| frame.responded)
+        {
+            return Ok(());
+        }
+        session.id
+    };
+    let app = window.app_handle().clone();
+    window
+        .run_on_main_thread(move || {
+            if let Err(err) = reveal_windows_overlays(&app, id)
+                && take_session(&app, |s| s.id == id, |_| true).is_some()
+            {
+                eprintln!("Grab-it: could not show the capture overlays: {err}");
+                actions::report_failure(&app, "The capture overlay could not open. Try again.");
+            }
+        })
+        .map_err(|err| err.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn reveal_windows_overlays(app: &AppHandle, id: u64) -> Result<(), String> {
+    let monitors = {
+        let state = app.state::<OverlayState>();
+        let phase = state.lock();
+        let Phase::Open(session) = &*phase else {
+            return Ok(());
+        };
+        if session.id != id {
+            return Ok(());
+        }
+        session
+            .frames
+            .iter()
+            .map(|(label, frame)| (label.clone(), frame.monitor.clone()))
+            .collect::<Vec<_>>()
+    };
+    let cursor = app.cursor_position().ok();
+    let mut windows = Vec::with_capacity(monitors.len());
+    for (label, monitor) in monitors {
+        let window = app
+            .get_webview_window(&label)
+            .ok_or("capture overlay closed")?;
+        fit_windows_overlay(&window, &monitor)?;
+        windows.push((window, monitor));
+    }
+    let focus = cursor
+        .and_then(|p| {
+            windows.iter().position(|(_, monitor)| {
+                screen::monitor_at(std::slice::from_ref(monitor), p.x, p.y).is_some()
+            })
+        })
+        .or_else(|| windows.iter().position(|(_, monitor)| monitor.is_primary));
+    for (window, _) in &windows {
+        window.show().map_err(|err| err.to_string())?;
+    }
+    if let Some((window, _)) = windows.get(focus.unwrap_or(0)) {
+        window.set_focus().map_err(|err| err.to_string())?;
+    }
+    for (window, _) in &windows {
+        window
+            .emit_to(window.label(), REVEALED_EVENT, ())
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+/// Corrects a spare's bounds while it is still hidden, on the window thread.
+#[cfg(target_os = "windows")]
+fn fit_windows_overlay(window: &WebviewWindow, monitor: &MonitorInfo) -> Result<(), String> {
+    use windows::Win32::{
+        Foundation::HWND,
+        UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos},
+    };
+
+    let (position, size) = physical_frame(monitor);
+    let bounds = || {
+        window
+            .inner_position()
+            .and_then(|position| window.inner_size().map(|size| (position, size)))
+            .map_err(|err| err.to_string())
+    };
+    let mut actual = bounds()?;
+    trace(format_args!(
+        "{} bounds {actual:?}, expected {:?}",
+        window.label(),
+        (position, size)
+    ));
+    if actual == (position, size) {
+        return Ok(());
+    }
+    let hwnd = window.hwnd().map_err(|err| err.to_string())?;
+    // A move can dispatch WM_DPICHANGED inside SetWindowPos. If that
+    // changed the size, apply the full rect again at the destination DPI.
+    for _ in 0..2 {
+        // SAFETY: this is the hidden borderless window's live HWND, and
+        // the reveal runs on the thread that owns it.
+        unsafe {
+            SetWindowPos(
+                HWND(hwnd.0),
+                None,
+                position.x,
+                position.y,
+                size.width as i32,
+                size.height as i32,
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            )
+        }
+        .map_err(|err| err.to_string())?;
+        actual = bounds()?;
+        if actual == (position, size) {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "{} has bounds {actual:?}, expected {:?}",
+        window.label(),
+        (position, size)
+    ))
 }
 
 /// The All-in-one toolbar on one monitor changed its mode or Timer: keep

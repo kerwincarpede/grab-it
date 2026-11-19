@@ -38,7 +38,7 @@ A press that barely moves (less than a few pixels) is a click, not a drag. Hover
 
 The capture is copied, saved and shown on the [Quick Access card](/grab-it/capture/first-capture/#the-quick-access-card), as every capture is. Grab-it also remembers the area, so [Repeat last region](/grab-it/capture/repeat/) can capture it again, and [Capture & record…](/grab-it/capture/all-in-one/) offers it as its starting selection.
 
-On monitors with different scale factors (a Retina laptop next to a regular screen, say), each region is captured at its own monitor's full resolution.
+On monitors with different display scales, each overlay fills its own monitor and each region is captured at that monitor's full resolution.
 
 :::note
 On Wayland your desktop's own screenshot picker shows instead of Grab-it's overlay. See [Wayland](/grab-it/capture/wayland/).

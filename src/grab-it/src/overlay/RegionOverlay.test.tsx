@@ -1702,6 +1702,29 @@ describe("RegionOverlay", () => {
       expect(calls.filter((call) => call.cmd === "overlay_ready")).toHaveLength(1);
     });
 
+    it("waits for the Windows reveal before dimming its ready image", async () => {
+      window.location.hash = "#/overlay?windows";
+      try {
+        Object.assign(URL, { createObjectURL: () => "blob:frozen", revokeObjectURL: () => {} });
+        const calls = mockOverlay();
+        const { container } = render(<RegionOverlay />);
+        const overlay = await ready();
+        const image = await waitFor(() => {
+          const img = container.querySelector("img");
+          expect(img).not.toBeNull();
+          return img as HTMLImageElement;
+        });
+        fireEvent.load(image);
+        await waitFor(() => expect(calls.some((call) => call.cmd === "overlay_ready")).toBe(true));
+        expect(overlay).toHaveAttribute("data-shown", "false");
+
+        await emit("overlay-revealed");
+        await waitFor(() => expect(overlay).toHaveAttribute("data-shown", "true"));
+      } finally {
+        window.location.hash = "";
+      }
+    });
+
     it("magnifies the pixels around the cursor and names the centre colour", async () => {
       const context = mockCanvas();
       const overlay = await renderLoaded({ intent: "color" });
