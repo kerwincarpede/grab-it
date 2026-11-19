@@ -74,18 +74,22 @@
   pointer-events: none;
 }
 
-/*
- * The tint, in four pieces that leave the selection or the hovered window
- * clear. Each is a 1px square of solid colour that the page stretches into
- * place with a transform, so nothing is painted while the hole follows a
- * drag, and it glides from window to window in the compositor.
- */
 .overlay-dim {
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
 
+.overlay-dim-fill {
+  background: var(--overlay-dim);
+}
+
+/* Glide between hovered windows when Windows uses a cutout. */
+.overlay[data-dragging="false"][data-selected="false"] .overlay-dim-fill {
+  transition: clip-path 90ms ease-out;
+}
+
+/* Outside Windows, the selection moves four stretched pieces without repainting. */
 .overlay-dim-piece,
 .overlay-dim-corner {
   position: absolute;
@@ -834,6 +838,7 @@
   .overlay-toolbar,
   .overlay-tip,
   .overlay-backdrop,
+  .overlay[data-dragging="false"][data-selected="false"] .overlay-dim-fill,
   .overlay[data-dragging="false"] .overlay-dim-piece,
   .overlay[data-dragging="false"] .overlay-dim-corner {
     transition: none;
