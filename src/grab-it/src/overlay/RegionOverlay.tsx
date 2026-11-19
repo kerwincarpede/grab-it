@@ -606,6 +606,9 @@ function RegionOverlay() {
   const hovered =
     canPickWindow && !dragging && !held && pointer ? topmostAt(pickable, pointer) : undefined;
   const highlight = framed ?? hovered?.box ?? null;
+  // On Windows the scaled WebView can clip stretched tint pieces at its
+  // logical size. Cut the selection out of a viewport-sized background.
+  const dimPath = windows && highlight ? cutoutPath(highlight, view, framed ? 0 : WINDOW_RADIUS) : undefined;
   // Boxes are memoized with the windows, so this settles in one extra render.
   if (hovered && hovered.box !== lastHovered) setLastHovered(hovered.box);
   const blurHole = hovered && !dragging ? hovered.box : lastHovered;
@@ -1068,24 +1071,21 @@ function RegionOverlay() {
           }}
         />
       )}
-      {/*
-        The tint, in four pieces around the selection or the hovered window.
-        Each is a solid colour stretched into place by a transform, so a drag
-        moves them without anything being laid out or painted again.
-      */}
       {intent !== "color" && (
         // Colours have to be judged as they are, so the colour picker never dims.
         <div
           // A hole that appears or goes does so at once; only a move from
           // one window to the next glides.
           key={highlight ? "hole" : "whole"}
-          className="overlay-dim"
+          className={windows || !highlight ? "overlay-dim overlay-dim-fill" : "overlay-dim"}
           data-testid="overlay-dim"
+          style={dimPath ? { clipPath: dimPath } : undefined}
         >
-          {surround(highlight, view).map((piece, at) => (
+          {!windows && highlight && surround(highlight, view).map((piece, at) => (
             <span key={at} className="overlay-dim-piece" style={{ transform: stretch(piece) }} />
           ))}
-          {highlight &&
+          {!windows &&
+            highlight &&
             !framed &&
             holeCorners(highlight, WINDOW_RADIUS).map((corner, at) => (
               <span

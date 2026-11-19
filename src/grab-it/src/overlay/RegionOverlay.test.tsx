@@ -9,6 +9,7 @@ import { CHOICE_EVENT, START_EVENT, type OverlayInfo } from "./api";
 import type { Box } from "./geometry";
 import { DEFAULT_RECORDING, type Camera, type RecordingSettings } from "../settings/api";
 import { camera, fakeMedia, type FakeMedia } from "../webcam/testMedia";
+import overlayStyles from "./overlay.css?inline";
 
 interface Call {
   cmd: string;
@@ -128,11 +129,6 @@ describe("RegionOverlay", () => {
     mockOverlay();
     render(<RegionOverlay />);
     const overlay = await ready();
-
-    // Nothing selected: the tint is one piece over the whole screen.
-    expect(pieces(screen.getByTestId("overlay-dim"), ".overlay-dim-piece")[0]).toBe(
-      "translate(0px, 0px) scale(1000, 800)",
-    );
 
     fireEvent.mouseDown(overlay, { button: 0, clientX: 500, clientY: 400 });
     fireEvent.mouseMove(overlay, { clientX: 700, clientY: 500 });
@@ -1702,18 +1698,61 @@ describe("RegionOverlay", () => {
       expect(calls.filter((call) => call.cmd === "overlay_ready")).toHaveLength(1);
     });
 
-    it("is ready on Windows ahead of its image, and dims once it is revealed", async () => {
+    it.each([
+      { name: "Region", allInOne: false },
+      { name: "Capture & record", allInOne: true },
+    ])("dims the whole 125% Windows display in $name before its image loads", async ({ allInOne }) => {
       window.location.hash = "#/overlay?windows";
       try {
+        // The spare page starts with the unscaled viewport before reveal.
+        Object.defineProperty(window, "innerWidth", { configurable: true, value: 1920 });
+        Object.defineProperty(window, "innerHeight", { configurable: true, value: 1080 });
         // No object URLs in jsdom: the image never loads here.
-        const calls = mockOverlay();
-        render(<RegionOverlay />);
+        const calls = mockOverlay({
+          allInOne, pointerHere: false, monitorWidth: 1920, monitorHeight: 1080, imageWidth: 1920,
+        });
+        render(
+          <>
+            <style>{overlayStyles}</style>
+            <RegionOverlay />
+          </>,
+        );
         const overlay = await ready();
         await waitFor(() => expect(calls.some((call) => call.cmd === "overlay_ready")).toBe(true));
         expect(overlay).toHaveAttribute("data-shown", "false");
 
+        Object.defineProperty(window, "innerWidth", { configurable: true, value: 1536 });
+        Object.defineProperty(window, "innerHeight", { configurable: true, value: 864 });
         await emit("overlay-revealed");
         await waitFor(() => expect(overlay).toHaveAttribute("data-shown", "true"));
+        const idleDim = screen.getByTestId("overlay-dim");
+        const tint = getComputedStyle(idleDim);
+        expect(tint.position).toBe("absolute");
+        expect(tint.inset).toBe("0px");
+        expect(tint.background).toBe("var(--overlay-dim)");
+        expect(tint.clipPath).toBe("none");
+        expect(idleDim).toBeEmptyDOMElement();
+
+        // Drag near the lower-right edge on the secondary display.
+        fireEvent.mouseDown(overlay, { button: 0, clientX: 1432, clientY: 792 });
+        fireEvent.mouseMove(overlay, { clientX: 1528, clientY: 856 });
+        const dragDim = screen.getByTestId("overlay-dim");
+        expect(getComputedStyle(dragDim).background).toBe("var(--overlay-dim)");
+        expect(dragDim).toBeEmptyDOMElement();
+        expect(dragDim.style.clipPath).toMatch(/M0 0H1536V864H0Z M1432 792H1528.*V856/);
+        expect(screen.getByTestId("overlay-size")).toHaveTextContent("120 × 80");
+
+        fireEvent.mouseUp(overlay, { button: 0, clientX: 1528, clientY: 856 });
+        if (allInOne) fireEvent.keyDown(window, { key: "Enter" });
+        await waitFor(() =>
+          expect(calls.find((call) => call.cmd === "overlay_finish")?.payload).toMatchObject({
+            selection: {
+              kind: "region",
+              rect: { x: 1432, y: 792, width: 96, height: 64 },
+              viewportWidth: 1536,
+            },
+          }),
+        );
       } finally {
         window.location.hash = "";
       }
