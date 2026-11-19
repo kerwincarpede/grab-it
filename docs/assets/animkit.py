@@ -265,3 +265,96 @@ def th_error(x, y, w, h, cid):
             f'<rect x="{x + 60}" y="{y + 34}" width="62" height="6" rx="3" fill="#1f2328"/>'
             f'<rect x="{x + 60}" y="{y + 45}" width="48" height="5" rx="2.5" fill="#c3cbdb"/>'
             f'<rect x="{x + w - 74}" y="{y + 62}" width="40" height="14" rx="4" fill="#4c8dff"/>')
+
+CHOOSER_MODES = [("Region", "1"), ("Window", "2"), ("Screen", "3"), None,
+                 ("Text", "4"), ("Colour", "5"), ("Record", "6"), ("Scroll", "7")]
+
+
+def chooser_toolbar(cx, y, picked, main=None, ready=False, size=None, ratio="Free", timer="Timer", timer_on=False,
+                    colour=None):
+    """Capture &amp; record…'s one toolbar, centred on cx with its top at y: modes 1–3 and 4–7, the
+    picked one labelled in a grey pill, then the selection's size and ratios when `size` is (w, h),
+    or the hex value when `colour` is, the Timer (None hides it), the main button (dimmed until `ready`;
+    None hides it) and ×.
+    Returns (svg, left x, width, {mode: (x, width)})."""
+    h, bh, pad, gap = 40, 30, 5, 2
+    parts = []  # (kind, payload, width)
+    for mode in CHOOSER_MODES:
+        if mode is None:
+            parts.append(("sep", None, 9))
+            continue
+        name, _ = mode
+        w = round(28 + text_w(name, 12.5) + 24) if name == picked else 44
+        parts.append(("mode", mode, w))
+    if size:
+        parts.append(("sep", None, 9))
+        parts.append(("field", str(size[0]), 44))
+        parts.append(("times", None, 10))
+        parts.append(("field", str(size[1]), 40))
+        parts.append(("unit", None, 18))
+        for lab in ("Free", "16:9", "4:3", "1:1"):
+            parts.append(("ratio", lab, round(text_w(lab, 12) + 16)))
+        parts.append(("sep", None, 9))
+    elif colour:
+        parts.append(("sep", None, 9))
+        parts.append(("colour", colour, round(28 + text_w(colour, 12) * 1.15)))
+        parts.append(("sep", None, 9))
+    else:
+        parts.append(("space", None, 8))
+    if timer is not None:
+        parts.append(("timer", timer, round(26 + text_w(timer, 12.5) + 24)))
+    if main is not None:
+        parts.append(("main", main, round(16 + text_w(main, 12.5) * 1.05 + 30)))
+    parts.append(("cancel", None, 30))
+    width = pad * 2 + sum(w for _, _, w in parts) + gap * (len(parts) - 1)
+    left = cx - width / 2
+    cy = y + h / 2
+    out = [f'<rect x="{left}" y="{y}" width="{width}" height="{h}" rx="{h / 2}" fill="#101113" stroke="#2a2c31"/>']
+    places = {}
+    x = left + pad
+    for kind, data, w in parts:
+        top = cy - bh / 2
+        if kind == "sep":
+            out.append(f'<rect x="{x + w / 2 - .5}" y="{cy - 9}" width="1" height="18" fill="#2a2c31"/>')
+        elif kind == "mode":
+            name, key = data
+            places[name] = (x, w)
+            if name == picked:
+                out.append(f'<rect x="{x}" y="{top}" width="{w}" height="{bh}" rx="{bh / 2}" fill="#34373f"/>')
+                out.append(mode_icon(name, x + 15, cy))
+                out.append(f'<text x="{x + 28}" y="{cy + 4.5}" class="t" font-size="12.5" fill="#fff">{name}</text>')
+            else:
+                out.append(mode_icon(name, x + 14, cy))
+            out.append(f'<rect x="{x + w - 21}" y="{cy - 8}" width="15" height="16" rx="4" fill="#ffffff" opacity=".12"/>')
+            out.append(f'<text x="{x + w - 13.5}" y="{cy + 4}" class="t" font-size="10.5" fill="#c9ceda" text-anchor="middle">{key}</text>')
+        elif kind == "field":
+            out.append(f'<rect x="{x}" y="{cy - 12}" width="{w}" height="24" rx="6" fill="#1c1e22" stroke="#2e3036"/>')
+            out.append(f'<text x="{x + w - 6}" y="{cy + 4.5}" class="t" font-size="12" fill="#fff" text-anchor="end">{data}</text>')
+        elif kind == "times":
+            out.append(f'<text x="{x + w / 2}" y="{cy + 4.5}" class="t" font-size="12" fill="#8b93a1" text-anchor="middle">×</text>')
+        elif kind == "unit":
+            out.append(f'<text x="{x + 2}" y="{cy + 4}" class="t" font-size="11" fill="#8b93a1">px</text>')
+        elif kind == "colour":
+            out.append(f'<rect x="{x + 4}" y="{cy - 7}" width="14" height="14" rx="4" fill="{data}" stroke="#fff" stroke-opacity=".25"/>')
+            out.append(f'<text x="{x + 24}" y="{cy + 4.5}" {MONO} font-size="12" fill="#e6e8ee">{data}</text>')
+        elif kind == "ratio":
+            places[data] = (x, w)
+            if data == ratio:
+                out.append(f'<rect x="{x}" y="{cy - 12}" width="{w}" height="24" rx="12" fill="#34373f"/>')
+            out.append(f'<text x="{x + w / 2}" y="{cy + 4.5}" class="t" font-size="12" fill="#e6e8ee" text-anchor="middle">{data}</text>')
+        elif kind == "timer":
+            if timer_on:
+                out.append(f'<rect x="{x}" y="{top}" width="{w}" height="{bh}" rx="{bh / 2}" fill="#34373f"/>')
+            out.append(mode_icon("Timer", x + 14, cy))
+            out.append(f'<text x="{x + 26}" y="{cy + 4.5}" class="t" font-size="12.5" fill="#e6e8ee">{data}</text>')
+            out.append(f'<rect x="{x + w - 21}" y="{cy - 8}" width="15" height="16" rx="4" fill="#ffffff" opacity=".12"/>')
+            out.append(f'<text x="{x + w - 13.5}" y="{cy + 4}" class="t" font-size="10.5" fill="#c9ceda" text-anchor="middle">8</text>')
+        elif kind == "main":
+            glow = ' stroke="#2f81f7" stroke-opacity=".3" stroke-width="3"' if ready else ""
+            out.append(f'<rect x="{x}" y="{top}" width="{w}" height="{bh}" rx="{bh / 2}" fill="#2f81f7" opacity="{1 if ready else .35}"{glow}/>')
+            out.append(f'<text x="{x + 14}" y="{cy + 4.5}" class="t b" font-size="12.5" fill="#fff" opacity="{1 if ready else .6}">{data}</text>')
+            out.append(f'<text x="{x + w - 15}" y="{cy + 4}" {MONO} font-size="10" fill="#fff" opacity=".7" text-anchor="middle">⏎</text>')
+        elif kind == "cancel":
+            out.append(f'<path d="M{x + 11} {cy - 4}l8 8M{x + 19} {cy - 4}l-8 8" stroke="#8b93a1" stroke-width="1.6" stroke-linecap="round"/>')
+        x += w + gap
+    return "".join(out), left, width, places

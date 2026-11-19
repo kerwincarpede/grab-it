@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useEffectEvent,
   useMemo,
@@ -6,7 +7,6 @@ import {
   useRef,
   useState,
   type MouseEvent,
-  type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
 import {
@@ -62,20 +62,14 @@ import {
   type Size,
 } from "./geometry";
 import { drawBackdrop } from "./backdrop";
-import {
-  ColourIcon,
-  RecordIcon,
-  ScrollIcon,
-  RegionIcon,
-  ScreenIcon,
-  TextIcon,
-  TimerIcon,
-  WindowIcon,
-} from "../app/icons";
 import Loupe from "./Loupe";
 import RecordSetup from "./RecordSetup";
+import { ChooserToolbar, SizeFields } from "./ChooserToolbar";
+import { EMPTY_TRAIL, movedTo, pointedAt, reachedToolbar } from "./pointerRest";
+import { RATIOS, TIMER_KEY, TIMER_STEPS, TOOLS, toolbarLayout, type RatioId, type Tool } from "./chooser";
 import { SOURCES, useRecordingOptions } from "./recordSources";
 import type { RecordingSource } from "../settings/api";
+import { effectiveHotkeys, type BindingLabels } from "../app/api";
 import "./overlay.css";
 
 interface PickableWindow {
@@ -104,16 +98,12 @@ const RECORD_HINTS: Record<RecordingSource, { open: string; held: string }> = {
   screen: { open: "Click this display to record it.", held: "Press Record to record this display." },
 };
 const WINDOW_HINT = "Click a window to capture it. Esc cancels.";
-/** All-in-one, once a region is selected and waits to be confirmed. */
-const ADJUST_HINT = "Drag the handles to adjust, then press Enter. Esc cancels.";
-/** Room the size field and ratio presets take beside a selection; an estimate. */
-const SIZE_PANEL: Size = { width: 470, height: 46 };
 /** The size and ratio chip beside a recording's region, which has no button. */
 const SIZE_CHIP: Size = { width: 300, height: 46 };
 /** Half the setup toolbar's height, and room for the hint beside it, in CSS px. */
 const SETUP_HALF = 23;
 const SETUP_HINT_GAP = 10;
-/** Room the setup toolbar takes under All-in-one's mode toolbar, gap included. */
+/** Room the setup toolbar takes under Capture & record's toolbar, gap included. */
 const SETUP_ROOM = 54;
 /** How near the edge the setup toolbar's centre may be dragged. */
 const SETUP_EDGE = 40;
@@ -123,45 +113,40 @@ const SETUP_EDGE = 40;
  */
 const WINDOW_RADIUS = 10;
 
-/**
- * All-in-one's modes, in the order of their number keys. Screen captures
- * as soon as it is picked; the others say what the next selection is for.
- */
-type Tool = "region" | "window" | "screen" | "text" | "color" | "record" | "scroll";
+/** Room Capture & record's toolbar takes, gap included, in CSS px; a second row adds `TOOLBAR_ROW`. */
+const TOOLBAR_ROOM = 58;
+const TOOLBAR_ROW = 44;
+/** The toolbar's gap from the bottom edge, when it moves there out of a selection's way. */
+const TOOLBAR_BOTTOM = 12;
 
-const TOOLS: { tool: Tool; label: string; icon: ReactNode }[] = [
-  { tool: "region", label: "Region", icon: <RegionIcon /> },
-  { tool: "window", label: "Window", icon: <WindowIcon /> },
-  { tool: "screen", label: "Screen", icon: <ScreenIcon /> },
-  { tool: "text", label: "Text", icon: <TextIcon /> },
-  { tool: "color", label: "Colour", icon: <ColourIcon /> },
-  { tool: "record", label: "Record", icon: <RecordIcon /> },
-  { tool: "scroll", label: "Scroll", icon: <ScrollIcon /> },
-];
-/** The Timer's settings in seconds, in the order a click steps through them. */
-const TIMER_STEPS = [0, 3, 5, 10];
-/** The Timer's number key, after the modes'. */
-const TIMER_KEY = TOOLS.length + 1;
-/** Room the toolbar takes above the hint, gap included, in CSS px. */
-const TOOLBAR_ROOM = 52;
-
-/** All-in-one's aspect ratio presets: width over height, or none. */
-type RatioId = "free" | "16:9" | "4:3" | "1:1";
-const RATIOS: { id: RatioId; label: string; value: number | null }[] = [
-  { id: "free", label: "Free", value: null },
-  { id: "16:9", label: "16:9", value: 16 / 9 },
-  { id: "4:3", label: "4:3", value: 4 / 3 },
-  { id: "1:1", label: "1:1", value: 1 },
-];
-
-/** What confirms each kind of selection, on the button beside it. */
+/** What confirms each kind of selection: the main button's label, and the key tip's. */
 const CONFIRM_LABELS: Record<OverlayIntent, string> = {
   capture: "Capture",
   text: "Copy text",
-  color: "Capture",
+  color: "Copy colour",
   record: "Record",
   scroll: "Start scrolling",
 };
+
+/** What the main button's tooltip says once it can act. */
+const MAIN_USES: Record<OverlayIntent, string> = {
+  capture: "Captures the selection.",
+  text: "Reads the text in the selection and copies it.",
+  color: "Copies the colour of the pixel under the pointer.",
+  record: "Starts recording.",
+  scroll: "Starts the scrolling capture.",
+};
+
+/** What the dimmed main button's tooltip asks for first. */
+const FIRST_STEPS: Record<OverlayIntent | "window", string> = {
+  capture: "Drag an area or click a window first.",
+  window: "Point at a window first.",
+  text: "Drag over the text first.",
+  color: "Point at a colour first.",
+  record: "Drag an area or click a window first.",
+  scroll: "Drag an area or click a window first.",
+};
+
 
 /**
  * An adjustable selection being changed: by a handle, or moved as a whole
@@ -275,79 +260,22 @@ interface SizePanelProps {
   /** The selection's size in image pixels. */
   size: Size;
   ratio: RatioId;
-  /** Left out beside a recording's region: the setup toolbar's Record starts it. */
-  confirmLabel?: string;
-  canConfirm: boolean;
   transform: string;
   onSize: (size: Size) => void;
   onRatio: (ratio: RatioId) => void;
-  onConfirm: () => void;
-  /** A second row, below the size: a recording's options. */
-  children?: ReactNode;
-}
-
-/** A typed size: a whole number of image pixels, at least one. */
-function parseLength(text: string): number | null {
-  const value = Number(text.trim());
-  return Number.isInteger(value) && value >= 1 ? value : null;
 }
 
 /**
- * Beside All-in-one's adjustable selection: its width and height in image
- * pixels, which take an exact size, the ratio presets, and the button that
- * confirms it. Placed by a transform, as it follows the selection.
+ * Beside the Record overlay's adjustable region: its width and height in
+ * image pixels, which take an exact size, and the ratio presets. Placed by
+ * a transform, as it follows the selection. Capture & record shows these in
+ * its toolbar instead.
  */
-function SizePanel({
-  size,
-  ratio,
-  confirmLabel,
-  canConfirm,
-  transform,
-  onSize,
-  onRatio,
-  onConfirm,
-  children,
-}: SizePanelProps) {
-  // What is being typed, until Enter or leaving the field applies it.
-  const [draft, setDraft] = useState<{ width: string; height: string } | null>(null);
-  const shown = draft ?? { width: String(size.width), height: String(size.height) };
-
-  function apply() {
-    if (!draft) return;
-    setDraft(null);
-    const width = parseLength(draft.width);
-    const height = parseLength(draft.height);
-    if (width === null || height === null) return;
-    if (width !== size.width || height !== size.height) onSize({ width, height });
-  }
-
-  function field(side: "width" | "height", label: string) {
-    return (
-      <input
-        className="overlay-size-input"
-        type="text"
-        inputMode="numeric"
-        aria-label={label}
-        data-testid={`overlay-size-${side}`}
-        value={shown[side]}
-        onChange={(event) => setDraft({ ...shown, [side]: event.target.value })}
-        onBlur={apply}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter") return;
-          // Enter here sets the size; it only captures from outside the field.
-          event.preventDefault();
-          event.stopPropagation();
-          apply();
-        }}
-      />
-    );
-  }
-
+function SizePanel({ size, ratio, transform, onSize, onRatio }: SizePanelProps) {
   return (
     <div
       className="overlay-size-panel"
       data-testid="overlay-size-panel"
-      data-rows={children ? "2" : "1"}
       style={{ transform }}
       // A click on a button leaves the focus where it was, so Enter never
       // presses it again; the fields take the focus as fields do.
@@ -356,102 +284,8 @@ function SizePanel({
       }}
     >
       <div className="overlay-size-row">
-        {field("width", "Width")}
-        <span aria-hidden="true">×</span>
-        {field("height", "Height")}
-        <span className="overlay-size-unit">px</span>
-        <span className="overlay-toolbar-gap" aria-hidden="true" />
-        <div className="overlay-ratios" role="group" aria-label="Aspect ratio">
-          {RATIOS.map(({ id, label }) => (
-            <button
-              key={id}
-              type="button"
-              className="overlay-tool overlay-ratio"
-              aria-pressed={id === ratio}
-              onClick={() => onRatio(id)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        {confirmLabel !== undefined && (
-          <>
-            <span className="overlay-toolbar-gap" aria-hidden="true" />
-            <button
-              type="button"
-              className="overlay-tool overlay-confirm"
-              data-testid="overlay-confirm"
-              disabled={!canConfirm}
-              onClick={onConfirm}
-            >
-              <span>{confirmLabel}</span>
-              <kbd aria-hidden="true">Enter</kbd>
-            </button>
-          </>
-        )}
+        <SizeFields size={size} ratio={ratio} folded={false} up={false} onSize={onSize} onRatio={onRatio} />
       </div>
-      {children}
-    </div>
-  );
-}
-
-interface ToolbarProps {
-  tool: Tool;
-  timer: number;
-  hidden: boolean;
-  top: number;
-  onTool: (tool: Tool) => void;
-  onTimer: () => void;
-}
-
-/**
- * All-in-one's mode toolbar: a button per mode, numbered by its key, and the
- * Timer. It never follows the pointer.
- */
-function Toolbar({ tool, timer, hidden, top, onTool, onTimer }: ToolbarProps) {
-  const timed = isTimed(tool);
-  return (
-    <div
-      className="overlay-toolbar"
-      role="toolbar"
-      aria-label="Capture mode"
-      data-testid="overlay-toolbar"
-      data-hidden={hidden ? "true" : "false"}
-      style={{ top }}
-      // Clicks leave the focus where it was, so Enter and Space never press
-      // the last button again.
-      onMouseDown={(event) => event.preventDefault()}
-    >
-      {TOOLS.map(({ tool: each, label, icon }, at) => (
-        <button
-          key={each}
-          type="button"
-          className="overlay-tool"
-          aria-pressed={each === "screen" ? undefined : each === tool}
-          aria-keyshortcuts={String(at + 1)}
-          title={`${label} (${at + 1} in this chooser)`}
-          onClick={() => onTool(each)}
-        >
-          {icon}
-          <span>{label}</span>
-          <kbd aria-hidden="true">{at + 1}</kbd>
-        </button>
-      ))}
-      <span className="overlay-toolbar-gap" aria-hidden="true" />
-      <button
-        type="button"
-        className="overlay-tool"
-        data-testid="overlay-timer"
-        data-active={timed && timer > 0 ? "true" : "false"}
-        disabled={!timed}
-        aria-keyshortcuts={String(TIMER_KEY)}
-        title={`Timer (${TIMER_KEY} in this chooser)`}
-        onClick={onTimer}
-      >
-        <TimerIcon />
-        <span>{timer > 0 ? `Timer ${timer} s` : "Timer off"}</span>
-        <kbd aria-hidden="true">{TIMER_KEY}</kbd>
-      </button>
     </div>
   );
 }
@@ -463,17 +297,20 @@ function Toolbar({ tool, timer, hidden, top, onTool, onTimer }: ToolbarProps) {
  * click. While dragging, Shift keeps the selection square and Space moves it.
  * Esc or right-click cancels.
  *
- * Opened by All-in-one, a toolbar at the top switches between those modes
- * in place, keys 1 to 7 pick them and 8 steps the Timer through off, 3, 5
- * and 10 s. Screen captures every monitor as frozen the moment it is
+ * Opened by Capture & record, one toolbar at the top switches between those
+ * modes in place, keys 1 to 7 pick them and 8 steps the Timer through off,
+ * 3, 5 and 10 s. Screen captures every monitor as frozen the moment it is
  * picked. With the Timer on, the overlay closes on the selection and the
- * backend captures the same area live once the time is up.
+ * backend captures the same area live once the time is up. Tooltips on the
+ * toolbar take the place of the hint line, which stays for Record.
  *
- * In All-in-one a released drag stays selected, with handles that resize
- * it, room inside to move it, a size field for an exact size in image
- * pixels and ratio presets; Enter or the button beside it confirms. The
- * last region starts out selected when it was on this monitor, and a drag
- * elsewhere replaces it.
+ * In Capture & record a released drag stays selected, with handles that
+ * resize it and room inside to move it; the toolbar's middle section takes
+ * an exact size in image pixels and ratio presets, and Enter or the main
+ * button confirms. In Window, Enter captures the window under the pointer;
+ * in Colour, the pixel under it. Over the toolbar the pointer stands for
+ * where it last rested, so the main button acts on that. The last region starts out selected when
+ * it was on this monitor, and a drag elsewhere replaces it.
  *
  * The page is usually loaded ahead of time in a hidden spare window, and
  * draws nothing until a selection starts on it.
@@ -485,6 +322,8 @@ function RegionOverlay() {
   const [error, setError] = useState<string | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [pointer, setPointer] = useState<Point | null>(null);
+  // Where the pointer rested, which it stands for while over a toolbar.
+  const trail = useRef(EMPTY_TRAIL);
   const [square, setSquare] = useState(false);
   const [moving, setMoving] = useState(false);
   // A hidden window was shown once the frozen image was painted.
@@ -502,6 +341,20 @@ function RegionOverlay() {
   const [tool, setTool] = useState<Tool>("region");
   const [timer, setTimer] = useState(0);
   const toolbar = useRef<HTMLDivElement>(null);
+  // Each mode's global shortcut, for the toolbar's tooltips.
+  // As the tray, hub and Library show them: only those registered, or the desktop's own on Wayland.
+  const [hotkeys, setHotkeys] = useState<BindingLabels>({});
+  // The toolbar's copy of the loupe's colour, written as the loupe draws.
+  const colourText = useRef<HTMLSpanElement>(null);
+  const colourSwatch = useRef<HTMLSpanElement>(null);
+  // Written straight to the DOM, as the loupe writes its own, so a pointer
+  // move renders the overlay once.
+  const showColour = useCallback((hex: string | null) => {
+    const text = colourText.current;
+    const swatch = colourSwatch.current;
+    if (text) text.textContent = hex ?? "—";
+    if (swatch) swatch.style.backgroundColor = hex ?? "transparent";
+  }, []);
   // All-in-one's adjustable selection. Undefined until the user changes it,
   // so the last region (`info.lastRegion`) is shown at the current scale.
   const [picked, setPicked] = useState<Box | null | undefined>(undefined);
@@ -569,6 +422,22 @@ function RegionOverlay() {
     };
   }, []);
 
+  const loadsHotkeys = info?.allInOne === true;
+  useEffect(() => {
+    if (!loadsHotkeys) return;
+    let cancelled = false;
+    effectiveHotkeys()
+      .then((labels) => {
+        if (!cancelled) setHotkeys(labels ?? {});
+      })
+      .catch(() => {
+        // The tooltips leave the global shortcuts out.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadsHotkeys]);
+
   useEffect(() => {
     window.addEventListener("resize", resized);
     return () => window.removeEventListener("resize", resized);
@@ -597,6 +466,12 @@ function RegionOverlay() {
       if (event.key === "Escape") {
         if (done.current) return;
         event.preventDefault();
+        // The first Esc leaves the toolbar; the next one cancels.
+        const target = event.target;
+        if (target instanceof HTMLElement && target.closest('[data-testid="overlay-toolbar"]')) {
+          target.blur();
+          return;
+        }
         done.current = true;
         void cancelOverlay();
       } else if (event.key === "Shift") {
@@ -620,6 +495,7 @@ function RegionOverlay() {
       setMoving(false);
       setGrab(null);
       setPointer(null);
+      trail.current = EMPTY_TRAIL;
     }
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
@@ -760,6 +636,29 @@ function RegionOverlay() {
     finish({ kind: "region", rect: held, viewportWidth: view.width });
   }
 
+  // What Enter or the main button acts on: the window or pixel under the
+  // pointer in Window and Colour, else the held selection.
+  const pointsAtWindow = allInOne && intent === "capture" && windowMode;
+  const ready =
+    intent === "color"
+      ? pointer !== null
+      : pointsAtWindow
+        ? hovered !== undefined
+        : held !== null && isDrag(held);
+
+  /** The main button, or Enter: whatever the mode does with what is ready. */
+  function confirmMain() {
+    if (intent === "color") {
+      if (pointer) finish({ kind: "point", x: pointer.x, y: pointer.y, viewportWidth: view.width });
+      return;
+    }
+    if (pointsAtWindow) {
+      if (hovered) finish({ kind: "window", id: hovered.window.id });
+      return;
+    }
+    confirmHeld();
+  }
+
   /** The held selection at an exact size in image pixels, its corner kept. */
   function applySize(size: Size) {
     if (!held) return;
@@ -821,9 +720,15 @@ function RegionOverlay() {
     }
     if (isField(event.target)) return;
     if (event.key === "Enter") {
-      if (!held || event.target instanceof HTMLButtonElement) return;
-      event.preventDefault();
-      confirmHeld();
+      // A focused button takes its own Enter.
+      if (event.target instanceof HTMLButtonElement) return;
+      if (held) {
+        event.preventDefault();
+        confirmHeld();
+      } else if (allInOne && ready) {
+        event.preventDefault();
+        confirmMain();
+      }
       return;
     }
     if (recordKeys && !allInOne) {
@@ -895,7 +800,17 @@ function RegionOverlay() {
   }
 
   function onMouseMove(event: MouseEvent) {
+    // Over a toolbar the pointer stands for where it last rested, so the
+    // main button acts on the window or pixel pointed at, not on what lies
+    // under the toolbar or what the pointer crossed on its way there.
+    if (!drag && !grab && !gripping && onToolbar(event)) {
+      trail.current = reachedToolbar(trail.current, event.timeStamp);
+      const target = pointedAt(trail.current);
+      if (target) setPointer(target);
+      return;
+    }
     const point = pointOf(event);
+    trail.current = movedTo(trail.current, point, event.timeStamp);
     const follow = () => {
       if (gripping) setSetupAt(gripped(gripping, point));
       if (grab) setPicked(grabbed(grab, point, event.shiftKey));
@@ -921,6 +836,7 @@ function RegionOverlay() {
   function onMouseLeave() {
     if (drag || grab || gripping) return;
     setPointer(null);
+    trail.current = EMPTY_TRAIL;
   }
 
   function onMouseUp(event: MouseEvent) {
@@ -1011,7 +927,7 @@ function RegionOverlay() {
   const placement = highlight
     ? labelPlacement(
         highlight,
-        dragging ? SIZE_LABEL : held ? (intent === "record" ? SIZE_CHIP : SIZE_PANEL) : TITLE_LABEL,
+        dragging ? SIZE_LABEL : held ? (allInOne ? SIZE_LABEL : SIZE_CHIP) : TITLE_LABEL,
         view,
       )
     : null;
@@ -1021,6 +937,19 @@ function RegionOverlay() {
   // is on (or with a pick of its own), centred where the recording toolbar
   // opens; in All-in-one, under the mode toolbar.
   const top = hintTop(info?.topInset, view.height);
+  const layout = toolbarLayout(view.width);
+  const sizeInToolbar = allInOne && held !== null && !dragging && heldSize !== null && (source === null || source === "region");
+  const toolbarRoom = TOOLBAR_ROOM + (layout === "stacked" && sizeInToolbar ? TOOLBAR_ROW : 0);
+  // A held selection under the toolbar sends it to the bottom edge, if the
+  // selection leaves room there. Record keeps it at the top, over its setup.
+  const toolbarEdge: "top" | "bottom" =
+    allInOne &&
+    intent !== "record" &&
+    held !== null &&
+    held.y < top + toolbarRoom &&
+    held.y + held.height <= view.height - TOOLBAR_BOTTOM - toolbarRoom
+      ? "bottom"
+      : "top";
   const showSetup =
     info !== null && intent === "record" && (allInOne || info.pointerHere !== false || held !== null);
   const setupCentre: Point = allInOne
@@ -1045,15 +974,16 @@ function RegionOverlay() {
       : held && heldSize && source === "screen"
         ? `${info?.monitorName || "This display"} · ${heldSize.width} × ${heldSize.height}`
         : null;
+  // Capture & record explains itself in tooltips; the hint line stays for
+  // an error, for Record and for an overlay opened for one mode.
+  const showHint = !allInOne || intent === "record" || error !== null;
   const hintText =
     error ??
     (source
       ? `${RECORD_HINTS[source][held ? "held" : "open"]} Esc cancels.`
       : windowMode
         ? WINDOW_HINT
-        : held
-          ? ADJUST_HINT
-          : HINTS[intent]);
+        : HINTS[intent]);
 
   return (
     <div
@@ -1157,17 +1087,14 @@ function RegionOverlay() {
           {nameTag}
         </span>
       )}
-      {held && !dragging && placement && heldSize && (source === null || source === "region") && (
+      {!allInOne && held && !dragging && placement && heldSize && source === "region" && (
         <div ref={sizePanel}>
           <SizePanel
             size={heldSize}
             ratio={ratio}
-            confirmLabel={source ? undefined : CONFIRM_LABELS[intent]}
-            canConfirm={isDrag(held)}
             transform={labelTransform(held, placement)}
             onSize={applySize}
             onRatio={chooseRatio}
-            onConfirm={confirmHeld}
           />
         </div>
       )}
@@ -1204,19 +1131,56 @@ function RegionOverlay() {
         </>
       )}
       {!windowMode && !screenSource && pointer && (
-        <Loupe image={image} pointer={pointer} scale={scale} viewport={view} />
+        <Loupe
+          image={image}
+          pointer={pointer}
+          scale={scale}
+          viewport={view}
+          onColour={intent === "color" ? showColour : undefined}
+        />
       )}
       {allInOne && (
-        <div ref={toolbar}>
-          <Toolbar
-            tool={tool}
-            timer={timer}
-            hidden={active}
-            top={top}
-            onTool={chooseTool}
-            onTimer={stepTimer}
-          />
-        </div>
+        <ChooserToolbar
+          barRef={toolbar}
+          tool={tool}
+          timer={timer}
+          showTimer={isTimed(tool)}
+          mainLabel={
+            intent === "record"
+              ? null
+              : intent === "capture" && timer > 0
+                ? `Capture in ${timer} s`
+                : CONFIRM_LABELS[intent]
+          }
+          ready={ready}
+          mainUse={ready ? MAIN_USES[intent] : FIRST_STEPS[pointsAtWindow ? "window" : intent]}
+          globals={hotkeys}
+          layout={layout}
+          edge={toolbarEdge}
+          offset={toolbarEdge === "top" ? top : TOOLBAR_BOTTOM}
+          hidden={active}
+          middle={
+            sizeInToolbar && heldSize ? (
+              <SizeFields
+                size={heldSize}
+                ratio={ratio}
+                folded={layout === "folded" || layout === "stacked"}
+                up={toolbarEdge === "bottom"}
+                onSize={applySize}
+                onRatio={chooseRatio}
+              />
+            ) : intent === "color" ? (
+              <span className="overlay-toolbar-colour" data-testid="overlay-toolbar-colour">
+                <span ref={colourSwatch} className="overlay-loupe-swatch" aria-hidden="true" />
+                <span ref={colourText}>—</span>
+              </span>
+            ) : null
+          }
+          onTool={chooseTool}
+          onTimer={stepTimer}
+          onMain={confirmMain}
+          onCancel={cancel}
+        />
       )}
       {showSetup && source && (
         <div ref={setup} data-hidden={active ? "true" : "false"}>
@@ -1238,45 +1202,47 @@ function RegionOverlay() {
           />
         </div>
       )}
-      <div
-        className="overlay-hint"
-        data-hidden={active && !error ? "true" : "false"}
-        style={hintAt.left === undefined ? { top: hintAt.top } : { top: hintAt.top, left: hintAt.left }}
-      >
-        <p className="overlay-hint-text" role="status" data-error={error ? "true" : "false"}>
-          {hintText}
-        </p>
-        <ul className="overlay-keys" aria-label="Keyboard shortcuts">
-          <li>
-            <kbd>Esc</kbd> Cancel
-          </li>
-          {allInOne && (
+      {showHint && (
+        <div
+          className="overlay-hint"
+          data-hidden={active && !error ? "true" : "false"}
+          style={hintAt.left === undefined ? { top: hintAt.top } : { top: hintAt.top, left: hintAt.left }}
+        >
+          <p className="overlay-hint-text" role="status" data-error={error ? "true" : "false"}>
+            {hintText}
+          </p>
+          <ul className="overlay-keys" aria-label="Keyboard shortcuts">
             <li>
-              <kbd>1</kbd>–<kbd>{TIMER_KEY}</kbd> In this chooser
+              <kbd>Esc</kbd> Cancel
             </li>
-          )}
-          {source && !allInOne && (
-            <li>
-              <kbd>1</kbd>–<kbd>{SOURCES.length}</kbd> Source
-            </li>
-          )}
-          {held && (
-            <li>
-              <kbd>Enter</kbd> {CONFIRM_LABELS[intent]}
-            </li>
-          )}
-          {canDrag && (
-            <>
+            {allInOne && (
               <li>
-                <kbd>Shift</kbd> Square
+                <kbd>1</kbd>–<kbd>{TIMER_KEY}</kbd> In this chooser
               </li>
+            )}
+            {source && !allInOne && (
               <li>
-                <kbd>Space</kbd> Move
+                <kbd>1</kbd>–<kbd>{SOURCES.length}</kbd> Source
               </li>
-            </>
-          )}
-        </ul>
-      </div>
+            )}
+            {held && (
+              <li>
+                <kbd>Enter</kbd> {CONFIRM_LABELS[intent]}
+              </li>
+            )}
+            {canDrag && (
+              <>
+                <li>
+                  <kbd>Shift</kbd> Square
+                </li>
+                <li>
+                  <kbd>Space</kbd> Move
+                </li>
+              </>
+            )}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

@@ -69,7 +69,7 @@ interface ChipMenuProps {
 }
 
 /** A chip that opens a short list to pick from. */
-function ChipMenu({ label, icon, title, disabled, up, checks = false, options }: ChipMenuProps) {
+export function ChipMenu({ label, icon, title, disabled, up, checks = false, options }: ChipMenuProps) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {

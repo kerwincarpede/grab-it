@@ -58,6 +58,11 @@ interface LoupeProps {
    * under `pointer` at `scale`.
    */
   pixel?: Point;
+  /**
+   * Told each colour drawn, `#RRGGBB` or null when it cannot be read, so
+   * Capture & record's toolbar can show it too in Colour.
+   */
+  onColour?: (hex: string | null) => void;
 }
 
 /**
@@ -65,7 +70,7 @@ interface LoupeProps {
  * colour of the pixel under the cursor and the cursor's position in image
  * pixels.
  */
-function Loupe({ image, pointer, scale, viewport, pixel: shownPixel }: LoupeProps) {
+function Loupe({ image, pointer, scale, viewport, pixel: shownPixel, onColour }: LoupeProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const swatch = useRef<HTMLSpanElement>(null);
   const colour = useRef<HTMLSpanElement>(null);
@@ -85,7 +90,8 @@ function Loupe({ image, pointer, scale, viewport, pixel: shownPixel }: LoupeProp
     // putting it in state would render the overlay twice per pointer move.
     if (colour.current) colour.current.textContent = hex ?? UNKNOWN_COLOUR;
     if (swatch.current) swatch.current.style.backgroundColor = hex ?? "transparent";
-  }, [image, pixel.x, pixel.y]);
+    onColour?.(hex);
+  }, [image, pixel.x, pixel.y, onColour]);
 
   return (
     <div

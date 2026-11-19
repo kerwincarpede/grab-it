@@ -17,7 +17,7 @@ import math
 import random
 import sys
 
-from animkit import (MONO, Anim, dashboard, head, logo, mode_icon, qlen, text_w, th_chat, th_code, th_dash, th_error,
+from animkit import (MONO, Anim, chooser_toolbar, dashboard, head, logo, qlen, th_chat, th_code, th_dash, th_error,
                      th_figma, th_receipt, th_rec, th_term, tile_bg, tool_icon, tr)
 
 T = 32.0  # seconds per loop
@@ -106,23 +106,6 @@ kf("sel", [(1.8, "opacity:0;transform:scale(0)"), (1.82, "opacity:1;transform:sc
            (3.95, "opacity:0;transform:scale(1)")], "#sel", "ease-in-out")
 show("#handles", "handles", [(2.95, 3.95)], fade=.15)
 
-# Size chip with exact size and ratio locks, above the selection.
-CHX, CHY = SX, SY - 42
-chip = [f'<rect x="{CHX}" y="{CHY}" width="368" height="32" rx="9" fill="#16181d" stroke="#2c313b"/>',
-        f'<rect x="{CHX + 6}" y="{CHY + 6}" width="48" height="20" rx="5" fill="#23262d"/>',
-        f'<text x="{CHX + 30}" y="{CHY + 20}" class="t" font-size="12" fill="#e6e8ee" text-anchor="middle">1120</text>',
-        f'<text x="{CHX + 62}" y="{CHY + 20}" class="t" font-size="12" fill="#8b93a1" text-anchor="middle">×</text>',
-        f'<rect x="{CHX + 70}" y="{CHY + 6}" width="42" height="20" rx="5" fill="#23262d"/>',
-        f'<text x="{CHX + 91}" y="{CHY + 20}" class="t" font-size="12" fill="#e6e8ee" text-anchor="middle">508</text>',
-        f'<text x="{CHX + 118}" y="{CHY + 20}" class="t" font-size="11" fill="#8b93a1">px</text>',
-        f'<rect x="{CHX + 138}" y="{CHY + 5}" width="40" height="22" rx="6" fill="#0090ff"/>']
-for lx, lab in [(CHX + 158, "Free"), (CHX + 198, "16:9"), (CHX + 234, "4:3"), (CHX + 266, "1:1")]:
-    chip.append(f'<text x="{lx}" y="{CHY + 20}" class="t b" font-size="12" fill="#e6e8ee" text-anchor="middle">{lab}</text>')
-chip.append(f'<text x="{CHX + 290}" y="{CHY + 20}" class="t b" font-size="12" fill="#e6e8ee">Capture</text>')
-chip.append(f'<text x="{CHX + 342}" y="{CHY + 20}" {MONO} font-size="10" fill="#8b93a1">⏎</text>')
-body.append(f'<g id="chip">{"".join(chip)}</g>')
-show("#chip", "chip", [(3.0, 3.95)], fade=.2)
-
 # Enter key press.
 body.append(f"""<g id="enter"><g transform="translate({SX + SW / 2} {SY + SH / 2})">
   <rect x="-46" y="-24" width="92" height="50" rx="11" fill="#f4f5f8"/><rect x="-46" y="-24" width="92" height="44" rx="11" fill="#fff"/>
@@ -149,55 +132,25 @@ kf("sel2", [(13.5, "opacity:0;transform:scale(0)"), (13.52, "opacity:1;transform
             (14.75, "opacity:0;transform:scale(1)")], "#sel2", "ease-in-out")
 kf("scanbar", [(14.22, "transform:translateX(0)"), (14.7, f"transform:translateX({TW + 60}px)")], "#scanbar", "ease-in-out")
 
-# Capture &amp; record… toolbar.
-MODES = [("Region", "1"), ("Window", "2"), ("Screen", "3"), ("Text", "4"), ("Colour", "5"), ("Record", "6"), ("Scroll", "7"), ("Timer off", "8")]
-
-
-
-
-widths = [round(30 + text_w(m, 12.5) + 30) for m, _ in MODES]
-tb_w = sum(widths) + 4 * (len(MODES) - 1) + 12
-tb_x = 480 - tb_w / 2
+# Capture &amp; record… toolbar: Region until a region is held, then its size, ratios and a lit
+# Capture button in the middle; later Text, with Copy text. No hint line: the toolbar explains itself.
 TB_Y = 12
-
-
-
-
-tb = [f'<rect x="{tb_x}" y="{TB_Y}" width="{tb_w}" height="36" rx="11" fill="#16181d" stroke="#2c313b"/>']
-mx = tb_x + 6
-mode_x = {}
-for (m, n), w in zip(MODES, widths):
-    mode_x[m] = (mx, w)
-    mx += w + 4
-for m in ("Region", "Text"):
-    hx, hw = mode_x[m]
-    tb.append(f'<rect id="hl{m}" x="{hx}" y="{TB_Y + 4}" width="{hw}" height="28" rx="8" fill="#0090ff"/>')
-for (m, n), w in zip(MODES, widths):
-    hx, _ = mode_x[m]
-    cy = TB_Y + 18
-    tb.append(mode_icon(m, hx + 16, cy))
-    tb.append(f'<text x="{hx + 30}" y="{cy + 4.5}" class="t" font-size="12.5" fill="#f3f4f7">{m}</text>')
-    tb.append(f'<rect x="{hx + w - 22}" y="{cy - 8}" width="15" height="16" rx="4" fill="#ffffff" opacity=".14"/>')
-    tb.append(f'<text x="{hx + w - 14.5}" y="{cy + 4}" class="t" font-size="10.5" fill="#c9ceda" text-anchor="middle">{n}</text>')
-
-
-def hint(id_, text, width):
-    return (f'<g id="{id_}"><rect x="{480 - width / 2}" y="{TB_Y + 44}" width="{width}" height="26" rx="8" fill="#16181d" opacity=".92"/>'
-            f'<text x="480" y="{TB_Y + 61}" class="t" font-size="12" fill="#e6e8ee" text-anchor="middle">{text}</text></g>')
-
-
-tb.append(hint("hint1", "1–8 in this chooser. Drag a region, then press Enter.", 336))
-tb.append(hint("hint2", "Drag over the text, then press Enter to copy.", 295))
+tb = []
+for id_, picked, main, ready, size, timer in [
+        ("tbOpen", "Region", "Capture", False, None, "Timer"),
+        ("tbHeld", "Region", "Capture", True, (1120, 508), "Timer"),
+        ("tbText", "Text", "Copy text", True, None, None)]:
+    svg, _, _, _ = chooser_toolbar(480, TB_Y, picked, main, ready, size, timer=timer)
+    tb.append(f'<g id="{id_}">{svg}</g>')
 body.append(f'<g id="aio">{"".join(tb)}</g>')
 kf("aio", [(1.2, "opacity:0;transform:translateY(-60px)"), (1.55, "opacity:1;transform:translateY(0)"),
            (3.75, "opacity:1;transform:translateY(0)"), (3.95, "opacity:0;transform:translateY(0)"),
            (12.95, "opacity:0;transform:translateY(-60px)"), (13.3, "opacity:1;transform:translateY(0)"),
            (14.55, "opacity:1;transform:translateY(0)"), (14.75, "opacity:0;transform:translateY(0)")],
    "#aio", "cubic-bezier(.2,.9,.3,1.1)")
-show("#hlRegion", "hlRegion", [(0, 13.55)], fade=.15)
-show("#hlText", "hlText", [(13.45, T)], fade=.15)
-show("#hint1", "hint1", [(0, 13.55)], fade=.15)
-show("#hint2", "hint2", [(13.45, T)], fade=.15)
+show("#tbOpen", "tbOpen", [(0, 3.0)], fade=.15)
+show("#tbHeld", "tbHeld", [(3.0, 13.0)], fade=.15)
+show("#tbText", "tbText", [(13.0, T)], fade=.15)
 
 # Crosshair with magnifier (Capture) and a plain one (Copy text).
 body.append("""
