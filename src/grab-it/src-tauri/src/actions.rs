@@ -100,25 +100,15 @@ pub fn start_after(app: &AppHandle, action: Action, delay: Duration) {
 
 /// Starts a capture without blocking the caller (often the main thread).
 pub fn start(app: &AppHandle, action: Action) {
-    dispatch(app, action, false, Duration::ZERO);
+    dispatch(app, action, false);
 }
 
 /// The global chooser binding also dismisses a chooser already on screen.
 pub fn start_from_hotkey(app: &AppHandle, action: Action) {
-    dispatch(app, action, action == Action::AllInOne, Duration::ZERO);
+    dispatch(app, action, action == Action::AllInOne);
 }
 
-/// Claims the chooser immediately and freezes the screen after the hub has hidden.
-pub fn chooser_after_hiding(app: &AppHandle, settle: Duration) {
-    #[cfg(target_os = "linux")]
-    if crate::portal::is_wayland() {
-        start_after(app, Action::AllInOne, settle);
-        return;
-    }
-    dispatch(app, Action::AllInOne, false, settle);
-}
-
-fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool, settle: Duration) {
+fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool) {
     if action == Action::Steps {
         crate::steps::toggle(app, crate::steps::Trigger::Keys);
         return;
@@ -221,9 +211,6 @@ fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool, settle: Durat
     std::thread::spawn(move || {
         let result = match job {
             CaptureJob::Overlay(id) => {
-                if !settle.is_zero() {
-                    std::thread::sleep(settle);
-                }
                 overlay::open(&app, action.mode(), action.intent(), chooser, id)
             }
             CaptureJob::Repeat => {
