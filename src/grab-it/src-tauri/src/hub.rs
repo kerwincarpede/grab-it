@@ -352,11 +352,11 @@ pub fn hub_capture(
         "colour" => Action::Colour,
         other => return Err(format!("unknown capture: {other}")),
     };
+    // Every capture, Capture & record included, starts once the hub has
+    // hidden and the window under it has the focus. Claiming the chooser
+    // while the hub was still hiding left it unopened on macOS when the
+    // Library was open.
     hide(&app);
-    if action == Action::AllInOne && delay_seconds.unwrap_or(0) == 0 {
-        actions::chooser_after_hiding(&app, HIDE_SETTLE);
-        return Ok(());
-    }
     // A timed capture's countdown covers the hub hiding, so its pill
     // counts the whole seconds asked for.
     let delay = match delay_seconds.unwrap_or(0).min(60) {
