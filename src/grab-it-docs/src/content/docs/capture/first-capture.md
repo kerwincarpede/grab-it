@@ -20,6 +20,8 @@ Your capture is now:
 - **saved** as a PNG in `Pictures/Grab-it`, named after the moment you took it (`Grab-it 2026-11-15 14-05-09.png`), and
 - shown on a **Quick Access** card in the corner of your screen.
 
+On macOS, Grab-it offers PNG first when you copy an image. It also offers TIFF for apps that need it.
+
 See [Region](/grab-it/capture/region/) for everything the overlay can do.
 
 ## The Quick Access card

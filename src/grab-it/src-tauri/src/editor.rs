@@ -456,16 +456,13 @@ pub fn editor_save_annotations(
 }
 
 /// Copies the flattened PNG in the request body to the clipboard.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn editor_copy(request: tauri::ipc::Request<'_>, app: AppHandle) -> Result<(), String> {
     let png = raw_body(&request)?;
     let image = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
         .map_err(|err| format!("could not decode the image: {err}"))?
         .into_rgba8();
-    let clip = tauri::image::Image::new(image.as_raw(), image.width(), image.height());
-    app.clipboard()
-        .write_image(&clip)
-        .map_err(|err| format!("could not copy to the clipboard: {err}"))
+    crate::file_clipboard::copy_image(&app, &image)
 }
 
 /// Writes the flattened image in the request body to the path in the

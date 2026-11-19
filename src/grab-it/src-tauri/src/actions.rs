@@ -395,12 +395,11 @@ fn save(
         }
         None => image,
     };
-    let clip = tauri::image::Image::new(image.as_raw(), image.width(), image.height());
-    let copied = match app.clipboard().write_image(&clip) {
+    let copied = match crate::file_clipboard::copy_image(app, image) {
         Ok(()) => true,
         Err(err) => {
             // The file is saved; a clipboard failure is not worth losing it over.
-            eprintln!("Grab-it: saved, but could not copy to the clipboard: {err}");
+            eprintln!("Grab-it: saved, but {err}");
             false
         }
     };
