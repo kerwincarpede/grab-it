@@ -18,7 +18,7 @@ import {
 
 import { COUNTDOWN_USE, countdownText } from "./recordOptions";
 import { SOURCES } from "./recordSources";
-import { Tipped, type TipText } from "./Tipped";
+import { Tipped } from "./Tipped";
 
 /** A typed size: a whole number of image pixels, at least one. */
 function parseLength(text: string): number | null {

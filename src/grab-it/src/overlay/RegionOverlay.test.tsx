@@ -2084,7 +2084,7 @@ describe("RegionOverlay", () => {
       });
 
       it("shows the microphone and webcam by name on a wide display", async () => {
-        Object.defineProperty(window, "innerWidth", { configurable: true, value: 1800 });
+        Object.defineProperty(window, "innerWidth", { configurable: true, value: 1920 });
         mockOverlay({ allInOne: true });
         render(<RegionOverlay />);
         await ready();
