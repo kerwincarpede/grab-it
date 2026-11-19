@@ -1,6 +1,5 @@
 /*
- * Landing page base styles, hover lifts, the hero animation and the tour
- * animations' controls.
+ * Landing page base styles, hover lifts and the tour animations' controls.
  * Colours come from tokens.css. Every animation stops under
  * prefers-reduced-motion.
  */
@@ -112,21 +111,9 @@ a{color:inherit}
 .gi-cta{transition:filter .2s ease, transform .2s ease}
 .gi-cta:hover{filter:brightness(1.08);transform:translateY(-1px)}
 .gi-link:hover{opacity:.8}
-@keyframes gi-sel{0%,10%{width:0;height:0;opacity:0}11%{opacity:1}30%,88%{width:46%;height:52%;opacity:1}100%{width:46%;height:52%;opacity:0}}
-@keyframes gi-cur{0%{transform:translate(0,0)}10%{transform:translate(0,0)}30%{transform:translate(440%,520%)}45%{transform:translate(620%,260%)}60%{transform:translate(380%,640%)}100%{transform:translate(380%,640%)}}
-@keyframes gi-arrow{0%,34%{opacity:0;transform:translate(-12px,12px)}42%,88%{opacity:1;transform:none}100%{opacity:0}}
-@keyframes gi-box{0%,44%{opacity:0;transform:scale(.92)}52%,88%{opacity:1;transform:none}100%{opacity:0}}
-@keyframes gi-blur{0%,54%{opacity:0}62%,88%{opacity:1}100%{opacity:0}}
-@keyframes gi-toast{0%,66%{opacity:0;transform:translateY(18px) scale(.96)}72%,92%{opacity:1;transform:none}100%{opacity:0;transform:translateY(8px)}}
 @keyframes gi-pulse{0%,100%{opacity:.55}50%{opacity:1}}
-.gi-sel{animation:gi-sel 7s ease-in-out infinite}
-.gi-cur{animation:gi-cur 7s cubic-bezier(.6,0,.3,1) infinite}
-.gi-arrow{animation:gi-arrow 7s ease-out infinite}
-.gi-box{animation:gi-box 7s ease-out infinite}
-.gi-blur{animation:gi-blur 7s ease-out infinite}
-.gi-toast{animation:gi-toast 7s ease-out infinite}
 .gi-pulse{animation:gi-pulse 2.4s ease-in-out infinite}
-@media (prefers-reduced-motion: reduce){.gi-sel,.gi-cur,.gi-arrow,.gi-box,.gi-blur,.gi-toast,.gi-pulse{animation:none !important}.gi-lift,.gi-cta{transition:none}}
+@media (prefers-reduced-motion: reduce){.gi-pulse{animation:none !important}.gi-lift,.gi-cta{transition:none}}
 
 @media (prefers-reduced-motion: reduce) {
 	html {
