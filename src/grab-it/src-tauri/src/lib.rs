@@ -15,6 +15,8 @@ mod ffmpeg;
 mod file_clipboard;
 mod frame_overlays;
 mod frames;
+#[cfg(target_os = "windows")]
+mod freeze;
 mod guide_export;
 mod hotkeys;
 mod hub;

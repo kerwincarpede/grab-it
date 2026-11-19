@@ -111,10 +111,14 @@ webkit2gtk = "2.0"
 # (file_clipboard.rs).
 windows = { version = "0.61", features = [
     "Win32_Foundation",
+    # Shows and hides the capture overlay without a fade (freeze.rs).
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     # Attaches the command line to the terminal it was run from (cli.rs).
     "Win32_System_Console",
     "Win32_System_DataExchange",
+    # The module a window class is registered under (freeze.rs).
+    "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_UI_WindowsAndMessaging",

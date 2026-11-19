@@ -1702,24 +1702,43 @@ describe("RegionOverlay", () => {
       expect(calls.filter((call) => call.cmd === "overlay_ready")).toHaveLength(1);
     });
 
-    it("waits for the Windows reveal before dimming its ready image", async () => {
+    it("is ready on Windows ahead of its image, and dims once it is revealed", async () => {
+      window.location.hash = "#/overlay?windows";
+      try {
+        // No object URLs in jsdom: the image never loads here.
+        const calls = mockOverlay();
+        render(<RegionOverlay />);
+        const overlay = await ready();
+        await waitFor(() => expect(calls.some((call) => call.cmd === "overlay_ready")).toBe(true));
+        expect(overlay).toHaveAttribute("data-shown", "false");
+
+        await emit("overlay-revealed");
+        await waitFor(() => expect(overlay).toHaveAttribute("data-shown", "true"));
+      } finally {
+        window.location.hash = "";
+      }
+    });
+
+    it("shows no loupe on Windows until its image has arrived", async () => {
       window.location.hash = "#/overlay?windows";
       try {
         Object.assign(URL, { createObjectURL: () => "blob:frozen", revokeObjectURL: () => {} });
-        const calls = mockOverlay();
+        mockOverlay();
         const { container } = render(<RegionOverlay />);
         const overlay = await ready();
+        await emit("overlay-revealed");
+        await waitFor(() => expect(overlay).toHaveAttribute("data-shown", "true"));
+
+        fireEvent.mouseMove(overlay, { clientX: 100, clientY: 50 });
+        expect(screen.queryByTestId("overlay-loupe")).toBeNull();
+
         const image = await waitFor(() => {
           const img = container.querySelector("img");
           expect(img).not.toBeNull();
           return img as HTMLImageElement;
         });
         fireEvent.load(image);
-        await waitFor(() => expect(calls.some((call) => call.cmd === "overlay_ready")).toBe(true));
-        expect(overlay).toHaveAttribute("data-shown", "false");
-
-        await emit("overlay-revealed");
-        await waitFor(() => expect(overlay).toHaveAttribute("data-shown", "true"));
+        await waitFor(() => expect(screen.getByTestId("overlay-loupe")).toBeInTheDocument());
       } finally {
         window.location.hash = "";
       }

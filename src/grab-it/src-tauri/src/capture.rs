@@ -115,6 +115,19 @@ pub fn crop(image: &RgbaImage, rect: Rect) -> Option<RgbaImage> {
     )
 }
 
+/// Screen pixels as Windows hands them over (blue, green, red, then a byte
+/// GDI leaves unset) in the order and with the full opacity a capture is
+/// kept in.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn bgra_to_rgba(bgra: &[u8]) -> Vec<u8> {
+    let mut rgba = bgra.to_vec();
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+        pixel[3] = 255;
+    }
+    rgba
+}
+
 /// One monitor's image and where the monitor sits on the desktop, in the
 /// coordinate space the platform reports monitor positions in.
 pub struct Tile<'a> {
@@ -510,6 +523,12 @@ mod tests {
         // A 1.25x monitor next to it.
         assert_eq!(image_scale(1920, 1536.0, 1.0), 1.25);
         assert_eq!(image_scale(1920, 0.0, 1.5), 1.5);
+    }
+
+    #[test]
+    fn windows_screen_pixels_become_opaque_rgba() {
+        let bgra = [10, 20, 30, 0, 40, 50, 60, 255];
+        assert_eq!(bgra_to_rgba(&bgra), [30, 20, 10, 255, 60, 50, 40, 255]);
     }
 
     #[test]
