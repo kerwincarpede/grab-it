@@ -85,6 +85,11 @@ export function isInstantOverlay(hash: string = window.location.hash): boolean {
   return routeFromHash(hash) === "overlay" && routeHasFlag(hash, "instant");
 }
 
+/** Windows shows its capture overlays together once their images are ready. */
+export function isWindowsOverlay(hash: string = window.location.hash): boolean {
+  return routeFromHash(hash) === "overlay" && routeHasFlag(hash, "windows");
+}
+
 export type Selection =
   | { kind: "region"; rect: Box; viewportWidth: number }
   | { kind: "window"; id: number }
@@ -120,9 +125,14 @@ export function imageType(bytes: ArrayBuffer): string {
   return head[0] === 0x42 && head[1] === 0x4d ? "image/bmp" : "image/png";
 }
 
-/** The frozen image is on screen: the backend may show this overlay now. */
+/** The frozen image is ready for the backend to show. */
 export function overlayReady(): Promise<void> {
   return invoke<void>("overlay_ready");
+}
+
+/** The Windows overlays are now visible. */
+export function onOverlayRevealed(handler: () => void): Promise<() => void> {
+  return listen("overlay-revealed", () => handler());
 }
 
 /** Mirrors `Choice` in src-tauri/src/overlay.rs: what All-in-one's toolbar chose. */
