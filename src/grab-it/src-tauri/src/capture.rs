@@ -121,7 +121,7 @@ pub fn crop(image: &RgbaImage, rect: Rect) -> Option<RgbaImage> {
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn bgra_to_rgba(bgra: &[u8]) -> Vec<u8> {
     let mut rgba = bgra.to_vec();
-    for pixel in rgba.chunks_exact_mut(4) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
         pixel[3] = 255;
     }
