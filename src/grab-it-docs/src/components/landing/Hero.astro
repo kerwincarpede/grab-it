@@ -1,8 +1,8 @@
 ---
-// The hero: headline, calls to action and an animated product scene of the
-// Capture & record… toolbar, a selection, annotations and the copied card. It
-// replaces the old demo GIF. The scene is pure CSS animation, so it stops on
-// its finished frame under prefers-reduced-motion.
+// The hero: headline, calls to action and a demo of one first run of the app
+// (HeroDemo.astro), then the three keys it takes.
+import HeroDemo from './HeroDemo.astro';
+
 const keycap =
 	"flex: none; min-width: 64px; text-align: center; font-family: var(--gi-font-mono); font-size: 13px; font-weight: 600; color: var(--gi-text); padding: 10px 12px; border-radius: 10px; border: 1px solid var(--gi-hair-strong); background: linear-gradient(180deg, var(--gi-fill), transparent), var(--gi-panel); box-shadow: inset 0 -3px 0 var(--gi-hair-strong), 0 6px 16px rgb(0 0 0 / 18%);";
 ---
@@ -24,64 +24,8 @@ Open source for Windows, macOS and Linux <span aria-hidden="true">→</span>
 
 <figure style="position: relative; margin: clamp(56px, 7vw, 88px) auto 0; max-width: 1060px">
 <div aria-hidden="true" style="position: absolute; inset: 8% 4% -6% 4%; background: radial-gradient(closest-side, var(--gi-glow), transparent); filter: blur(40px)"></div>
-<div role="img" aria-label="Animation: the Capture & record… toolbar appears, a region is selected, an arrow, a box and a blur are added, and the screenshot is copied to the clipboard." style="position: relative; padding: 1px; border-radius: 22px; background: linear-gradient(180deg, var(--gi-hair-strong), var(--gi-hair) 40%, transparent)">
-<div style="position: relative; border-radius: 21px; overflow: hidden; aspect-ratio: 16 / 9; background: radial-gradient(120% 90% at 20% 0%, var(--gi-wall-a), transparent 60%), radial-gradient(90% 90% at 100% 100%, var(--gi-wall-b), transparent 60%), var(--gi-wall)">
-
-<div style="position: absolute; left: 50%; top: 4%; transform: translateX(-50%); display: flex; gap: 3px; padding: 4px; border-radius: 11px; background: var(--gi-float); border: 1px solid rgb(255 255 255 / 10%); box-shadow: 0 12px 30px rgb(0 0 0 / 35%); z-index: 3">
-<span style="font-size: 11.5px; font-weight: 600; color: #0b0c10; background: #97a9ff; border-radius: 7px; padding: 5px 10px">Region</span>
-<span style="font-size: 11.5px; color: #c7cad1; padding: 5px 10px">Window</span>
-<span style="font-size: 11.5px; color: #c7cad1; padding: 5px 10px">Screen</span>
-<span style="font-size: 11.5px; color: #c7cad1; padding: 5px 10px">Text</span>
-<span style="font-size: 11.5px; color: #c7cad1; padding: 5px 10px">Record</span>
-</div>
-
-<div style="position: absolute; left: 12%; top: 18%; width: 64%; height: 72%; border-radius: 12px; background: var(--gi-pop); border: 1px solid var(--gi-border); box-shadow: 0 30px 60px rgb(0 0 0 / 30%); overflow: hidden; text-align: left">
-<div style="height: 30px; background: var(--gi-chrome); border-bottom: 1px solid var(--gi-border); display: flex; align-items: center; gap: 6px; padding: 0 12px">
-<span style="width: 9px; height: 9px; border-radius: 50%; background: #ff5f57"></span>
-<span style="width: 9px; height: 9px; border-radius: 50%; background: #febc2e"></span>
-<span style="width: 9px; height: 9px; border-radius: 50%; background: #28c840"></span>
-</div>
-<div style="display: flex; height: calc(100% - 31px)">
-<div style="width: 22%; border-right: 1px solid var(--gi-border); padding: 14px 10px; display: flex; flex-direction: column; gap: 9px">
-<div style="height: 7px; width: 70%; border-radius: 3px; background: var(--gi-border-strong)"></div>
-<div style="height: 7px; width: 55%; border-radius: 3px; background: var(--gi-accent); opacity: .7"></div>
-<div style="height: 7px; width: 62%; border-radius: 3px; background: var(--gi-border-strong)"></div>
-<div style="height: 7px; width: 48%; border-radius: 3px; background: var(--gi-border-strong)"></div>
-</div>
-<div style="flex: 1; padding: 5% 6%; display: flex; flex-direction: column; gap: 12px">
-<div style="height: 13px; width: 40%; border-radius: 4px; background: var(--gi-text); opacity: .85"></div>
-<div style="height: 8px; width: 80%; border-radius: 4px; background: var(--gi-border-strong)"></div>
-<div style="display: flex; gap: 12px; margin-top: 8px">
-<div style="flex: 1; height: 74px; border-radius: 9px; background: linear-gradient(135deg, var(--gi-accent-soft), transparent), var(--gi-surface); border: 1px solid var(--gi-border)"></div>
-<div style="flex: 1; height: 74px; border-radius: 9px; background: var(--gi-surface); border: 1px solid var(--gi-border)"></div>
-<div style="flex: 1; height: 74px; border-radius: 9px; background: var(--gi-surface); border: 1px solid var(--gi-border)"></div>
-</div>
-<div style="display: flex; align-items: center; gap: 10px; margin-top: 6px">
-<div style="height: 8px; width: 18%; border-radius: 4px; background: var(--gi-border-strong)"></div>
-<div style="height: 24px; width: 40%; border-radius: 6px; background: var(--gi-surface); border: 1px solid var(--gi-border); font-family: var(--gi-font-mono); font-size: 10.5px; line-height: 24px; padding-left: 8px; color: var(--gi-muted)">jane@example.com</div>
-</div>
-<div style="height: 28px; width: 28%; border-radius: 7px; background: var(--gi-accent); margin-top: 6px"></div>
-</div>
-</div>
-</div>
-
-<div class="gi-sel" style="position: absolute; left: 30%; top: 32%; width: 46%; height: 52%; border: 1.5px solid #97a9ff; box-shadow: 0 0 0 9999px rgb(5 6 10 / 38%), 0 0 30px rgb(130 151 255 / 45%); border-radius: 2px; z-index: 2">
-<span style="position: absolute; left: -4px; top: -4px; width: 7px; height: 7px; background: #fff; border: 1.5px solid #97a9ff; border-radius: 2px"></span>
-<span style="position: absolute; right: -4px; top: -4px; width: 7px; height: 7px; background: #fff; border: 1.5px solid #97a9ff; border-radius: 2px"></span>
-<span style="position: absolute; left: -4px; bottom: -4px; width: 7px; height: 7px; background: #fff; border: 1.5px solid #97a9ff; border-radius: 2px"></span>
-<span style="position: absolute; right: -4px; bottom: -4px; width: 7px; height: 7px; background: #fff; border: 1.5px solid #97a9ff; border-radius: 2px"></span>
-<span style="position: absolute; left: 0; top: -26px; font-family: var(--gi-font-mono); font-size: 10.5px; color: #0b0c10; background: #97a9ff; padding: 2px 7px; border-radius: 5px">812 × 468</span>
-</div>
-<div class="gi-box" style="position: absolute; left: 33%; top: 66%; width: 22%; height: 14%; border: 3px solid #ff7a6b; border-radius: 8px; box-shadow: 0 0 24px rgb(255 122 107 / 45%); z-index: 2"></div>
-<svg class="gi-arrow" style="position: absolute; left: 54%; top: 40%; width: 16%; height: 26%; overflow: visible; z-index: 2; filter: drop-shadow(0 0 10px rgb(255 122 107 / 55%))" viewBox="0 0 100 100" aria-hidden="true"><path d="M92 6 C 72 18, 42 40, 14 86" fill="none" stroke="#ff7a6b" stroke-width="7" stroke-linecap="round"></path><path d="M4 68 L 12 92 L 36 84" fill="none" stroke="#ff7a6b" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-<div class="gi-blur" style="position: absolute; left: 43%; top: 59.5%; width: 21%; height: 5%; border-radius: 6px; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); background: rgb(140 140 160 / 22%); z-index: 2"></div>
-<svg class="gi-cur" style="position: absolute; left: 30%; top: 32%; width: 20px; height: 20px; z-index: 4; filter: drop-shadow(0 2px 4px rgb(0 0 0 / 45%))" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3l7 18 2.5-7.5L21 11z" fill="#ffffff" stroke="#0b0c10" stroke-width="1.5" stroke-linejoin="round"></path></svg>
-
-<div class="gi-toast" style="position: absolute; right: 4%; bottom: 6%; display: flex; align-items: center; gap: 12px; background: var(--gi-float); color: #f1f2f5; padding: 10px 14px 10px 10px; border-radius: 13px; border: 1px solid rgb(255 255 255 / 10%); box-shadow: 0 20px 50px rgb(0 0 0 / 45%); z-index: 3; text-align: left">
-<span style="width: 54px; height: 36px; border-radius: 6px; background: linear-gradient(135deg, #5b6cf0, #a36bf2); border: 1px solid rgb(255 255 255 / 20%)"></span>
-<span style="display: flex; flex-direction: column; line-height: 1.25"><span style="font-size: 13px; font-weight: 650">Copied to clipboard</span><span style="font-size: 11.5px; color: #a2a6ae">Annotate · Save · Pin</span></span>
-</div>
-</div>
+<div style="position: relative; padding: 1px; border-radius: 20px; background: linear-gradient(180deg, var(--gi-hair-strong), var(--gi-hair) 40%, transparent)">
+<HeroDemo />
 </div>
 </figure>
 
