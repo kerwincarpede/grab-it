@@ -292,6 +292,8 @@ pub fn run() {
             }
             app.manage(Mutex::new(store));
             let data_dir = app.path().app_data_dir()?;
+            let restore_library =
+                update::take_library_restore(&data_dir, &app.package_info().version);
             app.manage(library::open_for_app(&data_dir));
 
             let handle = app.handle();
@@ -326,10 +328,12 @@ pub fn run() {
             // Has a capture overlay loaded and waiting, so the first
             // selection appears as fast as any other.
             overlay::prewarm_later(handle);
-            if let Some(target) = open_target {
+            if let Some(target) = startup_target(
+                open_target,
+                || first_run || permissions_need_welcome(handle),
+                restore_library,
+            ) {
                 windows::open(handle, target)?;
-            } else if first_run || permissions_need_welcome(handle) {
-                windows::show_welcome(handle)?;
             }
             Ok(())
         })
@@ -359,6 +363,20 @@ pub fn run() {
             _ => {}
         }
     });
+}
+
+fn startup_target(
+    requested: Option<cli::OpenTarget>,
+    needs_welcome: impl FnOnce() -> bool,
+    restore_library: bool,
+) -> Option<cli::OpenTarget> {
+    requested.or_else(|| {
+        if needs_welcome() {
+            Some(cli::OpenTarget::Welcome)
+        } else {
+            restore_library.then_some(cli::OpenTarget::Library)
+        }
+    })
 }
 
 /// Runs what a second launch asked for in this, the running, instance.
@@ -418,4 +436,32 @@ fn open_settings(app: &App) -> tauri::Result<SettingsStore> {
         .unwrap_or_else(|_| PathBuf::from("Pictures"));
     let file = paths.app_data_dir()?.join(SETTINGS_FILE);
     Ok(SettingsStore::open(file, Settings::defaults(&pictures)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cli::OpenTarget, startup_target};
+
+    #[test]
+    fn only_a_tray_start_can_restore_the_library() {
+        for restore in [false, true] {
+            assert_eq!(
+                startup_target(
+                    Some(OpenTarget::Settings),
+                    || panic!("explicit request"),
+                    restore
+                ),
+                Some(OpenTarget::Settings)
+            );
+            assert_eq!(
+                startup_target(None, || true, restore),
+                Some(OpenTarget::Welcome)
+            );
+        }
+        assert_eq!(
+            startup_target(None, || false, true),
+            Some(OpenTarget::Library)
+        );
+        assert_eq!(startup_target(None, || false, false), None);
+    }
 }
