@@ -20,6 +20,8 @@
 
 use std::{
     cell::Cell,
+    fs, io,
+    path::Path,
     sync::{
         Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -60,6 +62,8 @@ const STABLE_ENDPOINT: &str =
 const RELEASES_API: &str = "https://api.github.com/repos/kerwincarpede/grab-it/releases";
 const RELEASE_PAGE_SIZE: usize = 100;
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
+
+const RESTORE_FILE: &str = "update-library-restore.json";
 
 #[derive(Deserialize)]
 struct GithubRelease {
@@ -345,11 +349,14 @@ pub fn update_install(app: AppHandle) -> Result<(), String> {
     let Some(update) = lock(&state.pending).clone() else {
         return Err("There is no update to install.".into());
     };
+    let data_dir = app.path().app_data_dir().map_err(|err| err.to_string())?;
     if state.installing.swap(true, Ordering::SeqCst) {
         emit(&app, current_status(&app), true);
         return Ok(());
     }
-    std::thread::spawn(move || install_and_restart(&app, &update));
+    // Closing the shared Library window destroys it. Minimising it keeps it open.
+    let library_open = app.get_webview_window(windows::MAIN_LABEL).is_some();
+    std::thread::spawn(move || install_and_restart(&app, &update, &data_dir, library_open));
     Ok(())
 }
 
@@ -508,10 +515,61 @@ fn check_once(app: &AppHandle, trigger: Trigger) -> u64 {
     }
 }
 
+fn clear_restore(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
+/// Takes the one-use Library handoff, even when startup will show another window.
+pub fn take_library_restore(data_dir: &Path, current: &Version) -> bool {
+    let path = data_dir.join(RESTORE_FILE);
+    let contents = match fs::read(&path) {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return false,
+        result => result,
+    };
+    if let Err(err) = clear_restore(&path) {
+        eprintln!("Grab-it: could not consume the Library restore record: {err}");
+        return false;
+    }
+    contents
+        .ok()
+        .and_then(|data| serde_json::from_slice::<String>(&data).ok())
+        .is_some_and(|target| target == current.to_string())
+}
+
+// The Windows installer exits the process on success, so the handoff must
+// already be on disk before entering the updater. A read-only profile should
+// still be able to install the update.
+fn install_with_restore<E>(
+    data_dir: &Path,
+    version: &str,
+    library_open: bool,
+    install: impl FnOnce() -> Result<(), E>,
+) -> Result<(), E> {
+    let path = data_dir.join(RESTORE_FILE);
+    let saved = if library_open {
+        fs::write(&path, serde_json::Value::from(version).to_string())
+    } else {
+        clear_restore(&path)
+    };
+    if let Err(err) = saved {
+        eprintln!("Grab-it: could not prepare the Library for restart: {err}");
+    }
+    let result = install();
+    if result.is_err()
+        && let Err(err) = clear_restore(&path)
+    {
+        eprintln!("Grab-it: could not clear the Library restore record: {err}");
+    }
+    result
+}
+
 /// Downloads and installs `update`, reporting progress, then restarts.
 /// Blocks, so it must not run on the main thread. The caller has set
 /// [`UpdateState::installing`].
-fn install_and_restart(app: &AppHandle, update: &Update) {
+fn install_and_restart(app: &AppHandle, update: &Update, data_dir: &Path, library_open: bool) {
     let info = info_of(update);
     let installing = |downloaded: u64, total: Option<u64>| UpdateStatus::Installing {
         info: info.clone(),
@@ -526,18 +584,20 @@ fn install_and_restart(app: &AppHandle, update: &Update) {
     let downloaded = Cell::new(0u64);
     let total = Cell::new(None::<u64>);
     let mut sent_at: Option<Instant> = None;
-    let installed = tauri::async_runtime::block_on(update.download_and_install(
-        |chunk, length| {
-            downloaded.set(downloaded.get() + chunk as u64);
-            total.set(length);
-            let done = length.is_some_and(|length| downloaded.get() >= length);
-            if done || sent_at.is_none_or(|at| at.elapsed() >= PROGRESS_EVERY) {
-                sent_at = Some(Instant::now());
-                set_status(app, installing(downloaded.get(), length), true);
-            }
-        },
-        || set_status(app, installing(downloaded.get(), total.get()), true),
-    ));
+    let installed = install_with_restore(data_dir, &update.version, library_open, || {
+        tauri::async_runtime::block_on(update.download_and_install(
+            |chunk, length| {
+                downloaded.set(downloaded.get() + chunk as u64);
+                total.set(length);
+                let done = length.is_some_and(|length| downloaded.get() >= length);
+                if done || sent_at.is_none_or(|at| at.elapsed() >= PROGRESS_EVERY) {
+                    sent_at = Some(Instant::now());
+                    set_status(app, installing(downloaded.get(), length), true);
+                }
+            },
+            || set_status(app, installing(downloaded.get(), total.get()), true),
+        ))
+    });
     match installed {
         // On Windows the installer has already closed Grab-it by now.
         Ok(()) => app.restart(),
@@ -675,6 +735,56 @@ fn shorten(item: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn an_open_library_is_recorded_before_install_and_restored_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let version = Version::new(1, 2, 3);
+        let record = dir.path().join(RESTORE_FILE);
+        install_with_restore(dir.path(), "1.2.3", true, || {
+            assert!(record.exists());
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        assert!(take_library_restore(dir.path(), &version));
+        assert!(!take_library_restore(dir.path(), &version));
+    }
+
+    #[test]
+    fn a_closed_library_leaves_no_restore_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = dir.path().join(RESTORE_FILE);
+        fs::write(&record, r#""1.2.3""#).unwrap();
+        install_with_restore(dir.path(), "1.2.3", false, || {
+            assert!(!record.exists());
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        assert!(!take_library_restore(dir.path(), &Version::new(1, 2, 3)));
+    }
+
+    #[test]
+    fn a_failed_install_clears_the_handoff() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            install_with_restore(dir.path(), "1.2.3", true, || Err("installer failed")),
+            Err("installer failed")
+        );
+        assert!(!dir.path().join(RESTORE_FILE).exists());
+    }
+
+    #[test]
+    fn an_ordinary_launch_discards_invalid_records_and_other_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = dir.path().join(RESTORE_FILE);
+        let version = Version::new(1, 2, 3);
+        assert!(!take_library_restore(dir.path(), &version));
+        for contents in [r#""1.2.4""#, r#""broken""#, "bad json"] {
+            fs::write(&record, contents).unwrap();
+            assert!(!take_library_restore(dir.path(), &version));
+            assert!(!record.exists());
+        }
+    }
 
     fn changes(version: &str, items: &[&str]) -> Changes {
         Changes {
