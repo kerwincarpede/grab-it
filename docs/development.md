@@ -409,7 +409,7 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --no-report
 cargo llvm-cov report --manifest-path src-tauri/Cargo.toml --html
 ```
 
-`npm run test:coverage` fails when the frontend tests cover less than 90% of lines or 83% of branches in `src/`, test files and `src/test/` aside; the floors are in `vitest.config.ts`. It writes HTML and lcov reports to `src/grab-it/coverage/`. `npm test` runs the same tests without coverage. `cargo llvm-cov` needs [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and the `llvm-tools-preview` rustup component, and writes its HTML report to `src-tauri/target/llvm-cov/html/`. Without them, `cargo test --manifest-path src-tauri/Cargo.toml` runs the same tests. Rust coverage counts lines only, since branch coverage needs nightly Rust, and CI fails below 68% of lines; that floor is in `ci.yml`.
+`npm run test:coverage` fails when the frontend tests cover less than 90% of lines or 83% of branches in `src/`, test and bench files and `src/test/` aside; the floors are in `vitest.config.ts`. It writes HTML and lcov reports to `src/grab-it/coverage/`. `npm test` runs the same tests without coverage. `cargo llvm-cov` needs [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and the `llvm-tools-preview` rustup component, and writes its HTML report to `src-tauri/target/llvm-cov/html/`. Without them, `cargo test --manifest-path src-tauri/Cargo.toml` runs the same tests. Rust coverage counts lines only, since branch coverage needs nightly Rust, and CI fails below 68% of lines; that floor is in `ci.yml`.
 
 The IPC tests in `src-tauri/src/ipc_tests.rs` call the real commands through Tauri's IPC on its mock runtime, against a temporary settings file, Library and save folder, so they need no display either. They check each command's JSON reply, what it saves and its error messages.
 
@@ -479,13 +479,35 @@ cargo bench --manifest-path src-tauri/Cargo.toml --features bench -- --baseline 
 
 Criterion keeps the results in `src-tauri/target/criterion/`. From the repository root, `python3 .github/scripts/bench_report.py src/grab-it/src-tauri/target/criterion` prints them as the table CI shows.
 
+`npm run bench` in `src/grab-it/` times the frontend's pure code with `vitest bench`. The benches sit beside their modules as `*.bench.ts`, and `npm test` leaves them out. Each file holds one test, named after its module, whose `bench` fixture times each case with `bench(...).run()`:
+
+- `overlay/geometry`: 1000 pointer moves of a selection drag, free and at 16:9, each working out the box, the cut-out, the frame and the size label; every resize handle over the same moves; and finding the window under the pointer among 200.
+- `editor/flatten`: the plain borders of a 1920×1080 capture with a window in the middle, and of one that is plain all over; laying out and painting every backdrop fill at every aspect; and the export area at 1000 views.
+- `editor/render`: the render plan of 128 edited captures (every turn and mirror, cropped and not, under each kind of backdrop), with and without a scale factor.
+- `recording/clips`: scrubbing 1000 times across 200 clips, clip starts and zoom owners, 100 splits and moves, and reading 200 saved clips.
+
+Each file takes the functions it times from their module once, so the times leave out the test runner's export getters. There is no canvas in the benches' jsdom, so they time the layout and pixel maths, not drawing.
+
+```sh
+npm run bench                      # every frontend bench
+npm run bench -- overlay/geometry  # one file
+```
+
+To compare a change with `main` locally, write a JSON report on each and pass both to the report script from the repository root:
+
+```sh
+npm run bench -- --reporter=default --reporter=json --outputFile.json=/tmp/main.json   # on main
+npm run bench -- --reporter=default --reporter=json --outputFile.json=/tmp/head.json   # on the branch
+python3 .github/scripts/bench_report.py --vitest /tmp/head.json --vitest-base /tmp/main.json
+```
+
 ## CI
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04, and the [smoke tests](#smoke-tests) on Ubuntu 24.04 for pull requests. In parallel, the Rust tests job runs `cargo test` on Windows and macOS, so code behind `#[cfg(windows)]` and `#[cfg(target_os = "macos")]` is tested as well as built. Tauri embeds the Common Controls 6 manifest only in the app, so on Windows the test executables would fail to start. `build.rs` turns that off and has the linker embed `windows-app-manifest.xml`, the same manifest, in every binary instead. The build job builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts. `ci.yml` runs on every pull request except those that change only docs (the site, `docs/` or Markdown), and never publishes anything. Pushes to `main` run it through the release workflow instead (below), so `main` is built once, as a release. Linux dependencies are downloaded from the Ubuntu archive (ports on arm64), with a 120-second limit for index updates and 180 seconds for package downloads per attempt. A failure tries a second mirror (the runner's original ports source on arm64). Downloads finish before installation, so a timeout never interrupts dpkg. Packages are installed without optional recommendations.
 
 The Checks job measures coverage while it runs the tests: `npm run test:coverage` for the frontend and `cargo llvm-cov` (pinned in `ci.yml`) for Rust, which prints a line summary in the job log. Either one falling below its floor fails the job. It uploads the HTML and lcov reports for both as one `coverage` artifact, even when a test or floor fails.
 
-[`.github/workflows/bench.yml`](../.github/workflows/bench.yml) runs on the same pull requests. In one Ubuntu 24.04 job it checks the benches with `cargo clippy --features bench --benches`, times the PR's base (from a `git worktree` sharing the target folder, `--save-baseline base`) and then its head (`--baseline-lenient base`), and writes a table of both with `.github/scripts/bench_report.py` to the job summary and to the Report step's log, which signed-out viewers and `gh run view --log` can read. A bench over 10% slower than the base is flagged with a warning, but the job never fails on it. A base from before the benches existed, or one that fails to build, is skipped and the summary shows the head alone. See "Benchmarks" above.
+[`.github/workflows/bench.yml`](../.github/workflows/bench.yml) runs on the same pull requests. In one Ubuntu 24.04 job it checks the Rust benches with `cargo clippy --features bench --benches`, times the PR's base (from a `git worktree` sharing the target folder, `--save-baseline base`) and then its head (`--baseline-lenient base`), and runs `npm run bench` on the base and the head with vitest's JSON reporter. `.github/scripts/bench_report.py` writes a table for each, Rust and Frontend, to the job summary and to the Report step's log, which signed-out viewers and `gh run view --log` can read. The frontend's change is worked out from the two reports' means. A bench over 10% slower than the base is flagged with a warning, but the job never fails on it. A base from before a suite's benches existed, or one that fails to build or run, is skipped and that table shows the head alone. See "Benchmarks" above.
 
 ## Releases
 

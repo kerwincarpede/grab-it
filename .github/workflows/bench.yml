@@ -1,8 +1,8 @@
 name: Benchmarks
 
-# Times the Rust benches (src/grab-it/src-tauri/benches/) on a PR's base and
-# head in one job, on one runner, and reports the difference in the job
-# summary. A slower bench is a warning, never a failure. Runs on the same PRs
+# Times the Rust benches (src/grab-it/src-tauri/benches/) and the frontend
+# benches (src/grab-it/src/**/*.bench.ts) on a PR's base and head in one job,
+# on one runner, and reports the difference in the job summary. A slower bench is a warning, never a failure. Runs on the same PRs
 # as ci.yml: docs-only PRs skip it.
 on:
   pull_request:
@@ -109,6 +109,7 @@ jobs:
           if [ -z "$BASE_SHA" ]; then
             echo "No PR base; only this commit is timed."
             echo "benches=false" >> "$GITHUB_OUTPUT"
+            echo "frontend=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"
@@ -116,8 +117,14 @@ jobs:
           if grep -q '^bench = ' "$tauri/Cargo.toml" && [ -d "$tauri/benches" ]; then
             echo "benches=true" >> "$GITHUB_OUTPUT"
           else
-            echo "The base has no benches; only the head is timed."
+            echo "The base has no Rust benches; only the head's are timed."
             echo "benches=false" >> "$GITHUB_OUTPUT"
+          fi
+          if grep -q '"bench":' "$RUNNER_TEMP/base/src/grab-it/package.json"; then
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "The base has no frontend benches; only the head's are timed."
+            echo "frontend=false" >> "$GITHUB_OUTPUT"
           fi
 
       # The base's results go to each bench's base/ folder. Its new/ folders
@@ -140,6 +147,20 @@ jobs:
               rm -rf "${run%/benchmark.json}"
             done
 
+      # vitest's JSON reporter writes the base's means for the report to
+      # compare the head's with.
+      - name: Time the base's frontend
+        id: base-frontend
+        if: steps.base.outputs.frontend == 'true'
+        continue-on-error: true
+        working-directory: .
+        run: |
+          cd "$RUNNER_TEMP/base"
+          # The Rust step above installs the base's packages when it runs.
+          [ -d node_modules ] || npm ci
+          cd src/grab-it
+          npm run bench -- --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-base.json"
+
       - name: Time the head
         env:
           BASE_OK: ${{ steps.base-run.outcome == 'success' }}
@@ -153,14 +174,21 @@ jobs:
             cargo bench --manifest-path src-tauri/Cargo.toml --features bench -- --save-baseline head
           fi
 
+      - name: Time the head's frontend
+        run: npm run bench -- --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-head.json"
+
       - name: Report
         if: ${{ !cancelled() }}
         working-directory: .
         env:
           BASE_OK: ${{ steps.base-run.outcome == 'success' }}
+          FRONTEND_BASE_OK: ${{ steps.base-frontend.outcome == 'success' }}
         run: |
-          flags=()
+          flags=(--vitest "$RUNNER_TEMP/vitest-head.json")
           if [ "$BASE_OK" != true ]; then
             flags+=(--no-base)
+          fi
+          if [ "$FRONTEND_BASE_OK" = true ]; then
+            flags+=(--vitest-base "$RUNNER_TEMP/vitest-base.json")
           fi
           python3 .github/scripts/bench_report.py "$CARGO_TARGET_DIR/criterion" "${flags[@]}"
