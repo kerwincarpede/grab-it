@@ -1031,6 +1031,14 @@ fn path_json(path: &Path) -> Value {
     json!(path.to_string_lossy())
 }
 
+/// Fails unless `message` starts with `prefix`.
+fn assert_starts_with(message: &str, prefix: &str) {
+    assert!(
+        message.starts_with(prefix),
+        "expected a message starting with {prefix:?}, got: {message}"
+    );
+}
+
 const NO_SHOT: &str = "no capture with id 999 in the library";
 const NOT_A_RECORDING: &str = "That works on screenshots, not recordings.";
 
@@ -1539,6 +1547,14 @@ fn thumbnail_headers(id: Option<i64>, edited_at: Option<i64>) -> HeaderMap {
 fn library_save_thumbnail_saves_the_drawn_thumbnail() {
     let h = Harness::new();
     let seeded = h.seed();
+    // Drawn long before the edits, so the thumbnail is surely stale.
+    fs::File::options()
+        .write(true)
+        .open(seeded.folder.join(THUMBS_DIR).join("invoice.png"))
+        .and_then(|thumb| {
+            thumb.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000))
+        })
+        .unwrap();
     fs::write(
         capture::annotations_path(&seeded.invoice_path()),
         json!({ "version": 1, "shapes": [{ "kind": "arrow" }] }).to_string(),
@@ -1547,7 +1563,9 @@ fn library_save_thumbnail_saves_the_drawn_thumbnail() {
     let edited_at = h.ok("library_annotations", json!({ "id": seeded.invoice }))["editedAt"]
         .as_i64()
         .expect("when the edits were saved");
-    assert_eq!(h.listed(seeded.invoice)["editedAt"], edited_at);
+    let before = h.listed(seeded.invoice);
+    assert_eq!(before["editedAt"], edited_at);
+    assert_eq!(before["thumbStale"], true);
 
     let saved = h.invoke_raw(
         "library_save_thumbnail",
@@ -1891,7 +1909,7 @@ fn library_storage_sizes_each_kind_and_what_is_due() {
     );
     assert_eq!(day["due"]["image"], json!({ "count": 1, "bytes": invoice }));
     assert_eq!(day["due"]["gif"], nothing);
-    // Starred or tagged, it is protected.
+    // Starred, it is protected.
     h.ok(
         "library_set_keep",
         json!({ "id": seeded.invoice, "keep": true }),
@@ -1901,6 +1919,13 @@ fn library_storage_sizes_each_kind_and_what_is_due() {
     // Zero days, as Purge now asks, is every unprotected item.
     let purge = h.ok("library_storage", json!({ "candidate": { "image": 0 } }));
     assert_eq!(purge["due"]["image"], json!({ "count": 1, "bytes": plain }));
+    // Tagged, it is protected too.
+    h.ok(
+        "library_set_tags",
+        json!({ "id": seeded.plain, "tags": ["work"] }),
+    );
+    let tagged = h.ok("library_storage", json!({ "candidate": { "image": 0 } }));
+    assert_eq!(tagged["due"]["image"], nothing);
 
     assert_invalid_arg(
         &h.err(
@@ -1944,6 +1969,7 @@ fn editor_save_annotations_round_trips_the_sidecar() {
     let h = Harness::new();
     let seeded = h.seed();
     let path = seeded.invoice_path();
+    let original = fs::read(&path).unwrap();
     h.edit(&path);
     assert_eq!(
         h.ok("library_annotations", json!({ "id": seeded.invoice })),
@@ -1974,7 +2000,7 @@ fn editor_save_annotations_round_trips_the_sidecar() {
     let shot = h.listed(seeded.invoice);
     assert_eq!(shot["editedAt"], edited_at);
     // The original is never written.
-    assert_eq!(dimensions(&fs::read(&path).unwrap()), (8, 6));
+    assert_eq!(fs::read(&path).unwrap(), original);
 }
 
 #[test]
@@ -2025,15 +2051,13 @@ fn library_annotations_refuses_what_it_cannot_read() {
     // edited, and the editor refuses it too.
     let sidecar = capture::annotations_path(&seeded.invoice_path());
     fs::write(&sidecar, "{ not json").unwrap();
-    assert!(
-        h.err("library_annotations", json!({ "id": seeded.invoice }))
-            .starts_with("could not parse")
+    let unparsable = format!("could not parse {}: ", sidecar.display());
+    assert_starts_with(
+        &h.err("library_annotations", json!({ "id": seeded.invoice })),
+        &unparsable,
     );
     h.edit(&seeded.invoice_path());
-    assert!(
-        h.err("editor_info", json!({}))
-            .starts_with("could not parse")
-    );
+    assert_starts_with(&h.err("editor_info", json!({})), &unparsable);
     fs::write(&sidecar, json!({ "version": 9, "shapes": [] }).to_string()).unwrap();
     assert_eq!(
         h.err("library_annotations", json!({ "id": seeded.invoice })),
@@ -2058,9 +2082,9 @@ fn editor_image_sends_the_original_bytes() {
         fs::read(seeded.invoice_path()).unwrap()
     );
     fs::remove_file(seeded.invoice_path()).unwrap();
-    assert!(
-        h.err("editor_image", json!({}))
-            .starts_with("could not open")
+    assert_starts_with(
+        &h.err("editor_image", json!({})),
+        &format!("could not open {}: ", seeded.invoice_path().display()),
     );
 }
 
@@ -2107,12 +2131,12 @@ fn editor_add_image_file_copies_the_image_beside_the_capture() {
         "the image must be a PNG, JPEG, WebP or GIF image"
     );
     let missing = h.dir.path().join("missing.png");
-    assert!(
-        h.err(
+    assert_starts_with(
+        &h.err(
             "editor_add_image_file",
-            json!({ "path": missing.to_string_lossy() })
-        )
-        .starts_with("could not open")
+            json!({ "path": missing.to_string_lossy() }),
+        ),
+        &format!("could not open {}: ", missing.display()),
     );
     assert_eq!(fs::read_dir(&assets).unwrap().count(), 1);
 }
@@ -2171,12 +2195,12 @@ fn editor_backdrop_image_reads_only_images() {
         "the backdrop image must be a PNG, JPEG, WebP or GIF image"
     );
     let missing = h.dir.path().join("missing.png");
-    assert!(
-        h.err(
+    assert_starts_with(
+        &h.err(
             "editor_backdrop_image",
-            json!({ "path": missing.to_string_lossy() })
-        )
-        .starts_with("could not open")
+            json!({ "path": missing.to_string_lossy() }),
+        ),
+        &format!("could not open {}: ", missing.display()),
     );
 }
 
@@ -2190,8 +2214,6 @@ fn save_backdrop_preset_image_refuses_a_missing_file() {
         "save_backdrop_preset_image",
         json!({ "path": missing.to_string_lossy() }),
     );
-    assert!(
-        message.starts_with("could not"),
-        "unexpected message: {message}"
-    );
+    // Refused when the source is read, before anything is written.
+    assert_starts_with(&message, &format!("could not open {}: ", missing.display()));
 }
