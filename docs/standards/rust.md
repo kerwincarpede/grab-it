@@ -10,7 +10,7 @@ These apply to `src/grab-it/src-tauri/`. Each feature has its own module in `src
 - Send bytes as `tauri::ipc::Response`, not as a JSON array.
 - Check arguments from the page before using them, for example that `factor.is_finite() && factor > 0.0` in `pin_zoom`. The page is not trusted to send sane values.
 - Give each command `#[specta::specta]` under `#[tauri::command]`, list it in `specta_builder` in `lib.rs`, and derive `specta::Type` on every struct and enum it sends or receives. A command that sends or receives raw bytes goes in the `byte_commands!` list in `lib.rs` instead, since Specta cannot describe it.
-- A struct or enum that crosses the bridge reaches the page through the generated `src/app/bindings.ts`. Run `npm run bindings` from `src/grab-it` after changing one and commit the result. `cargo test` fails until you do. Two types may not share a name in the bindings: give one a `#[serde(rename = "...")]`, which a struct's JSON never shows.
+- A struct or enum that crosses the bridge reaches the page through the generated `src/app/bindings.ts`. Run `npm run bindings` from `src/grab-it` after changing one, or only the `///` doc comments of a command or type (they are copied into the bindings), and commit the result. `cargo test` fails until you do. Two types may not share a name in the bindings: give one a `#[serde(rename = "...")]`, which a struct's JSON never shows.
 
 ## Windows and capabilities
 

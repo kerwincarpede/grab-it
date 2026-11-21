@@ -413,7 +413,7 @@ cargo llvm-cov report --manifest-path src-tauri/Cargo.toml --html
 
 The IPC tests in `src-tauri/src/ipc_tests.rs` call the real commands through Tauri's IPC on its mock runtime, against a temporary settings file, Library and save folder, so they need no display either. They check each command's JSON reply, what it saves and its error messages.
 
-`src/app/bindings.ts` holds the TypeScript types of every command the page calls, generated from the Rust signatures by [tauri-specta](https://github.com/specta-rs/tauri-specta) (`specta_builder` in `src-tauri/src/lib.rs`). After changing a command's arguments or return type, or a struct or enum it sends or receives, regenerate it from `src/grab-it/` and commit the result:
+`src/app/bindings.ts` holds the TypeScript types of every command the page calls, generated from the Rust signatures by [tauri-specta](https://github.com/specta-rs/tauri-specta) (`specta_builder` in `src-tauri/src/lib.rs`). After changing a command's arguments or return type, or a struct or enum it sends or receives, or only their `///` doc comments (which are copied into the file), regenerate it from `src/grab-it/` and commit the result:
 
 ```sh
 npm run bindings    # cargo test runs tests::export_bindings, which writes src/app/bindings.ts
