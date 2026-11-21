@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { benchSwitch } from "./bench";
 import { floatingPosition, imagePixelAt, toHex, type Point, type Size } from "./geometry";
 import "./loupe.css";
 
@@ -84,7 +85,8 @@ function Loupe({ image, pointer, scale, viewport, pixel: shownPixel, onColour }:
   const position = floatingPosition(pointer, PANEL, viewport, OFFSET);
 
   useEffect(() => {
-    if (!canvas.current || !image) return;
+    // The bench's `nolensdraw` switch shows the loupe without drawing it.
+    if (!canvas.current || !image || benchSwitch("nolensdraw")) return;
     const hex = drawLens(canvas.current, image, { x: pixel.x, y: pixel.y });
     // Written straight to the DOM: the colour is only known after drawing, and
     // putting it in state would render the overlay twice per pointer move.
