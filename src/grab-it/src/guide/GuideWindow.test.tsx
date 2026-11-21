@@ -1,9 +1,16 @@
+/// <reference types="node" />
+
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { forwardRef, useImperativeHandle, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import GuideWindow from "./GuideWindow";
 import type { GuideInfo, GuideStep, Value } from "../app/bindings";
 import { mockCommands } from "../test/mockCommands";
+
+vi.mock("@tauri-apps/api/path", async () => {
+  const { posix } = await import("node:path");
+  return { join: posix.join, dirname: posix.dirname };
+});
 
 // The window draws steps on a canvas only once their image loads, which
 // jsdom never does; the stand-ins keep Konva out of the test.
@@ -169,7 +176,7 @@ describe("GuideWindow steps with cuts", () => {
     flattened.length = 0;
   });
 
-  it("draws a cut step on the joined capture, where its shapes and crop live", async () => {
+  function loadImages() {
     // Captures "load" at 400 × 300, as jsdom never decodes them.
     class LoadedImage {
       naturalWidth = 400;
@@ -185,6 +192,35 @@ describe("GuideWindow steps with cuts", () => {
     vi.stubGlobal("Image", LoadedImage);
     // jsdom has no object URLs.
     Object.assign(URL, { createObjectURL: () => "blob:step", revokeObjectURL: () => {} });
+  }
+
+  it("exports a guide from the shared folder and remembers its destination", async () => {
+    loadImages();
+    const calls = mockCommands({
+      guide_info: () => ({ ...info, steps: [info.steps[0]] }),
+      guide_image: () => new ArrayBuffer(0),
+      guide_export: () => null,
+    }, {
+      shouldMockEvents: true,
+      otherwise: (cmd) => {
+        if (cmd === "get_settings") return { saveFolder: "/pictures", lastExportFolder: "/exports" };
+        if (cmd === "plugin:dialog|save") return "/desktop/guide.md";
+        return null;
+      },
+    });
+    render(<GuideWindow />);
+    await waitFor(() => expect(flattened).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Markdown/ }));
+    expect(await screen.findByText("Exported to /desktop/guide.md")).toBeInTheDocument();
+    expect(calls.find(({ cmd }) => cmd === "plugin:dialog|save")?.payload).toMatchObject({
+      options: { defaultPath: `/exports/${info.title}.md` },
+    });
+    expect(calls).toContainEqual({ cmd: "set_last_export_folder", payload: { folder: "/desktop" } });
+  });
+
+  it("draws a cut step on the joined capture, where its shapes and crop live", async () => {
+    loadImages();
     const crop = { x: 0, y: 20, width: 400, height: 200 };
     const annotations: Value = { version: 1, shapes: [], crop, cuts: [{ axis: "y", start: 100, end: 160, edge: "straight" }] };
     mockCommands(

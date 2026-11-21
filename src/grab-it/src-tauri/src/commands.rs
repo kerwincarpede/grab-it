@@ -153,6 +153,21 @@ pub fn set_show_in_dock(
     Ok(settings)
 }
 
+/// Remembers the chosen folder for the next image, Library or guide export.
+#[tauri::command]
+#[specta::specta]
+pub fn set_last_export_folder(
+    folder: std::path::PathBuf,
+    state: State<'_, SettingsState>,
+) -> Result<Settings, String> {
+    if !folder.is_absolute() {
+        return Err("Choose an absolute export folder.".into());
+    }
+    lock(&state)
+        .set_last_export_folder(folder)
+        .map_err(|err| err.to_string())
+}
+
 /// Turns Settings › AI agents' access switch on or off. The control
 /// connection reads it with every request, so it applies at once.
 #[tauri::command]

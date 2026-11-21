@@ -491,6 +491,11 @@ export function setShowInDock(enabled: boolean): Promise<Settings> {
   return commands.setShowInDock(enabled);
 }
 
+/** Remembers the chosen folder across export dialogs. */
+export function setLastExportFolder(folder: string): Promise<Settings> {
+  return commands.setLastExportFolder(folder);
+}
+
 /** Lets the grab-it command line capture, or stops it; resolves to the settings as saved. */
 export function setAgentAccess(enabled: boolean): Promise<Settings> {
   return commands.setAgentAccess(enabled);

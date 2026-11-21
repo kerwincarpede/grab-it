@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { emit } from "@tauri-apps/api/event";
@@ -6,6 +8,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import LibraryWindow from "./LibraryWindow";
 import type { SearchQuery_Deserialize, Settings_Serialize } from "../app/bindings";
 import { mockCommands, type CommandCall, type CommandHandlers } from "../test/mockCommands";
+
+vi.mock("@tauri-apps/api/path", async () => {
+  const { posix } = await import("node:path");
+  return { join: posix.join, dirname: posix.dirname };
+});
 
 // Drawing a capture with its edits needs a real canvas; the image it gives is stood in for.
 vi.mock("../editor/renderCapture", () => ({ renderCapture: vi.fn(async () => new Uint8Array([137, 80, 78, 71, 1])) }));
@@ -68,6 +75,7 @@ function shot(id: number, overrides: Partial<Shot> = {}): Shot {
 /** Settings as `get_settings` sends them, with AI describing as the backend says. */
 function settings(backend: Backend): Settings_Serialize {
   return {
+    lastExportFolder: backend.lastExportFolder,
     saveFolder: "/home/me/Pictures/Grab-it",
     hotkeys: {
       allInOne: "",
@@ -149,6 +157,7 @@ interface Backend {
   /** The system can ask which app to open a file with; it cannot when unset. */
   openWith?: boolean;
   /** What the save dialog answers; cancelled when unset. */
+  lastExportFolder?: string;
   saveAs?: string | null;
   /** The folder the open dialog answers; cancelled when unset. */
   openFolder?: string | null;
@@ -374,6 +383,10 @@ function mockBackend(shots: Shot[]): Backend {
     },
     open_target: () => null,
     get_settings: () => settings(backend),
+    set_last_export_folder: ({ folder }) => {
+      backend.lastExportFolder = folder;
+      return settings(backend);
+    },
     dismiss_ai_notice: () => {
       backend.aiNotice = false;
       return settings(backend);
@@ -1680,7 +1693,7 @@ describe("LibraryWindow right-click menu", () => {
     expect(await screen.findByText("Exported to Login bug.webp")).toBeInTheDocument();
     expect(callsTo(backend, "plugin:dialog|save")[0].payload).toMatchObject({
       options: {
-        defaultPath: "Grab-it 1.png",
+        defaultPath: "/home/me/Pictures/Grab-it/Grab-it 1.png",
         filters: [
           { name: "PNG image", extensions: ["png"] },
           { name: "JPEG image", extensions: ["jpg", "jpeg"] },
@@ -1688,6 +1701,7 @@ describe("LibraryWindow right-click menu", () => {
         ],
       },
     });
+    expect(backend.lastExportFolder).toBe("/home/me/Desktop");
     expect(callsTo(backend, "library_export")[0].payload).toEqual({ id: 1, target: "/home/me/Desktop/Login bug.webp" });
   });
 
@@ -1711,13 +1725,13 @@ describe("LibraryWindow right-click menu", () => {
       expect(callsTo(backend, "library_export")[0].payload).toEqual({ id: 2, target: "/home/me/Desktop/Demo.mp4" }),
     );
     expect(callsTo(backend, "plugin:dialog|save")[0].payload).toMatchObject({
-      options: { defaultPath: "Grab-it 2.mp4", filters: [{ name: "MP4 video", extensions: ["mp4"] }] },
+      options: { defaultPath: "/home/me/Pictures/Grab-it/Grab-it 2.mp4", filters: [{ name: "MP4 video", extensions: ["mp4"] }] },
     });
 
     await userEvent.click(within(await openMenu("Grab-it 3.gif")).getByRole("menuitem", { name: "Export…" }));
     await waitFor(() => expect(callsTo(backend, "plugin:dialog|save")).toHaveLength(2));
     expect(callsTo(backend, "plugin:dialog|save")[1].payload).toMatchObject({
-      options: { defaultPath: "Grab-it 3.gif", filters: [{ name: "GIF animation", extensions: ["gif"] }] },
+      options: { defaultPath: "/home/me/Desktop/Grab-it 3.gif", filters: [{ name: "GIF animation", extensions: ["gif"] }] },
     });
   });
 

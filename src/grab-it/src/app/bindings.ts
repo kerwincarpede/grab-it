@@ -62,6 +62,8 @@ export const commands = {
 	 *  The next cleanup, at startup, daily or from the Library, uses them.
 	 */
 	setRetention: (retention: Retention_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("set_retention", { retention }, options),
+	/**  Remembers the chosen folder for the next image, Library or guide export. */
+	setLastExportFolder: (folder: string, options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("set_last_export_folder", { folder }, options),
 	/**
 	 *  Turns Settings › AI agents' access switch on or off. The control
 	 *  connection reads it with every request, so it applies at once.
@@ -2087,6 +2089,8 @@ export type Settings = Settings_Serialize | Settings_Deserialize;
 export type Settings_Deserialize = {
 	/**  Where new captures are saved. Holds `originals/` and `thumbs/`. */
 	saveFolder: string,
+	/**  Folder most recently chosen for an export. */
+	lastExportFolder?: string | null,
 	/**  Global hotkeys for region, window and screen captures. */
 	hotkeys: Hotkeys_Deserialize,
 	/**  The annotation editor's remembered style and tool. */
@@ -2116,6 +2120,8 @@ export type Settings_Deserialize = {
 export type Settings_Serialize = {
 	/**  Where new captures are saved. Holds `originals/` and `thumbs/`. */
 	saveFolder: string,
+	/**  Folder most recently chosen for an export. */
+	lastExportFolder?: string,
 	/**  Global hotkeys for region, window and screen captures. */
 	hotkeys: Hotkeys_Serialize,
 	/**  The annotation editor's remembered style and tool. */
@@ -2564,6 +2570,7 @@ export type MockCommandHandlers = {
     stepTextSize: (args: { step: TextSizeStep }) => Settings_Serialize | Promise<Settings_Serialize>,
     setRecording: (args: { recording: RecordingSettings_Deserialize }) => Settings_Serialize | Promise<Settings_Serialize>,
     setRetention: (args: { retention: Retention_Deserialize }) => Settings_Serialize | Promise<Settings_Serialize>,
+    setLastExportFolder: (args: { folder: string }) => Settings_Serialize | Promise<Settings_Serialize>,
     setAgentAccess: (args: { enabled: boolean }) => Settings_Serialize | Promise<Settings_Serialize>,
     setUpdateChannel: (args: { channel: UpdateChannel }) => Settings_Serialize | Promise<Settings_Serialize>,
     agentSkillStatus: () => AgentSkill | Promise<AgentSkill>,
@@ -2727,6 +2734,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "step_text_size": return mockCommandHandler(mockHandlers.stepTextSize, "step_text_size", args);
             case "set_recording": return mockCommandHandler(mockHandlers.setRecording, "set_recording", args);
             case "set_retention": return mockCommandHandler(mockHandlers.setRetention, "set_retention", args);
+            case "set_last_export_folder": return mockCommandHandler(mockHandlers.setLastExportFolder, "set_last_export_folder", args);
             case "set_agent_access": return mockCommandHandler(mockHandlers.setAgentAccess, "set_agent_access", args);
             case "set_update_channel": return mockCommandHandler(mockHandlers.setUpdateChannel, "set_update_channel", args);
             case "agent_skill_status": return mockCommandHandler(mockHandlers.agentSkillStatus, "agent_skill_status", args);

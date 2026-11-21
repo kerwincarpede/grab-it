@@ -52,6 +52,8 @@ Stopping a step capture opens its guide. Each step shows its capture, with its b
 | Mark up a step | **Open in editor**. Reopen the guide afterwards to see your changes in the export. |
 | Copy the guide | **Copy** puts it on the clipboard as formatted text with its images, and as Markdown text for apps that take only text. |
 
+The image editor, Library and guide share the last folder you chose for export. The first time, the dialog opens in your Grab-it save folder.
+
 **Export** writes the guide as:
 
 | Format | What you get |

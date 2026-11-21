@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockWindows } from "@tauri-apps/api/mocks";
@@ -12,6 +14,11 @@ import { PREFERENCES_DELAY_MS } from "./preferences";
 import { AUTOSAVE_DELAY_MS } from "./useAnnotations";
 import type { EditorPreferences_Deserialize, EditorPreferences_Serialize, Value } from "../app/bindings";
 import { mockCommands } from "../test/mockCommands";
+
+vi.mock("@tauri-apps/api/path", async () => {
+  const { posix } = await import("node:path");
+  return { join: posix.join, dirname: posix.dirname };
+});
 
 /** Where the mocked stage reports the pointer, in capture pixels. */
 const pointerAt = vi.hoisted(() => ({ x: 0, y: 0 }));
@@ -460,6 +467,15 @@ function mockEditor(
     {
       otherwise: (cmd, payload) => {
         switch (cmd) {
+          case "get_settings":
+            return { saveFolder: "/pictures", lastExportFolder: "/exports" };
+          case "plugin:dialog|save":
+            record(cmd, payload);
+            return "/desktop/edited.png";
+          case "set_last_export_folder":
+          case "editor_export":
+            record(cmd, payload);
+            return null;
           case "plugin:dialog|open":
             return preferences.picked ?? null;
           case "plugin:event|listen":
@@ -567,6 +583,18 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
     expect(last(saved)!.shapes[1]).toMatchObject({ type: "highlighter", points: [20, 100, 120, 102] });
     expect(last(saved)!.shapes[1]).not.toMatchObject({ strokeWidth: 14 });
   }, COLD_START_TIMEOUT_MS);
+
+  it("opens Export in the last folder and remembers the folder chosen", async () => {
+    const calls: { cmd: string; payload: unknown }[] = [];
+    mockEditor(sidecar, calls);
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Export…" }));
+    expect(await screen.findByText("Exported to /desktop/edited.png")).toBeInTheDocument();
+    expect(calls.find(({ cmd }) => cmd === "plugin:dialog|save")?.payload).toMatchObject({
+      options: { defaultPath: "/exports/shot annotated.png" },
+    });
+    expect(calls).toContainEqual({ cmd: "set_last_export_folder", payload: { folder: "/desktop" } });
+  });
 
   it("draws with Z, selects the lens interior and saves its zoom, shape, line and spot", async () => {
     const saved = mockEditor({ version: 1, shapes: [], crop: null });

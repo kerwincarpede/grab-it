@@ -352,6 +352,7 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             commands::step_text_size,
             commands::set_recording,
             commands::set_retention,
+            commands::set_last_export_folder,
             commands::set_agent_access,
             commands::set_update_channel,
             agent::agent_skill_status,
