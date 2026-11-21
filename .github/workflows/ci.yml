@@ -313,6 +313,31 @@ jobs:
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features e2e -- -D warnings
       - run: npm run e2e
 
+      # What was left running, and where WebView2 wrote its DevTools port,
+      # for a session msedgedriver could not attach to. Each session folder
+      # also holds msedgedriver.log and processes.txt from during the run.
+      - name: Show WebView2 processes and DevTools ports
+        if: failure()
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          Write-Output '== Processes'
+          Get-CimInstance Win32_Process |
+            Where-Object { $_.Name -in 'grab-it.exe', 'msedgewebview2.exe', 'msedgedriver.exe', 'tauri-driver.exe' } |
+            Format-List ProcessId, ParentProcessId, Name, CommandLine |
+            Out-String -Width 4096
+          Write-Output '== WEBVIEW2_* environment'
+          Get-ChildItem env: | Where-Object { $_.Name -like 'WEBVIEW2_*' } | Format-Table -AutoSize | Out-String -Width 4096
+          Write-Output '== WebView2 policies'
+          foreach ($key in 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2', 'HKCU:\SOFTWARE\Policies\Microsoft\Edge\WebView2') {
+            Get-ItemProperty -Path $key -ErrorAction SilentlyContinue | Format-List | Out-String -Width 4096
+          }
+          Write-Output '== DevToolsActivePort files'
+          foreach ($root in @($env:TEMP, $env:LOCALAPPDATA, $env:GRAB_IT_E2E_RUN) | Where-Object { $_ }) {
+            Get-ChildItem -Path $root -Recurse -Force -Filter DevToolsActivePort -ErrorAction SilentlyContinue |
+              ForEach-Object { "$($_.FullName)  $($_.LastWriteTime)  $(Get-Content -Raw -Path $_.FullName -ErrorAction SilentlyContinue)" }
+          }
+
       - name: Upload smoke test logs
         if: failure()
         uses: actions/upload-artifact@v7

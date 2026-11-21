@@ -63,6 +63,42 @@ function msedgedriverPath(): string {
   return found;
 }
 
+/**
+ * Windows: a .cmd in the session folder that runs msedgedriver with what
+ * tauri-driver passes it, plus a verbose log beside it, so a session that
+ * never starts shows why. cmd.exe waits for msedgedriver, so taskkill /t on
+ * tauri-driver still reaches msedgedriver and the app through it.
+ */
+function msedgedriverWrapper(sandboxRoot: string): string {
+  const wrapper = path.join(sandboxRoot, "msedgedriver.cmd");
+  // %% is a literal % in a batch file.
+  const quoted = (value: string) => `"${value.replaceAll("%", "%%")}"`;
+  const log = `--log-path=${path.join(sandboxRoot, "msedgedriver.log")}`;
+  fs.writeFileSync(wrapper, `@echo off\r\n${quoted(msedgedriverPath())} %* --verbose ${quoted(log)}\r\n`);
+  return wrapper;
+}
+
+/**
+ * Windows: appends Grab-it's, WebView2's and the drivers' processes, with
+ * their command lines, to `processes.txt` in the session folder, to show
+ * what started when a session does not.
+ */
+function saveWindowsProcesses(sandboxRoot: string, when: string): void {
+  const script =
+    "Get-CimInstance Win32_Process | Where-Object { $_.Name -in 'grab-it.exe','msedgewebview2.exe','msedgedriver.exe','tauri-driver.exe','cmd.exe' } | " +
+    "Format-List ProcessId,ParentProcessId,Name,CommandLine | Out-String -Width 4096";
+  const listed = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", timeout: 30_000 });
+  const text = `${listed.stdout ?? ""}${listed.stderr ?? ""}${listed.error ? String(listed.error) : ""}`;
+  fs.appendFileSync(path.join(sandboxRoot, "processes.txt"), `== ${when}, ${new Date().toISOString()}\n${text.trim()}\n\n`);
+}
+
+/**
+ * Windows: msedgedriver gives up on the app's WebView2 after a minute and
+ * may end the app then. Set in beforeSession, this lists the processes
+ * before that, and the before hook cancels it once a session exists.
+ */
+let sessionStartSnapshot: NodeJS.Timeout | undefined;
+
 /** Windows: whether a grab-it.exe is still running. */
 function appRunning(): boolean {
   try {
@@ -201,8 +237,8 @@ async function startTauriDriver(sandboxRoot: string, port: number, nativePort: n
   const env = appEnvironment(sandboxRoot);
   const log = fs.openSync(path.join(sandboxRoot, "tauri-driver.log"), "a");
   const driverArgs = [tauriDriverPath(), "--port", String(port), "--native-port", String(nativePort)];
-  // Windows: tauri-driver drives msedgedriver.
-  if (process.platform === "win32") driverArgs.push("--native-driver", msedgedriverPath());
+  // Windows: tauri-driver drives msedgedriver, through a wrapper that logs.
+  if (process.platform === "win32") driverArgs.push("--native-driver", msedgedriverWrapper(sandboxRoot));
   // Linux: a private session bus, so the single-instance check never hands
   // the arguments to a Grab-it already running on the developer's bus.
   const dbus = process.platform === "linux" ? onPath("dbus-run-session") : undefined;
@@ -348,6 +384,9 @@ export const config: WebdriverIO.Config = {
     if (process.platform === "win32") await stopWindowsApp();
     try {
       await startTauriDriver(sandboxRoot, port, nativePort);
+      if (process.platform === "win32") {
+        sessionStartSnapshot = setTimeout(() => saveWindowsProcesses(sandboxRoot, "40 seconds into the session start"), 40_000).unref();
+      }
     } catch (err) {
       // Nothing listens on the port now, so creating the session fails
       // too: the app never starts in another session's data.
@@ -355,6 +394,17 @@ export const config: WebdriverIO.Config = {
       console.error(`[${cid}] tauri-driver did not start, so ${path.basename(specs[0] ?? "this spec")} fails: ${String(err)}`);
       throw err;
     }
+  },
+
+  before: () => {
+    clearTimeout(sessionStartSnapshot);
+  },
+
+  // Also runs when no session was made, while tauri-driver still runs.
+  after: (result) => {
+    clearTimeout(sessionStartSnapshot);
+    const sandboxRoot = process.env[SANDBOX_VAR];
+    if (process.platform === "win32" && result !== 0 && sandboxRoot) saveWindowsProcesses(sandboxRoot, "after the failure");
   },
 
   afterSession: async () => {
