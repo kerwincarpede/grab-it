@@ -53,9 +53,6 @@ export async function playShot(id: number): Promise<void> {
 /** A page of shots, as `ShotPage` in src-tauri/src/library.rs sends it. */
 export type ShotPage = ShotPage_Serialize;
 
-
-
-
 /** The library's size by kind and the save folder's disk, as `LibraryStorage` in src-tauri/src/storage.rs sends it. */
 export type LibraryStorage = LibraryStorage_Serialize;
 
@@ -74,7 +71,6 @@ export const STORAGE_KINDS: { kind: ShotKind; name: string; one: string; many: s
 export function libraryStorage(candidate?: Retention_Deserialize): Promise<LibraryStorage> {
   return commands.libraryStorage(candidate ?? null);
 }
-
 
 /** Mirrors `LIBRARY_CLEANED_EVENT` in src-tauri/src/storage.rs: an automatic cleanup removed something. */
 export const LIBRARY_CLEANED_EVENT = "library-cleaned";
@@ -209,8 +205,6 @@ export function saveShotThumbnail(id: number, png: Uint8Array, editedAt: number)
 export function setShotTags(id: number, tags: string[]): Promise<Shot> {
   return commands.librarySetTags(id, tags);
 }
-
-
 
 export function sidebarSummary(): Promise<SidebarSummary> {
   return commands.librarySidebar();
@@ -355,13 +349,10 @@ export async function copyShot(id: number): Promise<void> {
   await commands.libraryCopy(id);
 }
 
-
 /** The text OCR found in the shot, or why there is none yet. */
 export function shotText(id: number): Promise<ShotText> {
   return commands.libraryText(id);
 }
-
-
 
 /**
  * The lines of text in the shot with their word boxes, in the pixels of its
@@ -463,7 +454,6 @@ export function formatCapturedAt(ms: number): string {
   return new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-
 /** How each field a search can match is named in results. */
 export const FIELD_LABELS: Record<MatchField, string> = {
   text: "Text in image",
@@ -473,7 +463,6 @@ export const FIELD_LABELS: Record<MatchField, string> = {
   windowTitle: "Window",
   description: "Description",
 };
-
 
 /** A search match, as `SearchHit` in src-tauri/src/search.rs sends it. */
 export type SearchHit = SearchHit_Serialize;
@@ -504,7 +493,6 @@ export type SearchQuery = SearchQuery_Deserialize & {
 
 /** Narrows the Library to captures or to recordings. */
 export type KindFilter = "image" | "recording";
-
 
 /** The filter bar as the user set it; "" means any. Dates are `YYYY-MM-DD`. */
 export interface Filters {
@@ -566,7 +554,6 @@ export function searchShots(query: SearchQuery, offset: number, limit: number): 
 export function filterOptions(): Promise<FilterOptions> {
   return commands.libraryFilterOptions();
 }
-
 
 /** Mirrors `OCR_STATUS_EVENT` in src-tauri/src/ocr.rs. */
 export const OCR_STATUS_EVENT = "ocr-status";
