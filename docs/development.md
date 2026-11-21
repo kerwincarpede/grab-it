@@ -10,7 +10,8 @@ Grab-it is built with Rust and [Tauri 2](https://tauri.app/), with a React + Typ
 | `src/grab-it/` | The Tauri project |
 | `src/grab-it/src/` | Frontend: React + TypeScript + Vite |
 | `src/grab-it/src-tauri/` | Backend: Rust |
-| `.github/workflows/ci.yml` | Checks, Rust tests on Windows and macOS, and installer builds on Linux, Windows and macOS |
+| `src/grab-it/e2e/` | Smoke tests: WebdriverIO specs that drive the built app |
+| `.github/workflows/ci.yml` | Checks, Rust tests on Windows and macOS, smoke tests on Linux, and installer builds on Linux, Windows and macOS |
 | `.github/workflows/release.yml` | Release of every push to `main` |
 | `AGENTS.md` | The rules every change follows, and which standard to read for which task |
 | `docs/` | User and developer docs; `docs/standards/` holds the coding, data, writing and PR standards; `docs/assets/` holds the README animation and the scripts that draw it and the docs site's tour animations |
@@ -416,9 +417,45 @@ The OCR tests load the bundled models from `src-tauri/ocr-models/`, so they need
 
 To build installers locally, run `npm run tauri build`; they land in `src/grab-it/src-tauri/target/release/bundle/`.
 
+## Smoke tests
+
+The smoke tests in `src/grab-it/e2e/` drive the built app through [tauri-driver](https://v2.tauri.app/develop/tests/webdriver/) with [WebdriverIO](https://webdriver.io/) and Mocha. Each spec file starts a fresh Grab-it and checks one area against the files it leaves on disk: the app launches, a dragged region and the whole screen are saved with their `meta.json`, Quick Access shows the capture, the editor saves a rectangle to `annotations.json` and exports a PNG while the original stays unchanged, the Library lists a capture and deletes it with its sidecars, and a changed setting survives a restart. They run on Linux under X11; Wayland and macOS are not automated.
+
+They use a test build with the `e2e` Cargo feature. In it, `GRAB_IT_E2E_CAPTURE` names a PNG that every monitor and window capture returns in place of the screen, resized to the size xcap reports (`screen.rs`). Release builds never turn the feature on. The suite sets it to `e2e/fixtures/screen.png`, a 960×540 picture of a window with four colour swatches, and checks known pixels of it in the saved region and screen captures, so a capture of the real screen fails.
+
+On Debian/Ubuntu, add WebKit's WebDriver, a virtual display, xdotool and a session bus, then tauri-driver:
+
+```sh
+sudo apt-get install -y webkit2gtk-driver xvfb xauth xdotool dbus
+cargo install tauri-driver --locked
+```
+
+Then, from `src/grab-it/`:
+
+```sh
+npm run e2e         # builds the e2e binary, then runs every spec
+npm run e2e:run     # runs the specs against the last e2e build
+```
+
+`npm run e2e` builds with `npm run tauri build -- --debug --no-bundle --features e2e`, so tauri-driver launches `src-tauri/target/debug/grab-it` with `--open library`, since Grab-it otherwise starts with no window. `e2e/wdio.conf.ts` starts its own 1920×1080 Xvfb, so no window opens on your desktop and `xvfb-run` is optional; set `GRAB_IT_E2E_DISPLAY=inherit` to use your own display instead and watch. Each spec file gets its own tauri-driver, under `dbus-run-session` when it is installed, so the single-instance check never hands its arguments to a Grab-it you have running. The app's `HOME`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` point into a throwaway folder per session, with a seeded `settings.json` that saves captures there, records GIF so no ffmpeg is downloaded, keeps AI descriptions off and keeps Quick Access open. The folders, captures, logs (`tauri-driver.log` per session, WebdriverIO's under `logs/`) and a screenshot of the window each failed test was driving (`screenshots/`) are kept after the run in the folder it prints, or in `GRAB_IT_E2E_RUN` when that is set. The editor's export answers GTK's Save dialog with xdotool, the one native window the suite drives.
+
+Captures are driven through the Grab-it window, as a user would: **New capture** opens the overlay, where a WebDriver pointer drag selects the region, and **Capture screen** in its menu captures the screen. That menu offers the same captures as the hub through the same command (`hub_capture`). The hub itself opens only from a tray click, which WebDriver cannot reach, and Linux has no hub, so it is checked by hand.
+
+### macOS checklist
+
+macOS has no WebDriver for WKWebView, so check these by hand on a build of the change, with a new save folder:
+
+1. Quit Grab-it, then open it: the menu bar icon appears, and the first launch opens the welcome.
+2. Click the menu bar icon: the hub opens under it. Press **Region** and drag a box: a PNG and its `.meta.json` appear in `originals/`, and Quick Access shows the capture.
+3. Capture the whole screen from the hub: the PNG is the size of the display in pixels.
+4. Click **Annotate** on Quick Access: the editor opens. Draw a rectangle, then close the editor: `.annotations.json` holds a `rect` shape.
+5. Open the capture in the editor again and **Export…** a PNG: the file is written, and the original PNG is unchanged.
+6. Open the Library: both captures are listed. Delete one: its PNG and sidecars are gone from `originals/`.
+7. In **Settings → After a capture**, turn off **Copy every capture to the clipboard**. Quit and reopen Grab-it: it is still off.
+
 ## CI
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04. In parallel, the Rust tests job runs `cargo test` on Windows and macOS, so code behind `#[cfg(windows)]` and `#[cfg(target_os = "macos")]` is tested as well as built. Tauri embeds the Common Controls 6 manifest only in the app, so on Windows the test executables would fail to start. `build.rs` turns that off and has the linker embed `windows-app-manifest.xml`, the same manifest, in every binary instead. The build job builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts. `ci.yml` runs on every pull request except those that change only docs (the site, `docs/` or Markdown), and never publishes anything. Pushes to `main` run it through the release workflow instead (below), so `main` is built once, as a release. Linux dependencies are downloaded from the Ubuntu archive (ports on arm64), with a 120-second limit for index updates and 180 seconds for package downloads per attempt. A failure tries a second mirror (the runner's original ports source on arm64). Downloads finish before installation, so a timeout never interrupts dpkg. Packages are installed without optional recommendations.
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04, and the [smoke tests](#smoke-tests) on Ubuntu 24.04 for pull requests. In parallel, the Rust tests job runs `cargo test` on Windows and macOS, so code behind `#[cfg(windows)]` and `#[cfg(target_os = "macos")]` is tested as well as built. Tauri embeds the Common Controls 6 manifest only in the app, so on Windows the test executables would fail to start. `build.rs` turns that off and has the linker embed `windows-app-manifest.xml`, the same manifest, in every binary instead. The build job builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts. `ci.yml` runs on every pull request except those that change only docs (the site, `docs/` or Markdown), and never publishes anything. Pushes to `main` run it through the release workflow instead (below), so `main` is built once, as a release. Linux dependencies are downloaded from the Ubuntu archive (ports on arm64), with a 120-second limit for index updates and 180 seconds for package downloads per attempt. A failure tries a second mirror (the runner's original ports source on arm64). Downloads finish before installation, so a timeout never interrupts dpkg. Packages are installed without optional recommendations.
 
 The Checks job measures coverage while it runs the tests: `npm run test:coverage` for the frontend and `cargo llvm-cov` (pinned in `ci.yml`) for Rust, which prints a line summary in the job log. Either one falling below its floor fails the job. It uploads the HTML and lcov reports for both as one `coverage` artifact, even when a test or floor fails.
 

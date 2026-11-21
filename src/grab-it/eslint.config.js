@@ -20,4 +20,15 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    // The smoke tests run in Node under WebdriverIO and Mocha; only the
+    // callbacks they pass to browser.execute run in the page.
+    files: ["e2e/**/*.ts"],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.mocha },
+    },
+    rules: {
+      "react-refresh/only-export-components": "off",
+    },
+  },
 ]);

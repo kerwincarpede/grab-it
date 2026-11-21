@@ -165,6 +165,71 @@ jobs:
       - run: npm run build
       - run: cargo test --manifest-path src-tauri/Cargo.toml
 
+  # Drives the built app through about ten smoke flows (src/grab-it/e2e/):
+  # an e2e build captures a fixture PNG instead of the screen, under Xvfb.
+  # Pull requests only; release builds on main skip it.
+  e2e-linux:
+    name: Smoke tests (Linux)
+    if: github.event_name == 'pull_request' && github.workflow != 'Release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: src/grab-it
+    env:
+      # The suite's throwaway homes, captures, logs and failure screenshots,
+      # uploaded on failure.
+      GRAB_IT_E2E_RUN: ${{ github.workspace }}/e2e-run
+    steps:
+      - uses: actions/checkout@v7
+
+      # webkit2gtk-driver: WebKitWebDriver, which tauri-driver drives.
+      # xvfb, xauth: the display. xdotool: answers the editor's Save dialog.
+      # dbus: a private session bus for each app session.
+      - name: Install Linux build and test dependencies
+        working-directory: .
+        run: sudo python3 .github/scripts/install_linux_deps.py $LINUX_DEPS $XCAP_DEPS webkit2gtk-driver xvfb xauth xdotool dbus
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/grab-it/src-tauri
+          key: e2e
+
+      - name: Install tauri-driver
+        working-directory: .
+        run: cargo install tauri-driver --locked
+
+      - name: Install dependencies
+        working-directory: .
+        run: npm ci
+      # Produces dist/, which the Rust build embeds.
+      - run: npm run build
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features e2e -- -D warnings
+      # The fixture loader's own tests only build with the feature.
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --features e2e screen::tests
+      - run: xvfb-run npm run e2e
+
+      - name: Upload smoke test logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-tests-linux
+          # The control sockets cannot go in a zip.
+          path: |
+            ${{ github.workspace }}/e2e-run
+            !${{ github.workspace }}/e2e-run/**/control.sock
+          if-no-files-found: ignore
+
   build:
     name: Build (${{ matrix.platform }})
     # A release build (release.yml, main only) runs in the release
