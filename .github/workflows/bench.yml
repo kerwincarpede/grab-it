@@ -133,7 +133,12 @@ jobs:
           cd src/grab-it
           npm run build
           cargo bench --manifest-path src-tauri/Cargo.toml --features bench -- --save-baseline base
-          find "$CARGO_TARGET_DIR/criterion" -type d -name new -prune -exec rm -rf {} +
+          # Only run folders: a new/ that holds benchmark.json itself. sort
+          # lets find finish before anything is removed.
+          find "$CARGO_TARGET_DIR/criterion" -path '*/new/benchmark.json' -print0 | sort -z |
+            while IFS= read -r -d '' run; do
+              rm -rf "${run%/benchmark.json}"
+            done
 
       - name: Time the head
         env:

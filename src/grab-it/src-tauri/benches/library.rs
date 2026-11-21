@@ -156,7 +156,9 @@ fn rescan_folder(c: &mut Criterion) {
     });
     // Thumbnails exist, so this times reading the sidecars and adding rows.
     // The filled library is returned, so dropping it is not timed.
-    group.bench_function("new", |b| {
+    // Never name a bench new, base or change: criterion keeps its runs in
+    // folders with those names, and bench.yml deletes the new/ ones.
+    group.bench_function("into_empty", |b| {
         b.iter_batched(
             || Library::open_in_memory().expect("open a library"),
             |mut library| {

@@ -455,7 +455,7 @@ macOS has no WebDriver for WKWebView, so check these by hand on a build of the c
 
 ## Benchmarks
 
-Criterion benches in `src-tauri/benches/` time the Rust hot paths. Each needs the `bench` feature, which makes the code they call reachable through the `bench` module in `lib.rs`; the feature is off by default, so `cargo test`, `cargo clippy --all-targets` and release builds leave the benches out. The lib and the app binary set `bench = false`, so `cargo bench` runs only these and criterion's own flags, such as `--save-baseline`, reach them. Run them from `src/grab-it/` after `npm run build`:
+Criterion benches in `src-tauri/benches/` time the Rust hot paths. Each needs the `bench` feature, which makes the code they call reachable through the `bench` module in `lib.rs`; the feature is off by default, so `cargo test`, `cargo clippy --all-targets`, `cargo llvm-cov` and release builds leave the benches out. The lib and the app binary set `bench = false`, so `cargo bench` runs only these and criterion's own flags, such as `--save-baseline`, reach them. Run them from `src/grab-it/` after `npm run build`:
 
 ```sh
 cargo bench --manifest-path src-tauri/Cargo.toml --features bench
@@ -465,7 +465,7 @@ cargo bench --manifest-path src-tauri/Cargo.toml --features bench -- detect/ocr 
 
 - `detect`: OCR (`Ocr::read_image`), face detection (`Faces::detect`) and code detection (`codes::decode`, with a QR code and with none) on a 1280×800 capture made from the test fixtures and the bundled models. On macOS, `Ocr::read_image` times Vision; elsewhere it times ocrs.
 - `encode`: writing a thumbnail and `export_shot` to PNG, JPG and WebP from a generated 1920×1080 capture. A PNG export of a PNG capture copies its bytes.
-- `library`: `Library::search` (two words, a prefix, an app filter, newest first) over 10,000 generated items, and a rescan of a save folder of 10,000 captures, once with nothing changed and once into an empty Library.
+- `library`: `Library::search` (two words, a prefix, an app filter, newest first) over 10,000 generated items, and a rescan of a save folder of 10,000 captures, once with nothing changed (`unchanged`) and once into an empty Library (`into_empty`).
 
 Each bench makes its captures when it starts, writing any files to a temporary folder, and uses no fixtures beyond the tests' own, so none needs a network or a display. The `bench` profile skips the release profile's link-time optimisation to build faster, so its times compare one commit with another rather than measure the shipped app.
 
