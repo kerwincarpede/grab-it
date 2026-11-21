@@ -1,10 +1,11 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { mockIPC } from "@tauri-apps/api/mocks";
-import type { InvokeArgs } from "@tauri-apps/api/core";
 import { describe, expect, it, vi } from "vitest";
 import { acceleratorKeys } from "../settings/accelerator";
-import type { PermissionStatus } from "./permissions";
+import type { PermissionStatus } from "../app/bindings";
+import { DEFAULT_AI_PREFERENCES, type AiPreferences } from "../settings/api";
+import { mockCommands } from "../test/mockCommands";
+import { testSettings } from "../test/settingsFixture";
 import WelcomeWindow from "./WelcomeWindow";
 
 // Keep AI subscriptions local to this component test. Late subscription cleanup
@@ -34,6 +35,7 @@ const NOTHING_ASKED: PermissionStatus = {
   microphone: "notAsked",
   camera: "notAsked",
   resume: false,
+  askedThisLaunch: false,
 };
 
 /** Just after Allow all: macOS shows the two restart permissions as off until Grab-it restarts. */
@@ -43,6 +45,7 @@ const WAITING_FOR_RESTART: PermissionStatus = {
   microphone: "allowed",
   camera: "allowed",
   resume: true,
+  askedThisLaunch: false,
 };
 
 const ALL_ALLOWED: PermissionStatus = {
@@ -51,46 +54,43 @@ const ALL_ALLOWED: PermissionStatus = {
   microphone: "allowed",
   camera: "allowed",
   resume: false,
+  askedThisLaunch: false,
 };
 
 function mockBackend(
   options: {
     failSettings?: boolean;
     failOpen?: string;
-    ai?: object;
-    /** What permission_status reports; null, as off macOS, by default. */
-    permissions?: PermissionStatus | null;
+    ai?: Partial<AiPreferences>;
+    /** What permission_status reports; everything allowed, as off macOS, by default. */
+    permissions?: PermissionStatus;
     failPermissions?: boolean;
     /** What permission_status reports once Allow all has run. */
     afterAllowAll?: PermissionStatus;
   } = {},
 ) {
-  const calls: { cmd: string; payload?: InvokeArgs }[] = [];
-  mockIPC((cmd, payload) => {
-    calls.push({ cmd, payload });
-    if (cmd === "permission_status") {
-      if (options.failPermissions) throw "no status";
-      return options.permissions ?? null;
-    }
-    if (cmd === "permission_request_all") {
-      if (options.afterAllowAll) options.permissions = options.afterAllowAll;
-      return options.permissions ?? null;
-    }
-    if (cmd === "effective_hotkeys") return options.failSettings ? {} : HOTKEYS;
-    if (cmd === "get_settings") {
-      if (options.failSettings) throw "no settings";
-      return {
-        saveFolder: "/shots",
-        hotkeys: HOTKEYS,
-        afterCapture: "quickAccess",
-        copyToClipboard: true,
-        ...(options.ai ? { ai: options.ai } : {}),
-      };
-    }
-    if (cmd === "open_target" && options.failOpen) throw options.failOpen;
-    return null;
-  }, { shouldMockEvents: true });
-  return calls;
+  return mockCommands(
+    {
+      permission_status: () => {
+        if (options.failPermissions) throw "no status";
+        return options.permissions ?? ALL_ALLOWED;
+      },
+      permission_request_all: () => {
+        if (options.afterAllowAll) options.permissions = options.afterAllowAll;
+        return options.permissions ?? ALL_ALLOWED;
+      },
+      effective_hotkeys: () => (options.failSettings ? {} : HOTKEYS),
+      get_settings: () => {
+        if (options.failSettings) throw "no settings";
+        return testSettings({ saveFolder: "/shots", hotkeys: HOTKEYS, ai: { ...DEFAULT_AI_PREFERENCES, ...options.ai } });
+      },
+      open_target: () => {
+        if (options.failOpen) throw options.failOpen;
+        return null;
+      },
+    },
+    { shouldMockEvents: true, otherwise: () => null },
+  );
 }
 
 describe("WelcomeWindow", () => {
@@ -115,7 +115,7 @@ describe("WelcomeWindow", () => {
     expect(await screen.findByText(/Claude Code describes each new capture/)).toBeInTheDocument();
     unmount();
 
-    for (const ai of [{ enabled: false, provider: "claudeCode" }, { enabled: true, provider: null }, undefined]) {
+    for (const ai of [{ enabled: false, provider: "claudeCode" }, { enabled: true, provider: null }, undefined] as (Partial<AiPreferences> | undefined)[]) {
       mockBackend({ ai });
       const view = render(<WelcomeWindow />);
       await screen.findByLabelText("Shift+PrintScreen");
@@ -171,8 +171,8 @@ function row(title: string): HTMLElement {
 }
 
 describe("WelcomeWindow's Permissions page", () => {
-  it("opens on the hotkeys when nothing is reported, as off macOS", async () => {
-    const calls = mockBackend({ permissions: null });
+  it("opens on the hotkeys when everything is allowed, as off macOS", async () => {
+    const calls = mockBackend({ permissions: ALL_ALLOWED });
     render(<WelcomeWindow />);
     expect(await screen.findByRole("heading", { name: "Welcome to Grab-it" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Set up Grab-it" })).not.toBeInTheDocument();
@@ -195,7 +195,7 @@ describe("WelcomeWindow's Permissions page", () => {
   });
 
   it("makes no throwaway capture unless setup resumes with nothing missing", async () => {
-    for (const permissions of [null, ALL_ALLOWED, NOTHING_ASKED, WAITING_FOR_RESTART]) {
+    for (const permissions of [ALL_ALLOWED, NOTHING_ASKED, WAITING_FOR_RESTART]) {
       const calls = mockBackend({ permissions });
       const view = render(<WelcomeWindow />);
       await screen.findByRole("heading", { name: /Welcome to Grab-it|Set up Grab-it/ });
@@ -318,7 +318,7 @@ describe("WelcomeWindow's Permissions page", () => {
   });
 
   it("follows answers as they arrive by polling the status", async () => {
-    const options = { permissions: { ...NOTHING_ASKED } as PermissionStatus | null };
+    const options = { permissions: { ...NOTHING_ASKED } as PermissionStatus };
     const calls = mockBackend(options);
     render(<WelcomeWindow />);
     await screen.findByRole("heading", { name: "Set up Grab-it" });
@@ -331,11 +331,16 @@ describe("WelcomeWindow's Permissions page", () => {
   });
 
   it("says so when Grab-it cannot restart", async () => {
-    mockIPC((cmd) => {
-      if (cmd === "permission_status" || cmd === "permission_request_all") return WAITING_FOR_RESTART;
-      if (cmd === "permission_restart") throw "could not restart";
-      return null;
-    }, { shouldMockEvents: true });
+    mockCommands(
+      {
+        permission_status: () => WAITING_FOR_RESTART,
+        permission_request_all: () => WAITING_FOR_RESTART,
+        permission_restart: () => {
+          throw "could not restart";
+        },
+      },
+      { shouldMockEvents: true, otherwise: () => null },
+    );
     render(<WelcomeWindow />);
     await screen.findByRole("heading", { name: "Set up Grab-it" });
     // Already asked: Continue, until System Settings is opened for one that needs a restart.

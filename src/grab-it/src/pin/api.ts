@@ -1,15 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
+import { commands, type PinInfo } from "../app/bindings";
 
-/** Mirrors `PinInfo` in src-tauri/src/pin.rs. */
-export interface PinInfo {
-  width: number;
-  height: number;
-  /** False for images pinned from the editor, which have no capture to open. */
-  editable: boolean;
-}
+/** The pin's size and whether it can be edited, generated from `PinInfo` in src-tauri/src/pin.rs. */
+export type { PinInfo };
 
 export function pinInfo(): Promise<PinInfo> {
-  return invoke<PinInfo>("pin_info");
+  return commands.pinInfo();
 }
 
 /** The pinned image's bytes. */
@@ -18,33 +14,33 @@ export function pinImage(): Promise<ArrayBuffer> {
 }
 
 /** Resizes the pin by `factor`; above 1 grows it. */
-export function pinZoom(factor: number): Promise<void> {
-  return invoke<void>("pin_zoom", { factor });
+export async function pinZoom(factor: number): Promise<void> {
+  await commands.pinZoom(factor);
 }
 
 /**
  * Makes the pin click-through while it stays on top. It takes no mouse
  * input until Unlock pinned captures in the tray menu.
  */
-export function pinLock(): Promise<void> {
-  return invoke<void>("pin_lock");
+export async function pinLock(): Promise<void> {
+  await commands.pinLock();
 }
 
 /** Moves the pin by `dx`, `dy` logical pixels. */
-export function pinNudge(dx: number, dy: number): Promise<void> {
-  return invoke<void>("pin_nudge", { dx, dy });
+export async function pinNudge(dx: number, dy: number): Promise<void> {
+  await commands.pinNudge(dx, dy);
 }
 
-export function pinCopy(): Promise<void> {
-  return invoke<void>("pin_copy");
+export async function pinCopy(): Promise<void> {
+  await commands.pinCopy();
 }
 
-export function pinEdit(): Promise<void> {
-  return invoke<void>("pin_edit");
+export async function pinEdit(): Promise<void> {
+  await commands.pinEdit();
 }
 
-export function pinClose(): Promise<void> {
-  return invoke<void>("pin_close");
+export async function pinClose(): Promise<void> {
+  await commands.pinClose();
 }
 
 /** One notch of the wheel or one press of + or -. */

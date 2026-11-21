@@ -1,50 +1,59 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { InvokeArgs } from "@tauri-apps/api/core";
 import { describe, expect, it } from "vitest";
 import Hub from "./Hub";
 import { keyCaps, shortcutLabel } from "./keys";
 import { routeFromHash } from "../routes";
 import { HUB_ACTIVITY_EVENT, type HubActivity } from "./api";
+import type { Shot_Serialize } from "../app/bindings";
+import { mockCommands, type CommandCall } from "../test/mockCommands";
 
-function backend({ monitors = 1, shots = 0, activity = { recording: false, steps: false } as HubActivity } = {}) {
-  const calls: { cmd: string; payload?: InvokeArgs }[] = [];
-  mockIPC(
-    (cmd, payload) => {
-      calls.push({ cmd, payload });
-      switch (cmd) {
-        case "effective_hotkeys":
-          return { allInOne: "Ctrl+Alt+A", region: "Ctrl+Shift+R", window: "Alt+PrintScreen", library: "Ctrl+Shift+L" };
-        case "library_list":
-          return {
-            shots: Array.from({ length: shots }, (_, index) => ({
-              id: index + 1,
-              path: `/tmp/${index}.png`,
-              fileName: `${index}.png`,
-              windowTitle: `Shot ${index + 1}`,
-            })),
-            offset: 0,
-            total: shots,
-          };
-        case "library_thumbnail":
-          return new ArrayBuffer(0);
-        case "hub_monitors":
-          return Array.from({ length: monitors }, (_, index) => ({ index, label: `${index + 1}. Display` }));
-        case "hub_activity":
-          return activity;
-        default:
-          return null;
-      }
-    },
-    { shouldMockEvents: true },
-  );
-  return calls;
+/** A shot the Library lists, as `library_list` sends it. */
+function shot(index: number): Shot_Serialize {
+  return {
+    id: index + 1,
+    kind: "image",
+    path: `/tmp/${index}.png`,
+    fileName: `${index}.png`,
+    thumbPath: `/tmp/${index}.thumb.png`,
+    capturedAt: 0,
+    mode: "region",
+    app: null,
+    windowTitle: `Shot ${index + 1}`,
+    width: 800,
+    height: 600,
+    tags: [],
+    notes: "",
+    aiDescription: null,
+    aiCategory: null,
+    aiTags: [],
+    durationMs: null,
+    bytes: null,
+    keep: false,
+    editedAt: null,
+    thumbStale: false,
+  };
 }
 
-const sent = (calls: { cmd: string; payload?: InvokeArgs }[], cmd: string) =>
-  calls.filter((call) => call.cmd === cmd).map((call) => call.payload);
+function backend({ monitors = 1, shots = 0, activity = { recording: false, steps: false } as HubActivity } = {}) {
+  return mockCommands(
+    {
+      effective_hotkeys: () => ({ allInOne: "Ctrl+Alt+A", region: "Ctrl+Shift+R", window: "Alt+PrintScreen", library: "Ctrl+Shift+L" }),
+      library_list: () => ({
+        shots: Array.from({ length: shots }, (_, index) => shot(index)),
+        offset: 0,
+        total: shots,
+      }),
+      library_thumbnail: () => new ArrayBuffer(0),
+      hub_monitors: () => Array.from({ length: monitors }, (_, index) => ({ index, label: `${index + 1}. Display` })),
+      hub_activity: () => activity,
+    },
+    { shouldMockEvents: true, otherwise: () => null },
+  );
+}
+
+const sent = (calls: CommandCall[], cmd: string) => calls.filter((call) => call.cmd === cmd).map((call) => call.payload);
 
 describe("Hub", () => {
   it("starts each capture by its kind", async () => {
@@ -87,7 +96,7 @@ describe("Hub", () => {
     await act(() => emit("effective-hotkeys-changed", {}));
     expect(chooser).toHaveAccessibleName("Capture & record…");
     await userEvent.keyboard("{Enter}");
-    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "allInOne", delaySeconds: undefined, monitor: undefined });
+    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "allInOne", delaySeconds: null, monitor: null });
     expect(screen.queryByRole("button", { name: "Check for updates" })).not.toBeInTheDocument();
   });
 
@@ -100,7 +109,7 @@ describe("Hub", () => {
     await userEvent.tab();
     expect(screen.getByRole("button", { name: "Region in 3 s" })).toHaveFocus();
     await userEvent.keyboard(" ");
-    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "region", delaySeconds: 3, monitor: undefined });
+    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "region", delaySeconds: 3, monitor: null });
   });
 
   it("offers timed captures", async () => {
@@ -108,7 +117,7 @@ describe("Hub", () => {
     render(<Hub />);
     await userEvent.click(screen.getByRole("button", { name: "Timed" }));
     await userEvent.click(screen.getByRole("button", { name: "Region in 5 s" }));
-    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "region", delaySeconds: 5, monitor: undefined });
+    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "region", delaySeconds: 5, monitor: null });
   });
 
   it("offers each monitor when there are several", async () => {
@@ -116,7 +125,7 @@ describe("Hub", () => {
     render(<Hub />);
     await userEvent.click(await screen.findByRole("button", { name: "Monitor" }));
     await userEvent.click(screen.getByRole("button", { name: "2. Display" }));
-    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "monitor", delaySeconds: undefined, monitor: 1 });
+    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "monitor", delaySeconds: null, monitor: 1 });
   });
 
   it("leaves the monitor list out with one monitor", async () => {
@@ -157,7 +166,7 @@ describe("Hub", () => {
     render(<Hub />);
     await userEvent.click(await screen.findByRole("button", { name: "Stop recording" }));
     expect(screen.getByRole("button", { name: /^Step capture/ })).toBeInTheDocument();
-    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "record", delaySeconds: undefined, monitor: undefined });
+    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "record", delaySeconds: null, monitor: null });
   });
 
   it("says Stop step capture while a step capture runs, and stops it", async () => {
@@ -165,7 +174,7 @@ describe("Hub", () => {
     render(<Hub />);
     await userEvent.click(await screen.findByRole("button", { name: "Stop step capture" }));
     expect(screen.getByRole("button", { name: /^Record/ })).toBeInTheDocument();
-    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "steps", delaySeconds: undefined, monitor: undefined });
+    expect(sent(calls, "hub_capture")).toContainEqual({ kind: "steps", delaySeconds: null, monitor: null });
   });
 
   it("updates as a recording starts and stops while it is open", async () => {

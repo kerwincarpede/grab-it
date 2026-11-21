@@ -1,30 +1,33 @@
-import { mockIPC } from "@tauri-apps/api/mocks";
-import type { InvokeArgs } from "@tauri-apps/api/core";
 import { describe, expect, it, vi } from "vitest";
 import { loadThumbnail, thumbKey } from "./thumbnails";
+import { mockCommands, type CommandHandlers } from "../test/mockCommands";
 
 const { drawn } = vi.hoisted(() => ({ drawn: new Uint8Array([137, 80, 78, 71, 7]) }));
 vi.mock("../editor/renderCapture", () => ({ renderCapture: vi.fn(async () => drawn) }));
 
 function backend(fail: string[] = []) {
-  const calls: { cmd: string; payload?: InvokeArgs }[] = [];
-  mockIPC((cmd, payload) => {
-    calls.push({ cmd, payload });
+  const failing = (cmd: string) => {
     if (fail.includes(cmd)) throw `${cmd} failed`;
-    switch (cmd) {
-      case "library_thumbnail":
-        return new Uint8Array([1, 2, 3]).buffer;
-      case "library_image":
-        return new Uint8Array([137, 80, 78, 71]).buffer;
-      case "library_annotations":
-        return { annotations: { version: 1, shapes: [] }, scaleFactor: 2, editedAt: 5_000 };
-      case "library_save_thumbnail":
-        return null;
-      default:
-        throw new Error(`unexpected command ${cmd}`);
-    }
-  });
-  return calls;
+  };
+  const handlers: CommandHandlers = {
+    library_thumbnail: () => {
+      failing("library_thumbnail");
+      return new Uint8Array([1, 2, 3]).buffer;
+    },
+    library_image: () => {
+      failing("library_image");
+      return new Uint8Array([137, 80, 78, 71]).buffer;
+    },
+    library_annotations: () => {
+      failing("library_annotations");
+      return { annotations: { version: 1, shapes: [] }, scaleFactor: 2, editedAt: 5_000 };
+    },
+    library_save_thumbnail: () => {
+      failing("library_save_thumbnail");
+      return null;
+    },
+  };
+  return mockCommands(handlers);
 }
 
 const commands = (calls: { cmd: string }[]) => calls.map((call) => call.cmd);

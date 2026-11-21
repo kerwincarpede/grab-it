@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "../app/bindings";
 
 /** When the countdown ends, in ms since the Unix epoch, from the page's hash (`#/timerbar?ends=…`). */
 export function endsFromHash(hash: string): number | null {
@@ -15,5 +15,5 @@ export function secondsLeft(ends: number | null, now: number): number {
 
 /** Stops the timed capture counting down, so it does not start. */
 export function cancelTimer(): Promise<void> {
-  return invoke<void>("timer_bar_cancel");
+  return commands.timerBarCancel();
 }

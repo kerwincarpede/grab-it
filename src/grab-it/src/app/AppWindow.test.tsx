@@ -1,16 +1,16 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { emit } from "@tauri-apps/api/event";
-import { mockIPC } from "@tauri-apps/api/mocks";
-import type { InvokeArgs } from "@tauri-apps/api/core";
 import { describe, expect, it } from "vitest";
 import AppWindow from "./AppWindow";
 import { viewFromHash } from "./api";
 import App from "../App";
 import { routeFromHash } from "../routes";
+import type { LibraryStorage_Serialize, UpdateChannel, UpdateInfo_Serialize, UpdateStatus_Serialize } from "./bindings";
+import { mockCommands } from "../test/mockCommands";
+import { testSettings } from "../test/settingsFixture";
 
-const SETTINGS = {
-  saveFolder: "/home/me/Pictures/Grab-it",
+const SETTINGS = testSettings({
   hotkeys: {
     allInOne: "Cmd+Shift+A",
     region: "Cmd+Shift+2",
@@ -21,11 +21,9 @@ const SETTINGS = {
     library: "Cmd+Shift+0",
     steps: "Cmd+Shift+8",
   },
-  afterCapture: "quickAccess",
-  copyToClipboard: true,
-};
+});
 
-const UPDATE = {
+const UPDATE: UpdateInfo_Serialize = {
   current: "0.2.1",
   version: "0.3.0",
   date: "2026-11-12T09:00:00Z",
@@ -37,55 +35,43 @@ const UPDATE = {
 
 /** A backend with two apps and no captures; records every call. */
 function backend({
-  update = { state: "idle", current: "0.2.1" } as unknown,
-  storage = null as unknown,
-  updateChannel = undefined as string | undefined,
+  update = { state: "idle", current: "0.2.1" } as UpdateStatus_Serialize,
+  /** Null: the library cannot measure its sizes. */
+  storage = null as LibraryStorage_Serialize | null,
+  updateChannel = "stable" as UpdateChannel,
 } = {}) {
-  const calls: { cmd: string; payload?: InvokeArgs }[] = [];
   let channel = updateChannel;
-  const settings = () => (channel === undefined ? SETTINGS : { ...SETTINGS, updateChannel: channel });
-  mockIPC(
-    (cmd, payload) => {
-      calls.push({ cmd, payload });
-      switch (cmd) {
-        case "effective_hotkeys":
-          return { allInOne: "⌘⇧A", region: "⌘⇧2", window: "⌘⇧W" };
-        case "get_settings":
-          return settings();
-        case "set_update_channel":
-          channel = (payload as { channel: string }).channel;
-          return settings();
-        case "library_sidebar":
-          return {
-            total: 3,
-            apps: [
-              { name: "Chrome", count: 2 },
-              { name: "Ghostty", count: 1 },
-            ],
-            tags: [{ name: "rust", count: 2 }],
-            recordings: 1,
-          };
-        case "update_status":
-          return update;
-        case "library_storage":
-          return storage;
-      case "library_filter_options":
-        return { apps: ["Chrome", "Ghostty"], tags: [], categories: [] };
-      case "library_list":
-        return { shots: [], offset: 0, total: 0 };
-      case "library_search":
-        return { hits: [], offset: 0, total: 0 };
-      case "ocr_status":
-        return { state: "idle" };
-      case "ai_status":
-        return { state: "idle", done: 0, total: 0, error: null };
-        default:
-          return null;
-      }
+  const settings = () => ({ ...SETTINGS, updateChannel: channel });
+  return mockCommands(
+    {
+      effective_hotkeys: () => ({ allInOne: "⌘⇧A", region: "⌘⇧2", window: "⌘⇧W" }),
+      get_settings: () => settings(),
+      set_update_channel: (args) => {
+        channel = args.channel;
+        return settings();
+      },
+      library_sidebar: () => ({
+        total: 3,
+        apps: [
+          { name: "Chrome", count: 2 },
+          { name: "Ghostty", count: 1 },
+        ],
+        tags: [{ name: "rust", count: 2 }],
+        recordings: 1,
+      }),
+      update_status: () => update,
+      library_storage: () => {
+        if (!storage) throw "Storage could not be measured";
+        return storage;
+      },
+      library_filter_options: () => ({ apps: ["Chrome", "Ghostty"], tags: [], categories: [] }),
+      library_list: () => ({ shots: [], offset: 0, total: 0 }),
+      library_search: () => ({ hits: [], offset: 0, total: 0 }),
+      ocr_status: () => ({ state: "idle" }),
+      ai_status: () => ({ state: "idle", done: 0, total: 0, error: null, provider: "endpoint" }),
     },
-    { shouldMockEvents: true },
+    { shouldMockEvents: true, otherwise: () => null },
   );
-  return calls;
 }
 
 describe("AppWindow", () => {
@@ -282,7 +268,7 @@ describe("AppWindow", () => {
     expect(more).toHaveFocus();
     await userEvent.keyboard("{Enter}{Enter}");
     expect(calls.filter(({ cmd }) => cmd === "hub_capture").map(({ payload }) => payload)).toEqual([
-      { kind: "allInOne", delaySeconds: undefined, monitor: undefined },
+      { kind: "allInOne", delaySeconds: null, monitor: null },
     ]);
   });
 
