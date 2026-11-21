@@ -400,12 +400,15 @@ Run `npm ci` at the repository root, then the rest from `src/grab-it/`. CI runs 
 npm ci              # at the repository root
 cd src/grab-it
 npm run lint        # eslint + tsc --noEmit
-npm test            # vitest run
+npm run test:coverage  # vitest run --coverage
 npm run build       # tsc + vite build, also needed before the Rust build
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path src-tauri/Cargo.toml
+cargo llvm-cov --manifest-path src-tauri/Cargo.toml --no-report
+cargo llvm-cov report --manifest-path src-tauri/Cargo.toml --html
 ```
+
+`npm run test:coverage` fails when the frontend tests cover less than 90% of lines or 83% of branches in `src/`, test files and `src/test/` aside; the floors are in `vitest.config.ts`. It writes HTML and lcov reports to `src/grab-it/coverage/`. `npm test` runs the same tests without coverage. `cargo llvm-cov` needs [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and the `llvm-tools-preview` rustup component, and writes its HTML report to `src-tauri/target/llvm-cov/html/`. Without them, `cargo test --manifest-path src-tauri/Cargo.toml` runs the same tests. Rust coverage counts lines only, since branch coverage needs nightly Rust, and CI fails below 68% of lines; that floor is in `ci.yml`.
 
 The OCR tests load the bundled models from `src-tauri/ocr-models/`, so they need no network. Their fixture, `src-tauri/tests/fixtures/ocr-pineapple.png`, was made with ImageMagick (the command is in `src-tauri/src/ocr.rs`).
 
@@ -414,6 +417,8 @@ To build installers locally, run `npm run tauri build`; they land in `src/grab-i
 ## CI
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04 and, in parallel, builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts. It runs on every pull request except those that change only docs (the site, `docs/` or Markdown), and never publishes anything. Pushes to `main` run it through the release workflow instead (below), so `main` is built once, as a release. Linux dependencies are downloaded from the Ubuntu archive (ports on arm64), with a 120-second limit for index updates and 180 seconds for package downloads per attempt. A failure tries a second mirror (the runner's original ports source on arm64). Downloads finish before installation, so a timeout never interrupts dpkg. Packages are installed without optional recommendations.
+
+The Checks job measures coverage while it runs the tests: `npm run test:coverage` for the frontend and `cargo llvm-cov` (pinned in `ci.yml`) for Rust, which prints a line summary in the job log. Either one falling below its floor fails the job. It uploads the HTML and lcov reports for both as one `coverage` artifact, even when a test or floor fails.
 
 ## Releases
 

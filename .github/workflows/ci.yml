@@ -85,11 +85,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt, clippy, llvm-tools-preview
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/grab-it/src-tauri
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
 
       - name: Install dependencies
         working-directory: .
@@ -98,12 +102,33 @@ jobs:
       - name: Test the release scripts
         working-directory: .
         run: python3 -m unittest discover .github/scripts
-      - run: npm test
+      # Fails below the floors in vitest.config.ts.
+      - run: npm run test:coverage
       # Also produces dist/, which the Rust build embeds.
       - run: npm run build
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      # Runs the Rust tests once, instrumented, then writes the reports from
+      # that run. Branch coverage needs nightly Rust, so only lines count.
+      # The line floor sits 1 point below the 69.95% measured when it was set.
+      - name: Test Rust with coverage
+        run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --no-report
+      - name: Write the Rust coverage reports
+        run: |
+          cargo llvm-cov report --manifest-path src-tauri/Cargo.toml --html
+          cargo llvm-cov report --manifest-path src-tauri/Cargo.toml --lcov --output-path src-tauri/target/llvm-cov/lcov.info
+          cargo llvm-cov report --manifest-path src-tauri/Cargo.toml --summary-only --fail-under-lines 68
+
+      # Uploaded even when a test or a floor fails, to show what dropped.
+      - name: Upload coverage reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: |
+            src/grab-it/coverage/
+            src/grab-it/src-tauri/target/llvm-cov/html/
+            src/grab-it/src-tauri/target/llvm-cov/lcov.info
 
   build:
     name: Build (${{ matrix.platform }})
