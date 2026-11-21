@@ -90,6 +90,7 @@ type Panel = "timed" | "monitor" | null;
 function Hub() {
   const hotkeys = useEffectiveHotkeys();
   const primary = useRef<HTMLButtonElement>(null);
+  const submenu = useRef<HTMLDivElement>(null);
   const [recent, setRecent] = useState<Shot[]>([]);
   const [monitors, setMonitors] = useState<HubMonitor[]>([]);
   const [panel, setPanel] = useState<Panel>(null);
@@ -137,6 +138,10 @@ function Hub() {
       window.removeEventListener("keydown", onKey);
     };
   }, [load]);
+
+  useEffect(() => {
+    submenu.current?.scrollIntoView?.({ block: "nearest" });
+  }, [panel]);
 
   function run(action: Promise<void>) {
     action.catch((err: unknown) => setError(errorMessage(err)));
@@ -186,7 +191,7 @@ function Hub() {
           <ChevronRightIcon size={13} />
         </button>
         {panel === "timed" && (
-          <div className="hub-sub">
+          <div className="hub-sub" ref={submenu}>
             {TIMED.map(({ kind, title, seconds }) => (
               <button type="button" key={title} onClick={() => run(startCapture(kind, { delaySeconds: seconds }))}>
                 {title}
@@ -202,7 +207,7 @@ function Hub() {
           </button>
         )}
         {panel === "monitor" && (
-          <div className="hub-sub">
+          <div className="hub-sub" ref={submenu}>
             {monitors.map(({ index, label }) => (
               <button type="button" key={index} onClick={() => run(startCapture("monitor", { monitor: index }))}>
                 {label}
@@ -210,24 +215,24 @@ function Hub() {
             ))}
           </div>
         )}
-
-        <hr className="hub-sep" />
-        <div className="hub-recent-head">
-          <h2>Recent</h2>
-          <button type="button" className="link-button" onClick={() => run(openMain("library"))}>
-            Show all
-          </button>
-        </div>
-        {recent.length > 0 ? (
-          <div className="hub-recent">
-            {recent.map((shot) => (
-              <RecentShot key={shot.id} shot={shot} />
-            ))}
-          </div>
-        ) : (
-          <p className="hub-empty">Your captures will show up here.</p>
-        )}
       </div>
+
+      <hr className="hub-sep" />
+      <div className="hub-recent-head">
+        <h2>Recent</h2>
+        <button type="button" className="link-button" onClick={() => run(openMain("library"))}>
+          Show all
+        </button>
+      </div>
+      {recent.length > 0 ? (
+        <div className="hub-recent">
+          {recent.map((shot) => (
+            <RecentShot key={shot.id} shot={shot} />
+          ))}
+        </div>
+      ) : (
+        <p className="hub-empty">Your captures will show up here.</p>
+      )}
 
       {error && (
         <p role="alert" className="hub-error">

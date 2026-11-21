@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { emit } from "@tauri-apps/api/event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import Hub from "./Hub";
 import { keyCaps, shortcutLabel } from "./keys";
 import { routeFromHash } from "../routes";
@@ -126,6 +126,37 @@ describe("Hub", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Monitor" }));
     await userEvent.click(screen.getByRole("button", { name: "2. Display" }));
     expect(sent(calls, "hub_capture")).toContainEqual({ kind: "monitor", delaySeconds: null, monitor: 1 });
+  });
+
+  it("scrolls opened submenus into view and keeps recent captures outside the scrolling list", async () => {
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+
+    try {
+      backend({ monitors: 2, shots: 3 });
+      render(<Hub />);
+      const latest = await screen.findByRole("button", { name: "Open Shot 3 in the editor" });
+      for (const [menu, option] of [["Timed", "Screen in 5 s"], ["Monitor", "2. Display"]]) {
+        scrollIntoView.mockClear();
+        await userEvent.click(screen.getByRole("button", { name: menu }));
+        const button = screen.getByRole("button", { name: option });
+        expect(scrollIntoView).toHaveBeenCalledTimes(1);
+        expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+        expect(scrollIntoView.mock.contexts[0]).toBe(button.closest(".hub-sub"));
+
+        const list = button.closest(".hub-scroll");
+        expect(list).toBeInTheDocument();
+        expect(list).not.toContainElement(screen.getByRole("heading", { name: "Recent" }));
+        expect(list).not.toContainElement(latest);
+      }
+    } finally {
+      if (original) {
+        Object.defineProperty(Element.prototype, "scrollIntoView", original);
+      } else {
+        Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+      }
+    }
   });
 
   it("leaves the monitor list out with one monitor", async () => {

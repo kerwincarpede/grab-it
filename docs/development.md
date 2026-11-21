@@ -78,6 +78,10 @@ src-tauri/target/debug/grab-it frames <path from record> --count 9
 
 ## How it works
 
+### Tray hub
+
+In `src/hub/Hub.tsx`, the capture choices scroll inside `.hub-scroll`. Opening **Timed** or **Monitor** scrolls its choices into view. The **Recent** heading and thumbnails stay pinned below the list, above the footer.
+
 ### Captures on disk
 
 Each capture is copied to the clipboard and saved to `<save folder>/originals/` as `Grab-it YYYY-MM-DD HH-MM-SS.png`, with `<name>.meta.json` beside it holding the time, mode, size, foreground app and window title. The PNG is never modified. On macOS, every image copy offers PNG first, then TIFF for apps that need it. If TIFF conversion fails, the PNG is still available.

@@ -85,7 +85,9 @@ body:has(.hub) {
   color: var(--text-muted);
 }
 
-.hub-item:where(:hover, :focus-visible) {
+/* Keep the focus outline while a hovered row takes the filled highlight. */
+.hub-item:where(:hover),
+.hub-scroll:where(:not(:has(button:hover))) .hub-item:where(:focus-visible) {
   background: var(--fill-hover);
 }
 
@@ -99,20 +101,22 @@ body:has(.hub) {
   transform: rotate(90deg);
 }
 
-.hub-item.is-primary {
-  color: var(--on-accent);
-  font-weight: 600;
-  background: var(--accent);
-}
+.hub-scroll:not(:has(button:not(.is-primary):is(:hover, :focus-visible))) {
+  & .hub-item.is-primary {
+    color: var(--on-accent);
+    font-weight: 600;
+    background: var(--accent);
+  }
 
-.hub-item.is-primary > .icon:first-child,
-.hub-item.is-primary .hub-key {
-  color: var(--on-accent);
-  opacity: 0.75;
-}
+  & .is-primary > .icon:first-child,
+  & .is-primary .hub-key {
+    color: var(--on-accent);
+    opacity: 0.75;
+  }
 
-.hub-item.is-primary:where(:hover) {
-  background: var(--accent-hover);
+  & .is-primary:hover {
+    background: var(--accent-hover);
+  }
 }
 
 /* A recording or step capture is running: choosing the item stops it. */
@@ -126,7 +130,8 @@ body:has(.hub) {
   background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
-.hub-item.is-running:where(:hover, :focus-visible) {
+.hub-item.is-running:where(:hover),
+.hub-scroll:where(:not(:has(button:hover))) .hub-item.is-running:where(:focus-visible) {
   background: color-mix(in srgb, var(--danger) 16%, transparent);
 }
 
@@ -187,7 +192,8 @@ body:has(.hub) {
   border-radius: 6px;
 }
 
-.hub-sub button:where(:hover, :focus-visible) {
+.hub-sub button:where(:hover),
+.hub-scroll:where(:not(:has(button:hover))) .hub-sub button:where(:focus-visible) {
   color: var(--text);
   background: var(--fill-hover);
 }

@@ -33,7 +33,7 @@ The microphone chip records your voice with an MP4:
 - **Default microphone**: the input chosen in your system's sound settings,
 - or any microphone connected, by name.
 
-A GIF is silent, so the chip says **No sound** and can't be changed.
+A tick marks the current choice in the **Microphone** menu. A GIF is silent, so the chip says **No sound** and can't be changed.
 
 ## System sound
 

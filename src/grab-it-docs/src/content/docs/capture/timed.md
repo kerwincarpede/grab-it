@@ -9,16 +9,18 @@ Some things vanish the moment you press a key: an open menu, a tooltip, a hover 
 
 ## From the tray
 
-Open the tray menu's **Timed capture** submenu and pick one:
+On Windows and macOS, click the tray icon to open the hub. Click **Timed** and choose a delay.
 
 | Item | What it does |
 | --- | --- |
-| **Region in 3 seconds** | Waits 3 seconds, then freezes the screen for you to drag a region |
-| **Region in 5 seconds** | The same, after 5 seconds |
-| **Region in 10 seconds** | The same, after 10 seconds |
-| **Screen in 5 seconds** | Waits 5 seconds, then captures every monitor |
+| **Region in 3 s** | Waits 3 seconds, then freezes the screen for you to drag a region |
+| **Region in 5 s** | The same, after 5 seconds |
+| **Region in 10 s** | The same, after 10 seconds |
+| **Screen in 5 s** | Waits 5 seconds, then captures every monitor |
 
-Start it, open the menu or hover the tooltip you want, and wait. For a region, the screen freezes once the time is up, with your menu still open, and you drag as usual.
+You can also right-click the tray icon and choose **Timed capture**. On Linux, open the tray menu and choose **Timed capture**.
+
+Start the countdown, open the menu or hover the tooltip you want, and wait. For a region, the screen freezes once the time is up, with your menu still open, and you drag as usual.
 
 ## From Capture & record…
 

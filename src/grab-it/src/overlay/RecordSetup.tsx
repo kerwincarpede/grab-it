@@ -294,6 +294,7 @@ export function RecordOptionsFields({ options, up, iconsOnly }: RecordOptionsFie
       <ChipMenu
         title="Microphone"
         up={up}
+        checks
         disabled={gif}
         icon={micOn && !gif ? <MicIcon size={14} /> : <MicOffIcon size={14} />}
         label={iconsOnly ? undefined : micLabel}

@@ -2240,6 +2240,11 @@ describe("RegionOverlay", () => {
       fireEvent.click(within(setup).getByRole("button", { name: "Microphone" }));
       fireEvent.click(screen.getByRole("menuitemradio", { name: "USB Microphone" }));
       await waitFor(() => expect(saved(calls)).toMatchObject({ audio: "microphone", microphone: "usb" }));
+      fireEvent.click(within(setup).getByRole("button", { name: "Microphone" }));
+      const selectedMic = screen.getByRole("menuitemradio", { name: "USB Microphone", checked: true });
+      expect(selectedMic.querySelector(".overlay-chip-mark svg")).toBeInTheDocument();
+      expect(screen.getByRole("menu", { name: "Microphone" }).querySelectorAll(".overlay-chip-mark svg")).toHaveLength(1);
+      fireEvent.click(within(setup).getByRole("button", { name: "Microphone" }));
 
       const system = within(setup).getByRole("button", { name: "System sound" });
       expect(system).toHaveAccessibleDescription(/^System sound · off/);
