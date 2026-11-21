@@ -10,5 +10,14 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
     restoreMocks: true,
+    // npm run test:coverage. The floors sit 1 point below the coverage
+    // measured when they were set, so coverage can't quietly drop.
+    coverage: {
+      provider: "v8",
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/**/*.test.{ts,tsx}", "src/test/**"],
+      reporter: ["text-summary", "html", "lcov"],
+      thresholds: { lines: 90, branches: 83 },
+    },
   },
 });

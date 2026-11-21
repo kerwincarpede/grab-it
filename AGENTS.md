@@ -18,11 +18,13 @@ Run these before you push. CI runs the same ones:
 ```sh
 npm ci                                   # repository root
 cd src/grab-it
-npm run lint && npm test && npm run build
+npm run lint && npm run test:coverage && npm run build
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
+
+`npm run test:coverage` fails below 90% of lines or 83% of branches. CI runs the Rust tests under `cargo llvm-cov` instead of `cargo test`, which needs the `llvm-tools-preview` rustup component.
 
 ## Read before you start
 
