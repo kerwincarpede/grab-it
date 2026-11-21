@@ -137,9 +137,11 @@ Accessibility permission (`CGPreflightPostEventAccess()` was false), so OS
 mouse events could not be posted and Safari's Web Inspector could not be
 driven. Instead:
 
-1. **A bench harness inside the real overlay** (`capture-overlay-bench/bench.patch`,
-   local only, never commit it). When `GRAB_IT_OVERLAY_BENCH` is set (even
-   to `""`), the overlay page, once its image is decoded, replays:
+1. **A bench harness inside the real overlay** (`src/overlay/bench.ts` and
+   the `overlay_bench_*` commands in `overlay.rs`), built into every build.
+   When `GRAB_IT_OVERLAY_BENCH` is set (even to `""`), the backend opens
+   overlays at `#/overlay?bench`, and the page, once its image is decoded,
+   replays:
    - a 2.5 s hover sweep: a zig-zag over the whole screen, crossing windows;
    - a 3 s drag: mousedown at (150, 150), then the corner swept around the
      screen;
@@ -149,7 +151,10 @@ driven. Instead:
    `flushSync`, so the measured time per move includes the handler, React's
    render and commit, and passive effects (the loupe redraw). (It did not
    until round two: see above.) It reports
-   through a bench-only `overlay_bench_log` command to stderr:
+   through a bench-only `overlay_bench_log` command to stderr, as
+   `BENCH <json>` lines, each followed on macOS by a `BENCHCPU` line with
+   the CPU seconds WindowServer, the WebKit GPU process and the app have
+   used so far:
    - `fps`, `frameP50/P95/Max`: intervals between `requestAnimationFrame`
      callbacks;
    - `missed`: frames over 12.5 ms (1.5 vsyncs at 120 Hz);
@@ -157,11 +162,16 @@ driven. Instead:
    - `renderPerFrame`: ms from a rAF callback to the next task, which
      covers style and layout but not paint (GPU process);
    - `open`: page-side marks in ms after the page's `start()`: `info`,
-     `bytes` (image received), `loaded`, `decoded`, `painted`.
+     `bytes` (image received), `loaded`, `decoded`, `painted`, and
+     `backdropMs`, how long `drawBackdrop` took.
+
+   Without the variable the page has no `bench` flag: it calls none of the
+   bench commands, and the backend logs nothing.
 
    Switches in the same variable turn suspects off: `noloupe`, `nolensdraw`
    (loupe shown, canvas not redrawn), `nodim`, `noguides`, `noblend`,
-   `nobackdrop`, `noselection`, `noimage`, `nohint`. Two A/B switches:
+   `nobackdrop`, `noselection`, `noimage`, `nohint`, `nowillchange`. Two
+   A/B switches:
    `cap60` keeps WebKit's 60 fps default, and `png` sends a PNG instead of
    a BMP.
 2. **CPU time per run** for the app, its WebKit GPU process and WindowServer
@@ -181,7 +191,6 @@ driven. Instead:
 From the repository root, on a Mac:
 
 ```sh
-git apply docs/analysis/capture-overlay-bench/bench.patch
 cd src/grab-it && npm run tauri build -- --no-bundle \
   --config '{"productName":"Grab-it Dev","identifier":"com.kerwincarpede.grabit.dev"}'
 cd ../..
@@ -189,7 +198,15 @@ docs/analysis/capture-overlay-bench/run.sh base "" 3        # 120 Hz, BMP
 docs/analysis/capture-overlay-bench/run.sh cap60 cap60 3    # WebKit default
 docs/analysis/capture-overlay-bench/run.sh noloupe noloupe 3
 docs/analysis/capture-overlay-bench/presented.sh "" 2       # frames on screen
-git apply -R docs/analysis/capture-overlay-bench/bench.patch
+```
+
+By hand, without the scripts: start the binary with the variable set, open
+a region from a second terminal, and read the `BENCH` lines on the first
+one's stderr. The overlay replays the hover and the drag, then cancels.
+
+```sh
+GRAB_IT_OVERLAY_BENCH= src/grab-it/src-tauri/target/release/grab-it
+src/grab-it/src-tauri/target/release/grab-it --open region   # another terminal
 ```
 
 - Quit every running Grab-it first, **including an installed Grab-it Dev**:
@@ -361,9 +378,9 @@ Ranked by likely payoff. Each says how to measure it with the bench.
    Measure with `GRAB_IT_TRACE_OVERLAY=1` ("monitors frozen").
 3. **Image decoded to first frame with it: about 40 ms** (`decoded` →
    `painted`). Most of it is probably `drawBackdrop` on the main thread (an
-   11 Mpx high-quality downscale plus a box blur), but it was not timed
-   separately, and the mark also includes the bench's own
-   `overlay_bench_config` call. Time `drawBackdrop` first. Options:
+   11 Mpx high-quality downscale plus a box blur). The bench now reports it
+   on its own as `backdropMs`; `painted` also includes the bench's own
+   `overlay_bench_config` call. Read `backdropMs` first. Options:
    - Draw it in a worker with `OffscreenCanvas` and `createImageBitmap`
      with `resizeWidth`.
    - Or have Rust send a quarter-size, already-blurred backdrop beside the
@@ -393,10 +410,10 @@ Ranked by likely payoff. Each says how to measure it with the bench.
 
 ## Files
 
-- [`capture-overlay-bench/bench.patch`](capture-overlay-bench/bench.patch): the harness
-  (`src/overlay/bench.ts`, hooks in `RegionOverlay.tsx` and `Loupe.tsx`,
-  bench commands in `overlay.rs` and `lib.rs`, the `cap60` and `png`
-  switches). Applies to this branch.
+- The harness itself is committed: `src/grab-it/src/overlay/bench.ts`, its
+  hooks in `RegionOverlay.tsx` and `Loupe.tsx`, and the `overlay_bench_*`
+  commands and the `cap60`, `png` and `opaque` switches in `overlay.rs`.
+  It replaced `bench.patch`, which had to be applied by hand.
 - [`capture-overlay-bench/run.sh`](capture-overlay-bench/run.sh): runs the bench and prints medians.
 - [`capture-overlay-bench/presented.sh`](capture-overlay-bench/presented.sh),
   [`presented.swift`](capture-overlay-bench/presented.swift): frames on screen.

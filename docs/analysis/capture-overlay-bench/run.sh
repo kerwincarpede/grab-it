@@ -1,11 +1,12 @@
 #!/bin/bash
-# Runs the overlay bench (bench.patch applied, release binary built) and
-# prints medians. See ../capture-overlay-performance.md.
+# Runs the overlay bench against a release binary and prints medians. The
+# harness is built in: GRAB_IT_OVERLAY_BENCH switches it on. See
+# ../capture-overlay-performance.md.
 #
 # Usage: run.sh <label> <switches> [runs]
 #   switches: comma-separated, "" for none. cap60, png, noloupe, nolensdraw,
 #             nodim, noguides, noblend, nobackdrop, noselection, noimage, nohint,
-#             opaque, leak, lazy, raw, probe (see the write-up)
+#             nowillchange, opaque, leak, lazy, raw, probe (see the write-up)
 # Logs go to $BENCH_OUT (default: $TMPDIR/grab-it-bench).
 set -u
 # A running Grab-it Dev shares the bench's identifier: it would take the

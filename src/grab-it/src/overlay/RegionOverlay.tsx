@@ -65,6 +65,7 @@ import {
 } from "./geometry";
 import { drawBackdrop } from "./backdrop";
 import Loupe from "./Loupe";
+import { benchMark, benchOpaque, benchSpan, benchSwitch, runBench, setupBench } from "./bench";
 import RecordSetup, { RecordOptionsFields } from "./RecordSetup";
 import { nextCountdown } from "./recordOptions";
 import { ChooserToolbar, SizeFields } from "./ChooserToolbar";
@@ -396,14 +397,17 @@ function RegionOverlay() {
     // backend says one has started, so this runs once on load and again on
     // that event, whichever finds the selection first.
     function start() {
+      benchMark("start");
       overlayInfo()
         .then((loaded) => {
           if (cancelled || started || !loaded) return;
           started = true;
+          benchMark("info");
           setInfo(loaded);
           // Another monitor's toolbar may have chosen before this page loaded.
           if (loaded.allInOne && loaded.choice) follow(loaded.choice);
           return overlayImage().then((bytes) => {
+            benchMark("bytes");
             if (cancelled) return;
             url = toImageUrl(bytes);
             setImageUrl(url);
@@ -541,6 +545,24 @@ function RegionOverlay() {
 
   const view = viewport();
 
+  // The overlay bench (`#/overlay?bench`): once the image is painted, replay
+  // a hover and a drag. Off, `setupBench` resolves false having called nothing.
+  const root = useRef<HTMLDivElement>(null);
+  const benched = useRef(false);
+  useEffect(() => {
+    if (!image || benched.current || !root.current) return;
+    benched.current = true;
+    const target = root.current;
+    void setupBench().then((on) => {
+      if (!on) return;
+      requestAnimationFrame(() => {
+        benchMark("painted");
+        if (benchSwitch("opaque")) void benchOpaque();
+        void runBench(target);
+      });
+    });
+  }, [image]);
+
   const allInOne = info?.allInOne === true;
   const intent = allInOne ? toolIntent(tool) : (info?.intent ?? "capture");
   const recording = useRecordingOptions(intent === "record");
@@ -561,7 +583,9 @@ function RegionOverlay() {
   // All-in-one the canvas comes back with a mode that picks windows.
   useEffect(() => {
     if (!image || !backdrop.current) return;
+    const drawStarted = performance.now();
     setBackdropReady(drawBackdrop(backdrop.current, image, view.width, view.height));
+    benchSpan("backdropMs", performance.now() - drawStarted);
   }, [image, view.width, view.height, canPickWindow]);
   const pickable = useMemo<PickableWindow[]>(() => {
     if (!info) return [];
@@ -873,8 +897,10 @@ function RegionOverlay() {
     };
     // Drawn before this event returns. React would otherwise render a pointer
     // move in a task of its own, and a frame that goes out in between shows
-    // the selection where the pointer was a move ago.
-    flushSync(follow);
+    // the selection where the pointer was a move ago. The bench's `lazy`
+    // switch leaves it to React, to cost the difference.
+    if (benchSwitch("lazy")) follow();
+    else flushSync(follow);
   }
 
   /**
@@ -1035,6 +1061,7 @@ function RegionOverlay() {
 
   return (
     <div
+      ref={root}
       className="overlay"
       data-testid="overlay"
       data-ready={info ? "true" : "false"}
@@ -1066,8 +1093,14 @@ function RegionOverlay() {
           onLoad={(event) => {
             const img = event.currentTarget;
             // Decode before asking the backend to show the window.
+            benchMark("loaded");
             const decoded = typeof img.decode === "function" ? img.decode() : Promise.resolve();
-            decoded.catch(() => {}).finally(() => setImage(img));
+            decoded
+              .catch(() => {})
+              .finally(() => {
+                benchMark("decoded");
+                setImage(img);
+              });
           }}
         />
       )}
@@ -1175,7 +1208,11 @@ function RegionOverlay() {
         </>
       )}
       {/* On Windows the page is shown ahead of its image: no empty loupe meanwhile. */}
-      {!windowMode && !screenSource && pointer && !(windows && image === null) && (
+      {!windowMode &&
+        !screenSource &&
+        pointer &&
+        !(windows && image === null) &&
+        !benchSwitch("noloupe") && (
         <Loupe
           image={image}
           pointer={pointer}
