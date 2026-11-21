@@ -15,9 +15,16 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.{ts,tsx}"],
-      exclude: ["src/**/*.test.{ts,tsx}", "src/test/**"],
+      exclude: ["src/**/*.test.{ts,tsx}", "src/**/*.bench.ts", "src/test/**"],
       reporter: ["text-summary", "html", "lcov"],
       thresholds: { lines: 90, branches: 83 },
+    },
+    benchmark: {
+      // flatten.ts and render.ts read model.ts's exports through the module
+      // runner's getters on every call, as their tests do. The base and the
+      // head pay the same cost, so comparisons hold; the warning would only
+      // repeat that on every run.
+      suppressExportGetterWarnings: true,
     },
   },
 });

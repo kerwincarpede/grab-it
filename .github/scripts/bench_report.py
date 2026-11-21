@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """Write the Benchmarks job summary: each bench's base and head times.
 
-Reads the results `cargo bench` leaves under target/criterion/: a bench's
-`base/` holds the PR base's numbers (`--save-baseline base`), its `new/`
-the head's, and its `change/` the difference criterion measured
-(`--baseline-lenient base`). Benches more than 10% slower are flagged and
-raise a warning annotation. The report goes to stdout and to the job
-summary, and never fails the job.
+Reports two suites, each in its own table:
+
+- Rust: the results `cargo bench` leaves under target/criterion/. A
+  bench's `base/` holds the PR base's numbers (`--save-baseline base`), its
+  `new/` the head's, and its `change/` the difference criterion measured
+  (`--baseline-lenient base`).
+- Frontend: the JSON reports of `npm run bench` (vitest's `json` reporter)
+  for the head and, when it ran, the base. The change is the ratio of their
+  means.
+
+Benches more than 10% slower are flagged and raise a warning annotation.
+The report goes to stdout and to the job summary, and never fails the job.
 """
 
 from __future__ import annotations
@@ -80,6 +86,48 @@ def criterion_results(root, has_base=True):
     return sorted(results, key=lambda result: result.name)
 
 
+def vitest_means(path):
+    """Each bench's mean nanoseconds per iteration in a vitest JSON report.
+
+    A bench is named after its test and its own name, such as
+    `overlay/geometry/drag 1000 moves`. None when the report is missing or
+    cannot be read.
+    """
+    report = read_json(Path(path)) if path else None
+    if not isinstance(report, dict):
+        return None
+    means = {}
+    for module in report.get("testResults") or []:
+        for test in module.get("assertionResults") or []:
+            for benchmark in test.get("benchmarks") or []:
+                for task in benchmark.get("tasks") or []:
+                    # A row `bench.from()` read from a file was not timed in this run.
+                    if task.get("fromStore"):
+                        continue
+                    try:
+                        name = f"{benchmark['name']}/{task['name']}"
+                        # vitest's latencies are in milliseconds.
+                        means[name] = float(task["latency"]["mean"]) * 1e6
+                    except (KeyError, TypeError, ValueError):
+                        continue
+    return means
+
+
+def vitest_results(head, base=None):
+    """The head's and base's frontend benches, sorted by name, and whether the base ran."""
+    head_means = vitest_means(head) or {}
+    base_means = vitest_means(base)
+    has_base = base_means is not None
+    base_means = base_means or {}
+    results = []
+    for name in sorted(set(head_means) | set(base_means)):
+        base_ns = base_means.get(name)
+        head_ns = head_means.get(name)
+        change = head_ns / base_ns - 1 if base_ns and head_ns is not None else None
+        results.append(Result(name, base_ns, head_ns, change))
+    return results, has_base
+
+
 def duration(nanoseconds):
     if nanoseconds is None:
         return "–"
@@ -93,12 +141,11 @@ def is_slower(result):
     return result.change is not None and result.change > SLOWER
 
 
-def render(results, has_base):
-    """The summary's Markdown, and a warning line for each slower bench."""
-    lines = ["## Benchmarks", ""]
+def section(title, results, has_base):
+    """One suite's table as Markdown lines, and a warning line for each slower bench."""
+    lines = [f"### {title}", ""]
     if not results:
-        lines.append("No benchmark results were found.")
-        return "\n".join(lines) + "\n", []
+        return lines + ["No benchmark results were found.", ""], []
     if not has_base:
         lines += ["The base has no benches, so only this PR's numbers are shown.", ""]
     lines += [
@@ -131,18 +178,37 @@ def render(results, has_base):
         f"{slower} of {len(results)} benches are over {SLOWER:.0%} slower than the base."
         if has_base
         else f"{len(results)} benches ran.",
-        "Times are the mean per iteration on a shared runner, so a few percent either way is noise.",
+        "",
     ]
+    return lines, warnings
+
+
+def render(sections):
+    """The summary's Markdown for `(title, results, has_base)` sections, and their warnings."""
+    lines = ["## Benchmarks", ""]
+    warnings = []
+    if not sections:
+        lines += ["No benchmark results were found.", ""]
+    for title, results, has_base in sections:
+        section_lines, section_warnings = section(title, results, has_base)
+        lines += section_lines
+        warnings += section_warnings
+    lines.append("Times are the mean per iteration on a shared runner, so a few percent either way is noise.")
     return "\n".join(lines) + "\n", warnings
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("criterion", help="the target/criterion folder")
+    parser.add_argument("criterion", nargs="?", help="the target/criterion folder")
     parser.add_argument(
         "--no-base",
         action="store_true",
-        help="the PR base has no benches; report the head alone",
+        help="the PR base's Rust benches did not run; report the head alone",
+    )
+    parser.add_argument("--vitest", help="the head's vitest JSON report")
+    parser.add_argument(
+        "--vitest-base",
+        help="the base's vitest JSON report; without it the frontend shows the head alone",
     )
     parser.add_argument(
         "--summary",
@@ -151,8 +217,13 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     try:
-        has_base = not args.no_base
-        markdown, warnings = render(criterion_results(args.criterion, has_base), has_base)
+        sections = []
+        if args.criterion:
+            has_base = not args.no_base
+            sections.append(("Rust", criterion_results(args.criterion, has_base), has_base))
+        if args.vitest:
+            sections.append(("Frontend", *vitest_results(args.vitest, args.vitest_base)))
+        markdown, warnings = render(sections)
         # Also in the log: job summaries are hidden from signed-out
         # viewers and from the API.
         sys.stdout.write(markdown)
