@@ -29,7 +29,10 @@ interface Meta {
  * resizes it to each monitor's size, so on the suite's 1920 × 1080 Xvfb a
  * screen pixel (x, y) shows fixture pixel (x / 2, y / 2). Each point below
  * sits at least 20 fixture pixels inside its area, clear of the blending
- * the resize does at colour edges.
+ * the resize does at colour edges. The one exception is the region
+ * capture's background point (105, 80), which is 15 from the window's left
+ * edge: the region starts at fixture x 100 and the window at x 120, so no
+ * background point inside the region is further from that edge.
  */
 const FIXTURE = { width: 960, height: 540 };
 const BACKGROUND: Rgb = [36, 41, 51];

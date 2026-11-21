@@ -221,6 +221,23 @@ async function startTauriDriver(sandboxRoot: string, port: number, nativePort: n
   await waitForDriver(driver, port, 30_000);
 }
 
+/**
+ * Saves a screenshot of the window the session is driving to
+ * `screenshots/` in the run folder, named after the spec's session and the
+ * failed test or hook.
+ */
+async function saveFailureScreenshot(parent: string | undefined, title: string): Promise<void> {
+  const name = `${parent ?? ""} ${title}`.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120);
+  const dir = path.join(runDir, "screenshots");
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    await browser.saveScreenshot(path.join(dir, `${process.env[SANDBOX_VAR] ? path.basename(process.env[SANDBOX_VAR]) : "session"}-${name}.png`));
+  } catch (err) {
+    // The window may have closed with the failure, or no session was made.
+    console.warn(`No screenshot for "${title}": ${String(err)}`);
+  }
+}
+
 /** The app's environment: the sandbox's home and data, the fixture, and X11 only. */
 function appEnvironment(sandboxRoot: string): NodeJS.ProcessEnv {
   const sandbox = createSandbox(sandboxRoot);
@@ -292,16 +309,13 @@ export const config: WebdriverIO.Config = {
 
   // A failed test leaves a picture of the window it was driving.
   afterTest: async (test, _context, { passed }) => {
-    if (passed) return;
-    const name = `${test.parent} ${test.title}`.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120);
-    const dir = path.join(runDir, "screenshots");
-    try {
-      fs.mkdirSync(dir, { recursive: true });
-      await browser.saveScreenshot(path.join(dir, `${process.env[SANDBOX_VAR] ? path.basename(process.env[SANDBOX_VAR]) : "session"}-${name}.png`));
-    } catch (err) {
-      // The window may have closed with the failure.
-      console.warn(`No screenshot for "${test.title}": ${String(err)}`);
-    }
+    if (!passed) await saveFailureScreenshot(test.parent, test.title);
+  },
+
+  // So does a failed hook, such as a spec's `before` that captures: Mocha
+  // then skips its tests, and afterTest never runs.
+  afterHook: async (test, _context, { passed }) => {
+    if (!passed) await saveFailureScreenshot(test.parent, test.title);
   },
 
   onPrepare: async () => {
