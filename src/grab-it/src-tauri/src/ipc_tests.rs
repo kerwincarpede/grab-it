@@ -296,21 +296,28 @@ fn set_save_folder_saves_and_rescans_the_new_folder() {
 #[test]
 fn set_save_folder_creates_a_missing_folder() {
     let h = Harness::new();
+    // A rescan of the new, empty folder would change nothing that could be
+    // waited for. A Library row whose file is gone is dropped by a rescan
+    // of any folder, so the one rescan below always changes the Library,
+    // and the test waits for it before the temporary folder goes.
+    let old = h.dir.path().join("old");
+    seed_capture(&old, "seed.png");
+    h.app
+        .state::<LibraryState>()
+        .rescan(&old, None)
+        .expect("the old folder rescans");
+    assert_eq!(h.library_total(), 1);
+    fs::remove_file(old.join(ORIGINALS_DIR).join("seed.png")).unwrap();
+
     let folder = h.dir.path().join("new").join("captures");
     h.ok(
         "set_save_folder",
         json!({ "path": folder.to_string_lossy() }),
     );
     assert!(folder.is_dir());
-    // The empty folder's rescan changes nothing that could be waited for,
-    // so choosing it again with a capture in it starts one that does. The
-    // test waits for it before the temporary folder goes.
-    seed_capture(&folder, "seed.png");
-    h.ok(
-        "set_save_folder",
-        json!({ "path": folder.to_string_lossy() }),
-    );
-    wait_for("the rescan to add the capture", || h.library_total() == 1);
+    wait_for("the rescan to drop the missing capture", || {
+        h.library_total() == 0
+    });
 }
 
 #[test]
