@@ -77,6 +77,17 @@ class Report(unittest.TestCase):
         self.assertIn("1 benches ran.", markdown)
         self.assertEqual(warnings, [])
 
+    def test_without_a_base_ignores_the_heads_own_base_folder(self):
+        # A plain `cargo bench` saves the head's numbers to base/ too.
+        self.bench("detect/ocr", base=2e8, head=2e8, change=0.0)
+        self.assertEqual(
+            criterion_results(self.root, has_base=False),
+            [Result("detect/ocr", None, 2e8, None)],
+        )
+        summary = self.root / "summary.md"
+        self.assertEqual(main([str(self.root), "--no-base", "--summary", str(summary)]), 0)
+        self.assertIn("| `detect/ocr` | – | 200 ms | – |  |", summary.read_text())
+
     def test_formats_durations(self):
         self.assertEqual(duration(12.345), "12.3 ns")
         self.assertEqual(duration(4_560), "4.56 µs")

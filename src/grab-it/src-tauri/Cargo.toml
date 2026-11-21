@@ -11,6 +11,14 @@ edition = "2024"
 # see https://github.com/rust-lang/cargo/issues/8519
 name = "grab_it_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+# Only the criterion benches in benches/ run under `cargo bench`: libtest
+# would reject criterion's flags, such as --save-baseline.
+bench = false
+
+[[bin]]
+name = "grab-it"
+path = "src/main.rs"
+bench = false
 
 [features]
 # Smoke-test builds only (npm run e2e): capture reads the PNG named by

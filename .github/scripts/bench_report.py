@@ -8,12 +8,15 @@ the head's, and its `change/` the difference criterion measured
 raise a warning annotation. The report never fails the job.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 # A bench this much slower than the base is flagged.
 SLOWER = 0.10
@@ -22,9 +25,9 @@ SLOWER = 0.10
 @dataclass
 class Result:
     name: str
-    base: float | None  # mean nanoseconds per iteration
-    head: float | None
-    change: float | None  # head against base: 0.1 is 10% slower
+    base: Optional[float]  # mean nanoseconds per iteration
+    head: Optional[float]
+    change: Optional[float]  # head against base: 0.1 is 10% slower
 
 
 def read_json(path):
@@ -50,19 +53,22 @@ def bench_name(bench_dir, root):
     return bench_dir.relative_to(root).as_posix()
 
 
-def criterion_results(root):
-    """Every bench under `root` (target/criterion), sorted by name."""
+def criterion_results(root, has_base=True):
+    """Every bench under `root` (target/criterion), sorted by name. Without
+    a base, any base/ and change/ folders are ignored: a plain `cargo bench`
+    saves its own numbers to base/."""
     root = Path(root)
+    runs = ("new", "base") if has_base else ("new",)
     if not root.is_dir():
         return []
     bench_dirs = {
         path.parent.parent
-        for run in ("new", "base")
+        for run in runs
         for path in root.glob(f"**/{run}/estimates.json")
     }
     results = []
     for bench_dir in bench_dirs:
-        base = mean(bench_dir / "base" / "estimates.json")
+        base = mean(bench_dir / "base" / "estimates.json") if has_base else None
         head = mean(bench_dir / "new" / "estimates.json")
         change = None
         if base is not None and head is not None:
@@ -144,7 +150,8 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     try:
-        markdown, warnings = render(criterion_results(args.criterion), not args.no_base)
+        has_base = not args.no_base
+        markdown, warnings = render(criterion_results(args.criterion, has_base), has_base)
         if args.summary:
             with open(args.summary, "a", encoding="utf-8") as summary:
                 summary.write(markdown)

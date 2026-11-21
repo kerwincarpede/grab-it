@@ -143,8 +143,9 @@ jobs:
             cargo bench --manifest-path src-tauri/Cargo.toml --features bench -- --baseline-lenient base
           else
             # A base that failed part-way leaves results to compare nothing with.
+            # Saved as "head", since criterion otherwise saves them as "base".
             rm -rf "$CARGO_TARGET_DIR/criterion"
-            cargo bench --manifest-path src-tauri/Cargo.toml --features bench
+            cargo bench --manifest-path src-tauri/Cargo.toml --features bench -- --save-baseline head
           fi
 
       - name: Report

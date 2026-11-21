@@ -455,7 +455,7 @@ macOS has no WebDriver for WKWebView, so check these by hand on a build of the c
 
 ## Benchmarks
 
-Criterion benches in `src-tauri/benches/` time the Rust hot paths. Each needs the `bench` feature, which makes the code they call reachable through the `bench` module in `lib.rs`; the feature is off by default, so `cargo test`, `cargo clippy --all-targets` and release builds leave the benches out. Run them from `src/grab-it/` after `npm run build`:
+Criterion benches in `src-tauri/benches/` time the Rust hot paths. Each needs the `bench` feature, which makes the code they call reachable through the `bench` module in `lib.rs`; the feature is off by default, so `cargo test`, `cargo clippy --all-targets` and release builds leave the benches out. The lib and the app binary set `bench = false`, so `cargo bench` runs only these and criterion's own flags, such as `--save-baseline`, reach them. Run them from `src/grab-it/` after `npm run build`:
 
 ```sh
 cargo bench --manifest-path src-tauri/Cargo.toml --features bench
