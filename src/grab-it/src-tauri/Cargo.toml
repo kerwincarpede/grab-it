@@ -11,12 +11,23 @@ edition = "2024"
 # see https://github.com/rust-lang/cargo/issues/8519
 name = "grab_it_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+# Only the criterion benches in benches/ run under `cargo bench`: libtest
+# would reject criterion's flags, such as --save-baseline.
+bench = false
+
+[[bin]]
+name = "grab-it"
+path = "src/main.rs"
+bench = false
 
 [features]
 # Smoke-test builds only (npm run e2e): capture reads the PNG named by
 # GRAB_IT_E2E_CAPTURE instead of the screen (screen.rs). Shipped builds never
 # turn it on.
 e2e = []
+# Exposes the code the criterion benches in benches/ time (the `bench`
+# module in lib.rs). Off by default, so release builds are unchanged.
+bench = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -192,6 +203,26 @@ tempfile = "3"
 rxing = { version = "0.9", default-features = false, features = ["encoders"] }
 # The tests pack the .tar.xz builds they download.
 lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "encoder", "xz"] }
+# The benches in benches/ (`cargo bench --features bench`). Without its
+# defaults: the reports are read as JSON, so no plots are drawn.
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+# Each bench needs the `bench` feature, so `cargo clippy --all-targets` and
+# `cargo test` without it skip them.
+[[bench]]
+name = "detect"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "encode"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "library"
+harness = false
+required-features = ["bench"]
 
 # ocrs is unusably slow unoptimised (see its README), so OCR crates are
 # optimised in dev and test builds too.
@@ -238,6 +269,12 @@ opt-level = 3
 
 [profile.dev.package.image]
 opt-level = 3
+
+# Benches compare a PR with its base rather than time the shipped app, so
+# they skip the release profile's slow link-time optimisation.
+[profile.bench]
+lto = false
+codegen-units = 16
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

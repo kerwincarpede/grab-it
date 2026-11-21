@@ -58,6 +58,49 @@ mod zoom;
 #[cfg(test)]
 mod ipc_tests;
 
+/// What the criterion benches in `benches/` time. Only built with the
+/// `bench` feature, so the app's modules stay private in release builds.
+#[cfg(feature = "bench")]
+pub mod bench {
+    use std::path::{Path, PathBuf};
+
+    pub use crate::capture::{CaptureMode, Foreground, save_capture};
+    pub use crate::codes::decode as decode_codes;
+    pub use crate::faces::Faces;
+    pub use crate::library::{
+        Library, LibraryResult, PreparedShot, RescanReport, Shot, ShotKind, ensure_thumbnail,
+        export_shot, prepare_capture, thumb_path,
+    };
+    pub use crate::ocr::Ocr;
+    pub use crate::search::SearchQuery;
+
+    /// The OCR models as the app bundles them.
+    pub fn ocr_models_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(crate::ocr::MODELS_DIR)
+    }
+
+    /// The face model as the app bundles it.
+    pub fn face_models_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(crate::faces::MODELS_DIR)
+    }
+
+    /// A file in `tests/fixtures/`, which the tests use too.
+    pub fn fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join(name)
+    }
+
+    /// Brings `library` up to date with `save_folder`, as
+    /// `LibraryState::rescan` does without ffmpeg, in one thread.
+    pub fn rescan(library: &mut Library, save_folder: &Path) -> LibraryResult<RescanReport> {
+        let known = library.known()?;
+        let scan = crate::library::scan_files(&known, save_folder, None)?;
+        library.apply(&scan)
+    }
+}
+
 use std::{path::PathBuf, sync::Mutex};
 
 use tauri::{App, Builder, Manager, RunEvent, ipc::Invoke};

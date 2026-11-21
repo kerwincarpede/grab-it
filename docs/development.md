@@ -453,11 +453,39 @@ macOS has no WebDriver for WKWebView, so check these by hand on a build of the c
 6. Open the Library: both captures are listed. Delete one: its PNG and sidecars are gone from `originals/`.
 7. In **Settings → After a capture**, turn off **Copy every capture to the clipboard**. Quit and reopen Grab-it: it is still off.
 
+## Benchmarks
+
+Criterion benches in `src-tauri/benches/` time the Rust hot paths. Each needs the `bench` feature, which makes the code they call reachable through the `bench` module in `lib.rs`; the feature is off by default, so `cargo test`, `cargo clippy --all-targets`, `cargo llvm-cov` and release builds leave the benches out. The lib and the app binary set `bench = false`, so `cargo bench` runs only these and criterion's own flags, such as `--save-baseline`, reach them. Run them from `src/grab-it/` after `npm run build`:
+
+```sh
+cargo bench --manifest-path src-tauri/Cargo.toml --features bench
+cargo bench --manifest-path src-tauri/Cargo.toml --features bench --bench library   # one file
+cargo bench --manifest-path src-tauri/Cargo.toml --features bench -- detect/ocr     # one bench
+```
+
+- `detect`: OCR (`Ocr::read_image`), face detection (`Faces::detect`) and code detection (`codes::decode`, with a QR code and with none) on a 1280×800 capture made from the test fixtures and the bundled models. On macOS, `Ocr::read_image` times Vision; elsewhere it times ocrs.
+- `encode`: writing a thumbnail and `export_shot` to PNG, JPG and WebP from a generated 1920×1080 capture. A PNG export of a PNG capture copies its bytes.
+- `library`: `Library::search` (two words, a prefix, an app filter, newest first) over 10,000 generated items, and a rescan of a save folder of 10,000 captures, once with nothing changed (`unchanged`) and once into an empty Library (`into_empty`).
+
+Each bench makes its captures when it starts, writing any files to a temporary folder, and uses no fixtures beyond the tests' own, so none needs a network or a display. The `bench` profile skips the release profile's link-time optimisation to build faster, so its times compare one commit with another rather than measure the shipped app.
+
+To compare a change with `main` locally, save a baseline on `main` and compare against it on the branch:
+
+```sh
+cargo bench --manifest-path src-tauri/Cargo.toml --features bench -- --save-baseline main
+git switch my-branch
+cargo bench --manifest-path src-tauri/Cargo.toml --features bench -- --baseline main
+```
+
+Criterion keeps the results in `src-tauri/target/criterion/`. From the repository root, `python3 .github/scripts/bench_report.py src/grab-it/src-tauri/target/criterion` prints them as the table CI shows.
+
 ## CI
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04, and the [smoke tests](#smoke-tests) on Ubuntu 24.04 for pull requests. In parallel, the Rust tests job runs `cargo test` on Windows and macOS, so code behind `#[cfg(windows)]` and `#[cfg(target_os = "macos")]` is tested as well as built. Tauri embeds the Common Controls 6 manifest only in the app, so on Windows the test executables would fail to start. `build.rs` turns that off and has the linker embed `windows-app-manifest.xml`, the same manifest, in every binary instead. The build job builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts. `ci.yml` runs on every pull request except those that change only docs (the site, `docs/` or Markdown), and never publishes anything. Pushes to `main` run it through the release workflow instead (below), so `main` is built once, as a release. Linux dependencies are downloaded from the Ubuntu archive (ports on arm64), with a 120-second limit for index updates and 180 seconds for package downloads per attempt. A failure tries a second mirror (the runner's original ports source on arm64). Downloads finish before installation, so a timeout never interrupts dpkg. Packages are installed without optional recommendations.
 
 The Checks job measures coverage while it runs the tests: `npm run test:coverage` for the frontend and `cargo llvm-cov` (pinned in `ci.yml`) for Rust, which prints a line summary in the job log. Either one falling below its floor fails the job. It uploads the HTML and lcov reports for both as one `coverage` artifact, even when a test or floor fails.
+
+[`.github/workflows/bench.yml`](../.github/workflows/bench.yml) runs on the same pull requests. In one Ubuntu 24.04 job it checks the benches with `cargo clippy --features bench --benches`, times the PR's base (from a `git worktree` sharing the target folder, `--save-baseline base`) and then its head (`--baseline-lenient base`), and writes a table of both with `.github/scripts/bench_report.py` to the job summary and to the Report step's log, which signed-out viewers and `gh run view --log` can read. A bench over 10% slower than the base is flagged with a warning, but the job never fails on it. A base from before the benches existed, or one that fails to build, is skipped and the summary shows the head alone. See "Benchmarks" above.
 
 ## Releases
 
