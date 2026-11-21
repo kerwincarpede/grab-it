@@ -93,6 +93,8 @@ struct AutoScroll {
     center: (i32, i32),
     reason: Option<&'static str>,
     still_steps: u8,
+    /// Whether a frame after a wheel step ever differed from the one before.
+    moved: bool,
 }
 impl AutoScroll {
     fn new(center: (i32, i32), allowed: bool) -> Self {
@@ -101,6 +103,7 @@ impl AutoScroll {
             reason: (!allowed)
                 .then_some("Accessibility permission is needed. Scroll by hand, then choose Done."),
             still_steps: 0,
+            moved: false,
         }
     }
     fn observe_pointer(&mut self, pointer: Option<(i32, i32)>) {
@@ -120,18 +123,32 @@ impl AutoScroll {
         if self.reason.is_some() {
             return false;
         }
+        self.moved |= !unchanged;
         self.still_steps = if unchanged { self.still_steps + 1 } else { 0 };
         if self.still_steps < 5 {
             return false;
         }
         if !has_scrolled {
-            self.reason = Some("Nothing scrolled automatically. Scroll by hand, then choose Done.");
+            // Content that moved but never lined up did scroll; saying
+            // nothing scrolled would send the user looking for the wrong fault.
+            self.reason = Some(if self.moved {
+                "The page scrolled, but Grab-it could not join the views. Scroll by hand, then choose Done."
+            } else {
+                "Nothing scrolled automatically. Scroll by hand, then choose Done."
+            });
             return false;
         }
         true
     }
-    fn wheel(&self, axis: Option<Axis>, reverse: Option<bool>) -> rdev::EventType {
-        let delta = if reverse == Some(true) { 1 } else { -1 };
+    /// The wheel event for one step of `amount` in the platform's unit
+    /// (points on macOS, notches elsewhere), toward content not yet seen.
+    fn wheel(&self, axis: Option<Axis>, reverse: Option<bool>, amount: i32) -> rdev::EventType {
+        let amount = i64::from(amount.max(1));
+        let delta = if reverse == Some(true) {
+            amount
+        } else {
+            -amount
+        };
         if axis == Some(Axis::Horizontal) {
             rdev::EventType::Wheel {
                 // X11 button 7 and Windows HWHEEL use positive for right;
@@ -149,6 +166,42 @@ impl AutoScroll {
                 delta_y: delta,
             }
         }
+    }
+}
+
+/// One automatic step moves a third of the area along the scroll axis, in
+/// the area's image pixels. The axis counts as vertical until one is accepted.
+/// A third leaves the Stitcher a wide overlap to match.
+fn step_pixels(width: u32, height: u32, axis: Option<Axis>) -> u32 {
+    let along = if axis == Some(Axis::Horizontal) {
+        width
+    } else {
+        height
+    };
+    (along / 3).max(1)
+}
+/// The scale factor, or 1 when a monitor reports none that can divide.
+fn usable_scale(scale: f64) -> f64 {
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
+/// macOS scrolls in points, which are image pixels over the scale factor.
+fn step_points(pixels: u32, scale: f64) -> i32 {
+    ((f64::from(pixels) / usable_scale(scale)).round() as i32).max(1)
+}
+/// Windows and X11 scroll in wheel notches of about 100 logical pixels.
+fn step_notches(pixels: u32, scale: f64) -> i32 {
+    ((f64::from(pixels) / usable_scale(scale) / 100.0).round() as i32).max(1)
+}
+/// The step in this platform's own scroll unit.
+fn step_amount(pixels: u32, scale: f64) -> i32 {
+    if cfg!(target_os = "macos") {
+        step_points(pixels, scale)
+    } else {
+        step_notches(pixels, scale)
     }
 }
 
@@ -399,6 +452,42 @@ fn place_pointer(monitor: &MonitorInfo, offset: (i32, i32)) -> Result<(), String
     }
 }
 
+/// Posts one automatic step. rdev's macOS wheel scrolls a single point per
+/// unit, so macOS posts a pixel-unit scroll of the whole step itself; rdev
+/// sends Windows and X11 one wheel notch per unit.
+fn post_wheel(event: &rdev::EventType) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_core_graphics::{
+            CGEvent, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGScrollEventUnit,
+        };
+        let rdev::EventType::Wheel { delta_x, delta_y } = *event else {
+            return Err("not a wheel event".into());
+        };
+        let (Ok(delta_x), Ok(delta_y)) = (i32::try_from(delta_x), i32::try_from(delta_y)) else {
+            return Err("scroll step out of range".into());
+        };
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .ok_or("could not create an event source")?;
+        // As rdev does: wheel 1 is vertical, wheel 2 horizontal.
+        let scroll = CGEvent::new_scroll_wheel_event2(
+            Some(&source),
+            CGScrollEventUnit::Pixel,
+            2,
+            delta_y,
+            delta_x,
+            0,
+        )
+        .ok_or("could not create a scroll event")?;
+        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&scroll));
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        rdev::simulate(event).map_err(|error| format!("{error:?}"))
+    }
+}
+
 pub fn start(
     app: &AppHandle,
     monitor: &MonitorInfo,
@@ -425,7 +514,7 @@ pub fn start(
     let spawned = std::thread::Builder::new()
         .name("grab-it-scroll".into())
         .spawn(move || {
-            let result = (|| -> Result<(), String> {
+            let (result, restore_fade) = without_card_fade(|on| set_card_fade(&handle, on), |card_fade| -> Result<(), String> {
                 std::thread::sleep(Duration::from_millis(250));
                 hide_card(&handle)?;
                 let allowed = crate::permissions::ensure_accessibility(&handle);
@@ -460,6 +549,8 @@ pub fn start(
                     manual_reason: a.reason.map(str::to_owned),
                 };
                 let mut generation = quick::show(&handle, item(&stitch, &auto));
+                // quick::show can create the card, which then has its fade.
+                card_fade(false);
                 let overlaps = place_card(&handle, &monitor, rect, image_size);
                 if !overlaps {
                     // Start the video cache only after the old card has moved
@@ -467,6 +558,15 @@ pub fn start(
                     drop(source);
                     source = frames::open(&monitor, rect, 10, false)?;
                 }
+                // place_card has confirmed the card's move, so a frame read
+                // now cannot show it. The Stitcher starts again from the
+                // reader every later frame comes from.
+                let use_buffered;
+                (stitch, previous, use_buffered) = if overlaps {
+                    (stitch, previous, false)
+                } else {
+                    restart_stitch(source.as_mut(), synchronous.as_mut())?
+                };
                 let mut wheel_pending = false;
                 while control.end.load(Ordering::SeqCst) == 0 {
                     std::thread::sleep(Duration::from_millis(250));
@@ -480,13 +580,19 @@ pub fn start(
                     if stitch.capped {
                         continue;
                     }
-                    let frame = grab_clean(
-                        source.as_mut(),
-                        synchronous.as_mut(),
-                        overlaps,
-                        || hide_card(&handle),
-                        || restore_card(&handle),
-                    )?;
+                    let frame = if use_buffered {
+                        source.grab()?
+                    } else if overlaps {
+                        grab_clean(
+                            source.as_mut(),
+                            synchronous.as_mut(),
+                            true,
+                            || hide_card(&handle),
+                            || restore_card(&handle),
+                        )?
+                    } else {
+                        synchronous.grab()?
+                    };
                     let old_reason = auto.reason;
                     auto.observe_pointer(frame.pointer);
                     let unchanged = frame.image == previous;
@@ -505,7 +611,11 @@ pub fn start(
                         }
                     }
                     if auto.reason.is_none() && !stitch.capped && control.end.load(Ordering::SeqCst) == 0 {
-                        if rdev::simulate(&auto.wheel(stitch.axis, stitch.reverse)).is_ok() {
+                        let step = step_amount(
+                            step_pixels(rect.width, rect.height, stitch.axis),
+                            monitor.scale_factor,
+                        );
+                        if post_wheel(&auto.wheel(stitch.axis, stitch.reverse, step)).is_ok() {
                             wheel_pending = true;
                         } else {
                             auto.reason = Some("Automatic scrolling is unavailable. Scroll by hand, then choose Done.");
@@ -531,7 +641,8 @@ pub fn start(
                     );
                 }
                 Ok(())
-            })();
+            });
+            restore_fade();
             *state_lock(&handle.state::<ScrollState>()) = None;
             if let Err(e) = result {
                 actions::report_failure(&handle, &e);
@@ -542,6 +653,59 @@ pub fn start(
         return Err(e.to_string().into());
     }
     Ok(())
+}
+
+/// Runs a scroll session with the Quick Access card's fade off, so a hidden
+/// card is gone from the next frame. `body` gets the setter to turn it off
+/// again on a card it creates. The returned closure turns the fade back on;
+/// the caller runs it beside the ScrollState reset, so it follows Done,
+/// Cancel and an early error alike.
+fn without_card_fade<T, F: FnMut(bool)>(
+    mut set_fade: F,
+    body: impl FnOnce(&mut dyn FnMut(bool)) -> T,
+) -> (T, impl FnOnce()) {
+    set_fade(false);
+    let result = body(&mut set_fade);
+    (result, move || set_fade(true))
+}
+/// Windows only: the card's DWM fade. Elsewhere the card leaves at once.
+fn set_card_fade(app: &AppHandle, enabled: bool) {
+    #[cfg(target_os = "windows")]
+    if let Some(window) = app.get_webview_window(quick::LABEL)
+        && let Ok(hwnd) = window.hwnd()
+    {
+        crate::freeze::set_transitions(hwnd.0, enabled);
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = (app, enabled);
+}
+
+/// How long the buffered reader may take to send its own first frame.
+const SETTLE_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Starts the Stitcher from the reader every later frame will come from, and
+/// says whether that is the buffered one. The buffered reader (AVCapture,
+/// DXGI) and the synchronous one (xcap) do not give identical pixels for the
+/// same screen, and the Stitcher never replaces a reference it cannot match,
+/// so mixing them would turn away every frame of the session. When the
+/// buffered reader has no frame of its own yet (Windows duplication on a
+/// still screen), or draws the parked pointer into its frames (macOS
+/// AVCapture), the whole session reads synchronously instead.
+fn restart_stitch(
+    buffered: &mut dyn frames::FrameSource,
+    synchronous: &mut dyn frames::FrameSource,
+) -> Result<(Stitcher, RgbaImage, bool), String> {
+    let use_buffered = buffered.hides_pointer() && buffered.settle(SETTLE_TIMEOUT);
+    let frame = if use_buffered {
+        buffered.grab()?
+    } else {
+        synchronous.grab()?
+    };
+    Ok((
+        Stitcher::new(frame.image.clone()),
+        frame.image,
+        use_buffered,
+    ))
 }
 
 /// Hiding a window does not invalidate AVCapture/DXGI's latest-frame cache.
@@ -602,6 +766,27 @@ fn hide_and_wait(
     std::thread::sleep(Duration::from_millis(50));
     Ok(())
 }
+/// Off-main-thread set_position() only enqueues the move. The position getter
+/// round-trips through the UI event loop, as is_visible() does for
+/// hide_and_wait, so a reply at `target` acknowledges that the move has run.
+/// Nothing may read the area as clear of the card before that.
+fn move_and_wait<P: PartialEq>(
+    move_to: impl FnOnce() -> Result<(), String>,
+    mut position: impl FnMut() -> Result<P, String>,
+    target: P,
+) -> Result<(), String> {
+    move_to()?;
+    let deadline = std::time::Instant::now() + Duration::from_millis(500);
+    while position()? != target {
+        if std::time::Instant::now() >= deadline {
+            return Err("Quick Access did not move clear of the area".into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Let the compositor repaint the area the card left.
+    std::thread::sleep(Duration::from_millis(50));
+    Ok(())
+}
 fn restore_card(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(quick::LABEL) {
         window.show().map_err(|e| e.to_string())?;
@@ -650,10 +835,17 @@ fn place_card(app: &AppHandle, info: &MonitorInfo, rect: Rect, image_size: (u32,
             || p.x as f64 >= region.0 + region.2
             || p.y as f64 >= region.1 + region.3;
         if clear {
-            if let Some(w) = app.get_webview_window("quick") {
-                let _ = w.set_position(p);
-            }
-            return false;
+            let Some(w) = app.get_webview_window(quick::LABEL) else {
+                return false;
+            };
+            // Unconfirmed, the card may still be over the area: hide it
+            // for each grab, as when no corner is clear.
+            return move_and_wait(
+                || w.set_position(p).map_err(|e| e.to_string()),
+                || w.outer_position().map_err(|e| e.to_string()),
+                p,
+            )
+            .is_err();
         }
     }
     true
@@ -901,6 +1093,261 @@ mod tests {
         assert_eq!(buffered.calls + synchronous.calls, 0);
     }
 
+    /// Runs a session shaped like the scroll thread's: hide the card, maybe
+    /// fail before it shows, show it, then end with Done or Cancel.
+    fn fade_sequence(outcome: Result<u8, &str>) -> (Vec<&'static str>, Result<u8, String>) {
+        use std::cell::RefCell;
+        let log = RefCell::new(Vec::new());
+        let (result, restore_fade) = without_card_fade(
+            |on| {
+                log.borrow_mut()
+                    .push(if on { "fade on" } else { "fade off" })
+            },
+            |card_fade| -> Result<u8, String> {
+                hide_and_wait(
+                    || {
+                        log.borrow_mut().push("hide");
+                        Ok(())
+                    },
+                    || Ok(false),
+                )?;
+                let action = outcome.map_err(str::to_owned)?;
+                log.borrow_mut().push("show");
+                card_fade(false);
+                log.borrow_mut().push("dismiss");
+                Ok(action)
+            },
+        );
+        restore_fade();
+        log.borrow_mut().push("reset");
+        (log.into_inner(), result)
+    }
+    #[test]
+    fn card_fade_is_off_for_a_session_ending_in_done_or_cancel() {
+        for action in [1, 2] {
+            let (log, result) = fade_sequence(Ok(action));
+            assert_eq!(result, Ok(action));
+            assert_eq!(
+                log,
+                [
+                    "fade off", "hide", "show", "fade off", "dismiss", "fade on", "reset"
+                ]
+            );
+        }
+    }
+    #[test]
+    fn card_fade_comes_back_after_an_early_error() {
+        let (log, result) = fade_sequence(Err("capture unavailable"));
+        assert_eq!(result.err().as_deref(), Some("capture unavailable"));
+        assert_eq!(log, ["fade off", "hide", "fade on", "reset"]);
+    }
+
+    /// A reader that sees the page `offset` lines down, with every colour
+    /// `tint` levels off, as two capture paths differ for the same screen.
+    /// Until `settled`, it reads through a fallback 3 levels off, as Windows
+    /// duplication does through GDI before its first frame.
+    struct PageSource {
+        offset: u32,
+        tint: u8,
+        settled: bool,
+        draws_pointer: bool,
+    }
+    impl frames::FrameSource for PageSource {
+        fn settle(&mut self, _timeout: Duration) -> bool {
+            self.settled
+        }
+        fn hides_pointer(&self) -> bool {
+            !self.draws_pointer
+        }
+        fn grab(&mut self) -> Result<frames::Grabbed, String> {
+            let mut image = frame(Axis::Vertical, self.offset, false);
+            let tint = if self.settled { self.tint } else { 3 };
+            for pixel in image.pixels_mut() {
+                for channel in &mut pixel.0[..3] {
+                    *channel = channel.saturating_add(tint);
+                }
+            }
+            Ok(frames::Grabbed {
+                image,
+                pointer: None,
+            })
+        }
+    }
+    #[test]
+    fn a_reference_from_the_other_reader_rejects_every_frame() {
+        use frames::FrameSource;
+        let mut synchronous = PageSource {
+            offset: 0,
+            tint: 3,
+            settled: true,
+            draws_pointer: false,
+        };
+        let mut buffered = PageSource {
+            offset: 0,
+            tint: 0,
+            settled: true,
+            draws_pointer: false,
+        };
+        // The first frame comes from the synchronous reader, later frames
+        // from the buffered one: none of them line up with it.
+        let mut stitch = Stitcher::new(synchronous.grab().unwrap().image);
+        for offset in [10, 20, 30] {
+            buffered.offset = offset;
+            assert!(!stitch.push(buffered.grab().unwrap().image));
+        }
+        assert_eq!(stitch.image.height(), 80);
+    }
+    #[test]
+    fn restarting_from_the_buffered_reader_lets_the_capture_grow() {
+        use frames::FrameSource;
+        let mut buffered = PageSource {
+            offset: 0,
+            tint: 0,
+            settled: true,
+            draws_pointer: false,
+        };
+        let mut synchronous = PageSource {
+            offset: 0,
+            tint: 3,
+            settled: true,
+            draws_pointer: false,
+        };
+        let (mut stitch, previous, use_buffered) =
+            restart_stitch(&mut buffered, &mut synchronous).unwrap();
+        assert!(use_buffered);
+        assert_eq!(previous, frame(Axis::Vertical, 0, false));
+        for (offset, height) in [(10, 90), (20, 100), (30, 110)] {
+            buffered.offset = offset;
+            assert!(stitch.push(buffered.grab().unwrap().image));
+            assert_eq!(stitch.image.height(), height);
+        }
+    }
+    #[test]
+    fn an_unsettled_buffered_reader_leaves_the_session_synchronous() {
+        use frames::FrameSource;
+        // Windows duplication with no frame yet would hand back its GDI
+        // fallback now and DXGI frames later: never mix the two.
+        let mut buffered = PageSource {
+            offset: 0,
+            tint: 0,
+            settled: false,
+            draws_pointer: false,
+        };
+        let mut synchronous = PageSource {
+            offset: 0,
+            tint: 3,
+            settled: true,
+            draws_pointer: false,
+        };
+        let (mut stitch, _, use_buffered) =
+            restart_stitch(&mut buffered, &mut synchronous).unwrap();
+        assert!(!use_buffered);
+        for (offset, height) in [(10, 90), (20, 100)] {
+            synchronous.offset = offset;
+            assert!(stitch.push(synchronous.grab().unwrap().image));
+            assert_eq!(stitch.image.height(), height);
+        }
+    }
+    #[test]
+    fn a_reader_that_draws_the_pointer_leaves_the_session_synchronous() {
+        use frames::FrameSource;
+        // macOS AVCapture draws the parked pointer despite capturesCursor
+        // off; joining its frames would bake the pointer into the capture.
+        let mut buffered = PageSource {
+            offset: 0,
+            tint: 0,
+            settled: true,
+            draws_pointer: true,
+        };
+        let mut synchronous = PageSource {
+            offset: 0,
+            tint: 3,
+            settled: true,
+            draws_pointer: false,
+        };
+        let (_, previous, use_buffered) = restart_stitch(&mut buffered, &mut synchronous).unwrap();
+        assert!(!use_buffered);
+        assert_eq!(previous, synchronous.grab().unwrap().image);
+    }
+    /// A reader that shows the card in the area while it sits at `(0, 0)`.
+    struct CardSource<'a> {
+        card: &'a std::cell::Cell<(i32, i32)>,
+    }
+    impl frames::FrameSource for CardSource<'_> {
+        fn grab(&mut self) -> Result<frames::Grabbed, String> {
+            let covered = self.card.get() == (0, 0);
+            Ok(frames::Grabbed {
+                image: RgbaImage::from_pixel(
+                    2,
+                    2,
+                    image::Rgba([if covered { 255 } else { 0 }, 0, 0, 255]),
+                ),
+                pointer: None,
+            })
+        }
+    }
+    #[test]
+    fn the_reference_is_read_only_after_the_queued_move_has_run() {
+        use std::cell::{Cell, RefCell};
+        use std::collections::VecDeque;
+        let card = Cell::new((0, 0));
+        // Model Tauri's UI queue: set_position returns with the card still
+        // in place. A position query drives queued work.
+        let queue = RefCell::new(VecDeque::new());
+        let queries = Cell::new(0);
+        move_and_wait(
+            || {
+                queue.borrow_mut().push_back((400, 0));
+                assert_eq!(card.get(), (0, 0), "enqueueing must not move at once");
+                Ok(())
+            },
+            || {
+                queries.set(queries.get() + 1);
+                if queries.get() > 1
+                    && let Some(at) = queue.borrow_mut().pop_front()
+                {
+                    card.set(at);
+                }
+                Ok(card.get())
+            },
+            (400, 0),
+        )
+        .unwrap();
+        assert_eq!(queries.get(), 2);
+        let (_, previous, _) = restart_stitch(
+            &mut CardSource { card: &card },
+            &mut CardSource { card: &card },
+        )
+        .unwrap();
+        assert_eq!(previous.get_pixel(0, 0)[0], 0);
+    }
+    #[test]
+    fn an_unconfirmed_move_is_reported() {
+        let result = move_and_wait(|| Ok(()), || Ok((0, 0)), (400, 0));
+        assert_eq!(
+            result.err().as_deref(),
+            Some("Quick Access did not move clear of the area")
+        );
+    }
+    #[test]
+    fn content_that_moved_but_never_lined_up_is_not_called_unscrolled() {
+        let mut auto = AutoScroll::new((0, 0), true);
+        // The page moves for a while, then stops at its end.
+        for _ in 0..3 {
+            assert!(!auto.at_end(false, false));
+        }
+        for _ in 0..4 {
+            assert!(!auto.at_end(true, false));
+        }
+        assert!(!auto.at_end(true, false));
+        assert_eq!(
+            auto.reason,
+            Some(
+                "The page scrolled, but Grab-it could not join the views. Scroll by hand, then choose Done."
+            )
+        );
+    }
+
     #[test]
     fn pointer_threshold_is_radial_and_pause_is_permanent() {
         let mut auto = AutoScroll::new((100, 100), true);
@@ -958,7 +1405,15 @@ mod tests {
     fn wheel_follows_first_accepted_axis_and_direction() {
         let auto = AutoScroll::new((0, 0), true);
         assert!(matches!(
-            auto.wheel(None, None),
+            auto.wheel(None, None, 7),
+            rdev::EventType::Wheel {
+                delta_x: 0,
+                delta_y: -7
+            }
+        ));
+        // A step is never smaller than one unit.
+        assert!(matches!(
+            auto.wheel(None, None, 0),
             rdev::EventType::Wheel {
                 delta_x: 0,
                 delta_y: -1
@@ -968,8 +1423,8 @@ mod tests {
             for reverse in [false, true] {
                 let mut stitch = Stitcher::new(frame(axis, if reverse { 20 } else { 0 }, false));
                 assert!(stitch.push(frame(axis, if reverse { 0 } else { 20 }, false)));
-                let delta = if reverse { 1 } else { -1 };
-                match auto.wheel(stitch.axis, stitch.reverse) {
+                let delta = if reverse { 5 } else { -5 };
+                match auto.wheel(stitch.axis, stitch.reverse, 5) {
                     rdev::EventType::Wheel { delta_x, delta_y } => {
                         assert_eq!(
                             (delta_x, delta_y),
@@ -1000,7 +1455,7 @@ mod tests {
             let next = if reverse { 0 } else { 40 };
             assert!(stitch.push(frame(Axis::Horizontal, next, false)));
             let rdev::EventType::Wheel { delta_x, delta_y } =
-                auto.wheel(stitch.axis, stitch.reverse)
+                auto.wheel(stitch.axis, stitch.reverse, 3)
             else {
                 panic!("expected horizontal wheel event");
             };
@@ -1013,8 +1468,57 @@ mod tests {
             };
             assert_eq!(moves_right, !reverse);
             assert_eq!(delta_y, 0);
-            assert_eq!(delta_x.abs(), 1);
+            assert_eq!(delta_x.abs(), 3);
         }
+    }
+    #[test]
+    fn step_is_a_third_of_the_area_along_the_axis() {
+        // Vertical until an axis is accepted.
+        assert_eq!(step_pixels(1200, 900, None), 300);
+        assert_eq!(step_pixels(1200, 900, Some(Axis::Vertical)), 300);
+        assert_eq!(step_pixels(1200, 900, Some(Axis::Horizontal)), 400);
+        // Small areas still move.
+        assert_eq!(step_pixels(2, 2, None), 1);
+        assert_eq!(step_pixels(0, 0, Some(Axis::Horizontal)), 1);
+    }
+    #[test]
+    fn macos_step_is_in_points() {
+        assert_eq!(step_points(600, 2.0), 300);
+        assert_eq!(step_points(300, 1.0), 300);
+        assert_eq!(step_points(400, 1.5), 267);
+        assert_eq!(step_points(1, 2.0), 1);
+        // A scale that cannot divide counts as 1.
+        assert_eq!(step_points(300, 0.0), 300);
+        assert_eq!(step_points(300, f64::NAN), 300);
+    }
+    #[test]
+    fn windows_and_x11_step_is_in_whole_notches() {
+        // 900 image px at 1x is 900 logical px: nine notches.
+        assert_eq!(step_notches(900, 1.0), 9);
+        // At 2x the same area is 450 logical px.
+        assert_eq!(step_notches(900, 2.0), 5);
+        assert_eq!(step_notches(600, 1.5), 4);
+        assert_eq!(step_notches(340, 1.0), 3);
+        // Never fewer than one notch, however small the area.
+        assert_eq!(step_notches(40, 1.0), 1);
+        assert_eq!(step_notches(1, 2.0), 1);
+        assert_eq!(step_notches(300, 0.0), 3);
+    }
+    #[test]
+    fn step_uses_the_platform_unit_for_both_axes() {
+        for axis in [Axis::Vertical, Axis::Horizontal] {
+            let pixels = step_pixels(1800, 1200, Some(axis));
+            let expected = if cfg!(target_os = "macos") {
+                step_points(pixels, 2.0)
+            } else {
+                step_notches(pixels, 2.0)
+            };
+            assert_eq!(step_amount(pixels, 2.0), expected);
+        }
+        assert_eq!(
+            step_amount(step_pixels(1800, 1200, Some(Axis::Horizontal)), 2.0),
+            if cfg!(target_os = "macos") { 300 } else { 3 }
+        );
     }
     fn frame(axis: Axis, offset: u32, sticky: bool) -> RgbaImage {
         let (w, h) = if axis == Axis::Vertical {
