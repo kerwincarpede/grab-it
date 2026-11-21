@@ -140,7 +140,7 @@ driven. Instead:
 1. **A bench harness inside the real overlay** (`src/overlay/bench.ts` and
    the `overlay_bench_*` commands in `overlay.rs`), built into every build.
    When `GRAB_IT_OVERLAY_BENCH` is set (even to `""`), the backend opens
-   overlays at `#/overlay?bench`, and the page, once its image is decoded,
+   overlays at `#/overlay?bench`, and the page, once its image is painted,
    replays:
    - a 2.5 s hover sweep: a zig-zag over the whole screen, crossing windows;
    - a 3 s drag: mousedown at (150, 150), then the corner swept around the

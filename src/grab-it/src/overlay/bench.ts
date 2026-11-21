@@ -48,6 +48,20 @@ export function benchSpan(name: string, ms: number) {
   if (benchEnabled()) spans[name] = ms;
 }
 
+/**
+ * What `benchMark` and `benchSpan` noted, marks in ms after `start` and
+ * spans as they were, and forgets them for the next overlay.
+ */
+export function takeOpenMarks(): Record<string, number> {
+  const base = marks.start ?? 0;
+  const open: Record<string, number> = {};
+  for (const [name, at] of Object.entries(marks)) open[name] = r1(at - base);
+  for (const [name, ms] of Object.entries(spans)) open[name] = r1(ms);
+  marks = {};
+  spans = {};
+  return open;
+}
+
 /** Styles that switch one suspect off, by switch name. */
 const CSS: Record<string, string> = {
   noblend: ".overlay-guide{mix-blend-mode:normal!important}",
@@ -121,7 +135,10 @@ export interface PhaseStats {
   /** Mean JS per pointer move (handler + React render + commit + effects). */
   scriptPerMove: number;
   scriptP95: number;
-  /** Mean rendering work per frame: rAF callback to the next task (style, layout, paint). */
+  /**
+   * Mean rendering work per frame: rAF callback to the next task. Style and
+   * layout; paint happens in WebKit's GPU process.
+   */
   renderPerFrame: number;
   renderP95: number;
   /** When the longest frame started, in ms into the phase. */
@@ -228,6 +245,29 @@ async function runPhase(
   const elapsed = performance.now() - start;
   channel.port1.close();
 
+  return phaseStats({ phase, elapsed, moves, frameTimes, scripts, renders, anims, behind });
+}
+
+/** What a phase recorded, before it is summed up. */
+export interface PhaseSamples {
+  phase: string;
+  /** How long the phase ran, in ms. */
+  elapsed: number;
+  moves: number;
+  /** Each frame's `requestAnimationFrame` timestamp. */
+  frameTimes: number[];
+  /** Each move's script time, in ms. */
+  scripts: number[];
+  /** Each frame's rendering time, in ms; the first is left out as a warm-up. */
+  renders: number[];
+  anims: number;
+  /** Per probed piece: frames that painted it late, and frames probed. */
+  behind: Record<string, [number, number]>;
+}
+
+/** Sums up what a phase recorded as the figures `overlay_bench_log` prints. */
+export function phaseStats(samples: PhaseSamples): PhaseStats {
+  const { phase, elapsed, moves, frameTimes, scripts, renders, anims, behind } = samples;
   const intervals = frameTimes.slice(1).map((t, i) => t - frameTimes[i]);
   let maxAt = 0;
   intervals.forEach((interval, i) => {
@@ -268,10 +308,7 @@ async function runPhase(
 export async function runBench(target: Element) {
   const w = window.innerWidth;
   const h = window.innerHeight;
-  const base = marks.start ?? 0;
-  const open: Record<string, number> = {};
-  for (const [name, at] of Object.entries(marks)) open[name] = r1(at - base);
-  for (const [name, ms] of Object.entries(spans)) open[name] = r1(ms);
+  const open = takeOpenMarks();
   await benchLog({ open, viewport: [w, h, window.devicePixelRatio], off: [...(switches ?? [])] });
   await new Promise((resolve) => setTimeout(resolve, 400));
   // Hover: a zig-zag sweep over the whole screen, crossing many windows.
@@ -314,7 +351,5 @@ export async function runBench(target: Element) {
     1,
   );
   await benchLog(drag);
-  marks = {};
-  spans = {};
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 }
