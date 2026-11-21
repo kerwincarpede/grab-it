@@ -2,8 +2,9 @@ name: Benchmarks
 
 # Times the Rust benches (src/grab-it/src-tauri/benches/) and the frontend
 # benches (src/grab-it/src/**/*.bench.ts) on a PR's base and head in one job,
-# on one runner, and reports the difference in the job summary. A slower bench is a warning, never a failure. Runs on the same PRs
-# as ci.yml: docs-only PRs skip it.
+# on one runner, and reports the difference in the job summary. A slower
+# bench is a warning, never a failure. Runs on the same PRs as ci.yml:
+# docs-only PRs skip it.
 on:
   pull_request:
     paths-ignore:
