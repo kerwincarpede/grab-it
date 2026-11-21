@@ -157,7 +157,9 @@ export const config: WebdriverIO.Config = {
       },
     },
   ],
-  logLevel: "warn",
+  // WebdriverIO writes each worker's commands and replies to a log file in
+  // outputDir, for working out a failure after the run.
+  logLevel: "info",
   outputDir: path.join(runDir, "logs"),
   bail: 0,
   waitforTimeout: 20_000,

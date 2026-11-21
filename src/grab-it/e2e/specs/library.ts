@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { clickText, sidecar, startMenuCapture, switchToMainWindow, waitForCapture, waitForJson } from "../support/app";
+import { clickElement, clickText, sidecar, startMenuCapture, switchToMainWindow, waitForCapture, waitForJson } from "../support/app";
 import { currentSandbox } from "../support/sandbox";
 
 describe("Library", () => {
@@ -29,7 +29,7 @@ describe("Library", () => {
     const files = [capture, sidecar(capture, "meta.json"), annotations];
 
     await switchToMainWindow();
-    await $(tile).click();
+    await clickElement(tile);
     await expect($("aside.details")).toBeDisplayed();
     await clickText("aside.details .details-delete button", "Delete…");
     await clickText("aside.details .details-delete button", "Delete permanently");

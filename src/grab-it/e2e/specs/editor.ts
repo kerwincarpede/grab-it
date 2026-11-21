@@ -4,6 +4,7 @@ import { $, browser, expect } from "@wdio/globals";
 import {
   answerSaveDialog,
   boxOf,
+  clickElement,
   clickText,
   drag,
   pngSize,
@@ -37,18 +38,16 @@ describe("Editor", () => {
 
   it("opens the capture from Quick Access", async () => {
     await switchToPage("quick", `button[aria-label="Annotate ${path.basename(capture)}"]`);
-    const annotate = $('button[title="Open in the editor"]');
-    await annotate.waitForClickable();
-    await annotate.click();
+    await clickElement('button[title="Open in the editor"]');
     await switchToPage("editor", EDITOR_READY);
     await expect($(".editor-canvas canvas")).toExist();
   });
 
   it("saves a drawn rectangle to the annotations sidecar", async () => {
     await switchToPage("editor", EDITOR_READY);
-    const rectangle = $('.editor-rail button[aria-label="Rectangle"]');
-    await rectangle.click();
-    await expect(rectangle).toHaveAttribute("aria-pressed", "true");
+    const rectangle = '.editor-rail button[aria-label="Rectangle"]';
+    await clickElement(rectangle);
+    await expect($(rectangle)).toHaveAttribute("aria-pressed", "true");
 
     // The capture is fitted in the middle of the canvas.
     const canvas = await boxOf(".editor-canvas");

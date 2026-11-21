@@ -214,6 +214,8 @@ jobs:
       # Produces dist/, which the Rust build embeds.
       - run: npm run build
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features e2e -- -D warnings
+      # The fixture loader's own tests only build with the feature.
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --features e2e screen::tests
       - run: xvfb-run npm run e2e
 
       - name: Upload smoke test logs
@@ -221,7 +223,10 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: smoke-tests-linux
-          path: ${{ github.workspace }}/e2e-run
+          # The control sockets cannot go in a zip.
+          path: |
+            ${{ github.workspace }}/e2e-run
+            !${{ github.workspace }}/e2e-run/**/control.sock
           if-no-files-found: ignore
 
   build:

@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { $, $$, browser } from "@wdio/globals";
+import { $, browser } from "@wdio/globals";
 import type { Sandbox } from "./sandbox";
 
 /** A point in the current window's viewport, in CSS pixels. */
@@ -62,30 +62,64 @@ export function switchToMainWindow(): Promise<string> {
   return switchToPage("app", ".app-window");
 }
 
-/** Clicks the first `selector` match whose visible text contains `text`. */
-export async function clickText(selector: string, text: string): Promise<void> {
-  let target: WebdriverIO.Element | undefined;
+/**
+ * Clicks `selector`: a WebDriver click, or a DOM click when WebDriver
+ * cannot click it (covered, or still animating in).
+ */
+export async function clickElement(selector: string): Promise<void> {
+  const element = $(selector);
+  await element.waitForExist();
+  try {
+    await element.waitForClickable({ timeout: 5_000 });
+    await element.click();
+  } catch {
+    const clicked = await browser.execute((wanted: string) => {
+      const target = document.querySelector<HTMLElement>(wanted);
+      target?.click();
+      return target !== null;
+    }, selector);
+    if (!clicked) throw new Error(`Nothing to click at ${selector}`);
+  }
+}
+
+let marks = 0;
+
+/**
+ * Marks the first `selector` match whose text contains `text`, waiting for
+ * one, and returns a selector for just that element. The text is read from
+ * the DOM (`textContent`) in the page, not through WebDriver's Get Element
+ * Text, which WebKitWebDriver did not answer for these lists.
+ */
+export async function markByText(selector: string, text: string, timeout = 20_000): Promise<string> {
+  const mark = `e2e-${process.pid}-${++marks}`;
   await browser.waitUntil(
-    async () => {
-      for (const element of await $$(selector)) {
-        if ((await element.getText()).includes(text)) {
-          target = element;
-          return true;
-        }
-      }
-      return false;
-    },
-    { timeoutMsg: `Nothing matching ${selector} says "${text}"` },
+    () =>
+      browser.execute(
+        (wanted: string, words: string, id: string) => {
+          const match = Array.from(document.querySelectorAll(wanted)).find((element) =>
+            (element.textContent ?? "").replace(/\s+/g, " ").includes(words),
+          );
+          match?.setAttribute("data-e2e-mark", id);
+          return match !== undefined;
+        },
+        selector,
+        text,
+        mark,
+      ),
+    { timeout, interval: 250, timeoutMsg: `Nothing matching ${selector} says "${text}"` },
   );
-  await target?.click();
+  return `[data-e2e-mark="${mark}"]`;
+}
+
+/** Clicks the first `selector` match whose text contains `text`. */
+export async function clickText(selector: string, text: string): Promise<void> {
+  await clickElement(await markByText(selector, text));
 }
 
 /** Starts a region capture with the Grab-it window's New capture button. */
 export async function startRegionCapture(): Promise<void> {
   await switchToMainWindow();
-  const button = $("button.capture-main");
-  await button.waitForClickable();
-  await button.click();
+  await clickElement("button.capture-main");
 }
 
 /**
@@ -94,9 +128,15 @@ export async function startRegionCapture(): Promise<void> {
  */
 export async function startMenuCapture(title: "Capture screen" | "Capture & record…" | "Capture window"): Promise<void> {
   await switchToMainWindow();
-  const more = $("button.capture-more");
-  await more.waitForClickable();
-  await more.click();
+  // The menu closes on a click outside it or on losing focus; open it
+  // again if it closed before the item could be clicked.
+  await browser.waitUntil(
+    async () => {
+      if (!(await $(".capture-menu").isExisting())) await clickElement("button.capture-more");
+      return $(".capture-menu").isExisting();
+    },
+    { timeout: 20_000, interval: 500, timeoutMsg: "The New capture menu never opened" },
+  );
   await clickText('.capture-menu [role="menuitem"]', title);
 }
 
@@ -114,7 +154,12 @@ export async function drag(from: Point, to: Point): Promise<void> {
     .move({ x: Math.round(to.x), y: Math.round(to.y), duration: 150 })
     .pause(50)
     .up({ button: 0 })
-    .perform();
+    // Not released afterwards: a drag on the overlay captures and closes
+    // it, and releasing in a closed window fails with "no such window".
+    .perform(true)
+    .catch((err: unknown) => {
+      if (!/no such window/i.test(String(err))) throw err;
+    });
 }
 
 /** Drags a region over the live capture overlay, which captures it at once. */
