@@ -2217,3 +2217,42 @@ fn save_backdrop_preset_image_refuses_a_missing_file() {
     // Refused when the source is read, before anything is written.
     assert_starts_with(&message, &format!("could not open {}: ", missing.display()));
 }
+
+/// Tauri's reply to a command no handler has.
+fn not_found(cmd: &str) -> String {
+    format!("Command {cmd} not found")
+}
+
+#[test]
+fn an_unknown_command_is_not_found() {
+    let h = Harness::new();
+    assert_eq!(
+        h.err("no_such_command", json!({})),
+        not_found("no_such_command")
+    );
+}
+
+#[test]
+fn byte_commands_reach_their_handler() {
+    let h = Harness::new();
+    // Called without the window, capture or arguments they need, each byte
+    // command fails with its own message. Sent to the typed handler instead,
+    // it would come back as not found.
+    for cmd in crate::BYTE_COMMANDS {
+        let message = h.err(cmd, json!({}));
+        assert_ne!(
+            message,
+            not_found(cmd),
+            "{cmd} was not routed to its handler"
+        );
+    }
+}
+
+#[test]
+fn library_image_reports_a_missing_capture() {
+    let h = Harness::new();
+    assert_eq!(
+        h.err("library_image", json!({ "id": 999_999 })),
+        "no capture with id 999999 in the library"
+    );
+}
