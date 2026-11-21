@@ -154,12 +154,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # A key of its own, so the debug test build and the release installer
-      # build on the same runner don't share a cache.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/grab-it/src-tauri
-          key: rust-tests
 
       - name: Install dependencies
         working-directory: .
