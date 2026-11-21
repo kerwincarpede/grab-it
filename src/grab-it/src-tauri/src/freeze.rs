@@ -323,10 +323,17 @@ pub fn capture_monitors(
 /// window that appears or goes. The capture overlay covers the screen, so
 /// its fade was the whole desktop dimming and brightening.
 pub fn without_transitions(window: *mut c_void) {
+    set_transitions(window, false);
+}
+
+/// Turns the fade Windows gives `window` as it appears or goes on or off.
+/// Scroll capture turns the Quick Access card's off while it runs, so a
+/// hidden card is gone from the very next frame instead of fading out in it.
+pub fn set_transitions(window: *mut c_void, enabled: bool) {
     // `BOOL` is a 32-bit integer.
-    let disabled: i32 = 1;
+    let disabled: i32 = i32::from(!enabled);
     // SAFETY: `window` is a live window, and the value is read before the
-    // call returns. A failure only keeps the fade.
+    // call returns. A failure only keeps the window as it was.
     unsafe {
         let _ = DwmSetWindowAttribute(
             HWND(window),

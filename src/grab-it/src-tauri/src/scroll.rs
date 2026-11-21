@@ -130,8 +130,15 @@ impl AutoScroll {
         }
         true
     }
-    fn wheel(&self, axis: Option<Axis>, reverse: Option<bool>) -> rdev::EventType {
-        let delta = if reverse == Some(true) { 1 } else { -1 };
+    /// The wheel event for one step of `amount` in the platform's unit
+    /// (points on macOS, notches elsewhere), toward content not yet seen.
+    fn wheel(&self, axis: Option<Axis>, reverse: Option<bool>, amount: i32) -> rdev::EventType {
+        let amount = i64::from(amount.max(1));
+        let delta = if reverse == Some(true) {
+            amount
+        } else {
+            -amount
+        };
         if axis == Some(Axis::Horizontal) {
             rdev::EventType::Wheel {
                 // X11 button 7 and Windows HWHEEL use positive for right;
@@ -149,6 +156,42 @@ impl AutoScroll {
                 delta_y: delta,
             }
         }
+    }
+}
+
+/// One automatic step moves a third of the area along the scroll axis, in
+/// the area's image pixels. The axis counts as vertical until one is accepted.
+/// A third leaves the Stitcher a wide overlap to match.
+fn step_pixels(width: u32, height: u32, axis: Option<Axis>) -> u32 {
+    let along = if axis == Some(Axis::Horizontal) {
+        width
+    } else {
+        height
+    };
+    (along / 3).max(1)
+}
+/// The scale factor, or 1 when a monitor reports none that can divide.
+fn usable_scale(scale: f64) -> f64 {
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
+/// macOS scrolls in points, which are image pixels over the scale factor.
+fn step_points(pixels: u32, scale: f64) -> i32 {
+    ((f64::from(pixels) / usable_scale(scale)).round() as i32).max(1)
+}
+/// Windows and X11 scroll in wheel notches of about 100 logical pixels.
+fn step_notches(pixels: u32, scale: f64) -> i32 {
+    ((f64::from(pixels) / usable_scale(scale) / 100.0).round() as i32).max(1)
+}
+/// The step in this platform's own scroll unit.
+fn step_amount(pixels: u32, scale: f64) -> i32 {
+    if cfg!(target_os = "macos") {
+        step_points(pixels, scale)
+    } else {
+        step_notches(pixels, scale)
     }
 }
 
@@ -399,6 +442,42 @@ fn place_pointer(monitor: &MonitorInfo, offset: (i32, i32)) -> Result<(), String
     }
 }
 
+/// Posts one automatic step. rdev's macOS wheel scrolls a single point per
+/// unit, so macOS posts a pixel-unit scroll of the whole step itself; rdev
+/// sends Windows and X11 one wheel notch per unit.
+fn post_wheel(event: &rdev::EventType) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_core_graphics::{
+            CGEvent, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGScrollEventUnit,
+        };
+        let rdev::EventType::Wheel { delta_x, delta_y } = *event else {
+            return Err("not a wheel event".into());
+        };
+        let (Ok(delta_x), Ok(delta_y)) = (i32::try_from(delta_x), i32::try_from(delta_y)) else {
+            return Err("scroll step out of range".into());
+        };
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .ok_or("could not create an event source")?;
+        // As rdev does: wheel 1 is vertical, wheel 2 horizontal.
+        let scroll = CGEvent::new_scroll_wheel_event2(
+            Some(&source),
+            CGScrollEventUnit::Pixel,
+            2,
+            delta_y,
+            delta_x,
+            0,
+        )
+        .ok_or("could not create a scroll event")?;
+        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&scroll));
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        rdev::simulate(event).map_err(|error| format!("{error:?}"))
+    }
+}
+
 pub fn start(
     app: &AppHandle,
     monitor: &MonitorInfo,
@@ -425,7 +504,7 @@ pub fn start(
     let spawned = std::thread::Builder::new()
         .name("grab-it-scroll".into())
         .spawn(move || {
-            let result = (|| -> Result<(), String> {
+            let (result, restore_fade) = without_card_fade(|on| set_card_fade(&handle, on), |card_fade| -> Result<(), String> {
                 std::thread::sleep(Duration::from_millis(250));
                 hide_card(&handle)?;
                 let allowed = crate::permissions::ensure_accessibility(&handle);
@@ -460,6 +539,8 @@ pub fn start(
                     manual_reason: a.reason.map(str::to_owned),
                 };
                 let mut generation = quick::show(&handle, item(&stitch, &auto));
+                // quick::show can create the card, which then has its fade.
+                card_fade(false);
                 let overlaps = place_card(&handle, &monitor, rect, image_size);
                 if !overlaps {
                     // Start the video cache only after the old card has moved
@@ -505,7 +586,11 @@ pub fn start(
                         }
                     }
                     if auto.reason.is_none() && !stitch.capped && control.end.load(Ordering::SeqCst) == 0 {
-                        if rdev::simulate(&auto.wheel(stitch.axis, stitch.reverse)).is_ok() {
+                        let step = step_amount(
+                            step_pixels(rect.width, rect.height, stitch.axis),
+                            monitor.scale_factor,
+                        );
+                        if post_wheel(&auto.wheel(stitch.axis, stitch.reverse, step)).is_ok() {
                             wheel_pending = true;
                         } else {
                             auto.reason = Some("Automatic scrolling is unavailable. Scroll by hand, then choose Done.");
@@ -531,7 +616,8 @@ pub fn start(
                     );
                 }
                 Ok(())
-            })();
+            });
+            restore_fade();
             *state_lock(&handle.state::<ScrollState>()) = None;
             if let Err(e) = result {
                 actions::report_failure(&handle, &e);
@@ -542,6 +628,31 @@ pub fn start(
         return Err(e.to_string().into());
     }
     Ok(())
+}
+
+/// Runs a scroll session with the Quick Access card's fade off, so a hidden
+/// card is gone from the next frame. `body` gets the setter to turn it off
+/// again on a card it creates. The returned closure turns the fade back on;
+/// the caller runs it beside the ScrollState reset, so it follows Done,
+/// Cancel and an early error alike.
+fn without_card_fade<T, F: FnMut(bool)>(
+    mut set_fade: F,
+    body: impl FnOnce(&mut dyn FnMut(bool)) -> T,
+) -> (T, impl FnOnce()) {
+    set_fade(false);
+    let result = body(&mut set_fade);
+    (result, move || set_fade(true))
+}
+/// Windows only: the card's DWM fade. Elsewhere the card leaves at once.
+fn set_card_fade(app: &AppHandle, enabled: bool) {
+    #[cfg(target_os = "windows")]
+    if let Some(window) = app.get_webview_window(quick::LABEL)
+        && let Ok(hwnd) = window.hwnd()
+    {
+        crate::freeze::set_transitions(hwnd.0, enabled);
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = (app, enabled);
 }
 
 /// Hiding a window does not invalidate AVCapture/DXGI's latest-frame cache.
@@ -901,6 +1012,55 @@ mod tests {
         assert_eq!(buffered.calls + synchronous.calls, 0);
     }
 
+    /// Runs a session shaped like the scroll thread's: hide the card, maybe
+    /// fail before it shows, show it, then end with Done or Cancel.
+    fn fade_sequence(outcome: Result<u8, &str>) -> (Vec<&'static str>, Result<u8, String>) {
+        use std::cell::RefCell;
+        let log = RefCell::new(Vec::new());
+        let (result, restore_fade) = without_card_fade(
+            |on| {
+                log.borrow_mut()
+                    .push(if on { "fade on" } else { "fade off" })
+            },
+            |card_fade| -> Result<u8, String> {
+                hide_and_wait(
+                    || {
+                        log.borrow_mut().push("hide");
+                        Ok(())
+                    },
+                    || Ok(false),
+                )?;
+                let action = outcome.map_err(str::to_owned)?;
+                log.borrow_mut().push("show");
+                card_fade(false);
+                log.borrow_mut().push("dismiss");
+                Ok(action)
+            },
+        );
+        restore_fade();
+        log.borrow_mut().push("reset");
+        (log.into_inner(), result)
+    }
+    #[test]
+    fn card_fade_is_off_for_a_session_ending_in_done_or_cancel() {
+        for action in [1, 2] {
+            let (log, result) = fade_sequence(Ok(action));
+            assert_eq!(result, Ok(action));
+            assert_eq!(
+                log,
+                [
+                    "fade off", "hide", "show", "fade off", "dismiss", "fade on", "reset"
+                ]
+            );
+        }
+    }
+    #[test]
+    fn card_fade_comes_back_after_an_early_error() {
+        let (log, result) = fade_sequence(Err("capture unavailable"));
+        assert_eq!(result.err().as_deref(), Some("capture unavailable"));
+        assert_eq!(log, ["fade off", "hide", "fade on", "reset"]);
+    }
+
     #[test]
     fn pointer_threshold_is_radial_and_pause_is_permanent() {
         let mut auto = AutoScroll::new((100, 100), true);
@@ -958,7 +1118,15 @@ mod tests {
     fn wheel_follows_first_accepted_axis_and_direction() {
         let auto = AutoScroll::new((0, 0), true);
         assert!(matches!(
-            auto.wheel(None, None),
+            auto.wheel(None, None, 7),
+            rdev::EventType::Wheel {
+                delta_x: 0,
+                delta_y: -7
+            }
+        ));
+        // A step is never smaller than one unit.
+        assert!(matches!(
+            auto.wheel(None, None, 0),
             rdev::EventType::Wheel {
                 delta_x: 0,
                 delta_y: -1
@@ -968,8 +1136,8 @@ mod tests {
             for reverse in [false, true] {
                 let mut stitch = Stitcher::new(frame(axis, if reverse { 20 } else { 0 }, false));
                 assert!(stitch.push(frame(axis, if reverse { 0 } else { 20 }, false)));
-                let delta = if reverse { 1 } else { -1 };
-                match auto.wheel(stitch.axis, stitch.reverse) {
+                let delta = if reverse { 5 } else { -5 };
+                match auto.wheel(stitch.axis, stitch.reverse, 5) {
                     rdev::EventType::Wheel { delta_x, delta_y } => {
                         assert_eq!(
                             (delta_x, delta_y),
@@ -1000,7 +1168,7 @@ mod tests {
             let next = if reverse { 0 } else { 40 };
             assert!(stitch.push(frame(Axis::Horizontal, next, false)));
             let rdev::EventType::Wheel { delta_x, delta_y } =
-                auto.wheel(stitch.axis, stitch.reverse)
+                auto.wheel(stitch.axis, stitch.reverse, 3)
             else {
                 panic!("expected horizontal wheel event");
             };
@@ -1013,8 +1181,57 @@ mod tests {
             };
             assert_eq!(moves_right, !reverse);
             assert_eq!(delta_y, 0);
-            assert_eq!(delta_x.abs(), 1);
+            assert_eq!(delta_x.abs(), 3);
         }
+    }
+    #[test]
+    fn step_is_a_third_of_the_area_along_the_axis() {
+        // Vertical until an axis is accepted.
+        assert_eq!(step_pixels(1200, 900, None), 300);
+        assert_eq!(step_pixels(1200, 900, Some(Axis::Vertical)), 300);
+        assert_eq!(step_pixels(1200, 900, Some(Axis::Horizontal)), 400);
+        // Small areas still move.
+        assert_eq!(step_pixels(2, 2, None), 1);
+        assert_eq!(step_pixels(0, 0, Some(Axis::Horizontal)), 1);
+    }
+    #[test]
+    fn macos_step_is_in_points() {
+        assert_eq!(step_points(600, 2.0), 300);
+        assert_eq!(step_points(300, 1.0), 300);
+        assert_eq!(step_points(400, 1.5), 267);
+        assert_eq!(step_points(1, 2.0), 1);
+        // A scale that cannot divide counts as 1.
+        assert_eq!(step_points(300, 0.0), 300);
+        assert_eq!(step_points(300, f64::NAN), 300);
+    }
+    #[test]
+    fn windows_and_x11_step_is_in_whole_notches() {
+        // 900 image px at 1x is 900 logical px: nine notches.
+        assert_eq!(step_notches(900, 1.0), 9);
+        // At 2x the same area is 450 logical px.
+        assert_eq!(step_notches(900, 2.0), 5);
+        assert_eq!(step_notches(600, 1.5), 4);
+        assert_eq!(step_notches(340, 1.0), 3);
+        // Never fewer than one notch, however small the area.
+        assert_eq!(step_notches(40, 1.0), 1);
+        assert_eq!(step_notches(1, 2.0), 1);
+        assert_eq!(step_notches(300, 0.0), 3);
+    }
+    #[test]
+    fn step_uses_the_platform_unit_for_both_axes() {
+        for axis in [Axis::Vertical, Axis::Horizontal] {
+            let pixels = step_pixels(1800, 1200, Some(axis));
+            let expected = if cfg!(target_os = "macos") {
+                step_points(pixels, 2.0)
+            } else {
+                step_notches(pixels, 2.0)
+            };
+            assert_eq!(step_amount(pixels, 2.0), expected);
+        }
+        assert_eq!(
+            step_amount(step_pixels(1800, 1200, Some(Axis::Horizontal)), 2.0),
+            if cfg!(target_os = "macos") { 300 } else { 3 }
+        );
     }
     fn frame(axis: Axis, offset: u32, sticky: bool) -> RgbaImage {
         let (w, h) = if axis == Axis::Vertical {
