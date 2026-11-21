@@ -12,6 +12,12 @@ edition = "2024"
 name = "grab_it_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Smoke-test builds only (npm run e2e): capture reads the PNG named by
+# GRAB_IT_E2E_CAPTURE instead of the screen (screen.rs). Shipped builds never
+# turn it on.
+e2e = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

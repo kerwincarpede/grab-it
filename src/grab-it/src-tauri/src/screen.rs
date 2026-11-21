@@ -64,15 +64,31 @@ pub fn monitors() -> Result<Vec<MonitorInfo>, String> {
         .collect()
 }
 
+/// A monitor's pixels, or the smoke tests' fixture in their place.
+fn monitor_image(monitor: &Monitor, context: &str) -> Result<RgbaImage, String> {
+    #[cfg(feature = "e2e")]
+    if let Some(image) = fixture::stand_in(|| Ok((monitor.width()?, monitor.height()?))) {
+        return image.map_err(|e| err(context, e));
+    }
+    monitor.capture_image().map_err(|e| err(context, e))
+}
+
+/// A window's pixels, or the smoke tests' fixture in their place.
+fn window_image(window: &Window, context: &str) -> Result<RgbaImage, String> {
+    #[cfg(feature = "e2e")]
+    if let Some(image) = fixture::stand_in(|| Ok((window.width()?, window.height()?))) {
+        return image.map_err(|e| err(context, e));
+    }
+    window.capture_image().map_err(|e| err(context, e))
+}
+
 /// Every monitor's info and image, captured as close together as possible.
 pub fn capture_monitors() -> Result<Vec<(MonitorInfo, RgbaImage)>, String> {
     all_monitors()?
         .iter()
         .enumerate()
         .map(|(index, monitor)| {
-            let image = monitor
-                .capture_image()
-                .map_err(|e| err("could not capture the screen", e))?;
+            let image = monitor_image(monitor, "could not capture the screen")?;
             Ok((monitor_info(index, monitor)?, image))
         })
         .collect()
@@ -100,9 +116,7 @@ pub fn capture_monitor(index: usize) -> Result<RgbaImage, String> {
     let monitor = monitors
         .get(index)
         .ok_or_else(|| format!("monitor {} is no longer connected", index + 1))?;
-    monitor
-        .capture_image()
-        .map_err(|e| err("could not capture the monitor", e))
+    monitor_image(monitor, "could not capture the monitor")
 }
 
 /// One window by id, including parts covered by other windows where the
@@ -113,9 +127,55 @@ pub fn capture_window(id: u32) -> Result<RgbaImage, String> {
         .into_iter()
         .find(|window| window.id().ok() == Some(id))
         .ok_or_else(|| "the window was closed".to_string())?;
-    window
-        .capture_image()
-        .map_err(|e| err("could not capture the window", e))
+    window_image(&window, "could not capture the window")
+}
+
+/// Smoke-test builds (the `e2e` feature): with `GRAB_IT_E2E_CAPTURE` set to
+/// a PNG, every monitor and window capture returns that image, resized to
+/// the size xcap reports, so the tests capture a known picture on any
+/// display, Xvfb's included.
+#[cfg(feature = "e2e")]
+mod fixture {
+    use std::path::Path;
+
+    use image::{RgbaImage, imageops::FilterType};
+
+    /// Names the PNG that stands in for the screen.
+    pub const CAPTURE_VAR: &str = "GRAB_IT_E2E_CAPTURE";
+
+    /// The fixture at the size `size` reports, or `None` when
+    /// `GRAB_IT_E2E_CAPTURE` is unset and the screen should be read.
+    pub fn stand_in(
+        size: impl FnOnce() -> xcap::XCapResult<(u32, u32)>,
+    ) -> Option<Result<RgbaImage, String>> {
+        let path = std::env::var_os(CAPTURE_VAR).filter(|path| !path.is_empty())?;
+        Some(
+            size()
+                .map_err(|e| e.to_string())
+                .and_then(|(width, height)| load(Path::new(&path), width, height)),
+        )
+    }
+
+    /// The PNG at `path`, resized to `width` × `height` when it differs.
+    pub fn load(path: &Path, width: u32, height: u32) -> Result<RgbaImage, String> {
+        if width == 0 || height == 0 {
+            return Err(format!(
+                "{CAPTURE_VAR}: nothing to capture at {width}×{height}"
+            ));
+        }
+        let image = image::open(path)
+            .map_err(|e| format!("{CAPTURE_VAR}: could not read {}: {e}", path.display()))?
+            .to_rgba8();
+        if image.dimensions() == (width, height) {
+            return Ok(image);
+        }
+        Ok(image::imageops::resize(
+            &image,
+            width,
+            height,
+            FilterType::Triangle,
+        ))
+    }
 }
 
 /// The monitor of `monitors` that holds the point `x`, `y`.
@@ -674,6 +734,24 @@ pub fn foreground_of(window: &WindowInfo) -> Foreground {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "e2e")]
+    #[test]
+    fn the_e2e_fixture_is_resized_to_the_reported_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fixture.png");
+        RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]))
+            .save(&path)
+            .unwrap();
+
+        let same = fixture::load(&path, 4, 2).unwrap();
+        assert_eq!(same.dimensions(), (4, 2));
+        let resized = fixture::load(&path, 8, 6).unwrap();
+        assert_eq!(resized.dimensions(), (8, 6));
+        assert_eq!(resized.get_pixel(7, 5), &image::Rgba([10, 20, 30, 255]));
+        assert!(fixture::load(&path, 0, 6).is_err());
+        assert!(fixture::load(&dir.path().join("missing.png"), 8, 6).is_err());
+    }
 
     fn window(id: u32, x: i32, y: i32, width: u32, height: u32) -> WindowInfo {
         WindowInfo {
