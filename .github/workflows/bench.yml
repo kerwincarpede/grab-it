@@ -1,0 +1,166 @@
+name: Benchmarks
+
+# Times the Rust benches (src/grab-it/src-tauri/benches/) on a PR's base and
+# head in one job, on one runner, and reports the difference in the job
+# summary. A slower bench is a warning, never a failure. Runs on the same PRs
+# as ci.yml: docs-only PRs skip it.
+on:
+  pull_request:
+    paths-ignore:
+      - src/grab-it-docs/**
+      - docs/**
+      - '**/*.md'
+  workflow_dispatch:
+
+# A newer push to a PR cancels the older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Silences git's default-branch hint during checkout.
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+  # The base and the head build into one target folder, so they share the
+  # compiled dependencies and criterion keeps both runs' results in
+  # target/criterion/.
+  CARGO_TARGET_DIR: ${{ github.workspace }}/src/grab-it/src-tauri/target
+  # The same packages as ci.yml installs.
+  LINUX_DEPS: >-
+    libwebkit2gtk-4.1-dev
+    libayatana-appindicator3-dev
+    librsvg2-dev
+    libxdo-dev
+    libssl-dev
+    patchelf
+    build-essential
+    curl
+    wget
+    file
+    libx11-dev
+    libxtst-dev
+    libxi-dev
+  XCAP_DEPS: >-
+    pkg-config
+    libclang-dev
+    libxcb1-dev
+    libxrandr-dev
+    libdbus-1-dev
+    libpipewire-0.3-dev
+    libwayland-dev
+    libegl-dev
+    libgbm-dev
+
+jobs:
+  bench:
+    name: Benchmarks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: src/grab-it
+    steps:
+      # The whole history, so the PR's base can be checked out beside it.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Linux build dependencies
+        working-directory: .
+        run: sudo python3 .github/scripts/install_linux_deps.py $LINUX_DEPS $XCAP_DEPS
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # Its own cache: the bench profile builds nothing ci.yml's checks do.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/grab-it/src-tauri
+          key: bench
+
+      - name: Install dependencies
+        working-directory: .
+        run: npm ci
+      # Produces dist/, which the Rust build embeds.
+      - run: npm run build
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --features bench --benches -- -D warnings
+
+      # A base from before the benches existed has nothing to time, and the
+      # report then shows the head alone.
+      - name: Check out the base
+        id: base
+        working-directory: .
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          rm -rf "$CARGO_TARGET_DIR/criterion"
+          if [ -z "$BASE_SHA" ]; then
+            echo "No PR base; only this commit is timed."
+            echo "benches=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"
+          tauri="$RUNNER_TEMP/base/src/grab-it/src-tauri"
+          if grep -q '^bench = ' "$tauri/Cargo.toml" && [ -d "$tauri/benches" ]; then
+            echo "benches=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "The base has no benches; only the head is timed."
+            echo "benches=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The base's results go to each bench's base/ folder. Its new/ folders
+      # are removed, so a bench the head drops shows no head numbers.
+      - name: Time the base
+        id: base-run
+        if: steps.base.outputs.benches == 'true'
+        continue-on-error: true
+        working-directory: .
+        run: |
+          cd "$RUNNER_TEMP/base"
+          npm ci
+          cd src/grab-it
+          npm run build
+          cargo bench --manifest-path src-tauri/Cargo.toml --features bench -- --save-baseline base
+          # Only run folders: a new/ that holds benchmark.json itself. sort
+          # lets find finish before anything is removed.
+          find "$CARGO_TARGET_DIR/criterion" -path '*/new/benchmark.json' -print0 | sort -z |
+            while IFS= read -r -d '' run; do
+              rm -rf "${run%/benchmark.json}"
+            done
+
+      - name: Time the head
+        env:
+          BASE_OK: ${{ steps.base-run.outcome == 'success' }}
+        run: |
+          if [ "$BASE_OK" = true ]; then
+            cargo bench --manifest-path src-tauri/Cargo.toml --features bench -- --baseline-lenient base
+          else
+            # A base that failed part-way leaves results to compare nothing with.
+            # Saved as "head", since criterion otherwise saves them as "base".
+            rm -rf "$CARGO_TARGET_DIR/criterion"
+            cargo bench --manifest-path src-tauri/Cargo.toml --features bench -- --save-baseline head
+          fi
+
+      - name: Report
+        if: ${{ !cancelled() }}
+        working-directory: .
+        env:
+          BASE_OK: ${{ steps.base-run.outcome == 'success' }}
+        run: |
+          flags=()
+          if [ "$BASE_OK" != true ]; then
+            flags+=(--no-base)
+          fi
+          python3 .github/scripts/bench_report.py "$CARGO_TARGET_DIR/criterion" "${flags[@]}"
