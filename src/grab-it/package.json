@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "bindings": "cargo test --manifest-path src-tauri/Cargo.toml --lib -- --ignored --exact tests::export_bindings",
+    "bench": "vitest bench --run",
     "tauri": "tauri",
     "e2e": "tauri build --debug --no-bundle --features e2e && npm run e2e:run",
     "e2e:run": "wdio run e2e/wdio.conf.ts"
