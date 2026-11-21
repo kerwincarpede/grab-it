@@ -39,6 +39,7 @@ mod record;
 mod record_bar;
 mod record_frame;
 mod recording_editor;
+mod rt;
 mod screen;
 mod scroll;
 mod search;
@@ -54,9 +55,14 @@ mod webcam;
 mod windows;
 mod zoom;
 
+#[cfg(test)]
+mod ipc_tests;
+
 use std::{path::PathBuf, sync::Mutex};
 
-use tauri::{App, Manager, RunEvent};
+use tauri::{App, Builder, Manager, RunEvent, ipc::Invoke};
+
+use rt::{AppHandle, Rt};
 
 use settings::{SETTINGS_FILE, Settings, SettingsStore};
 
@@ -72,7 +78,7 @@ pub fn run() {
         None
     });
 
-    let app = tauri::Builder::default()
+    let builder = Builder::<Rt>::new()
         // Registered first, as the plugin asks: a second launch hands its
         // arguments to the running Grab-it and exits, so `grab-it --open
         // region` works as a desktop shortcut or a script.
@@ -108,169 +114,9 @@ pub fn run() {
                     responder.respond(response);
                 });
             },
-        )
-        .manage(overlay::OverlayState::default())
-        .manage(overlay::SpareState::default())
-        .manage(overlay::LastRegionState::default())
-        .manage(quick::QuickState::default())
-        .manage(pin::PinState::default())
-        .manage(record::RecordState::default())
-        .manage(scroll::ScrollState::default())
-        .manage(record_bar::RecordBarState::default())
-        .manage(hotkeys::HotkeyState::default())
-        .manage(editor::EditorState::default())
-        .manage(recording_editor::RecordingEditorState::default())
-        .manage(update::UpdateState::default())
-        .manage(hub::HubState::default())
-        .invoke_handler(tauri::generate_handler![
-            commands::get_settings,
-            commands::set_save_folder,
-            commands::set_hotkeys,
-            commands::set_preferences,
-            commands::get_editor_preferences,
-            commands::set_editor_preferences,
-            commands::set_auto_backdrop,
-            commands::set_show_pointer,
-            commands::set_backdrop_presets,
-            commands::set_favorite_colors,
-            commands::dismiss_ai_notice,
-            commands::open_target,
-            commands::get_autostart,
-            commands::set_autostart,
-            commands::set_show_in_dock,
-            commands::set_appearance,
-            commands::step_text_size,
-            commands::set_recording,
-            commands::set_retention,
-            commands::set_agent_access,
-            commands::set_update_channel,
-            agent::agent_skill_status,
-            agent::install_agent_skill,
-            hub::hub_capture,
-            hotkeys::effective_hotkeys,
-            hub::hub_monitors,
-            hub::hub_open,
-            hub::hub_check_updates,
-            hub::hub_quit,
-            hub::hub_hide,
-            hub::hub_activity,
-            quick::quick_info,
-            quick::quick_thumbnail,
-            quick::quick_action,
-            quick::quick_drag,
-            pin::pin_info,
-            pin::pin_image,
-            pin::pin_zoom,
-            pin::pin_lock,
-            pin::pin_nudge,
-            pin::pin_copy,
-            pin::pin_edit,
-            pin::pin_close,
-            pin::editor_pin,
-            record::record_stop,
-            scroll::scroll_done,
-            scroll::scroll_cancel,
-            record::record_pause,
-            record::record_mute,
-            record::record_webcam,
-            record::record_discard,
-            record::record_restart,
-            record::record_bar_status,
-            record::record_bar_level,
-            record_bar::record_bar_fit,
-            record_bar::record_bar_reset,
-            record_bar::record_bar_remember,
-            steps_bar::steps_bar_stop,
-            timer_bar::timer_bar_cancel,
-            webcam::known_cameras,
-            webcam::remember_cameras,
-            ffmpeg::ffmpeg_status,
-            ffmpeg::ffmpeg_retry,
-            audio::recording_microphones,
-            audio::recording_system_audio,
-            hotkeys::pause_hotkeys,
-            hotkeys::resume_hotkeys,
-            overlay::overlay_info,
-            overlay::overlay_image,
-            overlay::overlay_ready,
-            overlay::overlay_finish,
-            overlay::overlay_choose,
-            overlay::overlay_cancel,
-            editor::editor_info,
-            editor::editor_image,
-            editor::editor_backdrop_image,
-            editor::editor_add_image_file,
-            editor::editor_add_clipboard_image,
-            editor::editor_asset_image,
-            editor::save_backdrop_preset_image,
-            editor::editor_save_annotations,
-            editor::editor_copy,
-            editor::editor_export,
-            editor::editor_words,
-            editor::editor_faces,
-            recording_editor::recording_info,
-            recording_editor::recording_save_edits,
-            recording_editor::recording_source,
-            recording_editor::recording_export,
-            library::library_list,
-            library::library_thumbnail,
-            library::library_set_tags,
-            search::library_sidebar,
-            library::library_remove_ai_tag,
-            library::library_set_notes,
-            library::library_set_keep,
-            library::library_delete,
-            library::library_trash,
-            library::library_rename,
-            library::library_duplicate,
-            library::library_open_with,
-            library::library_open_with_supported,
-            library::library_open,
-            library::library_copy,
-            library::library_image,
-            library::library_annotations,
-            library::library_save_thumbnail,
-            library::library_copy_file,
-            library::library_export,
-            library::library_text,
-            library::library_words,
-            library::library_shot_id,
-            library::library_copy_text,
-            library::library_pin,
-            library::library_reveal,
-            library::library_open_folder,
-            library::library_open_external,
-            library::library_copy_path,
-            library::library_play,
-            storage::library_storage,
-            storage::library_clean_up,
-            storage::library_stop_clean_up,
-            search::library_search,
-            search::library_filter_options,
-            ocr::ocr_status,
-            ai::ai_status,
-            ai::ai_redescribe,
-            ai::ai_clear,
-            ai::ai_redescribe_all,
-            ai::ai_test_connection,
-            ai::ai_clis,
-            update::update_status,
-            update::update_check,
-            update::update_install,
-            update::update_later,
-            permissions::permission_status,
-            permissions::permission_request_all,
-            permissions::permission_prime_capture,
-            permissions::permission_finish,
-            permissions::permission_restart,
-            permissions::permission_open_settings,
-            steps::guide_info,
-            steps::guide_image,
-            steps::guide_save,
-            steps::guide_open_editor,
-            steps::guide_export,
-            steps::guide_copy
-        ])
+        );
+    let app = manage_states(builder)
+        .invoke_handler(invoke_handler())
         .setup(move |app| {
             let mut store = open_settings(app)?;
             // macOS: a Dock icon that opens the Grab-it window, unless the
@@ -365,6 +211,179 @@ pub fn run() {
     });
 }
 
+/// The states the commands share from the start, before `setup` adds the
+/// ones that need the app's folders. The IPC tests manage the same ones.
+fn manage_states(builder: Builder<Rt>) -> Builder<Rt> {
+    builder
+        .manage(overlay::OverlayState::default())
+        .manage(overlay::SpareState::default())
+        .manage(overlay::LastRegionState::default())
+        .manage(quick::QuickState::default())
+        .manage(pin::PinState::default())
+        .manage(record::RecordState::default())
+        .manage(scroll::ScrollState::default())
+        .manage(record_bar::RecordBarState::default())
+        .manage(hotkeys::HotkeyState::default())
+        .manage(editor::EditorState::default())
+        .manage(recording_editor::RecordingEditorState::default())
+        .manage(update::UpdateState::default())
+        .manage(hub::HubState::default())
+}
+
+/// Every command the app's pages can call. The IPC tests build the same
+/// list, so a command they call is the one the app ships.
+fn invoke_handler() -> impl Fn(Invoke<Rt>) -> bool + Send + Sync + 'static {
+    tauri::generate_handler![
+        commands::get_settings,
+        commands::set_save_folder,
+        commands::set_hotkeys,
+        commands::set_preferences,
+        commands::get_editor_preferences,
+        commands::set_editor_preferences,
+        commands::set_auto_backdrop,
+        commands::set_show_pointer,
+        commands::set_backdrop_presets,
+        commands::set_favorite_colors,
+        commands::dismiss_ai_notice,
+        commands::open_target,
+        commands::get_autostart,
+        commands::set_autostart,
+        commands::set_show_in_dock,
+        commands::set_appearance,
+        commands::step_text_size,
+        commands::set_recording,
+        commands::set_retention,
+        commands::set_agent_access,
+        commands::set_update_channel,
+        agent::agent_skill_status,
+        agent::install_agent_skill,
+        hub::hub_capture,
+        hotkeys::effective_hotkeys,
+        hub::hub_monitors,
+        hub::hub_open,
+        hub::hub_check_updates,
+        hub::hub_quit,
+        hub::hub_hide,
+        hub::hub_activity,
+        quick::quick_info,
+        quick::quick_thumbnail,
+        quick::quick_action,
+        quick::quick_drag,
+        pin::pin_info,
+        pin::pin_image,
+        pin::pin_zoom,
+        pin::pin_lock,
+        pin::pin_nudge,
+        pin::pin_copy,
+        pin::pin_edit,
+        pin::pin_close,
+        pin::editor_pin,
+        record::record_stop,
+        scroll::scroll_done,
+        scroll::scroll_cancel,
+        record::record_pause,
+        record::record_mute,
+        record::record_webcam,
+        record::record_discard,
+        record::record_restart,
+        record::record_bar_status,
+        record::record_bar_level,
+        record_bar::record_bar_fit,
+        record_bar::record_bar_reset,
+        record_bar::record_bar_remember,
+        steps_bar::steps_bar_stop,
+        timer_bar::timer_bar_cancel,
+        webcam::known_cameras,
+        webcam::remember_cameras,
+        ffmpeg::ffmpeg_status,
+        ffmpeg::ffmpeg_retry,
+        audio::recording_microphones,
+        audio::recording_system_audio,
+        hotkeys::pause_hotkeys,
+        hotkeys::resume_hotkeys,
+        overlay::overlay_info,
+        overlay::overlay_image,
+        overlay::overlay_ready,
+        overlay::overlay_finish,
+        overlay::overlay_choose,
+        overlay::overlay_cancel,
+        editor::editor_info,
+        editor::editor_image,
+        editor::editor_backdrop_image,
+        editor::editor_add_image_file,
+        editor::editor_add_clipboard_image,
+        editor::editor_asset_image,
+        editor::save_backdrop_preset_image,
+        editor::editor_save_annotations,
+        editor::editor_copy,
+        editor::editor_export,
+        editor::editor_words,
+        editor::editor_faces,
+        recording_editor::recording_info,
+        recording_editor::recording_save_edits,
+        recording_editor::recording_source,
+        recording_editor::recording_export,
+        library::library_list,
+        library::library_thumbnail,
+        library::library_set_tags,
+        search::library_sidebar,
+        library::library_remove_ai_tag,
+        library::library_set_notes,
+        library::library_set_keep,
+        library::library_delete,
+        library::library_trash,
+        library::library_rename,
+        library::library_duplicate,
+        library::library_open_with,
+        library::library_open_with_supported,
+        library::library_open,
+        library::library_copy,
+        library::library_image,
+        library::library_annotations,
+        library::library_save_thumbnail,
+        library::library_copy_file,
+        library::library_export,
+        library::library_text,
+        library::library_words,
+        library::library_shot_id,
+        library::library_copy_text,
+        library::library_pin,
+        library::library_reveal,
+        library::library_open_folder,
+        library::library_open_external,
+        library::library_copy_path,
+        library::library_play,
+        storage::library_storage,
+        storage::library_clean_up,
+        storage::library_stop_clean_up,
+        search::library_search,
+        search::library_filter_options,
+        ocr::ocr_status,
+        ai::ai_status,
+        ai::ai_redescribe,
+        ai::ai_clear,
+        ai::ai_redescribe_all,
+        ai::ai_test_connection,
+        ai::ai_clis,
+        update::update_status,
+        update::update_check,
+        update::update_install,
+        update::update_later,
+        permissions::permission_status,
+        permissions::permission_request_all,
+        permissions::permission_prime_capture,
+        permissions::permission_finish,
+        permissions::permission_restart,
+        permissions::permission_open_settings,
+        steps::guide_info,
+        steps::guide_image,
+        steps::guide_save,
+        steps::guide_open_editor,
+        steps::guide_export,
+        steps::guide_copy
+    ]
+}
+
 fn startup_target(
     requested: Option<cli::OpenTarget>,
     needs_welcome: impl FnOnce() -> bool,
@@ -382,7 +401,7 @@ fn startup_target(
 /// Runs what a second launch asked for in this, the running, instance.
 /// Without `--open` it shows the Library, so launching Grab-it again from
 /// the applications menu visibly does something.
-fn second_launch(app: &tauri::AppHandle, args: Vec<String>) {
+fn second_launch(app: &AppHandle, args: Vec<String>) {
     let target = match cli::parse_open_target(args) {
         Ok(target) => target.unwrap_or(cli::OpenTarget::Library),
         Err(err) => {
@@ -403,7 +422,7 @@ fn second_launch(app: &tauri::AppHandle, args: Vec<String>) {
 /// macOS: the Welcome window opens on its Permissions page while Screen
 /// Recording is not allowed, and reopens after Allow all's restart to finish
 /// setup. Other systems need no permission.
-fn permissions_need_welcome(app: &tauri::AppHandle) -> bool {
+fn permissions_need_welcome(app: &AppHandle) -> bool {
     #[cfg(target_os = "macos")]
     {
         permissions::should_open_welcome(&permissions::status(app))
@@ -428,7 +447,7 @@ fn uses_hotkey_plugin() -> bool {
     }
 }
 
-fn open_settings(app: &App) -> tauri::Result<SettingsStore> {
+fn open_settings(app: &App<Rt>) -> tauri::Result<SettingsStore> {
     let paths = app.path();
     let pictures = paths
         .picture_dir()

@@ -32,9 +32,10 @@ use chrono::{DateTime, Local};
 use image::{DynamicImage, GrayImage, Rgba, RgbaImage, imageops};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
+use crate::rt::AppHandle;
 use crate::{
     actions, ai,
     capture::{self, CaptureMode, Foreground, Rect},

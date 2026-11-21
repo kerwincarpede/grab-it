@@ -2,7 +2,8 @@
 //! the Grab-it version and system, for the user to finish and submit.
 //! Nothing is sent until they submit the form themselves.
 
-use tauri::{AppHandle, Url};
+use crate::rt::AppHandle;
+use tauri::Url;
 use tauri_plugin_opener::OpenerExt;
 
 const NEW_ISSUE_URL: &str = "https://github.com/kerwincarpede/grab-it/issues/new";

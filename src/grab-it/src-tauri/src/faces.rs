@@ -14,9 +14,10 @@ use std::{
 use image::{RgbaImage, imageops::FilterType};
 use rten::Model;
 use rten_tensor::{NdTensor, prelude::*};
-use tauri::{AppHandle, Manager};
+use tauri::Manager;
 
 use crate::capture::Rect;
+use crate::rt::AppHandle;
 
 /// Where the model lives, under the resource directory.
 pub const MODELS_DIR: &str = "face-models";

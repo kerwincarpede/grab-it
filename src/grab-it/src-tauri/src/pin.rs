@@ -19,10 +19,11 @@ use std::{
 
 use serde::Serialize;
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, State, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder, WindowEvent, ipc::InvokeBody,
+    LogicalPosition, LogicalSize, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    ipc::InvokeBody,
 };
 
+use crate::rt::{AppHandle, WebviewWindow};
 use crate::{quick, tray, windows};
 
 /// Pin windows are labelled `pin-<n>`.

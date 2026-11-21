@@ -19,8 +19,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tauri::{AppHandle, Manager};
+use tauri::Manager;
 
+use crate::rt::AppHandle;
 use crate::{
     record_bar::Display,
     steps_bar::{self, Pill},

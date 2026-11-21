@@ -30,8 +30,9 @@ use std::{
 use base64::prelude::{BASE64_STANDARD, Engine as _};
 use serde::Serialize;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{Emitter, Manager, State};
 
+use crate::rt::AppHandle;
 use crate::{
     ai_cli,
     commands::{SettingsState, lock},

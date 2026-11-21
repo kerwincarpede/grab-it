@@ -39,11 +39,12 @@ use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{
-    AppHandle, Emitter, EventTarget, Manager, State, WebviewWindow,
+    Emitter, EventTarget, Manager, State,
     http::{Request, Response, StatusCode, header},
     ipc::InvokeBody,
 };
 
+use crate::rt::{AppHandle, WebviewWindow};
 use crate::{
     capture::sidecar_path,
     commands::{SettingsState, lock},

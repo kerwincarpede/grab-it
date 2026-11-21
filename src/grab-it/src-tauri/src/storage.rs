@@ -16,13 +16,14 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{Emitter, Manager, State};
 
 use crate::commands::{SettingsState, lock};
 use crate::library::{
     LIBRARY_CHANGED_EVENT, Library, LibraryError, LibraryResult, LibraryState, SHOT_COLUMNS, Shot,
     ShotKind, current_save_folder, remove_if_present, shot_from_row, trashed_files,
 };
+use crate::rt::AppHandle;
 use crate::settings::{Removal, Retention};
 
 /// Emitted with a [`Cleaned`] when an automatic cleanup removed something.

@@ -44,8 +44,9 @@ use image::{
     imageops::{self, FilterType},
 };
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::Manager;
 
+use crate::rt::AppHandle;
 use crate::{
     actions,
     audio::{self, Gap, Input, Sound},

@@ -25,10 +25,11 @@ use std::{
 use ocrs::{ImageSource, OcrEngine, OcrEngineParams, TextItem};
 use rten::Model;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{Emitter, Manager, State};
 
 use image::RgbaImage;
 
+use crate::rt::AppHandle;
 use crate::{
     capture::Rect,
     codes::{self, Code},

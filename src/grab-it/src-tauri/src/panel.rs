@@ -31,13 +31,13 @@
 
 use std::{ffi::c_void, sync::OnceLock};
 
+use crate::rt::{AppHandle, WebviewWindow};
 use objc2::{
     msg_send,
     runtime::{AnyClass, AnyObject, Bool, Imp, Sel},
     sel,
 };
 use objc2_core_foundation::{CGPoint, CGRect};
-use tauri::{AppHandle, WebviewWindow};
 
 /// `NSApplicationActivateIgnoringOtherApps`. macOS 14 ignores it, and
 /// activates an app when the active one yields to it instead.

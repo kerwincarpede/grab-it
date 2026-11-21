@@ -28,10 +28,11 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
-    WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
+    WindowEvent,
 };
 
+use crate::rt::{AppHandle, WebviewWindow};
 use crate::{capture::Rect, record::BarStatus, screen::MonitorInfo};
 
 pub const LABEL: &str = "record-bar";

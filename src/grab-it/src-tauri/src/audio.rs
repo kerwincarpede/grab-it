@@ -35,8 +35,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::rt::AppHandle;
 use serde::Serialize;
-use tauri::AppHandle;
 
 /// How long a microphone gets to start.
 #[cfg(any(target_os = "macos", target_os = "windows"))]

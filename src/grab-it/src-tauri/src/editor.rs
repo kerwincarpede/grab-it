@@ -14,11 +14,12 @@ use std::{
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, ipc::InvokeBody};
+use tauri::{Emitter, Manager, State, ipc::InvokeBody};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use image::RgbaImage;
 
+use crate::rt::{AppHandle, WebviewWindow};
 use crate::{
     capture::{Rect, annotations_path},
     library::LibraryState,

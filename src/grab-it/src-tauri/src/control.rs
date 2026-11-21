@@ -16,8 +16,9 @@ use std::{
 use interprocess::local_socket::{GenericFilePath, ListenerOptions, Name, Stream, prelude::*};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use tauri::Manager;
 
+use crate::rt::AppHandle;
 use crate::{
     commands::{SettingsState, lock},
     settings::RecordingFormat,

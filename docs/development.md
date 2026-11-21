@@ -410,6 +410,8 @@ cargo llvm-cov report --manifest-path src-tauri/Cargo.toml --html
 
 `npm run test:coverage` fails when the frontend tests cover less than 90% of lines or 83% of branches in `src/`, test files and `src/test/` aside; the floors are in `vitest.config.ts`. It writes HTML and lcov reports to `src/grab-it/coverage/`. `npm test` runs the same tests without coverage. `cargo llvm-cov` needs [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and the `llvm-tools-preview` rustup component, and writes its HTML report to `src-tauri/target/llvm-cov/html/`. Without them, `cargo test --manifest-path src-tauri/Cargo.toml` runs the same tests. Rust coverage counts lines only, since branch coverage needs nightly Rust, and CI fails below 68% of lines; that floor is in `ci.yml`.
 
+The IPC tests in `src-tauri/src/ipc_tests.rs` call the real commands through Tauri's IPC on its mock runtime, against a temporary settings file, Library and save folder, so they need no display either. They check each command's JSON reply, what it saves and its error messages.
+
 The OCR tests load the bundled models from `src-tauri/ocr-models/`, so they need no network. Their fixture, `src-tauri/tests/fixtures/ocr-pineapple.png`, was made with ImageMagick (the command is in `src-tauri/src/ocr.rs`).
 
 To build installers locally, run `npm run tauri build`; they land in `src/grab-it/src-tauri/target/release/bundle/`.

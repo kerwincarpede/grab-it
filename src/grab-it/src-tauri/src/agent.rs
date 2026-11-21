@@ -17,8 +17,9 @@ use chrono::Local;
 use image::{RgbaImage, imageops};
 use serde::Serialize;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{Emitter, Manager};
 
+use crate::rt::AppHandle;
 use crate::{
     capture::{self, CaptureMode, Foreground, Rect},
     control::{FramesRequest, GifRequest, RecordRequest, Request, ShotRequest, ShotTarget},

@@ -6,11 +6,12 @@ use std::{
 };
 
 use tauri::{
-    AppHandle, Manager,
-    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
+    Manager,
+    menu::{Menu, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 
+use crate::rt::{AppHandle, MenuItem, Submenu};
 use crate::{
     actions::{self, Action},
     feedback, hub, pin, quick, screen, update, windows,
@@ -97,10 +98,10 @@ pub fn reset_hover() {
 
 /// The menu items whose text or state changes while Grab-it runs.
 pub struct TrayItems {
-    chooser: MenuItem<tauri::Wry>,
-    record: MenuItem<tauri::Wry>,
-    steps: MenuItem<tauri::Wry>,
-    unlock: MenuItem<tauri::Wry>,
+    chooser: MenuItem,
+    record: MenuItem,
+    steps: MenuItem,
+    unlock: MenuItem,
 }
 
 /// Shows the global shortcut without installing a competing menu accelerator.
@@ -210,7 +211,7 @@ fn timed_action_for(id: &str) -> Option<(Action, Duration)> {
     Some((action, Duration::from_secs(seconds)))
 }
 
-fn timed_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
+fn timed_submenu(app: &AppHandle) -> tauri::Result<Submenu> {
     let submenu = Submenu::new(app, "Timed capture", true)?;
     for (what, label, seconds) in [
         ("region", "Region", 3),
@@ -231,7 +232,7 @@ fn timed_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
 }
 
 /// Send feedback: each item opens a GitHub issue form in the browser.
-fn feedback_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
+fn feedback_submenu(app: &AppHandle) -> tauri::Result<Submenu> {
     let problem = MenuItem::with_id(
         app,
         MENU_REPORT_PROBLEM,
@@ -261,7 +262,7 @@ pub fn monitor_label(monitor: &screen::MonitorInfo) -> String {
     )
 }
 
-fn monitor_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
+fn monitor_submenu(app: &AppHandle) -> tauri::Result<Submenu> {
     let submenu = Submenu::new(app, "Monitor", true)?;
     // On Wayland xcap may not list monitors; the portal then lets the user
     // pick one interactively, so a single item is offered.
