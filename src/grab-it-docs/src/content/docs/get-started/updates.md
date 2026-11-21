@@ -9,6 +9,8 @@ Once installed, Grab-it keeps itself up to date. About half a minute after it st
 
 If the Library was open when you chose **Install and restart**, Grab-it reopens it after the update, even if it was minimised. Later launches follow your usual startup behaviour.
 
+You can also read what changed in each version on the [Grab-it releases page](https://github.com/kerwincarpede/grab-it/releases).
+
 ## Stable and Edge
 
 Grab-it updates from one of two channels. Pick one with **Update channel** in **Settings → General → Updates**:

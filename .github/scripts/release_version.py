@@ -15,6 +15,9 @@ import sys
 from pathlib import Path
 
 VERSION = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+# GitHub can include the original commit subjects as bullets in a squash message.
+CONVENTIONAL_HEADER = re.compile(r"^(?:\* )?([a-z][a-z0-9-]*)(?:\([^\n)]+\))?(!)?:", re.I | re.M)
+BREAKING_FOOTER = re.compile(r"^BREAKING(?: |-)CHANGE:", re.M)
 
 
 def git(*args):
@@ -24,9 +27,10 @@ def git(*args):
 def bump(version, kind, message=""):
     major, minor, patch = version
     if kind == "auto":
-        if re.search(r"^[a-z]+(?:\([^\n]*\))?!:", message, re.M) or "BREAKING CHANGE:" in message:
+        headers = CONVENTIONAL_HEADER.findall(message)
+        if any(bang for _, bang in headers) or BREAKING_FOOTER.search(message):
             kind = "major"
-        elif re.search(r"^feat(?:\([^\n]*\))?:", message, re.M):
+        elif any(commit_type.lower() == "feat" for commit_type, _ in headers):
             kind = "minor"
         else:
             kind = "patch"
@@ -91,11 +95,17 @@ def main():
             ).returncode == 0:
                 sys.exit("Newer commits already have versions; force a bump on a new commit instead.")
     commits = []
-    for sha in git("rev-list", "--first-parent", "--reverse", args.sha).splitlines():
+    for entry in git("rev-list", "--first-parent", "--parents", "--reverse", args.sha).splitlines():
+        sha, *parents = entry.split()
+        # Include the commits introduced by a merge when choosing its single bump.
+        if len(parents) > 1:
+            message = git("log", "--format=%B", f"{parents[0]}..{sha}")
+        else:
+            message = git("show", "-s", "--format=%B", sha)
         commits.append({
             "sha": sha,
-            "message": git("show", "-s", "--format=%B", sha),
-            "paths": git("diff-tree", "--root", "--first-parent", "--no-commit-id", "--name-only", "-r", sha).splitlines(),
+            "message": message,
+            "paths": git("diff-tree", "-m", "--root", "--first-parent", "--no-commit-id", "--name-only", "-r", sha).splitlines(),
         })
     initial = tuple(map(int, json.loads(Path("src/grab-it/src-tauri/tauri.conf.json").read_text())["version"].split(".")))
     try:

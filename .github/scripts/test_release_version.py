@@ -47,7 +47,15 @@ class Versions(unittest.TestCase):
         self.assertEqual(bump((1, 2, 3), "auto", "feat!: breaking"), (2, 0, 0))
         self.assertEqual(bump((1, 2, 3), "auto", "fix: one\n\nBREAKING CHANGE: two"), (2, 0, 0))
         self.assertEqual(bump((1, 2, 3), "auto", "feat(editor): one"), (1, 3, 0))
+        self.assertEqual(bump((1, 2, 3), "auto", "fix: one"), (1, 2, 4))
+        self.assertEqual(bump((1, 2, 3), "auto", "Add stamps to the editor (#247)"), (1, 2, 4))
         self.assertEqual(bump((1, 2, 3), "patch", "feat!: one"), (1, 2, 4))
+
+    def test_squash_message_keeps_the_highest_conventional_bump(self):
+        subject = "Update the editor (#123)\n\n"
+        self.assertEqual(bump((1, 2, 3), "auto", subject + "* feat(editor): one\n\n* fix: two"), (1, 3, 0))
+        self.assertEqual(bump((1, 2, 3), "auto", subject + "* feat: one\n\n* fix(editor)!: two"), (2, 0, 0))
+        self.assertEqual(bump((1, 2, 3), "auto", subject + "* feat: one\n\nBREAKING-CHANGE: two"), (2, 0, 0))
 
 
 class GitHistory(unittest.TestCase):
@@ -72,12 +80,14 @@ class GitHistory(unittest.TestCase):
             git("init", "-q")
             save("src/grab-it/src-tauri/tauri.conf.json", '{"version":"0.2.0"}', "base")
             git("tag", "v1.2.3")
-            save("README.md", "docs", "docs: one")
+            parent = save("README.md", "docs", "docs: one")
             one = save("src/app.rs", "one", "feat: one")
-            # A real merge commit: diff-tree must compare its first parent.
+            # The merge has a plain title and gets its bump from its side commit.
             tree = git("rev-parse", "HEAD^{tree}")
-            parent = git("rev-parse", "HEAD^")
-            merged = git("commit-tree", tree, "-p", parent, "-p", one, "-m", "feat: merged")
+            merged = git("commit-tree", tree, "-p", parent, "-p", one, "-m", "Merge pull request #123")
+            save("src/app.rs", "two", "fix: two")
+            tree = git("rev-parse", "HEAD^{tree}")
+            two = git("commit-tree", tree, "-p", merged, "-m", "fix: two")
             releases = root / "releases.json"
             releases.write_text("[]")
 
@@ -87,10 +97,9 @@ class GitHistory(unittest.TestCase):
                 ], cwd=root, text=True).strip()
 
             self.assertEqual(version(merged), "version=1.3.0")
-            two = save("src/app.rs", "two", "fix: two")
             self.assertEqual(version(two), "version=1.3.1")
             releases.write_text(json.dumps([{
                 "draft": True, "tag_name": "v1.3.1", "target_commitish": two,
             }]))
-            self.assertEqual(version(one), "version=1.3.0")
+            self.assertEqual(version(merged), "version=1.3.0")
             self.assertEqual(version(two), "version=1.3.1")

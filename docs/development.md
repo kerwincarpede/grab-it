@@ -474,17 +474,19 @@ gh run watch                               # follow it
 
 A release only runs from `main`, and refuses a commit that is already released.
 
-Versions come from published `v*` git tags and drafts that reserve versions for builds still running. [`.github/scripts/release_version.py`](../.github/scripts/release_version.py) walks main's first-parent history from the nearest reservation, skipping docs-only commits. Each code merge consumes its own version in commit order, even when a later run reserves its version first. With the default `auto` bump, each commit message gives a [Conventional Commits](https://www.conventionalcommits.org/) bump:
+Versions come from published `v*` git tags and drafts that reserve versions for builds still running. [`.github/scripts/release_version.py`](../.github/scripts/release_version.py) walks main's first-parent history from the nearest reservation, skipping docs-only commits. Each code merge consumes its own version in commit order, even when a later run reserves its version first. The default `auto` bump takes the highest [Conventional Commits](https://www.conventionalcommits.org/) bump from the commit message and any commits it merges. For squash merges, it also reads commit subjects that GitHub includes as bullets in the squash message.
 
-| Commit (or squash-merged PR title) | Bump |
+| Conventional Commit marker | Bump |
 | --- | --- |
-| `feat!: ...`, or `BREAKING CHANGE:` in the message | major |
+| `!` after the type or scope, or a `BREAKING CHANGE:` or `BREAKING-CHANGE:` footer | major |
 | `feat: ...` or `feat(scope): ...` | minor |
-| anything else | patch |
+| `fix: ...`, other types or no marker | patch |
 
 The first release, made before any tag exists, takes the version in `src/grab-it/src-tauri/tauri.conf.json`. CI writes the reserved version into `tauri.conf.json` before building, so the version fields in the repository do not need bumping by hand. A forced bump cannot change an existing reservation or invalidate a newer commit's reservation; use a new commit for that.
 
 A run opens a draft release, builds the installers into it, and publishes it as a pre-release (creating the tag) only when the checks and all the builds pass. A failed run leaves a hidden draft that keeps its version reserved. Retrying that commit with `auto` replaces the unfinished draft and keeps its version; other commits never take it. Each release is named by its version, for example `0.2.1` for the tag `v0.2.1`, and its notes open with an **Edge build** line.
+
+Before publishing, the workflow cleans up GitHub's generated **What's Changed** list. It removes Conventional Commits prefixes and skips `ci`, `docs`, `chore`, `build`, `refactor`, `style` and `test` entries. The GitHub release keeps contributor credits and pull request links. The update prompt shows the same change descriptions.
 
 All updater assets are attached before publication. Releases are immutable: neither Edge checks nor Stable promotion replaces their assets. Edge asks GitHub's releases API for the highest published version with a `latest.json`, including versions promoted to Stable, and reads that version's manifest. The list is paginated and discovery has a 30-second total timeout. An older build finishing later cannot move Edge backwards. The old rolling `edge` release is unused; copies that still read it need one manual update from a versioned release.
 
@@ -515,7 +517,7 @@ At startup Grab-it consumes the record even if another window takes precedence. 
 
 A release builds those packages because CI turns on `bundle.createUpdaterArtifacts` when it stamps the version: the `.app.tar.gz` on macOS, and the `.AppImage`, `.deb`, `.rpm`, `.msi` and `-setup.exe` themselves elsewhere, each with a `.sig`. The publish job then writes `latest.json` from those signatures ([`.github/scripts/updater_manifest.py`](../.github/scripts/updater_manifest.py)) and refuses to publish a release that is missing macOS, Linux or Windows.
 
-`latest.json` also carries `changes`: the user-facing entries of the generated release notes ("What's Changed") of this release and up to 49 earlier published versions available when its manifest was written, Edge pre-releases included. Promotion keeps that history unchanged. The rolling `edge` release is left out. The update prompt lists those newer than the installed version, so someone several versions behind sees everything the update brings. Entries come from the pull request titles, without their Conventional Commits prefix; `ci`, `docs`, `chore`, `build`, `refactor`, `style` and `test` changes are left out, so write `feat:` and `fix:` titles for a user to read.
+`latest.json` also carries `changes`, the user-facing entries from this release's **What's Changed** list and up to 49 earlier published versions available when the manifest was written, including Edge pre-releases. Promotion reuses that history. The rolling `edge` release is left out. The update prompt lists the changes newer than the installed version, so someone several versions behind sees everything the update brings.
 
 The updater accepts only packages signed with the key whose public half is `plugins.updater.pubkey` in `tauri.conf.json`. The private key and its password are the `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets in the `release` environment. **Keep a backup of the key**: if it is lost, installed copies cannot be updated, and everyone has to download a release built with a new key by hand. Ordinary CI builds make no update packages, so they need neither secret.
 

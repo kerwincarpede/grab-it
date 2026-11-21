@@ -2,7 +2,7 @@
 """Writes the updater's latest.json for a release, and prints it.
 
     updater_manifest.py --sigs DIR --release RELEASE.json \\
-        --history RELEASES.json --download-base URL
+        --history RELEASES.json --download-base URL [--release-notes FILE]
 
 --sigs holds the release's `.sig` assets, named as they are on the
 release. Each one signs the asset of the same name without `.sig`, which
@@ -17,6 +17,8 @@ count, so a Stable release lists the Edge versions since the last one; the
 rolling `edge` release, whose tag is not a version, does not. `notes` repeats this
 release's list as Markdown, for anything that reads only the standard
 fields.
+
+--release-notes writes the cleaned release body for the GitHub release page.
 
 Grab-it's updater looks for `<os>-<arch>-<installer>` first, so each kind
 of install updates with its own kind of package, and then `<os>-<arch>`.
@@ -56,9 +58,10 @@ HISTORY = 50
 
 # Conventional-commit types that change nothing a user sees.
 UNSEEN = {"build", "chore", "ci", "docs", "refactor", "style", "test"}
+VISIBLE_TYPES = {"feat", "fix", "perf", "revert"}
 
 # "feat(library)!: " -> type "feat"
-PREFIX = re.compile(r"^(?P<type>[a-z]+)(\([^)]*\))?!?:\s*")
+PREFIX = re.compile(r"^(?P<type>[a-z]+)(\([^)]*\))?!?:\s*", re.I)
 # GitHub's " by @someone in https://github.com/.../pull/12"
 CREDIT = re.compile(r"\s+by @\S+ in https://\S+$")
 
@@ -96,26 +99,55 @@ def platforms(sig_dir, download_base):
     return found
 
 
-def change_items(body):
-    """The user-facing entries of a release's generated "What's Changed"."""
-    items = []
-    in_changes = False
-    for line in (body or "").splitlines():
+def split_change_section(body):
+    """Find GitHub's generated heading and bullet list within the release body."""
+    lines = (body or "").splitlines(keepends=True)
+    for start, line in enumerate(lines):
+        if not (line.startswith("#") and line.lstrip("#").strip().lower() == "what's changed"):
+            continue
+        end = start + 1
+        while end < len(lines):
+            text = lines[end].strip()
+            if text and not text.startswith(("* ", "- ")):
+                break
+            end += 1
+        return lines[:start], lines[start:end], lines[end:]
+    return lines, [], []
+
+
+def visible_changes(section):
+    for line in section[1:]:
         line = line.strip()
-        if line.startswith("#"):
-            in_changes = line.lstrip("#").strip().lower() == "what's changed"
+        if not line.startswith(("* ", "- ")):
             continue
-        if not in_changes or not line.startswith(("* ", "- ")):
-            continue
-        text = CREDIT.sub("", line[2:].strip())
+        text = line[2:].strip()
+        credit = CREDIT.search(text)
+        if credit:
+            text = text[:credit.start()]
         prefix = PREFIX.match(text)
         if prefix:
-            if prefix.group("type") in UNSEEN:
+            kind = prefix.group("type").lower()
+            if kind in UNSEEN:
                 continue
-            text = text[prefix.end() :]
+            if kind in VISIBLE_TYPES:
+                text = text[prefix.end():]
         if text:
-            items.append(text[0].upper() + text[1:])
-    return items
+            yield line[:2], text[0].upper() + text[1:], credit.group() if credit else ""
+
+
+def change_items(body):
+    """The release changes shown in the in-app update prompt."""
+    _, section, _ = split_change_section(body)
+    return [title for _, title, _ in visible_changes(section)]
+
+
+def public_release_notes(body):
+    """The GitHub release body with readable change titles and PR credits."""
+    before, section, after = split_change_section(body)
+    bullets = [f"{bullet}{title}{credit}\n" for bullet, title, credit in visible_changes(section)]
+    if bullets:
+        before.extend([section[0], *bullets, "\n"])
+    return "".join(before + after)
 
 
 def version_of(release):
@@ -156,6 +188,7 @@ def main():
     parser.add_argument("--release", required=True)
     parser.add_argument("--history", required=True)
     parser.add_argument("--download-base", required=True)
+    parser.add_argument("--release-notes", type=Path)
     args = parser.parse_args()
 
     release = json.loads(Path(args.release).read_text())
@@ -172,6 +205,8 @@ def main():
         "platforms": dict(sorted(found.items())),
         "changes": recent,
     }
+    if args.release_notes:
+        args.release_notes.write_text(public_release_notes(release.get("body")), encoding="utf-8")
     print(json.dumps(manifest, indent=2))
 
 

@@ -17,5 +17,5 @@ This covers UI text, the docs site, `docs/development.md` and PR titles.
 
 ## PR titles
 
-- A PR title becomes a line in the release notes that the update prompt shows. Write it as a short sentence a user would understand: "Add the Magnify tool", "Select several Library items and act on them together".
-- Release notes drop `ci`, `docs`, `chore`, `build`, `refactor`, `style` and `test` changes (see "Updates" in [development.md](../development.md)).
+- Give PR titles a Conventional Commits prefix and a short description a user would understand, such as `feat: Add the Magnify tool` or `fix: Keep Library items selected after editing`. Keep the prefix in the commit message when merging so the release can pick the version bump.
+- The GitHub release page and the update prompt show the description without the prefix. Both omit `ci`, `docs`, `chore`, `build`, `refactor`, `style` and `test` entries. See [Releases](../development.md#releases).

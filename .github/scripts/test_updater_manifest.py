@@ -15,6 +15,9 @@ Download the installer.
 * fix(editor)!: keep the crop when undoing by @someone in https://github.com/o/r/pull/24
 * ci: release manually by @someone in https://github.com/o/r/pull/17
 * docs(readme): a new GIF by @someone in https://github.com/o/r/pull/22
+* Build(linux): update dependencies by @someone in https://github.com/o/r/pull/25
+* refactor: simplify asset lookup by @someone in https://github.com/o/r/pull/26
+* style: format the release script by @someone in https://github.com/o/r/pull/27
 * Browse captures in a library by @someone in https://github.com/o/r/pull/6
 
 ## New Contributors
@@ -42,6 +45,35 @@ class ChangeItems(unittest.TestCase):
     def test_a_body_without_changes_has_none(self):
         self.assertEqual(manifest.change_items(None), [])
         self.assertEqual(manifest.change_items("## Install\n* not a change"), [])
+
+    def test_published_notes_keep_the_install_section_credits_and_changelog(self):
+        notes = manifest.public_release_notes(BODY)
+        self.assertEqual(notes, """## Install
+
+Download the installer.
+
+## What's Changed
+* Check for updates by @someone in https://github.com/o/r/pull/23
+* Keep the crop when undoing by @someone in https://github.com/o/r/pull/24
+* Browse captures in a library by @someone in https://github.com/o/r/pull/6
+
+## New Contributors
+* @someone made their first contribution in https://github.com/o/r/pull/1
+
+**Full Changelog**: https://github.com/o/r/compare/v0.3.0...v0.4.0
+""")
+        self.assertEqual(manifest.change_items(notes), manifest.change_items(BODY))
+
+    def test_internal_only_release_has_no_changes_heading(self):
+        footer = "**Full Changelog**: https://github.com/o/r/compare/v0.3.0...v0.4.0\n"
+        notes = manifest.public_release_notes("## What's Changed\n* test: add coverage\n\n" + footer)
+        self.assertEqual(notes, footer)
+
+    def test_descriptive_labels_survive_when_reading_published_notes(self):
+        body = "## What's Changed\n* FIX: OCR: Keep lines together\n"
+        notes = manifest.public_release_notes(body)
+        self.assertIn("* OCR: Keep lines together\n", notes)
+        self.assertEqual(manifest.change_items(notes), ["OCR: Keep lines together"])
 
 
 class Changes(unittest.TestCase):

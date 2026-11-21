@@ -191,7 +191,7 @@ jobs:
       # to find, and verify, the update package for their platform. Written
       # here rather than by each build, so the four builds cannot race to
       # rewrite it.
-      - name: Add the updater manifest
+      - name: Prepare release notes and add the updater manifest
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.version.outputs.release_id }}
@@ -211,6 +211,7 @@ jobs:
           python3 .github/scripts/updater_manifest.py \
             --sigs sigs --release release.json --history history.json \
             --download-base "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
+            --release-notes release-notes.md \
             > latest.json
           cat latest.json
           curl --fail-with-body -sS -X POST \
@@ -229,5 +230,5 @@ jobs:
           RELEASE_ID: ${{ needs.version.outputs.release_id }}
         run: |
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
-            -F draft=false -F prerelease=true -f make_latest=false \
+            -F draft=false -F prerelease=true -f make_latest=false -F body=@release-notes.md \
             --jq '"Published \(.tag_name): \(.html_url)"'
