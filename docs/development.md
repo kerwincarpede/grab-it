@@ -387,6 +387,8 @@ While `agentAccess` in `settings.json` is `false` (the default) every request is
 
 ### Settings
 
+The image editor, Library and guide export dialogs read the optional `lastExportFolder` in `settings.json` when they open, falling back to `saveFolder`. Choosing a file updates `lastExportFolder` to its parent directory.
+
 `settings.json` lives in the app data directory (`com.kerwincarpede.grabit`):
 
 - Linux: `~/.local/share/com.kerwincarpede.grabit/`

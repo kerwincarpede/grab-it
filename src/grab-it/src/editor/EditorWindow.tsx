@@ -3,7 +3,7 @@ import type Konva from "konva";
 import { Circle, Group, Image as KonvaImage, Layer, Line, Rect as KonvaRect, Stage, Transformer } from "react-konva";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { save } from "@tauri-apps/plugin-dialog";
+import { chooseExportFile } from "../app/exportDialog";
 import "./editor.css";
 import { getEditorPreferences, MAX_BACKDROP_PRESETS, MAX_FAVORITE_COLORS, setBackdropPresets, setFavoriteColors } from "../settings/api";
 import Loupe from "../overlay/Loupe";
@@ -1775,8 +1775,7 @@ export default function EditorWindow() {
   const exportAs = async () => {
     try {
       const stem = (info?.fileName ?? "capture.png").replace(/\.[^.]+$/, "");
-      const chosen = await save({
-        defaultPath: `${stem} annotated.png`,
+      const chosen = await chooseExportFile(`${stem} annotated.png`, {
         filters: [
           { name: "PNG image", extensions: ["png"] },
           { name: "JPEG image", extensions: ["jpg", "jpeg"] },

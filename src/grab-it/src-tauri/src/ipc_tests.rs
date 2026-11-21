@@ -663,6 +663,20 @@ fn set_show_in_dock_saves_the_choice() {
 }
 
 #[test]
+fn set_last_export_folder_keeps_the_chosen_absolute_path() {
+    let h = Harness::new();
+    let folder = json!(h.dir.path().join("exports"));
+    let settings = h.ok("set_last_export_folder", json!({ "folder": folder }));
+    assert_eq!(settings["lastExportFolder"], folder);
+    assert_eq!(h.saved()["lastExportFolder"], folder);
+    assert!(
+        !h.err("set_last_export_folder", json!({ "folder": "relative" }))
+            .is_empty()
+    );
+    assert_eq!(h.settings()["lastExportFolder"], folder);
+}
+
+#[test]
 fn set_agent_access_saves_the_switch() {
     let h = Harness::new();
     let settings = h.ok("set_agent_access", json!({ "enabled": true }));

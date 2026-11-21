@@ -9,7 +9,8 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
+import { chooseExportFile } from "../app/exportDialog";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import "./library.css";
 import {
   CLI_NAMES,
@@ -1647,7 +1648,7 @@ function LibraryWindow({
   async function exportAs(shot: Shot): Promise<string | null> {
     const filters = exportFilters(shot);
     const { stem } = splitFileName(shot.fileName);
-    const chosen = await save({ defaultPath: `${stem}.${filters[0].extensions[0]}`, filters });
+    const chosen = await chooseExportFile(`${stem}.${filters[0].extensions[0]}`, { filters });
     if (!chosen) return null;
     const written = await exportShot(shot.id, exportPath(chosen, filters));
     setError(null);

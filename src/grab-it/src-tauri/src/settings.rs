@@ -956,6 +956,9 @@ impl UpdateChannel {
 pub struct Settings {
     /// Where new captures are saved. Holds `originals/` and `thumbs/`.
     pub save_folder: PathBuf,
+    /// Folder most recently chosen for an export.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_export_folder: Option<PathBuf>,
     /// Global hotkeys for region, window and screen captures.
     pub hotkeys: Hotkeys,
     #[serde(flatten)]
@@ -999,6 +1002,7 @@ impl Settings {
             retention: Retention::default(),
             permissions: PermissionSetup::default(),
             agent_access: false,
+            last_export_folder: None,
             update_channel: UpdateChannel::Stable,
         }
     }
@@ -1025,6 +1029,7 @@ struct StoredSettings {
     /// Read leniently by [`PermissionSetup::from_stored`].
     permissions: Option<serde_json::Value>,
     agent_access: Option<bool>,
+    last_export_folder: Option<PathBuf>,
     /// Read leniently by [`UpdateChannel::from_stored`].
     update_channel: Option<serde_json::Value>,
 }
@@ -1105,6 +1110,7 @@ impl StoredSettings {
                 .map(PermissionSetup::from_stored)
                 .unwrap_or(defaults.permissions),
             agent_access: self.agent_access.unwrap_or(defaults.agent_access),
+            last_export_folder: self.last_export_folder,
             update_channel: self
                 .update_channel
                 .map(UpdateChannel::from_stored)
@@ -1162,6 +1168,8 @@ pub fn load(path: &Path, defaults: Settings) -> Result<Settings, SettingsError> 
 #[serde(rename_all = "camelCase")]
 struct SettingsOnDisk<'a> {
     save_folder: &'a Path,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_export_folder: Option<&'a Path>,
     hotkeys: &'a Hotkeys,
     after_capture: AfterCapture,
     copy_to_clipboard: bool,
@@ -1235,6 +1243,7 @@ impl<'a> SettingsOnDisk<'a> {
             retention: settings.retention,
             permissions: settings.permissions,
             agent_access: settings.agent_access,
+            last_export_folder: settings.last_export_folder.as_deref(),
             update_channel: settings.update_channel,
         }
     }
@@ -1650,6 +1659,17 @@ impl SettingsStore {
         Ok(self.current.clone())
     }
 
+    /// Remembers the folder chosen in an export dialog.
+    pub fn set_last_export_folder(&mut self, folder: PathBuf) -> Result<Settings, SettingsError> {
+        let next = Settings {
+            last_export_folder: Some(folder),
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
     /// Lets the grab-it command line capture, or stops it.
     pub fn set_agent_access(&mut self, enabled: bool) -> Result<Settings, SettingsError> {
         let next = Settings {
@@ -1819,10 +1839,39 @@ mod tests {
                 resume: true,
             },
             agent_access: true,
+            last_export_folder: Some(dir.path().join("exports")),
             update_channel: UpdateChannel::Edge,
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path, defaults(&dir)).unwrap(), settings);
+    }
+
+    #[test]
+    fn older_settings_have_no_export_folder() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(SETTINGS_FILE);
+        fs::write(&path, r#"{"showInDock": false}"#).unwrap();
+        let settings = load(&path, defaults(&dir)).unwrap();
+        assert!(!settings.show_in_dock);
+        assert!(settings.last_export_folder.is_none());
+        save(&path, &settings).unwrap();
+        assert!(
+            !fs::read_to_string(path)
+                .unwrap()
+                .contains("lastExportFolder")
+        );
+    }
+
+    #[test]
+    fn store_remembers_the_export_folder_between_sessions() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        let folder = dir.path().join("exports");
+        let updated = store.set_last_export_folder(folder.clone()).unwrap();
+        assert_eq!(updated.last_export_folder.as_ref(), Some(&folder));
+        let reopened = open_store(path, defaults(&dir));
+        assert_eq!(reopened.get().last_export_folder.as_ref(), Some(&folder));
     }
 
     #[test]

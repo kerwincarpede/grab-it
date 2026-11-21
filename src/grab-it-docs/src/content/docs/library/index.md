@@ -33,6 +33,8 @@ Each tile shows the window title (or the file name), the app and the time. Hover
 
 Once you've edited a screenshot, its tile, its details and the hub's recent captures show it with your edits. **Copy** and **Pin** give the finished image too, with your arrows, blurs, crop and backdrop, so a detail you blurred stays blurred when you paste it. To get the screenshot as you took it, right-click its tile and choose **Copy original image**.
 
+The image editor, Library and guide share the last folder you chose for export. The first time, the dialog opens in your Grab-it save folder.
+
 **Copy as file**, **Export…**, dragging a tile out, **Open with…** and **Show in folder** still give the original file, and **Copy text in image** reads the original. To share the finished image as a file, export it from the [editor](/grab-it/image-editor/mark-it-up/).
 
 ## Keyboard

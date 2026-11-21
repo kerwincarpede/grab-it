@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { save } from "@tauri-apps/plugin-dialog";
+import { chooseExportFile } from "../app/exportDialog";
 import { commands, type ExportStep, type GuideInfo, type GuideStep } from "../app/bindings";
 import { EXPORT_FORMATS, exportName, type GuideFormat } from "./model";
 
@@ -43,10 +43,8 @@ export function onGuideChanged(handler: () => void): Promise<UnlistenFn> {
 /** Asks where to export, or null when cancelled. */
 export async function chooseExportPath(title: string, format: GuideFormat): Promise<string | null> {
   const entry = EXPORT_FORMATS.find((candidate) => candidate.format === format);
-  const picked = await save({
+  return chooseExportFile(exportName(title, format), {
     title: "Export guide",
-    defaultPath: exportName(title, format),
     filters: entry ? [{ name: entry.label, extensions: [entry.extension] }] : [],
   });
-  return picked ?? null;
 }

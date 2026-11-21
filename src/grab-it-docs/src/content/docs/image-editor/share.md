@@ -19,6 +19,8 @@ The status bar confirms each one, for example *"Copied to the clipboard."*
 
 ## Export
 
+The image editor, Library and guide share the last folder you chose for export. The first time, the dialog opens in your Grab-it save folder.
+
 **Export…** asks where to save, suggesting the capture's own name followed by `annotated`, such as `Grab-it 2026-11-15 14-05-09 annotated.png`.
 
 - Save as **PNG** for sharp text and transparency.
