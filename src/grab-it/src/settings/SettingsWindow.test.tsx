@@ -1,20 +1,23 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { emit } from "@tauri-apps/api/event";
-import { mockIPC } from "@tauri-apps/api/mocks";
-import type { InvokeArgs } from "@tauri-apps/api/core";
 import { afterEach, describe, expect, it } from "vitest";
 import SettingsWindow from "./SettingsWindow";
 import { camera, fakeMedia, type FakeMedia } from "../webcam/testMedia";
+import { mockCommands, type CommandCall } from "../test/mockCommands";
+import type { Settings_Serialize } from "../app/bindings";
 import {
   DEFAULT_AI_PREFERENCES,
+  DEFAULT_APPEARANCE,
   DEFAULT_RECORDING,
   DEFAULT_RETENTION,
   SETTINGS_SECTIONS,
   isLocalEndpoint,
   keystrokesHint,
   listCameras,
+  type AfterCapture,
   type AiPreferences,
+  type Appearance,
   type FfmpegStatus,
   type Microphone,
   type RecordingSettings,
@@ -41,7 +44,7 @@ const DEFAULT_HOTKEYS = {
 interface Backend {
   /** Undefined: the system cannot say, and `get_autostart` fails. */
   autostart?: boolean;
-  afterCapture: string;
+  afterCapture: AfterCapture;
   copyToClipboard: boolean;
   ai: AiPreferences;
   /** What `ai_test_connection` answers; a thrown error when it starts with "error:". */
@@ -54,7 +57,7 @@ interface Backend {
   autoBackdrop?: boolean;
   /** The editor section's pointer flag. */
   showPointer?: boolean;
-  appearance?: unknown;
+  appearance?: Appearance;
   recording?: RecordingSettings;
   retention: Retention;
   /** Each kind's count and size, as `library_storage` reads them. */
@@ -86,7 +89,7 @@ interface Backend {
   skillInstalled?: string[];
   /** What `install_agent_skill` fails with, when it does. */
   installError?: string;
-  calls: { cmd: string; payload?: InvokeArgs }[];
+  calls: CommandCall[];
 }
 
 function mockBackend(initial: Partial<Backend> = {}): Backend {
@@ -119,7 +122,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     calls: [],
     ...initial,
   };
-  const settings = () => ({
+  const settings = (): Settings_Serialize => ({
     saveFolder: backend.saveFolder,
     hotkeys: backend.hotkeys,
     afterCapture: backend.afterCapture,
@@ -129,30 +132,38 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
       ...(backend.autoBackdrop === undefined ? {} : { autoBackdrop: backend.autoBackdrop }),
       ...(backend.showPointer === undefined ? {} : { showPointer: backend.showPointer }),
     },
-    appearance: backend.appearance,
-    recording: backend.recording,
+    showInDock: false,
+    appearance: backend.appearance ?? DEFAULT_APPEARANCE,
+    recording: backend.recording ?? DEFAULT_RECORDING,
     retention: backend.retention,
-    agentAccess: backend.agentAccess,
-    updateChannel: backend.updateChannel,
+    permissions: { asked: true, resume: false },
+    agentAccess: backend.agentAccess ?? false,
+    updateChannel: backend.updateChannel ?? "stable",
   });
-  mockIPC((cmd, payload) => {
-    backend.calls.push({ cmd, payload });
-    switch (cmd) {
-      case "get_settings":
+  const guard = () => {
+    if (backend.setError) throw backend.setError;
+  };
+  backend.calls = mockCommands(
+    {
+      get_settings: () => settings(),
+      set_appearance: ({ appearance }) => {
+        backend.appearance = { ...DEFAULT_APPEARANCE, ...appearance };
         return settings();
-      case "set_appearance":
-        backend.appearance = (payload as { appearance: unknown }).appearance;
+      },
+      set_recording: ({ recording }) => {
+        // "rounded" is the old name serde still reads for "round".
+        const webcamShape = recording.webcamShape === "rounded" ? "round" : recording.webcamShape;
+        backend.recording = { ...DEFAULT_RECORDING, ...recording, webcamShape: webcamShape ?? DEFAULT_RECORDING.webcamShape };
         return settings();
-      case "set_recording":
-        backend.recording = (payload as { recording: RecordingSettings }).recording;
+      },
+      set_retention: ({ retention }) => {
+        guard();
+        backend.retention = { ...DEFAULT_RETENTION, ...retention };
         return settings();
-      case "set_retention":
-        if (backend.setError) throw backend.setError;
-        backend.retention = (payload as { retention: Retention }).retention;
-        return settings();
-      case "library_storage": {
+      },
+      library_storage: ({ candidate }) => {
         if (backend.storageFails) throw new Error("unexpected command library_storage");
-        const retention = (payload as { candidate?: Retention } | undefined)?.candidate ?? backend.retention;
+        const retention = candidate ?? backend.retention;
         // Zero days, as Purge now asks, is everything unprotected.
         const due = (kind: KindName) =>
           retention[kind] === null
@@ -165,96 +176,95 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
           disk: { free: 100 * GB, total: 500 * GB },
           due: { image: due("image"), gif: due("gif"), video: due("video") },
         };
-      }
-      case "library_clean_up": {
-        const { retention } = payload as { retention?: Retention };
+      },
+      library_clean_up: ({ retention }) => {
         const removed = (kind: KindName) => (retention?.[kind] === 0 ? backend.usage[kind] : { count: 0, bytes: 0 });
         const kinds: KindName[] = ["image", "gif", "video"];
         return {
           count: kinds.reduce((sum, kind) => sum + removed(kind).count, 0),
           bytes: kinds.reduce((sum, kind) => sum + removed(kind).bytes, 0),
         };
-      }
-      case "ffmpeg_status":
-        return backend.ffmpeg;
-      case "ffmpeg_retry":
+      },
+      ffmpeg_status: () => backend.ffmpeg,
+      ffmpeg_retry: () => {
         backend.ffmpeg = backend.ffmpegAfterRetry;
         return backend.ffmpeg;
-      case "recording_microphones":
-        return backend.microphones;
-      case "remember_cameras":
-        backend.rememberedCameras = (payload as { cameras: unknown }).cameras;
+      },
+      recording_microphones: () => backend.microphones,
+      remember_cameras: ({ cameras }) => {
+        backend.rememberedCameras = cameras;
         return null;
-      case "recording_system_audio":
-        return backend.systemSound;
-      case "get_autostart":
+      },
+      recording_system_audio: () => backend.systemSound,
+      get_autostart: () => {
         if (backend.autostart === undefined) throw "not supported";
         return backend.autostart;
-      case "set_autostart":
-        if (backend.setError) throw backend.setError;
-        backend.autostart = (payload as { enabled: boolean }).enabled;
+      },
+      set_autostart: ({ enabled }) => {
+        guard();
+        backend.autostart = enabled;
         return backend.autostart;
-      case "set_preferences": {
-        if (backend.setError) throw backend.setError;
-        const { preferences } = payload as {
-          preferences: { afterCapture: string; copyToClipboard: boolean; ai: AiPreferences };
-        };
+      },
+      set_preferences: ({ preferences }) => {
+        guard();
         backend.afterCapture = preferences.afterCapture;
         backend.copyToClipboard = preferences.copyToClipboard;
-        backend.ai = preferences.ai;
+        backend.ai = { ...backend.ai, ...preferences.ai };
         return settings();
-      }
-      case "ai_test_connection":
+      },
+      ai_test_connection: () => {
         if (backend.testResult.startsWith("error:")) throw backend.testResult.slice(6).trim();
         return backend.testResult;
-      case "ai_redescribe_all":
-        return null;
-      case "ai_clis":
-        return { claudeCode: backend.claudePath, codex: backend.codexPath };
-      case "set_auto_backdrop":
-        if (backend.setError) throw backend.setError;
-        backend.autoBackdrop = (payload as { enabled: boolean }).enabled;
+      },
+      ai_redescribe_all: () => null,
+      ai_clis: () => ({ claudeCode: backend.claudePath, codex: backend.codexPath }),
+      set_auto_backdrop: ({ enabled }) => {
+        guard();
+        backend.autoBackdrop = enabled;
         return settings();
-      case "set_show_pointer":
-        if (backend.setError) throw backend.setError;
-        backend.showPointer = (payload as { enabled: boolean }).enabled;
+      },
+      set_show_pointer: ({ enabled }) => {
+        guard();
+        backend.showPointer = enabled;
         return settings();
-      case "plugin:dialog|open":
-        return backend.picked;
-      case "set_save_folder": {
-        if (backend.setError) throw backend.setError;
-        backend.saveFolder = (payload as { path: string }).path;
+      },
+      set_save_folder: ({ path }) => {
+        guard();
+        backend.saveFolder = path;
         return settings();
-      }
-      case "set_hotkeys": {
-        if (backend.setError) throw backend.setError;
-        backend.hotkeys = (payload as { hotkeys: typeof DEFAULT_HOTKEYS }).hotkeys;
-        return {
-          settings: settings(),
-          warnings: backend.hotkeyWarnings,
-        };
-      }
-      case "pause_hotkeys":
-      case "resume_hotkeys":
-        return null;
-      case "set_agent_access":
-        if (backend.setError) throw backend.setError;
-        backend.agentAccess = (payload as { enabled: boolean }).enabled;
+      },
+      set_hotkeys: ({ hotkeys }) => {
+        guard();
+        backend.hotkeys = { ...hotkeys, steps: hotkeys.steps ?? DEFAULT_HOTKEYS.steps };
+        return { settings: settings(), warnings: backend.hotkeyWarnings };
+      },
+      pause_hotkeys: () => undefined,
+      resume_hotkeys: () => undefined,
+      set_agent_access: ({ enabled }) => {
+        guard();
+        backend.agentAccess = enabled;
         return settings();
-      case "set_update_channel":
-        if (backend.setError) throw backend.setError;
-        backend.updateChannel = (payload as { channel: UpdateChannel }).channel;
+      },
+      set_update_channel: ({ channel }) => {
+        guard();
+        backend.updateChannel = channel;
         return settings();
-      case "agent_skill_status":
-        return { installed: backend.skillInstalled ?? [], current: (backend.skillInstalled ?? []).length > 0 };
-      case "install_agent_skill":
+      },
+      agent_skill_status: () => ({ installed: backend.skillInstalled ?? [], current: (backend.skillInstalled ?? []).length > 0 }),
+      install_agent_skill: () => {
         if (backend.installError) throw backend.installError;
         backend.skillInstalled = ["/home/me/.agents/skills/grab-it/SKILL.md", "/home/me/.claude/skills/grab-it/SKILL.md"];
         return { installed: backend.skillInstalled, current: true };
-      default:
+      },
+    },
+    {
+      shouldMockEvents: true,
+      otherwise: (cmd) => {
+        if (cmd === "plugin:dialog|open") return backend.picked;
         throw new Error(`unexpected command ${cmd}`);
-    }
-  }, { shouldMockEvents: true });
+      },
+    },
+  );
   return backend;
 }
 

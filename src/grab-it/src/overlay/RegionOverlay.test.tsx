@@ -1,20 +1,24 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { mockIPC } from "@tauri-apps/api/mocks";
-import type { InvokeArgs } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RegionOverlay from "./RegionOverlay";
 import { CHOICE_EVENT, START_EVENT, type OverlayInfo } from "./api";
 import type { Box } from "./geometry";
-import { DEFAULT_RECORDING, type Camera, type RecordingSettings } from "../settings/api";
+import {
+  DEFAULT_AI_PREFERENCES,
+  DEFAULT_APPEARANCE,
+  DEFAULT_RECORDING,
+  DEFAULT_RETENTION,
+  type Camera,
+  type RecordingSettings,
+} from "../settings/api";
+import type { Settings_Serialize } from "../app/bindings";
+import { mockCommands, type CommandCall } from "../test/mockCommands";
 import { camera, fakeMedia, type FakeMedia } from "../webcam/testMedia";
 import overlayStyles from "./overlay.css?inline";
 
-interface Call {
-  cmd: string;
-  payload?: InvokeArgs;
-}
+type Call = CommandCall;
 
 /** The cameras remembered with their names, as `known_cameras` reads them by default. */
 const KNOWN_CAMERAS: Camera[] = [
@@ -22,55 +26,83 @@ const KNOWN_CAMERAS: Camera[] = [
   { id: "cam-usb", name: "Logitech C920" },
 ];
 
+/**
+ * A region overlay on a 1000 × 800 monitor with no windows, as `overlay_info`
+ * sends it. The rest is what an overlay that is not All-in-one gets.
+ */
+function overlayInfo(info: Partial<OverlayInfo> = {}): OverlayInfo {
+  return {
+    mode: "region",
+    intent: "capture",
+    allInOne: false,
+    choice: null,
+    monitorWidth: 1000,
+    monitorHeight: 800,
+    // Not known: the frozen image's own size is used.
+    imageWidth: 0,
+    windows: [],
+    topInset: null,
+    lastRegion: null,
+    pointerHere: true,
+    barCentre: null,
+    monitorName: "",
+    ...info,
+  };
+}
+
+/** Settings as `get_settings` sends them, with `recording` as given. */
+function settings(recording: RecordingSettings): Settings_Serialize {
+  return {
+    saveFolder: "/home/me/Pictures/Grab-it",
+    hotkeys: { allInOne: "", region: "", window: "", screen: "", text: "", colour: "", library: "", steps: "" },
+    editor: {},
+    showInDock: true,
+    appearance: DEFAULT_APPEARANCE,
+    recording,
+    retention: DEFAULT_RETENTION,
+    permissions: { asked: true, resume: false },
+    agentAccess: false,
+    updateChannel: "stable",
+    afterCapture: "quickAccess",
+    copyToClipboard: true,
+    ai: DEFAULT_AI_PREFERENCES,
+  };
+}
+
 function mockOverlay(
   info: Partial<OverlayInfo> = {},
   recording: Partial<RecordingSettings> = {},
   cameras: Camera[] = KNOWN_CAMERAS,
 ): Call[] {
-  const calls: Call[] = [];
-  mockIPC((cmd, payload) => {
-    calls.push({ cmd, payload });
-    switch (cmd) {
-      case "overlay_info":
-        return {
-          mode: "region",
+  return mockCommands(
+    {
+      overlay_info: () =>
+        overlayInfo({
           // Twice the viewport: a 2x monitor.
           monitorWidth: window.innerWidth * 2,
           monitorHeight: window.innerHeight * 2,
-          windows: [
-            { id: 7, title: "Editor", appName: "code", x: 200, y: 200, width: 400, height: 300 },
-          ],
+          windows: [{ id: 7, title: "Editor", appName: "code", x: 200, y: 200, width: 400, height: 300 }],
           ...info,
-        };
-      case "overlay_image":
-        return new ArrayBuffer(8);
+        }),
+      overlay_image: () => new ArrayBuffer(8),
       // The recording options beside a recording's area.
-      case "get_settings":
-        return { recording: { ...DEFAULT_RECORDING, audio: "microphone", ...recording } };
+      get_settings: () => settings({ ...DEFAULT_RECORDING, audio: "microphone", ...recording }),
       // The shortcuts the desktop registered, as the tray and hub show them.
-      case "effective_hotkeys":
-        return { allInOne: "Ctrl+Alt+PrintScreen", region: "Ctrl+Shift+2", screen: "Ctrl+Shift+3" };
-      case "recording_microphones":
-        return [{ id: "usb", name: "USB Microphone", isDefault: false }];
-      case "recording_system_audio":
-        return true;
-      case "known_cameras":
-        return cameras;
-      case "remember_cameras":
-        return null;
-      case "set_recording":
-        return { recording: (payload as { recording: unknown }).recording };
-      case "overlay_ready":
-      case "record_bar_remember":
-      case "overlay_finish":
-      case "overlay_choose":
-      case "overlay_cancel":
-        return null;
-      default:
-        throw new Error(`unexpected command ${cmd}`);
-    }
-  }, { shouldMockEvents: true });
-  return calls;
+      effective_hotkeys: () => ({ allInOne: "Ctrl+Alt+PrintScreen", region: "Ctrl+Shift+2", screen: "Ctrl+Shift+3" }),
+      recording_microphones: () => [{ id: "usb", name: "USB Microphone", isDefault: false }],
+      recording_system_audio: () => true,
+      known_cameras: () => cameras,
+      remember_cameras: () => null,
+      // The overlay always sends every recording setting, so they read back as sent.
+      set_recording: ({ recording: sent }) => settings(sent as RecordingSettings),
+      overlay_ready: () => null,
+      record_bar_remember: () => null,
+      overlay_finish: () => null,
+      overlay_choose: () => null,
+      overlay_cancel: () => undefined,
+    },
+    { shouldMockEvents: true },
+  );
 }
 
 const last = (calls: Call[]) => calls[calls.length - 1];
@@ -120,6 +152,7 @@ describe("RegionOverlay", () => {
             rect: { x: 100, y: 50, width: 200, height: 200 },
             viewportWidth: 1000,
           },
+          choice: null,
         },
       }),
     );
@@ -199,7 +232,7 @@ describe("RegionOverlay", () => {
     await waitFor(() =>
       expect(last(calls)).toEqual({
         cmd: "overlay_finish",
-        payload: { selection: { kind: "window", id: 7 } },
+        payload: { selection: { kind: "window", id: 7 }, choice: null },
       }),
     );
   });
@@ -231,7 +264,7 @@ describe("RegionOverlay", () => {
     await waitFor(() =>
       expect(last(calls)).toEqual({
         cmd: "overlay_finish",
-        payload: { selection: { kind: "window", id: 7 } },
+        payload: { selection: { kind: "window", id: 7 }, choice: null },
       }),
     );
   });
@@ -325,6 +358,7 @@ describe("RegionOverlay", () => {
             rect: { x: 100, y: 100, width: 300, height: 200 },
             viewportWidth: 1000,
           },
+          choice: null,
         },
       }),
     );
@@ -374,6 +408,7 @@ describe("RegionOverlay", () => {
           rect: { x: 500, y: 400, width: 120, height: 120 },
           viewportWidth: 1000,
         },
+        choice: null,
       }),
     );
   });
@@ -416,6 +451,7 @@ describe("RegionOverlay", () => {
           rect: { x: 150, y: 160, width: 210, height: 100 },
           viewportWidth: 1000,
         },
+        choice: null,
       }),
     );
   });
@@ -446,31 +482,35 @@ describe("RegionOverlay", () => {
 
   describe("revealing the window", () => {
     it("shows the window when the image cannot be loaded, so the error is seen", async () => {
-      const calls: string[] = [];
-      mockIPC((cmd) => {
-        calls.push(cmd);
-        if (cmd === "overlay_info") {
-          return { mode: "region", monitorWidth: 1000, monitorHeight: 800, windows: [] };
-        }
-        if (cmd === "overlay_image") throw new Error("frozen image lost");
-        return null;
-      });
+      const calls = mockCommands(
+        {
+          overlay_info: () => overlayInfo(),
+          overlay_image: () => {
+            throw new Error("frozen image lost");
+          },
+        },
+        { otherwise: () => null },
+      );
       render(<RegionOverlay />);
 
       await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("frozen image lost"));
-      await waitFor(() => expect(calls).toContain("overlay_ready"));
+      await waitFor(() => expect(calls.map((c) => c.cmd)).toContain("overlay_ready"));
       expect(screen.getByTestId("overlay")).toHaveAttribute("data-shown", "true");
     });
   });
 
   it("shows a failed finish in the status element", async () => {
-    mockIPC((cmd) => {
-      if (cmd === "overlay_info") {
-        return { mode: "region", monitorWidth: 1000, monitorHeight: 800, windows: [] };
-      }
-      if (cmd === "overlay_image") return new ArrayBuffer(8);
-      throw new Error("capture failed");
-    });
+    mockCommands(
+      {
+        overlay_info: () => overlayInfo(),
+        overlay_image: () => new ArrayBuffer(8),
+      },
+      {
+        otherwise: () => {
+          throw new Error("capture failed");
+        },
+      },
+    );
     render(<RegionOverlay />);
     const overlay = await ready();
 
@@ -502,6 +542,7 @@ describe("RegionOverlay", () => {
               rect: { x: 100, y: 50, width: 200, height: 40 },
               viewportWidth: 1000,
             },
+            choice: null,
           },
         }),
       );
@@ -537,7 +578,7 @@ describe("RegionOverlay", () => {
       await waitFor(() =>
         expect(last(calls)).toEqual({
           cmd: "overlay_finish",
-          payload: { selection: { kind: "point", x: 150, y: 160, viewportWidth: 1000 } },
+          payload: { selection: { kind: "point", x: 150, y: 160, viewportWidth: 1000 }, choice: null },
         }),
       );
     });
@@ -560,6 +601,7 @@ describe("RegionOverlay", () => {
       await waitFor(() =>
         expect(last(calls).payload).toEqual({
           selection: { kind: "point", x: 400, y: 400, viewportWidth: 1000 },
+          choice: null,
         }),
       );
     });
@@ -1550,6 +1592,7 @@ describe("RegionOverlay", () => {
             rect: { x: 100, y: 50, width: 200, height: 200 },
             viewportWidth: 1000,
           },
+          choice: null,
         }),
       );
       expect(screen.queryAllByTestId(/^overlay-handle-/)).toHaveLength(0);
@@ -1559,35 +1602,28 @@ describe("RegionOverlay", () => {
   describe("as a spare, loaded before any selection", () => {
     it("draws nothing until a selection starts on it, then loads it once", async () => {
       let selecting = false;
-      const calls: string[] = [];
-      mockIPC(
-        (cmd) => {
-          calls.push(cmd);
-          if (cmd === "overlay_info") {
-            return selecting
-              ? { mode: "region", monitorWidth: 1000, monitorHeight: 800, windows: [] }
-              : null;
-          }
-          if (cmd === "overlay_image") return new ArrayBuffer(8);
-          return null;
+      const calls = mockCommands(
+        {
+          overlay_info: () => (selecting ? overlayInfo() : null),
+          overlay_image: () => new ArrayBuffer(8),
         },
-        { shouldMockEvents: true },
+        { shouldMockEvents: true, otherwise: () => null },
       );
       render(<RegionOverlay />);
       const overlay = screen.getByTestId("overlay");
 
-      await waitFor(() => expect(calls).toContain("overlay_info"));
+      await waitFor(() => expect(calls.map((c) => c.cmd)).toContain("overlay_info"));
       expect(overlay).toHaveAttribute("data-ready", "false");
       expect(overlay).toHaveAttribute("data-shown", "false");
       expect(screen.getByRole("status")).toHaveAttribute("data-error", "false");
-      expect(calls).not.toContain("overlay_image");
+      expect(calls.map((c) => c.cmd)).not.toContain("overlay_image");
 
       selecting = true;
       await emit(START_EVENT);
 
       await waitFor(() => expect(overlay).toHaveAttribute("data-ready", "true"));
-      await waitFor(() => expect(calls).toContain("overlay_image"));
-      expect(calls.filter((cmd) => cmd === "overlay_image")).toHaveLength(1);
+      await waitFor(() => expect(calls.map((c) => c.cmd)).toContain("overlay_image"));
+      expect(calls.filter((c) => c.cmd === "overlay_image")).toHaveLength(1);
     });
   });
 
@@ -1610,19 +1646,18 @@ describe("RegionOverlay", () => {
     });
 
     it("stays undimmed while it is a spare", async () => {
-      const calls: string[] = [];
-      mockIPC(
-        (cmd) => {
-          calls.push(cmd);
-          return null;
+      const calls = mockCommands(
+        {
+          // A spare: no selection yet.
+          overlay_info: () => null,
         },
-        { shouldMockEvents: true },
+        { shouldMockEvents: true, otherwise: () => null },
       );
       render(<RegionOverlay />);
 
-      await waitFor(() => expect(calls).toContain("overlay_info"));
+      await waitFor(() => expect(calls.map((c) => c.cmd)).toContain("overlay_info"));
       expect(screen.getByTestId("overlay")).toHaveAttribute("data-shown", "false");
-      expect(calls).not.toContain("overlay_ready");
+      expect(calls.map((c) => c.cmd)).not.toContain("overlay_ready");
     });
 
     it("labels the selection in image pixels before the image arrives", async () => {
@@ -1915,6 +1950,7 @@ describe("RegionOverlay", () => {
       await waitFor(() => expect(finishes(calls)).toHaveLength(1));
       expect(finishes(calls)[0].payload).toEqual({
         selection: { kind: "region", rect: { x: 100, y: 50, width: 200, height: 200 }, viewportWidth: 1000 },
+        choice: null,
       });
     });
 
@@ -2000,6 +2036,7 @@ describe("RegionOverlay", () => {
       await waitFor(() => expect(finishes(calls)).toHaveLength(1));
       expect(finishes(calls)[0].payload).toEqual({
         selection: { kind: "region", rect: { x: 0, y: 0, width: 1000, height: 800 }, viewportWidth: 1000 },
+        choice: null,
       });
     });
 

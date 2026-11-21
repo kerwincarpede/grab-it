@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { SettingsSection } from "../settings/api";
+import { commands } from "./bindings";
 
 /** What the Grab-it window shows. Mirrors `MainView` in src-tauri/src/windows.rs. */
 export type MainView = "library" | "settings" | "welcome";
@@ -27,11 +27,11 @@ export function onNavigate(handler: (view: MainView) => void): Promise<UnlistenF
 /** A capture the Grab-it window and the hub can start. */
 export type CaptureKind = "allInOne" | "region" | "window" | "screen" | "monitor" | "repeat" | "record" | "text" | "colour" | "steps";
 
-/** Mirrors BindingLabels in hotkeys.rs. Missing actions have no registered shortcut. */
+/** `BindingLabels` in hotkeys.rs, keyed by capture. Missing actions have no registered shortcut. */
 export type BindingLabels = Partial<Record<CaptureKind | "library", string>>;
 
 export function effectiveHotkeys(): Promise<BindingLabels> {
-  return invoke<BindingLabels>("effective_hotkeys");
+  return commands.effectiveHotkeys();
 }
 
 export function onEffectiveHotkeys(handler: (labels: BindingLabels) => void): Promise<UnlistenFn> {
@@ -40,16 +40,16 @@ export function onEffectiveHotkeys(handler: (labels: BindingLabels) => void): Pr
 
 /** Starts a capture; the hub hides first so it is not in the shot. */
 export function startCapture(kind: CaptureKind, options: { delaySeconds?: number; monitor?: number } = {}): Promise<void> {
-  return invoke<void>("hub_capture", { kind, delaySeconds: options.delaySeconds, monitor: options.monitor });
+  return commands.hubCapture(kind, options.delaySeconds ?? null, options.monitor ?? null).then(() => undefined);
 }
 
 /** Opens (or switches) the Grab-it window to `view`. */
 export function openMain(view: MainView): Promise<void> {
-  return invoke<void>("hub_open", { view });
+  return commands.hubOpen(view).then(() => undefined);
 }
 
 export function checkForUpdates(): Promise<void> {
-  return invoke<void>("hub_check_updates");
+  return commands.hubCheckUpdates();
 }
 
 /** Where a sidebar item leads: the library (maybe one app) or a Settings page. */

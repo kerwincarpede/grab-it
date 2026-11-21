@@ -1,7 +1,6 @@
-import { mockIPC } from "@tauri-apps/api/mocks";
-import type { InvokeArgs } from "@tauri-apps/api/core";
 import { describe, expect, it } from "vitest";
 import { shotWords, type OcrLine } from "./api";
+import { mockCommands } from "../test/mockCommands";
 
 const lines: OcrLine[] = [
   {
@@ -20,25 +19,23 @@ const lines: OcrLine[] = [
 
 describe("shotWords", () => {
   it("asks for the shot's lines and resolves to them", async () => {
-    const calls: { cmd: string; payload?: InvokeArgs }[] = [];
-    mockIPC((cmd, payload) => {
-      calls.push({ cmd, payload });
-      return cmd === "library_words" ? lines : undefined;
-    });
+    const calls = mockCommands({ library_words: () => lines });
 
     await expect(shotWords(7)).resolves.toEqual(lines);
     expect(calls).toEqual([{ cmd: "library_words", payload: { id: 7 } }]);
   });
 
   it("resolves to null for a shot without word boxes", async () => {
-    mockIPC((cmd) => (cmd === "library_words" ? null : undefined));
+    mockCommands({ library_words: () => null });
 
     await expect(shotWords(3)).resolves.toBeNull();
   });
 
   it("rejects with the backend's message", async () => {
-    mockIPC(() => {
-      throw "no shot 99";
+    mockCommands({
+      library_words: () => {
+        throw "no shot 99";
+      },
     });
 
     await expect(shotWords(99)).rejects.toBe("no shot 99");

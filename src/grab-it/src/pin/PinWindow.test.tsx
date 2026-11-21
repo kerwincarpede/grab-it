@@ -1,29 +1,30 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { mockIPC } from "@tauri-apps/api/mocks";
-import type { InvokeArgs } from "@tauri-apps/api/core";
 import { describe, expect, it } from "vitest";
 import PinWindow from "./PinWindow";
 import { clampOpacity, MIN_OPACITY, wheelFactor, wheelOpacity, ZOOM_STEP } from "./api";
+import { mockCommands, type CommandCall } from "../test/mockCommands";
 
 interface Backend {
-  calls: { cmd: string; payload?: InvokeArgs }[];
+  calls: CommandCall[];
 }
 
 function mockBackend(editable = true): Backend {
-  const backend: Backend = { calls: [] };
-  mockIPC((cmd, payload) => {
-    backend.calls.push({ cmd, payload });
-    switch (cmd) {
-      case "pin_info":
-        return { width: 900, height: 520, editable };
-      case "pin_image":
-        return new ArrayBuffer(4);
-      default:
-        return null;
-    }
-  });
-  return backend;
+  const calls = mockCommands(
+    {
+      pin_info: () => ({ width: 900, height: 520, editable }),
+      pin_image: () => new ArrayBuffer(4),
+      pin_zoom: () => null,
+      pin_lock: () => null,
+      pin_nudge: () => null,
+      pin_copy: () => null,
+      pin_edit: () => null,
+      pin_close: () => null,
+    },
+    // The window plugin's commands.
+    { otherwise: () => null },
+  );
+  return { calls };
 }
 
 const commands = (backend: Backend) =>

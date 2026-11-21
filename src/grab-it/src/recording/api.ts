@@ -1,38 +1,28 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { commands, type AudioKind, type RecordingClipSource_Serialize, type RecordingInfo_Serialize, type Value } from "../app/bindings";
 import type { SidecarEdits } from "./edits";
 import type { CursorPath, Zoom } from "./zooms";
 
-/** Mirrors `RecordingInfo` in src-tauri/src/recording_editor.rs. */
-export interface RecordingInfo {
-  path: string;
-  fileName: string;
-  /** The saved `<recording>.edits.json`, or null when there is none yet. */
-  edits: unknown;
-  /** The frame rate it was recorded at. */
-  fps: number;
-  /** The pointer's smoothed path, which follow-the-pointer zooms centre on; null without `<recording>.cursor.json`. */
-  cursor: CursorPath | null;
-  /** Each source of its sound, by kind; empty when it is silent. */
-  audio: AudioKind[];
-}
+/**
+ * The recording the editor opened, from `RecordingInfo` in
+ * src-tauri/src/recording_editor.rs. Its pointer path is narrowed to finite
+ * points: specta types every `f64` as `number | null` for NaN, which the
+ * smoothed path never holds.
+ */
+export type RecordingInfo = Omit<RecordingInfo_Serialize, "cursor"> & { cursor: CursorPath | null };
 
 /**
  * What one source of a recording's sound is: `mixed` is the microphone and
- * system sound in one track. Mirrors `AudioKind` in src-tauri/src/recording_editor.rs.
+ * system sound in one track. From `AudioKind` in src-tauri/src/recording_editor.rs.
  */
-export type AudioKind = "microphone" | "system" | "mixed";
+export type { AudioKind };
 
-/** Mirrors `RecordingSource` in src-tauri/src/recording_editor.rs: a recording a clip plays. */
-export interface RecordingSource {
-  path: string;
-  fileName: string;
-  fps: number;
-  /** Its pointer path, for follow-the-pointer zooms; null without one. */
-  cursor: CursorPath | null;
-  /** Whether it has a sound track. */
-  hasAudio: boolean;
-}
+/**
+ * A recording a clip plays, from `RecordingClipSource` in
+ * src-tauri/src/recording_editor.rs, its pointer path narrowed as in `RecordingInfo`.
+ */
+export type RecordingSource = Omit<RecordingClipSource_Serialize, "cursor"> & { cursor: CursorPath | null };
 
 /** Mirrors `VIDEO_SCHEME` in src-tauri/src/recording_editor.rs. */
 export const VIDEO_SCHEME = "grab-it-video";
@@ -103,12 +93,12 @@ export interface ExportProgress {
 }
 
 export function recordingInfo(): Promise<RecordingInfo> {
-  return invoke<RecordingInfo>("recording_info");
+  return commands.recordingInfo() as Promise<RecordingInfo>;
 }
 
 /** A recordings-folder MP4 by file name; refused for anything else or a file that is gone. */
 export function recordingSource(fileName: string): Promise<RecordingSource> {
-  return invoke<RecordingSource>("recording_source", { fileName });
+  return commands.recordingSource(fileName) as Promise<RecordingSource>;
 }
 
 /** Where the page plays `path` from: the recordings folder, served by `grab-it-video`. */
@@ -151,8 +141,9 @@ export async function fetchRecording(url: string, fetcher: typeof fetch = fetch)
   }
 }
 
-export function saveEdits(edits: SidecarEdits): Promise<void> {
-  return invoke<void>("recording_save_edits", { edits });
+export async function saveEdits(edits: SidecarEdits): Promise<void> {
+  // The sidecar is free-form JSON to Rust (`serde_json::Value`).
+  await commands.recordingSaveEdits(edits as unknown as Value);
 }
 
 /**

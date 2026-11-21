@@ -1,50 +1,54 @@
-import { invoke } from "@tauri-apps/api/core";
+import {
+  commands,
+  type AfterCapture,
+  type AiProvider,
+  type PopupCorner,
+  type RecordingAudio,
+  type RecordingFormat,
+  type RecordingQuality,
+  type Removal,
+  type TextSizeStep,
+  type UpdateChannel,
+  type AgentSkill as GeneratedAgentSkill,
+  type AiClis_Serialize,
+  type AiSettings_Serialize,
+  type Appearance_Serialize,
+  type BackdropPreset as GeneratedBackdropPreset,
+  type Camera as GeneratedCamera,
+  type EditorPreferences_Deserialize,
+  type EditorPreferences_Serialize,
+  type FfmpegStatus_Serialize,
+  type Hotkeys_Serialize,
+  type HotkeysUpdate_Serialize,
+  type MicrophoneInfo,
+  type Preferences_Serialize,
+  type RecordingSettings_Serialize,
+  type Retention_Serialize,
+  type Settings_Serialize,
+  type WebcamShape_Serialize,
+} from "../app/bindings";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
-/** Mirrors `AfterCapture` in src-tauri/src/settings.rs. */
-export type AfterCapture = "quickAccess" | "editor" | "nothing";
+export type {
+  AfterCapture,
+  AiProvider,
+  ApiKeyStorage,
+  PopupCorner,
+  RecordingAudio,
+  RecordingFormat,
+  RecordingQuality,
+  RecordingSource,
+  Removal,
+  TextSizeStep,
+  UpdateChannel,
+} from "../app/bindings";
 
-/** Mirrors `Preferences` in src-tauri/src/settings.rs. */
-export interface Preferences {
-  afterCapture: AfterCapture;
-  copyToClipboard: boolean;
-  ai: AiPreferences;
-}
+/** `Preferences` in src-tauri/src/settings.rs. */
+export type Preferences = Preferences_Serialize;
 
-/** Mirrors `AiProvider` in src-tauri/src/settings.rs: who describes captures. */
-export type AiProvider = "claudeCode" | "codex" | "endpoint";
-
-/** Mirrors `ApiKeyStorage` in src-tauri/src/settings.rs: where the endpoint API key is kept. */
-export type ApiKeyStorage = "keychain" | "settingsFile";
-
-/** Mirrors `AiSettings` in src-tauri/src/settings.rs: the vision model that describes captures. */
-export interface AiPreferences {
-  enabled: boolean;
-  /**
-   * Null until a provider was picked, or Grab-it picked Claude Code or Codex
-   * because it is installed; it then works as "endpoint" (see {@link aiProvider}).
-   */
-  provider: AiProvider | null;
-  /** An OpenAI-compatible API base URL, such as Ollama's. Only the endpoint provider uses it. */
-  endpoint: string;
-  /** Only the endpoint provider uses it. */
-  model: string;
-  /** The model Claude Code is asked for: an alias (haiku, sonnet, opus) or a full name. Empty means haiku. */
-  claudeModel: string;
-  /** The model Codex is asked for. Empty means the one set up in Codex itself. */
-  codexModel: string;
-  /** Only cloud providers need one. */
-  apiKey: string | null;
-  /** Leave captures from before AI descriptions were turned on alone. */
-  newCapturesOnly: boolean;
-  /** Text captures are read again by the same AI, which fixes OCR mistakes and lays out JSON, code and tables. Only while {@link enabled}. */
-  tidyText: boolean;
-  /** Grab-it turned describing on by itself and the Library has not said so yet. Only the backend changes it. */
-  noticePending: boolean;
-  /** Where {@link apiKey} is kept: the OS keychain, or settings.json when there is none. Only the backend changes it. */
-  apiKeyStorage: ApiKeyStorage;
-}
+/** `AiSettings` in src-tauri/src/settings.rs: the vision model that describes captures. */
+export type AiPreferences = AiSettings_Serialize;
 
 /** What the backend starts with. */
 export const DEFAULT_AI_PREFERENCES: AiPreferences = {
@@ -122,15 +126,12 @@ export function providerName(provider: AiProvider): string {
   return "the AI endpoint";
 }
 
-/** Mirrors `AiClis` in src-tauri/src/ai.rs: where each AI CLI was found, or null when it is not installed. */
-export interface AiClis {
-  claudeCode: string | null;
-  codex: string | null;
-}
+/** `AiClis` in src-tauri/src/ai.rs: where each AI CLI was found, or null when it is not installed. */
+export type AiClis = AiClis_Serialize;
 
 /** Looks for the AI CLIs Grab-it can run. */
 export function aiClis(): Promise<AiClis> {
-  return invoke<AiClis>("ai_clis");
+  return commands.aiClis();
 }
 
 /** Whether an endpoint URL points at this computer, so screenshots stay on it. */
@@ -144,36 +145,16 @@ export function isLocalEndpoint(endpoint: string): boolean {
 }
 
 /**
- * Mirrors `EditorPreferences` in src-tauri/src/settings.rs: the annotation
+ * `EditorPreferences` in src-tauri/src/settings.rs: the annotation
  * editor's remembered choices. Any key may be missing; the editor checks
  * each value and uses its own default otherwise.
+ * The backend keeps `backdrop` and each preset's backdrop as opaque JSON;
+ * the editor checks them as it reads them, so they are `unknown` here.
  */
-export interface EditorPreferences {
-  /** `#rrggbb`. */
-  color?: string;
-  /** The last tool picked (`Tool` in editor/model.ts). */
-  tool?: string;
-  /** Each tool's own width in pixels: stroke width, text font size or step badge size. */
-  widths?: Record<string, number>;
-  fill?: boolean;
-  textBackground?: boolean;
-  /** `TextStyle` in editor/model.ts (`outline` or `shadow`); absent for plain text, and ignored while `textBackground` is on. */
-  textStyle?: string;
-  /** `BlurMode` in editor/model.ts. */
-  blurMode?: string;
-  /** The stamp the Stamp tool places: a pick id (`pickId` in editor/stamps.ts). */
-  stamp?: string;
-  /** The last backdrop picked (`Backdrop` in editor/model.ts); checked by the editor as it reads it. */
+export type EditorPreferences = Omit<EditorPreferences_Serialize, "backdrop" | "backdropPresets"> & {
   backdrop?: unknown;
-  /** Frame captures that have no annotations yet with `backdrop`. Set from Settings; the editor never writes it. */
-  autoBackdrop?: boolean;
-  /** New captures start with their mouse pointer shown. Set from Settings; the editor never writes it. Off when unset. */
-  showPointer?: boolean;
-  /** Backdrops saved by name. Set with `setBackdropPresets`; the editor's other saves keep them. */
   backdropPresets?: BackdropPreset[];
-  /** Colours saved beside the built-in swatches, as `#rrggbb`. Set with `setFavoriteColors`; the editor's other saves keep them. */
-  favoriteColors?: string[];
-}
+};
 
 /** Mirrors `MAX_BACKDROP_PRESETS` in src-tauri/src/settings.rs. */
 export const MAX_BACKDROP_PRESETS = 24;
@@ -182,35 +163,14 @@ export const MAX_BACKDROP_PRESETS = 24;
 export const MAX_FAVORITE_COLORS = 8;
 
 /**
- * Mirrors `BackdropPreset` in src-tauri/src/settings.rs: a backdrop saved
- * under a name. Names need not be unique; `id` tells presets apart.
+ * `BackdropPreset` in src-tauri/src/settings.rs: a backdrop saved under a
+ * name. Names need not be unique; `id` tells presets apart. `backdrop` is
+ * `Backdrop` in editor/model.ts, checked by the editor as it reads it.
  */
-export interface BackdropPreset<B = unknown> {
-  id: string;
-  name: string;
-  /** `Backdrop` in editor/model.ts; checked by the editor as it reads it. */
-  backdrop: B;
-}
+export type BackdropPreset<B = unknown> = Omit<GeneratedBackdropPreset, "backdrop"> & { backdrop: B };
 
-/** Mirrors `Settings` in src-tauri/src/settings.rs. */
-export interface Settings extends Preferences {
-  saveFolder: string;
-  hotkeys: Hotkeys;
-  editor?: EditorPreferences;
-  /** macOS: a Dock icon that opens the Grab-it window. */
-  showInDock?: boolean;
-  appearance?: Appearance;
-  recording?: RecordingSettings;
-  /** Older backends leave it out: everything is kept forever. */
-  retention?: Retention;
-  /** Settings › AI agents: the grab-it command line may capture. Older backends leave it out. */
-  agentAccess?: boolean;
-  /** Settings › Updates: which releases the updater checks. Older backends leave it out: Stable. */
-  updateChannel?: UpdateChannel;
-}
-
-/** Mirrors `UpdateChannel` in src-tauri/src/settings.rs: which releases Grab-it updates to. */
-export type UpdateChannel = "stable" | "edge";
+/** `Settings` in src-tauri/src/settings.rs. */
+export type Settings = Omit<Settings_Serialize, "editor"> & { editor: EditorPreferences };
 
 /** The update channels in the order Settings lists them. */
 export const UPDATE_CHANNELS: { value: UpdateChannel; title: string; hint: string }[] = [
@@ -226,16 +186,8 @@ export const UPDATE_CHANNELS: { value: UpdateChannel; title: string; hint: strin
   },
 ];
 
-/** Mirrors `Removal` in src-tauri/src/settings.rs: how cleanup removes items. */
-export type Removal = "trash" | "permanent";
-
-/** Mirrors `Retention` in src-tauri/src/settings.rs: days each kind is kept, null for forever. */
-export interface Retention {
-  image: number | null;
-  gif: number | null;
-  video: number | null;
-  removal: Removal;
-}
+/** `Retention` in src-tauri/src/settings.rs: days each kind is kept, null for forever. */
+export type Retention = Retention_Serialize;
 
 /** The kinds a Keep setting is for. */
 export type RetentionKind = "image" | "gif" | "video";
@@ -276,30 +228,16 @@ export const REMOVALS: { value: Removal; title: string; hint: string }[] = [
 
 /** Saves how long each kind is kept and how items are removed; resolves to the settings as saved. */
 export function setRetention(retention: Retention): Promise<Settings> {
-  return invoke<Settings>("set_retention", { retention });
+  return commands.setRetention(retention);
 }
 
-/** Mirrors `PopupCorner` in src-tauri/src/settings.rs. */
-export type PopupCorner = "bottomLeft" | "bottomRight" | "topLeft" | "topRight";
-
-/** Mirrors `Appearance` in src-tauri/src/settings.rs. */
-export interface Appearance {
-  /** How big the Grab-it window draws everything, in percent. */
-  textScale: number;
-  /** The same for the menu bar hub. */
-  hubScale: number;
-  popupCorner: PopupCorner;
-  /** How long the popup stays, in seconds; 0 keeps it until it is closed. */
-  popupSeconds: number;
-}
+/** `Appearance` in src-tauri/src/settings.rs. */
+export type Appearance = Appearance_Serialize;
 
 export const DEFAULT_APPEARANCE: Appearance = { textScale: 110, hubScale: 110, popupCorner: "bottomRight", popupSeconds: 8 };
 
 /** The text size sliders, in percent. Mirrors `MIN_TEXT_SCALE` and `MAX_TEXT_SCALE` in src-tauri/src/settings.rs. */
 export const TEXT_SCALE = { min: 85, max: 130, step: 5 };
-
-/** Mirrors `TextSizeStep` in src-tauri/src/settings.rs: ⌘+, ⌘− and ⌘0. */
-export type TextSizeStep = "bigger" | "smaller" | "reset";
 
 /** The text size step a key press asks for, if any: ⌘+ (or ⌘=), ⌘− and ⌘0, with Ctrl off macOS. */
 export function textSizeStep(event: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean }): TextSizeStep | null {
@@ -320,7 +258,7 @@ export function textSizeStep(event: { key: string; metaKey: boolean; ctrlKey: bo
 
 /** Saves the Grab-it window's text size a step bigger, smaller or back to the default, easing the window to it. */
 export function stepTextSize(step: TextSizeStep): Promise<Settings> {
-  return invoke<Settings>("step_text_size", { step });
+  return commands.stepTextSize(step);
 }
 
 /** Mirrors `APPEARANCE_CHANGED_EVENT` in src-tauri/src/commands.rs. */
@@ -342,60 +280,14 @@ export const POPUP_CORNERS: { value: PopupCorner; title: string }[] = [
 export const POPUP_SECONDS = [3, 5, 8, 12, 20, 30, 0];
 
 export function setAppearance(appearance: Appearance): Promise<Settings> {
-  return invoke<Settings>("set_appearance", { appearance });
+  return commands.setAppearance(appearance);
 }
-
-/** Mirrors `RecordingFormat` in src-tauri/src/settings.rs. */
-export type RecordingFormat = "gif" | "mp4";
-
-/** Mirrors `RecordingQuality` in src-tauri/src/settings.rs. */
-export type RecordingQuality = "low" | "medium" | "high";
 
 /** Mirrors `RecordingSettings::fps` in src-tauri/src/settings.rs: an MP4's frames a second. */
 export type RecordingFps = 30 | 60;
 
-/**
- * Mirrors `RecordingAudio` in src-tauri/src/settings.rs: what sound an MP4 records. `system` is what the
- * computer plays; `both` mixes it with the microphone.
- */
-export type RecordingAudio = "none" | "microphone" | "system" | "both";
-
-/**
- * Mirrors `RecordingSource` in src-tauri/src/settings.rs: what the Record overlay records, a dragged region, a
- * picked window's area or a whole display.
- */
-export type RecordingSource = "region" | "window" | "screen";
-
-/** Mirrors `RecordingSettings` in src-tauri/src/settings.rs. */
-export interface RecordingSettings {
-  format: RecordingFormat;
-  /** MP4 only. */
-  quality: RecordingQuality;
-  /** MP4 only; a GIF is about 10 fps. */
-  fps: RecordingFps;
-  /** Draws the pointer into the recording. */
-  showCursor: boolean;
-  /** Draws a fading ring where each click lands. */
-  showClicks: boolean;
-  /** Draws the keys pressed as a label at the bottom centre. */
-  showKeystrokes: boolean;
-  /** MP4 only; a GIF is silent. */
-  audio: RecordingAudio;
-  /** The `Microphone.id` recorded; null records the system's default microphone. */
-  microphone: string | null;
-  /** Shows the webcam in a bubble on screen while recording, so it is recorded too. */
-  showWebcam: boolean;
-  /** The `Camera.id` shown; null shows the system's default camera. */
-  camera: string | null;
-  /** The bubble's outline. */
-  webcamShape: WebcamShape;
-  /** Shows the camera mirrored, as a mirror would. */
-  mirrorWebcam: boolean;
-  /** Seconds counted down on the recording toolbar before it starts: one of `RECORDING_COUNTDOWNS`. */
-  countdown: number;
-  /** The source the Record overlay opens on: the one used last. */
-  source: RecordingSource;
-}
+/** `RecordingSettings` in src-tauri/src/settings.rs. */
+export type RecordingSettings = RecordingSettings_Serialize;
 
 /** Mirrors `RECORDING_COUNTDOWNS` in src-tauri/src/settings.rs; 0 starts at once. */
 export const RECORDING_COUNTDOWNS = [0, 3, 5, 10] as const;
@@ -460,8 +352,8 @@ export function recordsMicrophone(audio: RecordingAudio): boolean {
   return audio === "microphone" || audio === "both";
 }
 
-/** Mirrors `WebcamShape` in src-tauri/src/settings.rs. */
-export type WebcamShape = "squircle" | "round" | "arch" | "pill" | "wide" | "blob";
+/** `WebcamShape` in src-tauri/src/settings.rs, as the backend sends it. */
+export type WebcamShape = WebcamShape_Serialize;
 
 export const WEBCAM_SHAPES: { value: WebcamShape; title: string }[] = [
   { value: "squircle", title: "Squircle" },
@@ -472,12 +364,8 @@ export const WEBCAM_SHAPES: { value: WebcamShape; title: string }[] = [
   { value: "blob", title: "Blob (moves)" },
 ];
 
-/** A camera the webview can show. Mirrors `Camera` in src-tauri/src/webcam.rs. */
-export interface Camera {
-  /** What `RecordingSettings.camera` saves to pick it: the webview's `deviceId`. */
-  id: string;
-  name: string;
-}
+/** A camera the webview can show: `Camera` in src-tauri/src/webcam.rs. `id` is the webview's `deviceId`. */
+export type Camera = GeneratedCamera;
 
 /** The cameras the webview listed, and whether it gave each one its real name. */
 export interface CameraListing {
@@ -516,12 +404,12 @@ export async function listCameras(ask = false): Promise<CameraListing> {
 
 /** The cameras last listed with their names, remembered across restarts; empty when none were. */
 export function knownCameras(): Promise<Camera[]> {
-  return invoke<Camera[]>("known_cameras");
+  return commands.knownCameras();
 }
 
 /** Remembers `cameras` for {@link knownCameras}. */
 export function rememberCameras(cameras: Camera[]): Promise<void> {
-  return invoke<void>("remember_cameras", { cameras });
+  return commands.rememberCameras(cameras).then(() => undefined);
 }
 
 /**
@@ -534,49 +422,35 @@ export async function rememberListing(listing: CameraListing): Promise<void> {
 }
 
 export function setRecording(recording: RecordingSettings): Promise<Settings> {
-  return invoke<Settings>("set_recording", { recording });
+  return commands.setRecording(recording);
 }
 
-/** Mirrors `MicrophoneInfo` in src-tauri/src/audio.rs. */
-export interface Microphone {
-  /** What `RecordingSettings.microphone` saves to pick it. */
-  id: string;
-  name: string;
-  isDefault: boolean;
-}
+/** `MicrophoneInfo` in src-tauri/src/audio.rs. `id` is what `RecordingSettings.microphone` saves. */
+export type Microphone = MicrophoneInfo;
 
 /** Whether what the computer plays can be recorded here: on Windows, Linux and macOS 13 or later. */
 export function systemSoundAvailable(): Promise<boolean> {
-  return invoke<boolean>("recording_system_audio");
+  return commands.recordingSystemAudio();
 }
 
 /** The microphones that can be recorded. On Linux, empty until ffmpeg is ready, which lists them. */
 export function listMicrophones(): Promise<Microphone[]> {
-  return invoke<Microphone[]>("recording_microphones");
+  return commands.recordingMicrophones();
 }
 
-/** Mirrors `FfmpegStatus` in src-tauri/src/ffmpeg.rs: whether MP4 can be recorded yet. */
-export type FfmpegStatus =
-  | { state: "missing" }
-  /** `total` is 0 until the server says. */
-  | { state: "downloading"; downloaded: number; total: number }
-  | { state: "checking" }
-  /** `path` is the ffmpeg in use: one already installed, or the one Grab-it downloaded. */
-  | { state: "ready"; path: string; encoder: string }
-  /** None is installed and none can be downloaded here; `install` is the command that installs one. */
-  | { state: "notInstalled"; install: string | null }
-  | { state: "failed"; message: string };
+/** `FfmpegStatus` in src-tauri/src/ffmpeg.rs: whether MP4 can be recorded yet. */
+export type FfmpegStatus = FfmpegStatus_Serialize;
 
 /** Mirrors `FFMPEG_STATUS_EVENT` in src-tauri/src/ffmpeg.rs. */
 export const FFMPEG_STATUS_EVENT = "ffmpeg-status";
 
 export function ffmpegStatus(): Promise<FfmpegStatus> {
-  return invoke<FfmpegStatus>("ffmpeg_status");
+  return commands.ffmpegStatus();
 }
 
 /** Looks for ffmpeg again, downloading it or finding an encoder; resolves to the status as it starts. */
 export function retryFfmpeg(): Promise<FfmpegStatus> {
-  return invoke<FfmpegStatus>("ffmpeg_retry");
+  return commands.ffmpegRetry();
 }
 
 export function onFfmpegStatus(handler: (status: FfmpegStatus) => void): Promise<UnlistenFn> {
@@ -614,12 +488,12 @@ export function hasDock(): boolean {
 
 /** Shows or hides the Dock icon; resolves to the settings as saved. */
 export function setShowInDock(enabled: boolean): Promise<Settings> {
-  return invoke<Settings>("set_show_in_dock", { enabled });
+  return commands.setShowInDock(enabled);
 }
 
 /** Lets the grab-it command line capture, or stops it; resolves to the settings as saved. */
 export function setAgentAccess(enabled: boolean): Promise<Settings> {
-  return invoke<Settings>("set_agent_access", { enabled });
+  return commands.setAgentAccess(enabled);
 }
 
 /**
@@ -627,25 +501,20 @@ export function setAgentAccess(enabled: boolean): Promise<Settings> {
  * backend forgets the update the old channel offered and checks the new one.
  */
 export function setUpdateChannel(channel: UpdateChannel): Promise<Settings> {
-  return invoke<Settings>("set_update_channel", { channel });
+  return commands.setUpdateChannel(channel);
 }
 
-/** Mirrors `AgentSkill` in src-tauri/src/agent.rs: where the agent skill is installed. */
-export interface AgentSkill {
-  /** The SKILL.md files written; empty when it is not installed. */
-  installed: string[];
-  /** Whether every installed copy names Grab-it where it is now. */
-  current: boolean;
-}
+/** `AgentSkill` in src-tauri/src/agent.rs: where the agent skill is installed. */
+export type AgentSkill = GeneratedAgentSkill;
 
 /** Where the agent skill is installed. */
 export function agentSkillStatus(): Promise<AgentSkill> {
-  return invoke<AgentSkill>("agent_skill_status");
+  return commands.agentSkillStatus();
 }
 
 /** Writes the agent skill into ~/.agents/skills and ~/.claude/skills; resolves to where it is now. */
 export function installAgentSkill(): Promise<AgentSkill> {
-  return invoke<AgentSkill>("install_agent_skill");
+  return commands.installAgentSkill();
 }
 
 /** What each choice after a capture does, in the order Settings lists them. */
@@ -667,82 +536,70 @@ export const AFTER_CAPTURE_CHOICES: { value: AfterCapture; title: string; hint: 
   },
 ];
 
-/** Mirrors `Hotkeys` in src-tauri/src/hotkeys.rs: accelerator strings. */
-export interface Hotkeys {
-  /** Opens the capture overlay with a toolbar offering every mode. */
-  allInOne: string;
-  region: string;
-  window: string;
-  screen: string;
-  /** Reads the text in a region and copies it. */
-  text: string;
-  /** Copies the colour under the pointer. */
-  colour: string;
-  /** Opens the Grab-it window on the library. */
-  library: string;
-  /** Starts a step capture, or stops it and opens its guide. */
-  steps: string;
-}
+/** `Hotkeys` in src-tauri/src/hotkeys.rs: accelerator strings. */
+export type Hotkeys = Hotkeys_Serialize;
 
-/** Mirrors `HotkeysUpdate` in src-tauri/src/commands.rs. */
-export interface HotkeysUpdate {
-  settings: Settings;
-  /** Hotkeys the system would not register, for example because another app holds them. */
-  warnings: string[];
-}
+/** `HotkeysUpdate` in src-tauri/src/commands.rs; `warnings` are hotkeys the system would not register. */
+export type HotkeysUpdate = Omit<HotkeysUpdate_Serialize, "settings"> & { settings: Settings };
 
 export function getSettings(): Promise<Settings> {
-  return invoke<Settings>("get_settings");
+  return commands.getSettings();
 }
 
 export function setSaveFolder(path: string): Promise<Settings> {
-  return invoke<Settings>("set_save_folder", { path });
+  return commands.setSaveFolder(path);
 }
 
 export function setPreferences(preferences: Preferences): Promise<Settings> {
-  return invoke<Settings>("set_preferences", { preferences });
+  return commands.setPreferences(preferences);
 }
 
 export function getEditorPreferences(): Promise<EditorPreferences> {
-  return invoke<EditorPreferences>("get_editor_preferences");
+  return commands.getEditorPreferences();
 }
 
 export function setEditorPreferences(preferences: EditorPreferences): Promise<EditorPreferences> {
-  return invoke<EditorPreferences>("set_editor_preferences", { preferences });
+  return commands.setEditorPreferences(
+    // The backdrop is the editor's own JSON, which the backend stores untouched.
+    preferences as unknown as EditorPreferences_Deserialize,
+  );
 }
 
 /** Replaces the saved backdrop presets; resolves to them as kept. */
 export function setBackdropPresets<B>(presets: BackdropPreset<B>[]): Promise<BackdropPreset[]> {
-  return invoke<BackdropPreset[]>("set_backdrop_presets", { presets });
+  return commands.setBackdropPresets(
+    // Each backdrop is the editor's own JSON, which the backend stores untouched.
+    presets as unknown as GeneratedBackdropPreset[],
+  );
 }
 
 /** Replaces the saved favourite colours; resolves to them as kept. */
 export function setFavoriteColors(colors: string[]): Promise<string[]> {
-  return invoke<string[]>("set_favorite_colors", { colors });
+  return commands.setFavoriteColors(colors);
 }
 
 /** Turns framing new captures with the last backdrop on or off. */
 export function setAutoBackdrop(enabled: boolean): Promise<Settings> {
-  return invoke<Settings>("set_auto_backdrop", { enabled });
+  return commands.setAutoBackdrop(enabled);
 }
 
 /** Turns showing the pointer in new captures on or off. */
 export function setShowPointer(enabled: boolean): Promise<Settings> {
-  return invoke<Settings>("set_show_pointer", { enabled });
+  return commands.setShowPointer(enabled);
 }
 
 /** Whether Grab-it starts when the user signs in; the system holds this. */
 export function getAutostart(): Promise<boolean> {
-  return invoke<boolean>("get_autostart");
+  return commands.getAutostart();
 }
 
 /** Turns starting at sign-in on or off; resolves to the setting as it now is. */
 export function setAutostart(enabled: boolean): Promise<boolean> {
-  return invoke<boolean>("set_autostart", { enabled });
+  return commands.setAutostart(enabled);
 }
 
 export function setHotkeys(hotkeys: Hotkeys): Promise<HotkeysUpdate> {
-  return invoke<HotkeysUpdate>("set_hotkeys", { hotkeys });
+  return commands.setHotkeys(hotkeys);
 }
 
 /**
@@ -750,12 +607,12 @@ export function setHotkeys(hotkeys: Hotkeys): Promise<HotkeysUpdate> {
  * current hotkey there records it instead of starting a capture.
  */
 export function pauseHotkeys(): Promise<void> {
-  return invoke<void>("pause_hotkeys");
+  return commands.pauseHotkeys();
 }
 
 /** Registers the saved hotkeys again after {@link pauseHotkeys}. */
 export function resumeHotkeys(): Promise<void> {
-  return invoke<void>("resume_hotkeys");
+  return commands.resumeHotkeys();
 }
 
 /** Asks the user for a folder. Resolves to null when they cancel. */
@@ -771,10 +628,10 @@ export async function chooseFolder(defaultPath?: string): Promise<string | null>
 
 /** Asks the saved provider's model to answer; resolves to what it says, or rejects with why not. */
 export function testAiConnection(): Promise<string> {
-  return invoke<string>("ai_test_connection");
+  return commands.aiTestConnection();
 }
 
 /** Queues every capture to be described again. */
 export function redescribeAll(): Promise<void> {
-  return invoke<void>("ai_redescribe_all");
+  return commands.aiRedescribeAll().then(() => undefined);
 }

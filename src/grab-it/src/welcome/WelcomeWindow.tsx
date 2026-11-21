@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import "./welcome.css";
 import Logo from "../app/Logo";
 import {
@@ -22,6 +21,7 @@ import { useEffectiveHotkeys } from "../app/useEffectiveHotkeys";
 import { keyCaps } from "../hub/keys";
 import { onAiStatus } from "../library/api";
 import { aiProvider, getSettings, type Hotkeys } from "../settings/api";
+import { openTarget } from "./api";
 import PermissionsPage from "./PermissionsPage";
 import {
   finishPermissions,
@@ -30,11 +30,6 @@ import {
   primeScreenCapture,
   type PermissionStatus,
 } from "./permissions";
-
-/** Opens a window or starts a capture by its `--open` name. */
-function openTarget(target: string): Promise<void> {
-  return invoke<void>("open_target", { target });
-}
 
 /** The hotkeys in the order they are listed, with what each one does. */
 const SHORTCUTS: { key: keyof Hotkeys; title: string; detail: string; icon: ReactNode }[] = [

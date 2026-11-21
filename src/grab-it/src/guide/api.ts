@@ -1,23 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
+import { commands, type ExportStep, type GuideInfo, type GuideStep } from "../app/bindings";
 import { EXPORT_FORMATS, exportName, type GuideFormat } from "./model";
 
-/** Mirrors `GuideInfo` in src-tauri/src/steps.rs. */
-export interface GuideInfo {
-  path: string;
-  title: string;
-  steps: { capture: string; description: string; annotations: unknown; exists: boolean }[];
-}
+/** What the Guide window shows: `GuideInfo` in src-tauri/src/steps.rs. */
+export type { GuideInfo };
 
-/** One flattened step for export or copy: base64 PNG. */
-export interface ExportStep {
-  description: string;
-  png: string;
-}
+/** One flattened step for export or copy: base64 PNG. `ExportStep` in src-tauri/src/steps.rs. */
+export type { ExportStep };
 
 export function guideInfo(): Promise<GuideInfo> {
-  return invoke<GuideInfo>("guide_info");
+  return commands.guideInfo();
 }
 
 export function guideImage(capture: string): Promise<ArrayBuffer> {
@@ -25,20 +19,20 @@ export function guideImage(capture: string): Promise<ArrayBuffer> {
 }
 
 /** Writes the steps in order; Rust renumbers each capture's badge. */
-export function saveGuide(steps: { capture: string; description: string }[]): Promise<void> {
-  return invoke<void>("guide_save", { steps });
+export async function saveGuide(steps: GuideStep[]): Promise<void> {
+  await commands.guideSave(steps);
 }
 
-export function openInEditor(capture: string): Promise<void> {
-  return invoke<void>("guide_open_editor", { capture });
+export async function openInEditor(capture: string): Promise<void> {
+  await commands.guideOpenEditor(capture);
 }
 
-export function exportGuide(format: GuideFormat, path: string, steps: ExportStep[]): Promise<void> {
-  return invoke<void>("guide_export", { format, path, steps });
+export async function exportGuide(format: GuideFormat, path: string, steps: ExportStep[]): Promise<void> {
+  await commands.guideExport(format, path, steps);
 }
 
-export function copyGuide(steps: ExportStep[]): Promise<void> {
-  return invoke<void>("guide_copy", { steps });
+export async function copyGuide(steps: ExportStep[]): Promise<void> {
+  await commands.guideCopy(steps);
 }
 
 /** Called when a step's description arrives from the AI. */

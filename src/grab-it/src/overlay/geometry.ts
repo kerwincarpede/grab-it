@@ -533,7 +533,7 @@ const HINT_GAP = 12;
  * Where the hint's top goes, in CSS px: just below the menu bar or camera
  * notch, given how far down they reach as a share of the screen's height.
  */
-export function hintTop(topInset: number | undefined, viewHeight: number): number {
+export function hintTop(topInset: number | null | undefined, viewHeight: number): number {
   const share = typeof topInset === "number" && Number.isFinite(topInset) ? Math.min(Math.max(topInset, 0), 0.2) : 0;
   return Math.round(share * viewHeight) + HINT_GAP;
 }

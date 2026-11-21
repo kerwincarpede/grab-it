@@ -1,11 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WEBCAM_SHAPES } from "../settings/api";
 import WebcamBubble from "./WebcamBubble";
 import { cameraConstraints, cameraProblem, webcamOptions, type WebcamOptions } from "./api";
 import { SHAPE_OUTLINES, shapeOutline } from "./shapes";
 import { camera, fakeMedia, type FakeMedia } from "./testMedia";
+import { mockCommands } from "../test/mockCommands";
 
 const SQUIRCLE: WebcamOptions = { shape: "squircle", mirror: true, camera: null };
 
@@ -101,10 +101,15 @@ describe("WebcamBubble", () => {
 
   it("remembers the cameras' names once its camera is live", async () => {
     const remembered: unknown[] = [];
-    mockIPC((cmd, payload) => {
-      if (cmd === "remember_cameras") remembered.push((payload as { cameras: unknown }).cameras);
-      return null;
-    });
+    mockCommands(
+      {
+        remember_cameras: ({ cameras }) => {
+          remembered.push(cameras);
+          return null;
+        },
+      },
+      { otherwise: () => null },
+    );
     media = fakeMedia({
       devices: [camera("", "")],
       devicesAfterOpen: [camera("cam-1", "FaceTime HD Camera"), camera("cam-2", "USB Webcam")],
@@ -123,16 +128,12 @@ describe("WebcamBubble", () => {
   });
 
   it("keeps the cameras remembered when their names are hidden", async () => {
-    const commands: string[] = [];
-    mockIPC((cmd) => {
-      commands.push(cmd);
-      return null;
-    });
+    const calls = mockCommands({}, { otherwise: () => null });
     media = fakeMedia({ devices: [camera("cam-1", "")] });
     render(<WebcamBubble options={SQUIRCLE} />);
     await waitFor(() => expect(screen.getByTestId("webcam")).toHaveAttribute("data-live", "true"));
     await act(() => Promise.resolve());
-    expect(commands).not.toContain("remember_cameras");
+    expect(calls.map((call) => call.cmd)).not.toContain("remember_cameras");
   });
 
   it("takes the chosen shape, unmirrored when asked", () => {
