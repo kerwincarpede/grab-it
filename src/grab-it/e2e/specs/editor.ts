@@ -14,6 +14,7 @@ import {
   switchToPage,
   waitForCapture,
   waitForJson,
+  waitForText,
 } from "../support/app";
 import { currentSandbox } from "../support/sandbox";
 
@@ -74,7 +75,7 @@ describe("Editor", () => {
     await browser.waitUntil(() => fs.existsSync(target) && fs.statSync(target).size > 24, {
       timeoutMsg: `Nothing was exported to ${target}`,
     });
-    await expect($(".editor-status .status-message")).toHaveText(expect.stringContaining("Exported to"));
+    await waitForText(".editor-status .status-message", (text) => text.includes("Exported to"));
     const exported = pngSize(target);
     expect(exported.width).toBeGreaterThan(0);
     expect(exported.height).toBeGreaterThan(0);

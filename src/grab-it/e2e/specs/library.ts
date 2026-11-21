@@ -1,7 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { clickElement, clickText, sidecar, startMenuCapture, switchToMainWindow, waitForCapture, waitForJson } from "../support/app";
+import {
+  clickElement,
+  clickText,
+  sidecar,
+  startMenuCapture,
+  switchToMainWindow,
+  waitForCapture,
+  waitForJson,
+  waitForText,
+} from "../support/app";
 import { currentSandbox } from "../support/sandbox";
 
 describe("Library", () => {
@@ -38,6 +47,6 @@ describe("Library", () => {
       timeoutMsg: `Still on disk: ${files.filter((file) => fs.existsSync(file)).join(", ")}`,
     });
     await expect($(tile)).not.toBeExisting();
-    await expect($(".empty-title")).toHaveText("Your library is empty");
+    await waitForText(".empty-title", (text) => text === "Your library is empty");
   });
 });

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { switchToMainWindow } from "../support/app";
+import { switchToMainWindow, waitForText } from "../support/app";
 import { currentSandbox } from "../support/sandbox";
 
 describe("Launch", () => {
@@ -10,8 +10,8 @@ describe("Launch", () => {
   it("opens the Grab-it window on an empty Library", async () => {
     await switchToMainWindow();
     await expect($("nav.sidebar")).toBeDisplayed();
-    await expect($("button.capture-main")).toHaveText(expect.stringContaining("New capture"));
-    await expect($(".empty-title")).toHaveText("Your library is empty");
+    await waitForText("button.capture-main", (text) => text.includes("New capture"));
+    await waitForText(".empty-title", (text) => text === "Your library is empty");
   });
 
   it("keeps its data in the sandbox", async () => {

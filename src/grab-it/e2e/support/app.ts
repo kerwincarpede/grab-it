@@ -188,15 +188,76 @@ export function captures(sandbox: Sandbox): string[] {
     .map((name) => path.join(sandbox.originals, name));
 }
 
-/** Waits until the save folder holds `count` captures, and returns the newest. */
+/** Whether `file` is a whole PNG: the signature, then an IEND chunk at the very end. */
+function isCompletePng(file: string): boolean {
+  try {
+    const bytes = fs.readFileSync(file);
+    return (
+      bytes.length > 20 &&
+      bytes.subarray(0, 8).toString("hex") === "89504e470d0a1a0a" &&
+      bytes.subarray(-12).toString("hex") === "0000000049454e44ae426082"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Whether `file` exists and parses as JSON. */
+function isJson(file: string): boolean {
+  try {
+    JSON.parse(fs.readFileSync(file, "utf8"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Waits until the save folder holds `count` captures, and returns the
+ * newest once it is fully saved. The PNG appears empty and fills as it is
+ * encoded, and meta.json is written only after it (capture.rs
+ * `save_capture_with_pointer`), so the newest counts as saved when its
+ * meta.json parses and the PNG ends with its IEND chunk.
+ */
 export async function waitForCapture(sandbox: Sandbox, count: number, timeout = 30_000): Promise<string> {
-  await browser.waitUntil(async () => captures(sandbox).length >= count, {
-    timeout,
-    interval: 250,
-    timeoutMsg: `Expected ${count} capture(s) in ${sandbox.originals}, found ${captures(sandbox).length}`,
-  });
-  const all = captures(sandbox);
-  return all[all.length - 1];
+  let newest = "";
+  await browser.waitUntil(
+    async () => {
+      const all = captures(sandbox);
+      if (all.length < count) return false;
+      newest = all[all.length - 1];
+      return isJson(sidecar(newest, "meta.json")) && isCompletePng(newest);
+    },
+    {
+      timeout,
+      interval: 250,
+      timeoutMsg: `Expected ${count} saved capture(s) in ${sandbox.originals}, found ${captures(sandbox).length}`,
+    },
+  );
+  return newest;
+}
+
+/**
+ * Waits for the first `selector` match's text to satisfy `accept`, and
+ * returns it. The text is read from the DOM (`textContent`) in the page:
+ * WebKitWebDriver's Get Element Text does not answer reliably, so the specs
+ * never use `getText` or `toHaveText`.
+ */
+export async function waitForText(selector: string, accept: (text: string) => boolean, timeout = 20_000): Promise<string> {
+  let text = "";
+  await browser.waitUntil(
+    async () => {
+      const read: string | null = await browser.execute(
+        (wanted: string) => document.querySelector(wanted)?.textContent ?? null,
+        selector,
+      );
+      if (read === null) return false;
+      text = read.replace(/\s+/g, " ").trim();
+      return accept(text);
+    },
+    { timeout, interval: 250, timeoutMsg: `${selector} never showed the expected text (last: "${text}")` },
+  );
+  return text;
 }
 
 /** `<name>.meta.json` and the other sidecars beside a capture. */

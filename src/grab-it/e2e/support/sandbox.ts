@@ -50,8 +50,12 @@ export function sandboxAt(root: string): Sandbox {
 /**
  * Makes the folders and seeds settings.json: the save folder inside the
  * sandbox, AI descriptions never turned on by themselves (a provider is
- * set), GIF recordings so no ffmpeg is downloaded, and a Quick Access card
- * that stays until it is closed.
+ * set), GIF recordings so no ffmpeg is downloaded, a Quick Access card
+ * that stays until it is closed, and text at 100%.
+ *
+ * Text size zooms the webviews, and its default is 110%. Under that zoom
+ * WebKitWebDriver lands element clicks at the element's centre divided by
+ * 1.1, on whatever is there instead, so the specs run at 100%.
  */
 export function createSandbox(root: string): Sandbox {
   const sandbox = sandboxAt(root);
@@ -62,7 +66,7 @@ export function createSandbox(root: string): Sandbox {
     saveFolder: sandbox.saveFolder,
     ai: { enabled: false, provider: "endpoint" },
     recording: { format: "gif" },
-    appearance: { popupSeconds: 0 },
+    appearance: { popupSeconds: 0, textScale: 100, hubScale: 100 },
   };
   fs.writeFileSync(sandbox.settingsFile, `${JSON.stringify(settings, null, 2)}\n`);
   return sandbox;
