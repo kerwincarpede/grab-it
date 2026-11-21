@@ -193,6 +193,7 @@ fn close(app: &AppHandle, generation: u64) {
 /// Stops the timed capture counting down, from the pill's Cancel. Once
 /// the pill has closed the capture is under way and this does nothing.
 #[tauri::command]
+#[specta::specta]
 pub fn timer_bar_cancel(app: AppHandle) {
     let generation = cancel(&GENERATION);
     // Off the calling thread: closing waits for the window lock.

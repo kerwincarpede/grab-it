@@ -164,6 +164,7 @@ pub fn close(app: &AppHandle) {
 /// keyboard: the click landed on Grab-it, which step capture never takes,
 /// so no step before it is dropped as a stopping click.
 #[tauri::command]
+#[specta::specta]
 pub fn steps_bar_stop(app: AppHandle) {
     if crate::steps::is_running() {
         crate::steps::toggle(&app, crate::steps::Trigger::Keys);

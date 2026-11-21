@@ -772,7 +772,7 @@ pub fn install_skill(home: &Path, exe: &Path) -> Result<Vec<PathBuf>, String> {
 
 /// Whether the skill is installed, and where. Mirrors `AgentSkill` in
 /// src/settings/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSkill {
     /// The `SKILL.md` files written, in [`SKILL_DIRS`] order.
@@ -813,6 +813,7 @@ fn home_and_exe(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
 
 /// Settings › AI agents: whether the skill is installed.
 #[tauri::command]
+#[specta::specta]
 pub fn agent_skill_status(app: AppHandle) -> Result<AgentSkill, String> {
     let (home, exe) = home_and_exe(&app)?;
     Ok(skill_status(&home, &exe))
@@ -821,6 +822,7 @@ pub fn agent_skill_status(app: AppHandle) -> Result<AgentSkill, String> {
 /// Settings › AI agents' Install skill: writes the skill for Claude Code,
 /// Codex and other agents.
 #[tauri::command]
+#[specta::specta]
 pub fn install_agent_skill(app: AppHandle) -> Result<AgentSkill, String> {
     let (home, exe) = home_and_exe(&app)?;
     install_skill(&home, &exe)?;

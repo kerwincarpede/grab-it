@@ -76,7 +76,7 @@ impl EditorState {
 }
 
 /// Mirrors `EditorInfo` in src/editor/api.ts.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorInfo {
     pub path: PathBuf,
@@ -350,6 +350,7 @@ fn raw_body(request: &tauri::ipc::Request<'_>) -> Result<Vec<u8>, String> {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn editor_info(
     window: WebviewWindow,
     state: State<'_, EditorState>,
@@ -382,6 +383,7 @@ pub fn editor_backdrop_image(path: PathBuf) -> Result<tauri::ipc::Response, Stri
 /// Keeps a preset's own copy of its backdrop image in
 /// `<app data dir>/backdrop-presets/`; returns the path to save in the preset.
 #[tauri::command]
+#[specta::specta]
 pub fn save_backdrop_preset_image(path: PathBuf, app: AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -394,6 +396,7 @@ pub fn save_backdrop_preset_image(path: PathBuf, app: AppHandle) -> Result<PathB
 /// Copies an image file dropped on the editor into its capture's assets
 /// folder; returns the copy's file name for the new image shape.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn editor_add_image_file(
     path: PathBuf,
     window: WebviewWindow,
@@ -406,6 +409,7 @@ pub fn editor_add_image_file(
 /// Saves the image on the clipboard into the editor's capture's assets
 /// folder as a PNG; returns its file name for the new image shape.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn editor_add_clipboard_image(
     window: WebviewWindow,
     app: AppHandle,
@@ -444,6 +448,7 @@ pub fn editor_image(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn editor_save_annotations(
     annotations: Value,
     window: WebviewWindow,
@@ -520,6 +525,7 @@ fn open_capture(png: &Path) -> Result<RgbaImage, String> {
 /// private details and the Blur tool's word click. Read now when the
 /// library has none stored; nothing leaves the computer.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn editor_words(
     window: WebviewWindow,
     app: AppHandle,
@@ -535,6 +541,7 @@ pub fn editor_words(
 /// The faces in the editor's capture, in its pixels, for Blur private
 /// details.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn editor_faces(
     window: WebviewWindow,
     app: AppHandle,

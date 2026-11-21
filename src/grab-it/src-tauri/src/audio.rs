@@ -103,6 +103,7 @@ pub fn system_available() -> bool {
 
 /// Whether Settings offers System and Both.
 #[tauri::command]
+#[specta::specta]
 pub fn recording_system_audio() -> bool {
     system_available()
 }
@@ -113,7 +114,7 @@ const SILENCE_AFTER: Duration = Duration::from_millis(100);
 
 /// A microphone that can be picked. Mirrors `Microphone` in
 /// src/settings/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct MicrophoneInfo {
     /// What `recording.microphone` saves to pick it.
@@ -714,6 +715,7 @@ pub fn microphones(ffmpeg: Option<&Path>) -> Result<Vec<MicrophoneInfo>, String>
 /// Lists the microphones for Settings. Async: listing asks the sound
 /// server, which may take a moment.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn recording_microphones(app: AppHandle) -> Vec<MicrophoneInfo> {
     let ffmpeg = crate::ffmpeg::ready(&app).map(|ready| ready.path);
     microphones(ffmpeg.as_deref()).unwrap_or_else(|err| {

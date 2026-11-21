@@ -234,7 +234,7 @@ pub fn unlock_all(app: &AppHandle) {
 }
 
 /// Mirrors `PinInfo` in src/pin/api.ts.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PinInfo {
     pub width: u32,
@@ -257,6 +257,7 @@ fn with_pin<T>(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn pin_info(window: WebviewWindow, state: State<'_, PinState>) -> Result<PinInfo, String> {
     with_pin(&window, &state, |pin| PinInfo {
         width: pin.size.0,
@@ -279,6 +280,7 @@ pub fn pin_image(
 
 /// Resizes the pin by `factor` (above 1 grows it), keeping its ratio.
 #[tauri::command]
+#[specta::specta]
 pub fn pin_zoom(
     factor: f64,
     window: WebviewWindow,
@@ -302,6 +304,7 @@ pub fn pin_zoom(
 /// Locks the pin: clicks pass through it to the window underneath while it
 /// stays on top, until Unlock pinned captures in the tray menu.
 #[tauri::command]
+#[specta::specta]
 pub fn pin_lock(
     window: WebviewWindow,
     app: AppHandle,
@@ -318,6 +321,7 @@ pub fn pin_lock(
 
 /// Moves the pin by `dx`, `dy` logical pixels.
 #[tauri::command]
+#[specta::specta]
 pub fn pin_nudge(
     dx: f64,
     dy: f64,
@@ -340,6 +344,7 @@ pub fn pin_nudge(
 }
 
 #[tauri::command(async)]
+#[specta::specta]
 pub fn pin_copy(
     window: WebviewWindow,
     app: AppHandle,
@@ -352,6 +357,7 @@ pub fn pin_copy(
 /// Opens the pinned capture in the editor. Async, so the editor window is
 /// not created on the main thread inside a command.
 #[tauri::command]
+#[specta::specta]
 pub async fn pin_edit(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
     let state = app.state::<PinState>();
     let (path, temporary) = with_pin(&window, &state, |pin| (pin.path.clone(), pin.temporary))?;
@@ -362,6 +368,7 @@ pub async fn pin_edit(window: WebviewWindow, app: AppHandle) -> Result<(), Strin
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn pin_close(window: WebviewWindow) -> Result<(), String> {
     window.destroy().map_err(|err| err.to_string())
 }

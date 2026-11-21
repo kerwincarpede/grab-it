@@ -1185,7 +1185,7 @@ pub fn preview_at_ms(duration_ms: Option<u64>) -> u64 {
 }
 
 /// Where ffmpeg is up to. Mirrors `FfmpegStatus` in src/settings/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum FfmpegStatus {
     /// Not looked for yet: nothing has asked for MP4.
@@ -1440,6 +1440,7 @@ pub fn fallback_reason(status: &FfmpegStatus) -> String {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn ffmpeg_status(app: AppHandle) -> FfmpegStatus {
     status(&app)
 }
@@ -1447,6 +1448,7 @@ pub fn ffmpeg_status(app: AppHandle) -> FfmpegStatus {
 /// Looks again for ffmpeg, downloading it or finding an encoder. Returns the status
 /// as the new attempt starts.
 #[tauri::command]
+#[specta::specta]
 pub fn ffmpeg_retry(app: AppHandle) -> FfmpegStatus {
     prepare_in_background(&app);
     status(&app)

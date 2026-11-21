@@ -23,11 +23,13 @@ pub fn lock(state: &SettingsState) -> MutexGuard<'_, SettingsStore> {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn get_settings(state: State<'_, SettingsState>) -> Settings {
     lock(&state).get().clone()
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn set_save_folder(
     path: String,
     app: AppHandle,
@@ -44,6 +46,7 @@ pub fn set_save_folder(
 /// Saves the capture and AI preferences. Without `ai`, the AI settings
 /// are kept.
 #[tauri::command]
+#[specta::specta]
 pub fn set_preferences(
     preferences: PreferencesUpdate,
     app: AppHandle,
@@ -62,6 +65,7 @@ pub fn set_preferences(
 
 /// Saves how Grab-it looks and applies the text size to the open window.
 #[tauri::command]
+#[specta::specta]
 pub fn set_appearance(
     appearance: crate::settings::Appearance,
     app: AppHandle,
@@ -83,6 +87,7 @@ pub const APPEARANCE_CHANGED_EVENT: &str = "appearance-changed";
 /// ⌘+, ⌘− and ⌘0 in the Grab-it window: saves the text size one step
 /// bigger or smaller, or back to the default, and eases the window to it.
 #[tauri::command]
+#[specta::specta]
 pub fn step_text_size(
     step: crate::settings::TextSizeStep,
     app: AppHandle,
@@ -105,6 +110,7 @@ pub fn step_text_size(
 /// Saves how screen recordings are made. Choosing MP4 gets ffmpeg ready
 /// in the background, downloading it the first time.
 #[tauri::command]
+#[specta::specta]
 pub fn set_recording(
     recording: crate::settings::RecordingSettings,
     app: AppHandle,
@@ -122,6 +128,7 @@ pub fn set_recording(
 /// Saves how long each kind of item is kept and how cleanup removes them.
 /// The next cleanup, at startup, daily or from the Library, uses them.
 #[tauri::command]
+#[specta::specta]
 pub fn set_retention(
     retention: crate::settings::Retention,
     state: State<'_, SettingsState>,
@@ -133,6 +140,7 @@ pub fn set_retention(
 
 /// Shows or hides the Dock icon (macOS) and remembers the choice.
 #[tauri::command]
+#[specta::specta]
 pub fn set_show_in_dock(
     enabled: bool,
     app: AppHandle,
@@ -148,6 +156,7 @@ pub fn set_show_in_dock(
 /// Turns Settings › AI agents' access switch on or off. The control
 /// connection reads it with every request, so it applies at once.
 #[tauri::command]
+#[specta::specta]
 pub fn set_agent_access(
     enabled: bool,
     state: State<'_, SettingsState>,
@@ -161,6 +170,7 @@ pub fn set_agent_access(
 /// update the old channel offered and checks the new one. Refused while an
 /// update installs, so the install and the setting always agree.
 #[tauri::command]
+#[specta::specta]
 pub fn set_update_channel(
     channel: UpdateChannel,
     app: AppHandle,
@@ -183,11 +193,13 @@ pub fn set_update_channel(
 
 /// The annotation editor's remembered colour, tool, widths and options.
 #[tauri::command]
+#[specta::specta]
 pub fn get_editor_preferences(state: State<'_, SettingsState>) -> EditorPreferences {
     lock(&state).get().editor.clone()
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn set_editor_preferences(
     preferences: EditorPreferences,
     state: State<'_, SettingsState>,
@@ -199,6 +211,7 @@ pub fn set_editor_preferences(
 
 /// Replaces the editor's saved backdrop presets; returns them as kept.
 #[tauri::command]
+#[specta::specta]
 pub fn set_backdrop_presets(
     presets: Vec<BackdropPreset>,
     state: State<'_, SettingsState>,
@@ -210,6 +223,7 @@ pub fn set_backdrop_presets(
 
 /// Replaces the editor's saved favourite colours; returns them as kept.
 #[tauri::command]
+#[specta::specta]
 pub fn set_favorite_colors(
     colors: Vec<String>,
     state: State<'_, SettingsState>,
@@ -221,6 +235,7 @@ pub fn set_favorite_colors(
 
 /// Turns framing new captures with the last backdrop on or off.
 #[tauri::command]
+#[specta::specta]
 pub fn set_auto_backdrop(
     enabled: bool,
     state: State<'_, SettingsState>,
@@ -232,6 +247,7 @@ pub fn set_auto_backdrop(
 
 /// Turns showing the pointer in new captures on or off.
 #[tauri::command]
+#[specta::specta]
 pub fn set_show_pointer(
     enabled: bool,
     state: State<'_, SettingsState>,
@@ -243,6 +259,7 @@ pub fn set_show_pointer(
 
 /// Clears the one-time notice that Grab-it turned describing on.
 #[tauri::command]
+#[specta::specta]
 pub fn dismiss_ai_notice(state: State<'_, SettingsState>) -> Result<Settings, String> {
     lock(&state)
         .dismiss_ai_notice()
@@ -252,6 +269,7 @@ pub fn dismiss_ai_notice(state: State<'_, SettingsState>) -> Result<Settings, St
 /// Opens a window or starts a capture by its `--open` name (`region`,
 /// `settings`, `library`…), for the Welcome window's buttons.
 #[tauri::command]
+#[specta::specta]
 pub fn open_target(target: String, app: AppHandle) -> Result<(), String> {
     let target = crate::cli::parse_open_target(["grab-it", "--open", target.as_str()])
         .map_err(|err| err.to_string())?
@@ -269,6 +287,7 @@ pub fn open_target(target: String, app: AppHandle) -> Result<(), String> {
 /// Whether Grab-it starts when the user signs in. The operating system
 /// holds this, not `settings.json`, so it is asked each time.
 #[tauri::command]
+#[specta::specta]
 pub fn get_autostart(app: AppHandle) -> Result<bool, String> {
     use tauri_plugin_autostart::ManagerExt;
     app.autolaunch()
@@ -279,6 +298,7 @@ pub fn get_autostart(app: AppHandle) -> Result<bool, String> {
 /// Turns starting at sign-in on or off. Returns the setting as the system
 /// now reports it.
 #[tauri::command]
+#[specta::specta]
 pub fn set_autostart(enabled: bool, app: AppHandle) -> Result<bool, String> {
     use tauri_plugin_autostart::ManagerExt;
     let launcher = app.autolaunch();
@@ -294,7 +314,7 @@ pub fn set_autostart(enabled: bool, app: AppHandle) -> Result<bool, String> {
 }
 
 /// The saved settings and any hotkey the system would not register.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeysUpdate {
     pub settings: Settings,
@@ -302,6 +322,7 @@ pub struct HotkeysUpdate {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn set_hotkeys(
     hotkeys: Hotkeys,
     app: AppHandle,

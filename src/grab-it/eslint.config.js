@@ -6,7 +6,8 @@ import tseslint from "typescript-eslint";
 import { defineConfig, globalIgnores } from "eslint/config";
 
 export default defineConfig([
-  globalIgnores(["dist", "src-tauri"]),
+  // bindings.ts is generated from the Rust commands by `npm run bindings`.
+  globalIgnores(["dist", "src-tauri", "src/app/bindings.ts"]),
   {
     files: ["**/*.{ts,tsx}"],
     extends: [

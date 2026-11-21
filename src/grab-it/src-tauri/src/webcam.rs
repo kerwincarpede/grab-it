@@ -66,7 +66,7 @@ fn proportions(shape: WebcamShape) -> (f64, f64) {
 
 /// A camera the webview listed by name. Mirrors `Camera` in
 /// src/settings/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct Camera {
     /// The webview's `deviceId`, as `RecordingSettings::camera` saves it.
     pub id: String,
@@ -99,6 +99,7 @@ fn write_cameras(path: &Path, cameras: &[Camera]) -> Result<(), String> {
 
 /// The cameras last listed with their names.
 #[tauri::command]
+#[specta::specta]
 pub fn known_cameras(app: AppHandle) -> Vec<Camera> {
     cameras_path(&app)
         .map(|path| read_cameras(&path))
@@ -107,6 +108,7 @@ pub fn known_cameras(app: AppHandle) -> Vec<Camera> {
 
 /// Remembers `cameras`, a listing in which every camera had its name.
 #[tauri::command]
+#[specta::specta]
 pub fn remember_cameras(app: AppHandle, cameras: Vec<Camera>) -> Result<(), String> {
     let path =
         cameras_path(&app).ok_or("Grab-it has no data folder to remember the cameras in.")?;
