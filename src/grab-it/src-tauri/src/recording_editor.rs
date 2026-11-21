@@ -94,28 +94,40 @@ const MUX_TIMEOUT: Duration = Duration::from_secs(300);
 #[derive(Default)]
 pub struct RecordingEditorState {
     editors: EditorState,
-    exports: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    exports: Mutex<HashMap<String, ActiveExport>>,
+}
+
+struct ActiveExport {
+    original: PathBuf,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl RecordingEditorState {
-    fn begin_export(&self, label: &str) -> Result<Arc<AtomicBool>, String> {
+    fn begin_export(&self, label: &str, original: &Path) -> Result<Arc<AtomicBool>, String> {
         let mut exports = self.exports.lock().unwrap_or_else(|err| err.into_inner());
-        if exports.contains_key(label) {
+        if exports.contains_key(label) || exports.values().any(|export| export.original == original)
+        {
             return Err("An export is already running".into());
         }
         let flag = Arc::new(AtomicBool::new(false));
-        exports.insert(label.to_owned(), flag.clone());
+        exports.insert(
+            label.to_owned(),
+            ActiveExport {
+                original: original.to_owned(),
+                cancelled: flag.clone(),
+            },
+        );
         Ok(flag)
     }
 
     fn cancel_export(&self, label: &str) {
-        if let Some(flag) = self
+        if let Some(export) = self
             .exports
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .get(label)
         {
-            flag.store(true, Ordering::Relaxed);
+            export.cancelled.store(true, Ordering::Relaxed);
         }
     }
 
@@ -1368,13 +1380,14 @@ fn render(
             })
             .collect();
         check_cancelled(cancelled)?;
-        ffmpeg::run(
+        let mux = ffmpeg::run_cancellable(
             &ready.path,
             clip_sound_args(&silent, &sounds, output),
             MUX_TIMEOUT,
-        )
-        .map_err(|err| format!("could not add the sound: {err}"))?;
-        check_cancelled(cancelled)
+            || cancelled.load(Ordering::Relaxed),
+        );
+        check_cancelled(cancelled)?;
+        mux.map_err(|err| format!("could not add the sound: {err}"))
     })();
     let _ = fs::remove_file(&silent);
     if result.is_err() {
@@ -1423,7 +1436,10 @@ pub async fn recording_export(
         );
     };
     let label = window.label().to_owned();
-    let cancelled = state.begin_export(&label)?;
+    let cancelled = state.begin_export(
+        &label,
+        &original.canonicalize().map_err(|err| err.to_string())?,
+    )?;
     // Minutes of decoding and encoding: on a thread of its own, not the
     // async runtime's.
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -1663,14 +1679,28 @@ mod tests {
     #[test]
     fn cancellation_is_scoped_to_one_window_and_one_export() {
         let state = RecordingEditorState::default();
-        let first = state.begin_export("first").unwrap();
-        let second = state.begin_export("second").unwrap();
-        assert!(state.begin_export("first").is_err());
+        let first = state.begin_export("first", Path::new("first.mp4")).unwrap();
+        let second = state
+            .begin_export("second", Path::new("second.mp4"))
+            .unwrap();
+        assert!(state.begin_export("first", Path::new("first.mp4")).is_err());
+        assert!(
+            state
+                .begin_export("reopened", Path::new("first.mp4"))
+                .is_err()
+        );
         state.cancel_export("first");
         assert!(check_cancelled(&first).is_err());
         assert!(check_cancelled(&second).is_ok());
         state.finish_export("first");
-        assert!(check_cancelled(&state.begin_export("first").unwrap()).is_ok());
+        assert!(
+            check_cancelled(
+                &state
+                    .begin_export("reopened", Path::new("first.mp4"))
+                    .unwrap()
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1695,6 +1725,122 @@ mod tests {
             )),
             Err("Export cancelled".into())
         );
+        assert!(!output.exists());
+        assert!(!sidecar_path(&output, ".exporting.mp4").exists());
+    }
+
+    // Exercise the real pipes and child cleanup without requiring a system encoder.
+    #[cfg(unix)]
+    fn render_fixture(dir: &Path) -> ffmpeg::Ready {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("ffmpeg");
+        fs::write(
+            &path,
+            r#"#!/bin/sh
+for output do :; done
+case "$output" in
+    pipe:1) exec dd if=/dev/zero bs=262144 count=4 2>/dev/null ;;
+    *.exporting.mp4) exec cat > "$output" ;;
+    *) : > "$output"; exec sleep 30 ;;
+esac
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        ffmpeg::Ready {
+            path,
+            encoder: ffmpeg::X264,
+        }
+    }
+
+    #[cfg(unix)]
+    fn fixture_job(output: &Path, gap: bool) -> ExportJob<'_> {
+        let (entry, source) = if gap {
+            (ExportEntry::Gap(ExportGap { gap_ms: 1000 }), None)
+        } else {
+            let clip = ExportClip {
+                source_width: 256,
+                source_height: 256,
+                width: 256,
+                height: 256,
+                start_ms: 0,
+                end_ms: 1000,
+                ..clip()
+            };
+            (
+                clip.into(),
+                Some(ClipSource {
+                    path: output.with_file_name("clip.mp4"),
+                    cursor: None,
+                    has_audio: false,
+                }),
+            )
+        };
+        ExportJob {
+            output,
+            plan: ExportPlan {
+                clips: vec![entry],
+                width: 256,
+                height: 256,
+                video_width: 256,
+                video_height: 256,
+                x: 0,
+                y: 0,
+                backdrop_bytes: 0,
+            },
+            sources: vec![source],
+            layers: None,
+            fps: 4,
+            bits_per_pixel: 0.1,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_after_a_frame_stops_clips_and_gaps_and_removes_partial_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = render_fixture(dir.path());
+        let output = dir.path().join("edited.mp4");
+        let silent = sidecar_path(&output, ".exporting.mp4");
+        for gap in [false, true] {
+            let cancelled = AtomicBool::new(false);
+            let mut frames = Vec::new();
+            let result = render(&ready, fixture_job(&output, gap), &cancelled, |progress| {
+                assert!(silent.is_file());
+                frames.push(progress.done);
+                cancelled.store(true, Ordering::Relaxed);
+            });
+            assert_eq!(result, Err("Export cancelled".into()));
+            assert_eq!(frames, [1]);
+            assert!(!silent.exists());
+            assert!(!output.exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_during_mux_reaps_ffmpeg_and_removes_both_files() {
+        use std::time::Instant;
+        let dir = tempfile::tempdir().unwrap();
+        let ready = render_fixture(dir.path());
+        let output = dir.path().join("edited.mp4");
+        let cancelled = AtomicBool::new(false);
+        let start = Instant::now();
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                while !output.exists() {
+                    assert!(
+                        start.elapsed() < Duration::from_secs(10),
+                        "mux never started"
+                    );
+                    thread::sleep(Duration::from_millis(10));
+                }
+                cancelled.store(true, Ordering::Relaxed);
+            });
+            let result = render(&ready, fixture_job(&output, true), &cancelled, |_| {});
+            assert_eq!(result, Err("Export cancelled".into()));
+        });
+        assert!(start.elapsed() < Duration::from_secs(20));
         assert!(!output.exists());
         assert!(!sidecar_path(&output, ".exporting.mp4").exists());
     }
