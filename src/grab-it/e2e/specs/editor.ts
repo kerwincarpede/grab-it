@@ -64,7 +64,9 @@ describe("Editor", () => {
 
   it("exports a PNG and leaves the original unchanged", async function () {
     if (process.platform !== "linux") {
-      // The native Save dialog is answered with xdotool, on X11 only.
+      // The native Save dialog sits outside the webview, so WebDriver cannot
+      // answer it; on Linux xdotool does, on X11. Windows' common dialog is
+      // not driven, so this flow is skipped there.
       this.skip();
     }
     await switchToPage("editor", EDITOR_READY);

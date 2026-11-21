@@ -7,6 +7,21 @@ export const SANDBOX_VAR = "GRAB_IT_E2E_SANDBOX";
 /** Grab-it's identifier in tauri.conf.json: the name of its app data folder. */
 const IDENTIFIER = "com.kerwincarpede.grabit";
 
+/**
+ * Windows: the app data folders Tauri uses (app_data_dir, and
+ * app_local_data_dir for the webview's own data). Tauri asks Windows for
+ * the known folders, which ignore APPDATA and LOCALAPPDATA, so a run cannot
+ * redirect them as it does HOME and XDG_DATA_HOME on Linux: it empties
+ * these real folders instead, which is why it runs on CI runners only
+ * (wdio.conf.ts).
+ */
+export function windowsAppDataFolders(): { roaming: string; local: string } {
+  const roaming = process.env.APPDATA;
+  const local = process.env.LOCALAPPDATA;
+  if (!roaming || !local) throw new Error("APPDATA and LOCALAPPDATA must be set on Windows");
+  return { roaming: path.join(roaming, IDENTIFIER), local: path.join(local, IDENTIFIER) };
+}
+
 /** Where one app session keeps everything, so a run never touches the real home or settings. */
 export interface Sandbox {
   root: string;
@@ -18,7 +33,7 @@ export interface Sandbox {
   configHome: string;
   /** XDG_CACHE_HOME. */
   cacheHome: string;
-  /** The app data folder: settings.json, the Library database, control.sock. */
+  /** The app data folder: settings.json, the Library database, control.sock. On Windows the real one. */
   appData: string;
   settingsFile: string;
   /** The save folder the seeded settings point at. */
@@ -31,7 +46,7 @@ export interface Sandbox {
 
 export function sandboxAt(root: string): Sandbox {
   const dataHome = path.join(root, "data");
-  const appData = path.join(dataHome, IDENTIFIER);
+  const appData = process.platform === "win32" ? windowsAppDataFolders().roaming : path.join(dataHome, IDENTIFIER);
   const saveFolder = path.join(root, "captures");
   return {
     root,
@@ -59,6 +74,14 @@ export function sandboxAt(root: string): Sandbox {
  */
 export function createSandbox(root: string): Sandbox {
   const sandbox = sandboxAt(root);
+  if (process.platform === "win32") {
+    // A fresh app on Windows: empty the real app data, which the previous
+    // session's app has let go of by now (wdio.conf.ts stops it first).
+    const { roaming, local } = windowsAppDataFolders();
+    for (const dir of [roaming, local]) {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+    }
+  }
   for (const dir of [sandbox.home, sandbox.configHome, sandbox.cacheHome, sandbox.appData, sandbox.exports]) {
     fs.mkdirSync(dir, { recursive: true });
   }

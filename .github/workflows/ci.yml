@@ -230,6 +230,97 @@ jobs:
             !${{ github.workspace }}/e2e-run/**/control.sock
           if-no-files-found: ignore
 
+  # The same smoke flows on Windows, through msedgedriver. The e2e build
+  # skips the frozen screen (freeze.rs) so captures read the fixture. The
+  # suite empties Grab-it's real app data, which is why it runs on CI only.
+  e2e-windows:
+    name: Smoke tests (Windows)
+    if: github.event_name == 'pull_request' && github.workflow != 'Release'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: src/grab-it
+    env:
+      # The suite's captures and logs, uploaded on failure.
+      GRAB_IT_E2E_RUN: ${{ github.workspace }}\e2e-run
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/grab-it/src-tauri
+          key: e2e
+
+      - name: Install tauri-driver
+        working-directory: .
+        run: cargo install tauri-driver --locked
+
+      # msedgedriver has to match the WebView2 runtime the runner has, so
+      # it is downloaded for the version installed rather than pinned.
+      - name: Install msedgedriver for the installed WebView2
+        working-directory: .
+        shell: pwsh
+        run: |
+          $client = 'Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $version = $null
+          foreach ($key in "HKLM:\SOFTWARE\WOW6432Node\$client", "HKLM:\SOFTWARE\$client", "HKCU:\SOFTWARE\$client") {
+            $found = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).pv
+            if ($found -and $found -ne '0.0.0.0') { $version = $found; break }
+          }
+          if (-not $version) {
+            Write-Output "::error::No WebView2 runtime found in the registry"
+            exit 1
+          }
+          Write-Output "WebView2 $version"
+          $dir = Join-Path $env:RUNNER_TEMP 'msedgedriver'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $zip = Join-Path $dir 'edgedriver_win64.zip'
+          $downloaded = $false
+          foreach ($hostName in 'msedgedriver.microsoft.com', 'msedgedriver.azureedge.net') {
+            try {
+              Invoke-WebRequest -Uri "https://$hostName/$version/edgedriver_win64.zip" -OutFile $zip -UseBasicParsing
+              $downloaded = $true
+              break
+            } catch {
+              Write-Output "Not from ${hostName}: $($_.Exception.Message)"
+            }
+          }
+          if (-not $downloaded) {
+            Write-Output "::error::No msedgedriver $version to download"
+            exit 1
+          }
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          $driver = Join-Path $dir 'msedgedriver.exe'
+          & $driver --version
+          "MSEDGEDRIVER=$driver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install dependencies
+        working-directory: .
+        run: npm ci
+      # Produces dist/, which the Rust build embeds.
+      - run: npm run build
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features e2e -- -D warnings
+      - run: npm run e2e
+
+      - name: Upload smoke test logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-tests-windows
+          path: ${{ github.workspace }}\e2e-run
+          if-no-files-found: ignore
+
   build:
     name: Build (${{ matrix.platform }})
     # A release build (release.yml, main only) runs in the release

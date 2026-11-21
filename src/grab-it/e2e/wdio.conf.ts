@@ -1,7 +1,7 @@
 // Smoke tests: WebdriverIO drives the e2e build of Grab-it through
 // tauri-driver. `npm run e2e` builds that binary first; see "Smoke tests" in
 // docs/development.md.
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -48,6 +48,57 @@ function tauriDriverPath(): string {
   const found = process.env.TAURI_DRIVER ?? onPath("tauri-driver") ?? (fs.existsSync(cargoBin) ? cargoBin : undefined);
   if (!found) throw new Error("tauri-driver not found: install it with `cargo install tauri-driver --locked`");
   return found;
+}
+
+/**
+ * Windows: msedgedriver, which tauri-driver drives, from MSEDGEDRIVER or
+ * PATH. Its version has to match the installed WebView2 runtime's; CI
+ * downloads the matching one (ci.yml).
+ */
+function msedgedriverPath(): string {
+  const found = process.env.MSEDGEDRIVER ?? onPath("msedgedriver");
+  if (!found) {
+    throw new Error("msedgedriver not found: download the one matching your WebView2 version, and set MSEDGEDRIVER or put it on PATH");
+  }
+  return found;
+}
+
+/**
+ * Windows: the app keeps its settings and Library in the real app data
+ * folders, which a run empties (support/sandbox.ts). Only on CI, or when
+ * GRAB_IT_E2E_REPLACE_APP_DATA=1 says that is wanted.
+ */
+function checkWindowsAppData(): void {
+  if (process.platform !== "win32") return;
+  if (process.env.CI === "true" || process.env.GRAB_IT_E2E_REPLACE_APP_DATA === "1") return;
+  throw new Error(
+    "On Windows the smoke tests delete Grab-it's settings and Library in %APPDATA% and %LOCALAPPDATA%. " +
+      "They run on CI; set GRAB_IT_E2E_REPLACE_APP_DATA=1 to run them here anyway.",
+  );
+}
+
+/** Windows: whether a grab-it.exe is still running. */
+function appRunning(): boolean {
+  try {
+    const listed = execFileSync("tasklist", ["/FI", "IMAGENAME eq grab-it.exe", "/NH"], { encoding: "utf8" });
+    return listed.toLowerCase().includes("grab-it.exe");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Windows: ends any Grab-it still running, by name, and waits until none
+ * runs. A Grab-it left in the tray would take the next session's launch
+ * (single instance) and hold the app data the next session empties.
+ */
+async function stopWindowsApp(): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (appRunning()) {
+    if (Date.now() > deadline) throw new Error("grab-it.exe is still running 15 seconds after its session ended");
+    spawnSync("taskkill", ["/im", "grab-it.exe", "/t", "/f"], { stdio: "ignore" });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }
 
 /**
@@ -162,6 +213,8 @@ async function startTauriDriver(sandboxRoot: string, port: number, nativePort: n
   const env = appEnvironment(sandboxRoot);
   const log = fs.openSync(path.join(sandboxRoot, "tauri-driver.log"), "a");
   const driverArgs = [tauriDriverPath(), "--port", String(port), "--native-port", String(nativePort)];
+  // Windows: tauri-driver drives msedgedriver.
+  if (process.platform === "win32") driverArgs.push("--native-driver", msedgedriverPath());
   // Linux: a private session bus, so the single-instance check never hands
   // the arguments to a Grab-it already running on the developer's bus.
   const dbus = process.platform === "linux" ? onPath("dbus-run-session") : undefined;
@@ -189,7 +242,8 @@ function appEnvironment(sandboxRoot: string): NodeJS.ProcessEnv {
     GRAB_IT_E2E_CAPTURE: fixture,
   };
   if (process.platform === "win32") {
-    // Windows keeps app data under APPDATA, which this does not redirect.
+    // Tauri asks Windows for the app data folders, so HOME and XDG_* would
+    // change nothing; createSandbox emptied the real ones instead.
     return env;
   }
   Object.assign(env, {
@@ -262,6 +316,8 @@ export const config: WebdriverIO.Config = {
     if (!fs.existsSync(application)) {
       throw new Error(`No e2e build at ${application}: run \`npm run e2e\`, which builds it with --features e2e`);
     }
+    checkWindowsAppData();
+    if (process.platform === "win32") msedgedriverPath();
     await startXvfb();
     console.log(`Smoke test data and logs: ${runDir}`);
   },
@@ -279,6 +335,8 @@ export const config: WebdriverIO.Config = {
     config.port = port;
     // Kills the driver however the worker ends, even when no session was made.
     process.once("exit", stopTauriDriver);
+    // Windows: no Grab-it may hold the app data createSandbox empties.
+    if (process.platform === "win32") await stopWindowsApp();
     try {
       await startTauriDriver(sandboxRoot, port, nativePort);
     } catch (err) {
@@ -290,8 +348,12 @@ export const config: WebdriverIO.Config = {
     }
   },
 
-  afterSession: () => {
+  afterSession: async () => {
+    const started = tauriDriver !== undefined;
     stopTauriDriver();
+    // Windows: taskkill ends the tree under tauri-driver, but a Grab-it left
+    // in the tray would still take the next launch.
+    if (process.platform === "win32" && started) await stopWindowsApp();
   },
 
   // The launcher's backstop: a worker that crashed may have left its
