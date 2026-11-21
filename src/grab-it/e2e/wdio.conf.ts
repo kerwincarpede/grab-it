@@ -6,7 +6,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { createSandbox, SANDBOX_VAR } from "./support/sandbox";
+import { checkWindowsAppData, createSandbox, SANDBOX_VAR } from "./support/sandbox";
 
 const e2eDir = import.meta.dirname;
 const projectDir = path.resolve(e2eDir, "..");
@@ -63,20 +63,6 @@ function msedgedriverPath(): string {
   return found;
 }
 
-/**
- * Windows: the app keeps its settings and Library in the real app data
- * folders, which a run empties (support/sandbox.ts). Only on CI, or when
- * GRAB_IT_E2E_REPLACE_APP_DATA=1 says that is wanted.
- */
-function checkWindowsAppData(): void {
-  if (process.platform !== "win32") return;
-  if (process.env.CI === "true" || process.env.GRAB_IT_E2E_REPLACE_APP_DATA === "1") return;
-  throw new Error(
-    "On Windows the smoke tests delete Grab-it's settings and Library in %APPDATA% and %LOCALAPPDATA%. " +
-      "They run on CI; set GRAB_IT_E2E_REPLACE_APP_DATA=1 to run them here anyway.",
-  );
-}
-
 /** Windows: whether a grab-it.exe is still running. */
 function appRunning(): boolean {
   try {
@@ -93,6 +79,8 @@ function appRunning(): boolean {
  * (single instance) and hold the app data the next session empties.
  */
 async function stopWindowsApp(): Promise<void> {
+  // It also ends a Grab-it the developer has running.
+  checkWindowsAppData();
   const deadline = Date.now() + 15_000;
   while (appRunning()) {
     if (Date.now() > deadline) throw new Error("grab-it.exe is still running 15 seconds after its session ended");
@@ -316,6 +304,9 @@ export const config: WebdriverIO.Config = {
     if (!fs.existsSync(application)) {
       throw new Error(`No e2e build at ${application}: run \`npm run e2e\`, which builds it with --features e2e`);
     }
+    // Reported early here, but WebdriverIO carries on after a hook's
+    // error, so stopWindowsApp and createSandbox check again before they
+    // end or delete anything.
     checkWindowsAppData();
     if (process.platform === "win32") msedgedriverPath();
     await startXvfb();

@@ -22,6 +22,20 @@ export function windowsAppDataFolders(): { roaming: string; local: string } {
   return { roaming: path.join(roaming, IDENTIFIER), local: path.join(local, IDENTIFIER) };
 }
 
+/**
+ * Windows: throws unless emptying the real app data folders is wanted:
+ * on CI, or with GRAB_IT_E2E_REPLACE_APP_DATA=1. Called right before each
+ * step that ends Grab-it or deletes its data.
+ */
+export function checkWindowsAppData(): void {
+  if (process.platform !== "win32") return;
+  if (process.env.CI === "true" || process.env.GRAB_IT_E2E_REPLACE_APP_DATA === "1") return;
+  throw new Error(
+    "On Windows the smoke tests delete Grab-it's settings and Library in %APPDATA% and %LOCALAPPDATA%. " +
+      "They run on CI; set GRAB_IT_E2E_REPLACE_APP_DATA=1 to run them here anyway.",
+  );
+}
+
 /** Where one app session keeps everything, so a run never touches the real home or settings. */
 export interface Sandbox {
   root: string;
@@ -77,6 +91,7 @@ export function createSandbox(root: string): Sandbox {
   if (process.platform === "win32") {
     // A fresh app on Windows: empty the real app data, which the previous
     // session's app has let go of by now (wdio.conf.ts stops it first).
+    checkWindowsAppData();
     const { roaming, local } = windowsAppDataFolders();
     for (const dir of [roaming, local]) {
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
