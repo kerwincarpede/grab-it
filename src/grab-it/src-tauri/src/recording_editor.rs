@@ -384,14 +384,65 @@ pub struct AudioSource {
     pub stream: usize,
 }
 
-/// The sources in a recording's pointer sidecar's `audio`, or `None` when
-/// the sidecar, or its `audio`, is missing or unreadable.
-fn sidecar_audio(video: &Path) -> Option<Vec<SoundSource>> {
+/// The field `key` of a recording's pointer sidecar, or `None` when the
+/// sidecar, or that field, is missing or unreadable.
+fn sidecar_field(video: &Path, key: &str) -> Option<Value> {
     fs::read(cursor_path(video))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .and_then(|mut value| value.get_mut("audio").map(Value::take))
-        .and_then(|audio| serde_json::from_value(audio).ok())
+        .and_then(|mut value| value.get_mut(key).map(Value::take))
+}
+
+/// The sources in a recording's pointer sidecar's `audio`, or `None` when
+/// the sidecar, or its `audio`, is missing or unreadable.
+fn sidecar_audio(video: &Path) -> Option<Vec<SoundSource>> {
+    sidecar_field(video, "audio").and_then(|audio| serde_json::from_value(audio).ok())
+}
+
+/// Whether background noise was removed from the microphone in the MP4's
+/// sound, as its pointer sidecar's `removeNoise` says. False when that is
+/// absent: the recording was made without it, or before it could be.
+pub fn sidecar_remove_noise(video: &Path) -> bool {
+    sidecar_field(video, "removeNoise").and_then(|value| value.as_bool()) == Some(true)
+}
+
+/// A recording's sound sidecar when it holds the microphone apart, which
+/// an export can mix again with or without noise removal: the microphone
+/// is its `a:0`, and system sound, when recorded, its `a:1`. Both are
+/// unfiltered and lined up with the video.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeptSound {
+    pub file: PathBuf,
+    /// Whether system sound is its `a:1`.
+    pub system: bool,
+}
+
+/// The kept sound among `sources`, `video`'s [`audio_sources`], or `None`
+/// when its microphone is not kept apart in the sound sidecar.
+fn kept_sound_in(video: &Path, sources: &[AudioSource]) -> Option<KeptSound> {
+    match sources {
+        [microphone, rest @ ..]
+            if microphone.kind == AudioKind::Microphone
+                && microphone.stream == 0
+                && microphone.file != video =>
+        {
+            Some(KeptSound {
+                file: microphone.file.clone(),
+                system: rest.first().is_some_and(|system| {
+                    system.kind == AudioKind::System
+                        && system.stream == 1
+                        && system.file == microphone.file
+                }),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// `video`'s kept sound, or `None` when its microphone is not kept apart.
+/// Never probes the MP4: a recording without a sound sidecar has none.
+pub fn kept_sound(video: &Path) -> Option<KeptSound> {
+    kept_sound_in(video, &audio_sources_with(video, || false))
 }
 
 /// The sources of `video`'s sound. `ffmpeg` probes an older recording
@@ -456,6 +507,12 @@ pub struct RecordingInfo {
     /// Each source of its sound, by kind, in [`audio_sources`]' order:
     /// empty when it is silent.
     pub audio: Vec<AudioKind>,
+    /// Whether background noise was removed from the microphone in the
+    /// MP4's sound, from its pointer sidecar.
+    pub remove_noise: bool,
+    /// Whether the sound sidecar keeps its microphone apart, so an export
+    /// can remove background noise or leave it in ([`kept_sound`]).
+    pub separate_microphone: bool,
 }
 
 #[tauri::command]
@@ -476,21 +533,25 @@ pub async fn recording_info(
     let ffmpeg = ffmpeg::ready(&app).map(|ready| ready.path);
     let video = path.clone();
     // An older recording is probed by ffmpeg: off the async runtime.
-    let audio = tauri::async_runtime::spawn_blocking(move || {
-        audio_sources(&video, ffmpeg.as_deref())
-            .into_iter()
-            .map(|source| source.kind)
-            .collect()
+    let (audio, separate_microphone) = tauri::async_runtime::spawn_blocking(move || {
+        let sources = audio_sources(&video, ffmpeg.as_deref());
+        let separate = kept_sound_in(&video, &sources).is_some();
+        (
+            sources.into_iter().map(|source| source.kind).collect(),
+            separate,
+        )
     })
     .await
     .map_err(|err| format!("could not read the recording's sound: {err}"))?;
     Ok(RecordingInfo {
+        remove_noise: sidecar_remove_noise(&path),
         path,
         file_name,
         edits,
         fps,
         cursor,
         audio,
+        separate_microphone,
     })
 }
 
@@ -520,6 +581,12 @@ pub struct RecordingSource {
     pub cursor: Option<CursorPath>,
     /// Whether it holds sound.
     pub has_audio: bool,
+    /// Whether background noise was removed from the microphone in the
+    /// MP4's sound, from its pointer sidecar.
+    pub remove_noise: bool,
+    /// Whether the sound sidecar keeps its microphone apart, so an export
+    /// can remove background noise or leave it in ([`kept_sound`]).
+    pub separate_microphone: bool,
 }
 
 /// The MP4 `file_name` names in `recordings`: a bare file name, never a
@@ -568,6 +635,8 @@ pub async fn recording_source(
             cursor: CursorPath::load(&path),
             file_name,
             has_audio,
+            remove_noise: sidecar_remove_noise(&path),
+            separate_microphone: kept_sound(&path).is_some(),
             path,
         }
     })
@@ -892,6 +961,11 @@ pub struct ExportPlan {
     /// How many bytes of the body are the backdrop PNG; the rest is the
     /// mask PNG. 0, with an empty body, when there is no backdrop.
     pub backdrop_bytes: usize,
+    /// Whether background noise is removed from the microphone of every
+    /// clip whose recording keeps it apart. Other clips keep the sound
+    /// they were recorded with.
+    #[serde(default)]
+    pub remove_noise: bool,
 }
 
 impl ExportPlan {
@@ -970,27 +1044,43 @@ pub fn decode_args(input: &Path, clip: &ExportClip, fps: u32) -> Vec<OsString> {
     args
 }
 
-/// One entry's sound: a stretch of its recording, or with no `file`
-/// (a gap, or a recording without sound) silence as long as the stretch.
+/// Where a clip's sound is read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoundFrom<'a> {
+    /// Nothing: a gap, or a recording without sound.
+    Silence,
+    /// The MP4's own sound, as it was recorded.
+    Video(&'a Path),
+    /// The sound sidecar's unfiltered sources, mixed as the recording
+    /// mixed them. With `noise_model`, background noise is first removed
+    /// from the microphone alone with that RNNoise model.
+    Kept {
+        kept: &'a KeptSound,
+        noise_model: Option<&'a Path>,
+    },
+}
+
+/// One entry's sound: a stretch of its recording, or silence as long as
+/// the stretch.
 pub struct ClipSound<'a> {
     pub start_ms: u64,
     pub end_ms: u64,
-    pub file: Option<&'a Path>,
+    pub from: SoundFrom<'a>,
 }
 
 impl<'a> ClipSound<'a> {
-    /// `entry`'s sound: `file` for a clip, silence for a gap.
-    pub fn of(entry: &ExportEntry, file: Option<&'a Path>) -> Self {
+    /// `entry`'s sound: read `from` for a clip, silence for a gap.
+    pub fn of(entry: &ExportEntry, from: SoundFrom<'a>) -> Self {
         match entry {
             ExportEntry::Clip(clip) => Self {
                 start_ms: clip.start_ms,
                 end_ms: clip.end_ms,
-                file,
+                from,
             },
             ExportEntry::Gap(gap) => Self {
                 start_ms: 0,
                 end_ms: gap.gap_ms,
-                file: None,
+                from: SoundFrom::Silence,
             },
         }
     }
@@ -1000,11 +1090,46 @@ impl<'a> ClipSound<'a> {
     }
 }
 
+/// Where `source`'s sound is read from when the export removes
+/// background noise (`remove_noise`) or not: the MP4, as recorded, when
+/// its sound already matches, otherwise its kept sound mixed again,
+/// through `noise_model` when removing noise. A recording that does not
+/// keep its microphone apart always gives its MP4. Refuses to remove
+/// noise without the model.
+fn sound_from<'a>(
+    source: Option<&'a ClipSource>,
+    remove_noise: bool,
+    noise_model: Option<&'a Path>,
+) -> Result<SoundFrom<'a>, String> {
+    let Some(source) = source.filter(|source| source.has_audio) else {
+        return Ok(SoundFrom::Silence);
+    };
+    match &source.kept {
+        Some(kept) if source.remove_noise != remove_noise => {
+            if remove_noise && noise_model.is_none() {
+                return Err(NO_NOISE_MODEL.to_owned());
+            }
+            Ok(SoundFrom::Kept {
+                kept,
+                noise_model: noise_model.filter(|_| remove_noise),
+            })
+        }
+        _ => Ok(SoundFrom::Video(&source.path)),
+    }
+}
+
+/// Why an export that removes background noise cannot.
+const NO_NOISE_MODEL: &str = "the background noise model is missing from this install of \
+     Grab-it; reinstall it, or turn off Remove background noise";
+
 /// ffmpeg's arguments to write `output` from the silent `video` with each
 /// clip's stretch of its recording's sound, resampled to 48 kHz stereo
 /// and joined in order, as AAC. Each clip's sound is exactly its length:
 /// padded with silence where its recording's sound stops early, and
-/// silence throughout when its recording has none or it is a gap.
+/// silence throughout when its recording has none or it is a gap. A clip
+/// read from its kept sound has its stretch of the microphone, denoised
+/// when asked, mixed with its stretch of system sound, as recording
+/// mixed them.
 pub fn clip_sound_args(video: &Path, clips: &[ClipSound<'_>], output: &Path) -> Vec<OsString> {
     let mut args: Vec<OsString> = ["-hide_banner", "-loglevel", "error", "-y", "-i"]
         .into_iter()
@@ -1014,20 +1139,51 @@ pub fn clip_sound_args(video: &Path, clips: &[ClipSound<'_>], output: &Path) -> 
     let mut filters = Vec::new();
     let mut inputs = 0;
     for (index, clip) in clips.iter().enumerate() {
-        match clip.file {
+        let file = match clip.from {
+            SoundFrom::Silence => None,
+            SoundFrom::Video(file) => Some(file),
+            SoundFrom::Kept { kept, .. } => Some(kept.file.as_path()),
+        };
+        match file {
             Some(file) => {
                 args.push("-i".into());
                 args.push(file.as_os_str().to_owned());
                 inputs += 1;
+                let trim = |stream: usize| {
+                    format!(
+                        "[{inputs}:a:{stream}]atrim=start={}:end={},asetpts=PTS-STARTPTS,",
+                        seconds(clip.start_ms),
+                        seconds(clip.end_ms),
+                    )
+                };
+                // The stretch, ready for the format every clip shares.
+                let sound = match clip.from {
+                    SoundFrom::Kept { kept, noise_model } => {
+                        let denoise = noise_model
+                            .map(|model| format!("{},", ffmpeg::noise_filter(model)))
+                            .unwrap_or_default();
+                        if kept.system {
+                            // Trimmed before noise removal, so only the
+                            // stretch kept goes through the model.
+                            filters.push(format!(
+                                "{}{denoise}{}[m{index}]",
+                                trim(0),
+                                ffmpeg::MIX_FORMAT
+                            ));
+                            filters.push(format!("{}{}[s{index}]", trim(1), ffmpeg::MIX_FORMAT));
+                            format!("[m{index}][s{index}]{},", ffmpeg::mix(2))
+                        } else {
+                            format!("{}{denoise}", trim(0))
+                        }
+                    }
+                    _ => trim(0),
+                };
                 // Padded with silence and cut to the clip's length, so a
                 // sound track that ends early never pulls later clips'
                 // sound ahead of their frames.
                 filters.push(format!(
-                    "[{inputs}:a:0]atrim=start={}:end={},asetpts=PTS-STARTPTS,\
-                     aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,\
+                    "{sound}aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,\
                      apad,atrim=duration={}[a{index}]",
-                    seconds(clip.start_ms),
-                    seconds(clip.end_ms),
                     seconds(clip.duration_ms())
                 ));
             }
@@ -1173,6 +1329,10 @@ struct ClipSource {
     /// The pointer path follow-the-pointer zooms centre on.
     cursor: Option<CursorPath>,
     has_audio: bool,
+    /// Whether the MP4's microphone had background noise removed.
+    remove_noise: bool,
+    /// Its microphone kept apart, when it is.
+    kept: Option<KeptSound>,
 }
 
 /// One export to render.
@@ -1186,6 +1346,9 @@ struct ExportJob<'a> {
     /// The opened recording's frame rate, which every clip is decoded at.
     fps: u32,
     bits_per_pixel: f64,
+    /// The RNNoise model, when the plan removes background noise and it
+    /// is installed.
+    noise_model: Option<PathBuf>,
 }
 
 /// Decodes `clip` of `input` at `fps` and calls `frame` with each frame,
@@ -1262,11 +1425,23 @@ fn render(
         layers,
         fps,
         bits_per_pixel,
+        noise_model,
     } = job;
     let plan = &plan;
     if sources.len() != plan.clips.len() {
         return Err("every clip needs its recording".to_owned());
     }
+    // Where each clip's sound comes from, settled before minutes of
+    // encoding.
+    let sounds = plan
+        .clips
+        .iter()
+        .zip(&sources)
+        .map(|(entry, source)| {
+            sound_from(source.as_ref(), plan.remove_noise, noise_model.as_deref())
+                .map(|from| ClipSound::of(entry, from))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     let composer = layers
         .map(|(backdrop, mask)| Composer::new(backdrop, &mask, plan))
         .transpose()?;
@@ -1370,17 +1545,6 @@ fn render(
         let finished = video.finish_cancellable(|| cancelled.load(Ordering::Relaxed));
         check_cancelled(cancelled)?;
         finished.map_err(|err| err.to_string())?;
-        let sounds: Vec<ClipSound<'_>> = plan
-            .clips
-            .iter()
-            .zip(&sources)
-            .map(|(entry, source)| {
-                let file = source
-                    .as_ref()
-                    .and_then(|source| source.has_audio.then_some(source.path.as_path()));
-                ClipSound::of(entry, file)
-            })
-            .collect();
         check_cancelled(cancelled)?;
         let mux = ffmpeg::run_cancellable(
             &ready.path,
@@ -1476,6 +1640,8 @@ fn clip_sources(
             Ok(Some(ClipSource {
                 cursor: CursorPath::load(&path),
                 has_audio: probe.audio,
+                remove_noise: sidecar_remove_noise(&path),
+                kept: kept_sound(&path),
                 path,
             }))
         })
@@ -1513,6 +1679,12 @@ fn export(
     // Clips are looked for beside the opened recording, which is in the
     // recordings folder the editor was opened from.
     let sources = clip_sources(&ready.path, recordings_of(original)?, &plan, cancelled)?;
+    // Missing, an export that removes noise from a clip is refused.
+    let noise_model = if plan.remove_noise {
+        crate::noise::bundled_model(app)
+    } else {
+        None
+    };
     let output = edited_path(original);
     let duration_ms = plan.duration_ms();
     let job = ExportJob {
@@ -1522,6 +1694,7 @@ fn export(
         layers,
         fps,
         bits_per_pixel,
+        noise_model,
     };
     render(ready, job, cancelled, report)?;
     crate::library::record_recording(app, &output, duration_ms);
@@ -1648,6 +1821,201 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_kept_microphone_and_noise_removal_come_from_the_sidecars() {
+        let both = r#"{"version":1,"fps":30,"audio":["microphone","system"]}"#;
+        let (_dir, video) = recording_with(Some(both), true);
+        assert_eq!(
+            kept_sound(&video),
+            Some(KeptSound {
+                file: sound_path(&video),
+                system: true,
+            })
+        );
+        assert!(!sidecar_remove_noise(&video));
+
+        let denoised = r#"{"audio":["microphone"],"removeNoise":true}"#;
+        let (_dir, video) = recording_with(Some(denoised), true);
+        assert_eq!(
+            kept_sound(&video),
+            Some(KeptSound {
+                file: sound_path(&video),
+                system: false,
+            })
+        );
+        assert!(sidecar_remove_noise(&video));
+
+        // System sound alone has no microphone to remove noise from.
+        let (_dir, video) = recording_with(Some(r#"{"audio":["system"]}"#), true);
+        assert_eq!(kept_sound(&video), None);
+        // Without the sound sidecar, the MP4's one track cannot be split.
+        let (_dir, video) = recording_with(Some(both), false);
+        assert_eq!(kept_sound(&video), None);
+        // An older recording, or one whose sidecar says something else.
+        let (_dir, video) = recording_with(None, false);
+        assert_eq!(kept_sound(&video), None);
+        assert!(!sidecar_remove_noise(&video));
+        let (_dir, video) = recording_with(Some(r#"{"removeNoise":"yes"}"#), false);
+        assert!(!sidecar_remove_noise(&video));
+    }
+
+    /// A clip's recording at `/rec/clip.mp4`, with sound, its MP4
+    /// denoised when `remove_noise`, and its microphone kept apart when
+    /// `kept`.
+    fn sounding(remove_noise: bool, kept: bool) -> ClipSource {
+        ClipSource {
+            path: PathBuf::from("/rec/clip.mp4"),
+            cursor: None,
+            has_audio: true,
+            remove_noise,
+            kept: kept.then(|| KeptSound {
+                file: PathBuf::from("/rec/clip.sound.m4a"),
+                system: true,
+            }),
+        }
+    }
+
+    #[test]
+    fn the_kept_sound_is_used_only_when_the_toggle_differs_from_the_mp4() {
+        let model = Path::new("/opt/bd.rnnn");
+        let video = Path::new("/rec/clip.mp4");
+        // As recorded: the MP4's own sound, either way.
+        for remove_noise in [false, true] {
+            let source = sounding(remove_noise, true);
+            assert_eq!(
+                sound_from(Some(&source), remove_noise, Some(model)),
+                Ok(SoundFrom::Video(video))
+            );
+        }
+        // Turned on for a recording made without it: denoised from the
+        // kept sound.
+        let plain = sounding(false, true);
+        assert_eq!(
+            sound_from(Some(&plain), true, Some(model)),
+            Ok(SoundFrom::Kept {
+                kept: plain.kept.as_ref().unwrap(),
+                noise_model: Some(model),
+            })
+        );
+        // Turned off for a recording made with it: the kept sound as heard.
+        let denoised = sounding(true, true);
+        assert_eq!(
+            sound_from(Some(&denoised), false, Some(model)),
+            Ok(SoundFrom::Kept {
+                kept: denoised.kept.as_ref().unwrap(),
+                noise_model: None,
+            })
+        );
+        // Without a kept microphone a clip exports as it is.
+        let older = sounding(false, false);
+        assert_eq!(
+            sound_from(Some(&older), true, Some(model)),
+            Ok(SoundFrom::Video(video))
+        );
+        // Silence for a gap or a recording without sound.
+        assert_eq!(sound_from(None, true, Some(model)), Ok(SoundFrom::Silence));
+        let silent = ClipSource {
+            has_audio: false,
+            ..sounding(false, true)
+        };
+        assert_eq!(
+            sound_from(Some(&silent), true, Some(model)),
+            Ok(SoundFrom::Silence)
+        );
+    }
+
+    #[test]
+    fn removing_noise_without_the_model_is_refused() {
+        let plain = sounding(false, true);
+        assert_eq!(
+            sound_from(Some(&plain), true, None),
+            Err(NO_NOISE_MODEL.to_owned())
+        );
+        // Turning it off needs no model.
+        let denoised = sounding(true, true);
+        assert!(sound_from(Some(&denoised), false, None).is_ok());
+    }
+
+    #[test]
+    fn noise_removal_comes_with_the_plan_and_is_off_without_it() {
+        let json = |extra: &str| {
+            format!(
+                r#"{{"clips":[{{"source":"a.mp4","startMs":0,"endMs":5000,
+                    "sourceWidth":1920,"sourceHeight":1080,"x":0,"y":0,"width":1920,"height":1080}}],
+                    "width":1920,"height":1080,"x":0,"y":0,
+                    "videoWidth":1920,"videoHeight":1080,"backdropBytes":0{extra}}}"#
+            )
+        };
+        let plan = |extra: &str| serde_json::from_str::<ExportPlan>(&json(extra)).unwrap();
+        assert!(!plan("").remove_noise);
+        assert!(plan(r#","removeNoise":true"#).remove_noise);
+    }
+
+    #[test]
+    fn noise_is_removed_from_the_kept_microphone_and_mixed_with_system_sound() {
+        let kept = KeptSound {
+            file: PathBuf::from("/rec/clip.sound.m4a"),
+            system: true,
+        };
+        let sounds = [ClipSound::of(
+            &clip().into(),
+            SoundFrom::Kept {
+                kept: &kept,
+                noise_model: Some(Path::new("/opt/bd.rnnn")),
+            },
+        )];
+        assert_eq!(
+            strings(clip_sound_args(
+                Path::new("/rec/clip (edited).exporting.mp4"),
+                &sounds,
+                Path::new("/rec/clip (edited).mp4"),
+            )),
+            "-hide_banner -loglevel error -y -i /rec/clip (edited).exporting.mp4 \
+             -i /rec/clip.sound.m4a -filter_complex \
+             [1:a:0]atrim=start=1.250:end=9.500,asetpts=PTS-STARTPTS,\
+             arnndn=m=/opt/bd.rnnn,aformat=sample_rates=48000:channel_layouts=stereo[m0];\
+             [1:a:1]atrim=start=1.250:end=9.500,asetpts=PTS-STARTPTS,\
+             aformat=sample_rates=48000:channel_layouts=stereo[s0];\
+             [m0][s0]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,\
+             aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,\
+             apad,atrim=duration=8.250[a0];\
+             [a0]concat=n=1:v=0:a=1[sound] \
+             -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k -shortest \
+             -movflags +faststart /rec/clip (edited).mp4"
+        );
+    }
+
+    #[test]
+    fn a_kept_microphone_alone_is_exported_unfiltered_when_turned_off() {
+        let kept = KeptSound {
+            file: PathBuf::from("/rec/clip.sound.m4a"),
+            system: false,
+        };
+        let sounds = [ClipSound::of(
+            &clip().into(),
+            SoundFrom::Kept {
+                kept: &kept,
+                noise_model: None,
+            },
+        )];
+        let args = strings(clip_sound_args(
+            Path::new("/rec/clip (edited).exporting.mp4"),
+            &sounds,
+            Path::new("/rec/clip (edited).mp4"),
+        ));
+        assert!(
+            args.contains(
+                "-i /rec/clip.sound.m4a -filter_complex \
+                 [1:a:0]atrim=start=1.250:end=9.500,asetpts=PTS-STARTPTS,\
+                 aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,\
+                 apad,atrim=duration=8.250[a0];"
+            ),
+            "{args}"
+        );
+        assert!(!args.contains("arnndn"));
+        assert!(!args.contains("amix"));
+    }
+
     fn strings(args: Vec<OsString>) -> String {
         args.into_iter()
             .map(|arg| arg.into_string().unwrap())
@@ -1681,6 +2049,7 @@ mod tests {
             video_width: 960,
             video_height: 540,
             backdrop_bytes: 10,
+            remove_noise: false,
         }
     }
 
@@ -1726,6 +2095,7 @@ mod tests {
             sources: vec![],
             fps: 30,
             bits_per_pixel: 0.1,
+            noise_model: None,
         };
         assert_eq!(
             render(&ready, job, &AtomicBool::new(true), |_| panic!(
@@ -1792,6 +2162,8 @@ esac
                     path: output.with_file_name("clip.mp4"),
                     cursor: None,
                     has_audio: false,
+                    remove_noise: false,
+                    kept: None,
                 }),
             )
         };
@@ -1806,11 +2178,13 @@ esac
                 x: 0,
                 y: 0,
                 backdrop_bytes: 0,
+                remove_noise: false,
             },
             sources: vec![source],
             layers: None,
             fps: 4,
             bits_per_pixel: 0.1,
+            noise_model: None,
         }
     }
 
@@ -2284,9 +2658,9 @@ esac
         let original = Path::new("/rec/clip.mp4");
         let gap = ExportEntry::Gap(ExportGap { gap_ms: 1500 });
         let sounds = [
-            ClipSound::of(&first.into(), Some(original)),
+            ClipSound::of(&first.into(), SoundFrom::Video(original)),
             // A gap is silent even when handed a file.
-            ClipSound::of(&gap, Some(original)),
+            ClipSound::of(&gap, SoundFrom::Video(original)),
         ];
         assert_eq!(
             strings(clip_sound_args(
@@ -2435,9 +2809,9 @@ esac
         };
         let original = Path::new("/rec/clip.mp4");
         let sounds = [
-            ClipSound::of(&first.into(), Some(original)),
-            ClipSound::of(&silent.into(), None),
-            ClipSound::of(&again.into(), Some(original)),
+            ClipSound::of(&first.into(), SoundFrom::Video(original)),
+            ClipSound::of(&silent.into(), SoundFrom::Silence),
+            ClipSound::of(&again.into(), SoundFrom::Video(original)),
         ];
         assert_eq!(
             strings(clip_sound_args(
@@ -2489,6 +2863,7 @@ esac
             video_width: 2,
             video_height: 2,
             backdrop_bytes: 1,
+            remove_noise: false,
             ..plan()
         };
         let backdrop = RgbaImage::from_pixel(4, 2, Rgba([0, 0, 200, 255]));
@@ -2525,6 +2900,7 @@ esac
         let mask = png([255, 255, 255, 0]);
         let plan = ExportPlan {
             backdrop_bytes: backdrop.len(),
+            remove_noise: false,
             ..plan()
         };
         let body = [backdrop.clone(), mask].concat();
@@ -2537,6 +2913,7 @@ esac
                 &[],
                 &ExportPlan {
                     backdrop_bytes: 0,
+                    remove_noise: false,
                     ..self::plan()
                 }
             ),

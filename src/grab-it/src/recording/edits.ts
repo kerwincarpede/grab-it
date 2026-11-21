@@ -29,6 +29,12 @@ export interface RecordingEdits {
   backdrop?: Backdrop | null;
   /** Zoom segments, sorted and never overlapping on one source; absent or empty for none. */
   zooms?: Zoom[];
+  /**
+   * Whether the export removes background noise from the microphone.
+   * Absent until it is changed, which follows how the opened recording
+   * was made (its `removeNoise`).
+   */
+  removeNoise?: boolean;
 }
 
 /** The shortest a trimmed recording may be. */
@@ -68,6 +74,7 @@ export function parseEdits(value: unknown): RecordingEdits {
   if (backdrop) edits.backdrop = backdrop;
   const zooms = parseZooms(doc.zooms);
   if (zooms.length > 0) edits.zooms = zooms;
+  if (typeof doc.removeNoise === "boolean") edits.removeNoise = doc.removeNoise;
   return edits;
 }
 
@@ -109,6 +116,7 @@ export function serializeEdits(edits: RecordingEdits): SidecarEdits {
           })),
         }
       : {}),
+    ...(edits.removeNoise !== undefined ? { removeNoise: edits.removeNoise } : {}),
   };
 }
 

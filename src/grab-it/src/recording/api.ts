@@ -84,6 +84,12 @@ export interface ExportPlan {
   videoHeight: number;
   /** How many bytes of the body are the backdrop PNG; the rest is the mask. 0 without a backdrop. */
   backdropBytes: number;
+  /**
+   * Whether background noise is removed from the microphone of every clip
+   * whose recording keeps it apart (`separateMicrophone`); other clips keep
+   * the sound they were recorded with.
+   */
+  removeNoise: boolean;
 }
 
 /** Mirrors `ExportProgress` in src-tauri/src/recording_editor.rs: frames written so far. */
