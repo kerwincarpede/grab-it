@@ -598,6 +598,7 @@ pub fn codex_reply(
 pub(crate) mod tests {
     use super::*;
     use crate::ai::SYSTEM_PROMPT;
+    #[cfg(unix)]
     use std::cell::Cell;
     use tempfile::TempDir;
 

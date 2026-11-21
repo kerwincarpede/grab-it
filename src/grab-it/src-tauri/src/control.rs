@@ -226,15 +226,17 @@ pub fn data_dir_from(env: impl Fn(&str) -> Option<PathBuf>) -> Option<PathBuf> {
 /// Grab-it's own program, as agents and a fresh launch should run it. In
 /// an AppImage that is the AppImage itself (`$APPIMAGE`): the running
 /// program sits in a temporary mount that changes on every launch and goes
-/// away with the process that made it.
+/// away with the process that made it. AppImages exist only on Linux, so
+/// elsewhere it is always the running program.
 pub fn executable() -> io::Result<PathBuf> {
-    Ok(executable_from(
-        std::env::var_os("APPIMAGE").map(PathBuf::from),
-        std::env::current_exe()?,
-    ))
+    let current = std::env::current_exe()?;
+    #[cfg(target_os = "linux")]
+    let current = executable_from(std::env::var_os("APPIMAGE").map(PathBuf::from), current);
+    Ok(current)
 }
 
 /// [`executable`], given `$APPIMAGE` and the running program.
+#[cfg(target_os = "linux")]
 pub fn executable_from(appimage: Option<PathBuf>, current: PathBuf) -> PathBuf {
     match appimage {
         Some(appimage) if appimage.is_absolute() => appimage,
@@ -574,6 +576,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn an_appimage_runs_as_the_appimage() {
         let mounted = PathBuf::from("/tmp/.mount_GrabXy/usr/bin/grab-it");
         assert_eq!(

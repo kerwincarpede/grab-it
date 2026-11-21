@@ -1,0 +1,4 @@
+# Grab-it embeds the agent skill byte for byte (include_str! in
+# src-tauri/src/agent.rs) and installs it as is, so its YAML frontmatter
+# keeps LF line endings even in a Windows checkout with core.autocrlf.
+src/grab-it/src-tauri/agent-skill/** text eol=lf
