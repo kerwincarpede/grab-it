@@ -20,16 +20,23 @@ use image::RgbaImage;
 use serde_json::{Value, json};
 use tauri::{
     App, Manager, WebviewUrl, WebviewWindowBuilder,
-    ipc::{CallbackFn, InvokeBody},
+    http::{HeaderMap, HeaderValue},
+    ipc::{CallbackFn, InvokeBody, InvokeResponseBody},
     test::{INVOKE_KEY, MockRuntime, get_ipc_response, mock_builder, mock_context, noop_assets},
     webview::InvokeRequest,
 };
 use tempfile::TempDir;
 
 use crate::{
-    capture::ORIGINALS_DIR,
+    capture::{self, ORIGINALS_DIR},
+    editor::EditorState,
     keychain::MemoryKeyStore,
-    library::{self, LibraryState, MAX_PAGE},
+    library::{
+        self, AiDescription, LibraryState, MAX_PAGE, THUMBNAIL_EDITED_HEADER, THUMBNAIL_ID_HEADER,
+        THUMBS_DIR,
+    },
+    ocr::OcrLine,
+    record::RECORDINGS_DIR,
     rt::WebviewWindow,
     settings::{SETTINGS_FILE, Settings, SettingsStore},
 };
@@ -120,19 +127,49 @@ impl Harness {
         fs::write(&folder, "not a folder").unwrap();
     }
 
-    /// Calls `cmd` with `args` as a page would.
-    fn invoke(&self, cmd: &str, args: Value) -> Result<Value, Value> {
+    /// Calls `cmd` with `body` and `headers` as a page would, returning the
+    /// reply as it was sent.
+    fn call(
+        &self,
+        cmd: &str,
+        body: InvokeBody,
+        headers: HeaderMap,
+    ) -> Result<InvokeResponseBody, Value> {
         let request = InvokeRequest {
             cmd: cmd.into(),
             callback: CallbackFn(0),
             error: CallbackFn(1),
             url: APP_URL.parse().unwrap(),
-            body: InvokeBody::Json(args),
-            headers: Default::default(),
+            body,
+            headers,
             invoke_key: INVOKE_KEY.into(),
         };
         get_ipc_response(&self.webview, request)
+    }
+
+    /// Calls `cmd` with `args` as a page would.
+    fn invoke(&self, cmd: &str, args: Value) -> Result<Value, Value> {
+        self.call(cmd, InvokeBody::Json(args), HeaderMap::new())
             .map(|body| body.deserialize::<Value>().expect("a JSON reply"))
+    }
+
+    /// Calls `cmd` with raw bytes as its body and `headers`, as a page
+    /// sending an image does.
+    fn invoke_raw(&self, cmd: &str, bytes: Vec<u8>, headers: HeaderMap) -> Result<Value, Value> {
+        self.call(cmd, InvokeBody::Raw(bytes), headers)
+            .map(|body| body.deserialize::<Value>().expect("a JSON reply"))
+    }
+
+    /// The bytes a call that must succeed sends back as a
+    /// `tauri::ipc::Response`.
+    fn bytes(&self, cmd: &str, args: Value) -> Vec<u8> {
+        match self.call(cmd, InvokeBody::Json(args), HeaderMap::new()) {
+            Ok(InvokeResponseBody::Raw(bytes)) => bytes,
+            Ok(InvokeResponseBody::Json(json)) => {
+                panic!("{cmd} sent JSON instead of bytes: {json}")
+            }
+            Err(err) => panic!("{cmd} failed: {err}"),
+        }
     }
 
     /// The reply of a call that must succeed.
@@ -835,4 +872,1348 @@ fn dismiss_ai_notice_reports_a_failed_save() {
     h.break_saving();
     assert!(!h.err("dismiss_ai_notice", json!({})).is_empty());
     assert_eq!(h.settings()["ai"]["noticePending"], true);
+}
+
+// The Library: captures and sidecars seeded in the save folder
+
+/// When the seeded invoice was captured, as its `meta.json` says.
+const INVOICE_CAPTURED_AT: &str = "2020-01-02T03:04:05+00:00";
+/// [`INVOICE_CAPTURED_AT`] in milliseconds since the Unix epoch.
+const INVOICE_CAPTURED_MS: i64 = 1_577_934_245_000;
+
+/// The items [`Harness::seed`] put in the Library.
+struct Seeded {
+    /// The save folder, as the Library spells its paths.
+    folder: PathBuf,
+    /// `invoice.png`: 8 × 6 with a `meta.json` (Firefox, "Quarterly
+    /// report", captured in 2020 at a scale of 2), OCR text and an AI
+    /// description.
+    invoice: i64,
+    /// `plain.png`: 8 × 6, no sidecars, waiting for OCR.
+    plain: i64,
+    /// `recordings/clip.gif`: a GIF recording.
+    clip: i64,
+}
+
+impl Seeded {
+    fn originals(&self) -> PathBuf {
+        self.folder.join(ORIGINALS_DIR)
+    }
+
+    fn invoice_path(&self) -> PathBuf {
+        self.originals().join("invoice.png")
+    }
+
+    fn plain_path(&self) -> PathBuf {
+        self.originals().join("plain.png")
+    }
+}
+
+/// The OCR lines seeded for the invoice, as `library_words` sends them.
+fn invoice_lines() -> Value {
+    json!([{
+        "text": "Total 42",
+        "x": 1, "y": 2, "width": 6, "height": 2,
+        "words": [
+            { "text": "Total", "x": 1, "y": 2, "width": 3, "height": 2 },
+            { "text": "42", "x": 5, "y": 2, "width": 2, "height": 2 },
+        ],
+    }])
+}
+
+impl Harness {
+    /// Writes two captures, a sidecar and a GIF recording into the save
+    /// folder, indexes them as a rescan does, and stores OCR text and an
+    /// AI description for the invoice as the queues would.
+    fn seed(&self) -> Seeded {
+        let folder = self.default_save_folder();
+        let originals = folder.join(ORIGINALS_DIR);
+        fs::create_dir_all(&originals).unwrap();
+        write_png(&originals.join("invoice.png"), 8, 6);
+        fs::write(
+            capture::meta_path(&originals.join("invoice.png")),
+            json!({
+                "version": 1,
+                "capturedAt": INVOICE_CAPTURED_AT,
+                "mode": "region",
+                "app": "Firefox",
+                "windowTitle": "Quarterly report",
+                "width": 8,
+                "height": 6,
+                "scaleFactor": 2.0,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        write_png(&originals.join("plain.png"), 8, 6);
+        let recordings = folder.join(RECORDINGS_DIR);
+        fs::create_dir_all(&recordings).unwrap();
+        RgbaImage::new(4, 4)
+            .save(recordings.join("clip.gif"))
+            .unwrap();
+
+        let library = self.app.state::<LibraryState>();
+        let report = library.rescan(&folder, None).expect("the rescan");
+        assert_eq!(report.added, 3);
+        let folder = fs::canonicalize(&folder).unwrap();
+        let id = |path: PathBuf| {
+            library
+                .lock()
+                .id_for_path(&path)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{} is in the Library", path.display()))
+        };
+        let seeded = Seeded {
+            invoice: id(folder.join(ORIGINALS_DIR).join("invoice.png")),
+            plain: id(folder.join(ORIGINALS_DIR).join("plain.png")),
+            clip: id(folder.join(RECORDINGS_DIR).join("clip.gif")),
+            folder,
+        };
+        let lines: Vec<OcrLine> = serde_json::from_value(invoice_lines()).unwrap();
+        let mut library = library.lock();
+        library.set_ocr_lines(seeded.invoice, &lines).unwrap();
+        library
+            .set_ai_description(
+                seeded.invoice,
+                &AiDescription {
+                    description: "An invoice in a browser.".into(),
+                    category: "receipt".into(),
+                    tags: vec!["receipt".into(), "paper".into()],
+                },
+                "test-model",
+            )
+            .unwrap();
+        seeded
+    }
+
+    /// The shot `id` as `library_list` sends it.
+    fn listed(&self, id: i64) -> Value {
+        let page = self.ok("library_list", json!({ "offset": 0, "limit": MAX_PAGE }));
+        page["shots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|shot| shot["id"] == id)
+            .unwrap_or_else(|| panic!("shot {id} is not listed"))
+            .clone()
+    }
+
+    /// Opens the mock webview as the editor of `capture`.
+    fn edit(&self, capture: &Path) {
+        self.app
+            .state::<EditorState>()
+            .insert(LABEL, capture.to_owned());
+    }
+}
+
+/// Writes a blank `width` × `height` PNG at `path`.
+fn write_png(path: &Path, width: u32, height: u32) {
+    RgbaImage::new(width, height).save(path).unwrap();
+}
+
+/// `width` × `height` PNG bytes, as a page sends a drawn image.
+fn png_bytes(width: u32, height: u32) -> Vec<u8> {
+    let mut png = std::io::Cursor::new(Vec::new());
+    RgbaImage::new(width, height)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    png.into_inner()
+}
+
+/// The size of the image in `bytes`.
+fn dimensions(bytes: &[u8]) -> (u32, u32) {
+    let image = image::load_from_memory(bytes).expect("an image");
+    (image.width(), image.height())
+}
+
+/// A path as the commands send it.
+fn path_json(path: &Path) -> Value {
+    json!(path.to_string_lossy())
+}
+
+/// Fails unless `message` starts with `prefix`.
+fn assert_starts_with(message: &str, prefix: &str) {
+    assert!(
+        message.starts_with(prefix),
+        "expected a message starting with {prefix:?}, got: {message}"
+    );
+}
+
+const NO_SHOT: &str = "no capture with id 999 in the library";
+const NOT_A_RECORDING: &str = "That works on screenshots, not recordings.";
+
+// library_list, library_set_tags, library_remove_ai_tag, library_set_keep
+// and library_set_notes
+
+#[test]
+fn library_list_returns_the_shot_shape() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let page = h.ok("library_list", json!({ "offset": 0, "limit": 50 }));
+    assert_eq!(keys(&page), ["offset", "shots", "total"]);
+    assert_eq!(page["offset"], 0);
+    assert_eq!(page["total"], 3);
+    let shots = page["shots"].as_array().unwrap();
+    assert_eq!(shots.len(), 3);
+    // Newest first: the invoice was captured in 2020.
+    let invoice = &shots[2];
+    assert_eq!(invoice["id"], seeded.invoice);
+    assert_eq!(
+        keys(invoice),
+        [
+            "aiCategory",
+            "aiDescription",
+            "aiTags",
+            "app",
+            "bytes",
+            "capturedAt",
+            "durationMs",
+            "editedAt",
+            "fileName",
+            "height",
+            "id",
+            "keep",
+            "kind",
+            "mode",
+            "notes",
+            "path",
+            "tags",
+            "thumbPath",
+            "thumbStale",
+            "width",
+            "windowTitle",
+        ]
+    );
+    let path = seeded.invoice_path();
+    assert_eq!(invoice["kind"], "image");
+    assert_eq!(invoice["path"], path_json(&path));
+    assert_eq!(invoice["fileName"], "invoice.png");
+    let thumb = seeded.folder.join(THUMBS_DIR).join("invoice.png");
+    assert_eq!(invoice["thumbPath"], path_json(&thumb));
+    assert!(thumb.is_file());
+    assert_eq!(invoice["capturedAt"], INVOICE_CAPTURED_MS);
+    assert_eq!(invoice["mode"], "region");
+    assert_eq!(invoice["app"], "Firefox");
+    assert_eq!(invoice["windowTitle"], "Quarterly report");
+    assert_eq!(
+        (&invoice["width"], &invoice["height"]),
+        (&json!(8), &json!(6))
+    );
+    assert_eq!(invoice["bytes"], fs::metadata(&path).unwrap().len());
+    assert_eq!(invoice["durationMs"], Value::Null);
+    assert_eq!(invoice["tags"], json!([]));
+    assert_eq!(invoice["notes"], "");
+    assert_eq!(invoice["aiDescription"], "An invoice in a browser.");
+    assert_eq!(invoice["aiCategory"], "receipt");
+    assert_eq!(invoice["aiTags"], json!(["paper", "receipt"]));
+    assert_eq!(invoice["keep"], false);
+    assert_eq!(invoice["editedAt"], Value::Null);
+    assert_eq!(invoice["thumbStale"], false);
+
+    let plain = h.listed(seeded.plain);
+    assert_eq!(plain["mode"], Value::Null);
+    assert_eq!(plain["app"], Value::Null);
+    assert_eq!(plain["aiTags"], json!([]));
+    let clip = h.listed(seeded.clip);
+    assert_eq!(clip["kind"], "gif");
+    assert_eq!(clip["fileName"], "clip.gif");
+    assert_eq!((&clip["width"], &clip["height"]), (&json!(4), &json!(4)));
+}
+
+#[test]
+fn library_list_pages_through_the_shots() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let page = h.ok("library_list", json!({ "offset": 2, "limit": 1 }));
+    assert_eq!(page["offset"], 2);
+    assert_eq!(page["total"], 3);
+    assert_eq!(page["shots"].as_array().unwrap().len(), 1);
+    assert_eq!(page["shots"][0]["id"], seeded.invoice);
+    // A limit of 0 still lists one.
+    let page = h.ok("library_list", json!({ "offset": 0, "limit": 0 }));
+    assert_eq!(page["shots"].as_array().unwrap().len(), 1);
+    let past = h.ok("library_list", json!({ "offset": 10, "limit": 5 }));
+    assert_eq!(past["shots"], json!([]));
+    assert_eq!(past["total"], 3);
+    assert_invalid_arg(
+        &h.err("library_list", json!({ "offset": 0 })),
+        "library_list",
+        "limit",
+    );
+    assert_invalid_arg(
+        &h.err("library_list", json!({ "offset": -1, "limit": 5 })),
+        "library_list",
+        "offset",
+    );
+}
+
+#[test]
+fn library_set_tags_replaces_the_tags() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let shot = h.ok(
+        "library_set_tags",
+        json!({ "id": seeded.plain, "tags": [" Work ", "work", "", "Q1   report"] }),
+    );
+    assert_eq!(shot["id"], seeded.plain);
+    assert_eq!(shot["tags"], json!(["Q1 report", "Work"]));
+    assert_eq!(h.listed(seeded.plain)["tags"], shot["tags"]);
+    let cleared = h.ok(
+        "library_set_tags",
+        json!({ "id": seeded.plain, "tags": [] }),
+    );
+    assert_eq!(cleared["tags"], json!([]));
+    assert_eq!(
+        h.err("library_set_tags", json!({ "id": 999, "tags": ["x"] })),
+        NO_SHOT
+    );
+    assert_invalid_arg(
+        &h.err(
+            "library_set_tags",
+            json!({ "id": seeded.plain, "tags": "x" }),
+        ),
+        "library_set_tags",
+        "tags",
+    );
+}
+
+#[test]
+fn library_remove_ai_tag_takes_one_ai_tag_off() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let shot = h.ok(
+        "library_remove_ai_tag",
+        json!({ "id": seeded.invoice, "tag": "RECEIPT" }),
+    );
+    assert_eq!(shot["aiTags"], json!(["paper"]));
+    assert_eq!(shot["aiDescription"], "An invoice in a browser.");
+    assert_eq!(h.listed(seeded.invoice)["aiTags"], json!(["paper"]));
+    // A tag it does not have changes nothing.
+    let same = h.ok(
+        "library_remove_ai_tag",
+        json!({ "id": seeded.invoice, "tag": "missing" }),
+    );
+    assert_eq!(same["aiTags"], json!(["paper"]));
+    assert_eq!(
+        h.err(
+            "library_remove_ai_tag",
+            json!({ "id": 999, "tag": "paper" })
+        ),
+        NO_SHOT
+    );
+    assert_invalid_arg(
+        &h.err("library_remove_ai_tag", json!({ "id": seeded.invoice })),
+        "library_remove_ai_tag",
+        "tag",
+    );
+}
+
+#[test]
+fn library_set_keep_stars_and_unstars() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let shot = h.ok(
+        "library_set_keep",
+        json!({ "id": seeded.clip, "keep": true }),
+    );
+    assert_eq!(shot["keep"], true);
+    assert_eq!(h.listed(seeded.clip)["keep"], true);
+    let shot = h.ok(
+        "library_set_keep",
+        json!({ "id": seeded.clip, "keep": false }),
+    );
+    assert_eq!(shot["keep"], false);
+    assert_eq!(
+        h.err("library_set_keep", json!({ "id": 999, "keep": true })),
+        NO_SHOT
+    );
+    assert_invalid_arg(
+        &h.err(
+            "library_set_keep",
+            json!({ "id": seeded.clip, "keep": "yes" }),
+        ),
+        "library_set_keep",
+        "keep",
+    );
+}
+
+#[test]
+fn library_set_notes_saves_the_notes() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let shot = h.ok(
+        "library_set_notes",
+        json!({ "id": seeded.invoice, "notes": "Paid in March" }),
+    );
+    assert_eq!(shot["notes"], "Paid in March");
+    assert_eq!(h.listed(seeded.invoice)["notes"], "Paid in March");
+    assert_eq!(
+        h.err("library_set_notes", json!({ "id": 999, "notes": "x" })),
+        NO_SHOT
+    );
+    assert_invalid_arg(
+        &h.err("library_set_notes", json!({ "id": "first", "notes": "x" })),
+        "library_set_notes",
+        "id",
+    );
+}
+
+// library_rename, library_duplicate, library_delete and library_export
+
+#[test]
+fn library_rename_moves_the_file_and_its_sidecars() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let old = seeded.invoice_path();
+    let shot = h.ok(
+        "library_rename",
+        json!({ "id": seeded.invoice, "name": "  March invoice.PNG " }),
+    );
+    let new = seeded.originals().join("March invoice.png");
+    assert_eq!(shot["id"], seeded.invoice);
+    assert_eq!(shot["fileName"], "March invoice.png");
+    assert_eq!(shot["path"], path_json(&new));
+    let thumb = seeded.folder.join(THUMBS_DIR).join("March invoice.png");
+    assert_eq!(shot["thumbPath"], path_json(&thumb));
+    assert!(new.is_file() && !old.exists());
+    assert!(capture::meta_path(&new).is_file());
+    assert!(!capture::meta_path(&old).exists());
+    assert!(thumb.is_file());
+    assert_eq!(shot["app"], "Firefox");
+    assert_eq!(h.listed(seeded.invoice)["path"], shot["path"]);
+
+    // Its own name again changes nothing.
+    let same = h.ok(
+        "library_rename",
+        json!({ "id": seeded.invoice, "name": "March invoice" }),
+    );
+    assert_eq!(same["path"], shot["path"]);
+}
+
+#[test]
+fn library_rename_refuses_bad_and_taken_names() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let rename = |name: &str| {
+        h.err(
+            "library_rename",
+            json!({ "id": seeded.invoice, "name": name }),
+        )
+    };
+    assert_eq!(rename("  "), "Give it a name.");
+    assert_eq!(
+        rename("a/b"),
+        "A name can't contain / \\ : * ? \" < > | or control characters."
+    );
+    assert_eq!(rename(".hidden"), "A name can't start with a dot.");
+    assert_eq!(rename("CON"), "Windows keeps that name for itself.");
+    assert_eq!(rename(&"x".repeat(201)), "That name is too long.");
+    assert_eq!(rename("plain"), "There is already a file called plain.png.");
+    assert!(seeded.invoice_path().is_file());
+    assert_eq!(h.listed(seeded.invoice)["fileName"], "invoice.png");
+    assert_eq!(
+        h.err("library_rename", json!({ "id": 999, "name": "x" })),
+        NO_SHOT
+    );
+    assert_invalid_arg(
+        &h.err("library_rename", json!({ "id": seeded.invoice })),
+        "library_rename",
+        "name",
+    );
+
+    fs::remove_file(seeded.plain_path()).unwrap();
+    assert_eq!(
+        h.err("library_rename", json!({ "id": seeded.plain, "name": "x" })),
+        format!("{} no longer exists", seeded.plain_path().display())
+    );
+}
+
+#[test]
+fn library_duplicate_copies_the_file_tags_and_notes() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    h.ok(
+        "library_set_tags",
+        json!({ "id": seeded.invoice, "tags": ["work"] }),
+    );
+    h.ok(
+        "library_set_notes",
+        json!({ "id": seeded.invoice, "notes": "Paid" }),
+    );
+    let copy = h.ok("library_duplicate", json!({ "id": seeded.invoice }));
+    let path = seeded.originals().join("invoice copy.png");
+    assert_ne!(copy["id"], seeded.invoice);
+    assert_eq!(copy["fileName"], "invoice copy.png");
+    assert_eq!(copy["path"], path_json(&path));
+    assert_eq!(copy["tags"], json!(["work"]));
+    assert_eq!(copy["notes"], "Paid");
+    assert_eq!(copy["capturedAt"], INVOICE_CAPTURED_MS);
+    assert_eq!(copy["app"], "Firefox");
+    assert!(path.is_file());
+    assert!(capture::meta_path(&path).is_file());
+    assert!(seeded.invoice_path().is_file());
+    assert_eq!(h.library_total(), 4);
+
+    let second = h.ok("library_duplicate", json!({ "id": seeded.invoice }));
+    assert_eq!(second["fileName"], "invoice copy 2.png");
+    assert_eq!(h.err("library_duplicate", json!({ "id": 999 })), NO_SHOT);
+    assert_invalid_arg(
+        &h.err("library_duplicate", json!({})),
+        "library_duplicate",
+        "id",
+    );
+    fs::remove_file(seeded.plain_path()).unwrap();
+    assert_eq!(
+        h.err("library_duplicate", json!({ "id": seeded.plain })),
+        format!("{} no longer exists", seeded.plain_path().display())
+    );
+}
+
+#[test]
+fn library_delete_removes_the_file_its_sidecars_and_row() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let path = seeded.invoice_path();
+    let thumb = seeded.folder.join(THUMBS_DIR).join("invoice.png");
+    assert!(thumb.is_file());
+    assert_eq!(
+        h.ok("library_delete", json!({ "id": seeded.invoice })),
+        Value::Null
+    );
+    assert!(!path.exists());
+    assert!(!capture::meta_path(&path).exists());
+    assert!(!thumb.exists());
+    assert_eq!(h.library_total(), 2);
+    assert!(seeded.plain_path().is_file());
+    assert_eq!(
+        h.err("library_delete", json!({ "id": seeded.invoice })),
+        format!("no capture with id {} in the library", seeded.invoice)
+    );
+    assert_invalid_arg(
+        &h.err("library_delete", json!({ "id": null })),
+        "library_delete",
+        "id",
+    );
+}
+
+#[test]
+fn library_export_writes_the_chosen_format() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let out = h.dir.path().join("exports");
+    fs::create_dir_all(&out).unwrap();
+
+    let jpg = out.join("invoice.jpg");
+    let written = h.ok(
+        "library_export",
+        json!({ "id": seeded.invoice, "target": jpg.to_string_lossy() }),
+    );
+    assert_eq!(written, path_json(&jpg));
+    let image = image::open(&jpg).expect("a JPEG");
+    assert_eq!((image.width(), image.height()), (8, 6));
+
+    // A folder gets the shot's own name, then a numbered one.
+    let first = h.ok(
+        "library_export",
+        json!({ "id": seeded.invoice, "target": out.to_string_lossy() }),
+    );
+    assert_eq!(first, path_json(&out.join("invoice.png")));
+    assert_eq!(
+        fs::read(out.join("invoice.png")).unwrap(),
+        fs::read(seeded.invoice_path()).unwrap()
+    );
+    let second = h.ok(
+        "library_export",
+        json!({ "id": seeded.invoice, "target": out.to_string_lossy() }),
+    );
+    assert_eq!(second, path_json(&out.join("invoice 2.png")));
+
+    let gif = out.join("clip.gif");
+    h.ok(
+        "library_export",
+        json!({ "id": seeded.clip, "target": gif.to_string_lossy() }),
+    );
+    assert_eq!(
+        fs::read(&gif).unwrap(),
+        fs::read(seeded.folder.join(RECORDINGS_DIR).join("clip.gif")).unwrap()
+    );
+}
+
+#[test]
+fn library_export_refuses_bad_targets() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let out = h.dir.path().join("exports");
+    fs::create_dir_all(&out).unwrap();
+    let export = |id: i64, target: &Path| {
+        h.err(
+            "library_export",
+            json!({ "id": id, "target": target.to_string_lossy() }),
+        )
+    };
+    assert_eq!(
+        export(seeded.invoice, &out.join("invoice.bmp")),
+        "A screenshot exports as .png, .jpg or .webp: give the file one of those names."
+    );
+    assert_eq!(
+        export(seeded.clip, &out.join("clip.mp4")),
+        "A recording is exported as it is: give the file a .gif name."
+    );
+    let meta = capture::meta_path(&seeded.invoice_path());
+    let before = fs::read(&meta).unwrap();
+    assert_eq!(
+        export(seeded.invoice, &meta),
+        "export would overwrite the original capture; choose another file"
+    );
+    assert_eq!(fs::read(&meta).unwrap(), before);
+    assert_eq!(export(999, &out.join("x.png")), NO_SHOT);
+    assert_invalid_arg(
+        &h.err("library_export", json!({ "id": seeded.invoice })),
+        "library_export",
+        "target",
+    );
+    assert_eq!(fs::read_dir(&out).unwrap().count(), 0);
+}
+
+// library_image, library_thumbnail, library_save_thumbnail, library_text,
+// library_words, library_shot_id and library_open_with_supported
+
+#[test]
+fn library_image_sends_the_original_bytes() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    assert_eq!(
+        h.bytes("library_image", json!({ "id": seeded.invoice })),
+        fs::read(seeded.invoice_path()).unwrap()
+    );
+    assert_eq!(
+        h.err("library_image", json!({ "id": seeded.clip })),
+        NOT_A_RECORDING
+    );
+    assert_eq!(h.err("library_image", json!({ "id": 999 })), NO_SHOT);
+    fs::remove_file(seeded.plain_path()).unwrap();
+    assert_eq!(
+        h.err("library_image", json!({ "id": seeded.plain })),
+        format!("{} no longer exists", seeded.plain_path().display())
+    );
+}
+
+#[test]
+fn library_thumbnail_sends_the_thumbnail_png() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let thumb = h.bytes("library_thumbnail", json!({ "id": seeded.invoice }));
+    assert_eq!(dimensions(&thumb), (8, 6));
+    assert_eq!(
+        thumb,
+        fs::read(seeded.folder.join(THUMBS_DIR).join("invoice.png")).unwrap()
+    );
+    // A missing thumbnail is made again.
+    let plain_thumb = seeded.folder.join(THUMBS_DIR).join("plain.png");
+    fs::remove_file(&plain_thumb).unwrap();
+    let made = h.bytes("library_thumbnail", json!({ "id": seeded.plain }));
+    assert_eq!(dimensions(&made), (8, 6));
+    assert!(plain_thumb.is_file());
+    assert_eq!(h.err("library_thumbnail", json!({ "id": 999 })), NO_SHOT);
+
+    // An edited capture's thumbnail is drawn by the Library, never made
+    // from the original.
+    fs::write(
+        capture::annotations_path(&seeded.plain_path()),
+        json!({ "version": 1, "shapes": [] }).to_string(),
+    )
+    .unwrap();
+    fs::remove_file(&plain_thumb).unwrap();
+    assert_eq!(
+        h.err("library_thumbnail", json!({ "id": seeded.plain })),
+        "the edited capture has no thumbnail yet"
+    );
+    assert!(!plain_thumb.exists());
+}
+
+/// The headers `library_save_thumbnail` reads.
+fn thumbnail_headers(id: Option<i64>, edited_at: Option<i64>) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    if let Some(id) = id {
+        headers.insert(THUMBNAIL_ID_HEADER, HeaderValue::from(id));
+    }
+    if let Some(edited_at) = edited_at {
+        headers.insert(THUMBNAIL_EDITED_HEADER, HeaderValue::from(edited_at));
+    }
+    headers
+}
+
+#[test]
+fn library_save_thumbnail_saves_the_drawn_thumbnail() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    // Drawn long before the edits, so the thumbnail is surely stale.
+    fs::File::options()
+        .write(true)
+        .open(seeded.folder.join(THUMBS_DIR).join("invoice.png"))
+        .and_then(|thumb| {
+            thumb.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000))
+        })
+        .unwrap();
+    fs::write(
+        capture::annotations_path(&seeded.invoice_path()),
+        json!({ "version": 1, "shapes": [{ "kind": "arrow" }] }).to_string(),
+    )
+    .unwrap();
+    let edited_at = h.ok("library_annotations", json!({ "id": seeded.invoice }))["editedAt"]
+        .as_i64()
+        .expect("when the edits were saved");
+    let before = h.listed(seeded.invoice);
+    assert_eq!(before["editedAt"], edited_at);
+    assert_eq!(before["thumbStale"], true);
+
+    let saved = h.invoke_raw(
+        "library_save_thumbnail",
+        png_bytes(4, 3),
+        thumbnail_headers(Some(seeded.invoice), Some(edited_at)),
+    );
+    assert_eq!(saved, Ok(Value::Null));
+    let shot = h.listed(seeded.invoice);
+    assert_eq!(shot["thumbStale"], false);
+    assert_eq!(shot["editedAt"], edited_at);
+    let thumb = h.bytes("library_thumbnail", json!({ "id": seeded.invoice }));
+    assert_eq!(dimensions(&thumb), (4, 3));
+}
+
+#[test]
+fn library_save_thumbnail_refuses_bad_requests() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let sidecar = capture::annotations_path(&seeded.invoice_path());
+    fs::write(&sidecar, json!({ "version": 1, "shapes": [] }).to_string()).unwrap();
+    let edited_at = h.ok("library_annotations", json!({ "id": seeded.invoice }))["editedAt"]
+        .as_i64()
+        .unwrap();
+    let thumb = seeded.folder.join(THUMBS_DIR).join("invoice.png");
+    let before = fs::read(&thumb).unwrap();
+    let save =
+        |headers: HeaderMap| match h.invoke_raw("library_save_thumbnail", png_bytes(4, 3), headers)
+        {
+            Err(Value::String(message)) => message,
+            other => panic!("library_save_thumbnail did not fail with a message: {other:?}"),
+        };
+    assert_eq!(
+        save(thumbnail_headers(None, Some(edited_at))),
+        "missing the capture's id"
+    );
+    assert_eq!(
+        save(thumbnail_headers(Some(seeded.invoice), None)),
+        "missing when the edits were saved"
+    );
+    assert_eq!(
+        save(thumbnail_headers(Some(seeded.clip), Some(edited_at))),
+        NOT_A_RECORDING
+    );
+    assert_eq!(save(thumbnail_headers(Some(999), Some(edited_at))), NO_SHOT);
+    // Drawn from edits that were saved again since.
+    assert_eq!(
+        save(thumbnail_headers(
+            Some(seeded.invoice),
+            Some(edited_at - 1_000)
+        )),
+        "the capture was edited again while it was drawn"
+    );
+    let json_body = h.call(
+        "library_save_thumbnail",
+        InvokeBody::Json(json!({})),
+        thumbnail_headers(Some(seeded.invoice), Some(edited_at)),
+    );
+    assert_eq!(json_body.err(), Some(json!("expected image bytes")));
+    assert_eq!(fs::read(&thumb).unwrap(), before);
+}
+
+#[test]
+fn library_text_says_how_far_ocr_has_got() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    assert_eq!(
+        h.ok("library_text", json!({ "id": seeded.invoice })),
+        json!({ "state": "read", "text": "Total 42" })
+    );
+    assert_eq!(
+        h.ok("library_text", json!({ "id": seeded.plain })),
+        json!({ "state": "waiting" })
+    );
+    h.app
+        .state::<LibraryState>()
+        .lock()
+        .mark_ocr_failed(seeded.plain)
+        .unwrap();
+    assert_eq!(
+        h.ok("library_text", json!({ "id": seeded.plain })),
+        json!({ "state": "failed" })
+    );
+    // A recording is never read: it has no text.
+    assert_eq!(
+        h.ok("library_text", json!({ "id": seeded.clip })),
+        json!({ "state": "read", "text": "" })
+    );
+    assert_eq!(h.err("library_text", json!({ "id": 999 })), NO_SHOT);
+}
+
+#[test]
+fn library_words_sends_the_word_boxes() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    assert_eq!(
+        h.ok("library_words", json!({ "id": seeded.invoice })),
+        invoice_lines()
+    );
+    assert_eq!(
+        h.ok("library_words", json!({ "id": seeded.plain })),
+        Value::Null
+    );
+    assert_eq!(
+        h.ok("library_words", json!({ "id": seeded.clip })),
+        Value::Null
+    );
+    assert_eq!(h.err("library_words", json!({ "id": 999 })), NO_SHOT);
+}
+
+#[test]
+fn library_shot_id_finds_a_capture_by_path() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    assert_eq!(
+        h.ok(
+            "library_shot_id",
+            json!({ "path": seeded.invoice_path().to_string_lossy() })
+        ),
+        seeded.invoice
+    );
+    // Another spelling of the same file.
+    let roundabout = seeded
+        .originals()
+        .join("..")
+        .join(ORIGINALS_DIR)
+        .join("plain.png");
+    assert_eq!(
+        h.ok(
+            "library_shot_id",
+            json!({ "path": roundabout.to_string_lossy() })
+        ),
+        seeded.plain
+    );
+    let unknown = seeded.originals().join("unknown.png");
+    assert_eq!(
+        h.ok(
+            "library_shot_id",
+            json!({ "path": unknown.to_string_lossy() })
+        ),
+        Value::Null
+    );
+    assert_invalid_arg(
+        &h.err("library_shot_id", json!({})),
+        "library_shot_id",
+        "path",
+    );
+}
+
+#[test]
+fn library_open_with_supported_says_whether_a_chooser_exists() {
+    let h = Harness::new();
+    assert_eq!(
+        h.ok("library_open_with_supported", json!({})),
+        cfg!(any(target_os = "linux", target_os = "windows"))
+    );
+}
+
+// library_search, library_sidebar, library_filter_options and
+// library_storage
+
+#[test]
+fn library_search_finds_words_with_a_snippet() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let page = h.ok(
+        "library_search",
+        json!({ "query": { "text": "quart" }, "offset": 0, "limit": 20 }),
+    );
+    assert_eq!(keys(&page), ["hits", "offset", "total"]);
+    assert_eq!(page["total"], 1);
+    assert_eq!(page["offset"], 0);
+    let hit = &page["hits"][0];
+    assert_eq!(keys(hit), ["field", "shot", "snippet"]);
+    assert_eq!(hit["shot"]["id"], seeded.invoice);
+    assert_eq!(hit["shot"]["aiTags"], json!(["paper", "receipt"]));
+    assert_eq!(hit["field"], "windowTitle");
+    let parts = hit["snippet"].as_array().unwrap();
+    assert!(parts.iter().all(|part| keys(part) == ["hit", "text"]));
+    assert!(
+        parts
+            .iter()
+            .any(|part| part["hit"] == true && part["text"] == "Quarterly"),
+        "the snippet marks the match: {parts:?}"
+    );
+
+    let by_text = h.ok(
+        "library_search",
+        json!({ "query": { "text": "total" }, "offset": 0, "limit": 20 }),
+    );
+    assert_eq!(by_text["hits"][0]["field"], "text");
+    let none = h.ok(
+        "library_search",
+        json!({ "query": { "text": "zebra" }, "offset": 0, "limit": 20 }),
+    );
+    assert_eq!(none, json!({ "hits": [], "offset": 0, "total": 0 }));
+}
+
+#[test]
+fn library_search_filters_without_words() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let search = |query: Value| {
+        h.ok(
+            "library_search",
+            json!({ "query": query, "offset": 0, "limit": 20 }),
+        )
+    };
+    let ids = |page: &Value| -> Vec<Value> {
+        page["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|hit| hit["shot"]["id"].clone())
+            .collect()
+    };
+    let all = search(json!({}));
+    assert_eq!(all["total"], 3);
+    assert_eq!(all["hits"][0]["field"], Value::Null);
+    assert_eq!(all["hits"][0]["snippet"], json!([]));
+    assert_eq!(
+        ids(&search(json!({ "kind": "recording" }))),
+        [json!(seeded.clip)]
+    );
+    assert_eq!(search(json!({ "kind": "image" }))["total"], 2);
+    assert_eq!(
+        ids(&search(json!({ "app": "Firefox" }))),
+        [json!(seeded.invoice)]
+    );
+    assert_eq!(
+        ids(&search(json!({ "tag": "RECEIPT" }))),
+        [json!(seeded.invoice)]
+    );
+    assert_eq!(
+        ids(&search(json!({ "category": "receipt" }))),
+        [json!(seeded.invoice)]
+    );
+    assert_eq!(
+        ids(&search(json!({ "to": INVOICE_CAPTURED_MS + 1 }))),
+        [json!(seeded.invoice)]
+    );
+    assert_eq!(
+        search(json!({ "from": INVOICE_CAPTURED_MS + 1 }))["total"],
+        2
+    );
+    assert_invalid_arg(
+        &h.err(
+            "library_search",
+            json!({ "query": { "from": "yesterday" }, "offset": 0, "limit": 20 }),
+        ),
+        "library_search",
+        "query",
+    );
+    assert_invalid_arg(
+        &h.err("library_search", json!({ "query": {}, "offset": 0 })),
+        "library_search",
+        "limit",
+    );
+}
+
+#[test]
+fn library_sidebar_counts_apps_and_tags() {
+    let h = Harness::new();
+    assert_eq!(
+        h.ok("library_sidebar", json!({})),
+        json!({ "total": 0, "recordings": 0, "apps": [], "tags": [] })
+    );
+    let seeded = h.seed();
+    h.ok(
+        "library_set_tags",
+        json!({ "id": seeded.plain, "tags": ["paper", "work"] }),
+    );
+    assert_eq!(
+        h.ok("library_sidebar", json!({})),
+        json!({
+            "total": 3,
+            "recordings": 1,
+            "apps": [{ "name": "Firefox", "count": 1 }],
+            "tags": [
+                { "name": "paper", "count": 2 },
+                { "name": "receipt", "count": 1 },
+                { "name": "work", "count": 1 },
+            ],
+        })
+    );
+}
+
+#[test]
+fn library_filter_options_lists_apps_tags_and_categories() {
+    let h = Harness::new();
+    assert_eq!(
+        h.ok("library_filter_options", json!({})),
+        json!({ "apps": [], "tags": [], "categories": [] })
+    );
+    let seeded = h.seed();
+    h.ok(
+        "library_set_tags",
+        json!({ "id": seeded.plain, "tags": ["Work", "Paper"] }),
+    );
+    let options = h.ok("library_filter_options", json!({}));
+    assert_eq!(options["apps"], json!(["Firefox"]));
+    assert_eq!(options["categories"], json!(["receipt"]));
+    let tags: Vec<String> = options["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tag| tag.as_str().unwrap().to_lowercase())
+        .collect();
+    assert_eq!(tags, ["paper", "receipt", "work"]);
+}
+
+#[test]
+fn library_storage_sizes_each_kind_and_what_is_due() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let size = |path: &Path| fs::metadata(path).unwrap().len();
+    let invoice = size(&seeded.invoice_path());
+    let plain = size(&seeded.plain_path());
+    let clip = size(&seeded.folder.join(RECORDINGS_DIR).join("clip.gif"));
+
+    let storage = h.ok("library_storage", json!({}));
+    assert_eq!(keys(&storage), ["disk", "due", "gif", "image", "video"]);
+    assert_eq!(
+        storage["image"],
+        json!({ "count": 2, "bytes": invoice + plain })
+    );
+    assert_eq!(storage["gif"], json!({ "count": 1, "bytes": clip }));
+    assert_eq!(storage["video"], json!({ "count": 0, "bytes": 0 }));
+    assert_eq!(keys(&storage["disk"]), ["free", "total"]);
+    assert!(storage["disk"]["total"].as_u64().unwrap() > 0);
+    // Kept forever by default: nothing is due.
+    let nothing = json!({ "count": 0, "bytes": 0 });
+    assert_eq!(
+        storage["due"],
+        json!({ "image": nothing, "gif": nothing, "video": nothing })
+    );
+
+    // Kept a day: only the invoice, from 2020, is old enough.
+    let day = h.ok(
+        "library_storage",
+        json!({ "candidate": { "image": 1, "gif": 1 } }),
+    );
+    assert_eq!(day["due"]["image"], json!({ "count": 1, "bytes": invoice }));
+    assert_eq!(day["due"]["gif"], nothing);
+    // Starred, it is protected.
+    h.ok(
+        "library_set_keep",
+        json!({ "id": seeded.invoice, "keep": true }),
+    );
+    let kept = h.ok("library_storage", json!({ "candidate": { "image": 1 } }));
+    assert_eq!(kept["due"]["image"], nothing);
+    // Zero days, as Purge now asks, is every unprotected item.
+    let purge = h.ok("library_storage", json!({ "candidate": { "image": 0 } }));
+    assert_eq!(purge["due"]["image"], json!({ "count": 1, "bytes": plain }));
+    // Tagged, it is protected too.
+    h.ok(
+        "library_set_tags",
+        json!({ "id": seeded.plain, "tags": ["work"] }),
+    );
+    let tagged = h.ok("library_storage", json!({ "candidate": { "image": 0 } }));
+    assert_eq!(tagged["due"]["image"], nothing);
+
+    assert_invalid_arg(
+        &h.err(
+            "library_storage",
+            json!({ "candidate": { "removal": "shred" } }),
+        ),
+        "library_storage",
+        "candidate",
+    );
+}
+
+// editor_info, editor_save_annotations and library_annotations
+
+#[test]
+fn editor_info_describes_the_editors_capture() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    assert_eq!(
+        h.err("editor_info", json!({})),
+        "this window is not an editor"
+    );
+    h.edit(&seeded.invoice_path());
+    assert_eq!(
+        h.ok("editor_info", json!({})),
+        json!({
+            "path": seeded.invoice_path().to_string_lossy(),
+            "fileName": "invoice.png",
+            "annotations": null,
+            "scaleFactor": 2.0,
+            "pointer": null,
+        })
+    );
+    h.edit(&seeded.plain_path());
+    let plain = h.ok("editor_info", json!({}));
+    assert_eq!(plain["fileName"], "plain.png");
+    assert_eq!(plain["scaleFactor"], Value::Null);
+}
+
+#[test]
+fn editor_save_annotations_round_trips_the_sidecar() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let path = seeded.invoice_path();
+    let original = fs::read(&path).unwrap();
+    h.edit(&path);
+    assert_eq!(
+        h.ok("library_annotations", json!({ "id": seeded.invoice })),
+        json!({ "annotations": null, "scaleFactor": 2.0, "editedAt": null })
+    );
+    let annotations = json!({
+        "version": 1,
+        "shapes": [{ "kind": "arrow", "from": [1, 1], "to": [5, 4] }],
+        "backdrop": { "kind": "gradient" },
+    });
+    assert_eq!(
+        h.ok(
+            "editor_save_annotations",
+            json!({ "annotations": annotations })
+        ),
+        Value::Null
+    );
+    let sidecar = capture::annotations_path(&path);
+    let saved: Value = serde_json::from_str(&fs::read_to_string(&sidecar).unwrap()).unwrap();
+    assert_eq!(saved, annotations);
+    assert_eq!(h.ok("editor_info", json!({}))["annotations"], annotations);
+
+    let read = h.ok("library_annotations", json!({ "id": seeded.invoice }));
+    assert_eq!(keys(&read), ["annotations", "editedAt", "scaleFactor"]);
+    assert_eq!(read["annotations"], annotations);
+    assert_eq!(read["scaleFactor"], 2.0);
+    let edited_at = read["editedAt"].as_i64().expect("when it was saved");
+    let shot = h.listed(seeded.invoice);
+    assert_eq!(shot["editedAt"], edited_at);
+    // The original is never written.
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn editor_save_annotations_refuses_an_unknown_sidecar() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let path = seeded.invoice_path();
+    assert_eq!(
+        h.err(
+            "editor_save_annotations",
+            json!({ "annotations": { "version": 1, "shapes": [] } }),
+        ),
+        "this window is not an editor"
+    );
+    h.edit(&path);
+    assert_eq!(
+        h.err(
+            "editor_save_annotations",
+            json!({ "annotations": { "version": 2, "shapes": [] } }),
+        ),
+        "unsupported annotations version 2"
+    );
+    assert_eq!(
+        h.err(
+            "editor_save_annotations",
+            json!({ "annotations": { "version": 1 } }),
+        ),
+        "annotations need a `shapes` list"
+    );
+    assert_invalid_arg(
+        &h.err("editor_save_annotations", json!({})),
+        "editor_save_annotations",
+        "annotations",
+    );
+    assert!(!capture::annotations_path(&path).exists());
+}
+
+#[test]
+fn library_annotations_refuses_what_it_cannot_read() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    assert_eq!(
+        h.err("library_annotations", json!({ "id": seeded.clip })),
+        NOT_A_RECORDING
+    );
+    assert_eq!(h.err("library_annotations", json!({ "id": 999 })), NO_SHOT);
+    // A broken sidecar is an error, so the original is never passed off as
+    // edited, and the editor refuses it too.
+    let sidecar = capture::annotations_path(&seeded.invoice_path());
+    fs::write(&sidecar, "{ not json").unwrap();
+    let unparsable = format!("could not parse {}: ", sidecar.display());
+    assert_starts_with(
+        &h.err("library_annotations", json!({ "id": seeded.invoice })),
+        &unparsable,
+    );
+    h.edit(&seeded.invoice_path());
+    assert_starts_with(&h.err("editor_info", json!({})), &unparsable);
+    fs::write(&sidecar, json!({ "version": 9, "shapes": [] }).to_string()).unwrap();
+    assert_eq!(
+        h.err("library_annotations", json!({ "id": seeded.invoice })),
+        "unsupported annotations version 9"
+    );
+}
+
+// editor_image, editor_asset_image, editor_backdrop_image,
+// editor_add_image_file and save_backdrop_preset_image
+
+#[test]
+fn editor_image_sends_the_original_bytes() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    assert_eq!(
+        h.err("editor_image", json!({})),
+        "this window is not an editor"
+    );
+    h.edit(&seeded.invoice_path());
+    assert_eq!(
+        h.bytes("editor_image", json!({})),
+        fs::read(seeded.invoice_path()).unwrap()
+    );
+    fs::remove_file(seeded.invoice_path()).unwrap();
+    assert_starts_with(
+        &h.err("editor_image", json!({})),
+        &format!("could not open {}: ", seeded.invoice_path().display()),
+    );
+}
+
+#[test]
+fn editor_add_image_file_copies_the_image_beside_the_capture() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    let dropped = h.dir.path().join("logo.png");
+    write_png(&dropped, 3, 2);
+    assert_eq!(
+        h.err(
+            "editor_add_image_file",
+            json!({ "path": dropped.to_string_lossy() })
+        ),
+        "this window is not an editor"
+    );
+    h.edit(&seeded.invoice_path());
+    let name = h.ok(
+        "editor_add_image_file",
+        json!({ "path": dropped.to_string_lossy() }),
+    );
+    let name = name.as_str().expect("the copy's file name");
+    assert!(
+        name.starts_with("logo-") && name.ends_with(".png"),
+        "unexpected name {name}"
+    );
+    let assets = capture::assets_dir(&seeded.invoice_path());
+    assert_eq!(
+        fs::read(assets.join(name)).unwrap(),
+        fs::read(&dropped).unwrap()
+    );
+    assert_eq!(
+        h.bytes("editor_asset_image", json!({ "name": name })),
+        fs::read(&dropped).unwrap()
+    );
+
+    let text = h.dir.path().join("notes.txt");
+    fs::write(&text, "not an image").unwrap();
+    assert_eq!(
+        h.err(
+            "editor_add_image_file",
+            json!({ "path": text.to_string_lossy() })
+        ),
+        "the image must be a PNG, JPEG, WebP or GIF image"
+    );
+    let missing = h.dir.path().join("missing.png");
+    assert_starts_with(
+        &h.err(
+            "editor_add_image_file",
+            json!({ "path": missing.to_string_lossy() }),
+        ),
+        &format!("could not open {}: ", missing.display()),
+    );
+    assert_eq!(fs::read_dir(&assets).unwrap().count(), 1);
+}
+
+#[test]
+fn editor_asset_image_reads_only_the_captures_own_images() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    assert_eq!(
+        h.err("editor_asset_image", json!({ "name": "logo.png" })),
+        "this window is not an editor"
+    );
+    h.edit(&seeded.invoice_path());
+    assert_eq!(
+        h.err("editor_asset_image", json!({ "name": "missing.png" })),
+        "the added image is missing"
+    );
+    let outside = format!("..{}plain.png", std::path::MAIN_SEPARATOR);
+    assert_eq!(
+        h.err("editor_asset_image", json!({ "name": outside })),
+        "not an image added to this capture"
+    );
+    assert_eq!(
+        h.err(
+            "editor_asset_image",
+            json!({ "name": seeded.plain_path().to_string_lossy() })
+        ),
+        "not an image added to this capture"
+    );
+    assert_invalid_arg(
+        &h.err("editor_asset_image", json!({})),
+        "editor_asset_image",
+        "name",
+    );
+}
+
+#[test]
+fn editor_backdrop_image_reads_only_images() {
+    let h = Harness::new();
+    let picked = h.dir.path().join("backdrop.png");
+    write_png(&picked, 5, 5);
+    assert_eq!(
+        h.bytes(
+            "editor_backdrop_image",
+            json!({ "path": picked.to_string_lossy() })
+        ),
+        fs::read(&picked).unwrap()
+    );
+    let text = h.dir.path().join("backdrop.txt");
+    fs::write(&text, "not an image").unwrap();
+    assert_eq!(
+        h.err(
+            "editor_backdrop_image",
+            json!({ "path": text.to_string_lossy() })
+        ),
+        "the backdrop image must be a PNG, JPEG, WebP or GIF image"
+    );
+    let missing = h.dir.path().join("missing.png");
+    assert_starts_with(
+        &h.err(
+            "editor_backdrop_image",
+            json!({ "path": missing.to_string_lossy() }),
+        ),
+        &format!("could not open {}: ", missing.display()),
+    );
+}
+
+#[test]
+fn save_backdrop_preset_image_refuses_a_missing_file() {
+    // Only the failure is tested: a success would write into the real app
+    // data folder, which the mock runtime does not redirect.
+    let h = Harness::new();
+    let missing = h.dir.path().join("missing.png");
+    let message = h.err(
+        "save_backdrop_preset_image",
+        json!({ "path": missing.to_string_lossy() }),
+    );
+    // Refused when the source is read, before anything is written.
+    assert_starts_with(&message, &format!("could not open {}: ", missing.display()));
 }
