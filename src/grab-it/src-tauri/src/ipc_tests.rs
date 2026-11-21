@@ -54,7 +54,9 @@ const WAIT: Duration = Duration::from_secs(10);
 struct Harness {
     webview: WebviewWindow,
     app: App<MockRuntime>,
-    /// Dropped last, after the app has let go of the Library.
+    /// Dropped last. A background thread's handle keeps the Library open
+    /// after `app` drops, so a test must wait for any background work it
+    /// starts, such as set_save_folder's rescan, before it ends.
     dir: TempDir,
 }
 
@@ -300,6 +302,15 @@ fn set_save_folder_creates_a_missing_folder() {
         json!({ "path": folder.to_string_lossy() }),
     );
     assert!(folder.is_dir());
+    // The empty folder's rescan changes nothing that could be waited for,
+    // so choosing it again with a capture in it starts one that does. The
+    // test waits for it before the temporary folder goes.
+    seed_capture(&folder, "seed.png");
+    h.ok(
+        "set_save_folder",
+        json!({ "path": folder.to_string_lossy() }),
+    );
+    wait_for("the rescan to add the capture", || h.library_total() == 1);
 }
 
 #[test]
