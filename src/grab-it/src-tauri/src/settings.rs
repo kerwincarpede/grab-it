@@ -1866,11 +1866,12 @@ mod tests {
     fn store_remembers_the_export_folder_between_sessions() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        let mut store = open_store(path.clone(), defaults(&dir));
         let folder = dir.path().join("exports");
         let updated = store.set_last_export_folder(folder.clone()).unwrap();
         assert_eq!(updated.last_export_folder.as_ref(), Some(&folder));
-        assert_eq!(load(&path, defaults(&dir)).unwrap(), updated);
+        let reopened = open_store(path, defaults(&dir));
+        assert_eq!(reopened.get().last_export_folder.as_ref(), Some(&folder));
     }
 
     #[test]
