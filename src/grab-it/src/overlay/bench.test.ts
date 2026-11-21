@@ -1,4 +1,3 @@
-import { mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   benchEnabled,
@@ -12,16 +11,11 @@ import {
   takeOpenMarks,
   type PhaseSamples,
 } from "./bench";
+import { mockCommands, type CommandCall } from "../test/mockCommands";
 
 /** Fakes the backend, with `config` as `GRAB_IT_OVERLAY_BENCH`; returns the commands called. */
-function mockBench(config: string | null): string[] {
-  const calls: string[] = [];
-  mockIPC((cmd) => {
-    calls.push(cmd);
-    if (cmd === "overlay_bench_config") return config;
-    throw new Error(`unexpected command ${cmd}`);
-  });
-  return calls;
+function mockBench(config: string | null): CommandCall[] {
+  return mockCommands({ overlay_bench_config: () => config });
 }
 
 const benchStyle = () => document.getElementById("overlay-bench-style");
@@ -54,7 +48,7 @@ describe("setupBench", () => {
 
     await expect(setupBench("#/overlay?instant&bench")).resolves.toBe(true);
 
-    expect(calls).toEqual(["overlay_bench_config"]);
+    expect(calls.map((call) => call.cmd)).toEqual(["overlay_bench_config"]);
     expect(benchSwitch("noloupe")).toBe(true);
     expect(benchSwitch("probe")).toBe(true);
     expect(benchSwitch("lazy")).toBe(false);
@@ -184,13 +178,11 @@ describe("runBench", () => {
     // jsdom has no Web Animations.
     Object.defineProperty(document, "getAnimations", { configurable: true, value: () => [] });
     const lines: string[] = [];
-    mockIPC((cmd, payload) => {
-      if (cmd === "overlay_bench_config") return "";
-      if (cmd === "overlay_bench_log") {
-        lines.push((payload as { line: string }).line);
-        return null;
-      }
-      throw new Error(`unexpected command ${cmd}`);
+    mockCommands({
+      overlay_bench_config: () => "",
+      overlay_bench_log: ({ line }) => {
+        lines.push(line);
+      },
     });
     window.location.hash = "#/overlay?bench";
     await setupBench();

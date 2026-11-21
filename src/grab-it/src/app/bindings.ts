@@ -202,6 +202,22 @@ export const commands = {
 	 *  yet: its page then waits for [`START_EVENT`].
 	 */
 	overlayInfo: (options?: InvokeOptions) => __TAURI_INVOKE<OverlayInfo_Serialize | null>("overlay_info", undefined, options),
+	/**  The bench's switches, or nothing when `GRAB_IT_OVERLAY_BENCH` is not set. */
+	overlayBenchConfig: (options?: InvokeOptions) => __TAURI_INVOKE<string | null>("overlay_bench_config", undefined, options),
+	/**
+	 *  Prints one line of the bench's report to stderr as `BENCH <line>`. On
+	 *  macOS a `BENCHCPU` line follows with the CPU time WindowServer, WebKit's
+	 *  GPU process and the app have spent so far, so each phase can be costed
+	 *  on its own. Async: `ps` would otherwise hold up the main thread for tens
+	 *  of milliseconds, right as the next phase starts.
+	 */
+	overlayBenchLog: (line: string, options?: InvokeOptions) => __TAURI_INVOKE<void>("overlay_bench_log", { line }, options),
+	/**
+	 *  macOS: makes the overlay's window opaque, for the bench's `opaque`
+	 *  switch, to cost WindowServer blending a see-through window. Does nothing
+	 *  elsewhere or without the bench.
+	 */
+	overlayBenchOpaque: (options?: InvokeOptions) => __TAURI_INVOKE<void>("overlay_bench_opaque", undefined, options),
 	/**
 	 *  The page is ready to be shown: on X11 with its frozen image, on Windows
 	 *  as soon as it knows what to show, the frozen screen being on show under
@@ -2592,6 +2608,9 @@ export type MockCommandHandlers = {
     pauseHotkeys: () => void | Promise<void>,
     resumeHotkeys: () => void | Promise<void>,
     overlayInfo: () => OverlayInfo_Serialize | null | Promise<OverlayInfo_Serialize | null>,
+    overlayBenchConfig: () => string | null | Promise<string | null>,
+    overlayBenchLog: (args: { line: string }) => void | Promise<void>,
+    overlayBenchOpaque: () => void | Promise<void>,
     overlayReady: () => null | Promise<null>,
     overlayFinish: (args: { selection: Selection; choice: Choice_Deserialize | null }) => null | Promise<null>,
     overlayChoose: (args: { choice: Choice_Deserialize }) => null | Promise<null>,
@@ -2751,6 +2770,9 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "pause_hotkeys": return mockCommandHandler(mockHandlers.pauseHotkeys, "pause_hotkeys", args);
             case "resume_hotkeys": return mockCommandHandler(mockHandlers.resumeHotkeys, "resume_hotkeys", args);
             case "overlay_info": return mockCommandHandler(mockHandlers.overlayInfo, "overlay_info", args);
+            case "overlay_bench_config": return mockCommandHandler(mockHandlers.overlayBenchConfig, "overlay_bench_config", args);
+            case "overlay_bench_log": return mockCommandHandler(mockHandlers.overlayBenchLog, "overlay_bench_log", args);
+            case "overlay_bench_opaque": return mockCommandHandler(mockHandlers.overlayBenchOpaque, "overlay_bench_opaque", args);
             case "overlay_ready": return mockCommandHandler(mockHandlers.overlayReady, "overlay_ready", args);
             case "overlay_finish": return mockCommandHandler(mockHandlers.overlayFinish, "overlay_finish", args);
             case "overlay_choose": return mockCommandHandler(mockHandlers.overlayChoose, "overlay_choose", args);

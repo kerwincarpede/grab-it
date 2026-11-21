@@ -145,3 +145,22 @@ export function cancelOverlay(): Promise<void> {
 export async function rememberSetupSpot(centre: Point): Promise<void> {
   await commands.recordBarRemember(centre);
 }
+
+/**
+ * The overlay bench's comma-separated switches, or null when
+ * `GRAB_IT_OVERLAY_BENCH` is not set. Only asked for on an overlay opened
+ * for the bench (`#/overlay?bench`).
+ */
+export function overlayBenchConfig(): Promise<string | null> {
+  return commands.overlayBenchConfig();
+}
+
+/** Prints one line of the bench's report to the app's stderr. */
+export function overlayBenchLog(line: string): Promise<void> {
+  return commands.overlayBenchLog(line);
+}
+
+/** macOS: makes the overlay's window opaque, for the bench's `opaque` switch. */
+export function overlayBenchOpaque(): Promise<void> {
+  return commands.overlayBenchOpaque();
+}

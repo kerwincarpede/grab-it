@@ -2037,6 +2037,7 @@ fn with_bench_flag(page: &str, on: bool) -> String {
 
 /// The bench's switches, or nothing when `GRAB_IT_OVERLAY_BENCH` is not set.
 #[tauri::command]
+#[specta::specta]
 pub fn overlay_bench_config() -> Option<String> {
     bench_config().map(str::to_owned)
 }
@@ -2047,6 +2048,7 @@ pub fn overlay_bench_config() -> Option<String> {
 /// on its own. Async: `ps` would otherwise hold up the main thread for tens
 /// of milliseconds, right as the next phase starts.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn overlay_bench_log(line: String) {
     if bench_config().is_none() {
         return;
@@ -2063,6 +2065,7 @@ pub fn overlay_bench_log(line: String) {
 /// switch, to cost WindowServer blending a see-through window. Does nothing
 /// elsewhere or without the bench.
 #[tauri::command]
+#[specta::specta]
 pub fn overlay_bench_opaque(window: WebviewWindow) {
     if !bench_switch("opaque") {
         return;

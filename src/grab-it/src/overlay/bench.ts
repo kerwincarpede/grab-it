@@ -4,12 +4,9 @@
 // frame timing through `overlay_bench_log`, then cancels. Without the flag
 // nothing here calls the backend or records anything. See
 // docs/analysis/capture-overlay-performance.md.
-//
-// The bench's commands are called from here rather than from api.ts: they
-// exist only for the bench and nothing else in the overlay uses them.
-import { invoke } from "@tauri-apps/api/core";
 import { flushSync } from "react-dom";
 import { routeHasFlag } from "../routes";
+import { overlayBenchConfig, overlayBenchLog, overlayBenchOpaque } from "./api";
 
 /** The overlay was opened for the bench (`#/overlay?bench`). */
 export function benchEnabled(hash: string = window.location.hash): boolean {
@@ -89,7 +86,7 @@ export async function setupBench(hash: string = window.location.hash): Promise<b
   switches = null;
   document.getElementById(STYLE_ID)?.remove();
   if (!benchEnabled(hash)) return false;
-  const config = await invoke<string | null>("overlay_bench_config").catch(() => null);
+  const config = await overlayBenchConfig().catch(() => null);
   if (config === null) return false;
   switches = parseSwitches(config);
   const css = [...switches].map((name) => CSS[name] ?? "").filter(Boolean).join("\n");
@@ -104,11 +101,11 @@ export async function setupBench(hash: string = window.location.hash): Promise<b
 
 /** Makes the overlay's window opaque, for the `opaque` switch. */
 export function benchOpaque(): Promise<void> {
-  return invoke<void>("overlay_bench_opaque").catch(() => {});
+  return overlayBenchOpaque().catch(() => {});
 }
 
 function benchLog(line: unknown): Promise<void> {
-  return invoke<void>("overlay_bench_log", { line: JSON.stringify(line) }).catch(() => {});
+  return overlayBenchLog(JSON.stringify(line)).catch(() => {});
 }
 
 function pct(sorted: number[], p: number) {
