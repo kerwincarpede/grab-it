@@ -93,6 +93,8 @@ struct AutoScroll {
     center: (i32, i32),
     reason: Option<&'static str>,
     still_steps: u8,
+    /// Whether a frame after a wheel step ever differed from the one before.
+    moved: bool,
 }
 impl AutoScroll {
     fn new(center: (i32, i32), allowed: bool) -> Self {
@@ -101,6 +103,7 @@ impl AutoScroll {
             reason: (!allowed)
                 .then_some("Accessibility permission is needed. Scroll by hand, then choose Done."),
             still_steps: 0,
+            moved: false,
         }
     }
     fn observe_pointer(&mut self, pointer: Option<(i32, i32)>) {
@@ -120,12 +123,19 @@ impl AutoScroll {
         if self.reason.is_some() {
             return false;
         }
+        self.moved |= !unchanged;
         self.still_steps = if unchanged { self.still_steps + 1 } else { 0 };
         if self.still_steps < 5 {
             return false;
         }
         if !has_scrolled {
-            self.reason = Some("Nothing scrolled automatically. Scroll by hand, then choose Done.");
+            // Content that moved but never lined up did scroll; saying
+            // nothing scrolled would send the user looking for the wrong fault.
+            self.reason = Some(if self.moved {
+                "The scrolled frames did not line up. Scroll by hand, then choose Done."
+            } else {
+                "Nothing scrolled automatically. Scroll by hand, then choose Done."
+            });
             return false;
         }
         true
@@ -547,6 +557,9 @@ pub fn start(
                     // out of the selection; its previous frames are unsafe.
                     drop(source);
                     source = frames::open(&monitor, rect, 10, false)?;
+                    // Every later frame now comes from this source, so the
+                    // Stitcher starts again from one of its frames.
+                    (stitch, previous) = restart_stitch(source.as_mut())?;
                 }
                 let mut wheel_pending = false;
                 while control.end.load(Ordering::SeqCst) == 0 {
@@ -653,6 +666,16 @@ fn set_card_fade(app: &AppHandle, enabled: bool) {
     }
     #[cfg(not(target_os = "windows"))]
     let _ = (app, enabled);
+}
+
+/// Starts the Stitcher from a frame of `source`, the reader every later frame
+/// comes from. The buffered reader (AVCapture, DXGI) and the synchronous one
+/// (xcap) do not give identical pixels for the same screen, and the Stitcher
+/// never replaces a reference it cannot match, so a reference from the other
+/// reader would turn away every frame of the session.
+fn restart_stitch(source: &mut dyn frames::FrameSource) -> Result<(Stitcher, RgbaImage), String> {
+    let frame = source.grab()?;
+    Ok((Stitcher::new(frame.image.clone()), frame.image))
 }
 
 /// Hiding a window does not invalidate AVCapture/DXGI's latest-frame cache.
@@ -1059,6 +1082,69 @@ mod tests {
         let (log, result) = fade_sequence(Err("capture unavailable"));
         assert_eq!(result.err().as_deref(), Some("capture unavailable"));
         assert_eq!(log, ["fade off", "hide", "fade on", "reset"]);
+    }
+
+    /// A reader that sees the page `offset` lines down, with every colour
+    /// `tint` levels off, as two capture paths differ for the same screen.
+    struct PageSource {
+        offset: u32,
+        tint: u8,
+    }
+    impl frames::FrameSource for PageSource {
+        fn grab(&mut self) -> Result<frames::Grabbed, String> {
+            let mut image = frame(Axis::Vertical, self.offset, false);
+            for pixel in image.pixels_mut() {
+                for channel in &mut pixel.0[..3] {
+                    *channel = channel.saturating_add(self.tint);
+                }
+            }
+            Ok(frames::Grabbed {
+                image,
+                pointer: None,
+            })
+        }
+    }
+    #[test]
+    fn a_reference_from_the_other_reader_rejects_every_frame() {
+        use frames::FrameSource;
+        let mut synchronous = PageSource { offset: 0, tint: 3 };
+        let mut buffered = PageSource { offset: 0, tint: 0 };
+        // The first frame comes from the synchronous reader, later frames
+        // from the buffered one: none of them line up with it.
+        let mut stitch = Stitcher::new(synchronous.grab().unwrap().image);
+        for offset in [10, 20, 30] {
+            buffered.offset = offset;
+            assert!(!stitch.push(buffered.grab().unwrap().image));
+        }
+        assert_eq!(stitch.image.height(), 80);
+    }
+    #[test]
+    fn restarting_from_the_buffered_reader_lets_the_capture_grow() {
+        use frames::FrameSource;
+        let mut buffered = PageSource { offset: 0, tint: 0 };
+        let (mut stitch, previous) = restart_stitch(&mut buffered).unwrap();
+        assert_eq!(previous, frame(Axis::Vertical, 0, false));
+        for (offset, height) in [(10, 90), (20, 100), (30, 110)] {
+            buffered.offset = offset;
+            assert!(stitch.push(buffered.grab().unwrap().image));
+            assert_eq!(stitch.image.height(), height);
+        }
+    }
+    #[test]
+    fn content_that_moved_but_never_lined_up_is_not_called_unscrolled() {
+        let mut auto = AutoScroll::new((0, 0), true);
+        // The page moves for a while, then stops at its end.
+        for _ in 0..3 {
+            assert!(!auto.at_end(false, false));
+        }
+        for _ in 0..4 {
+            assert!(!auto.at_end(true, false));
+        }
+        assert!(!auto.at_end(true, false));
+        assert_eq!(
+            auto.reason,
+            Some("The scrolled frames did not line up. Scroll by hand, then choose Done.")
+        );
     }
 
     #[test]
