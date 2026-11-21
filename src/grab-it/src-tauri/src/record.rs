@@ -131,7 +131,7 @@ impl Controls {
 }
 
 /// Where a recording is in its life, as the toolbar shows it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum Phase {
     /// Counting down to the first frame.
@@ -143,7 +143,7 @@ pub enum Phase {
 
 /// What the recording toolbar shows. Mirrors `BarStatus` in
 /// src/recordbar/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct BarStatus {
     pub phase: Phase,
@@ -347,12 +347,14 @@ pub fn stop_and_wait(app: &AppHandle) {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn record_stop(app: AppHandle) {
     stop(&app);
 }
 
 /// Pauses the recording under way, or carries it on.
 #[tauri::command]
+#[specta::specta]
 pub fn record_pause(paused: bool, app: AppHandle) {
     let Some(session) = session(&app) else {
         return;
@@ -376,7 +378,7 @@ pub fn record_pause(paused: bool, app: AppHandle) {
 
 /// Which sound the toolbar mutes. Mirrors `MutedInput` in
 /// src/recordbar/api.ts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum MutedInput {
     Microphone,
@@ -386,6 +388,7 @@ pub enum MutedInput {
 /// Mutes the microphone or the system sound of the recording under way,
 /// or turns it back on: silence is recorded in its place meanwhile.
 #[tauri::command]
+#[specta::specta]
 pub fn record_mute(input: MutedInput, muted: bool, app: AppHandle) {
     let Some(session) = session(&app) else {
         return;
@@ -408,6 +411,7 @@ pub fn record_mute(input: MutedInput, muted: bool, app: AppHandle) {
 
 /// Shows or hides the webcam bubble of the recording under way.
 #[tauri::command]
+#[specta::specta]
 pub fn record_webcam(shown: bool, app: AppHandle) {
     let Some(session) = session(&app) else {
         return;
@@ -431,6 +435,7 @@ pub fn record_webcam(shown: bool, app: AppHandle) {
 
 /// Throws the recording under way away.
 #[tauri::command]
+#[specta::specta]
 pub fn record_discard(app: AppHandle) {
     if let Some(session) = session(&app) {
         session.controls.discard.store(true, Ordering::SeqCst);
@@ -440,6 +445,7 @@ pub fn record_discard(app: AppHandle) {
 
 /// Throws the recording under way away and starts again on the same area.
 #[tauri::command]
+#[specta::specta]
 pub fn record_restart(app: AppHandle) {
     if let Some(session) = session(&app) {
         session.controls.restart.store(true, Ordering::SeqCst);
@@ -449,6 +455,7 @@ pub fn record_restart(app: AppHandle) {
 
 /// What the recording toolbar shows, or None when nothing is recording.
 #[tauri::command]
+#[specta::specta]
 pub fn record_bar_status(app: AppHandle) -> Option<BarStatus> {
     session(&app).map(|session| session.status())
 }
@@ -456,6 +463,7 @@ pub fn record_bar_status(app: AppHandle) -> Option<BarStatus> {
 /// How loud the microphone has been since this was last asked, from 0 to
 /// 1, or None when it is not being recorded.
 #[tauri::command]
+#[specta::specta]
 pub fn record_bar_level(app: AppHandle) -> Option<f32> {
     let session = session(&app)?;
     let meter = session

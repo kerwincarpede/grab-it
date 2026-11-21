@@ -291,7 +291,7 @@ impl From<image::ImageError> for LibraryError {
 pub type LibraryResult<T> = std::result::Result<T, LibraryError>;
 
 /// What a library item is. Mirrors `ShotKind` in src/library/api.ts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum ShotKind {
     /// A capture: a PNG in `originals/`.
@@ -338,7 +338,7 @@ impl ShotKind {
 }
 
 /// One capture or recording. Mirrors `Shot` in src/library/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Shot {
     pub id: i64,
@@ -385,7 +385,7 @@ pub(crate) const SHOT_COLUMN_COUNT: usize = 16;
 
 /// The text in a shot, as far as OCR has got. Mirrors `ShotText` in
 /// src/library/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum ShotText {
     /// OCR has not read it yet.
@@ -397,7 +397,7 @@ pub enum ShotText {
 }
 
 /// One page of shots, newest first. Mirrors `ShotPage` in src/library/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ShotPage {
     pub shots: Vec<Shot>,
@@ -2247,6 +2247,7 @@ fn to_message(err: LibraryError) -> String {
 // windows or the tray.
 
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_list(
     offset: u32,
     limit: u32,
@@ -2298,6 +2299,7 @@ pub fn library_thumbnail(
 }
 
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_set_tags(
     id: i64,
     tags: Vec<String>,
@@ -2307,6 +2309,7 @@ pub fn library_set_tags(
 }
 
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_remove_ai_tag(
     id: i64,
     tag: String,
@@ -2317,6 +2320,7 @@ pub fn library_remove_ai_tag(
 
 /// Stars or unstars a shot Keep forever.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_set_keep(
     id: i64,
     keep: bool,
@@ -2326,6 +2330,7 @@ pub fn library_set_keep(
 }
 
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_set_notes(
     id: i64,
     notes: String,
@@ -2336,6 +2341,7 @@ pub fn library_set_notes(
 
 /// Deletes a shot from disk and the library, closing its editor first.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_delete(
     id: i64,
     app: AppHandle,
@@ -2363,6 +2369,7 @@ fn close_editor(app: &AppHandle, path: &Path) {
 /// Moves a shot's file and sidecars to the system Trash and drops it from
 /// the library, closing its editor first.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_trash(
     id: i64,
     app: AppHandle,
@@ -2381,6 +2388,7 @@ pub fn library_trash(
 /// the shot as it now is. `name` is the new name; the file keeps its
 /// extension. Its editor is closed first, since it saves to the old path.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_rename(
     id: i64,
     name: String,
@@ -2408,6 +2416,7 @@ pub fn library_rename(
 /// Copies a shot beside itself as "<name> copy" with its sidecars, adds
 /// the copy to the library and returns it.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_duplicate(
     id: i64,
     app: AppHandle,
@@ -2425,6 +2434,7 @@ pub fn library_duplicate(
 /// the OpenURI portal on Linux and the Open With dialog on Windows. macOS
 /// has no system chooser an app can show.
 #[tauri::command]
+#[specta::specta]
 pub fn library_open_with_supported() -> bool {
     cfg!(any(target_os = "linux", target_os = "windows"))
 }
@@ -2432,6 +2442,7 @@ pub fn library_open_with_supported() -> bool {
 /// Asks the system which app to open a shot's file with, and opens it
 /// there. Resolves once the choice is made; backing out is not a failure.
 #[tauri::command]
+#[specta::specta]
 pub async fn library_open_with(id: i64, app: AppHandle) -> Result<(), String> {
     let path = existing_path(&app, id)?;
     #[cfg(target_os = "linux")]
@@ -2486,6 +2497,7 @@ fn open_with_dialog(path: &Path) -> Result<(), String> {
 /// window is not created on the main thread inside a command, which
 /// deadlocks on Windows.
 #[tauri::command]
+#[specta::specta]
 pub async fn library_open(id: i64, app: AppHandle) -> Result<(), String> {
     let shot = app
         .state::<LibraryState>()
@@ -2515,6 +2527,7 @@ fn play(app: &AppHandle, path: &Path) -> Result<(), String> {
 
 /// Plays a recording in the app that plays its kind of file.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_play(id: i64, app: AppHandle) -> Result<(), String> {
     play(&app, &existing_path(&app, id)?)
 }
@@ -2559,7 +2572,7 @@ pub fn library_image(id: i64, app: AppHandle) -> Result<tauri::ipc::Response, St
 
 /// A capture's saved annotations and pixels per point, for drawing it
 /// with its edits. Mirrors `ShotAnnotations` in src/library/api.ts.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ShotAnnotations {
     /// The sidecar, or `None` when the capture has no edits.
@@ -2587,6 +2600,7 @@ pub fn shot_annotations(png: &Path) -> Result<ShotAnnotations, String> {
 
 /// A capture's saved annotations and scale. See [`shot_annotations`].
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_annotations(id: i64, app: AppHandle) -> Result<ShotAnnotations, String> {
     shot_annotations(&existing_image(&app, id)?)
 }
@@ -2632,6 +2646,7 @@ pub const THUMBNAIL_EDITED_HEADER: &str = "x-grab-it-edited";
 
 /// Copies a shot's original image to the clipboard.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_copy(id: i64, app: AppHandle) -> Result<(), String> {
     crate::quick::copy_file(&app, &existing_image(&app, id)?)
 }
@@ -2639,6 +2654,7 @@ pub fn library_copy(id: i64, app: AppHandle) -> Result<(), String> {
 /// Puts a shot's file on the clipboard as a file, screenshot or
 /// recording, to paste into a file manager or attach in another app.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_copy_file(id: i64, app: AppHandle) -> Result<(), String> {
     let path = existing_path(&app, id)?;
     crate::file_clipboard::copy_files(&app, &[path])
@@ -2648,6 +2664,7 @@ pub fn library_copy_file(id: i64, app: AppHandle) -> Result<(), String> {
 /// returns the path written: a screenshot as PNG, JPG or WebP by the
 /// target's extension, a recording as a copy. See [`export_shot`].
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_export(
     id: i64,
     target: PathBuf,
@@ -2661,6 +2678,7 @@ pub fn library_export(
 
 /// The text in a shot, as far as OCR has got.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_text(id: i64, state: State<'_, LibraryState>) -> Result<ShotText, String> {
     state.lock().text(id).map_err(to_message)
 }
@@ -2668,6 +2686,7 @@ pub fn library_text(id: i64, state: State<'_, LibraryState>) -> Result<ShotText,
 /// The lines of text in a shot with their word boxes, in image pixels, or
 /// None when OCR has not read them (see [`Library::lines`]).
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_words(
     id: i64,
     state: State<'_, LibraryState>,
@@ -2678,6 +2697,7 @@ pub fn library_words(
 /// The library id of the capture at `path`, or None when the library does
 /// not know it, so windows that only have a path can use the id commands.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_shot_id(
     path: PathBuf,
     state: State<'_, LibraryState>,
@@ -2689,6 +2709,7 @@ pub fn library_shot_id(
 /// or could not read, is read now, with the values of any codes in it, and
 /// what it finds is stored, so it is searchable and can be described.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_copy_text(id: i64, app: AppHandle) -> Result<String, String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
     let library = app.state::<LibraryState>();
@@ -2729,12 +2750,14 @@ pub fn library_copy_text(id: i64, app: AppHandle) -> Result<String, String> {
 /// Floats a shot above other windows. Async for the same reason as
 /// [`library_open`].
 #[tauri::command]
+#[specta::specta]
 pub async fn library_pin(id: i64, app: AppHandle) -> Result<(), String> {
     crate::pin::open(&app, &existing_image(&app, id)?, false)
 }
 
 /// Shows a shot's file in the system file manager.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_reveal(id: i64, app: AppHandle) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     app.opener()
@@ -2745,6 +2768,7 @@ pub fn library_reveal(id: i64, app: AppHandle) -> Result<(), String> {
 /// Opens the folder a shot's file is in, without picking the file out as
 /// [`library_reveal`] does.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_open_folder(id: i64, app: AppHandle) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     let path = existing_path(&app, id)?;
@@ -2758,6 +2782,7 @@ pub fn library_open_folder(id: i64, app: AppHandle) -> Result<(), String> {
 
 /// Opens a shot's file in the app the system opens its kind of file with.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_open_external(id: i64, app: AppHandle) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     app.opener()
@@ -2767,6 +2792,7 @@ pub fn library_open_external(id: i64, app: AppHandle) -> Result<(), String> {
 
 /// Puts the full path of a shot's file on the clipboard and returns it.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_copy_path(id: i64, app: AppHandle) -> Result<String, String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
     let path = existing_path(&app, id)?.to_string_lossy().into_owned();

@@ -203,7 +203,7 @@ impl Ocr {
 /// A line of text OCR read, with its box and its words. Stored as JSON in
 /// the library's `ocr_words` column; mirrors `OcrLine` in
 /// src/library/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct OcrLine {
     pub text: String,
@@ -214,7 +214,7 @@ pub struct OcrLine {
 }
 
 /// A word in an [`OcrLine`]. Mirrors `OcrWord` in src/library/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct OcrWord {
     pub text: String,
@@ -290,7 +290,7 @@ pub fn store_text(
 }
 
 /// What the OCR queue is doing. Mirrors `OcrStatus` in src/library/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum OcrStatus {
     /// Nothing waits for OCR.
@@ -507,6 +507,7 @@ fn run(app: &AppHandle, models: &Path, receiver: &Receiver<()>) {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn ocr_status(state: State<'_, OcrState>) -> OcrStatus {
     state.status()
 }

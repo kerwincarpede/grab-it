@@ -192,7 +192,7 @@ pub fn ensure_input_monitoring(_app: &AppHandle) -> bool {
 }
 
 /// The permissions the Permissions page lists, in its order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum Permission {
     ScreenRecording,
@@ -223,7 +223,7 @@ impl Permission {
 }
 
 /// Where one permission stands. Mirrors `Access` in src/welcome/permissions.ts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub enum Access {
@@ -236,7 +236,7 @@ pub enum Access {
 
 /// What `permission_status` reports. Mirrors `PermissionStatus` in
 /// src/welcome/permissions.ts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionStatus {
     pub screen_recording: Access,
@@ -484,12 +484,14 @@ pub fn request_all(app: &AppHandle) -> PermissionStatus {
 
 /// Where each permission stands, for the Permissions page, which polls it.
 #[tauri::command]
+#[specta::specta]
 pub fn permission_status(app: AppHandle) -> PermissionStatus {
     status(&app)
 }
 
 /// Allow all: asks for each permission in turn.
 #[tauri::command]
+#[specta::specta]
 pub async fn permission_request_all(app: AppHandle) -> Result<PermissionStatus, String> {
     tauri::async_runtime::spawn_blocking(move || request_all(&app))
         .await
@@ -501,6 +503,7 @@ pub async fn permission_request_all(app: AppHandle) -> Result<PermissionStatus, 
 /// than on the first real capture. Does nothing without Screen Recording,
 /// or off macOS.
 #[tauri::command]
+#[specta::specta]
 pub async fn permission_prime_capture() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(|| {
         #[cfg(target_os = "macos")]
@@ -513,18 +516,21 @@ pub async fn permission_prime_capture() -> Result<(), String> {
 /// Skip for now or Continue: launches stop reopening the Welcome window for
 /// an unfinished setup.
 #[tauri::command]
+#[specta::specta]
 pub fn permission_finish(app: AppHandle) {
     save_setup(&app, |setup| setup.resume = false);
 }
 
 /// Restarts Grab-it, so it sees Screen Recording and Input Monitoring.
 #[tauri::command]
+#[specta::specta]
 pub fn permission_restart(app: AppHandle) {
     app.restart();
 }
 
 /// Opens `permission`'s pane in System Settings. Only macOS has one.
 #[tauri::command]
+#[specta::specta]
 pub fn permission_open_settings(permission: Permission) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {

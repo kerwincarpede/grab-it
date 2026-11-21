@@ -253,7 +253,7 @@ pub fn centre_in_css(
 }
 
 /// A point in a page's CSS pixels. Mirrors `Point` in src/overlay/geometry.ts.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, specta::Type)]
 pub struct CssPoint {
     pub x: f64,
     pub y: f64,
@@ -802,7 +802,7 @@ fn display_in_points(bar: Area, scale: f64, displays: &[Display]) -> Option<(Are
 }
 
 /// Where the menu opens. Mirrors `BarLayout` in src/recordbar/api.ts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct BarLayout {
     /// Whether the menu sits above the pill.
@@ -814,6 +814,7 @@ pub struct BarLayout {
 /// corner it is anchored by when it changes size, and the menu opens
 /// above it in the lower half of the display.
 #[tauri::command]
+#[specta::specta]
 pub fn record_bar_fit(
     width: f64,
     height: f64,
@@ -861,6 +862,7 @@ pub fn record_bar_fit(
 /// toolbar opens where the setup toolbar was left, and the next setup
 /// toolbar too.
 #[tauri::command]
+#[specta::specta]
 pub fn record_bar_remember(
     centre: CssPoint,
     window: WebviewWindow,
@@ -900,6 +902,7 @@ pub fn record_bar_remember(
 /// Forgets where the toolbar was left and moves it back to the top
 /// centre of the display it is on.
 #[tauri::command]
+#[specta::specta]
 pub fn record_bar_reset(app: AppHandle) {
     remember(&app, |memory| *memory = Memory::default());
     let Some(window) = app.get_webview_window(LABEL) else {

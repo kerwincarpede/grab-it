@@ -118,7 +118,7 @@ pub struct Guide {
 }
 
 /// One step: its capture, as a path from the save folder, and what it says.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct GuideStep {
     pub capture: String,
     pub description: String,
@@ -1085,7 +1085,7 @@ fn open_guide() -> Result<PathBuf, String> {
 }
 
 /// What the Guide window shows.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GuideInfo {
     pub path: PathBuf,
@@ -1093,7 +1093,7 @@ pub struct GuideInfo {
     pub steps: Vec<GuideStepInfo>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GuideStepInfo {
     pub capture: String,
@@ -1105,6 +1105,7 @@ pub struct GuideStepInfo {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn guide_info(app: AppHandle) -> Result<GuideInfo, String> {
     let path = open_guide()?;
     let folder = save_folder(&app);
@@ -1144,6 +1145,7 @@ pub fn guide_image(capture: String, app: AppHandle) -> Result<tauri::ipc::Respon
 
 /// Writes the guide's steps in their new order and renumbers their badges.
 #[tauri::command]
+#[specta::specta]
 pub fn guide_save(steps: Vec<GuideStep>, app: AppHandle) -> Result<(), String> {
     let path = open_guide()?;
     let folder = save_folder(&app);
@@ -1160,6 +1162,7 @@ pub fn guide_save(steps: Vec<GuideStep>, app: AppHandle) -> Result<(), String> {
 
 /// Opens a step's capture in the editor.
 #[tauri::command]
+#[specta::specta]
 pub fn guide_open_editor(capture: String, app: AppHandle) -> Result<(), String> {
     let png = resolve_capture(&save_folder(&app), &capture)?;
     std::thread::spawn(move || {
@@ -1171,7 +1174,7 @@ pub fn guide_open_editor(capture: String, app: AppHandle) -> Result<(), String> 
 }
 
 /// One flattened step, as the Guide window sends it for export.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportStep {
     pub description: String,
@@ -1193,6 +1196,7 @@ fn decode_steps(steps: Vec<ExportStep>) -> Result<Vec<guide_export::Step>, Strin
 
 /// Exports the guide as `format` (markdown, html, docx or pptx) to `path`.
 #[tauri::command]
+#[specta::specta]
 pub fn guide_export(format: String, path: PathBuf, steps: Vec<ExportStep>) -> Result<(), String> {
     let format = guide_export::Format::parse(&format)?;
     let title = open_guide()
@@ -1203,6 +1207,7 @@ pub fn guide_export(format: String, path: PathBuf, steps: Vec<ExportStep>) -> Re
 
 /// Copies the guide as HTML with its images, and as Markdown text.
 #[tauri::command]
+#[specta::specta]
 pub fn guide_copy(steps: Vec<ExportStep>, app: AppHandle) -> Result<(), String> {
     let title = open_guide()
         .map(|guide| guide_title(&guide))

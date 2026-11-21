@@ -48,7 +48,7 @@ const CORNER_RADIUS: f64 = 12.0;
 const THUMB_MAX: u32 = 672;
 
 /// What the card shows. Mirrors `QuickItem` in src/quick/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum QuickItem {
     #[serde(rename_all = "camelCase")]
@@ -124,7 +124,7 @@ pub enum QuickItem {
 /// How tidying a text capture with AI is going (see `tidy.rs`). `by` is
 /// who tidies it, as the card names them. Mirrors `TextTidy` in
 /// src/quick/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum TextTidy {
     /// The AI is reading the text again.
@@ -204,7 +204,7 @@ pub fn hex_colour(rgb: [u8; 3]) -> String {
 
 /// What is on the card, numbered so that an action can say which card it
 /// was clicked on. Mirrors `QuickShown` in src/quick/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub struct Shown {
     /// Different for every item the card has shown.
     pub generation: u64,
@@ -405,6 +405,7 @@ pub fn place_in_corner(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn quick_info(state: State<'_, QuickState>) -> Option<Shown> {
     lock(&state.current).clone()
 }
@@ -476,6 +477,7 @@ fn drag_source(item: &QuickItem) -> Option<(PathBuf, DragImage)> {
 
 /// Resolves only after native drop/cancel, not when GTK merely starts the drag.
 #[tauri::command]
+#[specta::specta]
 pub async fn quick_drag(generation: u64, app: AppHandle) -> Result<(), String> {
     let item = {
         let state = app.state::<QuickState>();
@@ -616,7 +618,7 @@ fn start_gtk_file_drag(
 }
 
 /// What a button on the card does. Mirrors `QuickAction` in src/quick/api.ts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum QuickAction {
     Copy,
@@ -644,6 +646,7 @@ pub enum QuickAction {
 /// Async, so the windows some actions open are never created on the main
 /// thread inside a command, which deadlocks on Windows.
 #[tauri::command]
+#[specta::specta]
 pub async fn quick_action(
     action: QuickAction,
     generation: u64,

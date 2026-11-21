@@ -93,7 +93,7 @@ struct Frame {
 
 /// What the overlay's selection is for. Mirrors `Intent` in
 /// src/overlay/api.ts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum Intent {
     /// Save the selection as a capture.
@@ -1117,7 +1117,7 @@ fn dismiss(app: &AppHandle, session: &Session, give_back: bool) {
 
 /// A window the overlay can highlight, relative to the overlay's monitor in
 /// the monitor's own units (`monitorWidth` by `monitorHeight`).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayWindow {
     pub id: u32,
@@ -1129,7 +1129,7 @@ pub struct OverlayWindow {
     pub height: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayInfo {
     pub mode: CaptureMode,
@@ -1255,7 +1255,7 @@ pub fn monitor_to_image_rect(rect: Rect, monitor: &MonitorInfo, image_size: (u32
 }
 
 /// What the user picked in an overlay.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Selection {
     /// A dragged region in the overlay's CSS pixels, with the overlay's
@@ -1274,7 +1274,7 @@ pub enum Selection {
 
 /// What an All-in-one overlay's toolbar chose, sent with its selection.
 /// An overlay opened for one mode has no toolbar, and this is ignored.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Choice {
     pub intent: Option<Intent>,
@@ -1377,6 +1377,7 @@ pub fn css_to_image_point(
 /// What this overlay is to show, or `None` for a spare with no selection
 /// yet: its page then waits for [`START_EVENT`].
 #[tauri::command]
+#[specta::specta]
 pub fn overlay_info(
     app: AppHandle,
     window: WebviewWindow,
@@ -1531,6 +1532,7 @@ pub fn overlay_image(
 /// as soon as it knows what to show, the frozen screen being on show under
 /// it. On Windows wait for every page before showing the overlays.
 #[tauri::command]
+#[specta::specta]
 pub fn overlay_ready(window: WebviewWindow, state: State<'_, OverlayState>) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -1697,6 +1699,7 @@ fn fit_windows_overlay(window: &WebviewWindow, monitor: &MonitorInfo) -> Result<
 /// it for the session and tell every other overlay, so each toolbar shows
 /// it and a selection on any monitor finishes with it.
 #[tauri::command]
+#[specta::specta]
 pub fn overlay_choose(
     window: WebviewWindow,
     state: State<'_, OverlayState>,
@@ -1731,6 +1734,7 @@ pub fn overlay_choose(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn overlay_cancel(app: AppHandle, window: WebviewWindow) {
     let _ = take_session(&app, |s| s.frames.contains_key(window.label()), |_| true);
 }
@@ -1739,6 +1743,7 @@ pub fn overlay_cancel(app: AppHandle, window: WebviewWindow) {
 /// sends the `choice` its toolbar made with it; with a Timer, the area is
 /// captured live once the overlays are gone and the time is up.
 #[tauri::command]
+#[specta::specta]
 pub fn overlay_finish(
     window: WebviewWindow,
     app: AppHandle,

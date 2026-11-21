@@ -293,7 +293,7 @@ pub fn edited_path(original: &Path) -> PathBuf {
 
 /// What one source of a recording's sound is. Mirrors `AudioKind` in
 /// src/recording/api.ts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum AudioKind {
     Microphone,
@@ -383,7 +383,7 @@ fn audio_sources_with(video: &Path, has_audio: impl FnOnce() -> bool) -> Vec<Aud
 }
 
 /// Mirrors `RecordingInfo` in src/recording/api.ts.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingInfo {
     pub path: PathBuf,
@@ -401,6 +401,7 @@ pub struct RecordingInfo {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn recording_info(
     window: WebviewWindow,
     app: AppHandle,
@@ -436,6 +437,7 @@ pub async fn recording_info(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn recording_save_edits(
     edits: Value,
     window: WebviewWindow,
@@ -447,8 +449,10 @@ pub fn recording_save_edits(
 
 /// A recording a clip of the sequence plays. Mirrors `RecordingSource` in
 /// src/recording/api.ts.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, specta::Type)]
+// Named apart from the settings' `RecordingSource` in the bindings. A
+// struct's name never reaches the JSON, so the wire format is unchanged.
+#[serde(rename = "RecordingClipSource", rename_all = "camelCase")]
 pub struct RecordingSource {
     pub path: PathBuf,
     pub file_name: String,
@@ -487,6 +491,7 @@ fn recordings_of(original: &Path) -> Result<&Path, String> {
 /// gone. Whether it has sound is asked of ffmpeg; before ffmpeg is ready
 /// it is assumed to have some.
 #[tauri::command]
+#[specta::specta]
 pub async fn recording_source(
     file_name: String,
     window: WebviewWindow,

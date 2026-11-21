@@ -349,10 +349,12 @@ pub fn active(app: &AppHandle) -> bool {
     state_lock(&app.state::<ScrollState>()).is_some()
 }
 #[tauri::command]
+#[specta::specta]
 pub fn scroll_done(app: AppHandle, session_id: u64) {
     end(&app, session_id, 1);
 }
 #[tauri::command]
+#[specta::specta]
 pub fn scroll_cancel(app: AppHandle, session_id: u64) {
     end(&app, session_id, 2);
 }

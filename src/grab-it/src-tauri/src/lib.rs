@@ -231,157 +231,207 @@ fn manage_states(builder: Builder<Rt>) -> Builder<Rt> {
 }
 
 /// Every command the app's pages can call. The IPC tests build the same
-/// list, so a command they call is the one the app ships.
+/// handler, so a command they call is the one the app ships, routed the
+/// same way: the typed commands through tauri-specta ([`specta_builder`]),
+/// the byte ones through a plain handler ([`byte_commands!`]).
 fn invoke_handler() -> impl Fn(Invoke<Rt>) -> bool + Send + Sync + 'static {
-    tauri::generate_handler![
-        commands::get_settings,
-        commands::set_save_folder,
-        commands::set_hotkeys,
-        commands::set_preferences,
-        commands::get_editor_preferences,
-        commands::set_editor_preferences,
-        commands::set_auto_backdrop,
-        commands::set_show_pointer,
-        commands::set_backdrop_presets,
-        commands::set_favorite_colors,
-        commands::dismiss_ai_notice,
-        commands::open_target,
-        commands::get_autostart,
-        commands::set_autostart,
-        commands::set_show_in_dock,
-        commands::set_appearance,
-        commands::step_text_size,
-        commands::set_recording,
-        commands::set_retention,
-        commands::set_agent_access,
-        commands::set_update_channel,
-        agent::agent_skill_status,
-        agent::install_agent_skill,
-        hub::hub_capture,
-        hotkeys::effective_hotkeys,
-        hub::hub_monitors,
-        hub::hub_open,
-        hub::hub_check_updates,
-        hub::hub_quit,
-        hub::hub_hide,
-        hub::hub_activity,
-        quick::quick_info,
-        quick::quick_thumbnail,
-        quick::quick_action,
-        quick::quick_drag,
-        pin::pin_info,
-        pin::pin_image,
-        pin::pin_zoom,
-        pin::pin_lock,
-        pin::pin_nudge,
-        pin::pin_copy,
-        pin::pin_edit,
-        pin::pin_close,
-        pin::editor_pin,
-        record::record_stop,
-        scroll::scroll_done,
-        scroll::scroll_cancel,
-        record::record_pause,
-        record::record_mute,
-        record::record_webcam,
-        record::record_discard,
-        record::record_restart,
-        record::record_bar_status,
-        record::record_bar_level,
-        record_bar::record_bar_fit,
-        record_bar::record_bar_reset,
-        record_bar::record_bar_remember,
-        steps_bar::steps_bar_stop,
-        timer_bar::timer_bar_cancel,
-        webcam::known_cameras,
-        webcam::remember_cameras,
-        ffmpeg::ffmpeg_status,
-        ffmpeg::ffmpeg_retry,
-        audio::recording_microphones,
-        audio::recording_system_audio,
-        hotkeys::pause_hotkeys,
-        hotkeys::resume_hotkeys,
-        overlay::overlay_info,
-        overlay::overlay_image,
-        overlay::overlay_ready,
-        overlay::overlay_finish,
-        overlay::overlay_choose,
-        overlay::overlay_cancel,
-        editor::editor_info,
-        editor::editor_image,
-        editor::editor_backdrop_image,
-        editor::editor_add_image_file,
-        editor::editor_add_clipboard_image,
-        editor::editor_asset_image,
-        editor::save_backdrop_preset_image,
-        editor::editor_save_annotations,
-        editor::editor_copy,
-        editor::editor_export,
-        editor::editor_words,
-        editor::editor_faces,
-        recording_editor::recording_info,
-        recording_editor::recording_save_edits,
-        recording_editor::recording_source,
-        recording_editor::recording_export,
-        library::library_list,
-        library::library_thumbnail,
-        library::library_set_tags,
-        search::library_sidebar,
-        library::library_remove_ai_tag,
-        library::library_set_notes,
-        library::library_set_keep,
-        library::library_delete,
-        library::library_trash,
-        library::library_rename,
-        library::library_duplicate,
-        library::library_open_with,
-        library::library_open_with_supported,
-        library::library_open,
-        library::library_copy,
-        library::library_image,
-        library::library_annotations,
-        library::library_save_thumbnail,
-        library::library_copy_file,
-        library::library_export,
-        library::library_text,
-        library::library_words,
-        library::library_shot_id,
-        library::library_copy_text,
-        library::library_pin,
-        library::library_reveal,
-        library::library_open_folder,
-        library::library_open_external,
-        library::library_copy_path,
-        library::library_play,
-        storage::library_storage,
-        storage::library_clean_up,
-        storage::library_stop_clean_up,
-        search::library_search,
-        search::library_filter_options,
-        ocr::ocr_status,
-        ai::ai_status,
-        ai::ai_redescribe,
-        ai::ai_clear,
-        ai::ai_redescribe_all,
-        ai::ai_test_connection,
-        ai::ai_clis,
-        update::update_status,
-        update::update_check,
-        update::update_install,
-        update::update_later,
-        permissions::permission_status,
-        permissions::permission_request_all,
-        permissions::permission_prime_capture,
-        permissions::permission_finish,
-        permissions::permission_restart,
-        permissions::permission_open_settings,
-        steps::guide_info,
-        steps::guide_image,
-        steps::guide_save,
-        steps::guide_open_editor,
-        steps::guide_export,
-        steps::guide_copy
-    ]
+    // The builder's handler borrows it, so the closure keeps the builder and
+    // asks it for the handler on each call, which only clones an `Arc`.
+    let typed = specta_builder();
+    let bytes = byte_handler();
+    move |invoke| {
+        if BYTE_COMMANDS.contains(&invoke.message.command()) {
+            bytes(invoke)
+        } else {
+            typed.invoke_handler()(invoke)
+        }
+    }
+}
+
+/// Declares the byte commands once, as [`BYTE_COMMANDS`] and
+/// [`byte_handler`], so the name list that routes an invoke can never
+/// disagree with the handler that runs it.
+macro_rules! byte_commands {
+    ($($module:ident :: $command:ident),* $(,)?) => {
+        /// The commands that send or receive raw bytes (`tauri::ipc::Response`
+        /// or a `tauri::ipc::Request` body). Specta cannot describe them, so
+        /// they skip the generated bindings and their callers type them by
+        /// hand.
+        const BYTE_COMMANDS: &[&str] = &[$(stringify!($command)),*];
+
+        /// The handler for [`BYTE_COMMANDS`].
+        fn byte_handler() -> impl Fn(Invoke<Rt>) -> bool + Send + Sync + 'static {
+            tauri::generate_handler![$($module::$command),*]
+        }
+    };
+}
+
+byte_commands![
+    quick::quick_thumbnail,
+    pin::pin_image,
+    pin::editor_pin,
+    overlay::overlay_image,
+    editor::editor_image,
+    editor::editor_backdrop_image,
+    editor::editor_asset_image,
+    editor::editor_copy,
+    editor::editor_export,
+    library::library_thumbnail,
+    library::library_image,
+    library::library_save_thumbnail,
+    recording_editor::recording_export,
+    steps::guide_image,
+];
+
+/// Every command except the byte ones, as tauri-specta sees them. The app
+/// registers its handler, and the `export_bindings` test writes
+/// `src/app/bindings.ts` from it, so the page's types follow the Rust
+/// signatures.
+fn specta_builder() -> tauri_specta::Builder<Rt> {
+    tauri_specta::Builder::<Rt>::new()
+        .commands(tauri_specta::collect_commands![
+            commands::get_settings,
+            commands::set_save_folder,
+            commands::set_hotkeys,
+            commands::set_preferences,
+            commands::get_editor_preferences,
+            commands::set_editor_preferences,
+            commands::set_auto_backdrop,
+            commands::set_show_pointer,
+            commands::set_backdrop_presets,
+            commands::set_favorite_colors,
+            commands::dismiss_ai_notice,
+            commands::open_target,
+            commands::get_autostart,
+            commands::set_autostart,
+            commands::set_show_in_dock,
+            commands::set_appearance,
+            commands::step_text_size,
+            commands::set_recording,
+            commands::set_retention,
+            commands::set_agent_access,
+            commands::set_update_channel,
+            agent::agent_skill_status,
+            agent::install_agent_skill,
+            hub::hub_capture,
+            hotkeys::effective_hotkeys,
+            hub::hub_monitors,
+            hub::hub_open,
+            hub::hub_check_updates,
+            hub::hub_quit,
+            hub::hub_hide,
+            hub::hub_activity,
+            quick::quick_info,
+            quick::quick_action,
+            quick::quick_drag,
+            pin::pin_info,
+            pin::pin_zoom,
+            pin::pin_lock,
+            pin::pin_nudge,
+            pin::pin_copy,
+            pin::pin_edit,
+            pin::pin_close,
+            record::record_stop,
+            scroll::scroll_done,
+            scroll::scroll_cancel,
+            record::record_pause,
+            record::record_mute,
+            record::record_webcam,
+            record::record_discard,
+            record::record_restart,
+            record::record_bar_status,
+            record::record_bar_level,
+            record_bar::record_bar_fit,
+            record_bar::record_bar_reset,
+            record_bar::record_bar_remember,
+            steps_bar::steps_bar_stop,
+            timer_bar::timer_bar_cancel,
+            webcam::known_cameras,
+            webcam::remember_cameras,
+            ffmpeg::ffmpeg_status,
+            ffmpeg::ffmpeg_retry,
+            audio::recording_microphones,
+            audio::recording_system_audio,
+            hotkeys::pause_hotkeys,
+            hotkeys::resume_hotkeys,
+            overlay::overlay_info,
+            overlay::overlay_ready,
+            overlay::overlay_finish,
+            overlay::overlay_choose,
+            overlay::overlay_cancel,
+            editor::editor_info,
+            editor::editor_add_image_file,
+            editor::editor_add_clipboard_image,
+            editor::save_backdrop_preset_image,
+            editor::editor_save_annotations,
+            editor::editor_words,
+            editor::editor_faces,
+            recording_editor::recording_info,
+            recording_editor::recording_save_edits,
+            recording_editor::recording_source,
+            library::library_list,
+            library::library_set_tags,
+            search::library_sidebar,
+            library::library_remove_ai_tag,
+            library::library_set_notes,
+            library::library_set_keep,
+            library::library_delete,
+            library::library_trash,
+            library::library_rename,
+            library::library_duplicate,
+            library::library_open_with,
+            library::library_open_with_supported,
+            library::library_open,
+            library::library_copy,
+            library::library_annotations,
+            library::library_copy_file,
+            library::library_export,
+            library::library_text,
+            library::library_words,
+            library::library_shot_id,
+            library::library_copy_text,
+            library::library_pin,
+            library::library_reveal,
+            library::library_open_folder,
+            library::library_open_external,
+            library::library_copy_path,
+            library::library_play,
+            storage::library_storage,
+            storage::library_clean_up,
+            storage::library_stop_clean_up,
+            search::library_search,
+            search::library_filter_options,
+            ocr::ocr_status,
+            ai::ai_status,
+            ai::ai_redescribe,
+            ai::ai_clear,
+            ai::ai_redescribe_all,
+            ai::ai_test_connection,
+            ai::ai_clis,
+            update::update_status,
+            update::update_check,
+            update::update_install,
+            update::update_later,
+            permissions::permission_status,
+            permissions::permission_request_all,
+            permissions::permission_prime_capture,
+            permissions::permission_finish,
+            permissions::permission_restart,
+            permissions::permission_open_settings,
+            steps::guide_info,
+            steps::guide_save,
+            steps::guide_open_editor,
+            steps::guide_export,
+            steps::guide_copy,
+        ])
+        // serde sends u64 and i64 as JSON numbers, which is what the page
+        // reads; library ids and sizes stay well below 2^53.
+        .dangerously_cast_bigints_to_number()
+        // Adds `MockCommandHandlers`, the argument and result types of each
+        // command, which src/test/mockCommands.ts types the tests' fake
+        // backend with. The app never calls the generated mocks, so the
+        // bundler drops them.
+        .mocks()
 }
 
 fn startup_target(
@@ -459,7 +509,75 @@ fn open_settings(app: &App<Rt>) -> tauri::Result<SettingsStore> {
 
 #[cfg(test)]
 mod tests {
-    use super::{cli::OpenTarget, startup_target};
+    use std::path::{Path, PathBuf};
+
+    use super::{BYTE_COMMANDS, cli::OpenTarget, specta_builder, startup_target};
+
+    /// The checked-in TypeScript bindings the page imports.
+    fn bindings_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/app/bindings.ts")
+    }
+
+    /// Writes the bindings from the Rust signatures. `npm run bindings` runs
+    /// it, so it is ignored by a plain `cargo test`.
+    fn write_bindings(path: &Path) {
+        specta_builder()
+            .export(
+                specta_typescript::Typescript::default().header(
+                    "// Generated from the Rust commands by `npm run bindings`. Do not edit.",
+                ),
+                path,
+            )
+            .expect("export the TypeScript bindings");
+        // The exporter leaves spaces at the ends of some lines, which `git
+        // diff --check` refuses.
+        let text = std::fs::read_to_string(path).expect("read the bindings");
+        let mut clean = text
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        clean.push('\n');
+        std::fs::write(path, clean).expect("write the bindings");
+    }
+
+    #[test]
+    #[ignore = "writes src/app/bindings.ts; run it with `npm run bindings`"]
+    fn export_bindings() {
+        write_bindings(&bindings_path());
+    }
+
+    #[test]
+    fn bindings_are_up_to_date() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let fresh = dir.path().join("bindings.ts");
+        write_bindings(&fresh);
+        // A Windows checkout may turn the file's line endings into CRLF.
+        let read = |path: &Path| {
+            std::fs::read_to_string(path)
+                .unwrap_or_default()
+                .replace("\r\n", "\n")
+        };
+        assert!(
+            read(&fresh) == read(&bindings_path()),
+            "src/app/bindings.ts is out of date with the Rust commands: \
+             run `npm run bindings` in src/grab-it and commit the result"
+        );
+    }
+
+    #[test]
+    fn byte_commands_are_not_in_the_bindings() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let path = dir.path().join("bindings.ts");
+        write_bindings(&path);
+        let bindings = std::fs::read_to_string(path).expect("read the bindings");
+        for command in BYTE_COMMANDS {
+            assert!(
+                !bindings.contains(&format!("\"{command}\"")),
+                "{command} sends bytes, so it belongs in the plain handler only"
+            );
+        }
+    }
 
     #[test]
     fn only_a_tray_start_can_restore_the_library() {

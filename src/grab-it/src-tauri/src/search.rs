@@ -20,7 +20,7 @@ const HIT_END: char = '\u{E001}';
 const SNIPPET_TOKENS: u32 = 12;
 
 /// What to look for. Mirrors `SearchQuery` in src/library/api.ts.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SearchQuery {
     /// Words to find; each matches as a prefix, and all must match.
@@ -41,7 +41,7 @@ pub struct SearchQuery {
 
 /// The `shots_fts` columns, in index order. Mirrors `MatchField` in
 /// src/library/api.ts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum MatchField {
     /// Text OCR found in the image.
@@ -66,7 +66,7 @@ const FIELDS: [MatchField; 7] = [
 ];
 
 /// A piece of a snippet; `hit` pieces matched the search.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub struct SnippetPart {
     pub text: String,
     pub hit: bool,
@@ -74,7 +74,7 @@ pub struct SnippetPart {
 
 /// A shot that matched, with where and how. Mirrors `SearchHit` in
 /// src/library/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
     pub shot: Shot,
@@ -85,7 +85,7 @@ pub struct SearchHit {
 }
 
 /// One page of results. Mirrors `SearchPage` in src/library/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchPage {
     pub hits: Vec<SearchHit>,
@@ -96,7 +96,7 @@ pub struct SearchPage {
 
 /// The values the filter bar offers. Mirrors `FilterOptions` in
 /// src/library/api.ts.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct FilterOptions {
     pub apps: Vec<String>,
@@ -107,7 +107,7 @@ pub struct FilterOptions {
 }
 
 /// A name and how many shots have it, for the sidebar.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub struct NameCount {
     pub name: String,
     pub count: u32,
@@ -115,7 +115,7 @@ pub struct NameCount {
 
 /// What the Grab-it window's sidebar lists. Mirrors `SidebarSummary` in
 /// src/library/api.ts.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, specta::Type)]
 pub struct SidebarSummary {
     pub total: u32,
     /// How many of them are recordings.
@@ -353,6 +353,7 @@ impl Library {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn library_search(
     query: SearchQuery,
     offset: u32,
@@ -366,11 +367,13 @@ pub fn library_search(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn library_sidebar(state: State<'_, LibraryState>) -> Result<SidebarSummary, String> {
     state.lock().sidebar().map_err(|err| err.to_string())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn library_filter_options(state: State<'_, LibraryState>) -> Result<FilterOptions, String> {
     state.lock().filter_options().map_err(|err| err.to_string())
 }

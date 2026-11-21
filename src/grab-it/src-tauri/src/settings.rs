@@ -20,7 +20,7 @@ pub const SETTINGS_FILE: &str = "settings.json";
 pub const DEFAULT_FOLDER_NAME: &str = "Grab-it";
 
 /// What Grab-it shows once a capture is saved.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum AfterCapture {
     /// A small floating preview in the corner with Copy, Annotate, Pin…
@@ -39,7 +39,7 @@ pub const DEFAULT_AI_ENDPOINT: &str = "http://localhost:11434/v1";
 pub const DEFAULT_AI_MODEL: &str = "qwen3-vl:4b";
 
 /// Who describes captures. Mirrors `AiProvider` in src/settings/api.ts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum AiProvider {
     /// The user's own `claude` CLI, run headlessly (see `ai_cli.rs`).
@@ -73,7 +73,7 @@ where
 
 /// Where the endpoint API key is kept. Mirrors `ApiKeyStorage` in
 /// src/settings/api.ts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum ApiKeyStorage {
     /// The OS credential store (see `keychain.rs`); settings.json has no key.
@@ -88,7 +88,7 @@ pub enum ApiKeyStorage {
 /// Grab-it turns it on once because Claude Code or Codex is installed (see
 /// [`SettingsStore::enable_cli_provider`]). Mirrors `AiPreferences` in
 /// src/settings/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AiSettings {
     pub enabled: bool,
@@ -96,6 +96,9 @@ pub struct AiSettings {
     /// picked one; it then works as [`AiProvider::Endpoint`], which is what
     /// settings from before providers existed used.
     #[serde(deserialize_with = "lenient_provider")]
+    // The page sends and reads the provider itself; only reading an old
+    // settings file is lenient.
+    #[specta(type = Option<AiProvider>)]
     pub provider: Option<AiProvider>,
     /// An OpenAI-compatible base URL; `/chat/completions` is appended.
     pub endpoint: String,
@@ -248,7 +251,7 @@ impl AiSettings {
 }
 
 /// The choices on the Settings window's Capture and AI sections.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Preferences {
     pub after_capture: AfterCapture,
@@ -271,7 +274,7 @@ impl Default for Preferences {
 
 /// What `set_preferences` takes: [`Preferences`], where a missing `ai`
 /// keeps the current AI settings (frontends from before it existed).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PreferencesUpdate {
     pub after_capture: AfterCapture,
@@ -303,7 +306,7 @@ impl From<Preferences> for PreferencesUpdate {
 /// The annotation editor's remembered choices, saved as they change and
 /// restored when it opens. Every key is optional: the editor uses its own
 /// default for anything missing, and checks each value it reads.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorPreferences {
     /// The drawing colour, as `#rrggbb`.
@@ -390,7 +393,7 @@ fn keep_favorite_colors<'a>(colors: impl IntoIterator<Item = &'a str>) -> Vec<St
 
 /// A backdrop saved under a name. Mirrors `BackdropPreset` in
 /// src/settings/api.ts. Names need not be unique; `id` tells presets apart.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct BackdropPreset {
     pub id: String,
@@ -500,7 +503,7 @@ pub const DEFAULT_TEXT_SCALE: u32 = 110;
 pub const TEXT_SCALE_STEP: u32 = 5;
 
 /// A text size keyboard shortcut: ⌘+, ⌘− or ⌘0.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum TextSizeStep {
     Bigger,
@@ -515,7 +518,7 @@ fn clamp_text_scale(percent: u32) -> u32 {
 }
 
 /// Which corner of the screen the popup after a capture sits in.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum PopupCorner {
     BottomLeft,
@@ -529,7 +532,7 @@ pub enum PopupCorner {
 pub const MAX_POPUP_SECONDS: u32 = 60;
 
 /// How Grab-it looks. Mirrors `Appearance` in src/settings/api.ts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Appearance {
     /// How big the Grab-it window draws everything, in percent.
@@ -605,7 +608,7 @@ impl Appearance {
 }
 
 /// What recordings are saved as.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum RecordingFormat {
     /// An animated GIF, silent and at most a minute long.
@@ -626,7 +629,7 @@ impl RecordingFormat {
 }
 
 /// How good an MP4 looks, and so how big it is.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum RecordingQuality {
     Low,
@@ -654,7 +657,7 @@ pub const RECORDING_FPS: [u32; 2] = [30, 60];
 pub const RECORDING_COUNTDOWNS: [u32; 4] = [0, 3, 5, 10];
 
 /// What sound an MP4 records.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum RecordingAudio {
     /// Silent.
@@ -684,7 +687,7 @@ impl RecordingAudio {
 
 /// The webcam bubble's outline while recording (see webcam.rs). Mirrors
 /// `WebcamShape` in src/settings/api.ts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum WebcamShape {
     /// A square with smooth, continuous corners. Saved as `rounded` before
@@ -721,7 +724,7 @@ impl WebcamShape {
 /// What the Record overlay's setup toolbar records: a dragged region, a
 /// picked window's area or a whole display. Mirrors `RecordingSource` in
 /// src/settings/api.ts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum RecordingSource {
     #[default]
@@ -732,7 +735,7 @@ pub enum RecordingSource {
 
 /// How screen recordings are made. Mirrors `RecordingSettings` in
 /// src/settings/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RecordingSettings {
     pub format: RecordingFormat,
@@ -846,7 +849,7 @@ impl RecordingSettings {
 
 /// How cleanup removes items older than their Keep setting. Mirrors
 /// `Removal` in src/settings/api.ts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum Removal {
     /// To the system Trash, where they can be restored.
@@ -858,7 +861,7 @@ pub enum Removal {
 
 /// How long each kind of item is kept, in days; `None` keeps it forever.
 /// Mirrors `Retention` in src/settings/api.ts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Retention {
     pub image: Option<u32>,
@@ -903,7 +906,7 @@ impl Retention {
 /// got to. No system API says whether Screen Recording or Input Monitoring
 /// were ever asked for, so Grab-it remembers it. Kept outside
 /// [`Preferences`], so saving any other settings carries it over.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PermissionSetup {
     /// Allow all has asked for Screen Recording and Input Monitoring.
@@ -931,7 +934,7 @@ impl PermissionSetup {
 
 /// Which releases Grab-it updates to. Mirrors `UpdateChannel` in
 /// src/settings/api.ts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum UpdateChannel {
     /// Releases the owner has promoted. Every copy starts here.
@@ -948,7 +951,7 @@ impl UpdateChannel {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     /// Where new captures are saved. Holds `originals/` and `thumbs/`.

@@ -27,7 +27,7 @@ use crate::{
     commands::{SettingsState, lock},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Hotkeys {
     /// Opens the overlay with a toolbar offering every capture mode.
@@ -221,6 +221,7 @@ fn native_label(accelerator: &str) -> String {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn effective_hotkeys(state: State<'_, HotkeyState>) -> BindingLabels {
     state
         .labels
@@ -299,11 +300,13 @@ pub fn resume(app: &AppHandle) {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn pause_hotkeys(app: AppHandle) {
     pause(&app);
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn resume_hotkeys(app: AppHandle) {
     resume(&app);
 }

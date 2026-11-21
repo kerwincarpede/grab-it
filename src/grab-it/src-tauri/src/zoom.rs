@@ -156,7 +156,7 @@ struct CursorFile {
 
 /// The pointer's smoothed path: a point a frame, as fractions of the frame,
 /// held inside it. Mirrors `CursorPath` in src/recording/zooms.ts.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
 pub struct CursorPath {
     pub fps: u32,
     pub points: Vec<[f64; 2]>,
