@@ -1367,7 +1367,9 @@ fn render(
             }
         }
         check_cancelled(cancelled)?;
-        video.finish().map_err(|err| err.to_string())?;
+        let finished = video.finish_cancellable(|| cancelled.load(Ordering::Relaxed));
+        check_cancelled(cancelled)?;
+        finished.map_err(|err| err.to_string())?;
         let sounds: Vec<ClipSound<'_>> = plan
             .clips
             .iter()
@@ -1457,17 +1459,23 @@ fn clip_sources(
     ffmpeg_path: &Path,
     recordings: &Path,
     plan: &ExportPlan,
+    cancelled: &AtomicBool,
 ) -> Result<Vec<Option<ClipSource>>, String> {
     plan.clips
         .iter()
         .map(|entry| {
+            check_cancelled(cancelled)?;
             let Some(clip) = entry.clip() else {
                 return Ok(None);
             };
             let path = source_file(recordings, &clip.source)?;
+            let probe = ffmpeg::probe_file_cancellable(ffmpeg_path, &path, || {
+                cancelled.load(Ordering::Relaxed)
+            });
+            check_cancelled(cancelled)?;
             Ok(Some(ClipSource {
                 cursor: CursorPath::load(&path),
-                has_audio: ffmpeg::probe_file(ffmpeg_path, &path).audio,
+                has_audio: probe.audio,
                 path,
             }))
         })
@@ -1504,7 +1512,7 @@ fn export(
         .unwrap_or_else(|| crate::settings::RecordingQuality::High.bits_per_pixel());
     // Clips are looked for beside the opened recording, which is in the
     // recordings folder the editor was opened from.
-    let sources = clip_sources(&ready.path, recordings_of(original)?, &plan)?;
+    let sources = clip_sources(&ready.path, recordings_of(original)?, &plan, cancelled)?;
     let output = edited_path(original);
     let duration_ms = plan.duration_ms();
     let job = ExportJob {
@@ -1738,9 +1746,20 @@ mod tests {
             &path,
             r#"#!/bin/sh
 for output do :; done
+if [ "$#" = 3 ] && [ "$2" = -i ]; then
+    : > "$output.probing"
+    exec sleep 30
+fi
 case "$output" in
     pipe:1) exec dd if=/dev/zero bs=262144 count=4 2>/dev/null ;;
-    *.exporting.mp4) exec cat > "$output" ;;
+    *.exporting.mp4)
+        if [ -f "$output.hold" ]; then
+            cat > "$output"
+            : > "$output.finishing"
+            exec sleep 30
+        fi
+        exec cat > "$output"
+        ;;
     *) : > "$output"; exec sleep 30 ;;
 esac
 "#,
@@ -1818,25 +1837,67 @@ esac
     }
 
     #[cfg(unix)]
+    fn cancel_when_created(path: &Path, cancelled: &AtomicBool) {
+        let start = std::time::Instant::now();
+        while !path.exists() {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "ffmpeg never created {}",
+                path.display()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        cancelled.store(true, Ordering::Relaxed);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_during_source_probe_stops_preflight() {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = render_fixture(dir.path());
+        fs::write(dir.path().join("clip.mp4"), []).unwrap();
+        let probing = dir.path().join("clip.mp4.probing");
+        let cancelled = AtomicBool::new(false);
+        let start = std::time::Instant::now();
+        thread::scope(|scope| {
+            scope.spawn(|| cancel_when_created(&probing, &cancelled));
+            let result = clip_sources(&ready.path, dir.path(), &plan(), &cancelled);
+            assert_eq!(result.err().as_deref(), Some("Export cancelled"));
+        });
+        assert!(start.elapsed() < Duration::from_secs(10));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_during_encoder_finish_removes_unfinished_video() {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = render_fixture(dir.path());
+        let output = dir.path().join("edited.mp4");
+        let silent = sidecar_path(&output, ".exporting.mp4");
+        fs::write(dir.path().join("edited.exporting.mp4.hold"), []).unwrap();
+        let finishing = dir.path().join("edited.exporting.mp4.finishing");
+        let cancelled = AtomicBool::new(false);
+        let start = std::time::Instant::now();
+        thread::scope(|scope| {
+            scope.spawn(|| cancel_when_created(&finishing, &cancelled));
+            let result = render(&ready, fixture_job(&output, true), &cancelled, |_| {});
+            assert_eq!(result, Err("Export cancelled".into()));
+        });
+        assert!(start.elapsed() < Duration::from_secs(20));
+        assert!(!silent.exists());
+        assert!(!output.exists());
+    }
+
+    #[cfg(unix)]
     #[test]
     fn cancellation_during_mux_reaps_ffmpeg_and_removes_both_files() {
-        use std::time::Instant;
         let dir = tempfile::tempdir().unwrap();
         let ready = render_fixture(dir.path());
         let output = dir.path().join("edited.mp4");
         let cancelled = AtomicBool::new(false);
-        let start = Instant::now();
+        let start = std::time::Instant::now();
         thread::scope(|scope| {
-            scope.spawn(|| {
-                while !output.exists() {
-                    assert!(
-                        start.elapsed() < Duration::from_secs(10),
-                        "mux never started"
-                    );
-                    thread::sleep(Duration::from_millis(10));
-                }
-                cancelled.store(true, Ordering::Relaxed);
-            });
+            scope.spawn(|| cancel_when_created(&output, &cancelled));
             let result = render(&ready, fixture_job(&output, true), &cancelled, |_| {});
             assert_eq!(result, Err("Export cancelled".into()));
         });
