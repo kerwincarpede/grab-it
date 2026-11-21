@@ -5,7 +5,8 @@ Reads the results `cargo bench` leaves under target/criterion/: a bench's
 `base/` holds the PR base's numbers (`--save-baseline base`), its `new/`
 the head's, and its `change/` the difference criterion measured
 (`--baseline-lenient base`). Benches more than 10% slower are flagged and
-raise a warning annotation. The report never fails the job.
+raise a warning annotation. The report goes to stdout and to the job
+summary, and never fails the job.
 """
 
 from __future__ import annotations
@@ -146,17 +147,18 @@ def main(argv=None):
     parser.add_argument(
         "--summary",
         default=os.environ.get("GITHUB_STEP_SUMMARY"),
-        help="file the Markdown is appended to (default: $GITHUB_STEP_SUMMARY, else stdout)",
+        help="file the Markdown is also appended to (default: $GITHUB_STEP_SUMMARY)",
     )
     args = parser.parse_args(argv)
     try:
         has_base = not args.no_base
         markdown, warnings = render(criterion_results(args.criterion, has_base), has_base)
+        # Also in the log: job summaries are hidden from signed-out
+        # viewers and from the API.
+        sys.stdout.write(markdown)
         if args.summary:
             with open(args.summary, "a", encoding="utf-8") as summary:
                 summary.write(markdown)
-        else:
-            sys.stdout.write(markdown)
         for warning in warnings:
             print(warning)
     except Exception as err:  # A broken report must not fail the job.

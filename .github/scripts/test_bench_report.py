@@ -106,6 +106,8 @@ class Report(unittest.TestCase):
             self.assertEqual(main([str(self.root), "--summary", str(summary)]), 0)
         self.assertIn("::warning title=Benchmark slower::detect/ocr", out.getvalue())
         self.assertIn("`detect/ocr`", summary.read_text())
+        # The log carries the same report as the summary.
+        self.assertIn(render(criterion_results(self.root), True)[0], out.getvalue())
 
         # A summary that cannot be written is a warning, not a failure.
         out = io.StringIO()
