@@ -676,7 +676,8 @@ fn encode_later(image: &Arc<RgbaImage>, started: Instant) -> Encoded {
 /// and the hover blur have nothing to draw until then) and under 30 ms as
 /// a BMP. Elsewhere a PNG, until the BMP has been tried in those webviews.
 fn encode_for_page(image: &RgbaImage) -> Result<Vec<u8>, String> {
-    if cfg!(target_os = "macos") {
+    // The bench's `png` switch sends a PNG on macOS too, for an A/B.
+    if cfg!(target_os = "macos") && !bench_switch("png") {
         encode_bmp(image)
     } else {
         encode_png(image)
@@ -913,7 +914,8 @@ fn create_window(
     size: PhysicalSize<u32>,
     scale: f64,
 ) -> tauri::Result<WebviewWindow> {
-    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(PAGE.into()))
+    let page = with_bench_flag(PAGE, bench_config().is_some());
+    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
         .e2e_browser_args()
         .title("Grab-it capture")
         .decorations(false)
@@ -952,8 +954,11 @@ fn create_window(
     crate::panel::make_panel(&window)?;
     #[cfg(target_os = "macos")]
     raise_above_menu_bar(&window)?;
+    // The bench's `cap60` switch keeps WebKit's 60 fps default, for an A/B.
     #[cfg(target_os = "macos")]
-    render_at_display_rate(&window)?;
+    if !bench_switch("cap60") {
+        render_at_display_rate(&window)?;
+    }
     // Placed after the level change, so the window keeps the monitor's
     // full size, menu bar area included, and the region scale (image width
     // over viewport width) holds vertically too.
@@ -1996,6 +2001,188 @@ fn window_image(frame: &Frame, window: &WindowInfo) -> Result<RgbaImage, String>
     capture::crop(&frame.image, pixels).ok_or_else(|| "the window is off screen".into())
 }
 
+// The overlay bench: with `GRAB_IT_OVERLAY_BENCH` set (even to ""), the
+// overlay's page replays a hover and a drag and reports their timings to
+// stderr. See docs/analysis/capture-overlay-performance.md. Without it,
+// every command below returns at once and nothing is logged.
+
+/// The bench's comma-separated switches, when `GRAB_IT_OVERLAY_BENCH` is
+/// set. Read once, so an overlay without it pays a single check.
+fn bench_config() -> Option<&'static str> {
+    static CONFIG: OnceLock<Option<String>> = OnceLock::new();
+    CONFIG
+        .get_or_init(|| std::env::var("GRAB_IT_OVERLAY_BENCH").ok())
+        .as_deref()
+}
+
+/// The bench is on with `name` among its switches.
+fn bench_switch(name: &str) -> bool {
+    bench_config().is_some_and(|config| has_switch(config, name))
+}
+
+/// `name` is one of the comma-separated switches in `config`.
+fn has_switch(config: &str, name: &str) -> bool {
+    config.split(',').any(|switch| switch.trim() == name)
+}
+
+/// `page` with a `bench` flag on its route when the bench is `on`, so the
+/// page knows without asking the backend.
+fn with_bench_flag(page: &str, on: bool) -> String {
+    if !on {
+        return page.to_owned();
+    }
+    let separator = if page.contains('?') { '&' } else { '?' };
+    format!("{page}{separator}bench")
+}
+
+/// The bench's switches, or nothing when `GRAB_IT_OVERLAY_BENCH` is not set.
+#[tauri::command]
+#[specta::specta]
+pub fn overlay_bench_config() -> Option<String> {
+    bench_config().map(str::to_owned)
+}
+
+/// Prints one line of the bench's report to stderr as `BENCH <line>`. On
+/// macOS a `BENCHCPU` line follows with the CPU time WindowServer, WebKit's
+/// GPU process and the app have spent so far, so each phase can be costed
+/// on its own. Async: `ps` would otherwise hold up the main thread for tens
+/// of milliseconds, right as the next phase starts.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn overlay_bench_log(line: String) {
+    if bench_config().is_none() {
+        return;
+    }
+    // One report line per call, whatever the page sent.
+    eprintln!("BENCH {}", line.replace(['\r', '\n'], " "));
+    #[cfg(target_os = "macos")]
+    if let Some(cpu) = bench_cpu() {
+        eprintln!("BENCHCPU {cpu}");
+    }
+}
+
+/// macOS: makes the overlay's window opaque, for the bench's `opaque`
+/// switch, to cost WindowServer blending a see-through window. Does nothing
+/// elsewhere or without the bench.
+#[tauri::command]
+#[specta::specta]
+pub fn overlay_bench_opaque(window: WebviewWindow) {
+    if !bench_switch("opaque") {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    make_opaque(&window);
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
+#[cfg(target_os = "macos")]
+fn make_opaque(window: &WebviewWindow) {
+    use objc2::runtime::{AnyClass, AnyObject, Bool};
+
+    let Ok(ns_window) = window.ns_window() else {
+        return;
+    };
+    let ns_window = ns_window.cast::<AnyObject>();
+    if ns_window.is_null() {
+        return;
+    }
+    let Some(colour) = AnyClass::get(c"NSColor") else {
+        return;
+    };
+    // SAFETY: `ns_window` is this window's live NSWindow. Commands that are
+    // not async run on the main thread, where AppKit may be used.
+    // `blackColor` returns a shared NSColor.
+    unsafe {
+        let black: *mut AnyObject = objc2::msg_send![colour, blackColor];
+        if black.is_null() {
+            return;
+        }
+        let _: () = objc2::msg_send![ns_window, setBackgroundColor: black];
+        let _: () = objc2::msg_send![ns_window, setOpaque: Bool::YES];
+    }
+    eprintln!("Grab-it overlay bench: window made opaque");
+}
+
+/// The CPU time spent so far, as `ws=<s> gpu=<s> app=<s>`, from `ps`.
+#[cfg(target_os = "macos")]
+fn bench_cpu() -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-axo", "pid=,etime=,time=,comm="])
+        .output()
+        .ok()?;
+    let rows = parse_ps(&String::from_utf8_lossy(&out.stdout));
+    Some(cpu_summary(&rows, std::process::id()))
+}
+
+/// One process as `ps -axo pid=,etime=,time=,comm=` lists it.
+#[cfg(any(target_os = "macos", test))]
+struct PsRow {
+    pid: u32,
+    /// Seconds since it started.
+    age: f64,
+    /// CPU seconds it has used.
+    cpu: f64,
+    command: String,
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_ps(text: &str) -> Vec<PsRow> {
+    text.lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse().ok()?;
+            let age = ps_seconds(fields.next()?);
+            let cpu = ps_seconds(fields.next()?);
+            let command = fields.collect::<Vec<_>>().join(" ");
+            Some(PsRow {
+                pid,
+                age,
+                cpu,
+                command,
+            })
+        })
+        .collect()
+}
+
+/// `ps`'s `[[dd-]hh:]mm:ss[.ff]` in seconds.
+#[cfg(any(target_os = "macos", test))]
+fn ps_seconds(text: &str) -> f64 {
+    let (days, rest) = text.split_once('-').map_or((0.0, text), |(days, rest)| {
+        (days.parse().unwrap_or(0.0), rest)
+    });
+    let clock = rest.split(':').fold(0.0, |total, part| {
+        total * 60.0 + part.parse::<f64>().unwrap_or(0.0)
+    });
+    days * 86_400.0 + clock
+}
+
+/// CPU seconds of WindowServer, of the WebKit GPU processes no older than
+/// the app `me` (so another app's webviews are left out), and of the app.
+#[cfg(any(target_os = "macos", test))]
+fn cpu_summary(rows: &[PsRow], me: u32) -> String {
+    let age = rows
+        .iter()
+        .find(|row| row.pid == me)
+        .map_or(f64::MAX, |row| row.age);
+    let ws: f64 = rows
+        .iter()
+        .filter(|row| row.command.ends_with("WindowServer"))
+        .map(|row| row.cpu)
+        .sum();
+    let gpu: f64 = rows
+        .iter()
+        .filter(|row| row.command.contains("WebKit.GPU") && row.age <= age + 1.0)
+        .map(|row| row.cpu)
+        .sum();
+    let app: f64 = rows
+        .iter()
+        .filter(|row| row.pid == me)
+        .map(|row| row.cpu)
+        .sum();
+    format!("ws={ws:.2} gpu={gpu:.2} app={app:.2}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2666,5 +2853,51 @@ mod tests {
         for scale in [0.0, -2.0, f64::NAN] {
             assert_eq!(logical_frame(frame.0, frame.1, scale), expected);
         }
+    }
+
+    #[test]
+    fn bench_switches_are_whole_names() {
+        assert!(has_switch("cap60,png", "png"));
+        assert!(has_switch(" probe , raw", "raw"));
+        assert!(!has_switch("", "png"));
+        assert!(!has_switch("nopng", "png"));
+    }
+
+    #[test]
+    fn bench_flag_joins_the_route_query() {
+        assert_eq!(
+            with_bench_flag("index.html#/overlay", false),
+            "index.html#/overlay"
+        );
+        assert_eq!(
+            with_bench_flag("index.html#/overlay", true),
+            "index.html#/overlay?bench"
+        );
+        assert_eq!(
+            with_bench_flag("index.html#/overlay?instant", true),
+            "index.html#/overlay?instant&bench"
+        );
+    }
+
+    #[test]
+    fn ps_times_are_seconds() {
+        assert_eq!(ps_seconds("0:01.50"), 1.5);
+        assert_eq!(ps_seconds("02:03"), 123.0);
+        assert_eq!(ps_seconds("1:00:00"), 3600.0);
+        assert_eq!(ps_seconds("2-00:00:01"), 172_801.0);
+    }
+
+    #[test]
+    fn cpu_counts_only_this_apps_gpu_process() {
+        let text = "\
+  100 10-00:00:00 5:00.00 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+  200      01:00 0:02.00 /Applications/grab-it
+  300      00:59 0:01.25 /System/Library/Frameworks/WebKit.framework/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU
+  400   01:00:00 0:09.00 /System/Library/Frameworks/WebKit.framework/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU
+  not a row
+";
+        let rows = parse_ps(text);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(cpu_summary(&rows, 200), "ws=300.00 gpu=1.25 app=2.00");
     }
 }
