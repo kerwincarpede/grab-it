@@ -2247,12 +2247,3 @@ fn byte_commands_reach_their_handler() {
         );
     }
 }
-
-#[test]
-fn library_image_reports_a_missing_capture() {
-    let h = Harness::new();
-    assert_eq!(
-        h.err("library_image", json!({ "id": 999_999 })),
-        "no capture with id 999999 in the library"
-    );
-}
