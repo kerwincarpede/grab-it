@@ -267,7 +267,9 @@ export const config: WebdriverIO.Config = {
       "tauri:options": {
         application,
         // Grab-it starts in the tray with no window; open the Grab-it window.
-        args: ["--open", "library"],
+        // One argument: msedgedriver passes the app Chromium-style switches
+        // and does not keep a separate value after `--open`.
+        args: ["--open=library"],
       },
     },
   ],
@@ -278,7 +280,9 @@ export const config: WebdriverIO.Config = {
   bail: 0,
   waitforTimeout: 20_000,
   connectionRetryTimeout: 120_000,
-  connectionRetryCount: 1,
+  // Windows: msedgedriver already waits a minute for the app's WebView2
+  // before it gives up, and a retry only repeats that wait.
+  connectionRetryCount: process.platform === "win32" ? 0 : 1,
   framework: "mocha",
   reporters: ["spec"],
   mochaOpts: {
