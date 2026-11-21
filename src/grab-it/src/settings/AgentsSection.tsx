@@ -80,7 +80,7 @@ function AgentsSection({ access, disabled, onAccess }: Props) {
           <span className="row-text">
             <span className="row-title">Let AI agents use Grab-it</span>
             <span className="row-hint">
-              Agents and scripts can list your displays and windows and take screenshots with the grab-it command.
+              Agents and scripts can list your displays and windows, take screenshots, record the screen and make GIFs and contact sheets from videos with the grab-it command.
               Shots go to your Library tagged agent, and a notice shows each one.
             </span>
           </span>

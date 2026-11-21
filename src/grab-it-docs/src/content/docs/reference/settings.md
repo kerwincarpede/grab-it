@@ -93,7 +93,7 @@ Most changes save as soon as you make them. Hotkeys save when you press **Save h
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| **Let AI agents use Grab-it** | Off | Lets the [grab-it commands](/grab-it/reference/command-line/#commands) list your displays and windows and take screenshots. Shots go to the Library tagged **agent**, with a notice for each. Off, every command fails with a message saying how to turn it on. |
+| **Let AI agents use Grab-it** | Off | Lets the [grab-it commands](/grab-it/reference/command-line/#commands) list your displays and windows, take screenshots, record the screen and make GIFs and contact sheets from videos. Shots go to the Library tagged **agent**, with a notice for each. Off, every command fails with a message saying how to turn it on. |
 
 **Agent skill → Install skill** writes the skill that teaches Claude Code, Codex and other agents the commands, to `~/.agents/skills/grab-it` and `~/.claude/skills/grab-it`. The row says where it's installed. See [AI agents](/grab-it/ai/agents/).
 

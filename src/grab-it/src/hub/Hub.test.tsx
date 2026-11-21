@@ -128,6 +128,19 @@ describe("Hub", () => {
     expect(sent(calls, "hub_capture")).toContainEqual({ kind: "monitor", delaySeconds: null, monitor: 1 });
   });
 
+  it("keeps recent captures outside the scrolling list when a submenu opens", async () => {
+    backend({ monitors: 2, shots: 3 });
+    render(<Hub />);
+    const latest = await screen.findByRole("button", { name: "Open Shot 3 in the editor" });
+    for (const [menu, option] of [["Timed", "Screen in 5 s"], ["Monitor", "2. Display"]]) {
+      await userEvent.click(screen.getByRole("button", { name: menu }));
+      const list = screen.getByRole("button", { name: option }).closest(".hub-scroll");
+      expect(list).toBeInTheDocument();
+      expect(list).not.toContainElement(screen.getByRole("heading", { name: "Recent" }));
+      expect(list).not.toContainElement(latest);
+    }
+  });
+
   it("leaves the monitor list out with one monitor", async () => {
     backend({ monitors: 1 });
     render(<Hub />);

@@ -99,20 +99,27 @@ body:has(.hub) {
   transform: rotate(90deg);
 }
 
-.hub-item.is-primary {
-  color: var(--on-accent);
-  font-weight: 600;
-  background: var(--accent);
+.hub-scroll:not(:has(button:not(.is-primary):is(:hover, :focus-visible))) {
+  & .hub-item.is-primary {
+    color: var(--on-accent);
+    font-weight: 600;
+    background: var(--accent);
+  }
+
+  & .is-primary > .icon:first-child,
+  & .is-primary .hub-key {
+    color: var(--on-accent);
+    opacity: 0.75;
+  }
+
+  & .is-primary:hover {
+    background: var(--accent-hover);
+  }
 }
 
-.hub-item.is-primary > .icon:first-child,
-.hub-item.is-primary .hub-key {
-  color: var(--on-accent);
-  opacity: 0.75;
-}
-
-.hub-item.is-primary:where(:hover) {
-  background: var(--accent-hover);
+/* The primary button receives focus when the hub opens. */
+.hub-scroll:has(button:not(.is-primary):is(:hover, :focus-visible)) .is-primary {
+  background: none;
 }
 
 /* A recording or step capture is running: choosing the item stops it. */
