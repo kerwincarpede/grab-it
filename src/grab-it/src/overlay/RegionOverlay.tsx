@@ -125,7 +125,7 @@ const TOOLBAR_BOTTOM = 12;
  * toolbar out as a display this much narrower would, so its options shrink
  * and then move to a second row sooner.
  */
-const RECORD_ROOM = 400;
+const RECORD_ROOM = 434;
 
 /** What confirms each kind of selection: the main button's label, and the key tip's. */
 const CONFIRM_LABELS: Record<OverlayIntent, string> = {

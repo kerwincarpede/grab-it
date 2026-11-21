@@ -24,6 +24,7 @@ mod input;
 mod keychain;
 mod library;
 mod net;
+mod noise;
 mod ocr;
 mod ocr_vision;
 mod overlay;

@@ -638,6 +638,11 @@ pub struct CursorTrack {
     /// failed. Absent in recordings made before sources were kept.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio: Option<Vec<SoundSource>>,
+    /// Whether background noise was removed from the microphone in the
+    /// MP4's sound. Its sound sidecar is never filtered. Absent when it
+    /// was not, and in recordings made before it could be.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub remove_noise: bool,
     /// The grabbed frames' size, which the video may be scaled from.
     #[serde(skip)]
     grabbed: (u32, u32),
@@ -652,6 +657,7 @@ impl CursorTrack {
             fps: spec.fps,
             positions: Vec::new(),
             audio: None,
+            remove_noise: false,
             grabbed: spec.input,
         }
     }
@@ -835,6 +841,12 @@ pub fn start_with(
     // first time; the recording waits for the answer.
     let mp4 = format == RecordingFormat::Mp4;
     let microphone = mp4 && recording.audio.microphone();
+    // Without the model the microphone is kept as it was heard.
+    let noise_model = if microphone && recording.remove_noise {
+        crate::noise::bundled_model(app)
+    } else {
+        None
+    };
     let system = mp4 && recording.audio.system();
     let mut inputs = Vec::new();
     let mut refused = Vec::new();
@@ -948,6 +960,7 @@ pub fn start_with(
                                     &recording,
                                     inputs,
                                     refused,
+                                    noise_model.as_deref(),
                                     &mut overlays,
                                 )
                             },
@@ -1105,6 +1118,8 @@ fn final_note(failed: &[(&str, String)], kept: bool, muxed: Result<(), String>) 
 /// Saves where the pointer was beside it, and muxes in the sound of
 /// `inputs`, mixed into one track when there are two. With the
 /// microphone, each source is also kept unmixed in the sound sidecar.
+/// With `noise_model`, background noise is removed from the microphone
+/// in the MP4 with that RNNoise model, though not in the sound sidecar.
 /// `refused` is the
 /// sound that was not allowed or not available, by what it is and why.
 /// Returns how long the video runs, and why it is missing sound when some
@@ -1118,6 +1133,7 @@ fn record_mp4(
     recording: &RecordingSettings,
     inputs: Vec<Input>,
     refused: Vec<(&'static str, String)>,
+    noise_model: Option<&Path>,
     overlays: &mut Overlays,
 ) -> Result<(Duration, Option<String>), String> {
     // What was refused or failed, and why.
@@ -1249,17 +1265,18 @@ fn record_mp4(
     let muxed = if kept {
         let tracks: Vec<ffmpeg::AudioTrack<'_>> = captured
             .iter()
-            .map(|(_, sound, offset)| ffmpeg::AudioTrack {
+            .map(|(source, sound, offset)| ffmpeg::AudioTrack {
                 wav: &sound.wav,
                 offset: *offset,
+                microphone: *source == SoundSource::Microphone,
             })
             .collect();
         // The video is kept, silent.
-        let muxed =
-            ffmpeg::add_audio(&ready.path, path, &tracks, pacer.duration()).map_err(|err| {
-                eprintln!("Grab-it: the recording has no sound: {err}");
-                err.to_string()
-            });
+        let (muxed, denoised) = mux_removing_noise(
+            noise_model.filter(|_| sources.contains(&SoundSource::Microphone)),
+            |model| ffmpeg::add_audio(&ready.path, path, &tracks, model, pacer.duration()),
+        );
+        track.remove_noise = denoised;
         // Written from the same WAVs before they are dropped. The video
         // is fine without it: its sound is then only the mixed track.
         if muxed.is_ok()
@@ -1280,6 +1297,28 @@ fn record_mp4(
         eprintln!("Grab-it: no pointer sidecar: {err}");
     }
     Ok((pacer.duration(), note))
+}
+
+/// Muxes a recording's sound with `mux`, removing background noise with
+/// `noise_model` when there is one. Noise removal is optional: when the
+/// filtered mux fails (an ffmpeg without `arnndn`, say, or one that
+/// rejects the model), the sound is muxed again unfiltered rather than
+/// lost. Returns how the mux went, and whether noise was removed.
+fn mux_removing_noise<E: std::fmt::Display>(
+    noise_model: Option<&Path>,
+    mut mux: impl FnMut(Option<&Path>) -> Result<(), E>,
+) -> (Result<(), String>, bool) {
+    if let Some(model) = noise_model {
+        match mux(Some(model)) {
+            Ok(()) => return (Ok(()), true),
+            Err(err) => eprintln!("Grab-it: recording without noise removal: {err}"),
+        }
+    }
+    let muxed = mux(None).map_err(|err| {
+        eprintln!("Grab-it: the recording has no sound: {err}");
+        err.to_string()
+    });
+    (muxed, false)
 }
 
 /// Grabs frames into the GIF at `path` until `stop` is set or the time is
@@ -1707,6 +1746,10 @@ mod tests {
         // A recording whose sound failed holds none.
         track.audio = Some(Vec::new());
         assert_eq!(json(&track)["audio"], serde_json::json!([]));
+        // Noise removal is saved only once it ran.
+        assert!(json(&track).get("removeNoise").is_none());
+        track.remove_noise = true;
+        assert_eq!(json(&track)["removeNoise"], true);
         // The microphone sorts first, as the sound sidecar's streams do.
         let mut sources = [SoundSource::System, SoundSource::Microphone];
         sources.sort();
@@ -1715,6 +1758,40 @@ mod tests {
             serde_json::from_str::<Vec<SoundSource>>(r#"["system"]"#).unwrap(),
             [SoundSource::System]
         );
+    }
+
+    #[test]
+    fn noise_removal_falls_back_to_unfiltered_sound() {
+        let model = Path::new("/res/noise-models/bd.rnnn");
+        // Asked for and run.
+        let mut asked = Vec::new();
+        let (muxed, denoised) = mux_removing_noise(Some(model), |with: Option<&Path>| {
+            asked.push(with.map(Path::to_path_buf));
+            Ok::<(), String>(())
+        });
+        assert_eq!((muxed, denoised), (Ok(()), true));
+        assert_eq!(asked, [Some(model.to_path_buf())]);
+
+        // An ffmpeg without `arnndn`: muxed again unfiltered, not silent.
+        let mut asked = Vec::new();
+        let (muxed, denoised) = mux_removing_noise(Some(model), |with: Option<&Path>| {
+            asked.push(with.map(Path::to_path_buf));
+            match with {
+                Some(_) => Err("No such filter: 'arnndn'".to_owned()),
+                None => Ok(()),
+            }
+        });
+        assert_eq!((muxed, denoised), (Ok(()), false));
+        assert_eq!(asked, [Some(model.to_path_buf()), None]);
+
+        // Not asked for: one unfiltered mux, whose failure is reported.
+        let mut asked = Vec::new();
+        let (muxed, denoised) = mux_removing_noise(None, |with: Option<&Path>| {
+            asked.push(with.map(Path::to_path_buf));
+            Err("disk full".to_owned())
+        });
+        assert_eq!((muxed, denoised), (Err("disk full".to_owned()), false));
+        assert_eq!(asked, [None]);
     }
 
     #[test]

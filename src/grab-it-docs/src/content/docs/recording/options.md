@@ -1,6 +1,6 @@
 ---
 title: Recording options
-description: Format, microphone, system sound, webcam, clicks, keys and the countdown, on the setup toolbar and in Settings.
+description: Format, microphone, system sound, background noise removal, webcam, clicks, keys and the countdown, on the setup toolbar and in Settings.
 sidebar:
   order: 2
 ---
@@ -38,6 +38,14 @@ A tick marks the current choice in the **Microphone** menu. A GIF is silent, so 
 ## System sound
 
 The speaker icon records what your computer plays, such as a video's sound or a notification. With the microphone on too, both are mixed into the MP4's one sound track, so it plays the same anywhere.
+
+## Remove background noise
+
+The sound wave icon beside the speaker cleans fan hum, keyboard clatter and room noise from your microphone, so your voice comes through clearly in a noisy room. It's off by default. Only the microphone is cleaned: system sound is left as it is.
+
+The noise is removed on your computer when the recording is saved, with the [RNNoise](https://github.com/GregorR/rnnoise-models) model that comes with Grab-it, and nothing is sent anywhere. The sound kept apart beside the recording (below) stays as it was heard.
+
+It needs a microphone, so it's turned off with **No microphone** and for a GIF. You can also turn it on in **Settings → Recording → Remove background noise**.
 
 ## Sound kept apart
 
@@ -83,5 +91,6 @@ The countdown button steps through **Off**, **3 s**, **5 s** and **10 s**. In Ca
 
 - **Show cursor**: on by default. Turn it off to leave the pointer out of the recording.
 - **Frame rate** and **Audio**: the same choices as the setup toolbar's format and sound.
+- **Remove background noise**: the same as the toolbar's sound wave icon.
 
 See [Settings](/grab-it/reference/settings/) for the rest.

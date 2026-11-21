@@ -62,6 +62,7 @@ Most changes save as soon as you make them. Hotkeys save when you press **Save h
 | **Video encoder** (MP4) | | Whether ffmpeg is ready, and which encoder it uses. See below. |
 | **Audio** | None | None, Microphone, System sound, or Microphone and system sound. GIFs are silent. System sound is offered on Windows, Linux and macOS 13 or later. |
 | **Microphone** | System default | Which microphone, when Audio records one. System default follows the input chosen in your sound settings. |
+| **Remove background noise** | Off | Cleans fan hum, keyboard clatter and room noise from the microphone when the recording is saved. System sound is left as it is. Needs a microphone, and GIFs are silent. |
 | **Show cursor** | On | Draws the pointer into the recording. |
 | **Show clicks** | Off | Draws a ring where you click, fading in half a second. |
 | **Show keystrokes** | Off | Shows the keys you press at the bottom of the recording. |

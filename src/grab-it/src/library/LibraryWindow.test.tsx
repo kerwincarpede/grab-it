@@ -99,6 +99,7 @@ function settings(backend: Backend): Settings_Serialize {
       showKeystrokes: false,
       audio: "none",
       microphone: null,
+      removeNoise: false,
       showWebcam: false,
       camera: null,
       webcamShape: "squircle",

@@ -845,6 +845,42 @@ const MUXING_SUFFIX: &str = ".muxing.mp4";
 pub struct AudioTrack<'a> {
     pub wav: &'a Path,
     pub offset: f64,
+    /// Whether it is the microphone, the only sound noise is removed
+    /// from: never system sound.
+    pub microphone: bool,
+}
+
+/// Escapes `value` for one filter option in an ffmpeg filter graph: once
+/// for the option (`\`, `'` and `:`), then again for the graph (`\`,
+/// `'`, `[`, `]`, `,` and `;`). A Windows path holds `\` and `:`.
+fn escape_filter_value(value: &str) -> String {
+    let escape = |text: &str, special: &[char]| {
+        let mut escaped = String::with_capacity(text.len());
+        for ch in text.chars() {
+            if special.contains(&ch) {
+                escaped.push('\\');
+            }
+            escaped.push(ch);
+        }
+        escaped
+    };
+    escape(
+        &escape(value, &['\\', '\'', ':']),
+        &['\\', '\'', '[', ']', ',', ';'],
+    )
+}
+
+/// The filter that removes background noise with the RNNoise model at
+/// `model` (ffmpeg's `arnndn`), followed by a comma, or nothing for
+/// `None` or a track other than the microphone.
+fn denoise(track: &AudioTrack<'_>, model: Option<&Path>) -> String {
+    match model {
+        Some(model) if track.microphone => format!(
+            "arnndn=m={},",
+            escape_filter_value(&model.to_string_lossy())
+        ),
+        _ => String::new(),
+    }
 }
 
 /// The channels and rate each WAV is brought to before two are mixed.
@@ -884,10 +920,12 @@ fn delay(millis: i64) -> String {
 /// later is delayed with silence, and sound that started earlier has its
 /// start cut. Two or more are brought to 48 kHz stereo and mixed with
 /// `amix` at their own levels. The sound is padded or cut to `duration`,
-/// the video's length.
+/// the video's length. With `noise_model`, background noise is first
+/// removed from the microphone alone with that RNNoise model.
 pub fn mux_args(
     video: &Path,
     tracks: &[AudioTrack<'_>],
+    noise_model: Option<&Path>,
     duration: Duration,
     output: &Path,
 ) -> Vec<OsString> {
@@ -902,13 +940,18 @@ pub fn mux_args(
         for arg in ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af"] {
             push(arg);
         }
-        push(&format!("{}apad", delay(millis)));
+        push(&format!(
+            "{}{}apad",
+            denoise(&tracks[0], noise_model),
+            delay(millis)
+        ));
     } else {
         let mut graph = String::new();
-        for (index, millis) in delays.iter().enumerate() {
+        for (index, (track, millis)) in tracks.iter().zip(&delays).enumerate() {
             graph.push_str(&format!(
-                "[{}:a]{}{MIX_FORMAT}[a{index}];",
+                "[{}:a]{}{}{MIX_FORMAT}[a{index}];",
                 index + 1,
+                denoise(track, noise_model),
                 delay(*millis)
             ));
         }
@@ -952,12 +995,13 @@ pub fn add_audio(
     ffmpeg: &Path,
     video: &Path,
     tracks: &[AudioTrack<'_>],
+    noise_model: Option<&Path>,
     duration: Duration,
 ) -> FfmpegResult<()> {
     let output = crate::capture::sidecar_path(video, MUXING_SUFFIX);
     let result = run(
         ffmpeg,
-        mux_args(video, tracks, duration, &output),
+        mux_args(video, tracks, noise_model, duration, &output),
         FINISH_TIMEOUT,
     )
     .and_then(|()| fs::rename(&output, video).map_err(FfmpegError::from));
@@ -1852,7 +1896,9 @@ At least one output file must be specified";
                 &[AudioTrack {
                     wav: Path::new("/tmp/mic.wav"),
                     offset,
+                    microphone: true,
                 }],
+                None,
                 Duration::from_millis(12_345),
                 Path::new("/rec/clip.muxing.mp4"),
             )
@@ -1893,12 +1939,15 @@ At least one output file must be specified";
                     AudioTrack {
                         wav: Path::new("/tmp/mic.wav"),
                         offset: microphone,
+                        microphone: true,
                     },
                     AudioTrack {
                         wav: Path::new("/tmp/system.wav"),
                         offset: system,
+                        microphone: false,
                     },
                 ],
+                None,
                 Duration::from_millis(12_345),
                 Path::new("/rec/clip.muxing.mp4"),
             )
@@ -1935,6 +1984,103 @@ At least one output file must be specified";
         );
     }
 
+    /// The tracks of a recording with the microphone, and with system
+    /// sound when `system`, muxed with noise removed by `model`.
+    fn denoised(system: bool, model: &str) -> Vec<String> {
+        let mut tracks = vec![AudioTrack {
+            wav: Path::new("/tmp/mic.wav"),
+            offset: 0.12,
+            microphone: true,
+        }];
+        if system {
+            tracks.push(AudioTrack {
+                wav: Path::new("/tmp/system.wav"),
+                offset: 0.0,
+                microphone: false,
+            });
+        }
+        mux_args(
+            Path::new("/rec/clip.mp4"),
+            &tracks,
+            Some(Path::new(model)),
+            Duration::from_millis(12_345),
+            Path::new("/rec/clip.muxing.mp4"),
+        )
+        .into_iter()
+        .map(|arg| arg.into_string().unwrap())
+        .collect()
+    }
+
+    /// The argument after `flag` in `args`.
+    fn after<'a>(args: &'a [String], flag: &str) -> &'a str {
+        let at = args.iter().position(|arg| arg == flag).unwrap();
+        &args[at + 1]
+    }
+
+    #[test]
+    fn noise_is_removed_from_the_microphone_alone() {
+        let args = denoised(false, "/opt/grab-it/noise-models/bd.rnnn");
+        // Before it is delayed and padded, so the delay's silence is not
+        // run through the model.
+        assert_eq!(
+            after(&args, "-af"),
+            "arnndn=m=/opt/grab-it/noise-models/bd.rnnn,adelay=delays=120:all=1,apad"
+        );
+    }
+
+    #[test]
+    fn noise_is_removed_from_the_microphone_but_not_system_sound() {
+        let args = denoised(true, "/opt/grab-it/noise-models/bd.rnnn");
+        let graph = after(&args, "-filter_complex");
+        assert_eq!(
+            graph,
+            "[1:a]arnndn=m=/opt/grab-it/noise-models/bd.rnnn,adelay=delays=120:all=1,\
+             aformat=sample_rates=48000:channel_layouts=stereo[a0];\
+             [2:a]aformat=sample_rates=48000:channel_layouts=stereo[a1];\
+             [a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,apad[mix]"
+        );
+        assert_eq!(graph.matches("arnndn").count(), 1);
+    }
+
+    #[test]
+    fn system_sound_alone_is_never_denoised() {
+        let args = mux_args(
+            Path::new("/rec/clip.mp4"),
+            &[AudioTrack {
+                wav: Path::new("/tmp/system.wav"),
+                offset: 0.0,
+                microphone: false,
+            }],
+            Some(Path::new("/opt/bd.rnnn")),
+            Duration::from_millis(12_345),
+            Path::new("/rec/clip.muxing.mp4"),
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.to_string_lossy().contains("arnndn"))
+        );
+    }
+
+    #[test]
+    fn a_windows_model_path_is_escaped_for_the_filter_graph() {
+        let args = denoised(true, r"C:\Program Files\Grab-it\noise-models\bd.rnnn");
+        let graph = after(&args, "-filter_complex");
+        // `\` and `:` escaped for the option, then each `\` again for the
+        // graph.
+        assert!(
+            graph.starts_with(
+                r"[1:a]arnndn=m=C\\:\\\\Program Files\\\\Grab-it\\\\noise-models\\\\bd.rnnn,adelay="
+            ),
+            "{graph}"
+        );
+        // The graph's own separators in a path are escaped too.
+        assert_eq!(
+            escape_filter_value("/a,b;c[d]'e'"),
+            r"/a\,b\;c\[d\]\\\'e\\\'"
+        );
+    }
+
     #[test]
     fn the_microphone_alone_is_kept_as_one_aligned_stream() {
         let args = |offset: f64| {
@@ -1942,6 +2088,7 @@ At least one output file must be specified";
                 &[AudioTrack {
                     wav: Path::new("/tmp/mic.wav"),
                     offset,
+                    microphone: true,
                 }],
                 Duration::from_millis(12_345),
                 Path::new("/rec/clip.sound.m4a"),
@@ -1974,10 +2121,12 @@ At least one output file must be specified";
                 AudioTrack {
                     wav: Path::new("/tmp/mic.wav"),
                     offset: -0.25,
+                    microphone: true,
                 },
                 AudioTrack {
                     wav: Path::new("/tmp/system.wav"),
                     offset: 0.12,
+                    microphone: false,
                 },
             ],
             Duration::from_millis(12_345),

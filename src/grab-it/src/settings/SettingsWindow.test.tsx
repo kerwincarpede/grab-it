@@ -1179,6 +1179,32 @@ describe("SettingsWindow recording", () => {
     expect(screen.getByRole("combobox", { name: "Microphone" })).toBeDisabled();
   });
 
+  it("removes background noise from the microphone, and is off without one or for a GIF", async () => {
+    const backend = mockBackend({ recording: { ...DEFAULT_RECORDING, audio: "microphone" } });
+    const { unmount } = render(<SettingsWindow section="recording" />);
+    const noise = await screen.findByRole("switch", { name: /Remove background noise/ });
+    await waitFor(() => expect(noise).toBeEnabled());
+    expect(noise).not.toBeChecked();
+    await userEvent.click(noise);
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, audio: "microphone", removeNoise: true }));
+    expect(noise).toBeChecked();
+
+    // Without a microphone there is nothing to clean up.
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Audio" }), "none");
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, audio: "none", removeNoise: true }));
+    expect(noise).toBeDisabled();
+    expect(noise).not.toBeChecked();
+    expect(screen.getByText("Choose a microphone under Audio first.")).toBeInTheDocument();
+    unmount();
+
+    mockBackend({ recording: { ...DEFAULT_RECORDING, format: "gif", audio: "microphone", removeNoise: true } });
+    render(<SettingsWindow section="recording" />);
+    await screen.findByText("GIFs are silent. Choose MP4 video to record sound.");
+    const silent = screen.getByRole("switch", { name: /Remove background noise/ });
+    expect(silent).toBeDisabled();
+    expect(silent).not.toBeChecked();
+  });
+
   it("keeps a chosen microphone that is not connected", async () => {
     mockBackend({
       recording: { ...DEFAULT_RECORDING, audio: "microphone", microphone: "USB Headset" },

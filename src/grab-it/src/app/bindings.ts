@@ -1851,6 +1851,12 @@ export type RecordingSettings_Deserialize = {
 	 */
 	microphone?: string | null,
 	/**
+	 *  Whether background noise is removed from the microphone (never
+	 *  from system sound) when an MP4 is saved, with the bundled RNNoise
+	 *  model. The sound sidecar keeps it unfiltered.
+	 */
+	removeNoise?: boolean,
+	/**
 	 *  Whether the webcam is shown in a bubble on screen, and so recorded
 	 *  with it.
 	 */
@@ -1901,6 +1907,12 @@ export type RecordingSettings_Serialize = {
 	 *  with. None records the system's default microphone.
 	 */
 	microphone: string | null,
+	/**
+	 *  Whether background noise is removed from the microphone (never
+	 *  from system sound) when an MP4 is saved, with the bundled RNNoise
+	 *  model. The sound sidecar keeps it unfiltered.
+	 */
+	removeNoise: boolean,
 	/**
 	 *  Whether the webcam is shown in a bubble on screen, and so recorded
 	 *  with it.
