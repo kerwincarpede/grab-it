@@ -2262,6 +2262,41 @@ describe("RegionOverlay", () => {
       expect(finishes(calls)).toHaveLength(0);
     });
 
+    it("saves Remove background noise, beside System sound", async () => {
+      const calls = mockOverlay({ intent: "record" });
+      render(<RegionOverlay />);
+      await ready();
+      const setup = await screen.findByRole("group", { name: "Recording options" });
+      const toggles = within(setup)
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label"));
+      expect(toggles.indexOf("Remove background noise")).toBe(toggles.indexOf("System sound") + 1);
+
+      const noise = within(setup).getByRole("button", { name: "Remove background noise" });
+      expect(noise).toBeEnabled();
+      expect(noise).toHaveAttribute("aria-pressed", "false");
+      expect(noise).toHaveAccessibleDescription(/^Remove background noise · off\s*Cleans fan hum/);
+      fireEvent.click(noise);
+      await waitFor(() => expect(saved(calls)).toMatchObject({ audio: "microphone", removeNoise: true }));
+      await waitFor(() => expect(noise).toHaveAttribute("aria-pressed", "true"));
+      fireEvent.click(noise);
+      await waitFor(() => expect(saved(calls)).toMatchObject({ removeNoise: false }));
+    });
+
+    it.each([
+      { name: "a GIF", recording: { format: "gif", removeNoise: true }, why: /A GIF is silent\./ },
+      { name: "no microphone", recording: { audio: "none", removeNoise: true }, why: /Turn on a microphone first\./ },
+    ] as const)("disables Remove background noise for $name", async ({ recording, why }) => {
+      mockOverlay({ intent: "record" }, recording);
+      render(<RegionOverlay />);
+      await ready();
+      const setup = await screen.findByRole("group", { name: "Recording options" });
+      const noise = within(setup).getByRole("button", { name: "Remove background noise" });
+      expect(noise).toBeDisabled();
+      expect(noise).toHaveAttribute("aria-pressed", "false");
+      expect(noise).toHaveAccessibleDescription(why);
+    });
+
     describe("the Camera chip", () => {
       let media: FakeMedia | null = null;
 

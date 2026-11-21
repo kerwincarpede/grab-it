@@ -251,6 +251,14 @@ export const SpeakerIcon = ({ size }: IconProps) => (
   </Icon>
 );
 
+/** A sound wave with a sparkle: Remove background noise, which cleans up the microphone. */
+export const NoiseIcon = ({ size }: IconProps) => (
+  <Icon size={size}>
+    <path d="M3 12h1M7 9v6M11 5v14M15 9v6" />
+    <path d="M19 3l.8 1.7 1.7.8-1.7.8L19 8l-.8-1.7-1.7-.8 1.7-.8z" />
+  </Icon>
+);
+
 export const SpeakerOffIcon = ({ size }: IconProps) => (
   <Icon size={size}>
     <path d="M11 5 6 9H3v6h3l5 4z" />

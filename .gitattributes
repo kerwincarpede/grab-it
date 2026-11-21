@@ -2,3 +2,6 @@
 # src-tauri/src/agent.rs) and installs it as is, so its YAML frontmatter
 # keeps LF line endings even in a Windows checkout with core.autocrlf.
 src/grab-it/src-tauri/agent-skill/** text eol=lf
+# The noise model's SHA-256 is pinned (src-tauri/src/noise.rs), so a
+# Windows checkout with core.autocrlf must not rewrite its line endings.
+src/grab-it/src-tauri/noise-models/*.rnnn -text

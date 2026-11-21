@@ -301,6 +301,7 @@ export const DEFAULT_RECORDING: RecordingSettings = {
   showKeystrokes: false,
   audio: "none",
   microphone: null,
+  removeNoise: false,
   showWebcam: false,
   camera: null,
   webcamShape: "squircle",

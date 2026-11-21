@@ -638,6 +638,11 @@ pub struct CursorTrack {
     /// failed. Absent in recordings made before sources were kept.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio: Option<Vec<SoundSource>>,
+    /// Whether background noise was removed from the microphone in the
+    /// MP4's sound. Its sound sidecar is never filtered. Absent when it
+    /// was not, and in recordings made before it could be.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub remove_noise: bool,
     /// The grabbed frames' size, which the video may be scaled from.
     #[serde(skip)]
     grabbed: (u32, u32),
@@ -652,6 +657,7 @@ impl CursorTrack {
             fps: spec.fps,
             positions: Vec::new(),
             audio: None,
+            remove_noise: false,
             grabbed: spec.input,
         }
     }
@@ -835,6 +841,12 @@ pub fn start_with(
     // first time; the recording waits for the answer.
     let mp4 = format == RecordingFormat::Mp4;
     let microphone = mp4 && recording.audio.microphone();
+    // Without the model the microphone is kept as it was heard.
+    let noise_model = if microphone && recording.remove_noise {
+        crate::noise::bundled_model(app)
+    } else {
+        None
+    };
     let system = mp4 && recording.audio.system();
     let mut inputs = Vec::new();
     let mut refused = Vec::new();
@@ -948,6 +960,7 @@ pub fn start_with(
                                     &recording,
                                     inputs,
                                     refused,
+                                    noise_model.as_deref(),
                                     &mut overlays,
                                 )
                             },
@@ -1105,6 +1118,8 @@ fn final_note(failed: &[(&str, String)], kept: bool, muxed: Result<(), String>) 
 /// Saves where the pointer was beside it, and muxes in the sound of
 /// `inputs`, mixed into one track when there are two. With the
 /// microphone, each source is also kept unmixed in the sound sidecar.
+/// With `noise_model`, background noise is removed from the microphone
+/// in the MP4 with that RNNoise model, though not in the sound sidecar.
 /// `refused` is the
 /// sound that was not allowed or not available, by what it is and why.
 /// Returns how long the video runs, and why it is missing sound when some
@@ -1118,6 +1133,7 @@ fn record_mp4(
     recording: &RecordingSettings,
     inputs: Vec<Input>,
     refused: Vec<(&'static str, String)>,
+    noise_model: Option<&Path>,
     overlays: &mut Overlays,
 ) -> Result<(Duration, Option<String>), String> {
     // What was refused or failed, and why.
@@ -1249,14 +1265,15 @@ fn record_mp4(
     let muxed = if kept {
         let tracks: Vec<ffmpeg::AudioTrack<'_>> = captured
             .iter()
-            .map(|(_, sound, offset)| ffmpeg::AudioTrack {
+            .map(|(source, sound, offset)| ffmpeg::AudioTrack {
                 wav: &sound.wav,
                 offset: *offset,
+                microphone: *source == SoundSource::Microphone,
             })
             .collect();
         // The video is kept, silent.
-        let muxed =
-            ffmpeg::add_audio(&ready.path, path, &tracks, pacer.duration()).map_err(|err| {
+        let muxed = ffmpeg::add_audio(&ready.path, path, &tracks, noise_model, pacer.duration())
+            .map_err(|err| {
                 eprintln!("Grab-it: the recording has no sound: {err}");
                 err.to_string()
             });
@@ -1273,6 +1290,8 @@ fn record_mp4(
     } else {
         Ok(())
     };
+    track.remove_noise =
+        muxed.is_ok() && noise_model.is_some() && sources.contains(&SoundSource::Microphone);
     track.audio = Some(if muxed.is_ok() { sources } else { Vec::new() });
     let note = final_note(&failed, kept, muxed);
     // The video is fine without it.
@@ -1707,6 +1726,10 @@ mod tests {
         // A recording whose sound failed holds none.
         track.audio = Some(Vec::new());
         assert_eq!(json(&track)["audio"], serde_json::json!([]));
+        // Noise removal is saved only once it ran.
+        assert!(json(&track).get("removeNoise").is_none());
+        track.remove_noise = true;
+        assert_eq!(json(&track)["removeNoise"], true);
         // The microphone sorts first, as the sound sidecar's streams do.
         let mut sources = [SoundSource::System, SoundSource::Microphone];
         sources.sort();

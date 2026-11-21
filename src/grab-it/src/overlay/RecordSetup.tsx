@@ -10,6 +10,7 @@ import {
   KeyboardIcon,
   MicIcon,
   MicOffIcon,
+  NoiseIcon,
   RestartIcon,
   SpeakerIcon,
   TimerIcon,
@@ -171,6 +172,9 @@ export function ChipMenu({ label, icon, title, disabled, up, checks = false, tip
   );
 }
 
+/** What Remove background noise does, on the toolbar. */
+const NOISE_USE = "Cleans fan hum, keyboard clatter and room noise from your microphone.";
+
 interface IconToggleProps {
   label: string;
   icon: ReactNode;
@@ -212,9 +216,10 @@ interface RecordOptionsFieldsProps {
 
 /**
  * Settings → Recording's most used options, each with a tooltip: the
- * format, the microphone, the webcam, and the system sound, clicks and
- * keys as icons. In the Record overlay's setup toolbar and in the middle
- * of Capture & record's toolbar while Record is on.
+ * format, the microphone, the webcam, and the system sound, noise
+ * removal, clicks and keys as icons. In the Record overlay's setup
+ * toolbar and in the middle of Capture & record's toolbar while Record
+ * is on.
  */
 export function RecordOptionsFields({ options, up, iconsOnly }: RecordOptionsFieldsProps) {
   const { recording, microphones, cameras, refreshingCameras, refreshCameras, system, error, save } = options;
@@ -322,6 +327,14 @@ export function RecordOptionsFields({ options, up, iconsOnly }: RecordOptionsFie
           onToggle={() => save(withSystemSound(recording, !recordsSystemSound(recording.audio)))}
         />
       )}
+      <IconToggle
+        label="Remove background noise"
+        icon={<NoiseIcon size={16} />}
+        on={!gif && micOn && recording.removeNoise}
+        disabled={gif || !micOn}
+        use={gif ? silent : micOn ? NOISE_USE : "Turn on a microphone first."}
+        onToggle={() => save({ ...recording, removeNoise: !recording.removeNoise })}
+      />
       <IconToggle
         label="Clicks"
         icon={<ClickIcon size={16} />}

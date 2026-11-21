@@ -755,6 +755,10 @@ pub struct RecordingSettings {
     /// The microphone recorded, by the id `audio::microphones` lists it
     /// with. None records the system's default microphone.
     pub microphone: Option<String>,
+    /// Whether background noise is removed from the microphone (never
+    /// from system sound) when an MP4 is saved, with the bundled RNNoise
+    /// model. The sound sidecar keeps it unfiltered.
+    pub remove_noise: bool,
     /// Whether the webcam is shown in a bubble on screen, and so recorded
     /// with it.
     pub show_webcam: bool,
@@ -783,6 +787,7 @@ impl Default for RecordingSettings {
             show_keystrokes: false,
             audio: RecordingAudio::default(),
             microphone: None,
+            remove_noise: false,
             show_webcam: false,
             camera: None,
             webcam_shape: WebcamShape::default(),
@@ -824,6 +829,9 @@ impl RecordingSettings {
             microphone: field("microphone")
                 .and_then(|v| v.as_str().map(str::to_owned))
                 .filter(|name| !name.is_empty()),
+            remove_noise: field("removeNoise")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(defaults.remove_noise),
             show_webcam: field("showWebcam")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(defaults.show_webcam),
@@ -1821,6 +1829,7 @@ mod tests {
                 show_keystrokes: true,
                 audio: RecordingAudio::Microphone,
                 microphone: Some("USB Microphone".into()),
+                remove_noise: true,
                 show_webcam: true,
                 camera: Some("3f9a1c".into()),
                 webcam_shape: WebcamShape::Arch,
@@ -2034,6 +2043,7 @@ mod tests {
                 "showKeystrokes": false,
                 "audio": "none",
                 "microphone": null,
+                "removeNoise": false,
                 "showWebcam": false,
                 "camera": null,
                 "webcamShape": "squircle",
@@ -2156,6 +2166,7 @@ mod tests {
                 "showKeystrokes": false,
                 "audio": "none",
                 "microphone": null,
+                "removeNoise": false,
                 "showWebcam": false,
                 "camera": null,
                 "webcamShape": "squircle",

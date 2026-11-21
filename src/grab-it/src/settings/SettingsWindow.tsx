@@ -811,6 +811,26 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
             )}
             <label className="row">
               <span className="row-text">
+                <span className="row-title">Remove background noise</span>
+                <span className="row-hint">
+                  {silent
+                    ? "GIFs are silent."
+                    : recordsMicrophone(recording.audio)
+                      ? "Cleans fan hum, keyboard clatter and room noise from your microphone. System sound is left as it is."
+                      : "Choose a microphone under Audio first."}
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                className="switch"
+                checked={!silent && recordsMicrophone(recording.audio) && recording.removeNoise}
+                disabled={busy || settings === null || recordingOff || silent || !recordsMicrophone(recording.audio)}
+                onChange={(event) => void changeRecording({ removeNoise: event.target.checked })}
+              />
+            </label>
+            <label className="row">
+              <span className="row-text">
                 <span className="row-title">Show cursor</span>
                 <span className="row-hint">Draws the pointer into the recording.</span>
               </span>
