@@ -40,6 +40,7 @@ use tauri::{
 };
 
 use crate::rt::{AppHandle, WebviewWindow};
+use crate::windows::E2eBrowserArgs;
 use crate::{
     actions,
     capture::{self, CaptureMode, CapturedPointer, CssRect, Foreground, Rect},
@@ -913,6 +914,7 @@ fn create_window(
     scale: f64,
 ) -> tauri::Result<WebviewWindow> {
     let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(PAGE.into()))
+        .e2e_browser_args()
         .title("Grab-it capture")
         .decorations(false)
         .resizable(false)

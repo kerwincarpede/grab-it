@@ -24,6 +24,7 @@ use tauri::{
 };
 
 use crate::rt::{AppHandle, WebviewWindow};
+use crate::windows::E2eBrowserArgs;
 use crate::{quick, tray, windows};
 
 /// Pin windows are labelled `pin-<n>`.
@@ -170,6 +171,7 @@ pub fn open(app: &AppHandle, path: &Path, temporary: bool) -> Result<(), String>
         },
     );
     let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html#/pin".into()))
+        .e2e_browser_args()
         .title("Grab-it pin")
         .inner_size(width, height)
         .decorations(false)
