@@ -24,7 +24,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-`npm run test:coverage` fails below 90% of lines or 83% of branches. CI runs the Rust tests under `cargo llvm-cov` instead of `cargo test`, which needs the `llvm-tools-preview` rustup component.
+`npm run test:coverage` fails below 90% of lines or 83% of branches. CI runs the Rust tests under `cargo llvm-cov` instead of `cargo test`, and fails below 68% of lines, which needs the `llvm-tools-preview` rustup component.
 
 ## Read before you start
 
