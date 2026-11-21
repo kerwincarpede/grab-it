@@ -12,9 +12,10 @@
 //! Vision scales a very large image down until ordinary UI text is too
 //! small to read (a capture across two displays gave 2 lines where one
 //! display gave 97), so images over [`MAX_TILE`] pixels either way are read
-//! as overlapping tiles ([`tiles`]). Each line is kept only from the tile
-//! whose core holds the centre of its box ([`tile_lines`]), so the overlaps
-//! give no duplicates.
+//! as overlapping tiles ([`tiles`]). Each tile offers the lines whose box
+//! centre lies in or just past its core ([`tile_lines`]), and
+//! [`merge_tiles`] keeps one of each line two tiles both read, so the
+//! overlaps give no duplicates and a line on a seam is never lost.
 
 use image::RgbImage;
 
@@ -39,6 +40,11 @@ const MAX_TILE: u32 = 4096;
 /// one tile's edge is whole in its neighbour.
 #[cfg(any(target_os = "macos", test))]
 const TILE_OVERLAP: u32 = 128;
+/// How far past its core a tile still offers a line. Each tile measures a
+/// line on its own, a pixel or two apart, so a line centred on a seam
+/// could otherwise fall just outside both cores and be lost.
+#[cfg(any(target_os = "macos", test))]
+const SEAM_SLACK: u32 = TILE_OVERLAP / 4;
 
 /// A part of an image Vision reads on its own, in the image's pixels.
 #[cfg(any(target_os = "macos", test))]
@@ -103,22 +109,35 @@ fn tiles((width, height): (u32, u32)) -> Vec<Tile> {
         .collect()
 }
 
+/// A line one tile read, in the image's pixels.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug)]
+struct TileLine {
+    line: OcrLine,
+    /// The tile that read it.
+    tile: Tile,
+    /// Whether its box's centre lies in the tile's core, rather than just
+    /// past it.
+    in_core: bool,
+}
+
 /// The `lines` Vision read in `tile`, boxes in the tile's pixels, moved
 /// into the image's pixels, keeping only those whose box's centre lies in
-/// the tile's core.
+/// the tile's core or within [`SEAM_SLACK`] of it.
 #[cfg(any(target_os = "macos", test))]
-fn tile_lines(lines: Vec<OcrLine>, tile: &Tile) -> Vec<OcrLine> {
+fn tile_lines(lines: Vec<OcrLine>, tile: &Tile) -> Vec<TileLine> {
     let shift = |rect: &mut Rect| {
         rect.x += tile.rect.x;
         rect.y += tile.rect.y;
     };
     let (left, right, top, bottom) = tile.core;
     // Twice the centre, to stay in whole pixels.
-    let inside = |rect: &Rect| {
+    let within = |rect: &Rect, slack: u32| {
         let cx = 2 * i64::from(rect.x) + i64::from(rect.width);
         let cy = 2 * i64::from(rect.y) + i64::from(rect.height);
-        (2 * i64::from(left)..2 * i64::from(right)).contains(&cx)
-            && (2 * i64::from(top)..2 * i64::from(bottom)).contains(&cy)
+        let slack = 2 * i64::from(slack);
+        (2 * i64::from(left) - slack..2 * i64::from(right) + slack).contains(&cx)
+            && (2 * i64::from(top) - slack..2 * i64::from(bottom) + slack).contains(&cy)
     };
     lines
         .into_iter()
@@ -127,9 +146,47 @@ fn tile_lines(lines: Vec<OcrLine>, tile: &Tile) -> Vec<OcrLine> {
             for word in &mut line.words {
                 shift(&mut word.rect);
             }
-            inside(&line.rect).then_some(line)
+            within(&line.rect, SEAM_SLACK).then(|| TileLine {
+                in_core: within(&line.rect, 0),
+                line,
+                tile: *tile,
+            })
         })
         .collect()
+}
+
+/// The area two boxes share.
+#[cfg(any(target_os = "macos", test))]
+fn shared_area(a: &Rect, b: &Rect) -> i64 {
+    let span = |a0: i32, a1: u32, b0: i32, b1: u32| {
+        let start = i64::from(a0.max(b0));
+        let end = (i64::from(a0) + i64::from(a1)).min(i64::from(b0) + i64::from(b1));
+        (end - start).max(0)
+    };
+    span(a.x, a.width, b.x, b.width) * span(a.y, a.height, b.y, b.height)
+}
+
+/// The lines of all tiles, each line two tiles both read kept once: a line
+/// is dropped when another tile's kept line covers at least half of the
+/// smaller of their boxes. Lines centred in their tile's core are kept
+/// first, then larger boxes, so a line whole in one tile wins over the
+/// part of it cut at another tile's edge.
+#[cfg(any(target_os = "macos", test))]
+fn merge_tiles(mut lines: Vec<TileLine>) -> Vec<OcrLine> {
+    let area = |rect: &Rect| i64::from(rect.width) * i64::from(rect.height);
+    lines.sort_by_key(|l| (!l.in_core, std::cmp::Reverse(area(&l.line.rect))));
+    let mut kept: Vec<TileLine> = Vec::with_capacity(lines.len());
+    for line in lines {
+        let repeated = kept.iter().any(|other| {
+            other.tile != line.tile
+                && 2 * shared_area(&other.line.rect, &line.line.rect)
+                    >= area(&other.line.rect).min(area(&line.line.rect))
+        });
+        if !repeated {
+            kept.push(line);
+        }
+    }
+    kept.into_iter().map(|l| l.line).collect()
 }
 
 /// `lines` gathered from several tiles in reading order: rows top to
@@ -280,7 +337,8 @@ mod mac {
     };
 
     use super::{
-        keep_line, pick_languages, pixel_rect, reading_order, tile_lines, tiles, word_ranges,
+        keep_line, merge_tiles, pick_languages, pixel_rect, reading_order, tile_lines, tiles,
+        word_ranges,
     };
     use crate::ocr::{OcrLine, OcrWord};
 
@@ -367,7 +425,7 @@ mod mac {
             let read = autoreleasepool(|_| recognize_one(&part))?;
             lines.extend(tile_lines(read, tile));
         }
-        Ok(reading_order(lines))
+        Ok(reading_order(merge_tiles(lines)))
     }
 
     /// The lines in `image`, read with one Vision request.
@@ -660,7 +718,7 @@ mod tests {
             },
             core: (1064, 5000, 500, 4596),
         };
-        let kept = tile_lines(vec![boxed("Newest", 100, 20, 60, 10)], &tile);
+        let kept = merge_tiles(tile_lines(vec![boxed("Newest", 100, 20, 60, 10)], &tile));
         assert_eq!(kept, vec![boxed("Newest", 1100, 520, 60, 10)]);
     }
 
@@ -681,19 +739,83 @@ mod tests {
         let image_x = second.rect.x + 10;
         let from_first = vec![boxed("Labels", image_x - first.rect.x, 40, 50, 12)];
         let from_second = vec![boxed("Labels", image_x - second.rect.x, 40, 50, 12)];
-        let kept = tile_lines(from_first, &first).len() + tile_lines(from_second, &second).len();
-        assert_eq!(kept, 1);
-        // A line whose centre sits exactly on the boundary goes to the
-        // second tile.
+        let mut lines = tile_lines(from_first, &first);
+        lines.extend(tile_lines(from_second, &second));
+        assert_eq!(merge_tiles(lines).len(), 1);
+    }
+
+    #[test]
+    fn a_line_on_a_seam_is_kept_once_however_each_tile_measures_it() {
+        let spans = spans(9000);
+        let make = |(x, w, left, right): (u32, u32, u32, u32)| Tile {
+            rect: Rect {
+                x: x as i32,
+                y: 0,
+                width: w,
+                height: 400,
+            },
+            core: (left, right, 0, 400),
+        };
+        let (first, second) = (make(spans[0]), make(spans[1]));
         let boundary = first.core.1 as i32;
-        let on_edge = |tile: &Tile| {
+        // The first tile sees the centre just past its core, the second
+        // just before its own: neither core holds it.
+        let seen = |tile: &Tile, centre: i32| {
             tile_lines(
-                vec![boxed("Issues", boundary - 20 - tile.rect.x, 0, 40, 10)],
+                vec![boxed("pineapple", centre - 224 - tile.rect.x, 58, 448, 49)],
                 tile,
             )
-            .len()
         };
-        assert_eq!((on_edge(&first), on_edge(&second)), (0, 1));
+        let mut lines = seen(&first, boundary + 1);
+        lines.extend(seen(&second, boundary - 2));
+        assert_eq!(merge_tiles(lines).len(), 1);
+    }
+
+    #[test]
+    fn a_line_well_past_a_tile_core_is_left_to_its_neighbour() {
+        let spans = spans(9000);
+        let (x, w, left, right) = spans[0];
+        let first = Tile {
+            rect: Rect {
+                x: x as i32,
+                y: 0,
+                width: w,
+                height: 400,
+            },
+            core: (left, right, 0, 400),
+        };
+        let past = (right + SEAM_SLACK) as i32;
+        let lines = tile_lines(vec![boxed("Labels", past, 40, 50, 12)], &first);
+        assert!(lines.is_empty(), "{lines:?}");
+    }
+
+    #[test]
+    fn a_whole_line_wins_over_its_part_cut_at_a_tile_edge() {
+        // Tiles overlapping by the least they may, their cores meeting
+        // halfway through the overlap.
+        let tile = |x: i32, core: (u32, u32, u32, u32)| Tile {
+            rect: Rect {
+                x,
+                y: 0,
+                width: MAX_TILE,
+                height: 400,
+            },
+            core,
+        };
+        let seam = MAX_TILE - TILE_OVERLAP / 2;
+        let first = tile(0, (0, seam, 0, 400));
+        let second = tile((MAX_TILE - TILE_OVERLAP) as i32, (seam, 8000, 0, 400));
+        // A line from 4000 to 4200: the first tile's edge cuts it at 4096,
+        // which puts the centre of what it reads just past its core.
+        let mut lines = tile_lines(vec![boxed("pine", 4000, 40, 96, 12)], &first);
+        assert_eq!(lines.len(), 1);
+        lines.extend(tile_lines(
+            vec![boxed("pineapple", 4000 - second.rect.x, 40, 200, 12)],
+            &second,
+        ));
+        let kept = merge_tiles(lines);
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(kept[0].text, "pineapple");
     }
 
     #[test]
@@ -728,7 +850,7 @@ mod tests {
             ],
             &right,
         ));
-        let text: Vec<String> = reading_order(lines)
+        let text: Vec<String> = reading_order(merge_tiles(lines))
             .into_iter()
             .map(|line| line.text)
             .collect();

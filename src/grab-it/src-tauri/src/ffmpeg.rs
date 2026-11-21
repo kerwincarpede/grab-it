@@ -1538,6 +1538,7 @@ At least one output file must be specified";
         }
     }
 
+    #[cfg(unix)]
     fn no_env(_: &str) -> Option<OsString> {
         None
     }
