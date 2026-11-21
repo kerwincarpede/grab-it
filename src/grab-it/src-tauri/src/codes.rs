@@ -10,7 +10,7 @@ use rxing::{BarcodeFormat, DecodeHints, RXingResult};
 use serde::Serialize;
 
 /// One code found in an image. Mirrors `QuickCode` in src/quick/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Code {
     /// The code's format as people call it, such as "QR code".

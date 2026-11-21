@@ -413,6 +413,14 @@ cargo llvm-cov report --manifest-path src-tauri/Cargo.toml --html
 
 The IPC tests in `src-tauri/src/ipc_tests.rs` call the real commands through Tauri's IPC on its mock runtime, against a temporary settings file, Library and save folder, so they need no display either. They check each command's JSON reply, what it saves and its error messages.
 
+`src/app/bindings.ts` holds the TypeScript types of every command the page calls, generated from the Rust signatures by [tauri-specta](https://github.com/specta-rs/tauri-specta) (`specta_builder` in `src-tauri/src/lib.rs`). After changing a command's arguments or return type, or a struct or enum it sends or receives, regenerate it from `src/grab-it/` and commit the result:
+
+```sh
+npm run bindings    # cargo test runs tests::export_bindings, which writes src/app/bindings.ts
+```
+
+`cargo test` fails while the file is out of date (`tests::bindings_are_up_to_date`). The byte commands, which send or receive raw bytes (the `byte_commands!` list in `lib.rs`), are left out of the bindings and registered through a plain `generate_handler!` built from the same list as `BYTE_COMMANDS`. `invoke_handler()`, which the app and the IPC tests share, sends each call to that handler or to the `specta_builder` one by command name, so the tests exercise the app's routing. The byte commands' callers and mocks type them by hand.
+
 The OCR tests load the bundled models from `src-tauri/ocr-models/`, so they need no network. Their fixture, `src-tauri/tests/fixtures/ocr-pineapple.png`, was made with ImageMagick (the command is in `src-tauri/src/ocr.rs`).
 
 To build installers locally, run `npm run tauri build`; they land in `src/grab-it/src-tauri/target/release/bundle/`.

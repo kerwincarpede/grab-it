@@ -20,7 +20,7 @@ pub const ANNOTATIONS_SUFFIX: &str = ".annotations.json";
 pub const ASSETS_SUFFIX: &str = ".assets";
 
 /// What the user asked to capture.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum CaptureMode {
     Region,
@@ -32,7 +32,7 @@ pub enum CaptureMode {
 }
 
 /// A rectangle in some pixel space.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct Rect {
     pub x: i32,
     pub y: i32,
@@ -41,7 +41,7 @@ pub struct Rect {
 }
 
 /// A rectangle in CSS pixels of an overlay window, as the frontend sends it.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, specta::Type)]
 pub struct CssRect {
     pub x: f64,
     pub y: f64,

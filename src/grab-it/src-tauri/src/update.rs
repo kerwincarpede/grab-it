@@ -166,7 +166,7 @@ pub enum Trigger {
 
 /// What one version brought, as `latest.json` lists it. Mirrors
 /// `UpdateChanges` in the frontend.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Changes {
     version: String,
@@ -175,7 +175,7 @@ pub struct Changes {
 }
 
 /// An update a check found. Mirrors `UpdateInfo` in the frontend.
-#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateInfo {
     /// This copy's version.
@@ -189,7 +189,7 @@ pub struct UpdateInfo {
 }
 
 /// Where updating stands. Mirrors `UpdateStatus` in the frontend.
-#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, specta::Type)]
 #[serde(
     tag = "state",
     rename_all = "camelCase",
@@ -333,18 +333,21 @@ async fn find_update(app: &AppHandle, channel: UpdateChannel) -> Result<Option<U
 
 /// The current status.
 #[tauri::command]
+#[specta::specta]
 pub fn update_status(app: AppHandle) -> UpdateStatus {
     current_status(&app)
 }
 
 /// Checks for an update, showing the result in the Grab-it window.
 #[tauri::command]
+#[specta::specta]
 pub fn update_check(app: AppHandle) {
     user_check(&app);
 }
 
 /// Installs the update the last check found and restarts Grab-it.
 #[tauri::command]
+#[specta::specta]
 pub fn update_install(app: AppHandle) -> Result<(), String> {
     let state = app.state::<UpdateState>();
     let Some(update) = lock(&state.pending).clone() else {
@@ -363,6 +366,7 @@ pub fn update_install(app: AppHandle) -> Result<(), String> {
 
 /// "Later": automatic checks stop pointing out this update.
 #[tauri::command]
+#[specta::specta]
 pub fn update_later(app: AppHandle) {
     let state = app.state::<UpdateState>();
     if state.installing.load(Ordering::SeqCst) {

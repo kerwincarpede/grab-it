@@ -112,7 +112,7 @@ impl fmt::Display for AiError {
 impl std::error::Error for AiError {}
 
 /// What the queue is doing. Mirrors `AiStatus` in src/library/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct AiStatus {
     pub state: AiState,
@@ -126,7 +126,7 @@ pub struct AiStatus {
     pub provider: AiProvider,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum AiState {
     /// Describing is turned off in Settings.
@@ -970,12 +970,14 @@ fn changed(app: &AppHandle) {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn ai_status(queue: State<'_, AiQueue>) -> AiStatus {
     queue.status()
 }
 
 /// Queues one capture to be described again, with the current model.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn ai_redescribe(id: i64, app: AppHandle) -> Result<(), String> {
     app.state::<LibraryState>()
         .lock()
@@ -987,6 +989,7 @@ pub fn ai_redescribe(id: i64, app: AppHandle) -> Result<(), String> {
 
 /// Drops a capture's description, category and AI tags, and skips it.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn ai_clear(id: i64, app: AppHandle) -> Result<(), String> {
     app.state::<LibraryState>()
         .lock()
@@ -998,6 +1001,7 @@ pub fn ai_clear(id: i64, app: AppHandle) -> Result<(), String> {
 
 /// Queues every capture, skipped ones too, to be described again.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn ai_redescribe_all(app: AppHandle) -> Result<(), String> {
     app.state::<LibraryState>()
         .lock()
@@ -1010,6 +1014,7 @@ pub fn ai_redescribe_all(app: AppHandle) -> Result<(), String> {
 /// Checks that the saved provider and model answer, whether or not
 /// describing is on.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn ai_test_connection(app: AppHandle) -> Result<String, String> {
     let ai = AiSettings {
         enabled: true,
@@ -1026,7 +1031,7 @@ pub fn ai_test_connection(app: AppHandle) -> Result<String, String> {
 
 /// Which AI CLIs are installed, by where they were found. Mirrors
 /// `AiClis` in src/settings/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct AiClis {
     pub claude_code: Option<PathBuf>,
@@ -1036,6 +1041,7 @@ pub struct AiClis {
 /// Looks for the AI CLIs, for Settings to say when the chosen one is
 /// missing. Async: the lookup may ask the login shell for its PATH.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn ai_clis() -> AiClis {
     AiClis {
         claude_code: ai_cli::find_claude(),

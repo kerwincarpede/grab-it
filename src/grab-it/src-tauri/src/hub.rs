@@ -323,6 +323,7 @@ fn hub_position(
 /// Starts a capture from the hub once it has hidden. `kind` is `region`,
 /// `allInOne`, `window`, `screen`, `monitor`, `repeat`, `record`, `text`, `colour` or `steps`.
 #[tauri::command]
+#[specta::specta]
 pub fn hub_capture(
     kind: String,
     delay_seconds: Option<u64>,
@@ -368,7 +369,7 @@ pub fn hub_capture(
 
 /// What is running, so the hub's Record and Step capture items can say
 /// Stop. Mirrors `HubActivity` in src/hub/api.ts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 pub struct HubActivity {
     /// A recording is under way, counting down included.
     recording: bool,
@@ -392,18 +393,20 @@ pub fn activity_changed(app: &AppHandle) {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn hub_activity(app: AppHandle) -> HubActivity {
     activity(&app)
 }
 
 /// A monitor the hub offers to capture.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct HubMonitor {
     index: usize,
     label: String,
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn hub_monitors() -> Vec<HubMonitor> {
     screen::monitors()
         .unwrap_or_default()
@@ -417,6 +420,7 @@ pub fn hub_monitors() -> Vec<HubMonitor> {
 
 /// Opens the Grab-it window on `view`: `library`, `settings` or `welcome`.
 #[tauri::command]
+#[specta::specta]
 pub fn hub_open(view: String, app: AppHandle) -> Result<(), String> {
     let view = match view.as_str() {
         "library" => MainView::Library,
@@ -438,18 +442,21 @@ pub fn hub_open(view: String, app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn hub_check_updates(app: AppHandle) {
     hide(&app);
     update::user_check(&app);
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn hub_quit(app: AppHandle) {
     hide(&app);
     tray::quit(&app);
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn hub_hide(app: AppHandle) {
     hide(&app);
 }

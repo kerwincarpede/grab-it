@@ -178,7 +178,7 @@ pub fn snapshot() -> Option<Snapshot> {
 
 /// A capture's pointer as `meta.json` keeps it. Mirrors `CapturedPointer`
 /// in src/editor/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CapturedPointer {
     /// Where the hot spot is, in the saved image's pixels.

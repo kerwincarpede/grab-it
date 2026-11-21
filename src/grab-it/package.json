@@ -10,6 +10,7 @@
     "lint": "eslint . && tsc --noEmit && tsc -p e2e --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "bindings": "cargo test --manifest-path src-tauri/Cargo.toml --lib -- --ignored --exact tests::export_bindings",
     "tauri": "tauri",
     "e2e": "tauri build --debug --no-bundle --features e2e && npm run e2e:run",
     "e2e:run": "wdio run e2e/wdio.conf.ts"

@@ -41,7 +41,7 @@ const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
 
 /// How many items of one kind the library holds and their total size.
 /// Mirrors `KindUsage` in src/library/api.ts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct KindUsage {
     pub count: u32,
@@ -51,7 +51,7 @@ pub struct KindUsage {
 }
 
 /// The library's items by kind.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
     pub image: KindUsage,
@@ -60,7 +60,7 @@ pub struct Usage {
 }
 
 /// Space on a disk, in bytes. Mirrors `DiskSpace` in src/library/api.ts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct DiskSpace {
     /// What Grab-it may still write.
@@ -70,7 +70,7 @@ pub struct DiskSpace {
 
 /// What `library_storage` answers. Mirrors `LibraryStorage` in
 /// src/library/api.ts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryStorage {
     pub image: KindUsage,
@@ -187,7 +187,7 @@ pub fn now_ms() -> i64 {
 }
 
 /// What a cleanup removed. Mirrors `Cleaned` in src/library/api.ts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Cleaned {
     pub count: u32,
@@ -506,6 +506,7 @@ fn clean_up(
 /// removes nothing and fails, so the dialog can ask again. Resolves to what
 /// went once it is done or stopped; fails while another cleanup runs.
 #[tauri::command]
+#[specta::specta]
 pub async fn library_clean_up(
     removal: Removal,
     confirmed: KindUsage,
@@ -525,6 +526,7 @@ pub async fn library_clean_up(
 /// Stops the running cleanup, automatic or from the Library, before its
 /// next item. Does nothing when none runs.
 #[tauri::command]
+#[specta::specta]
 pub fn library_stop_clean_up(app: AppHandle) {
     if let Some(running) = app.try_state::<CleanupLock>() {
         running.request_stop();
@@ -543,6 +545,7 @@ fn is_open_in_editor(app: &AppHandle, path: &Path) -> bool {
 /// would remove: under the saved Keep settings, or under `candidate` when
 /// Settings asks before saving a shorter one.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn library_storage(
     candidate: Option<Retention>,
     app: AppHandle,

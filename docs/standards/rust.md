@@ -4,12 +4,13 @@ These apply to `src/grab-it/src-tauri/`. Each feature has its own module in `src
 
 ## Commands
 
-- A `#[tauri::command]` lives in the module it belongs to. It is only reachable once it is listed in `tauri::generate_handler![...]` in `invoke_handler` in `lib.rs`, which the app and the IPC tests share.
+- A `#[tauri::command]` lives in the module it belongs to. It is only reachable once it is listed in `specta_builder` in `lib.rs`, or in `byte_commands!` for a byte command. `invoke_handler()`, which the app and the IPC tests share, routes each call to one of the two.
 - Name handles through the `crate::rt` aliases (`AppHandle`, `WebviewWindow`, `MenuItem` and so on), never a concrete `tauri::AppHandle` or `tauri::Wry`. They are Wry in the app and Tauri's mock runtime in tests, so the IPC tests can build the real commands.
 - Commands return `Result<T, String>`, so the frontend gets a message it can show. Inside a module, use a typed error (for example `LibraryResult`) and turn it into a `String` at the command.
 - Send bytes as `tauri::ipc::Response`, not as a JSON array.
 - Check arguments from the page before using them, for example that `factor.is_finite() && factor > 0.0` in `pin_zoom`. The page is not trusted to send sane values.
-- If a struct crosses the bridge, its TypeScript twin in an `api.ts` must change in the same PR (see [frontend.md](frontend.md)).
+- Give each command `#[specta::specta]` under `#[tauri::command]`, list it in `specta_builder` in `lib.rs`, and derive `specta::Type` on every struct and enum it sends or receives. A command that sends or receives raw bytes goes in the `byte_commands!` list in `lib.rs` instead, since Specta cannot describe it.
+- A struct or enum that crosses the bridge reaches the page through the generated `src/app/bindings.ts`. Run `npm run bindings` from `src/grab-it` after changing one and commit the result. `cargo test` fails until you do. Two types may not share a name in the bindings: give one a `#[serde(rename = "...")]`, which a struct's JSON never shows.
 
 ## Windows and capabilities
 
