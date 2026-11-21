@@ -215,8 +215,9 @@ jobs:
       # Produces dist/, which the Rust build embeds.
       - run: npm run build
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features e2e -- -D warnings
-      # The fixture loader's own tests only build with the feature.
-      - run: cargo test --manifest-path src-tauri/Cargo.toml --features e2e screen::tests
+      # Tests that only build with the feature: the fixture loader's, and
+      # the browser arguments e2e builds pass to WebView2.
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --features e2e -- screen::tests windows::tests
       - run: xvfb-run npm run e2e
 
       - name: Upload smoke test logs
