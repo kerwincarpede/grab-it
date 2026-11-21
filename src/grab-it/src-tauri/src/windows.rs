@@ -9,13 +9,67 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use crate::rt::{AppHandle, WebviewWindow};
 use crate::{
     actions, cli::OpenTarget, editor::EditorState, hotkeys, pin, quick,
     recording_editor::RecordingEditorState,
 };
+
+/// Smoke-test builds on Windows: keeps the browser arguments msedgedriver
+/// sets in `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, its
+/// `--remote-debugging-port` among them. The arguments wry passes in their
+/// place would replace them, and msedgedriver could not attach. Every
+/// webview builder calls it, since WebView2 wants one set of arguments per
+/// process. Other builds keep the builder as it is.
+pub trait E2eBrowserArgs {
+    #[must_use]
+    fn e2e_browser_args(self) -> Self;
+}
+
+impl<R: Runtime, M: Manager<R>> E2eBrowserArgs for WebviewWindowBuilder<'_, R, M> {
+    fn e2e_browser_args(self) -> Self {
+        #[cfg(all(feature = "e2e", target_os = "windows"))]
+        if let Ok(args) = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
+            && !args.trim().is_empty()
+        {
+            return self.additional_browser_args(&with_wry_browser_args(&args));
+        }
+        self
+    }
+}
+
+/// The features wry turns off when nothing sets the browser arguments.
+#[cfg(all(feature = "e2e", any(target_os = "windows", test)))]
+const WRY_DISABLED_FEATURES: &str = "msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+
+/// `args` with wry's turned-off features added to theirs, in one
+/// `--disable-features`, since Chromium reads only the last one.
+#[cfg(all(feature = "e2e", any(target_os = "windows", test)))]
+fn with_wry_browser_args(args: &str) -> String {
+    const SWITCH: &str = "--disable-features=";
+    let mut features: Vec<&str> = Vec::new();
+    let mut rest: Vec<&str> = Vec::new();
+    let mut position = None;
+    for arg in args.split_whitespace() {
+        match arg.strip_prefix(SWITCH) {
+            Some(value) => {
+                position.get_or_insert(rest.len());
+                features.extend(value.split(',').filter(|name| !name.is_empty()));
+            }
+            None => rest.push(arg),
+        }
+    }
+    for name in WRY_DISABLED_FEATURES.split(',') {
+        if !features.contains(&name) {
+            features.push(name);
+        }
+    }
+    let disable = format!("{SWITCH}{}", features.join(","));
+    rest.insert(position.unwrap_or(rest.len()), &disable);
+    rest.join(" ")
+}
 
 /// The Grab-it window: library, Settings, shortcuts and tips.
 pub const MAIN_LABEL: &str = "main";
@@ -114,6 +168,7 @@ pub fn show_guide(app: &AppHandle, title: &str) -> tauri::Result<()> {
         GUIDE_LABEL,
         WebviewUrl::App("index.html#/guide".into()),
     )
+    .e2e_browser_args()
     .title(format!("{title} - Grab-it Guide"))
     .inner_size(900.0, 760.0)
     .min_inner_size(560.0, 420.0)
@@ -146,6 +201,7 @@ pub fn show_editor(app: &AppHandle, capture: &Path) -> tauri::Result<()> {
         .unwrap_or_default();
     let window =
         WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html#/editor".into()))
+            .e2e_browser_args()
             .title(format!("{file_name} - Grab-it Editor"))
             .inner_size(1100.0, 760.0)
             .min_inner_size(640.0, 420.0)
@@ -192,6 +248,7 @@ pub fn show_recording_editor(app: &AppHandle, recording: &Path) -> tauri::Result
         .unwrap_or_default();
     let window =
         WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html#/recording".into()))
+            .e2e_browser_args()
             .title(format!("{file_name} - Grab-it Recording Editor"))
             .inner_size(1100.0, 760.0)
             .min_inner_size(640.0, 460.0)
@@ -243,6 +300,7 @@ pub fn show_main(app: &AppHandle, view: MainView) -> tauri::Result<()> {
         MAIN_LABEL,
         WebviewUrl::App(format!("index.html#/app/{}", view.as_str()).into()),
     )
+    .e2e_browser_args()
     .title("Grab-it")
     .inner_size(1180.0, 760.0)
     .min_inner_size(720.0, 480.0)
@@ -499,5 +557,29 @@ mod tests {
         assert_eq!(eased_zoom(1.0, 2.0, 1.5), 2.0);
         // Smaller works the same way down.
         assert!(eased_zoom(1.2, 1.1, 0.5) < 1.2 && eased_zoom(1.2, 1.1, 0.5) > 1.1);
+    }
+
+    #[cfg(feature = "e2e")]
+    #[test]
+    fn msedgedriver_browser_args_keep_the_features_wry_turns_off() {
+        use super::with_wry_browser_args;
+
+        assert_eq!(
+            with_wry_browser_args(
+                "--enable-automation --disable-features=IgnoreDuplicateNavs,Prewarm --remote-debugging-port=0"
+            ),
+            "--enable-automation \
+             --disable-features=IgnoreDuplicateNavs,Prewarm,msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+             --remote-debugging-port=0"
+        );
+        // No switch of their own: wry's is added. One already named once is not repeated.
+        assert_eq!(
+            with_wry_browser_args("--remote-debugging-port=0"),
+            "--remote-debugging-port=0 --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
+        );
+        assert_eq!(
+            with_wry_browser_args("--disable-features=msPdfOOUI  --disable-features=Prewarm"),
+            "--disable-features=msPdfOOUI,Prewarm,msWebOOUI,msSmartScreenProtection"
+        );
     }
 }

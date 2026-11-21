@@ -29,6 +29,7 @@ use tauri::{
 };
 
 use crate::rt::AppHandle;
+use crate::windows::E2eBrowserArgs;
 use crate::{
     capture::Rect,
     screen::MonitorInfo,
@@ -188,6 +189,7 @@ fn try_open(
 
     let builder =
         WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App(page_url(recording).into()))
+            .e2e_browser_args()
             .title("Grab-it webcam")
             // Built at its size: GTK keeps a window that may not be resized at the
             // size it was built with, and ignores a later set_size.

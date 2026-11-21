@@ -11,6 +11,7 @@ use serde::Serialize;
 use tauri::{Emitter, Manager, Rect, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use crate::rt::{AppHandle, WebviewWindow};
+use crate::windows::E2eBrowserArgs;
 use crate::{
     actions::{self, Action},
     screen, tray, update,
@@ -95,6 +96,7 @@ pub fn resize(app: &AppHandle) {
 fn create(app: &AppHandle, anchor: Option<Rect>) -> tauri::Result<()> {
     let zoom = zoom(app);
     let builder = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html#/hub".into()))
+        .e2e_browser_args()
         .title("Grab-it")
         .inner_size(WIDTH * zoom, HEIGHT * zoom)
         .decorations(false)

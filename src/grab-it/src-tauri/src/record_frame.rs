@@ -16,6 +16,7 @@
 use tauri::{Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
 
 use crate::rt::AppHandle;
+use crate::windows::E2eBrowserArgs;
 use crate::{capture::Rect, screen::MonitorInfo, settings::RecordingSource};
 
 pub const LABEL: &str = "record-frame";
@@ -140,6 +141,7 @@ fn create(
     let protected = cfg!(any(target_os = "macos", target_os = "windows"));
     let url = page_url(shape, f64::from(margin) / scale, protected);
     let window = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App(url.into()))
+        .e2e_browser_args()
         .title("Grab-it recorded area")
         // Built at its size: GTK keeps a window that may not be resized at
         // the size it was built with, and ignores a later set_size.

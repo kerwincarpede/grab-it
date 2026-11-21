@@ -22,6 +22,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::rt::AppHandle;
+use crate::windows::E2eBrowserArgs;
 use crate::{
     codes::{self, Code},
     library::LibraryState,
@@ -333,6 +334,7 @@ pub(crate) fn dismiss(app: &AppHandle, generation: u64) {
 
 fn create_window(app: &AppHandle, corner: Corner) -> tauri::Result<()> {
     let window = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html#/quick".into()))
+        .e2e_browser_args()
         .title("Grab-it Quick Access")
         .inner_size(WIDTH, HEIGHT)
         .decorations(false)

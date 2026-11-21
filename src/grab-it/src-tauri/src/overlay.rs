@@ -40,6 +40,7 @@ use tauri::{
 };
 
 use crate::rt::{AppHandle, WebviewWindow};
+use crate::windows::E2eBrowserArgs;
 use crate::{
     actions,
     capture::{self, CaptureMode, CapturedPointer, CssRect, Foreground, Rect},
@@ -140,6 +141,9 @@ struct Session {
     freeze: Option<crate::freeze::Freeze>,
 }
 
+// Windows' session also holds its frozen screens, which takes it over
+// clippy's limit. There is one Phase per app, so its size does not matter.
+#[cfg_attr(target_os = "windows", allow(clippy::large_enum_variant))]
 #[derive(Default)]
 enum Phase {
     #[default]
@@ -571,7 +575,7 @@ pub fn open(
 /// Windows: freezes every monitor with its frozen screen on show
 /// ([`crate::freeze`]). If that fails the monitors are still captured, and
 /// the overlays open over the live desktop.
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(feature = "e2e")))]
 #[allow(clippy::type_complexity)]
 fn freeze_monitors(
     app: &AppHandle,
@@ -586,6 +590,22 @@ fn freeze_monitors(
             (screen::capture_monitors(), None)
         }
     }
+}
+
+/// Smoke-test builds (the `e2e` feature): no frozen screen. freeze.rs reads
+/// the screen itself, so the monitors go through [`screen`], where the
+/// fixture stands in for them, and the overlays open over the live desktop.
+#[cfg(all(target_os = "windows", feature = "e2e"))]
+#[allow(clippy::type_complexity)]
+fn freeze_monitors(
+    _app: &AppHandle,
+) -> (
+    Result<Vec<(MonitorInfo, RgbaImage)>, String>,
+    Option<crate::freeze::Freeze>,
+) {
+    // Named so the frozen-screen code still counts as used in this build.
+    let _ = crate::freeze::capture_monitors;
+    (screen::capture_monitors(), None)
 }
 
 /// How often the pointer is checked for a move to another display's
@@ -894,6 +914,7 @@ fn create_window(
     scale: f64,
 ) -> tauri::Result<WebviewWindow> {
     let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(PAGE.into()))
+        .e2e_browser_args()
         .title("Grab-it capture")
         .decorations(false)
         .resizable(false)

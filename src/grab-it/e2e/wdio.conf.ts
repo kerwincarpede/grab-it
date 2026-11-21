@@ -1,12 +1,12 @@
 // Smoke tests: WebdriverIO drives the e2e build of Grab-it through
 // tauri-driver. `npm run e2e` builds that binary first; see "Smoke tests" in
 // docs/development.md.
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { createSandbox, SANDBOX_VAR } from "./support/sandbox";
+import { checkWindowsAppData, createSandbox, SANDBOX_VAR } from "./support/sandbox";
 
 const e2eDir = import.meta.dirname;
 const projectDir = path.resolve(e2eDir, "..");
@@ -48,6 +48,81 @@ function tauriDriverPath(): string {
   const found = process.env.TAURI_DRIVER ?? onPath("tauri-driver") ?? (fs.existsSync(cargoBin) ? cargoBin : undefined);
   if (!found) throw new Error("tauri-driver not found: install it with `cargo install tauri-driver --locked`");
   return found;
+}
+
+/**
+ * Windows: msedgedriver, which tauri-driver drives, from MSEDGEDRIVER or
+ * PATH. Its version has to match the installed WebView2 runtime's; CI
+ * downloads the matching one (ci.yml).
+ */
+function msedgedriverPath(): string {
+  const found = process.env.MSEDGEDRIVER ?? onPath("msedgedriver");
+  if (!found) {
+    throw new Error("msedgedriver not found: download the one matching your WebView2 version, and set MSEDGEDRIVER or put it on PATH");
+  }
+  return found;
+}
+
+/**
+ * Windows: a .cmd in the session folder that runs msedgedriver with what
+ * tauri-driver passes it, plus a verbose log beside it, so a session that
+ * never starts shows why. cmd.exe waits for msedgedriver, so taskkill /t on
+ * tauri-driver still reaches msedgedriver and the app through it.
+ */
+function msedgedriverWrapper(sandboxRoot: string): string {
+  const wrapper = path.join(sandboxRoot, "msedgedriver.cmd");
+  // %% is a literal % in a batch file.
+  const quoted = (value: string) => `"${value.replaceAll("%", "%%")}"`;
+  const log = `--log-path=${path.join(sandboxRoot, "msedgedriver.log")}`;
+  fs.writeFileSync(wrapper, `@echo off\r\n${quoted(msedgedriverPath())} %* --verbose ${quoted(log)}\r\n`);
+  return wrapper;
+}
+
+/**
+ * Windows: appends Grab-it's, WebView2's and the drivers' processes, with
+ * their command lines, to `processes.txt` in the session folder, to show
+ * what started when a session does not.
+ */
+function saveWindowsProcesses(sandboxRoot: string, when: string): void {
+  const script =
+    "Get-CimInstance Win32_Process | Where-Object { $_.Name -in 'grab-it.exe','msedgewebview2.exe','msedgedriver.exe','tauri-driver.exe','cmd.exe' } | " +
+    "Format-List ProcessId,ParentProcessId,Name,CommandLine | Out-String -Width 4096";
+  const listed = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", timeout: 30_000 });
+  const text = `${listed.stdout ?? ""}${listed.stderr ?? ""}${listed.error ? String(listed.error) : ""}`;
+  fs.appendFileSync(path.join(sandboxRoot, "processes.txt"), `== ${when}, ${new Date().toISOString()}\n${text.trim()}\n\n`);
+}
+
+/**
+ * Windows: msedgedriver gives up on the app's WebView2 after a minute and
+ * may end the app then. Set in beforeSession, this lists the processes
+ * before that, and the before hook cancels it once a session exists.
+ */
+let sessionStartSnapshot: NodeJS.Timeout | undefined;
+
+/** Windows: whether a grab-it.exe is still running. */
+function appRunning(): boolean {
+  try {
+    const listed = execFileSync("tasklist", ["/FI", "IMAGENAME eq grab-it.exe", "/NH"], { encoding: "utf8" });
+    return listed.toLowerCase().includes("grab-it.exe");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Windows: ends any Grab-it still running, by name, and waits until none
+ * runs. A Grab-it left in the tray would take the next session's launch
+ * (single instance) and hold the app data the next session empties.
+ */
+async function stopWindowsApp(): Promise<void> {
+  // It also ends a Grab-it the developer has running.
+  checkWindowsAppData();
+  const deadline = Date.now() + 15_000;
+  while (appRunning()) {
+    if (Date.now() > deadline) throw new Error("grab-it.exe is still running 15 seconds after its session ended");
+    spawnSync("taskkill", ["/im", "grab-it.exe", "/t", "/f"], { stdio: "ignore" });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }
 
 /**
@@ -162,6 +237,8 @@ async function startTauriDriver(sandboxRoot: string, port: number, nativePort: n
   const env = appEnvironment(sandboxRoot);
   const log = fs.openSync(path.join(sandboxRoot, "tauri-driver.log"), "a");
   const driverArgs = [tauriDriverPath(), "--port", String(port), "--native-port", String(nativePort)];
+  // Windows: tauri-driver drives msedgedriver, through a wrapper that logs.
+  if (process.platform === "win32") driverArgs.push("--native-driver", msedgedriverWrapper(sandboxRoot));
   // Linux: a private session bus, so the single-instance check never hands
   // the arguments to a Grab-it already running on the developer's bus.
   const dbus = process.platform === "linux" ? onPath("dbus-run-session") : undefined;
@@ -180,6 +257,23 @@ async function startTauriDriver(sandboxRoot: string, port: number, nativePort: n
   await waitForDriver(driver, port, 30_000);
 }
 
+/**
+ * Saves a screenshot of the window the session is driving to
+ * `screenshots/` in the run folder, named after the spec's session and the
+ * failed test or hook.
+ */
+async function saveFailureScreenshot(parent: string | undefined, title: string): Promise<void> {
+  const name = `${parent ?? ""} ${title}`.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120);
+  const dir = path.join(runDir, "screenshots");
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    await browser.saveScreenshot(path.join(dir, `${process.env[SANDBOX_VAR] ? path.basename(process.env[SANDBOX_VAR]) : "session"}-${name}.png`));
+  } catch (err) {
+    // The window may have closed with the failure, or no session was made.
+    console.warn(`No screenshot for "${title}": ${String(err)}`);
+  }
+}
+
 /** The app's environment: the sandbox's home and data, the fixture, and X11 only. */
 function appEnvironment(sandboxRoot: string): NodeJS.ProcessEnv {
   const sandbox = createSandbox(sandboxRoot);
@@ -189,7 +283,8 @@ function appEnvironment(sandboxRoot: string): NodeJS.ProcessEnv {
     GRAB_IT_E2E_CAPTURE: fixture,
   };
   if (process.platform === "win32") {
-    // Windows keeps app data under APPDATA, which this does not redirect.
+    // Tauri asks Windows for the app data folders, so HOME and XDG_* would
+    // change nothing; createSandbox emptied the real ones instead.
     return env;
   }
   Object.assign(env, {
@@ -225,7 +320,9 @@ export const config: WebdriverIO.Config = {
       "tauri:options": {
         application,
         // Grab-it starts in the tray with no window; open the Grab-it window.
-        args: ["--open", "library"],
+        // One argument: msedgedriver passes the app Chromium-style switches
+        // and does not keep a separate value after `--open`.
+        args: ["--open=library"],
       },
     },
   ],
@@ -236,7 +333,9 @@ export const config: WebdriverIO.Config = {
   bail: 0,
   waitforTimeout: 20_000,
   connectionRetryTimeout: 120_000,
-  connectionRetryCount: 1,
+  // Windows: msedgedriver already waits a minute for the app's WebView2
+  // before it gives up, and a retry only repeats that wait.
+  connectionRetryCount: process.platform === "win32" ? 0 : 1,
   framework: "mocha",
   reporters: ["spec"],
   mochaOpts: {
@@ -246,22 +345,24 @@ export const config: WebdriverIO.Config = {
 
   // A failed test leaves a picture of the window it was driving.
   afterTest: async (test, _context, { passed }) => {
-    if (passed) return;
-    const name = `${test.parent} ${test.title}`.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120);
-    const dir = path.join(runDir, "screenshots");
-    try {
-      fs.mkdirSync(dir, { recursive: true });
-      await browser.saveScreenshot(path.join(dir, `${process.env[SANDBOX_VAR] ? path.basename(process.env[SANDBOX_VAR]) : "session"}-${name}.png`));
-    } catch (err) {
-      // The window may have closed with the failure.
-      console.warn(`No screenshot for "${test.title}": ${String(err)}`);
-    }
+    if (!passed) await saveFailureScreenshot(test.parent, test.title);
+  },
+
+  // So does a failed hook, such as a spec's `before` that captures: Mocha
+  // then skips its tests, and afterTest never runs.
+  afterHook: async (test, _context, { passed }) => {
+    if (!passed) await saveFailureScreenshot(test.parent, test.title);
   },
 
   onPrepare: async () => {
     if (!fs.existsSync(application)) {
       throw new Error(`No e2e build at ${application}: run \`npm run e2e\`, which builds it with --features e2e`);
     }
+    // Reported early here, but WebdriverIO carries on after a hook's
+    // error, so stopWindowsApp and createSandbox check again before they
+    // end or delete anything.
+    checkWindowsAppData();
+    if (process.platform === "win32") msedgedriverPath();
     await startXvfb();
     console.log(`Smoke test data and logs: ${runDir}`);
   },
@@ -279,8 +380,13 @@ export const config: WebdriverIO.Config = {
     config.port = port;
     // Kills the driver however the worker ends, even when no session was made.
     process.once("exit", stopTauriDriver);
+    // Windows: no Grab-it may hold the app data createSandbox empties.
+    if (process.platform === "win32") await stopWindowsApp();
     try {
       await startTauriDriver(sandboxRoot, port, nativePort);
+      if (process.platform === "win32") {
+        sessionStartSnapshot = setTimeout(() => saveWindowsProcesses(sandboxRoot, "40 seconds into the session start"), 40_000).unref();
+      }
     } catch (err) {
       // Nothing listens on the port now, so creating the session fails
       // too: the app never starts in another session's data.
@@ -290,8 +396,23 @@ export const config: WebdriverIO.Config = {
     }
   },
 
-  afterSession: () => {
+  before: () => {
+    clearTimeout(sessionStartSnapshot);
+  },
+
+  // Also runs when no session was made, while tauri-driver still runs.
+  after: (result) => {
+    clearTimeout(sessionStartSnapshot);
+    const sandboxRoot = process.env[SANDBOX_VAR];
+    if (process.platform === "win32" && result !== 0 && sandboxRoot) saveWindowsProcesses(sandboxRoot, "after the failure");
+  },
+
+  afterSession: async () => {
+    const started = tauriDriver !== undefined;
     stopTauriDriver();
+    // Windows: taskkill ends the tree under tauri-driver, but a Grab-it left
+    // in the tray would still take the next launch.
+    if (process.platform === "win32" && started) await stopWindowsApp();
   },
 
   // The launcher's backstop: a worker that crashed may have left its

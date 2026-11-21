@@ -33,6 +33,7 @@ use tauri::{
 };
 
 use crate::rt::{AppHandle, WebviewWindow};
+use crate::windows::E2eBrowserArgs;
 use crate::{capture::Rect, record::BarStatus, screen::MonitorInfo};
 
 pub const LABEL: &str = "record-bar";
@@ -598,6 +599,7 @@ fn create(
     let scale = valid_scale(display.scale);
     let window =
         WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html#/recordbar".into()))
+            .e2e_browser_args()
             .title("Grab-it recording")
             .inner_size(f64::from(size.0) / scale, f64::from(size.1) / scale)
             .decorations(false)

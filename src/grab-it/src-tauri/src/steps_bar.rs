@@ -12,6 +12,7 @@ use tauri::{Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBu
 
 use crate::record_bar::{self, Display};
 use crate::rt::AppHandle;
+use crate::windows::E2eBrowserArgs;
 
 pub const LABEL: &str = "steps-bar";
 /// The window's size in points: the pill and the room for its shadow
@@ -110,6 +111,7 @@ pub(crate) fn open_pill(
     let (position, size) = placement;
     let url = WebviewUrl::App(format!("index.html#/{}", pill.route).into());
     let window = WebviewWindowBuilder::new(app, pill.label, url)
+        .e2e_browser_args()
         .title(pill.title)
         .inner_size(pill.size.0, pill.size.1)
         .decorations(false)

@@ -26,10 +26,12 @@ interface Meta {
 
 /**
  * e2e/fixtures/screen.png is 960 × 540. With the e2e feature, screen.rs
- * resizes it to each monitor's size, so on the suite's 1920 × 1080 Xvfb a
- * screen pixel (x, y) shows fixture pixel (x / 2, y / 2). Each point below
- * sits at least 20 fixture pixels inside its area, clear of the blending
- * the resize does at colour edges.
+ * stretches it over each monitor, so a screen of W × H physical pixels
+ * shows fixture pixel (x × 960 / W, y × 540 / H) at screen pixel (x, y):
+ * half of it on the suite's 1920 × 1080 Xvfb, but Windows runners and
+ * local displays have other sizes, so the specs measure the screen. Each
+ * point below sits at least 20 fixture pixels inside its area, clear of
+ * the blending the resize does at colour edges.
  */
 const FIXTURE = { width: 960, height: 540 };
 const BACKGROUND: Rgb = [36, 41, 51];
@@ -52,6 +54,30 @@ const SAMPLES: { at: [number, number]; colour: Rgb; name: string }[] = [
   { at: [750, 210], colour: YELLOW, name: "yellow swatch" },
 ];
 
+/**
+ * The region the region test drags, in fixture pixels: the background,
+ * the window's top-left corner and part of the red swatch. Its points sit
+ * at least 20 fixture pixels inside the region and inside their area, so
+ * they stay there at any screen size.
+ */
+const REGION = { left: 60, top: 30, right: 300, bottom: 240 };
+const REGION_SAMPLES: { at: [number, number]; colour: Rgb; name: string }[] = [
+  { at: [90, 55], colour: BACKGROUND, name: "background" },
+  { at: [200, 100], colour: TITLE_BAR, name: "title bar" },
+  { at: [200, 140], colour: WINDOW, name: "window" },
+  { at: [175, 200], colour: RED, name: "red swatch" },
+  { at: [240, 215], colour: RED, name: "red swatch" },
+];
+
+/** The screen in physical pixels and its scale, read in the current window. */
+async function measureScreen(): Promise<{ width: number; height: number; scale: number }> {
+  return browser.execute(() => ({
+    width: Math.round(window.screen.width * window.devicePixelRatio),
+    height: Math.round(window.screen.height * window.devicePixelRatio),
+    scale: window.devicePixelRatio,
+  }));
+}
+
 /** Fails with every pixel of `image` that does not show what was expected. */
 function expectPixels(image: DecodedPng, expected: { x: number; y: number; colour: Rgb; name: string }[]): void {
   const wrong = expected
@@ -65,8 +91,20 @@ describe("Capture", () => {
   const sandbox = currentSandbox();
 
   it("saves a dragged region as a PNG with its meta.json", async () => {
+    await switchToMainWindow();
+    const screen = await measureScreen();
+    // Screen pixels per fixture pixel. The overlay fills the screen, so its
+    // CSS pixels are screen pixels divided by the scale.
+    const scaleX = screen.width / FIXTURE.width;
+    const scaleY = screen.height / FIXTURE.height;
+    const toOverlay = (fx: number, fy: number) => ({
+      x: Math.round((fx * scaleX) / screen.scale),
+      y: Math.round((fy * scaleY) / screen.scale),
+    });
+    const from = toOverlay(REGION.left, REGION.top);
+    const to = toOverlay(REGION.right, REGION.bottom);
     await startRegionCapture();
-    await dragRegionOnOverlay({ x: 200, y: 150 }, { x: 600, y: 450 });
+    await dragRegionOnOverlay(from, to);
 
     const capture = await waitForCapture(sandbox, 1);
     expect(path.basename(capture)).toMatch(/^Grab-it \d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}\.png$/);
@@ -74,23 +112,23 @@ describe("Capture", () => {
     expect(meta.mode).toBe("region");
     const size = pngSize(capture);
     expect({ width: meta.width, height: meta.height }).toEqual(size);
-    // 400 × 300 CSS pixels on a display at scale 1, give or take the
+    // The dragged CSS pixels at the screen's scale, give or take the
     // snapping to whole image pixels.
-    expect(Math.abs(size.width - 400)).toBeLessThanOrEqual(2);
-    expect(Math.abs(size.height - 300)).toBeLessThanOrEqual(2);
+    expect(Math.abs(size.width - (to.x - from.x) * screen.scale)).toBeLessThanOrEqual(2);
+    expect(Math.abs(size.height - (to.y - from.y) * screen.scale)).toBeLessThanOrEqual(2);
 
-    // The overlay fills the 1920 × 1080 screen at scale 1, so capture pixel
-    // (x, y) is screen pixel (200 + x, 150 + y), which shows fixture pixel
-    // ((200 + x) / 2, (150 + y) / 2).
+    // Capture pixel (x, y) is the screen pixel that far from where the
+    // drag started, which shows the fixture pixel scaled back from there.
     const image = readPng(capture);
-    const toCapture = (fx: number, fy: number) => ({ x: fx * 2 - 200, y: fy * 2 - 150 });
-    expectPixels(image, [
-      { ...toCapture(105, 80), colour: BACKGROUND, name: "background" },
-      { ...toCapture(200, 100), colour: TITLE_BAR, name: "title bar" },
-      { ...toCapture(200, 140), colour: WINDOW, name: "window" },
-      { ...toCapture(175, 200), colour: RED, name: "red swatch" },
-      { ...toCapture(210, 210), colour: RED, name: "red swatch" },
-    ]);
+    expectPixels(
+      image,
+      REGION_SAMPLES.map(({ at: [fx, fy], colour, name }) => ({
+        x: fx * scaleX - from.x * screen.scale,
+        y: fy * scaleY - from.y * screen.scale,
+        colour,
+        name,
+      })),
+    );
   });
 
   it("shows the capture on the Quick Access card", async () => {
@@ -102,10 +140,8 @@ describe("Capture", () => {
 
   it("saves the whole screen from the New capture menu", async () => {
     await switchToMainWindow();
-    const screen = await browser.execute(() => ({
-      width: Math.round(window.screen.width * window.devicePixelRatio),
-      height: Math.round(window.screen.height * window.devicePixelRatio),
-    }));
+    const { width, height } = await measureScreen();
+    const screen = { width, height };
     await startMenuCapture("Capture screen");
 
     const capture = await waitForCapture(sandbox, 2);
