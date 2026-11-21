@@ -494,7 +494,7 @@ Criterion keeps the results in `src-tauri/target/criterion/`. From the repositor
 - `editor/render`: the render plan of 128 edited captures (every turn and mirror, cropped and not, under each kind of backdrop), with and without a scale factor.
 - `recording/clips`: scrubbing 1000 times across 200 clips, clip starts and zoom owners, 100 splits and moves, and reading 200 saved clips.
 
-Each file takes the functions it times from their module once, so the times leave out the test runner's export getters. There is no canvas in the benches' jsdom, so they time the layout and pixel maths, not drawing.
+Each file takes the functions it times from their module once, so its own calls skip the test runner's export getters. The code it calls still goes through them for its own imports: `editor/flatten` and `editor/render` read `model.ts`'s exports this way on every call, so their times include that cost. The base and the head pay it alike, so the comparison holds, and `vitest.config.ts` turns off the warning vitest prints about it (`benchmark.suppressExportGetterWarnings`). There is no canvas in the benches' jsdom, so they time the layout and pixel maths, not drawing.
 
 ```sh
 npm run bench                      # every frontend bench

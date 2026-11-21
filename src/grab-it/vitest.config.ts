@@ -25,5 +25,12 @@ export default defineConfig({
       reporter: ["text-summary", "html", "lcov"],
       thresholds: { lines: 90, branches: 83 },
     },
+    benchmark: {
+      // flatten.ts and render.ts read model.ts's exports through the module
+      // runner's getters on every call, as their tests do. The base and the
+      // head pay the same cost, so comparisons hold; the warning would only
+      // repeat that on every run.
+      suppressExportGetterWarnings: true,
+    },
   },
 });
