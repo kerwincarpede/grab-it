@@ -1,19 +1,19 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { mockIPC } from "@tauri-apps/api/mocks";
-import type { InvokeArgs } from "@tauri-apps/api/core";
+import { mockCommands } from "../test/mockCommands";
 import { describe, expect, it } from "vitest";
 import StepsBar from "./StepsBar";
 import { routeFromHash } from "../routes";
 
 function backend(fail = false) {
-  const calls: { cmd: string; payload?: InvokeArgs }[] = [];
-  mockIPC((cmd, payload) => {
-    calls.push({ cmd, payload });
-    if (cmd === "steps_bar_stop" && fail) throw new Error("no step capture");
-    return null;
-  });
-  return calls;
+  return mockCommands(
+    {
+      steps_bar_stop: () => {
+        if (fail) throw new Error("no step capture");
+      },
+    },
+    { otherwise: () => null },
+  );
 }
 
 describe("StepsBar", () => {

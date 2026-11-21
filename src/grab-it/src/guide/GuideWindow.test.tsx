@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { mockIPC } from "@tauri-apps/api/mocks";
 import { forwardRef, useImperativeHandle, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import GuideWindow from "./GuideWindow";
+import type { GuideInfo, GuideStep, Value } from "../app/bindings";
+import { mockCommands } from "../test/mockCommands";
 
 // The window draws steps on a canvas only once their image loads, which
 // jsdom never does; the stand-ins keep Konva out of the test.
@@ -24,7 +25,7 @@ vi.mock("react-konva", () => {
   return { Stage, Layer, Group: Box, Image, Rect: () => null, Circle: () => null, Line: () => null, Text: () => null, Arrow: () => null, Ellipse: () => null, Shape: () => null, Label: Box, Tag: () => null, Transformer: () => null, Path: () => null };
 });
 
-const info = {
+const info: GuideInfo = {
   path: "/pictures/Grab-it/guides/Grab-it Guide 2026-01-02 03-04-05.guide.json",
   title: "Grab-it Guide 2026-01-02 03-04-05",
   steps: [
@@ -44,13 +45,18 @@ vi.mock("../editor/flatten", () => ({
 }));
 
 function mockGuide() {
-  const saved: unknown[] = [];
-  mockIPC((cmd, args) => {
-    if (cmd === "guide_info") return info;
-    if (cmd === "guide_image") return new ArrayBuffer(0);
-    if (cmd === "guide_save") saved.push((args as { steps: unknown }).steps);
-    return null;
-  }, { shouldMockEvents: true });
+  const saved: GuideStep[][] = [];
+  mockCommands(
+    {
+      guide_info: () => info,
+      guide_image: () => new ArrayBuffer(0),
+      guide_save: ({ steps }) => {
+        saved.push(steps);
+        return null;
+      },
+    },
+    { shouldMockEvents: true, otherwise: () => null },
+  );
   return saved;
 }
 
@@ -180,12 +186,14 @@ describe("GuideWindow steps with cuts", () => {
     // jsdom has no object URLs.
     Object.assign(URL, { createObjectURL: () => "blob:step", revokeObjectURL: () => {} });
     const crop = { x: 0, y: 20, width: 400, height: 200 };
-    const annotations = { version: 1, shapes: [], crop, cuts: [{ axis: "y", start: 100, end: 160, edge: "straight" }] };
-    mockIPC((cmd) => {
-      if (cmd === "guide_info") return { ...info, steps: [{ ...info.steps[0], annotations }] };
-      if (cmd === "guide_image") return new ArrayBuffer(0);
-      return null;
-    }, { shouldMockEvents: true });
+    const annotations: Value = { version: 1, shapes: [], crop, cuts: [{ axis: "y", start: 100, end: 160, edge: "straight" }] };
+    mockCommands(
+      {
+        guide_info: () => ({ ...info, steps: [{ ...info.steps[0], annotations }] }),
+        guide_image: () => new ArrayBuffer(0),
+      },
+      { shouldMockEvents: true, otherwise: () => null },
+    );
     render(<GuideWindow />);
     const stage = await screen.findByTestId("step-stage");
     // 60 rows went: the step is 400 × 240, and so is the image its shapes sit on.

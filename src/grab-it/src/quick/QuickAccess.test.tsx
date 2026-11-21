@@ -1,8 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { InvokeArgs } from "@tauri-apps/api/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import QuickAccess from "./QuickAccess";
 import {
@@ -18,6 +16,7 @@ import {
   type QuickItem,
 } from "./api";
 import { LIBRARY_CHANGED_EVENT, type ShotText } from "../library/api";
+import { mockCommands, type CommandCall } from "../test/mockCommands";
 
 const CAPTURE: QuickItem = {
   kind: "capture",
@@ -29,7 +28,7 @@ const CAPTURE: QuickItem = {
 };
 
 interface Backend {
-  calls: { cmd: string; payload?: InvokeArgs }[];
+  calls: CommandCall[];
   failAction?: string;
   drag?: Promise<void>;
   failDrag?: string;
@@ -44,32 +43,36 @@ const SHOT_ID = 42;
 
 function mockBackend(item: QuickItem | null, options: Partial<Backend> = {}): Backend {
   const backend: Backend = { calls: [], ...options };
-  mockIPC(
-    (cmd, payload) => {
-      backend.calls.push({ cmd, payload });
-      switch (cmd) {
-        case "quick_info":
-          return item && { generation: 7, item };
-        case "quick_thumbnail":
-          return new ArrayBuffer(4);
-        case "quick_drag":
-          if (backend.failDrag) throw backend.failDrag;
-          return backend.drag ?? null;
-        case "quick_action":
-          if (backend.failAction) throw backend.failAction;
-          return null;
-        case "library_shot_id":
-          return backend.text ? SHOT_ID : null;
-        case "library_text":
-          return backend.text;
-        case "library_copy_text":
-          return backend.text?.state === "read" ? backend.text.text : null;
-        default:
-          // Event plumbing (`plugin:event|listen`) and anything else.
-          return null;
-      }
+  backend.calls = mockCommands(
+    {
+      // Settings' 8 seconds, which the card falls back to as well.
+      quick_info: () => item && { generation: 7, item, seconds: 8 },
+      quick_thumbnail: () => new ArrayBuffer(4),
+      quick_drag: () => {
+        if (backend.failDrag) throw backend.failDrag;
+        return backend.drag?.then(() => null) ?? null;
+      },
+      quick_action: () => {
+        if (backend.failAction) throw backend.failAction;
+        return null;
+      },
+      scroll_done: () => undefined,
+      scroll_cancel: () => undefined,
+      library_shot_id: () => (backend.text ? SHOT_ID : null),
+      library_text: () => {
+        if (!backend.text) throw new Error("not in the library");
+        return backend.text;
+      },
+      library_copy_text: () => {
+        if (backend.text?.state !== "read") throw new Error("no text read");
+        return backend.text.text;
+      },
     },
-    { shouldMockEvents: backend.events },
+    {
+      shouldMockEvents: backend.events,
+      // Event plumbing (`plugin:event|listen`) and anything else.
+      otherwise: () => null,
+    },
   );
   return backend;
 }

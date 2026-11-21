@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockWindows } from "@tauri-apps/api/mocks";
 import type { ReactNode, Ref } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import EditorWindow from "./EditorWindow";
@@ -10,6 +10,8 @@ import type { CapturedPointer } from "./api";
 import type { Annotations, Shape } from "./model";
 import { PREFERENCES_DELAY_MS } from "./preferences";
 import { AUTOSAVE_DELAY_MS } from "./useAnnotations";
+import type { EditorPreferences_Deserialize, EditorPreferences_Serialize, Value } from "../app/bindings";
+import { mockCommands } from "../test/mockCommands";
 
 /** Where the mocked stage reports the pointer, in capture pixels. */
 const pointerAt = vi.hoisted(() => ({ x: 0, y: 0 }));
@@ -351,6 +353,16 @@ interface PreferencesMock {
   pointer?: CapturedPointer;
 }
 
+/** A sidecar as Rust sends it: plain JSON, which `Annotations` types. */
+const sidecarValue = (annotations: Annotations | null) => annotations as unknown as Value | null;
+
+/**
+ * Preferences as Rust sends and receives them. The backdrops in them are the
+ * editor's own JSON, which `EditorPreferences` types, as in settings/api.ts.
+ */
+const toWire = (preferences: EditorPreferences) => preferences as unknown as EditorPreferences_Serialize;
+const fromWire = (preferences: EditorPreferences_Deserialize) => preferences as unknown as EditorPreferences;
+
 /** The capture's id in the mocked library. */
 const SHOT_ID = 7;
 
@@ -364,84 +376,104 @@ function mockEditor(
   preferences: PreferencesMock = {},
 ): Annotations[] {
   const saved: Annotations[] = [];
-  mockIPC((cmd, payload) => {
-    switch (cmd) {
-      case "get_editor_preferences":
+  const record = (cmd: string, payload: unknown) => calls.push({ cmd, payload });
+  mockCommands(
+    {
+      get_editor_preferences: () => {
         if (preferences.stored instanceof Error) throw preferences.stored;
-        return preferences.stored ?? {};
-      case "set_editor_preferences":
-        preferences.saved?.push((payload as { preferences: EditorPreferences }).preferences);
-        return (payload as { preferences: EditorPreferences }).preferences;
-      case "set_backdrop_presets": {
+        return toWire(preferences.stored ?? {});
+      },
+      set_editor_preferences: (payload) => {
+        const sent = fromWire(payload.preferences);
+        preferences.saved?.push(sent);
+        return toWire(sent);
+      },
+      set_backdrop_presets: ({ presets }) => {
         // Stored, so the next read sees them, as settings.json would.
-        const presets = (payload as { presets: BackdropPreset[] }).presets;
         preferences.presets?.push(presets);
         if (!(preferences.stored instanceof Error)) preferences.stored = { ...preferences.stored, backdropPresets: presets };
         return presets;
-      }
-      case "set_favorite_colors": {
+      },
+      set_favorite_colors: ({ colors }) => {
         // Stored, so the next read sees them, as settings.json would.
-        const colors = (payload as { colors: string[] }).colors;
         preferences.favorites?.push(colors);
         if (!(preferences.stored instanceof Error)) preferences.stored = { ...preferences.stored, favoriteColors: colors };
         return colors;
-      }
-      case "save_backdrop_preset_image":
-        calls.push({ cmd, payload });
+      },
+      save_backdrop_preset_image: (payload) => {
+        record("save_backdrop_preset_image", payload);
         return PRESET_COPY;
-      case "editor_info":
-        return {
-          path: "/p/originals/shot.png",
-          fileName: "shot.png",
-          annotations,
-          scaleFactor: preferences.scaleFactor ?? null,
-          pointer: preferences.pointer ?? null,
-        };
-      case "plugin:dialog|open":
-        return preferences.picked ?? null;
-      case "editor_backdrop_image":
-        calls.push({ cmd, payload });
+      },
+      editor_info: () => ({
+        path: "/p/originals/shot.png",
+        fileName: "shot.png",
+        annotations: sidecarValue(annotations),
+        scaleFactor: preferences.scaleFactor ?? null,
+        pointer: preferences.pointer ?? null,
+      }),
+      editor_backdrop_image: (payload) => {
+        record("editor_backdrop_image", payload);
         return new ArrayBuffer(4);
-      case "editor_image":
-        return new ArrayBuffer(8);
-      case "editor_add_image_file":
-        calls.push({ cmd, payload });
+      },
+      editor_image: () => new ArrayBuffer(8),
+      editor_add_image_file: (payload) => {
+        record("editor_add_image_file", payload);
         return "before-1700000000000.png";
-      case "editor_add_clipboard_image":
-        calls.push({ cmd, payload });
+      },
+      editor_add_clipboard_image: (payload) => {
+        record("editor_add_clipboard_image", payload);
         return "pasted-1700000000000.png";
-      case "editor_asset_image":
-        calls.push({ cmd, payload });
+      },
+      editor_asset_image: (payload) => {
+        record("editor_asset_image", payload);
         return preferences.asset ?? new ArrayBuffer(4);
-      case "editor_save_annotations":
-        saved.push((payload as { annotations: Annotations }).annotations);
+      },
+      editor_save_annotations: (payload) => {
+        saved.push(payload.annotations as unknown as Annotations);
         return null;
-      case "library_shot_id":
-        return preferences.shotText ? SHOT_ID : null;
-      case "library_text":
-        return preferences.shotText;
-      case "library_copy_text":
-        calls.push({ cmd, payload });
+      },
+      library_shot_id: () => (preferences.shotText ? SHOT_ID : null),
+      // Only asked for once `library_shot_id` finds the capture, so `shotText` is set.
+      library_text: () => preferences.shotText ?? { state: "waiting" },
+      library_copy_text: (payload) => {
+        record("library_copy_text", payload);
         return preferences.shotText?.state === "read" ? preferences.shotText.text : "";
-      case "plugin:event|listen":
-      case "plugin:event|unlisten":
-        return 1;
-      case "editor_words":
-        calls.push({ cmd, payload });
+      },
+      editor_words: (payload) => {
+        record("editor_words", payload);
         if (preferences.words instanceof Error) throw preferences.words;
         return preferences.words ?? [];
-      case "editor_faces":
-        calls.push({ cmd, payload });
+      },
+      editor_faces: (payload) => {
+        record("editor_faces", payload);
         return preferences.faces ?? [];
-      case "editor_pin":
-      case "editor_copy":
-      case "plugin:window|close":
-        calls.push({ cmd, payload });
+      },
+      editor_pin: (payload) => {
+        record("editor_pin", payload);
         return null;
-      default:
-        throw new Error(`unexpected command ${cmd}`);
-    }
-  });
+      },
+      editor_copy: (payload) => {
+        record("editor_copy", payload);
+        return null;
+      },
+    },
+    {
+      otherwise: (cmd, payload) => {
+        switch (cmd) {
+          case "plugin:dialog|open":
+            return preferences.picked ?? null;
+          case "plugin:event|listen":
+          case "plugin:event|unlisten":
+            return 1;
+          case "plugin:window|close":
+            record(cmd, payload);
+            return null;
+          default:
+            throw new Error(`unexpected command ${cmd}`);
+        }
+      },
+    },
+  );
   return saved;
 }
 
@@ -1129,13 +1161,17 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
   });
 
   it("says so when a dropped file cannot be added", async () => {
-    mockIPC((cmd) => {
-      if (cmd === "editor_add_image_file") throw "the image must be a PNG, JPEG, WebP or GIF image";
-      if (cmd === "editor_info") return { path: "/p/originals/shot.png", fileName: "shot.png", annotations: sidecar, scaleFactor: null };
-      if (cmd === "editor_image") return new ArrayBuffer(8);
-      if (cmd === "get_editor_preferences") return {};
-      return null;
-    });
+    mockCommands(
+      {
+        editor_add_image_file: () => {
+          throw "the image must be a PNG, JPEG, WebP or GIF image";
+        },
+        editor_info: () => ({ path: "/p/originals/shot.png", fileName: "shot.png", annotations: sidecarValue(sidecar), scaleFactor: null, pointer: null }),
+        editor_image: () => new ArrayBuffer(8),
+        get_editor_preferences: () => ({}),
+      },
+      { otherwise: () => null },
+    );
     await ready();
     await waitFor(() => expect(dropListener.handler).not.toBeNull());
     dropListener.handler?.({ payload: { type: "drop", paths: ["C:\\Users\\me\\notes.txt"], position: { x: 0, y: 0 } } });

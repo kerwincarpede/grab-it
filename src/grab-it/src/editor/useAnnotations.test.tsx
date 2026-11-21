@@ -1,10 +1,12 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { emit } from "@tauri-apps/api/event";
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockWindows } from "@tauri-apps/api/mocks";
 import { describe, expect, it } from "vitest";
 import type { Annotations, Shape } from "./model";
 import { addShape } from "./tools";
 import { AUTOSAVE_DELAY_MS, useAnnotations } from "./useAnnotations";
+import type { Value } from "../app/bindings";
+import { mockCommands } from "../test/mockCommands";
 
 const step: Shape = { id: "s1", type: "step", color: "#e5484d", x: 10, y: 10, radius: 16 };
 const rect: Shape = { id: "r1", type: "rect", color: "#0090ff", strokeWidth: 4, x: 1, y: 2, width: 30, height: 40 };
@@ -13,26 +15,29 @@ const rect: Shape = { id: "r1", type: "rect", color: "#0090ff", strokeWidth: 4, 
  * Mocks the editor commands inside an `editor-1` window; returns every
  * sidecar written. `calls` records each write and window destroy in order.
  */
-function mockEditor(annotations: unknown = { version: 1, shapes: [step] }, calls: string[] = []): Annotations[] {
+function mockEditor(annotations: Annotations | Value = { version: 1, shapes: [step] }, calls: string[] = []): Annotations[] {
   const saved: Annotations[] = [];
   mockWindows("editor-1");
-  mockIPC(
-    (cmd, payload) => {
-      switch (cmd) {
-        case "editor_info":
-          return { path: "/p/originals/shot.png", fileName: "shot.png", annotations };
-        case "editor_save_annotations":
-          saved.push(JSON.parse(JSON.stringify((payload as { annotations: Annotations }).annotations)));
-          calls.push("save");
-          return null;
-        case "plugin:window|destroy":
+  mockCommands(
+    {
+      // Any JSON the sidecar might hold, including ones the editor must reject.
+      editor_info: () => ({ path: "/p/originals/shot.png", fileName: "shot.png", annotations: annotations as Value, scaleFactor: null, pointer: null }),
+      editor_save_annotations: (payload) => {
+        saved.push(JSON.parse(JSON.stringify(payload.annotations)));
+        calls.push("save");
+        return null;
+      },
+    },
+    {
+      shouldMockEvents: true,
+      otherwise: (cmd) => {
+        if (cmd === "plugin:window|destroy") {
           calls.push("destroy");
           return null;
-        default:
-          throw new Error(`unexpected command ${cmd}`);
-      }
+        }
+        throw new Error(`unexpected command ${cmd}`);
+      },
     },
-    { shouldMockEvents: true },
   );
   return saved;
 }

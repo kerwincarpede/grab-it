@@ -1,11 +1,13 @@
 import { StrictMode } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
-import type { InvokeArgs } from "@tauri-apps/api/core";
+import { mockConvertFileSrc } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import RecordingEditor from "./RecordingEditor";
+import type { AudioKind, Value } from "../app/bindings";
+import { mockCommands, type CommandCall } from "../test/mockCommands";
+import type { CursorPath } from "./zooms";
 
 vi.mock("./sources", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./sources")>();
@@ -23,40 +25,32 @@ let picked: string | null = null;
 let gone: string[] = [];
 
 interface Backend {
-  calls: { cmd: string; payload?: InvokeArgs; headers?: Record<string, string> }[];
+  calls: (CommandCall & { headers?: Record<string, string> })[];
   /** What `recording_export` resolves or rejects with, once the test says. */
   exported?: { resolve: (path: string) => void; reject: (err: string) => void };
 }
 
-function mockBackend(edits: unknown = null, cursor: unknown = null, audio: string[] = []): Backend {
+function mockBackend(edits: Value | null = null, cursor: CursorPath | null = null, audio: AudioKind[] = []): Backend {
   const backend: Backend = { calls: [] };
   mockConvertFileSrc("linux");
-  mockIPC(
-    (cmd, payload) => {
-      backend.calls.push({ cmd, payload });
-      switch (cmd) {
-      case "recording_info":
-        return { path: PATH, fileName: "Grab-it 2026-03-07 09-05-01.mp4", edits, fps: 60, cursor, audio };
-      case "get_editor_preferences":
-        return {};
-      case "recording_save_edits":
-        return null;
-      case "plugin:dialog|open":
-        return picked;
-      case "recording_source": {
-        const name = (payload as { fileName: string }).fileName;
+  backend.calls = mockCommands(
+    {
+      recording_info: () => ({ path: PATH, fileName: "Grab-it 2026-03-07 09-05-01.mp4", edits, fps: 60, cursor, audio }),
+      get_editor_preferences: () => ({}),
+      recording_save_edits: () => null,
+      recording_source: ({ fileName: name }) => {
         if (gone.includes(name)) return Promise.reject(`${name} is not in the recordings folder`);
         return { path: `/shots/recordings/${name}`, fileName: name, fps: 30, cursor: null, hasAudio: true };
-      }
-      case "recording_export":
-        return new Promise<string>((resolve, reject) => {
+      },
+      recording_export: () =>
+        new Promise<string>((resolve, reject) => {
           backend.exported = { resolve, reject };
-        });
-      default:
-        return null;
-      }
+        }),
     },
-    { shouldMockEvents: true },
+    {
+      shouldMockEvents: true,
+      otherwise: (cmd) => (cmd === "plugin:dialog|open" ? picked : null),
+    },
   );
   // The mock leaves out the request headers; keep them with the call they came with.
   const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown, options?: { headers?: Record<string, string> }) => Promise<unknown> } })
@@ -915,7 +909,7 @@ describe("RecordingEditor", () => {
     });
 
     it("plays a gap as a black box on the frame clock, then the next clip", async () => {
-      const clips = [
+      const clips: Value[] = [
         { id: "a", source: OWN, startMs: 8000, endMs: 12_000 },
         { id: "g", gapMs: 1000 },
         { id: "b", source: OWN, startMs: 0, endMs: 2000 },
