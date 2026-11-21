@@ -1,7 +1,7 @@
 // Smoke tests: WebdriverIO drives the e2e build of Grab-it through
 // tauri-driver. `npm run e2e` builds that binary first; see "Smoke tests" in
 // docs/development.md.
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -18,7 +18,8 @@ const application = path.join(
   process.platform === "win32" ? "grab-it.exe" : "grab-it",
 );
 const fixture = path.join(e2eDir, "fixtures", "screen.png");
-const DRIVER_PORT = 4444;
+/** Replaced in beforeSession by a free port of the worker's own. */
+const PLACEHOLDER_PORT = 4444;
 
 // One folder per run, kept afterwards for its logs and captures. Set before
 // the workers start, so they all inherit it.
@@ -85,27 +86,98 @@ async function startXvfb(): Promise<void> {
   process.env.DISPLAY = `:${display}`;
 }
 
-/** Whether something listens on `port`. */
-function listening(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = net.connect(port, "127.0.0.1");
-    socket.once("connect", () => {
-      socket.end();
-      resolve(true);
-    });
-    socket.once("error", () => resolve(false));
-  });
+/**
+ * Free ports on 127.0.0.1, one per name. Each spec file's tauri-driver and
+ * native driver get their own, so a driver an earlier worker left running
+ * can never answer the next worker's session.
+ */
+async function freePorts(count: number): Promise<number[]> {
+  const servers = await Promise.all(
+    Array.from(
+      { length: count },
+      () =>
+        new Promise<net.Server>((resolve, reject) => {
+          const server = net.createServer();
+          server.once("error", reject);
+          server.listen(0, "127.0.0.1", () => resolve(server));
+        }),
+    ),
+  );
+  const ports = servers.map((server) => (server.address() as net.AddressInfo).port);
+  await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
+  return ports;
 }
 
-/** Resolves once `port` is listened on (`open`) or free again. */
-async function waitForPort(port: number, open: boolean, timeoutMs: number): Promise<void> {
+/**
+ * Resolves once tauri-driver passes a request through to the native
+ * WebDriver. tauri-driver listens before WebKitWebDriver (or msedgedriver)
+ * does, and a session asked for in between fails with a dropped socket.
+ * Any HTTP reply to `/status` proves both are up.
+ */
+async function waitForDriver(driver: ChildProcess, port: number, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while ((await listening(port)) !== open) {
-    if (Date.now() > deadline) {
-      throw new Error(open ? `tauri-driver did not listen on port ${port}` : `port ${port} is still in use`);
+  for (;;) {
+    if (driver.exitCode !== null || driver.signalCode !== null) {
+      throw new Error(`tauri-driver exited (${driver.exitCode ?? driver.signalCode}) before it was ready`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    try {
+      await fetch(`http://127.0.0.1:${port}/status`, { signal: AbortSignal.timeout(2_000) });
+      return;
+    } catch {
+      // Not listening yet, or the native driver is not.
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`tauri-driver on port ${port} did not reach its native driver within ${timeoutMs / 1000} seconds`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
+}
+
+/** Where a session's tauri-driver records its process ID, for onWorkerEnd. */
+function driverPidFile(sandboxRoot: string): string {
+  return path.join(sandboxRoot, "tauri-driver.pid");
+}
+
+/** Stops tauri-driver with what it started: the native driver, the app and the bus. */
+function stopProcessTree(pid: number): void {
+  try {
+    if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], { stdio: "ignore" });
+    else process.kill(-pid, "SIGTERM");
+  } catch {
+    // Already gone.
+  }
+}
+
+/** Stops this worker's tauri-driver, if it still runs. Synchronous, for process exit. */
+function stopTauriDriver(): void {
+  const driver = tauriDriver;
+  tauriDriver = undefined;
+  if (driver?.pid) stopProcessTree(driver.pid);
+  const sandboxRoot = process.env[SANDBOX_VAR];
+  if (sandboxRoot) fs.rmSync(driverPidFile(sandboxRoot), { force: true });
+}
+
+/** Starts tauri-driver for one spec file and waits until it can create a session. */
+async function startTauriDriver(sandboxRoot: string, port: number, nativePort: number): Promise<void> {
+  const env = appEnvironment(sandboxRoot);
+  const log = fs.openSync(path.join(sandboxRoot, "tauri-driver.log"), "a");
+  const driverArgs = [tauriDriverPath(), "--port", String(port), "--native-port", String(nativePort)];
+  // Linux: a private session bus, so the single-instance check never hands
+  // the arguments to a Grab-it already running on the developer's bus.
+  const dbus = process.platform === "linux" ? onPath("dbus-run-session") : undefined;
+  if (process.platform === "linux" && !dbus) {
+    env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${path.join(sandboxRoot, "no-session-bus")}`;
+  }
+  const [command, args] = dbus ? [dbus, ["--", ...driverArgs]] : [driverArgs[0], driverArgs.slice(1)];
+  const driver = spawn(command, args, {
+    env,
+    stdio: ["ignore", log, log],
+    // Its own process group, so the app and the bus go with it.
+    detached: process.platform !== "win32",
+  });
+  tauriDriver = driver;
+  if (driver.pid) fs.writeFileSync(driverPidFile(sandboxRoot), `${driver.pid}\n`);
+  await waitForDriver(driver, port, 30_000);
 }
 
 /** The app's environment: the sandbox's home and data, the fixture, and X11 only. */
@@ -142,9 +214,9 @@ function appEnvironment(sandboxRoot: string): NodeJS.ProcessEnv {
 export const config: WebdriverIO.Config = {
   runner: "local",
   hostname: "127.0.0.1",
-  port: DRIVER_PORT,
+  port: PLACEHOLDER_PORT,
   specs: [path.join(e2eDir, "specs", "*.ts")],
-  // One app at a time: they share tauri-driver's port and the display.
+  // One app at a time: they share the display.
   maxInstances: 1,
   capabilities: [
     {
@@ -195,42 +267,41 @@ export const config: WebdriverIO.Config = {
   },
 
   // Each spec file gets a fresh app with its own sandbox, behind its own
-  // tauri-driver. Restarts within a spec (reloadSession) keep both.
-  beforeSession: async (_config, _capabilities, _specs, cid) => {
-    // The previous spec's tauri-driver may still be letting go of the port.
-    await waitForPort(DRIVER_PORT, false, 15_000);
+  // tauri-driver on its own ports. Restarts within a spec (reloadSession)
+  // keep both.
+  beforeSession: async (config, _capabilities, specs, cid) => {
     const sandboxRoot = path.join(runDir, `session-${cid}`);
-    const env = appEnvironment(sandboxRoot);
-    // The specs read the sandbox from here.
+    // The specs read the sandbox from here. Set first, so the specs load
+    // even when the driver fails, and the worker fails on its own session.
     process.env[SANDBOX_VAR] = sandboxRoot;
-    const log = fs.openSync(path.join(sandboxRoot, "tauri-driver.log"), "a");
-    const driver = tauriDriverPath();
-    // Linux: a private session bus, so the single-instance check never hands
-    // the arguments to a Grab-it already running on the developer's bus.
-    const dbus = process.platform === "linux" ? onPath("dbus-run-session") : undefined;
-    if (process.platform === "linux" && !dbus) {
-      env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${path.join(sandboxRoot, "no-session-bus")}`;
+    const [port, nativePort] = await freePorts(2);
+    // The runner creates the session from this same config object.
+    config.port = port;
+    // Kills the driver however the worker ends, even when no session was made.
+    process.once("exit", stopTauriDriver);
+    try {
+      await startTauriDriver(sandboxRoot, port, nativePort);
+    } catch (err) {
+      // Nothing listens on the port now, so creating the session fails
+      // too: the app never starts in another session's data.
+      stopTauriDriver();
+      console.error(`[${cid}] tauri-driver did not start, so ${path.basename(specs[0] ?? "this spec")} fails: ${String(err)}`);
+      throw err;
     }
-    const [command, args] = dbus ? [dbus, ["--", driver]] : [driver, []];
-    tauriDriver = spawn(command, args, {
-      env,
-      stdio: ["ignore", log, log],
-      // Its own process group, so the app and the bus go with it.
-      detached: process.platform !== "win32",
-    });
-    await waitForPort(DRIVER_PORT, true, 30_000);
   },
 
   afterSession: () => {
-    const driver = tauriDriver;
-    tauriDriver = undefined;
-    if (!driver?.pid) return;
-    try {
-      if (process.platform === "win32") driver.kill();
-      else process.kill(-driver.pid, "SIGTERM");
-    } catch {
-      // Already gone.
-    }
+    stopTauriDriver();
+  },
+
+  // The launcher's backstop: a worker that crashed may have left its
+  // tauri-driver running.
+  onWorkerEnd: (cid) => {
+    const pidFile = driverPidFile(path.join(runDir, `session-${cid}`));
+    if (!fs.existsSync(pidFile)) return;
+    const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+    if (pid > 0) stopProcessTree(pid);
+    fs.rmSync(pidFile, { force: true });
   },
 
   onComplete: () => {
