@@ -35,8 +35,8 @@ use ::windows::{
     core::{PCWSTR, w},
 };
 use image::RgbaImage;
-use tauri::AppHandle;
 
+use crate::rt::AppHandle;
 use crate::{capture::bgra_to_rgba, screen::MonitorInfo};
 
 /// The window class of a frozen screen.

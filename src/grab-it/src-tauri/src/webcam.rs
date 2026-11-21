@@ -23,11 +23,12 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewUrl, WebviewWindow,
+    Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
     webview::{PermissionKind, PermissionResponse},
 };
 
+use crate::rt::AppHandle;
 use crate::{
     capture::Rect,
     screen::MonitorInfo,

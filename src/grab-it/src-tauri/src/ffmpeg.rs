@@ -33,10 +33,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::rt::AppHandle;
 use image::RgbaImage;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{Emitter, Manager};
 
 /// Where the downloaded ffmpeg lives, under the app data directory.
 pub const FFMPEG_DIR: &str = "ffmpeg";

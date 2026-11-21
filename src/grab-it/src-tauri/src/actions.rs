@@ -11,9 +11,10 @@ use std::time::Duration;
 
 use chrono::Local;
 use image::RgbaImage;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
+use crate::rt::AppHandle;
 use crate::{
     ai::{self, AiError},
     capture::{self, CaptureMode, CapturedPointer, Foreground, SavedCapture},

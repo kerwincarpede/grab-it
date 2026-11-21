@@ -4,7 +4,8 @@ These apply to `src/grab-it/src-tauri/`. Each feature has its own module in `src
 
 ## Commands
 
-- A `#[tauri::command]` lives in the module it belongs to. It is only reachable once it is listed in `tauri::generate_handler![...]` in `lib.rs`.
+- A `#[tauri::command]` lives in the module it belongs to. It is only reachable once it is listed in `tauri::generate_handler![...]` in `invoke_handler` in `lib.rs`, which the app and the IPC tests share.
+- Name handles through the `crate::rt` aliases (`AppHandle`, `WebviewWindow`, `MenuItem` and so on), never a concrete `tauri::AppHandle` or `tauri::Wry`. They are Wry in the app and Tauri's mock runtime in tests, so the IPC tests can build the real commands.
 - Commands return `Result<T, String>`, so the frontend gets a message it can show. Inside a module, use a typed error (for example `LibraryResult`) and turn it into a `String` at the command.
 - Send bytes as `tauri::ipc::Response`, not as a JSON array.
 - Check arguments from the page before using them, for example that `factor.is_finite() && factor > 0.0` in `pin_zoom`. The page is not trusted to send sane values.
@@ -25,5 +26,5 @@ These apply to `src/grab-it/src-tauri/`. Each feature has its own module in `src
 
 - `cargo fmt` and `cargo clippy --all-targets -- -D warnings` must be clean. Warnings fail CI.
 - Give public items a `///` comment that says what they do and why, not how.
-- Tests go in a `#[cfg(test)] mod tests` at the bottom of the module they test. They must run without a network or display. OCR tests use the bundled models in `ocr-models/`.
+- Tests go in a `#[cfg(test)] mod tests` at the bottom of the module they test. They must run without a network or display. OCR tests use the bundled models in `ocr-models/`. The one exception is `src/ipc_tests.rs`, the crate-level module that calls commands through Tauri's IPC on the mock runtime.
 - Debug switches are `GRAB_IT_*` environment variables (for example `GRAB_IT_TRACE_OVERLAY`). Document a new one in `development.md`.

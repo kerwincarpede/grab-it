@@ -320,6 +320,7 @@ impl Stitcher {
     }
 }
 
+use crate::rt::AppHandle;
 use crate::{
     actions,
     capture::{CaptureMode, Foreground, Rect},
@@ -334,7 +335,7 @@ use std::{
     },
     time::Duration,
 };
-use tauri::{AppHandle, Manager};
+use tauri::Manager;
 #[derive(Default)]
 pub struct ScrollState(Mutex<Option<Arc<Control>>>);
 struct Control {

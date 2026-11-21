@@ -8,10 +8,9 @@ use std::{
 };
 
 use serde::Serialize;
-use tauri::{
-    AppHandle, Emitter, Manager, Rect, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
-};
+use tauri::{Emitter, Manager, Rect, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
+use crate::rt::{AppHandle, WebviewWindow};
 use crate::{
     actions::{self, Action},
     screen, tray, update,

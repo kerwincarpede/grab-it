@@ -25,8 +25,9 @@ use std::{
 use chrono::DateTime;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{Emitter, Manager, State};
 
+use crate::rt::AppHandle;
 use crate::{
     capture::{self, CaptureMeta, ORIGINALS_DIR},
     commands::{SettingsState, lock},

@@ -13,8 +13,9 @@
 //! capture (`content_protected`), and elsewhere the brackets go once the
 //! countdown ends, so they are not recorded.
 
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
 
+use crate::rt::AppHandle;
 use crate::{capture::Rect, screen::MonitorInfo, settings::RecordingSource};
 
 pub const LABEL: &str = "record-frame";

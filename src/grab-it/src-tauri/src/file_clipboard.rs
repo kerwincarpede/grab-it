@@ -8,8 +8,8 @@
 
 use std::path::PathBuf;
 
+use crate::rt::AppHandle;
 use image::RgbaImage;
-use tauri::AppHandle;
 
 #[cfg(any(target_os = "macos", test))]
 fn png_bytes(image: &RgbaImage) -> Result<Vec<u8>, String> {

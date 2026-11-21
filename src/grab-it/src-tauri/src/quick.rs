@@ -17,12 +17,11 @@ use std::{
 
 use image::imageops::FilterType;
 use serde::{Deserialize, Serialize};
-use tauri::{
-    AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindowBuilder,
-};
+use tauri::{Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
 
+use crate::rt::AppHandle;
 use crate::{
     codes::{self, Code},
     library::LibraryState,

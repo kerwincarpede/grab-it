@@ -31,9 +31,10 @@ use std::{
 
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, Url};
+use tauri::{Emitter, Manager, Url};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
+use crate::rt::AppHandle;
 use crate::{
     commands::{SettingsState, lock as lock_settings},
     settings::UpdateChannel,

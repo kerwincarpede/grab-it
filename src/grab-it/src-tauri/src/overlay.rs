@@ -35,10 +35,11 @@ use std::{
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
-    State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, State,
+    WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 
+use crate::rt::{AppHandle, WebviewWindow};
 use crate::{
     actions,
     capture::{self, CaptureMode, CapturedPointer, CssRect, Foreground, Rect},

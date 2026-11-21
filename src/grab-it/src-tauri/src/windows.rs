@@ -9,10 +9,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tauri::{
-    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
-};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
+use crate::rt::{AppHandle, WebviewWindow};
 use crate::{
     actions, cli::OpenTarget, editor::EditorState, hotkeys, pin, quick,
     recording_editor::RecordingEditorState,

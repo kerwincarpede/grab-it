@@ -3,8 +3,9 @@
 use std::sync::{Mutex, MutexGuard};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{Emitter, State};
 
+use crate::rt::AppHandle;
 use crate::{
     hotkeys::{self, Hotkeys},
     settings::{

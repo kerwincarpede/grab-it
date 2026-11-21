@@ -8,9 +8,10 @@
 //! X11 has no such thing. Clicks on it are Grab-it's own, which step
 //! capture never takes as steps.
 
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
 
 use crate::record_bar::{self, Display};
+use crate::rt::AppHandle;
 
 pub const LABEL: &str = "steps-bar";
 /// The window's size in points: the pill and the room for its shadow

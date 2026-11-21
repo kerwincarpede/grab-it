@@ -178,6 +178,9 @@ objc2-vision = { version = "0.3", default-features = false, features = [
 cpal = "0.18"
 
 [dev-dependencies]
+# `test`: the IPC tests (ipc_tests.rs) run the real commands on Tauri's
+# mock runtime, without a window or display.
+tauri = { version = "2", features = ["test"] }
 tempfile = "3"
 # The tests draw the codes they decode; the app itself never writes one.
 rxing = { version = "0.9", default-features = false, features = ["encoders"] }

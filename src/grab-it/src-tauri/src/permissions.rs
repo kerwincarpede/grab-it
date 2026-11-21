@@ -14,8 +14,9 @@
 use std::sync::atomic::AtomicBool;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use tauri::Manager;
 
+use crate::rt::AppHandle;
 use crate::{
     commands::{SettingsState, lock},
     settings::PermissionSetup,

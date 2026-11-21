@@ -18,9 +18,10 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
+use crate::rt::{AppHandle, TauriPlugin};
 use crate::{
     actions::{self, Action},
     commands::{SettingsState, lock},
@@ -308,7 +309,7 @@ pub fn resume_hotkeys(app: AppHandle) {
 }
 
 /// The global-shortcut plugin, dispatching presses to captures.
-pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+pub fn plugin() -> TauriPlugin {
     tauri_plugin_global_shortcut::Builder::new()
         .with_handler(|app, shortcut, event| {
             if event.state != ShortcutState::Pressed || is_paused(app) {
