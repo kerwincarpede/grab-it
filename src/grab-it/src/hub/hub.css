@@ -85,7 +85,9 @@ body:has(.hub) {
   color: var(--text-muted);
 }
 
-.hub-item:where(:hover, :focus-visible) {
+/* Keep the focus outline while a hovered row takes the filled highlight. */
+.hub-item:where(:hover),
+.hub-scroll:where(:not(:has(button:hover))) .hub-item:where(:focus-visible) {
   background: var(--fill-hover);
 }
 
@@ -117,11 +119,6 @@ body:has(.hub) {
   }
 }
 
-/* The primary button receives focus when the hub opens. */
-.hub-scroll:has(button:not(.is-primary):is(:hover, :focus-visible)) .is-primary {
-  background: none;
-}
-
 /* A recording or step capture is running: choosing the item stops it. */
 .hub-item.is-running,
 .hub-item.is-running > .icon:first-child {
@@ -133,7 +130,8 @@ body:has(.hub) {
   background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
-.hub-item.is-running:where(:hover, :focus-visible) {
+.hub-item.is-running:where(:hover),
+.hub-scroll:where(:not(:has(button:hover))) .hub-item.is-running:where(:focus-visible) {
   background: color-mix(in srgb, var(--danger) 16%, transparent);
 }
 
@@ -194,7 +192,8 @@ body:has(.hub) {
   border-radius: 6px;
 }
 
-.hub-sub button:where(:hover, :focus-visible) {
+.hub-sub button:where(:hover),
+.hub-scroll:where(:not(:has(button:hover))) .hub-sub button:where(:focus-visible) {
   color: var(--text);
   background: var(--fill-hover);
 }
