@@ -12,6 +12,7 @@ import { newId } from "../editor/tools";
 import { useBackdropImage } from "../editor/useBackdropImage";
 import type { BackdropSources } from "../editor/flatten";
 import {
+  cancelExport,
   exportRecording,
   onExportProgress,
   recordingInfo,
@@ -240,6 +241,8 @@ export default function RecordingEditor() {
   const [selectedZoomId, setSelectedZoomId] = useState<string | null>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const [progress, setProgress] = useState<ExportProgress | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const exporting = progress !== null;
 
   const presets = useBackdropPresets(setMessage);
@@ -965,10 +968,22 @@ export default function RecordingEditor() {
 
   // --- Export -------------------------------------------------------------
 
+  const stopExport = async () => {
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      await cancelExport();
+    } catch (err) {
+      setCancelError(`Could not cancel export: ${errorText(err)}`);
+      setCancelling(false);
+    }
+  };
+
   const exportNow = async () => {
     if (!videoSize || !layout || exporting || !canExport) return;
     pause();
     setMessage(null);
+    setCancelError(null);
     setProgress({ done: 0, total: 0 });
     let unlisten: (() => void) | null = null;
     try {
@@ -1009,8 +1024,10 @@ export default function RecordingEditor() {
       );
       setMessage(`Exported ${fileName(saved)}`);
     } catch (err) {
-      setMessage(`Export failed: ${errorText(err)}`);
+      const reason = errorText(err);
+      setMessage(reason === "Export cancelled" ? reason : `Export failed: ${reason}`);
     } finally {
+      setCancelling(false);
       unlisten?.();
       setProgress(null);
     }
@@ -1322,9 +1339,16 @@ export default function RecordingEditor() {
         </Timeline>
       </div>
       {exporting && (
-        <div className="recording-progress" role="progressbar" aria-label="Export progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
-          <div style={{ width: `${percent}%` }} />
-        </div>
+        <section className="recording-export-panel" aria-label="Video export">
+          <strong>Exporting… {percent}%</strong>
+          <div className="recording-progress" role="progressbar" aria-label="Export progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+            <div style={{ width: `${percent}%` }} />
+          </div>
+          <button type="button" className="text-button" disabled={!progress.total || cancelling} onClick={() => void stopExport()}>
+            {cancelling ? "Cancelling…" : "Cancel"}
+          </button>
+          {cancelError && <span role="alert">{cancelError}</span>}
+        </section>
       )}
       <footer className="editor-status">
         <span>{info?.fileName ?? "Loading…"}</span>

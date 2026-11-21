@@ -284,8 +284,22 @@
   font-variant-numeric: tabular-nums;
 }
 
+.recording-export-panel {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--ed-surface);
+  color: var(--ed-text);
+  font-variant-numeric: tabular-nums;
+}
+
 .recording-progress {
-  height: 3px;
+  flex: 1;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
   background: var(--ed-raised);
 }
 

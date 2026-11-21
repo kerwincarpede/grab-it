@@ -780,7 +780,7 @@ impl Video {
         };
         if let Err(err) = stdin.write_all(frame.as_raw()) {
             // ffmpeg stopped reading: it has most likely said why.
-            let said = self.close(PROBE_TIMEOUT).err();
+            let said = self.close(PROBE_TIMEOUT, || false).err();
             return Err(said.unwrap_or_else(|| FfmpegError::Encode(err.to_string())));
         }
         Ok(())
@@ -791,14 +791,19 @@ impl Video {
         self.finish_within(FINISH_TIMEOUT)
     }
 
-    fn finish_within(mut self, timeout: Duration) -> FfmpegResult<()> {
-        self.close(timeout)
+    /// Finishes the video or stops and reaps the encoder on cancellation.
+    pub(crate) fn finish_cancellable(mut self, cancelled: impl Fn() -> bool) -> FfmpegResult<()> {
+        self.close(FINISH_TIMEOUT, cancelled)
     }
 
-    /// Closes stdin and waits up to `timeout` for ffmpeg to exit.
-    fn close(&mut self, timeout: Duration) -> FfmpegResult<()> {
+    fn finish_within(mut self, timeout: Duration) -> FfmpegResult<()> {
+        self.close(timeout, || false)
+    }
+
+    /// Closes stdin and waits for ffmpeg to exit, time out or be cancelled.
+    fn close(&mut self, timeout: Duration, cancelled: impl Fn() -> bool) -> FfmpegResult<()> {
         drop(self.stdin.take());
-        let status = wait_for(&mut self.child, timeout);
+        let status = wait_for_unless(&mut self.child, timeout, &cancelled);
         let said = self
             .stderr
             .take()
@@ -810,6 +815,7 @@ impl Video {
                 Some(line) => line.to_owned(),
                 None => format!("it exited with {status}"),
             })),
+            None if cancelled() => Err(FfmpegError::Encode("cancelled".into())),
             None => Err(FfmpegError::Encode(format!(
                 "it did not finish within {} seconds",
                 timeout.as_secs()
@@ -1014,6 +1020,17 @@ pub fn write_sound(
 /// Runs `ffmpeg` with `args` to the end, for up to `timeout`. Fails with
 /// the last line it printed when it fails.
 pub(crate) fn run(ffmpeg: &Path, args: Vec<OsString>, timeout: Duration) -> FfmpegResult<()> {
+    run_cancellable(ffmpeg, args, timeout, || false)
+}
+
+/// Runs ffmpeg until it finishes, times out, or cancellation is requested.
+/// Reaps the child before returning so its output can be removed.
+pub(crate) fn run_cancellable(
+    ffmpeg: &Path,
+    args: Vec<OsString>,
+    timeout: Duration,
+    cancelled: impl Fn() -> bool,
+) -> FfmpegResult<()> {
     let mut child = command(ffmpeg)
         .args(args)
         .stdin(Stdio::null())
@@ -1030,7 +1047,7 @@ pub(crate) fn run(ffmpeg: &Path, args: Vec<OsString>, timeout: Duration) -> Ffmp
             text
         })
     });
-    let status = wait_for(&mut child, timeout);
+    let status = wait_for_unless(&mut child, timeout, &cancelled);
     let said = stderr
         .and_then(|reader| reader.join().ok())
         .unwrap_or_default();
@@ -1040,6 +1057,7 @@ pub(crate) fn run(ffmpeg: &Path, args: Vec<OsString>, timeout: Duration) -> Ffmp
             Some(line) => line.to_owned(),
             None => format!("it exited with {status}"),
         })),
+        None if cancelled() => Err(FfmpegError::Encode("cancelled".into())),
         None => Err(FfmpegError::Encode(format!(
             "it did not finish within {} seconds",
             timeout.as_secs()
@@ -1054,11 +1072,21 @@ pub(crate) fn last_line(text: &str) -> Option<&str> {
 
 /// Waits up to `timeout` for `child`, killing it if it has not exited.
 pub(crate) fn wait_for(child: &mut Child, timeout: Duration) -> Option<ExitStatus> {
+    wait_for_unless(child, timeout, || false)
+}
+
+fn wait_for_unless(
+    child: &mut Child,
+    timeout: Duration,
+    cancelled: impl Fn() -> bool,
+) -> Option<ExitStatus> {
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return Some(status),
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
+            Ok(None) if !cancelled() && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(20))
+            }
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -1116,6 +1144,15 @@ pub fn parse_probe(said: &str) -> Probe {
 
 /// What ffmpeg says `video` holds; empty when it cannot say.
 pub fn probe_file(ffmpeg: &Path, video: &Path) -> Probe {
+    probe_file_cancellable(ffmpeg, video, || false)
+}
+
+/// Probes the file, stopping and reaping ffmpeg if the export is cancelled.
+pub(crate) fn probe_file_cancellable(
+    ffmpeg: &Path,
+    video: &Path,
+    cancelled: impl Fn() -> bool,
+) -> Probe {
     let said = command(ffmpeg)
         .arg("-hide_banner")
         .arg("-i")
@@ -1135,7 +1172,7 @@ pub fn probe_file(ffmpeg: &Path, video: &Path) -> Probe {
             });
             // ffmpeg exits with an error here (no output named), after
             // printing what the file holds.
-            wait_for(&mut child, Duration::from_secs(10));
+            wait_for_unless(&mut child, Duration::from_secs(10), cancelled);
             reader.and_then(|reader| reader.join().ok())
         });
     said.as_deref().map(parse_probe).unwrap_or_default()

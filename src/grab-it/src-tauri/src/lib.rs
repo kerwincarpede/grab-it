@@ -412,6 +412,7 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             editor::editor_save_annotations,
             editor::editor_words,
             editor::editor_faces,
+            recording_editor::recording_export_cancel,
             recording_editor::recording_info,
             recording_editor::recording_save_edits,
             recording_editor::recording_source,

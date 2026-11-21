@@ -25,12 +25,17 @@
 //! view ([`crate::zoom`]) before it is laid over the backdrop.
 
 use std::{
+    collections::HashMap,
     ffi::OsString,
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom},
     ops::Deref,
     path::{Path, PathBuf},
     process::Stdio,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::Duration,
 };
@@ -87,13 +92,66 @@ const MUX_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The recording each recording editor window shows, by window label.
 #[derive(Default)]
-pub struct RecordingEditorState(EditorState);
+pub struct RecordingEditorState {
+    editors: EditorState,
+    exports: Mutex<HashMap<String, ActiveExport>>,
+}
+
+struct ActiveExport {
+    original: PathBuf,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl RecordingEditorState {
+    fn begin_export(&self, label: &str, original: &Path) -> Result<Arc<AtomicBool>, String> {
+        let mut exports = self.exports.lock().unwrap_or_else(|err| err.into_inner());
+        if exports.contains_key(label) || exports.values().any(|export| export.original == original)
+        {
+            return Err("An export is already running".into());
+        }
+        let flag = Arc::new(AtomicBool::new(false));
+        exports.insert(
+            label.to_owned(),
+            ActiveExport {
+                original: original.to_owned(),
+                cancelled: flag.clone(),
+            },
+        );
+        Ok(flag)
+    }
+
+    fn cancel_export(&self, label: &str) {
+        if let Some(export) = self
+            .exports
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .get(label)
+        {
+            export.cancelled.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn finish_export(&self, label: &str) {
+        self.exports
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(label);
+    }
+}
+
+fn check_cancelled(flag: &AtomicBool) -> Result<(), String> {
+    if flag.load(Ordering::Relaxed) {
+        Err("Export cancelled".into())
+    } else {
+        Ok(())
+    }
+}
 
 impl Deref for RecordingEditorState {
     type Target = EditorState;
 
     fn deref(&self) -> &EditorState {
-        &self.0
+        &self.editors
     }
 }
 
@@ -1193,8 +1251,10 @@ fn decode_clip(
 fn render(
     ready: &ffmpeg::Ready,
     job: ExportJob<'_>,
+    cancelled: &AtomicBool,
     mut progress: impl FnMut(ExportProgress),
 ) -> Result<(), String> {
+    check_cancelled(cancelled)?;
     let ExportJob {
         output,
         plan,
@@ -1253,6 +1313,7 @@ fn render(
                 (ExportEntry::Gap(_), _) => {
                     let frame = gap_frame()?;
                     for _ in 0..entry.frames(fps) {
+                        check_cancelled(cancelled)?;
                         video.write(&frame).map_err(|err| err.to_string())?;
                         done += 1;
                         report(done);
@@ -1275,6 +1336,7 @@ fn render(
                 black(plan.video_width, plan.video_height)
             };
             let frames = decode_clip(&ready.path, &source.path, clip, fps, |buffer, index| {
+                check_cancelled(cancelled)?;
                 let mut shown: &[u8] = if clip.zooms.is_empty() {
                     buffer
                 } else {
@@ -1304,7 +1366,10 @@ fn render(
                 ));
             }
         }
-        video.finish().map_err(|err| err.to_string())?;
+        check_cancelled(cancelled)?;
+        let finished = video.finish_cancellable(|| cancelled.load(Ordering::Relaxed));
+        check_cancelled(cancelled)?;
+        finished.map_err(|err| err.to_string())?;
         let sounds: Vec<ClipSound<'_>> = plan
             .clips
             .iter()
@@ -1316,18 +1381,28 @@ fn render(
                 ClipSound::of(entry, file)
             })
             .collect();
-        ffmpeg::run(
+        check_cancelled(cancelled)?;
+        let mux = ffmpeg::run_cancellable(
             &ready.path,
             clip_sound_args(&silent, &sounds, output),
             MUX_TIMEOUT,
-        )
-        .map_err(|err| format!("could not add the sound: {err}"))
+            || cancelled.load(Ordering::Relaxed),
+        );
+        check_cancelled(cancelled)?;
+        mux.map_err(|err| format!("could not add the sound: {err}"))
     })();
     let _ = fs::remove_file(&silent);
     if result.is_err() {
         let _ = fs::remove_file(output);
     }
     result
+}
+
+/// Requests cancellation of the export running in this editor window.
+#[tauri::command]
+#[specta::specta]
+pub fn recording_export_cancel(window: WebviewWindow, state: State<'_, RecordingEditorState>) {
+    state.cancel_export(window.label());
 }
 
 /// Exports the window's recording as the plan in the [`EXPORT_PLAN_HEADER`]
@@ -1363,13 +1438,18 @@ pub async fn recording_export(
         );
     };
     let label = window.label().to_owned();
+    let cancelled = state.begin_export(
+        &label,
+        &original.canonicalize().map_err(|err| err.to_string())?,
+    )?;
     // Minutes of decoding and encoding: on a thread of its own, not the
     // async runtime's.
-    tauri::async_runtime::spawn_blocking(move || {
-        export(&app, &ready, &original, plan, &body, &label)
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        export(&app, &ready, &original, plan, &body, &label, &cancelled)
     })
-    .await
-    .map_err(|err| format!("the export stopped: {err}"))?
+    .await;
+    state.finish_export(window.label());
+    result.map_err(|err| format!("the export stopped: {err}"))?
 }
 
 /// The recording each clip of `plan` plays, from `recordings`; `None` for
@@ -1379,17 +1459,23 @@ fn clip_sources(
     ffmpeg_path: &Path,
     recordings: &Path,
     plan: &ExportPlan,
+    cancelled: &AtomicBool,
 ) -> Result<Vec<Option<ClipSource>>, String> {
     plan.clips
         .iter()
         .map(|entry| {
+            check_cancelled(cancelled)?;
             let Some(clip) = entry.clip() else {
                 return Ok(None);
             };
             let path = source_file(recordings, &clip.source)?;
+            let probe = ffmpeg::probe_file_cancellable(ffmpeg_path, &path, || {
+                cancelled.load(Ordering::Relaxed)
+            });
+            check_cancelled(cancelled)?;
             Ok(Some(ClipSource {
                 cursor: CursorPath::load(&path),
-                has_audio: ffmpeg::probe_file(ffmpeg_path, &path).audio,
+                has_audio: probe.audio,
                 path,
             }))
         })
@@ -1405,7 +1491,20 @@ fn export(
     plan: ExportPlan,
     body: &[u8],
     label: &str,
+    cancelled: &AtomicBool,
 ) -> Result<PathBuf, String> {
+    let fps = export_fps(&ready.path, original);
+    let report = |progress: ExportProgress| {
+        let _ = app.emit_to(
+            EventTarget::webview_window(label),
+            EXPORT_PROGRESS_EVENT,
+            progress,
+        );
+    };
+    report(ExportProgress {
+        done: 0,
+        total: plan.frames(fps),
+    });
     let layers = backdrop_and_mask(body, &plan)?;
     let bits_per_pixel = app
         .try_state::<SettingsState>()
@@ -1413,7 +1512,7 @@ fn export(
         .unwrap_or_else(|| crate::settings::RecordingQuality::High.bits_per_pixel());
     // Clips are looked for beside the opened recording, which is in the
     // recordings folder the editor was opened from.
-    let sources = clip_sources(&ready.path, recordings_of(original)?, &plan)?;
+    let sources = clip_sources(&ready.path, recordings_of(original)?, &plan, cancelled)?;
     let output = edited_path(original);
     let duration_ms = plan.duration_ms();
     let job = ExportJob {
@@ -1421,16 +1520,10 @@ fn export(
         plan,
         sources,
         layers,
-        fps: export_fps(&ready.path, original),
+        fps,
         bits_per_pixel,
     };
-    render(ready, job, |progress| {
-        let _ = app.emit_to(
-            EventTarget::webview_window(label),
-            EXPORT_PROGRESS_EVENT,
-            progress,
-        );
-    })?;
+    render(ready, job, cancelled, report)?;
     crate::library::record_recording(app, &output, duration_ms);
     let bytes = fs::metadata(&output).map(|meta| meta.len()).unwrap_or(0);
     quick::show(
@@ -1589,6 +1682,228 @@ mod tests {
             video_height: 540,
             backdrop_bytes: 10,
         }
+    }
+
+    #[test]
+    fn cancellation_is_scoped_to_one_window_and_one_export() {
+        let state = RecordingEditorState::default();
+        let first = state.begin_export("first", Path::new("first.mp4")).unwrap();
+        let second = state
+            .begin_export("second", Path::new("second.mp4"))
+            .unwrap();
+        assert!(state.begin_export("first", Path::new("first.mp4")).is_err());
+        assert!(
+            state
+                .begin_export("reopened", Path::new("first.mp4"))
+                .is_err()
+        );
+        state.cancel_export("first");
+        assert!(check_cancelled(&first).is_err());
+        assert!(check_cancelled(&second).is_ok());
+        state.finish_export("first");
+        assert!(
+            check_cancelled(
+                &state
+                    .begin_export("reopened", Path::new("first.mp4"))
+                    .unwrap()
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn cancelled_render_stops_before_starting_ffmpeg() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("edited.mp4");
+        let ready = ffmpeg::Ready {
+            path: dir.path().join("no-ffmpeg"),
+            encoder: ffmpeg::X264,
+        };
+        let job = ExportJob {
+            output: &output,
+            plan: plan(),
+            layers: None,
+            sources: vec![],
+            fps: 30,
+            bits_per_pixel: 0.1,
+        };
+        assert_eq!(
+            render(&ready, job, &AtomicBool::new(true), |_| panic!(
+                "unexpected frame"
+            )),
+            Err("Export cancelled".into())
+        );
+        assert!(!output.exists());
+        assert!(!sidecar_path(&output, ".exporting.mp4").exists());
+    }
+
+    // Exercise the real pipes and child cleanup without requiring a system encoder.
+    #[cfg(unix)]
+    fn render_fixture(dir: &Path) -> ffmpeg::Ready {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("ffmpeg");
+        fs::write(
+            &path,
+            r#"#!/bin/sh
+for output do :; done
+if [ "$#" = 3 ] && [ "$2" = -i ]; then
+    : > "$output.probing"
+    exec sleep 30
+fi
+case "$output" in
+    pipe:1) exec dd if=/dev/zero bs=262144 count=4 2>/dev/null ;;
+    *.exporting.mp4)
+        if [ -f "$output.hold" ]; then
+            cat > "$output"
+            : > "$output.finishing"
+            exec sleep 30
+        fi
+        exec cat > "$output"
+        ;;
+    *) : > "$output"; exec sleep 30 ;;
+esac
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        ffmpeg::Ready {
+            path,
+            encoder: ffmpeg::X264,
+        }
+    }
+
+    #[cfg(unix)]
+    fn fixture_job(output: &Path, gap: bool) -> ExportJob<'_> {
+        let (entry, source) = if gap {
+            (ExportEntry::Gap(ExportGap { gap_ms: 1000 }), None)
+        } else {
+            let clip = ExportClip {
+                source_width: 256,
+                source_height: 256,
+                width: 256,
+                height: 256,
+                start_ms: 0,
+                end_ms: 1000,
+                ..clip()
+            };
+            (
+                clip.into(),
+                Some(ClipSource {
+                    path: output.with_file_name("clip.mp4"),
+                    cursor: None,
+                    has_audio: false,
+                }),
+            )
+        };
+        ExportJob {
+            output,
+            plan: ExportPlan {
+                clips: vec![entry],
+                width: 256,
+                height: 256,
+                video_width: 256,
+                video_height: 256,
+                x: 0,
+                y: 0,
+                backdrop_bytes: 0,
+            },
+            sources: vec![source],
+            layers: None,
+            fps: 4,
+            bits_per_pixel: 0.1,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_after_a_frame_stops_clips_and_gaps_and_removes_partial_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = render_fixture(dir.path());
+        let output = dir.path().join("edited.mp4");
+        let silent = sidecar_path(&output, ".exporting.mp4");
+        for gap in [false, true] {
+            let cancelled = AtomicBool::new(false);
+            let mut frames = Vec::new();
+            let result = render(&ready, fixture_job(&output, gap), &cancelled, |progress| {
+                assert!(silent.is_file());
+                frames.push(progress.done);
+                cancelled.store(true, Ordering::Relaxed);
+            });
+            assert_eq!(result, Err("Export cancelled".into()));
+            assert_eq!(frames, [1]);
+            assert!(!silent.exists());
+            assert!(!output.exists());
+        }
+    }
+
+    #[cfg(unix)]
+    fn cancel_when_created(path: &Path, cancelled: &AtomicBool) {
+        let start = std::time::Instant::now();
+        while !path.exists() {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "ffmpeg never created {}",
+                path.display()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        cancelled.store(true, Ordering::Relaxed);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_during_source_probe_stops_preflight() {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = render_fixture(dir.path());
+        fs::write(dir.path().join("clip.mp4"), []).unwrap();
+        let probing = dir.path().join("clip.mp4.probing");
+        let cancelled = AtomicBool::new(false);
+        let start = std::time::Instant::now();
+        thread::scope(|scope| {
+            scope.spawn(|| cancel_when_created(&probing, &cancelled));
+            let result = clip_sources(&ready.path, dir.path(), &plan(), &cancelled);
+            assert_eq!(result.err().as_deref(), Some("Export cancelled"));
+        });
+        assert!(start.elapsed() < Duration::from_secs(10));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_during_encoder_finish_removes_unfinished_video() {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = render_fixture(dir.path());
+        let output = dir.path().join("edited.mp4");
+        let silent = sidecar_path(&output, ".exporting.mp4");
+        fs::write(dir.path().join("edited.exporting.mp4.hold"), []).unwrap();
+        let finishing = dir.path().join("edited.exporting.mp4.finishing");
+        let cancelled = AtomicBool::new(false);
+        let start = std::time::Instant::now();
+        thread::scope(|scope| {
+            scope.spawn(|| cancel_when_created(&finishing, &cancelled));
+            let result = render(&ready, fixture_job(&output, true), &cancelled, |_| {});
+            assert_eq!(result, Err("Export cancelled".into()));
+        });
+        assert!(start.elapsed() < Duration::from_secs(20));
+        assert!(!silent.exists());
+        assert!(!output.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_during_mux_reaps_ffmpeg_and_removes_both_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = render_fixture(dir.path());
+        let output = dir.path().join("edited.mp4");
+        let cancelled = AtomicBool::new(false);
+        let start = std::time::Instant::now();
+        thread::scope(|scope| {
+            scope.spawn(|| cancel_when_created(&output, &cancelled));
+            let result = render(&ready, fixture_job(&output, true), &cancelled, |_| {});
+            assert_eq!(result, Err("Export cancelled".into()));
+        });
+        assert!(start.elapsed() < Duration::from_secs(20));
+        assert!(!output.exists());
+        assert!(!sidecar_path(&output, ".exporting.mp4").exists());
     }
 
     #[test]
