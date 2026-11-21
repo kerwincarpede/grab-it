@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { $, browser } from "@wdio/globals";
+import { PNG } from "pngjs";
 import type { Sandbox } from "./sandbox";
 
 /** A point in the current window's viewport, in CSS pixels. */
@@ -62,24 +63,11 @@ export function switchToMainWindow(): Promise<string> {
   return switchToPage("app", ".app-window");
 }
 
-/**
- * Clicks `selector`: a WebDriver click, or a DOM click when WebDriver
- * cannot click it (covered, or still animating in).
- */
+/** Clicks `selector` with WebDriver, once it is clickable: covered or disabled buttons fail the test. */
 export async function clickElement(selector: string): Promise<void> {
   const element = $(selector);
-  await element.waitForExist();
-  try {
-    await element.waitForClickable({ timeout: 5_000 });
-    await element.click();
-  } catch {
-    const clicked = await browser.execute((wanted: string) => {
-      const target = document.querySelector<HTMLElement>(wanted);
-      target?.click();
-      return target !== null;
-    }, selector);
-    if (!clicked) throw new Error(`Nothing to click at ${selector}`);
-  }
+  await element.waitForClickable();
+  await element.click();
 }
 
 let marks = 0;
@@ -288,6 +276,39 @@ export function pngSize(file: string): { width: number; height: number } {
   const bytes = fs.readFileSync(file);
   if (bytes.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") throw new Error(`${file} is not a PNG`);
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+}
+
+/** An RGB colour. */
+export type Rgb = [number, number, number];
+
+/** A decoded PNG and its pixel lookup. */
+export interface DecodedPng {
+  width: number;
+  height: number;
+  /** The colour at whole pixel `x`, `y`, without alpha. */
+  at(x: number, y: number): Rgb;
+}
+
+export function readPng(file: string): DecodedPng {
+  const png = PNG.sync.read(fs.readFileSync(file));
+  return {
+    width: png.width,
+    height: png.height,
+    at(x, y) {
+      const px = Math.round(x);
+      const py = Math.round(y);
+      if (px < 0 || py < 0 || px >= png.width || py >= png.height) {
+        throw new Error(`(${px}, ${py}) is outside ${file}, ${png.width}×${png.height}`);
+      }
+      const i = (py * png.width + px) * 4;
+      return [png.data[i], png.data[i + 1], png.data[i + 2]];
+    },
+  };
+}
+
+/** Whether every channel of `actual` is within `tolerance` of `expected`. */
+export function closeTo(actual: Rgb, expected: Rgb, tolerance = 8): boolean {
+  return actual.every((channel, i) => Math.abs(channel - expected[i]) <= tolerance);
 }
 
 export function sha256(file: string): string {

@@ -172,6 +172,20 @@ export const config: WebdriverIO.Config = {
     timeout: 180_000,
   },
 
+  // A failed test leaves a picture of the window it was driving.
+  afterTest: async (test, _context, { passed }) => {
+    if (passed) return;
+    const name = `${test.parent} ${test.title}`.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120);
+    const dir = path.join(runDir, "screenshots");
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      await browser.saveScreenshot(path.join(dir, `${process.env[SANDBOX_VAR] ? path.basename(process.env[SANDBOX_VAR]) : "session"}-${name}.png`));
+    } catch (err) {
+      // The window may have closed with the failure.
+      console.warn(`No screenshot for "${test.title}": ${String(err)}`);
+    }
+  },
+
   onPrepare: async () => {
     if (!fs.existsSync(application)) {
       throw new Error(`No e2e build at ${application}: run \`npm run e2e\`, which builds it with --features e2e`);

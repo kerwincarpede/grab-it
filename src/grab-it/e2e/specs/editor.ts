@@ -76,9 +76,9 @@ describe("Editor", () => {
       timeoutMsg: `Nothing was exported to ${target}`,
     });
     await waitForText(".editor-status .status-message", (text) => text.includes("Exported to"));
-    const exported = pngSize(target);
-    expect(exported.width).toBeGreaterThan(0);
-    expect(exported.height).toBeGreaterThan(0);
+    // Without a crop or backdrop the export is the capture's size
+    // (exportArea in src/editor/flatten.ts).
+    expect(pngSize(target)).toEqual(pngSize(capture));
     expect(sha256(capture)).toBe(originalHash);
   });
 });

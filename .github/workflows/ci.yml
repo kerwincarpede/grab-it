@@ -177,7 +177,8 @@ jobs:
       run:
         working-directory: src/grab-it
     env:
-      # The suite's throwaway homes, captures and logs, uploaded on failure.
+      # The suite's throwaway homes, captures, logs and failure screenshots,
+      # uploaded on failure.
       GRAB_IT_E2E_RUN: ${{ github.workspace }}/e2e-run
     steps:
       - uses: actions/checkout@v7
