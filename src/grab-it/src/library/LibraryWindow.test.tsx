@@ -2401,6 +2401,7 @@ describe("LibraryWindow AI descriptions", () => {
 
   it("shows the notice when Grab-it turns AI on after the Library opened", async () => {
     const backend = mockBackend([shot(1)]);
+    backend.aiStatus = { state: "off", done: 0, total: 0, error: null, provider: "claudeCode" };
     render(<LibraryWindow />);
     await screen.findByRole("button", { name: "Grab-it 1.png" });
     await settle();

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "../app/bindings";
 import "./welcome.css";
 import Logo from "../app/Logo";
 import {
@@ -32,8 +32,8 @@ import {
 } from "./permissions";
 
 /** Opens a window or starts a capture by its `--open` name. */
-function openTarget(target: string): Promise<void> {
-  return invoke<void>("open_target", { target });
+async function openTarget(target: string): Promise<void> {
+  await commands.openTarget(target);
 }
 
 /** The hotkeys in the order they are listed, with what each one does. */

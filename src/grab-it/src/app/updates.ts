@@ -1,31 +1,17 @@
-import { invoke } from "@tauri-apps/api/core";
+import { commands, type Changes_Serialize, type UpdateInfo_Serialize, type UpdateStatus_Serialize } from "./bindings";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** Mirrors `UPDATE_STATUS_EVENT` in src-tauri/src/update.rs. */
 export const UPDATE_STATUS_EVENT = "update-status";
 
-export interface UpdateChanges {
-  version: string;
-  items: string[];
-}
+/** What one version brought. Generated from `Changes` in src-tauri/src/update.rs. */
+export type UpdateChanges = Changes_Serialize;
 
-export interface UpdateInfo {
-  current: string;
-  version: string;
-  /** RFC 3339, when the release says. */
-  date: string | null;
-  /** Newest first. */
-  changes: UpdateChanges[];
-}
+/** The update on offer. Generated from `UpdateInfo` in src-tauri/src/update.rs. */
+export type UpdateInfo = UpdateInfo_Serialize;
 
-/** Mirrors `UpdateStatus` in src-tauri/src/update.rs. */
-export type UpdateStatus =
-  | { state: "idle"; current: string }
-  | { state: "checking"; current: string }
-  | { state: "upToDate"; current: string; checkedAt: number }
-  | { state: "available"; info: UpdateInfo; declined: boolean }
-  | { state: "installing"; info: UpdateInfo; downloaded: number; total: number | null }
-  | { state: "failed"; current: string; message: string; info: UpdateInfo | null };
+/** Generated from `UpdateStatus` in src-tauri/src/update.rs. */
+export type UpdateStatus = UpdateStatus_Serialize;
 
 export interface UpdateEvent {
   status: UpdateStatus;
@@ -34,21 +20,21 @@ export interface UpdateEvent {
 }
 
 export function updateStatus(): Promise<UpdateStatus> {
-  return invoke<UpdateStatus>("update_status");
+  return commands.updateStatus();
 }
 
 /** Checks now; the result arrives as an event with `show` set. */
 export function checkForUpdate(): Promise<void> {
-  return invoke<void>("update_check");
+  return commands.updateCheck();
 }
 
-export function installUpdate(): Promise<void> {
-  return invoke<void>("update_install");
+export async function installUpdate(): Promise<void> {
+  await commands.updateInstall();
 }
 
 /** Not now: automatic checks stop asking about this version. */
 export function updateLater(): Promise<void> {
-  return invoke<void>("update_later");
+  return commands.updateLater();
 }
 
 export function onUpdateStatus(handler: (event: UpdateEvent) => void): Promise<UnlistenFn> {
