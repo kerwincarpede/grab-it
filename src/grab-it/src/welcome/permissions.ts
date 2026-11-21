@@ -1,22 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
+import { commands, type Permission, type PermissionStatus } from "../app/bindings";
 
-/** Mirrors `Permission` in src-tauri/src/permissions.rs. */
-export type Permission = "screenRecording" | "inputMonitoring" | "microphone" | "camera";
-
-/** Mirrors `Access` in src-tauri/src/permissions.rs. */
-export type Access = "allowed" | "off" | "notAsked";
-
-/** Mirrors `PermissionStatus` in src-tauri/src/permissions.rs. */
-export interface PermissionStatus {
-  screenRecording: Access;
-  inputMonitoring: Access;
-  microphone: Access;
-  camera: Access;
-  /** Allow all ran and setup is not finished. */
-  resume: boolean;
-  /** Allow all ran since Grab-it started: Screen Recording and Input Monitoring wait for a restart. */
-  askedThisLaunch?: boolean;
-}
+/** Where macOS stands on each permission; generated from the Rust types in src-tauri/src/permissions.rs. */
+export type { Access, Permission, PermissionStatus } from "../app/bindings";
 
 export const PERMISSIONS: readonly Permission[] = ["screenRecording", "inputMonitoring", "microphone", "camera"];
 
@@ -36,12 +21,12 @@ export function permissionsMissing(status: PermissionStatus | null | undefined):
 
 /** Where each permission stands, without asking for any. */
 export function permissionStatus(): Promise<PermissionStatus | null> {
-  return invoke<PermissionStatus | null>("permission_status");
+  return commands.permissionStatus();
 }
 
 /** Allow all: shows each system prompt in turn, resolving once all are answered. */
 export function requestAllPermissions(): Promise<PermissionStatus | null> {
-  return invoke<PermissionStatus | null>("permission_request_all");
+  return commands.permissionRequestAll();
 }
 
 /**
@@ -50,21 +35,21 @@ export function requestAllPermissions(): Promise<PermissionStatus | null> {
  * on the first real capture. Does nothing without Screen Recording, or off
  * macOS.
  */
-export function primeScreenCapture(): Promise<void> {
-  return invoke<void>("permission_prime_capture");
+export async function primeScreenCapture(): Promise<void> {
+  await commands.permissionPrimeCapture();
 }
 
 /** Skip for now or Continue: launches stop reopening setup. */
 export function finishPermissions(): Promise<void> {
-  return invoke<void>("permission_finish");
+  return commands.permissionFinish();
 }
 
 /** Restarts Grab-it, so macOS lets it use what was just turned on. */
 export function restartForPermissions(): Promise<void> {
-  return invoke<void>("permission_restart");
+  return commands.permissionRestart();
 }
 
 /** Opens `permission`'s pane in System Settings → Privacy & Security. */
-export function openPermissionSettings(permission: Permission): Promise<void> {
-  return invoke<void>("permission_open_settings", { permission });
+export async function openPermissionSettings(permission: Permission): Promise<void> {
+  await commands.permissionOpenSettings(permission);
 }
