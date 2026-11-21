@@ -130,6 +130,44 @@ jobs:
             src/grab-it/src-tauri/target/llvm-cov/html/
             src/grab-it/src-tauri/target/llvm-cov/lcov.info
 
+  # Runs the Rust tests on Windows and macOS, so code behind #[cfg(windows)]
+  # and #[cfg(target_os = "macos")] is tested as well as built. Checks runs
+  # them on Linux.
+  rust-tests:
+    name: Rust tests (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.platform }}
+    defaults:
+      run:
+        working-directory: src/grab-it
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # A key of its own, so the debug test build and the release installer
+      # build on the same runner don't share a cache.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/grab-it/src-tauri
+          key: rust-tests
+
+      - name: Install dependencies
+        working-directory: .
+        run: npm ci
+      # Produces dist/, which the Rust build embeds.
+      - run: npm run build
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+
   build:
     name: Build (${{ matrix.platform }})
     # A release build (release.yml, main only) runs in the release

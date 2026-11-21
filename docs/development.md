@@ -10,7 +10,7 @@ Grab-it is built with Rust and [Tauri 2](https://tauri.app/), with a React + Typ
 | `src/grab-it/` | The Tauri project |
 | `src/grab-it/src/` | Frontend: React + TypeScript + Vite |
 | `src/grab-it/src-tauri/` | Backend: Rust |
-| `.github/workflows/ci.yml` | Checks plus installer builds on Linux, Windows and macOS |
+| `.github/workflows/ci.yml` | Checks, Rust tests on Windows and macOS, and installer builds on Linux, Windows and macOS |
 | `.github/workflows/release.yml` | Release of every push to `main` |
 | `AGENTS.md` | The rules every change follows, and which standard to read for which task |
 | `docs/` | User and developer docs; `docs/standards/` holds the coding, data, writing and PR standards; `docs/assets/` holds the README animation and the scripts that draw it and the docs site's tour animations |
@@ -416,7 +416,7 @@ To build installers locally, run `npm run tauri build`; they land in `src/grab-i
 
 ## CI
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04 and, in parallel, builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts. It runs on every pull request except those that change only docs (the site, `docs/` or Markdown), and never publishes anything. Pushes to `main` run it through the release workflow instead (below), so `main` is built once, as a release. Linux dependencies are downloaded from the Ubuntu archive (ports on arm64), with a 120-second limit for index updates and 180 seconds for package downloads per attempt. A failure tries a second mirror (the runner's original ports source on arm64). Downloads finish before installation, so a timeout never interrupts dpkg. Packages are installed without optional recommendations.
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the checks on Ubuntu 24.04. In parallel, the Rust tests job runs `cargo test` on Windows and macOS, so code behind `#[cfg(windows)]` and `#[cfg(target_os = "macos")]` is tested as well as built. The build job builds installers with `tauri-action` on Ubuntu 24.04, Windows and macOS and uploads them as workflow artifacts. It runs on every pull request except those that change only docs (the site, `docs/` or Markdown), and never publishes anything. Pushes to `main` run it through the release workflow instead (below), so `main` is built once, as a release. Linux dependencies are downloaded from the Ubuntu archive (ports on arm64), with a 120-second limit for index updates and 180 seconds for package downloads per attempt. A failure tries a second mirror (the runner's original ports source on arm64). Downloads finish before installation, so a timeout never interrupts dpkg. Packages are installed without optional recommendations.
 
 The Checks job measures coverage while it runs the tests: `npm run test:coverage` for the frontend and `cargo llvm-cov` (pinned in `ci.yml`) for Rust, which prints a line summary in the job log. Either one falling below its floor fails the job. It uploads the HTML and lcov reports for both as one `coverage` artifact, even when a test or floor fails.
 
@@ -424,7 +424,7 @@ The Checks job measures coverage while it runs the tests: `npm run test:coverage
 
 Every push to `main`, such as a merged pull request, is released to the Edge channel. Each release publishes a [GitHub release](https://github.com/kerwincarpede/grab-it/releases) of that commit, marked as a pre-release and never as the latest release, with the installers attached: `.msi` and `-setup.exe` for Windows, a universal `.dmg` for macOS, and `.AppImage`, `.deb` and `.rpm` for Linux. Only copies on the Edge update channel offer it. A Stable release is an Edge release promoted later, with the same installers (see "Promoting to Stable").
 
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) runs the whole of `ci.yml` (checks and the installer builds) as a reusable workflow, so a release gets exactly the checks a pull request does, and those builds are the ones released. A short version job reserves each release in a draft. GitHub queues these jobs without allocating a runner until they can start (`queue: max`, up to 100 waiting jobs). Two installer pipelines can run at once, with their waiting jobs also queued by GitHub; no runner polls for earlier releases. Every code merge keeps its release, even if another finishes first. Duplicate runs of the same commit wait for each other.
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) runs the whole of `ci.yml` (checks, the Rust tests on Windows and macOS, and the installer builds) as a reusable workflow, so a release gets exactly the checks a pull request does, and those builds are the ones released. A short version job reserves each release in a draft. GitHub queues these jobs without allocating a runner until they can start (`queue: max`, up to 100 waiting jobs). Two installer pipelines can run at once, with their waiting jobs also queued by GitHub; no runner polls for earlier releases. Every code merge keeps its release, even if another finishes first. Duplicate runs of the same commit wait for each other.
 
 To force a bump the commits would not give, or to retry a failed release, open **Actions → Release → Run workflow** on GitHub, or from a terminal:
 
