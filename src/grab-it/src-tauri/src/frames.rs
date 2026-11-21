@@ -38,6 +38,12 @@ pub trait FrameSource {
     fn settle(&mut self, _timeout: std::time::Duration) -> bool {
         true
     }
+    /// Whether frames leave the pointer out when the source was opened
+    /// without it. Scroll capture parks the pointer over the area, so a
+    /// reader that draws it anyway would bake it into the saved image.
+    fn hides_pointer(&self) -> bool {
+        true
+    }
 }
 
 /// Opens the fastest way this platform has to grab `rect` of `monitor`.
@@ -608,6 +614,14 @@ mod mac {
     }
 
     impl FrameSource for ScreenInput {
+        /// AVCaptureScreenInput draws the pointer into some frames even with
+        /// `capturesCursor` off: a live scroll capture showed it in the
+        /// saved image every few steps, though the setter runs before the
+        /// input joins the session. Recordings are not checked here.
+        fn hides_pointer(&self) -> bool {
+            false
+        }
+
         fn grab(&mut self) -> Result<Grabbed, String> {
             let image = self
                 .frame()

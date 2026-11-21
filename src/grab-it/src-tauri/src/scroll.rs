@@ -689,12 +689,13 @@ const SETTLE_TIMEOUT: Duration = Duration::from_millis(500);
 /// same screen, and the Stitcher never replaces a reference it cannot match,
 /// so mixing them would turn away every frame of the session. When the
 /// buffered reader has no frame of its own yet (Windows duplication on a
-/// still screen), the whole session reads synchronously instead.
+/// still screen), or draws the parked pointer into its frames (macOS
+/// AVCapture), the whole session reads synchronously instead.
 fn restart_stitch(
     buffered: &mut dyn frames::FrameSource,
     synchronous: &mut dyn frames::FrameSource,
 ) -> Result<(Stitcher, RgbaImage, bool), String> {
-    let use_buffered = buffered.settle(SETTLE_TIMEOUT);
+    let use_buffered = buffered.hides_pointer() && buffered.settle(SETTLE_TIMEOUT);
     let frame = if use_buffered {
         buffered.grab()?
     } else {
@@ -1149,10 +1150,14 @@ mod tests {
         offset: u32,
         tint: u8,
         settled: bool,
+        draws_pointer: bool,
     }
     impl frames::FrameSource for PageSource {
         fn settle(&mut self, _timeout: Duration) -> bool {
             self.settled
+        }
+        fn hides_pointer(&self) -> bool {
+            !self.draws_pointer
         }
         fn grab(&mut self) -> Result<frames::Grabbed, String> {
             let mut image = frame(Axis::Vertical, self.offset, false);
@@ -1175,11 +1180,13 @@ mod tests {
             offset: 0,
             tint: 3,
             settled: true,
+            draws_pointer: false,
         };
         let mut buffered = PageSource {
             offset: 0,
             tint: 0,
             settled: true,
+            draws_pointer: false,
         };
         // The first frame comes from the synchronous reader, later frames
         // from the buffered one: none of them line up with it.
@@ -1197,11 +1204,13 @@ mod tests {
             offset: 0,
             tint: 0,
             settled: true,
+            draws_pointer: false,
         };
         let mut synchronous = PageSource {
             offset: 0,
             tint: 3,
             settled: true,
+            draws_pointer: false,
         };
         let (mut stitch, previous, use_buffered) =
             restart_stitch(&mut buffered, &mut synchronous).unwrap();
@@ -1222,11 +1231,13 @@ mod tests {
             offset: 0,
             tint: 0,
             settled: false,
+            draws_pointer: false,
         };
         let mut synchronous = PageSource {
             offset: 0,
             tint: 3,
             settled: true,
+            draws_pointer: false,
         };
         let (mut stitch, _, use_buffered) =
             restart_stitch(&mut buffered, &mut synchronous).unwrap();
@@ -1236,6 +1247,27 @@ mod tests {
             assert!(stitch.push(synchronous.grab().unwrap().image));
             assert_eq!(stitch.image.height(), height);
         }
+    }
+    #[test]
+    fn a_reader_that_draws_the_pointer_leaves_the_session_synchronous() {
+        use frames::FrameSource;
+        // macOS AVCapture draws the parked pointer despite capturesCursor
+        // off; joining its frames would bake the pointer into the capture.
+        let mut buffered = PageSource {
+            offset: 0,
+            tint: 0,
+            settled: true,
+            draws_pointer: true,
+        };
+        let mut synchronous = PageSource {
+            offset: 0,
+            tint: 3,
+            settled: true,
+            draws_pointer: false,
+        };
+        let (_, previous, use_buffered) = restart_stitch(&mut buffered, &mut synchronous).unwrap();
+        assert!(!use_buffered);
+        assert_eq!(previous, synchronous.grab().unwrap().image);
     }
     /// A reader that shows the card in the area while it sits at `(0, 0)`.
     struct CardSource<'a> {
