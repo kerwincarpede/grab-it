@@ -249,6 +249,8 @@ export const commands = {
 	 *  details.
 	 */
 	editorFaces: (options?: InvokeOptions) => __TAURI_INVOKE<Rect[]>("editor_faces", undefined, options),
+	/**  Requests cancellation of the export running in this editor window. */
+	recordingExportCancel: (options?: InvokeOptions) => __TAURI_INVOKE<void>("recording_export_cancel", undefined, options),
 	recordingInfo: (options?: InvokeOptions) => __TAURI_INVOKE<RecordingInfo_Serialize>("recording_info", undefined, options),
 	recordingSaveEdits: (edits: Value, options?: InvokeOptions) => __TAURI_INVOKE<null>("recording_save_edits", { edits }, options),
 	/**
@@ -2603,6 +2605,7 @@ export type MockCommandHandlers = {
     editorSaveAnnotations: (args: { annotations: Value }) => null | Promise<null>,
     editorWords: () => OcrLine[] | Promise<OcrLine[]>,
     editorFaces: () => Rect[] | Promise<Rect[]>,
+    recordingExportCancel: () => void | Promise<void>,
     recordingInfo: () => RecordingInfo_Serialize | Promise<RecordingInfo_Serialize>,
     recordingSaveEdits: (args: { edits: Value }) => null | Promise<null>,
     recordingSource: (args: { fileName: string }) => RecordingClipSource_Serialize | Promise<RecordingClipSource_Serialize>,
@@ -2762,6 +2765,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "editor_save_annotations": return mockCommandHandler(mockHandlers.editorSaveAnnotations, "editor_save_annotations", args);
             case "editor_words": return mockCommandHandler(mockHandlers.editorWords, "editor_words", args);
             case "editor_faces": return mockCommandHandler(mockHandlers.editorFaces, "editor_faces", args);
+            case "recording_export_cancel": return mockCommandHandler(mockHandlers.recordingExportCancel, "recording_export_cancel", args);
             case "recording_info": return mockCommandHandler(mockHandlers.recordingInfo, "recording_info", args);
             case "recording_save_edits": return mockCommandHandler(mockHandlers.recordingSaveEdits, "recording_save_edits", args);
             case "recording_source": return mockCommandHandler(mockHandlers.recordingSource, "recording_source", args);

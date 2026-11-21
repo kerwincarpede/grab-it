@@ -32,7 +32,9 @@ It keeps the frame rate of the recording you opened, and uses the **Quality** in
 
 ## Progress
 
-While it exports, playback pauses, **Backdrop**, **Zoom** and **Export** are greyed out, a bar under the timeline fills up, and the status bar counts up, like **Exporting… 42%**. A long recording can take a while; the editor stays open and you can use the rest of Grab-it meanwhile.
+Playback pauses during export. The panel under the timeline shows a progress bar and the percentage of frames written. You can use the rest of Grab-it while the editor works.
+
+Click **Cancel** to stop the export. Grab-it removes the unfinished file and the status bar says **Export cancelled**. You can keep editing or export again.
 
 If the export fails, the status bar says why and nothing is left behind. Exporting needs ffmpeg, as MP4 recording does: if it isn't ready yet, the status bar asks you to check **Settings → Recording** and export again.
 

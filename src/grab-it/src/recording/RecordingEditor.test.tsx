@@ -42,6 +42,7 @@ function mockBackend(edits: Value | null = null, cursor: CursorPath | null = nul
         if (gone.includes(name)) return Promise.reject(`${name} is not in the recordings folder`);
         return { path: `/shots/recordings/${name}`, fileName: name, fps: 30, cursor: null, hasAudio: true };
       },
+      recording_export_cancel: () => undefined,
       recording_export: () =>
         new Promise<string>((resolve, reject) => {
           backend.exported = { resolve, reject };
@@ -250,6 +251,22 @@ describe("RecordingEditor", () => {
       backdropBytes: 3,
     });
     expect(body).toEqual([1, 2, 3, 9, 9]);
+  });
+
+  it("cancels this export and enables exporting again after cleanup", async () => {
+    const backend = mockBackend();
+    render(<RecordingEditor />);
+    await loadVideo();
+    await userEvent.click(screen.getByRole("button", { name: "Export" }));
+    await exportCall(backend);
+    await emit("recording-export-progress", { done: 0, total: 100 });
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(backend.calls.some(({ cmd }) => cmd === "recording_export_cancel")).toBe(true);
+    expect(screen.getByRole("button", { name: "Cancelling…" })).toBeDisabled();
+    backend.exported?.reject("Export cancelled");
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/^Export cancelled$/));
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export" })).toBeEnabled();
   });
 
   it("says why an export failed", async () => {

@@ -25,12 +25,17 @@
 //! view ([`crate::zoom`]) before it is laid over the backdrop.
 
 use std::{
+    collections::HashMap,
     ffi::OsString,
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom},
     ops::Deref,
     path::{Path, PathBuf},
     process::Stdio,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::Duration,
 };
@@ -87,13 +92,54 @@ const MUX_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The recording each recording editor window shows, by window label.
 #[derive(Default)]
-pub struct RecordingEditorState(EditorState);
+pub struct RecordingEditorState {
+    editors: EditorState,
+    exports: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+impl RecordingEditorState {
+    fn begin_export(&self, label: &str) -> Result<Arc<AtomicBool>, String> {
+        let mut exports = self.exports.lock().unwrap_or_else(|err| err.into_inner());
+        if exports.contains_key(label) {
+            return Err("An export is already running".into());
+        }
+        let flag = Arc::new(AtomicBool::new(false));
+        exports.insert(label.to_owned(), flag.clone());
+        Ok(flag)
+    }
+
+    fn cancel_export(&self, label: &str) {
+        if let Some(flag) = self
+            .exports
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .get(label)
+        {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn finish_export(&self, label: &str) {
+        self.exports
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(label);
+    }
+}
+
+fn check_cancelled(flag: &AtomicBool) -> Result<(), String> {
+    if flag.load(Ordering::Relaxed) {
+        Err("Export cancelled".into())
+    } else {
+        Ok(())
+    }
+}
 
 impl Deref for RecordingEditorState {
     type Target = EditorState;
 
     fn deref(&self) -> &EditorState {
-        &self.0
+        &self.editors
     }
 }
 
@@ -1193,8 +1239,10 @@ fn decode_clip(
 fn render(
     ready: &ffmpeg::Ready,
     job: ExportJob<'_>,
+    cancelled: &AtomicBool,
     mut progress: impl FnMut(ExportProgress),
 ) -> Result<(), String> {
+    check_cancelled(cancelled)?;
     let ExportJob {
         output,
         plan,
@@ -1253,6 +1301,7 @@ fn render(
                 (ExportEntry::Gap(_), _) => {
                     let frame = gap_frame()?;
                     for _ in 0..entry.frames(fps) {
+                        check_cancelled(cancelled)?;
                         video.write(&frame).map_err(|err| err.to_string())?;
                         done += 1;
                         report(done);
@@ -1275,6 +1324,7 @@ fn render(
                 black(plan.video_width, plan.video_height)
             };
             let frames = decode_clip(&ready.path, &source.path, clip, fps, |buffer, index| {
+                check_cancelled(cancelled)?;
                 let mut shown: &[u8] = if clip.zooms.is_empty() {
                     buffer
                 } else {
@@ -1304,6 +1354,7 @@ fn render(
                 ));
             }
         }
+        check_cancelled(cancelled)?;
         video.finish().map_err(|err| err.to_string())?;
         let sounds: Vec<ClipSound<'_>> = plan
             .clips
@@ -1316,18 +1367,27 @@ fn render(
                 ClipSound::of(entry, file)
             })
             .collect();
+        check_cancelled(cancelled)?;
         ffmpeg::run(
             &ready.path,
             clip_sound_args(&silent, &sounds, output),
             MUX_TIMEOUT,
         )
-        .map_err(|err| format!("could not add the sound: {err}"))
+        .map_err(|err| format!("could not add the sound: {err}"))?;
+        check_cancelled(cancelled)
     })();
     let _ = fs::remove_file(&silent);
     if result.is_err() {
         let _ = fs::remove_file(output);
     }
     result
+}
+
+/// Requests cancellation of the export running in this editor window.
+#[tauri::command]
+#[specta::specta]
+pub fn recording_export_cancel(window: WebviewWindow, state: State<'_, RecordingEditorState>) {
+    state.cancel_export(window.label());
 }
 
 /// Exports the window's recording as the plan in the [`EXPORT_PLAN_HEADER`]
@@ -1363,13 +1423,15 @@ pub async fn recording_export(
         );
     };
     let label = window.label().to_owned();
+    let cancelled = state.begin_export(&label)?;
     // Minutes of decoding and encoding: on a thread of its own, not the
     // async runtime's.
-    tauri::async_runtime::spawn_blocking(move || {
-        export(&app, &ready, &original, plan, &body, &label)
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        export(&app, &ready, &original, plan, &body, &label, &cancelled)
     })
-    .await
-    .map_err(|err| format!("the export stopped: {err}"))?
+    .await;
+    state.finish_export(window.label());
+    result.map_err(|err| format!("the export stopped: {err}"))?
 }
 
 /// The recording each clip of `plan` plays, from `recordings`; `None` for
@@ -1405,7 +1467,20 @@ fn export(
     plan: ExportPlan,
     body: &[u8],
     label: &str,
+    cancelled: &AtomicBool,
 ) -> Result<PathBuf, String> {
+    let fps = export_fps(&ready.path, original);
+    let report = |progress: ExportProgress| {
+        let _ = app.emit_to(
+            EventTarget::webview_window(label),
+            EXPORT_PROGRESS_EVENT,
+            progress,
+        );
+    };
+    report(ExportProgress {
+        done: 0,
+        total: plan.frames(fps),
+    });
     let layers = backdrop_and_mask(body, &plan)?;
     let bits_per_pixel = app
         .try_state::<SettingsState>()
@@ -1421,16 +1496,10 @@ fn export(
         plan,
         sources,
         layers,
-        fps: export_fps(&ready.path, original),
+        fps,
         bits_per_pixel,
     };
-    render(ready, job, |progress| {
-        let _ = app.emit_to(
-            EventTarget::webview_window(label),
-            EXPORT_PROGRESS_EVENT,
-            progress,
-        );
-    })?;
+    render(ready, job, cancelled, report)?;
     crate::library::record_recording(app, &output, duration_ms);
     let bytes = fs::metadata(&output).map(|meta| meta.len()).unwrap_or(0);
     quick::show(
@@ -1589,6 +1658,45 @@ mod tests {
             video_height: 540,
             backdrop_bytes: 10,
         }
+    }
+
+    #[test]
+    fn cancellation_is_scoped_to_one_window_and_one_export() {
+        let state = RecordingEditorState::default();
+        let first = state.begin_export("first").unwrap();
+        let second = state.begin_export("second").unwrap();
+        assert!(state.begin_export("first").is_err());
+        state.cancel_export("first");
+        assert!(check_cancelled(&first).is_err());
+        assert!(check_cancelled(&second).is_ok());
+        state.finish_export("first");
+        assert!(check_cancelled(&state.begin_export("first").unwrap()).is_ok());
+    }
+
+    #[test]
+    fn cancelled_render_stops_before_starting_ffmpeg() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("edited.mp4");
+        let ready = ffmpeg::Ready {
+            path: dir.path().join("no-ffmpeg"),
+            encoder: ffmpeg::X264,
+        };
+        let job = ExportJob {
+            output: &output,
+            plan: plan(),
+            layers: None,
+            sources: vec![],
+            fps: 30,
+            bits_per_pixel: 0.1,
+        };
+        assert_eq!(
+            render(&ready, job, &AtomicBool::new(true), |_| panic!(
+                "unexpected frame"
+            )),
+            Err("Export cancelled".into())
+        );
+        assert!(!output.exists());
+        assert!(!sidecar_path(&output, ".exporting.mp4").exists());
     }
 
     #[test]

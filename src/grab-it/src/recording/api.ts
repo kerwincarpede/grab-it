@@ -163,6 +163,11 @@ export function exportRecording(plan: ExportPlan, layers: { backdrop: Uint8Array
   });
 }
 
+/** Stops the active export in this recording editor. */
+export async function cancelExport(): Promise<void> {
+  await commands.recordingExportCancel();
+}
+
 /** Calls `handler` as an export in this window writes its frames. */
 export function onExportProgress(handler: (progress: ExportProgress) => void): Promise<UnlistenFn> {
   return listen<ExportProgress>(EXPORT_PROGRESS_EVENT, (event) => handler(event.payload));
