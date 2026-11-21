@@ -132,7 +132,7 @@ impl AutoScroll {
             // Content that moved but never lined up did scroll; saying
             // nothing scrolled would send the user looking for the wrong fault.
             self.reason = Some(if self.moved {
-                "The scrolled frames did not line up. Scroll by hand, then choose Done."
+                "The page scrolled, but Grab-it could not join the views. Scroll by hand, then choose Done."
             } else {
                 "Nothing scrolled automatically. Scroll by hand, then choose Done."
             });
@@ -557,10 +557,16 @@ pub fn start(
                     // out of the selection; its previous frames are unsafe.
                     drop(source);
                     source = frames::open(&monitor, rect, 10, false)?;
-                    // Every later frame now comes from this source, so the
-                    // Stitcher starts again from one of its frames.
-                    (stitch, previous) = restart_stitch(source.as_mut())?;
                 }
+                // place_card has confirmed the card's move, so a frame read
+                // now cannot show it. The Stitcher starts again from the
+                // reader every later frame comes from.
+                let use_buffered;
+                (stitch, previous, use_buffered) = if overlaps {
+                    (stitch, previous, false)
+                } else {
+                    restart_stitch(source.as_mut(), synchronous.as_mut())?
+                };
                 let mut wheel_pending = false;
                 while control.end.load(Ordering::SeqCst) == 0 {
                     std::thread::sleep(Duration::from_millis(250));
@@ -574,13 +580,19 @@ pub fn start(
                     if stitch.capped {
                         continue;
                     }
-                    let frame = grab_clean(
-                        source.as_mut(),
-                        synchronous.as_mut(),
-                        overlaps,
-                        || hide_card(&handle),
-                        || restore_card(&handle),
-                    )?;
+                    let frame = if use_buffered {
+                        source.grab()?
+                    } else if overlaps {
+                        grab_clean(
+                            source.as_mut(),
+                            synchronous.as_mut(),
+                            true,
+                            || hide_card(&handle),
+                            || restore_card(&handle),
+                        )?
+                    } else {
+                        synchronous.grab()?
+                    };
                     let old_reason = auto.reason;
                     auto.observe_pointer(frame.pointer);
                     let unchanged = frame.image == previous;
@@ -668,14 +680,31 @@ fn set_card_fade(app: &AppHandle, enabled: bool) {
     let _ = (app, enabled);
 }
 
-/// Starts the Stitcher from a frame of `source`, the reader every later frame
-/// comes from. The buffered reader (AVCapture, DXGI) and the synchronous one
-/// (xcap) do not give identical pixels for the same screen, and the Stitcher
-/// never replaces a reference it cannot match, so a reference from the other
-/// reader would turn away every frame of the session.
-fn restart_stitch(source: &mut dyn frames::FrameSource) -> Result<(Stitcher, RgbaImage), String> {
-    let frame = source.grab()?;
-    Ok((Stitcher::new(frame.image.clone()), frame.image))
+/// How long the buffered reader may take to send its own first frame.
+const SETTLE_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Starts the Stitcher from the reader every later frame will come from, and
+/// says whether that is the buffered one. The buffered reader (AVCapture,
+/// DXGI) and the synchronous one (xcap) do not give identical pixels for the
+/// same screen, and the Stitcher never replaces a reference it cannot match,
+/// so mixing them would turn away every frame of the session. When the
+/// buffered reader has no frame of its own yet (Windows duplication on a
+/// still screen), the whole session reads synchronously instead.
+fn restart_stitch(
+    buffered: &mut dyn frames::FrameSource,
+    synchronous: &mut dyn frames::FrameSource,
+) -> Result<(Stitcher, RgbaImage, bool), String> {
+    let use_buffered = buffered.settle(SETTLE_TIMEOUT);
+    let frame = if use_buffered {
+        buffered.grab()?
+    } else {
+        synchronous.grab()?
+    };
+    Ok((
+        Stitcher::new(frame.image.clone()),
+        frame.image,
+        use_buffered,
+    ))
 }
 
 /// Hiding a window does not invalidate AVCapture/DXGI's latest-frame cache.
@@ -736,6 +765,27 @@ fn hide_and_wait(
     std::thread::sleep(Duration::from_millis(50));
     Ok(())
 }
+/// Off-main-thread set_position() only enqueues the move. The position getter
+/// round-trips through the UI event loop, as is_visible() does for
+/// hide_and_wait, so a reply at `target` acknowledges that the move has run.
+/// Nothing may read the area as clear of the card before that.
+fn move_and_wait<P: PartialEq>(
+    move_to: impl FnOnce() -> Result<(), String>,
+    mut position: impl FnMut() -> Result<P, String>,
+    target: P,
+) -> Result<(), String> {
+    move_to()?;
+    let deadline = std::time::Instant::now() + Duration::from_millis(500);
+    while position()? != target {
+        if std::time::Instant::now() >= deadline {
+            return Err("Quick Access did not move clear of the area".into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Let the compositor repaint the area the card left.
+    std::thread::sleep(Duration::from_millis(50));
+    Ok(())
+}
 fn restore_card(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(quick::LABEL) {
         window.show().map_err(|e| e.to_string())?;
@@ -784,10 +834,17 @@ fn place_card(app: &AppHandle, info: &MonitorInfo, rect: Rect, image_size: (u32,
             || p.x as f64 >= region.0 + region.2
             || p.y as f64 >= region.1 + region.3;
         if clear {
-            if let Some(w) = app.get_webview_window("quick") {
-                let _ = w.set_position(p);
-            }
-            return false;
+            let Some(w) = app.get_webview_window(quick::LABEL) else {
+                return false;
+            };
+            // Unconfirmed, the card may still be over the area: hide it
+            // for each grab, as when no corner is clear.
+            return move_and_wait(
+                || w.set_position(p).map_err(|e| e.to_string()),
+                || w.outer_position().map_err(|e| e.to_string()),
+                p,
+            )
+            .is_err();
         }
     }
     true
@@ -1086,16 +1143,23 @@ mod tests {
 
     /// A reader that sees the page `offset` lines down, with every colour
     /// `tint` levels off, as two capture paths differ for the same screen.
+    /// Until `settled`, it reads through a fallback 3 levels off, as Windows
+    /// duplication does through GDI before its first frame.
     struct PageSource {
         offset: u32,
         tint: u8,
+        settled: bool,
     }
     impl frames::FrameSource for PageSource {
+        fn settle(&mut self, _timeout: Duration) -> bool {
+            self.settled
+        }
         fn grab(&mut self) -> Result<frames::Grabbed, String> {
             let mut image = frame(Axis::Vertical, self.offset, false);
+            let tint = if self.settled { self.tint } else { 3 };
             for pixel in image.pixels_mut() {
                 for channel in &mut pixel.0[..3] {
-                    *channel = channel.saturating_add(self.tint);
+                    *channel = channel.saturating_add(tint);
                 }
             }
             Ok(frames::Grabbed {
@@ -1107,8 +1171,16 @@ mod tests {
     #[test]
     fn a_reference_from_the_other_reader_rejects_every_frame() {
         use frames::FrameSource;
-        let mut synchronous = PageSource { offset: 0, tint: 3 };
-        let mut buffered = PageSource { offset: 0, tint: 0 };
+        let mut synchronous = PageSource {
+            offset: 0,
+            tint: 3,
+            settled: true,
+        };
+        let mut buffered = PageSource {
+            offset: 0,
+            tint: 0,
+            settled: true,
+        };
         // The first frame comes from the synchronous reader, later frames
         // from the buffered one: none of them line up with it.
         let mut stitch = Stitcher::new(synchronous.grab().unwrap().image);
@@ -1121,14 +1193,109 @@ mod tests {
     #[test]
     fn restarting_from_the_buffered_reader_lets_the_capture_grow() {
         use frames::FrameSource;
-        let mut buffered = PageSource { offset: 0, tint: 0 };
-        let (mut stitch, previous) = restart_stitch(&mut buffered).unwrap();
+        let mut buffered = PageSource {
+            offset: 0,
+            tint: 0,
+            settled: true,
+        };
+        let mut synchronous = PageSource {
+            offset: 0,
+            tint: 3,
+            settled: true,
+        };
+        let (mut stitch, previous, use_buffered) =
+            restart_stitch(&mut buffered, &mut synchronous).unwrap();
+        assert!(use_buffered);
         assert_eq!(previous, frame(Axis::Vertical, 0, false));
         for (offset, height) in [(10, 90), (20, 100), (30, 110)] {
             buffered.offset = offset;
             assert!(stitch.push(buffered.grab().unwrap().image));
             assert_eq!(stitch.image.height(), height);
         }
+    }
+    #[test]
+    fn an_unsettled_buffered_reader_leaves_the_session_synchronous() {
+        use frames::FrameSource;
+        // Windows duplication with no frame yet would hand back its GDI
+        // fallback now and DXGI frames later: never mix the two.
+        let mut buffered = PageSource {
+            offset: 0,
+            tint: 0,
+            settled: false,
+        };
+        let mut synchronous = PageSource {
+            offset: 0,
+            tint: 3,
+            settled: true,
+        };
+        let (mut stitch, _, use_buffered) =
+            restart_stitch(&mut buffered, &mut synchronous).unwrap();
+        assert!(!use_buffered);
+        for (offset, height) in [(10, 90), (20, 100)] {
+            synchronous.offset = offset;
+            assert!(stitch.push(synchronous.grab().unwrap().image));
+            assert_eq!(stitch.image.height(), height);
+        }
+    }
+    /// A reader that shows the card in the area while it sits at `(0, 0)`.
+    struct CardSource<'a> {
+        card: &'a std::cell::Cell<(i32, i32)>,
+    }
+    impl frames::FrameSource for CardSource<'_> {
+        fn grab(&mut self) -> Result<frames::Grabbed, String> {
+            let covered = self.card.get() == (0, 0);
+            Ok(frames::Grabbed {
+                image: RgbaImage::from_pixel(
+                    2,
+                    2,
+                    image::Rgba([if covered { 255 } else { 0 }, 0, 0, 255]),
+                ),
+                pointer: None,
+            })
+        }
+    }
+    #[test]
+    fn the_reference_is_read_only_after_the_queued_move_has_run() {
+        use std::cell::{Cell, RefCell};
+        use std::collections::VecDeque;
+        let card = Cell::new((0, 0));
+        // Model Tauri's UI queue: set_position returns with the card still
+        // in place. A position query drives queued work.
+        let queue = RefCell::new(VecDeque::new());
+        let queries = Cell::new(0);
+        move_and_wait(
+            || {
+                queue.borrow_mut().push_back((400, 0));
+                assert_eq!(card.get(), (0, 0), "enqueueing must not move at once");
+                Ok(())
+            },
+            || {
+                queries.set(queries.get() + 1);
+                if queries.get() > 1
+                    && let Some(at) = queue.borrow_mut().pop_front()
+                {
+                    card.set(at);
+                }
+                Ok(card.get())
+            },
+            (400, 0),
+        )
+        .unwrap();
+        assert_eq!(queries.get(), 2);
+        let (_, previous, _) = restart_stitch(
+            &mut CardSource { card: &card },
+            &mut CardSource { card: &card },
+        )
+        .unwrap();
+        assert_eq!(previous.get_pixel(0, 0)[0], 0);
+    }
+    #[test]
+    fn an_unconfirmed_move_is_reported() {
+        let result = move_and_wait(|| Ok(()), || Ok((0, 0)), (400, 0));
+        assert_eq!(
+            result.err().as_deref(),
+            Some("Quick Access did not move clear of the area")
+        );
     }
     #[test]
     fn content_that_moved_but_never_lined_up_is_not_called_unscrolled() {
@@ -1143,7 +1310,9 @@ mod tests {
         assert!(!auto.at_end(true, false));
         assert_eq!(
             auto.reason,
-            Some("The scrolled frames did not line up. Scroll by hand, then choose Done.")
+            Some(
+                "The page scrolled, but Grab-it could not join the views. Scroll by hand, then choose Done."
+            )
         );
     }
 

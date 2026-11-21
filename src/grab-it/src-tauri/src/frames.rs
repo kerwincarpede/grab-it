@@ -32,6 +32,12 @@ pub struct Grabbed {
 /// Grabs frames of one area of one monitor.
 pub trait FrameSource {
     fn grab(&mut self) -> Result<Grabbed, String>;
+    /// Waits up to `timeout` until `grab` gives this source's own frames
+    /// rather than a fallback reader's, and says whether it does. Scroll
+    /// capture needs every frame it joins from one reader.
+    fn settle(&mut self, _timeout: std::time::Duration) -> bool {
+        true
+    }
 }
 
 /// Opens the fastest way this platform has to grab `rect` of `monitor`.
@@ -322,6 +328,30 @@ mod win {
     }
 
     impl FrameSource for Duplication {
+        /// Duplication sends its first frame up to a poll after Start, and
+        /// only once the screen changes; until then grabs come from GDI.
+        fn settle(&mut self, timeout: Duration) -> bool {
+            let deadline = std::time::Instant::now() + timeout;
+            loop {
+                if !self.duplicator.alive.load(Ordering::SeqCst) {
+                    return false;
+                }
+                let has_frame = self
+                    .duplicator
+                    .latest
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .is_some();
+                if has_frame {
+                    return true;
+                }
+                if std::time::Instant::now() >= deadline {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
         fn grab(&mut self) -> Result<Grabbed, String> {
             // A lost duplication (a full-screen app, a UAC prompt, the lock
             // screen) sends nothing more: GDI takes over for the rest.
