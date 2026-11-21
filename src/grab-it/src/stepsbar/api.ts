@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "../app/bindings";
 
 /** Stops the step capture under way and opens its guide. */
 export function stopSteps(): Promise<void> {
-  return invoke<void>("steps_bar_stop");
+  return commands.stepsBarStop();
 }

@@ -1,76 +1,32 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { commands, type CaptureMode, type Intent, type OverlayInfo_Serialize, type OverlayWindow, type Selection } from "../app/bindings";
 import { routeFromHash, routeHasFlag } from "../routes";
-import type { Box, Point } from "./geometry";
+import type { Point } from "./geometry";
 
-export type CaptureMode = "region" | "window" | "screen" | "monitor";
+/** Generated from `CaptureMode` in src-tauri/src/overlay.rs. */
+export type { CaptureMode };
 
-/** Mirrors `OverlayWindow` in src-tauri/src/overlay.rs: monitor units. */
-export interface OverlayWindow {
-  id: number;
-  title: string;
-  appName: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+/** A window the overlay can pick, in monitor units. Generated from `OverlayWindow` in src-tauri/src/overlay.rs. */
+export type { OverlayWindow };
 
 /**
  * What the selection is for: a screenshot, text recognition over the dragged
- * area, the colour of one pixel, or the area to record as a GIF.
+ * area, the colour of one pixel, or the area to record as a GIF. Generated
+ * from `Intent` in src-tauri/src/overlay.rs.
  */
-export type OverlayIntent = "capture" | "text" | "color" | "record" | "scroll";
+export type OverlayIntent = Intent;
 
-/** Mirrors `OverlayInfo` in src-tauri/src/overlay.rs. */
-export interface OverlayInfo {
-  mode: CaptureMode;
-  /** Older backends leave this out; treat that as "capture". */
-  intent?: OverlayIntent;
-  /**
-   * Opened by All-in-one: the overlay shows its mode toolbar. Older
-   * backends leave this out.
-   */
-  allInOne?: boolean;
-  /**
-   * What All-in-one's toolbar has chosen so far on another monitor, so a
-   * page that loads late starts on it. Null until a choice is made.
-   */
-  choice?: OverlayChoice | null;
-  monitorWidth: number;
-  monitorHeight: number;
-  /**
-   * The frozen image's width in its own pixels, known before the image
-   * itself arrives. Older backends leave this out.
-   */
-  imageWidth?: number;
-  /** Front to back. */
-  windows: OverlayWindow[];
-  /**
-   * How far down the monitor the menu bar or a camera notch reaches, as a
-   * share of its height. Older backends leave this out.
-   */
-  topInset?: number;
-  /**
-   * The last region captured, in this monitor's image pixels, when it was
-   * on this monitor: All-in-one starts with it selected. Only an All-in-one
-   * overlay is sent one, and older backends leave it out.
-   */
-  lastRegion?: Box | null;
-  /**
-   * The pointer is on this monitor: the Record overlay's setup toolbar
-   * shows here, and Screen starts picked here. Older backends leave it out.
-   */
-  pointerHere?: boolean;
-  /**
-   * Where the recording toolbar opens on this monitor, as the centre of its
-   * pill in CSS px: the setup toolbar opens centred on it. Null when it
-   * cannot be told; older backends leave it out.
-   */
-  barCentre?: Point | null;
-  /** The monitor's name, shown when Screen records it. */
-  monitorName?: string;
-}
+/**
+ * What this overlay is to show, generated from `OverlayInfo` in
+ * src-tauri/src/overlay.rs. The toolbar's choice and the toolbar centre are
+ * narrowed to what the backend sends in practice: a choice is only ever
+ * shared complete (`OverlayChoice`), and a centre's coordinates are finite.
+ */
+export type OverlayInfo = Omit<OverlayInfo_Serialize, "choice" | "barCentre"> & {
+  choice: OverlayChoice | null;
+  barCentre: Point | null;
+};
 
 /** Mirrors `START_EVENT` in src-tauri/src/overlay.rs. */
 export const START_EVENT = "overlay-start";
@@ -94,20 +50,19 @@ export function isWindowsOverlay(hash: string = window.location.hash): boolean {
   return routeFromHash(hash) === "overlay" && routeHasFlag(hash, "windows");
 }
 
-export type Selection =
-  | { kind: "region"; rect: Box; viewportWidth: number }
-  | { kind: "window"; id: number }
-  /** One point in CSS pixels, scaled by the backend like a region is. */
-  | { kind: "point"; x: number; y: number; viewportWidth: number }
-  /** Every frozen monitor, stitched: All-in-one's Screen. */
-  | { kind: "screen" };
+/**
+ * A finished selection: a region or a point in CSS pixels, a window, or
+ * every monitor. Generated from `Selection` in src-tauri/src/overlay.rs.
+ */
+export type { Selection };
 
 /**
  * What this overlay is to show. Null in a spare overlay, loaded ahead of
  * time with no selection yet: `onOverlayStart` says when to ask again.
  */
 export function overlayInfo(): Promise<OverlayInfo | null> {
-  return invoke<OverlayInfo | null>("overlay_info");
+  // Narrowed as `OverlayInfo` says.
+  return commands.overlayInfo() as Promise<OverlayInfo | null>;
 }
 
 /**
@@ -130,8 +85,8 @@ export function imageType(bytes: ArrayBuffer): string {
 }
 
 /** This overlay is ready for the backend to show. */
-export function overlayReady(): Promise<void> {
-  return invoke<void>("overlay_ready");
+export async function overlayReady(): Promise<void> {
+  await commands.overlayReady();
 }
 
 /** The Windows overlays are now visible. */
@@ -139,7 +94,11 @@ export function onOverlayRevealed(handler: () => void): Promise<() => void> {
   return listen("overlay-revealed", () => handler());
 }
 
-/** Mirrors `Choice` in src-tauri/src/overlay.rs: what All-in-one's toolbar chose. */
+/**
+ * What All-in-one's toolbar chose. `Choice` in src-tauri/src/overlay.rs, the
+ * generated `Choice_Deserialize`, leaves each field optional; the overlay
+ * always sends all three.
+ */
 export interface OverlayChoice {
   intent: OverlayIntent;
   mode: "region" | "window" | "screen";
@@ -151,8 +110,8 @@ export interface OverlayChoice {
  * Ends the selection. An All-in-one overlay sends what its toolbar chose
  * with it; any other overlay sends the selection alone.
  */
-export function finishOverlay(selection: Selection, choice?: OverlayChoice): Promise<void> {
-  return invoke<void>("overlay_finish", choice ? { selection, choice } : { selection });
+export async function finishOverlay(selection: Selection, choice?: OverlayChoice): Promise<void> {
+  await commands.overlayFinish(selection, choice ?? null);
 }
 
 /** Mirrors `CHOICE_EVENT` in src-tauri/src/overlay.rs. */
@@ -162,8 +121,8 @@ export const CHOICE_EVENT = "overlay-choice";
  * Tells the backend, and through it every other monitor's overlay, what
  * All-in-one's toolbar now has chosen.
  */
-export function chooseOverlay(choice: OverlayChoice): Promise<void> {
-  return invoke<void>("overlay_choose", { choice });
+export async function chooseOverlay(choice: OverlayChoice): Promise<void> {
+  await commands.overlayChoose(choice);
 }
 
 /**
@@ -175,7 +134,7 @@ export function onOverlayChoice(handler: (choice: OverlayChoice) => void): Promi
 }
 
 export function cancelOverlay(): Promise<void> {
-  return invoke<void>("overlay_cancel");
+  return commands.overlayCancel();
 }
 
 /**
@@ -183,6 +142,6 @@ export function cancelOverlay(): Promise<void> {
  * overlay's CSS px, as the spot the recording toolbar opens at on this
  * display (`record_bar_remember`).
  */
-export function rememberSetupSpot(centre: Point): Promise<void> {
-  return invoke<void>("record_bar_remember", { centre });
+export async function rememberSetupSpot(centre: Point): Promise<void> {
+  await commands.recordBarRemember(centre);
 }

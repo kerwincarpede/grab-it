@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "../app/app.css";
 import "./hub.css";
@@ -23,7 +22,7 @@ import { openMain, startCapture, type CaptureKind } from "../app/api";
 import { useEffectiveHotkeys } from "../app/useEffectiveHotkeys";
 import { formatTime, listShots, openShot, type Shot } from "../library/api";
 import { useThumbnail } from "../library/thumbnails";
-import { IDLE, hubActivity, onHubActivity, type HubActivity } from "./api";
+import { IDLE, hideHub, hubActivity, hubMonitors, onHubActivity, quitApp, type HubActivity, type HubMonitor } from "./api";
 
 /** Mirrors `HUB_SHOWN_EVENT` in src-tauri/src/hub.rs. */
 const HUB_SHOWN_EVENT = "hub-shown";
@@ -60,11 +59,6 @@ const TIMED: { kind: CaptureKind; title: string; seconds: number }[] = [
   { kind: "region", title: "Region in 10 s", seconds: 10 },
   { kind: "screen", title: "Screen in 5 s", seconds: 5 },
 ];
-
-interface HubMonitor {
-  index: number;
-  label: string;
-}
 
 function errorMessage(err: unknown): string {
   if (typeof err === "string") return err;
@@ -106,7 +100,7 @@ function Hub() {
     listShots(0, RECENT)
       .then((page) => setRecent(Array.isArray(page?.shots) ? page.shots : []))
       .catch(() => {});
-    invoke<HubMonitor[]>("hub_monitors")
+    hubMonitors()
       .then((found) => setMonitors(Array.isArray(found) ? found : []))
       .catch(() => {});
     hubActivity()
@@ -134,7 +128,7 @@ function Hub() {
       .then(keep)
       .catch(() => {});
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") void invoke("hub_hide");
+      if (event.key === "Escape") void hideHub();
     };
     window.addEventListener("keydown", onKey);
     return () => {
@@ -245,7 +239,7 @@ function Hub() {
         <button type="button" className="link-button" onClick={() => run(openMain("welcome"))}>
           Shortcuts
         </button>
-        <button type="button" className="link-button hub-quit" onClick={() => void invoke("hub_quit")}>
+        <button type="button" className="link-button hub-quit" onClick={() => void quitApp()}>
           Quit
         </button>
       </footer>

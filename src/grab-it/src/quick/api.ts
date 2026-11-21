@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { commands, type Code, type QuickAction, type QuickItem_Serialize, type Shown_Serialize, type TextTidy_Serialize } from "../app/bindings";
 
 /** What tidied text is laid out as. Mirrors `FORMATS` in src-tauri/src/tidy.rs. */
 export const TEXT_FORMATS = ["plain", "json", "yaml", "xml", "sql", "code", "table"] as const;
@@ -7,86 +8,31 @@ export type TextFormat = (typeof TEXT_FORMATS)[number];
 
 /**
  * How tidying a text capture with AI is going; `by` is who tidies it.
- * Mirrors `TextTidy` in src-tauri/src/quick.rs.
+ * Generated from `TextTidy` in src-tauri/src/quick.rs.
  */
-export type TextTidy =
-  | { state: "working"; by: string }
-  | {
-      state: "done";
-      by: string;
-      format: string;
-      language: string | null;
-      /** False when the AI's text matched what OCR read. */
-      changed: boolean;
-      /** Whether the card's text is on the clipboard: not when something else was copied meanwhile. */
-      copied: boolean;
-    }
-  | { state: "failed"; by: string; message: string };
+export type TextTidy = TextTidy_Serialize;
 
-/** A QR code or barcode read from the screen. Mirrors `Code` in src-tauri/src/codes.rs. */
-export interface QuickCode {
-  /** The format as people call it, such as "QR code". */
-  format: string;
-  value: string;
-  /** Whether `value` is an http(s) link, which the card offers to open. */
-  isLink: boolean;
-}
+/** A QR code or barcode read from the screen, generated from `Code` in src-tauri/src/codes.rs. */
+export type QuickCode = Code;
 
-/** Mirrors `QuickItem` in src-tauri/src/quick.rs. */
-export type QuickItem =
-  | { kind: "scrolling"; sessionId: number; width: number; height: number; capped: boolean; autoScrolling: boolean; manualReason: string | null }
-  | { kind: "capture"; path: string; fileName: string; width: number; height: number; copied: boolean }
-  /** `original` is what OCR read, when the AI's tidied text took its place. */
-  | { kind: "text"; text: string; original?: string; tidy?: TextTidy }
-  /** Codes whose values are on the clipboard; `text` is what OCR read around them, empty when nothing. */
-  | { kind: "code"; codes: QuickCode[]; text: string }
-  | { kind: "colour"; hex: string; rgb: string }
-  | { kind: "working"; message: string }
-  | { kind: "notice"; title: string; message: string }
-  | { kind: "error"; message: string }
-  /** `maxSeconds` is how long a GIF may run; an MP4 has no limit. */
-  /** `fallback` says why an MP4 recording was saved as a GIF instead. */
-  | {
-      kind: "recorded";
-      path: string;
-      fileName: string;
-      durationMs: number;
-      bytes: number;
-      format: "gif" | "mp4";
-      fallback?: string;
-    };
+/** What the card shows, generated from `QuickItem` in src-tauri/src/quick.rs. */
+export type QuickItem = QuickItem_Serialize;
 
 /**
  * What is on the card, numbered so an action can say which card it was
- * clicked on. Mirrors `Shown` in src-tauri/src/quick.rs.
+ * clicked on. Generated from `Shown` in src-tauri/src/quick.rs.
  */
-export interface QuickShown {
-  /** Different for every item the card has shown. */
-  generation: number;
-  item: QuickItem;
-  /** How long it stays, in seconds, as Settings has it; 0 keeps it until closed. */
-  seconds?: number;
-}
+export type QuickShown = Shown_Serialize;
 
-/** Mirrors `QuickAction` in src-tauri/src/quick.rs. */
-export type QuickAction =
-  | "copy"
-  | "copyOriginal"
-  | "copyText"
-  | "openLink"
-  | "edit"
-  | "pin"
-  | "reveal"
-  | "open"
-  | "delete"
-  | "close";
+/** A button on the card, generated from `QuickAction` in src-tauri/src/quick.rs. */
+export type { QuickAction };
 
 /** Mirrors `QUICK_CHANGED_EVENT` in src-tauri/src/quick.rs. */
 export const QUICK_CHANGED_EVENT = "quick-changed";
 
 /** What the card should show; null when it was opened with nothing. */
 export function quickInfo(): Promise<QuickShown | null> {
-  return invoke<QuickShown | null>("quick_info");
+  return commands.quickInfo();
 }
 
 /** The capture on the card as a small PNG, or a frame of the recording on it. */
@@ -98,8 +44,8 @@ export function quickThumbnail(): Promise<ArrayBuffer> {
  * Runs a button of the card that showed item `generation`. The backend
  * drops the action when the card has since moved on to a newer item.
  */
-export function quickAction(action: QuickAction, generation: number): Promise<void> {
-  return invoke<void>("quick_action", { action, generation });
+export async function quickAction(action: QuickAction, generation: number): Promise<void> {
+  await commands.quickAction(action, generation);
 }
 
 /** Calls `handler` when the card is reused for something new. */
@@ -197,11 +143,15 @@ export function isStructured(format: string | undefined): boolean {
   return format !== undefined && format !== "plain";
 }
 
-
 /** Waits for native drag completion (drop or cancel). */
-export function quickDrag(generation: number): Promise<void> {
-  return invoke<void>("quick_drag", { generation });
+export async function quickDrag(generation: number): Promise<void> {
+  await commands.quickDrag(generation);
 }
 
-export function scrollDone(sessionId: number): Promise<void> { return invoke("scroll_done", { sessionId }); }
-export function scrollCancel(sessionId: number): Promise<void> { return invoke("scroll_cancel", { sessionId }); }
+export function scrollDone(sessionId: number): Promise<void> {
+  return commands.scrollDone(sessionId);
+}
+
+export function scrollCancel(sessionId: number): Promise<void> {
+  return commands.scrollCancel(sessionId);
+}

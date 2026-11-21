@@ -1,11 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import type { Removal } from "../settings/api";
-import type { InvokeArgs } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import LibraryWindow from "./LibraryWindow";
+import type { SearchQuery_Deserialize, Settings_Serialize } from "../app/bindings";
+import { mockCommands, type CommandCall, type CommandHandlers } from "../test/mockCommands";
 
 // Drawing a capture with its edits needs a real canvas; the image it gives is stood in for.
 vi.mock("../editor/renderCapture", () => ({ renderCapture: vi.fn(async () => new Uint8Array([137, 80, 78, 71, 1])) }));
@@ -30,6 +30,7 @@ import {
   isSearching,
   parseTags,
   type AiStatus,
+  type LibraryStorage,
   type MatchField,
   type OcrStatus,
   type SearchHit,
@@ -54,13 +55,76 @@ function shot(id: number, overrides: Partial<Shot> = {}): Shot {
     aiDescription: null,
     aiCategory: null,
     aiTags: [],
+    kind: "image",
+    durationMs: null,
+    bytes: null,
+    keep: false,
+    editedAt: null,
+    thumbStale: false,
     ...overrides,
+  };
+}
+
+/** Settings as `get_settings` sends them, with AI describing as the backend says. */
+function settings(backend: Backend): Settings_Serialize {
+  return {
+    saveFolder: "/home/me/Pictures/Grab-it",
+    hotkeys: {
+      allInOne: "",
+      region: "",
+      window: "",
+      screen: "",
+      text: "",
+      colour: "",
+      library: "",
+      steps: "",
+    },
+    editor: {},
+    showInDock: true,
+    appearance: { textScale: 1, hubScale: 1, popupCorner: "bottomRight", popupSeconds: 5 },
+    recording: {
+      format: "mp4",
+      quality: "medium",
+      fps: 30,
+      showCursor: true,
+      showClicks: false,
+      showKeystrokes: false,
+      audio: "none",
+      microphone: null,
+      showWebcam: false,
+      camera: null,
+      webcamShape: "squircle",
+      mirrorWebcam: false,
+      countdown: 0,
+      source: "region",
+    },
+    retention: backend.removal
+      ? { image: null, gif: 90, video: 30, removal: backend.removal }
+      : { image: null, gif: null, video: null, removal: "trash" },
+    permissions: { asked: true, resume: false },
+    agentAccess: false,
+    updateChannel: "stable",
+    afterCapture: "quickAccess",
+    copyToClipboard: true,
+    ai: {
+      enabled: backend.aiEnabled ?? backend.aiNotice,
+      provider: backend.aiProvider ?? "claudeCode",
+      endpoint: "",
+      model: "",
+      claudeModel: "",
+      codexModel: "",
+      apiKey: null,
+      newCapturesOnly: false,
+      tidyText: false,
+      noticePending: backend.aiNotice,
+      apiKeyStorage: "keychain",
+    },
   };
 }
 
 interface Backend {
   shots: Shot[];
-  calls: { cmd: string; payload?: InvokeArgs }[];
+  calls: CommandCall[];
   fail?: string;
   /** Text OCR found, by shot id. */
   ocr: Record<number, string>;
@@ -97,8 +161,8 @@ interface Backend {
 }
 
 /** A small stand-in for `Library::search`: every word must start a word in some field. */
-function search(backend: Backend, query: SearchQuery): SearchHit[] {
-  const words = query.text.toLowerCase().split(/\s+/).filter(Boolean);
+function search(backend: Backend, query: SearchQuery_Deserialize): SearchHit[] {
+  const words = (query.text ?? "").toLowerCase().split(/\s+/).filter(Boolean);
   const hits: SearchHit[] = [];
   for (const item of [...backend.shots].sort((a, b) => b.capturedAt - a.capturedAt)) {
     if (query.app && item.app !== query.app) continue;
@@ -108,8 +172,8 @@ function search(backend: Backend, query: SearchQuery): SearchHit[] {
     const recorded = item.kind === "video" || item.kind === "gif";
     if (query.kind === "recording" && !recorded) continue;
     if (query.kind === "image" && recorded) continue;
-    if (query.from !== null && item.capturedAt < query.from) continue;
-    if (query.to !== null && item.capturedAt >= query.to) continue;
+    if (query.from != null && item.capturedAt < query.from) continue;
+    if (query.to != null && item.capturedAt >= query.to) continue;
     const fields: [MatchField, string][] = [
       ["text", backend.ocr[item.id] ?? ""],
       ["tags", item.tags.join(" ")],
@@ -141,7 +205,7 @@ function mockBackend(shots: Shot[]): Backend {
     calls: [],
     ocr: {},
     ocrStatus: { state: "idle" },
-    aiStatus: { state: "idle", done: 0, total: 0, error: null },
+    aiStatus: { state: "idle", done: 0, total: 0, error: null, provider: "claudeCode" },
     aiNotice: false,
     aiProvider: "claudeCode",
   };
@@ -150,207 +214,192 @@ function mockBackend(shots: Shot[]): Backend {
     if (!found) throw `no capture with id ${id}`;
     return found;
   };
-  mockIPC(
-    (cmd, payload) => {
-      backend.calls.push({ cmd, payload });
-      const args = payload as Record<string, unknown>;
-      if (backend.fail) throw backend.fail;
-      if (backend.failIds?.[cmd]?.includes(args?.id as number)) throw `could not reach shot ${args.id}`;
+  /** Fails a command as the backend would: all of them with `fail`, or for the ids in `failIds`. */
+  const check = (cmd: string, payload: unknown) => {
+    if (backend.fail) throw backend.fail;
+    const id = (payload as { id?: number } | undefined)?.id;
+    if (id !== undefined && backend.failIds?.[cmd]?.includes(id)) throw `could not reach shot ${id}`;
+  };
+  const update = (updated: Shot) => {
+    backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
+    return updated;
+  };
+  const opened = ({ id }: { id: number }) => {
+    find(id);
+    return null;
+  };
+  const handlers: CommandHandlers = {
+    library_list: ({ offset, limit }) => {
+      const sorted = [...backend.shots].sort((a, b) => b.capturedAt - a.capturedAt);
+      return { shots: sorted.slice(offset, offset + limit), offset, total: sorted.length };
+    },
+    library_thumbnail: () => new Uint8Array([137, 80, 78, 71]).buffer,
+    library_storage: () => {
+      if (backend.storageFails) throw new Error("unexpected command library_storage");
+      const usage = (kind: string) => {
+        const items = backend.shots.filter((item) => (item.kind ?? "image") === kind);
+        return { count: items.length, bytes: items.reduce((sum, item) => sum + (item.bytes ?? 0), 0) };
+      };
+      const none = { count: 0, bytes: 0 };
+      const due = backend.due && {
+        image: backend.due.image ?? none,
+        gif: backend.due.gif ?? none,
+        video: backend.due.video ?? none,
+      };
+      // Without `due` set, it is left out as older backends do, which the generated type does not allow.
+      return {
+        image: usage("image"),
+        gif: usage("gif"),
+        video: usage("video"),
+        disk: backend.disk ?? null,
+        ...(due ? { due } : {}),
+      } as LibraryStorage;
+    },
+    library_clean_up: ({ removal, confirmed }) => {
+      // As the backend does: nothing is removed when more is due than the dialog showed.
+      const due = Object.values(backend.due ?? {});
+      const count = due.reduce((sum, kind) => sum + kind.count, 0);
+      const bytes = due.reduce((sum, kind) => sum + kind.bytes, 0);
+      if (count > confirmed.count || bytes > confirmed.bytes) {
+        throw `More is due now than when you confirmed: ${count} items. Check what Clean up removes and confirm again.`;
+      }
+      return backend.cleanUp ? backend.cleanUp(removal) : { count: 0, bytes: 0 };
+    },
+    library_stop_clean_up: () => undefined,
+    library_set_tags: ({ id, tags }) => {
+      if (backend.tagsFail) throw backend.tagsFail;
+      return update({ ...find(id), tags });
+    },
+    library_set_notes: ({ id, notes }) => update({ ...find(id), notes }),
+    library_set_keep: ({ id, keep }) => update({ ...find(id), keep }),
+    library_delete: ({ id }) => {
+      find(id);
+      backend.shots = backend.shots.filter((item) => item.id !== id);
+      return null;
+    },
+    library_trash: ({ id }) => {
+      find(id);
+      backend.shots = backend.shots.filter((item) => item.id !== id);
+      return null;
+    },
+    library_rename: ({ id, name }) => {
+      // As the backend does: the extension is kept, and a taken name is refused.
+      const current = find(id);
+      const extension = current.fileName.slice(current.fileName.lastIndexOf("."));
+      const fileName = `${name.trim()}${extension}`;
+      if (backend.shots.some((item) => item.id !== current.id && item.fileName === fileName)) {
+        throw `There is already a file called ${fileName}.`;
+      }
+      const folder = current.path.slice(0, current.path.lastIndexOf("/") + 1);
+      return update({ ...current, fileName, path: `${folder}${fileName}` });
+    },
+    library_duplicate: ({ id }) => {
+      const current = find(id);
+      const dot = current.fileName.lastIndexOf(".");
+      const fileName = `${current.fileName.slice(0, dot)} copy${current.fileName.slice(dot)}`;
+      const folder = current.path.slice(0, current.path.lastIndexOf("/") + 1);
+      const copy = {
+        ...current,
+        id: Math.max(...backend.shots.map((item) => item.id)) + 1,
+        fileName,
+        path: `${folder}${fileName}`,
+        keep: false,
+      };
+      backend.shots = [...backend.shots, copy];
+      return copy;
+    },
+    library_open_with_supported: () => backend.openWith ?? false,
+    library_text: ({ id }) => {
+      find(id);
+      if (backend.unread && id in backend.unread) return { state: "waiting" };
+      return { state: "read", text: backend.ocr[id] ?? "" };
+    },
+    library_copy_text: ({ id }) => {
+      find(id);
+      if (backend.unread && id in backend.unread) {
+        backend.ocr[id] = backend.unread[id];
+        delete backend.unread[id];
+      }
+      const text = backend.ocr[id] ?? "";
+      if (!text.trim()) throw "No text found in this capture.";
+      return text;
+    },
+    library_image: ({ id }) => {
+      find(id);
+      return new Uint8Array([137, 80, 78, 71]).buffer;
+    },
+    library_annotations: ({ id }) => {
+      find(id);
+      return { annotations: { version: 1, shapes: [] }, scaleFactor: 2, editedAt: 5_000 };
+    },
+    editor_copy: () => null,
+    editor_pin: () => null,
+    library_save_thumbnail: () => null,
+    library_open: opened,
+    library_copy: opened,
+    library_pin: opened,
+    library_play: opened,
+    library_reveal: opened,
+    library_open_folder: opened,
+    library_open_external: opened,
+    library_open_with: opened,
+    library_copy_path: ({ id }) => find(id).path,
+    library_copy_file: opened,
+    library_export: ({ id, target }) => {
+      find(id);
+      return target;
+    },
+    library_search: ({ query, offset, limit }) => {
+      const hits = search(backend, query);
+      return { hits: hits.slice(offset, offset + limit), offset, total: hits.length };
+    },
+    library_filter_options: () => ({
+      apps: [...new Set(backend.shots.map((item) => item.app).filter((app): app is string => !!app))].sort(),
+      tags: [...new Set(backend.shots.flatMap((item) => [...item.tags, ...item.aiTags]))].sort(),
+      categories: [
+        ...new Set(backend.shots.map((item) => item.aiCategory).filter((found): found is string => !!found)),
+      ].sort(),
+    }),
+    ocr_status: () => backend.ocrStatus,
+    ai_status: () => backend.aiStatus,
+    ai_redescribe: opened,
+    library_remove_ai_tag: ({ id, tag }) => {
+      const current = find(id);
+      const lower = tag.toLowerCase();
+      return update({ ...current, aiTags: current.aiTags.filter((item) => item.toLowerCase() !== lower) });
+    },
+    ai_clear: ({ id }) => {
+      update({ ...find(id), aiDescription: null, aiCategory: null, aiTags: [] });
+      return null;
+    },
+    open_target: () => null,
+    get_settings: () => settings(backend),
+    dismiss_ai_notice: () => {
+      backend.aiNotice = false;
+      return settings(backend);
+    },
+  };
+  const guarded: Record<string, (payload: unknown) => unknown> = {};
+  for (const [cmd, handler] of Object.entries(handlers) as [string, (payload: unknown) => unknown][]) {
+    guarded[cmd] = (payload) => {
+      check(cmd, payload);
+      return handler(payload);
+    };
+  }
+  backend.calls = mockCommands(guarded as CommandHandlers, {
+    shouldMockEvents: true,
+    otherwise: (cmd, payload) => {
+      check(cmd, payload);
       switch (cmd) {
-        case "library_list": {
-          const { offset, limit } = args as { offset: number; limit: number };
-          const sorted = [...backend.shots].sort((a, b) => b.capturedAt - a.capturedAt);
-          return { shots: sorted.slice(offset, offset + limit), offset, total: sorted.length };
-        }
-        case "library_thumbnail":
-          return new Uint8Array([137, 80, 78, 71]).buffer;
-        case "library_storage": {
-          if (backend.storageFails) throw new Error("unexpected command library_storage");
-          const usage = (kind: string) => {
-            const items = backend.shots.filter((item) => (item.kind ?? "image") === kind);
-            return { count: items.length, bytes: items.reduce((sum, item) => sum + (item.bytes ?? 0), 0) };
-          };
-          const none = { count: 0, bytes: 0 };
-          const due = backend.due && {
-            image: backend.due.image ?? none,
-            gif: backend.due.gif ?? none,
-            video: backend.due.video ?? none,
-          };
-          return {
-            image: usage("image"),
-            gif: usage("gif"),
-            video: usage("video"),
-            disk: backend.disk ?? null,
-            ...(due ? { due } : {}),
-          };
-        }
-        case "library_clean_up": {
-          // As the backend does: nothing is removed when more is due than the dialog showed.
-          const confirmed = args.confirmed as { count: number; bytes: number };
-          const due = Object.values(backend.due ?? {});
-          const count = due.reduce((sum, kind) => sum + kind.count, 0);
-          const bytes = due.reduce((sum, kind) => sum + kind.bytes, 0);
-          if (count > confirmed.count || bytes > confirmed.bytes) {
-            throw `More is due now than when you confirmed: ${count} items. Check what Clean up removes and confirm again.`;
-          }
-          return backend.cleanUp ? backend.cleanUp(args.removal as Removal) : { count: 0, bytes: 0 };
-        }
-        case "library_stop_clean_up":
-          return null;
-        case "library_set_tags": {
-          if (backend.tagsFail) throw backend.tagsFail;
-          const updated = { ...find(args.id as number), tags: args.tags as string[] };
-          backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
-          return updated;
-        }
-        case "library_set_notes": {
-          const updated = { ...find(args.id as number), notes: args.notes as string };
-          backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
-          return updated;
-        }
-        case "library_set_keep": {
-          const updated = { ...find(args.id as number), keep: args.keep as boolean };
-          backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
-          return updated;
-        }
-        case "library_delete":
-        case "library_trash":
-          find(args.id as number);
-          backend.shots = backend.shots.filter((item) => item.id !== args.id);
-          return null;
-        case "library_rename": {
-          // As the backend does: the extension is kept, and a taken name is refused.
-          const current = find(args.id as number);
-          const extension = current.fileName.slice(current.fileName.lastIndexOf("."));
-          const fileName = `${String(args.name).trim()}${extension}`;
-          if (backend.shots.some((item) => item.id !== current.id && item.fileName === fileName)) {
-            throw `There is already a file called ${fileName}.`;
-          }
-          const folder = current.path.slice(0, current.path.lastIndexOf("/") + 1);
-          const updated = { ...current, fileName, path: `${folder}${fileName}` };
-          backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
-          return updated;
-        }
-        case "library_duplicate": {
-          const current = find(args.id as number);
-          const dot = current.fileName.lastIndexOf(".");
-          const fileName = `${current.fileName.slice(0, dot)} copy${current.fileName.slice(dot)}`;
-          const folder = current.path.slice(0, current.path.lastIndexOf("/") + 1);
-          const copy = {
-            ...current,
-            id: Math.max(...backend.shots.map((item) => item.id)) + 1,
-            fileName,
-            path: `${folder}${fileName}`,
-            keep: false,
-          };
-          backend.shots = [...backend.shots, copy];
-          return copy;
-        }
-        case "library_open_with_supported":
-          return backend.openWith ?? false;
-        case "library_text": {
-          const id = args.id as number;
-          find(id);
-          if (backend.unread && id in backend.unread) return { state: "waiting" };
-          return { state: "read", text: backend.ocr[id] ?? "" };
-        }
-        case "library_copy_text": {
-          const id = args.id as number;
-          find(id);
-          if (backend.unread && id in backend.unread) {
-            backend.ocr[id] = backend.unread[id];
-            delete backend.unread[id];
-          }
-          const text = backend.ocr[id] ?? "";
-          if (!text.trim()) throw "No text found in this capture.";
-          return text;
-        }
-        case "library_image":
-          find(args.id as number);
-          return new Uint8Array([137, 80, 78, 71]).buffer;
-        case "library_annotations":
-          find(args.id as number);
-          return { annotations: { version: 1, shapes: [] }, scaleFactor: 2, editedAt: 5_000 };
-        case "editor_copy":
-        case "editor_pin":
-        case "library_save_thumbnail":
-          return null;
-        case "library_open":
-        case "library_copy":
-        case "library_pin":
-        case "library_play":
-        case "library_reveal":
-        case "library_open_folder":
-        case "library_open_external":
-        case "library_open_with":
-          find(args.id as number);
-          return null;
-        case "library_copy_path":
-          return find(args.id as number).path;
-        case "library_copy_file":
-          find(args.id as number);
-          return null;
-        case "library_export":
-          find(args.id as number);
-          return args.target;
         case "plugin:dialog|save":
           return backend.saveAs ?? null;
         case "plugin:dialog|open":
           return backend.openFolder ?? null;
-        case "library_search": {
-          const { query, offset, limit } = args as { query: SearchQuery; offset: number; limit: number };
-          const hits = search(backend, query);
-          return { hits: hits.slice(offset, offset + limit), offset, total: hits.length };
-        }
-        case "library_filter_options":
-          return {
-            apps: [...new Set(backend.shots.map((item) => item.app).filter((app): app is string => !!app))].sort(),
-            tags: [...new Set(backend.shots.flatMap((item) => [...item.tags, ...item.aiTags]))].sort(),
-            categories: [
-              ...new Set(backend.shots.map((item) => item.aiCategory).filter((found): found is string => !!found)),
-            ].sort(),
-          };
-        case "ocr_status":
-          return backend.ocrStatus;
-        case "ai_status":
-          return backend.aiStatus;
-        case "ai_redescribe":
-          find(args.id as number);
-          return null;
-        case "library_remove_ai_tag": {
-          const current = find(args.id as number);
-          const tag = String(args.tag).toLowerCase();
-          const updated = { ...current, aiTags: current.aiTags.filter((item) => item.toLowerCase() !== tag) };
-          backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
-          return updated;
-        }
-        case "ai_clear": {
-          const updated = { ...find(args.id as number), aiDescription: null, aiCategory: null, aiTags: [] };
-          backend.shots = backend.shots.map((item) => (item.id === updated.id ? updated : item));
-          return null;
-        }
-        case "open_target":
-          return null;
-        case "get_settings":
-          return {
-            ai: {
-              enabled: backend.aiEnabled ?? backend.aiNotice,
-              provider: backend.aiProvider ?? "claudeCode",
-              noticePending: backend.aiNotice,
-            },
-            ...(backend.removal
-              ? { retention: { image: null, gif: 90, video: 30, removal: backend.removal } }
-              : {}),
-          };
-        case "dismiss_ai_notice":
-          backend.aiNotice = false;
-          return null;
         default:
           throw new Error(`unexpected command ${cmd}`);
       }
     },
-    { shouldMockEvents: true },
-  );
+  });
   return backend;
 }
 
@@ -917,7 +966,7 @@ describe("LibraryWindow cleanup", () => {
 
     const done = await screen.findByRole("dialog", { name: "Cleanup done" });
     expect(callsTo(backend, "library_clean_up").map((call) => call.payload)).toEqual([
-      { removal: "trash", confirmed: { count: 2, bytes: 12 * MB } },
+      { removal: "trash", confirmed: { count: 2, bytes: 12 * MB }, retention: null },
     ]);
     expect(within(done).getByText("2 items moved to the Trash · 12 MB")).toBeInTheDocument();
     await userEvent.click(within(done).getByRole("button", { name: "Done" }));
@@ -957,7 +1006,7 @@ describe("LibraryWindow cleanup", () => {
 
     const done = await screen.findByRole("dialog", { name: "Cleanup done" });
     expect(callsTo(backend, "library_clean_up").map((call) => call.payload)).toEqual([
-      { removal: "permanent", confirmed: { count: 2, bytes: 12 * MB } },
+      { removal: "permanent", confirmed: { count: 2, bytes: 12 * MB }, retention: null },
     ]);
     expect(within(done).getByText("2 items deleted · 12 MB freed")).toBeInTheDocument();
   });
@@ -1064,8 +1113,8 @@ describe("LibraryWindow cleanup", () => {
     await userEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
     await screen.findByRole("dialog", { name: "Cleanup done" });
     expect(callsTo(backend, "library_clean_up").map((call) => call.payload)).toEqual([
-      { removal: "permanent", confirmed: { count: 2, bytes: 12 * MB } },
-      { removal: "permanent", confirmed: { count: 4, bytes: 32 * MB } },
+      { removal: "permanent", confirmed: { count: 2, bytes: 12 * MB }, retention: null },
+      { removal: "permanent", confirmed: { count: 4, bytes: 32 * MB }, retention: null },
     ]);
   });
 
@@ -1698,7 +1747,7 @@ describe("LibraryWindow right-click menu", () => {
 
   it("leaves out Describe again while AI descriptions are off", async () => {
     const backend = mockBackend([shot(1)]);
-    backend.aiStatus = { state: "off", done: 0, total: 0, error: null };
+    backend.aiStatus = { state: "off", done: 0, total: 0, error: null, provider: "claudeCode" };
     render(<LibraryWindow />);
     await screen.findByRole("button", { name: "Grab-it 1.png" });
     await waitFor(() => expect(callsTo(backend, "ai_status")).toHaveLength(1));
@@ -2247,7 +2296,7 @@ describe("LibraryWindow AI descriptions", () => {
 
   it("says to turn AI on when it is off", async () => {
     const backend = mockBackend([shot(1)]);
-    backend.aiStatus = { state: "off", done: 0, total: 0, error: null };
+    backend.aiStatus = { state: "off", done: 0, total: 0, error: null, provider: "claudeCode" };
     render(<LibraryWindow />);
     await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
 
@@ -2258,7 +2307,7 @@ describe("LibraryWindow AI descriptions", () => {
 
   it("shows progress from the status event, then the error with a hint", async () => {
     const backend = mockBackend([shot(1)]);
-    backend.aiStatus = { state: "working", done: 2, total: 40, error: null };
+    backend.aiStatus = { state: "working", done: 2, total: 40, error: null, provider: "claudeCode" };
     render(<LibraryWindow />);
 
     expect(await screen.findByText("Describing 3 of 40…")).toBeInTheDocument();
@@ -2352,6 +2401,7 @@ describe("LibraryWindow AI descriptions", () => {
 
   it("shows the notice when Grab-it turns AI on after the Library opened", async () => {
     const backend = mockBackend([shot(1)]);
+    backend.aiStatus = { state: "off", done: 0, total: 0, error: null, provider: "claudeCode" };
     render(<LibraryWindow />);
     await screen.findByRole("button", { name: "Grab-it 1.png" });
     await settle();
@@ -2399,7 +2449,7 @@ describe("LibraryWindow AI descriptions", () => {
 
   it("reloads when a run finishes, to show the new descriptions", async () => {
     const backend = mockBackend([shot(1)]);
-    backend.aiStatus = { state: "working", done: 0, total: 1, error: null };
+    backend.aiStatus = { state: "working", done: 0, total: 1, error: null, provider: "claudeCode" };
     render(<LibraryWindow />);
     expect(await screen.findByText("Describing 1 of 1…")).toBeInTheDocument();
     await settle();

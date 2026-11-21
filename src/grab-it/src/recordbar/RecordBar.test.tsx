@@ -1,8 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { InvokeArgs } from "@tauri-apps/api/core";
+import { mockCommands, type CommandCall } from "../test/mockCommands";
 import { describe, expect, it } from "vitest";
 import RecordBar from "./RecordBar";
 import { RECORD_BAR_EVENT, countdownLeft, formatClock, recordedMs, type BarStatus } from "./api";
@@ -21,28 +20,19 @@ const RECORDING: BarStatus = {
 };
 
 interface Backend {
-  calls: { cmd: string; payload?: InvokeArgs }[];
+  calls: CommandCall[];
 }
 
 function mockBackend(status: BarStatus | null, options: { up?: boolean; level?: number } = {}): Backend {
-  const backend: Backend = { calls: [] };
-  mockIPC(
-    (cmd, payload) => {
-      backend.calls.push({ cmd, payload });
-      switch (cmd) {
-        case "record_bar_status":
-          return status;
-        case "record_bar_fit":
-          return { up: options.up ?? false };
-        case "record_bar_level":
-          return options.level ?? 0;
-        default:
-          return null;
-      }
+  const calls = mockCommands(
+    {
+      record_bar_status: () => status,
+      record_bar_fit: () => ({ up: options.up ?? false }),
+      record_bar_level: () => options.level ?? 0,
     },
-    { shouldMockEvents: true },
+    { shouldMockEvents: true, otherwise: () => null },
   );
-  return backend;
+  return { calls };
 }
 
 const called = (backend: Backend, cmd: string) => backend.calls.filter((call) => call.cmd === cmd);

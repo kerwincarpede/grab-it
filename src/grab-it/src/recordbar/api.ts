@@ -1,42 +1,20 @@
-import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { RecordingFormat } from "../settings/api";
+import { commands, type BarLayout, type BarStatus_Serialize, type MutedInput, type Phase } from "../app/bindings";
 
 /** Mirrors `RECORD_BAR_EVENT` in src-tauri/src/record_bar.rs. */
 export const RECORD_BAR_EVENT = "record-bar-status";
 
-/** Mirrors `Phase` in src-tauri/src/record.rs. */
-export type BarPhase = "countdown" | "recording" | "saving";
+/** From `Phase` in src-tauri/src/record.rs. */
+export type BarPhase = Phase;
 
-/** Mirrors `BarStatus` in src-tauri/src/record.rs. Times are ms since the Unix epoch. */
-export interface BarStatus {
-  phase: BarPhase;
-  countdownEndsAt: number | null;
-  /** When the first frame was grabbed; null while counting down. */
-  startedAt: number | null;
-  /** How long it has been paused, before the pause under way. */
-  pausedMs: number;
-  /** When the pause under way began; null while it records. */
-  pausedAt: number | null;
-  /** A GIF stops by itself after this many seconds; an MP4 has no limit. */
-  maxSeconds: number | null;
-  format: RecordingFormat;
-  /** Whether the microphone is muted; null when it is not recorded. */
-  microphone: boolean | null;
-  /** Whether the system sound is muted; null when it is not recorded. */
-  system: boolean | null;
-  /** Whether the webcam bubble is showing. */
-  webcam: boolean;
-}
+/** From `BarStatus` in src-tauri/src/record.rs. Times are ms since the Unix epoch. */
+export type BarStatus = BarStatus_Serialize;
 
-/** Mirrors `MutedInput` in src-tauri/src/record.rs. */
-export type MutedInput = "microphone" | "system";
+/** From `MutedInput` in src-tauri/src/record.rs. */
+export type { MutedInput };
 
-/** Mirrors `BarLayout` in src-tauri/src/record_bar.rs. */
-export interface BarLayout {
-  /** Whether the menu opens above the pill. */
-  up: boolean;
-}
+/** From `BarLayout` in src-tauri/src/record_bar.rs: whether the menu opens above the pill. */
+export type { BarLayout };
 
 /** How long it has recorded at `now`, leaving out the time it was paused. */
 export function recordedMs(status: BarStatus, now: number): number {
@@ -61,7 +39,7 @@ export function formatClock(ms: number): string {
 }
 
 export function barStatus(): Promise<BarStatus | null> {
-  return invoke<BarStatus | null>("record_bar_status");
+  return commands.recordBarStatus();
 }
 
 export function onBarStatus(handler: (status: BarStatus) => void): Promise<UnlistenFn> {
@@ -70,39 +48,39 @@ export function onBarStatus(handler: (status: BarStatus) => void): Promise<Unlis
 
 /** How loud the microphone has been since the last ask, 0 to 1; null when it is not recorded. */
 export function microphoneLevel(): Promise<number | null> {
-  return invoke<number | null>("record_bar_level");
+  return commands.recordBarLevel();
 }
 
 export function stopRecording(): Promise<void> {
-  return invoke<void>("record_stop");
+  return commands.recordStop();
 }
 
 export function pauseRecording(paused: boolean): Promise<void> {
-  return invoke<void>("record_pause", { paused });
+  return commands.recordPause(paused);
 }
 
 export function muteInput(input: MutedInput, muted: boolean): Promise<void> {
-  return invoke<void>("record_mute", { input, muted });
+  return commands.recordMute(input, muted);
 }
 
 export function showWebcam(shown: boolean): Promise<void> {
-  return invoke<void>("record_webcam", { shown });
+  return commands.recordWebcam(shown);
 }
 
 export function restartRecording(): Promise<void> {
-  return invoke<void>("record_restart");
+  return commands.recordRestart();
 }
 
 export function discardRecording(): Promise<void> {
-  return invoke<void>("record_discard");
+  return commands.recordDiscard();
 }
 
 /** Fits the window to a pill of `width` × `height` points, with a menu `menu` points tall open. */
 export function fitBar(width: number, height: number, menu: number | null): Promise<BarLayout> {
-  return invoke<BarLayout>("record_bar_fit", { width, height, menu });
+  return commands.recordBarFit(width, height, menu);
 }
 
 /** Forgets where the toolbar was left and puts it back at the top centre. */
 export function resetBarPosition(): Promise<void> {
-  return invoke<void>("record_bar_reset");
+  return commands.recordBarReset();
 }

@@ -1,48 +1,43 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { Removal, Retention } from "../settings/api";
+import {
+  commands,
+  type AiStatus_Serialize,
+  type LibraryStorage_Serialize,
+  type Removal,
+  type Retention_Deserialize,
+  type SearchHit_Serialize,
+  type SearchPage_Serialize,
+  type SearchQuery_Deserialize,
+  type ShotAnnotations_Serialize,
+  type ShotPage_Serialize,
+  type Shot_Serialize,
+} from "../app/bindings";
 
-/** Mirrors `Shot` in src-tauri/src/library.rs. */
-/** What a library item is. Mirrors `ShotKind` in src-tauri/src/library.rs. */
-export type ShotKind = "image" | "video" | "gif";
+export type {
+  Cleaned,
+  DiskSpace,
+  FilterOptions,
+  KindUsage,
+  MatchField,
+  NameCount,
+  OcrLine,
+  OcrStatus,
+  OcrWord,
+  ShotKind,
+  ShotText,
+  SidebarSummary,
+  SnippetPart,
+  Usage,
+} from "../app/bindings";
+import type { Cleaned, FilterOptions, KindUsage, MatchField, OcrLine, OcrStatus, ShotKind, ShotText, SidebarSummary } from "../app/bindings";
 
-export interface Shot {
-  id: number;
-  /** A capture, or an MP4 or GIF recording. Older backends leave it out: an image. */
-  kind?: ShotKind;
-  path: string;
-  fileName: string;
-  thumbPath: string;
-  /** Milliseconds since the Unix epoch. */
-  capturedAt: number;
-  mode: string | null;
-  app: string | null;
-  windowTitle: string | null;
-  width: number;
-  height: number;
-  tags: string[];
-  notes: string;
-  /** What the AI describer saw in the image; null until it has described it. */
-  aiDescription: string | null;
-  /** One of {@link AI_CATEGORIES}; null until described. */
-  aiCategory: string | null;
-  /** Tags the AI describer suggested, kept apart from the user's own. */
-  aiTags: string[];
-  /** How long a recording runs, once known. */
-  durationMs?: number | null;
-  /** The main file's size (the PNG's or the recording's), once known. */
-  bytes?: number | null;
-  /** Starred Keep forever: cleanup never removes it. Older backends leave it out. */
-  keep?: boolean;
-  /** When its annotations were last saved (ms since the Unix epoch); null for a capture never edited. Older backends leave it out. */
-  editedAt?: number | null;
-  /** It has edits and its saved thumbnail is missing or older than them, so the Library draws a new one. */
-  thumbStale?: boolean;
-}
+/** A library item, as `Shot` in src-tauri/src/library.rs sends it. */
+export type Shot = Shot_Serialize;
 
 /** Stars or unstars the shot Keep forever. */
 export function setShotKeep(id: number, keep: boolean): Promise<Shot> {
-  return invoke<Shot>("library_set_keep", { id, keep });
+  return commands.librarySetKeep(id, keep);
 }
 
 /** Whether the shot is a recording rather than a capture. */
@@ -51,48 +46,15 @@ export function isRecording(shot: Pick<Shot, "kind">): boolean {
 }
 
 /** Plays a recording in the app that plays its kind of file. */
-export function playShot(id: number): Promise<void> {
-  return invoke<void>("library_play", { id });
+export async function playShot(id: number): Promise<void> {
+  await commands.libraryPlay(id);
 }
 
-/** Mirrors `ShotPage` in src-tauri/src/library.rs. */
-export interface ShotPage {
-  shots: Shot[];
-  offset: number;
-  /** Every shot in the library. */
-  total: number;
-}
+/** A page of shots, as `ShotPage` in src-tauri/src/library.rs sends it. */
+export type ShotPage = ShotPage_Serialize;
 
-/** How many items of one kind the library holds and their size. Mirrors `KindUsage` in src-tauri/src/storage.rs. */
-export interface KindUsage {
-  count: number;
-  bytes: number;
-}
-
-/** Space on a disk, in bytes. Mirrors `DiskSpace` in src-tauri/src/storage.rs. */
-export interface DiskSpace {
-  /** What Grab-it may still write. */
-  free: number;
-  total: number;
-}
-
-/** Each kind's count and size. Mirrors `Usage` in src-tauri/src/storage.rs. */
-export interface Usage {
-  image: KindUsage;
-  gif: KindUsage;
-  video: KindUsage;
-}
-
-/** The library's size by kind and the save folder's disk. Mirrors `LibraryStorage` in src-tauri/src/storage.rs. */
-export interface LibraryStorage {
-  image: KindUsage;
-  gif: KindUsage;
-  video: KindUsage;
-  /** Null when the disk could not be read. */
-  disk: DiskSpace | null;
-  /** What the next cleanup removes, by kind: older than its Keep setting and not protected. Older backends leave it out. */
-  due?: Usage;
-}
+/** The library's size by kind and the save folder's disk, as `LibraryStorage` in src-tauri/src/storage.rs sends it. */
+export type LibraryStorage = LibraryStorage_Serialize;
 
 /** The kinds the Storage popover shows, in its order. */
 export const STORAGE_KINDS: { kind: ShotKind; name: string; one: string; many: string }[] = [
@@ -106,14 +68,8 @@ export const STORAGE_KINDS: { kind: ShotKind; name: string; one: string; many: s
  * cleanup removes under the saved Keep settings, or under `candidate` when
  * one is given, as Settings asks before saving a shorter one.
  */
-export function libraryStorage(candidate?: Retention): Promise<LibraryStorage> {
-  return candidate ? invoke<LibraryStorage>("library_storage", { candidate }) : invoke<LibraryStorage>("library_storage");
-}
-
-/** What a cleanup removed. Mirrors `Cleaned` in src-tauri/src/storage.rs. */
-export interface Cleaned {
-  count: number;
-  bytes: number;
+export function libraryStorage(candidate?: Retention_Deserialize): Promise<LibraryStorage> {
+  return commands.libraryStorage(candidate ?? null);
 }
 
 /** Mirrors `LIBRARY_CLEANED_EVENT` in src-tauri/src/storage.rs: an automatic cleanup removed something. */
@@ -152,15 +108,13 @@ export const CLEANUP_DONE_EVENT = "cleanup-done";
  * rejects. It also rejects while another cleanup runs. `retention`, when
  * given, stands in for the saved Keep settings, as Purge now does.
  */
-export function cleanUp(removal: Removal, confirmed: KindUsage, retention?: Retention): Promise<Cleaned> {
-  return retention
-    ? invoke<Cleaned>("library_clean_up", { removal, confirmed, retention })
-    : invoke<Cleaned>("library_clean_up", { removal, confirmed });
+export function cleanUp(removal: Removal, confirmed: KindUsage, retention?: Retention_Deserialize): Promise<Cleaned> {
+  return commands.libraryCleanUp(removal, confirmed, retention ?? null);
 }
 
 /** Stops the running cleanup before its next item. */
 export function stopCleanUp(): Promise<void> {
-  return invoke<void>("library_stop_clean_up");
+  return commands.libraryStopCleanUp();
 }
 
 /** Calls `handler` after each item a cleanup, automatic or not, looks at. */
@@ -211,7 +165,7 @@ export const PAGE_SIZE = 60;
 
 /** Shots newest first. */
 export function listShots(offset: number, limit: number): Promise<ShotPage> {
-  return invoke<ShotPage>("library_list", { offset, limit });
+  return commands.libraryList(offset, limit);
 }
 
 /** A shot's thumbnail as PNG bytes. */
@@ -224,19 +178,12 @@ export function shotImage(id: number): Promise<ArrayBuffer> {
   return invoke<ArrayBuffer>("library_image", { id });
 }
 
-/** A capture's saved annotations and scale. Mirrors `ShotAnnotations` in src-tauri/src/library.rs. */
-export interface ShotAnnotations {
-  /** The sidecar as saved; null when the capture has no edits. */
-  annotations: unknown;
-  /** The capture's pixels per point, when its meta.json records it. */
-  scaleFactor: number | null;
-  /** When the sidecar read was saved (ms since the Unix epoch); null without edits. */
-  editedAt: number | null;
-}
+/** A capture's saved annotations and scale, as `ShotAnnotations` in src-tauri/src/library.rs sends it. */
+export type ShotAnnotations = ShotAnnotations_Serialize;
 
 /** A capture's saved annotations; rejects when the sidecar cannot be read. */
 export function shotAnnotations(id: number): Promise<ShotAnnotations> {
-  return invoke<ShotAnnotations>("library_annotations", { id });
+  return commands.libraryAnnotations(id);
 }
 
 /** Mirrors `THUMBNAIL_ID_HEADER` in src-tauri/src/library.rs. */
@@ -256,32 +203,16 @@ export function saveShotThumbnail(id: number, png: Uint8Array, editedAt: number)
 }
 
 export function setShotTags(id: number, tags: string[]): Promise<Shot> {
-  return invoke<Shot>("library_set_tags", { id, tags });
-}
-
-/** A name and how many captures have it. */
-export interface NameCount {
-  name: string;
-  count: number;
-}
-
-/** What the Grab-it window's sidebar lists. Mirrors `SidebarSummary` in src-tauri/src/search.rs. */
-export interface SidebarSummary {
-  total: number;
-  /** How many of them are recordings. */
-  recordings?: number;
-  apps: NameCount[];
-  /** The most used tags, yours and the AI's. */
-  tags: NameCount[];
+  return commands.librarySetTags(id, tags);
 }
 
 export function sidebarSummary(): Promise<SidebarSummary> {
-  return invoke<SidebarSummary>("library_sidebar");
+  return commands.librarySidebar();
 }
 
 /** Takes one tag the AI added off a capture. */
 export function removeAiTag(id: number, tag: string): Promise<Shot> {
-  return invoke<Shot>("library_remove_ai_tag", { id, tag });
+  return commands.libraryRemoveAiTag(id, tag);
 }
 
 /** A capture's tags, then the AI's that you haven't also added. */
@@ -291,17 +222,17 @@ export function allTags(shot: Pick<Shot, "tags" | "aiTags">): string[] {
 }
 
 export function setShotNotes(id: number, notes: string): Promise<Shot> {
-  return invoke<Shot>("library_set_notes", { id, notes });
+  return commands.librarySetNotes(id, notes);
 }
 
 /** Deletes the PNG or recording, its sidecars and its thumbnail. */
-export function deleteShot(id: number): Promise<void> {
-  return invoke<void>("library_delete", { id });
+export async function deleteShot(id: number): Promise<void> {
+  await commands.libraryDelete(id);
 }
 
 /** Moves the PNG or recording and its sidecars to the system Trash, and drops it from the library. */
-export function trashShot(id: number): Promise<void> {
-  return invoke<void>("library_trash", { id });
+export async function trashShot(id: number): Promise<void> {
+  await commands.libraryTrash(id);
 }
 
 /**
@@ -310,30 +241,30 @@ export function trashShot(id: number): Promise<void> {
  * with why when the name is taken or not allowed.
  */
 export function renameShot(id: number, name: string): Promise<Shot> {
-  return invoke<Shot>("library_rename", { id, name });
+  return commands.libraryRename(id, name);
 }
 
 /** Copies the shot beside itself as "<name> copy" and resolves to the copy. */
 export function duplicateShot(id: number): Promise<Shot> {
-  return invoke<Shot>("library_duplicate", { id });
+  return commands.libraryDuplicate(id);
 }
 
 /** Asks the system which app to open the shot's file with. */
-export function openShotWith(id: number): Promise<void> {
-  return invoke<void>("library_open_with", { id });
+export async function openShotWith(id: number): Promise<void> {
+  await commands.libraryOpenWith(id);
 }
 
 /** Whether this system can ask which app to open a file with; false when it cannot say. */
 export function openWithSupported(): Promise<boolean> {
-  return invoke<boolean>("library_open_with_supported").then(
+  return commands.libraryOpenWithSupported().then(
     (supported) => supported === true,
     () => false,
   );
 }
 
 /** Puts the shot's file on the clipboard as a file, to paste into a file manager or attach in another app. */
-export function copyShotFile(id: number): Promise<void> {
-  return invoke<void>("library_copy_file", { id });
+export async function copyShotFile(id: number): Promise<void> {
+  await commands.libraryCopyFile(id);
 }
 
 /**
@@ -342,7 +273,7 @@ export function copyShotFile(id: number): Promise<void> {
  * target's extension, a recording as a copy.
  */
 export function exportShot(id: number, target: string): Promise<string> {
-  return invoke<string>("library_export", { id, target });
+  return commands.libraryExport(id, target);
 }
 
 /** A file type the export save dialog offers. */
@@ -409,35 +340,18 @@ export function splitFileName(fileName: string): { stem: string; extension: stri
 }
 
 /** Opens the shot in its editor: a capture in the annotation editor, an MP4 in the recording editor; a GIF plays. */
-export function openShot(id: number): Promise<void> {
-  return invoke<void>("library_open", { id });
+export async function openShot(id: number): Promise<void> {
+  await commands.libraryOpen(id);
 }
 
 /** Copies the shot's original image to the clipboard. For the image with its edits, see `copyFinished` in finished.ts. */
-export function copyShot(id: number): Promise<void> {
-  return invoke<void>("library_copy", { id });
+export async function copyShot(id: number): Promise<void> {
+  await commands.libraryCopy(id);
 }
-
-/** The text in a shot, as far as OCR has got. Mirrors `ShotText` in src-tauri/src/library.rs. */
-export type ShotText = { state: "waiting" } | { state: "read"; text: string } | { state: "failed" };
 
 /** The text OCR found in the shot, or why there is none yet. */
 export function shotText(id: number): Promise<ShotText> {
-  return invoke<ShotText>("library_text", { id });
-}
-
-/** A word OCR read, with its axis-aligned box in the image's pixels. Mirrors `OcrWord` in src-tauri/src/ocr.rs. */
-export interface OcrWord {
-  text: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-/** A line of text OCR read, with its box and its words. Mirrors `OcrLine` in src-tauri/src/ocr.rs. */
-export interface OcrLine extends OcrWord {
-  words: OcrWord[];
+  return commands.libraryText(id);
 }
 
 /**
@@ -446,7 +360,7 @@ export interface OcrLine extends OcrWord {
  * OCR, and for captures read before word boxes were stored.
  */
 export function shotWords(id: number): Promise<OcrLine[] | null> {
-  return invoke<OcrLine[] | null>("library_words", { id });
+  return commands.libraryWords(id);
 }
 
 /**
@@ -454,12 +368,12 @@ export function shotWords(id: number): Promise<OcrLine[] | null> {
  * read first, which takes a few seconds. Rejects when there is no text.
  */
 export function copyShotText(id: number): Promise<string> {
-  return invoke<string>("library_copy_text", { id });
+  return commands.libraryCopyText(id);
 }
 
 /** The library id of the capture at `path`, or null when the library does not know it. */
 export function shotIdForPath(path: string): Promise<number | null> {
-  return invoke<number | null>("library_shot_id", { path });
+  return commands.libraryShotId(path);
 }
 
 /** Whether the shot has text worth offering Copy text for. */
@@ -499,28 +413,28 @@ export function watchShotText(path: string, handler: (id: number | null, text: S
 }
 
 /** Floats the shot above other windows. */
-export function pinShot(id: number): Promise<void> {
-  return invoke<void>("library_pin", { id });
+export async function pinShot(id: number): Promise<void> {
+  await commands.libraryPin(id);
 }
 
 /** Shows the shot's file in the system file manager. */
-export function revealShot(id: number): Promise<void> {
-  return invoke<void>("library_reveal", { id });
+export async function revealShot(id: number): Promise<void> {
+  await commands.libraryReveal(id);
 }
 
 /** Opens the folder the shot's file is in. */
-export function openShotFolder(id: number): Promise<void> {
-  return invoke<void>("library_open_folder", { id });
+export async function openShotFolder(id: number): Promise<void> {
+  await commands.libraryOpenFolder(id);
 }
 
 /** Opens the shot's file in the system's default app for its kind. */
-export function openShotExternally(id: number): Promise<void> {
-  return invoke<void>("library_open_external", { id });
+export async function openShotExternally(id: number): Promise<void> {
+  await commands.libraryOpenExternal(id);
 }
 
 /** Copies the full path of the shot's file and resolves to it. */
 export function copyShotPath(id: number): Promise<string> {
-  return invoke<string>("library_copy_path", { id });
+  return commands.libraryCopyPath(id);
 }
 
 /** Calls `handler` whenever shots are added, changed or removed. */
@@ -540,9 +454,6 @@ export function formatCapturedAt(ms: number): string {
   return new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-/** Mirrors `MatchField` in src-tauri/src/search.rs. */
-export type MatchField = "text" | "tags" | "notes" | "app" | "windowTitle" | "description";
-
 /** How each field a search can match is named in results. */
 export const FIELD_LABELS: Record<MatchField, string> = {
   text: "Text in image",
@@ -553,32 +464,18 @@ export const FIELD_LABELS: Record<MatchField, string> = {
   description: "Description",
 };
 
-/** Mirrors `SnippetPart` in src-tauri/src/search.rs. */
-export interface SnippetPart {
-  text: string;
-  /** This part matched the search. */
-  hit: boolean;
-}
+/** A search match, as `SearchHit` in src-tauri/src/search.rs sends it. */
+export type SearchHit = SearchHit_Serialize;
 
-/** Mirrors `SearchHit` in src-tauri/src/search.rs. */
-export interface SearchHit {
-  shot: Shot;
-  /** The first field the words were found in; null without words. */
-  field: MatchField | null;
-  /** Text around the match in that field; empty without words. */
-  snippet: SnippetPart[];
-}
+/** A page of search matches, as `SearchPage` in src-tauri/src/search.rs sends it. */
+export type SearchPage = SearchPage_Serialize;
 
-/** Mirrors `SearchPage` in src-tauri/src/search.rs. */
-export interface SearchPage {
-  hits: SearchHit[];
-  offset: number;
-  /** Every shot that matches. */
-  total: number;
-}
-
-/** Mirrors `SearchQuery` in src-tauri/src/search.rs. */
-export interface SearchQuery {
+/**
+ * What `library_search` takes (`SearchQuery` in src-tauri/src/search.rs), in
+ * the narrower shape the Library builds: every filter present, and `kind` one
+ * of {@link KindFilter}.
+ */
+export type SearchQuery = SearchQuery_Deserialize & {
   /** Words to find, each as a prefix; all must match. */
   text: string;
   /** Captured at or after, in ms since the Unix epoch. */
@@ -592,18 +489,10 @@ export interface SearchQuery {
   category?: string;
   /** Only captures or only recordings; left out for both. */
   kind?: KindFilter;
-}
+};
 
 /** Narrows the Library to captures or to recordings. */
 export type KindFilter = "image" | "recording";
-
-/** Mirrors `FilterOptions` in src-tauri/src/search.rs. */
-export interface FilterOptions {
-  apps: string[];
-  tags: string[];
-  /** AI categories some capture has. */
-  categories: string[];
-}
 
 /** The filter bar as the user set it; "" means any. Dates are `YYYY-MM-DD`. */
 export interface Filters {
@@ -658,25 +547,19 @@ export function isSearching(query: SearchQuery): boolean {
 
 /** Shots matching the query: best matches first with words, else newest first. */
 export function searchShots(query: SearchQuery, offset: number, limit: number): Promise<SearchPage> {
-  return invoke<SearchPage>("library_search", { query, offset, limit });
+  return commands.librarySearch(query, offset, limit);
 }
 
 /** Every app, tag and AI category in the library, for the filter bar. */
 export function filterOptions(): Promise<FilterOptions> {
-  return invoke<FilterOptions>("library_filter_options");
+  return commands.libraryFilterOptions();
 }
-
-/** Mirrors `OcrStatus` in src-tauri/src/ocr.rs. */
-export type OcrStatus =
-  | { state: "idle" }
-  | { state: "working"; pending: number }
-  | { state: "failed"; message: string };
 
 /** Mirrors `OCR_STATUS_EVENT` in src-tauri/src/ocr.rs. */
 export const OCR_STATUS_EVENT = "ocr-status";
 
 export function ocrStatus(): Promise<OcrStatus> {
-  return invoke<OcrStatus>("ocr_status");
+  return commands.ocrStatus();
 }
 
 /** Calls `handler` whenever the OCR queue changes state. */
@@ -800,18 +683,8 @@ export function categoryLabel(category: string): string {
   return AI_CATEGORIES[category] ?? category.charAt(0).toUpperCase() + category.slice(1);
 }
 
-/** Mirrors `AiStatus` in src-tauri: the AI describer's queue. */
-export interface AiStatus {
-  /** "off" when AI descriptions are turned off in Settings. */
-  state: "off" | "idle" | "working" | "error";
-  /** Captures described so far in this run. */
-  done: number;
-  /** Captures in this run. */
-  total: number;
-  error: string | null;
-  /** Who describes captures (`AiProvider` in src-tauri/src/settings.rs), so an error can say whom to check. */
-  provider?: "claudeCode" | "codex" | "endpoint";
-}
+/** The AI describer's queue, as `AiStatus` in src-tauri/src/ai.rs sends it. */
+export type AiStatus = AiStatus_Serialize;
 
 /** The providers that run a CLI the user already has, which Grab-it can turn on by itself. */
 export type CliProvider = "claudeCode" | "codex";
@@ -823,17 +696,17 @@ export const CLI_NAMES: Record<CliProvider, string> = { claudeCode: "Claude Code
 export const AI_STATUS_EVENT = "ai-status";
 
 export function aiStatus(): Promise<AiStatus> {
-  return invoke<AiStatus>("ai_status");
+  return commands.aiStatus();
 }
 
 /** Queues the shot to be described again; the result arrives as a library change. */
-export function redescribeShot(id: number): Promise<void> {
-  return invoke<void>("ai_redescribe", { id });
+export async function redescribeShot(id: number): Promise<void> {
+  await commands.aiRedescribe(id);
 }
 
 /** Forgets the shot's AI description, category and tags. */
-export function clearAiDescription(id: number): Promise<void> {
-  return invoke<void>("ai_clear", { id });
+export async function clearAiDescription(id: number): Promise<void> {
+  await commands.aiClear(id);
 }
 
 /** Calls `handler` whenever the AI describer's queue changes. */
@@ -842,8 +715,8 @@ export function onAiStatus(handler: (status: AiStatus) => void): Promise<Unliste
 }
 
 /** Opens the Settings window. */
-export function openSettings(): Promise<void> {
-  return invoke<void>("open_target", { target: "settings" });
+export async function openSettings(): Promise<void> {
+  await commands.openTarget("settings");
 }
 
 /**
@@ -853,17 +726,14 @@ export function openSettings(): Promise<void> {
  * describing off or picked an endpoint since.
  */
 export async function pendingAiNotice(): Promise<CliProvider | null> {
-  const settings = await invoke<{ ai?: { enabled?: boolean; provider?: string | null; noticePending?: boolean } }>(
-    "get_settings",
-  );
-  const ai = settings.ai;
+  const { ai } = await commands.getSettings();
   if (ai?.noticePending !== true || ai.enabled !== true) return null;
   return ai.provider === "claudeCode" || ai.provider === "codex" ? ai.provider : null;
 }
 
 /** Stops showing the notice that Grab-it turned AI descriptions on. */
 export async function dismissAiNotice(): Promise<void> {
-  await invoke("dismiss_ai_notice");
+  await commands.dismissAiNotice();
 }
 
 /** "Copied 3 lines of text", for the notice after copying a shot's text. */
