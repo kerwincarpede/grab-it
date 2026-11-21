@@ -393,11 +393,14 @@ mod platform {
 
     use super::CursorImage;
 
+    /// A pointer with its hot spot and size.
+    type Measured = (HCURSOR, (i32, i32), (i32, i32));
+
     pub struct Pointer {
         /// The pointer last seen, if it was showing.
         current: Option<HCURSOR>,
         /// The last pointer measured, with its hot spot and size.
-        shape: Option<(HCURSOR, (i32, i32), (i32, i32))>,
+        shape: Option<Measured>,
     }
 
     impl Pointer {

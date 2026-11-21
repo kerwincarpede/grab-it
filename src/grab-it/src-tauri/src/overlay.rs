@@ -140,6 +140,9 @@ struct Session {
     freeze: Option<crate::freeze::Freeze>,
 }
 
+// Windows' session also holds its frozen screens, which takes it over
+// clippy's limit. There is one Phase per app, so its size does not matter.
+#[cfg_attr(target_os = "windows", allow(clippy::large_enum_variant))]
 #[derive(Default)]
 enum Phase {
     #[default]
