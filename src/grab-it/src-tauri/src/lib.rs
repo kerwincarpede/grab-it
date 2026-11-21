@@ -529,6 +529,16 @@ mod tests {
                 path,
             )
             .expect("export the TypeScript bindings");
+        // The exporter leaves spaces at the ends of some lines, which `git
+        // diff --check` refuses.
+        let text = std::fs::read_to_string(path).expect("read the bindings");
+        let mut clean = text
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        clean.push('\n');
+        std::fs::write(path, clean).expect("write the bindings");
     }
 
     #[test]

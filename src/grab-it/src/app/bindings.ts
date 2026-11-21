@@ -99,7 +99,7 @@ export const commands = {
 	 *  has moved on to a newer item the action is dropped: a click (or a
 	 *  dismiss timer) racing a new capture must never copy, delete or hide the
 	 *  newer one.
-	 * 
+	 *
 	 *  Async, so the windows some actions open are never created on the main
 	 *  thread inside a command, which deadlocks on Windows.
 	 */
@@ -434,7 +434,7 @@ export const commands = {
 
 /* Types */
 /**  Where one permission stands. Mirrors `Access` in src/welcome/permissions.ts. */
-export type Access = "allowed" | 
+export type Access = "allowed" |
 /**
  *  Asked for and not granted, or (Screen Recording and Input
  *  Monitoring) granted but not seen until Grab-it restarts.
@@ -442,11 +442,11 @@ export type Access = "allowed" |
 "off" | "notAsked";
 
 /**  What Grab-it shows once a capture is saved. */
-export type AfterCapture = 
+export type AfterCapture =
 /**  A small floating preview in the corner with Copy, Annotate, Pin… */
-"quickAccess" | 
+"quickAccess" |
 /**  Straight into the annotation editor. */
-"editor" | 
+"editor" |
 /**  Nothing: the capture is saved (and copied) silently. */
 "nothing";
 
@@ -486,11 +486,11 @@ export type AiClis_Serialize = {
 };
 
 /**  Who describes captures. Mirrors `AiProvider` in src/settings/api.ts. */
-export type AiProvider = 
+export type AiProvider =
 /**  The user's own `claude` CLI, run headlessly (see `ai_cli.rs`). */
-"claudeCode" | 
+"claudeCode" |
 /**  The user's own `codex` CLI, run headlessly (see `ai_cli.rs`). */
-"codex" | 
+"codex" |
 /**  An OpenAI-compatible `/chat/completions` endpoint. */
 "endpoint";
 
@@ -608,13 +608,13 @@ export type AiSettings_Serialize = {
 	apiKeyStorage: ApiKeyStorage,
 };
 
-export type AiState = 
+export type AiState =
 /**  Describing is turned off in Settings. */
-"off" | 
+"off" |
 /**  Nothing waits to be described (or waits for OCR first). */
-"idle" | 
+"idle" |
 /**  A capture is being described. */
-"working" | 
+"working" |
 /**
  *  The provider failed; waiting captures are described once it is
  *  retried.
@@ -654,9 +654,9 @@ export type AiStatus_Serialize = {
  *  Where the endpoint API key is kept. Mirrors `ApiKeyStorage` in
  *  src/settings/api.ts.
  */
-export type ApiKeyStorage = 
+export type ApiKeyStorage =
 /**  The OS credential store (see `keychain.rs`); settings.json has no key. */
-"keychain" | 
+"keychain" |
 /**  settings.json, because this system has no credential store that works. */
 "settingsFile";
 
@@ -689,7 +689,7 @@ export type Appearance_Serialize = {
  *  What one source of a recording's sound is. Mirrors `AudioKind` in
  *  src/recording/api.ts.
  */
-export type AudioKind = "microphone" | "system" | 
+export type AudioKind = "microphone" | "system" |
 /**
  *  The microphone and system sound in one track, which can only be
  *  edited together: recordings made before the sources were kept, or
@@ -784,9 +784,9 @@ export type Camera = {
 };
 
 /**  What the user asked to capture. */
-export type CaptureMode = "region" | "window" | 
+export type CaptureMode = "region" | "window" |
 /**  Every monitor, stitched into one image. */
-"screen" | 
+"screen" |
 /**  A single monitor. */
 "monitor";
 
@@ -1095,40 +1095,40 @@ export type ExportStep = {
 export type FfmpegStatus = FfmpegStatus_Serialize | FfmpegStatus_Deserialize;
 
 /**  Where ffmpeg is up to. Mirrors `FfmpegStatus` in src/settings/api.ts. */
-export type FfmpegStatus_Deserialize = 
+export type FfmpegStatus_Deserialize =
 /**  Not looked for yet: nothing has asked for MP4. */
-{ state: "missing" } | 
+{ state: "missing" } |
 /**  Being downloaded; `total` is 0 until the server says. */
-{ state: "downloading"; downloaded: number; total: number } | 
+{ state: "downloading"; downloaded: number; total: number } |
 /**  Found; its encoders are being tried. */
-{ state: "checking" } | 
+{ state: "checking" } |
 /**  Ready to record with the ffmpeg at `path` and its `encoder`. */
-{ state: "ready"; path: string; encoder: string } | 
+{ state: "ready"; path: string; encoder: string } |
 /**
  *  No ffmpeg is installed, and none can be downloaded for this
  *  platform. `install` is the command that installs one, if known.
  *  Retry looks again.
  */
-{ state: "notInstalled"; install?: string | null } | 
+{ state: "notInstalled"; install?: string | null } |
 /**  It could not be downloaded or used. Retry tries again. */
 { state: "failed"; message: string };
 
 /**  Where ffmpeg is up to. Mirrors `FfmpegStatus` in src/settings/api.ts. */
-export type FfmpegStatus_Serialize = 
+export type FfmpegStatus_Serialize =
 /**  Not looked for yet: nothing has asked for MP4. */
-{ state: "missing" } | 
+{ state: "missing" } |
 /**  Being downloaded; `total` is 0 until the server says. */
-{ state: "downloading"; downloaded: number; total: number } | 
+{ state: "downloading"; downloaded: number; total: number } |
 /**  Found; its encoders are being tried. */
-{ state: "checking" } | 
+{ state: "checking" } |
 /**  Ready to record with the ffmpeg at `path` and its `encoder`. */
-{ state: "ready"; path: string; encoder: string } | 
+{ state: "ready"; path: string; encoder: string } |
 /**
  *  No ffmpeg is installed, and none can be downloaded for this
  *  platform. `install` is the command that installs one, if known.
  *  Retry looks again.
  */
-{ state: "notInstalled"; install: string | null } | 
+{ state: "notInstalled"; install: string | null } |
 /**  It could not be downloaded or used. Retry tries again. */
 { state: "failed"; message: string };
 
@@ -1242,15 +1242,15 @@ export type HubMonitor = {
  *  What the overlay's selection is for. Mirrors `Intent` in
  *  src/overlay/api.ts.
  */
-export type Intent = 
+export type Intent =
 /**  Save the selection as a capture. */
-"capture" | 
+"capture" |
 /**  Read the text in the selection and copy it. */
-"text" | 
+"text" |
 /**  Copy the colour of the clicked pixel. */
-"color" | 
+"color" |
 /**  Record the selection as an MP4 or an animated GIF. */
-"record" | 
+"record" |
 /**  Stitch manually scrolled frames of the selected area. */
 "scroll";
 
@@ -1311,9 +1311,9 @@ export type LibraryStorage_Serialize = {
  *  The `shots_fts` columns, in index order. Mirrors `MatchField` in
  *  src/library/api.ts.
  */
-export type MatchField = 
+export type MatchField =
 /**  Text OCR found in the image. */
-"text" | "tags" | "notes" | "app" | "windowTitle" | 
+"text" | "tags" | "notes" | "app" | "windowTitle" |
 /**  The AI description. */
 "description";
 
@@ -1353,11 +1353,11 @@ export type OcrLine = {
 } & Rect;
 
 /**  What the OCR queue is doing. Mirrors `OcrStatus` in src/library/api.ts. */
-export type OcrStatus = 
+export type OcrStatus =
 /**  Nothing waits for OCR. */
-{ state: "idle" } | 
+{ state: "idle" } |
 /**  Captures are being read; `pending` counts the one being read too. */
-{ state: "working"; pending: number } | 
+{ state: "working"; pending: number } |
 /**
  *  The models could not be loaded, so the install is damaged. The next
  *  capture tries again.
@@ -1538,9 +1538,9 @@ export type PermissionStatus = {
 };
 
 /**  Where a recording is in its life, as the toolbar shows it. */
-export type Phase = 
+export type Phase =
 /**  Counting down to the first frame. */
-"countdown" | "recording" | 
+"countdown" | "recording" |
 /**  Stopped, and finishing the file. */
 "saving";
 
@@ -1606,13 +1606,13 @@ export type Preferences_Serialize = {
 };
 
 /**  What a button on the card does. Mirrors `QuickAction` in src/quick/api.ts. */
-export type QuickAction = "copy" | "edit" | "pin" | "reveal" | 
+export type QuickAction = "copy" | "edit" | "pin" | "reveal" |
 /**  Opens a recording in the app that plays it. */
-"open" | "delete" | "close" | 
+"open" | "delete" | "close" |
 /**  Copies what OCR read, in place of the tidied text. */
-"copyOriginal" | 
+"copyOriginal" |
 /**  Copies the text read around the codes, in place of their values. */
-"copyText" | 
+"copyText" |
 /**
  *  Opens the first code's link in the browser, and dismisses the card.
  *  Only ever on a click: a decoded link is never opened by itself.
@@ -1623,34 +1623,34 @@ export type QuickAction = "copy" | "edit" | "pin" | "reveal" |
 export type QuickItem = QuickItem_Serialize | QuickItem_Deserialize;
 
 /**  What the card shows. Mirrors `QuickItem` in src/quick/api.ts. */
-export type QuickItem_Deserialize = { kind: "scrolling"; sessionId: number; width: number; height: number; capped: boolean; autoScrolling: boolean; manualReason?: string | null } | { kind: "capture"; path: string; fileName: string; width: number; height: number; 
+export type QuickItem_Deserialize = { kind: "scrolling"; sessionId: number; width: number; height: number; capped: boolean; autoScrolling: boolean; manualReason?: string | null } | { kind: "capture"; path: string; fileName: string; width: number; height: number;
 /**  Whether the capture is on the clipboard already. */
-copied: boolean } | 
+copied: boolean } |
 /**  Text read from the screen, already on the clipboard. */
-{ kind: "text"; text: string; 
+{ kind: "text"; text: string;
 /**  What OCR read, when the AI's tidied text took its place. */
-original?: string | null; 
+original?: string | null;
 /**  How tidying the text with AI went, when it was asked to. */
-tidy?: TextTidy_Deserialize | null } | 
+tidy?: TextTidy_Deserialize | null } |
 /**
  *  QR codes or barcodes read from the screen, their values already on
  *  the clipboard one per line. `text` is what OCR read around them,
  *  empty when it read nothing; the card offers it to copy instead, and
  *  offers to open the first link.
  */
-{ kind: "code"; codes: Code[]; text: string } | 
+{ kind: "code"; codes: Code[]; text: string } |
 /**  A picked colour as `#RRGGBB`, already on the clipboard. */
-{ kind: "colour"; hex: string; rgb: string } | 
+{ kind: "colour"; hex: string; rgb: string } |
 /**  Something slow is under way, such as reading text. */
-{ kind: "working"; message: string } | { kind: "notice"; title: string; message: string } | { kind: "error"; message: string } | 
+{ kind: "working"; message: string } | { kind: "notice"; title: string; message: string } | { kind: "error"; message: string } |
 /**  A finished recording. */
-{ kind: "recorded"; path: string; fileName: string; 
+{ kind: "recorded"; path: string; fileName: string;
 /**  How long the recording runs, in milliseconds. */
-durationMs: number; 
+durationMs: number;
 /**  The file's size in bytes. */
-bytes: number; 
+bytes: number;
 /**  What it was saved as. */
-format: RecordingFormat; 
+format: RecordingFormat;
 /**
  *  Why an MP4 recording was saved as a GIF instead, or without
  *  the sound it was to have.
@@ -1658,34 +1658,34 @@ format: RecordingFormat;
 fallback?: string | null };
 
 /**  What the card shows. Mirrors `QuickItem` in src/quick/api.ts. */
-export type QuickItem_Serialize = { kind: "scrolling"; sessionId: number; width: number; height: number; capped: boolean; autoScrolling: boolean; manualReason: string | null } | { kind: "capture"; path: string; fileName: string; width: number; height: number; 
+export type QuickItem_Serialize = { kind: "scrolling"; sessionId: number; width: number; height: number; capped: boolean; autoScrolling: boolean; manualReason: string | null } | { kind: "capture"; path: string; fileName: string; width: number; height: number;
 /**  Whether the capture is on the clipboard already. */
-copied: boolean } | 
+copied: boolean } |
 /**  Text read from the screen, already on the clipboard. */
-{ kind: "text"; text: string; 
+{ kind: "text"; text: string;
 /**  What OCR read, when the AI's tidied text took its place. */
-original?: string; 
+original?: string;
 /**  How tidying the text with AI went, when it was asked to. */
-tidy?: TextTidy_Serialize } | 
+tidy?: TextTidy_Serialize } |
 /**
  *  QR codes or barcodes read from the screen, their values already on
  *  the clipboard one per line. `text` is what OCR read around them,
  *  empty when it read nothing; the card offers it to copy instead, and
  *  offers to open the first link.
  */
-{ kind: "code"; codes: Code[]; text: string } | 
+{ kind: "code"; codes: Code[]; text: string } |
 /**  A picked colour as `#RRGGBB`, already on the clipboard. */
-{ kind: "colour"; hex: string; rgb: string } | 
+{ kind: "colour"; hex: string; rgb: string } |
 /**  Something slow is under way, such as reading text. */
-{ kind: "working"; message: string } | { kind: "notice"; title: string; message: string } | { kind: "error"; message: string } | 
+{ kind: "working"; message: string } | { kind: "notice"; title: string; message: string } | { kind: "error"; message: string } |
 /**  A finished recording. */
-{ kind: "recorded"; path: string; fileName: string; 
+{ kind: "recorded"; path: string; fileName: string;
 /**  How long the recording runs, in milliseconds. */
-durationMs: number; 
+durationMs: number;
 /**  The file's size in bytes. */
-bytes: number; 
+bytes: number;
 /**  What it was saved as. */
-format: RecordingFormat; 
+format: RecordingFormat;
 /**
  *  Why an MP4 recording was saved as a GIF instead, or without
  *  the sound it was to have.
@@ -1693,16 +1693,16 @@ format: RecordingFormat;
 fallback?: string };
 
 /**  What sound an MP4 records. */
-export type RecordingAudio = 
+export type RecordingAudio =
 /**  Silent. */
-"none" | 
+"none" |
 /**  The chosen microphone (see audio.rs). */
-"microphone" | 
+"microphone" |
 /**
  *  What the computer plays (see audio.rs). Not offered on macOS
  *  before 13.
  */
-"system" | 
+"system" |
 /**
  *  The chosen microphone and what the computer plays, mixed into one
  *  track.
@@ -1746,9 +1746,9 @@ export type RecordingClipSource_Serialize = {
 };
 
 /**  What recordings are saved as. */
-export type RecordingFormat = 
+export type RecordingFormat =
 /**  An animated GIF, silent and at most a minute long. */
-"gif" | 
+"gif" |
 /**  An H.264 MP4, encoded by ffmpeg (see ffmpeg.rs). */
 "mp4";
 
@@ -1925,9 +1925,9 @@ export type Rect = {
  *  How cleanup removes items older than their Keep setting. Mirrors
  *  `Removal` in src/settings/api.ts.
  */
-export type Removal = 
+export type Removal =
 /**  To the system Trash, where they can be restored. */
-"trash" | 
+"trash" |
 /**  Deleted for good. */
 "permanent";
 
@@ -2048,16 +2048,16 @@ export type SearchQuery_Serialize = {
 };
 
 /**  What the user picked in an overlay. */
-export type Selection = 
+export type Selection =
 /**
  *  A dragged region in the overlay's CSS pixels, with the overlay's
  *  viewport width to derive the scale.
  */
-{ kind: "region"; rect: CssRect; viewportWidth: number | null } | 
+{ kind: "region"; rect: CssRect; viewportWidth: number | null } |
 /**  A window from [`OverlayInfo::windows`]. */
-{ kind: "window"; id: number } | 
+{ kind: "window"; id: number } |
 /**  A clicked point in the overlay's CSS pixels, for picking a colour. */
-{ kind: "point"; x: number | null; y: number | null; viewportWidth: number | null } | 
+{ kind: "point"; x: number | null; y: number | null; viewportWidth: number | null } |
 /**
  *  Every frozen monitor, stitched. Only All-in-one's Screen mode
  *  sends it.
@@ -2166,11 +2166,11 @@ export type ShotAnnotations_Serialize = {
 };
 
 /**  What a library item is. Mirrors `ShotKind` in src/library/api.ts. */
-export type ShotKind = 
+export type ShotKind =
 /**  A capture: a PNG in `originals/`. */
-"image" | 
+"image" |
 /**  An MP4 recording. */
-"video" | 
+"video" |
 /**  A GIF recording. */
 "gif";
 
@@ -2197,11 +2197,11 @@ export type ShotPage_Serialize = {
  *  The text in a shot, as far as OCR has got. Mirrors `ShotText` in
  *  src/library/api.ts.
  */
-export type ShotText = 
+export type ShotText =
 /**  OCR has not read it yet. */
-{ state: "waiting" } | 
+{ state: "waiting" } |
 /**  OCR read it; `text` is empty when it found none. */
-{ state: "read"; text: string } | 
+{ state: "read"; text: string } |
 /**  OCR could not read the image. */
 { state: "failed" };
 
@@ -2344,7 +2344,7 @@ export type SnippetPart = {
 };
 
 /**  A text size keyboard shortcut: ⌘+, ⌘− or ⌘0. */
-export type TextSizeStep = "bigger" | "smaller" | 
+export type TextSizeStep = "bigger" | "smaller" |
 /**  Back to [`DEFAULT_TEXT_SCALE`]. */
 "reset";
 
@@ -2360,16 +2360,16 @@ export type TextTidy = TextTidy_Serialize | TextTidy_Deserialize;
  *  who tidies it, as the card names them. Mirrors `TextTidy` in
  *  src/quick/api.ts.
  */
-export type TextTidy_Deserialize = 
+export type TextTidy_Deserialize =
 /**  The AI is reading the text again. */
-{ state: "working"; by: string } | 
+{ state: "working"; by: string } |
 /**
  *  The AI's text is on the card. `format` is one of `tidy::FORMATS`;
  *  `changed` is false when it matched what OCR read, and `copied` says
  *  whether it is on the clipboard: not when the user copied something
  *  else while the AI was reading.
  */
-{ state: "done"; by: string; format: string; language?: string | null; changed: boolean; copied: boolean } | 
+{ state: "done"; by: string; format: string; language?: string | null; changed: boolean; copied: boolean } |
 /**  The AI could not tidy it; the card keeps what OCR read. */
 { state: "failed"; by: string; message: string };
 
@@ -2378,16 +2378,16 @@ export type TextTidy_Deserialize =
  *  who tidies it, as the card names them. Mirrors `TextTidy` in
  *  src/quick/api.ts.
  */
-export type TextTidy_Serialize = 
+export type TextTidy_Serialize =
 /**  The AI is reading the text again. */
-{ state: "working"; by: string } | 
+{ state: "working"; by: string } |
 /**
  *  The AI's text is on the card. `format` is one of `tidy::FORMATS`;
  *  `changed` is false when it matched what OCR read, and `copied` says
  *  whether it is on the clipboard: not when the user copied something
  *  else while the AI was reading.
  */
-{ state: "done"; by: string; format: string; language: string | null; changed: boolean; copied: boolean } | 
+{ state: "done"; by: string; format: string; language: string | null; changed: boolean; copied: boolean } |
 /**  The AI could not tidy it; the card keeps what OCR read. */
 { state: "failed"; by: string; message: string };
 
@@ -2395,9 +2395,9 @@ export type TextTidy_Serialize =
  *  Which releases Grab-it updates to. Mirrors `UpdateChannel` in
  *  src/settings/api.ts.
  */
-export type UpdateChannel = 
+export type UpdateChannel =
 /**  Releases the owner has promoted. Every copy starts here. */
-"stable" | 
+"stable" |
 /**  Every merge to main, as soon as it is built. */
 "edge";
 
@@ -2432,32 +2432,32 @@ export type UpdateInfo_Serialize = {
 export type UpdateStatus = UpdateStatus_Serialize | UpdateStatus_Deserialize;
 
 /**  Where updating stands. Mirrors `UpdateStatus` in the frontend. */
-export type UpdateStatus_Deserialize = 
+export type UpdateStatus_Deserialize =
 /**  Not checked yet. */
-{ state: "idle"; current: string } | { state: "checking"; current: string } | { state: "upToDate"; current: string; 
+{ state: "idle"; current: string } | { state: "checking"; current: string } | { state: "upToDate"; current: string;
 /**  When, in milliseconds since the Unix epoch. */
-checkedAt: number } | { state: "available"; info: UpdateInfo_Deserialize; 
+checkedAt: number } | { state: "available"; info: UpdateInfo_Deserialize;
 /**  The user chose "Later" for this version. */
-declined: boolean } | { state: "installing"; info: UpdateInfo_Deserialize; 
+declined: boolean } | { state: "installing"; info: UpdateInfo_Deserialize;
 /**  Bytes downloaded so far. */
-downloaded: number; 
+downloaded: number;
 /**  The download's size, when the server says. */
-total?: number | null } | { state: "failed"; current: string; message: string; 
+total?: number | null } | { state: "failed"; current: string; message: string;
 /**  The update that failed to install; `None` when a check failed. */
 info?: UpdateInfo_Deserialize | null };
 
 /**  Where updating stands. Mirrors `UpdateStatus` in the frontend. */
-export type UpdateStatus_Serialize = 
+export type UpdateStatus_Serialize =
 /**  Not checked yet. */
-{ state: "idle"; current: string } | { state: "checking"; current: string } | { state: "upToDate"; current: string; 
+{ state: "idle"; current: string } | { state: "checking"; current: string } | { state: "upToDate"; current: string;
 /**  When, in milliseconds since the Unix epoch. */
-checkedAt: number } | { state: "available"; info: UpdateInfo_Serialize; 
+checkedAt: number } | { state: "available"; info: UpdateInfo_Serialize;
 /**  The user chose "Later" for this version. */
-declined: boolean } | { state: "installing"; info: UpdateInfo_Serialize; 
+declined: boolean } | { state: "installing"; info: UpdateInfo_Serialize;
 /**  Bytes downloaded so far. */
-downloaded: number; 
+downloaded: number;
 /**  The download's size, when the server says. */
-total: number | null } | { state: "failed"; current: string; message: string; 
+total: number | null } | { state: "failed"; current: string; message: string;
 /**  The update that failed to install; `None` when a check failed. */
 info: UpdateInfo_Serialize | null };
 
@@ -2480,25 +2480,25 @@ export type WebcamShape = WebcamShape_Serialize | WebcamShape_Deserialize;
  *  The webcam bubble's outline while recording (see webcam.rs). Mirrors
  *  `WebcamShape` in src/settings/api.ts.
  */
-export type WebcamShape_Deserialize = 
+export type WebcamShape_Deserialize =
 /**
  *  A square with smooth, continuous corners. Saved as `rounded` before
  *  it was drawn as a squircle.
  */
-"squircle" | 
+"squircle" |
 /**
  *  A square with smooth, continuous corners. Saved as `rounded` before
  *  it was drawn as a squircle.
  */
-"rounded" | 
+"rounded" |
 /**  A circle. */
-"round" | 
+"round" |
 /**  Portrait: a round top on a square base with soft corners. */
-"arch" | 
+"arch" |
 /**  A tall capsule. */
-"pill" | 
+"pill" |
 /**  Landscape, 16:10, with soft corners. */
-"wide" | 
+"wide" |
 /**  A soft outline that slowly changes. */
 "blob";
 
@@ -2506,20 +2506,20 @@ export type WebcamShape_Deserialize =
  *  The webcam bubble's outline while recording (see webcam.rs). Mirrors
  *  `WebcamShape` in src/settings/api.ts.
  */
-export type WebcamShape_Serialize = 
+export type WebcamShape_Serialize =
 /**
  *  A square with smooth, continuous corners. Saved as `rounded` before
  *  it was drawn as a squircle.
  */
-"squircle" | 
+"squircle" |
 /**  A circle. */
-"round" | 
+"round" |
 /**  Portrait: a round top on a square base with soft corners. */
-"arch" | 
+"arch" |
 /**  A tall capsule. */
-"pill" | 
+"pill" |
 /**  Landscape, 16:10, with soft corners. */
-"wide" | 
+"wide" |
 /**  A soft outline that slowly changes. */
 "blob";
 
