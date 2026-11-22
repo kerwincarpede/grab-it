@@ -124,14 +124,19 @@ during countdown, recording and pause. Starting a session cancels active and
 pending playback.
 
 The approved WAV is embedded in the binary. Its checksum and provenance are
-recorded under `src-tauri/sounds/`. Playback opens the default output on a worker
-thread through CPAL, using WASAPI on Windows, Core Audio on macOS and the
-PulseAudio protocol or ALSA on Linux. On Linux it asks for about 150 ms of
-buffered output, since the ALSA default of about 32 ms stalls while a closing
-overlay keeps the CPU busy. An underrun lets the stream carry on. Any other stream
-error, or 500 ms without a request for samples, plays the clip once more from the
-start on a fresh stream. If the output is still unavailable, a clipboard copy
-still succeeds and Settings reports an error when asked to preview.
+recorded under `src-tauri/sounds/`. Playback runs on a worker thread. On Windows
+and macOS it opens the default output through CPAL (WASAPI and Core Audio), and
+an underrun or a device change does not stop it. On Linux it opens ALSA's
+`default` PCM, which a desktop routes to PulseAudio or PipeWire. It asks for a
+500 ms buffer, writes the whole 260 ms clip at once, as aplay and ffmpeg do, and
+waits for the output to drain. A callback stream refilling two small periods
+underran while a closing overlay kept the CPU busy, and the plugin then failed
+or stalled. The clip is already queued, so a busy moment cannot cut it short. A
+recording start drops the queued sound at once. Every sound has a 3 s deadline.
+
+If no output opens, a clipboard copy still succeeds and Settings reports an error
+when asked to preview. An output that opens and then stops part-way is only
+logged, so Preview shows no error for it.
 
 ### Wayland and macOS
 
