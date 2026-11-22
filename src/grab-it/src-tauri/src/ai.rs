@@ -74,6 +74,14 @@ const MAX_TAG_WORDS: usize = 2;
 const MAX_DESCRIPTION_CHARS: usize = 600;
 /// The most of a response that is read.
 const MAX_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
+/// The longest description an endpoint may send, in tokens: a description
+/// and its tags take about 150.
+const DESCRIPTION_MAX_TOKENS: u32 = 400;
+/// The reply budget a reasoning model gets when it thought through the
+/// usual one without answering. Gemma 4 26B in LM Studio thought for 755
+/// tokens before answering the connection test, and for more than 397 of
+/// a description's 400.
+const REASONING_MAX_TOKENS: u32 = 2048;
 /// Request fields some servers refuse; one named in an error is dropped
 /// and the request sent again.
 const OPTIONAL_FIELDS: [&str; 3] = ["response_format", "max_tokens", "temperature"];
@@ -98,8 +106,8 @@ pub enum AiError {
 impl fmt::Display for AiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Image(err) => write!(f, "could not read the capture: {err}"),
-            Self::Response(err) => write!(f, "the model's answer could not be used: {err}"),
+            Self::Image(err) => write!(f, "Could not read the capture: {err}"),
+            Self::Response(err) => write!(f, "The model's answer could not be used: {err}"),
             Self::Endpoint(err) => f.write_str(err),
         }
     }
@@ -376,31 +384,80 @@ fn post(agent: &ureq::Agent, ai: &AiSettings, body: &Value) -> Result<String, Fa
     Ok(text)
 }
 
-/// The assistant's reply in a chat completion response.
+/// What an empty reply from a reasoning model that ran out of tokens says.
+const THOUGHT_OUT: &str = "the model spent its whole reply budget thinking and sent no answer. \
+     Choose a model without reasoning, or turn reasoning off in the server.";
+
+/// Whether a chat completion stopped before answering because the model
+/// was still reasoning: it ran out of tokens, or sent only its reasoning
+/// (`reasoning_content` from LM Studio and llama.cpp, `reasoning` from
+/// OpenRouter and Ollama).
+fn thought_out(value: &Value) -> bool {
+    let choice = value.pointer("/choices/0");
+    let length = choice
+        .and_then(|choice| choice.get("finish_reason"))
+        .and_then(Value::as_str)
+        == Some("length");
+    let reasoned = ["reasoning_content", "reasoning"].iter().any(|field| {
+        choice
+            .and_then(|choice| choice.pointer(&format!("/message/{field}")))
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty())
+    });
+    length || reasoned
+}
+
+/// The assistant's reply in a chat completion response. An empty reply
+/// from a model that was still thinking is [`THOUGHT_OUT`].
 fn reply_text(body: &str) -> Result<String, AiError> {
     let value: Value = serde_json::from_str(body)
         .map_err(|err| AiError::Response(format!("not a chat completion: {err}")))?;
     let content = value
         .pointer("/choices/0/message/content")
         .ok_or_else(|| AiError::Response(format!("no reply in {}", truncate(body, 200))))?;
-    match content {
-        Value::String(text) => Ok(text.clone()),
+    let text: String = match content {
+        Value::String(text) => text.clone(),
         // Some servers send the content as parts.
-        Value::Array(parts) => Ok(parts
+        Value::Array(parts) => parts
             .iter()
             .filter_map(|part| part.get("text").and_then(Value::as_str))
-            .collect()),
-        _ => Err(AiError::Response("the reply was empty".into())),
+            .collect(),
+        _ => String::new(),
+    };
+    if text.trim().is_empty() {
+        if thought_out(&value) {
+            return Err(AiError::Response(THOUGHT_OUT.into()));
+        }
+        if !content.is_string() {
+            return Err(AiError::Response("the reply was empty".into()));
+        }
     }
+    Ok(text)
 }
 
 /// Sends `body` and returns the reply. A field from [`OPTIONAL_FIELDS`]
 /// that the server says it does not support is dropped and the request
-/// sent again.
+/// sent again. A reasoning model that thinks through its whole
+/// `max_tokens` without answering is asked once more with
+/// [`REASONING_MAX_TOKENS`], so only such models spend the larger budget.
 fn complete(agent: &ureq::Agent, ai: &AiSettings, mut body: Value) -> Result<String, AiError> {
+    let mut raised = false;
     loop {
         match post(agent, ai, &body) {
-            Ok(text) => return reply_text(&text),
+            Ok(text) => match reply_text(&text) {
+                Err(AiError::Response(message)) if message == THOUGHT_OUT && !raised => {
+                    let Some(budget) = body.get_mut("max_tokens").filter(|budget| {
+                        budget
+                            .as_u64()
+                            .is_some_and(|n| n < REASONING_MAX_TOKENS.into())
+                    }) else {
+                        return Err(AiError::Response(message));
+                    };
+                    *budget = REASONING_MAX_TOKENS.into();
+                    raised = true;
+                }
+                reply => return reply,
+            },
             Err(failure) if matches!(failure.status, Some(400..=499)) => {
                 let lower = failure.message.to_lowercase();
                 let refused = OPTIONAL_FIELDS.iter().find(|field| {
@@ -443,15 +500,15 @@ fn endpoint_error(model: &str, failure: Failure) -> AiError {
     let message = failure.message;
     AiError::Endpoint(match failure.status {
         None => format!(
-            "The server did not answer. Check that it is running and that the URL is right. {message}"
+            "The server did not answer. Check that it is running and that the URL is right. Details: {message}"
         ),
         Some(401 | 403) => {
-            format!("The server did not accept the API key. Check the key. {message}")
+            format!("The server did not accept the API key. Check the key. Details: {message}")
         }
         // What servers answer a request they cannot run, not "not found",
         // rate limits or gateway errors, which a model name cannot fix.
         Some(400 | 415 | 422 | 500) if refuses_images(model, &failure.detail) => {
-            format!("{model} does not accept images. Choose a vision model. {message}")
+            format!("{model} does not accept images. Choose a vision model. Details: {message}")
         }
         Some(_) => message,
     })
@@ -617,7 +674,7 @@ pub fn describe(clients: &Clients, ai: &AiSettings, job: &AiJob) -> Result<AiDes
             prompt: &prompt(job),
             png: &png,
             schema: &description_schema(),
-            max_tokens: 400,
+            max_tokens: DESCRIPTION_MAX_TOKENS,
         },
     )?;
     parse_description(&reply)
@@ -663,7 +720,9 @@ pub fn test_connection(clients: &Clients, ai: &AiSettings) -> Result<String, AiE
             prompt: TEST_PROMPT,
             png: include_bytes!("../fixtures/connection-test.png"),
             schema: &test_schema(),
-            max_tokens: 20,
+            // A description's budget, so a reasoning model that passes
+            // the test has room to describe captures too.
+            max_tokens: DESCRIPTION_MAX_TOKENS,
         },
     )?;
     let answered = match ai.provider() {
@@ -689,12 +748,21 @@ pub fn test_connection(clients: &Clients, ai: &AiSettings) -> Result<String, AiE
     Ok(answered)
 }
 
+/// Whether a listed model ID is plainly an embedding or reranking model,
+/// which cannot describe a capture, such as LM Studio's
+/// `text-embedding-nomic-embed-text-v1.5`.
+fn is_embedding_model(id: &str) -> bool {
+    let lower = id.to_lowercase();
+    lower.contains("embed") || lower.contains("rerank")
+}
+
 /// How long listing an endpoint's models may take.
 pub const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The model IDs an OpenAI-compatible endpoint offers, from its `/models`:
 /// `{"data": [{"id": ...}]}`, as OpenAI, OpenRouter, LM Studio and
-/// Ollama send it. Empty when the server lists none.
+/// Ollama send it, without embedding models. Empty when the server lists
+/// none.
 pub fn list_models(
     agent: &ureq::Agent,
     endpoint: &str,
@@ -739,7 +807,7 @@ pub fn list_models(
         .flatten()
         .filter_map(|model| model.get("id").and_then(Value::as_str))
     {
-        if !models.iter().any(|known| known == id) {
+        if !is_embedding_model(id) && !models.iter().any(|known| known == id) {
             models.push(id.to_owned());
         }
     }
@@ -1814,6 +1882,56 @@ mod tests {
         }
     }
 
+    /// A reasoning model's answer when it ran out of tokens while thinking.
+    fn thought_out_reply() -> Reply {
+        Reply::Json(
+            200,
+            json!({ "choices": [{
+                "finish_reason": "length",
+                "message": { "role": "assistant", "content": "", "reasoning_content": "The user wants JSON. Let me think…" },
+            }] }),
+        )
+    }
+
+    #[test]
+    fn a_reasoning_model_that_runs_out_of_tokens_is_asked_again_with_more() {
+        let server = serve(vec![
+            thought_out_reply(),
+            Reply::Chat("{\"ok\": true}".into()),
+        ]);
+        let ai = settings(&server);
+        test_connection(&fast(), &ai).unwrap();
+        let requests = server.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].body["max_tokens"], DESCRIPTION_MAX_TOKENS);
+        assert_eq!(requests[1].body["max_tokens"], REASONING_MAX_TOKENS);
+    }
+
+    #[test]
+    fn a_reasoning_model_that_never_answers_says_so() {
+        let server = serve(vec![thought_out_reply(), thought_out_reply()]);
+        let err = test_connection(&fast(), &settings(&server)).unwrap_err();
+        assert!(matches!(err, AiError::Response(_)), "{err:?}");
+        let message = err.to_string();
+        assert!(message.starts_with("The model's answer could not be used: the model spent its whole reply budget thinking"), "{message}");
+        assert!(
+            message.contains("turn reasoning off in the server"),
+            "{message}"
+        );
+        // Asked once more, not again and again.
+        assert_eq!(server.requests().len(), 2);
+    }
+
+    #[test]
+    fn an_empty_reply_without_reasoning_is_not_blamed_on_thinking() {
+        let server = serve(vec![Reply::Chat(String::new())]);
+        let err = test_connection(&fast(), &settings(&server))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("empty reply"), "{err}");
+        assert_eq!(server.requests().len(), 1);
+    }
+
     #[test]
     fn an_endpoint_lists_its_models() {
         let server = serve(vec![
@@ -1822,6 +1940,8 @@ mod tests {
                 json!({ "object": "list", "data": [
                     { "id": "qwen3-vl:4b", "object": "model" },
                     { "id": "gemma3:4b", "object": "model" },
+                    { "id": "text-embedding-nomic-embed-text-v1.5", "object": "model" },
+                    { "id": "bge-reranker-v2-m3", "object": "model" },
                     { "id": "qwen3-vl:4b", "object": "model" },
                 ] }),
             ),

@@ -214,7 +214,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
       setResult(
         ids.length === 0
           ? { kind: "info", message: "The server lists no models. Type the model's ID instead." }
-          : { kind: "info", message: `Found ${ids.length} ${ids.length === 1 ? "model" : "models"}. Pick one that accepts images, or type its ID.` },
+          : { kind: "info", message: `Found ${ids.length} ${ids.length === 1 ? "model" : "models"}. Choose one that accepts images under Listed models, or type its ID.` },
       );
     } catch (err) {
       setResult({ kind: "error", message: errorMessage(err) });
@@ -428,7 +428,6 @@ function AiSection({ saved, disabled, onSave }: Props) {
                   id="ai-model"
                   className="row-field"
                   type="text"
-                  list={listed ? "ai-endpoint-models" : undefined}
                   spellCheck={false}
                   autoComplete="off"
                   value={draft.model}
@@ -447,14 +446,34 @@ function AiSection({ saved, disabled, onSave }: Props) {
                   </button>
                 )}
               </span>
-              {listed && (
-                <datalist id="ai-endpoint-models" data-testid="ai-endpoint-models">
-                  {listed.map((id) => (
-                    <option key={id} value={id} />
-                  ))}
-                </datalist>
-              )}
             </div>
+            {listed && listed.length > 0 && (
+              <div className="row">
+                <span className="row-text">
+                  <label className="row-title" htmlFor="ai-listed-models">
+                    Listed models
+                  </label>
+                  <span className="row-hint">What the server offers. Choosing one fills in Model.</span>
+                </span>
+                {/* A menu, not a datalist: a datalist hides every ID that does not start with what Model holds. */}
+                <select
+                  id="ai-listed-models"
+                  className="row-field"
+                  value={listed.includes(draft.model.trim()) ? draft.model.trim() : ""}
+                  disabled={busy}
+                  onChange={(event) => {
+                    if (event.target.value) setDraft({ ...draft, model: event.target.value });
+                  }}
+                >
+                  <option value="">Choose a model…</option>
+                  {listed.map((id) => (
+                    <option key={id} value={id}>
+                      {id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="row">
               <span className="row-text">
                 <label className="row-title" htmlFor="ai-api-key">

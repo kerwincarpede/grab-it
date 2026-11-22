@@ -39,7 +39,7 @@ Any API that speaks OpenAI's `/chat/completions`, on your computer or in the clo
 | Anthropic | Hosted, needs an API key | `https://api.anthropic.com/v1` | `claude-haiku-5-5` |
 
 - **Endpoint URL**: such as LM Studio, Ollama, llama.cpp's server, or a cloud provider.
-- **Model**: it must accept images. Type any model ID; it keeps the preset. **List models** asks the server which models it offers (its `/models`) and suggests them as you type. Listing sends no image, and the list doesn't say which models accept images.
+- **Model**: it must accept images. Type any model ID; it keeps the preset. **List models** asks the server which models it offers (its `/models`) and shows them under **Listed models**, where choosing one fills in **Model**. Embedding models are left out. Listing sends no image, and the list doesn't say which models accept images.
 - **API key**: only cloud providers need one. Leave it empty for LM Studio and Ollama. It's kept in your system keychain (Keychain on macOS, Credential Manager on Windows, the Secret Service on Linux), for that endpoint's address only: change the endpoint and Grab-it asks for the key again. On a computer with no keychain Grab-it can use, Settings says it's kept in plain text in Grab-it's settings file instead.
 
 These fields save only when you press **Save**. **Test connection** and **List models** save nothing.
@@ -52,8 +52,11 @@ The message starts with what to fix:
 - *The server did not accept the API key*: the key is missing, wrong or for another account.
 - *… does not accept images*: the model reads only text. Choose a vision model.
 - *The model's answer could not be used*: the model answered, but not with the JSON asked for. It may describe captures poorly; try a larger or newer model.
+- *The model spent its whole reply budget thinking and sent no answer*: a reasoning model used every token on its reasoning. Grab-it already asks once more with a larger budget. Choose a model without reasoning, or turn reasoning off in the server.
 
-Any other error shows the server's own message. Some servers pass the image to a text-only model without complaint, so a model that passes the test can still describe captures badly. If descriptions don't match your captures, choose a vision model.
+After what to fix, *Details* gives the server's own words. Any other error shows the server's own message.
+
+LM Studio and llama.cpp's server answer with whichever model is loaded, whatever model ID you type. A wrong ID doesn't fail the test there, and the preset's model ID is only a suggestion: replace it with the model you downloaded and loaded. Some servers pass the image to a text-only model without complaint, so a model that passes the test can still describe captures badly. If descriptions don't match your captures, choose a vision model.
 
 ### Run a model on your computer with Ollama
 
@@ -81,6 +84,20 @@ The first answer can take a while as Ollama loads the model.
 3. Keep the suggested model or press **List models** and pick one that takes image input, then **Test connection**.
 
 OpenRouter receives your screenshots and passes them to the model's provider.
+
+## What has been tested
+
+These results come from running **List models** and **Test connection** in Grab-it against each server.
+
+| Server | Model | What happened |
+| --- | --- | --- |
+| llama.cpp server 1.0.0, with the vision projector (`--mmproj`) | SmolVLM-500M | **List models** found the model. The image was accepted, but the model answered with other JSON (`{"url": …}`) instead of `{"ok": true}`, so the test failed with *The model's answer could not be used*. The model is too small to follow the instruction. |
+| llama.cpp server 1.0.0, without the projector | SmolVLM-500M | The server answered 500 *image input is not supported*, and Grab-it said *… does not accept images. Choose a vision model.* |
+| LM Studio | Gemma 4 26B (`google/gemma-4-26b-a4b-qat`), reasoning | LM Studio refused `response_format`, Grab-it retried without it, and the model spent all of the then 20-token budget on reasoning, so the reply was empty. Tried by hand with the same prompt, it answered `{"ok": true}` after 755 reasoning tokens, and gave nothing within 400. The test now asks again with 2048 tokens when this happens; that retry hasn't been tried against LM Studio yet. |
+| LM Studio | Qwen 3.8 27B (`qwen/qwen3.8-27b`), reasoning | The same as Gemma 4 26B. |
+| Ollama, not running | Any | **Test connection** and **List models** both said *The server did not answer*. |
+
+Not yet tried: Ollama running (its `/models` list, how it refuses images for a text-only model, and how it words a missing model); OpenAI, OpenRouter and Anthropic, including a wrong or missing API key; and a local **Test connection** that passes.
 
 ## What goes where
 

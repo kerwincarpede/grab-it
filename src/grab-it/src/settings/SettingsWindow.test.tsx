@@ -950,24 +950,31 @@ describe("SettingsWindow AI descriptions", () => {
     render(<SettingsWindow />);
     await userEvent.click(await screen.findByRole("button", { name: "List models" }));
 
-    expect(await screen.findByText("Found 2 models. Pick one that accepts images, or type its ID.")).toBeInTheDocument();
+    expect(await screen.findByText("Found 2 models. Choose one that accepts images under Listed models, or type its ID.")).toBeInTheDocument();
     const listed = backend.calls.find((call) => call.cmd === "ai_list_models")?.payload;
     expect(listed).toEqual({ endpoint: "https://openrouter.ai/api/v1", apiKey: "sk-or-1" });
-    const options = Array.from(screen.getByTestId("ai-endpoint-models").querySelectorAll("option"));
-    expect(options.map((option) => option.getAttribute("value"))).toEqual(["openai/gpt-5-mini", "google/gemini-3-flash"]);
-    expect(screen.getByLabelText("Model")).toHaveAttribute("list", "ai-endpoint-models");
+    const menu = screen.getByLabelText("Listed models");
+    expect(within(menu).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Choose a model…",
+      "openai/gpt-5-mini",
+      "google/gemini-3-flash",
+    ]);
+    expect(menu).toHaveValue("openai/gpt-5-mini");
 
-    // Any ID can still be typed, and nothing is saved.
+    // A typed ID that starts like none of them still leaves every listed model a click away.
     const model = screen.getByLabelText("Model");
     await userEvent.clear(model);
     await userEvent.type(model, "my/own-model");
     expect(model).toHaveValue("my/own-model");
+    expect(menu).toHaveValue("");
+    await userEvent.selectOptions(menu, "google/gemini-3-flash");
+    expect(model).toHaveValue("google/gemini-3-flash");
     expect(commands(backend)).not.toContain("set_preferences");
 
     // Another server forgets the list.
     const endpoint = screen.getByLabelText("Endpoint URL");
     await userEvent.type(endpoint, "x");
-    expect(screen.queryByTestId("ai-endpoint-models")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Listed models")).not.toBeInTheDocument();
   });
 
   it("says why the models could not be listed", async () => {
