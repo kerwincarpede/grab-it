@@ -471,8 +471,14 @@ fn recording_start_cancels_an_output_drain() {
             finish.send(played).unwrap();
         });
         started.recv().unwrap();
+        // Give the waiter time to park in the condvar, so the recording
+        // start has to wake it rather than being seen before it waits.
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(ended.try_recv().is_err(), "the drain must still be waiting");
+        let woken = Instant::now();
         crate::record::mark_test_recording(app, None);
         assert!(!ended.recv_timeout(Duration::from_secs(3)).unwrap());
+        assert!(woken.elapsed() < Duration::from_secs(1));
     });
 }
 
