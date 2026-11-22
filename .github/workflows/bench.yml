@@ -1,25 +1,24 @@
 name: Benchmarks
 
-# Times the Rust benches (src/grab-it/src-tauri/benches/) and the frontend
-# benches (src/grab-it/src/**/*.bench.ts) on a PR's base and head in one job,
-# on one runner, and reports the difference in the job summary. A slower
-# bench is a warning, never a failure. Runs on the same PRs as ci.yml:
-# docs-only PRs skip it.
 on:
+  push:
+    branches: [main]
   pull_request:
-    paths-ignore:
-      - src/grab-it-docs/**
-      - docs/**
-      - '**/*.md'
   workflow_dispatch:
+    inputs:
+      base:
+        description: Base commit or ref to time beside the selected head
+        required: true
+        default: origin/main
 
 # A newer push to a PR cancels the older run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -59,7 +58,47 @@ env:
     libgbm-dev
 
 jobs:
+  scope:
+    runs-on: ubuntu-24.04
+    outputs:
+      lint: ${{ steps.paths.outputs.lint }}
+      time: ${{ steps.paths.outputs.time }}
+    steps:
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: paths
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ -z "$BASE" ]]; then
+            printf 'lint=true\ntime=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only -z --no-renames "$BASE...$HEAD" > "$RUNNER_TEMP/paths"
+          lint=false
+          time=false
+          shopt -s extglob
+          while IFS= read -rd '' path; do
+            case "$path" in
+              docs/*|src/grab-it-docs/*|*.md) continue ;;
+            esac
+            lint=true
+            case "${path#src/grab-it/}" in
+              src-tauri/benches/*|src-tauri/@(Cargo.*|build.rs|.cargo/*|tauri.conf.json)|src-tauri/@(tests/fixtures|fixtures|face-models|ocr-models)/*) time=true ;;
+              src-tauri/src/@(capture|codes|editor|faces|ffmpeg|lib|library|ocr|pointer|record|search|settings|storage).rs) time=true ;;
+              src/*.bench.ts|src/editor/@(arrowStyles|callout|cut|flatten|model|orient|pointer|render|sidecar|stamps|tools).ts|src/overlay/geometry.ts|src/recording/@(clips|edits|zooms).ts|src/test/*) time=true ;;
+              package*.json|vitest*.ts|vite*.ts|tsconfig*.json|.github/workflows/bench.yml|.github/scripts/@(*bench*|install_linux_deps.py)|.cargo/*|*rust-toolchain*|.npmrc) time=true ;;
+            esac
+          done < "$RUNNER_TEMP/paths"
+          printf 'lint=%s\ntime=%s\n' "$lint" "$time" >> "$GITHUB_OUTPUT"
+
   bench:
+    needs: scope
+    if: needs.scope.outputs.lint == 'true'
     name: Benchmarks
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -71,6 +110,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Install Linux build dependencies
         working-directory: .
@@ -103,9 +144,10 @@ jobs:
       # report then shows the head alone.
       - name: Check out the base
         id: base
+        if: needs.scope.outputs.time == 'true'
         working-directory: .
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ inputs.base }}
         run: |
           rm -rf "$CARGO_TARGET_DIR/criterion"
           if [ -z "$BASE_SHA" ]; then
@@ -114,7 +156,8 @@ jobs:
             echo "frontend=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"
+          sha=$(git rev-parse --verify --end-of-options "$BASE_SHA^{commit}")
+          git worktree add --detach "$RUNNER_TEMP/base" "$sha"
           tauri="$RUNNER_TEMP/base/src/grab-it/src-tauri"
           if grep -q '^bench = ' "$tauri/Cargo.toml" && [ -d "$tauri/benches" ]; then
             echo "benches=true" >> "$GITHUB_OUTPUT"
@@ -164,6 +207,7 @@ jobs:
           npm run bench -- --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-base.json"
 
       - name: Time the head
+        if: needs.scope.outputs.time == 'true'
         env:
           BASE_OK: ${{ steps.base-run.outcome == 'success' }}
         run: |
@@ -177,17 +221,69 @@ jobs:
           fi
 
       - name: Time the head's frontend
+        if: needs.scope.outputs.time == 'true'
         run: npm run bench -- --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-head.json"
 
+      - name: Collect main measurements
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          baseline="$RUNNER_TEMP/measurements"
+          mkdir -p "$baseline/criterion"
+          cp "$RUNNER_TEMP/vitest-head.json" "$baseline/vitest.json"
+          cd "$CARGO_TARGET_DIR/criterion"
+          find . \( -path '*/new/estimates.json' -o -path '*/new/benchmark.json' \) -exec cp --parents -t "$baseline/criterion" {} +
+
+      - uses: actions/upload-artifact@v7
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: measurements-${{ github.sha }}
+          path: ${{ runner.temp }}/measurements/
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Find the successful main push for this base
+        id: producer
+        if: github.event_name == 'pull_request' && needs.scope.outputs.time == 'true' && github.base_ref == 'main'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/bench.yml/runs?event=push&branch=main&head_sha=$BASE&status=success" --jq '.workflow_runs[0].id // empty')
+          if [[ -n "$run" ]]; then
+            artifact=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?name=measurements-$BASE" --jq '.artifacts[0] | if .expired then "expired" else (.id // "missing") end')
+            echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+            echo "run=$run" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download measurements (JSON only)
+        id: baseline
+        if: steps.producer.outputs.artifact && steps.producer.outputs.artifact != 'expired' && steps.producer.outputs.artifact != 'missing'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.producer.outputs.run }}
+          artifact-ids: ${{ steps.producer.outputs.artifact }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/main-measurements
+
       - name: Report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && needs.scope.outputs.time == 'true' }}
         working-directory: .
         env:
           BASE_OK: ${{ steps.base-run.outcome == 'success' }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          DOWNLOADED: ${{ steps.baseline.outcome == 'success' }}
+          STATUS: ${{ steps.producer.outputs.artifact == 'expired' && 'expired' || 'unavailable' }}
           FRONTEND_BASE_OK: ${{ steps.base-frontend.outcome == 'success' }}
         run: |
           flags=(--vitest "$RUNNER_TEMP/vitest-head.json")
-          if [ "$BASE_OK" != true ]; then
+          if [[ -n "$PR_BASE" && "$DOWNLOADED" == true ]]; then
+            flags+=(--stored-baseline "$RUNNER_TEMP/main-measurements" --baseline-note "Compared with main $PR_BASE on a different runner.")
+          elif [[ -n "$PR_BASE" ]]; then
+            flags+=(--no-base --baseline-note "Head only: baseline for $PR_BASE is $STATUS.")
+          elif [ "$BASE_OK" != true ]; then
             flags+=(--no-base)
           fi
           if [ "$FRONTEND_BASE_OK" = true ]; then
