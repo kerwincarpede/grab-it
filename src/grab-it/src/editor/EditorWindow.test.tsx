@@ -514,6 +514,10 @@ const bytes = (payload: unknown) => Array.from(new Uint8Array(payload as ArrayBu
 async function ready() {
   render(<EditorWindow />);
   await waitFor(() => expect(screen.getByTestId("editor")).toHaveAttribute("data-ready", "true"));
+  // data-ready shows once the capture has rendered, but the window key
+  // handler that sees it is re-registered in an effect that can still be
+  // pending on a busy runner. Flush it so the first shortcut is not dropped.
+  await act(async () => {});
 }
 
 const last = <T,>(items: T[]): T | undefined => items[items.length - 1];
