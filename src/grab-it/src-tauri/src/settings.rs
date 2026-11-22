@@ -1495,7 +1495,7 @@ impl SettingsStore {
         // The notice belongs to Grab-it: a Settings window opened before it
         // was set, or dismissed, must not bring it back or clear it.
         preferences.ai.notice_pending = self.current.preferences.ai.notice_pending
-            && !(preferences.ai.enabled && !self.current.preferences.ai.enabled);
+            && (!preferences.ai.enabled || self.current.preferences.ai.enabled);
         let previous = &self.current.preferences.ai;
         let destination_changed =
             previous.endpoint.trim().trim_end_matches('/') != preferences.ai.endpoint;

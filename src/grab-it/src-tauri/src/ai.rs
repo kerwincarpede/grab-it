@@ -785,7 +785,7 @@ pub fn test_connection(clients: &Clients, ai: &AiSettings) -> Result<String, AiE
         return Err(AiError::Response("the model sent an empty reply".into()));
     }
     let answer = first_object(&reply).and_then(|object| serde_json::from_str::<Value>(object).ok());
-    if !answer.is_some_and(|answer| answer.get("ok").is_some()) {
+    if answer.is_none_or(|answer| answer.get("ok").is_none()) {
         return Err(AiError::Response(format!(
             "it did not answer with the JSON asked for, so it may not follow instructions well enough. It said: {}",
             truncate(reply.trim(), 200)
