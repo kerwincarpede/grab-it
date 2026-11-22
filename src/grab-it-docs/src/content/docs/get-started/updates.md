@@ -13,7 +13,7 @@ You can also read what changed in each version on the [Grab-it releases page](ht
 
 ## Stable and Edge
 
-Grab-it updates from one of two channels. Pick one with **Update channel** in **Settings → General → Updates**. The panel below the dropdown explains both choices.
+Grab-it updates from one of two channels. Pick one with **Update channel** in **Settings → General → Updates**.
 
 - **Stable** (default) — Get updates after they’ve been tried on Edge.
 - **Edge** — Get new features and fixes sooner. You may run into bugs. The Grab-it window's sidebar shows an **Edge** badge next to the version.

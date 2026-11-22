@@ -1086,9 +1086,19 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
           </h2>
           <div className="group">
             <div className="row">
-              <label className="row-title row-text" htmlFor="update-channel">
-                Update channel
-              </label>
+              <div className="row-text">
+                <label className="row-title" htmlFor="update-channel">
+                  Update channel
+                </label>
+                <div className="row-text" id="update-channel-info">
+                  {UPDATE_CHANNELS.map((choice) => (
+                    <span className="row-hint" key={choice.value}><strong>{choice.title}</strong> — {choice.hint}</span>
+                  ))}
+                  <span aria-live="polite" className={switchedToStable ? "row-hint" : undefined}>
+                    {switchedToStable && "If you’re ahead of Stable, you’ll keep your current version until a newer Stable release is available."}
+                  </span>
+                </div>
+              </div>
               <select
                 id="update-channel"
                 className="row-field"
@@ -1103,14 +1113,6 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                   </option>
                 ))}
               </select>
-            </div>
-            <div className="update-channel-info" id="update-channel-info">
-              {UPDATE_CHANNELS.map((choice) => (
-                <p key={choice.value}><strong>{choice.title}</strong> — {choice.hint}</p>
-              ))}
-              <p aria-live="polite">
-                {switchedToStable && "If you’re ahead of Stable, you’ll keep your current version until a newer Stable release is available."}
-              </p>
             </div>
           </div>
         </section>
