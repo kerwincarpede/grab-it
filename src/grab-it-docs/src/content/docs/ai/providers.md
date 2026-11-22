@@ -77,6 +77,8 @@ The first answer can take a while as Ollama loads the model.
 2. Load the model, then start the server in LM Studio's **Developer** tab. It listens on port 1234.
 3. In **Settings → AI integration**, choose **OpenAI-compatible endpoint** and the **LM Studio** preset. Press **List models** and pick the model you loaded, then **Test connection**.
 
+A reasoning model can take minutes to answer the test while it thinks: Qwen 3.8 27B took a few minutes. Settings shows *Testing…* until it answers.
+
 ### Use a hosted model with OpenRouter
 
 1. Create an API key at [openrouter.ai/keys](https://openrouter.ai/keys).
@@ -93,11 +95,14 @@ These results come from running **List models** and **Test connection** in Grab-
 | --- | --- | --- |
 | llama.cpp server 1.0.0, with the vision projector (`--mmproj`) | SmolVLM-500M | **List models** found the model. The image was accepted, but the model answered with other JSON (`{"url": …}`) instead of `{"ok": true}`, so the test failed with *The model's answer could not be used*. Why it ignored the instruction wasn't checked; the small model size is only a guess. |
 | llama.cpp server 1.0.0, without the projector | SmolVLM-500M | The server answered 500 *image input is not supported*, and Grab-it said *… does not accept images. Choose a vision model.* |
-| LM Studio | Gemma 4 26B (`google/gemma-4-26b-a4b-qat`), reasoning | LM Studio refused `response_format`, Grab-it retried without it, and the model spent all of the then 20-token budget on reasoning, so the reply was empty. Tried by hand with the same prompt, it answered `{"ok": true}` after 755 reasoning tokens, and gave nothing within 400. Grab-it now asks again with 2048 tokens when this happens; that retry hasn't been tried against LM Studio yet. |
-| LM Studio | Qwen 3.8 27B (`qwen/qwen3.8-27b`), reasoning | At the then 20-token test budget, the reply was empty. Sent by hand, it came back with empty content and `finish_reason` `length` after 19 reasoning tokens. Larger budgets weren't tried. |
-| Ollama, not running | Any | **Test connection** and **List models** both said *The server did not answer*. |
+| LM Studio, serving three chat models and `text-embedding-nomic-embed-text-v1.5` | `qwen/qwen3-vl-4b` typed in **Model** | **List models** said *Found 3 models. Choose one that accepts images under Listed models, or type its ID.* The menu offered `google/gemma-4-26b-a4b-qat`, `google/gemma-4-12b` and `qwen/qwen3.8-27b`, and left out the embedding model. Choosing one replaced the typed model ID. |
+| LM Studio | Gemma 4 26B (`google/gemma-4-26b-a4b-qat`), reasoning | **Test connection** said *Connected: google/gemma-4-26b-a4b-qat at http://localhost:1234/v1 answered.* An earlier version, which gave the test 20 tokens, failed with an empty reply: LM Studio refused `response_format`, Grab-it retried without it, and the model spent the budget on reasoning. Sent by hand with the same prompt, the model answered `{"ok": true}` after 755 reasoning tokens, and gave nothing within 400. |
+| LM Studio | Qwen 3.8 27B (`qwen/qwen3.8-27b`), reasoning | **Test connection** said *Connected: qwen/qwen3.8-27b at http://localhost:1234/v1 answered.* after a few minutes. The earlier 20-token version got an empty reply; sent by hand, it came back with empty content and `finish_reason` `length` after 19 reasoning tokens. |
+| Ollama, not running | Any | **Test connection** said *The server did not answer. Check that it is running and that the URL is right.*, with *Details* saying the connection to `http://localhost:11434/v1/chat/completions` was refused. **List models** said *The server did not answer* too. |
 
-Not yet tried: Ollama running (its `/models` list, how it refuses images for a text-only model, and how it words a missing model); OpenAI, OpenRouter and Anthropic, including a wrong or missing API key; and a local **Test connection** that passes.
+The llama.cpp rows, and LM Studio answering for whichever model is loaded when given a wrong ID, come from an earlier version of these changes and weren't repeated on the latest one.
+
+Not yet tried: Ollama running (its `/models` list, how it refuses images for a text-only model, and how it words a missing model); OpenAI, OpenRouter and Anthropic, including a wrong or missing API key. The *spent its whole reply budget thinking* message hasn't been seen from a real server, since both reasoning models above answered.
 
 ## What goes where
 
