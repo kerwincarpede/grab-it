@@ -626,7 +626,11 @@ const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, 
         aria-label={shot.fileName}
         // No tooltip over its own menu.
         title={menuOpen ? undefined : OPEN_HINTS[shot.kind ?? "image"]}
-        onClick={(event) => onSelect(shot.id, { toggle: event.metaKey || event.ctrlKey, range: event.shiftKey })}
+        onClick={(event) => {
+          // A double-click's second click: its first click already selected, and may have moved the grid.
+          if (event.detail > 1) return;
+          onSelect(shot.id, { toggle: event.metaKey || event.ctrlKey, range: event.shiftKey });
+        }}
         // Shift-click selects tiles, not the text in them.
         onMouseDown={(event) => {
           if (event.shiftKey) event.preventDefault();
@@ -1612,6 +1616,20 @@ function LibraryWindow({
     openShot(id).catch((err: unknown) => setError(errorMessage(err)));
   }, []);
 
+  /**
+   * The tile a double-click's first click landed on. That click opens the details, which can
+   * narrow the grid and move another tile under the pointer before the second click.
+   */
+  const pressed = useRef<number | null>(null);
+  const pressTile = useCallback(
+    (id: number, how: SelectHow) => {
+      pressed.current = id;
+      select(id, how);
+    },
+    [select],
+  );
+  const openTile = useCallback((id: number) => open(pressed.current ?? id), [open]);
+
   const toggleKeep = useCallback((shot: Shot) => {
     setShotKeep(shot.id, !shot.keep).then(
       (saved) => setShots((current) => current.map((item) => (item.id === saved.id ? saved : item))),
@@ -1949,8 +1967,8 @@ function LibraryWindow({
                       hit={hits[shot.id]}
                       selected={selectedIds.has(shot.id)}
                       index={tileIndex++}
-                      onSelect={select}
-                      onOpen={open}
+                      onSelect={pressTile}
+                      onOpen={openTile}
                       onAction={tileAction}
                       onKeep={toggleKeep}
                       menuOpen={menu?.id === shot.id}

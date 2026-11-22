@@ -620,6 +620,23 @@ describe("LibraryWindow", () => {
     expect(callsTo(backend, "library_open")[0].payload).toEqual({ id: 1 });
   });
 
+  it("opens the tile a double-click started on when the grid moves under the second click", async () => {
+    const backend = mockBackend([shot(1), shot(2)]);
+    render(<LibraryWindow />);
+    const first = await screen.findByRole("button", { name: "Grab-it 1.png" });
+    const second = screen.getByRole("button", { name: "Grab-it 2.png" });
+
+    // The first click opens the details; the second lands on the tile that moved under the pointer.
+    fireEvent.click(first, { detail: 1 });
+    fireEvent.click(second, { detail: 2 });
+    fireEvent.doubleClick(second, { detail: 2 });
+
+    await waitFor(() => expect(callsTo(backend, "library_open")).toHaveLength(1));
+    expect(callsTo(backend, "library_open")[0].payload).toEqual({ id: 1 });
+    expect(first).toHaveAttribute("aria-pressed", "true");
+    expect(second).toHaveAttribute("aria-pressed", "false");
+  });
+
   it("deletes a capture only after confirmation", async () => {
     const backend = mockBackend([shot(1), shot(2)]);
     render(<LibraryWindow />);
