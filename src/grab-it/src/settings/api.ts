@@ -477,8 +477,7 @@ export const SETTINGS_SECTIONS: { id: SettingsSection; title: string }[] = [
   { id: "editor", title: "Editor" },
   { id: "recording", title: "Recording" },
   { id: "storage", title: "Storage" },
-  { id: "ai", title: "AI descriptions" },
-  { id: "agents", title: "AI agents" },
+  { id: "ai", title: "AI integration" },
   { id: "hotkeys", title: "Hotkeys" },
 ];
 
@@ -633,11 +632,15 @@ export async function chooseFolder(defaultPath?: string): Promise<string | null>
 }
 
 /** Asks the saved provider's model to answer; resolves to what it says, or rejects with why not. */
-export function testAiConnection(): Promise<string> {
-  return commands.aiTestConnection();
+export function testAiConnection(draft: AiPreferences): Promise<string> {
+  return commands.aiTestConnection(draft);
 }
 
 /** Queues every capture to be described again. */
 export function redescribeAll(): Promise<void> {
   return commands.aiRedescribeAll().then(() => undefined);
+}
+
+export function aiCaptureCount(): Promise<number> {
+  return commands.aiCaptureCount();
 }

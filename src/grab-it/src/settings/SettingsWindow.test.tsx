@@ -81,6 +81,8 @@ interface Backend {
   hotkeyWarnings: string[];
   picked: string | null;
   setError?: string;
+  /** What `ai_capture_count` answers. */
+  captureCount?: number;
   /** Settings › AI agents' access switch. */
   agentAccess?: boolean;
   /** Settings › Updates' channel; undefined as an older backend leaves it out. */
@@ -209,7 +211,9 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
         guard();
         backend.afterCapture = preferences.afterCapture;
         backend.copyToClipboard = preferences.copyToClipboard;
-        backend.ai = { ...backend.ai, ...preferences.ai };
+        const { automaticDescriptions, ...ai } = preferences.ai ?? {};
+        // Saved as the backend writes it: an unset switch is left out.
+        backend.ai = { ...backend.ai, ...ai, ...(automaticDescriptions == null ? {} : { automaticDescriptions }) };
         return settings();
       },
       ai_test_connection: () => {
@@ -217,6 +221,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
         return backend.testResult;
       },
       ai_redescribe_all: () => null,
+      ai_capture_count: () => backend.captureCount ?? 12,
       ai_clis: () => ({ claudeCode: backend.claudePath, codex: backend.codexPath }),
       set_auto_backdrop: ({ enabled }) => {
         guard();
@@ -596,32 +601,123 @@ describe("SettingsWindow AI descriptions", () => {
     expect(screen.getByRole("button", { name: "Re-describe all…" })).toBeDisabled();
   });
 
-  it("saves the toggles at once, keeping the other preferences", async () => {
+  it("keeps the switches as a draft until Save, starting a new user's descriptions and tidying off", async () => {
     const backend = mockBackend({ afterCapture: "editor" });
     render(<SettingsWindow />);
-    const toggle = await screen.findByRole("switch", { name: /Describe captures with AI/ });
-    await waitFor(() => expect(toggle).toBeEnabled());
+    const use = await screen.findByRole("switch", { name: /Use an AI provider/ });
+    const describe = screen.getByRole("switch", { name: /Describe captures with AI/ });
+    await waitFor(() => expect(use).toBeEnabled());
+    expect(describe).toBeDisabled();
 
-    await userEvent.click(toggle);
-    await waitFor(() => expect(toggle).toBeChecked());
-    expect(lastPreferences(backend)).toEqual({
-      afterCapture: "editor",
-      copyToClipboard: true,
-      ai: { ...DEFAULT_AI_PREFERENCES, enabled: true },
+    await userEvent.click(use);
+
+    expect(use).toBeChecked();
+    // Provider access alone describes nothing and tidies nothing.
+    expect(describe).toBeEnabled();
+    expect(describe).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: /Tidy up captured text/ })).not.toBeChecked();
+    expect(commands(backend)).not.toContain("set_preferences");
+
+    await userEvent.click(describe);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(lastPreferences(backend)).toEqual({
+        afterCapture: "editor",
+        copyToClipboard: true,
+        ai: {
+          ...DEFAULT_AI_PREFERENCES,
+          enabled: true,
+          provider: "endpoint",
+          automaticDescriptions: true,
+          tidyText: false,
+        },
+      }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent("Saved.");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeDisabled());
+  });
+
+  it("asks with the count before a save describes the whole library", async () => {
+    const backend = mockBackend({ captureCount: 42 });
+    render(<SettingsWindow />);
+    const use = await screen.findByRole("switch", { name: /Use an AI provider/ });
+    await waitFor(() => expect(use).toBeEnabled());
+    await userEvent.click(use);
+    await userEvent.click(screen.getByRole("switch", { name: /Describe captures with AI/ }));
+    await userEvent.click(screen.getByRole("switch", { name: /Only describe new captures/ }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText("Describe 42 screenshots?")).toBeInTheDocument();
+    expect(commands(backend)).not.toContain("set_preferences");
+    // Cancelling the question saves nothing and keeps the draft.
+    await userEvent.click(within(screen.getByText("Describe 42 screenshots?").closest(".row") as HTMLElement).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText("Describe 42 screenshots?")).not.toBeInTheDocument();
+    expect(commands(backend)).not.toContain("set_preferences");
+    expect(use).toBeChecked();
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Confirm and save" }));
+    await waitFor(() => expect(backend.ai).toMatchObject({ enabled: true, automaticDescriptions: true, newCapturesOnly: false }));
+  });
+
+  it("puts back the saved settings on Cancel, saving nothing", async () => {
+    const backend = mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "claudeCode" } });
+    render(<SettingsWindow />);
+    const codex = await screen.findByRole("radio", { name: /^Codex/ });
+    await waitFor(() => expect(codex).toBeEnabled());
+    await userEvent.click(codex);
+    await userEvent.click(screen.getByRole("switch", { name: /Use an AI provider/ }));
+    expect(codex).toBeChecked();
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.getByRole("radio", { name: /Claude Code/ })).toBeChecked();
+    expect(screen.getByRole("switch", { name: /Use an AI provider/ })).toBeChecked();
+    expect(screen.getByLabelText("Model")).toHaveValue("haiku");
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(commands(backend)).not.toContain("set_preferences");
+  });
+
+  it("keeps the draft and the saved provider when the save fails", async () => {
+    const backend = mockBackend({
+      ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "claudeCode" },
+      setError: "settings.json is read-only",
     });
+    render(<SettingsWindow />);
+    const codex = await screen.findByRole("radio", { name: /^Codex/ });
+    await waitFor(() => expect(codex).toBeEnabled());
+    await userEvent.click(codex);
 
-    const newOnly = screen.getByRole("switch", { name: /Only describe new captures/ });
-    await waitFor(() => expect(newOnly).toBeEnabled());
-    await userEvent.click(newOnly);
-    await waitFor(() => expect(newOnly).not.toBeChecked());
-    expect(backend.ai).toEqual({ ...DEFAULT_AI_PREFERENCES, enabled: true, newCapturesOnly: false });
-    expect(screen.getByRole("status")).toHaveTextContent("Saved.");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    const tidy = screen.getByRole("switch", { name: /Tidy up captured text/ });
-    await waitFor(() => expect(tidy).toBeEnabled());
-    await userEvent.click(tidy);
-    await waitFor(() => expect(tidy).not.toBeChecked());
-    expect(backend.ai).toEqual({ ...DEFAULT_AI_PREFERENCES, enabled: true, newCapturesOnly: false, tidyText: false });
+    expect(await screen.findByText(/settings.json is read-only/)).toBeInTheDocument();
+    expect(backend.ai.provider).toBe("claudeCode");
+    // The choice is still there to save again.
+    expect(codex).toBeChecked();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+
+    backend.setError = undefined;
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(backend.ai.provider).toBe("codex"));
+  });
+
+  it("stops describing with Save while keeping the provider on", async () => {
+    const backend = mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "claudeCode" } });
+    render(<SettingsWindow />);
+    const describe = await screen.findByRole("switch", { name: /Describe captures with AI/ });
+    await waitFor(() => expect(describe).toBeEnabled());
+    // Saved before the switch existed, it reads as on.
+    expect(describe).toBeChecked();
+
+    await userEvent.click(describe);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(backend.ai.automaticDescriptions).toBe(false));
+    expect(backend.ai.enabled).toBe(true);
+    expect(commands(backend)).not.toContain("ai_capture_count");
   });
 
   it("saves a cloud endpoint, model and key", async () => {
@@ -741,7 +837,7 @@ describe("SettingsWindow AI descriptions", () => {
     await waitFor(() => expect(backend.ai.apiKey).toBeNull());
   });
 
-  it("tests the connection, saving what was typed first", async () => {
+  it("tests the connection with what was typed, saving nothing", async () => {
     const backend = mockBackend();
     render(<SettingsWindow />);
     const model = await screen.findByLabelText("Model");
@@ -751,9 +847,12 @@ describe("SettingsWindow AI descriptions", () => {
     await userEvent.click(screen.getByRole("button", { name: "Test connection" }));
 
     expect(await screen.findByText("Connected: qwen3-vl:4b (4.4B, Q4_K_M)")).toBeInTheDocument();
-    const order = commands(backend).filter((cmd) => cmd === "set_preferences" || cmd === "ai_test_connection");
-    expect(order).toEqual(["set_preferences", "ai_test_connection"]);
-    expect(backend.ai.model).toBe("llava:13b");
+    expect(commands(backend)).not.toContain("set_preferences");
+    const tested = backend.calls.find((call) => call.cmd === "ai_test_connection")?.payload as { draft: AiPreferences };
+    expect(tested.draft.model).toBe("llava:13b");
+    expect(backend.ai.model).toBe("qwen3-vl:4b");
+    // Still a draft, to save or cancel.
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
   });
 
   it("shows why the connection test failed", async () => {
@@ -773,6 +872,7 @@ describe("SettingsWindow AI descriptions", () => {
     await waitFor(() => expect(start).toBeEnabled());
 
     await userEvent.click(start);
+    expect(await screen.findByText("Describe 12 screenshots?")).toBeInTheDocument();
     expect(commands(backend)).not.toContain("ai_redescribe_all");
     await userEvent.click(screen.getByRole("button", { name: "Re-describe all" }));
 
@@ -780,7 +880,7 @@ describe("SettingsWindow AI descriptions", () => {
     expect(await screen.findByText(/Describing every capture again/)).toBeInTheDocument();
   });
 
-  it("picks Claude Code at once, hiding the endpoint's fields", async () => {
+  it("picks Claude Code, hiding the endpoint's fields, and saves it with Save", async () => {
     const backend = mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true } });
     render(<SettingsWindow />);
     const claude = await screen.findByRole("radio", { name: /Claude Code/ });
@@ -791,18 +891,18 @@ describe("SettingsWindow AI descriptions", () => {
     await userEvent.click(claude);
 
     await waitFor(() => expect(claude).toBeChecked());
-    expect(backend.ai).toEqual({ ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "claudeCode" });
+    expect(commands(backend)).not.toContain("set_preferences");
     expect(screen.queryByLabelText("Endpoint URL")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("API key")).not.toBeInTheDocument();
-    // Its own model instead, saved with Save.
+    // Its own model instead.
     expect(screen.getByLabelText("Model")).toHaveValue("haiku");
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(backend.ai).toEqual({ ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "claudeCode" }));
     expect(screen.getByText(/Claude Code sends your screenshots.*to Anthropic/)).toHaveClass("ai-privacy-cloud");
     expect(screen.queryByTestId("ai-missing")).not.toBeInTheDocument();
 
     // Back to the endpoint, with what it had.
     await userEvent.click(screen.getByRole("radio", { name: /OpenAI-compatible endpoint/ }));
-    await waitFor(() => expect(backend.ai.provider).toBe("endpoint"));
     expect(await screen.findByLabelText("Endpoint URL")).toHaveValue("http://localhost:11434/v1");
   });
 
@@ -839,9 +939,9 @@ describe("SettingsWindow AI descriptions", () => {
     expect(backend.ai.provider).toBe("claudeCode");
 
     await userEvent.click(screen.getByRole("radio", { name: /^Codex/ }));
-    await waitFor(() => expect(backend.ai.provider).toBe("codex"));
     await userEvent.type(screen.getByLabelText("Model"), "gpt-5-mini{Enter}");
     await waitFor(() => expect(backend.ai.codexModel).toBe("gpt-5-mini"));
+    expect(backend.ai.provider).toBe("codex");
     expect(backend.ai.claudeModel).toBe("sonnet");
   });
 
@@ -858,7 +958,7 @@ describe("SettingsWindow AI descriptions", () => {
     expect(commands(backend)).not.toContain("set_preferences");
   });
 
-  it("picks Codex at once, saying where screenshots go", async () => {
+  it("picks Codex, saying where screenshots go, and saves it with Save", async () => {
     const backend = mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true } });
     render(<SettingsWindow />);
     const codex = await screen.findByRole("radio", { name: /^Codex/ });
@@ -867,13 +967,15 @@ describe("SettingsWindow AI descriptions", () => {
     await userEvent.click(codex);
 
     await waitFor(() => expect(codex).toBeChecked());
-    expect(backend.ai).toEqual({ ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "codex" });
+    expect(commands(backend)).not.toContain("set_preferences");
     expect(screen.getByRole("radio", { name: /Claude Code/ })).not.toBeChecked();
     expect(screen.queryByLabelText("Endpoint URL")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Model")).toHaveValue("");
     expect(screen.getByLabelText("Model")).toHaveAttribute("placeholder", "Codex default");
     expect(screen.getByText(/Codex sends your screenshots.*to OpenAI/)).toHaveClass("ai-privacy-cloud");
     expect(screen.queryByTestId("ai-missing")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(backend.ai).toEqual({ ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "codex" }));
   });
 
   it("says when Codex is chosen but not installed", async () => {
@@ -1578,8 +1680,8 @@ describe("SettingsWindow updates", () => {
 describe("SettingsWindow AI agents", () => {
   it("comes after AI descriptions in the sidebar", () => {
     const ids = SETTINGS_SECTIONS.map((section) => section.id);
-    expect(ids.indexOf("agents")).toBe(ids.indexOf("ai") + 1);
-    expect(SETTINGS_SECTIONS.find((section) => section.id === "agents")?.title).toBe("AI agents");
+    expect(ids).not.toContain("agents");
+    expect(SETTINGS_SECTIONS.find((section) => section.id === "ai")?.title).toBe("AI integration");
   });
 
   it("keeps agent access off by default and turns it on at once", async () => {
@@ -1587,7 +1689,7 @@ describe("SettingsWindow AI agents", () => {
     render(<SettingsWindow section="agents" />);
     const toggle = await screen.findByRole("switch", { name: /Let AI agents use Grab-it/ });
     expect(toggle).not.toBeChecked();
-    expect(screen.getByRole("heading", { level: 1, name: "AI agents" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "AI integration" })).toBeInTheDocument();
 
     await userEvent.click(toggle);
 

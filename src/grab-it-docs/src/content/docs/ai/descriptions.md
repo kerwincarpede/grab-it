@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-With **Describe captures with AI** on, every new screenshot is described in the background, newest first, one at a time, once Grab-it has read its text. The Library shows *Describing 3 of 12…* while it works.
+With **Use an AI provider** and **Describe captures with AI** on in **Settings → AI integration**, every new screenshot is described in the background, newest first, one at a time, once Grab-it has read its text. The Library shows *Describing 3 of 12…* while it works.
 
 ## What you get
 
@@ -40,9 +40,9 @@ Each screenshot goes scaled down to at most 1568 pixels on its long edge, with u
 
 ## Old captures
 
-**Only describe new captures** is on by default, so turning describing on leaves earlier captures alone. Turn it off to describe the whole library.
+**Only describe new captures** is on by default, so turning describing on leaves earlier captures alone. Turn it off to describe the whole library; **Save** first says how many screenshots that is and waits for you to confirm.
 
-**Re-describe all…** under **Your library** describes every capture again, replacing the current descriptions. It's useful after switching to a better model. It asks first.
+**Re-describe all…** under **Your library** describes every capture again, replacing the current descriptions. It's useful after switching to a better model. It asks first, saying how many screenshots it will describe.
 
 To redo one capture, click **Redo** next to its **Description** in the details panel. **Clear** removes its description, category and AI tags.
 
@@ -54,4 +54,4 @@ A local model on a slow computer can take minutes for one image, so Grab-it give
 
 ## Turn it off
 
-Open **Settings → AI descriptions** and turn off **Describe captures with AI**. Nothing more is sent. Descriptions already written stay until you **Clear** them.
+Open **Settings → AI integration**, turn off **Describe captures with AI** and press **Save**. Nothing more is sent for descriptions. Captures still waiting are left undescribed. Descriptions already written stay until you **Clear** them.

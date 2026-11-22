@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-Pick who describes your captures in **Settings → AI descriptions → Described by**. The provider saves as soon as you click it. **Test connection** sends a tiny test image and tells you whether the model answered.
+Pick who describes your captures in **Settings → AI integration → Described by**, then press **Save**. **Test connection** sends a tiny test image with the settings as typed, without saving them, and tells you whether the model answered.
 
 ![Settings open at AI descriptions, with the switches and Claude Code picked as the provider.](../../../assets/ai/ai-settings.png)
 
@@ -39,7 +39,7 @@ Any API that speaks OpenAI's `/chat/completions`, on your computer or in the clo
 
 - **Endpoint URL**: such as Ollama, LM Studio, llama.cpp's server, or a cloud provider.
 - **Model**: it must accept images.
-- **API key**: only cloud providers need one. Leave it empty for Ollama. It's kept in your system keychain (Keychain on macOS, Credential Manager on Windows, the Secret Service on Linux). On a computer with no keychain Grab-it can use, Settings says it's kept in plain text in Grab-it's settings file instead.
+- **API key**: only cloud providers need one. Leave it empty for Ollama. It's kept in your system keychain (Keychain on macOS, Credential Manager on Windows, the Secret Service on Linux), for that endpoint's address only: change the endpoint and Grab-it asks for the key again. On a computer with no keychain Grab-it can use, Settings says it's kept in plain text in Grab-it's settings file instead.
 
 These fields save when you press **Save**, or when you press **Test connection**.
 
@@ -52,7 +52,7 @@ These fields save when you press **Save**, or when you press **Test connection**
    ollama pull qwen3-vl:4b
    ```
 
-3. In **Settings → AI descriptions**, choose **OpenAI-compatible endpoint** and the **Ollama** preset, then **Test connection**.
+3. In **Settings → AI integration**, choose **OpenAI-compatible endpoint** and the **Ollama** preset, then **Test connection**.
 
 The first answer can take a while as Ollama loads the model.
 

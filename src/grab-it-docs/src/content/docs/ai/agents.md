@@ -9,7 +9,7 @@ AI agents such as [Claude Code](https://claude.com/claude-code) and [Codex](http
 
 ## Set it up
 
-1. Open **Settings → AI agents**.
+1. Open **Settings → AI integration**. The agent settings are under **AI agents**, and work whether or not you use an AI provider.
 2. Turn on **Let AI agents use Grab-it**. It's off until you turn it on.
 3. Click **Install skill**. Grab-it writes its skill to `~/.agents/skills/grab-it` and `~/.claude/skills/grab-it`, where Codex, Claude Code and other agents look for skills. The skill has the full path to Grab-it in it, so agents find it even when it isn't on your `PATH`.
 

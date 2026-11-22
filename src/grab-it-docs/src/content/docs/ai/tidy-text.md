@@ -23,6 +23,6 @@ When the dragged area holds a QR code or barcode, its value is copied instead, a
 
 ## Turn it off
 
-Turn off **Tidy up captured text** in **Settings → AI descriptions**. It's on by default, and only works while **Describe captures with AI** is on.
+Turn off **Tidy up captured text** in **Settings → AI integration** and press **Save**. It's off for a new setup, and only works while **Use an AI provider** is on.
 
 Tidying waits up to two minutes for an answer.

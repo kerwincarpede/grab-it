@@ -11,10 +11,6 @@
 //! llama.cpp's server, OpenAI, OpenRouter…). The model answers with a
 //! description, a category and a few tags.
 //!
-//! Describing turns itself on once, for a user who never turned it on, with
-//! Claude Code when `claude` is installed, otherwise with Codex when `codex`
-//! is (see [`enable_cli_once`]).
-
 use std::{
     fmt,
     io::Cursor,
@@ -617,21 +613,13 @@ fn test_schema() -> Value {
 /// Sends a tiny image and checks the provider's model answers, for
 /// Settings' "Test connection".
 pub fn test_connection(clients: &Clients, ai: &AiSettings) -> Result<String, AiError> {
-    let mut bytes = Vec::new();
-    image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
-        16,
-        16,
-        image::Rgb([255, 255, 255]),
-    ))
-    .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
-    .map_err(|err| AiError::Image(err.to_string()))?;
     let reply = ask(
         clients,
         ai,
         &Ask {
             system: SYSTEM_PROMPT,
             prompt: TEST_PROMPT,
-            png: &bytes,
+            png: include_bytes!("../fixtures/connection-test.png"),
             schema: &test_schema(),
             max_tokens: 20,
         },
@@ -678,7 +666,7 @@ pub fn step(
     clients: &Clients,
     working: impl FnOnce(),
 ) -> Result<Step, LibraryError> {
-    if !ai.enabled {
+    if !ai.describes() {
         return Ok(Step::Off);
     }
     let Some(job) = library.lock().next_for_ai()? else {
@@ -708,7 +696,7 @@ pub fn step(
 /// Whether saving `after` over `before` turned describing on for new
 /// captures only, so the captures already waiting are skipped.
 pub fn skips_existing(before: &AiSettings, after: &AiSettings) -> bool {
-    !before.enabled && after.enabled && after.new_captures_only
+    !before.describes() && after.describes() && after.new_captures_only
 }
 
 /// Why the queue is woken.
@@ -755,10 +743,7 @@ impl AiQueue {
     }
 }
 
-/// Starts the queue's thread. It first turns describing on with an
-/// installed CLI if it should (see [`enable_cli_once`]), off the main
-/// thread because finding one may wait on the login shell, then describes
-/// every waiting capture while describing is on, and sleeps until woken.
+/// Describes waiting captures when automatic descriptions are enabled.
 pub fn start(app: &AppHandle) {
     let (sender, receiver) = mpsc::channel();
     app.manage(AiQueue::new(sender));
@@ -766,7 +751,6 @@ pub fn start(app: &AppHandle) {
     let spawned = thread::Builder::new()
         .name("grab-it-ai".into())
         .spawn(move || {
-            enable_cli_once(&app);
             run(&app, &receiver);
         });
     if let Err(err) = spawned {
@@ -799,57 +783,6 @@ pub fn settings_saved(app: &AppHandle, before: &AiSettings, after: &AiSettings) 
     }
     if before != after {
         retry(app);
-    }
-}
-
-/// The CLI provider describing turns itself on with: Claude Code when
-/// `claude` is installed, otherwise Codex when `codex` is, otherwise none.
-/// `codex` is only looked for when `claude` is missing.
-pub fn installed_cli(
-    has_claude: impl FnOnce() -> bool,
-    has_codex: impl FnOnce() -> bool,
-) -> Option<AiProvider> {
-    if has_claude() {
-        Some(AiProvider::ClaudeCode)
-    } else if has_codex() {
-        Some(AiProvider::Codex)
-    } else {
-        None
-    }
-}
-
-/// Turns describing on with an installed CLI (see [`installed_cli`]), for
-/// new captures only, when the user never turned it on. Runs once at
-/// start-up on the queue's thread, before its first step, so no waiting
-/// capture is described before it is skipped. Once a provider is set it
-/// never does anything again, so a user who turns describing off keeps it
-/// off. The queue's first status event then tells open windows to look
-/// again.
-pub fn enable_cli_once(app: &AppHandle) {
-    let state = app.state::<SettingsState>();
-    if !lock(&state).get().preferences.ai.never_enabled() {
-        return;
-    }
-    // Unlocked: the lookup may ask the login shell for its PATH.
-    let Some(provider) = installed_cli(
-        || ai_cli::find_claude().is_some(),
-        || ai_cli::find_codex().is_some(),
-    ) else {
-        return;
-    };
-    let mut store = lock(&state);
-    match store.enable_cli_provider(provider) {
-        Ok(Some(before)) => {
-            let after = store.get().preferences.ai.clone();
-            // Still locked, as when Settings saves: existing captures are
-            // skipped before the queue can start on them.
-            settings_saved(app, &before, &after);
-        }
-        Ok(None) => {}
-        Err(err) => eprintln!(
-            "Grab-it: could not turn on describing with {}: {err}",
-            provider.name()
-        ),
     }
 }
 
@@ -921,10 +854,10 @@ fn run(app: &AppHandle, receiver: &Receiver<Wake>) {
         let ai = current_settings(app);
         let provider = ai.provider();
         // Looked up each time, so installing it later needs no restart.
-        if ai.enabled && provider == AiProvider::ClaudeCode {
+        if ai.describes() && provider == AiProvider::ClaudeCode {
             clients.claude = ai_cli::find_claude();
         }
-        if ai.enabled && provider == AiProvider::Codex {
+        if ai.describes() && provider == AiProvider::Codex {
             clients.codex = ai_cli::find_codex();
         }
         let library = app.state::<LibraryState>();
@@ -1011,22 +944,27 @@ pub fn ai_redescribe_all(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Checks that the saved provider and model answer, whether or not
-/// describing is on.
+/// Tests draft settings with a synthetic image without changing the active provider.
 #[tauri::command(async)]
 #[specta::specta]
-pub fn ai_test_connection(app: AppHandle) -> Result<String, String> {
+pub fn ai_test_connection(draft: AiSettings) -> Result<String, String> {
     let ai = AiSettings {
         enabled: true,
-        ..current_settings(&app)
+        ..draft
     }
     .validated()
     .map_err(|err| err.to_string())?;
-    let message =
-        test_connection(&Clients::new(TEST_TIMEOUT), &ai).map_err(|err| err.to_string())?;
-    // It works now: a queue stopped by an earlier failure can go on.
-    retry(&app);
-    Ok(message)
+    test_connection(&Clients::new(TEST_TIMEOUT), &ai).map_err(|err| err.to_string())
+}
+
+/// Counts the screenshots a whole-library operation can describe.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn ai_capture_count(app: AppHandle) -> Result<u32, String> {
+    app.state::<LibraryState>()
+        .lock()
+        .ai_capture_count()
+        .map_err(|err| err.to_string())
 }
 
 /// Which AI CLIs are installed, by where they were found. Mirrors
@@ -1350,6 +1288,7 @@ mod tests {
 
     fn settings(server: &FakeServer) -> AiSettings {
         AiSettings {
+            automatic_descriptions: None,
             enabled: true,
             provider: Some(AiProvider::Endpoint),
             endpoint: format!("{}/", server.endpoint),
@@ -1514,6 +1453,38 @@ mod tests {
         };
         assert_eq!(step_again(&library, &off), Step::Off);
         assert_eq!(library.lock().ai_state(id).unwrap(), AI_WAITING);
+    }
+
+    #[test]
+    fn switching_descriptions_off_leaves_waiting_captures_waiting() {
+        let dir = TempDir::new().unwrap();
+        let (library, id) = library_with_shot(dir.path(), Some("x"));
+        // Nothing listens there: any request would fail the step.
+        let on = AiSettings {
+            enabled: true,
+            endpoint: "http://127.0.0.1:9".into(),
+            ..AiSettings::default()
+        };
+        // The provider stays on for manual use, but automatic descriptions
+        // are off: the waiting capture is neither sent nor skipped.
+        let off = AiSettings {
+            automatic_descriptions: Some(false),
+            ..on.clone()
+        };
+        assert!(!off.describes());
+        assert_eq!(step_again(&library, &off), Step::Off);
+        assert_eq!(library.lock().ai_state(id).unwrap(), AI_WAITING);
+        // Turning them back on for new captures only skips what waited.
+        assert!(skips_existing(
+            &off,
+            &AiSettings {
+                automatic_descriptions: Some(true),
+                new_captures_only: true,
+                ..off.clone()
+            }
+        ));
+        // Settings from before the switch existed describe as they did.
+        assert!(on.describes());
     }
 
     #[test]
@@ -1890,31 +1861,5 @@ mod tests {
         let schema: Value =
             serde_json::from_str(&std::fs::read_to_string(log.join("schema")).unwrap()).unwrap();
         assert_eq!(schema, test_schema());
-    }
-
-    // --- Turning describing on by itself -----------------------------------
-
-    #[test]
-    fn claude_code_is_preferred_then_codex_then_nothing() {
-        let asked_codex = std::cell::Cell::new(false);
-        let codex = |found: bool| {
-            let asked_codex = &asked_codex;
-            move || {
-                asked_codex.set(true);
-                found
-            }
-        };
-        assert_eq!(
-            installed_cli(|| true, codex(true)),
-            Some(AiProvider::ClaudeCode)
-        );
-        // With `claude` found, `codex` is not even looked for.
-        assert!(!asked_codex.get());
-        assert_eq!(
-            installed_cli(|| false, codex(true)),
-            Some(AiProvider::Codex)
-        );
-        assert!(asked_codex.get());
-        assert_eq!(installed_cli(|| false, codex(false)), None);
     }
 }

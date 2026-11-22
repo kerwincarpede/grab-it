@@ -403,11 +403,10 @@ export const commands = {
 	aiClear: (id: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("ai_clear", { id }, options),
 	/**  Queues every capture, skipped ones too, to be described again. */
 	aiRedescribeAll: (options?: InvokeOptions) => __TAURI_INVOKE<null>("ai_redescribe_all", undefined, options),
-	/**
-	 *  Checks that the saved provider and model answer, whether or not
-	 *  describing is on.
-	 */
-	aiTestConnection: (options?: InvokeOptions) => __TAURI_INVOKE<string>("ai_test_connection", undefined, options),
+	/**  Tests draft settings with a synthetic image without changing the active provider. */
+	aiTestConnection: (draft: AiSettings_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<string>("ai_test_connection", { draft }, options),
+	/**  Counts the screenshots a whole-library operation can describe. */
+	aiCaptureCount: (options?: InvokeOptions) => __TAURI_INVOKE<number>("ai_capture_count", undefined, options),
 	/**
 	 *  Looks for the AI CLIs, for Settings to say when the chosen one is
 	 *  missing. Async: the lookup may ask the login shell for its PATH.
@@ -516,22 +515,23 @@ export type AiProvider =
 
 /**
  *  How captures are described by a vision model (see `ai.rs`). Off by
- *  default: nothing leaves the machine until the user turns it on, or
- *  Grab-it turns it on once because Claude Code or Codex is installed (see
- *  [`SettingsStore::enable_cli_provider`]). Mirrors `AiPreferences` in
- *  src/settings/api.ts.
+ *  default: nothing leaves the machine until the user chooses a provider
+ *  and turns it on. Mirrors `AiPreferences` in src/settings/api.ts.
  */
 export type AiSettings = AiSettings_Serialize | AiSettings_Deserialize;
 
 /**
  *  How captures are described by a vision model (see `ai.rs`). Off by
- *  default: nothing leaves the machine until the user turns it on, or
- *  Grab-it turns it on once because Claude Code or Codex is installed (see
- *  [`SettingsStore::enable_cli_provider`]). Mirrors `AiPreferences` in
- *  src/settings/api.ts.
+ *  default: nothing leaves the machine until the user chooses a provider
+ *  and turns it on. Mirrors `AiPreferences` in src/settings/api.ts.
  */
 export type AiSettings_Deserialize = {
 	enabled?: boolean,
+	/**
+	 *  Whether captures are described automatically while `enabled` is on.
+	 *  None in settings from before it was its own switch, read as on.
+	 */
+	automaticDescriptions?: boolean | null,
 	/**
 	 *  Who describes captures. None until a provider was picked or Grab-it
 	 *  picked one; it then works as [`AiProvider::Endpoint`], which is what
@@ -575,13 +575,16 @@ export type AiSettings_Deserialize = {
 
 /**
  *  How captures are described by a vision model (see `ai.rs`). Off by
- *  default: nothing leaves the machine until the user turns it on, or
- *  Grab-it turns it on once because Claude Code or Codex is installed (see
- *  [`SettingsStore::enable_cli_provider`]). Mirrors `AiPreferences` in
- *  src/settings/api.ts.
+ *  default: nothing leaves the machine until the user chooses a provider
+ *  and turns it on. Mirrors `AiPreferences` in src/settings/api.ts.
  */
 export type AiSettings_Serialize = {
 	enabled: boolean,
+	/**
+	 *  Whether captures are described automatically while `enabled` is on.
+	 *  None in settings from before it was its own switch, read as on.
+	 */
+	automaticDescriptions?: boolean,
 	/**
 	 *  Who describes captures. None until a provider was picked or Grab-it
 	 *  picked one; it then works as [`AiProvider::Endpoint`], which is what
@@ -2724,7 +2727,8 @@ export type MockCommandHandlers = {
     aiRedescribe: (args: { id: number }) => null | Promise<null>,
     aiClear: (args: { id: number }) => null | Promise<null>,
     aiRedescribeAll: () => null | Promise<null>,
-    aiTestConnection: () => string | Promise<string>,
+    aiTestConnection: (args: { draft: AiSettings_Deserialize }) => string | Promise<string>,
+    aiCaptureCount: () => number | Promise<number>,
     aiClis: () => AiClis_Serialize | Promise<AiClis_Serialize>,
     updateStatus: () => UpdateStatus_Serialize | Promise<UpdateStatus_Serialize>,
     updateCheck: () => void | Promise<void>,
@@ -2889,6 +2893,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "ai_clear": return mockCommandHandler(mockHandlers.aiClear, "ai_clear", args);
             case "ai_redescribe_all": return mockCommandHandler(mockHandlers.aiRedescribeAll, "ai_redescribe_all", args);
             case "ai_test_connection": return mockCommandHandler(mockHandlers.aiTestConnection, "ai_test_connection", args);
+            case "ai_capture_count": return mockCommandHandler(mockHandlers.aiCaptureCount, "ai_capture_count", args);
             case "ai_clis": return mockCommandHandler(mockHandlers.aiClis, "ai_clis", args);
             case "update_status": return mockCommandHandler(mockHandlers.updateStatus, "update_status", args);
             case "update_check": return mockCommandHandler(mockHandlers.updateCheck, "update_check", args);

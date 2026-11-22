@@ -1039,6 +1039,14 @@ impl Library {
             .optional()?)
     }
 
+    pub fn ai_capture_count(&self) -> LibraryResult<u32> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM shots WHERE kind = 'image'",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
     /// How far the describing queue has got.
     pub fn ai_counts(&self) -> LibraryResult<AiCounts> {
         Ok(self.conn.query_row(

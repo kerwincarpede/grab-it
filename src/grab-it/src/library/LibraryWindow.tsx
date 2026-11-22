@@ -71,6 +71,7 @@ import {
   suggestedTags,
   textCopied,
   trashShot,
+  type AiNotice,
   type AiStatus,
   type CliProvider,
   type FilterOptions,
@@ -352,25 +353,36 @@ const CLI_DESTINATIONS: Record<CliProvider, string> = {
   codex: "OpenAI under your ChatGPT or OpenAI account",
 };
 
-/** Says once that Grab-it turned on AI descriptions with `provider`, until dismissed. */
-function AiNotice({
-  provider,
+/**
+ * The one-time AI notice, until dismissed: an invitation to set up AI
+ * integration for a new user, or, for an upgraded user, that an earlier
+ * version turned on describing with a CLI provider.
+ */
+function AiNoticeBanner({
+  notice,
   onSettings,
   onDismiss,
 }: {
-  provider: CliProvider;
+  notice: AiNotice;
   onSettings: () => void;
   onDismiss: () => void;
 }) {
   return (
     <div className="ocr-status ai-status ai-notice" role="status">
       <SparkleIcon />
-      <span>
-        {CLI_NAMES[provider]} now describes your new captures, so you can search for what they show. Their screenshots
-        go to {CLI_DESTINATIONS[provider]}.
-      </span>
+      {notice.kind === "invite" ? (
+        <span>
+          Set up AI integration to search captures by what they show, tidy captured text and let AI agents take
+          screenshots. It stays off until you choose a provider.
+        </span>
+      ) : (
+        <span>
+          {CLI_NAMES[notice.provider]} now describes your new captures, so you can search for what they show. Their
+          screenshots go to {CLI_DESTINATIONS[notice.provider]}.
+        </span>
+      )}
       <button type="button" className="pill-button" onClick={onSettings}>
-        Open Settings
+        {notice.kind === "invite" ? "Choose a provider" : "Open Settings"}
       </button>
       <button type="button" className="error-dismiss" aria-label="Dismiss AI notice" onClick={onDismiss}>
         <CloseIcon size={12} />
@@ -1259,8 +1271,8 @@ function LibraryWindow({
   const [options, setOptions] = useState<FilterOptions>({ apps: [], tags: [], categories: [] });
   // Null until the backend says; the AI actions then stay available.
   const [ai, setAi] = useState<AiStatus | null>(null);
-  // Grab-it turned AI descriptions on by itself and has not said so yet.
-  const [aiNotice, setAiNotice] = useState<CliProvider | null>(null);
+  // The one-time AI invitation or notice, until dismissed.
+  const [aiNotice, setAiNotice] = useState<AiNotice | null>(null);
   const [optionReloads, setOptionReloads] = useState(0);
   // Where each result matched, by shot id; empty when not searching.
   const [hits, setHits] = useState<Record<number, SearchHit>>({});
@@ -1550,6 +1562,11 @@ function LibraryWindow({
 
   function showSettings() {
     openSettings().catch((err: unknown) => setError(errorMessage(err)));
+  }
+
+  function showAiSettings() {
+    if (onOpenSettings) onOpenSettings("ai");
+    else showSettings();
   }
 
   function showStorageSettings() {
@@ -1919,11 +1936,11 @@ function LibraryWindow({
         />
         <OcrBanner status={ocr} />
         {aiNotice && (
-          <AiNotice
-            provider={aiNotice}
+          <AiNoticeBanner
+            notice={aiNotice}
             onSettings={() => {
               dismissNotice();
-              showSettings();
+              showAiSettings();
             }}
             onDismiss={dismissNotice}
           />

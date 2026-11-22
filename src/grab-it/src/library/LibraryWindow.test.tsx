@@ -117,7 +117,7 @@ function settings(backend: Backend): Settings_Serialize {
     copyToClipboard: true,
     ai: {
       enabled: backend.aiEnabled ?? backend.aiNotice,
-      provider: backend.aiProvider ?? "claudeCode",
+      provider: backend.aiProvider === undefined ? "claudeCode" : backend.aiProvider,
       endpoint: "",
       model: "",
       claudeModel: "",
@@ -2479,6 +2479,63 @@ describe("LibraryWindow AI descriptions", () => {
     render(<LibraryWindow />);
     expect(await screen.findByText(/Codex now describes your new captures/)).toBeInTheDocument();
     expect(screen.getByText(/go to OpenAI under your ChatGPT or OpenAI account/)).toBeInTheDocument();
+    expect(screen.queryByText(/Claude Code now describes/)).not.toBeInTheDocument();
+  });
+
+  it("invites a new user to set up AI integration, opening its settings", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.aiNotice = true;
+    backend.aiEnabled = false;
+    backend.aiProvider = null;
+    const onOpenSettings = vi.fn();
+    render(<LibraryWindow onOpenSettings={onOpenSettings} />);
+    expect(await screen.findByText(/Set up AI integration to search captures by what they show/)).toBeInTheDocument();
+    expect(screen.getByText(/It stays off until you choose a provider/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Choose a provider" }));
+
+    expect(onOpenSettings).toHaveBeenCalledWith("ai");
+    await waitFor(() => expect(callsTo(backend, "dismiss_ai_notice")).toHaveLength(1));
+    expect(screen.queryByText(/Set up AI integration/)).not.toBeInTheDocument();
+  });
+
+  it("remembers a dismissed invitation", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.aiNotice = true;
+    backend.aiEnabled = false;
+    backend.aiProvider = null;
+    const { unmount } = render(<LibraryWindow />);
+    await screen.findByText(/Set up AI integration/);
+
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss AI notice" }));
+
+    expect(screen.queryByText(/Set up AI integration/)).not.toBeInTheDocument();
+    await waitFor(() => expect(callsTo(backend, "dismiss_ai_notice")).toHaveLength(1));
+    unmount();
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: "Grab-it 1.png" });
+    await settle();
+    expect(screen.queryByText(/Set up AI integration/)).not.toBeInTheDocument();
+  });
+
+  it("opens Settings from the invitation in its own window", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.aiNotice = true;
+    backend.aiEnabled = false;
+    backend.aiProvider = null;
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Choose a provider" }));
+    await waitFor(() => expect(callsTo(backend, "open_target")[0]?.payload).toEqual({ target: "settings" }));
+  });
+
+  it("does not invite a user who already chose a provider and turned it off", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.aiNotice = true;
+    backend.aiEnabled = false;
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: "Grab-it 1.png" });
+    await settle();
+    expect(screen.queryByText(/Set up AI integration/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Claude Code now describes/)).not.toBeInTheDocument();
   });
 
