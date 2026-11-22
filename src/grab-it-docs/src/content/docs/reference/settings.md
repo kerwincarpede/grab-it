@@ -104,7 +104,7 @@ AI providers and AI agents share one page. Changes to the provider and its switc
 
 **Described by** picks the provider: **Claude Code**, **Codex** or **OpenAI-compatible endpoint**, with its **Model**, and for an endpoint its **Preset** (LM Studio, Ollama, OpenRouter, OpenAI, Anthropic or Custom), **Endpoint URL** and **API key**. **List models** suggests the models the endpoint offers. **Test connection** checks the settings as typed, with a built-in test image, without saving them, and says where it sends it first. See [Providers](/grab-it/ai/providers/).
 
-**Your library → Re-describe all…** says how many screenshots it will describe, then describes every capture again, replacing the current descriptions.
+**Your library → Analyse all again…** says how many screenshots it will describe, then describes every capture again, replacing the current descriptions. **Cancel** in the Library stops it.
 
 Settings from an earlier version are kept: a provider you had on stays on, with the same model, API key and switches.
 

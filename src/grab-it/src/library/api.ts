@@ -705,6 +705,11 @@ export async function redescribeShot(id: number): Promise<void> {
   await commands.aiRedescribe(id);
 }
 
+/** Takes every waiting capture out of the AI queue and drops the answer in flight. */
+export async function cancelAiDescribing(): Promise<void> {
+  await commands.aiCancel();
+}
+
 /** Forgets the shot's AI description, category and tags. */
 export async function clearAiDescription(id: number): Promise<void> {
   await commands.aiClear(id);

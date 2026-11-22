@@ -5,7 +5,9 @@ sidebar:
   order: 1
 ---
 
-With **Use an AI provider** and **Describe captures with AI** on in **Settings → AI integration**, every new screenshot is described in the background, newest first, one at a time, once Grab-it has read its text. The Library shows *Describing 3 of 12…* while it works.
+With **Use an AI provider** and **Describe captures with AI** on in **Settings → AI integration**, every new screenshot is described in the background, newest first, one at a time, once Grab-it has read its text. The Library shows *Analysing 3 of 12…* while it works. The capture being analysed has a band of light sweeping across it and an **Analysing…** badge, and the captures waiting their turn are marked **Queued**.
+
+Click **Cancel** next to the progress to stop. Every capture still waiting leaves the queue, and the answer for the one being analysed is thrown away. A capture that had a description keeps it; one that didn't stays undescribed until you ask again. Screenshots you take afterwards are still described.
 
 ## What you get
 
@@ -42,9 +44,9 @@ Each screenshot goes scaled down to at most 1568 pixels on its long edge, with u
 
 **Only describe new captures** is on by default, so turning describing on leaves earlier captures alone. Turn it off to describe the whole library; **Save** first says how many screenshots that is and waits for you to confirm.
 
-**Re-describe all…** under **Your library** describes every capture again, replacing the current descriptions. It's useful after switching to a better model. It asks first, saying how many screenshots it will describe.
+**Analyse all again…** under **Your library** describes every capture again, replacing the current descriptions. It's useful after switching to a better model. It asks first, saying how many screenshots it will describe, and you can **Cancel** it from the Library.
 
-To redo one capture, click **Redo** next to its **Description** in the details panel. **Clear** removes its description, category and AI tags.
+To redo one capture, click **Redo** next to its **Description** in the details panel, or right-click it and choose **Analyse again**. **Clear** removes its description, category and AI tags.
 
 ## When it can't describe
 

@@ -468,6 +468,7 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             ai::ai_redescribe,
             ai::ai_clear,
             ai::ai_redescribe_all,
+            ai::ai_cancel,
             ai::ai_test_connection,
             ai::ai_list_models,
             ai::ai_capture_count,

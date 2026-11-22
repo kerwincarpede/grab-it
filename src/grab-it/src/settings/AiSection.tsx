@@ -149,7 +149,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
 
   async function confirmCount(action: "save" | "describe") {
     try {
-      // A save only sends what is still waiting; Re-describe all sends everything.
+      // A save only sends what is still waiting; Analyse all again sends everything.
       const count = await aiCaptureCount(action === "save");
       setConfirmation({ count, action });
     } catch (err) {
@@ -186,7 +186,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
     setResult(null);
     try {
       await redescribeAll();
-      setResult({ kind: "info", message: "Describing every capture again. The Library shows the progress." });
+      setResult({ kind: "info", message: "Analysing every capture again. The Library shows the progress, and can cancel it." });
     } catch (err) {
       setResult({ kind: "error", message: errorMessage(err) });
     }
@@ -545,14 +545,14 @@ function AiSection({ saved, disabled, onSave }: Props) {
                   Cancel
                 </button>
                 <button type="button" className="pill is-primary" disabled={busy} onClick={() => void (confirmation.action === "save" ? save() : describeAll())}>
-                  {confirmation.action === "save" ? "Confirm and save" : "Re-describe all"}
+                  {confirmation.action === "save" ? "Confirm and save" : "Analyse all again"}
                 </button>
               </span>
             </>
           ) : (
             <>
               <span className="row-text">
-                <span className="row-title">Describe everything again</span>
+                <span className="row-title">Analyse everything again</span>
                 <span className="row-hint">Useful after switching to a better model.</span>
               </span>
               <button
@@ -561,7 +561,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
                 disabled={busy || !aiDescribes(saved)}
                 onClick={() => void confirmCount("describe")}
               >
-                Re-describe all…
+                Analyse all again…
               </button>
             </>
           )}

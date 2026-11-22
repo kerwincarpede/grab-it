@@ -62,6 +62,7 @@ function shot(id: number, overrides: Partial<Shot> = {}): Shot {
     aiDescription: null,
     aiCategory: null,
     aiTags: [],
+    aiWaiting: false,
     kind: "image",
     durationMs: null,
     bytes: null,
@@ -220,7 +221,7 @@ function mockBackend(shots: Shot[]): Backend {
     calls: [],
     ocr: {},
     ocrStatus: { state: "idle" },
-    aiStatus: { state: "idle", done: 0, total: 0, error: null, provider: "claudeCode" },
+    aiStatus: { state: "idle", done: 0, total: 0, error: null, provider: "claudeCode", current: null },
     aiNotice: false,
     aiProvider: "claudeCode",
   };
@@ -378,6 +379,7 @@ function mockBackend(shots: Shot[]): Backend {
     ocr_status: () => backend.ocrStatus,
     ai_status: () => backend.aiStatus,
     ai_redescribe: opened,
+    ai_cancel: () => null,
     library_remove_ai_tag: ({ id, tag }) => {
       const current = find(id);
       const lower = tag.toLowerCase();
@@ -1330,7 +1332,7 @@ describe("LibraryWindow right-click menu", () => {
       "Copy file path",
       "Add tag",
       "Keep forever",
-      "Describe again",
+      "Analyse again",
       "Show details",
       "Move to Trash",
       "Delete permanently…",
@@ -1793,14 +1795,14 @@ describe("LibraryWindow right-click menu", () => {
     expect(within(details).getByRole("button", { name: "Remove tag bug" })).toBeInTheDocument();
   });
 
-  it("leaves out Describe again while AI descriptions are off", async () => {
+  it("leaves out Analyse again while AI descriptions are off", async () => {
     const backend = mockBackend([shot(1)]);
-    backend.aiStatus = { state: "off", done: 0, total: 0, error: null, provider: "claudeCode" };
+    backend.aiStatus = { state: "off", done: 0, total: 0, error: null, provider: "claudeCode", current: null };
     render(<LibraryWindow />);
     await screen.findByRole("button", { name: "Grab-it 1.png" });
     await waitFor(() => expect(callsTo(backend, "ai_status")).toHaveLength(1));
     const menu = await openMenu("Grab-it 1.png");
-    await waitFor(() => expect(within(menu).queryByRole("menuitem", { name: "Describe again" })).not.toBeInTheDocument());
+    await waitFor(() => expect(within(menu).queryByRole("menuitem", { name: "Analyse again" })).not.toBeInTheDocument());
   });
 });
 
@@ -2329,10 +2331,10 @@ describe("LibraryWindow AI descriptions", () => {
     render(<LibraryWindow />);
     await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
 
-    await userEvent.click(screen.getByRole("button", { name: "Re-describe" }));
+    await userEvent.click(screen.getByRole("button", { name: "Analyse again" }));
     await waitFor(() => expect(callsTo(backend, "ai_redescribe")).toHaveLength(1));
     expect(callsTo(backend, "ai_redescribe")[0].payload).toEqual({ id: 1 });
-    expect(await screen.findByText(/Describing again/)).toBeInTheDocument();
+    expect(await screen.findByText(/Analysing again/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Clear AI description" }));
     await waitFor(() => expect(callsTo(backend, "ai_clear")[0]?.payload).toEqual({ id: 1 }));
@@ -2344,28 +2346,28 @@ describe("LibraryWindow AI descriptions", () => {
 
   it("says to turn AI on when it is off", async () => {
     const backend = mockBackend([shot(1)]);
-    backend.aiStatus = { state: "off", done: 0, total: 0, error: null, provider: "claudeCode" };
+    backend.aiStatus = { state: "off", done: 0, total: 0, error: null, provider: "claudeCode", current: null };
     render(<LibraryWindow />);
     await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
 
     expect(await screen.findByText(/Turn on AI descriptions in Settings/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Re-describe" })).toBeDisabled();
-    expect(screen.queryByText(/Describing/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Analyse again" })).toBeDisabled();
+    expect(screen.queryByText(/Analysing/)).not.toBeInTheDocument();
   });
 
   it("shows progress from the status event, then the error with a hint", async () => {
     const backend = mockBackend([shot(1)]);
-    backend.aiStatus = { state: "working", done: 2, total: 40, error: null, provider: "claudeCode" };
+    backend.aiStatus = { state: "working", done: 2, total: 40, error: null, provider: "claudeCode", current: null };
     render(<LibraryWindow />);
 
-    expect(await screen.findByText("Describing 3 of 40…")).toBeInTheDocument();
+    expect(await screen.findByText("Analysing 3 of 40…")).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "Descriptions" })).toHaveAttribute("value", "2");
     await settle();
 
     await act(async () => {
       await emit(AI_STATUS_EVENT, { state: "working", done: 9, total: 40, error: null });
     });
-    expect(screen.getByText("Describing 10 of 40…")).toBeInTheDocument();
+    expect(screen.getByText("Analysing 10 of 40…")).toBeInTheDocument();
 
     await act(async () => {
       await emit(AI_STATUS_EVENT, {
@@ -2375,7 +2377,7 @@ describe("LibraryWindow AI descriptions", () => {
         error: "could not reach http://localhost:11434/v1",
       });
     });
-    expect(screen.queryByText(/Describing \d+ of/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Analysing \d+ of/)).not.toBeInTheDocument();
     expect(screen.getByText(/Could not describe captures: could not reach/)).toBeInTheDocument();
     expect(screen.getByText(/Is the AI endpoint running\?/)).toBeInTheDocument();
     expect(screen.queryByText(/Ollama/)).not.toBeInTheDocument();
@@ -2396,6 +2398,7 @@ describe("LibraryWindow AI descriptions", () => {
       total: 1,
       error: "Claude Code failed: Not logged in · Please run /login",
       provider: "claudeCode",
+      current: null,
     };
     render(<LibraryWindow />);
     expect(await screen.findByText(/Could not describe captures: Claude Code failed/)).toBeInTheDocument();
@@ -2449,7 +2452,7 @@ describe("LibraryWindow AI descriptions", () => {
 
   it("shows the notice when Grab-it turns AI on after the Library opened", async () => {
     const backend = mockBackend([shot(1)]);
-    backend.aiStatus = { state: "off", done: 0, total: 0, error: null, provider: "claudeCode" };
+    backend.aiStatus = { state: "off", done: 0, total: 0, error: null, provider: "claudeCode", current: null };
     render(<LibraryWindow />);
     await screen.findByRole("button", { name: "Grab-it 1.png" });
     await settle();
@@ -2457,7 +2460,7 @@ describe("LibraryWindow AI descriptions", () => {
 
     backend.aiNotice = true;
     await act(async () => {
-      await emit(AI_STATUS_EVENT, { state: "idle", done: 0, total: 0, error: null, provider: "claudeCode" });
+      await emit(AI_STATUS_EVENT, { state: "idle", done: 0, total: 0, error: null, provider: "claudeCode", current: null });
     });
     expect(await screen.findByText(/Claude Code now describes your new captures/)).toBeInTheDocument();
   });
@@ -2470,6 +2473,7 @@ describe("LibraryWindow AI descriptions", () => {
       total: 1,
       error: "Codex failed: Not logged in. Run `codex login`.",
       provider: "codex",
+      current: null,
     };
     render(<LibraryWindow />);
     expect(await screen.findByText(/Could not describe captures: Codex failed/)).toBeInTheDocument();
@@ -2556,6 +2560,26 @@ describe("LibraryWindow AI descriptions", () => {
     expect(screen.queryByText(/Claude Code now describes/)).not.toBeInTheDocument();
   });
 
+  it("marks the capture being analysed and those queued, and cancels the run", async () => {
+    const backend = mockBackend([shot(1), shot(2, { aiWaiting: true }), shot(3)]);
+    backend.aiStatus = { state: "working", done: 0, total: 2, error: null, provider: "claudeCode", current: 1 };
+    render(<LibraryWindow />);
+
+    const working = await screen.findByRole("button", { name: "Grab-it 1.png" });
+    expect(await within(working).findByText("Analysing…")).toBeInTheDocument();
+    expect(within(screen.getByRole("button", { name: "Grab-it 2.png" })).getByText("Queued")).toBeInTheDocument();
+    const idle = screen.getByRole("button", { name: "Grab-it 3.png" });
+    expect(within(idle).queryByText(/Queued|Analysing/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(callsTo(backend, "ai_cancel")).toHaveLength(1));
+    await act(async () => {
+      await emit(AI_STATUS_EVENT, { state: "idle", done: 0, total: 0, error: null, provider: "claudeCode", current: null });
+    });
+    expect(screen.queryByText(/Analysing/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Queued")).not.toBeInTheDocument();
+  });
+
   it("shows no notice when Grab-it did not turn AI on", async () => {
     mockBackend([shot(1)]);
     render(<LibraryWindow />);
@@ -2566,9 +2590,9 @@ describe("LibraryWindow AI descriptions", () => {
 
   it("reloads when a run finishes, to show the new descriptions", async () => {
     const backend = mockBackend([shot(1)]);
-    backend.aiStatus = { state: "working", done: 0, total: 1, error: null, provider: "claudeCode" };
+    backend.aiStatus = { state: "working", done: 0, total: 1, error: null, provider: "claudeCode", current: null };
     render(<LibraryWindow />);
-    expect(await screen.findByText("Describing 1 of 1…")).toBeInTheDocument();
+    expect(await screen.findByText("Analysing 1 of 1…")).toBeInTheDocument();
     await settle();
 
     backend.shots = [described(1)];
@@ -2578,7 +2602,7 @@ describe("LibraryWindow AI descriptions", () => {
 
     const card = screen.getByRole("button", { name: "Grab-it 1.png" });
     expect(await within(card).findByText("rust")).toBeInTheDocument();
-    expect(screen.queryByText(/Describing/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Analysing/)).not.toBeInTheDocument();
   });
 
   it("names categories", () => {

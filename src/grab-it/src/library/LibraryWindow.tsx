@@ -21,6 +21,7 @@ import {
   PAGE_SIZE,
   SEARCH_DEBOUNCE_MS,
   aiStatus,
+  cancelAiDescribing,
   baseName,
   buildQuery,
   categoryLabel,
@@ -279,6 +280,23 @@ function RecordingBadges({ shot }: { shot: Shot }) {
   );
 }
 
+/** Where a shot is in the AI queue: being analysed now, or waiting its turn. */
+type AiMark = "working" | "waiting";
+
+/** Marks a tile the AI is analysing, with a sweep over it, or that waits its turn. */
+function AiBadge({ mark }: { mark: AiMark | undefined }) {
+  if (!mark) return null;
+  return (
+    <>
+      {mark === "working" && <span className="tile-ai-sweep" aria-hidden="true" />}
+      <span className={`tile-ai-badge is-${mark}`}>
+        <SparkleIcon />
+        {mark === "working" ? "Analysing…" : "Queued"}
+      </span>
+    </>
+  );
+}
+
 /** Where the search words were found in a result, matches highlighted. */
 function Snippet({ hit }: { hit: SearchHit }) {
   if (!hit.field || hit.snippet.length === 0) return null;
@@ -318,14 +336,17 @@ function OcrBanner({ status }: { status: OcrStatus }) {
 const CLI_COMMANDS: Record<CliProvider, string> = { claudeCode: "claude", codex: "codex" };
 
 /** The AI describer's progress, or why it stopped, while there is something to say. */
-function AiBanner({ status, onSettings }: { status: AiStatus; onSettings: () => void }) {
+function AiBanner({ status, onSettings, onCancel }: { status: AiStatus; onSettings: () => void; onCancel: () => void }) {
   if (status.state === "working") {
     const current = Math.min(status.done + 1, status.total);
     return (
       <div className="ocr-status ai-status" role="status">
         <SparkleIcon />
-        <span>{status.total > 0 ? `Describing ${current} of ${status.total}…` : "Describing captures…"}</span>
+        <span>{status.total > 0 ? `Analysing ${current} of ${status.total}…` : "Analysing captures…"}</span>
         {status.total > 0 && <progress aria-label="Descriptions" max={status.total} value={status.done} />}
+        <button type="button" className="pill-button ai-cancel" onClick={onCancel}>
+          Cancel
+        </button>
       </div>
     );
   }
@@ -604,20 +625,22 @@ interface TileProps {
   menuOpen: boolean;
   /** Opens its right-click menu at a point in the window. */
   onMenu: (shot: Shot, x: number, y: number, from: HTMLElement) => void;
+  /** Where it is in the AI queue, if it is in it. */
+  aiMark?: AiMark;
 }
 
 /** "Keep forever" or "Starred: kept forever", for the star's tooltip. */
 const keepTitle = (shot: Shot) => (shot.keep ? "Kept forever: cleanup never removes it" : "Keep forever");
 
 /** One capture in the grid; actions appear on hover, the star too until it is on. */
-const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, onDoubleOpen, onAction, onKeep, menuOpen, onMenu }: TileProps) {
+const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, onDoubleOpen, onAction, onKeep, menuOpen, onMenu, aiMark }: TileProps) {
   const style = { "--i": Math.min(index, 18) } as CSSProperties;
   const tags = allTags(shot);
   const recording = isRecording(shot);
   const meta = recording ? [recordingLabel(shot), formatTime(shot.capturedAt)] : [shot.app, formatTime(shot.capturedAt)];
   return (
     <li
-      className={`tile${selected ? " is-selected" : ""}${recording ? " is-recording" : ""}${menuOpen ? " is-menu-open" : ""}`}
+      className={`tile${selected ? " is-selected" : ""}${recording ? " is-recording" : ""}${menuOpen ? " is-menu-open" : ""}${aiMark === "working" ? " is-analysing" : ""}`}
       style={style}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -654,6 +677,7 @@ const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, 
         <span className="tile-frame">
           <Thumbnail shot={shot} />
           <RecordingBadges shot={shot} />
+          <AiBadge mark={aiMark} />
         </span>
         <span className="tile-caption">
           <span className="tile-title">{shot.windowTitle || shot.fileName}</span>
@@ -836,7 +860,7 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
   async function redescribe() {
     try {
       await redescribeShot(shot.id);
-      onNotice("Describing again. The new description shows up here when it is ready.");
+      onNotice("Analysing again. The new description shows up here when it is ready.");
     } catch (err) {
       onError(errorMessage(err));
     }
@@ -1041,7 +1065,7 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
                 <SparkleIcon />
                 Description
                 <span className="details-label-actions">
-                  <button type="button" className="link-button" aria-label="Re-describe" disabled={aiOff} onClick={() => void redescribe()}>
+                  <button type="button" className="link-button" aria-label="Analyse again" disabled={aiOff} onClick={() => void redescribe()}>
                     Redo
                   </button>
                   <button
@@ -1560,6 +1584,19 @@ function LibraryWindow({
     dismissAiNotice().catch((err: unknown) => setError(errorMessage(err)));
   }
 
+  function cancelAi() {
+    cancelAiDescribing().catch((err: unknown) => setError(errorMessage(err)));
+  }
+
+  /** Marks only while the queue runs: off, or failed, nothing is on its way. */
+  const aiWorking = ai?.state === "working";
+  const aiCurrent = aiWorking ? ai.current : null;
+  function aiMarkOf(shot: Shot): AiMark | undefined {
+    if (!aiWorking) return undefined;
+    if (shot.id === aiCurrent) return "working";
+    return shot.aiWaiting ? "waiting" : undefined;
+  }
+
   function showSettings() {
     openSettings().catch((err: unknown) => setError(errorMessage(err)));
   }
@@ -1838,7 +1875,7 @@ function LibraryWindow({
         toggleKeep(shot);
         break;
       case "redescribe":
-        redescribeShot(shot.id).then(() => say("Describing again"), failed);
+        redescribeShot(shot.id).then(() => say("Analysing again"), failed);
         break;
       case "reveal":
         tileAction(shot, "reveal");
@@ -1945,7 +1982,7 @@ function LibraryWindow({
             onDismiss={dismissNotice}
           />
         )}
-        {ai && <AiBanner status={ai} onSettings={showSettings} />}
+        {ai && <AiBanner status={ai} onSettings={showSettings} onCancel={cancelAi} />}
         {error && (
           <p role="alert" className="error-pill">
             {error}
@@ -1993,6 +2030,7 @@ function LibraryWindow({
                       onKeep={toggleKeep}
                       menuOpen={menu?.id === shot.id}
                       onMenu={openMenu}
+                      aiMark={aiMarkOf(shot)}
                     />
                   ))}
                 </ul>

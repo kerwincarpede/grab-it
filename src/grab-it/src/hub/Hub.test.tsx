@@ -28,6 +28,7 @@ function shot(index: number): Shot_Serialize {
     aiDescription: null,
     aiCategory: null,
     aiTags: [],
+    aiWaiting: false,
     durationMs: null,
     bytes: null,
     keep: false,
