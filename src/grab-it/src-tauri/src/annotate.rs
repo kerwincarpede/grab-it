@@ -200,15 +200,20 @@ pub fn prompt(instruction: &str, lines: &[OcrLine], frame: &Frame) -> String {
          shape:\n\
          {{\"annotations\": [{{\"kind\": \"...\", \"target\": \"...\", \"box\": [], \"from\": [], \"text\": \"...\"}}]}}\n\
          - kind: \"box\" for a rectangle outline, \"arrow\" for an arrow, or \"label\" for a \
-         short text label.\n\
+         short text label. A label is always its own \"label\" annotation: to label a box or \
+         an arrow, add a label with the same target as well.\n\
          - target: the ID of the text region the shape is about, such as \"t3\", or \"\" when \
          it is about something else. A box outlines its target, an arrow points at it and a \
-         label sits beside it.\n\
+         label sits beside it. Prefer a region ID over coordinates whenever the shape is \
+         about text listed below.\n\
          - box: without a target, where the shape goes, as [x, y, width, height] in pixels: \
          the rectangle a box outlines, what an arrow points at or where a label starts. \
-         Otherwise [].\n\
+         Otherwise []. To box a group of things, such as a set of controls, make the box \
+         cover every region of the group, from the listed coordinates of its first to its \
+         last.\n\
          - from: where an arrow starts, as [x, y]; otherwise [].\n\
-         - text: a label's text, short; otherwise \"\".\n\
+         - text: a label's text, short. Only labels have text: for a box or an arrow it is \
+         \"\".\n\
          Use at most {MAX_SUGGESTIONS} annotations. If nothing fits the request, reply \
          {{\"annotations\": []}}.\n\
          \nThe user asks:\n\"\"\"\n{}\n\"\"\"\n",
@@ -248,11 +253,21 @@ pub fn schema() -> Value {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "kind": { "type": "string", "enum": ["box", "arrow", "label"] },
-                        "target": { "type": "string" },
+                        "kind": {
+                            "type": "string",
+                            "enum": ["box", "arrow", "label"],
+                            "description": "A label is its own annotation, never text on a box or an arrow.",
+                        },
+                        "target": {
+                            "type": "string",
+                            "description": "A text region's ID, such as t3, preferred over a box; or empty.",
+                        },
                         "box": { "type": "array", "items": { "type": "number" } },
                         "from": { "type": "array", "items": { "type": "number" } },
-                        "text": { "type": "string" },
+                        "text": {
+                            "type": "string",
+                            "description": "A label's text; empty for a box or an arrow.",
+                        },
                     },
                     "required": ["kind", "target", "box", "from", "text"],
                     "additionalProperties": false,
@@ -381,6 +396,72 @@ fn default_tail(target: &Area, frame: &Frame) -> (f64, f64) {
     (frame.clamp_x(x), frame.clamp_y(y))
 }
 
+/// Where a label beside `area` starts: below it, or above it when there is
+/// no room below.
+fn beside(area: &Area, frame: &Frame) -> (f64, f64) {
+    let below = area.y + area.height + GAP;
+    if below + LABEL_HEIGHT <= f64::from(frame.height) {
+        (area.x, below)
+    } else {
+        (area.x, area.y - GAP - LABEL_HEIGHT)
+    }
+}
+
+fn label_at(x: f64, y: f64, text: String, frame: &Frame) -> Suggestion {
+    Suggestion::Text {
+        x: frame.clamp_x(x).round(),
+        y: frame.clamp_y(y).round(),
+        text,
+    }
+}
+
+/// The label a box or an arrow asks for with its own `text`, which only
+/// labels should have: beside the box, or at the arrow's tail on the side
+/// away from its head. None for anything else, or without text.
+fn label_for(item: &Value, shape: &Suggestion, frame: &Frame) -> Option<Suggestion> {
+    let text = item.get("text")?.as_str()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let text = truncate(text, MAX_LABEL_CHARS);
+    let (x, y) = match *shape {
+        Suggestion::Rect {
+            x,
+            y,
+            width,
+            height,
+        } => beside(
+            &Area {
+                x,
+                y,
+                width,
+                height,
+            },
+            frame,
+        ),
+        Suggestion::Arrow { x1, y1, y2, .. } if y2 > y1 => (x1, y1 - GAP - LABEL_HEIGHT),
+        Suggestion::Arrow { x1, y1, .. } => (x1, y1 + GAP),
+        Suggestion::Text { .. } => return None,
+    };
+    Some(label_at(x, y, text, frame))
+}
+
+/// Whether `item` is a label, by its kind.
+fn is_label(item: &Value) -> bool {
+    item.get("kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| matches!(kind.trim().to_lowercase().as_str(), "label" | "text"))
+}
+
+/// `item`'s `field`, trimmed and lowercased; empty when missing.
+fn key(item: &Value, field: &str) -> String {
+    item.get(field)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_lowercase()
+}
+
 /// Reads one annotation as a suggestion, or None when it cannot be placed.
 /// A box and an arrow use their target's region when it has one, which
 /// OCR measured, else the `box`; a label goes where its `box` says, else
@@ -431,28 +512,21 @@ fn suggestion(item: &Value, lines: &[OcrLine], frame: &Frame) -> Option<Suggesti
             let text = truncate(text, MAX_LABEL_CHARS);
             let (x, y) = match (placed, region) {
                 (Some(at), _) => (at.x, at.y),
-                (None, Some(region)) => {
-                    let below = region.y + region.height + GAP;
-                    if below + LABEL_HEIGHT <= f64::from(frame.height) {
-                        (region.x, below)
-                    } else {
-                        (region.x, region.y - GAP - LABEL_HEIGHT)
-                    }
-                }
+                (None, Some(region)) => beside(&region, frame),
                 (None, None) => return None,
             };
-            Some(Suggestion::Text {
-                x: frame.clamp_x(x).round(),
-                y: frame.clamp_y(y).round(),
-                text,
-            })
+            Some(label_at(x, y, text, frame))
         }
         _ => None,
     }
 }
 
 /// Reads the model's reply as suggestions in capture pixels, and how many
-/// annotations could not be placed: an unknown kind, a target that is
+/// annotations could not be placed. A box or an arrow that carries text,
+/// as models do although only labels should, also gets that text as a
+/// label, unless one of the model's labels has its target or its text.
+///
+/// Those that could not be placed have an unknown kind, a target that is
 /// missing or names more than one region, a label without text, or a
 /// shape with no room inside the capture. Chatter or code fences around
 /// the JSON are ignored.
@@ -469,12 +543,34 @@ pub fn parse(
         .get("annotations")
         .and_then(Value::as_array)
         .ok_or_else(|| AiError::Response(format!("no annotations in {}", truncate(object, 200))))?;
+    // What the model's own labels are about, so a box or arrow that also
+    // carries text gets a label only when none of them is for it already.
+    let labels: Vec<(String, String)> = items
+        .iter()
+        .filter(|item| is_label(item))
+        .map(|item| (key(item, "target"), key(item, "text")))
+        .collect();
+    let labelled = |item: &Value| {
+        let (target, text) = (key(item, "target"), key(item, "text"));
+        labels.iter().any(|(label_target, label_text)| {
+            (!target.is_empty() && *label_target == target) || *label_text == text
+        })
+    };
     let mut suggestions = Vec::new();
     let mut skipped = 0u32;
+    let mut keep = |found: Option<Suggestion>, suggestions: &mut Vec<Suggestion>| match found {
+        Some(found) if suggestions.len() < MAX_SUGGESTIONS => suggestions.push(found),
+        _ => skipped += 1,
+    };
     for item in items {
-        match suggestion(item, lines, frame) {
-            Some(found) if suggestions.len() < MAX_SUGGESTIONS => suggestions.push(found),
-            _ => skipped += 1,
+        let found = suggestion(item, lines, frame);
+        let extra = match &found {
+            Some(shape) if !is_label(item) && !labelled(item) => label_for(item, shape, frame),
+            _ => None,
+        };
+        keep(found, &mut suggestions);
+        if extra.is_some() {
+            keep(extra, &mut suggestions);
         }
     }
     Ok((suggestions, skipped))
@@ -794,6 +890,101 @@ mod tests {
         let (found, skipped) = parse(&reply(Value::Array(many)), &[], &frame).unwrap();
         assert_eq!(found.len(), MAX_SUGGESTIONS);
         assert_eq!(skipped, 3);
+    }
+
+    /// Gemma 4 26B's answer in LM Studio to "Box the provider controls,
+    /// point an arrow at Test connection and label it", on a 2180 × 1720
+    /// Settings screenshot sent at 1568 × 1237, where OCR read 44 regions
+    /// and Test connection was t41. It put each label in its shape's text.
+    const GEMMA_REPLY: &str = "```json\n{\"annotations\": [{\"kind\": \"box\", \"target\": \"\", \
+        \"box\": [403, 315, 731, 400], \"from\": [], \"text\": \"provider controls\"}, {\"kind\": \
+        \"arrow\", \"target\": \"t41\", \"box\": [1167, 1050], \"from\": [1167, 1050], \"text\": \
+        \"Test connection\"}]}\n```";
+
+    #[test]
+    fn text_on_a_box_or_an_arrow_becomes_its_label() {
+        let frame = Frame::new(2180, 1720, 1568);
+        // Forty other lines, then Test connection as t41, in capture pixels.
+        let mut lines: Vec<OcrLine> = (0..40)
+            .map(|i| line(&format!("Line {i}"), 40, 40 + i * 30, 120, 20))
+            .collect();
+        lines.push(line("Test connection", 1520, 1532, 207, 24));
+        let (found, skipped) = parse(GEMMA_REPLY, &lines, &frame).unwrap();
+        assert_eq!(skipped, 0);
+        assert_eq!(found.len(), 4, "{found:?}");
+        assert_eq!(
+            found[0],
+            Suggestion::Rect {
+                x: 560.0,
+                y: 438.0,
+                width: 1016.0,
+                height: 556.0
+            }
+        );
+        // Below the box.
+        assert_eq!(
+            found[1],
+            Suggestion::Text {
+                x: 560.0,
+                y: 1002.0,
+                text: "provider controls".into()
+            }
+        );
+        let Suggestion::Arrow { x1, y1, x2, y2 } = found[2] else {
+            panic!("{:?}", found[2]);
+        };
+        assert_eq!((x1, y1), (1622.0, 1460.0));
+        // Down to just above Test connection.
+        assert!(
+            (1520.0..=1727.0).contains(&x2) && y2 < 1532.0 && y2 > y1,
+            "{x2}, {y2}"
+        );
+        // The arrow points down, so its label sits above its tail.
+        assert_eq!(
+            found[3],
+            Suggestion::Text {
+                x: 1622.0,
+                y: 1412.0,
+                text: "Test connection".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_shape_the_model_labelled_itself_gets_no_second_label() {
+        let lines = settings_page();
+        let frame = Frame::new(1200, 1000, 1200);
+        let answer = reply(json!([
+            { "kind": "arrow", "target": "t2", "box": [], "from": [520, 400], "text": "Test it" },
+            { "kind": "label", "target": "t2", "box": [], "from": [], "text": "Try this" },
+            { "kind": "box", "target": "t1", "box": [], "from": [], "text": "Provider" },
+            { "kind": "label", "target": "", "box": [10, 10], "from": [], "text": "provider" },
+        ]));
+        let (found, skipped) = parse(&answer, &lines, &frame).unwrap();
+        assert_eq!(skipped, 0);
+        let texts: Vec<&str> = found
+            .iter()
+            .filter_map(|shape| match shape {
+                Suggestion::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["Try this", "provider"]);
+    }
+
+    #[test]
+    fn the_prompt_keeps_labels_separate_and_prefers_region_ids() {
+        let text = prompt("Box it", &settings_page(), &Frame::new(1200, 1000, 1200));
+        assert!(
+            text.contains("A label is always its own \"label\" annotation"),
+            "{text}"
+        );
+        assert!(text.contains("Only labels have text"), "{text}");
+        assert!(
+            text.contains("Prefer a region ID over coordinates"),
+            "{text}"
+        );
+        assert!(text.contains("cover every region of the group"), "{text}");
     }
 
     #[test]

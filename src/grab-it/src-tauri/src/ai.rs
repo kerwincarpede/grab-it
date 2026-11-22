@@ -82,6 +82,22 @@ const DESCRIPTION_MAX_TOKENS: u32 = 400;
 /// tokens before answering the connection test, and for more than 397 of
 /// a description's 400.
 const REASONING_MAX_TOKENS: u32 = 2048;
+/// The most a reasoning retry raises a budget to. A request that already
+/// asks for about [`REASONING_MAX_TOKENS`], such as Annotate with AI's,
+/// gets double its own instead, up to this.
+const REASONING_MAX_TOKENS_CAP: u32 = 8192;
+
+/// The budget a reasoning model is retried with after it thought through
+/// `budget`: [`REASONING_MAX_TOKENS`], or double `budget` when that is
+/// more, at most [`REASONING_MAX_TOKENS_CAP`]. None when that is no more
+/// than `budget`.
+fn raised_budget(budget: &Value) -> Option<u32> {
+    let budget = u32::try_from(budget.as_u64()?).ok()?;
+    let raised = budget
+        .saturating_mul(2)
+        .clamp(REASONING_MAX_TOKENS, REASONING_MAX_TOKENS_CAP);
+    (raised > budget).then_some(raised)
+}
 /// Request fields some servers refuse; one named in an error is dropped
 /// and the request sent again.
 const OPTIONAL_FIELDS: [&str; 3] = ["response_format", "max_tokens", "temperature"];
@@ -463,7 +479,8 @@ fn reply_text(body: &str) -> Result<String, AiError> {
 /// sent again.
 ///
 /// A reasoning model that thinks through its whole `max_tokens` without
-/// answering is asked once more with [`REASONING_MAX_TOKENS`]. That retry
+/// answering is asked once more with a larger budget ([`raised_budget`]:
+/// [`REASONING_MAX_TOKENS`] for a description). That retry
 /// sends the image again, and each request bills the tokens spent, so it
 /// costs one more request with the screenshot and the first attempt's
 /// tokens. `clients` then remembers the endpoint and model, so their later
@@ -481,16 +498,12 @@ fn complete(clients: &Clients, ai: &AiSettings, mut body: Value) -> Result<Strin
             .as_ref()
             == Some(&key)
     };
-    let small = |budget: &Value| {
-        budget
-            .as_u64()
-            .is_some_and(|n| n < u64::from(REASONING_MAX_TOKENS))
-    };
     let mut raised = false;
     if reasoning(clients)
-        && let Some(budget) = body.get_mut("max_tokens").filter(|budget| small(budget))
+        && let Some(budget) = body.get_mut("max_tokens")
+        && let Some(larger) = raised_budget(budget)
     {
-        *budget = Value::from(REASONING_MAX_TOKENS);
+        *budget = Value::from(larger);
         raised = true;
     }
     loop {
@@ -500,11 +513,13 @@ fn complete(clients: &Clients, ai: &AiSettings, mut body: Value) -> Result<Strin
                     if raised {
                         return Err(AiError::Endpoint(capitalized(THOUGHT_OUT)));
                     }
-                    let Some(budget) = body.get_mut("max_tokens").filter(|budget| small(budget))
+                    let Some((budget, larger)) = body
+                        .get_mut("max_tokens")
+                        .and_then(|budget| raised_budget(budget).map(|larger| (budget, larger)))
                     else {
                         return Err(AiError::Response(message));
                     };
-                    *budget = Value::from(REASONING_MAX_TOKENS);
+                    *budget = Value::from(larger);
                     raised = true;
                     *clients
                         .reasoning
@@ -1962,6 +1977,51 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].body["max_tokens"], DESCRIPTION_MAX_TOKENS);
         assert_eq!(requests[1].body["max_tokens"], REASONING_MAX_TOKENS);
+    }
+
+    #[test]
+    fn a_budget_near_the_reasoning_one_is_doubled_up_to_a_cap() {
+        let raise = |budget: u32| raised_budget(&Value::from(budget));
+        assert_eq!(raise(DESCRIPTION_MAX_TOKENS), Some(REASONING_MAX_TOKENS));
+        assert_eq!(raise(20), Some(REASONING_MAX_TOKENS));
+        assert_eq!(raise(2000), Some(4000));
+        assert_eq!(raise(5000), Some(REASONING_MAX_TOKENS_CAP));
+        assert_eq!(raise(REASONING_MAX_TOKENS_CAP), None);
+        assert_eq!(raised_budget(&Value::from("lots")), None);
+
+        // A request that asks for 2000 is retried with 4000, and so starts
+        // the next time.
+        let server = serve(vec![
+            thought_out_reply(),
+            Reply::Chat("{\"ok\": true}".into()),
+            Reply::Chat("{\"ok\": true}".into()),
+        ]);
+        let clients = fast();
+        let ai = settings(&server);
+        let ask_big = || {
+            ask(
+                &clients,
+                &ai,
+                &Ask {
+                    system: SYSTEM_PROMPT,
+                    prompt: TEST_PROMPT,
+                    png: include_bytes!("../fixtures/connection-test.png"),
+                    schema: &test_schema(),
+                    max_tokens: 2000,
+                },
+            )
+        };
+        ask_big().unwrap();
+        ask_big().unwrap();
+        let budgets: Vec<Value> = server
+            .requests()
+            .iter()
+            .map(|request| request.body["max_tokens"].clone())
+            .collect();
+        assert_eq!(
+            budgets,
+            [Value::from(2000), Value::from(4000), Value::from(4000)]
+        );
     }
 
     #[test]
