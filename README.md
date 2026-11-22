@@ -2,7 +2,7 @@
 
 # Grab-it
 
-### Capture it. Mark it up. Record it. Find it again.
+### Capture it. Mark it. Paste it.
 
 **The fast, free screenshot and screen recording tool for Windows, macOS and Linux.**<br>
 One key to capture, a few clicks to explain, and it's already on your clipboard.

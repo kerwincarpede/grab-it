@@ -16,7 +16,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'Grab-it',
-			description: 'Screenshot it. Mark it up. Paste it anywhere. The fast, free screenshot tool for Windows, macOS and Linux.',
+			description: 'Capture it. Mark it. Paste it. The fast, free screenshot tool for Windows, macOS and Linux.',
 			social: [
 				{ icon: 'github', label: 'GitHub', href: 'https://github.com/kerwincarpede/grab-it' },
 			],

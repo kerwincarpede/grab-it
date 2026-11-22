@@ -807,15 +807,17 @@ for i, (label, a, b) in enumerate(CHAPTERS):
 captions = f'<g id="steps">{"".join(caps_svg)}</g>'
 
 # ============================================================== headline ====
-# It marks itself up, as on the page: a box and a numbered step round "Mark it up.".
-# Widths of the bold 38px Instrument Sans runs, measured in Chrome.
-LINE_W, BEFORE_W, MARK_W = 714.1, 230.2, 171.8
-GAP = 10  # extra room either side of the box
+# It marks itself up, as on the page: a box and a numbered step round "Mark it.".
+# Widths of the bold 38px Instrument Sans runs, measured in Chrome, scaled to SIZE.
+SIZE = 44
+k = SIZE / 38
+LINE_W, BEFORE_W, MARK_W = 438.25 * k, 173.73 * k, 122.83 * k
+GAP = 12  # extra room either side of the box
 mx = W / 2 - (LINE_W + 2 * GAP) / 2 + BEFORE_W + GAP
-headline = f"""<text x="{W / 2}" y="86" class="fs b" font-size="38" fill="#ecedef" text-anchor="middle" letter-spacing="-1.6">Screenshot it. <tspan dx="{GAP}">Mark it up.</tspan> <tspan dx="{GAP}">Paste it anywhere.</tspan></text>
-<rect x="{mx - 9:.1f}" y="49" width="{MARK_W + 17:.1f}" height="50" rx="7" fill="none" stroke="#ff8a7a" stroke-width="2.5"/>
-<circle cx="{mx + MARK_W + 8:.1f}" cy="49" r="10" fill="#ff8a7a"/>
-<text x="{mx + MARK_W + 8:.1f}" y="53.4" class="fs b" font-size="12" fill="#16080a" text-anchor="middle">1</text>"""
+headline = f"""<text x="{W / 2}" y="88" class="fs b" font-size="{SIZE}" fill="#ecedef" text-anchor="middle" letter-spacing="{-1.6 * k:.2f}">Capture it. <tspan dx="{GAP}">Mark it.</tspan> <tspan dx="{GAP}">Paste it.</tspan></text>
+<rect x="{mx - 4:.1f}" y="45" width="{MARK_W + 18:.1f}" height="56" rx="8" fill="none" stroke="#ff8a7a" stroke-width="2.5"/>
+<circle cx="{mx + MARK_W + 14:.1f}" cy="45" r="11" fill="#ff8a7a"/>
+<text x="{mx + MARK_W + 14:.1f}" y="49.6" class="fs b" font-size="13" fill="#16080a" text-anchor="middle">1</text>"""
 
 # ================================================================= field ====
 # A still of the landing page's 3D field: glass captures around the edges, some
