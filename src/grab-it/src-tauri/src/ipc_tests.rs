@@ -91,6 +91,9 @@ impl Harness {
             Box::new(MemoryKeyStore::default()),
         );
         let app = crate::manage_states(mock_builder())
+            .manage(crate::clipboard_sound::Preference::new(
+                store.get().copy_sound,
+            ))
             .manage(Mutex::new(store))
             .manage(library::open_for_app(&dir.path().join("data")))
             .invoke_handler(crate::invoke_handler())
@@ -256,6 +259,7 @@ fn get_settings_returns_the_settings_shape() {
             "agentAccess",
             "ai",
             "appearance",
+            "copySound",
             "copyToClipboard",
             "editor",
             "hotkeys",
@@ -273,6 +277,7 @@ fn get_settings_returns_the_settings_shape() {
     );
     assert_eq!(settings["afterCapture"], "quickAccess");
     assert_eq!(settings["copyToClipboard"], true);
+    assert_eq!(settings["copySound"], false);
     assert_eq!(settings["ai"]["enabled"], false);
     assert_eq!(settings["updateChannel"], "stable");
     assert_eq!(
@@ -406,12 +411,24 @@ fn copy_sound_defaults_off_and_saves_independently() {
         "afterCapture": "editor",
         "agentAccess": true,
     }));
+    let preference = h.app.state::<crate::clipboard_sound::Preference>();
     let mut expected = h.settings();
     assert_eq!(expected["copySound"], false);
+    assert!(!preference.enabled());
     expected["copySound"] = json!(true);
     assert_eq!(h.ok("set_copy_sound", json!({ "enabled": true })), expected);
-    assert_eq!(h.saved()["copySound"], true);
-    let reloaded = Harness::with_stored(h.saved());
+    let saved = h.saved();
+    assert_eq!(saved["copySound"], true);
+    assert!(preference.enabled());
+
+    h.break_saving();
+    assert!(
+        !h.err("set_copy_sound", json!({ "enabled": false }))
+            .is_empty()
+    );
+    assert!(preference.enabled());
+
+    let reloaded = Harness::with_stored(saved);
     assert_eq!(reloaded.settings()["copySound"], true);
     assert_eq!(
         reloaded.ok("set_copy_sound", json!({ "enabled": false }))["copySound"],
@@ -437,6 +454,26 @@ fn preview_and_pending_copy_sounds_are_suppressed_during_recording_and_pause() {
             "The copy sound is unavailable while recording.",
         );
     }
+}
+
+#[test]
+fn recording_start_cancels_an_output_drain() {
+    let h = Harness::new();
+    let app = h.app.handle();
+    let ticket = crate::record::playback_ticket(app).unwrap();
+    let (begin, started) = std::sync::mpsc::channel();
+    let (finish, ended) = std::sync::mpsc::channel();
+
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            begin.send(()).unwrap();
+            let played = crate::record::wait_for_playback(app, ticket, Duration::from_secs(10));
+            finish.send(played).unwrap();
+        });
+        started.recv().unwrap();
+        crate::record::mark_test_recording(app, None);
+        assert!(!ended.recv_timeout(Duration::from_secs(3)).unwrap());
+    });
 }
 
 #[test]

@@ -18,16 +18,35 @@ use crate::{
 
 /// Puts plain text on the clipboard with confirmation after a successful write.
 pub fn copy_text(app: &AppHandle, text: &str) -> tauri_plugin_clipboard_manager::Result<()> {
-    write_text(app, text, CopySound::Confirm)
+    CopySound::Confirm.written(app.clipboard().write_text(text), || {
+        clipboard_sound::confirm(app)
+    })
 }
 
-/// Writes text with the chosen confirmation policy for this copy.
-pub(crate) fn write_text(
+/// Copies the AI's answer when requested by Capture text.
+pub fn copy_tidied_text(
     app: &AppHandle,
-    text: &str,
-    sound: CopySound,
+    ocr_text: &str,
+    answer: Option<&str>,
 ) -> tauri_plugin_clipboard_manager::Result<()> {
-    clipboard_sound::copied(app, sound, app.clipboard().write_text(text))
+    write_tidied_text(
+        ocr_text,
+        answer,
+        |text| app.clipboard().write_text(text),
+        || clipboard_sound::confirm(app),
+    )
+}
+
+fn write_tidied_text<E>(
+    ocr_text: &str,
+    answer: Option<&str>,
+    write: impl FnOnce(&str) -> Result<(), E>,
+    confirm: impl FnOnce(),
+) -> Result<(), E> {
+    if let Some(text) = answer {
+        CopySound::tidied(ocr_text).written(write(text), confirm)?;
+    }
+    Ok(())
 }
 
 /// Puts the guide's HTML and Markdown on the clipboard in a single logical copy.
@@ -36,11 +55,21 @@ pub fn copy_guide(
     html: String,
     text: String,
 ) -> tauri_plugin_clipboard_manager::Result<()> {
-    clipboard_sound::copied(
-        app,
-        CopySound::Confirm,
-        app.clipboard().write_html(html, Some(text)),
+    write_guide(
+        html,
+        text,
+        |html, text| app.clipboard().write_html(html, text),
+        || clipboard_sound::confirm(app),
     )
+}
+
+fn write_guide<E>(
+    html: String,
+    text: String,
+    write: impl FnOnce(String, Option<String>) -> Result<(), E>,
+    confirm: impl FnOnce(),
+) -> Result<(), E> {
+    CopySound::Confirm.written(write(html, Some(text)), confirm)
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -55,7 +84,7 @@ fn png_bytes(image: &RgbaImage) -> Result<Vec<u8>, String> {
 /// Copies pixels to the clipboard. Call from a worker thread because macOS
 /// waits for the main thread to publish the pasteboard item.
 pub fn copy_image(app: &AppHandle, image: &RgbaImage) -> Result<(), String> {
-    clipboard_sound::copied(app, CopySound::Confirm, write_image(app, image))
+    CopySound::Confirm.written(write_image(app, image), || clipboard_sound::confirm(app))
 }
 
 fn write_image(app: &AppHandle, image: &RgbaImage) -> Result<(), String> {
@@ -79,7 +108,9 @@ pub fn copy_files(app: &AppHandle, paths: &[PathBuf]) -> Result<(), String> {
     if paths.is_empty() {
         return Err("Nothing to copy.".into());
     }
-    clipboard_sound::copied(app, CopySound::Confirm, write_files(app, paths.to_vec()))
+    CopySound::Confirm.written(write_files(app, paths.to_vec()), || {
+        clipboard_sound::confirm(app)
+    })
 }
 
 fn write_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), String> {
@@ -357,6 +388,61 @@ mod win {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guide_writes_both_formats_and_confirms_only_one_successful_copy() {
+        for result in [Ok(()), Err("clipboard unavailable")] {
+            let mut writes = 0;
+            let mut confirmations = 0;
+            let copied = write_guide(
+                "<h1>Guide</h1>".into(),
+                "# Guide".into(),
+                |html, text| {
+                    assert_eq!(html, "<h1>Guide</h1>");
+                    assert_eq!(text.as_deref(), Some("# Guide"));
+                    writes += 1;
+                    result
+                },
+                || confirmations += 1,
+            );
+            assert_eq!(copied, result);
+            assert_eq!(writes, 1);
+            assert_eq!(confirmations, usize::from(result.is_ok()));
+        }
+    }
+
+    #[test]
+    fn ai_text_confirms_only_its_first_successful_copy() {
+        for (ocr_text, answer, result, expected_confirmations) in [
+            (" ", Some("AI read it"), Ok(()), 1),
+            (" ", Some("AI read it"), Err("clipboard unavailable"), 0),
+            ("OCR read it", Some("AI tidied it"), Ok(()), 0),
+            (
+                "OCR read it",
+                Some("AI tidied it"),
+                Err("clipboard unavailable"),
+                0,
+            ),
+            ("OCR read it", None, Ok(()), 0),
+        ] {
+            let mut writes = 0;
+            let mut confirmations = 0;
+            let copied = write_tidied_text(
+                ocr_text,
+                answer,
+                |text| {
+                    assert_eq!(Some(text), answer);
+                    writes += 1;
+                    result
+                },
+                || confirmations += 1,
+            );
+            assert_eq!(copied, result);
+            assert_eq!(writes, usize::from(answer.is_some()));
+            assert_eq!(confirmations, expected_confirmations);
+        }
+    }
+
     use std::path::Path;
 
     #[test]

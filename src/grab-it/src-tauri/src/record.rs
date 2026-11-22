@@ -309,6 +309,7 @@ pub struct RecordState {
     session: Mutex<Option<Arc<Session>>>,
     /// Changes at every start, invalidating playback requested before it.
     generation: AtomicU64,
+    generation_changed: Condvar,
 }
 
 impl RecordState {
@@ -325,6 +326,7 @@ impl RecordState {
         }
         self.generation.fetch_add(1, Ordering::Release);
         *current = Some(session);
+        self.generation_changed.notify_all();
         Ok(())
     }
 }
@@ -352,6 +354,22 @@ pub(crate) fn playback_ticket(app: &AppHandle) -> Option<u64> {
 pub(crate) fn playback_current(app: &AppHandle, ticket: u64) -> bool {
     app.try_state::<RecordState>()
         .is_none_or(|state| state.generation.load(Ordering::Acquire) == ticket)
+}
+
+/// Keeps the output open while submitted samples play. A recording start
+/// wakes the audio worker even if the output device issues no more callbacks.
+pub(crate) fn wait_for_playback(app: &AppHandle, ticket: u64, drain: Duration) -> bool {
+    let Some(state) = app.try_state::<RecordState>() else {
+        std::thread::sleep(drain);
+        return true;
+    };
+    let _wait = state
+        .generation_changed
+        .wait_timeout_while(state.lock(), drain, |_| {
+            state.generation.load(Ordering::Acquire) == ticket
+        })
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.generation.load(Ordering::Acquire) == ticket
 }
 
 #[cfg(test)]

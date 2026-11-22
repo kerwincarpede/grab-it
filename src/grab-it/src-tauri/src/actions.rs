@@ -18,7 +18,6 @@ use crate::rt::AppHandle;
 use crate::{
     ai::{self, AiError},
     capture::{self, CaptureMode, CapturedPointer, Foreground, SavedCapture},
-    clipboard_sound::CopySound,
     codes::{self, Code},
     commands::{SettingsState, lock},
     file_clipboard, ocr, overlay,
@@ -491,9 +490,7 @@ pub fn finish_text(app: &AppHandle, image: &RgbaImage) {
     if quick::replace(app, generation, outcome.item).is_none() {
         return;
     }
-    if let Some(text) = outcome.copy
-        && let Err(err) = file_clipboard::write_text(app, &text, CopySound::tidied(&read))
-    {
+    if let Err(err) = file_clipboard::copy_tidied_text(app, &read, outcome.copy.as_deref()) {
         eprintln!("Grab-it: could not copy the tidied text: {err}");
     }
 }

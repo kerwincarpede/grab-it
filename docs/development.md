@@ -120,8 +120,8 @@ AI replacement of text already copied by OCR is silent.
 
 The `copySound` setting defaults to `false`, including when an older file omits
 it. Preview bypasses the preference. A recording session suppresses both sounds
-during countdown, recording and pause. Starting a session also invalidates
-playback requests that are still pending.
+during countdown, recording and pause. Starting a session cancels active and
+pending playback.
 
 The approved WAV is embedded in the binary. Its checksum and provenance are
 recorded under `src-tauri/sounds/`. Playback opens the default output on a worker

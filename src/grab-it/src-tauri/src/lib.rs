@@ -181,6 +181,7 @@ pub fn run() {
             if first_run && let Err(err) = store.finish_first_run() {
                 eprintln!("Grab-it: could not write the settings file: {err}");
             }
+            app.manage(clipboard_sound::Preference::new(store.get().copy_sound));
             app.manage(Mutex::new(store));
             let data_dir = app.path().app_data_dir()?;
             let restore_library =

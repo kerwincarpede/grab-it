@@ -1,8 +1,29 @@
 //! Plays the bundled confirmation sound through the desktop's default output.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tauri::Manager;
 
-use crate::{commands, record, rt::AppHandle};
+use crate::{record, rt::AppHandle};
+
+const RECORDING_ERROR: &str = "The copy sound is unavailable while recording.";
+
+/// The persisted preference, available to clipboard writers without taking the settings lock.
+pub(crate) struct Preference(AtomicBool);
+
+impl Preference {
+    pub(crate) fn new(enabled: bool) -> Self {
+        Self(AtomicBool::new(enabled))
+    }
+
+    pub(crate) fn set(&self, enabled: bool) {
+        self.0.store(enabled, Ordering::Release);
+    }
+
+    pub(crate) fn enabled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
 
 /// Whether a logical copy is user-facing or an automatic update to OCR's copy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,40 +42,33 @@ impl CopySound {
         }
     }
 
-    fn notify(self, enabled: bool, ticket: Option<u64>) -> Option<u64> {
-        if self == Self::Confirm && enabled {
-            ticket
-        } else {
-            None
-        }
+    /// Runs confirmation once after a successful logical write.
+    pub(crate) fn written<E>(self, result: Result<(), E>, confirm: impl FnOnce()) -> Result<(), E> {
+        result.inspect(|()| {
+            if self == Self::Confirm {
+                confirm();
+            }
+        })
     }
 }
 
-/// Called once at the logical clipboard write boundary, after every format
-/// has been offered. Audio is independent of the clipboard write's result.
-pub(crate) fn copied<E>(app: &AppHandle, sound: CopySound, result: Result<(), E>) -> Result<(), E> {
-    after_write(result, || {
-        if sound == CopySound::Silent {
-            return;
+/// Schedules audio separately from the clipboard operation.
+pub(crate) fn confirm(app: &AppHandle) {
+    if !app
+        .try_state::<Preference>()
+        .is_some_and(|preference| preference.enabled())
+    {
+        return;
+    }
+    let Some(ticket) = record::playback_ticket(app) else {
+        return;
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = play(app, ticket).await {
+            eprintln!("Grab-it: {err}");
         }
-        let ticket = record::playback_ticket(app);
-        let enabled = app
-            .try_state::<commands::SettingsState>()
-            .is_some_and(|state| commands::lock(&state).get().copy_sound);
-        let Some(ticket) = sound.notify(enabled, ticket) else {
-            return;
-        };
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(err) = play(app, ticket).await {
-                eprintln!("Grab-it: {err}");
-            }
-        });
-    })
-}
-
-fn after_write<E>(result: Result<(), E>, confirm: impl FnOnce()) -> Result<(), E> {
-    result.inspect(|()| confirm())
+    });
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux", test))]
@@ -64,8 +78,7 @@ const WAV: &[u8] = include_bytes!("../sounds/2-holga-two-part.wav");
 #[tauri::command]
 #[specta::specta]
 pub async fn preview_copy_sound(app: AppHandle) -> Result<(), String> {
-    let ticket = record::playback_ticket(&app)
-        .ok_or_else(|| "The copy sound is unavailable while recording.".to_owned())?;
+    let ticket = record::playback_ticket(&app).ok_or_else(|| RECORDING_ERROR.to_owned())?;
     play(app, ticket).await
 }
 
@@ -79,24 +92,29 @@ async fn play(app: AppHandle, ticket: u64) -> Result<(), String> {
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 mod output {
-    use std::{sync::mpsc, thread, time::Duration};
+    use std::{
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
 
     use cpal::{
         Device, FromSample, SampleFormat, SizedSample, StreamConfig,
         traits::{DeviceTrait, HostTrait, StreamTrait},
     };
 
-    use super::{AppHandle, WAV};
+    use super::{AppHandle, RECORDING_ERROR, WAV};
+    use crate::record;
 
     // The checksum test pins this WAV's layout: 44-byte RIFF header and
     // 48 kHz mono signed 16-bit little-endian samples.
     const PCM: &[u8] = WAV.split_at(44).1;
     const SOURCE_RATE: f64 = 48_000.0;
     const OUTPUT_TIMEOUT: Duration = Duration::from_secs(2);
+    const CHECK_RECORDING_INTERVAL: Duration = Duration::from_millis(10);
 
     pub(super) fn play(app: &AppHandle, ticket: u64) -> Result<(), String> {
-        if !crate::record::playback_current(app, ticket) {
-            return Err("The copy sound is unavailable while recording.".into());
+        if !record::playback_current(app, ticket) {
+            return Err(RECORDING_ERROR.into());
         }
         let device = cpal::default_host()
             .default_output_device()
@@ -153,10 +171,9 @@ mod output {
             .build_output_stream(
                 config,
                 move |buffer: &mut [T], info| {
-                    if !crate::record::playback_current(&callback_app, ticket) {
+                    if !record::playback_current(&callback_app, ticket) {
                         buffer.fill(T::EQUILIBRIUM);
-                        let _ = send
-                            .try_send(Err("The copy sound is unavailable while recording.".into()));
+                        let _ = send.try_send(Err(RECORDING_ERROR.into()));
                         return;
                     }
                     if finished {
@@ -187,12 +204,27 @@ mod output {
             )
             .map_err(output_error)?;
         stream.play().map_err(output_error)?;
-        let drain = receive
-            .recv_timeout(OUTPUT_TIMEOUT)
-            .map_err(|_| "The audio output did not finish playing the copy sound.".to_owned())??;
-        // Keep the stream alive until the last submitted buffer is audible.
-        thread::sleep(drain);
-        Ok(())
+        let deadline = Instant::now() + OUTPUT_TIMEOUT;
+        let drain = loop {
+            if !record::playback_current(app, ticket) {
+                return Err(RECORDING_ERROR.into());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match receive.recv_timeout(remaining.min(CHECK_RECORDING_INTERVAL)) {
+                Ok(result) => break result?,
+                Err(mpsc::RecvTimeoutError::Timeout) if !remaining.is_zero() => continue,
+                Err(_) => {
+                    return Err("The audio output did not finish playing the copy sound.".into());
+                }
+            }
+        };
+        // Dropping the stream cancels queued output when recording starts,
+        // even if there are no more callbacks to see the invalidated ticket.
+        if record::wait_for_playback(app, ticket, drain) {
+            Ok(())
+        } else {
+            Err(RECORDING_ERROR.into())
+        }
     }
 }
 
@@ -207,34 +239,6 @@ mod output {
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
-
-    #[test]
-    fn only_a_successful_logical_copy_notifies_once() {
-        let mut notifications = 0;
-        let error = "clipboard unavailable";
-        assert_eq!(after_write(Err(error), || notifications += 1), Err(error));
-        assert_eq!(notifications, 0);
-
-        // A multi-format writer combines its offers before reporting success.
-        let outcomes = [Ok::<(), &str>(()), Ok(())];
-        let result = outcomes.into_iter().collect::<Result<(), _>>();
-        assert_eq!(after_write(result, || notifications += 1), Ok(()));
-        assert_eq!(notifications, 1);
-    }
-
-    #[test]
-    fn confirmation_requires_an_enabled_preference_and_an_idle_recording_state() {
-        let enabled = CopySound::Confirm;
-        assert_eq!(enabled.notify(true, Some(0)), Some(0));
-        assert_eq!(enabled.notify(false, Some(0)), None);
-        assert_eq!(enabled.notify(true, None), None);
-    }
-
-    #[test]
-    fn only_the_first_ai_copy_can_play_the_confirmation() {
-        assert_eq!(CopySound::tidied("  ").notify(true, Some(0)), Some(0));
-        assert_eq!(CopySound::tidied("OCR text").notify(true, Some(0)), None);
-    }
 
     #[test]
     fn bundled_sound_matches_the_approved_wav() {
