@@ -83,6 +83,9 @@ import {
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
+/** Why an edit was refused during a preview of suggested cuts. */
+const PREVIEW_BLOCKS_EDITS = "Stop the preview or apply the suggested cuts before editing.";
+
 const errorText = (err: unknown) => String(err instanceof Error ? err.message : err);
 const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
@@ -226,6 +229,12 @@ export default function RecordingEditor() {
   const requested = useRef(new Set<string>());
   const [clipDraft, setClipDraft] = useState<Clip[] | null>(null);
   const [suggestOpen, setSuggestOpen] = useState(false);
+  /**
+   * The sequence with the suggested cuts, while Suggest edits previews
+   * them. Nothing is saved meanwhile: every edit waits until the preview
+   * ends, and only Apply keeps the cuts.
+   */
+  const [suggestPreview, setSuggestPreview] = useState<Clip[] | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   /** While playing over a gap: when its clock started and the playhead then. */
   const gapClockRef = useRef<{ at: number; ms: number } | null>(null);
@@ -288,7 +297,7 @@ export default function RecordingEditor() {
   const backdrop = backdropDraft !== undefined ? backdropDraft : (edits.backdrop ?? null);
   const savedTrim = trimOf(edits, durationMs);
   const savedClips = useMemo(() => clipsOf(edits, own, durationMs), [edits, own, durationMs]);
-  const clips = clipDraft ?? savedClips;
+  const clips = clipDraft ?? suggestPreview ?? savedClips;
   const joined = isJoined(clips, own);
   const sequenceMs = sequenceDuration(clips);
   const timelineDuration = joined ? sequenceMs : durationMs;
@@ -313,7 +322,7 @@ export default function RecordingEditor() {
   /** Until it is changed, the export follows how the opened recording was made. */
   const removeNoise = edits.removeNoise ?? info?.removeNoise ?? false;
   /** Every clip's recording is there and its size known. */
-  const canExport = !missingClip && clips.every((clip) => isGap(clip) || meta[clip.source] !== undefined);
+  const canExport = !suggestPreview && !missingClip && clips.every((clip) => isGap(clip) || meta[clip.source] !== undefined);
 
   // Zooms keep their recording's time; the timeline shows each on its clip.
   const allZooms = useMemo(() => edits.zooms ?? [], [edits.zooms]);
@@ -354,14 +363,22 @@ export default function RecordingEditor() {
     [readOnly],
   );
 
-  /** One undo entry; an edit that leaves the sidecar as it was adds none. */
+  /**
+   * One undo entry; an edit that leaves the sidecar as it was adds none.
+   * While suggested cuts are previewed, edits are refused, since they
+   * would be made on the unapproved cuts; Apply alone passes `applying`.
+   */
   const commitEdits = useCallback(
-    (next: RecordingEdits) => {
+    (next: RecordingEdits, applying = false) => {
+      if (suggestPreview && !applying) {
+        setMessage(PREVIEW_BLOCKS_EDITS);
+        return;
+      }
       if (JSON.stringify(serializeEdits(next)) === JSON.stringify(serializeEdits(history.present))) return;
       setHistory(commit(history, next));
       save(next);
     },
-    [history, save],
+    [history, save, suggestPreview],
   );
 
   /** Moves the playhead to timeline time `ms` of `list`, switching recording when it must. */
@@ -425,9 +442,22 @@ export default function RecordingEditor() {
   }, [info, previewSources, own, ownMeta]);
 
   /** Keeps `next` as the sequence: one undo entry. */
-  const commitClips = (next: Clip[]) => {
+  const commitClips = (next: Clip[], applying = false) => {
     setClipDraft(null);
-    commitEdits(withClips(edits, next, own, durationMs));
+    commitEdits(withClips(edits, next, own, durationMs), applying);
+  };
+
+  /** Ends a preview of suggested cuts, back to the saved sequence. */
+  const endSuggestPreview = () => {
+    if (!suggestPreview) return;
+    setSuggestPreview(null);
+    setMessage(null);
+    seek(Math.min(currentMs, sequenceDuration(savedClips)), savedClips);
+  };
+
+  const closeSuggestions = () => {
+    endSuggestPreview();
+    setSuggestOpen(false);
   };
 
   const latestRef = useRef({ clips, at, commitClips, seek, meta });
@@ -555,6 +585,9 @@ export default function RecordingEditor() {
   /** Moves to `next` in the history, saves what it holds and keeps the playhead inside its trim. */
   const stepHistory = (next: History<RecordingEdits>) => {
     if (next === history || exporting) return;
+    // Undo and redo end a preview of suggested cuts first.
+    setSuggestPreview(null);
+    setMessage(null);
     setTrimDraft(null);
     setBackdropDraft(undefined);
     setZoomDraft(null);
@@ -1173,7 +1206,7 @@ export default function RecordingEditor() {
             type="button"
             className="text-button"
             aria-expanded={suggestOpen}
-            onClick={() => setSuggestOpen(!suggestOpen)}
+            onClick={() => (suggestOpen ? closeSuggestions() : setSuggestOpen(true))}
             disabled={!info || readOnly || exporting || durationMs <= 0}
             title="Propose cuts where the recording pauses, to preview and apply together"
           >
@@ -1387,15 +1420,23 @@ export default function RecordingEditor() {
           own={own}
           joined={joined}
           cursorOf={cursorOf}
+          previewing={suggestPreview !== null}
           onPreview={(next, fromMs) => {
-            setClipDraft(next);
-            seek(next ? (fromMs ?? 0) : Math.min(currentMs, sequenceDuration(savedClips)), next ?? savedClips);
+            if (!next) {
+              endSuggestPreview();
+              return;
+            }
+            setClipDraft(null);
+            setSuggestPreview(next);
+            seek(fromMs ?? 0, next);
           }}
           onApply={(next) => {
-            commitClips(next);
+            setSuggestPreview(null);
+            setMessage(null);
+            commitClips(next, true);
             seek(Math.min(currentMs, sequenceDuration(next)), next);
           }}
-          onClose={() => setSuggestOpen(false)}
+          onClose={closeSuggestions}
         />
       )}
       {exporting && (

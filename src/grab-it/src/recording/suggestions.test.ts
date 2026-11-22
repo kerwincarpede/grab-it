@@ -10,7 +10,7 @@ const ids = () => {
   let n = 0;
   return () => `n${++n}`;
 };
-const cut = (startMs: number, endMs: number, source = OWN): CutProposal => ({ id: `${source}:${startMs}`, source, startMs, endMs, reason: "pause" });
+const cut = (startMs: number, endMs: number, clipId = "own", source = OWN): CutProposal => ({ id: `${clipId}:${startMs}`, clipId, source, startMs, endMs, reason: "pause" });
 
 /** A pointer path at 10 fps: still at one point for `still` frames, moving for the rest. */
 function path(frames: number, still: [number, number]): CursorPath {
@@ -55,17 +55,17 @@ describe("stillSpans", () => {
 
 describe("proposeCuts", () => {
   it("cuts a pause, keeping a little of it at both ends", () => {
-    expect(proposeCuts(whole, OWN, "microphone", [{ startMs: 3000, endMs: 6000 }], null)).toEqual([{ id: "own:3250", source: OWN, startMs: 3250, endMs: 5750, reason: "pause" }]);
+    expect(proposeCuts(whole, OWN, "microphone", [{ startMs: 3000, endMs: 6000 }], null)).toEqual([{ id: "own:3250", clipId: "own", source: OWN, startMs: 3250, endMs: 5750, reason: "pause" }]);
   });
 
   it("leaves pauses where the pointer moves", () => {
     const cursor = path(120, [40, 75]);
-    expect(proposeCuts(whole, OWN, "mixed", [{ startMs: 3000, endMs: 8000 }], cursor)).toEqual([{ id: "own:4250", source: OWN, startMs: 4250, endMs: 7150, reason: "pause" }]);
+    expect(proposeCuts(whole, OWN, "mixed", [{ startMs: 3000, endMs: 8000 }], cursor)).toEqual([{ id: "own:4250", clipId: "own", source: OWN, startMs: 4250, endMs: 7150, reason: "pause" }]);
   });
 
   it("follows the pointer alone in a silent demonstration", () => {
     const proposals = proposeCuts(whole, OWN, "silent", [], path(120, [30, 80]));
-    expect(proposals).toEqual([{ id: "own:3250", source: OWN, startMs: 3250, endMs: 7650, reason: "idle" }]);
+    expect(proposals).toEqual([{ id: "own:3250", clipId: "own", source: OWN, startMs: 3250, endMs: 7650, reason: "idle" }]);
     expect(proposeCuts(whole, OWN, "silent", [], null)).toEqual([]);
   });
 
@@ -84,7 +84,7 @@ describe("proposeCuts", () => {
       { startMs: 9000, endMs: 11_900 },
     ];
     expect(proposeCuts(clips, OWN, "microphone", pauses, null)).toEqual([]);
-    expect(proposeCuts(clips, OWN, "microphone", [{ startMs: 8000, endMs: 10_500 }], null)).toEqual([{ id: "b:8250", source: OWN, startMs: 8250, endMs: 10_250, reason: "pause" }]);
+    expect(proposeCuts(clips, OWN, "microphone", [{ startMs: 8000, endMs: 10_500 }], null)).toEqual([{ id: "b:8250", clipId: "b", source: OWN, startMs: 8250, endMs: 10_250, reason: "pause" }]);
   });
 
   it("skips short pauses and other recordings", () => {
@@ -106,8 +106,9 @@ describe("applyCuts", () => {
 
   it("skips a cut that no longer lies inside a clip", () => {
     const clips: Clip[] = [{ id: "a", source: OWN, startMs: 0, endMs: 5000 }];
-    expect(isValidCut(clips, cut(4000, 6000))).toBe(false);
-    expect(applyCuts(clips, [cut(4000, 6000), cut(7000, 6000)])).toEqual(clips);
+    expect(isValidCut(clips, cut(4000, 6000, "a"))).toBe(false);
+    expect(isValidCut(clips, cut(1000, 2000, "gone"))).toBe(false);
+    expect(applyCuts(clips, [cut(4000, 6000, "a"), cut(7000, 6000, "a"), cut(1000, 2000, "gone")])).toEqual(clips);
   });
 
   it("never removes the last stretch that plays a recording", () => {
@@ -116,8 +117,37 @@ describe("applyCuts", () => {
 
   it("finds where a cut begins in the sequence", () => {
     const clips: Clip[] = [gapOf("g", 1000), { id: "a", source: OWN, startMs: 2000, endMs: 9000 }];
-    expect(cutSequenceMs(clips, cut(3000, 5000))).toBe(2000);
-    expect(cutSequenceMs(clips, cut(0, 1000))).toBeNull();
+    expect(cutSequenceMs(clips, cut(3000, 5000, "a"))).toBe(2000);
+    expect(cutSequenceMs(clips, cut(0, 1000, "a"))).toBeNull();
+  });
+
+  it("cuts the duplicate it was proposed on, not the first clip of the same stretch", () => {
+    const clips: Clip[] = [
+      { id: "a", source: OWN, startMs: 0, endMs: 6000 },
+      { id: "b", source: OWN, startMs: 0, endMs: 6000 },
+    ];
+    const proposals = proposeCuts(clips, OWN, "microphone", [{ startMs: 2000, endMs: 4000 }], null);
+    expect(proposals.map((each) => each.clipId)).toEqual(["a", "b"]);
+    const second = proposals[1];
+    expect(cutSequenceMs(clips, second)).toBe(8250);
+    expect(applyCuts(clips, [second], ids())).toEqual([
+      { id: "a", source: OWN, startMs: 0, endMs: 6000 },
+      { id: "b", source: OWN, startMs: 0, endMs: 2250 },
+      { id: "n1", source: OWN, startMs: 3750, endMs: 6000 },
+    ]);
+  });
+
+  it("follows a clip into the part an earlier cut left", () => {
+    const clips: Clip[] = [
+      { id: "a", source: OWN, startMs: 0, endMs: 12_000 },
+      { id: "b", source: OWN, startMs: 0, endMs: 12_000 },
+    ];
+    expect(applyCuts(clips, [cut(2000, 4000, "b"), cut(8000, 10_000, "b")], ids())).toEqual([
+      { id: "a", source: OWN, startMs: 0, endMs: 12_000 },
+      { id: "b", source: OWN, startMs: 0, endMs: 2000 },
+      { id: "n1", source: OWN, startMs: 4000, endMs: 8000 },
+      { id: "n2", source: OWN, startMs: 10_000, endMs: 12_000 },
+    ]);
   });
 
   it("is kept in the sidecar and reopened as the same clips", () => {

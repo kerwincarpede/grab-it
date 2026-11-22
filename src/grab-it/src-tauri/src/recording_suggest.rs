@@ -35,20 +35,22 @@ const PAUSES_TIMEOUT: Duration = Duration::from_secs(120);
 const AUDITION_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A stretch of a recording, in its own time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
-pub struct Span {
+pub struct PauseSpan {
     pub start_ms: u64,
     pub end_ms: u64,
 }
 
 /// What a recording's pauses were heard in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum PauseSound {
     /// The microphone alone, kept apart in the sound sidecar.
     Microphone,
-    /// The microphone and system sound in one track.
+    /// The MP4's one track, the microphone not kept apart: mixed with
+    /// system sound, or a microphone whose sound sidecar was never
+    /// written. It can only be played as recorded.
     Mixed,
     /// System sound only: no voice to pause.
     System,
@@ -56,30 +58,35 @@ pub enum PauseSound {
     Silent,
 }
 
-/// The quiet stretches of one recording. Mirrors `RecordingPauses` in
-/// src/recording/api.ts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// The quiet stretches of one recording; the page reads it from the
+/// generated bindings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingPauses {
     pub sound: PauseSound,
     /// Sorted, never overlapping; empty for a silent recording.
-    pub pauses: Vec<Span>,
+    pub pauses: Vec<PauseSpan>,
     /// Whether an audition can play the stretch cleaned as the export
     /// would: only with the microphone kept apart.
     pub can_clean: bool,
 }
 
-/// The sound pauses are heard in, and where it is read from: the kept
-/// microphone when there is one, else the recording's one track.
-fn pause_source(kinds: &[(AudioKind, PathBuf, usize)]) -> (PauseSound, Option<(PathBuf, usize)>) {
+/// The sound pauses are heard in, and where it is read from: the
+/// microphone kept apart in `video`'s sound sidecar when there is one,
+/// else the MP4's one track. A microphone in the MP4 itself (its sidecar
+/// never written) is not kept apart, so it counts as mixed.
+fn pause_source(
+    video: &Path,
+    kinds: &[(AudioKind, PathBuf, usize)],
+) -> (PauseSound, Option<(PathBuf, usize)>) {
     if let Some((_, file, stream)) = kinds
         .iter()
-        .find(|(kind, _, _)| *kind == AudioKind::Microphone)
+        .find(|(kind, file, _)| *kind == AudioKind::Microphone && file != video)
     {
         return (PauseSound::Microphone, Some((file.clone(), *stream)));
     }
     match kinds.first() {
-        Some((AudioKind::Mixed, file, stream)) => {
+        Some((AudioKind::Mixed | AudioKind::Microphone, file, stream)) => {
             (PauseSound::Mixed, Some((file.clone(), *stream)))
         }
         Some((AudioKind::System, _, _)) => (PauseSound::System, None),
@@ -114,7 +121,7 @@ pub fn silence_args(file: &Path, stream: usize) -> Vec<OsString> {
 /// The pauses in what `silencedetect` printed. A pause still open when
 /// the sound ends runs to `duration_ms` when it is known, else is
 /// dropped. Malformed lines are skipped.
-pub fn parse_silences(said: &str, duration_ms: Option<u64>) -> Vec<Span> {
+pub fn parse_silences(said: &str, duration_ms: Option<u64>) -> Vec<PauseSpan> {
     let value = |line: &str, key: &str| -> Option<f64> {
         let rest = &line[line.find(key)? + key.len()..];
         let number: String = rest
@@ -134,7 +141,7 @@ pub fn parse_silences(said: &str, duration_ms: Option<u64>) -> Vec<Span> {
             && let Some(start) = open.take()
             && ms(end) > start
         {
-            spans.push(Span {
+            spans.push(PauseSpan {
                 start_ms: start,
                 end_ms: ms(end),
             });
@@ -143,7 +150,7 @@ pub fn parse_silences(said: &str, duration_ms: Option<u64>) -> Vec<Span> {
     if let (Some(start), Some(end)) = (open, duration_ms)
         && end > start
     {
-        spans.push(Span {
+        spans.push(PauseSpan {
             start_ms: start,
             end_ms: end,
         });
@@ -194,6 +201,7 @@ fn recording_named(
 
 /// The pauses in recording `file_name`'s sound, for Suggest edits.
 #[tauri::command]
+#[specta::specta]
 pub async fn recording_pauses(
     file_name: String,
     window: WebviewWindow,
@@ -211,7 +219,7 @@ pub async fn recording_pauses(
             .map(|source| (source.kind, source.file, source.stream))
             .collect();
         let can_clean = kept_sound(&path).is_some();
-        let (sound, from) = pause_source(&sources);
+        let (sound, from) = pause_source(&path, &sources);
         let pauses = match from {
             Some((file, stream)) => {
                 let duration = ffmpeg::probe_file(&ready.path, &path).duration_ms;
@@ -374,15 +382,15 @@ size=N/A time=00:00:09.00
         assert_eq!(
             parse_silences(said, Some(9_000)),
             [
-                Span {
+                PauseSpan {
                     start_ms: 0,
                     end_ms: 900
                 },
-                Span {
+                PauseSpan {
                     start_ms: 1_500,
                     end_ms: 3_250
                 },
-                Span {
+                PauseSpan {
                     start_ms: 8_000,
                     end_ms: 9_000
                 },
@@ -421,22 +429,35 @@ size=N/A time=00:00:09.00
 
     #[test]
     fn pauses_are_heard_in_the_isolated_microphone_first() {
+        let video = Path::new("/r/clip.mp4");
         assert_eq!(
-            pause_source(&kinds(&[AudioKind::Microphone, AudioKind::System])),
+            pause_source(video, &kinds(&[AudioKind::Microphone, AudioKind::System])),
             (
                 PauseSound::Microphone,
                 Some((PathBuf::from("/r/sound.m4a"), 0))
             )
         );
         assert_eq!(
-            pause_source(&kinds(&[AudioKind::Mixed])).0,
+            pause_source(video, &kinds(&[AudioKind::Mixed])).0,
             PauseSound::Mixed
         );
         assert_eq!(
-            pause_source(&kinds(&[AudioKind::System])),
+            pause_source(video, &kinds(&[AudioKind::System])),
             (PauseSound::System, None)
         );
-        assert_eq!(pause_source(&[]), (PauseSound::Silent, None));
+        assert_eq!(pause_source(video, &[]), (PauseSound::Silent, None));
+    }
+
+    #[test]
+    fn a_microphone_left_in_the_mp4_is_not_isolated() {
+        // Its sound sidecar was never written, so the MP4's own track is
+        // the microphone, which cannot be cleaned apart.
+        let video = Path::new("/r/clip.mp4");
+        let in_video = [(AudioKind::Microphone, video.to_path_buf(), 0)];
+        assert_eq!(
+            pause_source(video, &in_video),
+            (PauseSound::Mixed, Some((video.to_path_buf(), 0)))
+        );
     }
 
     #[test]

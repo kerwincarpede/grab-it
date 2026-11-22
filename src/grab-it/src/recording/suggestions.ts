@@ -10,6 +10,7 @@
  * Nothing changes until the chosen proposals are applied together with
  * `applyCuts`, which is one undo entry in the editor.
  */
+import type { PauseSound } from "../app/bindings";
 import { MIN_CLIP_MS } from "./edits";
 import { clipLength, clipStarts, isGap, mergeGaps, newClipId, type Clip } from "./clips";
 import type { CursorPath } from "./zooms";
@@ -20,8 +21,8 @@ export interface Span {
   endMs: number;
 }
 
-/** What a recording's pauses were heard in. Mirrors `PauseSound` in src-tauri/src/recording_suggest.rs. */
-export type PauseSound = "microphone" | "mixed" | "system" | "silent";
+/** What a recording's pauses were heard in: `PauseSound` in src-tauri/src/recording_suggest.rs. */
+export type { PauseSound };
 
 /** Why a stretch is proposed. */
 export type CutReason = "pause" | "idle";
@@ -29,6 +30,8 @@ export type CutReason = "pause" | "idle";
 /** One proposed cut, in its recording's time. */
 export interface CutProposal {
   id: string;
+  /** The clip of the sequence it cuts: a recording can be in more than one. */
+  clipId: string;
   source: string;
   startMs: number;
   endMs: number;
@@ -135,44 +138,60 @@ export function proposeCuts(clips: readonly Clip[], source: string, sound: Pause
       startMs = Math.round(startMs);
       endMs = Math.round(endMs);
       if (endMs - startMs < MIN_CUT_MS) continue;
-      proposals.push({ id: `${clip.id}:${startMs}`, source, startMs, endMs, reason });
+      proposals.push({ id: `${clip.id}:${startMs}`, clipId: clip.id, source, startMs, endMs, reason });
     }
   }
   return proposals;
 }
 
-/** Whether `cut` still lies inside one clip of `clips` that plays its recording. */
-export function isValidCut(clips: readonly Clip[], cut: Span & { source: string }): boolean {
-  return cut.endMs > cut.startMs && clips.some((clip) => !isGap(clip) && clip.source === cut.source && cut.startMs >= clip.startMs && cut.endMs <= clip.endMs);
+/** The cut a clip may take: where, in which recording, and on which clip. */
+type CutPlace = Span & { source: string; clipId: string };
+
+/** Whether clip `clip` plays the whole of `cut`. */
+const holds = (clip: Clip, cut: CutPlace) => !isGap(clip) && clip.source === cut.source && cut.endMs > cut.startMs && cut.startMs >= clip.startMs && cut.endMs <= clip.endMs;
+
+/** The index of the clip `cut` was proposed on, while it still plays the whole cut; else -1. */
+const clipIndexOf = (clips: readonly Clip[], cut: CutPlace, ids: ReadonlySet<string> = new Set([cut.clipId])) =>
+  clips.findIndex((clip) => ids.has(clip.id) && holds(clip, cut));
+
+/** Whether `cut` still lies inside the clip it was proposed on. */
+export function isValidCut(clips: readonly Clip[], cut: CutPlace): boolean {
+  return clipIndexOf(clips, cut) >= 0;
 }
 
 /**
- * `clips` without each of `cuts` (a ripple delete of each stretch). A cut
- * that no longer lies inside a clip is skipped; so is one that would
- * remove the last stretch that plays a recording.
+ * `clips` without each of `cuts` (a ripple delete of each stretch from
+ * the clip it was proposed on, or from what is left of that clip once an
+ * earlier cut split it). A cut that no longer lies inside its clip is
+ * skipped; so is one that would remove the last stretch that plays a
+ * recording.
  */
 export function applyCuts(clips: readonly Clip[], cuts: readonly CutProposal[], makeId: () => string = newClipId): Clip[] {
   let next = [...clips];
+  /** For each proposed-on clip, the ids of it and the parts it was split into. */
+  const parts = new Map<string, Set<string>>();
   const sorted = [...cuts].sort((a, b) => a.startMs - b.startMs);
   for (const cut of sorted) {
-    const index = next.findIndex((clip) => !isGap(clip) && clip.source === cut.source && cut.startMs >= clip.startMs && cut.endMs <= clip.endMs && cut.endMs > cut.startMs);
+    const ids = parts.get(cut.clipId) ?? new Set([cut.clipId]);
+    const index = clipIndexOf(next, cut, ids);
     if (index < 0) continue;
     const clip = next[index];
-    const parts: Clip[] = [];
-    if (cut.startMs > clip.startMs) parts.push({ ...clip, endMs: cut.startMs });
-    if (cut.endMs < clip.endMs) parts.push({ ...clip, id: parts.length > 0 ? makeId() : clip.id, startMs: cut.endMs });
-    const replaced = [...next.slice(0, index), ...parts, ...next.slice(index + 1)];
+    const kept: Clip[] = [];
+    if (cut.startMs > clip.startMs) kept.push({ ...clip, endMs: cut.startMs });
+    if (cut.endMs < clip.endMs) kept.push({ ...clip, id: kept.length > 0 ? makeId() : clip.id, startMs: cut.endMs });
+    const replaced = [...next.slice(0, index), ...kept, ...next.slice(index + 1)];
     if (!replaced.some((each) => !isGap(each))) continue;
+    for (const part of kept) ids.add(part.id);
+    parts.set(cut.clipId, ids);
     next = replaced;
   }
   return mergeGaps(next);
 }
 
-/** Where `cut` begins on the sequence `clips` play, or null when no clip holds it. */
-export function cutSequenceMs(clips: readonly Clip[], cut: Span & { source: string }): number | null {
-  const starts = clipStarts([...clips]);
-  const index = clips.findIndex((clip) => !isGap(clip) && clip.source === cut.source && cut.startMs >= clip.startMs && cut.endMs <= clip.endMs);
-  return index < 0 ? null : starts[index] + cut.startMs - clips[index].startMs;
+/** Where `cut` begins on the sequence `clips` play, or null when its clip no longer holds it. */
+export function cutSequenceMs(clips: readonly Clip[], cut: CutPlace): number | null {
+  const index = clipIndexOf(clips, cut);
+  return index < 0 ? null : clipStarts([...clips])[index] + cut.startMs - clips[index].startMs;
 }
 
 /** How long `cuts` take together. */
@@ -184,7 +203,7 @@ export function soundLabel(sound: PauseSound): string {
     case "microphone":
       return "Microphone recorded on its own: Original and Cleaned can be compared.";
     case "mixed":
-      return "Microphone and system sound recorded together: only the original can be played.";
+      return "Microphone not recorded on its own: only the original can be played.";
     case "system":
       return "System sound only: cuts follow the pointer.";
     case "silent":

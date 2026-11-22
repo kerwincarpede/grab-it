@@ -20,6 +20,11 @@ export interface SuggestEditsPanelProps {
   /** Whether the sequence holds more than one clip, so ranges name their recording. */
   joined: boolean;
   cursorOf: (source: string) => CursorPath | null;
+  /**
+   * Whether the editor is playing a preview of the cuts. The editor owns
+   * it, so an undo that ends the preview shows here too.
+   */
+  previewing: boolean;
   /** Plays `next` in place of the sequence from `fromMs`, or ends the preview with null. */
   onPreview: (next: Clip[] | null, fromMs?: number) => void;
   /** Keeps `next` as the sequence, as one undo entry. */
@@ -35,20 +40,19 @@ type Heard = { pauses: RecordingPauses } | { error: string };
  * one, previewed together and applied in one undo entry; and the sound
  * around a cut played as recorded and as the export cleans it.
  */
-export default function SuggestEditsPanel({ clips, own, joined, cursorOf, onPreview, onApply, onClose }: SuggestEditsPanelProps) {
+export default function SuggestEditsPanel({ clips, own, joined, cursorOf, previewing, onPreview, onApply, onClose }: SuggestEditsPanelProps) {
   const sources = useMemo(() => [...new Set(clips.filter((clip) => !isGap(clip)).map((clip) => clip.source))].sort(), [clips]);
   const [heard, setHeard] = useState<Record<string, Heard>>({});
   const [chosen, setChosen] = useState<ReadonlySet<string> | null>(null);
-  const [previewing, setPreviewing] = useState(false);
   const [focusId, setFocusId] = useState<string | null>(null);
-  const [audition, setAudition] = useState<{ cleaned: boolean; url: string } | null>(null);
-  const [auditionBusy, setAuditionBusy] = useState(false);
-  const [auditionError, setAuditionError] = useState<string | null>(null);
+  /** The audition playing, for the cut it was made for. */
+  const [audition, setAudition] = useState<{ cutId: string; cleaned: boolean; url: string } | null>(null);
+  /** The cut an audition is being prepared for. */
+  const [auditionBusy, setAuditionBusy] = useState<string | null>(null);
+  const [auditionError, setAuditionError] = useState<{ cutId: string; text: string } | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const previewRef = useRef(onPreview);
-  useEffect(() => {
-    previewRef.current = onPreview;
-  });
+  /** Counts audition requests, so only the latest one's sound is kept. */
+  const auditionTicket = useRef(0);
 
   // Each recording is listened to once while the panel is open.
   const requested = useRef(new Set<string>());
@@ -57,6 +61,7 @@ export default function SuggestEditsPanel({ clips, own, joined, cursorOf, onPrev
     mounted.current = true;
     return () => {
       mounted.current = false;
+      auditionTicket.current += 1;
     };
   }, []);
   useEffect(() => {
@@ -90,17 +95,8 @@ export default function SuggestEditsPanel({ clips, own, joined, cursorOf, onPrev
   const focusPauses = focusSound && "pauses" in focusSound ? focusSound.pauses : null;
   const ownSound = heard[own];
 
-  // Leaving the panel mid-preview ends the preview.
-  const previewingRef = useRef(false);
-  useEffect(() => {
-    previewingRef.current = previewing;
-  }, [previewing]);
-  useEffect(
-    () => () => {
-      if (previewingRef.current) previewRef.current(null);
-    },
-    [],
-  );
+  // Only the focused cut's audition plays; another cut's is let go.
+  const shownAudition = audition && audition.cutId === focus?.id ? audition : null;
   useEffect(
     () => () => {
       if (audition) URL.revokeObjectURL(audition.url);
@@ -120,40 +116,51 @@ export default function SuggestEditsPanel({ clips, own, joined, cursorOf, onPrev
     if (selected.length === 0) return;
     const first = Math.min(...selected.map((cut) => cutSequenceMs(clips, cut) ?? 0));
     onPreview(applyCuts(clips, selected), Math.max(0, first - PREVIEW_LEAD_MS));
-    setPreviewing(true);
   };
 
-  const stopPreview = () => {
-    onPreview(null);
-    setPreviewing(false);
-  };
+  const stopPreview = () => onPreview(null);
 
   const apply = () => {
     if (selected.length === 0) return;
-    previewingRef.current = false;
-    setPreviewing(false);
     onApply(applyCuts(clips, selected));
     onClose();
   };
 
   const listen = async (cleaned: boolean) => {
     if (!focus) return;
+    const cut = focus;
+    const ticket = ++auditionTicket.current;
     audioRef.current?.pause();
-    setAuditionBusy(true);
+    setAudition(null);
+    setAuditionBusy(cut.id);
     setAuditionError(null);
+    const current = () => ticket === auditionTicket.current && mounted.current;
     try {
-      const blob = await recordingAudition(focus.source, Math.max(0, focus.startMs - AUDITION_CONTEXT_MS), focus.endMs + AUDITION_CONTEXT_MS, cleaned);
-      setAudition({ cleaned, url: URL.createObjectURL(blob) });
+      const blob = await recordingAudition(cut.source, Math.max(0, cut.startMs - AUDITION_CONTEXT_MS), cut.endMs + AUDITION_CONTEXT_MS, cleaned);
+      if (current()) setAudition({ cutId: cut.id, cleaned, url: URL.createObjectURL(blob) });
     } catch (err) {
-      setAuditionError(errorText(err));
+      if (current()) setAuditionError({ cutId: cut.id, text: errorText(err) });
     } finally {
-      setAuditionBusy(false);
+      if (current()) setAuditionBusy(null);
     }
   };
 
-  const stopAudition = () => {
+  /** Moves the audition to cut `id`, letting go of any sound for another. */
+  const focusOn = (id: string) => {
+    if (id === focus?.id) return;
+    auditionTicket.current += 1;
     audioRef.current?.pause();
     setAudition(null);
+    setAuditionBusy(null);
+    setAuditionError(null);
+    setFocusId(id);
+  };
+
+  const stopAudition = () => {
+    auditionTicket.current += 1;
+    audioRef.current?.pause();
+    setAudition(null);
+    setAuditionBusy(null);
   };
 
   const range = (cut: CutProposal) => `${joined || cut.source !== own ? `${cut.source} ` : ""}${formatTime(cut.startMs)}–${formatTime(cut.endMs)}`;
@@ -192,7 +199,7 @@ export default function SuggestEditsPanel({ clips, own, joined, cursorOf, onPrev
                 <input type="checkbox" checked={selected.some((each) => each.id === cut.id)} onChange={() => toggle(cut)} />
                 <span className="suggest-reason">{reasonLabel(cut.reason)}</span>
               </label>
-              <button type="button" className="suggest-range" onClick={() => setFocusId(cut.id)} aria-label={`Listen around ${range(cut)}`}>
+              <button type="button" className="suggest-range" onClick={() => focusOn(cut.id)} aria-label={`Listen around ${range(cut)}`}>
                 {range(cut)}
               </button>
               <span className="suggest-length">{formatTime(cut.endMs - cut.startMs)}</span>
@@ -224,29 +231,29 @@ export default function SuggestEditsPanel({ clips, own, joined, cursorOf, onPrev
             <span>{focusPauses ? "This recording has no sound." : ""}</span>
           ) : (
             <>
-              <button type="button" className="text-button" aria-pressed={audition?.cleaned === false} disabled={auditionBusy} onClick={() => void listen(false)}>
+              <button type="button" className="text-button" aria-pressed={shownAudition?.cleaned === false} disabled={auditionBusy !== null} onClick={() => void listen(false)}>
                 Original
               </button>
               <button
                 type="button"
                 className="text-button"
-                aria-pressed={audition?.cleaned === true}
-                disabled={auditionBusy || !focusPauses.canClean}
+                aria-pressed={shownAudition?.cleaned === true}
+                disabled={auditionBusy !== null || !focusPauses.canClean}
                 title={focusPauses.canClean ? "As the export removes background noise" : "The microphone was recorded together with other sound, so it cannot be cleaned"}
                 onClick={() => void listen(true)}
               >
                 Cleaned
               </button>
-              {audition && (
+              {shownAudition && (
                 <button type="button" className="text-button" onClick={stopAudition}>
                   Stop
                 </button>
               )}
             </>
           )}
-          {auditionBusy && <span role="status">Preparing…</span>}
-          {auditionError && <span role="alert">{auditionError}</span>}
-          {audition && <audio ref={audioRef} src={audition.url} autoPlay aria-label={audition.cleaned ? "Cleaned audio" : "Original audio"} />}
+          {auditionBusy === focus.id && <span role="status">Preparing…</span>}
+          {auditionError?.cutId === focus.id && <span role="alert">{auditionError.text}</span>}
+          {shownAudition && <audio ref={audioRef} src={shownAudition.url} autoPlay aria-label={shownAudition.cleaned ? "Cleaned audio" : "Original audio"} />}
         </div>
       )}
     </section>

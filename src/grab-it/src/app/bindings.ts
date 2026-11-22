@@ -288,6 +288,8 @@ export const commands = {
 	 *  it is assumed to have some.
 	 */
 	recordingSource: (fileName: string, options?: InvokeOptions) => __TAURI_INVOKE<RecordingClipSource_Serialize>("recording_source", { fileName }, options),
+	/**  The pauses in recording `file_name`'s sound, for Suggest edits. */
+	recordingPauses: (fileName: string, options?: InvokeOptions) => __TAURI_INVOKE<RecordingPauses>("recording_pauses", { fileName }, options),
 	libraryList: (offset: number, limit: number, options?: InvokeOptions) => __TAURI_INVOKE<ShotPage_Serialize>("library_list", { offset, limit }, options),
 	librarySetTags: (id: number, tags: string[], options?: InvokeOptions) => __TAURI_INVOKE<Shot_Serialize>("library_set_tags", { id, tags }, options),
 	librarySidebar: (options?: InvokeOptions) => __TAURI_INVOKE<SidebarSummary>("library_sidebar", undefined, options),
@@ -1530,6 +1532,27 @@ export type OverlayWindow = {
 	height: number,
 };
 
+/**  What a recording's pauses were heard in. */
+export type PauseSound =
+/**  The microphone alone, kept apart in the sound sidecar. */
+"microphone" |
+/**
+ *  The MP4's one track, the microphone not kept apart: mixed with
+ *  system sound, or a microphone whose sound sidecar was never
+ *  written. It can only be played as recorded.
+ */
+"mixed" |
+/**  System sound only: no voice to pause. */
+"system" |
+/**  No sound at all; pauses come from the pointer alone. */
+"silent";
+
+/**  A stretch of a recording, in its own time. */
+export type PauseSpan = {
+	startMs: number,
+	endMs: number,
+};
+
 /**  The permissions the Permissions page lists, in its order. */
 export type Permission = "screenRecording" | "inputMonitoring" | "microphone" | "camera";
 
@@ -1888,6 +1911,21 @@ export type RecordingInfo_Serialize = {
 	 *  can remove background noise or leave it in ([`kept_sound`]).
 	 */
 	separateMicrophone: boolean,
+};
+
+/**
+ *  The quiet stretches of one recording; the page reads it from the
+ *  generated bindings.
+ */
+export type RecordingPauses = {
+	sound: PauseSound,
+	/**  Sorted, never overlapping; empty for a silent recording. */
+	pauses: PauseSpan[],
+	/**
+	 *  Whether an audition can play the stretch cleaned as the export
+	 *  would: only with the microphone kept apart.
+	 */
+	canClean: boolean,
 };
 
 /**  How good an MP4 looks, and so how big it is. */
@@ -2736,6 +2774,7 @@ export type MockCommandHandlers = {
     recordingInfo: () => RecordingInfo_Serialize | Promise<RecordingInfo_Serialize>,
     recordingSaveEdits: (args: { edits: Value }) => null | Promise<null>,
     recordingSource: (args: { fileName: string }) => RecordingClipSource_Serialize | Promise<RecordingClipSource_Serialize>,
+    recordingPauses: (args: { fileName: string }) => RecordingPauses | Promise<RecordingPauses>,
     libraryList: (args: { offset: number; limit: number }) => ShotPage_Serialize | Promise<ShotPage_Serialize>,
     librarySetTags: (args: { id: number; tags: string[] }) => Shot_Serialize | Promise<Shot_Serialize>,
     librarySidebar: () => SidebarSummary | Promise<SidebarSummary>,
@@ -2903,6 +2942,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "recording_info": return mockCommandHandler(mockHandlers.recordingInfo, "recording_info", args);
             case "recording_save_edits": return mockCommandHandler(mockHandlers.recordingSaveEdits, "recording_save_edits", args);
             case "recording_source": return mockCommandHandler(mockHandlers.recordingSource, "recording_source", args);
+            case "recording_pauses": return mockCommandHandler(mockHandlers.recordingPauses, "recording_pauses", args);
             case "library_list": return mockCommandHandler(mockHandlers.libraryList, "library_list", args);
             case "library_set_tags": return mockCommandHandler(mockHandlers.librarySetTags, "library_set_tags", args);
             case "library_sidebar": return mockCommandHandler(mockHandlers.librarySidebar, "library_sidebar", args);

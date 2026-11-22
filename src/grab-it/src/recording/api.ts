@@ -1,8 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { commands, type AudioKind, type RecordingClipSource_Serialize, type RecordingInfo_Serialize, type Value } from "../app/bindings";
+import { commands, type AudioKind, type RecordingClipSource_Serialize, type RecordingInfo_Serialize, type RecordingPauses, type Value } from "../app/bindings";
 import type { SidecarEdits } from "./edits";
-import type { PauseSound, Span } from "./suggestions";
 import type { CursorPath, Zoom } from "./zooms";
 
 /**
@@ -181,20 +180,14 @@ export function onExportProgress(handler: (progress: ExportProgress) => void): P
 }
 
 /**
- * The pauses in a recording's sound, for Suggest edits. Mirrors
- * `RecordingPauses` in src-tauri/src/recording_suggest.rs (a byte command,
- * typed by hand).
+ * The pauses in a recording's sound, for Suggest edits: `RecordingPauses`
+ * in src-tauri/src/recording_suggest.rs.
  */
-export interface RecordingPauses {
-  sound: PauseSound;
-  pauses: Span[];
-  /** Whether a Cleaned audition can play: the microphone is kept apart. */
-  canClean: boolean;
-}
+export type { RecordingPauses };
 
 /** The quiet stretches of recordings-folder recording `fileName`. */
 export function recordingPauses(fileName: string): Promise<RecordingPauses> {
-  return invoke<RecordingPauses>("recording_pauses", { fileName });
+  return commands.recordingPauses(fileName);
 }
 
 /**
