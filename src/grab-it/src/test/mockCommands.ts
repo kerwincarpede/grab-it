@@ -1,6 +1,7 @@
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { MockCommandHandlers } from "../app/bindings";
+import type { RecordingPauses } from "../recording/api";
 
 /** `libraryOpenWith` to `library_open_with`: the generated accessor back to its Rust name. */
 type SnakeCase<S extends string> = S extends `${infer Head}${infer Tail}`
@@ -15,7 +16,8 @@ type TypedCommands = {
 /**
  * The byte commands (`BYTE_COMMANDS` in src-tauri/src/lib.rs). Specta cannot
  * describe them, so they are typed by hand: the image ones return the bytes,
- * the others take a raw request body.
+ * the others take a raw request body, except `recording_pauses`, which
+ * sits with its audition command `recording_audition`.
  */
 type ByteCommands = {
   quick_thumbnail: () => ArrayBuffer;
@@ -32,6 +34,8 @@ type ByteCommands = {
   editor_export: (args: InvokeArgs) => null;
   library_save_thumbnail: (args: InvokeArgs) => null;
   recording_export: (args: InvokeArgs) => string;
+  recording_pauses: (args: { fileName: string }) => RecordingPauses;
+  recording_audition: (args: { fileName: string; startMs: number; endMs: number; cleaned: boolean }) => ArrayBuffer;
 };
 
 type Commands = TypedCommands & ByteCommands;

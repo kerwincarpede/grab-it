@@ -41,6 +41,7 @@ mod record;
 mod record_bar;
 mod record_frame;
 mod recording_editor;
+mod recording_suggest;
 mod rt;
 mod screen;
 mod scroll;
@@ -325,6 +326,9 @@ byte_commands![
     library::library_image,
     library::library_save_thumbnail,
     recording_editor::recording_export,
+    // Plain JSON, kept beside the audition it serves.
+    recording_suggest::recording_pauses,
+    recording_suggest::recording_audition,
     steps::guide_image,
 ];
 

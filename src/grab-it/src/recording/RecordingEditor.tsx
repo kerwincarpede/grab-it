@@ -54,6 +54,7 @@ import {
   type ClipAt,
 } from "./clips";
 import ClipTrack from "./ClipTrack";
+import SuggestEditsPanel from "./SuggestEditsPanel";
 import RecordingVideo from "./RecordingVideo";
 import { chooseRecording, folderOf, isIn, probeVideo, type SourceMeta } from "./sources";
 import { clampTrim, emptyEdits, formatTime, isWhole, parseEdits, serializeEdits, trimOf, type RecordingEdits, type Trim } from "./edits";
@@ -224,6 +225,7 @@ export default function RecordingEditor() {
   const [missing, setMissing] = useState<ReadonlySet<string>>(() => new Set());
   const requested = useRef(new Set<string>());
   const [clipDraft, setClipDraft] = useState<Clip[] | null>(null);
+  const [suggestOpen, setSuggestOpen] = useState(false);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   /** While playing over a gap: when its clock started and the playhead then. */
   const gapClockRef = useRef<{ at: number; ms: number } | null>(null);
@@ -1170,6 +1172,16 @@ export default function RecordingEditor() {
           <button
             type="button"
             className="text-button"
+            aria-expanded={suggestOpen}
+            onClick={() => setSuggestOpen(!suggestOpen)}
+            disabled={!info || readOnly || exporting || durationMs <= 0}
+            title="Propose cuts where the recording pauses, to preview and apply together"
+          >
+            Suggest edits
+          </button>
+          <button
+            type="button"
+            className="text-button"
             onClick={splitAtPlayhead}
             disabled={!canSplitHere}
             title={canSplitHere ? "Split the clip at the playhead (S)" : "Move the playhead at least half a second inside a clip to split it"}
@@ -1369,6 +1381,23 @@ export default function RecordingEditor() {
           />
         </Timeline>
       </div>
+      {suggestOpen && info && !exporting && (
+        <SuggestEditsPanel
+          clips={savedClips}
+          own={own}
+          joined={joined}
+          cursorOf={cursorOf}
+          onPreview={(next, fromMs) => {
+            setClipDraft(next);
+            seek(next ? (fromMs ?? 0) : Math.min(currentMs, sequenceDuration(savedClips)), next ?? savedClips);
+          }}
+          onApply={(next) => {
+            commitClips(next);
+            seek(Math.min(currentMs, sequenceDuration(next)), next);
+          }}
+          onClose={() => setSuggestOpen(false)}
+        />
+      )}
       {exporting && (
         <section className="recording-export-panel" aria-label="Video export">
           <strong>Exporting… {percent}%</strong>

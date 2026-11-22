@@ -8,6 +8,7 @@ import RecordingEditor from "./RecordingEditor";
 import type { AudioKind, Value } from "../app/bindings";
 import { mockCommands, type CommandCall } from "../test/mockCommands";
 import type { CursorPath } from "./zooms";
+import type { RecordingPauses } from "./api";
 
 vi.mock("./sources", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./sources")>();
@@ -25,6 +26,8 @@ let picked: string | null = null;
 let gone: string[] = [];
 /** Recordings `recording_source` says keep their microphone apart. */
 let separate: string[] = [];
+/** What `recording_pauses` gives, or the error it rejects with. */
+let heard: RecordingPauses | string = { sound: "microphone", pauses: [], canClean: true };
 
 /** How the opened recording's sound was kept and whether noise was removed from it. */
 interface Noise {
@@ -60,6 +63,8 @@ function mockBackend(edits: Value | null = null, cursor: CursorPath | null = nul
         return { path: `/shots/recordings/${name}`, fileName: name, fps: 30, cursor: null, hasAudio: true, removeNoise: false, separateMicrophone: separate.includes(name) };
       },
       recording_export_cancel: () => undefined,
+      recording_pauses: () => (typeof heard === "string" ? Promise.reject(heard) : heard),
+      recording_audition: () => new ArrayBuffer(4),
       recording_export: () =>
         new Promise<string>((resolve, reject) => {
           backend.exported = { resolve, reject };
@@ -115,6 +120,7 @@ afterEach(() => {
   picked = null;
   gone = [];
   separate = [];
+  heard = { sound: "microphone", pauses: [], canClean: true };
 });
 
 const saved = (backend: Backend) => backend.calls.filter((call) => call.cmd === "recording_save_edits").map((call) => (call.payload as { edits: unknown }).edits);
@@ -1075,6 +1081,119 @@ describe("RecordingEditor", () => {
       await loadJoined();
       await waitFor(() => expect(screen.getByRole("option", { name: `${OTHER} (missing), 0:06.0` })).toBeInTheDocument());
       expect(screen.getByRole("button", { name: "Export" })).toBeDisabled();
+    });
+  });
+
+  describe("Suggest edits", () => {
+    const PAUSE = { startMs: 3000, endMs: 6000 };
+
+    it("proposes a cut at a pause with its reason, range and length", async () => {
+      heard = { sound: "microphone", pauses: [PAUSE], canClean: true };
+      const backend = mockBackend(null, null, ["microphone"], { separateMicrophone: true });
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      const list = await screen.findByRole("list", { name: "Proposed cuts" });
+      expect(list).toHaveTextContent("Quiet pause with the pointer still");
+      expect(list).toHaveTextContent("0:03.2–0:05.7");
+      expect(list).toHaveTextContent("0:02.5");
+      expect(screen.getByText(/Microphone recorded on its own/)).toBeInTheDocument();
+      expect(backend.calls.find((call) => call.cmd === "recording_pauses")?.payload).toEqual({ fileName: OWN });
+    });
+
+    it("previews the chosen cuts without saving, and stops the preview", async () => {
+      heard = { sound: "microphone", pauses: [PAUSE], canClean: true };
+      const backend = mockBackend(null, null, ["microphone"], { separateMicrophone: true });
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Preview" }));
+      expect(screen.getByText("2 clips, 0:09.5")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Stop preview" }));
+      expect(screen.getByText("Clip 0:12.0")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+      await userEvent.click(screen.getByRole("button", { name: "Close" }));
+      expect(screen.getByText("Clip 0:12.0")).toBeInTheDocument();
+      expect(saved(backend)).toEqual([]);
+    });
+
+    it("applies the chosen cuts in one undo step, and reopens them", async () => {
+      heard = { sound: "microphone", pauses: [PAUSE, { startMs: 8000, endMs: 10_000 }], canClean: true };
+      const backend = mockBackend(null, null, ["microphone"], { separateMicrophone: true });
+      const { unmount } = render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      const boxes = await screen.findAllByRole("checkbox");
+      expect(boxes).toHaveLength(2);
+      await userEvent.click(boxes[1]);
+      await userEvent.click(screen.getByRole("button", { name: "Apply 1 cut (0:02.5)" }));
+      await waitFor(() => expect(saved(backend)).toHaveLength(1));
+      const edits = lastSaved(backend) as { version: number; clips: { startMs: number; endMs: number }[] };
+      expect(edits.version).toBe(2);
+      expect(edits.clips.map((clip) => [clip.startMs, clip.endMs])).toEqual([
+        [0, 3250],
+        [5750, 12_000],
+      ]);
+      expect(screen.getByText("2 clips, 0:09.5")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1 }));
+      expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+      unmount();
+
+      mockBackend(edits as unknown as Value, null, ["microphone"], { separateMicrophone: true });
+      render(<RecordingEditor />);
+      await screen.findByText("2 clips, 0:09.5");
+    });
+
+    it("plays the original and cleaned sound around a cut", async () => {
+      heard = { sound: "microphone", pauses: [PAUSE], canClean: true };
+      vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:audition");
+      vi.spyOn(URL, "revokeObjectURL").mockReturnValue(undefined);
+      const backend = mockBackend(null, null, ["microphone"], { separateMicrophone: true });
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Cleaned" }));
+      await waitFor(() => expect(backend.calls.filter((call) => call.cmd === "recording_audition")).toHaveLength(1));
+      expect(backend.calls.find((call) => call.cmd === "recording_audition")?.payload).toEqual({ fileName: OWN, startMs: 1250, endMs: 7750, cleaned: true });
+      expect(await screen.findByLabelText("Cleaned audio")).toHaveAttribute("src", "blob:audition");
+      await userEvent.click(screen.getByRole("button", { name: "Original" }));
+      expect(await screen.findByLabelText("Original audio")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+      expect(screen.queryByLabelText("Original audio")).not.toBeInTheDocument();
+    });
+
+    it("offers only the original for mixed sound", async () => {
+      heard = { sound: "mixed", pauses: [PAUSE], canClean: false };
+      mockBackend(null, null, ["mixed"]);
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      expect(await screen.findByRole("button", { name: "Cleaned" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Original" })).toBeEnabled();
+      expect(screen.getByText(/only the original can be played/)).toBeInTheDocument();
+    });
+
+    it("follows the pointer in a silent demonstration", async () => {
+      heard = { sound: "silent", pauses: [], canClean: false };
+      const points: [number, number][] = Array.from({ length: 720 }, (_, index) => (index >= 120 && index < 420 ? [0.5, 0.5] : [(index % 2) * 0.5, 0.2]));
+      mockBackend(null, { fps: 60, points });
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      const list = await screen.findByRole("list", { name: "Proposed cuts" });
+      expect(list).toHaveTextContent("Pointer idle");
+      expect(screen.getByText("This recording has no sound.")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Original" })).not.toBeInTheDocument();
+    });
+
+    it("says when no pauses were found, or why it could not listen", async () => {
+      heard = "ffmpeg is not ready yet";
+      mockBackend(null, null, ["microphone"]);
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("ffmpeg is not ready yet");
     });
   });
 });

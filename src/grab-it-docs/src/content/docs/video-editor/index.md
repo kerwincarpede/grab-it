@@ -41,3 +41,4 @@ Each undo and redo is saved straight away, like any other edit. The steps last w
 - [Zooms](/grab-it/video-editor/zooms/): zoom in on an area or follow the pointer.
 - [Export](/grab-it/video-editor/export/): where the new MP4 goes, and what's left untouched.
 - [Join recordings](/grab-it/video-editor/join-recordings/): add other recordings, reorder them and trim each one.
+- [Suggest edits](/grab-it/video-editor/suggest-edits/): cut the pauses Grab-it finds, and compare the sound before and after noise removal.

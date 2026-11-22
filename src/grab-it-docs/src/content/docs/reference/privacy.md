@@ -43,3 +43,5 @@ Turn off **Use an AI provider** in **Settings → AI integration** and nothing m
 ## Recordings
 
 Microphone, system sound and webcam are off by default, and recorded only when you turn them on in [Settings → Recording](/grab-it/reference/settings/#recording). **Show keystrokes** draws the keys you press into the recording. On macOS, keys typed into a password field are left out; on Windows and Linux they aren't, so turn it off before you type a password.
+
+[Suggest edits](/grab-it/video-editor/suggest-edits/) listens for pauses and plays its **Original** and **Cleaned** auditions on your computer, with Grab-it's own ffmpeg and noise model. The sound is never sent anywhere.
