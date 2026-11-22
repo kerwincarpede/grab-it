@@ -18,7 +18,6 @@ use std::{
 use image::imageops::FilterType;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::rt::AppHandle;
@@ -744,8 +743,7 @@ pub fn first_link(codes: &[Code]) -> Option<&str> {
 
 /// Puts `text` on the clipboard.
 fn copy_text(app: &AppHandle, text: &str) -> Result<(), String> {
-    app.clipboard()
-        .write_text(text.to_owned())
+    crate::file_clipboard::copy_text(app, text)
         .map_err(|err| format!("could not copy the text: {err}"))
 }
 

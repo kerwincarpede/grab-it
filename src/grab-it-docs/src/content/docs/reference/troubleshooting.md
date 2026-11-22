@@ -55,7 +55,7 @@ Until ffmpeg works, recordings are saved as GIFs.
 The AI provider didn't answer.
 
 - **Claude Code or Codex**: run `claude` (or `codex`) in a terminal to check it's installed and signed in. If Settings says *Grab-it cannot find Claude Code*, install it, sign in, and reopen Settings.
-- **An endpoint**: check the URL and model in **Settings → AI descriptions**, and that the server (such as Ollama) is running. **Test connection** shows the error.
+- **An endpoint**: check the URL and model in **Settings → AI integration**, and that the server (such as LM Studio or Ollama) is running. **Test connection** says whether the server, the API key or the model is the problem. See [When the test fails](/grab-it/ai/providers/#when-the-test-fails).
 
 Describing carries on by itself once the provider works, or straight away when you change a setting. See [AI descriptions](/grab-it/ai/descriptions/#when-it-cant-describe).
 

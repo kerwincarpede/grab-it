@@ -4,7 +4,8 @@ import AiSection from "./AiSection";
 import HotkeysSection from "./HotkeysSection";
 import StorageSection from "./StorageSection";
 import { isMacPlatform } from "./accelerator";
-import { FolderIcon } from "../app/icons";
+import { FolderIcon, PlayIcon } from "../app/icons";
+import { hubActivity, onHubActivity } from "../hub/api";
 import {
   AFTER_CAPTURE_CHOICES,
   DEFAULT_AI_PREFERENCES,
@@ -48,6 +49,9 @@ import {
   hasDock,
   SETTINGS_SECTIONS,
   setAgentAccess,
+  previewCopySound,
+  setCopySound,
+  setCopySoundVolume,
   setAutoBackdrop,
   setShowPointer,
   setAutostart,
@@ -72,23 +76,47 @@ interface ScaleSliderProps {
   hint: string;
   value: number;
   disabled: boolean;
-  onCommit: (percent: number) => void;
+  /** Saves the value; a promise of false means it was not saved, and the slider returns to `value`. */
+  onCommit: (percent: number) => void | Promise<boolean>;
+  /** The percent range; text size's by default. */
+  range?: { min: number; max: number; step: number };
+  /** Shows a small and a large A at the ends, for text size. */
+  letters?: boolean;
 }
 
+/** The copy sound's volume slider: every whole percent from 0 to 100. */
+const VOLUME_RANGE = { min: 0, max: 100, step: 1 };
+
 /**
- * A text size slider. It shows the value while dragging but saves only on
- * release, so the window does not rescale under the pointer mid-drag.
+ * A percent slider, such as text size. It shows the value while dragging but
+ * saves only on release, so the window does not rescale under the pointer
+ * mid-drag and a volume change is saved once.
  */
-function ScaleSlider({ id, label, hint, value, disabled, onCommit }: ScaleSliderProps) {
+function ScaleSlider({
+  id,
+  label,
+  hint,
+  value,
+  disabled,
+  onCommit,
+  range = TEXT_SCALE,
+  letters = true,
+}: ScaleSliderProps) {
   // What is being dragged, tied to the saved value it started from: once a
   // new value is saved (or comes from elsewhere) the slider shows that.
   const [dragging, setDragging] = useState<{ from: number; to: number } | null>(null);
   const draft = dragging && dragging.from === value ? dragging.to : value;
   const setDraft = (to: number) => setDragging({ from: value, to });
   const commit = () => {
-    if (draft !== value) onCommit(draft);
+    if (draft === value) return;
+    const attempt = { from: value, to: draft };
+    void onCommit(draft)?.then((saved) => {
+      // Shows the saved value again, unless another drag has started since.
+      if (saved) return;
+      setDragging((current) => (current?.from === attempt.from && current.to === attempt.to ? null : current));
+    });
   };
-  const fill = ((draft - TEXT_SCALE.min) * 100) / (TEXT_SCALE.max - TEXT_SCALE.min);
+  const fill = ((draft - range.min) * 100) / (range.max - range.min);
   return (
     <div className="row is-stacked">
       <span className="row-text">
@@ -98,15 +126,17 @@ function ScaleSlider({ id, label, hint, value, disabled, onCommit }: ScaleSlider
         <span className="row-hint">{hint}</span>
       </span>
       <span className="scale-slider">
-        <span className="scale-a scale-a-small" aria-hidden="true">
-          A
-        </span>
+        {letters && (
+          <span className="scale-a scale-a-small" aria-hidden="true">
+            A
+          </span>
+        )}
         <input
           id={id}
           type="range"
-          min={TEXT_SCALE.min}
-          max={TEXT_SCALE.max}
-          step={TEXT_SCALE.step}
+          min={range.min}
+          max={range.max}
+          step={range.step}
           value={draft}
           disabled={disabled}
           aria-valuetext={`${draft}%`}
@@ -116,9 +146,11 @@ function ScaleSlider({ id, label, hint, value, disabled, onCommit }: ScaleSlider
           onKeyUp={commit}
           onBlur={commit}
         />
-        <span className="scale-a scale-a-large" aria-hidden="true">
-          A
-        </span>
+        {letters && (
+          <span className="scale-a scale-a-large" aria-hidden="true">
+            A
+          </span>
+        )}
         <span className="scale-value" data-for={id} aria-hidden="true">
           {draft}%
         </span>
@@ -208,10 +240,13 @@ interface SettingsWindowProps {
 
 function SettingsWindow({ section }: SettingsWindowProps = {}) {
   const shows = (page: SettingsSection) => section === undefined || section === page;
-  const title = section === undefined ? "Settings" : SETTINGS_SECTIONS.find((page) => page.id === section)?.title;
+  const title = section === undefined ? "Settings" : SETTINGS_SECTIONS.find((page) => page.id === (section === "agents" ? "ai" : section))?.title;
   const [settings, setSettings] = useState<Settings | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [busy, setBusy] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [recordingActive, setRecordingActive] = useState<boolean | null>(null);
+  const showsCapture = shows("capture");
   const [switchedToStable, setSwitchedToStable] = useState(false);
   /** Null until the backend has said; only the Recording page asks. */
   const [ffmpeg, setFfmpeg] = useState<FfmpegStatus | null>(null);
@@ -274,6 +309,31 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!showsCapture) return;
+    let cancelled = false;
+    let receivedActivity = false;
+    let unlisten: (() => void) | undefined;
+    onHubActivity(({ recording }) => {
+      receivedActivity = true;
+      if (!cancelled) setRecordingActive(recording);
+    })
+      .then((stop) => (cancelled ? stop() : (unlisten = stop)))
+      .catch(() => undefined)
+      .then(hubActivity)
+      .then((activity) => {
+        if (!cancelled && !receivedActivity) setRecordingActive(activity?.recording === true);
+      })
+      .catch(() => {
+        // The preview command checks again before playing.
+        if (!cancelled && !receivedActivity) setRecordingActive(false);
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [showsCapture]);
 
   useEffect(() => {
     if (!showsRecording) return;
@@ -429,6 +489,41 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     }
   }
 
+  async function changeCopySound(enabled: boolean) {
+    setBusy(true);
+    try {
+      setSettings(await setCopySound(enabled));
+      setStatus({ kind: "preferences-saved" });
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function changeCopySoundVolume(volume: number): Promise<boolean> {
+    try {
+      setSettings(await setCopySoundVolume(volume));
+      setStatus({ kind: "preferences-saved" });
+      return true;
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+      return false;
+    }
+  }
+
+  async function playCopySoundPreview() {
+    setPreviewing(true);
+    setStatus({ kind: "idle" });
+    try {
+      await previewCopySound();
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
   const saveAi = (ai: AiPreferences) => changePreferences({ ai });
 
   async function changeAutoBackdrop(enabled: boolean) {
@@ -565,7 +660,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
       {/* Scrolls on its own, so the heading and the scrollbar never overlap. */}
       <div className="settings-content">
       <p className="settings-lead">
-        {savesAtOnce ? "Changes save as you make them." : section === "hotkeys" ? "Press Save to use new hotkeys." : "Switches save at once; endpoint details save with Save."}
+        {savesAtOnce ? "Changes save as you make them." : section === "hotkeys" ? "Press Save to use new hotkeys." : "AI settings save with Save; agent access saves at once."}
       </p>
       {showsMac && (
         <section aria-labelledby="mac-heading">
@@ -608,7 +703,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
           </div>
         </section>
       )}
-      {shows("capture") && (
+      {showsCapture && (
         <section aria-labelledby="after-capture-heading">
           <h2 className="group-heading" id="after-capture-heading">
             When a capture is done
@@ -645,6 +740,51 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                 onChange={(event) => void changePreferences({ copyToClipboard: event.target.checked })}
               />
             </label>
+            <div className="row">
+              <span className="row-text">
+                <label className="row-title" htmlFor="copy-sound">
+                  Play a sound when copying
+                </label>
+                <span className="row-hint">Hear a shutter sound when Grab-it copies to the clipboard.</span>
+                {recordingActive && (
+                  <span className="row-hint" id="copy-sound-preview-hint">
+                    Preview is unavailable while recording.
+                  </span>
+                )}
+              </span>
+              {/* Usable while the sound is off; it plays at the Volume below. */}
+              <button
+                type="button"
+                className="btn btn-icon"
+                aria-label="Preview sound"
+                title="Preview sound"
+                aria-describedby={recordingActive ? "copy-sound-preview-hint" : undefined}
+                disabled={recordingActive !== false || previewing || settings === null}
+                onClick={() => void playCopySoundPreview()}
+              >
+                <PlayIcon size={14} />
+              </button>
+              <input
+                id="copy-sound"
+                type="checkbox"
+                role="switch"
+                className="switch"
+                checked={settings?.copySound ?? true}
+                disabled={busy || settings === null}
+                onChange={(event) => void changeCopySound(event.target.checked)}
+              />
+            </div>
+            {/* Enabled while the sound is off, and never disabled by a save, so a drag is never cut short. */}
+            <ScaleSlider
+              id="copy-sound-volume"
+              label="Volume"
+              hint="How loud the copy sound plays, and its preview too."
+              value={settings?.copySoundVolume ?? 50}
+              disabled={settings === null}
+              range={VOLUME_RANGE}
+              letters={false}
+              onCommit={changeCopySoundVolume}
+            />
           </div>
         </section>
       )}
@@ -1122,7 +1262,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
       {shows("ai") && settings && (
         <AiSection saved={settings.ai ?? DEFAULT_AI_PREFERENCES} disabled={busy} onSave={saveAi} />
       )}
-      {shows("agents") && settings && (
+      {(shows("agents") || shows("ai")) && settings && (
         <AgentsSection
           access={settings.agentAccess ?? false}
           disabled={busy}

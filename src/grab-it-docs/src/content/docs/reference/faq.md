@@ -27,7 +27,7 @@ No. Reading text in images, search and Capture text all work without it. AI adds
 
 ## Can I keep everything on my computer and still use AI?
 
-Yes. Run a model with [Ollama](https://ollama.com) and pick the **Ollama** preset in **Settings → AI descriptions**. See [Providers](/grab-it/ai/providers/#run-a-model-on-your-computer-with-ollama).
+Yes. Run a model with [Ollama](https://ollama.com) and pick the **Ollama** preset in **Settings → AI integration**. See [Providers](/grab-it/ai/providers/#run-a-model-on-your-computer-with-ollama).
 
 ## How do I record my screen?
 

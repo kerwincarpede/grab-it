@@ -20,6 +20,10 @@ import {
   saveBackdropPresetImage,
 } from "./api";
 import BackdropPanel from "./BackdropPanel";
+import AiAnnotatePanel from "./AiAnnotatePanel";
+import { applySuggestions, pendingSuggestions, requestAnnotations, suggestedMessage, suggestionShapes, type PendingSuggestion } from "./aiAnnotate";
+import { SparkleIcon } from "../library/icons";
+import { openMain } from "../app/api";
 import { defaultTailOffset } from "./callout";
 import { copyShotText, hasShotText, textCopied, watchShotText, type OcrLine, type ShotText } from "../library/api";
 import { capturePixel, pixelColor } from "./eyedropper";
@@ -595,6 +599,24 @@ export default function EditorWindow() {
   const [privateFor, setPrivateFor] = useState<{ path: string | null; ids: string[] } | null>(null);
   /** Blur private details is finding text and faces. */
   const [findingPrivate, setFindingPrivate] = useState(false);
+  /** The Annotate with AI popover is open. */
+  const [aiOpen, setAiOpen] = useState(false);
+  /** What the user asked Annotate with AI for; kept while they set up a provider. */
+  const [aiPrompt, setAiPrompt] = useState("");
+  /** Annotate with AI is waiting for the provider. */
+  const [aiBusy, setAiBusy] = useState(false);
+  /** No provider was set up when Annotate with AI last asked. */
+  const [aiNeedsProvider, setAiNeedsProvider] = useState(false);
+  const [aiMessage, setAiMessage] = useState<string | null>(null);
+  /**
+   * The suggestions on preview, in the original capture's pixels, with the
+   * capture they are for; never in the document until applied. They are
+   * drawn through the cuts as they are, so cutting or undoing a cut moves them.
+   */
+  const [aiSuggestions, setAiSuggestions] = useState<{ path: string | null; pending: PendingSuggestion[] } | null>(null);
+  /** Counts requests, so a cancelled or superseded one's answer is ignored. */
+  const aiRequest = useRef(0);
+  const aiRef = useRef<HTMLDivElement>(null);
   /** The capture's library id and stored OCR text; null when the library does not know it. */
   const [storedFor, setStoredFor] = useState<{ path: string; id: number; text: ShotText } | null>(null);
   const [backdropOpen, setBackdropOpen] = useState(false);
@@ -921,6 +943,16 @@ export default function EditorWindow() {
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [lookOpen]);
+
+  // A click outside the Annotate with AI panel closes it; its request and suggestions stay.
+  useEffect(() => {
+    if (!aiOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !aiRef.current?.contains(event.target) && !container.current?.contains(event.target)) setAiOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [aiOpen]);
 
   // A click outside the backdrop panel closes it.
   useEffect(() => {
@@ -1750,6 +1782,69 @@ export default function EditorWindow() {
     }
   };
 
+  // Kept with the path it is for, like Blur private details.
+  const aiPending = aiSuggestions !== null && aiSuggestions.path === capturePath ? aiSuggestions.pending : null;
+  /** The suggestions as shapes on the image as it is now: through the current cuts, in the current styles. */
+  const previewShapes = (pending: PendingSuggestion[], cuts: typeof doc.cuts) =>
+    suggestionShapes(pending, { rect: drawStyle("rect"), arrow: drawStyle("arrow"), text: drawStyle("text") }, cuts, imageSize);
+  const aiPreview = aiPending ? previewShapes(aiPending, doc.cuts) : null;
+
+  /**
+   * Annotate with AI: sends the capture, its text regions and the request
+   * to the provider, and previews what comes back. Without a provider it
+   * offers Settings and keeps the request for when the user returns.
+   */
+  const suggestAnnotations = async () => {
+    const instruction = aiPrompt.trim();
+    if (aiBusy || !instruction) return;
+    const request = ++aiRequest.current;
+    setAiBusy(true);
+    setAiNeedsProvider(false);
+    setAiMessage(null);
+    try {
+      const outcome = await requestAnnotations(instruction);
+      if (request !== aiRequest.current) return;
+      if (outcome.state === "needsProvider") {
+        setAiNeedsProvider(true);
+        return;
+      }
+      const pending = pendingSuggestions(outcome.suggestions);
+      const shapes = previewShapes(pending, docRef.current.cuts);
+      setAiSuggestions({ path: capturePath, pending });
+      setAiMessage(suggestedMessage(shapes.length, outcome.skipped + outcome.suggestions.length - shapes.length, outcome.by));
+    } catch (err) {
+      if (request === aiRequest.current) setAiMessage(`Annotate with AI failed: ${errorText(err)}`);
+    } finally {
+      if (request === aiRequest.current) setAiBusy(false);
+    }
+  };
+
+  /** Stops waiting for the provider: whatever it answers later is ignored. */
+  const cancelSuggestions = () => {
+    aiRequest.current += 1;
+    setAiBusy(false);
+    setAiMessage("Cancelled.");
+  };
+
+  /** Adds every suggestion on preview to the latest document as one undo step. */
+  const applyAiSuggestions = () => {
+    if (!aiPending) return;
+    // Through the cuts the document has now, not those when the answer came.
+    const latest = docRef.current;
+    const shapes = previewShapes(aiPending, latest.cuts);
+    if (shapes.length === 0) return;
+    commit(applySuggestions(latest, shapes));
+    setAiSuggestions(null);
+    setAiMessage(`Added ${shapes.length} ${shapes.length === 1 ? "shape" : "shapes"}. Undo removes them together.`);
+  };
+
+  const discardAiSuggestion = (id: string) =>
+    setAiSuggestions((now) => (now ? { ...now, pending: now.pending.filter((item) => item.id !== id) } : now));
+
+  const openAiSettings = () => {
+    openMain("ai-settings").catch((err: unknown) => setMessage(`Could not open Settings: ${errorText(err)}`));
+  };
+
   /** Blurs the word at `at`, in capture pixels, and every other place it appears, as one undo step. */
   const blurWord = async (at: Point) => {
     try {
@@ -1848,6 +1943,7 @@ export default function EditorWindow() {
         setBackdropOpen(false);
         setResizeOpen(false);
         setLookOpen(false);
+        setAiOpen(false);
         setWheelAt(null);
       } else if (event.key === " ") {
         event.preventDefault();
@@ -2391,6 +2487,43 @@ export default function EditorWindow() {
               Copy text
             </button>
           )}
+          <div
+            className="ai-annotate-anchor"
+            ref={aiRef}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setAiOpen(false);
+            }}
+          >
+            <button
+              type="button"
+              className="text-button"
+              aria-haspopup="dialog"
+              aria-expanded={aiOpen}
+              data-on={aiPreview && aiPreview.length > 0 ? "true" : undefined}
+              disabled={!image}
+              onClick={() => setAiOpen(!aiOpen)}
+              title="Describe boxes, arrows and labels for your AI provider to suggest"
+            >
+              <SparkleIcon />
+              Annotate with AI
+            </button>
+            {aiOpen && (
+              <AiAnnotatePanel
+                prompt={aiPrompt}
+                onPrompt={setAiPrompt}
+                busy={aiBusy}
+                needsProvider={aiNeedsProvider}
+                message={aiMessage}
+                suggestions={aiPreview}
+                onSuggest={() => void suggestAnnotations()}
+                onCancel={cancelSuggestions}
+                onApply={applyAiSuggestions}
+                onDiscard={discardAiSuggestion}
+                onDiscardAll={() => setAiSuggestions(null)}
+                onOpenSettings={openAiSettings}
+              />
+            )}
+          </div>
           <button
             type="button"
             className="text-button"
@@ -2560,6 +2693,26 @@ export default function EditorWindow() {
                       />
                     </Fragment>
                   ))}
+                  {/* Annotate with AI's suggestions, faded and out of reach until applied. */}
+                  {aiPreview && aiPreview.length > 0 && (
+                    <Group name="ai-preview" opacity={0.6} listening={false}>
+                      {aiPreview.map((shape) => (
+                        <ShapeNode
+                          key={shape.id}
+                          shape={shape}
+                          image={image}
+                          assets={assetImages}
+                          stampImages={stampImages}
+                          editable={false}
+                          orientation={oriented ? orientation : undefined}
+                          onSelect={() => undefined}
+                          onChange={() => undefined}
+                          onMove={() => undefined}
+                          onEditText={() => undefined}
+                        />
+                      ))}
+                    </Group>
+                  )}
                   {calloutPreview && (
                     <Line
                       name="callout-preview"

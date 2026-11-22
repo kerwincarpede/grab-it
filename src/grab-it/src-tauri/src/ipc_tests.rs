@@ -91,6 +91,10 @@ impl Harness {
             Box::new(MemoryKeyStore::default()),
         );
         let app = crate::manage_states(mock_builder())
+            .manage(crate::clipboard_sound::Preference::new(
+                store.get().copy_sound,
+                store.get().copy_sound_volume,
+            ))
             .manage(Mutex::new(store))
             .manage(library::open_for_app(&dir.path().join("data")))
             .invoke_handler(crate::invoke_handler())
@@ -256,6 +260,8 @@ fn get_settings_returns_the_settings_shape() {
             "agentAccess",
             "ai",
             "appearance",
+            "copySound",
+            "copySoundVolume",
             "copyToClipboard",
             "editor",
             "hotkeys",
@@ -273,6 +279,8 @@ fn get_settings_returns_the_settings_shape() {
     );
     assert_eq!(settings["afterCapture"], "quickAccess");
     assert_eq!(settings["copyToClipboard"], true);
+    assert_eq!(settings["copySound"], true);
+    assert_eq!(settings["copySoundVolume"], 50);
     assert_eq!(settings["ai"]["enabled"], false);
     assert_eq!(settings["updateChannel"], "stable");
     assert_eq!(
@@ -398,6 +406,146 @@ fn set_save_folder_reports_a_failed_save() {
 
 // set_preferences, set_appearance, step_text_size, set_recording,
 // set_retention, set_show_in_dock and set_agent_access
+
+#[test]
+fn copy_sound_defaults_on_and_saves_independently() {
+    let h = Harness::with_stored(json!({
+        "copyToClipboard": false,
+        "afterCapture": "editor",
+        "agentAccess": true,
+    }));
+    let preference = h.app.state::<crate::clipboard_sound::Preference>();
+    let mut expected = h.settings();
+    assert_eq!(expected["copySound"], true);
+    assert_eq!(expected["copySoundVolume"], 50);
+    assert!(preference.enabled());
+    assert_eq!(preference.volume(), 50);
+    expected["copySound"] = json!(false);
+    assert_eq!(
+        h.ok("set_copy_sound", json!({ "enabled": false })),
+        expected
+    );
+    let saved = h.saved();
+    assert_eq!(saved["copySound"], false);
+    assert!(!preference.enabled());
+
+    h.break_saving();
+    assert!(
+        !h.err("set_copy_sound", json!({ "enabled": true }))
+            .is_empty()
+    );
+    assert!(!preference.enabled());
+
+    let reloaded = Harness::with_stored(saved);
+    assert_eq!(reloaded.settings()["copySound"], false);
+    assert!(
+        !reloaded
+            .app
+            .state::<crate::clipboard_sound::Preference>()
+            .enabled()
+    );
+    assert_eq!(
+        reloaded.ok("set_copy_sound", json!({ "enabled": true }))["copySound"],
+        true,
+    );
+    assert_eq!(reloaded.saved()["copySound"], true);
+    assert_eq!(reloaded.saved()["copyToClipboard"], false);
+    assert_eq!(reloaded.saved()["afterCapture"], "editor");
+    assert_eq!(reloaded.saved()["agentAccess"], true);
+}
+
+#[test]
+fn copy_sound_volume_is_clamped_saved_and_held_beside_the_flag() {
+    let h = Harness::with_stored(json!({ "copySound": false, "copySoundVolume": 80 }));
+    let preference = h.app.state::<crate::clipboard_sound::Preference>();
+    assert_eq!(h.settings()["copySoundVolume"], 80);
+    assert_eq!(preference.volume(), 80);
+
+    let mut expected = h.settings();
+    expected["copySoundVolume"] = json!(35);
+    assert_eq!(
+        h.ok("set_copy_sound_volume", json!({ "volume": 35 })),
+        expected
+    );
+    assert_eq!(h.saved()["copySoundVolume"], 35);
+    assert_eq!(h.saved()["copySound"], false);
+    assert_eq!(preference.volume(), 35);
+    assert!(!preference.enabled());
+
+    assert_eq!(
+        h.ok("set_copy_sound_volume", json!({ "volume": 400 }))["copySoundVolume"],
+        100
+    );
+    assert_eq!(preference.volume(), 100);
+    assert_invalid_arg(
+        &h.err("set_copy_sound_volume", json!({ "volume": -1 })),
+        "set_copy_sound_volume",
+        "volume",
+    );
+    assert_eq!(preference.volume(), 100);
+
+    h.break_saving();
+    assert!(
+        !h.err("set_copy_sound_volume", json!({ "volume": 10 }))
+            .is_empty()
+    );
+    assert_eq!(preference.volume(), 100);
+}
+
+#[test]
+fn previewing_at_zero_volume_plays_nothing() {
+    let h = Harness::with_stored(json!({ "copySoundVolume": 0 }));
+    // No stream is opened, so this passes even without an audio output.
+    assert_eq!(h.ok("preview_copy_sound", json!({})), Value::Null);
+    let app = h.app.handle();
+    crate::record::mark_test_recording(app, None);
+    assert_eq!(
+        h.err("preview_copy_sound", json!({})),
+        "The copy sound is unavailable while recording.",
+    );
+}
+
+#[test]
+fn preview_and_pending_copy_sounds_are_suppressed_during_recording_and_pause() {
+    for paused_at in [None, Some(1)] {
+        let h = Harness::new();
+        let app = h.app.handle();
+        let before_start = crate::record::playback_ticket(app).unwrap();
+        crate::record::mark_test_recording(app, paused_at);
+        assert!(crate::record::playback_ticket(app).is_none());
+        assert!(!crate::record::playback_current(app, before_start));
+        assert_eq!(
+            h.err("preview_copy_sound", json!({})),
+            "The copy sound is unavailable while recording.",
+        );
+    }
+}
+
+#[test]
+fn recording_start_cancels_an_output_drain() {
+    let h = Harness::new();
+    let app = h.app.handle();
+    let ticket = crate::record::playback_ticket(app).unwrap();
+    let (begin, started) = std::sync::mpsc::channel();
+    let (finish, ended) = std::sync::mpsc::channel();
+
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            begin.send(()).unwrap();
+            let played = crate::record::wait_for_playback(app, ticket, Duration::from_secs(10));
+            finish.send(played).unwrap();
+        });
+        started.recv().unwrap();
+        // Give the waiter time to park in the condvar, so the recording
+        // start has to wake it rather than being seen before it waits.
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(ended.try_recv().is_err(), "the drain must still be waiting");
+        let woken = Instant::now();
+        crate::record::mark_test_recording(app, None);
+        assert!(!ended.recv_timeout(Duration::from_secs(3)).unwrap());
+        assert!(woken.elapsed() < Duration::from_secs(1));
+    });
+}
 
 #[test]
 fn set_preferences_without_ai_keeps_the_ai_settings() {

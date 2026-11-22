@@ -31,6 +31,7 @@ export type {
   Usage,
 } from "../app/bindings";
 import type { Cleaned, FilterOptions, KindUsage, MatchField, OcrLine, OcrStatus, ShotKind, ShotText, SidebarSummary } from "../app/bindings";
+import { aiDescribes } from "../settings/api";
 
 /** A library item, as `Shot` in src-tauri/src/library.rs sends it. */
 export type Shot = Shot_Serialize;
@@ -720,18 +721,23 @@ export async function openSettings(): Promise<void> {
 }
 
 /**
- * The CLI provider Grab-it turned AI descriptions on with by itself, while
- * the Library should still say so, once; otherwise null. Only while that
- * provider still describes captures, since the user may have turned
- * describing off or picked an endpoint since.
+ * What the Library's one-time AI notice says, or null for none.
+ *
+ * "invite" asks a new user, who never chose a provider, to set up AI
+ * integration. "enabled" tells an upgraded user that an earlier version
+ * turned on describing with a CLI provider, while it still does.
  */
-export async function pendingAiNotice(): Promise<CliProvider | null> {
+export type AiNotice = { kind: "invite" } | { kind: "enabled"; provider: CliProvider };
+
+export async function pendingAiNotice(): Promise<AiNotice | null> {
   const { ai } = await commands.getSettings();
-  if (ai?.noticePending !== true || ai.enabled !== true) return null;
-  return ai.provider === "claudeCode" || ai.provider === "codex" ? ai.provider : null;
+  if (ai?.noticePending !== true) return null;
+  if (ai.enabled !== true) return ai.provider == null ? { kind: "invite" } : null;
+  if (!aiDescribes(ai)) return null;
+  return ai.provider === "claudeCode" || ai.provider === "codex" ? { kind: "enabled", provider: ai.provider } : null;
 }
 
-/** Stops showing the notice that Grab-it turned AI descriptions on. */
+/** Stops showing the AI notice, for good. */
 export async function dismissAiNotice(): Promise<void> {
   await commands.dismissAiNotice();
 }

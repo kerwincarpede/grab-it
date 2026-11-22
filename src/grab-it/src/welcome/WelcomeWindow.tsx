@@ -20,7 +20,7 @@ import {
 import { useEffectiveHotkeys } from "../app/useEffectiveHotkeys";
 import { keyCaps } from "../hub/keys";
 import { onAiStatus } from "../library/api";
-import { aiProvider, getSettings, type Hotkeys } from "../settings/api";
+import { aiDescribes, aiProvider, getSettings, type Hotkeys } from "../settings/api";
 import { openTarget } from "./api";
 import PermissionsPage from "./PermissionsPage";
 import {
@@ -50,6 +50,7 @@ const TIP_ICONS: Record<string, ReactNode> = {
   Record: <RecordIcon />,
   Library: <SearchIcon />,
   "AI descriptions": <SparkleIcon />,
+  "AI integration": <SparkleIcon />,
 };
 
 const TIPS: { title: string; detail: string }[] = [
@@ -66,7 +67,14 @@ const TIPS: { title: string; detail: string }[] = [
   { title: "Library", detail: "Every capture, searchable by the text inside the image." },
 ];
 
-/** Added to the tips while Claude Code describes captures. */
+/** The last tip while no provider describes captures: AI integration is optional and off. */
+const AI_TIP = {
+  title: "AI integration",
+  detail:
+    "Optional and off until you choose a provider in Settings. It describes captures so you can search for what they show, and lets AI agents take screenshots.",
+};
+
+/** The last tip while Claude Code describes captures. */
 const CLAUDE_TIP = {
   title: "AI descriptions",
   detail:
@@ -142,7 +150,7 @@ function HotkeysPage({ onClose }: { onClose?: () => void }) {
       getSettings()
         .then((settings) => {
           if (cancelled) return;
-          setClaudeDescribes(settings.ai?.enabled === true && aiProvider(settings.ai) === "claudeCode");
+          setClaudeDescribes(aiDescribes(settings.ai) && aiProvider(settings.ai) === "claudeCode");
         })
         .catch(() => {
           // The tips still read well without the hotkeys.
@@ -169,7 +177,7 @@ function HotkeysPage({ onClose }: { onClose?: () => void }) {
     openTarget(target).catch((err: unknown) => setError(typeof err === "string" ? err : "Something went wrong."));
   }
 
-  const tips = claudeDescribes ? [...TIPS, CLAUDE_TIP] : TIPS;
+  const tips = [...TIPS, claudeDescribes ? CLAUDE_TIP : AI_TIP];
   return (
     <main className={onClose ? "welcome in-dialog" : "window welcome"}>
       <header className="welcome-head">

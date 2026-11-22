@@ -230,6 +230,21 @@ describe("AppWindow", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("opens Settings at AI integration for the ai-settings view, at start and when asked", async () => {
+    backend();
+    const { unmount } = render(<AppWindow initialView="ai-settings" />);
+    const started = await screen.findByRole("dialog", { name: "Settings" });
+    expect(within(started).getByRole("heading", { level: 1, name: "AI integration" })).toBeInTheDocument();
+    unmount();
+
+    render(<AppWindow />);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // The editor's Open AI integration reaches an open window this way.
+    await act(() => emit("main-navigate", "ai-settings"));
+    const asked = await screen.findByRole("dialog", { name: "Settings" });
+    expect(within(asked).getByRole("heading", { level: 1, name: "AI integration" })).toBeInTheDocument();
+  });
+
   it("opens Shortcuts and tips from the sidebar", async () => {
     backend();
     render(<AppWindow />);
@@ -387,6 +402,7 @@ describe("viewFromHash", () => {
     ["#/app", "library"],
     ["#/app/library", "library"],
     ["#/app/settings", "settings"],
+    ["#/app/ai-settings", "ai-settings"],
     ["#/app/welcome", "welcome"],
     ["#/app/nowhere", "library"],
   ] as const)("maps %j to %s", (hash, view) => {

@@ -669,6 +669,26 @@ input.switch:disabled {
   width: 240px;
 }
 
+/* A field with a small button beside it, together as wide as a plain field. */
+.row .row-field-with-action {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.row .row-field-with-action > input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* A round button that shows only an icon; its name is in aria-label. */
+.pill.icon-only {
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+}
+
 /* The save folder: a read-only path, set in mono like a value, not a box. */
 .row input.mono-value {
   width: 100%;

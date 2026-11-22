@@ -15,6 +15,15 @@ export const commands = {
 	 *  are kept.
 	 */
 	setPreferences: (preferences: PreferencesUpdate_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("set_preferences", { preferences }, options),
+	/**  Saves whether successful clipboard copies play a confirmation sound. */
+	setCopySound: (enabled: boolean, options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("set_copy_sound", { enabled }, options),
+	/**  Saves the copy sound's volume as a percent, clamped to 0–100. */
+	setCopySoundVolume: (volume: number, options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("set_copy_sound_volume", { volume }, options),
+	/**
+	 *  Previews the sound at the saved volume, whether or not copies play it,
+	 *  whenever recording is idle.
+	 */
+	previewCopySound: (options?: InvokeOptions) => __TAURI_INVOKE<null>("preview_copy_sound", undefined, options),
 	/**  The annotation editor's remembered colour, tool, widths and options. */
 	getEditorPreferences: (options?: InvokeOptions) => __TAURI_INVOKE<EditorPreferences_Serialize>("get_editor_preferences", undefined, options),
 	setEditorPreferences: (preferences: EditorPreferences_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<EditorPreferences_Serialize>("set_editor_preferences", { preferences }, options),
@@ -89,7 +98,10 @@ export const commands = {
 	hubCapture: (kind: string, delaySeconds: number | null, monitor: number | null, options?: InvokeOptions) => __TAURI_INVOKE<null>("hub_capture", { kind, delaySeconds, monitor }, options),
 	effectiveHotkeys: (options?: InvokeOptions) => __TAURI_INVOKE<{ [key in string]: string }>("effective_hotkeys", undefined, options),
 	hubMonitors: (options?: InvokeOptions) => __TAURI_INVOKE<HubMonitor[]>("hub_monitors", undefined, options),
-	/**  Opens the Grab-it window on `view`: `library`, `settings` or `welcome`. */
+	/**
+	 *  Opens the Grab-it window on `view`: `library`, `settings`,
+	 *  `ai-settings` (Settings at AI integration) or `welcome`.
+	 */
 	hubOpen: (view: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("hub_open", { view }, options),
 	hubCheckUpdates: (options?: InvokeOptions) => __TAURI_INVOKE<void>("hub_check_updates", undefined, options),
 	hubQuit: (options?: InvokeOptions) => __TAURI_INVOKE<void>("hub_quit", undefined, options),
@@ -267,6 +279,13 @@ export const commands = {
 	 *  details.
 	 */
 	editorFaces: (options?: InvokeOptions) => __TAURI_INVOKE<Rect[]>("editor_faces", undefined, options),
+	/**
+	 *  Suggests annotations for the editor's capture as `instruction` asks.
+	 *  Without a provider set up, says so, so the editor can offer Settings.
+	 *  The text regions are the library's stored ones or read now; a capture
+	 *  with none is still sent, and the model places shapes by coordinates.
+	 */
+	editorAnnotate: (instruction: string, options?: InvokeOptions) => __TAURI_INVOKE<AnnotateOutcome>("editor_annotate", { instruction }, options),
 	/**  Requests cancellation of the export running in this editor window. */
 	recordingExportCancel: (options?: InvokeOptions) => __TAURI_INVOKE<void>("recording_export_cancel", undefined, options),
 	recordingInfo: (options?: InvokeOptions) => __TAURI_INVOKE<RecordingInfo_Serialize>("recording_info", undefined, options),
@@ -278,6 +297,8 @@ export const commands = {
 	 *  it is assumed to have some.
 	 */
 	recordingSource: (fileName: string, options?: InvokeOptions) => __TAURI_INVOKE<RecordingClipSource_Serialize>("recording_source", { fileName }, options),
+	/**  The pauses in recording `file_name`'s sound, for Suggest edits. */
+	recordingPauses: (fileName: string, options?: InvokeOptions) => __TAURI_INVOKE<RecordingPauses_Serialize>("recording_pauses", { fileName }, options),
 	libraryList: (offset: number, limit: number, options?: InvokeOptions) => __TAURI_INVOKE<ShotPage_Serialize>("library_list", { offset, limit }, options),
 	librarySetTags: (id: number, tags: string[], options?: InvokeOptions) => __TAURI_INVOKE<Shot_Serialize>("library_set_tags", { id, tags }, options),
 	librarySidebar: (options?: InvokeOptions) => __TAURI_INVOKE<SidebarSummary>("library_sidebar", undefined, options),
@@ -403,11 +424,19 @@ export const commands = {
 	aiClear: (id: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("ai_clear", { id }, options),
 	/**  Queues every capture, skipped ones too, to be described again. */
 	aiRedescribeAll: (options?: InvokeOptions) => __TAURI_INVOKE<null>("ai_redescribe_all", undefined, options),
+	/**  Tests draft settings with a synthetic image without changing the active provider. */
+	aiTestConnection: (draft: AiSettings_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<string>("ai_test_connection", { draft }, options),
 	/**
-	 *  Checks that the saved provider and model answer, whether or not
-	 *  describing is on.
+	 *  Lists the models an OpenAI-compatible endpoint offers, for Settings to
+	 *  suggest. Nothing is saved, and no image is sent.
 	 */
-	aiTestConnection: (options?: InvokeOptions) => __TAURI_INVOKE<string>("ai_test_connection", undefined, options),
+	aiListModels: (endpoint: string, apiKey: string | null, options?: InvokeOptions) => __TAURI_INVOKE<string[]>("ai_list_models", { endpoint, apiKey }, options),
+	/**
+	 *  Counts the screenshots a whole-library request would describe: every
+	 *  image for Re-describe all, or with `waiting` only those still waiting,
+	 *  which is what a save that describes earlier captures sends.
+	 */
+	aiCaptureCount: (waiting: boolean, options?: InvokeOptions) => __TAURI_INVOKE<number>("ai_capture_count", { waiting }, options),
 	/**
 	 *  Looks for the AI CLIs, for Settings to say when the chosen one is
 	 *  missing. Async: the lookup may ask the login shell for its PATH.
@@ -516,22 +545,23 @@ export type AiProvider =
 
 /**
  *  How captures are described by a vision model (see `ai.rs`). Off by
- *  default: nothing leaves the machine until the user turns it on, or
- *  Grab-it turns it on once because Claude Code or Codex is installed (see
- *  [`SettingsStore::enable_cli_provider`]). Mirrors `AiPreferences` in
- *  src/settings/api.ts.
+ *  default: nothing leaves the machine until the user chooses a provider
+ *  and turns it on. Mirrors `AiPreferences` in src/settings/api.ts.
  */
 export type AiSettings = AiSettings_Serialize | AiSettings_Deserialize;
 
 /**
  *  How captures are described by a vision model (see `ai.rs`). Off by
- *  default: nothing leaves the machine until the user turns it on, or
- *  Grab-it turns it on once because Claude Code or Codex is installed (see
- *  [`SettingsStore::enable_cli_provider`]). Mirrors `AiPreferences` in
- *  src/settings/api.ts.
+ *  default: nothing leaves the machine until the user chooses a provider
+ *  and turns it on. Mirrors `AiPreferences` in src/settings/api.ts.
  */
 export type AiSettings_Deserialize = {
 	enabled?: boolean,
+	/**
+	 *  Whether captures are described automatically while `enabled` is on.
+	 *  None in settings from before it was its own switch, read as on.
+	 */
+	automaticDescriptions?: boolean | null,
 	/**
 	 *  Who describes captures. None until a provider was picked or Grab-it
 	 *  picked one; it then works as [`AiProvider::Endpoint`], which is what
@@ -575,13 +605,16 @@ export type AiSettings_Deserialize = {
 
 /**
  *  How captures are described by a vision model (see `ai.rs`). Off by
- *  default: nothing leaves the machine until the user turns it on, or
- *  Grab-it turns it on once because Claude Code or Codex is installed (see
- *  [`SettingsStore::enable_cli_provider`]). Mirrors `AiPreferences` in
- *  src/settings/api.ts.
+ *  default: nothing leaves the machine until the user chooses a provider
+ *  and turns it on. Mirrors `AiPreferences` in src/settings/api.ts.
  */
 export type AiSettings_Serialize = {
 	enabled: boolean,
+	/**
+	 *  Whether captures are described automatically while `enabled` is on.
+	 *  None in settings from before it was its own switch, read as on.
+	 */
+	automaticDescriptions?: boolean,
 	/**
 	 *  Who describes captures. None until a provider was picked or Grab-it
 	 *  picked one; it then works as [`AiProvider::Endpoint`], which is what
@@ -669,6 +702,19 @@ export type AiStatus_Serialize = {
 	/**  Who describes captures, so a failure can say whom to check. */
 	provider: AiProvider,
 };
+
+/**
+ *  What Annotate with AI found. Mirrors `AnnotateOutcome` in
+ *  src/editor/aiAnnotate.ts.
+ */
+export type AnnotateOutcome =
+/**
+ *  No provider is set up: the editor offers Settings, keeping the
+ *  instruction.
+ */
+{ state: "needsProvider" } |
+/**  The model's shapes that could be placed, and how many could not. */
+{ state: "suggested"; suggestions: Suggestion[]; skipped: number; by: string };
 
 /**
  *  Where the endpoint API key is kept. Mirrors `ApiKeyStorage` in
@@ -1495,6 +1541,27 @@ export type OverlayWindow = {
 	height: number,
 };
 
+/**  What a recording's pauses were heard in. */
+export type PauseSound =
+/**  The microphone alone, kept apart in the sound sidecar. */
+"microphone" |
+/**
+ *  The MP4's one track, the microphone not kept apart: mixed with
+ *  system sound, or a microphone whose sound sidecar was never
+ *  written. It can only be played as recorded.
+ */
+"mixed" |
+/**  System sound only: no voice to pause. */
+"system" |
+/**  No sound at all; pauses come from the pointer alone. */
+"silent";
+
+/**  A stretch of a recording, in its own time. */
+export type PauseSpan = {
+	startMs: number,
+	endMs: number,
+};
+
 /**  The permissions the Permissions page lists, in its order. */
 export type Permission = "screenRecording" | "inputMonitoring" | "microphone" | "camera";
 
@@ -1855,6 +1922,52 @@ export type RecordingInfo_Serialize = {
 	separateMicrophone: boolean,
 };
 
+/**
+ *  The quiet stretches of one recording; the page reads it from the
+ *  generated bindings.
+ */
+export type RecordingPauses = RecordingPauses_Serialize | RecordingPauses_Deserialize;
+
+/**
+ *  The quiet stretches of one recording; the page reads it from the
+ *  generated bindings.
+ */
+export type RecordingPauses_Deserialize = {
+	sound: PauseSound,
+	/**  Sorted, never overlapping; empty for a silent recording. */
+	pauses: PauseSpan[],
+	/**
+	 *  Whether an audition can play the stretch cleaned as the export
+	 *  would: only with the microphone kept apart.
+	 */
+	canClean: boolean,
+	/**
+	 *  The pointer as recorded, not smoothed, so a rest is found where the
+	 *  pointer really stopped; None without a pointer track.
+	 */
+	pointer?: CursorPath | null,
+};
+
+/**
+ *  The quiet stretches of one recording; the page reads it from the
+ *  generated bindings.
+ */
+export type RecordingPauses_Serialize = {
+	sound: PauseSound,
+	/**  Sorted, never overlapping; empty for a silent recording. */
+	pauses: PauseSpan[],
+	/**
+	 *  Whether an audition can play the stretch cleaned as the export
+	 *  would: only with the microphone kept apart.
+	 */
+	canClean: boolean,
+	/**
+	 *  The pointer as recorded, not smoothed, so a rest is found where the
+	 *  pointer really stopped; None without a pointer track.
+	 */
+	pointer: CursorPath | null,
+};
+
 /**  How good an MP4 looks, and so how big it is. */
 export type RecordingQuality = "low" | "medium" | "high";
 
@@ -2145,6 +2258,10 @@ export type Settings_Deserialize = {
 	lastExportFolder?: string | null,
 	/**  Global hotkeys for region, window and screen captures. */
 	hotkeys: Hotkeys_Deserialize,
+	/**  Plays a sound when Grab-it copies something to the clipboard. */
+	copySound: boolean,
+	/**  How loud the copy sound plays, as a percent from 0 to 100. */
+	copySoundVolume: number,
 	/**  The annotation editor's remembered style and tool. */
 	editor: EditorPreferences_Deserialize,
 	/**
@@ -2176,6 +2293,10 @@ export type Settings_Serialize = {
 	lastExportFolder?: string,
 	/**  Global hotkeys for region, window and screen captures. */
 	hotkeys: Hotkeys_Serialize,
+	/**  Plays a sound when Grab-it copies something to the clipboard. */
+	copySound: boolean,
+	/**  How loud the copy sound plays, as a percent from 0 to 100. */
+	copySoundVolume: number,
 	/**  The annotation editor's remembered style and tool. */
 	editor: EditorPreferences_Serialize,
 	/**
@@ -2419,6 +2540,19 @@ export type SnippetPart = {
 	hit: boolean,
 };
 
+/**
+ *  One suggested shape, in whole pixels of the original capture and
+ *  inside it.
+ *  Mirrors `AiSuggestion` in src/editor/aiAnnotate.ts.
+ */
+export type Suggestion =
+/**  A rectangle outline. */
+{ kind: "rect"; x: number | null; y: number | null; width: number | null; height: number | null } |
+/**  An arrow from its tail (`x1`, `y1`) to its head (`x2`, `y2`). */
+{ kind: "arrow"; x1: number | null; y1: number | null; x2: number | null; y2: number | null } |
+/**  A label whose top-left corner is at `x`, `y`. */
+{ kind: "text"; x: number | null; y: number | null; text: string };
+
 /**  A text size keyboard shortcut: ⌘+, ⌘− or ⌘0. */
 export type TextSizeStep = "bigger" | "smaller" |
 /**  Back to [`DEFAULT_TEXT_SCALE`]. */
@@ -2607,6 +2741,9 @@ export type MockCommandHandlers = {
     setSaveFolder: (args: { path: string }) => Settings_Serialize | Promise<Settings_Serialize>,
     setHotkeys: (args: { hotkeys: Hotkeys_Deserialize }) => HotkeysUpdate_Serialize | Promise<HotkeysUpdate_Serialize>,
     setPreferences: (args: { preferences: PreferencesUpdate_Deserialize }) => Settings_Serialize | Promise<Settings_Serialize>,
+    setCopySound: (args: { enabled: boolean }) => Settings_Serialize | Promise<Settings_Serialize>,
+    setCopySoundVolume: (args: { volume: number }) => Settings_Serialize | Promise<Settings_Serialize>,
+    previewCopySound: () => null | Promise<null>,
     getEditorPreferences: () => EditorPreferences_Serialize | Promise<EditorPreferences_Serialize>,
     setEditorPreferences: (args: { preferences: EditorPreferences_Deserialize }) => EditorPreferences_Serialize | Promise<EditorPreferences_Serialize>,
     setAutoBackdrop: (args: { enabled: boolean }) => Settings_Serialize | Promise<Settings_Serialize>,
@@ -2683,10 +2820,12 @@ export type MockCommandHandlers = {
     editorSaveAnnotations: (args: { annotations: Value }) => null | Promise<null>,
     editorWords: () => OcrLine[] | Promise<OcrLine[]>,
     editorFaces: () => Rect[] | Promise<Rect[]>,
+    editorAnnotate: (args: { instruction: string }) => AnnotateOutcome | Promise<AnnotateOutcome>,
     recordingExportCancel: () => void | Promise<void>,
     recordingInfo: () => RecordingInfo_Serialize | Promise<RecordingInfo_Serialize>,
     recordingSaveEdits: (args: { edits: Value }) => null | Promise<null>,
     recordingSource: (args: { fileName: string }) => RecordingClipSource_Serialize | Promise<RecordingClipSource_Serialize>,
+    recordingPauses: (args: { fileName: string }) => RecordingPauses_Serialize | Promise<RecordingPauses_Serialize>,
     libraryList: (args: { offset: number; limit: number }) => ShotPage_Serialize | Promise<ShotPage_Serialize>,
     librarySetTags: (args: { id: number; tags: string[] }) => Shot_Serialize | Promise<Shot_Serialize>,
     librarySidebar: () => SidebarSummary | Promise<SidebarSummary>,
@@ -2724,7 +2863,9 @@ export type MockCommandHandlers = {
     aiRedescribe: (args: { id: number }) => null | Promise<null>,
     aiClear: (args: { id: number }) => null | Promise<null>,
     aiRedescribeAll: () => null | Promise<null>,
-    aiTestConnection: () => string | Promise<string>,
+    aiTestConnection: (args: { draft: AiSettings_Deserialize }) => string | Promise<string>,
+    aiListModels: (args: { endpoint: string; apiKey: string | null }) => string[] | Promise<string[]>,
+    aiCaptureCount: (args: { waiting: boolean }) => number | Promise<number>,
     aiClis: () => AiClis_Serialize | Promise<AiClis_Serialize>,
     updateStatus: () => UpdateStatus_Serialize | Promise<UpdateStatus_Serialize>,
     updateCheck: () => void | Promise<void>,
@@ -2771,6 +2912,9 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "set_save_folder": return mockCommandHandler(mockHandlers.setSaveFolder, "set_save_folder", args);
             case "set_hotkeys": return mockCommandHandler(mockHandlers.setHotkeys, "set_hotkeys", args);
             case "set_preferences": return mockCommandHandler(mockHandlers.setPreferences, "set_preferences", args);
+            case "set_copy_sound": return mockCommandHandler(mockHandlers.setCopySound, "set_copy_sound", args);
+            case "set_copy_sound_volume": return mockCommandHandler(mockHandlers.setCopySoundVolume, "set_copy_sound_volume", args);
+            case "preview_copy_sound": return mockCommandHandler(mockHandlers.previewCopySound, "preview_copy_sound", args);
             case "get_editor_preferences": return mockCommandHandler(mockHandlers.getEditorPreferences, "get_editor_preferences", args);
             case "set_editor_preferences": return mockCommandHandler(mockHandlers.setEditorPreferences, "set_editor_preferences", args);
             case "set_auto_backdrop": return mockCommandHandler(mockHandlers.setAutoBackdrop, "set_auto_backdrop", args);
@@ -2847,10 +2991,12 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "editor_save_annotations": return mockCommandHandler(mockHandlers.editorSaveAnnotations, "editor_save_annotations", args);
             case "editor_words": return mockCommandHandler(mockHandlers.editorWords, "editor_words", args);
             case "editor_faces": return mockCommandHandler(mockHandlers.editorFaces, "editor_faces", args);
+            case "editor_annotate": return mockCommandHandler(mockHandlers.editorAnnotate, "editor_annotate", args);
             case "recording_export_cancel": return mockCommandHandler(mockHandlers.recordingExportCancel, "recording_export_cancel", args);
             case "recording_info": return mockCommandHandler(mockHandlers.recordingInfo, "recording_info", args);
             case "recording_save_edits": return mockCommandHandler(mockHandlers.recordingSaveEdits, "recording_save_edits", args);
             case "recording_source": return mockCommandHandler(mockHandlers.recordingSource, "recording_source", args);
+            case "recording_pauses": return mockCommandHandler(mockHandlers.recordingPauses, "recording_pauses", args);
             case "library_list": return mockCommandHandler(mockHandlers.libraryList, "library_list", args);
             case "library_set_tags": return mockCommandHandler(mockHandlers.librarySetTags, "library_set_tags", args);
             case "library_sidebar": return mockCommandHandler(mockHandlers.librarySidebar, "library_sidebar", args);
@@ -2889,6 +3035,8 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "ai_clear": return mockCommandHandler(mockHandlers.aiClear, "ai_clear", args);
             case "ai_redescribe_all": return mockCommandHandler(mockHandlers.aiRedescribeAll, "ai_redescribe_all", args);
             case "ai_test_connection": return mockCommandHandler(mockHandlers.aiTestConnection, "ai_test_connection", args);
+            case "ai_list_models": return mockCommandHandler(mockHandlers.aiListModels, "ai_list_models", args);
+            case "ai_capture_count": return mockCommandHandler(mockHandlers.aiCaptureCount, "ai_capture_count", args);
             case "ai_clis": return mockCommandHandler(mockHandlers.aiClis, "ai_clis", args);
             case "update_status": return mockCommandHandler(mockHandlers.updateStatus, "update_status", args);
             case "update_check": return mockCommandHandler(mockHandlers.updateCheck, "update_check", args);

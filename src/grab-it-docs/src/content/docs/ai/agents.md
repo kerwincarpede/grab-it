@@ -2,14 +2,14 @@
 title: AI agents
 description: Let Claude Code, Codex and other AI agents take screenshots, record the screen and make GIFs with Grab-it, and install the skill that teaches them how.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 AI agents such as [Claude Code](https://claude.com/claude-code) and [Codex](https://developers.openai.com/codex/cli) can take screenshots and recordings with Grab-it: to see the app they're building, check a page they changed, show how something behaves, or show you what they found. They use Grab-it's [command line](/grab-it/reference/command-line/#commands), and a skill teaches them its commands.
 
 ## Set it up
 
-1. Open **Settings → AI agents**.
+1. Open **Settings → AI integration**. The agent settings are under **AI agents**, and work whether or not you use an AI provider.
 2. Turn on **Let AI agents use Grab-it**. It's off until you turn it on.
 3. Click **Install skill**. Grab-it writes its skill to `~/.agents/skills/grab-it` and `~/.claude/skills/grab-it`, where Codex, Claude Code and other agents look for skills. The skill has the full path to Grab-it in it, so agents find it even when it isn't on your `PATH`.
 

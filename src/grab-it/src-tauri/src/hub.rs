@@ -21,7 +21,7 @@ use crate::{
 pub const LABEL: &str = "hub";
 /// Emitted to the hub each time it is shown, so it can refresh.
 pub const HUB_SHOWN_EVENT: &str = "hub-shown";
-/// Emitted to the hub with a [`HubActivity`] when a recording or a step
+/// Emitted to the hub and main window with a [`HubActivity`] when a recording or a step
 /// capture starts or stops. Mirrors `HUB_ACTIVITY_EVENT` in src/hub/api.ts.
 pub const HUB_ACTIVITY_EVENT: &str = "hub-activity";
 
@@ -386,11 +386,13 @@ fn activity(app: &AppHandle) -> HubActivity {
     }
 }
 
-/// Tells an open hub that a recording or a step capture started or
-/// stopped, so it updates at once.
+/// Tells the hub and Settings that a recording or a step capture started or stopped.
 pub fn activity_changed(app: &AppHandle) {
-    if app.get_webview_window(LABEL).is_some() {
-        let _ = app.emit_to(LABEL, HUB_ACTIVITY_EVENT, activity(app));
+    let activity = activity(app);
+    for label in [LABEL, windows::MAIN_LABEL] {
+        if app.get_webview_window(label).is_some() {
+            let _ = app.emit_to(label, HUB_ACTIVITY_EVENT, activity);
+        }
     }
 }
 
@@ -420,13 +422,15 @@ pub fn hub_monitors() -> Vec<HubMonitor> {
         .collect()
 }
 
-/// Opens the Grab-it window on `view`: `library`, `settings` or `welcome`.
+/// Opens the Grab-it window on `view`: `library`, `settings`,
+/// `ai-settings` (Settings at AI integration) or `welcome`.
 #[tauri::command]
 #[specta::specta]
 pub fn hub_open(view: String, app: AppHandle) -> Result<(), String> {
     let view = match view.as_str() {
         "library" => MainView::Library,
         "settings" => MainView::Settings,
+        "ai-settings" => MainView::AiSettings,
         "welcome" => MainView::Welcome,
         other => return Err(format!("unknown view: {other}")),
     };

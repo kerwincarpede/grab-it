@@ -166,17 +166,32 @@ impl CursorPath {
     /// Reads and smooths the pointer sidecar beside `video`. None when it is
     /// missing, unreadable, or never saw the pointer.
     pub fn load(video: &Path) -> Option<CursorPath> {
+        Self::read(video, true)
+    }
+
+    /// Reads the pointer sidecar beside `video` as it was recorded, held
+    /// inside the frame with its gaps filled but not smoothed, so a rest
+    /// starts and ends where the pointer really stopped and moved. None
+    /// when it is missing, unreadable, or never saw the pointer.
+    pub fn load_recorded(video: &Path) -> Option<CursorPath> {
+        Self::read(video, false)
+    }
+
+    fn read(video: &Path, smoothed: bool) -> Option<CursorPath> {
         let bytes = fs::read(cursor_path(video)).ok()?;
         let file: CursorFile = serde_json::from_slice(&bytes).ok()?;
         if file.width == 0 || file.height == 0 || !(1..=240).contains(&file.fps) {
             return None;
         }
-        let points = smooth(
-            &file.positions,
-            f64::from(file.width),
-            f64::from(file.height),
-            file.fps,
-        )?;
+        let (width, height) = (f64::from(file.width), f64::from(file.height));
+        let points = if smoothed {
+            smooth(&file.positions, width, height, file.fps)?
+        } else {
+            held(&file.positions, width, height)?
+                .into_iter()
+                .map(|point| point.map(round_point))
+                .collect()
+        };
         Some(CursorPath {
             fps: file.fps,
             points,
@@ -207,21 +222,7 @@ pub fn smooth(
     height: f64,
     fps: u32,
 ) -> Option<Vec<[f64; 2]>> {
-    let fraction = |[x, y]: [f64; 2]| [(x / width).clamp(0.0, 1.0), (y / height).clamp(0.0, 1.0)];
-    let first = positions
-        .iter()
-        .flatten()
-        .find(|p| p.iter().all(|v| v.is_finite()))?;
-    let mut held = fraction(*first);
-    let mut points: Vec<[f64; 2]> = positions
-        .iter()
-        .map(|position| {
-            if let Some(position) = position.filter(|p| p.iter().all(|v| v.is_finite())) {
-                held = fraction(position);
-            }
-            held
-        })
-        .collect();
+    let mut points = held(positions, width, height)?;
     let alpha = 1.0 - (-1.0 / (f64::from(fps.max(1)) * FOLLOW_SMOOTHING_S)).exp();
     let follow = |from: [f64; 2], to: [f64; 2]| {
         [
@@ -235,8 +236,41 @@ pub fn smooth(
     for i in (0..points.len().saturating_sub(1)).rev() {
         points[i] = follow(points[i + 1], points[i]);
     }
-    let round = |value: f64| (value * 100_000.0).round() / 100_000.0;
-    Some(points.into_iter().map(|point| point.map(round)).collect())
+    Some(
+        points
+            .into_iter()
+            .map(|point| point.map(round_point))
+            .collect(),
+    )
+}
+
+/// Raw pointer `positions` (pixels of a `width` × `height` frame, null
+/// where unknown) as fractions of the frame, each held inside it, a gap
+/// keeping the last known point (the first known one before it). None
+/// when no position is known.
+fn held(positions: &[Option<[f64; 2]>], width: f64, height: f64) -> Option<Vec<[f64; 2]>> {
+    let fraction = |[x, y]: [f64; 2]| [(x / width).clamp(0.0, 1.0), (y / height).clamp(0.0, 1.0)];
+    let first = positions
+        .iter()
+        .flatten()
+        .find(|p| p.iter().all(|v| v.is_finite()))?;
+    let mut held = fraction(*first);
+    Some(
+        positions
+            .iter()
+            .map(|position| {
+                if let Some(position) = position.filter(|p| p.iter().all(|v| v.is_finite())) {
+                    held = fraction(position);
+                }
+                held
+            })
+            .collect(),
+    )
+}
+
+/// A path value rounded to 1e-5, so the page gets the very same numbers.
+fn round_point(value: f64) -> f64 {
+    (value * 100_000.0).round() / 100_000.0
 }
 
 // --- Drawing a view ----------------------------------------------------------
@@ -456,6 +490,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(CursorPath::load(&video), None);
+    }
+
+    #[test]
+    fn the_sidecar_is_read_as_recorded_without_smoothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let video = dir.path().join("clip.mp4");
+        assert_eq!(CursorPath::load_recorded(&video), None);
+        // Still, then a jump: as recorded it jumps on its frame, held in
+        // the frame and across the gap.
+        fs::write(
+            dir.path().join("clip.cursor.json"),
+            r#"{"version":1,"width":200,"height":100,"fps":30,"positions":[[50,25],null,[50,25],[300,50]]}"#,
+        )
+        .unwrap();
+        let path = CursorPath::load_recorded(&video).unwrap();
+        assert_eq!(path.fps, 30);
+        assert_eq!(
+            path.points,
+            vec![[0.25, 0.25], [0.25, 0.25], [0.25, 0.25], [1.0, 0.5]]
+        );
+        assert_ne!(CursorPath::load(&video).unwrap().points, path.points);
     }
 
     #[test]

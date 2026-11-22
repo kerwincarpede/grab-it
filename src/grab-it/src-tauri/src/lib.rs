@@ -2,9 +2,11 @@ mod actions;
 mod agent;
 mod ai;
 mod ai_cli;
+mod annotate;
 mod audio;
 mod capture;
 mod cli;
+mod clipboard_sound;
 mod codes;
 mod commands;
 mod control;
@@ -40,6 +42,7 @@ mod record;
 mod record_bar;
 mod record_frame;
 mod recording_editor;
+mod recording_suggest;
 mod rt;
 mod screen;
 mod scroll;
@@ -180,6 +183,10 @@ pub fn run() {
             if first_run && let Err(err) = store.finish_first_run() {
                 eprintln!("Grab-it: could not write the settings file: {err}");
             }
+            app.manage(clipboard_sound::Preference::new(
+                store.get().copy_sound,
+                store.get().copy_sound_volume,
+            ));
             app.manage(Mutex::new(store));
             let data_dir = app.path().app_data_dir()?;
             let restore_library =
@@ -324,6 +331,7 @@ byte_commands![
     library::library_image,
     library::library_save_thumbnail,
     recording_editor::recording_export,
+    recording_suggest::recording_audition,
     steps::guide_image,
 ];
 
@@ -338,6 +346,9 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             commands::set_save_folder,
             commands::set_hotkeys,
             commands::set_preferences,
+            commands::set_copy_sound,
+            commands::set_copy_sound_volume,
+            clipboard_sound::preview_copy_sound,
             commands::get_editor_preferences,
             commands::set_editor_preferences,
             commands::set_auto_backdrop,
@@ -414,10 +425,12 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             editor::editor_save_annotations,
             editor::editor_words,
             editor::editor_faces,
+            annotate::editor_annotate,
             recording_editor::recording_export_cancel,
             recording_editor::recording_info,
             recording_editor::recording_save_edits,
             recording_editor::recording_source,
+            recording_suggest::recording_pauses,
             library::library_list,
             library::library_set_tags,
             search::library_sidebar,
@@ -456,6 +469,8 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             ai::ai_clear,
             ai::ai_redescribe_all,
             ai::ai_test_connection,
+            ai::ai_list_models,
+            ai::ai_capture_count,
             ai::ai_clis,
             update::update_status,
             update::update_check,

@@ -67,6 +67,7 @@ const RECORDINGS: Place = { app: "", tag: "", kind: "recording" };
 
 function dialogFor(view: MainView): Open {
   if (view === "settings") return { kind: "settings", section: "general" };
+  if (view === "ai-settings") return { kind: "settings", section: "ai" };
   if (view === "welcome") return { kind: "welcome" };
   return null;
 }

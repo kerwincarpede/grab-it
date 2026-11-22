@@ -10,6 +10,7 @@ import type { BackdropPreset, EditorPreferences } from "../settings/api";
 import type { OcrLine, ShotText } from "../library/api";
 import type { CapturedPointer } from "./api";
 import type { Annotations, Shape } from "./model";
+import type { AnnotateOutcome } from "./aiAnnotate";
 import { PREFERENCES_DELAY_MS } from "./preferences";
 import { AUTOSAVE_DELAY_MS } from "./useAnnotations";
 import type { EditorPreferences_Deserialize, EditorPreferences_Serialize, Value } from "../app/bindings";
@@ -358,6 +359,8 @@ interface PreferencesMock {
   faces?: { x: number; y: number; width: number; height: number }[];
   /** The mouse pointer saved with the capture; none when unset. */
   pointer?: CapturedPointer;
+  /** What `editor_annotate` answers, in turn (an Error makes it fail); no provider when unset. */
+  annotate?: (AnnotateOutcome | Error | Promise<AnnotateOutcome>)[];
 }
 
 /** A sidecar as Rust sends it: plain JSON, which `Annotations` types. */
@@ -454,6 +457,16 @@ function mockEditor(
       editor_faces: (payload) => {
         record("editor_faces", payload);
         return preferences.faces ?? [];
+      },
+      editor_annotate: (payload) => {
+        record("editor_annotate", payload);
+        const answer = preferences.annotate?.shift() ?? { state: "needsProvider" };
+        if (answer instanceof Error) throw answer;
+        return answer;
+      },
+      hub_open: (payload) => {
+        record("hub_open", payload);
+        return null;
       },
       editor_pin: (payload) => {
         record("editor_pin", payload);
@@ -2179,6 +2192,126 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
     expect(privateToggle()).toBeEnabled();
     expect(privateToggle()).toHaveAttribute("aria-pressed", "false");
     expect(blurs(last(saved))).toHaveLength(0);
+  });
+
+  const annotateButton = () =>
+    within(screen.getByRole("toolbar", { name: "Style and actions" })).getByRole("button", { name: "Annotate with AI" });
+  const SUGGESTED: AnnotateOutcome = {
+    state: "suggested",
+    by: "Claude Code",
+    skipped: 1,
+    suggestions: [
+      { kind: "rect", x: 20, y: 20, width: 100, height: 40 },
+      { kind: "arrow", x1: 10, y1: 200, x2: 60, y2: 70 },
+      { kind: "text", x: 10, y: 10, text: "Test it" },
+    ],
+  };
+  const requestBox = () => screen.getByRole("textbox", { name: "Describe the markup" });
+
+  it("keeps the request while a provider is set up, previews suggestions, and applies them as one undo step", async () => {
+    const calls: { cmd: string; payload: unknown }[] = [];
+    const saved = mockEditor({ version: 1, shapes: [], crop: null }, calls, { annotate: [{ state: "needsProvider" }, SUGGESTED] });
+    await ready();
+    fireEvent.click(annotateButton());
+    fireEvent.change(requestBox(), { target: { value: "Box the provider and point at Test connection" } });
+    fireEvent.click(screen.getByRole("button", { name: "Suggest" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open AI integration" }));
+    // Settings opens at AI integration.
+    await waitFor(() => expect(calls).toContainEqual({ cmd: "hub_open", payload: { view: "ai-settings" } }));
+    // The request is still there when the user comes back.
+    expect(requestBox()).toHaveValue("Box the provider and point at Test connection");
+
+    fireEvent.click(screen.getByRole("button", { name: "Suggest" }));
+    expect(await screen.findByText("Claude Code suggested 3 shapes. 1 more could not be placed, so it was left out.")).toBeInTheDocument();
+    expect(last(calls.filter((call) => call.cmd === "editor_annotate"))?.payload).toEqual({ instruction: "Box the provider and point at Test connection" });
+    // On preview only: nothing is saved yet.
+    await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 50));
+    expect(saved).toHaveLength(0);
+    expect(document.querySelector('[data-name~="ai-preview"]')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply 3 suggestions" }));
+    await waitFor(() => expect(last(saved)?.shapes.map((shape) => shape.type)).toEqual(["rect", "arrow", "text"]));
+    expect(last(saved)?.shapes[0]).toEqual(expect.objectContaining({ x: 20, y: 20, width: 100, height: 40 }));
+    expect(last(saved)?.shapes[2]).toEqual(expect.objectContaining({ text: "Test it" }));
+
+    // One undo takes them all away.
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(last(saved)?.shapes).toHaveLength(0));
+  });
+
+  it("applies suggestions through a cut made while they were on preview", async () => {
+    const saved = mockEditor({ version: 1, shapes: [], crop: null }, [], {
+      annotate: [
+        {
+          state: "suggested",
+          by: "Codex",
+          skipped: 0,
+          suggestions: [
+            { kind: "rect", x: 20, y: 100, width: 100, height: 40 },
+            { kind: "arrow", x1: 10, y1: 200, x2: 60, y2: 90 },
+          ],
+        },
+      ],
+    });
+    await ready();
+    fireEvent.click(annotateButton());
+    fireEvent.change(requestBox(), { target: { value: "Mark it up" } });
+    fireEvent.click(screen.getByRole("button", { name: "Suggest" }));
+    expect(await screen.findByRole("button", { name: "Apply 2 suggestions" })).toBeInTheDocument();
+
+    // Rows 30 to 70 go while the suggestions are on preview.
+    fireEvent.keyDown(window, { key: "x" });
+    fireEvent.keyUp(window, { key: "x" });
+    drag([50, 30], [300, 70]);
+    await waitFor(() => expect(last(saved)?.cuts).toEqual([{ axis: "y", start: 30, end: 70, edge: "straight" }]));
+
+    if (!screen.queryByRole("button", { name: "Apply 2 suggestions" })) fireEvent.click(annotateButton());
+    fireEvent.click(screen.getByRole("button", { name: "Apply 2 suggestions" }));
+    // Moved up with the image past the strip, as the shapes already there are.
+    await waitFor(() => expect(last(saved)?.shapes).toHaveLength(2));
+    expect(last(saved)?.shapes[0]).toMatchObject({ type: "rect", x: 20, y: 60, width: 100, height: 40 });
+    expect(last(saved)?.shapes[1]).toMatchObject({ type: "arrow", points: [10, 160, 60, 50] });
+  });
+
+  it("discards suggestions one by one or all at once", async () => {
+    const saved = mockEditor({ version: 1, shapes: [], crop: null }, [], { annotate: [SUGGESTED, SUGGESTED] });
+    await ready();
+    fireEvent.click(annotateButton());
+    fireEvent.change(requestBox(), { target: { value: "Mark it up" } });
+    fireEvent.click(screen.getByRole("button", { name: "Suggest" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard Arrow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply 2 suggestions" }));
+    await waitFor(() => expect(last(saved)?.shapes.map((shape) => shape.type)).toEqual(["rect", "text"]));
+
+    fireEvent.click(screen.getByRole("button", { name: "Suggest" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+    expect(screen.queryByRole("list", { name: "Suggestions" })).not.toBeInTheDocument();
+    expect(last(saved)?.shapes).toHaveLength(2);
+  });
+
+  it("ignores an answer that comes after Cancel", async () => {
+    let answer: (outcome: AnnotateOutcome) => void = () => {};
+    const pending = new Promise<AnnotateOutcome>((resolve) => (answer = resolve));
+    mockEditor({ version: 1, shapes: [], crop: null }, [], { annotate: [pending] });
+    await ready();
+    fireEvent.click(annotateButton());
+    fireEvent.change(requestBox(), { target: { value: "Mark it up" } });
+    fireEvent.click(screen.getByRole("button", { name: "Suggest" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText("Cancelled.")).toBeInTheDocument();
+    await act(async () => answer(SUGGESTED));
+    expect(screen.queryByRole("list", { name: "Suggestions" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Suggest" })).toBeEnabled();
+  });
+
+  it("says why Annotate with AI failed", async () => {
+    mockEditor({ version: 1, shapes: [], crop: null }, [], { annotate: [new Error("the model's answer could not be used: no JSON")] });
+    await ready();
+    fireEvent.click(annotateButton());
+    fireEvent.change(requestBox(), { target: { value: "Mark it up" } });
+    fireEvent.click(screen.getByRole("button", { name: "Suggest" }));
+    expect(await screen.findByText("Annotate with AI failed: the model's answer could not be used: no JSON")).toBeInTheDocument();
   });
 
   it("says why Blur private details failed", async () => {

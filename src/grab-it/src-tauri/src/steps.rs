@@ -33,7 +33,6 @@ use image::{DynamicImage, GrayImage, Rgba, RgbaImage, imageops};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::{Emitter, Manager};
-use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::rt::AppHandle;
 use crate::{
@@ -733,7 +732,7 @@ fn run(
 ) {
     let ai = ai::current_settings(app);
     let (jobs, queue) = mpsc::channel::<DescribeJob>();
-    let describes = ai.enabled;
+    let describes = ai.describes();
     if describes {
         let app = app.clone();
         let guide = guide.to_path_buf();
@@ -1215,8 +1214,7 @@ pub fn guide_copy(steps: Vec<ExportStep>, app: AppHandle) -> Result<(), String> 
     let steps = decode_steps(steps)?;
     let html = guide_export::html(&title, &steps);
     let text = guide_export::markdown_text(&title, &steps);
-    app.clipboard()
-        .write_html(html, Some(text))
+    crate::file_clipboard::copy_guide(&app, html, text)
         .map_err(|err| format!("could not copy the guide: {err}"))
 }
 

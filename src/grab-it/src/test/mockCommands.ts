@@ -32,6 +32,7 @@ type ByteCommands = {
   editor_export: (args: InvokeArgs) => null;
   library_save_thumbnail: (args: InvokeArgs) => null;
   recording_export: (args: InvokeArgs) => string;
+  recording_audition: (args: { fileName: string; startMs: number; endMs: number; cleaned: boolean }) => ArrayBuffer;
 };
 
 type Commands = TypedCommands & ByteCommands;
