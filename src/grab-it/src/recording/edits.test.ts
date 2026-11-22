@@ -26,6 +26,16 @@ describe("recording edits sidecar", () => {
     expect(() => parseEdits("edits")).toThrow(EditsError);
   });
 
+  it("round-trips noise removal either way, and leaves it out until it is set", () => {
+    for (const removeNoise of [true, false]) {
+      const written = JSON.parse(JSON.stringify(serializeEdits({ version: 1, removeNoise })));
+      expect(written).toEqual({ version: 1, removeNoise });
+      expect(parseEdits(written)).toEqual({ version: 1, removeNoise });
+    }
+    expect(serializeEdits({ version: 1 })).not.toHaveProperty("removeNoise");
+    expect(parseEdits({ version: 1, removeNoise: "yes" })).toEqual({ version: 1 });
+  });
+
   it("drops a trim or backdrop it cannot read, keeping the rest", () => {
     expect(parseEdits({ version: 1, trim: { startMs: 5000, endMs: 100 }, backdrop: BACKDROP })).toEqual({ version: 1, backdrop: BACKDROP });
     expect(parseEdits({ version: 1, trim: { startMs: 0, endMs: 900 }, backdrop: { fill: 3 } })).toEqual({ version: 1, trim: { startMs: 0, endMs: 900 } });

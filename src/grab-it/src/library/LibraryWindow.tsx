@@ -583,6 +583,8 @@ interface TileProps {
   index: number;
   onSelect: (id: number, how: SelectHow) => void;
   onOpen: (id: number) => void;
+  /** A double-click on the tile: opens the tile its first click landed on. */
+  onDoubleOpen: (id: number) => void;
   onAction: (shot: Shot, action: TileAction) => void;
   /** Stars or unstars the shot Keep forever. */
   onKeep: (shot: Shot) => void;
@@ -596,7 +598,7 @@ interface TileProps {
 const keepTitle = (shot: Shot) => (shot.keep ? "Kept forever: cleanup never removes it" : "Keep forever");
 
 /** One capture in the grid; actions appear on hover, the star too until it is on. */
-const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, onAction, onKeep, menuOpen, onMenu }: TileProps) {
+const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, onDoubleOpen, onAction, onKeep, menuOpen, onMenu }: TileProps) {
   const style = { "--i": Math.min(index, 18) } as CSSProperties;
   const tags = allTags(shot);
   const recording = isRecording(shot);
@@ -626,12 +628,16 @@ const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, 
         aria-label={shot.fileName}
         // No tooltip over its own menu.
         title={menuOpen ? undefined : OPEN_HINTS[shot.kind ?? "image"]}
-        onClick={(event) => onSelect(shot.id, { toggle: event.metaKey || event.ctrlKey, range: event.shiftKey })}
+        onClick={(event) => {
+          // A double-click's second click: its first click already selected, and may have moved the grid.
+          if (event.detail > 1) return;
+          onSelect(shot.id, { toggle: event.metaKey || event.ctrlKey, range: event.shiftKey });
+        }}
         // Shift-click selects tiles, not the text in them.
         onMouseDown={(event) => {
           if (event.shiftKey) event.preventDefault();
         }}
-        onDoubleClick={() => onOpen(shot.id)}
+        onDoubleClick={() => onDoubleOpen(shot.id)}
       >
         <span className="tile-frame">
           <Thumbnail shot={shot} />
@@ -1612,6 +1618,20 @@ function LibraryWindow({
     openShot(id).catch((err: unknown) => setError(errorMessage(err)));
   }, []);
 
+  /**
+   * The tile a double-click's first click landed on. That click opens the details, which can
+   * narrow the grid and move another tile under the pointer before the second click.
+   */
+  const pressed = useRef<number | null>(null);
+  const pressTile = useCallback(
+    (id: number, how: SelectHow) => {
+      pressed.current = id;
+      select(id, how);
+    },
+    [select],
+  );
+  const openTile = useCallback((id: number) => open(pressed.current ?? id), [open]);
+
   const toggleKeep = useCallback((shot: Shot) => {
     setShotKeep(shot.id, !shot.keep).then(
       (saved) => setShots((current) => current.map((item) => (item.id === saved.id ? saved : item))),
@@ -1949,8 +1969,9 @@ function LibraryWindow({
                       hit={hits[shot.id]}
                       selected={selectedIds.has(shot.id)}
                       index={tileIndex++}
-                      onSelect={select}
+                      onSelect={pressTile}
                       onOpen={open}
+                      onDoubleOpen={openTile}
                       onAction={tileAction}
                       onKeep={toggleKeep}
                       menuOpen={menu?.id === shot.id}

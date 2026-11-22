@@ -875,16 +875,25 @@ fn escape_filter_value(value: &str) -> String {
 /// `None` or a track other than the microphone.
 fn denoise(track: &AudioTrack<'_>, model: Option<&Path>) -> String {
     match model {
-        Some(model) if track.microphone => format!(
-            "arnndn=m={},",
-            escape_filter_value(&model.to_string_lossy())
-        ),
+        Some(model) if track.microphone => format!("{},", noise_filter(model)),
         _ => String::new(),
     }
 }
 
-/// The channels and rate each WAV is brought to before two are mixed.
-const MIX_FORMAT: &str = "aformat=sample_rates=48000:channel_layouts=stereo";
+/// The `arnndn` filter that removes background noise with the RNNoise
+/// model at `model`, its path escaped for a filter graph.
+pub fn noise_filter(model: &Path) -> String {
+    format!("arnndn=m={}", escape_filter_value(&model.to_string_lossy()))
+}
+
+/// The channels and rate each sound is brought to before two are mixed.
+pub const MIX_FORMAT: &str = "aformat=sample_rates=48000:channel_layouts=stereo";
+
+/// The filter that mixes `inputs` sounds into one. Not normalised: each
+/// keeps its own level rather than being turned down by the number mixed.
+pub fn mix(inputs: usize) -> String {
+    format!("amix=inputs={inputs}:duration=longest:dropout_transition=0:normalize=0")
+}
 
 /// Adds each WAV of `tracks` to `args` as an input, its start cut by
 /// `-ss` when it started before the first frame. Returns how long each
@@ -958,12 +967,7 @@ pub fn mux_args(
         for index in 0..delays.len() {
             graph.push_str(&format!("[a{index}]"));
         }
-        // Not normalised: each keeps its own level rather than being
-        // turned down by the number mixed.
-        graph.push_str(&format!(
-            "amix=inputs={}:duration=longest:dropout_transition=0:normalize=0,apad[mix]",
-            delays.len()
-        ));
+        graph.push_str(&format!("{},apad[mix]", mix(delays.len())));
         for arg in [
             "-filter_complex",
             graph.as_str(),

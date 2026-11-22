@@ -1748,6 +1748,16 @@ export type RecordingClipSource_Deserialize = {
 	cursor?: CursorPath | null,
 	/**  Whether it holds sound. */
 	hasAudio: boolean,
+	/**
+	 *  Whether background noise was removed from the microphone in the
+	 *  MP4's sound, from its pointer sidecar.
+	 */
+	removeNoise: boolean,
+	/**
+	 *  Whether the sound sidecar keeps its microphone apart, so an export
+	 *  can remove background noise or leave it in ([`kept_sound`]).
+	 */
+	separateMicrophone: boolean,
 };
 
 /**
@@ -1763,6 +1773,16 @@ export type RecordingClipSource_Serialize = {
 	cursor: CursorPath | null,
 	/**  Whether it holds sound. */
 	hasAudio: boolean,
+	/**
+	 *  Whether background noise was removed from the microphone in the
+	 *  MP4's sound, from its pointer sidecar.
+	 */
+	removeNoise: boolean,
+	/**
+	 *  Whether the sound sidecar keeps its microphone apart, so an export
+	 *  can remove background noise or leave it in ([`kept_sound`]).
+	 */
+	separateMicrophone: boolean,
 };
 
 /**  What recordings are saved as. */
@@ -1793,6 +1813,16 @@ export type RecordingInfo_Deserialize = {
 	 *  empty when it is silent.
 	 */
 	audio: AudioKind[],
+	/**
+	 *  Whether background noise was removed from the microphone in the
+	 *  MP4's sound, from its pointer sidecar.
+	 */
+	removeNoise: boolean,
+	/**
+	 *  Whether the sound sidecar keeps its microphone apart, so an export
+	 *  can remove background noise or leave it in ([`kept_sound`]).
+	 */
+	separateMicrophone: boolean,
 };
 
 /**  Mirrors `RecordingInfo` in src/recording/api.ts. */
@@ -1813,6 +1843,16 @@ export type RecordingInfo_Serialize = {
 	 *  empty when it is silent.
 	 */
 	audio: AudioKind[],
+	/**
+	 *  Whether background noise was removed from the microphone in the
+	 *  MP4's sound, from its pointer sidecar.
+	 */
+	removeNoise: boolean,
+	/**
+	 *  Whether the sound sidecar keeps its microphone apart, so an export
+	 *  can remove background noise or leave it in ([`kept_sound`]).
+	 */
+	separateMicrophone: boolean,
 };
 
 /**  How good an MP4 looks, and so how big it is. */

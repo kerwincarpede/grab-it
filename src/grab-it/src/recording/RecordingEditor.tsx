@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import "../editor/editor.css";
 import "./recording.css";
+import { NoiseIcon } from "../app/icons";
 import { MAX_BACKDROP_PRESETS } from "../settings/api";
 import { chooseBackdropImage, saveBackdropPresetImage } from "../editor/api";
 import BackdropPanel from "../editor/BackdropPanel";
@@ -162,6 +163,11 @@ function sourceNear(clips: Clip[], index: number): string | null {
   return null;
 }
 
+/** What Remove background noise does, on the top bar. */
+const NOISE_USE = "Remove background noise from the microphone when exporting. The preview plays as recorded.";
+/** Why Remove background noise is off for this sequence. */
+const NOISE_UNAVAILABLE = "Only newer recordings with a microphone can remove background noise";
+
 /** Why a recording's sound shows as Mixed sound. */
 const MIXED_SOUND_HINT = "This recording's microphone and system sound are mixed into one track, so they can only be edited together.";
 
@@ -298,6 +304,12 @@ export default function RecordingEditor() {
   const cursor = cursorOf(currentSource);
   const selectedClip = joined ? (clips.find((clip) => clip.id === selectedClipId) ?? null) : null;
   const missingClip = clips.find((clip) => !isGap(clip) && missing.has(clip.source)) ?? null;
+  /** Whether the sound sidecar of recording `source` keeps its microphone apart. */
+  const separateMicrophone = (source: string) => (source === own ? (info?.separateMicrophone ?? false) : (sourceInfo[source]?.separateMicrophone ?? false));
+  /** Noise can be removed when any clip's recording keeps its microphone apart. */
+  const canRemoveNoise = clips.some((clip) => !isGap(clip) && separateMicrophone(clip.source));
+  /** Until it is changed, the export follows how the opened recording was made. */
+  const removeNoise = edits.removeNoise ?? info?.removeNoise ?? false;
   /** Every clip's recording is there and its size known. */
   const canExport = !missingClip && clips.every((clip) => isGap(clip) || meta[clip.source] !== undefined);
 
@@ -563,6 +575,11 @@ export default function RecordingEditor() {
 
   const undoEdit = () => stepHistory(undo(history));
   const redoEdit = () => stepHistory(redo(history));
+
+  const toggleRemoveNoise = () => {
+    if (exporting || !canRemoveNoise) return;
+    commitEdits({ ...edits, removeNoise: !removeNoise });
+  };
 
   const commitBackdrop = (next: Backdrop | null) => {
     setBackdropDraft(undefined);
@@ -1019,6 +1036,7 @@ export default function RecordingEditor() {
           videoWidth: shape.videoWidth,
           videoHeight: shape.videoHeight,
           backdropBytes: 0,
+          removeNoise,
         },
         layers,
       );
@@ -1114,6 +1132,19 @@ export default function RecordingEditor() {
               onPresetsChange={presets.change}
             />
           )}
+        </div>
+        <div className="bar-group">
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Remove background noise"
+            aria-pressed={canRemoveNoise && removeNoise}
+            disabled={!canRemoveNoise || exporting}
+            title={canRemoveNoise ? NOISE_USE : NOISE_UNAVAILABLE}
+            onClick={toggleRemoveNoise}
+          >
+            <NoiseIcon size={18} />
+          </button>
         </div>
         <div className="bar-group">
           <button

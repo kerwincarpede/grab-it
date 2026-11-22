@@ -23,6 +23,14 @@ const OTHER_PATH = "/shots/recordings/Other take.mp4";
 let picked: string | null = null;
 /** Recordings `recording_source` refuses, as if gone. */
 let gone: string[] = [];
+/** Recordings `recording_source` says keep their microphone apart. */
+let separate: string[] = [];
+
+/** How the opened recording's sound was kept and whether noise was removed from it. */
+interface Noise {
+  removeNoise?: boolean;
+  separateMicrophone?: boolean;
+}
 
 interface Backend {
   calls: (CommandCall & { headers?: Record<string, string> })[];
@@ -30,17 +38,26 @@ interface Backend {
   exported?: { resolve: (path: string) => void; reject: (err: string) => void };
 }
 
-function mockBackend(edits: Value | null = null, cursor: CursorPath | null = null, audio: AudioKind[] = []): Backend {
+function mockBackend(edits: Value | null = null, cursor: CursorPath | null = null, audio: AudioKind[] = [], noise: Noise = {}): Backend {
   const backend: Backend = { calls: [] };
   mockConvertFileSrc("linux");
   backend.calls = mockCommands(
     {
-      recording_info: () => ({ path: PATH, fileName: "Grab-it 2026-03-07 09-05-01.mp4", edits, fps: 60, cursor, audio }),
+      recording_info: () => ({
+        path: PATH,
+        fileName: "Grab-it 2026-03-07 09-05-01.mp4",
+        edits,
+        fps: 60,
+        cursor,
+        audio,
+        removeNoise: noise.removeNoise ?? false,
+        separateMicrophone: noise.separateMicrophone ?? false,
+      }),
       get_editor_preferences: () => ({}),
       recording_save_edits: () => null,
       recording_source: ({ fileName: name }) => {
         if (gone.includes(name)) return Promise.reject(`${name} is not in the recordings folder`);
-        return { path: `/shots/recordings/${name}`, fileName: name, fps: 30, cursor: null, hasAudio: true };
+        return { path: `/shots/recordings/${name}`, fileName: name, fps: 30, cursor: null, hasAudio: true, removeNoise: false, separateMicrophone: separate.includes(name) };
       },
       recording_export_cancel: () => undefined,
       recording_export: () =>
@@ -97,6 +114,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   picked = null;
   gone = [];
+  separate = [];
 });
 
 const saved = (backend: Backend) => backend.calls.filter((call) => call.cmd === "recording_save_edits").map((call) => (call.payload as { edits: unknown }).edits);
@@ -213,6 +231,7 @@ describe("RecordingEditor", () => {
       videoWidth: 1920,
       videoHeight: 1080,
       backdropBytes: 0,
+      removeNoise: false,
     });
     expect(body).toEqual([]);
 
@@ -249,6 +268,7 @@ describe("RecordingEditor", () => {
       videoWidth: 1012,
       videoHeight: 570,
       backdropBytes: 3,
+      removeNoise: false,
     });
     expect(body).toEqual([1, 2, 3, 9, 9]);
   });
@@ -544,6 +564,85 @@ describe("RecordingEditor", () => {
     expect(entries[1].zooms).toEqual([zoom]);
   });
 
+  describe("Remove background noise", () => {
+    const toggle = () => screen.getByRole("button", { name: "Remove background noise" });
+    const KEPT = { separateMicrophone: true };
+
+    it("saves the toggle, undoably, and sends it with the export", async () => {
+      const backend = mockBackend(null, null, ["microphone", "system"], KEPT);
+      render(<RecordingEditor />);
+      await loadVideo();
+      expect(toggle()).toBeEnabled();
+      expect(toggle()).toHaveAttribute("aria-pressed", "false");
+      expect(toggle()).toHaveAttribute("title", "Remove background noise from the microphone when exporting. The preview plays as recorded.");
+
+      await userEvent.click(toggle());
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, removeNoise: true }));
+      expect(toggle()).toHaveAttribute("aria-pressed", "true");
+
+      fireEvent.keyDown(document.body, { key: "z", ctrlKey: true });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1 }));
+      expect(toggle()).toHaveAttribute("aria-pressed", "false");
+      fireEvent.keyDown(document.body, { key: "Z", ctrlKey: true, shiftKey: true });
+      await waitFor(() => expect(toggle()).toHaveAttribute("aria-pressed", "true"));
+
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan } = await exportCall(backend);
+      expect(plan.removeNoise).toBe(true);
+    });
+
+    it("follows how the opened recording was made until it is changed", async () => {
+      const backend = mockBackend(null, null, ["microphone"], { ...KEPT, removeNoise: true });
+      render(<RecordingEditor />);
+      await loadVideo();
+      expect(toggle()).toHaveAttribute("aria-pressed", "true");
+
+      await userEvent.click(toggle());
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, removeNoise: false }));
+      expect(toggle()).toHaveAttribute("aria-pressed", "false");
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan } = await exportCall(backend);
+      expect(plan.removeNoise).toBe(false);
+    });
+
+    it("opens with the saved choice over the recording's own", async () => {
+      const backend = mockBackend({ version: 1, removeNoise: false }, null, ["microphone"], { ...KEPT, removeNoise: true });
+      render(<RecordingEditor />);
+      await loadVideo();
+      expect(toggle()).toHaveAttribute("aria-pressed", "false");
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan } = await exportCall(backend);
+      expect(plan.removeNoise).toBe(false);
+    });
+
+    it("is off for a recording that does not keep its microphone apart", async () => {
+      const backend = mockBackend(null, null, ["mixed"]);
+      render(<RecordingEditor />);
+      await loadVideo();
+      expect(toggle()).toBeDisabled();
+      expect(toggle()).toHaveAttribute("aria-pressed", "false");
+      expect(toggle()).toHaveAttribute("title", "Only newer recordings with a microphone can remove background noise");
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan } = await exportCall(backend);
+      expect(plan.removeNoise).toBe(false);
+    });
+
+    it("can be turned on when a joined clip keeps its microphone apart", async () => {
+      separate = [OTHER];
+      const backend = mockBackend({
+        version: 2,
+        clips: [
+          { id: "a", source: OWN, startMs: 1000, endMs: 5000 },
+          { id: "b", source: OTHER, startMs: 0, endMs: 6000 },
+        ],
+      });
+      render(<RecordingEditor />);
+      await waitFor(() => expect(toggle()).toBeEnabled());
+      await userEvent.click(toggle());
+      await waitFor(() => expect(lastSaved(backend)).toMatchObject({ version: 2, removeNoise: true }));
+    });
+  });
+
   describe("names the recording's sound in the status bar", () => {
     it("lists each source kept apart", async () => {
       mockBackend(null, null, ["microphone", "system"]);
@@ -674,6 +773,7 @@ describe("RecordingEditor", () => {
         videoWidth: 1920,
         videoHeight: 1080,
         backdropBytes: 0,
+        removeNoise: false,
       });
     });
 
