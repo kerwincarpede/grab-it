@@ -476,8 +476,10 @@ mod output {
         fn the_clip_is_written_unchanged_at_its_own_rate() {
             let samples = frames(SOURCE_RATE, 1);
             let source: Vec<i16> = super::super::PCM
-                .chunks_exact(2)
-                .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|bytes| i16::from_le_bytes(*bytes))
                 .collect();
             assert_eq!(samples, source);
         }
@@ -487,7 +489,13 @@ mod output {
             let mono = frames(SOURCE_RATE, 1);
             let stereo = frames(96_000, 2);
             assert_eq!(stereo.len(), mono.len() * 4);
-            assert!(stereo.chunks_exact(2).all(|frame| frame[0] == frame[1]));
+            assert!(
+                stereo
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .all(|[left, right]| left == right)
+            );
             assert_eq!(stereo[4], mono[1]);
             assert_eq!(
                 frames(44_100, 1).len(),
