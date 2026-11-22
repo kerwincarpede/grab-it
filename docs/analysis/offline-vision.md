@@ -16,7 +16,7 @@ Render the following three SVG bodies inside a 640 × 360 SVG root with a white 
 
 Use SmolVLM-500M-Instruct GGUF (Q8_0) with its matching vision projector. Record the repository revision, both filenames, hashes and total downloaded bytes. Record the llama.cpp commit, build flags, OS, CPU, RAM and GPU. Copy the same weights and PNGs to both hosts before disconnecting external networking.
 
-Start llama-server bound to localhost with the model, projector, context 4096 and one slot. Set GPU layers to zero on the physical 8 GB CPU-only host and enable full offload on the accelerated host. Record actual offload from the server log. For each PNG send one image through the local chat completions endpoint at temperature zero with a 128-token output limit. Ask “Describe the image in one sentence. Give the centre of the TARGET in pixels from the top left of this 640 by 360 image.” Replace TARGET with the target in the table. Save raw replies.
+Start llama-server bound to localhost with the model, projector, context 4096 and one slot. Set GPU layers to zero on the physical 8 GB CPU-only host and enable full offload on the accelerated host. Record actual offload from the server log, which needs `-lv 4`: llama-server 1.0.0 at its default verbosity prints no `offloaded N/33 layers` or buffer lines. For each PNG send one image through the local chat completions endpoint at temperature zero with a 128-token output limit. Put the text part first and the image part second in the message content; the order changes the scores (see Quality). To time warm requests honestly, set `"cache_prompt": false` in each request's JSON body; it is a per-request field, not a server flag. Ask “Describe the image in one sentence. Give the centre of the TARGET in pixels from the top left of this 640 by 360 image.” Replace TARGET with the target in the table. Save raw replies.
 
 Time model load to first healthy response, first request and five successive warm requests per fixture. Record median and range of warm wall time, peak resident memory and separate accelerator memory where available. Cancel one additional streaming request after its first token. Time until the slot is idle and confirm a subsequent request completes. Record failures, including swap or process termination.
 
@@ -26,7 +26,7 @@ Import the same PNGs into Grab-it with automatic descriptions off. Record the bu
 
 Measured on 22 November 2026 on a Mac17,8 (Apple M5 Pro, 6 performance cores, 48 GiB, macOS 27.0.1), the available accelerated target. Grab-it's source tree (no installed app) was not used: OCR ran Apple Vision through a small Swift script with the same request settings as `ocr_vision.rs` (`VNRecognizeTextRequest`, accurate level) but without its short-line filter or tiling, which these 640 × 360 images do not need. Network access stayed on, so the offline condition was not tested.
 
-Setup. llama.cpp build 12359 (commit b1b770d90, Homebrew 1.0.0, Metal and Accelerate). Weights from ggml-org/SmolVLM-500M-Instruct-GGUF at revision 72e986006ef53e37cdd3f6d4241c90b0f01df376, driven by a Python script posting to `/v1/chat/completions` with `cache_prompt` off so warm requests re-evaluate the image.
+Setup. llama.cpp build 12359 (commit b1b770d90, Homebrew 1.0.0, Metal and Accelerate). Weights from ggml-org/SmolVLM-500M-Instruct-GGUF at revision 72e986006ef53e37cdd3f6d4241c90b0f01df376, driven by a Python script posting to `/v1/chat/completions` with `"cache_prompt": false` in each request body (a per-request field, not a server flag) so warm requests re-evaluate the image, and with the text part before the image part in each message.
 
 | Item | Bytes | SHA-256 |
 | --- | --- | --- |
@@ -51,6 +51,8 @@ Apple silicon uses unified memory, so resident memory includes the accelerator b
 
 ### Quality
 
+All model results use the text part first, then the image. The tie with OCR on caption facts below holds only for that order.
+
 | Capture | Model reply (both runs) | Caption facts | Placement |
 | --- | --- | --- | --- |
 | Settings | "Settings." | 1 of 2 (no connection test) | No coordinates |
@@ -61,11 +63,13 @@ The image-heavy reply differs slightly between the offload and CPU runs and was 
 
 | Capture | Bundled OCR output | Time | Caption facts | Placement |
 | --- | --- | --- | --- | --- |
-| Settings | "Settings" box (17, 31, 41 × 11); "Test connection" box (397, 277, 81 × 6), centre (438, 280) | 23,305 ms first call (engine start), then 17 to 20 ms | 2 of 2 | Hit: centre inside the button (380 to 580, 250 to 310) |
+| Settings | "Settings" box (17, 31, 41 × 11); "Test connection" box (397, 277, 81 × 6), centre (438, 280) | 23,305 ms first call (engine warm-up, not a stable figure: it depends on whether Vision is already warm, and a re-run saw 157 ms), then 17 to 20 ms | 2 of 2 | Hit: centre inside the button (380 to 580, 250 to 310) |
 | Icon only | No lines | 20 ms | 0 of 2 | Missing |
 | Image heavy | No lines | 17 ms | 0 of 2 | Missing |
 
 OCR total: 2 of 6 caption facts, 1 placement hit, 0 misses, 2 missing predictions.
+
+Sensitivity to part order. With the image part first, the same model, build and temperature zero score 0 of 6 caption facts instead of 2 of 6, and warm image-heavy Metal latency rises to about 0.30 s from 0.25 s. Settings replies " 1024.", icon only replies " 10." on Metal or " 1." on CPU, and the image-heavy reply calls the sun "a single yellow circle".
 
 ## Coverage and decision
 
@@ -74,4 +78,4 @@ OCR total: 2 of 6 caption facts, 1 placement hit, 0 misses, 2 missing prediction
 | Physical 8 GB CPU only | Not measured: no 8 GB CPU-only machine is available to this run. The CPU-only column above is a lower bound on a fast 6-core Apple CPU with 48 GiB, not a substitute. |
 | Accelerated | Measured on the Mac17,8 above (Metal, unified memory, no separate accelerator memory). |
 
-The model scored the same as OCR on caption facts and never produced a usable coordinate, so it added no placement over OCR, and its 545 MB download and about 0.9 to 1.2 GB resident memory buy no measured gain. SmolVLM-500M at this prompt is not shown to help; its latency is not the obstacle. Still defer the ship recommendation: the 8 GB CPU-only target has no measurement, and the quality result comes from three synthetic images and one prompt. Rerun on that host, and consider a larger model or a placement-specific prompt, before deciding on an optional download.
+With the text part first, the model scored the same as OCR on caption facts and never produced a usable coordinate, so it added no placement over OCR, and its 545 MB download and about 0.9 to 1.2 GB resident memory buy no measured gain. SmolVLM-500M at this prompt is not shown to help; its latency is not the obstacle. Still defer the ship recommendation: the 8 GB CPU-only target has no measurement, and the quality result comes from three synthetic images and one prompt. Rerun on that host, and consider a larger model or a placement-specific prompt, before deciding on an optional download.
