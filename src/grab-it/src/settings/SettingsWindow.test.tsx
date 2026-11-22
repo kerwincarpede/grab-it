@@ -638,6 +638,30 @@ describe("SettingsWindow AI descriptions", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeDisabled());
   });
 
+  it("dims Only describe new captures while descriptions are off, and tidying while the provider is off", async () => {
+    mockBackend();
+    render(<SettingsWindow />);
+    const use = await screen.findByRole("switch", { name: /Use an AI provider/ });
+    await waitFor(() => expect(use).toBeEnabled());
+    const describe = screen.getByRole("switch", { name: /Describe captures with AI/ });
+    const newOnly = screen.getByRole("switch", { name: /Only describe new captures/ });
+    const tidy = screen.getByRole("switch", { name: /Tidy up captured text/ });
+    // Provider off: everything that depends on it is disabled.
+    expect(describe).toBeDisabled();
+    expect(newOnly).toBeDisabled();
+    expect(tidy).toBeDisabled();
+
+    // Provider on, descriptions still off: tidying is available, new-only is not.
+    await userEvent.click(use);
+    expect(describe).toBeEnabled();
+    expect(describe).not.toBeChecked();
+    expect(newOnly).toBeDisabled();
+    expect(tidy).toBeEnabled();
+
+    await userEvent.click(describe);
+    expect(newOnly).toBeEnabled();
+  });
+
   it("asks with the count before a save describes the whole library", async () => {
     const backend = mockBackend({ captureCount: 42 });
     render(<SettingsWindow />);

@@ -238,7 +238,8 @@ function AiSection({ saved, disabled, onSave }: Props) {
             role="switch"
             className="switch"
             checked={draft.newCapturesOnly}
-            disabled={busy}
+            // Only matters while captures are described.
+            disabled={busy || !aiDescribes(draft)}
             onChange={(event) => setDraft({ ...draft, newCapturesOnly: event.target.checked })}
           />
         </label>
