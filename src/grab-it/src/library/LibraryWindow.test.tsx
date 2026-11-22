@@ -117,6 +117,7 @@ function settings(backend: Backend): Settings_Serialize {
     copyToClipboard: true,
     ai: {
       enabled: backend.aiEnabled ?? backend.aiNotice,
+      ...(backend.aiAutomatic === undefined ? {} : { automaticDescriptions: backend.aiAutomatic }),
       provider: backend.aiProvider === undefined ? "claudeCode" : backend.aiProvider,
       endpoint: "",
       model: "",
@@ -145,6 +146,8 @@ interface Backend {
   aiNotice: boolean;
   /** Whether describing is on now; the notice's own flag when unset. */
   aiEnabled?: boolean;
+  /** Settings' Describe captures with AI; left out, as from an earlier version, when unset. */
+  aiAutomatic?: boolean;
   /** The provider now; Claude Code when unset. */
   aiProvider?: "claudeCode" | "codex" | "endpoint" | null;
   /** The save folder's disk; unreadable when null. */
@@ -2526,6 +2529,18 @@ describe("LibraryWindow AI descriptions", () => {
     render(<LibraryWindow />);
     await userEvent.click(await screen.findByRole("button", { name: "Choose a provider" }));
     await waitFor(() => expect(callsTo(backend, "open_target")[0]?.payload).toEqual({ target: "settings" }));
+  });
+
+  it("drops the Claude Code notice once describing is off but the provider is still on", async () => {
+    const backend = mockBackend([shot(1)]);
+    backend.aiNotice = true;
+    backend.aiEnabled = true;
+    backend.aiAutomatic = false;
+    render(<LibraryWindow />);
+    await screen.findByRole("button", { name: "Grab-it 1.png" });
+    await settle();
+    expect(screen.queryByText(/Claude Code now describes/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Set up AI integration/)).not.toBeInTheDocument();
   });
 
   it("does not invite a user who already chose a provider and turned it off", async () => {

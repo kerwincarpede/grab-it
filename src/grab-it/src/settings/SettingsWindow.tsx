@@ -565,7 +565,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
       {/* Scrolls on its own, so the heading and the scrollbar never overlap. */}
       <div className="settings-content">
       <p className="settings-lead">
-        {savesAtOnce ? "Changes save as you make them." : section === "hotkeys" ? "Press Save to use new hotkeys." : "Switches save at once; endpoint details save with Save."}
+        {savesAtOnce ? "Changes save as you make them." : section === "hotkeys" ? "Press Save to use new hotkeys." : "AI settings save with Save; agent access saves at once."}
       </p>
       {showsMac && (
         <section aria-labelledby="mac-heading">

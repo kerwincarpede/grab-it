@@ -65,6 +65,15 @@ export const DEFAULT_AI_PREFERENCES: AiPreferences = {
   apiKeyStorage: "settingsFile",
 };
 
+/**
+ * Whether captures are described: the provider is on and so are automatic
+ * descriptions, which read as on in settings from before they had a switch,
+ * as in `AiSettings::describes`.
+ */
+export function aiDescribes(ai: Pick<AiPreferences, "enabled" | "automaticDescriptions"> | null | undefined): boolean {
+  return ai?.enabled === true && (ai.automaticDescriptions ?? true);
+}
+
 /** The provider describing uses: an unset one is the endpoint, as in `AiSettings::provider`. */
 export function aiProvider(ai: Pick<AiPreferences, "provider"> | null | undefined): AiProvider {
   return ai?.provider ?? "endpoint";
@@ -641,6 +650,7 @@ export function redescribeAll(): Promise<void> {
   return commands.aiRedescribeAll().then(() => undefined);
 }
 
-export function aiCaptureCount(): Promise<number> {
-  return commands.aiCaptureCount();
+/** How many screenshots a whole-library request would describe; with `waiting`, only those not yet described. */
+export function aiCaptureCount(waiting: boolean): Promise<number> {
+  return commands.aiCaptureCount(waiting);
 }

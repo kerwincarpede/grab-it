@@ -1468,12 +1468,17 @@ impl SettingsStore {
                     }
                 }
                 None => {
-                    if let Err(err) = self.keys.delete(&new_account)
-                        && self.keychain_worked
-                    {
-                        return Err(SettingsError::Invalid(format!(
-                            "Could not clear the endpoint key: {err}"
-                        )));
+                    // Removed before the file says it is gone: a key the
+                    // keychain refuses to remove fails the save, so it is
+                    // never left behind while Settings shows it cleared.
+                    for account in [&old_account, &new_account] {
+                        if let Err(err) = self.keys.delete(account)
+                            && self.keychain_worked
+                        {
+                            return Err(SettingsError::Invalid(format!(
+                                "Could not remove the API key from the keychain: {err}"
+                            )));
+                        }
                     }
                 }
             }
@@ -3105,6 +3110,29 @@ mod tests {
             Ok(Some("sk-1".into()))
         );
         assert_eq!(keys.stored().as_deref(), Some("sk-1"));
+    }
+
+    #[test]
+    fn clearing_a_key_the_keychain_will_not_remove_fails_the_save() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let keys = MemoryKeyStore::default();
+        let mut store =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+        let saved = store.set_preferences(with_key(Some("sk-1"))).unwrap();
+        // Only the account holding the key refuses; the rest of the keychain works.
+        let holding = key_account(&saved.preferences.ai, saved.ai_key_slot);
+        keys.refuse_delete(&holding);
+
+        assert!(matches!(
+            store.set_preferences(with_key(None)),
+            Err(SettingsError::Invalid(_))
+        ));
+
+        assert_eq!(store.get(), &saved);
+        assert_eq!(keys.get(&holding), Ok(Some("sk-1".into())));
+        let again = SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys));
+        assert_eq!(again.get().preferences.ai.api_key.as_deref(), Some("sk-1"));
     }
 
     #[test]

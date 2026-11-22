@@ -405,8 +405,12 @@ export const commands = {
 	aiRedescribeAll: (options?: InvokeOptions) => __TAURI_INVOKE<null>("ai_redescribe_all", undefined, options),
 	/**  Tests draft settings with a synthetic image without changing the active provider. */
 	aiTestConnection: (draft: AiSettings_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<string>("ai_test_connection", { draft }, options),
-	/**  Counts the screenshots a whole-library operation can describe. */
-	aiCaptureCount: (options?: InvokeOptions) => __TAURI_INVOKE<number>("ai_capture_count", undefined, options),
+	/**
+	 *  Counts the screenshots a whole-library request would describe: every
+	 *  image for Re-describe all, or with `waiting` only those still waiting,
+	 *  which is what a save that describes earlier captures sends.
+	 */
+	aiCaptureCount: (waiting: boolean, options?: InvokeOptions) => __TAURI_INVOKE<number>("ai_capture_count", { waiting }, options),
 	/**
 	 *  Looks for the AI CLIs, for Settings to say when the chosen one is
 	 *  missing. Async: the lookup may ask the login shell for its PATH.
@@ -2728,7 +2732,7 @@ export type MockCommandHandlers = {
     aiClear: (args: { id: number }) => null | Promise<null>,
     aiRedescribeAll: () => null | Promise<null>,
     aiTestConnection: (args: { draft: AiSettings_Deserialize }) => string | Promise<string>,
-    aiCaptureCount: () => number | Promise<number>,
+    aiCaptureCount: (args: { waiting: boolean }) => number | Promise<number>,
     aiClis: () => AiClis_Serialize | Promise<AiClis_Serialize>,
     updateStatus: () => UpdateStatus_Serialize | Promise<UpdateStatus_Serialize>,
     updateCheck: () => void | Promise<void>,

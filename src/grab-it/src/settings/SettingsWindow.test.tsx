@@ -650,6 +650,10 @@ describe("SettingsWindow AI descriptions", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
 
     expect(await screen.findByText("Describe 42 screenshots?")).toBeInTheDocument();
+    // Only what is still waiting is counted, and nothing is replaced.
+    expect(backend.calls.find((call) => call.cmd === "ai_capture_count")?.payload).toEqual({ waiting: true });
+    expect(screen.getByText("Earlier captures not yet described are sent to the provider.")).toBeInTheDocument();
+    expect(screen.queryByText(/replaces the current descriptions/)).not.toBeInTheDocument();
     expect(commands(backend)).not.toContain("set_preferences");
     // Cancelling the question saves nothing and keeps the draft.
     await userEvent.click(within(screen.getByText("Describe 42 screenshots?").closest(".row") as HTMLElement).getByRole("button", { name: "Cancel" }));
@@ -718,6 +722,8 @@ describe("SettingsWindow AI descriptions", () => {
     await waitFor(() => expect(backend.ai.automaticDescriptions).toBe(false));
     expect(backend.ai.enabled).toBe(true);
     expect(commands(backend)).not.toContain("ai_capture_count");
+    // Nothing would describe them, so Re-describe all is not offered.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Re-describe all…" })).toBeDisabled());
   });
 
   it("saves a cloud endpoint, model and key", async () => {
@@ -810,6 +816,40 @@ describe("SettingsWindow AI descriptions", () => {
     expect(screen.getByText(/nothing leaves this computer/)).not.toHaveClass("ai-privacy-cloud");
   });
 
+  it("never carries a saved key to another endpoint", async () => {
+    const backend = mockBackend({
+      ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "endpoint", endpoint: "https://api.openai.com/v1", model: "gpt-5-mini", apiKey: "sk-openai" },
+    });
+    render(<SettingsWindow />);
+    const key = await screen.findByLabelText("API key");
+    const preset = screen.getByLabelText("Preset");
+    await waitFor(() => expect(preset).toBeEnabled());
+    expect(key).toHaveValue("sk-openai");
+
+    // Picking the preset for the same endpoint keeps the key.
+    await userEvent.selectOptions(preset, "OpenAI");
+    expect(key).toHaveValue("sk-openai");
+
+    // Another preset empties it, and the test sends no key.
+    await userEvent.selectOptions(preset, "OpenRouter");
+    expect(key).toHaveValue("");
+    await userEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    await waitFor(() => expect(commands(backend)).toContain("ai_test_connection"));
+    const tested = backend.calls.find((call) => call.cmd === "ai_test_connection")?.payload as { draft: AiPreferences };
+    expect(tested.draft).toMatchObject({ endpoint: "https://openrouter.ai/api/v1", apiKey: null });
+
+    // So does typing another endpoint, and the save sends no key either.
+    await userEvent.selectOptions(preset, "OpenAI");
+    await userEvent.type(key, "sk-typed");
+    const endpoint = screen.getByLabelText("Endpoint URL");
+    await userEvent.type(endpoint, "/other");
+    expect(key).toHaveValue("");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(backend.ai.endpoint).toBe("https://api.openai.com/v1/other"));
+    expect(lastPreferences(backend)).toMatchObject({ ai: { apiKey: null } });
+    expect(backend.ai.apiKey).toBeNull();
+  });
+
   it("says the key is kept in the keychain when there is one", async () => {
     mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, apiKey: "sk-secret", apiKeyStorage: "keychain" } });
     render(<SettingsWindow />);
@@ -873,6 +913,8 @@ describe("SettingsWindow AI descriptions", () => {
 
     await userEvent.click(start);
     expect(await screen.findByText("Describe 12 screenshots?")).toBeInTheDocument();
+    expect(screen.getByText("This replaces the current descriptions.")).toBeInTheDocument();
+    expect(backend.calls.find((call) => call.cmd === "ai_capture_count")?.payload).toEqual({ waiting: false });
     expect(commands(backend)).not.toContain("ai_redescribe_all");
     await userEvent.click(screen.getByRole("button", { name: "Re-describe all" }));
 

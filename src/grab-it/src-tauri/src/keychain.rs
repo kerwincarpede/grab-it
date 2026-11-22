@@ -79,6 +79,8 @@ pub struct MemoryKeyStore {
     key: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, String>>>,
     /// Every call fails, as on a system without a credential store.
     broken: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Accounts whose removal fails, as when the system denies access to one item.
+    undeletable: std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
 }
 
 #[cfg(test)]
@@ -101,6 +103,11 @@ impl MemoryKeyStore {
     pub fn set_broken(&self, broken: bool) {
         self.broken
             .store(broken, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Makes removing `account` fail from now on.
+    pub fn refuse_delete(&self, account: &str) {
+        self.undeletable.lock().unwrap().insert(account.into());
     }
 
     /// What the store holds, without going through [`KeyStore`].
@@ -132,6 +139,9 @@ impl KeyStore for MemoryKeyStore {
 
     fn delete(&self, account: &str) -> Result<(), KeyStoreError> {
         self.check()?;
+        if self.undeletable.lock().unwrap().contains(account) {
+            return Err(KeyStoreError("access denied".into()));
+        }
         self.key.lock().unwrap().remove(account);
         Ok(())
     }

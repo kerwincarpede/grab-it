@@ -5,6 +5,7 @@ import {
   ENDPOINT_PRESETS,
   aiClis,
   aiCaptureCount,
+  aiDescribes,
   aiProvider,
   isLocalEndpoint,
   matchingPreset,
@@ -142,7 +143,8 @@ function AiSection({ saved, disabled, onSave }: Props) {
 
   async function confirmCount(action: "save" | "describe") {
     try {
-      const count = await aiCaptureCount();
+      // A save only sends what is still waiting; Re-describe all sends everything.
+      const count = await aiCaptureCount(action === "save");
       setConfirmation({ count, action });
     } catch (err) {
       setResult({ kind: "error", message: errorMessage(err) });
@@ -452,7 +454,11 @@ function AiSection({ saved, disabled, onSave }: Props) {
             <>
               <span className="row-text">
                 <span className="row-title">Describe {confirmation.count} screenshots?</span>
-                <span className="row-hint">This replaces the current descriptions.</span>
+                <span className="row-hint">
+                  {confirmation.action === "save"
+                    ? "Earlier captures not yet described are sent to the provider."
+                    : "This replaces the current descriptions."}
+                </span>
               </span>
               <span className="row-control">
                 <button type="button" className="pill" onClick={() => setConfirmation(null)}>
@@ -472,7 +478,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
               <button
                 type="button"
                 className="pill"
-                disabled={busy || !saved.enabled}
+                disabled={busy || !aiDescribes(saved)}
                 onClick={() => void confirmCount("describe")}
               >
                 Re-describe all…

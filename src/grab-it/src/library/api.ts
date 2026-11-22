@@ -31,6 +31,7 @@ export type {
   Usage,
 } from "../app/bindings";
 import type { Cleaned, FilterOptions, KindUsage, MatchField, OcrLine, OcrStatus, ShotKind, ShotText, SidebarSummary } from "../app/bindings";
+import { aiDescribes } from "../settings/api";
 
 /** A library item, as `Shot` in src-tauri/src/library.rs sends it. */
 export type Shot = Shot_Serialize;
@@ -732,6 +733,7 @@ export async function pendingAiNotice(): Promise<AiNotice | null> {
   const { ai } = await commands.getSettings();
   if (ai?.noticePending !== true) return null;
   if (ai.enabled !== true) return ai.provider == null ? { kind: "invite" } : null;
+  if (!aiDescribes(ai)) return null;
   return ai.provider === "claudeCode" || ai.provider === "codex" ? { kind: "enabled", provider: ai.provider } : null;
 }
 

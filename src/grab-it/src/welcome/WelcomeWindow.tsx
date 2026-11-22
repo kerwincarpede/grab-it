@@ -20,7 +20,7 @@ import {
 import { useEffectiveHotkeys } from "../app/useEffectiveHotkeys";
 import { keyCaps } from "../hub/keys";
 import { onAiStatus } from "../library/api";
-import { aiProvider, getSettings, type Hotkeys } from "../settings/api";
+import { aiDescribes, aiProvider, getSettings, type Hotkeys } from "../settings/api";
 import { openTarget } from "./api";
 import PermissionsPage from "./PermissionsPage";
 import {
@@ -150,7 +150,7 @@ function HotkeysPage({ onClose }: { onClose?: () => void }) {
       getSettings()
         .then((settings) => {
           if (cancelled) return;
-          setClaudeDescribes(settings.ai?.enabled === true && aiProvider(settings.ai) === "claudeCode");
+          setClaudeDescribes(aiDescribes(settings.ai) && aiProvider(settings.ai) === "claudeCode");
         })
         .catch(() => {
           // The tips still read well without the hotkeys.

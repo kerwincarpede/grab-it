@@ -41,7 +41,7 @@ Any API that speaks OpenAI's `/chat/completions`, on your computer or in the clo
 - **Model**: it must accept images.
 - **API key**: only cloud providers need one. Leave it empty for Ollama. It's kept in your system keychain (Keychain on macOS, Credential Manager on Windows, the Secret Service on Linux), for that endpoint's address only: change the endpoint and Grab-it asks for the key again. On a computer with no keychain Grab-it can use, Settings says it's kept in plain text in Grab-it's settings file instead.
 
-These fields save when you press **Save**, or when you press **Test connection**.
+These fields save when you press **Save**. **Test connection** tries them as typed and saves nothing.
 
 ### Run a model on your computer with Ollama
 

@@ -957,13 +957,15 @@ pub fn ai_test_connection(draft: AiSettings) -> Result<String, String> {
     test_connection(&Clients::new(TEST_TIMEOUT), &ai).map_err(|err| err.to_string())
 }
 
-/// Counts the screenshots a whole-library operation can describe.
+/// Counts the screenshots a whole-library request would describe: every
+/// image for Re-describe all, or with `waiting` only those still waiting,
+/// which is what a save that describes earlier captures sends.
 #[tauri::command(async)]
 #[specta::specta]
-pub fn ai_capture_count(app: AppHandle) -> Result<u32, String> {
+pub fn ai_capture_count(app: AppHandle, waiting: bool) -> Result<u32, String> {
     app.state::<LibraryState>()
         .lock()
-        .ai_capture_count()
+        .ai_capture_count(waiting)
         .map_err(|err| err.to_string())
 }
 
@@ -1485,6 +1487,24 @@ mod tests {
         ));
         // Settings from before the switch existed describe as they did.
         assert!(on.describes());
+    }
+
+    #[test]
+    fn the_capture_count_tells_waiting_captures_from_every_capture() {
+        let dir = TempDir::new().unwrap();
+        let (library, id) = library_with_shot(dir.path(), Some("x"));
+        let guard = library.lock();
+        assert_eq!(guard.ai_capture_count(true).unwrap(), 1);
+        assert_eq!(guard.ai_capture_count(false).unwrap(), 1);
+        // Described or skipped, a save would not send it; Re-describe all would.
+        for state in [AI_DONE, AI_SKIPPED] {
+            guard
+                .connection()
+                .execute("UPDATE shots SET ai_state = ?1 WHERE id = ?2", [state, id])
+                .unwrap();
+            assert_eq!(guard.ai_capture_count(true).unwrap(), 0);
+            assert_eq!(guard.ai_capture_count(false).unwrap(), 1);
+        }
     }
 
     #[test]

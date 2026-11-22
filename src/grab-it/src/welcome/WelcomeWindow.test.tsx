@@ -115,7 +115,13 @@ describe("WelcomeWindow", () => {
     expect(await screen.findByText(/Claude Code describes each new capture/)).toBeInTheDocument();
     unmount();
 
-    for (const ai of [{ enabled: false, provider: "claudeCode" }, { enabled: true, provider: null }, undefined] as (Partial<AiPreferences> | undefined)[]) {
+    for (const ai of [
+      { enabled: false, provider: "claudeCode" },
+      // The provider is on, but it describes nothing.
+      { enabled: true, provider: "claudeCode", automaticDescriptions: false },
+      { enabled: true, provider: null },
+      undefined,
+    ] as (Partial<AiPreferences> | undefined)[]) {
       mockBackend({ ai });
       const view = render(<WelcomeWindow />);
       await screen.findByLabelText("Shift+PrintScreen");
