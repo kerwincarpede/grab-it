@@ -16,7 +16,7 @@ use std::{
     io::Cursor,
     path::{Path, PathBuf},
     sync::{
-        Mutex,
+        Arc, Mutex,
         mpsc::{self, Receiver, Sender},
     },
     thread,
@@ -190,6 +190,10 @@ pub struct Clients {
     pub claude: Option<PathBuf>,
     pub codex: Option<PathBuf>,
     pub cli_timeout: Duration,
+    /// The endpoint and model that last needed [`REASONING_MAX_TOKENS`],
+    /// so their later requests start with it instead of thinking through a
+    /// smaller budget first. Another endpoint or model starts small again.
+    pub reasoning: Arc<Mutex<Option<(String, String)>>>,
 }
 
 impl Clients {
@@ -200,6 +204,7 @@ impl Clients {
             claude: ai_cli::find_claude(),
             codex: ai_cli::find_codex(),
             cli_timeout: stall,
+            reasoning: Arc::default(),
         }
     }
 
@@ -384,6 +389,15 @@ fn post(agent: &ureq::Agent, ai: &AiSettings, body: &Value) -> Result<String, Fa
     Ok(text)
 }
 
+/// `text` with its first letter in upper case, to stand as a sentence.
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
 /// What an empty reply from a reasoning model that ran out of tokens says.
 const THOUGHT_OUT: &str = "the model spent its whole reply budget thinking and sent no answer. \
      Choose a model without reasoning, or turn reasoning off in the server.";
@@ -437,24 +451,56 @@ fn reply_text(body: &str) -> Result<String, AiError> {
 
 /// Sends `body` and returns the reply. A field from [`OPTIONAL_FIELDS`]
 /// that the server says it does not support is dropped and the request
-/// sent again. A reasoning model that thinks through its whole
-/// `max_tokens` without answering is asked once more with
-/// [`REASONING_MAX_TOKENS`], so only such models spend the larger budget.
-fn complete(agent: &ureq::Agent, ai: &AiSettings, mut body: Value) -> Result<String, AiError> {
+/// sent again.
+///
+/// A reasoning model that thinks through its whole `max_tokens` without
+/// answering is asked once more with [`REASONING_MAX_TOKENS`]. That retry
+/// sends the image again, and each request bills the tokens spent, so it
+/// costs one more request with the screenshot and the first attempt's
+/// tokens. `clients` then remembers the endpoint and model, so their later
+/// requests start with the larger budget and pay that once, not for every
+/// capture. When the larger budget also runs out, the model will not
+/// answer within it, so the error is [`AiError::Endpoint`]: the queue
+/// stops with what to do and the capture waits.
+fn complete(clients: &Clients, ai: &AiSettings, mut body: Value) -> Result<String, AiError> {
+    let key = (ai.endpoint.clone(), ai.model.clone());
+    let reasoning = |clients: &Clients| {
+        clients
+            .reasoning
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            == Some(&key)
+    };
+    let small = |budget: &Value| {
+        budget
+            .as_u64()
+            .is_some_and(|n| n < u64::from(REASONING_MAX_TOKENS))
+    };
     let mut raised = false;
+    if reasoning(clients)
+        && let Some(budget) = body.get_mut("max_tokens").filter(|budget| small(budget))
+    {
+        *budget = Value::from(REASONING_MAX_TOKENS);
+        raised = true;
+    }
     loop {
-        match post(agent, ai, &body) {
+        match post(&clients.http, ai, &body) {
             Ok(text) => match reply_text(&text) {
-                Err(AiError::Response(message)) if message == THOUGHT_OUT && !raised => {
-                    let Some(budget) = body.get_mut("max_tokens").filter(|budget| {
-                        budget
-                            .as_u64()
-                            .is_some_and(|n| n < REASONING_MAX_TOKENS.into())
-                    }) else {
+                Err(AiError::Response(message)) if message == THOUGHT_OUT => {
+                    if raised {
+                        return Err(AiError::Endpoint(capitalized(THOUGHT_OUT)));
+                    }
+                    let Some(budget) = body.get_mut("max_tokens").filter(|budget| small(budget))
+                    else {
                         return Err(AiError::Response(message));
                     };
-                    *budget = REASONING_MAX_TOKENS.into();
+                    *budget = Value::from(REASONING_MAX_TOKENS);
                     raised = true;
+                    *clients
+                        .reasoning
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(key.clone());
                 }
                 reply => return reply,
             },
@@ -641,7 +687,7 @@ pub fn ask(clients: &Clients, ai: &AiSettings, question: &Ask) -> Result<String,
                 Some(&url),
                 question.max_tokens,
             );
-            complete(&clients.http, ai, body)
+            complete(clients, ai, body)
         }
         AiProvider::ClaudeCode => ai_cli::claude_reply(
             clients.claude()?,
@@ -1023,6 +1069,7 @@ fn run(app: &AppHandle, receiver: &Receiver<Wake>) {
         claude: None,
         codex: None,
         cli_timeout: AI_STALL_TIMEOUT,
+        reasoning: Arc::default(),
     };
     loop {
         let ai = current_settings(app);
@@ -1523,6 +1570,7 @@ mod tests {
             claude: None,
             codex: None,
             cli_timeout: Duration::from_secs(10),
+            reasoning: Arc::default(),
         }
     }
 
@@ -1911,15 +1959,72 @@ mod tests {
     fn a_reasoning_model_that_never_answers_says_so() {
         let server = serve(vec![thought_out_reply(), thought_out_reply()]);
         let err = test_connection(&fast(), &settings(&server)).unwrap_err();
-        assert!(matches!(err, AiError::Response(_)), "{err:?}");
+        assert!(matches!(err, AiError::Endpoint(_)), "{err:?}");
         let message = err.to_string();
-        assert!(message.starts_with("The model's answer could not be used: the model spent its whole reply budget thinking"), "{message}");
+        assert!(
+            message.starts_with("The model spent its whole reply budget thinking"),
+            "{message}"
+        );
         assert!(
             message.contains("turn reasoning off in the server"),
             "{message}"
         );
         // Asked once more, not again and again.
         assert_eq!(server.requests().len(), 2);
+    }
+
+    #[test]
+    fn a_reasoning_model_that_never_answers_stops_the_queue() {
+        let dir = TempDir::new().unwrap();
+        let (library, id) = library_with_shot(dir.path(), Some("x"));
+        let server = serve(vec![thought_out_reply(), thought_out_reply()]);
+        let Step::Stopped(message) = step_again(&library, &settings(&server)) else {
+            panic!("the queue should stop");
+        };
+        assert!(
+            message.contains("Choose a model without reasoning"),
+            "{message}"
+        );
+        assert_eq!(library.lock().ai_state(id).unwrap(), AI_WAITING);
+        assert_eq!(server.requests().len(), 2);
+    }
+
+    #[test]
+    fn the_larger_budget_is_remembered_for_the_endpoint_and_model() {
+        let dir = TempDir::new().unwrap();
+        let (library, id) = library_with_shot(dir.path(), Some("x"));
+        let job = library.lock().next_for_ai().unwrap().unwrap();
+        assert_eq!(job.id, id);
+        let server = serve(vec![
+            thought_out_reply(),
+            Reply::Chat(GOOD_REPLY.into()),
+            Reply::Chat(GOOD_REPLY.into()),
+            Reply::Chat(GOOD_REPLY.into()),
+        ]);
+        let clients = fast();
+        let ai = settings(&server);
+        describe(&clients, &ai, &job).unwrap();
+        describe(&clients, &ai, &job).unwrap();
+        // Another model starts small again.
+        let other = AiSettings {
+            model: "other-vision".into(),
+            ..ai.clone()
+        };
+        describe(&clients, &other, &job).unwrap();
+        let budgets: Vec<Value> = server
+            .requests()
+            .iter()
+            .map(|request| request.body["max_tokens"].clone())
+            .collect();
+        assert_eq!(
+            budgets,
+            [
+                Value::from(DESCRIPTION_MAX_TOKENS),
+                Value::from(REASONING_MAX_TOKENS),
+                Value::from(REASONING_MAX_TOKENS),
+                Value::from(DESCRIPTION_MAX_TOKENS),
+            ]
+        );
     }
 
     #[test]

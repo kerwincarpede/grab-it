@@ -52,7 +52,7 @@ The message starts with what to fix:
 - *The server did not accept the API key*: the key is missing, wrong or for another account.
 - *… does not accept images*: the model reads only text. Choose a vision model.
 - *The model's answer could not be used*: the model answered, but not with the JSON asked for. It may describe captures poorly; try a larger or newer model.
-- *The model spent its whole reply budget thinking and sent no answer*: a reasoning model used every token on its reasoning. Grab-it already asks once more with a larger budget. Choose a model without reasoning, or turn reasoning off in the server.
+- *The model spent its whole reply budget thinking and sent no answer*: a reasoning model used every token on its reasoning. Grab-it already asks once more with a larger budget, and keeps using it for that model. If that runs out too, describing stops and the Library shows this message. Choose a model without reasoning, or turn reasoning off in the server.
 
 After what to fix, *Details* gives the server's own words. Any other error shows the server's own message.
 
@@ -91,10 +91,10 @@ These results come from running **List models** and **Test connection** in Grab-
 
 | Server | Model | What happened |
 | --- | --- | --- |
-| llama.cpp server 1.0.0, with the vision projector (`--mmproj`) | SmolVLM-500M | **List models** found the model. The image was accepted, but the model answered with other JSON (`{"url": …}`) instead of `{"ok": true}`, so the test failed with *The model's answer could not be used*. The model is too small to follow the instruction. |
+| llama.cpp server 1.0.0, with the vision projector (`--mmproj`) | SmolVLM-500M | **List models** found the model. The image was accepted, but the model answered with other JSON (`{"url": …}`) instead of `{"ok": true}`, so the test failed with *The model's answer could not be used*. Why it ignored the instruction wasn't checked; the small model size is only a guess. |
 | llama.cpp server 1.0.0, without the projector | SmolVLM-500M | The server answered 500 *image input is not supported*, and Grab-it said *… does not accept images. Choose a vision model.* |
-| LM Studio | Gemma 4 26B (`google/gemma-4-26b-a4b-qat`), reasoning | LM Studio refused `response_format`, Grab-it retried without it, and the model spent all of the then 20-token budget on reasoning, so the reply was empty. Tried by hand with the same prompt, it answered `{"ok": true}` after 755 reasoning tokens, and gave nothing within 400. The test now asks again with 2048 tokens when this happens; that retry hasn't been tried against LM Studio yet. |
-| LM Studio | Qwen 3.8 27B (`qwen/qwen3.8-27b`), reasoning | The same as Gemma 4 26B. |
+| LM Studio | Gemma 4 26B (`google/gemma-4-26b-a4b-qat`), reasoning | LM Studio refused `response_format`, Grab-it retried without it, and the model spent all of the then 20-token budget on reasoning, so the reply was empty. Tried by hand with the same prompt, it answered `{"ok": true}` after 755 reasoning tokens, and gave nothing within 400. Grab-it now asks again with 2048 tokens when this happens; that retry hasn't been tried against LM Studio yet. |
+| LM Studio | Qwen 3.8 27B (`qwen/qwen3.8-27b`), reasoning | At the then 20-token test budget, the reply was empty. Sent by hand, it came back with empty content and `finish_reason` `length` after 19 reasoning tokens. Larger budgets weren't tried. |
 | Ollama, not running | Any | **Test connection** and **List models** both said *The server did not answer*. |
 
 Not yet tried: Ollama running (its `/models` list, how it refuses images for a text-only model, and how it words a missing model); OpenAI, OpenRouter and Anthropic, including a wrong or missing API key; and a local **Test connection** that passes.
