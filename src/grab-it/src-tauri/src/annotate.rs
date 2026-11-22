@@ -463,9 +463,9 @@ fn key(item: &Value, field: &str) -> String {
 }
 
 /// Reads one annotation as a suggestion, or None when it cannot be placed.
-/// A box and an arrow use their target's region when it has one, which
-/// OCR measured, else the `box`; a label goes where its `box` says, else
-/// beside its target.
+/// Each uses its target's region when it has one, which OCR measured,
+/// else the `box`: a box outlines the region, an arrow points at it and a
+/// label sits beside it, where it does not cover the text it names.
 fn suggestion(item: &Value, lines: &[OcrLine], frame: &Frame) -> Option<Suggestion> {
     let kind = item.get("kind")?.as_str()?.trim().to_lowercase();
     // An ambiguous target is placed only by its box.
@@ -510,9 +510,9 @@ fn suggestion(item: &Value, lines: &[OcrLine], frame: &Frame) -> Option<Suggesti
                 return None;
             }
             let text = truncate(text, MAX_LABEL_CHARS);
-            let (x, y) = match (placed, region) {
-                (Some(at), _) => (at.x, at.y),
-                (None, Some(region)) => beside(&region, frame),
+            let (x, y) = match (region, placed) {
+                (Some(region), _) => beside(&region, frame),
+                (None, Some(at)) => (at.x, at.y),
                 (None, None) => return None,
             };
             Some(label_at(x, y, text, frame))
@@ -947,6 +947,49 @@ mod tests {
                 y: 1412.0,
                 text: "Test connection".into()
             }
+        );
+    }
+
+    /// Gemma 4 26B's answer to the same request in a later run, with the
+    /// label's own `box` on Test connection itself.
+    const GEMMA_LABEL_REPLY: &str = "```json\n{\"annotations\": [{\"kind\": \"box\", \"target\": \
+        \"\", \"box\": [403, 260, 830, 450], \"from\": [], \"text\": \"\"}, {\"kind\": \"arrow\", \
+        \"target\": \"t41\", \"box\": [], \"from\": [850, 1000], \"text\": \"\"}, {\"kind\": \
+        \"label\", \"target\": \"t41\", \"box\": [1160, 1100], \"from\": [], \"text\": \
+        \"Test connection\"}]}\n```";
+
+    #[test]
+    fn a_label_with_a_target_sits_beside_it_whatever_its_box_says() {
+        let frame = Frame::new(2180, 1720, 1568);
+        let mut lines: Vec<OcrLine> = (0..40)
+            .map(|i| line(&format!("Line {i}"), 40, 40 + i * 30, 120, 20))
+            .collect();
+        lines.push(line("Test connection", 1520, 1532, 207, 24));
+        assert!(prompt("", &lines, &frame).contains("t41 [1093, 1102, 149, 17]"));
+        let (found, skipped) = parse(GEMMA_LABEL_REPLY, &lines, &frame).unwrap();
+        assert_eq!(skipped, 0);
+        assert_eq!(found.len(), 3, "{found:?}");
+        // Below Test connection, not on it at the box's (1613, 1529).
+        assert_eq!(
+            found[2],
+            Suggestion::Text {
+                x: 1520.0,
+                y: 1564.0,
+                text: "Test connection".into()
+            }
+        );
+        // Without a target, the label's box still places it.
+        let answer = reply(json!([
+            { "kind": "label", "target": "", "box": [1160, 1100], "from": [], "text": "Here" },
+        ]));
+        let (found, _) = parse(&answer, &lines, &frame).unwrap();
+        assert_eq!(
+            found,
+            vec![Suggestion::Text {
+                x: 1613.0,
+                y: 1529.0,
+                text: "Here".into()
+            }]
         );
     }
 

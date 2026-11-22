@@ -23,7 +23,9 @@ AI can only box, point at and label things. When it suggests something Grab-it c
 
 Annotate with AI uses the provider you chose in **Settings → AI integration**. If you haven't chosen one, the panel says so and **Open AI integration** opens Settings at AI integration. The editor stays open with your request typed in, so press **Suggest** again once you've saved a provider.
 
-**Cancel** stops waiting for an answer. Anything that arrives afterwards is ignored. Suggesting waits up to two minutes.
+**Cancel** stops waiting for an answer. Anything that arrives afterwards is ignored. Suggesting gives up when the provider goes two minutes without answering.
+
+Models that reason before they answer are slower and less reliable here. If one spends its whole reply budget thinking, Grab-it asks once more with a larger budget, so the wait can pass two minutes: nearly three has been seen. It can also think through both budgets and send no answer, and the panel then says to choose a model without reasoning or turn reasoning off in the server. For Annotate with AI, turn reasoning off if your server allows it.
 
 ## What is sent
 
