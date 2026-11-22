@@ -3,9 +3,9 @@ import type { SettingsSection } from "../settings/api";
 import { commands } from "./bindings";
 
 /** What the Grab-it window shows. Mirrors `MainView` in src-tauri/src/windows.rs. */
-export type MainView = "library" | "settings" | "welcome";
+export type MainView = "library" | "settings" | "ai-settings" | "welcome";
 
-const VIEWS: readonly MainView[] = ["library", "settings", "welcome"];
+const VIEWS: readonly MainView[] = ["library", "settings", "ai-settings", "welcome"];
 
 /** Mirrors `MAIN_NAVIGATE_EVENT` in src-tauri/src/windows.rs. */
 export const MAIN_NAVIGATE_EVENT = "main-navigate";

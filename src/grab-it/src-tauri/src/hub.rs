@@ -422,13 +422,15 @@ pub fn hub_monitors() -> Vec<HubMonitor> {
         .collect()
 }
 
-/// Opens the Grab-it window on `view`: `library`, `settings` or `welcome`.
+/// Opens the Grab-it window on `view`: `library`, `settings`,
+/// `ai-settings` (Settings at AI integration) or `welcome`.
 #[tauri::command]
 #[specta::specta]
 pub fn hub_open(view: String, app: AppHandle) -> Result<(), String> {
     let view = match view.as_str() {
         "library" => MainView::Library,
         "settings" => MainView::Settings,
+        "ai-settings" => MainView::AiSettings,
         "welcome" => MainView::Welcome,
         other => return Err(format!("unknown view: {other}")),
     };

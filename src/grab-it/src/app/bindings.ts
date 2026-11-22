@@ -98,7 +98,10 @@ export const commands = {
 	hubCapture: (kind: string, delaySeconds: number | null, monitor: number | null, options?: InvokeOptions) => __TAURI_INVOKE<null>("hub_capture", { kind, delaySeconds, monitor }, options),
 	effectiveHotkeys: (options?: InvokeOptions) => __TAURI_INVOKE<{ [key in string]: string }>("effective_hotkeys", undefined, options),
 	hubMonitors: (options?: InvokeOptions) => __TAURI_INVOKE<HubMonitor[]>("hub_monitors", undefined, options),
-	/**  Opens the Grab-it window on `view`: `library`, `settings` or `welcome`. */
+	/**
+	 *  Opens the Grab-it window on `view`: `library`, `settings`,
+	 *  `ai-settings` (Settings at AI integration) or `welcome`.
+	 */
 	hubOpen: (view: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("hub_open", { view }, options),
 	hubCheckUpdates: (options?: InvokeOptions) => __TAURI_INVOKE<void>("hub_check_updates", undefined, options),
 	hubQuit: (options?: InvokeOptions) => __TAURI_INVOKE<void>("hub_quit", undefined, options),
@@ -276,6 +279,13 @@ export const commands = {
 	 *  details.
 	 */
 	editorFaces: (options?: InvokeOptions) => __TAURI_INVOKE<Rect[]>("editor_faces", undefined, options),
+	/**
+	 *  Suggests annotations for the editor's capture as `instruction` asks.
+	 *  Without a provider set up, says so, so the editor can offer Settings.
+	 *  The text regions are the library's stored ones or read now; a capture
+	 *  with none is still sent, and the model places shapes by coordinates.
+	 */
+	editorAnnotate: (instruction: string, options?: InvokeOptions) => __TAURI_INVOKE<AnnotateOutcome>("editor_annotate", { instruction }, options),
 	/**  Requests cancellation of the export running in this editor window. */
 	recordingExportCancel: (options?: InvokeOptions) => __TAURI_INVOKE<void>("recording_export_cancel", undefined, options),
 	recordingInfo: (options?: InvokeOptions) => __TAURI_INVOKE<RecordingInfo_Serialize>("recording_info", undefined, options),
@@ -690,6 +700,19 @@ export type AiStatus_Serialize = {
 	/**  Who describes captures, so a failure can say whom to check. */
 	provider: AiProvider,
 };
+
+/**
+ *  What Annotate with AI found. Mirrors `AnnotateOutcome` in
+ *  src/editor/aiAnnotate.ts.
+ */
+export type AnnotateOutcome =
+/**
+ *  No provider is set up: the editor offers Settings, keeping the
+ *  instruction.
+ */
+{ state: "needsProvider" } |
+/**  The model's shapes that could be placed, and how many could not. */
+{ state: "suggested"; suggestions: Suggestion[]; skipped: number; by: string };
 
 /**
  *  Where the endpoint API key is kept. Mirrors `ApiKeyStorage` in
@@ -2448,6 +2471,19 @@ export type SnippetPart = {
 	hit: boolean,
 };
 
+/**
+ *  One suggested shape, in whole pixels of the original capture and
+ *  inside it.
+ *  Mirrors `AiSuggestion` in src/editor/aiAnnotate.ts.
+ */
+export type Suggestion =
+/**  A rectangle outline. */
+{ kind: "rect"; x: number | null; y: number | null; width: number | null; height: number | null } |
+/**  An arrow from its tail (`x1`, `y1`) to its head (`x2`, `y2`). */
+{ kind: "arrow"; x1: number | null; y1: number | null; x2: number | null; y2: number | null } |
+/**  A label whose top-left corner is at `x`, `y`. */
+{ kind: "text"; x: number | null; y: number | null; text: string };
+
 /**  A text size keyboard shortcut: ⌘+, ⌘− or ⌘0. */
 export type TextSizeStep = "bigger" | "smaller" |
 /**  Back to [`DEFAULT_TEXT_SCALE`]. */
@@ -2715,6 +2751,7 @@ export type MockCommandHandlers = {
     editorSaveAnnotations: (args: { annotations: Value }) => null | Promise<null>,
     editorWords: () => OcrLine[] | Promise<OcrLine[]>,
     editorFaces: () => Rect[] | Promise<Rect[]>,
+    editorAnnotate: (args: { instruction: string }) => AnnotateOutcome | Promise<AnnotateOutcome>,
     recordingExportCancel: () => void | Promise<void>,
     recordingInfo: () => RecordingInfo_Serialize | Promise<RecordingInfo_Serialize>,
     recordingSaveEdits: (args: { edits: Value }) => null | Promise<null>,
@@ -2884,6 +2921,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "editor_save_annotations": return mockCommandHandler(mockHandlers.editorSaveAnnotations, "editor_save_annotations", args);
             case "editor_words": return mockCommandHandler(mockHandlers.editorWords, "editor_words", args);
             case "editor_faces": return mockCommandHandler(mockHandlers.editorFaces, "editor_faces", args);
+            case "editor_annotate": return mockCommandHandler(mockHandlers.editorAnnotate, "editor_annotate", args);
             case "recording_export_cancel": return mockCommandHandler(mockHandlers.recordingExportCancel, "recording_export_cancel", args);
             case "recording_info": return mockCommandHandler(mockHandlers.recordingInfo, "recording_info", args);
             case "recording_save_edits": return mockCommandHandler(mockHandlers.recordingSaveEdits, "recording_save_edits", args);

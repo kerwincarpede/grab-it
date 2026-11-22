@@ -275,6 +275,8 @@ pub fn show_recording_editor(app: &AppHandle, recording: &Path) -> tauri::Result
 pub enum MainView {
     Library,
     Settings,
+    /// Settings, open at AI integration.
+    AiSettings,
     Welcome,
 }
 
@@ -283,6 +285,7 @@ impl MainView {
         match self {
             Self::Library => "library",
             Self::Settings => "settings",
+            Self::AiSettings => "ai-settings",
             Self::Welcome => "welcome",
         }
     }
