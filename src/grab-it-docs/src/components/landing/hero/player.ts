@@ -1,8 +1,9 @@
 // Plays the hero demo. Each frame draws the whole scene for one second of the
 // timeline, so pausing, replaying and jumping to a step are just "draw second
-// t". The loop starts when the hero scrolls into view, waits while it is off
-// screen, and holds the poster frame when motion is reduced. On a narrow stage
-// the camera follows the action so the card and toolbar stay readable.
+// t". The loop starts when the hero scrolls into view and waits while it is
+// off screen. It plays even when motion is reduced, face-on and without the
+// camera's swings. On a narrow stage the camera follows the action so the card
+// and toolbar stay readable.
 import { arrowGeometry, BARS } from './scene';
 import {
 	ARROW_FROM,
@@ -32,7 +33,7 @@ import {
 const T: Timeline = buildTimeline();
 const KEYS = pointerKeys(T);
 const FOCUS = focusKeys(T);
-/** The reduced-motion poster: the marked-up image floating above the editor. */
+/** A still of the finished result: the marked-up image floating above the editor. */
 const POSTER = T.clickCopy + 1.6;
 const STEPS = steps(T, POSTER);
 
@@ -41,6 +42,9 @@ const START = { rx: 16, ry: -20, tz: -460 };
 const FINISH = { rx: 13, ry: 17, tz: -400 };
 type Camera = typeof START;
 const mix = (a: Camera, b: Camera, u: number): Camera => ({ rx: lerp(a.rx, b.rx, u), ry: lerp(a.ry, b.ry, u), tz: lerp(a.tz, b.tz, u) });
+
+/** Reduce Motion: the demo still plays, face-on, without the camera's swings and leans. */
+let calm = false;
 
 const px = (v: number) => `${Math.round(v * 10) / 10}px`;
 const deg = (v: number) => `${v.toFixed(2)}deg`;
@@ -209,6 +213,7 @@ function draw(R: Refs, t: number) {
 	cam.ry += -9 * lean1 + 16 * lean2;
 	cam.tz += -120 * lean1 - 300 * lean2;
 	if (t > T.clickCopy) cam = mix(mix(cam, FINISH, inOut(seg(t, T.clickCopy + 0.15, T.clickCopy + 1.3))), START, inOut(seg(t, T.end - 1, T.end)));
+	if (calm) cam = { rx: 0, ry: 0, tz: 0 };
 	transform(R.rig, `translate3d(0,0,${px(cam.tz)}) rotateX(${deg(cam.rx)}) rotateY(${deg(cam.ry)})`);
 
 	// The capture lifts off the selection and lands in the card, then flies into the editor
@@ -293,7 +298,6 @@ class HeroDemo {
 	constructor(
 		root: HTMLElement,
 		private stage: HTMLElement,
-		reduced: boolean,
 	) {
 		this.R = refs(stage);
 		const controls = root.querySelector<HTMLElement>('[data-hero-controls]');
@@ -302,7 +306,7 @@ class HeroDemo {
 		if (!controls || !play || !replay) throw new Error('Hero demo is missing its controls');
 		this.playButton = play;
 		this.stepButtons = [...root.querySelectorAll<HTMLButtonElement>('[data-hero-step]')];
-		this.stepBars = this.stepButtons.map((b) => b.querySelector<HTMLElement>('.gi-hd-bar') ?? b);
+		this.stepBars = this.stepButtons.map((b) => b.querySelector<HTMLElement>('.gi-hd-fill') ?? b);
 		controls.hidden = false;
 
 		play.addEventListener('click', () => (this.playing ? this.pause() : this.play()));
@@ -320,13 +324,8 @@ class HeroDemo {
 		new ResizeObserver(() => this.layout()).observe(stage);
 		new IntersectionObserver(([entry]) => (this.visible = entry.isIntersecting), { threshold: 0.2 }).observe(stage);
 		this.layout();
-		if (reduced) {
-			this.pause();
-			this.seek(POSTER);
-		} else {
-			this.seek(0);
-			this.play();
-		}
+		this.seek(0);
+		this.play();
 	}
 
 	play() {
@@ -387,20 +386,14 @@ class HeroDemo {
 /** Starts every hero demo on the page. */
 export function startHeroDemos() {
 	const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+	calm = motion.matches;
 	const demos: HeroDemo[] = [];
 	document.querySelectorAll<HTMLElement>('[data-hero-demo]').forEach((root) => {
 		const stage = root.querySelector<HTMLElement>('[data-hero-stage]');
-		if (stage) demos.push(new HeroDemo(root, stage, motion.matches));
+		if (stage) demos.push(new HeroDemo(root, stage));
 	});
 	if (!demos.length) return;
-	motion.addEventListener('change', (e) =>
-		demos.forEach((d) => {
-			if (e.matches) {
-				d.pause();
-				d.seek(POSTER);
-			} else d.play();
-		}),
-	);
+	motion.addEventListener('change', (e) => (calm = e.matches));
 	let last = performance.now();
 	const frame = (now: number) => {
 		const dt = Math.min(0.05, (now - last) / 1000);

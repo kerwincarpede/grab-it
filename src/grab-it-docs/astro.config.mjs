@@ -10,6 +10,9 @@ const section = (label, directory) => ({ label, items: [{ autogenerate: { direct
 export default defineConfig({
 	site: 'https://kerwincarpede.github.io',
 	base: '/grab-it',
+	// three.js, for the landing page's 3D field, is one ~550 kB chunk (~140 kB
+	// gzipped). It loads only after the page is idle, so it never blocks.
+	vite: { build: { chunkSizeWarningLimit: 600 } },
 	integrations: [
 		starlight({
 			title: 'Grab-it',

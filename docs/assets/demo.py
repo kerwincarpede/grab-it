@@ -3,6 +3,10 @@ docs/assets/demo.gif, which docs/assets/demo_gif.py renders from this SVG.
 
 Run from the repository root:  python3 docs/assets/demo.py docs/assets/demo.svg
 
+The screen sits in the landing page's frame: its headline, which marks itself
+up, a still field of glass captures like the page's 3D background, and the
+chapter names on a hairline track along the bottom.
+
 Everything is driven by CSS keyframes sharing one cycle of T seconds, so the SVG
 also plays inside an <img>. Times below are in seconds into that cycle.
 
@@ -13,9 +17,11 @@ The story, one chapter per caption at the bottom:
   4. Record & edit  record the screen, trim it, zoom in on the click, export
   5. Find it again  search the Library by the text inside a capture, AI details
 """
+import base64
 import math
 import random
 import sys
+from pathlib import Path
 
 from animkit import (MONO, Anim, chooser_toolbar, dashboard, head, logo, qlen, th_chat, th_code, th_dash, th_error,
                      th_figma, th_receipt, th_rec, th_term, tile_bg, tool_icon, tr)
@@ -24,7 +30,8 @@ T = 32.0  # seconds per loop
 A = Anim(T)
 css, body, ripples = A.css, A.body, A.ripples
 P, kf, show, click = A.P, A.kf, A.show, A.click
-W, H = 960, 620  # card size; the "screen" is the top 960x540
+W, H = 1200, 820  # the whole picture
+SX, SY = 120, 128  # where the 960x540 screen sits in it
 
 
 
@@ -781,22 +788,102 @@ cur = [
 kf("cur", [(t, f"opacity:{o};{tr(x, y)}") for t, (x, y), o in cur], "#cur", "cubic-bezier(.45,0,.3,1)")
 
 # ================================================================ captions ====
+# Chapter names on a hairline track, as under the landing page's hero demo: the
+# current one is bright and its stretch of the track fills in as it plays.
 CHAPTERS = [("Capture", 0, 5.4), ("Mark it up", 5.4, 12.3), ("Copy text", 12.3, 16.6),
             ("Record and edit", 16.6, 23.8), ("Find it again", 23.8, T)]
 caps_svg = []
+cw = 960 / len(CHAPTERS)
 for i, (label, a, b) in enumerate(CHAPTERS):
-    x = 96 + i * 192
+    x, y = SX + i * cw, SY + 540 + 44
     caps_svg.append(f"""<g id="ch{i}">
-  <rect x="{x - 88}" y="560" width="176" height="40" rx="20" class="pill"/>
-  <circle cx="{x - 64}" cy="580" r="12" class="num"/>
-  <text x="{x - 64}" y="584.5" class="t b numt" font-size="12.5" text-anchor="middle">{i + 1}</text>
-  <text x="{x - 44}" y="585" class="t b lab" font-size="14">{label}</text>
+  <rect x="{x:.1f}" y="{y}" width="{cw - 20:.1f}" height="1" fill="#fff" opacity=".16"/>
+  <rect id="chb{i}" class="bar" x="{x:.1f}" y="{y}" width="{cw - 20:.1f}" height="1.5" fill="#ecedef"/>
+  <text x="{x:.1f}" y="{y + 25}" class="fm" font-size="11.5" fill="#9a9ea7">{i + 1:02d}</text>
+  <text x="{x + 26:.1f}" y="{y + 25}" class="fs" font-size="15" font-weight="500" fill="#ecedef">{label}</text>
 </g>""")
-    show(f"#ch{i}", f"ch{i}", [(a, b)], fade=.25, off="opacity:.38")
-    show(f"#ch{i} .num", f"ch{i}n", [(a, b)], fade=.25, off="fill:#1d2129", on="fill:#0090ff")
+    show(f"#ch{i}", f"ch{i}", [(a, b)], fade=.25, off="opacity:.42")
+    kf(f"chb{i}", [(a, "transform:scaleX(0)"), (b, "transform:scaleX(1)")], f"#chb{i}", "linear")
 captions = f'<g id="steps">{"".join(caps_svg)}</g>'
-progress = '<rect id="prog" x="0" y="617" width="960" height="3" fill="url(#bd)"/>'
-kf("prog", [(0, "transform:scaleX(0)"), (T, "transform:scaleX(1)")], "#prog", "linear")
+
+# ============================================================== headline ====
+# It marks itself up, as on the page: a box and a numbered step round "Mark it up.".
+# Widths of the bold 38px Instrument Sans runs, measured in Chrome.
+LINE_W, BEFORE_W, MARK_W = 714.1, 230.2, 171.8
+GAP = 10  # extra room either side of the box
+mx = W / 2 - (LINE_W + 2 * GAP) / 2 + BEFORE_W + GAP
+headline = f"""<text x="{W / 2}" y="86" class="fs b" font-size="38" fill="#ecedef" text-anchor="middle" letter-spacing="-1.6">Screenshot it. <tspan dx="{GAP}">Mark it up.</tspan> <tspan dx="{GAP}">Paste it anywhere.</tspan></text>
+<rect x="{mx - 9:.1f}" y="49" width="{MARK_W + 17:.1f}" height="50" rx="7" fill="none" stroke="#ff8a7a" stroke-width="2.5"/>
+<circle cx="{mx + MARK_W + 8:.1f}" cy="49" r="10" fill="#ff8a7a"/>
+<text x="{mx + MARK_W + 8:.1f}" y="53.4" class="fs b" font-size="12" fill="#16080a" text-anchor="middle">1</text>"""
+
+# ================================================================= field ====
+# A still of the landing page's 3D field: glass captures around the edges, some
+# with the logo's crop corners, some with an arrow, steps, a recording or the
+# Library's search loupe. Smaller ones are further away, so dimmer and softer.
+rnd = random.Random(7)
+FIELD_HUE = "#8297ff"
+MARKS = {"arrow": "#ff8a7a", "steps": "#ff8a7a", "rec": "#b18cff", "find": "#4fd1c5"}
+
+
+def capture_frame(cx, cy, w, depth):
+    h = w * .62
+    op = .2 + .5 * depth
+    rot = rnd.uniform(-9, 9)
+    skew = rnd.uniform(-6, 6)
+    x, y = -w / 2, -h / 2
+    parts = [f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="{w * .04:.1f}" fill="{FIELD_HUE}" fill-opacity=".035" stroke="{FIELD_HUE}" stroke-opacity=".55" stroke-width="1.2"/>',
+             f'<rect x="{x + w * .07:.1f}" y="{y + h * .14:.1f}" width="{w * .3:.1f}" height="{h * .045:.1f}" rx="1" fill="{FIELD_HUE}" opacity=".3"/>']
+    for k in range(3):
+        parts.append(f'<rect x="{x + w * .07:.1f}" y="{y + h * (.36 + k * .14):.1f}" width="{w * rnd.uniform(.3, .65):.1f}" height="{h * .035:.1f}" rx="1" fill="{FIELD_HUE}" opacity=".2"/>')
+    if rnd.random() < .45:  # the logo's crop corners
+        p, arm = w * .045, min(w, h) * .2
+        x0, y0, x1, y1 = x - p, y - p, -x + p, -y + p
+        parts.append(f'<path d="M{x0:.1f} {y0 + arm:.1f}V{y0:.1f}H{x0 + arm:.1f}M{x1 - arm:.1f} {y0:.1f}H{x1:.1f}V{y0 + arm:.1f}'
+                     f'M{x1:.1f} {y1 - arm:.1f}V{y1:.1f}H{x1 - arm:.1f}M{x0 + arm:.1f} {y1:.1f}H{x0:.1f}V{y1 - arm:.1f}"'
+                     f' fill="none" stroke="{FIELD_HUE}" stroke-width="2.4"/>')
+    mark = rnd.choice(["arrow", "steps", "rec", "find", None, None])
+    c = MARKS.get(mark)
+    if mark == "arrow":
+        parts.append(f'<path d="M{x + w * .15:.1f} {y + h * .25:.1f}Q{w * .05:.1f} {y + h * .1:.1f} {w * .2:.1f} {h * .15:.1f}" fill="none" stroke="{c}" stroke-width="2.2" stroke-linecap="round"/>'
+                     f'<circle cx="{w * .2:.1f}" cy="{h * .15:.1f}" r="3.5" fill="{c}"/>')
+    elif mark == "steps":
+        parts.append(f'<circle cx="{x + w * .2:.1f}" cy="{y + h * .3:.1f}" r="{w * .04:.1f}" fill="{c}"/><circle cx="{w * .28:.1f}" cy="{h * .22:.1f}" r="{w * .04:.1f}" fill="{c}"/>')
+    elif mark == "rec":
+        parts.append(f'<circle cx="{-x - w * .14:.1f}" cy="{y + h * .2:.1f}" r="{w * .06:.1f}" fill="none" stroke="{c}" stroke-width="1.8"/><circle cx="{-x - w * .14:.1f}" cy="{y + h * .2:.1f}" r="{w * .028:.1f}" fill="{c}"/>')
+    elif mark == "find":
+        r = w * .055
+        parts.append(f'<circle cx="{w * .28:.1f}" cy="{-h * .12:.1f}" r="{r:.1f}" fill="none" stroke="{c}" stroke-width="1.8"/>'
+                     f'<path d="M{w * .28 + r * .7:.1f} {-h * .12 + r * .7:.1f}l{r * .8:.1f} {r * .8:.1f}" stroke="{c}" stroke-width="2" stroke-linecap="round"/>')
+    blur = ' filter="url(#far)"' if depth < .35 else ""
+    return (f'<g transform="translate({cx:.1f} {cy:.1f}) rotate({rot:.1f}) skewY({skew:.1f})" opacity="{op:.2f}"{blur}>'
+            + "".join(parts) + "</g>")
+
+
+frames = []
+ZONES = [(-60, SX + 70, -40, H + 40), (SX + 890, W + 60, -40, H + 40), (-60, W + 60, -40, SY), (-60, W + 60, SY + 600, H + 40)]
+while len(frames) < 28:
+    x0, x1, y0, y1 = ZONES[len(frames) % len(ZONES)]  # each side in turn, so the field is even
+    cx, cy = rnd.uniform(x0, x1), rnd.uniform(y0, y1)
+    behind_screen = SX - 30 < cx < SX + 990 and SY - 20 < cy < SY + 560
+    over_headline = cy < 120 and W / 2 - 420 < cx < W / 2 + 420
+    under_captions = SY + 540 < cy < SY + 690
+    if behind_screen or over_headline or under_captions:
+        continue
+    depth = rnd.uniform(.15, 1)
+    frames.append((depth, capture_frame(cx, cy, 70 + 150 * depth, depth)))
+field = "".join(f for _, f in sorted(frames))  # far ones first
+
+# ================================================================== fonts ====
+# The site's fonts, embedded: an SVG shown as an <img> cannot load any.
+FONTS = Path(__file__).resolve().parents[2] / "node_modules"
+
+
+def font_face(family, file):
+    data = base64.b64encode((FONTS / file).read_bytes()).decode()
+    return (f"@font-face{{font-family:'{family}';font-weight:400 700;"
+            f"src:url(data:font/woff2;base64,{data}) format('woff2')}}")
+
 
 # ================================================================== output ====
 defs = f"""
@@ -808,6 +895,10 @@ defs = f"""
   <pattern id="dots" width="18" height="18" patternUnits="userSpaceOnUse"><circle cx="9" cy="9" r="1" fill="#2a2e37"/></pattern>
   <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="40"/></filter>
   <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="14"/></filter>
+  <filter id="far" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="1.4"/></filter>
+  <filter id="lift" x="-10%" y="-10%" width="120%" height="130%"><feGaussianBlur stdDeviation="22"/></filter>
+  <radialGradient id="vignette" cx=".5" cy=".45" r=".75"><stop offset=".55" stop-color="#0c0d0f" stop-opacity="0"/><stop offset="1" stop-color="#0c0d0f" stop-opacity=".9"/></radialGradient>
+  <radialGradient id="glow" cx=".5" cy=".55" r=".5"><stop offset="0" stop-color="#6e84ff" stop-opacity=".3"/><stop offset="1" stop-color="#6e84ff" stop-opacity="0"/></radialGradient>
   <clipPath id="screen"><rect width="960" height="540" rx="16"/></clipPath>
   <clipPath id="capclip"><rect x="{CX}" y="{CY}" width="{cap_w:.1f}" height="{cap_h:.1f}" rx="10"/></clipPath>
   <clipPath id="qaclip"><rect x="{QX + 16}" y="{QY + 14}" width="{SW * qa_scale:.1f}" height="{SH * qa_scale:.1f}" rx="6"/></clipPath>
@@ -817,28 +908,36 @@ defs = f"""
   {''.join(tile_clips)}
 </defs>"""
 
-style = """
-.t{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,"Helvetica Neue",Arial,sans-serif}
-.b{font-weight:700}
-.pill{fill:#1d2129;stroke:#2c313b}
-.lab{fill:#f3f4f7}
-.numt{fill:#fff}
-#prog{transform-origin:0 0}
-@media (prefers-reduced-motion:reduce){*{animation-delay:-9.9s!important;animation-play-state:paused!important}}
-""" + "\n".join(css)
+style = "\n".join([
+    font_face("Instrument Sans", "@fontsource-variable/instrument-sans/files/instrument-sans-latin-wght-normal.woff2"),
+    font_face("Geist Mono", "@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2"),
+    '.t{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,"Helvetica Neue",Arial,sans-serif}',
+    ".fs{font-family:'Instrument Sans',sans-serif}",
+    ".fm{font-family:'Geist Mono',monospace}",
+    ".b{font-weight:700}",
+    ".bar{transform-box:fill-box;transform-origin:0 0}",
+    "@media (prefers-reduced-motion:reduce){*{animation-delay:-9.9s!important;animation-play-state:paused!important}}",
+    *css,
+])
 
 svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" role="img" aria-labelledby="title desc">
 <title id="title">Grab-it in action</title>
 <desc id="desc">Capture part of the screen from the Capture &amp; record… toolbar, annotate it with an arrow, a box, numbered steps, a blur and a note on a gradient backdrop, and copy it. Copy the code off a screen share as text, tidied up by AI. Record the screen, trim the recording, zoom in on a click and export it. Then search the Library for "invoice" to find a receipt by the text inside it, with an AI description and tags.</desc>
 <style>{style}</style>
 {defs}
-<rect width="{W}" height="{H}" rx="20" fill="#0d1016"/>
+<rect width="{W}" height="{H}" fill="#0c0d0f"/>
+<g>{field}</g>
+<rect width="{W}" height="{H}" fill="url(#vignette)"/>
+<ellipse cx="{SX + 480}" cy="{SY + 330}" rx="560" ry="300" fill="url(#glow)"/>
+{headline}
+<rect x="{SX + 20}" y="{SY + 40}" width="920" height="520" rx="16" fill="#000" opacity=".55" filter="url(#lift)"/>
+<g transform="translate({SX} {SY})">
 <g clip-path="url(#screen)">
 {''.join(body)}
 </g>
-<rect width="960" height="540" rx="16" fill="none" stroke="#2c313b"/>
+</g>
+<rect x="{SX - .5}" y="{SY - .5}" width="961" height="541" rx="16.5" fill="none" stroke="#fff" stroke-opacity=".16"/>
 {captions}
-{progress}
 </svg>
 """
 open(sys.argv[1], "w").write(svg)

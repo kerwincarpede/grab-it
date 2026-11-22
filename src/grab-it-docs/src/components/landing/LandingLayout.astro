@@ -1,10 +1,10 @@
 ---
-// The landing page's own layout: head, theme, header and footer. Docs and
+// The landing page's own layout: head, theme, the 3D field behind the page
+// (field.ts), header and footer, and the scroll reveals (reveal.ts). Docs and
 // reference pages keep Starlight's layout.
 import '@fontsource-variable/instrument-sans';
 import '@fontsource-variable/geist-mono';
 import '../../styles/tokens.css';
-import '../../styles/landing.css';
 import Logo from '../Logo.astro';
 
 interface Props {
@@ -18,14 +18,14 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
 
 const guide = [
 	['Get started', '/grab-it/get-started/'],
-	['Library', '/grab-it/library/'],
 	['Capture', '/grab-it/capture/'],
-	['AI', '/grab-it/ai/'],
 	['Image editor', '/grab-it/image-editor/'],
-	['Reference', '/grab-it/reference/'],
 	['Recording', '/grab-it/recording/'],
-	['Contribute', '/grab-it/contribute/'],
 	['Video editor', '/grab-it/video-editor/'],
+	['Library', '/grab-it/library/'],
+	['AI', '/grab-it/ai/'],
+	['Reference', '/grab-it/reference/'],
+	['Contribute', '/grab-it/contribute/'],
 	['GitHub', 'https://github.com/kerwincarpede/grab-it'],
 ];
 ---
@@ -66,43 +66,326 @@ const guide = [
 		</script>
 	</head>
 	<body>
-		<div class="gi-page">
-			<a class="gi-skip" href="#main">Skip to content</a>
-			<div aria-hidden="true" style="position: absolute; inset: 0 0 auto 0; height: 1400px; background-image: radial-gradient(var(--gi-dot) 1px, transparent 1px); background-size: 24px 24px; -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 30%, transparent 75%); mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 30%, transparent 75%)"></div>
-			<div aria-hidden="true" style="position: absolute; left: 50%; top: -260px; width: 1100px; height: 700px; transform: translateX(-50%); background: radial-gradient(closest-side, var(--gi-glow), transparent); filter: blur(20px)"></div>
+		<a class="gi-skip" href="#main">Skip to content</a>
+		<canvas class="gi-field" aria-hidden="true" data-field></canvas>
+		<div class="gi-vignette" aria-hidden="true"></div>
 
-			<header style="position: relative; z-index: 2; max-width: 1200px; margin: 0 auto; padding: 18px clamp(16px, 4vw, 40px) 0">
-				<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; padding: 8px 8px 8px 16px; border-radius: 14px; background: var(--gi-glass); border: 1px solid var(--gi-hair); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px)">
-					<a href="/grab-it/" style="display: flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 650; font-size: 18px; letter-spacing: -0.01em">
-						<Logo id="gi-logo-header" />
-						Grab-it
-					</a>
-					<nav aria-label="Main" style="display: flex; flex-wrap: wrap; gap: 2px; font-size: 14.5px; color: var(--gi-muted); flex: 1 1 auto">
-						<a class="gi-link" href="#tour" style="text-decoration: none; padding: 8px 12px; border-radius: 8px">Tour</a>
-						<a class="gi-link" href="/grab-it/get-started/" style="text-decoration: none; padding: 8px 12px; border-radius: 8px">Docs</a>
-						<a class="gi-link" href="/grab-it/reference/" style="text-decoration: none; padding: 8px 12px; border-radius: 8px">Reference</a>
-						<a class="gi-link" href="https://github.com/kerwincarpede/grab-it" style="text-decoration: none; padding: 8px 12px; border-radius: 8px">GitHub</a>
-					</nav>
-					<a class="gi-cta" href="#download" style="text-decoration: none; background: var(--gi-cta); color: var(--gi-on-cta); font-weight: 650; font-size: 14.5px; padding: 0 16px; border-radius: 9px; min-height: 40px; box-sizing: border-box; display: inline-flex; align-items: center; box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%), 0 6px 20px var(--gi-glow)">Download</a>
-				</div>
-			</header>
+		<header class="gi-head" data-head>
+			<a href="/grab-it/" class="gi-brand"><Logo id="gi-logo-header" size={24} /> Grab-it</a>
+			<nav aria-label="Main" class="gi-nav">
+				<a href="#tour">Tour</a>
+				<a href="/grab-it/get-started/">Docs</a>
+				<a href="/grab-it/reference/">Reference</a>
+				<a href="https://github.com/kerwincarpede/grab-it">GitHub</a>
+			</nav>
+			<a class="gi-btn gi-btn--small" href="#download">Download</a>
+		</header>
 
-			<main id="main">
-				<slot name="hero" />
-				<slot />
-			</main>
+		<main id="main">
+			<slot />
+		</main>
 
-			<footer style="position: relative; max-width: 1200px; margin: 0 auto; padding: 96px clamp(16px, 4vw, 40px) 0">
-				<div style="display: flex; flex-wrap: wrap; gap: 32px 64px; font-size: 14px">
-					<div style="flex: 1 1 240px">
-						<p style="margin: 0; color: var(--gi-muted); max-width: 300px">MIT licensed. Made for people who explain things on screen.</p>
-					</div>
-					<nav aria-label="Guide" style="display: grid; grid-template-columns: repeat(2, minmax(120px, 1fr)); gap: 10px 48px; color: var(--gi-muted)">
-						{guide.map(([label, href]) => <a class="gi-link" href={href} style="text-decoration: none">{label}</a>)}
-					</nav>
-				</div>
-				<p aria-hidden="true" style="margin: 64px 0 0; font-size: clamp(88px, 21vw, 280px); line-height: 0.8; letter-spacing: -0.06em; font-weight: 700; text-align: center; background: linear-gradient(180deg, var(--gi-wordmark), transparent 85%); -webkit-background-clip: text; background-clip: text; color: transparent; user-select: none">Grab-it</p>
-			</footer>
-		</div>
+		<footer class="gi-foot">
+			<p><Logo id="gi-logo-footer" size={20} /> MIT licensed. Made for people who explain things on screen.</p>
+			<nav aria-label="Guide">
+				{guide.map(([label, href]) => <a href={href}>{label}</a>)}
+			</nav>
+		</footer>
 	</body>
 </html>
+
+<script>
+	import { startReveals } from './reveal';
+
+	startReveals();
+
+	// The header gains its glass once the page has scrolled.
+	const head = document.querySelector<HTMLElement>('[data-head]');
+	const onScroll = () => head?.classList.toggle('is-stuck', window.scrollY > 24);
+	window.addEventListener('scroll', onScroll, { passive: true });
+	onScroll();
+
+	// The 3D field loads after the page, so it never holds up the first paint.
+	const canvas = document.querySelector<HTMLCanvasElement>('[data-field]');
+	if (canvas) {
+		const start = () => import('./field').then((m) => m.startField(canvas));
+		if ('requestIdleCallback' in window) requestIdleCallback(start, { timeout: 1500 });
+		else setTimeout(start, 300);
+	}
+</script>
+
+<style is:global>
+	html {
+		background: var(--gi-bg);
+		scroll-behavior: smooth;
+	}
+	body {
+		margin: 0;
+		background: var(--gi-bg);
+		color: var(--gi-text);
+		font-family: var(--gi-font-sans);
+		font-size: 16px;
+		line-height: 1.55;
+		-webkit-font-smoothing: antialiased;
+		overflow-x: clip;
+	}
+	a {
+		color: inherit;
+	}
+	:focus-visible {
+		outline: 2px solid var(--gi-accent);
+		outline-offset: 3px;
+		border-radius: 4px;
+	}
+	kbd {
+		font-family: var(--gi-font-mono);
+	}
+
+	/* Buttons, shared by the header, hero and downloads */
+	.gi-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 10px;
+		min-height: 50px;
+		padding: 0 22px;
+		border-radius: 999px;
+		background: var(--gi-text);
+		color: var(--gi-bg);
+		font-weight: 650;
+		font-size: 16px;
+		text-decoration: none;
+		box-sizing: border-box;
+		transition: transform 0.25s ease, box-shadow 0.25s ease;
+	}
+	.gi-btn:hover {
+		transform: translateY(-1px);
+		box-shadow: 0 10px 36px color-mix(in srgb, var(--gi-accent) 35%, transparent);
+	}
+	.gi-btn--ghost {
+		background: transparent;
+		color: var(--gi-text);
+		box-shadow: inset 0 0 0 1px var(--gi-hair-strong);
+	}
+	.gi-btn--ghost:hover {
+		box-shadow: inset 0 0 0 1px var(--gi-text);
+	}
+	.gi-btn--small {
+		min-height: 38px;
+		padding: 0 16px;
+		font-size: 14px;
+	}
+
+	/* Section headings: the second line is quieter */
+	.gi-h2 {
+		margin: 0 auto;
+		text-align: center;
+		font-size: clamp(36px, 5vw, 64px);
+		line-height: 1.02;
+		letter-spacing: -0.04em;
+		font-weight: 600;
+		text-wrap: balance;
+	}
+	.gi-h2 > span {
+		display: block;
+	}
+	.gi-h2 > span + span {
+		color: var(--gi-muted);
+	}
+	.gi-lede {
+		margin: 26px auto 0;
+		max-width: 560px;
+		font-size: clamp(17px, 1.6vw, 20px);
+		color: var(--gi-muted);
+		text-wrap: balance;
+	}
+
+	/* The tour animations' pause and play button */
+	.gi-tour-toggle {
+		position: absolute;
+		right: 10px;
+		bottom: 10px;
+		width: 44px;
+		height: 44px;
+		border-radius: 50%;
+		border: 1px solid rgb(255 255 255 / 18%);
+		background: rgb(13 16 22 / 72%);
+		color: #f3f4f7;
+		cursor: pointer;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		backdrop-filter: blur(6px);
+		-webkit-backdrop-filter: blur(6px);
+		transition: background 0.2s ease;
+	}
+	.gi-tour-toggle:hover {
+		background: rgb(13 16 22 / 90%);
+	}
+
+	/* Scroll reveals (reveal.ts): rise out of a soft blur, children one after
+	   another. The hidden state only applies once the script has run. */
+	[data-reveal],
+	[data-reveal] [data-reveal-child] {
+		transition:
+			opacity 0.9s ease,
+			transform 1s cubic-bezier(0.2, 0.7, 0.2, 1),
+			filter 1s ease;
+		transition-delay: calc(var(--i, 0) * 90ms);
+	}
+	.gi-reveals [data-reveal]:not(.is-in):not(:has([data-reveal-child])),
+	.gi-reveals [data-reveal]:not(.is-in) [data-reveal-child] {
+		opacity: 0;
+		transform: translateY(22px);
+		filter: blur(6px);
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		html {
+			scroll-behavior: auto;
+		}
+		.gi-reveals [data-reveal],
+		.gi-reveals [data-reveal] [data-reveal-child] {
+			transform: none !important;
+			filter: none !important;
+			transition: opacity 0.5s ease !important;
+		}
+		.gi-btn:hover {
+			transform: none;
+		}
+	}
+</style>
+
+<style>
+	/* The field sits behind everything, fading in once it has drawn. */
+	.gi-field {
+		position: fixed;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		z-index: 0;
+		pointer-events: none;
+		opacity: 0;
+		transition: opacity 2.4s ease;
+	}
+	.gi-field:global(.is-on) {
+		opacity: 1;
+	}
+	:global(.gi-field-dim) .gi-field:global(.is-on) {
+		opacity: 0.4;
+	}
+	/* Keeps the text calm: darker down the middle and at the edges. */
+	.gi-vignette {
+		position: fixed;
+		inset: 0;
+		z-index: 0;
+		pointer-events: none;
+		background:
+			radial-gradient(ellipse 34% 60% at 50% 45%, color-mix(in srgb, var(--gi-bg) 55%, transparent), transparent 100%),
+			radial-gradient(ellipse 120% 90% at 50% 40%, transparent 55%, var(--gi-bg) 100%);
+	}
+	.gi-head,
+	main,
+	.gi-foot {
+		position: relative;
+		z-index: 1;
+	}
+	.gi-skip {
+		position: absolute;
+		left: 16px;
+		top: -100px;
+		z-index: 50;
+		background: var(--gi-text);
+		color: var(--gi-bg);
+		font-weight: 650;
+		padding: 10px 16px;
+		border-radius: 9px;
+		text-decoration: none;
+	}
+	.gi-skip:focus {
+		top: 16px;
+	}
+
+	.gi-head {
+		position: sticky;
+		top: 0;
+		z-index: 20;
+		display: flex;
+		align-items: center;
+		gap: 12px 28px;
+		max-width: 1200px;
+		margin: 0 auto;
+		padding: 14px clamp(16px, 4vw, 40px);
+		border-bottom: 1px solid transparent;
+		transition: background 0.4s ease, border-color 0.4s ease;
+	}
+	.gi-head.is-stuck {
+		max-width: none;
+		background: color-mix(in srgb, var(--gi-bg) 72%, transparent);
+		border-bottom-color: var(--gi-hair);
+		-webkit-backdrop-filter: blur(16px) saturate(1.2);
+		backdrop-filter: blur(16px) saturate(1.2);
+	}
+	.gi-brand {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		font-weight: 650;
+		font-size: 17px;
+		letter-spacing: -0.01em;
+		text-decoration: none;
+	}
+	.gi-nav {
+		display: flex;
+		gap: 4px;
+		flex: 1;
+		font-size: 14.5px;
+		color: var(--gi-muted);
+	}
+	.gi-nav a {
+		text-decoration: none;
+		padding: 8px 12px;
+		border-radius: 8px;
+		transition: color 0.2s ease;
+	}
+	.gi-nav a:hover {
+		color: var(--gi-text);
+	}
+	@media (max-width: 640px) {
+		.gi-nav {
+			display: none;
+		}
+		.gi-head {
+			justify-content: space-between;
+		}
+	}
+
+	.gi-foot {
+		max-width: 1200px;
+		margin: clamp(120px, 14vw, 180px) auto 0;
+		padding: 32px clamp(16px, 4vw, 40px) 48px;
+		border-top: 1px solid var(--gi-hair);
+		display: flex;
+		flex-wrap: wrap;
+		gap: 24px 48px;
+		justify-content: space-between;
+		font-size: 14px;
+		color: var(--gi-muted);
+	}
+	.gi-foot p {
+		margin: 0;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+	.gi-foot nav {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px 20px;
+	}
+	.gi-foot a {
+		text-decoration: none;
+	}
+	.gi-foot a:hover {
+		color: var(--gi-text);
+	}
+</style>

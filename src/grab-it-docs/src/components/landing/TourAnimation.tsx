@@ -5,24 +5,22 @@ import { sx } from './sx';
 // It is shown as an <img>, so its ids and keyframes stay out of the page. To
 // pause it, the SVG is shown again with every animation held at the current
 // moment; to play, it carries on from there. The loop starts from the beginning
-// when it first scrolls into view, waits while it is off screen, and stays on
-// its poster frame when motion is reduced.
+// when it first scrolls into view and waits while it is off screen. It plays
+// even when motion is reduced; its pause button stays. The page frames it.
+
 interface Props {
 	src: string;
 	alt: string;
 }
 
-const reducedMotion = () =>
-	typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
 export default function TourAnimation({ src, alt }: Props) {
 	const box = useRef<HTMLDivElement>(null);
-	const svg = useRef<{ text: string; loop: number; poster: number } | null>(null);
+	const svg = useRef<{ text: string; loop: number } | null>(null);
 	const [shown, setShown] = useState(src);
 	const [playing, setPlaying] = useState(true);
 	// Where the loop is: playing, the moment it was at second 0; paused, the second it is held at.
 	const clock = useRef({ start: 0, held: 0 });
-	const userPaused = useRef(reducedMotion());
+	const userPaused = useRef(false);
 	const visible = useRef(false);
 
 	const now = () => performance.now() / 1000;
@@ -62,13 +60,12 @@ export default function TourAnimation({ src, alt }: Props) {
 				const text = await fetch(src).then((r) => r.text());
 				if (cancelled) return;
 				const num = (name: string) => Number(new RegExp(`data-${name}="([\\d.]+)"`).exec(text)?.[1] ?? 0);
-				svg.current = { text, loop: num('loop') || 10, poster: num('poster') };
+				svg.current = { text, loop: num('loop') || 10 };
 			}
 			if (cancelled) return;
 			if (!started) {
 				started = true;
-				if (userPaused.current) await show(svg.current.poster, false);
-				else if (entry.isIntersecting) await show(0, true);
+				if (entry.isIntersecting) await show(0, true);
 				return;
 			}
 			if (userPaused.current) return;
@@ -93,7 +90,7 @@ export default function TourAnimation({ src, alt }: Props) {
 	return (
 		<div
 			ref={box}
-			style={sx('position: relative; border-radius: 16px; border: 1px solid var(--gi-hair); background: #0d1016; box-shadow: 0 30px 60px rgb(0 0 0 / 25%); overflow: hidden; aspect-ratio: 720 / 450')}
+			style={sx('position: relative; border-radius: inherit; background: #0d1016; overflow: hidden; aspect-ratio: 720 / 450')}
 		>
 			<img src={shown} alt={alt} width={720} height={450} loading="lazy" decoding="async" style={sx('display: block; width: 100%; height: 100%')} />
 			<button type="button" className="gi-tour-toggle" onClick={toggle} aria-label={playing ? 'Pause animation' : 'Play animation'}>

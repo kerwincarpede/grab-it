@@ -1,54 +1,215 @@
 ---
-// The hero: headline, calls to action and a demo of one first run of the app
-// (HeroDemo.astro), then the three keys it takes.
+// The hero: a headline that marks itself up (a box and a numbered step are
+// drawn round "Mark it up."), the calls to action, the demo of one first run
+// of the app (HeroDemo.astro), which leans back in space and settles flat as
+// it scrolls in, and the three keys it takes.
 import HeroDemo from './HeroDemo.astro';
-
-const keycap =
-	"flex: none; min-width: 64px; text-align: center; font-family: var(--gi-font-mono); font-size: 13px; font-weight: 600; color: var(--gi-text); padding: 10px 12px; border-radius: 10px; border: 1px solid var(--gi-hair-strong); background: linear-gradient(180deg, var(--gi-fill), transparent), var(--gi-panel); box-shadow: inset 0 -3px 0 var(--gi-hair-strong), 0 6px 16px rgb(0 0 0 / 18%);";
 ---
 
-<section id="top" style="position: relative; z-index: 1; max-width: 1200px; margin: 0 auto; padding: clamp(64px, 9vw, 120px) clamp(16px, 4vw, 40px) 0; text-align: center">
-<a href="https://github.com/kerwincarpede/grab-it/releases/latest" class="gi-link" style="display: inline-flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--gi-muted); text-decoration: none; border: 1px solid var(--gi-hair); background: var(--gi-glass); border-radius: 999px; padding: 6px 14px 6px 8px">
-<span style="font-family: var(--gi-font-mono); font-size: 11px; font-weight: 600; color: var(--gi-on-cta); background: var(--gi-cta); border-radius: 999px; padding: 2px 8px">FREE</span>
-Open source for Windows, macOS and Linux <span aria-hidden="true">→</span>
-</a>
-<h1 style="margin: 28px auto 0; max-width: 1000px; font-size: clamp(46px, 8.2vw, 104px); line-height: 0.98; letter-spacing: -0.045em; font-weight: 650">Screenshot it.<br><span style="background: linear-gradient(92deg, var(--gi-h1a) 0%, var(--gi-h1b) 55%, var(--gi-h1c) 100%); -webkit-background-clip: text; background-clip: text; color: transparent">Mark it up.</span> Paste it anywhere.</h1>
-<p style="margin: 28px auto 0; font-size: clamp(17px, 1.7vw, 21px); color: var(--gi-muted); max-width: 580px">One key to capture, a few clicks to explain, and it's already on your clipboard.</p>
-<div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 36px">
-<a class="gi-cta" href="#download" style="text-decoration: none; background: var(--gi-cta); color: var(--gi-on-cta); font-weight: 650; padding: 0 22px; border-radius: 11px; min-height: 52px; box-sizing: border-box; display: inline-flex; align-items: center; gap: 10px; font-size: 16.5px; box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%), 0 10px 40px var(--gi-glow)">
-<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"></path></svg>
-<span data-gi-download-label>Download Grab-it</span>
-</a>
-<a class="gi-cta" href="/grab-it/get-started/" style="text-decoration: none; background: var(--gi-glass); border: 1px solid var(--gi-hair-strong); font-weight: 600; padding: 0 22px; border-radius: 11px; min-height: 52px; box-sizing: border-box; display: inline-flex; align-items: center; font-size: 16.5px">Read the docs</a>
-</div>
+<section class="gi-hero" data-hue="capture">
+	<p class="gi-eyebrow gi-in" style="--d: 0">Free and open source · Windows, macOS and Linux</p>
+	<h1 class="gi-title">
+		<span class="gi-in" style="--d: 1">Screenshot it.</span>
+		<span class="gi-in gi-mark" style="--d: 2">
+			Mark it up.
+			<svg class="gi-mark-box" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+				<rect x="1" y="3" width="98" height="94" rx="6" pathLength="1"></rect>
+			</svg>
+			<span class="gi-mark-step" aria-hidden="true">1</span>
+		</span>
+		<span class="gi-in" style="--d: 3">Paste it anywhere.</span>
+	</h1>
+	<p class="gi-lede gi-in" style="--d: 4">One key to capture, a few clicks to explain, and it's already on your clipboard.</p>
+	<div class="gi-ctas gi-in" style="--d: 5">
+		<a class="gi-btn" href="#download">
+			<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"></path></svg>
+			<span data-download-label>Download Grab-it</span>
+		</a>
+		<a class="gi-btn gi-btn--ghost" href="/grab-it/get-started/">Read the docs <span aria-hidden="true">→</span></a>
+	</div>
 
-<figure style="position: relative; margin: clamp(56px, 7vw, 88px) auto 0; max-width: 1060px">
-<div aria-hidden="true" style="position: absolute; inset: 8% 4% -6% 4%; background: radial-gradient(closest-side, var(--gi-glow), transparent); filter: blur(40px)"></div>
-<div style="position: relative; padding: 1px; border-radius: 20px; background: linear-gradient(180deg, var(--gi-hair-strong), var(--gi-hair) 40%, transparent)">
-<HeroDemo />
-</div>
-</figure>
+	<figure class="gi-demo" data-tilt>
+		<HeroDemo />
+	</figure>
 
-<ol aria-label="How it works" style="list-style: none; margin: 56px auto 0; padding: 0; max-width: 900px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; text-align: left">
-<li style="display: flex; align-items: center; gap: 14px; padding: 16px; border-radius: 14px; border: 1px solid var(--gi-hair); background: var(--gi-glass)">
-<kbd style={keycap}>PrtSc</kbd>
-<span><span style="display: block; font-weight: 650">Capture</span><span style="font-size: 13.5px; color: var(--gi-muted)">or ⌘ ⇧ 2 on a Mac</span></span>
-</li>
-<li style="display: flex; align-items: center; gap: 14px; padding: 16px; border-radius: 14px; border: 1px solid var(--gi-hair); background: var(--gi-glass)">
-<kbd style={keycap}>Drag</kbd>
-<span><span style="display: block; font-weight: 650">Select</span><span style="font-size: 13.5px; color: var(--gi-muted)">a region or a window</span></span>
-</li>
-<li style="display: flex; align-items: center; gap: 14px; padding: 16px; border-radius: 14px; border: 1px solid var(--gi-hair); background: var(--gi-glass)">
-<kbd style={keycap}>Ctrl V</kbd>
-<span><span style="display: block; font-weight: 650">Paste</span><span style="font-size: 13.5px; color: var(--gi-muted)">it's already copied</span></span>
-</li>
-</ol>
+	<p class="gi-keys" data-reveal>
+		<span data-reveal-child><kbd>PrtSc</kbd> or <kbd>⌘ ⇧ 2</kbd> to capture</span>
+		<span class="gi-keys-sep" aria-hidden="true" data-reveal-child></span>
+		<span data-reveal-child>drag a region or click a window</span>
+		<span class="gi-keys-sep" aria-hidden="true" data-reveal-child></span>
+		<span data-reveal-child><kbd>Ctrl V</kbd> anywhere: it's already copied</span>
+	</p>
 </section>
 
 <script>
+	import { onScrollProgress } from './reveal';
 	import { detectOs, osNames } from './os';
 
+	// The demo leans back in space and settles flat as it scrolls in.
+	const tilt = document.querySelector<HTMLElement>('[data-tilt]');
+	if (tilt && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+		onScrollProgress(tilt, (p) => tilt.style.setProperty('--p', p.toFixed(4)), { start: 1.15, end: 0.55 });
+	}
+
 	const os = detectOs();
-	const label = document.querySelector('[data-gi-download-label]');
+	const label = document.querySelector('[data-download-label]');
 	if (os && label) label.textContent = `Download for ${osNames[os]}`;
 </script>
+
+<style>
+	.gi-hero {
+		max-width: 1200px;
+		margin: 0 auto;
+		padding: clamp(72px, 11vw, 150px) clamp(16px, 4vw, 40px) 0;
+		text-align: center;
+	}
+	.gi-eyebrow {
+		margin: 0;
+		font-size: 14px;
+		color: var(--gi-muted);
+	}
+	.gi-title {
+		margin: 22px auto 0;
+		font-size: clamp(46px, 8.4vw, 112px);
+		line-height: 0.98;
+		letter-spacing: -0.05em;
+		font-weight: 600;
+	}
+	.gi-title > span {
+		display: inline-block;
+	}
+	.gi-title > span:last-child {
+		display: block;
+	}
+	/* The headline marks itself up, like a capture in the editor. */
+	.gi-mark {
+		position: relative;
+		margin: 0 0.12em;
+		padding: 0 0.1em;
+	}
+	.gi-mark-box {
+		position: absolute;
+		inset: -0.02em -0.08em -0.06em;
+		width: calc(100% + 0.16em);
+		height: calc(100% + 0.08em);
+		overflow: visible;
+		pointer-events: none;
+	}
+	.gi-mark-box rect {
+		fill: none;
+		stroke: var(--gi-hue-editor);
+		stroke-width: 3px;
+		vector-effect: non-scaling-stroke;
+		stroke-dasharray: 1;
+		stroke-dashoffset: 1;
+		animation: gi-draw 1.1s cubic-bezier(0.65, 0, 0.35, 1) 1.25s forwards;
+	}
+	.gi-mark-step {
+		position: absolute;
+		right: -0.42em;
+		top: -0.3em;
+		width: 0.42em;
+		height: 0.42em;
+		border-radius: 50%;
+		background: var(--gi-hue-editor);
+		color: #16080a;
+		font-size: 0.26em;
+		font-weight: 700;
+		letter-spacing: 0;
+		line-height: 1.6em;
+		display: grid;
+		place-items: center;
+		transform: scale(0);
+		animation: gi-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 2.15s forwards;
+	}
+	@keyframes gi-draw {
+		to {
+			stroke-dashoffset: 0;
+		}
+	}
+	@keyframes gi-pop {
+		to {
+			transform: scale(1);
+		}
+	}
+	.gi-ctas {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
+		gap: 12px;
+		margin-top: 36px;
+	}
+	/* The entrance: each line rises out of a soft blur, one after another. */
+	.gi-in {
+		opacity: 0;
+		transform: translateY(18px);
+		filter: blur(8px);
+		animation: gi-rise 1s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+		animation-delay: calc(var(--d) * 110ms + 150ms);
+	}
+	@keyframes gi-rise {
+		to {
+			opacity: 1;
+			transform: none;
+			filter: none;
+		}
+	}
+
+	.gi-demo {
+		--p: 1;
+		margin: clamp(64px, 8vw, 104px) auto 0;
+		max-width: 1080px;
+		perspective: 1400px;
+		opacity: 0;
+		animation: gi-fade 1.4s ease 0.9s forwards;
+	}
+	.gi-demo :global(.gi-hd-stage) {
+		transform: rotateX(calc((1 - var(--p)) * 24deg)) scale(calc(0.9 + var(--p) * 0.1));
+		transform-origin: 50% 0%;
+		box-shadow:
+			0 0 0 1px var(--gi-hair-strong),
+			0 50px 120px -20px color-mix(in srgb, var(--gi-accent) calc(var(--p) * 30%), transparent);
+		will-change: transform;
+	}
+	@keyframes gi-fade {
+		to {
+			opacity: 1;
+		}
+	}
+	.gi-keys {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: center;
+		gap: 10px 18px;
+		margin: 56px auto 0;
+		color: var(--gi-muted);
+		font-size: 15px;
+	}
+	.gi-keys kbd {
+		display: inline-block;
+		margin: 0 2px;
+		padding: 3px 8px;
+		border-radius: 7px;
+		font-size: 12.5px;
+		color: var(--gi-text);
+		box-shadow: inset 0 0 0 1px var(--gi-hair-strong), inset 0 -2px 0 var(--gi-hair-strong);
+	}
+	.gi-keys-sep {
+		width: 28px;
+		height: 1px;
+		background: var(--gi-hair-strong);
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.gi-in {
+			transform: none;
+			filter: none;
+			animation-duration: 0.6s;
+		}
+		.gi-mark-box rect,
+		.gi-mark-step {
+			animation-duration: 0.01s;
+		}
+	}
+</style>
