@@ -464,6 +464,9 @@ describe("SettingsWindow", () => {
     fireEvent.pointerUp(volume);
     expect(await screen.findByText("disk full")).toBeInTheDocument();
     expect(volume).toBeEnabled();
+    // The slider goes back to what copies and Preview still play at.
+    await waitFor(() => expect(volume).toHaveValue("60"));
+    expect(screen.getByText("60%", { selector: ".scale-value[data-for='copy-sound-volume']" })).toBeInTheDocument();
   });
 
   it("disables preview while a recording is under way and re-enables it afterwards", async () => {

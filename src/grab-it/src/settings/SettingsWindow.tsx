@@ -76,7 +76,8 @@ interface ScaleSliderProps {
   hint: string;
   value: number;
   disabled: boolean;
-  onCommit: (percent: number) => void;
+  /** Saves the value; a promise of false means it was not saved, and the slider returns to `value`. */
+  onCommit: (percent: number) => void | Promise<boolean>;
   /** The percent range; text size's by default. */
   range?: { min: number; max: number; step: number };
   /** Shows a small and a large A at the ends, for text size. */
@@ -107,7 +108,13 @@ function ScaleSlider({
   const draft = dragging && dragging.from === value ? dragging.to : value;
   const setDraft = (to: number) => setDragging({ from: value, to });
   const commit = () => {
-    if (draft !== value) onCommit(draft);
+    if (draft === value) return;
+    const attempt = { from: value, to: draft };
+    void onCommit(draft)?.then((saved) => {
+      // Shows the saved value again, unless another drag has started since.
+      if (saved) return;
+      setDragging((current) => (current?.from === attempt.from && current.to === attempt.to ? null : current));
+    });
   };
   const fill = ((draft - range.min) * 100) / (range.max - range.min);
   return (
@@ -494,12 +501,14 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     }
   }
 
-  async function changeCopySoundVolume(volume: number) {
+  async function changeCopySoundVolume(volume: number): Promise<boolean> {
     try {
       setSettings(await setCopySoundVolume(volume));
       setStatus({ kind: "preferences-saved" });
+      return true;
     } catch (err) {
       setStatus({ kind: "error", message: errorMessage(err) });
+      return false;
     }
   }
 
@@ -774,7 +783,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
               disabled={settings === null}
               range={VOLUME_RANGE}
               letters={false}
-              onCommit={(volume) => void changeCopySoundVolume(volume)}
+              onCommit={changeCopySoundVolume}
             />
           </div>
         </section>
