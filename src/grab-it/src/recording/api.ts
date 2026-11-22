@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { commands, type AudioKind, type RecordingClipSource_Serialize, type RecordingInfo_Serialize, type Value } from "../app/bindings";
+import { commands, type AudioKind, type RecordingClipSource_Serialize, type RecordingInfo_Serialize, type RecordingPauses_Serialize, type Value } from "../app/bindings";
 import type { SidecarEdits } from "./edits";
 import type { CursorPath, Zoom } from "./zooms";
 
@@ -177,4 +177,25 @@ export async function cancelExport(): Promise<void> {
 /** Calls `handler` as an export in this window writes its frames. */
 export function onExportProgress(handler: (progress: ExportProgress) => void): Promise<UnlistenFn> {
   return listen<ExportProgress>(EXPORT_PROGRESS_EVENT, (event) => handler(event.payload));
+}
+
+/**
+ * The pauses in a recording's sound, for Suggest edits: `RecordingPauses`
+ * in src-tauri/src/recording_suggest.rs, its pointer as recorded narrowed
+ * as in `RecordingInfo`.
+ */
+export type RecordingPauses = Omit<RecordingPauses_Serialize, "pointer"> & { pointer: CursorPath | null };
+
+/** The quiet stretches of recordings-folder recording `fileName`. */
+export function recordingPauses(fileName: string): Promise<RecordingPauses> {
+  return commands.recordingPauses(fileName) as Promise<RecordingPauses>;
+}
+
+/**
+ * A stretch of `fileName`'s sound as a WAV: as recorded, or `cleaned` as
+ * the export removes background noise. At most 30 seconds.
+ */
+export async function recordingAudition(fileName: string, startMs: number, endMs: number, cleaned: boolean): Promise<Blob> {
+  const bytes = await invoke<ArrayBuffer>("recording_audition", { fileName, startMs: Math.round(startMs), endMs: Math.round(endMs), cleaned });
+  return new Blob([bytes], { type: "audio/wav" });
 }

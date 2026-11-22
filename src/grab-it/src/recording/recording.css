@@ -410,3 +410,77 @@
 .recording-fit[data-gap="true"] .recording-video {
   visibility: hidden;
 }
+
+.recording-suggest-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--ed-surface);
+  color: var(--ed-text);
+  font-variant-numeric: tabular-nums;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.recording-suggest-panel header,
+.recording-suggest-panel .suggest-audition {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.recording-suggest-panel header .text-button {
+  margin-left: auto;
+}
+
+.recording-suggest-panel p {
+  margin: 0;
+}
+
+.suggest-sound {
+  opacity: 0.8;
+}
+
+.suggest-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.suggest-list li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.suggest-list li[data-focus="true"] {
+  background: var(--ed-hover, rgba(127, 127, 127, 0.15));
+}
+
+.suggest-list label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 16em;
+}
+
+.suggest-range {
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline dotted;
+  cursor: pointer;
+  padding: 0;
+}
+
+.suggest-length {
+  opacity: 0.8;
+}

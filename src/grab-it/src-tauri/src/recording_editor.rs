@@ -605,7 +605,7 @@ pub fn source_file(recordings: &Path, file_name: &str) -> Result<PathBuf, String
 
 /// The folder clips are taken from: the one holding the recording the
 /// editor opened, which is a recordings folder.
-fn recordings_of(original: &Path) -> Result<&Path, String> {
+pub(crate) fn recordings_of(original: &Path) -> Result<&Path, String> {
     original
         .parent()
         .ok_or_else(|| "the recording has no folder".to_owned())
@@ -1119,8 +1119,77 @@ fn sound_from<'a>(
 }
 
 /// Why an export that removes background noise cannot.
-const NO_NOISE_MODEL: &str = "the background noise model is missing from this install of \
+pub(crate) const NO_NOISE_MODEL: &str = "the background noise model is missing from this install of \
      Grab-it; reinstall it, or turn off Remove background noise";
+
+/// The file `clip`'s sound is read from, or `None` for silence.
+pub fn clip_sound_file<'a>(clip: &ClipSound<'a>) -> Option<&'a Path> {
+    match clip.from {
+        SoundFrom::Silence => None,
+        SoundFrom::Video(file) => Some(file),
+        SoundFrom::Kept { kept, .. } => Some(kept.file.as_path()),
+    }
+}
+
+/// Adds to `filters` the graph that brings `clip`'s sound, from ffmpeg
+/// input `input` (`None` for silence), to `[a<index>]`: 48 kHz stereo,
+/// exactly the clip's length, its microphone denoised when asked and
+/// mixed with system sound as recording mixed them. The export and the
+/// editor's audio auditions share it, so an audition sounds as the
+/// export will.
+pub fn push_clip_sound(
+    filters: &mut Vec<String>,
+    clip: &ClipSound<'_>,
+    input: Option<usize>,
+    index: usize,
+) {
+    match input {
+        Some(inputs) => {
+            let trim = |stream: usize| {
+                format!(
+                    "[{inputs}:a:{stream}]atrim=start={}:end={},asetpts=PTS-STARTPTS,",
+                    seconds(clip.start_ms),
+                    seconds(clip.end_ms),
+                )
+            };
+            // The stretch, ready for the format every clip shares.
+            let sound = match clip.from {
+                SoundFrom::Kept { kept, noise_model } => {
+                    let denoise = noise_model
+                        .map(|model| format!("{},", ffmpeg::noise_filter(model)))
+                        .unwrap_or_default();
+                    if kept.system {
+                        // Trimmed before noise removal, so only the
+                        // stretch kept goes through the model.
+                        filters.push(format!(
+                            "{}{denoise}{}[m{index}]",
+                            trim(0),
+                            ffmpeg::MIX_FORMAT
+                        ));
+                        filters.push(format!("{}{}[s{index}]", trim(1), ffmpeg::MIX_FORMAT));
+                        format!("[m{index}][s{index}]{},", ffmpeg::mix(2))
+                    } else {
+                        format!("{}{denoise}", trim(0))
+                    }
+                }
+                _ => trim(0),
+            };
+            // Padded with silence and cut to the clip's length, so a
+            // sound track that ends early never pulls later clips'
+            // sound ahead of their frames.
+            filters.push(format!(
+                "{sound}aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,\
+                 apad,atrim=duration={}[a{index}]",
+                seconds(clip.duration_ms())
+            ));
+        }
+        None => filters.push(format!(
+            "anullsrc=r=48000:cl=stereo,atrim=duration={},\
+             aformat=sample_fmts=fltp:channel_layouts=stereo[a{index}]",
+            seconds(clip.duration_ms())
+        )),
+    }
+}
 
 /// ffmpeg's arguments to write `output` from the silent `video` with each
 /// clip's stretch of its recording's sound, resampled to 48 kHz stereo
@@ -1139,60 +1208,13 @@ pub fn clip_sound_args(video: &Path, clips: &[ClipSound<'_>], output: &Path) -> 
     let mut filters = Vec::new();
     let mut inputs = 0;
     for (index, clip) in clips.iter().enumerate() {
-        let file = match clip.from {
-            SoundFrom::Silence => None,
-            SoundFrom::Video(file) => Some(file),
-            SoundFrom::Kept { kept, .. } => Some(kept.file.as_path()),
-        };
-        match file {
-            Some(file) => {
-                args.push("-i".into());
-                args.push(file.as_os_str().to_owned());
-                inputs += 1;
-                let trim = |stream: usize| {
-                    format!(
-                        "[{inputs}:a:{stream}]atrim=start={}:end={},asetpts=PTS-STARTPTS,",
-                        seconds(clip.start_ms),
-                        seconds(clip.end_ms),
-                    )
-                };
-                // The stretch, ready for the format every clip shares.
-                let sound = match clip.from {
-                    SoundFrom::Kept { kept, noise_model } => {
-                        let denoise = noise_model
-                            .map(|model| format!("{},", ffmpeg::noise_filter(model)))
-                            .unwrap_or_default();
-                        if kept.system {
-                            // Trimmed before noise removal, so only the
-                            // stretch kept goes through the model.
-                            filters.push(format!(
-                                "{}{denoise}{}[m{index}]",
-                                trim(0),
-                                ffmpeg::MIX_FORMAT
-                            ));
-                            filters.push(format!("{}{}[s{index}]", trim(1), ffmpeg::MIX_FORMAT));
-                            format!("[m{index}][s{index}]{},", ffmpeg::mix(2))
-                        } else {
-                            format!("{}{denoise}", trim(0))
-                        }
-                    }
-                    _ => trim(0),
-                };
-                // Padded with silence and cut to the clip's length, so a
-                // sound track that ends early never pulls later clips'
-                // sound ahead of their frames.
-                filters.push(format!(
-                    "{sound}aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,\
-                     apad,atrim=duration={}[a{index}]",
-                    seconds(clip.duration_ms())
-                ));
-            }
-            None => filters.push(format!(
-                "anullsrc=r=48000:cl=stereo,atrim=duration={},\
-                 aformat=sample_fmts=fltp:channel_layouts=stereo[a{index}]",
-                seconds(clip.duration_ms())
-            )),
-        }
+        let input = clip_sound_file(clip).map(|file| {
+            args.push("-i".into());
+            args.push(file.as_os_str().to_owned());
+            inputs += 1;
+            inputs
+        });
+        push_clip_sound(&mut filters, clip, input, index);
     }
     let joined: String = (0..clips.len())
         .map(|index| format!("[a{index}]"))

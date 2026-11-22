@@ -54,6 +54,7 @@ import {
   type ClipAt,
 } from "./clips";
 import ClipTrack from "./ClipTrack";
+import SuggestEditsPanel from "./SuggestEditsPanel";
 import RecordingVideo from "./RecordingVideo";
 import { chooseRecording, folderOf, isIn, probeVideo, type SourceMeta } from "./sources";
 import { clampTrim, emptyEdits, formatTime, isWhole, parseEdits, serializeEdits, trimOf, type RecordingEdits, type Trim } from "./edits";
@@ -81,6 +82,9 @@ import {
 } from "./zooms";
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
+
+/** Why an edit was refused during a preview of suggested cuts. */
+const PREVIEW_BLOCKS_EDITS = "Stop the preview or apply the suggested cuts before editing.";
 
 const errorText = (err: unknown) => String(err instanceof Error ? err.message : err);
 const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
@@ -224,6 +228,13 @@ export default function RecordingEditor() {
   const [missing, setMissing] = useState<ReadonlySet<string>>(() => new Set());
   const requested = useRef(new Set<string>());
   const [clipDraft, setClipDraft] = useState<Clip[] | null>(null);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  /**
+   * The sequence with the suggested cuts, while Suggest edits previews
+   * them. Nothing is saved meanwhile: every edit waits until the preview
+   * ends, and only Apply keeps the cuts.
+   */
+  const [suggestPreview, setSuggestPreview] = useState<Clip[] | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   /** While playing over a gap: when its clock started and the playhead then. */
   const gapClockRef = useRef<{ at: number; ms: number } | null>(null);
@@ -286,7 +297,7 @@ export default function RecordingEditor() {
   const backdrop = backdropDraft !== undefined ? backdropDraft : (edits.backdrop ?? null);
   const savedTrim = trimOf(edits, durationMs);
   const savedClips = useMemo(() => clipsOf(edits, own, durationMs), [edits, own, durationMs]);
-  const clips = clipDraft ?? savedClips;
+  const clips = clipDraft ?? suggestPreview ?? savedClips;
   const joined = isJoined(clips, own);
   const sequenceMs = sequenceDuration(clips);
   const timelineDuration = joined ? sequenceMs : durationMs;
@@ -311,7 +322,7 @@ export default function RecordingEditor() {
   /** Until it is changed, the export follows how the opened recording was made. */
   const removeNoise = edits.removeNoise ?? info?.removeNoise ?? false;
   /** Every clip's recording is there and its size known. */
-  const canExport = !missingClip && clips.every((clip) => isGap(clip) || meta[clip.source] !== undefined);
+  const canExport = !suggestPreview && !missingClip && clips.every((clip) => isGap(clip) || meta[clip.source] !== undefined);
 
   // Zooms keep their recording's time; the timeline shows each on its clip.
   const allZooms = useMemo(() => edits.zooms ?? [], [edits.zooms]);
@@ -352,14 +363,22 @@ export default function RecordingEditor() {
     [readOnly],
   );
 
-  /** One undo entry; an edit that leaves the sidecar as it was adds none. */
+  /**
+   * One undo entry; an edit that leaves the sidecar as it was adds none.
+   * While suggested cuts are previewed, edits are refused, since they
+   * would be made on the unapproved cuts; Apply alone passes `applying`.
+   */
   const commitEdits = useCallback(
-    (next: RecordingEdits) => {
+    (next: RecordingEdits, applying = false) => {
+      if (suggestPreview && !applying) {
+        setMessage(PREVIEW_BLOCKS_EDITS);
+        return;
+      }
       if (JSON.stringify(serializeEdits(next)) === JSON.stringify(serializeEdits(history.present))) return;
       setHistory(commit(history, next));
       save(next);
     },
-    [history, save],
+    [history, save, suggestPreview],
   );
 
   /** Moves the playhead to timeline time `ms` of `list`, switching recording when it must. */
@@ -423,9 +442,22 @@ export default function RecordingEditor() {
   }, [info, previewSources, own, ownMeta]);
 
   /** Keeps `next` as the sequence: one undo entry. */
-  const commitClips = (next: Clip[]) => {
+  const commitClips = (next: Clip[], applying = false) => {
     setClipDraft(null);
-    commitEdits(withClips(edits, next, own, durationMs));
+    commitEdits(withClips(edits, next, own, durationMs), applying);
+  };
+
+  /** Ends a preview of suggested cuts, back to the saved sequence. */
+  const endSuggestPreview = () => {
+    if (!suggestPreview) return;
+    setSuggestPreview(null);
+    setMessage(null);
+    seek(Math.min(currentMs, sequenceDuration(savedClips)), savedClips);
+  };
+
+  const closeSuggestions = () => {
+    endSuggestPreview();
+    setSuggestOpen(false);
   };
 
   const latestRef = useRef({ clips, at, commitClips, seek, meta });
@@ -553,6 +585,9 @@ export default function RecordingEditor() {
   /** Moves to `next` in the history, saves what it holds and keeps the playhead inside its trim. */
   const stepHistory = (next: History<RecordingEdits>) => {
     if (next === history || exporting) return;
+    // Undo and redo end a preview of suggested cuts first.
+    setSuggestPreview(null);
+    setMessage(null);
     setTrimDraft(null);
     setBackdropDraft(undefined);
     setZoomDraft(null);
@@ -871,7 +906,21 @@ export default function RecordingEditor() {
   // undoes, and Ctrl/⌘ Shift Z or Ctrl Y redoes, unless a field has the text.
   // Alt and the arrow keys move the selected clip; Delete removes it and
   // Shift Delete leaves a gap. S splits at the playhead; Ctrl/⌘ D duplicates.
-  const keysRef = useRef({ toggle, undoEdit, redoEdit, moveSelectedClip, removeSelectedClip, leaveGapForSelected, duplicateSelectedClip, splitAtPlayhead, hasClip: false });
+  // Esc ends a preview of suggested cuts, unless a field or dialog has it.
+  const keysRef = useRef({
+    toggle,
+    undoEdit,
+    redoEdit,
+    moveSelectedClip,
+    removeSelectedClip,
+    leaveGapForSelected,
+    duplicateSelectedClip,
+    splitAtPlayhead,
+    endSuggestPreview,
+    hasClip: false,
+    previewing: false,
+    dialogOpen: false,
+  });
   useEffect(() => {
     keysRef.current = {
       toggle,
@@ -882,13 +931,24 @@ export default function RecordingEditor() {
       leaveGapForSelected,
       duplicateSelectedClip,
       splitAtPlayhead,
+      endSuggestPreview,
       hasClip: selectedClip !== null && !selectedZoom && !exporting,
+      previewing: suggestPreview !== null,
+      dialogOpen: backdropOpen,
     };
   });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const mod = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
+      if (event.key === "Escape" && keysRef.current.previewing && !keysRef.current.dialogOpen && !event.defaultPrevented && !isEditingText(event.target)) {
+        const inDialog = event.target instanceof Element && event.target.closest('[role="dialog"]') !== null;
+        if (!inDialog) {
+          event.preventDefault();
+          keysRef.current.endSuggestPreview();
+          return;
+        }
+      }
       if (mod && !event.altKey && (key === "z" || key === "y")) {
         if (isEditingText(event.target)) return;
         event.preventDefault();
@@ -1170,6 +1230,16 @@ export default function RecordingEditor() {
           <button
             type="button"
             className="text-button"
+            aria-expanded={suggestOpen}
+            onClick={() => (suggestOpen ? closeSuggestions() : setSuggestOpen(true))}
+            disabled={!info || readOnly || exporting || durationMs <= 0}
+            title="Propose cuts where the recording pauses, to preview and apply together"
+          >
+            Suggest edits
+          </button>
+          <button
+            type="button"
+            className="text-button"
             onClick={splitAtPlayhead}
             disabled={!canSplitHere}
             title={canSplitHere ? "Split the clip at the playhead (S)" : "Move the playhead at least half a second inside a clip to split it"}
@@ -1369,6 +1439,30 @@ export default function RecordingEditor() {
           />
         </Timeline>
       </div>
+      {suggestOpen && info && !exporting && (
+        <SuggestEditsPanel
+          clips={savedClips}
+          own={own}
+          joined={isJoined(savedClips, own)}
+          previewing={suggestPreview !== null}
+          onPreview={(next, fromMs) => {
+            if (!next) {
+              endSuggestPreview();
+              return;
+            }
+            setClipDraft(null);
+            setSuggestPreview(next);
+            seek(fromMs ?? 0, next);
+          }}
+          onApply={(next) => {
+            setSuggestPreview(null);
+            setMessage(null);
+            commitClips(next, true);
+            seek(Math.min(currentMs, sequenceDuration(next)), next);
+          }}
+          onClose={closeSuggestions}
+        />
+      )}
       {exporting && (
         <section className="recording-export-panel" aria-label="Video export">
           <strong>Exporting… {percent}%</strong>

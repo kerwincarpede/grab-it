@@ -42,6 +42,7 @@ mod record;
 mod record_bar;
 mod record_frame;
 mod recording_editor;
+mod recording_suggest;
 mod rt;
 mod screen;
 mod scroll;
@@ -330,6 +331,7 @@ byte_commands![
     library::library_image,
     library::library_save_thumbnail,
     recording_editor::recording_export,
+    recording_suggest::recording_audition,
     steps::guide_image,
 ];
 
@@ -428,6 +430,7 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             recording_editor::recording_info,
             recording_editor::recording_save_edits,
             recording_editor::recording_source,
+            recording_suggest::recording_pauses,
             library::library_list,
             library::library_set_tags,
             search::library_sidebar,
