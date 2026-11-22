@@ -212,6 +212,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [busy, setBusy] = useState(false);
+  const [switchedToStable, setSwitchedToStable] = useState(false);
   /** Null until the backend has said; only the Recording page asks. */
   const [ffmpeg, setFfmpeg] = useState<FfmpegStatus | null>(null);
   const showsRecording = shows("recording");
@@ -494,6 +495,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     setBusy(true);
     try {
       setSettings(await setUpdateChannel(channel));
+      setSwitchedToStable(channel === "stable");
       setStatus({ kind: "preferences-saved" });
     } catch (err) {
       setStatus({ kind: "error", message: errorMessage(err) });
@@ -1085,18 +1087,21 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
           </h2>
           <div className="group">
             <div className="row">
-              <span className="row-text">
+              <div className="row-text">
                 <label className="row-title" htmlFor="update-channel">
                   Update channel
                 </label>
-                {updateChannelChoice && <span className="row-hint">{updateChannelChoice.hint}</span>}
-                <span className="row-hint">
-                  Switching from Edge to Stable never installs an older version: Grab-it waits until Stable catches up.
-                </span>
-              </span>
+                <div className="row-text" id="update-channel-info">
+                  {updateChannelChoice && <span className="row-hint">{updateChannelChoice.hint}</span>}
+                  <span aria-live="polite" className={switchedToStable ? "row-hint" : undefined}>
+                    {switchedToStable && "If you’re ahead of Stable, you’ll keep your current version until a newer Stable release is available."}
+                  </span>
+                </div>
+              </div>
               <select
                 id="update-channel"
                 className="row-field"
+                aria-describedby="update-channel-info"
                 value={updateChannel}
                 disabled={busy || settings === null}
                 onChange={(event) => void changeUpdateChannel(event.target.value as UpdateChannel)}

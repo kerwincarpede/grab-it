@@ -177,12 +177,12 @@ export const UPDATE_CHANNELS: { value: UpdateChannel; title: string; hint: strin
   {
     value: "stable",
     title: "Stable",
-    hint: "Releases that have been tried out first. Best for everyday use.",
+    hint: "Get updates after they’ve been tried on Edge.",
   },
   {
     value: "edge",
     title: "Edge",
-    hint: "Every change as soon as it is built. New features come first, and so can new bugs.",
+    hint: "Get new features and fixes sooner. You may run into bugs.",
   },
 ];
 

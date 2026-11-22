@@ -13,10 +13,10 @@ You can also read what changed in each version on the [Grab-it releases page](ht
 
 ## Stable and Edge
 
-Grab-it updates from one of two channels. Pick one with **Update channel** in **Settings → General → Updates**:
+Grab-it updates from one of two channels. Pick one with **Update channel** in **Settings → General → Updates**.
 
-- **Stable**, the default: releases that have been tried out first. Best for everyday use.
-- **Edge**: every change as soon as it is built. New features come first, and so can new bugs. The Grab-it window's sidebar shows an **Edge** badge next to the version.
+- **Stable** (default) — Get updates after they’ve been tried on Edge.
+- **Edge** — Get new features and fixes sooner. You may run into bugs. The Grab-it window's sidebar shows an **Edge** badge next to the version.
 
 Switching channel forgets any update the old channel offered and checks the new one straight away. Grab-it never installs an older version, so moving from Edge back to Stable keeps the version you have until Stable passes it.
 
