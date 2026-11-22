@@ -1531,7 +1531,7 @@ describe("SettingsWindow updates", () => {
     await waitFor(() => expect(channel).toBeEnabled());
     expect(channel).toHaveValue("stable");
     expect(within(channel).getAllByRole("option").map((option) => option.textContent)).toEqual(["Stable", "Edge"]);
-    expect(channel).toHaveAccessibleDescription(/Stable — Get updates after they’ve been tried on Edge.*Edge — Get new features and fixes sooner/);
+    expect(channel).toHaveAccessibleDescription("Get updates after they’ve been tried on Edge.");
     expect(screen.queryByText(/you’ll keep your current version/)).not.toBeInTheDocument();
 
     await userEvent.selectOptions(channel, "Edge");
@@ -1539,7 +1539,7 @@ describe("SettingsWindow updates", () => {
     await waitFor(() => expect(channel).toHaveValue("edge"));
     expect(backend.updateChannel).toBe("edge");
     expect(backend.calls.find((call) => call.cmd === "set_update_channel")?.payload).toEqual({ channel: "edge" });
-    expect(channel).toHaveAccessibleDescription(/Stable — Get updates after.*Edge — Get new features and fixes sooner/);
+    expect(channel).toHaveAccessibleDescription("Get new features and fixes sooner. You may run into bugs.");
     expect(screen.queryByText(/you’ll keep your current version/)).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Saved.");
   });

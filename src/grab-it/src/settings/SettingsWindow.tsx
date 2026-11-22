@@ -557,6 +557,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   const appearanceOff = busy || settings === null;
   const showsMac = shows("general") && (hasDock() || autostart !== null);
   const updateChannel = settings?.updateChannel ?? "stable";
+  const updateChannelChoice = UPDATE_CHANNELS.find((choice) => choice.value === updateChannel);
 
   return (
     <main className={section === undefined ? "window settings" : "window settings settings-page"}>
@@ -1091,9 +1092,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                   Update channel
                 </label>
                 <div className="row-text" id="update-channel-info">
-                  {UPDATE_CHANNELS.map((choice) => (
-                    <span className="row-hint" key={choice.value}><strong>{choice.title}</strong> — {choice.hint}</span>
-                  ))}
+                  {updateChannelChoice && <span className="row-hint">{updateChannelChoice.hint}</span>}
                   <span aria-live="polite" className={switchedToStable ? "row-hint" : undefined}>
                     {switchedToStable && "If you’re ahead of Stable, you’ll keep your current version until a newer Stable release is available."}
                   </span>
