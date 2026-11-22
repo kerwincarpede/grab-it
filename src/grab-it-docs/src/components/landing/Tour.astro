@@ -1,80 +1,282 @@
 ---
-// The feature tour: one large panel per feature, each with its own colour
-// glow, a short explanation, links to its docs section and an animation of
-// the app at work. The animations are made by docs/assets/tours.py.
+// The feature tour: one sticky stage beside four chapters. As each chapter
+// passes the middle of the screen it lights up, the stage changes to its
+// animation, and the 3D field behind takes its colour (data-hue) and dims. On narrow
+// screens each chapter shows its own animation instead. The animations are
+// made by docs/assets/tours.py.
 import TourAnimation from './TourAnimation';
 import captureSvg from './tours/capture.svg?url';
 import editorSvg from './tours/editor.svg?url';
 import videoSvg from './tours/video.svg?url';
 import librarySvg from './tours/library.svg?url';
 
-// A panel's glow in one corner, over a gradient hairline border.
-const panel = (glow: string, corner: string) =>
-	`background: radial-gradient(70% 90% at ${corner}, var(${glow}), transparent 70%) padding-box, linear-gradient(var(--gi-panel), var(--gi-panel)) padding-box, linear-gradient(160deg, var(--gi-hair-strong), var(--gi-hair) 45%, var(--gi-hair)) border-box;`;
+const chapters = [
+	{
+		hue: 'capture',
+		label: 'Capture',
+		title: 'One shortcut for every capture',
+		body: 'Capture & record… freezes the screen and puts every mode on one toolbar: a region, a window, a whole screen, some text or a colour, a recording or a timer. Set an exact size or lock a ratio, read the text or the link in a QR code, and pick any colour off the screen.',
+		links: [['Capture guide', '/grab-it/capture/']],
+		src: captureSvg,
+		alt: 'The Capture & record… toolbar opens over a frozen screen. A region is dragged around a card, locked to 4:3 and captured to the Quick Access card. Then Text mode reads the link in a QR code, and Colour mode picks the blue of a chart bar with a magnifying loupe.',
+	},
+	{
+		hue: 'editor',
+		label: 'Image editor',
+		title: 'Explain it in seconds',
+		body: 'Arrows, boxes, numbered steps, text and highlights, each one keystroke away. Blur the private bits, crop the rest, and drop it on a backdrop. Your original is never changed, so you can come back and move that arrow weeks later.',
+		links: [['Image editor guide', '/grab-it/image-editor/']],
+		src: editorSvg,
+		alt: 'In the image editor, tools are picked by their keys: an arrow, a box, numbered steps, a highlight, a blur over an email address, a spotlight on one card and a note. The Backdrop panel puts the screenshot on a gradient with more padding, and Copy copies it.',
+	},
+	{
+		hue: 'video',
+		label: 'Recording and video',
+		title: 'Record it, then make it look good',
+		body: 'Record a region, a window or a display as an MP4 or a GIF, with your microphone, your webcam, and your clicks and keys shown. Trim the ends, zoom in on an area or follow the pointer, and export a new MP4.',
+		links: [['Recording guide', '/grab-it/recording/'], ['Video editor guide', '/grab-it/video-editor/']],
+		src: videoSvg,
+		alt: 'Record mode is picked on the Capture & record… toolbar and a window is chosen, with the webcam, clicks and keys on. After a countdown it records, showing a ring for each click and a label for a shortcut. In the video editor the start is trimmed, a zoom is added that follows the cursor, playback zooms in on each click, and Export saves a new MP4.',
+	},
+	{
+		hue: 'library',
+		label: 'Library and AI',
+		title: 'Find any screenshot again',
+		body: 'Search every capture by the words inside the image, or by app, tag and date. Text recognition runs on your computer. Add AI descriptions and tags from Claude Code, Codex or a local model.',
+		links: [['Library guide', '/grab-it/library/'], ['AI guide', '/grab-it/ai/']],
+		src: librarySvg,
+		alt: 'In the Library, a new capture is described by AI and gets tags. Searching for invoice finds a receipt by the text inside it. Its details show the AI description, category and tags; a tag is added and its text is copied. Then the Recordings filter shows a recording with Play and Edit on hover.',
+	},
+];
 ---
 
-<div id="tour" style="position: relative; max-width: 1200px; margin: 0 auto; padding: clamp(96px, 11vw, 160px) clamp(16px, 4vw, 40px) 0">
-<div style="text-align: center; max-width: 720px; margin: 0 auto">
-<p style="margin: 0; font-family: var(--gi-font-mono); font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--gi-muted)">The tour</p>
-<h2 style="margin: 14px 0 0; font-size: clamp(34px, 4.6vw, 58px); line-height: 1.04; letter-spacing: -0.035em; font-weight: 650">Everything between the screenshot and the share.</h2>
-</div>
+<section id="tour" class="gi-tour" aria-labelledby="gi-tour-title">
+	<h2 id="gi-tour-title" class="gi-h2" data-reveal>
+		<span data-reveal-child>Everything between</span>
+		<span data-reveal-child>the screenshot and the share.</span>
+	</h2>
 
-<div style="display: flex; flex-direction: column; gap: 24px; margin-top: 64px">
-<section aria-labelledby="t-capture" style={`${panel('--gi-cap-a', '0% 0%')} border-radius: 26px; border: 1px solid transparent; padding: clamp(24px, 4vw, 48px); display: flex; flex-wrap: wrap; gap: 40px; align-items: center`}>
-<div style="flex: 1 1 300px; min-width: 0; max-width: 380px">
-<p style="margin: 0; display: inline-flex; align-items: center; gap: 8px; font-family: var(--gi-font-mono); font-size: 12.5px; color: var(--gi-hue-capture)"><span class="gi-pulse" style="width: 7px; height: 7px; border-radius: 50%; background: var(--gi-hue-capture); box-shadow: 0 0 12px var(--gi-hue-capture)"></span>01 · CAPTURE</p>
-<h3 id="t-capture" style="margin: 14px 0 0; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 650">One shortcut for every capture</h3>
-<p style="margin: 16px 0 0; color: var(--gi-muted)">Capture & record… freezes the screen and puts every mode on one toolbar: a region, a window, a whole screen, some text or a colour, a recording or a timer.</p>
-<p style="margin: 12px 0 0; color: var(--gi-muted)">Set an exact size or lock a ratio, read the text or the link in a QR code, and pick any colour off the screen.</p>
-<a class="gi-link" href="/grab-it/capture/" style="display: inline-flex; align-items: center; gap: 6px; margin-top: 20px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-capture)">Capture guide <span aria-hidden="true" style="color: var(--gi-hue-capture)">→</span></a>
-</div>
-<div style="flex: 1.5 1 480px; min-width: 0">
-<TourAnimation client:visible src={captureSvg} alt="The Capture & record… toolbar opens over a frozen screen. A region is dragged around a card, locked to 4:3 and captured to the Quick Access card. Then Text mode reads the link in a QR code, and Colour mode picks the blue of a chart bar with a magnifying loupe." />
-</div>
+	<div class="gi-tour-grid" data-tour-grid>
+		<div>
+			{
+				chapters.map((c, i) => (
+					<article class="gi-chapter" data-hue={c.hue} data-chapter={i} aria-labelledby={`gi-ch-${i}`} style={`--hue: var(--gi-hue-${c.hue})`}>
+						<p class="gi-ch-label">
+							<span class="gi-ch-n">0{i + 1}</span>
+							{c.label}
+						</p>
+						<h3 id={`gi-ch-${i}`}>{c.title}</h3>
+						<p class="gi-ch-body">{c.body}</p>
+						<p class="gi-ch-links">
+							{c.links.map(([label, href]) => (
+								<a href={href}>
+									{label} <span aria-hidden="true">→</span>
+								</a>
+							))}
+						</p>
+						<div class="gi-ch-media">
+							<TourAnimation client:visible src={c.src} alt={c.alt} />
+						</div>
+					</article>
+				))
+			}
+		</div>
+		<div class="gi-stage-wrap" aria-hidden="true">
+			<div class="gi-stage">
+				{
+					chapters.map((c, i) => (
+						<div class="gi-stage-item" data-stage-item={i} style={`--hue: var(--gi-hue-${c.hue})`}>
+							<TourAnimation client:visible src={c.src} alt="" />
+						</div>
+					))
+				}
+				<div class="gi-stage-dots">
+					{chapters.map((c, i) => <span data-stage-dot={i} style={`--hue: var(--gi-hue-${c.hue})`} />)}
+				</div>
+			</div>
+		</div>
+	</div>
 </section>
 
-<section aria-labelledby="t-editor" style={`${panel('--gi-ed-a', '100% 0%')} border-radius: 26px; border: 1px solid transparent; padding: clamp(24px, 4vw, 48px); display: flex; flex-wrap: wrap-reverse; gap: 40px; align-items: center`}>
-<div style="flex: 1.5 1 480px; min-width: 0">
-<TourAnimation client:visible src={editorSvg} alt="In the image editor, tools are picked by their keys: an arrow, a box, numbered steps, a highlight, a blur over an email address, a spotlight on one card and a note. The Backdrop panel puts the screenshot on a gradient with more padding, and Copy copies it." />
-</div>
-<div style="flex: 1 1 300px; min-width: 0; max-width: 380px">
-<p style="margin: 0; display: inline-flex; align-items: center; gap: 8px; font-family: var(--gi-font-mono); font-size: 12.5px; color: var(--gi-hue-editor)"><span class="gi-pulse" style="width: 7px; height: 7px; border-radius: 50%; background: var(--gi-hue-editor); box-shadow: 0 0 12px var(--gi-hue-editor)"></span>02 · IMAGE EDITOR</p>
-<h3 id="t-editor" style="margin: 14px 0 0; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 650">Explain it in seconds</h3>
-<p style="margin: 16px 0 0; color: var(--gi-muted)">Arrows, boxes, numbered steps, text and highlights, each one keystroke away. Blur the private bits, crop the rest, and drop it on a backdrop.</p>
-<p style="margin: 12px 0 0; color: var(--gi-muted)">Your original is never changed, so you can come back and move that arrow weeks later.</p>
-<a class="gi-link" href="/grab-it/image-editor/" style="display: inline-flex; align-items: center; gap: 6px; margin-top: 20px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-editor)">Image editor guide <span aria-hidden="true" style="color: var(--gi-hue-editor)">→</span></a>
-</div>
-</section>
+<script>
+	// The chapter crossing the middle of the screen picks the stage's animation.
+	const chapters = [...document.querySelectorAll<HTMLElement>('[data-chapter]')];
+	const items = [...document.querySelectorAll<HTMLElement>('[data-stage-item]')];
+	const dots = [...document.querySelectorAll<HTMLElement>('[data-stage-dot]')];
+	const setActive = (i: number) =>
+		[chapters, items, dots].forEach((list) => list.forEach((el, j) => el.classList.toggle('is-on', i === j)));
+	setActive(0);
+	const io = new IntersectionObserver(
+		(entries) => {
+			for (const e of entries) if (e.isIntersecting) setActive(Number((e.target as HTMLElement).dataset.chapter));
+		},
+		{ rootMargin: '-45% 0px -45% 0px' },
+	);
+	chapters.forEach((c) => io.observe(c));
 
-<section aria-labelledby="t-video" style={`${panel('--gi-vid-a', '0% 100%')} border-radius: 26px; border: 1px solid transparent; padding: clamp(24px, 4vw, 48px); display: flex; flex-wrap: wrap; gap: 40px; align-items: center`}>
-<div style="flex: 1 1 300px; min-width: 0; max-width: 380px">
-<p style="margin: 0; display: inline-flex; align-items: center; gap: 8px; font-family: var(--gi-font-mono); font-size: 12.5px; color: var(--gi-hue-video)"><span class="gi-pulse" style="width: 7px; height: 7px; border-radius: 50%; background: var(--gi-hue-video); box-shadow: 0 0 12px var(--gi-hue-video)"></span>03 · RECORDING AND VIDEO</p>
-<h3 id="t-video" style="margin: 14px 0 0; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 650">Record it, then make it look good</h3>
-<p style="margin: 16px 0 0; color: var(--gi-muted)">Record a region, a window or a display as an MP4 or a GIF, with your microphone, your webcam, and your clicks and keys shown. Trim the ends, zoom in on an area or follow the pointer, and export a new MP4.</p>
-<div style="display: flex; flex-wrap: wrap; gap: 4px 22px; margin-top: 20px">
-<a class="gi-link" href="/grab-it/recording/" style="display: inline-flex; align-items: center; gap: 6px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-video)">Recording guide <span aria-hidden="true" style="color: var(--gi-hue-video)">→</span></a>
-<a class="gi-link" href="/grab-it/video-editor/" style="display: inline-flex; align-items: center; gap: 6px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-video)">Video editor guide <span aria-hidden="true" style="color: var(--gi-hue-video)">→</span></a>
-</div>
-</div>
-<div style="flex: 1.5 1 480px; min-width: 0">
-<TourAnimation client:visible src={videoSvg} alt="Record mode is picked on the Capture & record… toolbar and a window is chosen, with the webcam, clicks and keys on. After a countdown it records, showing a ring for each click and a label for a shortcut. In the video editor the start is trimmed, a zoom is added that follows the cursor, playback zooms in on each click, and Export saves a new MP4." />
-</div>
-</section>
+	// While the chapters fill the screen, the field behind them dims so the text stays clear.
+	const grid = document.querySelector('[data-tour-grid]');
+	if (grid) {
+		new IntersectionObserver(([e]) => document.documentElement.classList.toggle('gi-field-dim', e.isIntersecting), {
+			rootMargin: '-30% 0px -30% 0px',
+		}).observe(grid);
+	}
+</script>
 
-<section aria-labelledby="t-library" style={`${panel('--gi-lib-a', '100% 100%')} border-radius: 26px; border: 1px solid transparent; padding: clamp(24px, 4vw, 48px); display: flex; flex-wrap: wrap-reverse; gap: 40px; align-items: center`}>
-<div style="flex: 1.5 1 480px; min-width: 0">
-<TourAnimation client:visible src={librarySvg} alt="In the Library, a new capture is described by AI and gets tags. Searching for invoice finds a receipt by the text inside it. Its details show the AI description, category and tags; a tag is added and its text is copied. Then the Recordings filter shows a recording with Play and Edit on hover." />
-</div>
-<div style="flex: 1 1 300px; min-width: 0; max-width: 380px">
-<p style="margin: 0; display: inline-flex; align-items: center; gap: 8px; font-family: var(--gi-font-mono); font-size: 12.5px; color: var(--gi-hue-library)"><span class="gi-pulse" style="width: 7px; height: 7px; border-radius: 50%; background: var(--gi-hue-library); box-shadow: 0 0 12px var(--gi-hue-library)"></span>04 · LIBRARY AND AI</p>
-<h3 id="t-library" style="margin: 14px 0 0; font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 650">Find any screenshot again</h3>
-<p style="margin: 16px 0 0; color: var(--gi-muted)">Search every capture by the words inside the image, or by app, tag and date. Text recognition runs on your computer. Add AI descriptions and tags from Claude Code, Codex or a local model.</p>
-
-<div style="display: flex; flex-wrap: wrap; gap: 4px 22px; margin-top: 20px">
-<a class="gi-link" href="/grab-it/library/" style="display: inline-flex; align-items: center; gap: 6px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-library)">Library guide <span aria-hidden="true" style="color: var(--gi-hue-library)">→</span></a>
-<a class="gi-link" href="/grab-it/ai/" style="display: inline-flex; align-items: center; gap: 6px; color: var(--gi-text); font-weight: 600; text-decoration: none; min-height: 44px; border-bottom: 1px solid var(--gi-hue-library)">AI guide <span aria-hidden="true" style="color: var(--gi-hue-library)">→</span></a>
-</div>
-</div>
-</section>
-</div>
-</div>
+<style>
+	.gi-tour {
+		max-width: 1200px;
+		margin: 0 auto;
+		padding: clamp(120px, 14vw, 200px) clamp(16px, 4vw, 40px) 0;
+	}
+	.gi-tour-grid {
+		display: grid;
+		grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+		gap: clamp(32px, 5vw, 72px);
+		margin-top: clamp(48px, 8vw, 96px);
+	}
+	.gi-chapter {
+		min-height: 78vh;
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		opacity: 0.28;
+		transition: opacity 0.7s ease;
+	}
+	.gi-chapter:global(.is-on) {
+		opacity: 1;
+	}
+	.gi-ch-label {
+		margin: 0;
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		font-size: 14px;
+		color: var(--hue);
+	}
+	.gi-ch-n {
+		font-family: var(--gi-font-mono);
+		font-size: 12px;
+		color: var(--gi-muted);
+	}
+	.gi-ch-label::after {
+		content: '';
+		flex: 0 0 0;
+		height: 1px;
+		background: var(--hue);
+		transition: flex-basis 0.9s cubic-bezier(0.2, 0.7, 0.2, 1);
+	}
+	.gi-chapter:global(.is-on) .gi-ch-label::after {
+		flex-basis: 48px;
+	}
+	.gi-chapter h3 {
+		margin: 16px 0 0;
+		font-size: clamp(28px, 3vw, 40px);
+		line-height: 1.08;
+		letter-spacing: -0.03em;
+		font-weight: 600;
+	}
+	.gi-ch-body {
+		margin: 16px 0 0;
+		color: var(--gi-muted);
+		max-width: 420px;
+	}
+	.gi-ch-links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px 24px;
+		margin: 18px 0 0;
+	}
+	.gi-ch-links a {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		min-height: 44px;
+		font-weight: 600;
+		text-decoration: none;
+	}
+	.gi-ch-links a span {
+		color: var(--hue);
+		transition: transform 0.25s ease;
+	}
+	.gi-ch-links a:hover span {
+		transform: translateX(3px);
+	}
+	.gi-ch-media {
+		display: none;
+	}
+	.gi-stage-wrap {
+		position: relative;
+	}
+	.gi-stage {
+		position: sticky;
+		top: calc(50vh - min(19vw, 230px));
+		aspect-ratio: 720 / 450;
+		border-radius: 18px;
+	}
+	.gi-stage-item {
+		position: absolute;
+		inset: 0;
+		border-radius: 18px;
+		box-shadow:
+			0 0 0 1px var(--gi-hair-strong),
+			0 40px 100px -20px color-mix(in srgb, var(--hue) 40%, transparent);
+		opacity: 0;
+		transform: translateY(16px) scale(0.985);
+		filter: blur(6px);
+		transition:
+			opacity 0.8s ease,
+			transform 0.9s cubic-bezier(0.2, 0.7, 0.2, 1),
+			filter 0.8s ease;
+	}
+	.gi-stage-item:global(.is-on) {
+		opacity: 1;
+		transform: none;
+		filter: none;
+	}
+	.gi-stage-dots {
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: -36px;
+		display: flex;
+		justify-content: center;
+		gap: 8px;
+	}
+	.gi-stage-dots span {
+		width: 6px;
+		height: 6px;
+		border-radius: 999px;
+		background: var(--gi-hair-strong);
+		transition: width 0.5s ease, background 0.5s ease;
+	}
+	.gi-stage-dots span:global(.is-on) {
+		width: 22px;
+		background: var(--hue);
+	}
+	@media (max-width: 900px) {
+		.gi-tour-grid {
+			grid-template-columns: 1fr;
+		}
+		.gi-stage-wrap {
+			display: none;
+		}
+		.gi-chapter {
+			min-height: 0;
+			padding: 48px 0;
+			opacity: 1;
+		}
+		.gi-ch-media {
+			display: block;
+			margin-top: 28px;
+			border-radius: 14px;
+			box-shadow: 0 0 0 1px var(--gi-hair-strong);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.gi-stage-item {
+			transform: none !important;
+			filter: none !important;
+		}
+	}
+</style>

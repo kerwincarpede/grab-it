@@ -10,10 +10,13 @@ const section = (label, directory) => ({ label, items: [{ autogenerate: { direct
 export default defineConfig({
 	site: 'https://kerwincarpede.github.io',
 	base: '/grab-it',
+	// three.js, for the landing page's 3D field, is one ~550 kB chunk (~140 kB
+	// gzipped). It loads only after the page is idle, so it never blocks.
+	vite: { build: { chunkSizeWarningLimit: 600 } },
 	integrations: [
 		starlight({
 			title: 'Grab-it',
-			description: 'Screenshot it. Mark it up. Paste it anywhere. The fast, free screenshot tool for Windows, macOS and Linux.',
+			description: 'Capture it. Mark it. Paste it. The fast, free screenshot tool for Windows, macOS and Linux.',
 			social: [
 				{ icon: 'github', label: 'GitHub', href: 'https://github.com/kerwincarpede/grab-it' },
 			],

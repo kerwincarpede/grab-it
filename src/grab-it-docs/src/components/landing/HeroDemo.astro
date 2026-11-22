@@ -3,12 +3,15 @@
 // single timeline (hero/timeline.ts). PrtSc, a drag around a chart, let go, the
 // capture lifts off the screen into the Quick Access card, Annotate flies it
 // into the editor, an arrow is drawn and Copy lifts the result free. The
-// pointer drives the selection and the arrow, so it stays on them. Without
-// JavaScript the scene shows its poster: the editor with the finished arrow.
+// pointer drives the selection and the arrow, so it stays on them. It always
+// plays; under Reduce Motion it stays face-on. The steps below it are a quiet
+// caption line: four names on a hairline track that fills as each one plays.
+// Without JavaScript the scene shows its poster: the editor with the finished
+// arrow.
 import { sceneHTML } from './hero/scene';
 import './hero/scene.css';
 
-const steps = ['Press PrtSc and drag around the chart', "Let go. It's copied and saved", 'Click Annotate and draw an arrow', 'Copy it, then paste it anywhere'];
+const steps = ['Press PrtSc, drag', "Let go: it's copied", 'Annotate an arrow', 'Copy, paste anywhere'];
 ---
 
 <div class="gi-hd" data-hero-demo>
@@ -19,26 +22,26 @@ const steps = ['Press PrtSc and drag around the chart', "Let go. It's copied and
 		aria-label="Animation: PrtSc is pressed and a region is dragged around a sales chart. On letting go, the capture lifts off the screen into the Quick Access card. Annotate flies it into the image editor, an arrow is drawn to this week's bar, and Copy copies the result."
 		set:html={sceneHTML()}
 	/>
-	<div class="gi-hd-controls" data-hero-controls hidden>
-		<div class="gi-hd-buttons">
-			<button type="button" class="gi-hd-btn" data-hero-play aria-label="Pause animation"></button>
-			<button type="button" class="gi-hd-btn" data-hero-replay aria-label="Replay from the start">
-				<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"></path></svg>
-			</button>
-		</div>
+	<div class="gi-hd-bar" data-hero-controls hidden>
 		<ol class="gi-hd-steps" aria-label="Steps in the animation">
 			{
 				steps.map((label, i) => (
 					<li>
 						<button type="button" data-hero-step>
-							<span class="gi-hd-n">{i + 1}</span>
+							<span class="gi-hd-n">{String(i + 1).padStart(2, '0')}</span>
 							<span>{label}</span>
-							<span class="gi-hd-bar" aria-hidden="true" />
+							<span class="gi-hd-fill" aria-hidden="true" />
 						</button>
 					</li>
 				))
 			}
 		</ol>
+		<div class="gi-hd-buttons">
+			<button type="button" class="gi-hd-btn" data-hero-play aria-label="Pause animation"></button>
+			<button type="button" class="gi-hd-btn" data-hero-replay aria-label="Replay from the start">
+				<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"></path></svg>
+			</button>
+		</div>
 	</div>
 </div>
 
@@ -46,35 +49,16 @@ const steps = ['Press PrtSc and drag around the chart', "Let go. It's copied and
 	.gi-hd {
 		display: flex;
 		flex-direction: column;
-		gap: 14px;
+		gap: 18px;
 	}
-	.gi-hd-controls {
+	.gi-hd-bar {
 		display: flex;
-		gap: 10px;
-		align-items: stretch;
+		align-items: flex-start;
+		gap: 16px;
 		text-align: left;
 	}
-	.gi-hd-controls[hidden] {
+	.gi-hd-bar[hidden] {
 		display: none;
-	}
-	.gi-hd-buttons {
-		display: flex;
-		gap: 8px;
-		flex: none;
-	}
-	.gi-hd-btn {
-		width: 44px;
-		height: 44px;
-		border-radius: 12px;
-		border: 1px solid var(--gi-hair-strong);
-		background: var(--gi-glass);
-		color: var(--gi-text);
-		display: inline-grid;
-		place-items: center;
-		cursor: pointer;
-	}
-	.gi-hd-btn:hover {
-		background: var(--gi-accent-soft);
 	}
 	.gi-hd-steps {
 		list-style: none;
@@ -84,68 +68,78 @@ const steps = ['Press PrtSc and drag around the chart', "Let go. It's copied and
 		min-width: 0;
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: 8px;
+		gap: 0 20px;
 	}
 	.gi-hd-steps button {
 		position: relative;
 		width: 100%;
-		height: 100%;
-		min-height: 44px;
-		display: grid;
-		grid-template-columns: auto 1fr;
+		display: flex;
 		gap: 10px;
-		align-items: center;
-		padding: 8px 12px;
-		border-radius: 12px;
-		border: 1px solid var(--gi-hair);
-		background: var(--gi-glass);
+		align-items: baseline;
+		padding: 14px 0 4px;
+		border: 0;
+		background: none;
 		color: var(--gi-muted);
 		font: inherit;
 		font-size: 13.5px;
-		line-height: 1.3;
+		line-height: 1.35;
 		text-align: left;
 		cursor: pointer;
-		overflow: hidden;
+		transition: color 0.4s ease;
 	}
-	.gi-hd-steps button:hover {
-		border-color: var(--gi-hair-strong);
-	}
-	.gi-hd-steps button.is-on {
-		color: var(--gi-text);
-		border-color: var(--gi-accent-edge);
-		background: var(--gi-accent-soft);
-	}
-	.gi-hd-n {
-		font-family: var(--gi-font-mono);
-		font-size: 12px;
-		font-weight: 600;
-		width: 22px;
-		height: 22px;
-		border-radius: 7px;
-		display: grid;
-		place-items: center;
-		border: 1px solid var(--gi-hair-strong);
-		color: var(--gi-text);
-	}
-	.is-on .gi-hd-n {
-		background: var(--gi-accent);
-		color: var(--gi-on-accent);
-		border-color: transparent;
-	}
-	.gi-hd-bar {
+	/* The hairline track, with the step's progress drawn over it */
+	.gi-hd-steps button::before {
+		content: '';
 		position: absolute;
 		left: 0;
-		bottom: 0;
+		right: 0;
+		top: 0;
+		height: 1px;
+		background: var(--gi-hair-strong);
+	}
+	.gi-hd-fill {
+		position: absolute;
+		left: 0;
+		top: 0;
 		width: 100%;
-		height: 3px;
-		background: var(--gi-accent);
+		height: 1px;
+		background: var(--gi-text);
 		transform-origin: 0 0;
 		transform: scaleX(0);
 	}
+	.gi-hd-steps button:hover,
+	.gi-hd-steps button:global(.is-on) {
+		color: var(--gi-text);
+	}
+	.gi-hd-n {
+		font-family: var(--gi-font-mono);
+		font-size: 11px;
+		letter-spacing: 0.04em;
+		opacity: 0.7;
+	}
+	.gi-hd-buttons {
+		display: flex;
+		gap: 4px;
+		flex: none;
+		padding-top: 4px;
+	}
+	.gi-hd-btn {
+		width: 36px;
+		height: 36px;
+		border-radius: 50%;
+		border: 1px solid var(--gi-hair);
+		background: transparent;
+		color: var(--gi-muted);
+		display: inline-grid;
+		place-items: center;
+		cursor: pointer;
+		transition: color 0.2s ease, border-color 0.2s ease;
+	}
+	.gi-hd-btn:hover {
+		color: var(--gi-text);
+		border-color: var(--gi-hair-strong);
+	}
 	@media (max-width: 760px) {
-		.gi-hd-controls {
-			flex-direction: column;
-		}
 		.gi-hd-steps {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}

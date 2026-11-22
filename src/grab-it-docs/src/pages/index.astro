@@ -1,17 +1,18 @@
 ---
 // The landing page at /grab-it/: the hero, a tour of every feature with small
-// live demos, and the downloads. Docs and reference pages stay in Starlight.
+// live demos, and the downloads, over a slow 3D field of captures. Docs and
+// reference pages stay in Starlight.
 import LandingLayout from '../components/landing/LandingLayout.astro';
 import Hero from '../components/landing/Hero.astro';
 import Tour from '../components/landing/Tour.astro';
-import Download from '../components/landing/Download';
+import Download from '../components/landing/Download.astro';
 ---
 
 <LandingLayout
-	title="Grab-it: Screenshot it. Mark it up. Paste it anywhere."
-	description="Screenshot it. Mark it up. Paste it anywhere. The fast, free screenshot tool for Windows, macOS and Linux."
+	title="Grab-it: Capture it. Mark it. Paste it."
+	description="Capture it. Mark it. Paste it. The fast, free screenshot tool for Windows, macOS and Linux."
 >
-	<Hero slot="hero" />
+	<Hero />
 	<Tour />
-	<Download client:load />
+	<Download />
 </LandingLayout>
