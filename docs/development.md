@@ -126,8 +126,12 @@ pending playback.
 The approved WAV is embedded in the binary. Its checksum and provenance are
 recorded under `src-tauri/sounds/`. Playback opens the default output on a worker
 thread through CPAL, using WASAPI on Windows, Core Audio on macOS and the
-PulseAudio protocol or ALSA on Linux. If the output is unavailable, a clipboard
-copy still succeeds and Settings reports an error when asked to preview.
+PulseAudio protocol or ALSA on Linux. On Linux it asks for about 150 ms of
+buffered output, since the ALSA default of about 32 ms stalls while a closing
+overlay keeps the CPU busy. An underrun lets the stream carry on. Any other stream
+error, or 500 ms without a request for samples, plays the clip once more from the
+start on a fresh stream. If the output is still unavailable, a clipboard copy
+still succeeds and Settings reports an error when asked to preview.
 
 ### Wayland and macOS
 
