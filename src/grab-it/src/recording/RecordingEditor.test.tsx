@@ -1212,6 +1212,24 @@ describe("RecordingEditor", () => {
       expect(saved(backend)).toEqual([]);
     });
 
+    it("ends a preview with Esc from anywhere in the window, even after Play", async () => {
+      heard = { sound: "microphone", pauses: [PAUSE], canClean: true };
+      const backend = mockBackend(null, null, ["microphone"], { separateMicrophone: true });
+      render(<RecordingEditor />);
+      await loadVideo();
+      vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      vi.spyOn(HTMLMediaElement.prototype, "pause").mockReturnValue(undefined);
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Preview" }));
+      expect(screen.getByText("2 clips, 0:09.5")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Play" }));
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(screen.getByText("Clip 0:12.0")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Stop preview" })).not.toBeInTheDocument();
+      expect(screen.getByRole("list", { name: "Proposed cuts" })).toBeInTheDocument();
+      expect(saved(backend)).toEqual([]);
+    });
+
     it("ends a preview on Undo, keeping no unapproved cut", async () => {
       heard = { sound: "microphone", pauses: [PAUSE], canClean: true };
       const backend = mockBackend(null, null, ["microphone"], { separateMicrophone: true });

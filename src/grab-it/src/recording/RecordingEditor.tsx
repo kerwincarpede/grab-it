@@ -906,7 +906,21 @@ export default function RecordingEditor() {
   // undoes, and Ctrl/⌘ Shift Z or Ctrl Y redoes, unless a field has the text.
   // Alt and the arrow keys move the selected clip; Delete removes it and
   // Shift Delete leaves a gap. S splits at the playhead; Ctrl/⌘ D duplicates.
-  const keysRef = useRef({ toggle, undoEdit, redoEdit, moveSelectedClip, removeSelectedClip, leaveGapForSelected, duplicateSelectedClip, splitAtPlayhead, hasClip: false });
+  // Esc ends a preview of suggested cuts, unless a field or dialog has it.
+  const keysRef = useRef({
+    toggle,
+    undoEdit,
+    redoEdit,
+    moveSelectedClip,
+    removeSelectedClip,
+    leaveGapForSelected,
+    duplicateSelectedClip,
+    splitAtPlayhead,
+    endSuggestPreview,
+    hasClip: false,
+    previewing: false,
+    dialogOpen: false,
+  });
   useEffect(() => {
     keysRef.current = {
       toggle,
@@ -917,13 +931,24 @@ export default function RecordingEditor() {
       leaveGapForSelected,
       duplicateSelectedClip,
       splitAtPlayhead,
+      endSuggestPreview,
       hasClip: selectedClip !== null && !selectedZoom && !exporting,
+      previewing: suggestPreview !== null,
+      dialogOpen: backdropOpen,
     };
   });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const mod = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
+      if (event.key === "Escape" && keysRef.current.previewing && !keysRef.current.dialogOpen && !event.defaultPrevented && !isEditingText(event.target)) {
+        const inDialog = event.target instanceof Element && event.target.closest('[role="dialog"]') !== null;
+        if (!inDialog) {
+          event.preventDefault();
+          keysRef.current.endSuggestPreview();
+          return;
+        }
+      }
       if (mod && !event.altKey && (key === "z" || key === "y")) {
         if (isEditingText(event.target)) return;
         event.preventDefault();
