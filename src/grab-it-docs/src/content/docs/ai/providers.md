@@ -2,7 +2,7 @@
 title: Providers
 description: Describe captures with Claude Code, Codex, or an OpenAI-compatible endpoint such as LM Studio, Ollama, OpenRouter, OpenAI or Anthropic, and what each one sends where.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 Pick who describes your captures in **Settings → AI integration → Described by**, then press **Save**. **Test connection** sends a tiny sample image, never one of your captures, with the settings as typed, without saving them. Settings shows where it goes before you press it. It tells you whether the server answered, took the request with the image, and replied with the JSON asked for, or what to fix. It can't tell whether the model looked at the image; see [When the test fails](#when-the-test-fails).

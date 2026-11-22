@@ -6,12 +6,13 @@ sidebar:
   order: 0
 ---
 
-Grab-it can use an AI you already have to do two things:
+Grab-it can use an AI you already have to:
 
 - **Describe your captures**: a sentence or two, a category and up to three tags for each one, so you can search for what a screenshot *shows*, not only the words in it.
 - **Tidy up captured text**: after [Capture text](/grab-it/capture/more-tricks/), fix what was misread and lay out JSON, code and tables properly.
+- **Annotate with AI**: in the image editor, describe the boxes, arrows and labels you want and apply what it suggests.
 
-Both use the same provider: your [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex/cli) command, or any OpenAI-compatible API, such as [Ollama](https://ollama.com) on your own computer.
+All use the same provider: your [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex/cli) command, or any OpenAI-compatible API, such as [Ollama](https://ollama.com) on your own computer.
 
 Reading text in images doesn't need AI. That always happens on your computer, with or without AI.
 
@@ -27,5 +28,6 @@ If you used AI descriptions in an earlier version, your provider, model, API key
 
 - [AI descriptions](/grab-it/ai/descriptions/): what's written for each capture, categories, and describing your whole library.
 - [Tidy up text](/grab-it/ai/tidy-text/): how Capture text gets cleaned up, and how to get the original back.
+- [Annotate with AI](/grab-it/ai/annotate/): describe markup, preview the suggestions and apply them.
 - [Providers](/grab-it/ai/providers/): Claude Code, Codex and OpenAI-compatible endpoints, how to set each up, and what goes where.
 - [AI agents](/grab-it/ai/agents/): on the same settings page, let Claude Code, Codex and other agents take screenshots with Grab-it.

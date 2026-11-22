@@ -225,7 +225,12 @@ pub fn png_bytes(png: &Path) -> Result<Vec<u8>, AiError> {
 
 /// `image` as PNG bytes, scaled down to fit [`MAX_IMAGE_EDGE`].
 pub fn fit_png(image: image::DynamicImage) -> Result<Vec<u8>, AiError> {
-    let image = if image.width().max(image.height()) > MAX_IMAGE_EDGE {
+    encode_png(fit_image(image))
+}
+
+/// `image` scaled down to fit [`MAX_IMAGE_EDGE`], keeping its shape.
+pub fn fit_image(image: image::DynamicImage) -> image::DynamicImage {
+    if image.width().max(image.height()) > MAX_IMAGE_EDGE {
         image.resize(
             MAX_IMAGE_EDGE,
             MAX_IMAGE_EDGE,
@@ -233,7 +238,11 @@ pub fn fit_png(image: image::DynamicImage) -> Result<Vec<u8>, AiError> {
         )
     } else {
         image
-    };
+    }
+}
+
+/// `image` as PNG bytes, as it is.
+pub fn encode_png(image: image::DynamicImage) -> Result<Vec<u8>, AiError> {
     let mut bytes = Vec::new();
     image::DynamicImage::ImageRgb8(image.into_rgb8())
         .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
