@@ -27,7 +27,7 @@ let gone: string[] = [];
 /** Recordings `recording_source` says keep their microphone apart. */
 let separate: string[] = [];
 /** What `recording_pauses` gives, or the error it rejects with. */
-let heard: RecordingPauses | string = { sound: "microphone", pauses: [], canClean: true };
+let heard: RecordingPauses | string = { sound: "microphone", pauses: [], canClean: true, pointer: null };
 /** What `recording_audition` resolves with, when a test holds it back. */
 let auditioned: (() => Promise<ArrayBuffer>) | null = null;
 
@@ -122,7 +122,7 @@ afterEach(() => {
   picked = null;
   gone = [];
   separate = [];
-  heard = { sound: "microphone", pauses: [], canClean: true };
+  heard = { sound: "microphone", pauses: [], canClean: true, pointer: null };
   auditioned = null;
 });
 
@@ -1091,7 +1091,7 @@ describe("RecordingEditor", () => {
     const PAUSE = { startMs: 3000, endMs: 6000 };
 
     it("proposes a cut at a pause with its reason, range and length", async () => {
-      heard = { sound: "microphone", pauses: [PAUSE], canClean: true };
+      heard = { sound: "microphone", pauses: [PAUSE], canClean: true, pointer: null };
       const backend = mockBackend(null, null, ["microphone"], { separateMicrophone: true });
       render(<RecordingEditor />);
       await loadVideo();
@@ -1105,7 +1105,7 @@ describe("RecordingEditor", () => {
     });
 
     it("previews the chosen cuts without saving, and stops the preview", async () => {
-      heard = { sound: "microphone", pauses: [PAUSE], canClean: true };
+      heard = { sound: "microphone", pauses: [PAUSE], canClean: true, pointer: null };
       const backend = mockBackend(null, null, ["microphone"], { separateMicrophone: true });
       render(<RecordingEditor />);
       await loadVideo();
@@ -1121,7 +1121,7 @@ describe("RecordingEditor", () => {
     });
 
     it("applies the chosen cuts in one undo step, and reopens them", async () => {
-      heard = { sound: "microphone", pauses: [PAUSE, { startMs: 8000, endMs: 10_000 }], canClean: true };
+      heard = { sound: "microphone", pauses: [PAUSE, { startMs: 8000, endMs: 10_000 }], canClean: true, pointer: null };
       const backend = mockBackend(null, null, ["microphone"], { separateMicrophone: true });
       const { unmount } = render(<RecordingEditor />);
       await loadVideo();
@@ -1152,7 +1152,7 @@ describe("RecordingEditor", () => {
     });
 
     it("plays the original and cleaned sound around a cut", async () => {
-      heard = { sound: "microphone", pauses: [PAUSE], canClean: true };
+      heard = { sound: "microphone", pauses: [PAUSE], canClean: true, pointer: null };
       vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:audition");
       vi.spyOn(URL, "revokeObjectURL").mockReturnValue(undefined);
       const backend = mockBackend(null, null, ["microphone"], { separateMicrophone: true });
@@ -1170,7 +1170,7 @@ describe("RecordingEditor", () => {
     });
 
     it("offers only the original for mixed sound", async () => {
-      heard = { sound: "mixed", pauses: [PAUSE], canClean: false };
+      heard = { sound: "mixed", pauses: [PAUSE], canClean: false, pointer: null };
       mockBackend(null, null, ["mixed"]);
       render(<RecordingEditor />);
       await loadVideo();
@@ -1181,9 +1181,10 @@ describe("RecordingEditor", () => {
     });
 
     it("follows the pointer in a silent demonstration", async () => {
-      heard = { sound: "silent", pauses: [], canClean: false };
+      // The pointer as recorded comes with the pauses, not the smoothed path the zooms follow.
       const points: [number, number][] = Array.from({ length: 720 }, (_, index) => (index >= 120 && index < 420 ? [0.5, 0.5] : [(index % 2) * 0.5, 0.2]));
-      mockBackend(null, { fps: 60, points });
+      heard = { sound: "silent", pauses: [], canClean: false, pointer: { fps: 60, points } };
+      mockBackend();
       render(<RecordingEditor />);
       await loadVideo();
       await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
@@ -1193,8 +1194,22 @@ describe("RecordingEditor", () => {
       expect(screen.queryByRole("button", { name: "Original" })).not.toBeInTheDocument();
     });
 
+    it("keeps a cut's range as it is while its preview plays", async () => {
+      heard = { sound: "microphone", pauses: [PAUSE], canClean: true, pointer: null };
+      mockBackend(null, null, ["microphone"], { separateMicrophone: true });
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      const range = await screen.findByRole("button", { name: "Listen around 0:03.2–0:05.7" });
+      expect(range).toHaveTextContent(/^0:03\.2–0:05\.7$/);
+      await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+      expect(screen.getByText("2 clips, 0:09.5")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Listen around 0:03.2–0:05.7" })).toHaveTextContent(/^0:03\.2–0:05\.7$/);
+      expect(screen.getByRole("group", { name: "Audio audition" })).toHaveTextContent(/^Listen around 0:03\.2–0:05\.7/);
+    });
+
     it("saves nothing a preview shows when another edit is tried during it", async () => {
-      heard = { sound: "microphone", pauses: [PAUSE], canClean: true };
+      heard = { sound: "microphone", pauses: [PAUSE], canClean: true, pointer: null };
       const backend = mockBackend(null, null, ["microphone"], { separateMicrophone: true });
       render(<RecordingEditor />);
       await loadVideo();
@@ -1213,7 +1228,7 @@ describe("RecordingEditor", () => {
     });
 
     it("ends a preview with Esc from anywhere in the window, even after Play", async () => {
-      heard = { sound: "microphone", pauses: [PAUSE], canClean: true };
+      heard = { sound: "microphone", pauses: [PAUSE], canClean: true, pointer: null };
       const backend = mockBackend(null, null, ["microphone"], { separateMicrophone: true });
       render(<RecordingEditor />);
       await loadVideo();
@@ -1231,7 +1246,7 @@ describe("RecordingEditor", () => {
     });
 
     it("ends a preview on Undo, keeping no unapproved cut", async () => {
-      heard = { sound: "microphone", pauses: [PAUSE], canClean: true };
+      heard = { sound: "microphone", pauses: [PAUSE], canClean: true, pointer: null };
       const backend = mockBackend(null, null, ["microphone"], { separateMicrophone: true });
       render(<RecordingEditor />);
       await loadVideo();
@@ -1249,7 +1264,7 @@ describe("RecordingEditor", () => {
     });
 
     it("says when no pauses long enough to cut were found", async () => {
-      heard = { sound: "microphone", pauses: [], canClean: true };
+      heard = { sound: "microphone", pauses: [], canClean: true, pointer: null };
       mockBackend(null, null, ["microphone"], { separateMicrophone: true });
       render(<RecordingEditor />);
       await loadVideo();
@@ -1260,7 +1275,7 @@ describe("RecordingEditor", () => {
     });
 
     it("lets go of an audition when another cut is chosen, even one still being prepared", async () => {
-      heard = { sound: "microphone", pauses: [PAUSE, { startMs: 8000, endMs: 10_000 }], canClean: true };
+      heard = { sound: "microphone", pauses: [PAUSE, { startMs: 8000, endMs: 10_000 }], canClean: true, pointer: null };
       vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:audition");
       vi.spyOn(URL, "revokeObjectURL").mockReturnValue(undefined);
       const backend = mockBackend(null, null, ["microphone"], { separateMicrophone: true });

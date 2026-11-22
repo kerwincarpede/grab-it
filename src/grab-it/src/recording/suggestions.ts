@@ -66,7 +66,9 @@ export function cleanSpans(spans: readonly Span[]): Span[] {
 
 /**
  * The stretches the pointer stays within `STILL_DRIFT` of where it was
- * for at least `minMs`. Null without a pointer path.
+ * for at least `minMs`. Null without a pointer path. Give it the pointer
+ * as recorded: the smoothed path comes to rest well after the pointer
+ * stops and moves off before it moves, so a short rest would be lost.
  */
 export function stillSpans(cursor: CursorPath | null, minMs: number = MIN_IDLE_MS): Span[] | null {
   if (!cursor || cursor.fps <= 0 || cursor.points.length === 0) return null;
@@ -106,7 +108,7 @@ export function intersect(a: readonly Span[], b: readonly Span[]): Span[] {
 
 /**
  * The cuts proposed for recording `source`, played by `clips`: its
- * `pauses` where the pointer stays still for at least `MIN_CUT_MS` (all
+ * `pauses` where the pointer, as recorded (`cursor`), stays still for at least `MIN_CUT_MS` (all
  * of them without a pointer path), or, with no sound to pause (`sound` is silent or system sound
  * only), the stretches the pointer is idle. Each keeps `CUT_PAD_MS` at both
  * ends, lies inside one clip of `source`, leaves that clip at least

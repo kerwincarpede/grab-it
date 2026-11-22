@@ -1443,8 +1443,7 @@ export default function RecordingEditor() {
         <SuggestEditsPanel
           clips={savedClips}
           own={own}
-          joined={joined}
-          cursorOf={cursorOf}
+          joined={isJoined(savedClips, own)}
           previewing={suggestPreview !== null}
           onPreview={(next, fromMs) => {
             if (!next) {

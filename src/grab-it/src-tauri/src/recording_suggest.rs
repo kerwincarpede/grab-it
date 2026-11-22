@@ -22,6 +22,7 @@ use crate::recording_editor::{
     audio_sources, clip_sound_file, kept_sound, push_clip_sound, recordings_of, source_file,
 };
 use crate::rt::{AppHandle, WebviewWindow};
+use crate::zoom::CursorPath;
 
 /// How quiet sound must be to count as a pause, in dBFS.
 pub const PAUSE_NOISE_DB: i32 = -40;
@@ -60,7 +61,7 @@ pub enum PauseSound {
 
 /// The quiet stretches of one recording; the page reads it from the
 /// generated bindings.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingPauses {
     pub sound: PauseSound,
@@ -69,6 +70,9 @@ pub struct RecordingPauses {
     /// Whether an audition can play the stretch cleaned as the export
     /// would: only with the microphone kept apart.
     pub can_clean: bool,
+    /// The pointer as recorded, not smoothed, so a rest is found where the
+    /// pointer really stopped; None without a pointer track.
+    pub pointer: Option<CursorPath>,
 }
 
 /// The sound pauses are heard in, and where it is read from: the
@@ -234,6 +238,7 @@ pub async fn recording_pauses(
             sound,
             pauses,
             can_clean,
+            pointer: CursorPath::load_recorded(&path),
         })
     })
     .await

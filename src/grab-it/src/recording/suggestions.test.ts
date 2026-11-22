@@ -63,6 +63,22 @@ describe("proposeCuts", () => {
     expect(proposeCuts(whole, OWN, "mixed", [{ startMs: 3000, endMs: 8000 }], cursor)).toEqual([{ id: "own:4250", clipId: "own", source: OWN, startMs: 4250, endMs: 7150, reason: "pause" }]);
   });
 
+  it("cuts a pause the pointer rests through, padded only at its ends", () => {
+    // 15 s at 10 fps: still over the pauses at 2–4.5 s and 11–13 s, moving over the one at 6.5–9 s.
+    const resting = (index: number) => (index >= 20 && index < 45) || (index >= 110 && index < 130);
+    const points = Array.from({ length: 150 }, (_, index): [number, number] => (resting(index) ? [0.5, 0.5] : [(index % 2) * 0.5, 0.2]));
+    const clips: Clip[] = [{ id: "own", source: OWN, startMs: 0, endMs: 15_000 }];
+    const pauses = [
+      { startMs: 2000, endMs: 4500 },
+      { startMs: 6500, endMs: 9000 },
+      { startMs: 11_000, endMs: 13_000 },
+    ];
+    expect(proposeCuts(clips, OWN, "microphone", pauses, { fps: 10, points })).toEqual([
+      { id: "own:2250", clipId: "own", source: OWN, startMs: 2250, endMs: 4150, reason: "pause" },
+      { id: "own:11250", clipId: "own", source: OWN, startMs: 11_250, endMs: 12_650, reason: "pause" },
+    ]);
+  });
+
   it("follows the pointer alone in a silent demonstration", () => {
     const proposals = proposeCuts(whole, OWN, "silent", [], path(120, [30, 80]));
     expect(proposals).toEqual([{ id: "own:3250", clipId: "own", source: OWN, startMs: 3250, endMs: 7650, reason: "idle" }]);

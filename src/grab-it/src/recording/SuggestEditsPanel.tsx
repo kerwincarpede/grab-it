@@ -3,7 +3,6 @@ import { recordingAudition, recordingPauses, type RecordingPauses } from "./api"
 import { isGap, type Clip } from "./clips";
 import { formatTime } from "./edits";
 import { applyCuts, cutSequenceMs, cutsLength, isValidCut, proposeCuts, reasonLabel, soundLabel, type CutProposal } from "./suggestions";
-import type { CursorPath } from "./zooms";
 
 /** How much sound either side of a cut an audition plays. */
 const AUDITION_CONTEXT_MS = 2000;
@@ -17,9 +16,8 @@ export interface SuggestEditsPanelProps {
   clips: Clip[];
   /** The opened recording's file name. */
   own: string;
-  /** Whether the sequence holds more than one clip, so ranges name their recording. */
+  /** Whether the saved sequence holds more than one clip, so ranges name their recording. */
   joined: boolean;
-  cursorOf: (source: string) => CursorPath | null;
   /**
    * Whether the editor is playing a preview of the cuts. The editor owns
    * it, so an undo that ends the preview shows here too.
@@ -40,7 +38,7 @@ type Heard = { pauses: RecordingPauses } | { error: string };
  * one, previewed together and applied in one undo entry; and the sound
  * around a cut played as recorded and as the export cleans it.
  */
-export default function SuggestEditsPanel({ clips, own, joined, cursorOf, previewing, onPreview, onApply, onClose }: SuggestEditsPanelProps) {
+export default function SuggestEditsPanel({ clips, own, joined, previewing, onPreview, onApply, onClose }: SuggestEditsPanelProps) {
   const sources = useMemo(() => [...new Set(clips.filter((clip) => !isGap(clip)).map((clip) => clip.source))].sort(), [clips]);
   const [heard, setHeard] = useState<Record<string, Heard>>({});
   const [chosen, setChosen] = useState<ReadonlySet<string> | null>(null);
@@ -79,9 +77,9 @@ export default function SuggestEditsPanel({ clips, own, joined, cursorOf, previe
       sources.flatMap((source) => {
         const found = heard[source];
         if (!found || "error" in found) return [];
-        return proposeCuts(clips, source, found.pauses.sound, found.pauses.pauses, cursorOf(source));
+        return proposeCuts(clips, source, found.pauses.sound, found.pauses.pauses, found.pauses.pointer);
       }),
-    [sources, heard, clips, cursorOf],
+    [sources, heard, clips],
   );
   const loading = sources.some((source) => !heard[source]);
   const errors = sources.flatMap((source) => {

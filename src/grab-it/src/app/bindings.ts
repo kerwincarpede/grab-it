@@ -289,7 +289,7 @@ export const commands = {
 	 */
 	recordingSource: (fileName: string, options?: InvokeOptions) => __TAURI_INVOKE<RecordingClipSource_Serialize>("recording_source", { fileName }, options),
 	/**  The pauses in recording `file_name`'s sound, for Suggest edits. */
-	recordingPauses: (fileName: string, options?: InvokeOptions) => __TAURI_INVOKE<RecordingPauses>("recording_pauses", { fileName }, options),
+	recordingPauses: (fileName: string, options?: InvokeOptions) => __TAURI_INVOKE<RecordingPauses_Serialize>("recording_pauses", { fileName }, options),
 	libraryList: (offset: number, limit: number, options?: InvokeOptions) => __TAURI_INVOKE<ShotPage_Serialize>("library_list", { offset, limit }, options),
 	librarySetTags: (id: number, tags: string[], options?: InvokeOptions) => __TAURI_INVOKE<Shot_Serialize>("library_set_tags", { id, tags }, options),
 	librarySidebar: (options?: InvokeOptions) => __TAURI_INVOKE<SidebarSummary>("library_sidebar", undefined, options),
@@ -1917,7 +1917,13 @@ export type RecordingInfo_Serialize = {
  *  The quiet stretches of one recording; the page reads it from the
  *  generated bindings.
  */
-export type RecordingPauses = {
+export type RecordingPauses = RecordingPauses_Serialize | RecordingPauses_Deserialize;
+
+/**
+ *  The quiet stretches of one recording; the page reads it from the
+ *  generated bindings.
+ */
+export type RecordingPauses_Deserialize = {
 	sound: PauseSound,
 	/**  Sorted, never overlapping; empty for a silent recording. */
 	pauses: PauseSpan[],
@@ -1926,6 +1932,31 @@ export type RecordingPauses = {
 	 *  would: only with the microphone kept apart.
 	 */
 	canClean: boolean,
+	/**
+	 *  The pointer as recorded, not smoothed, so a rest is found where the
+	 *  pointer really stopped; None without a pointer track.
+	 */
+	pointer?: CursorPath | null,
+};
+
+/**
+ *  The quiet stretches of one recording; the page reads it from the
+ *  generated bindings.
+ */
+export type RecordingPauses_Serialize = {
+	sound: PauseSound,
+	/**  Sorted, never overlapping; empty for a silent recording. */
+	pauses: PauseSpan[],
+	/**
+	 *  Whether an audition can play the stretch cleaned as the export
+	 *  would: only with the microphone kept apart.
+	 */
+	canClean: boolean,
+	/**
+	 *  The pointer as recorded, not smoothed, so a rest is found where the
+	 *  pointer really stopped; None without a pointer track.
+	 */
+	pointer: CursorPath | null,
 };
 
 /**  How good an MP4 looks, and so how big it is. */
@@ -2774,7 +2805,7 @@ export type MockCommandHandlers = {
     recordingInfo: () => RecordingInfo_Serialize | Promise<RecordingInfo_Serialize>,
     recordingSaveEdits: (args: { edits: Value }) => null | Promise<null>,
     recordingSource: (args: { fileName: string }) => RecordingClipSource_Serialize | Promise<RecordingClipSource_Serialize>,
-    recordingPauses: (args: { fileName: string }) => RecordingPauses | Promise<RecordingPauses>,
+    recordingPauses: (args: { fileName: string }) => RecordingPauses_Serialize | Promise<RecordingPauses_Serialize>,
     libraryList: (args: { offset: number; limit: number }) => ShotPage_Serialize | Promise<ShotPage_Serialize>,
     librarySetTags: (args: { id: number; tags: string[] }) => Shot_Serialize | Promise<Shot_Serialize>,
     librarySidebar: () => SidebarSummary | Promise<SidebarSummary>,
