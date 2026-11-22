@@ -742,7 +742,7 @@ describe("SettingsWindow AI descriptions", () => {
     expect(tidy).toBeDisabled();
     expect(screen.getByText(/nothing leaves this computer; a cloud endpoint receives your screenshots/)).toBeInTheDocument();
     // Nothing to re-describe while it is off.
-    expect(screen.getByRole("button", { name: "Re-describe all…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Analyse all again…" })).toBeDisabled();
   });
 
   it("keeps the switches as a draft until Save, starting a new user's descriptions and tidying off", async () => {
@@ -890,8 +890,8 @@ describe("SettingsWindow AI descriptions", () => {
     await waitFor(() => expect(backend.ai.automaticDescriptions).toBe(false));
     expect(backend.ai.enabled).toBe(true);
     expect(commands(backend)).not.toContain("ai_capture_count");
-    // Nothing would describe them, so Re-describe all is not offered.
-    await waitFor(() => expect(screen.getByRole("button", { name: "Re-describe all…" })).toBeDisabled());
+    // Nothing would describe them, so Analyse all again is not offered.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Analyse all again…" })).toBeDisabled());
   });
 
   it("saves a cloud endpoint, model and key", async () => {
@@ -1159,7 +1159,7 @@ describe("SettingsWindow AI descriptions", () => {
   it("re-describes every capture after confirmation", async () => {
     const backend = mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true } });
     render(<SettingsWindow />);
-    const start = await screen.findByRole("button", { name: "Re-describe all…" });
+    const start = await screen.findByRole("button", { name: "Analyse all again…" });
     await waitFor(() => expect(start).toBeEnabled());
 
     await userEvent.click(start);
@@ -1167,10 +1167,10 @@ describe("SettingsWindow AI descriptions", () => {
     expect(screen.getByText("This replaces the current descriptions.")).toBeInTheDocument();
     expect(backend.calls.find((call) => call.cmd === "ai_capture_count")?.payload).toEqual({ waiting: false });
     expect(commands(backend)).not.toContain("ai_redescribe_all");
-    await userEvent.click(screen.getByRole("button", { name: "Re-describe all" }));
+    await userEvent.click(screen.getByRole("button", { name: "Analyse all again" }));
 
     await waitFor(() => expect(commands(backend)).toContain("ai_redescribe_all"));
-    expect(await screen.findByText(/Describing every capture again/)).toBeInTheDocument();
+    expect(await screen.findByText(/Analysing every capture again/)).toBeInTheDocument();
   });
 
   it("picks Claude Code, hiding the endpoint's fields, and saves it with Save", async () => {

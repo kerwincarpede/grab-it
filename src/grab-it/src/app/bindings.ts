@@ -424,6 +424,12 @@ export const commands = {
 	aiClear: (id: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("ai_clear", { id }, options),
 	/**  Queues every capture, skipped ones too, to be described again. */
 	aiRedescribeAll: (options?: InvokeOptions) => __TAURI_INVOKE<null>("ai_redescribe_all", undefined, options),
+	/**
+	 *  Stops describing: every capture still waiting leaves the queue, and the
+	 *  answer for the one being described is dropped. Captures made later are
+	 *  described as usual.
+	 */
+	aiCancel: (options?: InvokeOptions) => __TAURI_INVOKE<null>("ai_cancel", undefined, options),
 	/**  Tests draft settings with a synthetic image without changing the active provider. */
 	aiTestConnection: (draft: AiSettings_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<string>("ai_test_connection", { draft }, options),
 	/**
@@ -688,6 +694,8 @@ export type AiStatus_Deserialize = {
 	error?: string | null,
 	/**  Who describes captures, so a failure can say whom to check. */
 	provider: AiProvider,
+	/**  The capture being described, in the `working` state. */
+	current?: number | null,
 };
 
 /**  What the queue is doing. Mirrors `AiStatus` in src/library/api.ts. */
@@ -701,6 +709,8 @@ export type AiStatus_Serialize = {
 	error: string | null,
 	/**  Who describes captures, so a failure can say whom to check. */
 	provider: AiProvider,
+	/**  The capture being described, in the `working` state. */
+	current: number | null,
 };
 
 /**
@@ -2424,6 +2434,11 @@ export type Shot_Deserialize = {
 	aiCategory?: string | null,
 	/**  Tags the vision model gave; the user's own are in `tags`. */
 	aiTags: string[],
+	/**
+	 *  An image waiting in the AI queue to be described (or described
+	 *  again), so the Library can mark it.
+	 */
+	aiWaiting: boolean,
 	/**  How long a recording runs, once known. */
 	durationMs?: number | null,
 	/**  A recording's file size, once known. */
@@ -2465,6 +2480,11 @@ export type Shot_Serialize = {
 	aiCategory: string | null,
 	/**  Tags the vision model gave; the user's own are in `tags`. */
 	aiTags: string[],
+	/**
+	 *  An image waiting in the AI queue to be described (or described
+	 *  again), so the Library can mark it.
+	 */
+	aiWaiting: boolean,
 	/**  How long a recording runs, once known. */
 	durationMs: number | null,
 	/**  A recording's file size, once known. */
@@ -2863,6 +2883,7 @@ export type MockCommandHandlers = {
     aiRedescribe: (args: { id: number }) => null | Promise<null>,
     aiClear: (args: { id: number }) => null | Promise<null>,
     aiRedescribeAll: () => null | Promise<null>,
+    aiCancel: () => null | Promise<null>,
     aiTestConnection: (args: { draft: AiSettings_Deserialize }) => string | Promise<string>,
     aiListModels: (args: { endpoint: string; apiKey: string | null }) => string[] | Promise<string[]>,
     aiCaptureCount: (args: { waiting: boolean }) => number | Promise<number>,
@@ -3034,6 +3055,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "ai_redescribe": return mockCommandHandler(mockHandlers.aiRedescribe, "ai_redescribe", args);
             case "ai_clear": return mockCommandHandler(mockHandlers.aiClear, "ai_clear", args);
             case "ai_redescribe_all": return mockCommandHandler(mockHandlers.aiRedescribeAll, "ai_redescribe_all", args);
+            case "ai_cancel": return mockCommandHandler(mockHandlers.aiCancel, "ai_cancel", args);
             case "ai_test_connection": return mockCommandHandler(mockHandlers.aiTestConnection, "ai_test_connection", args);
             case "ai_list_models": return mockCommandHandler(mockHandlers.aiListModels, "ai_list_models", args);
             case "ai_capture_count": return mockCommandHandler(mockHandlers.aiCaptureCount, "ai_capture_count", args);

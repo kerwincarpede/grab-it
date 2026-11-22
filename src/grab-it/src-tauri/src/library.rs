@@ -361,6 +361,9 @@ pub struct Shot {
     pub ai_category: Option<String>,
     /// Tags the vision model gave; the user's own are in `tags`.
     pub ai_tags: Vec<String>,
+    /// An image waiting in the AI queue to be described (or described
+    /// again), so the Library can mark it.
+    pub ai_waiting: bool,
     /// How long a recording runs, once known.
     pub duration_ms: Option<u64>,
     /// A recording's file size, once known.
@@ -379,9 +382,9 @@ pub struct Shot {
 /// The columns [`shot_from_row`] reads, in order, from `shots` as `s`.
 pub(crate) const SHOT_COLUMNS: &str = "s.id, s.path, s.thumb_path, s.captured_at, s.mode, s.app, \
      s.window_title, s.width, s.height, s.notes, s.ai_description, s.ai_category, s.kind, \
-     s.duration_ms, s.bytes, s.keep";
+     s.duration_ms, s.bytes, s.keep, s.ai_state";
 /// How many columns [`SHOT_COLUMNS`] holds.
-pub(crate) const SHOT_COLUMN_COUNT: usize = 16;
+pub(crate) const SHOT_COLUMN_COUNT: usize = 17;
 
 /// The text in a shot, as far as OCR has got. Mirrors `ShotText` in
 /// src/library/api.ts.
@@ -1157,6 +1160,31 @@ impl Library {
         )?)
     }
 
+    /// Whether a shot still waits to be described: false once it was
+    /// described, cancelled or deleted.
+    pub fn ai_waiting(&self, id: i64) -> LibraryResult<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM shots WHERE id = ?1 AND ai_state = 0 AND kind = 'image'",
+                [id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
+    /// Takes every waiting shot out of the AI queue: one with an earlier
+    /// description goes back to described and keeps it, the rest are
+    /// skipped until the user asks again.
+    pub fn cancel_waiting_ai(&mut self) -> LibraryResult<usize> {
+        Ok(self.conn.execute(
+            "UPDATE shots SET ai_state = CASE WHEN ai_description IS NULL THEN 3 ELSE 1 END
+             WHERE ai_state = 0 AND kind = 'image'",
+            [],
+        )?)
+    }
+
     /// Drops a shot's description, category and AI tags and skips it.
     pub fn clear_ai(&mut self, id: i64) -> LibraryResult<()> {
         let tx = self.conn.transaction()?;
@@ -1505,6 +1533,7 @@ pub(crate) fn shot_from_row(row: &Row<'_>) -> rusqlite::Result<Shot> {
         ai_description: row.get(10)?,
         ai_category: row.get(11)?,
         ai_tags: Vec::new(),
+        ai_waiting: kind == ShotKind::Image && row.get::<_, i64>(16)? == 0,
         kind,
         duration_ms: row.get::<_, Option<i64>>(13)?.map(|ms| ms.max(0) as u64),
         bytes: row

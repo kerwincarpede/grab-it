@@ -68,7 +68,7 @@ function backend({
       library_list: () => ({ shots: [], offset: 0, total: 0 }),
       library_search: () => ({ hits: [], offset: 0, total: 0 }),
       ocr_status: () => ({ state: "idle" }),
-      ai_status: () => ({ state: "idle", done: 0, total: 0, error: null, provider: "endpoint" }),
+      ai_status: () => ({ state: "idle", done: 0, total: 0, error: null, provider: "endpoint", current: null }),
     },
     { shouldMockEvents: true, otherwise: () => null },
   );

@@ -144,6 +144,8 @@ pub struct AiStatus {
     pub error: Option<String>,
     /// Who describes captures, so a failure can say whom to check.
     pub provider: AiProvider,
+    /// The capture being described, in the `working` state.
+    pub current: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
@@ -166,6 +168,7 @@ impl AiStatus {
         counts: crate::library::AiCounts,
         error: Option<String>,
         provider: AiProvider,
+        current: Option<i64>,
     ) -> Self {
         Self {
             state,
@@ -173,6 +176,7 @@ impl AiStatus {
             total: counts.total,
             error,
             provider,
+            current,
         }
     }
 }
@@ -895,20 +899,22 @@ pub enum Step {
     Described(i64),
     /// The capture could not be described and will not be retried.
     Failed(i64),
-    /// The capture was deleted while it was described.
+    /// The capture was deleted, or its describing cancelled, while it was
+    /// described; nothing was stored.
     Gone(i64),
     /// The provider failed; the capture still waits.
     Stopped(String),
 }
 
 /// Describes the next waiting capture, if describing is on. `working` runs
-/// once a capture is picked, before the request. The library is not locked
-/// while the model works.
+/// with its id once a capture is picked, before the request. The library is
+/// not locked while the model works, so the answer is dropped if the
+/// capture stopped waiting meanwhile (the user cancelled).
 pub fn step(
     library: &LibraryState,
     ai: &AiSettings,
     clients: &Clients,
-    working: impl FnOnce(),
+    working: impl FnOnce(i64),
 ) -> Result<Step, LibraryError> {
     if !ai.describes() {
         return Ok(Step::Off);
@@ -916,19 +922,20 @@ pub fn step(
     let Some(job) = library.lock().next_for_ai()? else {
         return Ok(Step::Empty);
     };
-    working();
-    let saved = match describe(clients, ai, &job) {
-        Ok(description) => library
-            .lock()
+    working(job.id);
+    let described = describe(clients, ai, &job);
+    let mut guard = library.lock();
+    if !guard.ai_waiting(job.id)? {
+        return Ok(Step::Gone(job.id));
+    }
+    let saved = match described {
+        Ok(description) => guard
             .set_ai_description(job.id, &description, &ai.model_label())
             .map(|()| Step::Described(job.id)),
         Err(AiError::Endpoint(message)) => return Ok(Step::Stopped(message)),
         Err(err) => {
             eprintln!("Grab-it: could not describe {}: {err}", job.path.display());
-            library
-                .lock()
-                .mark_ai_failed(job.id)
-                .map(|()| Step::Failed(job.id))
+            guard.mark_ai_failed(job.id).map(|()| Step::Failed(job.id))
         }
     };
     match saved {
@@ -967,6 +974,7 @@ impl AiQueue {
                 Default::default(),
                 None,
                 AiProvider::Endpoint,
+                None,
             )),
         }
     }
@@ -1030,7 +1038,13 @@ pub fn settings_saved(app: &AppHandle, before: &AiSettings, after: &AiSettings) 
     }
 }
 
-fn set_status(app: &AppHandle, state: AiState, provider: AiProvider, error: Option<String>) {
+fn set_status(
+    app: &AppHandle,
+    state: AiState,
+    provider: AiProvider,
+    error: Option<String>,
+    current: Option<i64>,
+) {
     let Some(queue) = app.try_state::<AiQueue>() else {
         return;
     };
@@ -1039,7 +1053,7 @@ fn set_status(app: &AppHandle, state: AiState, provider: AiProvider, error: Opti
         .lock()
         .ai_counts()
         .unwrap_or_default();
-    let status = AiStatus::new(state, counts, error, provider);
+    let status = AiStatus::new(state, counts, error, provider, current);
     {
         let mut current = queue
             .status
@@ -1106,33 +1120,32 @@ fn run(app: &AppHandle, receiver: &Receiver<Wake>) {
             clients.codex = ai_cli::find_codex();
         }
         let library = app.state::<LibraryState>();
-        let result = step(&library, &ai, &clients, || {
-            set_status(app, AiState::Working, provider, None);
+        let result = step(&library, &ai, &clients, |id| {
+            set_status(app, AiState::Working, provider, None, Some(id));
         });
         let keep_going = match result {
             Ok(Step::Described(_) | Step::Failed(_)) => {
-                set_status(app, AiState::Working, provider, None);
                 let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
                 true
             }
             Ok(Step::Gone(_)) => true,
             Ok(Step::Off) => {
-                set_status(app, AiState::Off, provider, None);
+                set_status(app, AiState::Off, provider, None, None);
                 wait(receiver)
             }
             Ok(Step::Empty) => {
-                set_status(app, AiState::Idle, provider, None);
+                set_status(app, AiState::Idle, provider, None, None);
                 wait(receiver)
             }
             Ok(Step::Stopped(message)) => {
                 eprintln!("Grab-it: describing captures stopped: {message}");
-                set_status(app, AiState::Error, provider, Some(message));
+                set_status(app, AiState::Error, provider, Some(message), None);
                 wait_to_retry(receiver)
             }
             Err(err) => {
                 // Do not spin on a database that refuses writes.
                 eprintln!("Grab-it: could not store a description: {err}");
-                set_status(app, AiState::Idle, provider, None);
+                set_status(app, AiState::Idle, provider, None, None);
                 wait(receiver)
             }
         };
@@ -1185,6 +1198,23 @@ pub fn ai_redescribe_all(app: AppHandle) -> Result<(), String> {
         .lock()
         .requeue_all_ai()
         .map_err(|err| err.to_string())?;
+    changed(&app);
+    Ok(())
+}
+
+/// Stops describing: every capture still waiting leaves the queue, and the
+/// answer for the one being described is dropped. Captures made later are
+/// described as usual.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn ai_cancel(app: AppHandle) -> Result<(), String> {
+    app.state::<LibraryState>()
+        .lock()
+        .cancel_waiting_ai()
+        .map_err(|err| err.to_string())?;
+    // Said at once: the request in flight may take a while to come back.
+    let provider = current_settings(&app).provider();
+    set_status(&app, AiState::Idle, provider, None, None);
     changed(&app);
     Ok(())
 }
@@ -1414,11 +1444,13 @@ mod tests {
             total: 3,
             error: None,
             provider: AiProvider::ClaudeCode,
+            current: Some(7),
         };
         assert_eq!(
             serde_json::to_value(status).unwrap(),
             json!({
-                "state": "working", "done": 1, "total": 3, "error": null, "provider": "claudeCode"
+                "state": "working", "done": 1, "total": 3, "error": null, "provider": "claudeCode",
+                "current": 7
             })
         );
         assert_eq!(serde_json::to_value(AiState::Off).unwrap(), json!("off"));
@@ -1613,7 +1645,7 @@ mod tests {
         };
         let mut worked = false;
 
-        let step = step(&library, &ai, &fast(), || worked = true).unwrap();
+        let step = step(&library, &ai, &fast(), |_| worked = true).unwrap();
 
         assert_eq!(step, Step::Described(id));
         assert!(worked);
@@ -1676,7 +1708,7 @@ mod tests {
     }
 
     fn step_again(library: &LibraryState, ai: &AiSettings) -> Step {
-        step(library, ai, &fast(), || {}).unwrap()
+        step(library, ai, &fast(), |_| {}).unwrap()
     }
 
     #[test]
@@ -1834,7 +1866,7 @@ mod tests {
                 http: agent(Duration::from_millis(300)),
                 ..fast()
             },
-            || {},
+            |_| {},
         )
         .unwrap();
         assert!(matches!(step, Step::Stopped(_)), "{step:?}");
@@ -2180,6 +2212,54 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn cancelling_empties_the_queue_and_keeps_earlier_descriptions() {
+        let dir = TempDir::new().unwrap();
+        let (library, id) = library_with_shot(dir.path(), Some("x"));
+        let server = serve(vec![Reply::Chat(GOOD_REPLY.into())]);
+        assert_eq!(
+            step_again(&library, &settings(&server)),
+            Step::Described(id)
+        );
+
+        let mut guard = library.lock();
+        assert!(!guard.get(id).unwrap().ai_waiting);
+        guard.requeue_ai(id).unwrap();
+        assert!(guard.get(id).unwrap().ai_waiting);
+        assert_eq!(guard.cancel_waiting_ai().unwrap(), 1);
+        // Described before, so it is described again, as it was.
+        assert_eq!(guard.ai_state(id).unwrap(), AI_DONE);
+        let shot = guard.get(id).unwrap();
+        assert!(!shot.ai_waiting);
+        assert!(shot.ai_description.is_some());
+
+        // Never described: skipped until the user asks again.
+        guard.clear_ai(id).unwrap();
+        guard.requeue_ai(id).unwrap();
+        assert_eq!(guard.cancel_waiting_ai().unwrap(), 1);
+        assert_eq!(guard.ai_state(id).unwrap(), AI_SKIPPED);
+        assert!(guard.next_for_ai().unwrap().is_none());
+        assert_eq!(guard.cancel_waiting_ai().unwrap(), 0);
+    }
+
+    #[test]
+    fn an_answer_that_arrives_after_cancelling_is_dropped() {
+        let dir = TempDir::new().unwrap();
+        let (library, id) = library_with_shot(dir.path(), Some("x"));
+        let server = serve(vec![Reply::Chat(GOOD_REPLY.into())]);
+
+        let step = step(&library, &settings(&server), &fast(), |working| {
+            assert_eq!(working, id);
+            library.lock().cancel_waiting_ai().unwrap();
+        })
+        .unwrap();
+
+        assert_eq!(step, Step::Gone(id));
+        let guard = library.lock();
+        assert_eq!(guard.ai_state(id).unwrap(), AI_SKIPPED);
+        assert_eq!(guard.get(id).unwrap().ai_description, None);
+    }
+
     // --- The queue with Claude Code --------------------------------------
 
     fn claude_settings() -> AiSettings {
@@ -2205,7 +2285,7 @@ mod tests {
         };
 
         assert_eq!(
-            step(&library, &claude_settings(), &clients, || {}).unwrap(),
+            step(&library, &claude_settings(), &clients, |_| {}).unwrap(),
             Step::Described(id)
         );
 
@@ -2254,7 +2334,7 @@ mod tests {
             claude: Some(claude),
             ..fast()
         };
-        let Step::Stopped(message) = step(&library, &claude_settings(), &clients, || {}).unwrap()
+        let Step::Stopped(message) = step(&library, &claude_settings(), &clients, |_| {}).unwrap()
         else {
             panic!("the queue should stop");
         };
@@ -2268,7 +2348,7 @@ mod tests {
         let (library, id) = library_with_shot(dir.path(), Some("x"));
         let mut worked = false;
         let Step::Stopped(message) =
-            step(&library, &claude_settings(), &fast(), || worked = true).unwrap()
+            step(&library, &claude_settings(), &fast(), |_| worked = true).unwrap()
         else {
             panic!("the queue should stop");
         };
@@ -2322,7 +2402,7 @@ mod tests {
         };
 
         assert_eq!(
-            step(&library, &codex_settings(), &clients, || {}).unwrap(),
+            step(&library, &codex_settings(), &clients, |_| {}).unwrap(),
             Step::Described(id)
         );
 
@@ -2369,7 +2449,7 @@ mod tests {
             codex: Some(codex),
             ..fast()
         };
-        let Step::Stopped(message) = step(&library, &codex_settings(), &clients, || {}).unwrap()
+        let Step::Stopped(message) = step(&library, &codex_settings(), &clients, |_| {}).unwrap()
         else {
             panic!("the queue should stop");
         };
@@ -2381,7 +2461,7 @@ mod tests {
     fn a_missing_codex_stops_the_queue_and_the_capture_waits() {
         let dir = TempDir::new().unwrap();
         let (library, id) = library_with_shot(dir.path(), Some("x"));
-        let Step::Stopped(message) = step(&library, &codex_settings(), &fast(), || {}).unwrap()
+        let Step::Stopped(message) = step(&library, &codex_settings(), &fast(), |_| {}).unwrap()
         else {
             panic!("the queue should stop");
         };

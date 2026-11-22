@@ -1226,6 +1226,7 @@ fn library_list_returns_the_shot_shape() {
             "aiCategory",
             "aiDescription",
             "aiTags",
+            "aiWaiting",
             "app",
             "bytes",
             "capturedAt",

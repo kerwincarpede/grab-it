@@ -142,7 +142,7 @@ function shotMenuRows(shot: Shot, { aiOff, openWith }: { aiOff: boolean; openWit
     "separator",
     tags,
     keep,
-    ...(aiOff ? [] : [{ action: "redescribe", label: "Describe again", icon: <SparkleIcon /> } as Entry]),
+    ...(aiOff ? [] : [{ action: "redescribe", label: "Analyse again", icon: <SparkleIcon /> } as Entry]),
     { action: "details", label: "Show details", icon: <InfoIcon /> },
     "separator",
     ...remove,
