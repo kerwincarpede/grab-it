@@ -653,6 +653,10 @@ export function setCopySound(enabled: boolean): Promise<Settings> {
   return commands.setCopySound(enabled);
 }
 
+export function setCopySoundVolume(volume: number): Promise<Settings> {
+  return commands.setCopySoundVolume(volume);
+}
+
 export function previewCopySound(): Promise<null> {
   return commands.previewCopySound();
 }

@@ -93,6 +93,7 @@ impl Harness {
         let app = crate::manage_states(mock_builder())
             .manage(crate::clipboard_sound::Preference::new(
                 store.get().copy_sound,
+                store.get().copy_sound_volume,
             ))
             .manage(Mutex::new(store))
             .manage(library::open_for_app(&dir.path().join("data")))
@@ -260,6 +261,7 @@ fn get_settings_returns_the_settings_shape() {
             "ai",
             "appearance",
             "copySound",
+            "copySoundVolume",
             "copyToClipboard",
             "editor",
             "hotkeys",
@@ -277,7 +279,8 @@ fn get_settings_returns_the_settings_shape() {
     );
     assert_eq!(settings["afterCapture"], "quickAccess");
     assert_eq!(settings["copyToClipboard"], true);
-    assert_eq!(settings["copySound"], false);
+    assert_eq!(settings["copySound"], true);
+    assert_eq!(settings["copySoundVolume"], 50);
     assert_eq!(settings["ai"]["enabled"], false);
     assert_eq!(settings["updateChannel"], "stable");
     assert_eq!(
@@ -405,7 +408,7 @@ fn set_save_folder_reports_a_failed_save() {
 // set_retention, set_show_in_dock and set_agent_access
 
 #[test]
-fn copy_sound_defaults_off_and_saves_independently() {
+fn copy_sound_defaults_on_and_saves_independently() {
     let h = Harness::with_stored(json!({
         "copyToClipboard": false,
         "afterCapture": "editor",
@@ -413,31 +416,93 @@ fn copy_sound_defaults_off_and_saves_independently() {
     }));
     let preference = h.app.state::<crate::clipboard_sound::Preference>();
     let mut expected = h.settings();
-    assert_eq!(expected["copySound"], false);
-    assert!(!preference.enabled());
-    expected["copySound"] = json!(true);
-    assert_eq!(h.ok("set_copy_sound", json!({ "enabled": true })), expected);
-    let saved = h.saved();
-    assert_eq!(saved["copySound"], true);
+    assert_eq!(expected["copySound"], true);
+    assert_eq!(expected["copySoundVolume"], 50);
     assert!(preference.enabled());
+    assert_eq!(preference.volume(), 50);
+    expected["copySound"] = json!(false);
+    assert_eq!(
+        h.ok("set_copy_sound", json!({ "enabled": false })),
+        expected
+    );
+    let saved = h.saved();
+    assert_eq!(saved["copySound"], false);
+    assert!(!preference.enabled());
 
     h.break_saving();
     assert!(
-        !h.err("set_copy_sound", json!({ "enabled": false }))
+        !h.err("set_copy_sound", json!({ "enabled": true }))
             .is_empty()
     );
-    assert!(preference.enabled());
+    assert!(!preference.enabled());
 
     let reloaded = Harness::with_stored(saved);
-    assert_eq!(reloaded.settings()["copySound"], true);
-    assert_eq!(
-        reloaded.ok("set_copy_sound", json!({ "enabled": false }))["copySound"],
-        false,
+    assert_eq!(reloaded.settings()["copySound"], false);
+    assert!(
+        !reloaded
+            .app
+            .state::<crate::clipboard_sound::Preference>()
+            .enabled()
     );
-    assert_eq!(reloaded.saved()["copySound"], false);
+    assert_eq!(
+        reloaded.ok("set_copy_sound", json!({ "enabled": true }))["copySound"],
+        true,
+    );
+    assert_eq!(reloaded.saved()["copySound"], true);
     assert_eq!(reloaded.saved()["copyToClipboard"], false);
     assert_eq!(reloaded.saved()["afterCapture"], "editor");
     assert_eq!(reloaded.saved()["agentAccess"], true);
+}
+
+#[test]
+fn copy_sound_volume_is_clamped_saved_and_held_beside_the_flag() {
+    let h = Harness::with_stored(json!({ "copySound": false, "copySoundVolume": 80 }));
+    let preference = h.app.state::<crate::clipboard_sound::Preference>();
+    assert_eq!(h.settings()["copySoundVolume"], 80);
+    assert_eq!(preference.volume(), 80);
+
+    let mut expected = h.settings();
+    expected["copySoundVolume"] = json!(35);
+    assert_eq!(
+        h.ok("set_copy_sound_volume", json!({ "volume": 35 })),
+        expected
+    );
+    assert_eq!(h.saved()["copySoundVolume"], 35);
+    assert_eq!(h.saved()["copySound"], false);
+    assert_eq!(preference.volume(), 35);
+    assert!(!preference.enabled());
+
+    assert_eq!(
+        h.ok("set_copy_sound_volume", json!({ "volume": 400 }))["copySoundVolume"],
+        100
+    );
+    assert_eq!(preference.volume(), 100);
+    assert_invalid_arg(
+        &h.err("set_copy_sound_volume", json!({ "volume": -1 })),
+        "set_copy_sound_volume",
+        "volume",
+    );
+    assert_eq!(preference.volume(), 100);
+
+    h.break_saving();
+    assert!(
+        !h.err("set_copy_sound_volume", json!({ "volume": 10 }))
+            .is_empty()
+    );
+    assert_eq!(preference.volume(), 100);
+}
+
+#[test]
+fn previewing_at_zero_volume_plays_nothing() {
+    let h = Harness::with_stored(json!({ "copySoundVolume": 0 }));
+    // No stream is opened, so this passes even without an audio output.
+    assert_eq!(h.ok("preview_copy_sound", json!({})), Value::Null);
+    let app = h.app.handle();
+    crate::record::mark_test_recording(app, None);
+    assert_eq!(
+        h.err("preview_copy_sound", json!({})),
+        "The copy sound is unavailable while recording.",
+    );
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! Plays the bundled confirmation sound through the desktop's default output.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use tauri::Manager;
 
@@ -9,20 +9,40 @@ use crate::{record, rt::AppHandle};
 const RECORDING_ERROR: &str = "The copy sound is unavailable while recording.";
 
 /// The persisted preference, available to clipboard writers without taking the settings lock.
-pub(crate) struct Preference(AtomicBool);
+pub(crate) struct Preference {
+    enabled: AtomicBool,
+    /// The volume as a percent from 0 to 100.
+    volume: AtomicU8,
+}
 
 impl Preference {
-    pub(crate) fn new(enabled: bool) -> Self {
-        Self(AtomicBool::new(enabled))
+    pub(crate) fn new(enabled: bool, volume: u8) -> Self {
+        Self {
+            enabled: AtomicBool::new(enabled),
+            volume: AtomicU8::new(volume.min(100)),
+        }
     }
 
     pub(crate) fn set(&self, enabled: bool) {
-        self.0.store(enabled, Ordering::Release);
+        self.enabled.store(enabled, Ordering::Release);
     }
 
     pub(crate) fn enabled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.enabled.load(Ordering::Acquire)
     }
+
+    pub(crate) fn set_volume(&self, volume: u8) {
+        self.volume.store(volume.min(100), Ordering::Release);
+    }
+
+    pub(crate) fn volume(&self) -> u8 {
+        self.volume.load(Ordering::Acquire)
+    }
+}
+
+/// The linear gain for a volume percent: 0.0 at 0%, 1.0 at 100%.
+fn gain(volume: u8) -> f32 {
+    f32::from(volume.min(100)) / 100.0
 }
 
 /// Whether a logical copy is user-facing or an automatic update to OCR's copy.
@@ -54,10 +74,14 @@ impl CopySound {
 
 /// Schedules audio separately from the clipboard operation.
 pub(crate) fn confirm(app: &AppHandle) {
-    if !app
+    let Some(volume) = app
         .try_state::<Preference>()
-        .is_some_and(|preference| preference.enabled())
-    {
+        .filter(|preference| preference.enabled())
+        .map(|preference| preference.volume())
+    else {
+        return;
+    };
+    if volume == 0 {
         return;
     }
     let Some(ticket) = record::playback_ticket(app) else {
@@ -65,7 +89,7 @@ pub(crate) fn confirm(app: &AppHandle) {
     };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(err) = play(app, ticket).await {
+        if let Err(err) = play(app, ticket, volume).await {
             eprintln!("Grab-it: {err}");
         }
     });
@@ -74,18 +98,29 @@ pub(crate) fn confirm(app: &AppHandle) {
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux", test))]
 const WAV: &[u8] = include_bytes!("../sounds/2-holga-two-part.wav");
 
-/// Previews the sound independently of the preference, whenever recording is idle.
+/// Previews the sound at the saved volume, whether or not copies play it,
+/// whenever recording is idle.
 #[tauri::command]
 #[specta::specta]
 pub async fn preview_copy_sound(app: AppHandle) -> Result<(), String> {
     let ticket = record::playback_ticket(&app).ok_or_else(|| RECORDING_ERROR.to_owned())?;
-    play(app, ticket).await
+    let volume = app
+        .try_state::<Preference>()
+        .map_or(crate::settings::DEFAULT_COPY_SOUND_VOLUME, |preference| {
+            preference.volume()
+        });
+    play(app, ticket, volume).await
 }
 
-/// Plays the bundled shutter sound on a worker thread, if the recording
-/// generation still matches the one from when it was requested.
-async fn play(app: AppHandle, ticket: u64) -> Result<(), String> {
-    let played = tauri::async_runtime::spawn_blocking(move || output::play(&app, ticket))
+/// Plays the bundled shutter sound at `volume` percent on a worker thread,
+/// if the recording generation still matches the one from when it was
+/// requested. At 0% it plays nothing and opens no output.
+async fn play(app: AppHandle, ticket: u64, volume: u8) -> Result<(), String> {
+    if volume == 0 {
+        return Ok(());
+    }
+    let gain = gain(volume);
+    let played = tauri::async_runtime::spawn_blocking(move || output::play(&app, ticket, gain))
         .await
         .map_err(|err| format!("Could not play the copy sound: {err}"))?;
     settle(played)
@@ -125,9 +160,10 @@ const SOURCE_RATE: u32 = 48_000;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 const UNFINISHED: &str = "The audio output did not finish playing the copy sound.";
 
-/// The clip's sample at `position` (in source frames), linearly interpolated.
+/// The clip's sample at `position` (in source frames), linearly
+/// interpolated and scaled by the volume's linear `gain`.
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux", test))]
-fn sample_at(position: f64) -> f32 {
+fn sample_at(position: f64, gain: f32) -> f32 {
     let sample = |index: usize| {
         let offset = index * 2;
         PCM.get(offset..offset + 2).map_or(0.0, |bytes| {
@@ -137,7 +173,7 @@ fn sample_at(position: f64) -> f32 {
     let index = position as usize;
     let fraction = (position - index as f64) as f32;
     let left = sample(index);
-    left + (sample(index + 1) - left) * fraction
+    (left + (sample(index + 1) - left) * fraction) * gain
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
@@ -162,7 +198,7 @@ mod output {
     const OUTPUT_TIMEOUT: Duration = Duration::from_secs(2);
     const CHECK_RECORDING_INTERVAL: Duration = Duration::from_millis(10);
 
-    pub(super) fn play(app: &AppHandle, ticket: u64) -> Result<(), Failure> {
+    pub(super) fn play(app: &AppHandle, ticket: u64, gain: f32) -> Result<(), Failure> {
         if !record::playback_current(app, ticket) {
             return Err(Failure::Cancelled);
         }
@@ -175,18 +211,18 @@ mod output {
         let format = config.sample_format();
         let config = config.into();
         match format {
-            SampleFormat::I8 => play_samples::<i8>(&device, config, app, ticket),
-            SampleFormat::I16 => play_samples::<i16>(&device, config, app, ticket),
-            SampleFormat::I24 => play_samples::<cpal::I24>(&device, config, app, ticket),
-            SampleFormat::I32 => play_samples::<i32>(&device, config, app, ticket),
-            SampleFormat::I64 => play_samples::<i64>(&device, config, app, ticket),
-            SampleFormat::U8 => play_samples::<u8>(&device, config, app, ticket),
-            SampleFormat::U16 => play_samples::<u16>(&device, config, app, ticket),
-            SampleFormat::U24 => play_samples::<cpal::U24>(&device, config, app, ticket),
-            SampleFormat::U32 => play_samples::<u32>(&device, config, app, ticket),
-            SampleFormat::U64 => play_samples::<u64>(&device, config, app, ticket),
-            SampleFormat::F32 => play_samples::<f32>(&device, config, app, ticket),
-            SampleFormat::F64 => play_samples::<f64>(&device, config, app, ticket),
+            SampleFormat::I8 => play_samples::<i8>(&device, config, app, ticket, gain),
+            SampleFormat::I16 => play_samples::<i16>(&device, config, app, ticket, gain),
+            SampleFormat::I24 => play_samples::<cpal::I24>(&device, config, app, ticket, gain),
+            SampleFormat::I32 => play_samples::<i32>(&device, config, app, ticket, gain),
+            SampleFormat::I64 => play_samples::<i64>(&device, config, app, ticket, gain),
+            SampleFormat::U8 => play_samples::<u8>(&device, config, app, ticket, gain),
+            SampleFormat::U16 => play_samples::<u16>(&device, config, app, ticket, gain),
+            SampleFormat::U24 => play_samples::<cpal::U24>(&device, config, app, ticket, gain),
+            SampleFormat::U32 => play_samples::<u32>(&device, config, app, ticket, gain),
+            SampleFormat::U64 => play_samples::<u64>(&device, config, app, ticket, gain),
+            SampleFormat::F32 => play_samples::<f32>(&device, config, app, ticket, gain),
+            SampleFormat::F64 => play_samples::<f64>(&device, config, app, ticket, gain),
             _ => Err(Failure::Unavailable(format!(
                 "The audio output uses an unsupported format ({format})."
             ))),
@@ -211,6 +247,7 @@ mod output {
         config: StreamConfig,
         app: &AppHandle,
         ticket: u64,
+        gain: f32,
     ) -> Result<(), Failure> {
         let (send, receive) = mpsc::sync_channel(1);
         let errors = send.clone();
@@ -231,7 +268,7 @@ mod output {
                     }
                     let frame_count = buffer.len() / channels;
                     for frame in buffer.chunks_mut(channels) {
-                        frame.fill(T::from_sample(sample_at(position)));
+                        frame.fill(T::from_sample(sample_at(position, gain)));
                         position += source_step;
                     }
                     if position >= end {
@@ -323,7 +360,7 @@ mod output {
     const DEADLINE: Duration = Duration::from_secs(3);
     const CHECK_INTERVAL: Duration = Duration::from_millis(10);
 
-    pub(super) fn play(app: &AppHandle, ticket: u64) -> Result<(), Failure> {
+    pub(super) fn play(app: &AppHandle, ticket: u64, gain: f32) -> Result<(), Failure> {
         if !record::playback_current(app, ticket) {
             return Err(Failure::Cancelled);
         }
@@ -333,7 +370,7 @@ mod output {
             .hw_params_current()
             .and_then(|params| Ok((params.get_rate()?, params.get_channels()?)))
             .map_err(|err| Failure::Unavailable(output_error(&err)))?;
-        let samples = frames(rate, channels);
+        let samples = frames(rate, channels, gain);
         let channels = channels.max(1) as usize;
         write(&pcm, &samples, channels, app, ticket, deadline)?;
         let clip = Duration::from_secs_f64((samples.len() / channels) as f64 / f64::from(rate));
@@ -435,8 +472,8 @@ mod output {
         io::Error::from_raw_os_error(err.errno()).kind() == io::ErrorKind::WouldBlock
     }
 
-    /// The clip at `rate`, interleaved over `channels`.
-    pub(super) fn frames(rate: u32, channels: u32) -> Vec<i16> {
+    /// The clip at `rate`, interleaved over `channels` and scaled by `gain`.
+    pub(super) fn frames(rate: u32, channels: u32, gain: f32) -> Vec<i16> {
         let channels = channels.max(1) as usize;
         let rate = rate.max(1);
         let source = super::PCM.len() / 2;
@@ -444,7 +481,7 @@ mod output {
         let step = f64::from(SOURCE_RATE) / f64::from(rate);
         let mut samples = Vec::with_capacity(count * channels);
         for frame in 0..count {
-            let value = (sample_at(frame as f64 * step) * 32_768.0)
+            let value = (sample_at(frame as f64 * step, gain) * 32_768.0)
                 .round()
                 .clamp(-32_768.0, 32_767.0) as i16;
             samples.extend(std::iter::repeat_n(value, channels));
@@ -474,7 +511,7 @@ mod output {
 
         #[test]
         fn the_clip_is_written_unchanged_at_its_own_rate() {
-            let samples = frames(SOURCE_RATE, 1);
+            let samples = frames(SOURCE_RATE, 1, 1.0);
             let source: Vec<i16> = super::super::PCM
                 .as_chunks::<2>()
                 .0
@@ -486,8 +523,8 @@ mod output {
 
         #[test]
         fn the_clip_is_resampled_and_copied_to_every_channel() {
-            let mono = frames(SOURCE_RATE, 1);
-            let stereo = frames(96_000, 2);
+            let mono = frames(SOURCE_RATE, 1, 1.0);
+            let stereo = frames(96_000, 2, 1.0);
             assert_eq!(stereo.len(), mono.len() * 4);
             assert!(
                 stereo
@@ -498,9 +535,22 @@ mod output {
             );
             assert_eq!(stereo[4], mono[1]);
             assert_eq!(
-                frames(44_100, 1).len(),
+                frames(44_100, 1, 1.0).len(),
                 (mono.len() * 44_100).div_ceil(48_000)
             );
+        }
+
+        #[test]
+        fn the_written_clip_follows_the_volume() {
+            let full = frames(SOURCE_RATE, 1, 1.0);
+            let half = frames(SOURCE_RATE, 1, 0.5);
+            assert_eq!(half.len(), full.len());
+            assert!(
+                full.iter()
+                    .zip(&half)
+                    .all(|(&full, &half)| (f32::from(full) / 2.0 - f32::from(half)).abs() <= 0.5)
+            );
+            assert!(frames(SOURCE_RATE, 2, 0.0).iter().all(|&value| value == 0));
         }
 
         #[test]
@@ -525,7 +575,7 @@ mod output {
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 mod output {
-    pub(super) fn play(_: &super::AppHandle, _: u64) -> Result<(), super::Failure> {
+    pub(super) fn play(_: &super::AppHandle, _: u64, _: f32) -> Result<(), super::Failure> {
         Err(super::Failure::Unavailable(
             "The copy sound is unavailable on this system.".into(),
         ))
@@ -561,9 +611,47 @@ mod tests {
         let at = |index: usize| {
             f32::from(i16::from_le_bytes([PCM[index * 2], PCM[index * 2 + 1]])) / 32_768.0
         };
-        assert_eq!(sample_at(100.0), at(100));
-        let middle = sample_at(100.5);
+        assert_eq!(sample_at(100.0, 1.0), at(100));
+        let middle = sample_at(100.5, 1.0);
         assert!((middle - (at(100) + at(101)) / 2.0).abs() < 1e-6);
-        assert_eq!(sample_at((source_frames() + 1) as f64), 0.0);
+        assert_eq!(sample_at((source_frames() + 1) as f64, 1.0), 0.0);
+    }
+
+    #[test]
+    fn samples_are_scaled_linearly_by_the_gain() {
+        let loudest = (0..source_frames())
+            .max_by(|&a, &b| {
+                sample_at(a as f64, 1.0)
+                    .abs()
+                    .total_cmp(&sample_at(b as f64, 1.0).abs())
+            })
+            .unwrap();
+        let full = sample_at(loudest as f64, 1.0);
+        assert!(full.abs() > 0.1);
+        assert_eq!(sample_at(loudest as f64, 0.5), full * 0.5);
+        assert_eq!(sample_at(loudest as f64, 0.0), 0.0);
+        let between = loudest as f64 + 0.5;
+        assert_eq!(sample_at(between, 0.25), sample_at(between, 1.0) * 0.25);
+    }
+
+    #[test]
+    fn the_volume_percent_is_a_linear_gain() {
+        assert_eq!(gain(0), 0.0);
+        assert_eq!(gain(50), 0.5);
+        assert_eq!(gain(100), 1.0);
+        assert_eq!(gain(255), 1.0);
+    }
+
+    #[test]
+    fn the_preference_holds_a_clamped_volume_beside_the_flag() {
+        let preference = Preference::new(true, 50);
+        assert!(preference.enabled());
+        assert_eq!(preference.volume(), 50);
+        preference.set_volume(200);
+        assert_eq!(preference.volume(), 100);
+        preference.set(false);
+        assert!(!preference.enabled());
+        assert_eq!(preference.volume(), 100);
+        assert_eq!(Preference::new(false, 180).volume(), 100);
     }
 }

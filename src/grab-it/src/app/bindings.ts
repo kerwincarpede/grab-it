@@ -17,7 +17,12 @@ export const commands = {
 	setPreferences: (preferences: PreferencesUpdate_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("set_preferences", { preferences }, options),
 	/**  Saves whether successful clipboard copies play a confirmation sound. */
 	setCopySound: (enabled: boolean, options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("set_copy_sound", { enabled }, options),
-	/**  Previews the sound independently of the preference, whenever recording is idle. */
+	/**  Saves the copy sound's volume as a percent, clamped to 0–100. */
+	setCopySoundVolume: (volume: number, options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("set_copy_sound_volume", { volume }, options),
+	/**
+	 *  Previews the sound at the saved volume, whether or not copies play it,
+	 *  whenever recording is idle.
+	 */
 	previewCopySound: (options?: InvokeOptions) => __TAURI_INVOKE<null>("preview_copy_sound", undefined, options),
 	/**  The annotation editor's remembered colour, tool, widths and options. */
 	getEditorPreferences: (options?: InvokeOptions) => __TAURI_INVOKE<EditorPreferences_Serialize>("get_editor_preferences", undefined, options),
@@ -2163,6 +2168,8 @@ export type Settings_Deserialize = {
 	hotkeys: Hotkeys_Deserialize,
 	/**  Plays a sound when Grab-it copies something to the clipboard. */
 	copySound: boolean,
+	/**  How loud the copy sound plays, as a percent from 0 to 100. */
+	copySoundVolume: number,
 	/**  The annotation editor's remembered style and tool. */
 	editor: EditorPreferences_Deserialize,
 	/**
@@ -2196,6 +2203,8 @@ export type Settings_Serialize = {
 	hotkeys: Hotkeys_Serialize,
 	/**  Plays a sound when Grab-it copies something to the clipboard. */
 	copySound: boolean,
+	/**  How loud the copy sound plays, as a percent from 0 to 100. */
+	copySoundVolume: number,
 	/**  The annotation editor's remembered style and tool. */
 	editor: EditorPreferences_Serialize,
 	/**
@@ -2628,6 +2637,7 @@ export type MockCommandHandlers = {
     setHotkeys: (args: { hotkeys: Hotkeys_Deserialize }) => HotkeysUpdate_Serialize | Promise<HotkeysUpdate_Serialize>,
     setPreferences: (args: { preferences: PreferencesUpdate_Deserialize }) => Settings_Serialize | Promise<Settings_Serialize>,
     setCopySound: (args: { enabled: boolean }) => Settings_Serialize | Promise<Settings_Serialize>,
+    setCopySoundVolume: (args: { volume: number }) => Settings_Serialize | Promise<Settings_Serialize>,
     previewCopySound: () => null | Promise<null>,
     getEditorPreferences: () => EditorPreferences_Serialize | Promise<EditorPreferences_Serialize>,
     setEditorPreferences: (args: { preferences: EditorPreferences_Deserialize }) => EditorPreferences_Serialize | Promise<EditorPreferences_Serialize>,
@@ -2796,6 +2806,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "set_hotkeys": return mockCommandHandler(mockHandlers.setHotkeys, "set_hotkeys", args);
             case "set_preferences": return mockCommandHandler(mockHandlers.setPreferences, "set_preferences", args);
             case "set_copy_sound": return mockCommandHandler(mockHandlers.setCopySound, "set_copy_sound", args);
+            case "set_copy_sound_volume": return mockCommandHandler(mockHandlers.setCopySoundVolume, "set_copy_sound_volume", args);
             case "preview_copy_sound": return mockCommandHandler(mockHandlers.previewCopySound, "preview_copy_sound", args);
             case "get_editor_preferences": return mockCommandHandler(mockHandlers.getEditorPreferences, "get_editor_preferences", args);
             case "set_editor_preferences": return mockCommandHandler(mockHandlers.setEditorPreferences, "set_editor_preferences", args);

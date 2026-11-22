@@ -59,6 +59,22 @@ pub fn set_copy_sound(
     Ok(settings)
 }
 
+/// Saves the copy sound's volume as a percent, clamped to 0–100.
+#[tauri::command]
+#[specta::specta]
+pub fn set_copy_sound_volume(
+    volume: u32,
+    state: State<'_, SettingsState>,
+    preference: State<'_, crate::clipboard_sound::Preference>,
+) -> Result<Settings, String> {
+    let mut store = lock(&state);
+    let settings = store
+        .set_copy_sound_volume(volume)
+        .map_err(|err| err.to_string())?;
+    preference.set_volume(settings.copy_sound_volume);
+    Ok(settings)
+}
+
 /// Saves the capture and AI preferences. Without `ai`, the AI settings
 /// are kept.
 #[tauri::command]
