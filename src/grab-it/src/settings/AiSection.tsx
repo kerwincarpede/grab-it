@@ -483,7 +483,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
         <div className="row">
           <p className="hint ai-destination" data-testid="ai-destination">
             Test connection sends a small sample image, not one of your captures, to{" "}
-            {destination(draft) || "the endpoint"}. It checks that the model reads images and answers as asked.
+            {destination(draft) || "the endpoint"}. It checks that the server answers, takes a request with an image, and replies with the JSON asked for. It cannot tell whether the model looked at the image.
           </p>
         </div>
         <div className="row">

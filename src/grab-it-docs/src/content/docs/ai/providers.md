@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-Pick who describes your captures in **Settings → AI integration → Described by**, then press **Save**. **Test connection** sends a tiny sample image, never one of your captures, with the settings as typed, without saving them. Settings shows where it goes before you press it. It tells you whether the model read the image and answered as asked, or what to fix.
+Pick who describes your captures in **Settings → AI integration → Described by**, then press **Save**. **Test connection** sends a tiny sample image, never one of your captures, with the settings as typed, without saving them. Settings shows where it goes before you press it. It tells you whether the server answered, took the request with the image, and replied with the JSON asked for, or what to fix. It can't tell whether the model looked at the image; see [When the test fails](#when-the-test-fails).
 
 ![Settings open at AI descriptions, with the switches and Claude Code picked as the provider.](../../../assets/ai/ai-settings.png)
 

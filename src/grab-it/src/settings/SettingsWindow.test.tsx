@@ -981,6 +981,26 @@ describe("SettingsWindow AI descriptions", () => {
     expect(screen.getByTestId("ai-destination")).toHaveTextContent("to localhost:11434.");
   });
 
+  it("names where the test goes for each provider, and offers List models only where the server lists them", async () => {
+    mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "endpoint" } });
+    render(<SettingsWindow />);
+    const preset = await screen.findByLabelText("Preset");
+    await waitFor(() => expect(preset).toBeEnabled());
+    expect(screen.getByRole("button", { name: "List models" })).toBeInTheDocument();
+
+    await userEvent.selectOptions(preset, "Anthropic");
+    expect(screen.queryByRole("button", { name: "List models" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("ai-destination")).toHaveTextContent("to api.anthropic.com.");
+
+    await userEvent.clear(screen.getByLabelText("Endpoint URL"));
+    expect(screen.getByTestId("ai-destination")).toHaveTextContent("to the endpoint.");
+
+    await userEvent.click(screen.getByRole("radio", { name: /Claude Code/ }));
+    expect(screen.getByTestId("ai-destination")).toHaveTextContent("to Anthropic, through Claude Code.");
+    await userEvent.click(screen.getByRole("radio", { name: /Codex/ }));
+    expect(screen.getByTestId("ai-destination")).toHaveTextContent("to OpenAI, through Codex.");
+  });
+
   it("shows why the connection test failed", async () => {
     const backend = mockBackend({ testResult: "error: could not connect to http://localhost:11434/v1" });
     render(<SettingsWindow />);

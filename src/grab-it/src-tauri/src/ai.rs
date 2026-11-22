@@ -317,6 +317,21 @@ fn request_body(
 struct Failure {
     status: Option<u16>,
     message: String,
+    /// The server's own message in an error response, without the URL or
+    /// status around it; empty when there was no response.
+    detail: String,
+}
+
+impl Failure {
+    /// `url` answered `status` with the error response `body`.
+    fn answered(url: &str, status: u16, body: &str) -> Self {
+        let detail = api_error_message(body);
+        Self {
+            status: Some(status),
+            message: format!("{url} answered {status}: {detail}"),
+            detail,
+        }
+    }
 }
 
 /// The message in an error response: OpenAI's `{"error": {"message"}}`,
@@ -345,6 +360,7 @@ fn post(agent: &ureq::Agent, ai: &AiSettings, body: &Value) -> Result<String, Fa
     let failed = |err: ureq::Error| Failure {
         status: None,
         message: format!("could not reach {url}: {err}"),
+        detail: String::new(),
     };
     let mut response = request.send(body.to_string()).map_err(failed)?;
     let status = response.status();
@@ -355,14 +371,7 @@ fn post(agent: &ureq::Agent, ai: &AiSettings, body: &Value) -> Result<String, Fa
         .read_to_string()
         .map_err(failed)?;
     if !status.is_success() {
-        return Err(Failure {
-            status: Some(status.as_u16()),
-            message: format!(
-                "{url} answered {}: {}",
-                status.as_u16(),
-                api_error_message(&text)
-            ),
-        });
+        return Err(Failure::answered(&url, status.as_u16(), &text));
     }
     Ok(text)
 }
@@ -412,9 +421,16 @@ fn complete(agent: &ureq::Agent, ai: &AiSettings, mut body: Value) -> Result<Str
     }
 }
 
-/// Whether an error response is about the image: the model reads only text.
-fn refuses_images(message: &str) -> bool {
-    let lower = message.to_lowercase();
+/// Whether the server's own message in an error response says the model
+/// reads only text. The model ID is left out first, as servers often quote
+/// it and one such as `llama3.2-vision` would otherwise always match; the
+/// URL is not in `detail` at all.
+fn refuses_images(model: &str, detail: &str) -> bool {
+    let mut lower = detail.to_lowercase();
+    let model = model.trim().to_lowercase();
+    if !model.is_empty() {
+        lower = lower.replace(&model, "");
+    }
     ["image", "vision", "multimodal", "multi-modal"]
         .iter()
         .any(|word| lower.contains(word))
@@ -432,7 +448,9 @@ fn endpoint_error(model: &str, failure: Failure) -> AiError {
         Some(401 | 403) => {
             format!("The server did not accept the API key. Check the key. {message}")
         }
-        Some(400..=599) if refuses_images(&message) => {
+        // What servers answer a request they cannot run, not "not found",
+        // rate limits or gateway errors, which a model name cannot fix.
+        Some(400 | 415 | 422 | 500) if refuses_images(model, &failure.detail) => {
             format!("{model} does not accept images. Choose a vision model. {message}")
         }
         Some(_) => message,
@@ -693,6 +711,7 @@ pub fn list_models(
             Failure {
                 status: None,
                 message: format!("could not reach {url}: {err}"),
+                detail: String::new(),
             },
         )
     };
@@ -707,14 +726,7 @@ pub fn list_models(
     if !status.is_success() {
         return Err(endpoint_error(
             "",
-            Failure {
-                status: Some(status.as_u16()),
-                message: format!(
-                    "{url} answered {}: {}",
-                    status.as_u16(),
-                    api_error_message(&text)
-                ),
-            },
+            Failure::answered(&url, status.as_u16(), &text),
         ));
     }
     let value: Value = serde_json::from_str(&text)
@@ -1774,6 +1786,32 @@ mod tests {
         };
         let down = test_connection(&fast(), &offline).unwrap_err().to_string();
         assert!(down.starts_with("The server did not answer."), "{down}");
+    }
+
+    #[test]
+    fn a_vision_model_that_is_missing_or_busy_is_not_said_to_refuse_images() {
+        let server = serve(vec![
+            Reply::Json(
+                404,
+                json!({ "error": { "message": "model \"llama3.2-vision\" not found, try pulling it first" } }),
+            ),
+            Reply::Json(
+                400,
+                json!({ "error": "llama3.2-vision: the prompt is longer than the context length" }),
+            ),
+            Reply::Json(
+                429,
+                json!({ "error": { "message": "Rate limit exceeded for vision requests" } }),
+            ),
+        ]);
+        let ai = AiSettings {
+            model: "llama3.2-vision".into(),
+            ..settings(&server)
+        };
+        for _ in 0..3 {
+            let err = test_connection(&fast(), &ai).unwrap_err().to_string();
+            assert!(!err.contains("does not accept images"), "{err}");
+        }
     }
 
     #[test]
