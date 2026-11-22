@@ -364,33 +364,13 @@ jobs:
       package: ${{ steps.route.outputs.package }}
     steps:
       - uses: actions/checkout@v7
-        if: github.event_name == 'pull_request'
         with:
           fetch-depth: 2
       - id: route
         shell: bash
         env:
           MANUAL_PACKAGE: ${{ inputs.package }}
-        run: |
-          package=true
-          if [[ $GITHUB_EVENT_NAME == pull_request ]]; then
-            # Compare the tested merge tree with its base parent. Count both
-            # sides of renames so moving an input away also tests packaging.
-            git diff --no-renames --name-only -z HEAD^1 HEAD > "$RUNNER_TEMP/pr-paths"
-            package=false
-            while IFS= read -r -d '' path; do
-              case "$path" in
-                src/grab-it/src-tauri/src/bin/*) package=true; break ;;
-                src/grab-it/src-tauri/src/*|src/grab-it/src-tauri/tests/*|src/grab-it/src-tauri/benches/*) ;;
-                .github/scripts/*bench_report.py|.github/workflows/bench.yml|.github/workflows/docs.yml) ;;
-                src/grab-it/src-tauri/*|.github/scripts/*|.github/workflows/*.yml|*/package.json|package.json|package-lock.json|dev-install.sh|.cargo/*|*/.cargo/*|.gitattributes)
-                  package=true; break ;;
-              esac
-            done < "$RUNNER_TEMP/pr-paths"
-          elif [[ $GITHUB_EVENT_NAME == workflow_dispatch && $MANUAL_PACKAGE == false ]]; then
-            package=false
-          fi
-          echo "package=$package" >> "$GITHUB_OUTPUT"
+        run: bash .github/scripts/packaging_route.sh >> "$GITHUB_OUTPUT"
 
   build:
     needs: build-route
