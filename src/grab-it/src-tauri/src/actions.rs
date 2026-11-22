@@ -18,9 +18,10 @@ use crate::rt::AppHandle;
 use crate::{
     ai::{self, AiError},
     capture::{self, CaptureMode, CapturedPointer, Foreground, SavedCapture},
+    clipboard_sound::CopySound,
     codes::{self, Code},
     commands::{SettingsState, lock},
-    ocr, overlay,
+    file_clipboard, ocr, overlay,
     overlay::Intent,
     permissions, pointer,
     quick::{self, QuickItem, TextTidy},
@@ -423,7 +424,7 @@ pub fn finish_text(app: &AppHandle, image: &RgbaImage) {
             |lines| ocr::lines_text(&lines),
         );
         let outcome = code_outcome(found, &text);
-        match app.clipboard().write_text(outcome.copy) {
+        match file_clipboard::copy_text(app, &outcome.copy) {
             Ok(()) => {
                 quick::show(app, outcome.item);
             }
@@ -447,7 +448,7 @@ pub fn finish_text(app: &AppHandle, image: &RgbaImage) {
             quick::show(app, no_text_found());
             return;
         }
-        match app.clipboard().write_text(read.clone()) {
+        match file_clipboard::copy_text(app, &read) {
             Ok(()) => {
                 quick::show(app, QuickItem::text(read));
             }
@@ -467,7 +468,7 @@ pub fn finish_text(app: &AppHandle, image: &RgbaImage) {
             },
         )
     } else {
-        if let Err(err) = app.clipboard().write_text(read.clone()) {
+        if let Err(err) = file_clipboard::copy_text(app, &read) {
             return report_failure(app, &format!("could not copy the text: {err}"));
         }
         Some(quick::show(
@@ -491,7 +492,7 @@ pub fn finish_text(app: &AppHandle, image: &RgbaImage) {
         return;
     }
     if let Some(text) = outcome.copy
-        && let Err(err) = app.clipboard().write_text(text)
+        && let Err(err) = file_clipboard::write_text(app, &text, CopySound::tidied(&read))
     {
         eprintln!("Grab-it: could not copy the tidied text: {err}");
     }
@@ -601,7 +602,7 @@ fn tidied_outcome(
 
 /// Copies a picked colour as `#RRGGBB`.
 pub fn finish_colour(app: &AppHandle, rgb: [u8; 3]) {
-    match app.clipboard().write_text(quick::hex_colour(rgb)) {
+    match file_clipboard::copy_text(app, &quick::hex_colour(rgb)) {
         Ok(()) => {
             quick::show(app, QuickItem::colour(rgb));
         }

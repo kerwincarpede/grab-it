@@ -127,6 +127,8 @@ x11rb = { version = "0.13", features = ["xfixes"] }
 # Already in the tree through wry: turns on media streams so the webcam
 # bubble and Settings can use the camera (webcam.rs).
 webkit2gtk = "2.0"
+# Native clipboard confirmation on PulseAudio or PipeWire-Pulse, with ALSA fallback.
+cpal = { version = "0.18", features = ["pulseaudio"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # The version xcap uses: draws the pointer into recordings (frames.rs),
@@ -195,9 +197,8 @@ objc2-vision = { version = "0.3", default-features = false, features = [
 ] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-# The microphone for recordings (audio.rs): Core Audio and WASAPI. Linux
-# records it through ffmpeg's PulseAudio input instead, so its builds need
-# no ALSA headers.
+# Core Audio and WASAPI for the recording microphone and clipboard sound.
+# Linux records its microphone through ffmpeg's PulseAudio input.
 cpal = "0.18"
 
 [dev-dependencies]

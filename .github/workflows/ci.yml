@@ -49,6 +49,7 @@ env:
     libx11-dev
     libxtst-dev
     libxi-dev
+    libasound2-dev
   # xcap: X11 (xcb, randr), Wayland (wayland, EGL, GBM) and PipeWire capture.
   # Its PipeWire bindings (libspa 0.8) need PipeWire 1.0 headers or newer,
   # which Ubuntu 22.04 does not ship; hence the 24.04 runners below.

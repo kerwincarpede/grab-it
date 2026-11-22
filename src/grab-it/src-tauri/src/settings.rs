@@ -971,6 +971,8 @@ pub struct Settings {
     pub hotkeys: Hotkeys,
     #[serde(flatten)]
     pub preferences: Preferences,
+    /// Plays a sound when Grab-it copies something to the clipboard.
+    pub copy_sound: bool,
     /// The annotation editor's remembered style and tool.
     pub editor: EditorPreferences,
     /// macOS: Grab-it has a Dock icon that opens its window. Off, it lives
@@ -1003,6 +1005,7 @@ impl Settings {
             save_folder: pictures_dir.join(DEFAULT_FOLDER_NAME),
             hotkeys: Hotkeys::default(),
             preferences: Preferences::default(),
+            copy_sound: false,
             editor: EditorPreferences::default(),
             show_in_dock: true,
             appearance: Appearance::default(),
@@ -1024,6 +1027,8 @@ struct StoredSettings {
     hotkeys: Option<StoredHotkeys>,
     after_capture: Option<AfterCapture>,
     copy_to_clipboard: Option<bool>,
+    #[serde(default)]
+    copy_sound: Option<bool>,
     ai: Option<AiSettings>,
     /// Read leniently by [`EditorPreferences::from_stored`].
     editor: Option<serde_json::Value>,
@@ -1096,6 +1101,7 @@ impl StoredSettings {
                     .unwrap_or(defaults.preferences.copy_to_clipboard),
                 ai: self.ai.unwrap_or(defaults.preferences.ai),
             },
+            copy_sound: self.copy_sound.unwrap_or(defaults.copy_sound),
             editor: match self.editor {
                 Some(stored) => EditorPreferences::from_stored(stored),
                 None => defaults.editor,
@@ -1181,6 +1187,7 @@ struct SettingsOnDisk<'a> {
     hotkeys: &'a Hotkeys,
     after_capture: AfterCapture,
     copy_to_clipboard: bool,
+    copy_sound: bool,
     ai: AiOnDisk<'a>,
     editor: &'a EditorPreferences,
     show_in_dock: bool,
@@ -1229,6 +1236,7 @@ impl<'a> SettingsOnDisk<'a> {
             hotkeys: &settings.hotkeys,
             after_capture: settings.preferences.after_capture,
             copy_to_clipboard: settings.preferences.copy_to_clipboard,
+            copy_sound: settings.copy_sound,
             ai: AiOnDisk {
                 enabled: *enabled,
                 provider: *provider,
@@ -1439,6 +1447,17 @@ impl SettingsStore {
         fs::create_dir_all(&folder)?;
         let next = Settings {
             save_folder: folder,
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
+    /// Saves the clipboard sound preference independently of the other settings.
+    pub fn set_copy_sound(&mut self, enabled: bool) -> Result<Settings, SettingsError> {
+        let next = Settings {
+            copy_sound: enabled,
             ..self.current.clone()
         };
         save(&self.path, &next)?;
@@ -1814,6 +1833,7 @@ mod tests {
                     ..AiSettings::default()
                 },
             },
+            copy_sound: true,
             editor: EditorPreferences {
                 color: Some("#0090ff".into()),
                 ..EditorPreferences::default()

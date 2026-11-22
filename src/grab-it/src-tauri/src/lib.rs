@@ -5,6 +5,7 @@ mod ai_cli;
 mod audio;
 mod capture;
 mod cli;
+mod clipboard_sound;
 mod codes;
 mod commands;
 mod control;
@@ -338,6 +339,8 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             commands::set_save_folder,
             commands::set_hotkeys,
             commands::set_preferences,
+            commands::set_copy_sound,
+            clipboard_sound::preview_copy_sound,
             commands::get_editor_preferences,
             commands::set_editor_preferences,
             commands::set_auto_backdrop,

@@ -8,8 +8,40 @@
 
 use std::path::PathBuf;
 
-use crate::rt::AppHandle;
 use image::RgbaImage;
+use tauri_plugin_clipboard_manager::ClipboardExt;
+
+use crate::{
+    clipboard_sound::{self, CopySound},
+    rt::AppHandle,
+};
+
+/// Puts plain text on the clipboard with confirmation after a successful write.
+pub fn copy_text(app: &AppHandle, text: &str) -> tauri_plugin_clipboard_manager::Result<()> {
+    write_text(app, text, CopySound::Confirm)
+}
+
+/// Writes text with the chosen confirmation policy for this copy.
+pub(crate) fn write_text(
+    app: &AppHandle,
+    text: &str,
+    sound: CopySound,
+) -> tauri_plugin_clipboard_manager::Result<()> {
+    clipboard_sound::copied(app, sound, app.clipboard().write_text(text))
+}
+
+/// Puts the guide's HTML and Markdown on the clipboard in a single logical copy.
+pub fn copy_guide(
+    app: &AppHandle,
+    html: String,
+    text: String,
+) -> tauri_plugin_clipboard_manager::Result<()> {
+    clipboard_sound::copied(
+        app,
+        CopySound::Confirm,
+        app.clipboard().write_html(html, Some(text)),
+    )
+}
 
 #[cfg(any(target_os = "macos", test))]
 fn png_bytes(image: &RgbaImage) -> Result<Vec<u8>, String> {
@@ -23,6 +55,10 @@ fn png_bytes(image: &RgbaImage) -> Result<Vec<u8>, String> {
 /// Copies pixels to the clipboard. Call from a worker thread because macOS
 /// waits for the main thread to publish the pasteboard item.
 pub fn copy_image(app: &AppHandle, image: &RgbaImage) -> Result<(), String> {
+    clipboard_sound::copied(app, CopySound::Confirm, write_image(app, image))
+}
+
+fn write_image(app: &AppHandle, image: &RgbaImage) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let png = png_bytes(image)?;
@@ -31,7 +67,6 @@ pub fn copy_image(app: &AppHandle, image: &RgbaImage) -> Result<(), String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        use tauri_plugin_clipboard_manager::ClipboardExt;
         let clip = tauri::image::Image::new(image.as_raw(), image.width(), image.height());
         app.clipboard()
             .write_image(&clip)
@@ -44,7 +79,10 @@ pub fn copy_files(app: &AppHandle, paths: &[PathBuf]) -> Result<(), String> {
     if paths.is_empty() {
         return Err("Nothing to copy.".into());
     }
-    let paths = paths.to_vec();
+    clipboard_sound::copied(app, CopySound::Confirm, write_files(app, paths.to_vec()))
+}
+
+fn write_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         on_main_thread(app, move || linux::write(&paths))

@@ -2711,7 +2711,6 @@ pub fn library_shot_id(
 #[tauri::command(async)]
 #[specta::specta]
 pub fn library_copy_text(id: i64, app: AppHandle) -> Result<String, String> {
-    use tauri_plugin_clipboard_manager::ClipboardExt;
     let library = app.state::<LibraryState>();
     let known = library.lock().text(id).map_err(to_message)?;
     let text = match known {
@@ -2741,8 +2740,7 @@ pub fn library_copy_text(id: i64, app: AppHandle) -> Result<String, String> {
     if text.trim().is_empty() {
         return Err("No text found in this capture.".into());
     }
-    app.clipboard()
-        .write_text(text.clone())
+    crate::file_clipboard::copy_text(&app, &text)
         .map_err(|err| format!("could not copy the text: {err}"))?;
     Ok(text)
 }
@@ -2794,10 +2792,8 @@ pub fn library_open_external(id: i64, app: AppHandle) -> Result<(), String> {
 #[tauri::command(async)]
 #[specta::specta]
 pub fn library_copy_path(id: i64, app: AppHandle) -> Result<String, String> {
-    use tauri_plugin_clipboard_manager::ClipboardExt;
     let path = existing_path(&app, id)?.to_string_lossy().into_owned();
-    app.clipboard()
-        .write_text(path.clone())
+    crate::file_clipboard::copy_text(&app, &path)
         .map_err(|err| format!("could not copy the path: {err}"))?;
     Ok(path)
 }

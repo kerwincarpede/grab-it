@@ -46,6 +46,7 @@ env:
     libx11-dev
     libxtst-dev
     libxi-dev
+    libasound2-dev
   XCAP_DEPS: >-
     pkg-config
     libclang-dev

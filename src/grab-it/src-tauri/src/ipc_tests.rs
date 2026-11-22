@@ -400,6 +400,46 @@ fn set_save_folder_reports_a_failed_save() {
 // set_retention, set_show_in_dock and set_agent_access
 
 #[test]
+fn copy_sound_defaults_off_and_saves_independently() {
+    let h = Harness::with_stored(json!({
+        "copyToClipboard": false,
+        "afterCapture": "editor",
+        "agentAccess": true,
+    }));
+    let mut expected = h.settings();
+    assert_eq!(expected["copySound"], false);
+    expected["copySound"] = json!(true);
+    assert_eq!(h.ok("set_copy_sound", json!({ "enabled": true })), expected);
+    assert_eq!(h.saved()["copySound"], true);
+    let reloaded = Harness::with_stored(h.saved());
+    assert_eq!(reloaded.settings()["copySound"], true);
+    assert_eq!(
+        reloaded.ok("set_copy_sound", json!({ "enabled": false }))["copySound"],
+        false,
+    );
+    assert_eq!(reloaded.saved()["copySound"], false);
+    assert_eq!(reloaded.saved()["copyToClipboard"], false);
+    assert_eq!(reloaded.saved()["afterCapture"], "editor");
+    assert_eq!(reloaded.saved()["agentAccess"], true);
+}
+
+#[test]
+fn preview_and_pending_copy_sounds_are_suppressed_during_recording_and_pause() {
+    for paused_at in [None, Some(1)] {
+        let h = Harness::new();
+        let app = h.app.handle();
+        let before_start = crate::record::playback_ticket(app).unwrap();
+        crate::record::mark_test_recording(app, paused_at);
+        assert!(crate::record::playback_ticket(app).is_none());
+        assert!(!crate::record::playback_current(app, before_start));
+        assert_eq!(
+            h.err("preview_copy_sound", json!({})),
+            "The copy sound is unavailable while recording.",
+        );
+    }
+}
+
+#[test]
 fn set_preferences_without_ai_keeps_the_ai_settings() {
     let h = Harness::new();
     let before = h.settings()["ai"].clone();

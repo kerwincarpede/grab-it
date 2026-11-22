@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { emit } from "@tauri-apps/api/event";
 import { afterEach, describe, expect, it } from "vitest";
 import SettingsWindow from "./SettingsWindow";
+import { HUB_ACTIVITY_EVENT } from "../hub/api";
 import { camera, fakeMedia, type FakeMedia } from "../webcam/testMedia";
 import { mockCommands, type CommandCall } from "../test/mockCommands";
 import type { Settings_Serialize } from "../app/bindings";
@@ -46,6 +47,9 @@ interface Backend {
   autostart?: boolean;
   afterCapture: AfterCapture;
   copyToClipboard: boolean;
+  copySound: boolean;
+  recordingActive: boolean;
+  previewError?: string;
   ai: AiPreferences;
   /** What `ai_test_connection` answers; a thrown error when it starts with "error:". */
   testResult: string;
@@ -96,6 +100,8 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
   const backend: Backend = {
     afterCapture: "quickAccess",
     copyToClipboard: true,
+    copySound: false,
+    recordingActive: false,
     ai: { ...DEFAULT_AI_PREFERENCES },
     testResult: "qwen3-vl:4b (4.4B, Q4_K_M)",
     claudePath: "/usr/local/bin/claude",
@@ -127,6 +133,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     hotkeys: backend.hotkeys,
     afterCapture: backend.afterCapture,
     copyToClipboard: backend.copyToClipboard,
+    copySound: backend.copySound,
     ai: backend.ai,
     editor: {
       ...(backend.autoBackdrop === undefined ? {} : { autoBackdrop: backend.autoBackdrop }),
@@ -204,6 +211,16 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
         guard();
         backend.autostart = enabled;
         return backend.autostart;
+      },
+      hub_activity: () => ({ recording: backend.recordingActive, steps: false }),
+      set_copy_sound: ({ enabled }) => {
+        guard();
+        backend.copySound = enabled;
+        return settings();
+      },
+      preview_copy_sound: () => {
+        if (backend.previewError) throw backend.previewError;
+        return null;
       },
       set_preferences: ({ preferences }) => {
         guard();
@@ -349,6 +366,58 @@ describe("SettingsWindow", () => {
     expect(backend.calls[backend.calls.length - 1].payload).toEqual({
       preferences: { afterCapture: "nothing", copyToClipboard: false, ai: DEFAULT_AI_PREFERENCES },
     });
+  });
+
+  it("previews while the sound preference is off and saves the toggle independently", async () => {
+    const backend = mockBackend({ afterCapture: "nothing", copyToClipboard: false });
+    render(<SettingsWindow section="capture" />);
+    const toggle = await screen.findByRole("switch", { name: /Play a sound when copying/ });
+    const preview = screen.getByRole("button", { name: "Preview sound" });
+    await waitFor(() => expect(preview).toBeEnabled());
+    expect(toggle).not.toBeChecked();
+
+    await userEvent.click(preview);
+    expect(backend.calls.some(({ cmd }) => cmd === "preview_copy_sound")).toBe(true);
+    expect(toggle).not.toBeChecked();
+
+    await userEvent.click(toggle);
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(backend.calls).toContainEqual({ cmd: "set_copy_sound", payload: { enabled: true } });
+    expect(screen.getByRole("radio", { name: "Do nothing" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: /Copy every capture/ })).not.toBeChecked();
+
+    await userEvent.click(toggle);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+    expect(backend.calls).toContainEqual({ cmd: "set_copy_sound", payload: { enabled: false } });
+  });
+
+  it("disables preview while a recording is under way and re-enables it afterwards", async () => {
+    const backend = mockBackend({ recordingActive: true });
+    render(<SettingsWindow section="capture" />);
+    const preview = await screen.findByRole("button", { name: "Preview sound" });
+    expect(await screen.findByText("Preview is unavailable while recording.")).toBeInTheDocument();
+    expect(preview).toBeDisabled();
+    await userEvent.click(preview);
+    expect(backend.calls.some(({ cmd }) => cmd === "preview_copy_sound")).toBe(false);
+
+    await emit(HUB_ACTIVITY_EVENT, { recording: false, steps: false });
+    await waitFor(() => expect(preview).toBeEnabled());
+    await emit(HUB_ACTIVITY_EVENT, { recording: true, steps: false });
+    await waitFor(() => expect(preview).toBeDisabled());
+  });
+
+  it("reports preview and save failures without changing the toggle", async () => {
+    mockBackend({ previewError: "No default audio output is available.", setError: "disk full" });
+    render(<SettingsWindow section="capture" />);
+    const preview = screen.getByRole("button", { name: "Preview sound" });
+    await waitFor(() => expect(preview).toBeEnabled());
+    await userEvent.click(preview);
+    expect(await screen.findByText("No default audio output is available.")).toBeInTheDocument();
+
+    const toggle = screen.getByRole("switch", { name: /Play a sound when copying/ });
+    await userEvent.click(toggle);
+    expect(await screen.findByText("disk full")).toBeInTheDocument();
+    expect(toggle).not.toBeChecked();
   });
 
   it("keeps the choice and says why when a preference cannot be saved", async () => {

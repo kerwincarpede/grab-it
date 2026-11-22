@@ -115,6 +115,7 @@ function settings(backend: Backend): Settings_Serialize {
     updateChannel: "stable",
     afterCapture: "quickAccess",
     copyToClipboard: true,
+    copySound: false,
     ai: {
       enabled: backend.aiEnabled ?? backend.aiNotice,
       provider: backend.aiProvider ?? "claudeCode",
