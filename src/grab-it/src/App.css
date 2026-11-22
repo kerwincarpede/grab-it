@@ -525,6 +525,30 @@ label.row {
   line-height: 1.4;
 }
 
+.update-channel-info {
+  margin: 0 18px 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--accent-edge);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.update-channel-info p {
+  margin: 0;
+}
+
+.update-channel-info p + p:not(:empty) {
+  margin-top: 4px;
+}
+
+.update-channel-info strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .row-control {
   display: flex;
   flex: none;

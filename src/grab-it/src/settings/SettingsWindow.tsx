@@ -212,6 +212,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [busy, setBusy] = useState(false);
+  const [switchedToStable, setSwitchedToStable] = useState(false);
   /** Null until the backend has said; only the Recording page asks. */
   const [ffmpeg, setFfmpeg] = useState<FfmpegStatus | null>(null);
   const showsRecording = shows("recording");
@@ -494,6 +495,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     setBusy(true);
     try {
       setSettings(await setUpdateChannel(channel));
+      setSwitchedToStable(channel === "stable");
       setStatus({ kind: "preferences-saved" });
     } catch (err) {
       setStatus({ kind: "error", message: errorMessage(err) });
@@ -555,7 +557,6 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   const appearanceOff = busy || settings === null;
   const showsMac = shows("general") && (hasDock() || autostart !== null);
   const updateChannel = settings?.updateChannel ?? "stable";
-  const updateChannelChoice = UPDATE_CHANNELS.find((choice) => choice.value === updateChannel);
 
   return (
     <main className={section === undefined ? "window settings" : "window settings settings-page"}>
@@ -1085,18 +1086,13 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
           </h2>
           <div className="group">
             <div className="row">
-              <span className="row-text">
-                <label className="row-title" htmlFor="update-channel">
-                  Update channel
-                </label>
-                {updateChannelChoice && <span className="row-hint">{updateChannelChoice.hint}</span>}
-                <span className="row-hint">
-                  Switching from Edge to Stable never installs an older version: Grab-it waits until Stable catches up.
-                </span>
-              </span>
+              <label className="row-title row-text" htmlFor="update-channel">
+                Update channel
+              </label>
               <select
                 id="update-channel"
                 className="row-field"
+                aria-describedby="update-channel-info"
                 value={updateChannel}
                 disabled={busy || settings === null}
                 onChange={(event) => void changeUpdateChannel(event.target.value as UpdateChannel)}
@@ -1107,6 +1103,14 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="update-channel-info" id="update-channel-info">
+              {UPDATE_CHANNELS.map((choice) => (
+                <p key={choice.value}><strong>{choice.title}</strong> — {choice.hint}</p>
+              ))}
+              <p aria-live="polite">
+                {switchedToStable && "If you’re ahead of Stable, you’ll keep your current version until a newer Stable release is available."}
+              </p>
             </div>
           </div>
         </section>

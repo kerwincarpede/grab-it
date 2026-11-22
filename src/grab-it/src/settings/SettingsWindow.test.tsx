@@ -1531,15 +1531,16 @@ describe("SettingsWindow updates", () => {
     await waitFor(() => expect(channel).toBeEnabled());
     expect(channel).toHaveValue("stable");
     expect(within(channel).getAllByRole("option").map((option) => option.textContent)).toEqual(["Stable", "Edge"]);
-    expect(screen.getByText(/Releases that have been tried out first/)).toBeInTheDocument();
-    expect(screen.getByText(/Grab-it waits until Stable catches up/)).toBeInTheDocument();
+    expect(channel).toHaveAccessibleDescription(/Stable — Get updates after they’ve been tried on Edge.*Edge — Get new features and fixes sooner/);
+    expect(screen.queryByText(/you’ll keep your current version/)).not.toBeInTheDocument();
 
     await userEvent.selectOptions(channel, "Edge");
 
     await waitFor(() => expect(channel).toHaveValue("edge"));
     expect(backend.updateChannel).toBe("edge");
     expect(backend.calls.find((call) => call.cmd === "set_update_channel")?.payload).toEqual({ channel: "edge" });
-    expect(screen.getByText(/Every change as soon as it is built/)).toBeInTheDocument();
+    expect(channel).toHaveAccessibleDescription(/Stable — Get updates after.*Edge — Get new features and fixes sooner/);
+    expect(screen.queryByText(/you’ll keep your current version/)).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Saved.");
   });
 
@@ -1554,6 +1555,8 @@ describe("SettingsWindow updates", () => {
 
     await waitFor(() => expect(channel).toHaveValue("stable"));
     expect(backend.updateChannel).toBe("stable");
+    expect(channel).toHaveAccessibleDescription(/you’ll keep your current version until a newer Stable release is available/);
+    expect(screen.getByText(/you’ll keep your current version/)).toHaveAttribute("aria-live", "polite");
   });
 
   it("keeps the channel and says why when it cannot switch", async () => {
