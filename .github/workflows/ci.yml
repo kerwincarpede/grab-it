@@ -1,13 +1,23 @@
 name: CI
 
-# main runs this through release.yml. Docs-only PRs skip it; docs.yml builds the site.
+# Ordinary PRs link native apps without bundling. Packaging inputs exercise
+# the real installers. Use Run workflow with package enabled to force packaging;
+# release.yml always packages, and docs.yml handles docs-only changes.
 on:
   pull_request:
-    paths-ignore:
-      - src/grab-it-docs/**
-      - docs/**
-      - '**/*.md'
+    paths:
+      - '**'
+      - '!src/grab-it-docs/**'
+      - '!docs/**'
+      - '!**/*.md'
+      # Native resources include licenses and other shipped Markdown.
+      - 'src/grab-it/src-tauri/**/*.md'
   workflow_dispatch:
+    inputs:
+      package:
+        description: Build and upload installers on every platform
+        type: boolean
+        default: true
   workflow_call:
     inputs:
       version:
@@ -348,7 +358,22 @@ jobs:
           path: ${{ github.workspace }}\e2e-run
           if-no-files-found: ignore
 
+  build-route:
+    runs-on: ubuntu-24.04
+    outputs:
+      package: ${{ steps.route.outputs.package }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - id: route
+        shell: bash
+        env:
+          MANUAL_PACKAGE: ${{ inputs.package }}
+        run: bash .github/scripts/packaging_route.sh >> "$GITHUB_OUTPUT"
+
   build:
+    needs: build-route
     name: Build (${{ matrix.platform }})
     # A release build (release.yml, main only) runs in the release
     # environment, which holds the updater and macOS signing secrets. Other
@@ -419,7 +444,7 @@ jobs:
       # and handed to Tauri by name.
       - name: Import the macOS signing certificate
         id: macos-signing
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && inputs.release_id != ''
         shell: bash
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
@@ -464,7 +489,13 @@ jobs:
       # to release.yml, which writes it once every platform is in.
       # On macOS one universal build serves both Apple silicon and Intel, and
       # lands under target/universal-apple-darwin/ rather than target/.
+      - name: Link native app without bundling
+        if: needs.build-route.outputs.package == 'false'
+        working-directory: src/grab-it
+        run: npm run tauri -- build --no-bundle ${{ runner.os == 'macOS' && '--target universal-apple-darwin' || '' }}
+
       - name: Build installers
+        if: needs.build-route.outputs.package == 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -493,6 +524,7 @@ jobs:
           fi
 
       - name: Upload installers
+        if: needs.build-route.outputs.package == 'true'
         uses: actions/upload-artifact@v7
         with:
           # Per runner, so the x86_64 and arm64 Linux builds don't collide.
