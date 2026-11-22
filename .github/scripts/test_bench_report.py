@@ -1,5 +1,8 @@
 import io
 import json
+import os
+import subprocess
+import textwrap
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -172,6 +175,49 @@ class Report(unittest.TestCase):
         self.assertNotIn("### Rust", markdown)
         self.assertIn("only this PR's numbers", markdown)
         self.assertIn("1 benches ran.", markdown)
+
+    def test_exact_main_artifact_with_a_partial_suite(self):
+        self.bench("library/search", head=120)
+        self.bench("library/added", head=200)
+        baseline = self.root / "main"
+        write(baseline / "criterion/search/new/benchmark.json", {"full_id": "library/search"})
+        write(baseline / "criterion/search/new/estimates.json", estimates(100))
+        head = self.vitest("head.json", {"editor/render": 1})
+        summary = self.root / "summary"
+        main([str(self.root / "library"), "--vitest", head, "--stored-baseline", str(baseline), "--summary", str(summary)])
+        text = summary.read_text()
+        self.assertIn("| `library/search` | 100 ns | 120 ns | +20.0% | **Slower** |", text)
+        self.assertIn("| `library/added` | – | 200 ns | – | New |", text)
+        self.assertIn("| `editor/render` | – | 1 ms | – |  |", text)
+
+    def test_stored_frontend_baseline(self):
+        baseline = self.root / 'main'
+        baseline.mkdir()
+        self.vitest('main/vitest.json', {'editor/render': 1})
+        head = self.vitest('head.json', {'editor/render': 2})
+        summary = self.root / 'summary'
+        main(['--stored-baseline', str(baseline), '--vitest', head, '--summary', str(summary)])
+        self.assertIn('| `editor/render` | 1 ms | 2 ms | +100.0% |', summary.read_text())
+
+    def test_editor_only_change_times_export_benches(self):
+        workflow = Path(__file__).resolve().parents[1] / 'workflows/bench.yml'
+        scope = workflow.read_text().split('      - id: paths\n', 1)[1]
+        script = textwrap.dedent(scope.split('        run: |\n', 1)[1].split('\n\n', 1)[0])
+        output = self.root / 'outputs'
+        env = dict(os.environ, BASE='base', HEAD='head', RUNNER_TEMP=str(self.root), GITHUB_OUTPUT=str(output))
+        # Supply the NUL-delimited output of git diff for this path-only PR.
+        subprocess.run(['bash', '-e', '-c', "git() { printf '%s\\0' src/grab-it/src-tauri/src/editor.rs; }\n" + script], env=env, check=True)
+        self.assertIn('time=true', output.read_text().splitlines())
+
+    def test_missing_and_expired_artifacts_keep_head_rows(self):
+        self.bench("search", head=100)
+        for reason in ("unavailable", "expired"):
+            with self.subTest(reason=reason):
+                summary = self.root / reason
+                note = f"Head only: baseline for abc is {reason}."
+                main([str(self.root), "--no-base", "--baseline-note", note, "--summary", str(summary)])
+                self.assertIn(note, summary.read_text())
+                self.assertIn("| `search` | – | 100 ns | – |  |", summary.read_text())
 
     def test_formats_durations(self):
         self.assertEqual(duration(12.345), "12.3 ns")

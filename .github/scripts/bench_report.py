@@ -86,6 +86,13 @@ def criterion_results(root, has_base=True):
     return sorted(results, key=lambda result: result.name)
 
 
+def stored_criterion_results(head, baseline):
+    """Join two independent Criterion runs by full benchmark ID, not directory name."""
+    heads = {r.name: r.head for r in criterion_results(head, False)}
+    bases = {r.name: r.head for r in criterion_results(baseline, False) if r.head is not None}
+    return compare_means(heads, bases), bool(bases)
+
+
 def vitest_means(path):
     """Each bench's mean nanoseconds per iteration in a vitest JSON report.
 
@@ -118,14 +125,17 @@ def vitest_results(head, base=None):
     head_means = vitest_means(head) or {}
     base_means = vitest_means(base)
     has_base = base_means is not None
-    base_means = base_means or {}
+    return compare_means(head_means, base_means or {}), has_base
+
+
+def compare_means(head_means, base_means):
     results = []
     for name in sorted(set(head_means) | set(base_means)):
         base_ns = base_means.get(name)
         head_ns = head_means.get(name)
         change = head_ns / base_ns - 1 if base_ns and head_ns is not None else None
         results.append(Result(name, base_ns, head_ns, change))
-    return results, has_base
+    return results
 
 
 def duration(nanoseconds):
@@ -147,7 +157,7 @@ def section(title, results, has_base):
     if not results:
         return lines + ["No benchmark results were found.", ""], []
     if not has_base:
-        lines += ["The base has no benches, so only this PR's numbers are shown.", ""]
+        lines += ["No usable baseline for this suite; only this PR's numbers are shown.", ""]
     lines += [
         "| Benchmark | Base | Head | Change | |",
         "| --- | ---: | ---: | ---: | --- |",
@@ -205,6 +215,8 @@ def main(argv=None):
         action="store_true",
         help="the PR base's Rust benches did not run; report the head alone",
     )
+    parser.add_argument("--stored-baseline", type=Path, help="downloaded main measurements directory")
+    parser.add_argument("--baseline-note", help="where the comparison came from")
     parser.add_argument("--vitest", help="the head's vitest JSON report")
     parser.add_argument(
         "--vitest-base",
@@ -218,12 +230,17 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         sections = []
-        if args.criterion:
+        if args.criterion and args.stored_baseline:
+            sections.append(("Rust", *stored_criterion_results(args.criterion, args.stored_baseline / "criterion")))
+        elif args.criterion:
             has_base = not args.no_base
             sections.append(("Rust", criterion_results(args.criterion, has_base), has_base))
         if args.vitest:
-            sections.append(("Frontend", *vitest_results(args.vitest, args.vitest_base)))
+            base = args.stored_baseline / "vitest.json" if args.stored_baseline else args.vitest_base
+            sections.append(("Frontend", *vitest_results(args.vitest, base)))
         markdown, warnings = render(sections)
+        if args.baseline_note:
+            markdown += f"\n{args.baseline_note}\n"
         # Also in the log: job summaries are hidden from signed-out
         # viewers and from the API.
         sys.stdout.write(markdown)
