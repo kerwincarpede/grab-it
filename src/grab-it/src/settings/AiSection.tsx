@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { RefreshIcon } from "../app/icons";
 import {
   AI_PROVIDERS,
   CLAUDE_MODELS,
@@ -424,27 +425,31 @@ function AiSection({ saved, disabled, onSave }: Props) {
                 <span className="row-hint">It must accept images. Type its ID, or list what the server offers.</span>
               </span>
               <span className="row-control">
-                <input
-                  id="ai-model"
-                  className="row-field"
-                  type="text"
-                  spellCheck={false}
-                  autoComplete="off"
-                  value={draft.model}
-                  disabled={busy}
-                  placeholder={preset?.model ?? "qwen3-vl:4b"}
-                  onChange={(event) => setDraft({ ...draft, model: event.target.value })}
-                />
-                {(preset?.listsModels ?? true) && (
-                  <button
-                    type="button"
-                    className="pill"
-                    disabled={busy || endpointKey.length === 0}
-                    onClick={() => void findModels()}
-                  >
-                    {listing ? "Listing…" : "List models"}
-                  </button>
-                )}
+                <span className="row-field row-field-with-action">
+                  <input
+                    id="ai-model"
+                    type="text"
+                    spellCheck={false}
+                    autoComplete="off"
+                    value={draft.model}
+                    disabled={busy}
+                    placeholder={preset?.model ?? "qwen3-vl:4b"}
+                    onChange={(event) => setDraft({ ...draft, model: event.target.value })}
+                  />
+                  {(preset?.listsModels ?? true) && (
+                    <button
+                      type="button"
+                      className="pill icon-only"
+                      aria-label="List models"
+                      title="List models"
+                      aria-busy={listing}
+                      disabled={busy || endpointKey.length === 0}
+                      onClick={() => void findModels()}
+                    >
+                      {listing ? <span className="spinner" aria-hidden="true" /> : <RefreshIcon size={15} />}
+                    </button>
+                  )}
+                </span>
               </span>
             </div>
             {listed && listed.length > 0 && (
