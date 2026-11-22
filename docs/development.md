@@ -118,8 +118,15 @@ TIFF together. Each pair produces one confirmation. For Capture text, the first
 successful copy can play the sound even when the text comes from AI. An automatic
 AI replacement of text already copied by OCR is silent.
 
-The `copySound` setting defaults to `false`, including when an older file omits
-it. Preview bypasses the preference. A recording session suppresses both sounds
+The `copySound` setting defaults to `true` when the file has no saved value,
+including an older file that omits it. A saved `false` stays off.
+`copySoundVolume` is a whole percent from 0 to 100 and defaults to 50; a value
+out of range is clamped and one that is not a number keeps 50.
+`clipboard_sound::Preference` holds the flag and the volume, so copies read
+both without the settings lock. Each copy or preview reads the volume when it
+starts and scales every sample by it as a linear gain. At
+0% nothing plays and no audio stream opens. The approved WAV is never rewritten
+to change its loudness. Preview bypasses the flag but uses the volume. A recording session suppresses both sounds
 during countdown, recording and pause. Starting a session cancels active and
 pending playback.
 

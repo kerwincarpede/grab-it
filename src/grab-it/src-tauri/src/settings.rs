@@ -965,6 +965,8 @@ pub struct Settings {
     pub preferences: Preferences,
     /// Plays a sound when Grab-it copies something to the clipboard.
     pub copy_sound: bool,
+    /// How loud the copy sound plays, as a percent from 0 to 100.
+    pub copy_sound_volume: u8,
     /// The annotation editor's remembered style and tool.
     pub editor: EditorPreferences,
     /// macOS: Grab-it has a Dock icon that opens its window. Off, it lives
@@ -998,7 +1000,8 @@ impl Settings {
             save_folder: pictures_dir.join(DEFAULT_FOLDER_NAME),
             hotkeys: Hotkeys::default(),
             preferences: Preferences::default(),
-            copy_sound: false,
+            copy_sound: true,
+            copy_sound_volume: DEFAULT_COPY_SOUND_VOLUME,
             editor: EditorPreferences::default(),
             show_in_dock: true,
             appearance: Appearance::default(),
@@ -1012,6 +1015,22 @@ impl Settings {
     }
 }
 
+/// The copy sound's volume for settings files that have none.
+pub const DEFAULT_COPY_SOUND_VOLUME: u8 = 50;
+
+/// Clamps a requested copy sound volume to 0–100 percent.
+pub fn clamp_copy_sound_volume(percent: u32) -> u8 {
+    u8::try_from(percent.min(100)).unwrap_or(100)
+}
+
+/// A stored volume as a whole percent, clamped to 0–100; `None` when it is
+/// not a number, so the default is kept.
+fn copy_sound_volume(value: &serde_json::Value) -> Option<u8> {
+    let percent = value.as_f64().filter(|percent| percent.is_finite())?;
+    // Clamped to 0–100 first, so the cast cannot truncate.
+    Some(percent.round().clamp(0.0, 100.0) as u8)
+}
+
 /// The file's shape on disk, with every key optional.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1023,6 +1042,8 @@ struct StoredSettings {
     copy_to_clipboard: Option<bool>,
     #[serde(default)]
     copy_sound: Option<bool>,
+    /// Read leniently by [`copy_sound_volume`].
+    copy_sound_volume: Option<serde_json::Value>,
     ai: Option<AiSettings>,
     /// Read leniently by [`EditorPreferences::from_stored`].
     editor: Option<serde_json::Value>,
@@ -1097,6 +1118,11 @@ impl StoredSettings {
                 ai: self.ai.unwrap_or(defaults.preferences.ai),
             },
             copy_sound: self.copy_sound.unwrap_or(defaults.copy_sound),
+            copy_sound_volume: self
+                .copy_sound_volume
+                .as_ref()
+                .and_then(copy_sound_volume)
+                .unwrap_or(defaults.copy_sound_volume),
             editor: match self.editor {
                 Some(stored) => EditorPreferences::from_stored(stored),
                 None => defaults.editor,
@@ -1185,6 +1211,7 @@ struct SettingsOnDisk<'a> {
     after_capture: AfterCapture,
     copy_to_clipboard: bool,
     copy_sound: bool,
+    copy_sound_volume: u8,
     ai: AiOnDisk<'a>,
     editor: &'a EditorPreferences,
     show_in_dock: bool,
@@ -1238,6 +1265,7 @@ impl<'a> SettingsOnDisk<'a> {
             after_capture: settings.preferences.after_capture,
             copy_to_clipboard: settings.preferences.copy_to_clipboard,
             copy_sound: settings.copy_sound,
+            copy_sound_volume: settings.copy_sound_volume,
             ai: AiOnDisk {
                 enabled: *enabled,
                 automatic_descriptions: *automatic_descriptions,
@@ -1439,6 +1467,17 @@ impl SettingsStore {
     pub fn set_copy_sound(&mut self, enabled: bool) -> Result<Settings, SettingsError> {
         let next = Settings {
             copy_sound: enabled,
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
+    /// Saves the copy sound's volume, clamped to 0–100 percent.
+    pub fn set_copy_sound_volume(&mut self, percent: u32) -> Result<Settings, SettingsError> {
+        let next = Settings {
+            copy_sound_volume: clamp_copy_sound_volume(percent),
             ..self.current.clone()
         };
         save(&self.path, &next)?;
@@ -1838,7 +1877,8 @@ mod tests {
                     ..AiSettings::default()
                 },
             },
-            copy_sound: true,
+            copy_sound: false,
+            copy_sound_volume: 30,
             editor: EditorPreferences {
                 color: Some("#0090ff".into()),
                 ..EditorPreferences::default()
@@ -2381,6 +2421,78 @@ mod tests {
         let loaded = load(&path, defaults(&dir)).unwrap();
         assert_eq!(loaded.retention, Retention::default());
         assert!(!loaded.show_in_dock);
+    }
+
+    #[test]
+    fn the_copy_sound_is_on_at_half_volume_by_default() {
+        let dir = TempDir::new().unwrap();
+        let fresh = load(&settings_path(&dir), defaults(&dir)).unwrap();
+        assert!(fresh.copy_sound);
+        assert_eq!(fresh.copy_sound_volume, DEFAULT_COPY_SOUND_VOLUME);
+        assert_eq!(DEFAULT_COPY_SOUND_VOLUME, 50);
+
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"showInDock": false}"#).unwrap();
+        let older = load(&path, defaults(&dir)).unwrap();
+        assert!(older.copy_sound);
+        assert_eq!(older.copy_sound_volume, 50);
+    }
+
+    #[test]
+    fn a_saved_off_copy_sound_stays_off() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"copySound": false}"#).unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap();
+        assert!(!loaded.copy_sound);
+        assert_eq!(loaded.copy_sound_volume, 50);
+        save(&path, &loaded).unwrap();
+        let reloaded = load(&path, defaults(&dir)).unwrap();
+        assert!(!reloaded.copy_sound);
+    }
+
+    #[test]
+    fn the_copy_sound_volume_is_read_leniently_and_clamped() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for (stored, expected) in [
+            ("0", 0),
+            ("35", 35),
+            ("100", 100),
+            ("250", 100),
+            ("-4", 0),
+            ("42.6", 43),
+            (r#""loud""#, 50),
+            ("null", 50),
+        ] {
+            fs::write(&path, format!(r#"{{"copySoundVolume": {stored}}}"#)).unwrap();
+            let loaded = load(&path, defaults(&dir)).unwrap();
+            assert_eq!(loaded.copy_sound_volume, expected, "stored {stored}");
+        }
+    }
+
+    #[test]
+    fn set_copy_sound_volume_clamps_and_persists() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        assert_eq!(
+            store.set_copy_sound_volume(35).unwrap().copy_sound_volume,
+            35
+        );
+        assert_eq!(load(&path, defaults(&dir)).unwrap().copy_sound_volume, 35);
+        assert_eq!(
+            store.set_copy_sound_volume(500).unwrap().copy_sound_volume,
+            100
+        );
+        assert_eq!(store.set_copy_sound_volume(0).unwrap().copy_sound_volume, 0);
+        let reloaded = load(&path, defaults(&dir)).unwrap();
+        assert_eq!(reloaded.copy_sound_volume, 0);
+        assert!(reloaded.copy_sound);
+        assert_eq!(clamp_copy_sound_volume(u32::MAX), 100);
     }
 
     #[test]

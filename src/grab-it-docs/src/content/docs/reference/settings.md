@@ -46,13 +46,18 @@ Most changes save as soon as you make them. Hotkeys save when you press **Save h
 
 **Copy every capture to the clipboard** (on by default) lets you paste it straight into a chat, a document or an issue.
 
-**Play a sound when copying** (off by default) plays a Holga shutter sound when
+**Play a sound when copying** (on by default) plays a Holga shutter sound when
 Grab-it successfully copies to the clipboard. It covers captures and manual
 copies from the editor, Library and Quick Access, including text, codes,
 colours, file paths, files and guides. A capture saved without copying and an
 automatic AI replacement of text already copied by OCR are silent.
 
-Select **Preview sound** to hear it while the switch is off or on. Both
+**Volume** (50% by default) sets how loud the sound plays, from 0% to 100%.
+It saves when you let go of the slider and stays available while the switch is
+off. At 0% nothing plays. Turning the sound off keeps it off after updates.
+
+Select **Preview sound** to hear it at the chosen volume while the switch is
+off or on. Both
 clipboard confirmations and preview are silent during countdown, recording and
 pause.
 

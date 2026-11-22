@@ -115,7 +115,8 @@ function settings(backend: Backend): Settings_Serialize {
     updateChannel: "stable",
     afterCapture: "quickAccess",
     copyToClipboard: true,
-    copySound: false,
+    copySound: true,
+    copySoundVolume: 50,
     ai: {
       enabled: backend.aiEnabled ?? backend.aiNotice,
       ...(backend.aiAutomatic === undefined ? {} : { automaticDescriptions: backend.aiAutomatic }),

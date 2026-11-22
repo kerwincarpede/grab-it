@@ -48,6 +48,7 @@ interface Backend {
   afterCapture: AfterCapture;
   copyToClipboard: boolean;
   copySound: boolean;
+  copySoundVolume: number;
   recordingActive: boolean;
   previewError?: string;
   ai: AiPreferences;
@@ -105,6 +106,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     afterCapture: "quickAccess",
     copyToClipboard: true,
     copySound: false,
+    copySoundVolume: 50,
     recordingActive: false,
     ai: { ...DEFAULT_AI_PREFERENCES },
     testResult: "qwen3-vl:4b (4.4B, Q4_K_M)",
@@ -138,6 +140,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     afterCapture: backend.afterCapture,
     copyToClipboard: backend.copyToClipboard,
     copySound: backend.copySound,
+    copySoundVolume: backend.copySoundVolume,
     ai: backend.ai,
     editor: {
       ...(backend.autoBackdrop === undefined ? {} : { autoBackdrop: backend.autoBackdrop }),
@@ -220,6 +223,11 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
       set_copy_sound: ({ enabled }) => {
         guard();
         backend.copySound = enabled;
+        return settings();
+      },
+      set_copy_sound_volume: ({ volume }) => {
+        guard();
+        backend.copySoundVolume = Math.min(100, volume);
         return settings();
       },
       preview_copy_sound: () => {
@@ -400,6 +408,57 @@ describe("SettingsWindow", () => {
     await userEvent.click(toggle);
     await waitFor(() => expect(toggle).not.toBeChecked());
     expect(backend.calls).toContainEqual({ cmd: "set_copy_sound", payload: { enabled: false } });
+  });
+
+  it("saves the volume on release, enabled while the sound is off, without playing it", async () => {
+    const backend = mockBackend({ copySound: false, copySoundVolume: 50 });
+    render(<SettingsWindow section="capture" />);
+    const volume = await screen.findByRole("slider", { name: "Volume" });
+    await waitFor(() => expect(volume).toBeEnabled());
+    expect(volume).toHaveValue("50");
+    expect(screen.getByText("50%", { selector: ".scale-value[data-for='copy-sound-volume']" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: /Play a sound when copying/ })).not.toBeChecked();
+
+    // Dragging shows the value but saves and plays nothing until release.
+    fireEvent.change(volume, { target: { value: "20" } });
+    fireEvent.change(volume, { target: { value: "35" } });
+    expect(screen.getByText("35%", { selector: ".scale-value[data-for='copy-sound-volume']" })).toBeInTheDocument();
+    expect(volume).toBeEnabled();
+    expect(backend.calls.some(({ cmd }) => cmd === "set_copy_sound_volume")).toBe(false);
+    fireEvent.pointerUp(volume);
+    await waitFor(() => expect(backend.copySoundVolume).toBe(35));
+    expect(backend.calls.filter(({ cmd }) => cmd === "set_copy_sound_volume")).toEqual([
+      { cmd: "set_copy_sound_volume", payload: { volume: 35 } },
+    ]);
+    expect(backend.calls.some(({ cmd }) => cmd === "preview_copy_sound")).toBe(false);
+
+    fireEvent.change(volume, { target: { value: "0" } });
+    fireEvent.keyUp(volume, { key: "Home" });
+    await waitFor(() => expect(backend.copySoundVolume).toBe(0));
+    expect(volume).toHaveValue("0");
+    // Releasing without a change saves nothing more.
+    fireEvent.pointerUp(volume);
+    expect(backend.calls.filter(({ cmd }) => cmd === "set_copy_sound_volume")).toHaveLength(2);
+    expect(backend.calls.some(({ cmd }) => cmd === "preview_copy_sound")).toBe(false);
+  });
+
+  it("shows the sound on at half volume for a fresh profile", async () => {
+    mockBackend({ copySound: true, copySoundVolume: 50 });
+    render(<SettingsWindow section="capture" />);
+    const toggle = await screen.findByRole("switch", { name: /Play a sound when copying/ });
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(screen.getByRole("slider", { name: "Volume" })).toHaveValue("50");
+  });
+
+  it("reports a volume that cannot be saved and keeps the saved value", async () => {
+    mockBackend({ copySoundVolume: 60, setError: "disk full" });
+    render(<SettingsWindow section="capture" />);
+    const volume = await screen.findByRole("slider", { name: "Volume" });
+    await waitFor(() => expect(volume).toHaveValue("60"));
+    fireEvent.change(volume, { target: { value: "10" } });
+    fireEvent.pointerUp(volume);
+    expect(await screen.findByText("disk full")).toBeInTheDocument();
+    expect(volume).toBeEnabled();
   });
 
   it("disables preview while a recording is under way and re-enables it afterwards", async () => {

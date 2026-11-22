@@ -51,6 +51,7 @@ import {
   setAgentAccess,
   previewCopySound,
   setCopySound,
+  setCopySoundVolume,
   setAutoBackdrop,
   setShowPointer,
   setAutostart,
@@ -76,13 +77,30 @@ interface ScaleSliderProps {
   value: number;
   disabled: boolean;
   onCommit: (percent: number) => void;
+  /** The percent range; text size's by default. */
+  range?: { min: number; max: number; step: number };
+  /** Shows a small and a large A at the ends, for text size. */
+  letters?: boolean;
 }
 
+/** The copy sound's volume slider: every whole percent from 0 to 100. */
+const VOLUME_RANGE = { min: 0, max: 100, step: 1 };
+
 /**
- * A text size slider. It shows the value while dragging but saves only on
- * release, so the window does not rescale under the pointer mid-drag.
+ * A percent slider, such as text size. It shows the value while dragging but
+ * saves only on release, so the window does not rescale under the pointer
+ * mid-drag and a volume change is saved once.
  */
-function ScaleSlider({ id, label, hint, value, disabled, onCommit }: ScaleSliderProps) {
+function ScaleSlider({
+  id,
+  label,
+  hint,
+  value,
+  disabled,
+  onCommit,
+  range = TEXT_SCALE,
+  letters = true,
+}: ScaleSliderProps) {
   // What is being dragged, tied to the saved value it started from: once a
   // new value is saved (or comes from elsewhere) the slider shows that.
   const [dragging, setDragging] = useState<{ from: number; to: number } | null>(null);
@@ -91,7 +109,7 @@ function ScaleSlider({ id, label, hint, value, disabled, onCommit }: ScaleSlider
   const commit = () => {
     if (draft !== value) onCommit(draft);
   };
-  const fill = ((draft - TEXT_SCALE.min) * 100) / (TEXT_SCALE.max - TEXT_SCALE.min);
+  const fill = ((draft - range.min) * 100) / (range.max - range.min);
   return (
     <div className="row is-stacked">
       <span className="row-text">
@@ -101,15 +119,17 @@ function ScaleSlider({ id, label, hint, value, disabled, onCommit }: ScaleSlider
         <span className="row-hint">{hint}</span>
       </span>
       <span className="scale-slider">
-        <span className="scale-a scale-a-small" aria-hidden="true">
-          A
-        </span>
+        {letters && (
+          <span className="scale-a scale-a-small" aria-hidden="true">
+            A
+          </span>
+        )}
         <input
           id={id}
           type="range"
-          min={TEXT_SCALE.min}
-          max={TEXT_SCALE.max}
-          step={TEXT_SCALE.step}
+          min={range.min}
+          max={range.max}
+          step={range.step}
           value={draft}
           disabled={disabled}
           aria-valuetext={`${draft}%`}
@@ -119,9 +139,11 @@ function ScaleSlider({ id, label, hint, value, disabled, onCommit }: ScaleSlider
           onKeyUp={commit}
           onBlur={commit}
         />
-        <span className="scale-a scale-a-large" aria-hidden="true">
-          A
-        </span>
+        {letters && (
+          <span className="scale-a scale-a-large" aria-hidden="true">
+            A
+          </span>
+        )}
         <span className="scale-value" data-for={id} aria-hidden="true">
           {draft}%
         </span>
@@ -472,6 +494,15 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
     }
   }
 
+  async function changeCopySoundVolume(volume: number) {
+    try {
+      setSettings(await setCopySoundVolume(volume));
+      setStatus({ kind: "preferences-saved" });
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    }
+  }
+
   async function playCopySoundPreview() {
     setPreviewing(true);
     setStatus({ kind: "idle" });
@@ -709,11 +740,22 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                 type="checkbox"
                 role="switch"
                 className="switch"
-                checked={settings?.copySound ?? false}
+                checked={settings?.copySound ?? true}
                 disabled={busy || settings === null}
                 onChange={(event) => void changeCopySound(event.target.checked)}
               />
             </label>
+            {/* Enabled while the sound is off, and never disabled by a save, so a drag is never cut short. */}
+            <ScaleSlider
+              id="copy-sound-volume"
+              label="Volume"
+              hint="How loud the copy sound plays. Preview sound uses it too."
+              value={settings?.copySoundVolume ?? 50}
+              disabled={settings === null}
+              range={VOLUME_RANGE}
+              letters={false}
+              onCommit={(volume) => void changeCopySoundVolume(volume)}
+            />
             <div className="row">
               <button
                 type="button"
