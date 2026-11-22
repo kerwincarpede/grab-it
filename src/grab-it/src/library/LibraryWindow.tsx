@@ -583,6 +583,8 @@ interface TileProps {
   index: number;
   onSelect: (id: number, how: SelectHow) => void;
   onOpen: (id: number) => void;
+  /** A double-click on the tile: opens the tile its first click landed on. */
+  onDoubleOpen: (id: number) => void;
   onAction: (shot: Shot, action: TileAction) => void;
   /** Stars or unstars the shot Keep forever. */
   onKeep: (shot: Shot) => void;
@@ -596,7 +598,7 @@ interface TileProps {
 const keepTitle = (shot: Shot) => (shot.keep ? "Kept forever: cleanup never removes it" : "Keep forever");
 
 /** One capture in the grid; actions appear on hover, the star too until it is on. */
-const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, onAction, onKeep, menuOpen, onMenu }: TileProps) {
+const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, onDoubleOpen, onAction, onKeep, menuOpen, onMenu }: TileProps) {
   const style = { "--i": Math.min(index, 18) } as CSSProperties;
   const tags = allTags(shot);
   const recording = isRecording(shot);
@@ -635,7 +637,7 @@ const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, 
         onMouseDown={(event) => {
           if (event.shiftKey) event.preventDefault();
         }}
-        onDoubleClick={() => onOpen(shot.id)}
+        onDoubleClick={() => onDoubleOpen(shot.id)}
       >
         <span className="tile-frame">
           <Thumbnail shot={shot} />
@@ -1968,7 +1970,8 @@ function LibraryWindow({
                       selected={selectedIds.has(shot.id)}
                       index={tileIndex++}
                       onSelect={pressTile}
-                      onOpen={openTile}
+                      onOpen={open}
+                      onDoubleOpen={openTile}
                       onAction={tileAction}
                       onKeep={toggleKeep}
                       menuOpen={menu?.id === shot.id}

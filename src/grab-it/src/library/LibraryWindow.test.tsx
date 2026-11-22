@@ -637,6 +637,17 @@ describe("LibraryWindow", () => {
     expect(second).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("opens the tile whose Edit button is clicked, not the one clicked before", async () => {
+    const backend = mockBackend([shot(1), shot(2)]);
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 1.png" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit Grab-it 2.png" }));
+
+    await waitFor(() => expect(callsTo(backend, "library_open")).toHaveLength(1));
+    expect(callsTo(backend, "library_open")[0].payload).toEqual({ id: 2 });
+  });
+
   it("deletes a capture only after confirmation", async () => {
     const backend = mockBackend([shot(1), shot(2)]);
     render(<LibraryWindow />);
