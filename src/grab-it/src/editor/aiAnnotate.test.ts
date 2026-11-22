@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applySuggestions, fitLabel, pointThroughCuts, suggestedMessage, suggestionShapes, type AiSuggestion, type SuggestionStyles } from "./aiAnnotate";
+import { applySuggestions, fitLabel, pendingSuggestions, pointThroughCuts, suggestedMessage, suggestionShapes, type AiSuggestion, type SuggestionStyles } from "./aiAnnotate";
 import { commit, initHistory, undo } from "./history";
 import { emptyAnnotations, type Cut } from "./model";
 import { parseAnnotations, serializeAnnotations } from "./sidecar";
@@ -21,7 +21,7 @@ const CUT: Cut = { axis: "y", start: 300, end: 400, edge: "straight" };
 
 describe("suggestionShapes", () => {
   it("draws each suggestion with the matching tool's style", () => {
-    const [rect, arrow, text] = suggestionShapes(SUGGESTIONS, STYLES, undefined, { width: 1200, height: 1000 });
+    const [rect, arrow, text] = suggestionShapes(pendingSuggestions(SUGGESTIONS), STYLES, undefined, { width: 1200, height: 1000 });
     expect(rect).toEqual(expect.objectContaining({ type: "rect", color: "#e5484d", strokeWidth: 4, x: 394, y: 594, width: 252, height: 52 }));
     expect(arrow).toEqual(expect.objectContaining({ type: "arrow", color: "#0090ff", strokeWidth: 6, points: [304, 504, 520, 592] }));
     expect(arrow).not.toHaveProperty("arrowStyle");
@@ -30,7 +30,7 @@ describe("suggestionShapes", () => {
   });
 
   it("moves suggestions on the original capture through its cuts", () => {
-    const [rect, arrow, text] = suggestionShapes(SUGGESTIONS, STYLES, [CUT], { width: 1200, height: 900 });
+    const [rect, arrow, text] = suggestionShapes(pendingSuggestions(SUGGESTIONS), STYLES, [CUT], { width: 1200, height: 900 });
     expect(rect).toEqual(expect.objectContaining({ y: 494 }));
     expect(arrow).toEqual(expect.objectContaining({ points: [304, 404, 520, 492] }));
     expect(text).toEqual(expect.objectContaining({ y: 138 }));
@@ -42,7 +42,7 @@ describe("suggestionShapes", () => {
       { kind: "rect", x: null, y: 10, width: 50, height: 40 },
       { kind: "arrow", x1: 10, y1: 320, x2: 12, y2: 380 },
     ];
-    expect(suggestionShapes(inside, STYLES, [CUT], { width: 1200, height: 900 })).toEqual([]);
+    expect(suggestionShapes(pendingSuggestions(inside), STYLES, [CUT], { width: 1200, height: 900 })).toEqual([]);
   });
 });
 
@@ -64,7 +64,7 @@ describe("pointThroughCuts", () => {
 
 describe("applySuggestions", () => {
   it("adds every shape as one undo step, and reopens them from the sidecar", () => {
-    const shapes = suggestionShapes(SUGGESTIONS, STYLES, undefined, { width: 1200, height: 1000 });
+    const shapes = suggestionShapes(pendingSuggestions(SUGGESTIONS), STYLES, undefined, { width: 1200, height: 1000 });
     const start = emptyAnnotations();
     const history = commit(initHistory(start), applySuggestions(start, shapes));
     expect(history.present.shapes).toHaveLength(3);

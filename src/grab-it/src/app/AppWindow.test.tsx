@@ -387,6 +387,7 @@ describe("viewFromHash", () => {
     ["#/app", "library"],
     ["#/app/library", "library"],
     ["#/app/settings", "settings"],
+    ["#/app/ai-settings", "ai-settings"],
     ["#/app/welcome", "welcome"],
     ["#/app/nowhere", "library"],
   ] as const)("maps %j to %s", (hash, view) => {

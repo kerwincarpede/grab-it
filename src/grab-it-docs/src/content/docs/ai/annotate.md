@@ -21,7 +21,7 @@ AI can only box, point at and label things. When it suggests something Grab-it c
 
 ## No provider yet?
 
-Annotate with AI uses the provider you chose in **Settings → AI integration**. If you haven't chosen one, the panel says so and **Open AI integration** opens Settings. The editor stays open with your request typed in, so press **Suggest** again once you've saved a provider.
+Annotate with AI uses the provider you chose in **Settings → AI integration**. If you haven't chosen one, the panel says so and **Open AI integration** opens Settings at AI integration. The editor stays open with your request typed in, so press **Suggest** again once you've saved a provider.
 
 **Cancel** stops waiting for an answer. Anything that arrives afterwards is ignored. Suggesting waits up to two minutes.
 

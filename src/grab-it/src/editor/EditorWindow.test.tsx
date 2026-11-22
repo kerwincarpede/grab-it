@@ -464,8 +464,8 @@ function mockEditor(
         if (answer instanceof Error) throw answer;
         return answer;
       },
-      open_target: (payload) => {
-        record("open_target", payload);
+      hub_open: (payload) => {
+        record("hub_open", payload);
         return null;
       },
       editor_pin: (payload) => {
@@ -2217,7 +2217,8 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
     fireEvent.click(screen.getByRole("button", { name: "Suggest" }));
 
     fireEvent.click(await screen.findByRole("button", { name: "Open AI integration" }));
-    await waitFor(() => expect(calls).toContainEqual({ cmd: "open_target", payload: { target: "settings" } }));
+    // Settings opens at AI integration.
+    await waitFor(() => expect(calls).toContainEqual({ cmd: "hub_open", payload: { view: "ai-settings" } }));
     // The request is still there when the user comes back.
     expect(requestBox()).toHaveValue("Box the provider and point at Test connection");
 
@@ -2237,6 +2238,40 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
     // One undo takes them all away.
     fireEvent.keyDown(window, { key: "z", ctrlKey: true });
     await waitFor(() => expect(last(saved)?.shapes).toHaveLength(0));
+  });
+
+  it("applies suggestions through a cut made while they were on preview", async () => {
+    const saved = mockEditor({ version: 1, shapes: [], crop: null }, [], {
+      annotate: [
+        {
+          state: "suggested",
+          by: "Codex",
+          skipped: 0,
+          suggestions: [
+            { kind: "rect", x: 20, y: 100, width: 100, height: 40 },
+            { kind: "arrow", x1: 10, y1: 200, x2: 60, y2: 90 },
+          ],
+        },
+      ],
+    });
+    await ready();
+    fireEvent.click(annotateButton());
+    fireEvent.change(requestBox(), { target: { value: "Mark it up" } });
+    fireEvent.click(screen.getByRole("button", { name: "Suggest" }));
+    expect(await screen.findByRole("button", { name: "Apply 2 suggestions" })).toBeInTheDocument();
+
+    // Rows 30 to 70 go while the suggestions are on preview.
+    fireEvent.keyDown(window, { key: "x" });
+    fireEvent.keyUp(window, { key: "x" });
+    drag([50, 30], [300, 70]);
+    await waitFor(() => expect(last(saved)?.cuts).toEqual([{ axis: "y", start: 30, end: 70, edge: "straight" }]));
+
+    if (!screen.queryByRole("button", { name: "Apply 2 suggestions" })) fireEvent.click(annotateButton());
+    fireEvent.click(screen.getByRole("button", { name: "Apply 2 suggestions" }));
+    // Moved up with the image past the strip, as the shapes already there are.
+    await waitFor(() => expect(last(saved)?.shapes).toHaveLength(2));
+    expect(last(saved)?.shapes[0]).toMatchObject({ type: "rect", x: 20, y: 60, width: 100, height: 40 });
+    expect(last(saved)?.shapes[1]).toMatchObject({ type: "arrow", points: [10, 160, 60, 50] });
   });
 
   it("discards suggestions one by one or all at once", async () => {

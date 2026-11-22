@@ -53,14 +53,26 @@ export interface SuggestionStyles {
   text: Style;
 }
 
+/** A suggestion on preview, by the id its shape keeps while it is previewed and once applied. */
+export interface PendingSuggestion {
+  id: string;
+  suggestion: AiSuggestion;
+}
+
+/** Gives each suggestion the id its shape keeps. */
+export function pendingSuggestions(suggestions: AiSuggestion[]): PendingSuggestion[] {
+  return suggestions.map((suggestion) => ({ id: newId(), suggestion }));
+}
+
 /**
- * The suggestions as shapes on the joined image (after the capture's
- * cuts), drawn with the current tool styles. A box or arrow a cut took
- * away is dropped. `bounds` is the joined image's size, which labels are
+ * The suggestions, kept in the original capture's pixels, as shapes on the
+ * joined image through the capture's cuts as they are now, drawn with the
+ * current tool styles. A box or arrow a cut took away is dropped while
+ * that cut is there. `bounds` is the joined image's size, which labels are
  * kept inside.
  */
-export function suggestionShapes(suggestions: AiSuggestion[], styles: SuggestionStyles, cuts: Cut[] | undefined, bounds: Size | null): Shape[] {
-  return suggestions.flatMap((suggestion): Shape[] => {
+export function suggestionShapes(pending: PendingSuggestion[], styles: SuggestionStyles, cuts: Cut[] | undefined, bounds: Size | null): Shape[] {
+  return pending.flatMap(({ id, suggestion }): Shape[] => {
     // The bindings let a number be null (Rust's NaN); such a suggestion is dropped.
     if (!finite(suggestion)) return [];
     switch (suggestion.kind) {
@@ -68,7 +80,7 @@ export function suggestionShapes(suggestions: AiSuggestion[], styles: Suggestion
         const [rect] = rectsThroughCuts([rectOf(suggestion)], cuts);
         if (!rect) return [];
         const { color, strokeWidth, fill } = styles.rect;
-        return [{ id: newId(), type: "rect", color, strokeWidth, ...rect, ...(fill ? { fill: true } : {}) }];
+        return [{ id, type: "rect", color, strokeWidth, ...rect, ...(fill ? { fill: true } : {}) }];
       }
       case "arrow": {
         const from = pointThroughCuts({ x: suggestion.x1, y: suggestion.y1 }, cuts);
@@ -76,7 +88,7 @@ export function suggestionShapes(suggestions: AiSuggestion[], styles: Suggestion
         if (Math.hypot(to.x - from.x, to.y - from.y) < 3) return [];
         const { color, strokeWidth, arrowStyle } = styles.arrow;
         const arrow: LineShape = {
-          id: newId(),
+          id,
           type: "arrow",
           color,
           strokeWidth,
@@ -89,7 +101,7 @@ export function suggestionShapes(suggestions: AiSuggestion[], styles: Suggestion
         const fontSize = styles.text.fontSize ?? 30;
         const at = fitLabel(pointThroughCuts({ x: suggestion.x, y: suggestion.y }, cuts), suggestion.text, fontSize, bounds);
         const text: TextShape = {
-          id: newId(),
+          id,
           type: "text",
           color: styles.text.color,
           x: at.x,

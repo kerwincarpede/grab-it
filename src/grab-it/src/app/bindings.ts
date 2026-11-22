@@ -89,7 +89,10 @@ export const commands = {
 	hubCapture: (kind: string, delaySeconds: number | null, monitor: number | null, options?: InvokeOptions) => __TAURI_INVOKE<null>("hub_capture", { kind, delaySeconds, monitor }, options),
 	effectiveHotkeys: (options?: InvokeOptions) => __TAURI_INVOKE<{ [key in string]: string }>("effective_hotkeys", undefined, options),
 	hubMonitors: (options?: InvokeOptions) => __TAURI_INVOKE<HubMonitor[]>("hub_monitors", undefined, options),
-	/**  Opens the Grab-it window on `view`: `library`, `settings` or `welcome`. */
+	/**
+	 *  Opens the Grab-it window on `view`: `library`, `settings`,
+	 *  `ai-settings` (Settings at AI integration) or `welcome`.
+	 */
 	hubOpen: (view: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("hub_open", { view }, options),
 	hubCheckUpdates: (options?: InvokeOptions) => __TAURI_INVOKE<void>("hub_check_updates", undefined, options),
 	hubQuit: (options?: InvokeOptions) => __TAURI_INVOKE<void>("hub_quit", undefined, options),

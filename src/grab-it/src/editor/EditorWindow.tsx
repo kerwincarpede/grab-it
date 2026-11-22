@@ -21,9 +21,9 @@ import {
 } from "./api";
 import BackdropPanel from "./BackdropPanel";
 import AiAnnotatePanel from "./AiAnnotatePanel";
-import { applySuggestions, requestAnnotations, suggestedMessage, suggestionShapes } from "./aiAnnotate";
+import { applySuggestions, pendingSuggestions, requestAnnotations, suggestedMessage, suggestionShapes, type PendingSuggestion } from "./aiAnnotate";
 import { SparkleIcon } from "../library/icons";
-import { commands } from "../app/bindings";
+import { openMain } from "../app/api";
 import { defaultTailOffset } from "./callout";
 import { copyShotText, hasShotText, textCopied, watchShotText, type OcrLine, type ShotText } from "../library/api";
 import { capturePixel, pixelColor } from "./eyedropper";
@@ -608,8 +608,12 @@ export default function EditorWindow() {
   /** No provider was set up when Annotate with AI last asked. */
   const [aiNeedsProvider, setAiNeedsProvider] = useState(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
-  /** The suggested shapes on preview, with the capture they are for; never in the document until applied. */
-  const [aiSuggestions, setAiSuggestions] = useState<{ path: string | null; shapes: Shape[] } | null>(null);
+  /**
+   * The suggestions on preview, in the original capture's pixels, with the
+   * capture they are for; never in the document until applied. They are
+   * drawn through the cuts as they are, so cutting or undoing a cut moves them.
+   */
+  const [aiSuggestions, setAiSuggestions] = useState<{ path: string | null; pending: PendingSuggestion[] } | null>(null);
   /** Counts requests, so a cancelled or superseded one's answer is ignored. */
   const aiRequest = useRef(0);
   const aiRef = useRef<HTMLDivElement>(null);
@@ -1779,7 +1783,11 @@ export default function EditorWindow() {
   };
 
   // Kept with the path it is for, like Blur private details.
-  const aiPreview = aiSuggestions !== null && aiSuggestions.path === capturePath ? aiSuggestions.shapes : null;
+  const aiPending = aiSuggestions !== null && aiSuggestions.path === capturePath ? aiSuggestions.pending : null;
+  /** The suggestions as shapes on the image as it is now: through the current cuts, in the current styles. */
+  const previewShapes = (pending: PendingSuggestion[], cuts: typeof doc.cuts) =>
+    suggestionShapes(pending, { rect: drawStyle("rect"), arrow: drawStyle("arrow"), text: drawStyle("text") }, cuts, imageSize);
+  const aiPreview = aiPending ? previewShapes(aiPending, doc.cuts) : null;
 
   /**
    * Annotate with AI: sends the capture, its text regions and the request
@@ -1800,13 +1808,9 @@ export default function EditorWindow() {
         setAiNeedsProvider(true);
         return;
       }
-      const shapes = suggestionShapes(
-        outcome.suggestions,
-        { rect: drawStyle("rect"), arrow: drawStyle("arrow"), text: drawStyle("text") },
-        docRef.current.cuts,
-        imageSize,
-      );
-      setAiSuggestions({ path: capturePath, shapes });
+      const pending = pendingSuggestions(outcome.suggestions);
+      const shapes = previewShapes(pending, docRef.current.cuts);
+      setAiSuggestions({ path: capturePath, pending });
       setAiMessage(suggestedMessage(shapes.length, outcome.skipped + outcome.suggestions.length - shapes.length, outcome.by));
     } catch (err) {
       if (request === aiRequest.current) setAiMessage(`Annotate with AI failed: ${errorText(err)}`);
@@ -1824,17 +1828,21 @@ export default function EditorWindow() {
 
   /** Adds every suggestion on preview to the latest document as one undo step. */
   const applyAiSuggestions = () => {
-    if (!aiPreview || aiPreview.length === 0) return;
-    commit(applySuggestions(docRef.current, aiPreview));
+    if (!aiPending) return;
+    // Through the cuts the document has now, not those when the answer came.
+    const latest = docRef.current;
+    const shapes = previewShapes(aiPending, latest.cuts);
+    if (shapes.length === 0) return;
+    commit(applySuggestions(latest, shapes));
     setAiSuggestions(null);
-    setAiMessage(`Added ${aiPreview.length} ${aiPreview.length === 1 ? "shape" : "shapes"}. Undo removes them together.`);
+    setAiMessage(`Added ${shapes.length} ${shapes.length === 1 ? "shape" : "shapes"}. Undo removes them together.`);
   };
 
   const discardAiSuggestion = (id: string) =>
-    setAiSuggestions((now) => (now ? { ...now, shapes: now.shapes.filter((shape) => shape.id !== id) } : now));
+    setAiSuggestions((now) => (now ? { ...now, pending: now.pending.filter((item) => item.id !== id) } : now));
 
   const openAiSettings = () => {
-    commands.openTarget("settings").catch((err: unknown) => setMessage(`Could not open Settings: ${errorText(err)}`));
+    openMain("ai-settings").catch((err: unknown) => setMessage(`Could not open Settings: ${errorText(err)}`));
   };
 
   /** Blurs the word at `at`, in capture pixels, and every other place it appears, as one undo step. */
