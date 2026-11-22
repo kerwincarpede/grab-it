@@ -32,7 +32,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -305,13 +305,29 @@ fn now_ms() -> u64 {
 
 /// The recording under way, if any.
 #[derive(Default)]
-pub struct RecordState(Mutex<Option<Arc<Session>>>);
+pub struct RecordState {
+    session: Mutex<Option<Arc<Session>>>,
+    /// Changes at every start, invalidating playback requested before it.
+    generation: AtomicU64,
+    generation_changed: Condvar,
+}
 
 impl RecordState {
     fn lock(&self) -> MutexGuard<'_, Option<Arc<Session>>> {
-        self.0
+        self.session
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn start(&self, session: Arc<Session>) -> Result<(), crate::scroll::StartError> {
+        let mut current = self.lock();
+        if current.is_some() {
+            return Err(crate::scroll::StartError::Busy);
+        }
+        self.generation.fetch_add(1, Ordering::Release);
+        *current = Some(session);
+        self.generation_changed.notify_all();
+        Ok(())
     }
 }
 
@@ -319,6 +335,84 @@ impl RecordState {
 pub fn session(app: &AppHandle) -> Option<Arc<Session>> {
     app.try_state::<RecordState>()
         .and_then(|state| state.lock().clone())
+}
+
+/// Takes a playback ticket only while no session is under way, including a paused session.
+pub(crate) fn playback_ticket(app: &AppHandle) -> Option<u64> {
+    match app.try_state::<RecordState>() {
+        Some(state) => {
+            let session = state.lock();
+            session
+                .is_none()
+                .then(|| state.generation.load(Ordering::Acquire))
+        }
+        None => Some(0),
+    }
+}
+
+/// The playback ticket expires as soon as another recording starts.
+pub(crate) fn playback_current(app: &AppHandle, ticket: u64) -> bool {
+    app.try_state::<RecordState>()
+        .is_none_or(|state| state.generation.load(Ordering::Acquire) == ticket)
+}
+
+/// Keeps the output open while submitted samples play. A recording start
+/// wakes the audio worker even if the output device issues no more callbacks.
+pub(crate) fn wait_for_playback(app: &AppHandle, ticket: u64, drain: Duration) -> bool {
+    let Some(state) = app.try_state::<RecordState>() else {
+        std::thread::sleep(drain);
+        return true;
+    };
+    let _wait = state
+        .generation_changed
+        .wait_timeout_while(state.lock(), drain, |_| {
+            state.generation.load(Ordering::Acquire) == ticket
+        })
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.generation.load(Ordering::Acquire) == ticket
+}
+
+#[cfg(test)]
+pub(crate) fn mark_test_recording(app: &AppHandle, paused_at: Option<u64>) {
+    app.state::<RecordState>()
+        .start(Arc::new(Session {
+            controls: Arc::new(Controls::default()),
+            monitor: MonitorInfo {
+                index: 0,
+                name: "Test".into(),
+                x: 0,
+                y: 0,
+                width: 640,
+                height: 480,
+                scale_factor: 1.0,
+                is_primary: true,
+            },
+            image_size: (640, 480),
+            rect: Rect {
+                x: 0,
+                y: 0,
+                width: 640,
+                height: 480,
+            },
+            recording: RecordingSettings::default(),
+            status: Mutex::new(BarStatus {
+                phase: Phase::Recording,
+                countdown_ends_at: None,
+                started_at: Some(0),
+                paused_ms: 0,
+                paused_at,
+                max_seconds: None,
+                format: RecordingFormat::Gif,
+                microphone: None,
+                system: None,
+                webcam: false,
+            }),
+            path: PathBuf::new(),
+            agent: None,
+            outcome: Mutex::new(None),
+            ended: Condvar::new(),
+        }))
+        .unwrap();
 }
 
 /// Asks the recording under way to finish. False when there is none. A
@@ -828,13 +922,7 @@ pub fn start_with(
         ended: Condvar::new(),
     });
     let state = app.state::<RecordState>();
-    {
-        let mut current = state.lock();
-        if current.is_some() {
-            return Err(crate::scroll::StartError::Busy);
-        }
-        *current = Some(Arc::clone(&session));
-    }
+    state.start(Arc::clone(&session))?;
     crate::tray::set_recording(app, true);
 
     // Only an MP4 has sound. macOS asks for the microphone first, the

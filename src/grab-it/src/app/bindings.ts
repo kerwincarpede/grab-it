@@ -15,6 +15,10 @@ export const commands = {
 	 *  are kept.
 	 */
 	setPreferences: (preferences: PreferencesUpdate_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("set_preferences", { preferences }, options),
+	/**  Saves whether successful clipboard copies play a confirmation sound. */
+	setCopySound: (enabled: boolean, options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("set_copy_sound", { enabled }, options),
+	/**  Previews the sound independently of the preference, whenever recording is idle. */
+	previewCopySound: (options?: InvokeOptions) => __TAURI_INVOKE<null>("preview_copy_sound", undefined, options),
 	/**  The annotation editor's remembered colour, tool, widths and options. */
 	getEditorPreferences: (options?: InvokeOptions) => __TAURI_INVOKE<EditorPreferences_Serialize>("get_editor_preferences", undefined, options),
 	setEditorPreferences: (preferences: EditorPreferences_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<EditorPreferences_Serialize>("set_editor_preferences", { preferences }, options),
@@ -2157,6 +2161,8 @@ export type Settings_Deserialize = {
 	lastExportFolder?: string | null,
 	/**  Global hotkeys for region, window and screen captures. */
 	hotkeys: Hotkeys_Deserialize,
+	/**  Plays a sound when Grab-it copies something to the clipboard. */
+	copySound: boolean,
 	/**  The annotation editor's remembered style and tool. */
 	editor: EditorPreferences_Deserialize,
 	/**
@@ -2188,6 +2194,8 @@ export type Settings_Serialize = {
 	lastExportFolder?: string,
 	/**  Global hotkeys for region, window and screen captures. */
 	hotkeys: Hotkeys_Serialize,
+	/**  Plays a sound when Grab-it copies something to the clipboard. */
+	copySound: boolean,
 	/**  The annotation editor's remembered style and tool. */
 	editor: EditorPreferences_Serialize,
 	/**
@@ -2619,6 +2627,8 @@ export type MockCommandHandlers = {
     setSaveFolder: (args: { path: string }) => Settings_Serialize | Promise<Settings_Serialize>,
     setHotkeys: (args: { hotkeys: Hotkeys_Deserialize }) => HotkeysUpdate_Serialize | Promise<HotkeysUpdate_Serialize>,
     setPreferences: (args: { preferences: PreferencesUpdate_Deserialize }) => Settings_Serialize | Promise<Settings_Serialize>,
+    setCopySound: (args: { enabled: boolean }) => Settings_Serialize | Promise<Settings_Serialize>,
+    previewCopySound: () => null | Promise<null>,
     getEditorPreferences: () => EditorPreferences_Serialize | Promise<EditorPreferences_Serialize>,
     setEditorPreferences: (args: { preferences: EditorPreferences_Deserialize }) => EditorPreferences_Serialize | Promise<EditorPreferences_Serialize>,
     setAutoBackdrop: (args: { enabled: boolean }) => Settings_Serialize | Promise<Settings_Serialize>,
@@ -2785,6 +2795,8 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "set_save_folder": return mockCommandHandler(mockHandlers.setSaveFolder, "set_save_folder", args);
             case "set_hotkeys": return mockCommandHandler(mockHandlers.setHotkeys, "set_hotkeys", args);
             case "set_preferences": return mockCommandHandler(mockHandlers.setPreferences, "set_preferences", args);
+            case "set_copy_sound": return mockCommandHandler(mockHandlers.setCopySound, "set_copy_sound", args);
+            case "preview_copy_sound": return mockCommandHandler(mockHandlers.previewCopySound, "preview_copy_sound", args);
             case "get_editor_preferences": return mockCommandHandler(mockHandlers.getEditorPreferences, "get_editor_preferences", args);
             case "set_editor_preferences": return mockCommandHandler(mockHandlers.setEditorPreferences, "set_editor_preferences", args);
             case "set_auto_backdrop": return mockCommandHandler(mockHandlers.setAutoBackdrop, "set_auto_backdrop", args);

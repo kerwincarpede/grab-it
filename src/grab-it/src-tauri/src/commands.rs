@@ -43,6 +43,22 @@ pub fn set_save_folder(
     Ok(settings)
 }
 
+/// Saves whether successful clipboard copies play a confirmation sound.
+#[tauri::command]
+#[specta::specta]
+pub fn set_copy_sound(
+    enabled: bool,
+    state: State<'_, SettingsState>,
+    preference: State<'_, crate::clipboard_sound::Preference>,
+) -> Result<Settings, String> {
+    let mut store = lock(&state);
+    let settings = store
+        .set_copy_sound(enabled)
+        .map_err(|err| err.to_string())?;
+    preference.set(settings.copy_sound);
+    Ok(settings)
+}
+
 /// Saves the capture and AI preferences. Without `ai`, the AI settings
 /// are kept.
 #[tauri::command]

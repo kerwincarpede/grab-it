@@ -5,6 +5,7 @@ mod ai_cli;
 mod audio;
 mod capture;
 mod cli;
+mod clipboard_sound;
 mod codes;
 mod commands;
 mod control;
@@ -180,6 +181,7 @@ pub fn run() {
             if first_run && let Err(err) = store.finish_first_run() {
                 eprintln!("Grab-it: could not write the settings file: {err}");
             }
+            app.manage(clipboard_sound::Preference::new(store.get().copy_sound));
             app.manage(Mutex::new(store));
             let data_dir = app.path().app_data_dir()?;
             let restore_library =
@@ -338,6 +340,8 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             commands::set_save_folder,
             commands::set_hotkeys,
             commands::set_preferences,
+            commands::set_copy_sound,
+            clipboard_sound::preview_copy_sound,
             commands::get_editor_preferences,
             commands::set_editor_preferences,
             commands::set_auto_backdrop,

@@ -65,6 +65,7 @@ function settings(recording: RecordingSettings): Settings_Serialize {
     updateChannel: "stable",
     afterCapture: "quickAccess",
     copyToClipboard: true,
+    copySound: false,
     ai: DEFAULT_AI_PREFERENCES,
   };
 }

@@ -649,6 +649,14 @@ export function setPreferences(preferences: Preferences): Promise<Settings> {
   return commands.setPreferences(preferences);
 }
 
+export function setCopySound(enabled: boolean): Promise<Settings> {
+  return commands.setCopySound(enabled);
+}
+
+export function previewCopySound(): Promise<null> {
+  return commands.previewCopySound();
+}
+
 export function getEditorPreferences(): Promise<EditorPreferences> {
   return commands.getEditorPreferences();
 }

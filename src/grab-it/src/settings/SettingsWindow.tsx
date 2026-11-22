@@ -5,6 +5,7 @@ import HotkeysSection from "./HotkeysSection";
 import StorageSection from "./StorageSection";
 import { isMacPlatform } from "./accelerator";
 import { FolderIcon } from "../app/icons";
+import { hubActivity, onHubActivity } from "../hub/api";
 import {
   AFTER_CAPTURE_CHOICES,
   DEFAULT_AI_PREFERENCES,
@@ -48,6 +49,8 @@ import {
   hasDock,
   SETTINGS_SECTIONS,
   setAgentAccess,
+  previewCopySound,
+  setCopySound,
   setAutoBackdrop,
   setShowPointer,
   setAutostart,
@@ -212,6 +215,9 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [busy, setBusy] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [recordingActive, setRecordingActive] = useState<boolean | null>(null);
+  const showsCapture = shows("capture");
   const [switchedToStable, setSwitchedToStable] = useState(false);
   /** Null until the backend has said; only the Recording page asks. */
   const [ffmpeg, setFfmpeg] = useState<FfmpegStatus | null>(null);
@@ -274,6 +280,31 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!showsCapture) return;
+    let cancelled = false;
+    let receivedActivity = false;
+    let unlisten: (() => void) | undefined;
+    onHubActivity(({ recording }) => {
+      receivedActivity = true;
+      if (!cancelled) setRecordingActive(recording);
+    })
+      .then((stop) => (cancelled ? stop() : (unlisten = stop)))
+      .catch(() => undefined)
+      .then(hubActivity)
+      .then((activity) => {
+        if (!cancelled && !receivedActivity) setRecordingActive(activity?.recording === true);
+      })
+      .catch(() => {
+        // The preview command checks again before playing.
+        if (!cancelled && !receivedActivity) setRecordingActive(false);
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [showsCapture]);
 
   useEffect(() => {
     if (!showsRecording) return;
@@ -426,6 +457,30 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
       return false;
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function changeCopySound(enabled: boolean) {
+    setBusy(true);
+    try {
+      setSettings(await setCopySound(enabled));
+      setStatus({ kind: "preferences-saved" });
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function playCopySoundPreview() {
+    setPreviewing(true);
+    setStatus({ kind: "idle" });
+    try {
+      await previewCopySound();
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setPreviewing(false);
     }
   }
 
@@ -608,7 +663,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
           </div>
         </section>
       )}
-      {shows("capture") && (
+      {showsCapture && (
         <section aria-labelledby="after-capture-heading">
           <h2 className="group-heading" id="after-capture-heading">
             When a capture is done
@@ -645,6 +700,31 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                 onChange={(event) => void changePreferences({ copyToClipboard: event.target.checked })}
               />
             </label>
+            <label className="row">
+              <span className="row-text">
+                <span className="row-title">Play a sound when copying</span>
+                <span className="row-hint">Hear a shutter sound when Grab-it copies to the clipboard.</span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                className="switch"
+                checked={settings?.copySound ?? false}
+                disabled={busy || settings === null}
+                onChange={(event) => void changeCopySound(event.target.checked)}
+              />
+            </label>
+            <div className="row">
+              <button
+                type="button"
+                className="pill"
+                disabled={recordingActive !== false || previewing || settings === null}
+                onClick={() => void playCopySoundPreview()}
+              >
+                Preview sound
+              </button>
+              {recordingActive && <span className="row-hint">Preview is unavailable while recording.</span>}
+            </div>
           </div>
         </section>
       )}
