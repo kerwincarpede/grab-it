@@ -56,10 +56,10 @@ automatic AI replacement of text already copied by OCR are silent.
 It saves when you let go of the slider and stays available while the switch is
 off. At 0% nothing plays. Turning the sound off keeps it off after updates.
 
-Select **Preview sound** to hear it at the chosen volume while the switch is
-off or on. Both
-clipboard confirmations and preview are silent during countdown, recording and
-pause.
+Select the play button beside the switch, **Preview sound**, to hear it at the
+chosen volume while the switch is off or on. Both clipboard confirmations and
+preview are silent during countdown, recording and pause, and the play button
+is unavailable then.
 
 ## Editor
 

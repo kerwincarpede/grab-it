@@ -390,10 +390,15 @@ describe("SettingsWindow", () => {
   it("previews while the sound preference is off and saves the toggle independently", async () => {
     const backend = mockBackend({ afterCapture: "nothing", copyToClipboard: false });
     render(<SettingsWindow section="capture" />);
-    const toggle = await screen.findByRole("switch", { name: /Play a sound when copying/ });
+    const toggle = await screen.findByRole("switch", { name: "Play a sound when copying" });
     const preview = screen.getByRole("button", { name: "Preview sound" });
     await waitFor(() => expect(preview).toBeEnabled());
     expect(toggle).not.toBeChecked();
+    // A play icon beside the toggle, with its name as the tooltip.
+    expect(preview).toHaveAttribute("title", "Preview sound");
+    expect(preview.querySelector("svg")).not.toBeNull();
+    expect(preview.textContent).toBe("");
+    expect(preview.parentElement).toBe(toggle.parentElement);
 
     await userEvent.click(preview);
     expect(backend.calls.some(({ cmd }) => cmd === "preview_copy_sound")).toBe(true);
@@ -467,11 +472,13 @@ describe("SettingsWindow", () => {
     const preview = await screen.findByRole("button", { name: "Preview sound" });
     expect(await screen.findByText("Preview is unavailable while recording.")).toBeInTheDocument();
     expect(preview).toBeDisabled();
+    expect(preview).toHaveAccessibleDescription("Preview is unavailable while recording.");
     await userEvent.click(preview);
     expect(backend.calls.some(({ cmd }) => cmd === "preview_copy_sound")).toBe(false);
 
     await emit(HUB_ACTIVITY_EVENT, { recording: false, steps: false });
     await waitFor(() => expect(preview).toBeEnabled());
+    expect(screen.queryByText("Preview is unavailable while recording.")).not.toBeInTheDocument();
     await emit(HUB_ACTIVITY_EVENT, { recording: true, steps: false });
     await waitFor(() => expect(preview).toBeDisabled());
   });

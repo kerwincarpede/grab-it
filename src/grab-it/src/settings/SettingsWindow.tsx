@@ -4,7 +4,7 @@ import AiSection from "./AiSection";
 import HotkeysSection from "./HotkeysSection";
 import StorageSection from "./StorageSection";
 import { isMacPlatform } from "./accelerator";
-import { FolderIcon } from "../app/icons";
+import { FolderIcon, PlayIcon } from "../app/icons";
 import { hubActivity, onHubActivity } from "../hub/api";
 import {
   AFTER_CAPTURE_CHOICES,
@@ -731,12 +731,32 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                 onChange={(event) => void changePreferences({ copyToClipboard: event.target.checked })}
               />
             </label>
-            <label className="row">
+            <div className="row">
               <span className="row-text">
-                <span className="row-title">Play a sound when copying</span>
+                <label className="row-title" htmlFor="copy-sound">
+                  Play a sound when copying
+                </label>
                 <span className="row-hint">Hear a shutter sound when Grab-it copies to the clipboard.</span>
+                {recordingActive && (
+                  <span className="row-hint" id="copy-sound-preview-hint">
+                    Preview is unavailable while recording.
+                  </span>
+                )}
               </span>
+              {/* Usable while the sound is off; it plays at the Volume below. */}
+              <button
+                type="button"
+                className="btn btn-icon"
+                aria-label="Preview sound"
+                title="Preview sound"
+                aria-describedby={recordingActive ? "copy-sound-preview-hint" : undefined}
+                disabled={recordingActive !== false || previewing || settings === null}
+                onClick={() => void playCopySoundPreview()}
+              >
+                <PlayIcon size={14} />
+              </button>
               <input
+                id="copy-sound"
                 type="checkbox"
                 role="switch"
                 className="switch"
@@ -744,29 +764,18 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                 disabled={busy || settings === null}
                 onChange={(event) => void changeCopySound(event.target.checked)}
               />
-            </label>
+            </div>
             {/* Enabled while the sound is off, and never disabled by a save, so a drag is never cut short. */}
             <ScaleSlider
               id="copy-sound-volume"
               label="Volume"
-              hint="How loud the copy sound plays. Preview sound uses it too."
+              hint="How loud the copy sound plays, and its preview too."
               value={settings?.copySoundVolume ?? 50}
               disabled={settings === null}
               range={VOLUME_RANGE}
               letters={false}
               onCommit={(volume) => void changeCopySoundVolume(volume)}
             />
-            <div className="row">
-              <button
-                type="button"
-                className="pill"
-                disabled={recordingActive !== false || previewing || settings === null}
-                onClick={() => void playCopySoundPreview()}
-              >
-                Preview sound
-              </button>
-              {recordingActive && <span className="row-hint">Preview is unavailable while recording.</span>}
-            </div>
           </div>
         </section>
       )}

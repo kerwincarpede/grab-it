@@ -124,10 +124,12 @@ including an older file that omits it. A saved `false` stays off.
 out of range is clamped and one that is not a number keeps 50.
 `clipboard_sound::Preference` holds the flag and the volume, so copies read
 both without the settings lock. Each copy or preview reads the volume when it
-starts and scales every sample by it as a linear gain. At
-0% nothing plays and no audio stream opens. The approved WAV is never rewritten
-to change its loudness. Preview bypasses the flag but uses the volume. A recording session suppresses both sounds
-during countdown, recording and pause. Starting a session cancels active and
+starts, and `sample_at` scales every sample by it as a linear gain, for the
+Linux ALSA frames and the Windows and macOS callback alike. At 0% nothing plays
+and no output opens. The approved WAV is never rewritten to change its
+loudness. Preview, the play button beside the switch, bypasses the flag but
+uses the volume. A recording session suppresses both sounds during countdown,
+recording and pause. Starting a session cancels active and
 pending playback.
 
 The approved WAV is embedded in the binary. Its checksum and provenance are
@@ -139,7 +141,9 @@ an underrun or a device change does not stop it. On Linux it opens ALSA's
 waits for the output to drain. A callback stream refilling two small periods
 underran while a closing overlay kept the CPU busy, and the plugin then failed
 or stalled. The clip is already queued, so a busy moment cannot cut it short. A
-recording start drops the queued sound at once. Every sound has a 3 s deadline.
+recording start drops the queued sound at once. On Linux each sound has a 3 s
+deadline from opening the output to its end. On Windows and macOS the output has
+up to 2 s to take the whole clip, then up to 2 s more to finish playing it.
 
 If no output opens, a clipboard copy still succeeds and Settings reports an error
 when asked to preview. An output that opens and then stops part-way is only
