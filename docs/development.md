@@ -329,7 +329,7 @@ Who describes captures is picked under **AI integration** in Settings (`ai.provi
 
 - **Claude Code** (`claudeCode`): Grab-it runs the `claude` CLI you already have installed and signed in to, headlessly, with the `haiku` model, no tools, no MCP servers and no saved session, in an empty temporary folder (see `ai_cli.rs`). Nothing else to set up or download. Screenshots go to Anthropic under your Claude account. Each description records `claude-code/haiku` as its model.
 - **Codex** (`codex`): Grab-it runs the `codex` CLI you already have installed and signed in to, as `codex exec` in a read-only sandbox with no saved session, in an empty temporary folder holding only the capture and the JSON schema its answer must follow. It uses the model you configured for Codex, at low reasoning effort, and its stdin is closed. Screenshots go to OpenAI under your ChatGPT or OpenAI account. Each description records `codex` as its model.
-- **OpenAI-compatible endpoint** (`endpoint`): any `/chat/completions` API: [Ollama](https://ollama.com), LM Studio, llama.cpp's server, or a cloud API such as OpenAI or OpenRouter.
+- **OpenAI-compatible endpoint** (`endpoint`): any `/chat/completions` API: [LM Studio](https://lmstudio.ai), [Ollama](https://ollama.com), llama.cpp's server, or a cloud API such as OpenRouter or OpenAI.
 
 AI integration is **off by default**, and Grab-it never turns it on by itself: finding `claude` or `codex` only lets Settings say whether the chosen CLI is missing. Three switches are independent: `ai.enabled` (**Use an AI provider**) lets Grab-it use the provider at all, `ai.automaticDescriptions` (**Describe captures with AI**) queues captures for describing, and `ai.tidyText` tidies Capture text. `automaticDescriptions` is absent in settings from earlier versions and then reads as on, so an upgraded user who had describing on keeps it on; an `ai` with `enabled: true` and no `provider` is still an endpoint user from before providers existed. When a user who never chose a provider turns the provider on, Settings starts `automaticDescriptions` and `tidyText` off.
 
@@ -358,16 +358,19 @@ Then pick the endpoint in Settings and choose the **Ollama** preset, or set it u
 }
 ```
 
-For a cloud API, set the endpoint, model and API key. The **Preset** menu in Settings fills in the URL and a vision model for the common ones; you add the key and press Save:
+For a cloud API, set the endpoint, model and API key. The **Preset** menu in Settings (`ENDPOINT_PRESETS` in `src/settings/api.ts`) fills in the URL and a vision model for the common ones, and shows each one's setup steps; you add the key and press Save:
 
 | Preset | Endpoint | Model |
 | --- | --- | --- |
+| LM Studio | `http://localhost:1234/v1` | `qwen/qwen3-vl-4b` |
 | Ollama | `http://localhost:11434/v1` | `qwen3-vl:4b` |
+| OpenRouter | `https://openrouter.ai/api/v1` | `openai/gpt-5-mini` |
 | OpenAI | `https://api.openai.com/v1` | `gpt-5-mini` |
 | Anthropic | `https://api.anthropic.com/v1` | `claude-haiku-5-5` |
-| OpenRouter | `https://openrouter.ai/api/v1` | `openai/gpt-5-mini` |
 
-Any other URL or model shows as **Custom**. The key is sent as `Authorization: Bearer …`.
+A preset is matched by its URL alone, so any typed model ID keeps it; any other URL shows as **Custom**. Presets only fill in fields: nothing new is saved, so existing endpoint settings, CLI providers and custom URLs load unchanged. The key is sent as `Authorization: Bearer …`.
+
+**List models** calls `ai_list_models`, which sends `GET <endpoint>/models` with the draft key and returns the `data[].id` values, for the Model field to suggest; any ID can still be typed. It sends no image and saves nothing. Endpoint failures, in the queue and in **Test connection**, start with what to fix (`endpoint_error` in `src-tauri/src/ai.rs`): no answer, a refused key (401 or 403), or a model that refuses images (an error mentioning images or vision). **Test connection** also fails with a response error when the reply has no JSON object with `ok`, so a model that ignores the instructions is caught before it describes the library. A text-only model behind a server that drops the image silently still passes.
 
 The API key is kept in the OS credential store, not in `settings.json`: Keychain on macOS, Credential Manager on Windows and the Secret Service (GNOME Keyring, KWallet) on Linux, under the service `com.kerwincarpede.grabit`. A key saved by an earlier version stays under the account `ai-endpoint-api-key` until the key or the endpoint first changes. From then on each key is stored under an account named for its endpoint, `ai-endpoint-<SHA-256 of the endpoint URL>-<slot>`, so a key typed for one destination is never sent to another. A save writes the new key to the other slot first and then renames `settings.json` into place with `aiKeySlot` pointing at it, so a failed save or a crash leaves the old key and endpoint in use; the old account is removed after the file is written. A key typed into `settings.json` as `"apiKey"`, or left there by an earlier version, is moved into the credential store the next time Grab-it starts, and the file is rewritten without it. Emptying the key in Settings removes it from the credential store too; if the store cannot remove it right then, the save fails with its message and the key is kept, so it never comes back on the next start. Where there is no credential store that works, such as a Linux session without a Secret Service, the key stays in plain text in `settings.json` under `ai.apiKey`; the hint under the API key field in Settings says which. The `keyring` crate talks to the Secret Service over D-Bus in pure Rust, so building needs no extra system packages. Tests use an in-memory key store and never touch the real one.
 

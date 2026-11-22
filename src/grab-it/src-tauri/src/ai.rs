@@ -392,11 +392,8 @@ fn complete(agent: &ureq::Agent, ai: &AiSettings, mut body: Value) -> Result<Str
     loop {
         match post(agent, ai, &body) {
             Ok(text) => return reply_text(&text),
-            Err(Failure {
-                status: Some(400..=499),
-                message,
-            }) => {
-                let lower = message.to_lowercase();
+            Err(failure) if matches!(failure.status, Some(400..=499)) => {
+                let lower = failure.message.to_lowercase();
                 let refused = OPTIONAL_FIELDS.iter().find(|field| {
                     lower.contains(*field)
                         && body
@@ -407,12 +404,39 @@ fn complete(agent: &ureq::Agent, ai: &AiSettings, mut body: Value) -> Result<Str
                     (Some(field), Some(object)) => {
                         object.remove(*field);
                     }
-                    _ => return Err(AiError::Endpoint(message)),
+                    _ => return Err(endpoint_error(&ai.model, failure)),
                 }
             }
-            Err(failure) => return Err(AiError::Endpoint(failure.message)),
+            Err(failure) => return Err(endpoint_error(&ai.model, failure)),
         }
     }
+}
+
+/// Whether an error response is about the image: the model reads only text.
+fn refuses_images(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    ["image", "vision", "multimodal", "multi-modal"]
+        .iter()
+        .any(|word| lower.contains(word))
+}
+
+/// A failed request as an [`AiError::Endpoint`] that starts with what to
+/// fix: the server, the API key or the model. The server's own message
+/// follows.
+fn endpoint_error(model: &str, failure: Failure) -> AiError {
+    let message = failure.message;
+    AiError::Endpoint(match failure.status {
+        None => format!(
+            "The server did not answer. Check that it is running and that the URL is right. {message}"
+        ),
+        Some(401 | 403) => {
+            format!("The server did not accept the API key. Check the key. {message}")
+        }
+        Some(400..=599) if refuses_images(&message) => {
+            format!("{model} does not accept images. Choose a vision model. {message}")
+        }
+        Some(_) => message,
+    })
 }
 
 /// The first JSON object in `text`: code fences and chatter around it are
@@ -637,7 +661,77 @@ pub fn test_connection(clients: &Clients, ai: &AiSettings) -> Result<String, AiE
     if reply.trim().is_empty() {
         return Err(AiError::Response("the model sent an empty reply".into()));
     }
+    let answer = first_object(&reply).and_then(|object| serde_json::from_str::<Value>(object).ok());
+    if !answer.is_some_and(|answer| answer.get("ok").is_some()) {
+        return Err(AiError::Response(format!(
+            "it did not answer with the JSON asked for, so it may not follow instructions well enough. It said: {}",
+            truncate(reply.trim(), 200)
+        )));
+    }
     Ok(answered)
+}
+
+/// How long listing an endpoint's models may take.
+pub const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The model IDs an OpenAI-compatible endpoint offers, from its `/models`:
+/// `{"data": [{"id": ...}]}`, as OpenAI, OpenRouter, LM Studio and
+/// Ollama send it. Empty when the server lists none.
+pub fn list_models(
+    agent: &ureq::Agent,
+    endpoint: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<String>, AiError> {
+    let url = format!("{}/models", endpoint.trim().trim_end_matches('/'));
+    let mut request = agent.get(&url);
+    if let Some(key) = api_key.map(str::trim).filter(|key| !key.is_empty()) {
+        request = request.header("Authorization", format!("Bearer {key}"));
+    }
+    let failed = |err: ureq::Error| {
+        endpoint_error(
+            "",
+            Failure {
+                status: None,
+                message: format!("could not reach {url}: {err}"),
+            },
+        )
+    };
+    let mut response = request.call().map_err(failed)?;
+    let status = response.status();
+    let text = response
+        .body_mut()
+        .with_config()
+        .limit(MAX_RESPONSE_BYTES)
+        .read_to_string()
+        .map_err(failed)?;
+    if !status.is_success() {
+        return Err(endpoint_error(
+            "",
+            Failure {
+                status: Some(status.as_u16()),
+                message: format!(
+                    "{url} answered {}: {}",
+                    status.as_u16(),
+                    api_error_message(&text)
+                ),
+            },
+        ));
+    }
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|err| AiError::Response(format!("not a model list: {err}")))?;
+    let mut models: Vec<String> = Vec::new();
+    for id in value
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|model| model.get("id").and_then(Value::as_str))
+    {
+        if !models.iter().any(|known| known == id) {
+            models.push(id.to_owned());
+        }
+    }
+    Ok(models)
 }
 
 /// What one turn of the queue did.
@@ -955,6 +1049,22 @@ pub fn ai_test_connection(draft: AiSettings) -> Result<String, String> {
     .validated()
     .map_err(|err| err.to_string())?;
     test_connection(&Clients::new(TEST_TIMEOUT), &ai).map_err(|err| err.to_string())
+}
+
+/// Lists the models an OpenAI-compatible endpoint offers, for Settings to
+/// suggest. Nothing is saved, and no image is sent.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn ai_list_models(endpoint: String, api_key: Option<String>) -> Result<Vec<String>, String> {
+    let lower = endpoint.trim().to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err(format!(
+            "The AI endpoint must start with http:// or https://, not `{}`.",
+            endpoint.trim()
+        ));
+    }
+    list_models(&agent(LIST_MODELS_TIMEOUT), &endpoint, api_key.as_deref())
+        .map_err(|err| err.to_string())
 }
 
 /// Counts the screenshots a whole-library request would describe: every
@@ -1612,6 +1722,91 @@ mod tests {
         assert!(message.contains("test-vision"), "{message}");
         let err = test_connection(&fast(), &ai).unwrap_err();
         assert!(err.to_string().contains("Incorrect API key"), "{err}");
+    }
+
+    #[test]
+    fn the_connection_test_says_what_to_fix() {
+        let server = serve(vec![
+            Reply::Json(
+                401,
+                json!({ "error": { "message": "No auth credentials found" } }),
+            ),
+            Reply::Json(
+                400,
+                json!({ "error": { "message": "Model does not support images. Please use a model that does." } }),
+            ),
+            Reply::Json(
+                500,
+                json!({ "error": "this model is missing data required for image input" }),
+            ),
+            Reply::Chat("Sure! The connection works.".into()),
+        ]);
+        let ai = settings(&server);
+        let auth = test_connection(&fast(), &ai).unwrap_err().to_string();
+        assert!(
+            auth.starts_with("The server did not accept the API key."),
+            "{auth}"
+        );
+        assert!(auth.contains("No auth credentials found"), "{auth}");
+        for _ in 0..2 {
+            let images = test_connection(&fast(), &ai).unwrap_err().to_string();
+            assert!(
+                images.starts_with("test-vision does not accept images."),
+                "{images}"
+            );
+        }
+        let answer = test_connection(&fast(), &ai).unwrap_err();
+        assert!(matches!(answer, AiError::Response(_)), "{answer:?}");
+        assert!(
+            answer.to_string().contains("did not answer with the JSON"),
+            "{answer}"
+        );
+        // Nothing listens on the port any more.
+        drop(server);
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let offline = AiSettings {
+            endpoint: format!("http://127.0.0.1:{port}/v1"),
+            ..ai
+        };
+        let down = test_connection(&fast(), &offline).unwrap_err().to_string();
+        assert!(down.starts_with("The server did not answer."), "{down}");
+    }
+
+    #[test]
+    fn an_endpoint_lists_its_models() {
+        let server = serve(vec![
+            Reply::Json(
+                200,
+                json!({ "object": "list", "data": [
+                    { "id": "qwen3-vl:4b", "object": "model" },
+                    { "id": "gemma3:4b", "object": "model" },
+                    { "id": "qwen3-vl:4b", "object": "model" },
+                ] }),
+            ),
+            Reply::Json(401, json!({ "error": { "message": "Invalid API key" } })),
+        ]);
+        let agent = agent(Duration::from_secs(5));
+        let models =
+            list_models(&agent, &format!("{}/", server.endpoint), Some("sk-test")).unwrap();
+        assert_eq!(models, ["qwen3-vl:4b", "gemma3:4b"]);
+        let request = &server.requests()[0];
+        assert!(
+            request.head.starts_with("GET /v1/models "),
+            "{}",
+            request.head
+        );
+        assert!(request.head.contains("Bearer sk-test"), "{}", request.head);
+        let err = list_models(&agent, &server.endpoint, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.starts_with("The server did not accept the API key."),
+            "{err}"
+        );
     }
 
     #[test]

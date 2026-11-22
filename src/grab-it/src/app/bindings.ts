@@ -406,6 +406,11 @@ export const commands = {
 	/**  Tests draft settings with a synthetic image without changing the active provider. */
 	aiTestConnection: (draft: AiSettings_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<string>("ai_test_connection", { draft }, options),
 	/**
+	 *  Lists the models an OpenAI-compatible endpoint offers, for Settings to
+	 *  suggest. Nothing is saved, and no image is sent.
+	 */
+	aiListModels: (endpoint: string, apiKey: string | null, options?: InvokeOptions) => __TAURI_INVOKE<string[]>("ai_list_models", { endpoint, apiKey }, options),
+	/**
 	 *  Counts the screenshots a whole-library request would describe: every
 	 *  image for Re-describe all, or with `waiting` only those still waiting,
 	 *  which is what a save that describes earlier captures sends.
@@ -2732,6 +2737,7 @@ export type MockCommandHandlers = {
     aiClear: (args: { id: number }) => null | Promise<null>,
     aiRedescribeAll: () => null | Promise<null>,
     aiTestConnection: (args: { draft: AiSettings_Deserialize }) => string | Promise<string>,
+    aiListModels: (args: { endpoint: string; apiKey: string | null }) => string[] | Promise<string[]>,
     aiCaptureCount: (args: { waiting: boolean }) => number | Promise<number>,
     aiClis: () => AiClis_Serialize | Promise<AiClis_Serialize>,
     updateStatus: () => UpdateStatus_Serialize | Promise<UpdateStatus_Serialize>,
@@ -2897,6 +2903,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "ai_clear": return mockCommandHandler(mockHandlers.aiClear, "ai_clear", args);
             case "ai_redescribe_all": return mockCommandHandler(mockHandlers.aiRedescribeAll, "ai_redescribe_all", args);
             case "ai_test_connection": return mockCommandHandler(mockHandlers.aiTestConnection, "ai_test_connection", args);
+            case "ai_list_models": return mockCommandHandler(mockHandlers.aiListModels, "ai_list_models", args);
             case "ai_capture_count": return mockCommandHandler(mockHandlers.aiCaptureCount, "ai_capture_count", args);
             case "ai_clis": return mockCommandHandler(mockHandlers.aiClis, "ai_clis", args);
             case "update_status": return mockCommandHandler(mockHandlers.updateStatus, "update_status", args);

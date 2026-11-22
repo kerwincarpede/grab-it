@@ -87,7 +87,7 @@ AI providers and AI agents share one page. Changes to the provider and its switc
 | **Only describe new captures** | On | Leaves earlier captures alone. Turn it off to describe the whole library: Save first says how many screenshots that is. |
 | **Tidy up captured text** | Off for a new setup | After Capture text, the AI reads the text again, fixes what was misread, and lays out JSON, code and tables. |
 
-**Described by** picks the provider: **Claude Code**, **Codex** or **OpenAI-compatible endpoint**, with its **Model**, and for an endpoint its **Preset**, **Endpoint URL** and **API key**. **Test connection** checks the settings as typed, with a built-in test image, without saving them. See [Providers](/grab-it/ai/providers/).
+**Described by** picks the provider: **Claude Code**, **Codex** or **OpenAI-compatible endpoint**, with its **Model**, and for an endpoint its **Preset** (LM Studio, Ollama, OpenRouter, OpenAI, Anthropic or Custom), **Endpoint URL** and **API key**. **List models** suggests the models the endpoint offers. **Test connection** checks the settings as typed, with a built-in test image, without saving them, and says where it sends it first. See [Providers](/grab-it/ai/providers/).
 
 **Your library → Re-describe all…** says how many screenshots it will describe, then describes every capture again, replacing the current descriptions.
 

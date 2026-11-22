@@ -26,12 +26,12 @@ Grab-it has no account, no analytics and no tracking. Your captures stay on your
 
 ## AI
 
-AI integration is off until you choose a provider in **Settings → AI integration** and press **Save**. Grab-it never turns it on by itself. **Test connection** sends only a small test image built into Grab-it, never one of your captures, and saves nothing. Your screenshots go:
+AI integration is off until you choose a provider in **Settings → AI integration** and press **Save**. Grab-it never turns it on by itself. **Test connection** sends only a small test image built into Grab-it, never one of your captures, and saves nothing; Settings names where it goes before you press it. **List models** asks the endpoint which models it offers, with your API key if you typed one, and sends no image. Your screenshots go:
 
 - **Claude Code**: to Anthropic, under your Claude account.
 - **Codex**: to OpenAI, under your ChatGPT or OpenAI account.
-- **An endpoint on your computer**, such as Ollama: nowhere.
-- **A cloud endpoint**: to that provider.
+- **An endpoint on your computer**, such as LM Studio or Ollama: nowhere.
+- **A cloud endpoint**: to that provider. OpenRouter passes them on to the provider of the model you chose.
 
 Turn off **Use an AI provider** in **Settings → AI integration** and nothing more is sent. See [AI](/grab-it/ai/).
 
