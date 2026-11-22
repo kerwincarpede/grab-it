@@ -130,25 +130,23 @@ pub fn parse_silences(said: &str, duration_ms: Option<u64>) -> Vec<Span> {
     for line in said.lines() {
         if let Some(start) = value(line, "silence_start:") {
             open = Some(ms(start));
-        } else if let Some(end) = value(line, "silence_end:") {
-            if let Some(start) = open.take() {
-                let end = ms(end);
-                if end > start {
-                    spans.push(Span {
-                        start_ms: start,
-                        end_ms: end,
-                    });
-                }
-            }
-        }
-    }
-    if let (Some(start), Some(end)) = (open, duration_ms) {
-        if end > start {
+        } else if let Some(end) = value(line, "silence_end:")
+            && let Some(start) = open.take()
+            && ms(end) > start
+        {
             spans.push(Span {
                 start_ms: start,
-                end_ms: end,
+                end_ms: ms(end),
             });
         }
+    }
+    if let (Some(start), Some(end)) = (open, duration_ms)
+        && end > start
+    {
+        spans.push(Span {
+            start_ms: start,
+            end_ms: end,
+        });
     }
     spans.sort_by_key(|span| span.start_ms);
     spans
@@ -289,6 +287,15 @@ pub fn audition_from<'a>(
     }
 }
 
+/// A fresh file in the temporary folder for one audition, removed once
+/// it is read.
+fn audition_path() -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("grab-it-audition-{}-{n}.wav", std::process::id()))
+}
+
 /// The stretch `start_ms`..`end_ms` of recording `file_name`'s sound as a
 /// WAV, as recorded or `cleaned` as the export cleans it. At most
 /// `MAX_AUDITION_MS` long.
@@ -331,14 +338,14 @@ pub async fn recording_audition(
             end_ms,
             from,
         };
-        let dir = tempfile::tempdir()
-            .map_err(|err| format!("could not make room for the audition: {err}"))?;
-        let output = dir.path().join("audition.wav");
-        ffmpeg::run(&ready.path, audition_args(&clip, &output), AUDITION_TIMEOUT)
-            .map_err(|err| err.to_string())?;
-        let bytes =
-            fs::read(&output).map_err(|err| format!("could not read the audition: {err}"))?;
-        Ok(tauri::ipc::Response::new(bytes))
+        let output = audition_path();
+        let rendered = ffmpeg::run(&ready.path, audition_args(&clip, &output), AUDITION_TIMEOUT)
+            .map_err(|err| err.to_string())
+            .and_then(|()| {
+                fs::read(&output).map_err(|err| format!("could not read the audition: {err}"))
+            });
+        let _ = fs::remove_file(&output);
+        Ok(tauri::ipc::Response::new(rendered?))
     })
     .await
     .map_err(|err| format!("the audition stopped: {err}"))?

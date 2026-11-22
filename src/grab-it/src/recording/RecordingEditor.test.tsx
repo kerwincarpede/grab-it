@@ -1142,6 +1142,9 @@ describe("RecordingEditor", () => {
 
       mockBackend(edits as unknown as Value, null, ["microphone"], { separateMicrophone: true });
       render(<RecordingEditor />);
+      const reopened = await previewVideo(OWN);
+      setVideoMetadata(reopened, 12, 1920, 1080);
+      fireEvent.loadedMetadata(reopened);
       await screen.findByText("2 clips, 0:09.5");
     });
 
