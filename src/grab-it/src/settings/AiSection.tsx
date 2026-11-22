@@ -7,7 +7,9 @@ import {
   aiCaptureCount,
   aiDescribes,
   aiProvider,
+  destination,
   isLocalEndpoint,
+  listModels,
   matchingPreset,
   redescribeAll,
   testAiConnection,
@@ -74,7 +76,7 @@ const PRIVACY: Record<AiProvider, string> = {
   codex:
     "Codex sends your screenshots, with their text, app and window title, to OpenAI under your ChatGPT or OpenAI account.",
   endpoint:
-    "With a local endpoint such as Ollama nothing leaves this computer; a cloud endpoint receives your screenshots.",
+    "With a local endpoint such as LM Studio or Ollama nothing leaves this computer; a cloud endpoint receives your screenshots.",
 };
 
 /**
@@ -88,6 +90,9 @@ function AiSection({ saved, disabled, onSave }: Props) {
   const [testing, setTesting] = useState(false);
   // Null until the backend has looked, or when it cannot say.
   const [clis, setClis] = useState<AiClis | null>(null);
+  // What List models found at `endpoint`; forgotten when the endpoint changes.
+  const [models, setModels] = useState<{ endpoint: string; ids: string[] } | null>(null);
+  const [listing, setListing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,7 +113,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
   const typedValid = draft.endpoint.trim().length > 0 && draft.model.trim().length > 0;
   const edited = editable(draft) !== editable(draftOf(saved));
   const valid = !usesEndpoint || typedValid;
-  const busy = disabled || testing;
+  const busy = disabled || testing || listing;
   // The chosen CLI provider's name and command, when Grab-it looked and could not find it.
   const missing =
     clis === null
@@ -187,14 +192,35 @@ function AiSection({ saved, disabled, onSave }: Props) {
   }
 
   const local = usesEndpoint && isLocalEndpoint(draft.endpoint.trim());
-  // The menu follows the fields, so typing your own shows "Custom".
-  const preset = matchingPreset(draft.endpoint.trim(), draft.model.trim());
+  // The menu follows the URL, so typing your own shows "Custom"; any model ID keeps the preset.
+  const preset = matchingPreset(draft.endpoint);
+  const endpointKey = draft.endpoint.trim().replace(/\/+$/, "");
+  const listed = models?.endpoint === endpointKey ? models.ids : null;
 
   function choosePreset(id: string) {
     const chosen = ENDPOINT_PRESETS.find((candidate) => candidate.id === id);
     if (!chosen) return;
     setResult(null);
-    setDraft({ ...draft, apiKey: chosen.endpoint === draft.endpoint ? draft.apiKey : "", endpoint: chosen.endpoint, model: chosen.model });
+    // A key belongs to the server it was typed for, so another server starts without one.
+    setDraft({ ...draft, apiKey: chosen.endpoint === endpointKey ? draft.apiKey : "", endpoint: chosen.endpoint, model: chosen.model });
+  }
+
+  async function findModels() {
+    setResult(null);
+    setListing(true);
+    try {
+      const ids = await listModels(endpointKey, draft.apiKey.trim() || null);
+      setModels({ endpoint: endpointKey, ids });
+      setResult(
+        ids.length === 0
+          ? { kind: "info", message: "The server lists no models. Type the model's ID instead." }
+          : { kind: "info", message: `Found ${ids.length} ${ids.length === 1 ? "model" : "models"}. Choose one that accepts images under Listed models, or type its ID.` },
+      );
+    } catch (err) {
+      setResult({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setListing(false);
+    }
   }
 
   const chosen = AI_PROVIDERS.find((choice) => choice.value === provider);
@@ -352,7 +378,9 @@ function AiSection({ saved, disabled, onSave }: Props) {
                 <label className="row-title" htmlFor="ai-preset">
                   Preset
                 </label>
-                <span className="row-hint">Fills in the URL and a model. Cloud providers also need your API key.</span>
+                <span className="row-hint" data-testid="ai-setup">
+                  {preset ? preset.setup : "Your own OpenAI-compatible server. Fill in its URL and a vision model below."}
+                </span>
               </span>
               <select
                 id="ai-preset"
@@ -393,26 +421,66 @@ function AiSection({ saved, disabled, onSave }: Props) {
                 <label className="row-title" htmlFor="ai-model">
                   Model
                 </label>
-                <span className="row-hint">It must accept images.</span>
+                <span className="row-hint">It must accept images. Type its ID, or list what the server offers.</span>
               </span>
-              <input
-                id="ai-model"
-                className="row-field"
-                type="text"
-                spellCheck={false}
-                value={draft.model}
-                disabled={busy}
-                placeholder="qwen3-vl:4b"
-                onChange={(event) => setDraft({ ...draft, model: event.target.value })}
-              />
+              <span className="row-control">
+                <input
+                  id="ai-model"
+                  className="row-field"
+                  type="text"
+                  spellCheck={false}
+                  autoComplete="off"
+                  value={draft.model}
+                  disabled={busy}
+                  placeholder={preset?.model ?? "qwen3-vl:4b"}
+                  onChange={(event) => setDraft({ ...draft, model: event.target.value })}
+                />
+                {(preset?.listsModels ?? true) && (
+                  <button
+                    type="button"
+                    className="pill"
+                    disabled={busy || endpointKey.length === 0}
+                    onClick={() => void findModels()}
+                  >
+                    {listing ? "Listing…" : "List models"}
+                  </button>
+                )}
+              </span>
             </div>
+            {listed && listed.length > 0 && (
+              <div className="row">
+                <span className="row-text">
+                  <label className="row-title" htmlFor="ai-listed-models">
+                    Listed models
+                  </label>
+                  <span className="row-hint">What the server offers. Choosing one fills in Model.</span>
+                </span>
+                {/* A menu, not a datalist: a datalist hides every ID that does not start with what Model holds. */}
+                <select
+                  id="ai-listed-models"
+                  className="row-field"
+                  value={listed.includes(draft.model.trim()) ? draft.model.trim() : ""}
+                  disabled={busy}
+                  onChange={(event) => {
+                    if (event.target.value) setDraft({ ...draft, model: event.target.value });
+                  }}
+                >
+                  <option value="">Choose a model…</option>
+                  {listed.map((id) => (
+                    <option key={id} value={id}>
+                      {id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="row">
               <span className="row-text">
                 <label className="row-title" htmlFor="ai-api-key">
                   API key
                 </label>
                 <span className="row-hint" data-testid="ai-api-key-hint">
-                  Only cloud providers need one. Leave it empty for Ollama.{" "}
+                  Only cloud providers need one. Leave it empty for LM Studio and Ollama.{" "}
                   {saved.apiKeyStorage === "keychain"
                     ? "It is kept in your system keychain, not in Grab-it's settings file."
                     : "This computer has no keychain Grab-it can use, so it is kept in plain text in Grab-it's settings file."}
@@ -431,6 +499,12 @@ function AiSection({ saved, disabled, onSave }: Props) {
             </div>
           </>
         )}
+        <div className="row">
+          <p className="hint ai-destination" data-testid="ai-destination">
+            Test connection sends a small sample image, not one of your captures, to{" "}
+            {destination(draft) || "the endpoint"}. It checks that the server answers, takes a request with an image, and replies with the JSON asked for. It cannot tell whether the model looked at the image.
+          </p>
+        </div>
         <div className="row">
           {/* Not role="status": the window's own status line is that. */}
           <p className={`ai-result ai-result-${result?.kind ?? "none"}`} aria-live="polite" data-testid="ai-result">

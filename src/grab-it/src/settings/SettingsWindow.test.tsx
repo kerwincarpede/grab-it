@@ -49,6 +49,8 @@ interface Backend {
   ai: AiPreferences;
   /** What `ai_test_connection` answers; a thrown error when it starts with "error:". */
   testResult: string;
+  /** What `ai_list_models` answers; a thrown error when it is a string. */
+  models?: string[] | string;
   /** Where `ai_clis` finds Claude Code; null when it is not installed. */
   claudePath: string | null;
   /** Where `ai_clis` finds Codex; null when it is not installed. */
@@ -219,6 +221,10 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
       ai_test_connection: () => {
         if (backend.testResult.startsWith("error:")) throw backend.testResult.slice(6).trim();
         return backend.testResult;
+      },
+      ai_list_models: () => {
+        if (typeof backend.models === "string") throw backend.models;
+        return backend.models ?? [];
       },
       ai_redescribe_all: () => null,
       ai_capture_count: () => backend.captureCount ?? 12,
@@ -785,10 +791,11 @@ describe("SettingsWindow AI descriptions", () => {
     expect(screen.getByRole("option", { name: "Custom" })).toBeInTheDocument();
     expect(within(preset).getAllByRole("option").map((option) => option.textContent)).toEqual([
       "Custom",
+      "LM Studio",
       "Ollama",
+      "OpenRouter",
       "OpenAI",
       "Anthropic",
-      "OpenRouter",
     ]);
 
     await userEvent.selectOptions(preset, "OpenRouter");
@@ -796,6 +803,8 @@ describe("SettingsWindow AI descriptions", () => {
     expect(screen.getByLabelText("Endpoint URL")).toHaveValue("https://openrouter.ai/api/v1");
     expect(screen.getByLabelText("Model")).toHaveValue("openai/gpt-5-mini");
     expect(preset).toHaveValue("openrouter");
+    expect(screen.getByTestId("ai-setup")).toHaveTextContent("Create an API key at openrouter.ai/keys");
+    expect(screen.getByTestId("ai-destination")).toHaveTextContent("to openrouter.ai.");
     // Only filled in: nothing is saved until Save.
     expect(commands(backend)).not.toContain("set_preferences");
     expect(screen.getByText(/a cloud endpoint receives your screenshots/)).toHaveClass("ai-privacy-cloud");
@@ -814,17 +823,31 @@ describe("SettingsWindow AI descriptions", () => {
     );
   });
 
-  it("shows Custom once the model is the user's own, and fills each preset's model", async () => {
+  it("keeps the preset for a model ID of the user's own, shows Custom for their own URL, and fills each preset's model", async () => {
     mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "endpoint" } });
     render(<SettingsWindow />);
     const preset = await screen.findByLabelText("Preset");
     await waitFor(() => expect(preset).toBeEnabled());
     expect(preset).toHaveValue("ollama");
+    expect(screen.getByTestId("ai-setup")).toHaveTextContent('run "ollama pull qwen3-vl:4b"');
 
     const model = screen.getByLabelText("Model");
     await userEvent.clear(model);
     await userEvent.type(model, "llava:13b");
+    expect(preset).toHaveValue("ollama");
+
+    const endpoint = screen.getByLabelText("Endpoint URL");
+    await userEvent.clear(endpoint);
+    await userEvent.type(endpoint, "http://gpu-box.lan:8080/v1");
     expect(preset).toHaveValue("");
+    expect(screen.getByTestId("ai-setup")).toHaveTextContent("Your own OpenAI-compatible server");
+    expect(screen.getByTestId("ai-destination")).toHaveTextContent("to gpu-box.lan:8080.");
+
+    await userEvent.selectOptions(preset, "LM Studio");
+    expect(endpoint).toHaveValue("http://localhost:1234/v1");
+    expect(model).toHaveValue("qwen/qwen3-vl-4b");
+    expect(screen.getByTestId("ai-setup")).toHaveTextContent("start the server in the Developer tab");
+    expect(screen.getByText(/nothing leaves this computer/)).not.toHaveClass("ai-privacy-cloud");
 
     await userEvent.selectOptions(preset, "OpenAI");
     expect(screen.getByLabelText("Endpoint URL")).toHaveValue("https://api.openai.com/v1");
@@ -890,7 +913,7 @@ describe("SettingsWindow AI descriptions", () => {
 
     const hint = await screen.findByTestId("ai-api-key-hint");
     expect(hint).toHaveTextContent("no keychain Grab-it can use, so it is kept in plain text in Grab-it's settings file");
-    expect(hint).toHaveTextContent("Only cloud providers need one");
+    expect(hint).toHaveTextContent("Only cloud providers need one. Leave it empty for LM Studio and Ollama.");
   });
 
   it("saves an emptied key as none", async () => {
@@ -917,6 +940,72 @@ describe("SettingsWindow AI descriptions", () => {
     expect(backend.ai.model).toBe("qwen3-vl:4b");
     // Still a draft, to save or cancel.
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  it("lists the endpoint's models to pick from, keeping a typed ID", async () => {
+    const backend = mockBackend({
+      ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "endpoint", endpoint: "https://openrouter.ai/api/v1", model: "openai/gpt-5-mini", apiKey: "sk-or-1" },
+      models: ["openai/gpt-5-mini", "google/gemini-3-flash"],
+    });
+    render(<SettingsWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "List models" }));
+
+    expect(await screen.findByText("Found 2 models. Choose one that accepts images under Listed models, or type its ID.")).toBeInTheDocument();
+    const listed = backend.calls.find((call) => call.cmd === "ai_list_models")?.payload;
+    expect(listed).toEqual({ endpoint: "https://openrouter.ai/api/v1", apiKey: "sk-or-1" });
+    const menu = screen.getByLabelText("Listed models");
+    expect(within(menu).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Choose a model…",
+      "openai/gpt-5-mini",
+      "google/gemini-3-flash",
+    ]);
+    expect(menu).toHaveValue("openai/gpt-5-mini");
+
+    // A typed ID that starts like none of them still leaves every listed model a click away.
+    const model = screen.getByLabelText("Model");
+    await userEvent.clear(model);
+    await userEvent.type(model, "my/own-model");
+    expect(model).toHaveValue("my/own-model");
+    expect(menu).toHaveValue("");
+    await userEvent.selectOptions(menu, "google/gemini-3-flash");
+    expect(model).toHaveValue("google/gemini-3-flash");
+    expect(commands(backend)).not.toContain("set_preferences");
+
+    // Another server forgets the list.
+    const endpoint = screen.getByLabelText("Endpoint URL");
+    await userEvent.type(endpoint, "x");
+    expect(screen.queryByLabelText("Listed models")).not.toBeInTheDocument();
+  });
+
+  it("says why the models could not be listed", async () => {
+    mockBackend({
+      ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "endpoint" },
+      models: "The server did not answer. Check that it is running and that the URL is right.",
+    });
+    render(<SettingsWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "List models" }));
+    expect(await screen.findByText(/The server did not answer/)).toHaveClass("ai-result-error");
+    expect(screen.getByTestId("ai-destination")).toHaveTextContent("to localhost:11434.");
+  });
+
+  it("names where the test goes for each provider, and offers List models only where the server lists them", async () => {
+    mockBackend({ ai: { ...DEFAULT_AI_PREFERENCES, enabled: true, provider: "endpoint" } });
+    render(<SettingsWindow />);
+    const preset = await screen.findByLabelText("Preset");
+    await waitFor(() => expect(preset).toBeEnabled());
+    expect(screen.getByRole("button", { name: "List models" })).toBeInTheDocument();
+
+    await userEvent.selectOptions(preset, "Anthropic");
+    expect(screen.queryByRole("button", { name: "List models" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("ai-destination")).toHaveTextContent("to api.anthropic.com.");
+
+    await userEvent.clear(screen.getByLabelText("Endpoint URL"));
+    expect(screen.getByTestId("ai-destination")).toHaveTextContent("to the endpoint.");
+
+    await userEvent.click(screen.getByRole("radio", { name: /Claude Code/ }));
+    expect(screen.getByTestId("ai-destination")).toHaveTextContent("to Anthropic, through Claude Code.");
+    await userEvent.click(screen.getByRole("radio", { name: /Codex/ }));
+    expect(screen.getByTestId("ai-destination")).toHaveTextContent("to OpenAI, through Codex.");
   });
 
   it("shows why the connection test failed", async () => {

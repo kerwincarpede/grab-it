@@ -16,7 +16,7 @@ use std::{
     io::Cursor,
     path::{Path, PathBuf},
     sync::{
-        Mutex,
+        Arc, Mutex,
         mpsc::{self, Receiver, Sender},
     },
     thread,
@@ -74,6 +74,14 @@ const MAX_TAG_WORDS: usize = 2;
 const MAX_DESCRIPTION_CHARS: usize = 600;
 /// The most of a response that is read.
 const MAX_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
+/// The longest description an endpoint may send, in tokens: a description
+/// and its tags take about 150.
+const DESCRIPTION_MAX_TOKENS: u32 = 400;
+/// The reply budget a reasoning model gets when it thought through the
+/// usual one without answering. Gemma 4 26B in LM Studio thought for 755
+/// tokens before answering the connection test, and for more than 397 of
+/// a description's 400.
+const REASONING_MAX_TOKENS: u32 = 2048;
 /// Request fields some servers refuse; one named in an error is dropped
 /// and the request sent again.
 const OPTIONAL_FIELDS: [&str; 3] = ["response_format", "max_tokens", "temperature"];
@@ -98,8 +106,8 @@ pub enum AiError {
 impl fmt::Display for AiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Image(err) => write!(f, "could not read the capture: {err}"),
-            Self::Response(err) => write!(f, "the model's answer could not be used: {err}"),
+            Self::Image(err) => write!(f, "Could not read the capture: {err}"),
+            Self::Response(err) => write!(f, "The model's answer could not be used: {err}"),
             Self::Endpoint(err) => f.write_str(err),
         }
     }
@@ -182,6 +190,10 @@ pub struct Clients {
     pub claude: Option<PathBuf>,
     pub codex: Option<PathBuf>,
     pub cli_timeout: Duration,
+    /// The endpoint and model that last needed [`REASONING_MAX_TOKENS`],
+    /// so their later requests start with it instead of thinking through a
+    /// smaller budget first. Another endpoint or model starts small again.
+    pub reasoning: Arc<Mutex<Option<(String, String)>>>,
 }
 
 impl Clients {
@@ -192,6 +204,7 @@ impl Clients {
             claude: ai_cli::find_claude(),
             codex: ai_cli::find_codex(),
             cli_timeout: stall,
+            reasoning: Arc::default(),
         }
     }
 
@@ -317,6 +330,21 @@ fn request_body(
 struct Failure {
     status: Option<u16>,
     message: String,
+    /// The server's own message in an error response, without the URL or
+    /// status around it; empty when there was no response.
+    detail: String,
+}
+
+impl Failure {
+    /// `url` answered `status` with the error response `body`.
+    fn answered(url: &str, status: u16, body: &str) -> Self {
+        let detail = api_error_message(body);
+        Self {
+            status: Some(status),
+            message: format!("{url} answered {status}: {detail}"),
+            detail,
+        }
+    }
 }
 
 /// The message in an error response: OpenAI's `{"error": {"message"}}`,
@@ -345,6 +373,7 @@ fn post(agent: &ureq::Agent, ai: &AiSettings, body: &Value) -> Result<String, Fa
     let failed = |err: ureq::Error| Failure {
         status: None,
         message: format!("could not reach {url}: {err}"),
+        detail: String::new(),
     };
     let mut response = request.send(body.to_string()).map_err(failed)?;
     let status = response.status();
@@ -355,48 +384,128 @@ fn post(agent: &ureq::Agent, ai: &AiSettings, body: &Value) -> Result<String, Fa
         .read_to_string()
         .map_err(failed)?;
     if !status.is_success() {
-        return Err(Failure {
-            status: Some(status.as_u16()),
-            message: format!(
-                "{url} answered {}: {}",
-                status.as_u16(),
-                api_error_message(&text)
-            ),
-        });
+        return Err(Failure::answered(&url, status.as_u16(), &text));
     }
     Ok(text)
 }
 
-/// The assistant's reply in a chat completion response.
+/// `text` with its first letter in upper case, to stand as a sentence.
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
+/// What an empty reply from a reasoning model that ran out of tokens says.
+const THOUGHT_OUT: &str = "the model spent its whole reply budget thinking and sent no answer. \
+     Choose a model without reasoning, or turn reasoning off in the server.";
+
+/// Whether a chat completion stopped before answering because the model
+/// was still reasoning: it ran out of tokens, or sent only its reasoning
+/// (`reasoning_content` from LM Studio and llama.cpp, `reasoning` from
+/// OpenRouter and Ollama).
+fn thought_out(value: &Value) -> bool {
+    let choice = value.pointer("/choices/0");
+    let length = choice
+        .and_then(|choice| choice.get("finish_reason"))
+        .and_then(Value::as_str)
+        == Some("length");
+    let reasoned = ["reasoning_content", "reasoning"].iter().any(|field| {
+        choice
+            .and_then(|choice| choice.pointer(&format!("/message/{field}")))
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty())
+    });
+    length || reasoned
+}
+
+/// The assistant's reply in a chat completion response. An empty reply
+/// from a model that was still thinking is [`THOUGHT_OUT`].
 fn reply_text(body: &str) -> Result<String, AiError> {
     let value: Value = serde_json::from_str(body)
         .map_err(|err| AiError::Response(format!("not a chat completion: {err}")))?;
     let content = value
         .pointer("/choices/0/message/content")
         .ok_or_else(|| AiError::Response(format!("no reply in {}", truncate(body, 200))))?;
-    match content {
-        Value::String(text) => Ok(text.clone()),
+    let text: String = match content {
+        Value::String(text) => text.clone(),
         // Some servers send the content as parts.
-        Value::Array(parts) => Ok(parts
+        Value::Array(parts) => parts
             .iter()
             .filter_map(|part| part.get("text").and_then(Value::as_str))
-            .collect()),
-        _ => Err(AiError::Response("the reply was empty".into())),
+            .collect(),
+        _ => String::new(),
+    };
+    if text.trim().is_empty() {
+        if thought_out(&value) {
+            return Err(AiError::Response(THOUGHT_OUT.into()));
+        }
+        if !content.is_string() {
+            return Err(AiError::Response("the reply was empty".into()));
+        }
     }
+    Ok(text)
 }
 
 /// Sends `body` and returns the reply. A field from [`OPTIONAL_FIELDS`]
 /// that the server says it does not support is dropped and the request
 /// sent again.
-fn complete(agent: &ureq::Agent, ai: &AiSettings, mut body: Value) -> Result<String, AiError> {
+///
+/// A reasoning model that thinks through its whole `max_tokens` without
+/// answering is asked once more with [`REASONING_MAX_TOKENS`]. That retry
+/// sends the image again, and each request bills the tokens spent, so it
+/// costs one more request with the screenshot and the first attempt's
+/// tokens. `clients` then remembers the endpoint and model, so their later
+/// requests start with the larger budget and pay that once, not for every
+/// capture. When the larger budget also runs out, the model will not
+/// answer within it, so the error is [`AiError::Endpoint`]: the queue
+/// stops with what to do and the capture waits.
+fn complete(clients: &Clients, ai: &AiSettings, mut body: Value) -> Result<String, AiError> {
+    let key = (ai.endpoint.clone(), ai.model.clone());
+    let reasoning = |clients: &Clients| {
+        clients
+            .reasoning
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            == Some(&key)
+    };
+    let small = |budget: &Value| {
+        budget
+            .as_u64()
+            .is_some_and(|n| n < u64::from(REASONING_MAX_TOKENS))
+    };
+    let mut raised = false;
+    if reasoning(clients)
+        && let Some(budget) = body.get_mut("max_tokens").filter(|budget| small(budget))
+    {
+        *budget = Value::from(REASONING_MAX_TOKENS);
+        raised = true;
+    }
     loop {
-        match post(agent, ai, &body) {
-            Ok(text) => return reply_text(&text),
-            Err(Failure {
-                status: Some(400..=499),
-                message,
-            }) => {
-                let lower = message.to_lowercase();
+        match post(&clients.http, ai, &body) {
+            Ok(text) => match reply_text(&text) {
+                Err(AiError::Response(message)) if message == THOUGHT_OUT => {
+                    if raised {
+                        return Err(AiError::Endpoint(capitalized(THOUGHT_OUT)));
+                    }
+                    let Some(budget) = body.get_mut("max_tokens").filter(|budget| small(budget))
+                    else {
+                        return Err(AiError::Response(message));
+                    };
+                    *budget = Value::from(REASONING_MAX_TOKENS);
+                    raised = true;
+                    *clients
+                        .reasoning
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(key.clone());
+                }
+                reply => return reply,
+            },
+            Err(failure) if matches!(failure.status, Some(400..=499)) => {
+                let lower = failure.message.to_lowercase();
                 let refused = OPTIONAL_FIELDS.iter().find(|field| {
                     lower.contains(*field)
                         && body
@@ -407,12 +516,48 @@ fn complete(agent: &ureq::Agent, ai: &AiSettings, mut body: Value) -> Result<Str
                     (Some(field), Some(object)) => {
                         object.remove(*field);
                     }
-                    _ => return Err(AiError::Endpoint(message)),
+                    _ => return Err(endpoint_error(&ai.model, failure)),
                 }
             }
-            Err(failure) => return Err(AiError::Endpoint(failure.message)),
+            Err(failure) => return Err(endpoint_error(&ai.model, failure)),
         }
     }
+}
+
+/// Whether the server's own message in an error response says the model
+/// reads only text. The model ID is left out first, as servers often quote
+/// it and one such as `llama3.2-vision` would otherwise always match; the
+/// URL is not in `detail` at all.
+fn refuses_images(model: &str, detail: &str) -> bool {
+    let mut lower = detail.to_lowercase();
+    let model = model.trim().to_lowercase();
+    if !model.is_empty() {
+        lower = lower.replace(&model, "");
+    }
+    ["image", "vision", "multimodal", "multi-modal"]
+        .iter()
+        .any(|word| lower.contains(word))
+}
+
+/// A failed request as an [`AiError::Endpoint`] that starts with what to
+/// fix: the server, the API key or the model. The server's own message
+/// follows.
+fn endpoint_error(model: &str, failure: Failure) -> AiError {
+    let message = failure.message;
+    AiError::Endpoint(match failure.status {
+        None => format!(
+            "The server did not answer. Check that it is running and that the URL is right. Details: {message}"
+        ),
+        Some(401 | 403) => {
+            format!("The server did not accept the API key. Check the key. Details: {message}")
+        }
+        // What servers answer a request they cannot run, not "not found",
+        // rate limits or gateway errors, which a model name cannot fix.
+        Some(400 | 415 | 422 | 500) if refuses_images(model, &failure.detail) => {
+            format!("{model} does not accept images. Choose a vision model. Details: {message}")
+        }
+        Some(_) => message,
+    })
 }
 
 /// The first JSON object in `text`: code fences and chatter around it are
@@ -542,7 +687,7 @@ pub fn ask(clients: &Clients, ai: &AiSettings, question: &Ask) -> Result<String,
                 Some(&url),
                 question.max_tokens,
             );
-            complete(&clients.http, ai, body)
+            complete(clients, ai, body)
         }
         AiProvider::ClaudeCode => ai_cli::claude_reply(
             clients.claude()?,
@@ -575,7 +720,7 @@ pub fn describe(clients: &Clients, ai: &AiSettings, job: &AiJob) -> Result<AiDes
             prompt: &prompt(job),
             png: &png,
             schema: &description_schema(),
-            max_tokens: 400,
+            max_tokens: DESCRIPTION_MAX_TOKENS,
         },
     )?;
     parse_description(&reply)
@@ -621,7 +766,9 @@ pub fn test_connection(clients: &Clients, ai: &AiSettings) -> Result<String, AiE
             prompt: TEST_PROMPT,
             png: include_bytes!("../fixtures/connection-test.png"),
             schema: &test_schema(),
-            max_tokens: 20,
+            // A description's budget, so a reasoning model that passes
+            // the test has room to describe captures too.
+            max_tokens: DESCRIPTION_MAX_TOKENS,
         },
     )?;
     let answered = match ai.provider() {
@@ -637,7 +784,80 @@ pub fn test_connection(clients: &Clients, ai: &AiSettings) -> Result<String, AiE
     if reply.trim().is_empty() {
         return Err(AiError::Response("the model sent an empty reply".into()));
     }
+    let answer = first_object(&reply).and_then(|object| serde_json::from_str::<Value>(object).ok());
+    if !answer.is_some_and(|answer| answer.get("ok").is_some()) {
+        return Err(AiError::Response(format!(
+            "it did not answer with the JSON asked for, so it may not follow instructions well enough. It said: {}",
+            truncate(reply.trim(), 200)
+        )));
+    }
     Ok(answered)
+}
+
+/// Whether a listed model ID is plainly an embedding or reranking model,
+/// which cannot describe a capture, such as LM Studio's
+/// `text-embedding-nomic-embed-text-v1.5`.
+fn is_embedding_model(id: &str) -> bool {
+    let lower = id.to_lowercase();
+    lower.contains("embed") || lower.contains("rerank")
+}
+
+/// How long listing an endpoint's models may take.
+pub const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The model IDs an OpenAI-compatible endpoint offers, from its `/models`:
+/// `{"data": [{"id": ...}]}`, as OpenAI, OpenRouter, LM Studio and
+/// Ollama send it, without embedding models. Empty when the server lists
+/// none.
+pub fn list_models(
+    agent: &ureq::Agent,
+    endpoint: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<String>, AiError> {
+    let url = format!("{}/models", endpoint.trim().trim_end_matches('/'));
+    let mut request = agent.get(&url);
+    if let Some(key) = api_key.map(str::trim).filter(|key| !key.is_empty()) {
+        request = request.header("Authorization", format!("Bearer {key}"));
+    }
+    let failed = |err: ureq::Error| {
+        endpoint_error(
+            "",
+            Failure {
+                status: None,
+                message: format!("could not reach {url}: {err}"),
+                detail: String::new(),
+            },
+        )
+    };
+    let mut response = request.call().map_err(failed)?;
+    let status = response.status();
+    let text = response
+        .body_mut()
+        .with_config()
+        .limit(MAX_RESPONSE_BYTES)
+        .read_to_string()
+        .map_err(failed)?;
+    if !status.is_success() {
+        return Err(endpoint_error(
+            "",
+            Failure::answered(&url, status.as_u16(), &text),
+        ));
+    }
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|err| AiError::Response(format!("not a model list: {err}")))?;
+    let mut models: Vec<String> = Vec::new();
+    for id in value
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|model| model.get("id").and_then(Value::as_str))
+    {
+        if !is_embedding_model(id) && !models.iter().any(|known| known == id) {
+            models.push(id.to_owned());
+        }
+    }
+    Ok(models)
 }
 
 /// What one turn of the queue did.
@@ -849,6 +1069,7 @@ fn run(app: &AppHandle, receiver: &Receiver<Wake>) {
         claude: None,
         codex: None,
         cli_timeout: AI_STALL_TIMEOUT,
+        reasoning: Arc::default(),
     };
     loop {
         let ai = current_settings(app);
@@ -955,6 +1176,22 @@ pub fn ai_test_connection(draft: AiSettings) -> Result<String, String> {
     .validated()
     .map_err(|err| err.to_string())?;
     test_connection(&Clients::new(TEST_TIMEOUT), &ai).map_err(|err| err.to_string())
+}
+
+/// Lists the models an OpenAI-compatible endpoint offers, for Settings to
+/// suggest. Nothing is saved, and no image is sent.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn ai_list_models(endpoint: String, api_key: Option<String>) -> Result<Vec<String>, String> {
+    let lower = endpoint.trim().to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err(format!(
+            "The AI endpoint must start with http:// or https://, not `{}`.",
+            endpoint.trim()
+        ));
+    }
+    list_models(&agent(LIST_MODELS_TIMEOUT), &endpoint, api_key.as_deref())
+        .map_err(|err| err.to_string())
 }
 
 /// Counts the screenshots a whole-library request would describe: every
@@ -1333,6 +1570,7 @@ mod tests {
             claude: None,
             codex: None,
             cli_timeout: Duration::from_secs(10),
+            reasoning: Arc::default(),
         }
     }
 
@@ -1612,6 +1850,226 @@ mod tests {
         assert!(message.contains("test-vision"), "{message}");
         let err = test_connection(&fast(), &ai).unwrap_err();
         assert!(err.to_string().contains("Incorrect API key"), "{err}");
+    }
+
+    #[test]
+    fn the_connection_test_says_what_to_fix() {
+        let server = serve(vec![
+            Reply::Json(
+                401,
+                json!({ "error": { "message": "No auth credentials found" } }),
+            ),
+            Reply::Json(
+                400,
+                json!({ "error": { "message": "Model does not support images. Please use a model that does." } }),
+            ),
+            Reply::Json(
+                500,
+                json!({ "error": "this model is missing data required for image input" }),
+            ),
+            Reply::Chat("Sure! The connection works.".into()),
+        ]);
+        let ai = settings(&server);
+        let auth = test_connection(&fast(), &ai).unwrap_err().to_string();
+        assert!(
+            auth.starts_with("The server did not accept the API key."),
+            "{auth}"
+        );
+        assert!(auth.contains("No auth credentials found"), "{auth}");
+        for _ in 0..2 {
+            let images = test_connection(&fast(), &ai).unwrap_err().to_string();
+            assert!(
+                images.starts_with("test-vision does not accept images."),
+                "{images}"
+            );
+        }
+        let answer = test_connection(&fast(), &ai).unwrap_err();
+        assert!(matches!(answer, AiError::Response(_)), "{answer:?}");
+        assert!(
+            answer.to_string().contains("did not answer with the JSON"),
+            "{answer}"
+        );
+        // Nothing listens on the port any more.
+        drop(server);
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let offline = AiSettings {
+            endpoint: format!("http://127.0.0.1:{port}/v1"),
+            ..ai
+        };
+        let down = test_connection(&fast(), &offline).unwrap_err().to_string();
+        assert!(down.starts_with("The server did not answer."), "{down}");
+    }
+
+    #[test]
+    fn a_vision_model_that_is_missing_or_busy_is_not_said_to_refuse_images() {
+        let server = serve(vec![
+            Reply::Json(
+                404,
+                json!({ "error": { "message": "model \"llama3.2-vision\" not found, try pulling it first" } }),
+            ),
+            Reply::Json(
+                400,
+                json!({ "error": "llama3.2-vision: the prompt is longer than the context length" }),
+            ),
+            Reply::Json(
+                429,
+                json!({ "error": { "message": "Rate limit exceeded for vision requests" } }),
+            ),
+        ]);
+        let ai = AiSettings {
+            model: "llama3.2-vision".into(),
+            ..settings(&server)
+        };
+        for _ in 0..3 {
+            let err = test_connection(&fast(), &ai).unwrap_err().to_string();
+            assert!(!err.contains("does not accept images"), "{err}");
+        }
+    }
+
+    /// A reasoning model's answer when it ran out of tokens while thinking.
+    fn thought_out_reply() -> Reply {
+        Reply::Json(
+            200,
+            json!({ "choices": [{
+                "finish_reason": "length",
+                "message": { "role": "assistant", "content": "", "reasoning_content": "The user wants JSON. Let me think…" },
+            }] }),
+        )
+    }
+
+    #[test]
+    fn a_reasoning_model_that_runs_out_of_tokens_is_asked_again_with_more() {
+        let server = serve(vec![
+            thought_out_reply(),
+            Reply::Chat("{\"ok\": true}".into()),
+        ]);
+        let ai = settings(&server);
+        test_connection(&fast(), &ai).unwrap();
+        let requests = server.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].body["max_tokens"], DESCRIPTION_MAX_TOKENS);
+        assert_eq!(requests[1].body["max_tokens"], REASONING_MAX_TOKENS);
+    }
+
+    #[test]
+    fn a_reasoning_model_that_never_answers_says_so() {
+        let server = serve(vec![thought_out_reply(), thought_out_reply()]);
+        let err = test_connection(&fast(), &settings(&server)).unwrap_err();
+        assert!(matches!(err, AiError::Endpoint(_)), "{err:?}");
+        let message = err.to_string();
+        assert!(
+            message.starts_with("The model spent its whole reply budget thinking"),
+            "{message}"
+        );
+        assert!(
+            message.contains("turn reasoning off in the server"),
+            "{message}"
+        );
+        // Asked once more, not again and again.
+        assert_eq!(server.requests().len(), 2);
+    }
+
+    #[test]
+    fn a_reasoning_model_that_never_answers_stops_the_queue() {
+        let dir = TempDir::new().unwrap();
+        let (library, id) = library_with_shot(dir.path(), Some("x"));
+        let server = serve(vec![thought_out_reply(), thought_out_reply()]);
+        let Step::Stopped(message) = step_again(&library, &settings(&server)) else {
+            panic!("the queue should stop");
+        };
+        assert!(
+            message.contains("Choose a model without reasoning"),
+            "{message}"
+        );
+        assert_eq!(library.lock().ai_state(id).unwrap(), AI_WAITING);
+        assert_eq!(server.requests().len(), 2);
+    }
+
+    #[test]
+    fn the_larger_budget_is_remembered_for_the_endpoint_and_model() {
+        let dir = TempDir::new().unwrap();
+        let (library, id) = library_with_shot(dir.path(), Some("x"));
+        let job = library.lock().next_for_ai().unwrap().unwrap();
+        assert_eq!(job.id, id);
+        let server = serve(vec![
+            thought_out_reply(),
+            Reply::Chat(GOOD_REPLY.into()),
+            Reply::Chat(GOOD_REPLY.into()),
+            Reply::Chat(GOOD_REPLY.into()),
+        ]);
+        let clients = fast();
+        let ai = settings(&server);
+        describe(&clients, &ai, &job).unwrap();
+        describe(&clients, &ai, &job).unwrap();
+        // Another model starts small again.
+        let other = AiSettings {
+            model: "other-vision".into(),
+            ..ai.clone()
+        };
+        describe(&clients, &other, &job).unwrap();
+        let budgets: Vec<Value> = server
+            .requests()
+            .iter()
+            .map(|request| request.body["max_tokens"].clone())
+            .collect();
+        assert_eq!(
+            budgets,
+            [
+                Value::from(DESCRIPTION_MAX_TOKENS),
+                Value::from(REASONING_MAX_TOKENS),
+                Value::from(REASONING_MAX_TOKENS),
+                Value::from(DESCRIPTION_MAX_TOKENS),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_reply_without_reasoning_is_not_blamed_on_thinking() {
+        let server = serve(vec![Reply::Chat(String::new())]);
+        let err = test_connection(&fast(), &settings(&server))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("empty reply"), "{err}");
+        assert_eq!(server.requests().len(), 1);
+    }
+
+    #[test]
+    fn an_endpoint_lists_its_models() {
+        let server = serve(vec![
+            Reply::Json(
+                200,
+                json!({ "object": "list", "data": [
+                    { "id": "qwen3-vl:4b", "object": "model" },
+                    { "id": "gemma3:4b", "object": "model" },
+                    { "id": "text-embedding-nomic-embed-text-v1.5", "object": "model" },
+                    { "id": "bge-reranker-v2-m3", "object": "model" },
+                    { "id": "qwen3-vl:4b", "object": "model" },
+                ] }),
+            ),
+            Reply::Json(401, json!({ "error": { "message": "Invalid API key" } })),
+        ]);
+        let agent = agent(Duration::from_secs(5));
+        let models =
+            list_models(&agent, &format!("{}/", server.endpoint), Some("sk-test")).unwrap();
+        assert_eq!(models, ["qwen3-vl:4b", "gemma3:4b"]);
+        let request = &server.requests()[0];
+        assert!(
+            request.head.starts_with("GET /v1/models "),
+            "{}",
+            request.head
+        );
+        assert!(request.head.contains("Bearer sk-test"), "{}", request.head);
+        let err = list_models(&agent, &server.endpoint, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.starts_with("The server did not accept the API key."),
+            "{err}"
+        );
     }
 
     #[test]

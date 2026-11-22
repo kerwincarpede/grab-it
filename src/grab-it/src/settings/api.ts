@@ -94,7 +94,7 @@ export const AI_PROVIDERS: { value: AiProvider; title: string; hint: string }[] 
   {
     value: "endpoint",
     title: "OpenAI-compatible endpoint",
-    hint: "Ollama or LM Studio on this computer, or a cloud API such as OpenAI or OpenRouter.",
+    hint: "LM Studio or Ollama on this computer, or a hosted API such as OpenRouter or OpenAI.",
   },
 ];
 
@@ -113,19 +113,100 @@ export interface EndpointPreset {
   endpoint: string;
   /** A vision model the API offers; the user can type another. */
   model: string;
+  /** Whether it runs on this computer, so screenshots stay on it. */
+  local: boolean;
+  /** Whether it wants an API key. */
+  needsKey: boolean;
+  /** Whether its `/models` lists the models it offers, for List models. */
+  listsModels: boolean;
+  /** What to do before testing it. */
+  setup: string;
 }
 
-/** The endpoint presets in the order Settings lists them. Ollama's matches {@link DEFAULT_AI_PREFERENCES}. */
+/**
+ * The endpoint presets in the order Settings lists them: the named local
+ * and hosted choices first, then the other cloud APIs. Ollama's matches
+ * {@link DEFAULT_AI_PREFERENCES}.
+ */
 export const ENDPOINT_PRESETS: EndpointPreset[] = [
-  { id: "ollama", name: "Ollama", endpoint: DEFAULT_AI_PREFERENCES.endpoint, model: DEFAULT_AI_PREFERENCES.model },
-  { id: "openai", name: "OpenAI", endpoint: "https://api.openai.com/v1", model: "gpt-5-mini" },
-  { id: "anthropic", name: "Anthropic", endpoint: "https://api.anthropic.com/v1", model: "claude-haiku-5-5" },
-  { id: "openrouter", name: "OpenRouter", endpoint: "https://openrouter.ai/api/v1", model: "openai/gpt-5-mini" },
+  {
+    id: "lmstudio",
+    name: "LM Studio",
+    endpoint: "http://localhost:1234/v1",
+    model: "qwen/qwen3-vl-4b",
+    local: true,
+    needsKey: false,
+    listsModels: true,
+    setup:
+      "Runs on this computer. In LM Studio, download a vision model, load it, and start the server in the Developer tab. No API key needed.",
+  },
+  {
+    id: "ollama",
+    name: "Ollama",
+    endpoint: DEFAULT_AI_PREFERENCES.endpoint,
+    model: DEFAULT_AI_PREFERENCES.model,
+    local: true,
+    needsKey: false,
+    listsModels: true,
+    setup: `Runs on this computer. Install Ollama, then run "ollama pull ${DEFAULT_AI_PREFERENCES.model}" or pull another vision model. No API key needed.`,
+  },
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    endpoint: "https://openrouter.ai/api/v1",
+    model: "openai/gpt-5-mini",
+    local: false,
+    needsKey: true,
+    listsModels: true,
+    setup:
+      "A hosted service. Create an API key at openrouter.ai/keys and paste it below. Choose a model that takes image input.",
+  },
+  {
+    id: "openai",
+    name: "OpenAI",
+    endpoint: "https://api.openai.com/v1",
+    model: "gpt-5-mini",
+    local: false,
+    needsKey: true,
+    listsModels: true,
+    setup: "A hosted service. Create an API key at platform.openai.com and paste it below.",
+  },
+  {
+    id: "anthropic",
+    name: "Anthropic",
+    endpoint: "https://api.anthropic.com/v1",
+    model: "claude-haiku-5-5",
+    local: false,
+    needsKey: true,
+    listsModels: false,
+    setup: "A hosted service. Create an API key at console.anthropic.com and paste it below.",
+  },
 ];
 
-/** The preset an endpoint and model are, or null when they are the user's own. */
-export function matchingPreset(endpoint: string, model: string): EndpointPreset | null {
-  return ENDPOINT_PRESETS.find((preset) => preset.endpoint === endpoint && preset.model === model) ?? null;
+/**
+ * The preset an endpoint is, or null when it is the user's own. The model
+ * does not count: a preset's server offers many, and any ID can be typed.
+ */
+export function matchingPreset(endpoint: string): EndpointPreset | null {
+  const trimmed = endpoint.trim().replace(/\/+$/, "");
+  return ENDPOINT_PRESETS.find((preset) => preset.endpoint === trimmed) ?? null;
+}
+
+/** Lists the models an OpenAI-compatible endpoint offers; rejects with why not. Sends no image. */
+export function listModels(endpoint: string, apiKey: string | null): Promise<string[]> {
+  return commands.aiListModels(endpoint, apiKey);
+}
+
+/** Where the connection test and descriptions go: a host, or the company behind a CLI. */
+export function destination(ai: Pick<AiPreferences, "provider" | "endpoint">): string {
+  const provider = aiProvider(ai);
+  if (provider === "claudeCode") return "Anthropic, through Claude Code";
+  if (provider === "codex") return "OpenAI, through Codex";
+  try {
+    return new URL(ai.endpoint.trim()).host || ai.endpoint.trim();
+  } catch {
+    return ai.endpoint.trim();
+  }
 }
 
 /** A provider's name as messages show it. */
