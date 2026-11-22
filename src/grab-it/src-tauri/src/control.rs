@@ -33,7 +33,7 @@ const SOCKET_FILE: &str = "control.sock";
 const MAX_REQUEST: u64 = 64 * 1024;
 
 /// What agent access being off answers every request with.
-pub const ACCESS_OFF: &str = "Agent access is off. Turn on \"Let AI agents use Grab-it\" in Grab-it's Settings › AI agents, then try again.";
+pub const ACCESS_OFF: &str = "Agent access is off. Turn on \"Let AI agents use Grab-it\" in Grab-it's Settings › AI integration, then try again.";
 
 /// One request from the command line.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -408,7 +408,7 @@ mod tests {
         });
         assert!(!ran);
         assert_eq!(reply, Reply::failure(ACCESS_OFF));
-        assert!(ACCESS_OFF.contains("Settings › AI agents"));
+        assert!(ACCESS_OFF.contains("Settings › AI integration"));
         assert_eq!(
             serde_json::to_value(&reply).unwrap(),
             json!({"ok": false, "error": ACCESS_OFF})

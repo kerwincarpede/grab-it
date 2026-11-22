@@ -1039,6 +1039,16 @@ impl Library {
             .optional()?)
     }
 
+    /// How many captures a whole-library request would describe: every
+    /// image, or with `waiting` only those not yet described or skipped.
+    pub fn ai_capture_count(&self, waiting: bool) -> LibraryResult<u32> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM shots WHERE kind = 'image' AND (?1 = 0 OR ai_state = 0)",
+            [waiting],
+            |row| row.get(0),
+        )?)
+    }
+
     /// How far the describing queue has got.
     pub fn ai_counts(&self) -> LibraryResult<AiCounts> {
         Ok(self.conn.query_row(

@@ -4,6 +4,8 @@ import {
   CLAUDE_MODELS,
   ENDPOINT_PRESETS,
   aiClis,
+  aiCaptureCount,
+  aiDescribes,
   aiProvider,
   isLocalEndpoint,
   matchingPreset,
@@ -29,7 +31,7 @@ interface Props {
 
 type Result = { kind: "ok" | "error" | "info"; message: string } | null;
 
-interface Draft {
+interface Draft extends AiPreferences {
   endpoint: string;
   model: string;
   apiKey: string;
@@ -38,12 +40,32 @@ interface Draft {
 }
 
 const draftOf = (ai: AiPreferences): Draft => ({
+  ...ai,
   endpoint: ai.endpoint,
   model: ai.model,
   apiKey: ai.apiKey ?? "",
   claudeModel: ai.claudeModel ?? "haiku",
   codexModel: ai.codexModel ?? "",
 });
+
+/**
+ * What the user can change, as the backend saves it, so a draft that only
+ * differs in spacing, a trailing slash or fields the backend owns (the
+ * notice, where the key is kept) is not an edit.
+ */
+const editable = (draft: Draft) =>
+  JSON.stringify([
+    draft.enabled,
+    draft.automaticDescriptions ?? true,
+    aiProvider(draft),
+    draft.endpoint.trim().replace(/\/+$/, ""),
+    draft.model.trim(),
+    draft.apiKey.trim(),
+    draft.claudeModel.trim(),
+    draft.codexModel.trim(),
+    draft.newCapturesOnly,
+    draft.tidyText,
+  ]);
 
 /** Where each provider sends screenshots. */
 const PRIVACY: Record<AiProvider, string> = {
@@ -56,15 +78,14 @@ const PRIVACY: Record<AiProvider, string> = {
 };
 
 /**
- * Who describes and sorts captures. The toggles and the provider save at
- * once; the endpoint's text fields save with Save, or before a connection
- * test. A preset only fills in those fields.
+ * Who describes and sorts captures. Everything here is a draft until Save,
+ * and Cancel puts back what is saved. Test connection tries the draft
+ * without saving it. A preset only fills in the endpoint's fields.
  */
 function AiSection({ saved, disabled, onSave }: Props) {
-  const [draft, setDraft] = useState<Draft>(() => draftOf(saved));
+  const [draft, updateDraft] = useState<Draft>(() => draftOf(saved));
   const [result, setResult] = useState<Result>(null);
   const [testing, setTesting] = useState(false);
-  const [confirmingAll, setConfirmingAll] = useState(false);
   // Null until the backend has looked, or when it cannot say.
   const [clis, setClis] = useState<AiClis | null>(null);
 
@@ -82,16 +103,10 @@ function AiSection({ saved, disabled, onSave }: Props) {
     };
   }, []);
 
-  const provider = aiProvider(saved);
+  const provider = aiProvider(draft);
   const usesEndpoint = provider === "endpoint";
   const typedValid = draft.endpoint.trim().length > 0 && draft.model.trim().length > 0;
-  const edited = usesEndpoint
-    ? draft.endpoint.trim() !== saved.endpoint ||
-      draft.model.trim() !== saved.model ||
-      (draft.apiKey.trim() || null) !== saved.apiKey
-    : provider === "claudeCode"
-      ? draft.claudeModel.trim() !== (saved.claudeModel ?? "haiku")
-      : draft.codexModel.trim() !== (saved.codexModel ?? "");
+  const edited = editable(draft) !== editable(draftOf(saved));
   const valid = !usesEndpoint || typedValid;
   const busy = disabled || testing;
   // The chosen CLI provider's name and command, when Grab-it looked and could not find it.
@@ -104,34 +119,54 @@ function AiSection({ saved, disabled, onSave }: Props) {
           ? { name: "Codex", command: "codex" }
           : null;
 
-  /** Saves the typed fields along with `change`. */
-  async function save(change: Partial<AiPreferences> = {}): Promise<boolean> {
-    const next: AiPreferences = {
-      ...saved,
-      ...(usesEndpoint && typedValid
-        ? { endpoint: draft.endpoint.trim(), model: draft.model.trim(), apiKey: draft.apiKey.trim() || null }
-        : {}),
-      ...(provider === "claudeCode" ? { claudeModel: draft.claudeModel.trim() } : {}),
-      ...(provider === "codex" ? { codexModel: draft.codexModel.trim() } : {}),
-      ...change,
+  const [confirmation, setConfirmation] = useState<{ count: number; action: "save" | "describe" } | null>(null);
+
+  function setDraft(next: Draft) {
+    setConfirmation(null);
+    updateDraft(next);
+  }
+
+  function preferences(): AiPreferences {
+    return {
+      ...draft,
+      endpoint: draft.endpoint.trim(),
+      model: draft.model.trim(),
+      apiKey: draft.apiKey.trim() || null,
     };
-    const ok = await onSave(next);
-    if (ok) setDraft(draftOf(next));
-    return ok;
+  }
+
+  async function save() {
+    setConfirmation(null);
+    const next = preferences();
+    if (await onSave(next)) setDraft(draftOf(next));
+  }
+
+  async function confirmCount(action: "save" | "describe") {
+    try {
+      // A save only sends what is still waiting; Re-describe all sends everything.
+      const count = await aiCaptureCount(action === "save");
+      setConfirmation({ count, action });
+    } catch (err) {
+      setResult({ kind: "error", message: errorMessage(err) });
+    }
   }
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (valid && edited) void save();
+    if (!valid || !edited) return;
+    if (draft.enabled && (draft.automaticDescriptions ?? true) && !draft.newCapturesOnly &&
+      (!saved.enabled || saved.automaticDescriptions === false || saved.newCapturesOnly)) {
+      void confirmCount("save");
+    } else {
+      void save();
+    }
   }
 
   async function test() {
     setResult(null);
     setTesting(true);
     try {
-      // The backend tests what is saved, so save what is typed first.
-      if (edited && !(await save())) return;
-      const info = await testAiConnection();
+      const info = await testAiConnection(preferences());
       setResult({ kind: "ok", message: info ? `Connected: ${info}` : "Connected." });
     } catch (err) {
       setResult({ kind: "error", message: errorMessage(err) });
@@ -141,7 +176,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
   }
 
   async function describeAll() {
-    setConfirmingAll(false);
+    setConfirmation(null);
     setResult(null);
     try {
       await redescribeAll();
@@ -159,7 +194,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
     const chosen = ENDPOINT_PRESETS.find((candidate) => candidate.id === id);
     if (!chosen) return;
     setResult(null);
-    setDraft({ ...draft, endpoint: chosen.endpoint, model: chosen.model });
+    setDraft({ ...draft, apiKey: chosen.endpoint === draft.endpoint ? draft.apiKey : "", endpoint: chosen.endpoint, model: chosen.model });
   }
 
   const chosen = AI_PROVIDERS.find((choice) => choice.value === provider);
@@ -172,7 +207,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
       <div className="group">
         <label className="row">
           <span className="row-text">
-            <span className="row-title">Describe captures with AI</span>
+            <span className="row-title">Use an AI provider</span>
             <span className="row-hint">
               A vision model writes a short description, picks a category and adds up to three short tags, so you can search
               for what is in a capture.
@@ -182,10 +217,16 @@ function AiSection({ saved, disabled, onSave }: Props) {
             type="checkbox"
             role="switch"
             className="switch"
-            checked={saved.enabled}
+            checked={draft.enabled}
             disabled={busy}
-            onChange={(event) => void save({ enabled: event.target.checked })}
+            onChange={(event) => setDraft({ ...draft, enabled: event.target.checked, provider, ...(saved.provider == null && !saved.enabled ? { automaticDescriptions: false, tidyText: false } : {}) })}
           />
+        </label>
+        <label className="row">
+          <span className="row-text"><span className="row-title">Describe captures with AI</span></span>
+          <input type="checkbox" role="switch" className="switch"
+            checked={draft.enabled && (draft.automaticDescriptions ?? true)} disabled={busy || !draft.enabled}
+            onChange={(event) => setDraft({ ...draft, automaticDescriptions: event.target.checked })} />
         </label>
         <label className="row">
           <span className="row-text">
@@ -196,9 +237,10 @@ function AiSection({ saved, disabled, onSave }: Props) {
             type="checkbox"
             role="switch"
             className="switch"
-            checked={saved.newCapturesOnly}
-            disabled={busy}
-            onChange={(event) => void save({ newCapturesOnly: event.target.checked })}
+            checked={draft.newCapturesOnly}
+            // Only matters while captures are described.
+            disabled={busy || !aiDescribes(draft)}
+            onChange={(event) => setDraft({ ...draft, newCapturesOnly: event.target.checked })}
           />
         </label>
         <label className="row">
@@ -213,9 +255,9 @@ function AiSection({ saved, disabled, onSave }: Props) {
             type="checkbox"
             role="switch"
             className="switch"
-            checked={saved.tidyText}
-            disabled={busy || !saved.enabled}
-            onChange={(event) => void save({ tidyText: event.target.checked })}
+            checked={draft.tidyText}
+            disabled={busy || !draft.enabled}
+            onChange={(event) => setDraft({ ...draft, tidyText: event.target.checked })}
           />
         </label>
       </div>
@@ -235,7 +277,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
                   checked={provider === choice.value}
                   onChange={() => {
                     setResult(null);
-                    void save({ provider: choice.value });
+                    setDraft({ ...draft, provider: choice.value });
                   }}
                 />
                 {choice.title}
@@ -343,7 +385,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
                 value={draft.endpoint}
                 disabled={busy}
                 placeholder="http://localhost:11434/v1"
-                onChange={(event) => setDraft({ ...draft, endpoint: event.target.value })}
+                onChange={(event) => setDraft({ ...draft, apiKey: "", endpoint: event.target.value })}
               />
             </div>
             <div className="row">
@@ -398,6 +440,7 @@ function AiSection({ saved, disabled, onSave }: Props) {
             <button type="button" className="pill" disabled={busy || !valid} onClick={() => void test()}>
               {testing ? "Testing…" : "Test connection"}
             </button>
+            {edited && <button type="button" className="pill" disabled={busy} onClick={() => { setDraft(draftOf(saved)); setConfirmation(null); setResult(null); }}>Cancel</button>}
             <button type="submit" className="pill is-primary" disabled={busy || !edited || !valid}>
               Save
             </button>
@@ -408,18 +451,22 @@ function AiSection({ saved, disabled, onSave }: Props) {
       <h2 className="group-heading">Your library</h2>
       <div className="group">
         <div className="row">
-          {confirmingAll ? (
+          {confirmation ? (
             <>
               <span className="row-text">
-                <span className="row-title">Describe every capture again?</span>
-                <span className="row-hint">This replaces the current descriptions.</span>
+                <span className="row-title">Describe {confirmation.count} screenshots?</span>
+                <span className="row-hint">
+                  {confirmation.action === "save"
+                    ? "Earlier captures not yet described are sent to the provider."
+                    : "This replaces the current descriptions."}
+                </span>
               </span>
               <span className="row-control">
-                <button type="button" className="pill" onClick={() => setConfirmingAll(false)}>
+                <button type="button" className="pill" onClick={() => setConfirmation(null)}>
                   Cancel
                 </button>
-                <button type="button" className="pill is-primary" disabled={busy} onClick={() => void describeAll()}>
-                  Re-describe all
+                <button type="button" className="pill is-primary" disabled={busy} onClick={() => void (confirmation.action === "save" ? save() : describeAll())}>
+                  {confirmation.action === "save" ? "Confirm and save" : "Re-describe all"}
                 </button>
               </span>
             </>
@@ -432,8 +479,8 @@ function AiSection({ saved, disabled, onSave }: Props) {
               <button
                 type="button"
                 className="pill"
-                disabled={busy || !saved.enabled}
-                onClick={() => setConfirmingAll(true)}
+                disabled={busy || !aiDescribes(saved)}
+                onClick={() => void confirmCount("describe")}
               >
                 Re-describe all…
               </button>

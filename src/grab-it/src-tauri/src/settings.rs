@@ -50,17 +50,6 @@ pub enum AiProvider {
     Endpoint,
 }
 
-impl AiProvider {
-    /// What the user calls the provider in messages.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::ClaudeCode => "Claude Code",
-            Self::Codex => "Codex",
-            Self::Endpoint => "an OpenAI-compatible endpoint",
-        }
-    }
-}
-
 /// Reads a stored provider leniently: one this version does not know, from
 /// a newer Grab-it, is read as none rather than costing the settings file.
 fn lenient_provider<'de, D>(deserializer: D) -> Result<Option<AiProvider>, D::Error>
@@ -84,14 +73,16 @@ pub enum ApiKeyStorage {
 }
 
 /// How captures are described by a vision model (see `ai.rs`). Off by
-/// default: nothing leaves the machine until the user turns it on, or
-/// Grab-it turns it on once because Claude Code or Codex is installed (see
-/// [`SettingsStore::enable_cli_provider`]). Mirrors `AiPreferences` in
-/// src/settings/api.ts.
+/// default: nothing leaves the machine until the user chooses a provider
+/// and turns it on. Mirrors `AiPreferences` in src/settings/api.ts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AiSettings {
     pub enabled: bool,
+    /// Whether captures are described automatically while `enabled` is on.
+    /// None in settings from before it was its own switch, read as on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub automatic_descriptions: Option<bool>,
     /// Who describes captures. None until a provider was picked or Grab-it
     /// picked one; it then works as [`AiProvider::Endpoint`], which is what
     /// settings from before providers existed used.
@@ -133,6 +124,7 @@ impl Default for AiSettings {
     fn default() -> Self {
         Self {
             enabled: false,
+            automatic_descriptions: None,
             provider: None,
             endpoint: DEFAULT_AI_ENDPOINT.into(),
             model: DEFAULT_AI_MODEL.into(),
@@ -165,6 +157,10 @@ fn clean_model(model: &str) -> String {
 }
 
 impl AiSettings {
+    pub fn describes(&self) -> bool {
+        self.enabled && self.automatic_descriptions.unwrap_or(true)
+    }
+
     /// Whether text captures are tidied up by the model.
     pub fn tidies_text(&self) -> bool {
         self.enabled && self.tidy_text
@@ -173,13 +169,6 @@ impl AiSettings {
     /// The provider describing uses: an unset one is the endpoint.
     pub fn provider(&self) -> AiProvider {
         self.provider.unwrap_or(AiProvider::Endpoint)
-    }
-
-    /// Whether the user never turned describing on: no provider was ever
-    /// picked and it is off. Settings with describing on but no provider
-    /// are an endpoint user's from before providers existed.
-    pub fn never_enabled(&self) -> bool {
-        self.provider.is_none() && !self.enabled
     }
 
     /// The model Claude Code is asked for.
@@ -236,6 +225,7 @@ impl AiSettings {
         }
         Ok(Self {
             enabled: self.enabled,
+            automatic_descriptions: self.automatic_descriptions,
             provider: self.provider,
             endpoint,
             model,
@@ -962,6 +952,8 @@ impl UpdateChannel {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
+    #[serde(skip)]
+    pub(crate) ai_key_slot: Option<bool>,
     /// Where new captures are saved. Holds `originals/` and `thumbs/`.
     pub save_folder: PathBuf,
     /// Folder most recently chosen for an export.
@@ -1000,6 +992,7 @@ impl Settings {
     /// platform's default hotkeys.
     pub fn defaults(pictures_dir: &Path) -> Self {
         Self {
+            ai_key_slot: None,
             save_folder: pictures_dir.join(DEFAULT_FOLDER_NAME),
             hotkeys: Hotkeys::default(),
             preferences: Preferences::default(),
@@ -1020,6 +1013,7 @@ impl Settings {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredSettings {
+    ai_key_slot: Option<bool>,
     save_folder: Option<PathBuf>,
     hotkeys: Option<StoredHotkeys>,
     after_capture: Option<AfterCapture>,
@@ -1079,6 +1073,7 @@ impl StoredHotkeys {
 impl StoredSettings {
     fn merge_onto(self, defaults: Settings) -> Settings {
         Settings {
+            ai_key_slot: self.ai_key_slot,
             save_folder: self
                 .save_folder
                 .filter(|folder| !folder.as_os_str().is_empty())
@@ -1175,6 +1170,8 @@ pub fn load(path: &Path, defaults: Settings) -> Result<Settings, SettingsError> 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SettingsOnDisk<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ai_key_slot: Option<bool>,
     save_folder: &'a Path,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_export_folder: Option<&'a Path>,
@@ -1196,6 +1193,8 @@ struct SettingsOnDisk<'a> {
 #[serde(rename_all = "camelCase")]
 struct AiOnDisk<'a> {
     enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    automatic_descriptions: Option<bool>,
     provider: Option<AiProvider>,
     endpoint: &'a str,
     model: &'a str,
@@ -1213,6 +1212,7 @@ impl<'a> SettingsOnDisk<'a> {
         // Every field named, so a new one cannot be left out by mistake.
         let AiSettings {
             enabled,
+            automatic_descriptions,
             provider,
             endpoint,
             model,
@@ -1225,12 +1225,14 @@ impl<'a> SettingsOnDisk<'a> {
             api_key_storage,
         } = &settings.preferences.ai;
         Self {
+            ai_key_slot: settings.ai_key_slot,
             save_folder: &settings.save_folder,
             hotkeys: &settings.hotkeys,
             after_capture: settings.preferences.after_capture,
             copy_to_clipboard: settings.preferences.copy_to_clipboard,
             ai: AiOnDisk {
                 enabled: *enabled,
+                automatic_descriptions: *automatic_descriptions,
                 provider: *provider,
                 endpoint,
                 model,
@@ -1301,6 +1303,19 @@ pub struct SettingsStore {
     keychain_worked: bool,
 }
 
+/// An older installation uses the original account until its first credential change.
+fn key_account(ai: &AiSettings, slot: Option<bool>) -> String {
+    use sha2::{Digest, Sha256};
+    match slot {
+        None => crate::keychain::ACCOUNT.to_owned(),
+        Some(slot) => format!(
+            "ai-endpoint-{:x}-{}",
+            Sha256::digest(ai.endpoint.trim().trim_end_matches('/').as_bytes()),
+            u8::from(slot)
+        ),
+    }
+}
+
 impl SettingsStore {
     /// Loads settings from `path`, with the API key in the OS keychain.
     pub fn open(path: PathBuf, defaults: Settings) -> Self {
@@ -1335,7 +1350,8 @@ impl SettingsStore {
     /// has into it. Settings from before the keychain, or from a system
     /// without one, have the key in the file.
     fn load_api_key(&mut self) {
-        let stored = match self.keys.get() {
+        let account = key_account(&self.current.preferences.ai, self.current.ai_key_slot);
+        let stored = match self.keys.get(&account) {
             Ok(stored) => {
                 self.keychain_worked = true;
                 stored
@@ -1361,7 +1377,7 @@ impl SettingsStore {
         // The file's key is the newer one: a keychain key beside it is
         // left from before the keychain stopped working.
         if stored.as_deref() != Some(key.as_str())
-            && let Err(err) = self.keys.set(&key)
+            && let Err(err) = self.keys.set(&account, &key)
         {
             eprintln!("Grab-it: keeping the API key in settings.json, could not move it: {err}");
             self.current.preferences.ai.api_key_storage = ApiKeyStorage::SettingsFile;
@@ -1375,44 +1391,6 @@ impl SettingsStore {
         }
     }
 
-    /// Stores `key`, the API key being saved, where `api_key_storage`
-    /// says. Returns where it now is: should the keychain fail to store a
-    /// key, it goes into settings.json instead of being lost.
-    ///
-    /// Clearing the key removes it from the keychain too, even after a
-    /// fallback to settings.json, as the next start would read a key left
-    /// there back. When the keychain worked but cannot remove it now, the
-    /// save fails rather than seeming to clear the key.
-    fn store_api_key(&self, key: Option<&str>) -> Result<ApiKeyStorage, SettingsError> {
-        let current = &self.current.preferences.ai;
-        if current.api_key.as_deref() == key {
-            return Ok(current.api_key_storage);
-        }
-        let Some(key) = key else {
-            return match self.keys.delete() {
-                Ok(()) => Ok(current.api_key_storage),
-                Err(err) if self.keychain_worked => Err(SettingsError::Invalid(format!(
-                    "Could not remove the API key from the keychain: {err}"
-                ))),
-                // Never reached this session: nothing of this session's is
-                // in it to remove.
-                Err(_) => Ok(current.api_key_storage),
-            };
-        };
-        if current.api_key_storage == ApiKeyStorage::SettingsFile {
-            return Ok(ApiKeyStorage::SettingsFile);
-        }
-        match self.keys.set(key) {
-            Ok(()) => Ok(ApiKeyStorage::Keychain),
-            Err(err) => {
-                eprintln!(
-                    "Grab-it: keeping the API key in settings.json, the keychain failed: {err}"
-                );
-                Ok(ApiKeyStorage::SettingsFile)
-            }
-        }
-    }
-
     /// True the first time Grab-it runs for this user, until
     /// [`Self::finish_first_run`] has written the settings file.
     pub fn is_first_run(&self) -> bool {
@@ -1422,7 +1400,10 @@ impl SettingsStore {
     /// Writes the settings file so the next launch is not a first run.
     pub fn finish_first_run(&mut self) -> Result<(), SettingsError> {
         if self.first_run {
-            save(&self.path, &self.current)?;
+            let mut next = self.current.clone();
+            next.preferences.ai.notice_pending = true;
+            save(&self.path, &next)?;
+            self.current = next;
             self.first_run = false;
         }
         Ok(())
@@ -1455,41 +1436,64 @@ impl SettingsStore {
         preferences.ai = preferences.ai.validated()?;
         // The notice belongs to Grab-it: a Settings window opened before it
         // was set, or dismissed, must not bring it back or clear it.
-        preferences.ai.notice_pending = self.current.preferences.ai.notice_pending;
-        preferences.ai.api_key_storage = self.store_api_key(preferences.ai.api_key.as_deref())?;
-        let next = Settings {
+        preferences.ai.notice_pending = self.current.preferences.ai.notice_pending
+            && !(preferences.ai.enabled && !self.current.preferences.ai.enabled);
+        let previous = &self.current.preferences.ai;
+        let destination_changed =
+            previous.endpoint.trim().trim_end_matches('/') != preferences.ai.endpoint;
+        let key_changed = previous.api_key != preferences.ai.api_key || destination_changed;
+        preferences.ai.api_key_storage = previous.api_key_storage;
+        let mut next = Settings {
             preferences,
             ..self.current.clone()
         };
-        save(&self.path, &next)?;
+        if key_changed {
+            let old_account = key_account(previous, self.current.ai_key_slot);
+            next.ai_key_slot = Some(!self.current.ai_key_slot.unwrap_or(false));
+            let ai = &mut next.preferences.ai;
+            let new_account = key_account(ai, next.ai_key_slot);
+            // Stage the credential in a separate account. The atomic file rename
+            // commits its destination and slot together, even across a crash.
+            match ai.api_key.as_deref() {
+                Some(key) => {
+                    if self.keys.set(&new_account, key).is_ok() {
+                        ai.api_key_storage = ApiKeyStorage::Keychain;
+                    } else {
+                        ai.api_key_storage = ApiKeyStorage::SettingsFile;
+                        // Keep the previous slot for this destination until the
+                        // plaintext fallback is migrated or cleared.
+                        if !destination_changed {
+                            next.ai_key_slot = self.current.ai_key_slot;
+                        }
+                    }
+                }
+                None => {
+                    // Removed before the file says it is gone: a key the
+                    // keychain refuses to remove fails the save, so it is
+                    // never left behind while Settings shows it cleared.
+                    for account in [&old_account, &new_account] {
+                        if let Err(err) = self.keys.delete(account)
+                            && self.keychain_worked
+                        {
+                            return Err(SettingsError::Invalid(format!(
+                                "Could not remove the API key from the keychain: {err}"
+                            )));
+                        }
+                    }
+                }
+            }
+            if let Err(err) = save(&self.path, &next) {
+                let _ = self.keys.delete(&new_account);
+                return Err(err);
+            }
+            if key_account(&next.preferences.ai, next.ai_key_slot) != old_account {
+                let _ = self.keys.delete(&old_account);
+            }
+        } else {
+            save(&self.path, &next)?;
+        }
         self.current = next;
         Ok(self.current.clone())
-    }
-
-    /// Turns describing on with `provider`, a CLI provider, for new
-    /// captures only, and asks for the one-time notice, when the user never
-    /// turned describing on. Finding its CLI is up to the caller. Returns
-    /// the AI settings from before, when they changed; once a provider is
-    /// set this never changes anything again.
-    pub fn enable_cli_provider(
-        &mut self,
-        provider: AiProvider,
-    ) -> Result<Option<AiSettings>, SettingsError> {
-        let before = self.current.preferences.ai.clone();
-        if !before.never_enabled() {
-            return Ok(None);
-        }
-        let mut next = self.current.clone();
-        next.preferences.ai = AiSettings {
-            enabled: true,
-            provider: Some(provider),
-            new_captures_only: true,
-            notice_pending: true,
-            ..before.clone()
-        };
-        save(&self.path, &next)?;
-        self.current = next;
-        Ok(Some(before))
     }
 
     /// Clears the one-time notice that describing was turned on.
@@ -1799,6 +1803,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
         let settings = Settings {
+            ai_key_slot: None,
             save_folder: dir.path().join("Shots"),
             hotkeys: Hotkeys {
                 region: "Ctrl+Shift+R".into(),
@@ -2669,7 +2674,10 @@ mod tests {
         assert!(store.is_first_run());
         store.finish_first_run().unwrap();
         assert!(!store.is_first_run());
-        assert_eq!(load(&path, defaults(&dir)).unwrap(), defaults(&dir));
+        // The defaults, with the Library's AI invitation pending.
+        let mut expected = defaults(&dir);
+        expected.preferences.ai.notice_pending = true;
+        assert_eq!(load(&path, defaults(&dir)).unwrap(), expected);
 
         // The next launch finds the file: not a first run.
         let again = open_store(path, defaults(&dir));
@@ -2794,6 +2802,7 @@ mod tests {
         };
         let updated = store
             .set_preferences(with(AiSettings {
+                automatic_descriptions: None,
                 enabled: true,
                 provider: Some(AiProvider::Endpoint),
                 endpoint: " https://api.example.com/v1/ ".into(),
@@ -2940,117 +2949,11 @@ mod tests {
     }
 
     #[test]
-    fn never_enabled_means_no_provider_and_off() {
-        let dir = TempDir::new().unwrap();
-        let path = settings_path(&dir);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let never = |text: &str| {
-            fs::write(&path, text).unwrap();
-            load(&path, defaults(&dir))
-                .unwrap()
-                .preferences
-                .ai
-                .never_enabled()
-        };
-        assert!(defaults(&dir).preferences.ai.never_enabled());
-        assert!(never(r#"{"copyToClipboard": true}"#));
-        assert!(never(r#"{"ai": {"enabled": false, "model": "llava"}}"#));
-        // An endpoint user from before providers existed is left alone.
-        assert!(!never(r#"{"ai": {"enabled": true}}"#));
-        // So is anyone who picked a provider, on or off.
-        assert!(!never(
-            r#"{"ai": {"enabled": false, "provider": "endpoint"}}"#
-        ));
-        assert!(!never(
-            r#"{"ai": {"enabled": false, "provider": "claudeCode"}}"#
-        ));
-    }
-
-    #[test]
-    fn claude_code_is_turned_on_once_for_new_captures_with_a_notice() {
-        let dir = TempDir::new().unwrap();
-        let path = settings_path(&dir);
-        let mut store = open_store(path.clone(), defaults(&dir));
-
-        let before = store.enable_cli_provider(AiProvider::ClaudeCode).unwrap();
-
-        assert_eq!(before, Some(AiSettings::default()));
-        let ai = load(&path, defaults(&dir)).unwrap().preferences.ai;
-        assert!(ai.enabled);
-        assert_eq!(ai.provider, Some(AiProvider::ClaudeCode));
-        assert!(ai.new_captures_only);
-        assert!(ai.notice_pending);
-        // The endpoint fields are kept for whoever switches back.
-        assert_eq!(ai.endpoint, DEFAULT_AI_ENDPOINT);
-        assert_eq!(
-            store.enable_cli_provider(AiProvider::ClaudeCode).unwrap(),
-            None
-        );
-
-        // Turned off afterwards, it stays off.
-        store
-            .set_preferences(Preferences {
-                ai: AiSettings {
-                    enabled: false,
-                    ..ai.clone()
-                },
-                ..Preferences::default()
-            })
-            .unwrap();
-        assert_eq!(
-            store.enable_cli_provider(AiProvider::ClaudeCode).unwrap(),
-            None
-        );
-        assert!(!store.get().preferences.ai.enabled);
-    }
-
-    #[test]
-    fn codex_is_turned_on_the_same_way() {
-        let dir = TempDir::new().unwrap();
-        let path = settings_path(&dir);
-        let mut store = open_store(path.clone(), defaults(&dir));
-
-        let before = store.enable_cli_provider(AiProvider::Codex).unwrap();
-
-        assert_eq!(before, Some(AiSettings::default()));
-        let ai = load(&path, defaults(&dir)).unwrap().preferences.ai;
-        assert!(ai.enabled);
-        assert_eq!(ai.provider, Some(AiProvider::Codex));
-        assert!(ai.new_captures_only);
-        assert!(ai.notice_pending);
-        assert_eq!(ai.model_label(), "codex");
-        // Once set, neither CLI changes it.
-        assert_eq!(
-            store.enable_cli_provider(AiProvider::ClaudeCode).unwrap(),
-            None
-        );
-        assert_eq!(store.get().preferences.ai.provider, Some(AiProvider::Codex));
-    }
-
-    #[test]
-    fn an_existing_endpoint_user_is_not_switched() {
-        let dir = TempDir::new().unwrap();
-        let path = settings_path(&dir);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, r#"{"ai": {"enabled": true, "model": "llava"}}"#).unwrap();
-        let mut store = open_store(path.clone(), defaults(&dir));
-        assert_eq!(
-            store.enable_cli_provider(AiProvider::ClaudeCode).unwrap(),
-            None
-        );
-        assert_eq!(store.get().preferences.ai.provider, None);
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            r#"{"ai": {"enabled": true, "model": "llava"}}"#
-        );
-    }
-
-    #[test]
     fn the_notice_is_kept_by_settings_saves_and_cleared_by_dismissing() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
         let mut store = open_store(path.clone(), defaults(&dir));
-        store.enable_cli_provider(AiProvider::ClaudeCode).unwrap();
+        store.finish_first_run().unwrap();
         let mut stale = store.get().preferences.clone();
         stale.ai.notice_pending = false;
         stale.after_capture = AfterCapture::Editor;
@@ -3082,6 +2985,178 @@ mod tests {
                 .ai
                 .notice_pending
         );
+    }
+
+    #[test]
+    fn an_upgraded_claude_code_user_keeps_every_ai_choice() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let before = r#"{"ai": {"enabled": true, "provider": "claudeCode", "claudeModel": "sonnet", "newCapturesOnly": true, "tidyText": false, "noticePending": true}}"#;
+        fs::write(&path, before).unwrap();
+        let mut store = open_store(path.clone(), defaults(&dir));
+
+        // Not a first run, and opening it writes nothing.
+        assert!(!store.is_first_run());
+        store.finish_first_run().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+        let ai = store.get().preferences.ai.clone();
+        assert!(ai.enabled && ai.describes());
+        assert_eq!(ai.provider, Some(AiProvider::ClaudeCode));
+        assert_eq!(ai.claude_model(), "sonnet");
+        assert!(ai.new_captures_only);
+        assert!(!ai.tidies_text());
+        assert!(ai.notice_pending);
+        assert_eq!(ai.automatic_descriptions, None);
+
+        // Saving another setting keeps them, and adds no new switch.
+        store
+            .set_preferences(Preferences {
+                after_capture: AfterCapture::Editor,
+                ai: ai.clone(),
+                ..Preferences::default()
+            })
+            .unwrap();
+        let on_disk = ai_on_disk(&path);
+        assert_eq!(on_disk["provider"], "claudeCode");
+        assert_eq!(on_disk["claudeModel"], "sonnet");
+        assert_eq!(on_disk["enabled"], true);
+        assert_eq!(on_disk.get("automaticDescriptions"), None, "{on_disk}");
+        // And a restart reads the same.
+        assert_eq!(
+            open_store(path.clone(), defaults(&dir))
+                .get()
+                .preferences
+                .ai,
+            store.get().preferences.ai
+        );
+    }
+
+    #[test]
+    fn a_disabled_endpoint_user_stays_disabled_with_their_key() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"ai": {"enabled": false, "endpoint": "https://api.openai.com/v1", "model": "gpt-5-mini"}}"#,
+        )
+        .unwrap();
+        // An earlier version kept the key under the one shared account.
+        let keys = MemoryKeyStore::with_key("sk-old");
+        let store = SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys));
+        let ai = &store.get().preferences.ai;
+        assert!(!ai.enabled && !ai.describes());
+        assert_eq!(ai.provider, None);
+        assert_eq!(ai.provider(), AiProvider::Endpoint);
+        assert_eq!(ai.model, "gpt-5-mini");
+        assert_eq!(ai.api_key.as_deref(), Some("sk-old"));
+        assert_eq!(ai.api_key_storage, ApiKeyStorage::Keychain);
+    }
+
+    #[test]
+    fn a_new_user_is_invited_once_and_turning_ai_on_ends_the_invitation() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        assert!(store.is_first_run());
+        store.finish_first_run().unwrap();
+        let ai = store.get().preferences.ai.clone();
+        assert!(ai.notice_pending && !ai.enabled && ai.provider.is_none());
+        // A restart keeps the invitation until it is dismissed or acted on.
+        assert!(
+            open_store(path.clone(), defaults(&dir))
+                .get()
+                .preferences
+                .ai
+                .notice_pending
+        );
+
+        let on = store
+            .set_preferences(Preferences {
+                ai: AiSettings {
+                    enabled: true,
+                    provider: Some(AiProvider::ClaudeCode),
+                    ..ai
+                },
+                ..Preferences::default()
+            })
+            .unwrap();
+        assert!(!on.preferences.ai.notice_pending);
+        assert_eq!(ai_on_disk(&path)["noticePending"], false);
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_saved_provider_key_and_endpoint() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let keys = MemoryKeyStore::default();
+        let mut store =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+        let saved = store.set_preferences(with_key(Some("sk-1"))).unwrap();
+        // The settings folder becomes a file, so writing settings.json fails.
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path.parent().unwrap(), "not a folder").unwrap();
+
+        let mut next = with_key(Some("sk-2"));
+        next.ai.endpoint = "https://openrouter.ai/api/v1".into();
+        next.ai.provider = Some(AiProvider::Endpoint);
+        assert!(store.set_preferences(next).is_err());
+
+        assert_eq!(store.get(), &saved);
+        // Only the saved destination's key is left in the keychain.
+        assert_eq!(
+            keys.get(&key_account(&saved.preferences.ai, saved.ai_key_slot)),
+            Ok(Some("sk-1".into()))
+        );
+        assert_eq!(keys.stored().as_deref(), Some("sk-1"));
+    }
+
+    #[test]
+    fn clearing_a_key_the_keychain_will_not_remove_fails_the_save() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let keys = MemoryKeyStore::default();
+        let mut store =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+        let saved = store.set_preferences(with_key(Some("sk-1"))).unwrap();
+        // Only the account holding the key refuses; the rest of the keychain works.
+        let holding = key_account(&saved.preferences.ai, saved.ai_key_slot);
+        keys.refuse_delete(&holding);
+
+        assert!(matches!(
+            store.set_preferences(with_key(None)),
+            Err(SettingsError::Invalid(_))
+        ));
+
+        assert_eq!(store.get(), &saved);
+        assert_eq!(keys.get(&holding), Ok(Some("sk-1".into())));
+        let again = SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys));
+        assert_eq!(again.get().preferences.ai.api_key.as_deref(), Some("sk-1"));
+    }
+
+    #[test]
+    fn a_key_is_scoped_to_its_endpoint_and_survives_a_restart() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let keys = MemoryKeyStore::default();
+        let mut store =
+            SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys.clone()));
+        store.set_preferences(with_key(Some("sk-1"))).unwrap();
+
+        // A new endpoint with no key typed gets no key, and the old one goes.
+        let mut moved = with_key(None);
+        moved.ai.endpoint = "https://openrouter.ai/api/v1".into();
+        let updated = store.set_preferences(moved).unwrap();
+        assert_eq!(updated.preferences.ai.api_key, None);
+        assert_eq!(keys.stored(), None);
+
+        let mut keyed = updated.preferences.clone();
+        keyed.ai.api_key = Some("sk-2".into());
+        let updated = store.set_preferences(keyed).unwrap();
+        let again = SettingsStore::open_with_keys(path.clone(), defaults(&dir), Box::new(keys));
+        assert_eq!(again.get(), &updated);
+        assert_eq!(again.get().preferences.ai.api_key.as_deref(), Some("sk-2"));
     }
 
     #[test]

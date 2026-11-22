@@ -115,16 +115,24 @@ describe("WelcomeWindow", () => {
     expect(await screen.findByText(/Claude Code describes each new capture/)).toBeInTheDocument();
     unmount();
 
-    for (const ai of [{ enabled: false, provider: "claudeCode" }, { enabled: true, provider: null }, undefined] as (Partial<AiPreferences> | undefined)[]) {
+    for (const ai of [
+      { enabled: false, provider: "claudeCode" },
+      // The provider is on, but it describes nothing.
+      { enabled: true, provider: "claudeCode", automaticDescriptions: false },
+      { enabled: true, provider: null },
+      undefined,
+    ] as (Partial<AiPreferences> | undefined)[]) {
       mockBackend({ ai });
       const view = render(<WelcomeWindow />);
       await screen.findByLabelText("Shift+PrintScreen");
       expect(screen.queryByText(/Claude Code describes/)).not.toBeInTheDocument();
+      // Otherwise it says AI integration is optional and off until set up.
+      expect(screen.getByText(/Optional and off until you choose a provider in Settings/)).toBeInTheDocument();
       view.unmount();
     }
   });
 
-  it("adds the AI tip when Grab-it turns Claude Code on after it opened", async () => {
+  it("swaps in the Claude Code tip when describing turns on after it opened", async () => {
     const options: { ai?: object } = {};
     mockBackend(options);
     render(<WelcomeWindow />);

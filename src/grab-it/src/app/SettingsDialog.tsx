@@ -45,8 +45,8 @@ function SettingsDialog({ section, onSection, onClose }: SettingsDialogProps) {
           <button
             key={id}
             type="button"
-            className={`nav-item${id === section ? " is-current" : ""}`}
-            aria-current={id === section ? "page" : undefined}
+            className={`nav-item${id === (section === "agents" ? "ai" : section) ? " is-current" : ""}`}
+            aria-current={id === (section === "agents" ? "ai" : section) ? "page" : undefined}
             onClick={() => onSection(id)}
           >
             {SECTION_ICONS[id]}

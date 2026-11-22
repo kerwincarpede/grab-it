@@ -65,6 +65,15 @@ export const DEFAULT_AI_PREFERENCES: AiPreferences = {
   apiKeyStorage: "settingsFile",
 };
 
+/**
+ * Whether captures are described: the provider is on and so are automatic
+ * descriptions, which read as on in settings from before they had a switch,
+ * as in `AiSettings::describes`.
+ */
+export function aiDescribes(ai: Pick<AiPreferences, "enabled" | "automaticDescriptions"> | null | undefined): boolean {
+  return ai?.enabled === true && (ai.automaticDescriptions ?? true);
+}
+
 /** The provider describing uses: an unset one is the endpoint, as in `AiSettings::provider`. */
 export function aiProvider(ai: Pick<AiPreferences, "provider"> | null | undefined): AiProvider {
   return ai?.provider ?? "endpoint";
@@ -477,8 +486,7 @@ export const SETTINGS_SECTIONS: { id: SettingsSection; title: string }[] = [
   { id: "editor", title: "Editor" },
   { id: "recording", title: "Recording" },
   { id: "storage", title: "Storage" },
-  { id: "ai", title: "AI descriptions" },
-  { id: "agents", title: "AI agents" },
+  { id: "ai", title: "AI integration" },
   { id: "hotkeys", title: "Hotkeys" },
 ];
 
@@ -633,11 +641,16 @@ export async function chooseFolder(defaultPath?: string): Promise<string | null>
 }
 
 /** Asks the saved provider's model to answer; resolves to what it says, or rejects with why not. */
-export function testAiConnection(): Promise<string> {
-  return commands.aiTestConnection();
+export function testAiConnection(draft: AiPreferences): Promise<string> {
+  return commands.aiTestConnection(draft);
 }
 
 /** Queues every capture to be described again. */
 export function redescribeAll(): Promise<void> {
   return commands.aiRedescribeAll().then(() => undefined);
+}
+
+/** How many screenshots a whole-library request would describe; with `waiting`, only those not yet described. */
+export function aiCaptureCount(waiting: boolean): Promise<number> {
+  return commands.aiCaptureCount(waiting);
 }

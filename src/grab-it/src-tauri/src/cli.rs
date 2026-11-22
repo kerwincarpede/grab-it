@@ -150,7 +150,7 @@ Usage: grab-it <command> [options]
 
 Ask the running Grab-it to capture the screen. Each command prints one line
 of JSON; errors go to stderr with a non-zero exit. Turn on Settings › AI
-agents › Let AI agents use Grab-it first. Grab-it starts in the tray when
+integration › Let AI agents use Grab-it first. Grab-it starts in the tray when
 it is not running.
 
 Commands:

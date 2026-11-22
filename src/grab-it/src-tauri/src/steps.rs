@@ -733,7 +733,7 @@ fn run(
 ) {
     let ai = ai::current_settings(app);
     let (jobs, queue) = mpsc::channel::<DescribeJob>();
-    let describes = ai.enabled;
+    let describes = ai.describes();
     if describes {
         let app = app.clone();
         let guide = guide.to_path_buf();

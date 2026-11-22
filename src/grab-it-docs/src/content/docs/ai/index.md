@@ -17,13 +17,15 @@ Reading text in images doesn't need AI. That always happens on your computer, wi
 
 ## Is it on?
 
-It's off until a provider is set up. The first time Grab-it starts and finds Claude Code installed, it turns describing on with Claude Code, for new captures only, and the Library says so once. Without Claude Code but with Codex, it does the same with Codex. With neither, describing stays off until you turn it on in **Settings → AI descriptions**.
+It's off until you choose a provider in **Settings → AI integration**. Grab-it never turns it on by itself, even when it finds Claude Code or Codex installed. The first time you open the Library, a notice explains what AI integration does and **Choose a provider** opens its settings. Close the notice and it doesn't come back.
 
-Grab-it does this only once. If you turn describing off, it stays off.
+Turning on **Use an AI provider** doesn't describe anything by itself: describing captures and tidying text each have their own switch, and both start off for a new setup. Nothing is saved until you press **Save**, and **Cancel** puts back what was saved.
+
+If you used AI descriptions in an earlier version, your provider, model, API key and switches are kept as they were.
 
 ## In this section
 
 - [AI descriptions](/grab-it/ai/descriptions/): what's written for each capture, categories, and describing your whole library.
 - [Tidy up text](/grab-it/ai/tidy-text/): how Capture text gets cleaned up, and how to get the original back.
 - [Providers](/grab-it/ai/providers/): Claude Code, Codex and OpenAI-compatible endpoints, how to set each up, and what goes where.
-- [AI agents](/grab-it/ai/agents/): let Claude Code, Codex and other agents take screenshots with Grab-it.
+- [AI agents](/grab-it/ai/agents/): on the same settings page, let Claude Code, Codex and other agents take screenshots with Grab-it.

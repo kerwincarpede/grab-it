@@ -208,7 +208,7 @@ interface SettingsWindowProps {
 
 function SettingsWindow({ section }: SettingsWindowProps = {}) {
   const shows = (page: SettingsSection) => section === undefined || section === page;
-  const title = section === undefined ? "Settings" : SETTINGS_SECTIONS.find((page) => page.id === section)?.title;
+  const title = section === undefined ? "Settings" : SETTINGS_SECTIONS.find((page) => page.id === (section === "agents" ? "ai" : section))?.title;
   const [settings, setSettings] = useState<Settings | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [busy, setBusy] = useState(false);
@@ -565,7 +565,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
       {/* Scrolls on its own, so the heading and the scrollbar never overlap. */}
       <div className="settings-content">
       <p className="settings-lead">
-        {savesAtOnce ? "Changes save as you make them." : section === "hotkeys" ? "Press Save to use new hotkeys." : "Switches save at once; endpoint details save with Save."}
+        {savesAtOnce ? "Changes save as you make them." : section === "hotkeys" ? "Press Save to use new hotkeys." : "AI settings save with Save; agent access saves at once."}
       </p>
       {showsMac && (
         <section aria-labelledby="mac-heading">
@@ -1122,7 +1122,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
       {shows("ai") && settings && (
         <AiSection saved={settings.ai ?? DEFAULT_AI_PREFERENCES} disabled={busy} onSave={saveAi} />
       )}
-      {shows("agents") && settings && (
+      {(shows("agents") || shows("ai")) && settings && (
         <AgentsSection
           access={settings.agentAccess ?? false}
           disabled={busy}

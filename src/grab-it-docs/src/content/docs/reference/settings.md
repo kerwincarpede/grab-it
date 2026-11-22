@@ -76,21 +76,24 @@ Most changes save as soon as you make them. Hotkeys save when you press **Save h
 
 **Video encoder.** MP4 needs ffmpeg, which isn't shipped with Grab-it. Grab-it uses one already on your computer, or downloads a build the first time you record an MP4, showing *Downloading ffmpeg…* here. On macOS, where there's no build to download, it asks you to install one with `brew install ffmpeg` and press **Retry**. Until ffmpeg works, recordings are saved as GIFs. Once it's ready, this row says which encoder it found, hardware encoders first.
 
-## AI descriptions
+## AI integration
 
-**Describing captures**
+AI providers and AI agents share one page. Changes to the provider and its switches take effect when you press **Save**; **Cancel** puts back what was saved. The agent settings save at once.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| **Describe captures with AI** | Off, until Grab-it finds Claude Code or Codex | A vision model writes a short description, picks a category and adds up to three short tags, so you can search for what is in a capture. |
-| **Only describe new captures** | On | Leaves earlier captures alone. Turn it off to describe the whole library. |
-| **Tidy up captured text** | On | After Capture text, the AI reads the text again, fixes what was misread, and lays out JSON, code and tables. Only while describing is on. |
+| **Use an AI provider** | Off | Lets Grab-it use the provider below. Off, nothing is sent. |
+| **Describe captures with AI** | Off for a new setup | A vision model writes a short description, picks a category and adds up to three short tags, so you can search for what is in a capture. |
+| **Only describe new captures** | On | Leaves earlier captures alone. Turn it off to describe the whole library: Save first says how many screenshots that is. |
+| **Tidy up captured text** | Off for a new setup | After Capture text, the AI reads the text again, fixes what was misread, and lays out JSON, code and tables. |
 
-**Described by** picks the provider: **Claude Code**, **Codex** or **OpenAI-compatible endpoint**, with its **Model**, and for an endpoint its **Preset**, **Endpoint URL** and **API key**. **Test connection** checks it works. See [Providers](/grab-it/ai/providers/).
+**Described by** picks the provider: **Claude Code**, **Codex** or **OpenAI-compatible endpoint**, with its **Model**, and for an endpoint its **Preset**, **Endpoint URL** and **API key**. **Test connection** checks the settings as typed, with a built-in test image, without saving them. See [Providers](/grab-it/ai/providers/).
 
-**Your library → Re-describe all…** describes every capture again, replacing the current descriptions.
+**Your library → Re-describe all…** says how many screenshots it will describe, then describes every capture again, replacing the current descriptions.
 
-## AI agents
+Settings from an earlier version are kept: a provider you had on stays on, with the same model, API key and switches.
+
+**AI agents**
 
 | Setting | Default | What it does |
 | --- | --- | --- |
