@@ -2250,6 +2250,7 @@ dependencies = [
  "criterion",
  "dispatch2",
  "drag",
+ "flate2",
  "fs4",
  "futures-util",
  "gtk",

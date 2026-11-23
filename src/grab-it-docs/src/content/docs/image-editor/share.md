@@ -23,9 +23,19 @@ The image editor, Library and guide share the last folder you chose for export. 
 
 **Export…** asks where to save, suggesting the capture's own name followed by `annotated`, such as `Grab-it 2026-11-15 14-05-09 annotated.png`.
 
-- Save as **PNG** for sharp text and transparency.
-- Save as **JPEG** (`.jpg` or `.jpeg`) for smaller files. JPEG has no transparency, so see-through parts come out white.
-- A name without either ending is saved as PNG.
+Pick a format in the dialog, or end the file name with its ending:
+
+| Format | Ending | Good for | Transparency |
+| --- | --- | --- | --- |
+| **PNG** | `.png` | Sharp text and screenshots | Kept |
+| **JPEG** | `.jpg` or `.jpeg` | Smaller files | White |
+| **WebP** | `.webp` | Web pages; saved without any loss | Kept |
+| **GIF** | `.gif` | Older tools; at most 256 colours | White |
+| **TIFF** | `.tif` or `.tiff` | Printing and scanning workflows | Kept |
+| **BMP** | `.bmp` | Older Windows tools | White |
+| **PDF** | `.pdf` | Forms and printing: one page the size of the image | White |
+
+Where a format has no transparency, see-through parts come out white. A name without one of these endings is saved as PNG.
 
 ## Pin
 

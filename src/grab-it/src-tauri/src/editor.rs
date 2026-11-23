@@ -488,8 +488,143 @@ pub fn editor_export(
         .and_then(|value| percent_decode(value).map_err(|_| "bad export path"))?;
     let target = PathBuf::from(target);
     check_export_target(&capture, &target)?;
-    let bytes = raw_body(&request)?;
+    let bytes = encode_export(raw_body(&request)?, &target)?;
     fs::write(&target, bytes).map_err(|err| format!("could not export: {err}"))
+}
+
+/// What an editor export to a file with a given ending is written as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExportEncoding {
+    /// The bytes the page sent: its own PNG or JPEG.
+    AsSent,
+    /// The page's PNG re-encoded in this format.
+    Image(image::ImageFormat),
+    /// The page's PNG as the one image of a one-page PDF.
+    Pdf,
+}
+
+/// The encoding for an export to `target`, by its ending, whatever its case.
+fn export_encoding(target: &Path) -> ExportEncoding {
+    let extension = target
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "webp" => ExportEncoding::Image(image::ImageFormat::WebP),
+        "gif" => ExportEncoding::Image(image::ImageFormat::Gif),
+        "tif" | "tiff" => ExportEncoding::Image(image::ImageFormat::Tiff),
+        "bmp" => ExportEncoding::Image(image::ImageFormat::Bmp),
+        "pdf" => ExportEncoding::Pdf,
+        _ => ExportEncoding::AsSent,
+    }
+}
+
+/// The bytes an editor export to `target` writes. For `.png`, `.jpg`,
+/// `.jpeg` and any other ending they are `bytes` as the page sent them.
+/// For WebP, GIF, TIFF, BMP and PDF the page sends a PNG (already on white
+/// for GIF, BMP and PDF, which have no transparency), re-encoded here: WebP
+/// losslessly and TIFF with their alpha, GIF with at most 256 colours.
+pub fn encode_export(bytes: Vec<u8>, target: &Path) -> Result<Vec<u8>, String> {
+    let encoding = export_encoding(target);
+    if encoding == ExportEncoding::AsSent {
+        return Ok(bytes);
+    }
+    let image = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+        .map_err(|err| format!("could not decode the image: {err}"))?;
+    match encoding {
+        ExportEncoding::AsSent => Ok(bytes),
+        ExportEncoding::Pdf => pdf_with_image(&image.into_rgb8()),
+        ExportEncoding::Image(format) => {
+            let image = match format {
+                image::ImageFormat::WebP | image::ImageFormat::Tiff => {
+                    image::DynamicImage::ImageRgba8(image.into_rgba8())
+                }
+                _ => image::DynamicImage::ImageRgb8(image.into_rgb8()),
+            };
+            let mut out = io::Cursor::new(Vec::new());
+            image
+                .write_to(&mut out, format)
+                .map_err(|err| format!("could not encode the image: {err}"))?;
+            Ok(out.into_inner())
+        }
+    }
+}
+
+/// `px` pixels at 96 per inch, in PDF points (72 per inch), exactly.
+fn pdf_points(px: u32) -> String {
+    let quarters = u64::from(px) * 3;
+    let fraction = ["", ".25", ".5", ".75"][(quarters % 4) as usize];
+    format!("{}{fraction}", quarters / 4)
+}
+
+/// A one-page PDF showing `image` at its own size (96 pixels per inch): an
+/// RGB image XObject, Flate-compressed so no pixel changes, filling a page
+/// whose MediaBox is the image's size in points.
+fn pdf_with_image(image: &image::RgbImage) -> Result<Vec<u8>, String> {
+    use std::io::Write as _;
+
+    let (width, height) = image.dimensions();
+    let (page_width, page_height) = (pdf_points(width), pdf_points(height));
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder
+        .write_all(image.as_raw())
+        .map_err(|err| format!("could not compress the image: {err}"))?;
+    let pixels = encoder
+        .finish()
+        .map_err(|err| format!("could not compress the image: {err}"))?;
+    let content = format!("q {page_width} 0 0 {page_height} 0 0 cm /Im0 Do Q");
+
+    let mut pdf: Vec<u8> = b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n".to_vec();
+    let mut offsets = Vec::new();
+    let mut object = |pdf: &mut Vec<u8>, body: &[u8]| {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n", offsets.len()).as_bytes());
+        pdf.extend_from_slice(body);
+        pdf.extend_from_slice(b"\nendobj\n");
+    };
+    object(&mut pdf, b"<< /Type /Catalog /Pages 2 0 R >>");
+    object(&mut pdf, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    object(
+        &mut pdf,
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_width} {page_height}] \
+             /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>"
+        )
+        .as_bytes(),
+    );
+    let mut xobject = format!(
+        "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
+         /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
+        pixels.len()
+    )
+    .into_bytes();
+    xobject.extend_from_slice(&pixels);
+    xobject.extend_from_slice(b"\nendstream");
+    object(&mut pdf, &xobject);
+    object(
+        &mut pdf,
+        format!(
+            "<< /Length {} >>\nstream\n{content}\nendstream",
+            content.len()
+        )
+        .as_bytes(),
+    );
+
+    let xref = pdf.len();
+    pdf.extend_from_slice(
+        format!("xref\n0 {}\n0000000000 65535 f\r\n", offsets.len() + 1).as_bytes(),
+    );
+    for offset in &offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n\r\n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            offsets.len() + 1
+        )
+        .as_bytes(),
+    );
+    Ok(pdf)
 }
 
 /// The lines of text the library stored for the capture at `png`, with
@@ -677,6 +812,121 @@ mod tests {
         state.insert("editor-1", link.join("shot.png"));
         let canonical = fs::canonicalize(real.join("shot.png")).unwrap();
         assert_eq!(state.label_for(&canonical).as_deref(), Some("editor-1"));
+    }
+
+    /// A 3×2 PNG whose top-left pixel is clear and the one beside it half
+    /// see-through, as the page sends it for WebP and TIFF.
+    fn export_png() -> Vec<u8> {
+        let mut image = RgbaImage::from_pixel(3, 2, image::Rgba([200, 40, 10, 255]));
+        image.put_pixel(0, 0, image::Rgba([0, 0, 0, 0]));
+        image.put_pixel(1, 0, image::Rgba([10, 120, 230, 128]));
+        let mut out = io::Cursor::new(Vec::new());
+        image.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn png_jpeg_and_unknown_endings_export_as_sent() {
+        for name in ["a.png", "a.JPG", "a.jpeg", "a.heic", "a"] {
+            assert_eq!(
+                encode_export(b"bytes".to_vec(), Path::new(name)),
+                Ok(b"bytes".to_vec())
+            );
+        }
+    }
+
+    #[test]
+    fn image_formats_decode_at_the_source_size() {
+        let png = export_png();
+        for (name, format, keeps_alpha) in [
+            ("a.webp", image::ImageFormat::WebP, true),
+            ("a.TIFF", image::ImageFormat::Tiff, true),
+            ("a.tif", image::ImageFormat::Tiff, true),
+            ("a.gif", image::ImageFormat::Gif, false),
+            ("a.Bmp", image::ImageFormat::Bmp, false),
+        ] {
+            let bytes = encode_export(png.clone(), Path::new(name)).unwrap();
+            assert_eq!(image::guess_format(&bytes).unwrap(), format, "{name}");
+            let decoded = image::load_from_memory_with_format(&bytes, format)
+                .unwrap()
+                .into_rgba8();
+            assert_eq!(decoded.dimensions(), (3, 2), "{name}");
+            if keeps_alpha {
+                assert_eq!(decoded.get_pixel(0, 0)[3], 0, "{name}");
+                assert_eq!(
+                    *decoded.get_pixel(1, 0),
+                    image::Rgba([10, 120, 230, 128]),
+                    "{name}"
+                );
+                assert_eq!(
+                    *decoded.get_pixel(2, 1),
+                    image::Rgba([200, 40, 10, 255]),
+                    "{name}"
+                );
+            } else {
+                assert!(decoded.pixels().all(|pixel| pixel[3] == 255), "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_pdf_export_holds_the_image_at_its_size() {
+        use std::io::Read as _;
+
+        let mut image = image::RgbImage::from_pixel(5, 2, image::Rgb([255, 255, 255]));
+        image.put_pixel(4, 1, image::Rgb([1, 2, 3]));
+        let mut png = io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let pdf = encode_export(png.into_inner(), Path::new("a.PDF")).unwrap();
+
+        assert!(pdf.starts_with(b"%PDF-1.4\n"));
+        assert!(pdf.ends_with(b"%%EOF\n"));
+        let text = String::from_utf8_lossy(&pdf);
+        // 5 × 2 px at 96 per inch is 3.75 × 1.5 pt.
+        assert!(text.contains("/MediaBox [0 0 3.75 1.5]"), "{text}");
+        assert!(text.contains("/Width 5 /Height 2"), "{text}");
+
+        // Byte offsets: the binary header and stream are not text.
+        let find = |needle: &[u8], within: &[u8]| {
+            within
+                .windows(needle.len())
+                .rposition(|w| w == needle)
+                .unwrap()
+        };
+        let number = |bytes: &[u8]| -> usize {
+            let digits = bytes.iter().take_while(|b| b.is_ascii_digit()).count();
+            std::str::from_utf8(&bytes[..digits])
+                .unwrap()
+                .parse()
+                .unwrap()
+        };
+        let start = pdf.windows(7).position(|w| w == b"stream\n").unwrap() + 7;
+        let length = number(&pdf[find(b"/Length ", &pdf[..start]) + 8..]);
+        let mut pixels = Vec::new();
+        flate2::read::ZlibDecoder::new(&pdf[start..start + length])
+            .read_to_end(&mut pixels)
+            .unwrap();
+        assert_eq!(pixels, image.into_raw());
+
+        // Each xref entry points at its object.
+        let table = number(&pdf[find(b"startxref\n", &pdf) + 10..]);
+        let entries = std::str::from_utf8(&pdf[table..]).unwrap();
+        for (n, entry) in entries.lines().skip(3).take(5).enumerate() {
+            let offset: usize = entry[..10].parse().unwrap();
+            assert!(
+                pdf[offset..].starts_with(format!("{} 0 obj", n + 1).as_bytes()),
+                "{entry}"
+            );
+        }
+    }
+
+    #[test]
+    fn pdf_points_are_three_quarters_of_a_pixel() {
+        assert_eq!(pdf_points(0), "0");
+        assert_eq!(pdf_points(1), "0.75");
+        assert_eq!(pdf_points(2), "1.5");
+        assert_eq!(pdf_points(3), "2.25");
+        assert_eq!(pdf_points(1920), "1440");
     }
 
     #[test]
