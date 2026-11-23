@@ -503,19 +503,28 @@ enum ExportEncoding {
     Pdf,
 }
 
-/// The encoding for an export to `target`, by its ending, whatever its case.
+/// The encoding for an export to `target`, by how its file name ends,
+/// whatever its case. Like the page's `exportTarget`, this reads the ending
+/// of the whole name, so a name that is only an ending, such as `.pdf`, is
+/// a PDF (`Path::extension` would see a dotfile with none).
 fn export_encoding(target: &Path) -> ExportEncoding {
-    let extension = target
-        .extension()
-        .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
-    match extension.as_str() {
-        "webp" => ExportEncoding::Image(image::ImageFormat::WebP),
-        "gif" => ExportEncoding::Image(image::ImageFormat::Gif),
-        "tif" | "tiff" => ExportEncoding::Image(image::ImageFormat::Tiff),
-        "bmp" => ExportEncoding::Image(image::ImageFormat::Bmp),
-        "pdf" => ExportEncoding::Pdf,
-        _ => ExportEncoding::AsSent,
+    let ending = |endings: &[&str]| endings.iter().any(|ending| name.ends_with(ending));
+    if ending(&[".webp"]) {
+        ExportEncoding::Image(image::ImageFormat::WebP)
+    } else if ending(&[".gif"]) {
+        ExportEncoding::Image(image::ImageFormat::Gif)
+    } else if ending(&[".tif", ".tiff"]) {
+        ExportEncoding::Image(image::ImageFormat::Tiff)
+    } else if ending(&[".bmp"]) {
+        ExportEncoding::Image(image::ImageFormat::Bmp)
+    } else if ending(&[".pdf"]) {
+        ExportEncoding::Pdf
+    } else {
+        ExportEncoding::AsSent
     }
 }
 
@@ -844,6 +853,9 @@ mod tests {
             ("a.tif", image::ImageFormat::Tiff, true),
             ("a.gif", image::ImageFormat::Gif, false),
             ("a.Bmp", image::ImageFormat::Bmp, false),
+            // A name that is only the ending, as the page reads it too.
+            ("dir/.webp", image::ImageFormat::WebP, true),
+            (".gif", image::ImageFormat::Gif, false),
         ] {
             let bytes = encode_export(png.clone(), Path::new(name)).unwrap();
             assert_eq!(image::guess_format(&bytes).unwrap(), format, "{name}");
@@ -877,7 +889,14 @@ mod tests {
         image.put_pixel(4, 1, image::Rgb([1, 2, 3]));
         let mut png = io::Cursor::new(Vec::new());
         image.write_to(&mut png, image::ImageFormat::Png).unwrap();
-        let pdf = encode_export(png.into_inner(), Path::new("a.PDF")).unwrap();
+        let png = png.into_inner();
+        // A name that is only the ending is a PDF too, as the page reads it.
+        assert!(
+            encode_export(png.clone(), Path::new("dir/.pdf"))
+                .unwrap()
+                .starts_with(b"%PDF-")
+        );
+        let pdf = encode_export(png, Path::new("a.PDF")).unwrap();
 
         assert!(pdf.starts_with(b"%PDF-1.4\n"));
         assert!(pdf.ends_with(b"%%EOF\n"));
