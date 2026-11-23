@@ -57,6 +57,9 @@ xcap = "0.7"
 image = { version = "0.25", default-features = false, features = ["png", "gif", "jpeg", "webp", "bmp", "tiff"] }
 # Already in the tree through png: compresses the image in a PDF export.
 flate2 = "1"
+# Already in the tree through image: the editor writes TIFF exports with it
+# directly, to tag the alpha sample (ExtraSamples), which image leaves out.
+tiff = "0.11"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 rusqlite = { version = "0.42", features = ["bundled"] }
 # ocrs 0.12 is the newest release on rten 0.24, whose MSRV (1.89) the

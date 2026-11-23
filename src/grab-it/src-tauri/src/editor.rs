@@ -532,7 +532,8 @@ fn export_encoding(target: &Path) -> ExportEncoding {
 /// `.jpeg` and any other ending they are `bytes` as the page sent them.
 /// For WebP, GIF, TIFF, BMP and PDF the page sends a PNG (already on white
 /// for GIF, BMP and PDF, which have no transparency), re-encoded here: WebP
-/// losslessly and TIFF with their alpha, GIF with at most 256 colours.
+/// losslessly and TIFF with their alpha (tagged as such, see
+/// [`tiff_with_alpha`]), GIF with at most 256 colours.
 pub fn encode_export(bytes: Vec<u8>, target: &Path) -> Result<Vec<u8>, String> {
     let encoding = export_encoding(target);
     if encoding == ExportEncoding::AsSent {
@@ -543,11 +544,10 @@ pub fn encode_export(bytes: Vec<u8>, target: &Path) -> Result<Vec<u8>, String> {
     match encoding {
         ExportEncoding::AsSent => Ok(bytes),
         ExportEncoding::Pdf => pdf_with_image(&image.into_rgb8()),
+        ExportEncoding::Image(image::ImageFormat::Tiff) => tiff_with_alpha(&image.into_rgba8()),
         ExportEncoding::Image(format) => {
             let image = match format {
-                image::ImageFormat::WebP | image::ImageFormat::Tiff => {
-                    image::DynamicImage::ImageRgba8(image.into_rgba8())
-                }
+                image::ImageFormat::WebP => image::DynamicImage::ImageRgba8(image.into_rgba8()),
                 _ => image::DynamicImage::ImageRgb8(image.into_rgb8()),
             };
             let mut out = io::Cursor::new(Vec::new());
@@ -557,6 +557,29 @@ pub fn encode_export(bytes: Vec<u8>, target: &Path) -> Result<Vec<u8>, String> {
             Ok(out.into_inner())
         }
     }
+}
+
+/// An uncompressed RGBA TIFF of `image` whose fourth sample is tagged as
+/// unassociated alpha (ExtraSamples = 2). The image crate's TIFF encoder
+/// leaves that tag out, so libtiff-based readers such as ImageMagick see
+/// four samples with no alpha and show see-through parts black.
+fn tiff_with_alpha(image: &RgbaImage) -> Result<Vec<u8>, String> {
+    let failed = |err: tiff::TiffError| format!("could not encode the image: {err}");
+    let mut out = io::Cursor::new(Vec::new());
+    {
+        let mut encoder = tiff::encoder::TiffEncoder::new(&mut out).map_err(failed)?;
+        let mut tiff = encoder
+            .new_image::<tiff::encoder::colortype::RGBA8>(image.width(), image.height())
+            .map_err(failed)?;
+        tiff.encoder()
+            .write_tag(
+                tiff::tags::Tag::ExtraSamples,
+                &[tiff::tags::ExtraSamples::UnassociatedAlpha][..],
+            )
+            .map_err(failed)?;
+        tiff.write_data(image.as_raw()).map_err(failed)?;
+    }
+    Ok(out.into_inner())
 }
 
 /// `px` pixels at 96 per inch, in PDF points (72 per inch), exactly.
@@ -879,6 +902,26 @@ mod tests {
                 assert!(decoded.pixels().all(|pixel| pixel[3] == 255), "{name}");
             }
         }
+    }
+
+    #[test]
+    fn a_tiff_export_tags_its_alpha() {
+        let bytes = encode_export(export_png(), Path::new("a.tiff")).unwrap();
+        let mut decoder = tiff::decoder::Decoder::new(io::Cursor::new(&bytes)).unwrap();
+        assert_eq!(decoder.dimensions().unwrap(), (3, 2));
+        assert_eq!(
+            decoder
+                .get_tag_u16_vec(tiff::tags::Tag::SamplesPerPixel)
+                .unwrap(),
+            [4]
+        );
+        // 2: unassociated alpha, which libtiff readers need to see the alpha.
+        assert_eq!(
+            decoder
+                .get_tag_u16_vec(tiff::tags::Tag::ExtraSamples)
+                .unwrap(),
+            [2]
+        );
     }
 
     #[test]

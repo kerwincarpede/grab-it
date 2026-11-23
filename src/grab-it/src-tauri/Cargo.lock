@@ -2293,6 +2293,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-specta",
  "tempfile",
+ "tiff",
  "trash",
  "ureq",
  "webkit2gtk",
