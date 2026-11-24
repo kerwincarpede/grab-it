@@ -193,9 +193,14 @@ fn estimate(last: &[Vec<u64>], next: &[Vec<u64>], hint: Option<i64>) -> Result<M
     }
     let mut why = Why::Vote;
     let mut chosen = groups.first().copied();
-    // Ties go to the automatic step asked for.
+    // Ties go to the automatic step asked for: a group near it wins only
+    // when it has nearly as many strips as the largest one. Its rival is
+    // then that near-equal group, so the ambiguity check is skipped.
+    let top_members = groups.first().map_or(0, |g| g.1);
     if let Some(hint) = hint
-        && let Some(g) = groups.iter().find(|g| (g.0 - hint).abs() <= 2)
+        && let Some(g) = groups
+            .iter()
+            .find(|g| (g.0 - hint).abs() <= 2 && g.1 * 5 >= top_members * 4)
     {
         if Some(g.0) != chosen.map(|c| c.0) {
             why = Why::Hint;
@@ -782,6 +787,32 @@ pub(crate) mod tests {
         )));
         assert!(s.push(frame(Axis::Vertical, 10, false)));
     }
+    /// Two panes moving by different amounts: `left` px wide by `a`, the
+    /// rest by `b`, with different content.
+    fn panes(left: u32, a: u32, b: u32) -> RgbaImage {
+        RgbaImage::from_fn(96, 120, |x, y| {
+            if x < left {
+                page(y + a, x)
+            } else {
+                page(y + b + 1000, x)
+            }
+        })
+    }
+    #[test]
+    fn the_step_asked_for_breaks_a_tie_between_two_panes() {
+        for hint in [20, 40] {
+            let mut s = Stitcher::new(panes(48, 0, 0));
+            assert_eq!(s.push_with_hint(panes(48, 20, 40), Some(hint)), Push::Grew);
+            assert_eq!(s.image.height(), 120 + hint as u32, "hint {hint}");
+        }
+    }
+    #[test]
+    fn the_step_asked_for_does_not_outvote_a_larger_pane() {
+        let mut s = Stitcher::new(panes(12, 0, 0));
+        assert_eq!(s.push_with_hint(panes(12, 20, 40), Some(20)), Push::Grew);
+        assert_eq!(s.image.height(), 160);
+    }
+
     #[test]
     fn a_fixed_sidebar_does_not_block_the_page() {
         let mut s = Stitcher::new(docs(0));

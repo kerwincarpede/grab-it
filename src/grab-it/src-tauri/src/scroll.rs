@@ -37,6 +37,46 @@ pub fn report_start_failure(error: StartError, report: impl FnOnce(&str)) {
     }
 }
 
+/// How long the loop waits between frames: by hand, frames are read faster
+/// so a quick scroll still leaves an overlap to match.
+fn read_interval(by_hand: bool) -> Duration {
+    Duration::from_millis(if by_hand { 100 } else { 250 })
+}
+
+/// Whether the bar warns that the user scrolled too fast after a frame with
+/// `outcome`: only by hand, from a frame that could not be placed until one
+/// that could.
+fn too_fast_after(outcome: Push, by_hand: bool, was: bool) -> bool {
+    match outcome {
+        Push::Grew | Push::Placed => false,
+        Push::Lost => by_hand,
+        Push::Still | Push::Capped => was,
+    }
+}
+
+/// What the bar shows for the image so far, without its preview. The limit
+/// comes first, then scrolling too fast, then why automatic scrolling stopped.
+fn bar_state(
+    session_id: u64,
+    stitch: &Stitcher,
+    reason: Option<&str>,
+    too_fast: bool,
+    saving: bool,
+) -> ScrollBarState {
+    let mut state = ScrollBarState::new(session_id, stitch.image.dimensions(), stitch.axis);
+    state.capped = stitch.capped;
+    state.auto_scrolling = reason.is_none() && !stitch.capped;
+    state.message = if stitch.capped {
+        Some(CAPPED.to_owned())
+    } else if too_fast {
+        Some(TOO_FAST.to_owned())
+    } else {
+        reason.map(str::to_owned)
+    };
+    state.saving = saving;
+    state
+}
+
 /// Shown when the user chose to scroll by hand.
 const BY_HAND: &str = "Scroll at a steady pace, then choose Done.";
 /// Shown once the image has reached its length limit.
@@ -338,17 +378,7 @@ pub fn start(
                 let mut stitch = Stitcher::new(first.image);
                 let mut too_fast = false;
                 let state = |s: &Stitcher, a: &AutoScroll, too_fast: bool, saving: bool| {
-                    let mut state = ScrollBarState::new(control.id, s.image.dimensions(), s.axis);
-                    state.capped = s.capped;
-                    state.auto_scrolling = a.reason.is_none() && !s.capped;
-                    state.message = if s.capped {
-                        Some(CAPPED.to_owned())
-                    } else if too_fast {
-                        Some(TOO_FAST.to_owned())
-                    } else {
-                        a.reason.map(str::to_owned)
-                    };
-                    state.saving = saving;
+                    let mut state = bar_state(control.id, s, a.reason, too_fast, saving);
                     state.preview = scroll_bar::preview_url(&s.image, s.axis, s.reverse == Some(true));
                     state
                 };
@@ -373,7 +403,7 @@ pub fn start(
                 while control.end.load(Ordering::SeqCst) == 0 {
                     // By hand, frames are read faster so a quick scroll still
                     // leaves an overlap to match.
-                    std::thread::sleep(Duration::from_millis(if auto.reason.is_some() { 100 } else { 250 }));
+                    std::thread::sleep(read_interval(auto.reason.is_some()));
                     if !scroll_bar::is_open(&handle) {
                         control.end.store(2, Ordering::SeqCst);
                         break;
@@ -410,11 +440,7 @@ pub fn start(
                     // a blinking caret or an animation cannot keep it going.
                     let unchanged = outcome == Push::Still;
                     let changed = outcome == Push::Grew;
-                    match outcome {
-                        Push::Grew | Push::Placed => too_fast = false,
-                        Push::Lost => too_fast = auto.reason.is_some(),
-                        Push::Still | Push::Capped => {}
-                    }
+                    too_fast = too_fast_after(outcome, auto.reason.is_some(), too_fast);
                     if wheel_pending && auto.at_end(unchanged, stitch.axis.is_some()) {
                         let _ = control.end.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
                         break;
@@ -945,6 +971,42 @@ mod tests {
             assert!(!auto.at_end(true, true));
         }
         assert!(auto.reason.is_some());
+    }
+    #[test]
+    fn too_fast_shows_only_by_hand_until_a_frame_is_placed() {
+        assert!(too_fast_after(Push::Lost, true, false));
+        // Automatic scrolling never warns: it paces itself.
+        assert!(!too_fast_after(Push::Lost, false, false));
+        assert!(!too_fast_after(Push::Grew, true, true));
+        assert!(!too_fast_after(Push::Placed, true, true));
+        // A still page or the limit leave the warning as it was.
+        assert!(too_fast_after(Push::Still, true, true));
+        assert!(!too_fast_after(Push::Still, true, false));
+        assert!(too_fast_after(Push::Capped, true, true));
+    }
+    #[test]
+    fn frames_are_read_faster_by_hand() {
+        assert_eq!(read_interval(true), Duration::from_millis(100));
+        assert_eq!(read_interval(false), Duration::from_millis(250));
+    }
+    #[test]
+    fn the_bar_says_the_limit_then_too_fast_then_why() {
+        let mut stitch = Stitcher::new(frame(Axis::Vertical, 0, false));
+        let reason = Some("Mouse moved. Scroll by hand, then choose Done.");
+        let auto = bar_state(1, &stitch, None, false, false);
+        assert!(auto.auto_scrolling);
+        assert_eq!(auto.message, None);
+        assert_eq!((auto.width, auto.height), (24, 80));
+        let manual = bar_state(1, &stitch, reason, false, false);
+        assert!(!manual.auto_scrolling);
+        assert_eq!(manual.message.as_deref(), reason);
+        let fast = bar_state(1, &stitch, reason, true, false);
+        assert_eq!(fast.message.as_deref(), Some(TOO_FAST));
+        stitch.capped = true;
+        let capped = bar_state(1, &stitch, None, true, true);
+        assert!(capped.capped && capped.saving);
+        assert!(!capped.auto_scrolling);
+        assert_eq!(capped.message.as_deref(), Some(CAPPED));
     }
     #[test]
     fn mouse_moved_is_measured_in_points() {

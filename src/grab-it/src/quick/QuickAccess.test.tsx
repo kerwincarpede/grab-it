@@ -698,5 +698,3 @@ describe("Quick Access native dragging", () => {
     expect(dragCalls(backend)).toEqual([]);
   });
 });
-
-

@@ -110,6 +110,16 @@ describe("WelcomeWindow", () => {
     expect(within(allInOne).getByText("Capture & record…")).toBeInTheDocument();
   });
 
+  it("starts Scrolling capture from its row, which has no hotkey by default", async () => {
+    const calls = mockBackend();
+    render(<WelcomeWindow />);
+    const row = (await screen.findByText("Scrolling capture")).closest("li") as HTMLElement;
+    expect(within(row).getByText("No hotkey")).toBeInTheDocument();
+    expect(row.querySelector("kbd")).toBeNull();
+    await userEvent.click(within(row).getByRole("button", { name: "Start Scrolling capture" }));
+    expect(calls.filter((call) => call.cmd === "hub_capture").map((call) => (call.payload as { kind: string }).kind)).toEqual(["scroll"]);
+  });
+
   it("mentions AI descriptions only while Claude Code describes captures", async () => {
     mockBackend({ ai: { enabled: true, provider: "claudeCode" } });
     const { unmount } = render(<WelcomeWindow />);

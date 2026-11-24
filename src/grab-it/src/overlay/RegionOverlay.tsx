@@ -390,6 +390,7 @@ function RegionOverlay() {
   const follow = useEffectEvent((choice: OverlayChoice) => {
     setTool(toolOf(choice));
     setTimer(TIMER_STEPS.includes(choice.delaySeconds) ? choice.delaySeconds : 0);
+    if (typeof choice.scrollByHand === "boolean") setScrollByHand(choice.scrollByHand);
     setDrag(null);
   });
 
@@ -572,6 +573,13 @@ function RegionOverlay() {
   const allInOne = info?.allInOne === true;
   const intent = allInOne ? toolIntent(tool) : (info?.intent ?? "capture");
   const accessibility = useAccessibility(intent === "scroll");
+  const scrollManual = scrollByHand || accessibility === false;
+
+  /** Who scrolls, chosen in the guide, shared with every monitor's overlay. */
+  function chooseWhoScrolls(byHand: boolean) {
+    setScrollByHand(byHand);
+    share(tool, timer, byHand);
+  }
   const recording = useRecordingOptions(intent === "record");
   // What a recording records: the source used last, until another is picked.
   const source: RecordingSource | null =
@@ -656,7 +664,8 @@ function RegionOverlay() {
       intent,
       mode,
       delaySeconds: isTimed(tool) ? timer : 0,
-      ...(intent === "scroll" ? { scrollByHand } : {}),
+      // What the guide shows: by hand when chosen or when Grab-it may not scroll.
+      ...(intent === "scroll" ? { scrollByHand: scrollManual } : {}),
     };
   }
 
@@ -665,11 +674,12 @@ function RegionOverlay() {
    * selection finishes the same whichever monitor it is made on. The Timer
    * is sent as set, even while a mode that ignores it is picked.
    */
-  function share(nextTool: Tool, seconds: number) {
+  function share(nextTool: Tool, seconds: number, byHand: boolean = scrollByHand) {
     const choice: OverlayChoice = {
       intent: toolIntent(nextTool),
       mode: nextTool === "window" ? "window" : "region",
       delaySeconds: seconds,
+      scrollByHand: byHand,
     };
     chooseOverlay(choice).catch(() => {
       // This monitor still finishes with its own choice.
@@ -1306,7 +1316,7 @@ function RegionOverlay() {
         <ScrollGuide
           stage={held ? "adjust" : "choose"}
           byHand={scrollByHand}
-          onByHand={setScrollByHand}
+          onByHand={chooseWhoScrolls}
           accessibility={accessibility}
           edge={held && held.y + held.height > view.height - SCROLL_GUIDE_ROOM ? "top" : "bottom"}
           top={top + (allInOne ? toolbarRoom : 0)}

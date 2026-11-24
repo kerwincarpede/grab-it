@@ -23,6 +23,7 @@ import { keyCaps } from "../hub/keys";
 import { onAiStatus } from "../library/api";
 import { aiDescribes, aiProvider, getSettings, type Hotkeys } from "../settings/api";
 import { openTarget } from "./api";
+import { startCapture, type CaptureKind } from "../app/api";
 import PermissionsPage from "./PermissionsPage";
 import {
   finishPermissions,
@@ -33,7 +34,7 @@ import {
 } from "./permissions";
 
 /** The hotkeys in the order they are listed, with what each one does. */
-const SHORTCUTS: { key: keyof Hotkeys; title: string; detail: string; icon: ReactNode }[] = [
+const SHORTCUTS: { key: keyof Hotkeys; title: string; detail: string; icon: ReactNode; start?: CaptureKind }[] = [
   { key: "allInOne", title: "Capture & record…", detail: "Press again to close the chooser or stop a recording. On Wayland, cancel in the desktop picker. Recording is unavailable there.", icon: <AllInOneIcon /> },
   { key: "region", title: "Capture a region", detail: "Drag an area, or click a window.", icon: <RegionIcon /> },
   { key: "window", title: "Capture a window", detail: "Hover a window and click it.", icon: <WindowIcon /> },
@@ -42,7 +43,7 @@ const SHORTCUTS: { key: keyof Hotkeys; title: string; detail: string; icon: Reac
   { key: "colour", title: "Pick a colour", detail: "Click a pixel to copy its hex code.", icon: <ColourIcon /> },
   { key: "library", title: "Open the library", detail: "Every capture, searchable, from anywhere.", icon: <GridIcon /> },
   { key: "steps", title: "Step capture", detail: "Each click becomes a numbered step in a guide. Press again to stop.", icon: <StepsIcon /> },
-  { key: "scroll", title: "Scrolling capture", detail: "Choose a window or area and Grab-it scrolls it into one long image. No hotkey until you set one in Settings. Unavailable on Wayland.", icon: <ScrollIcon /> },
+  { key: "scroll", title: "Scrolling capture", detail: "Choose a window or area and Grab-it scrolls it into one long image. No hotkey until you set one in Settings. Unavailable on Wayland.", icon: <ScrollIcon />, start: "scroll" },
 ];
 
 const TIP_ICONS: Record<string, ReactNode> = {
@@ -201,18 +202,27 @@ function HotkeysPage({ onClose }: { onClose?: () => void }) {
             Hotkeys
           </h2>
           <ul className="welcome-list">
-            {SHORTCUTS.map(({ key, title, detail, icon }) => (
+            {SHORTCUTS.map(({ key, title, detail, icon, start }) => (
               <li className="welcome-row" key={key}>
                 {icon}
                 <span className="welcome-text">
                   <span className="welcome-title">{title}</span>
                   <span className="welcome-detail">{detail}</span>
                 </span>
-                <span className="keys" aria-label={hotkeys?.[key] ?? undefined}>
-                  {keyCaps(hotkeys?.[key] ?? "").map((part) => (
-                    <kbd key={part}>{part}</kbd>
-                  ))}
-                </span>
+                {hotkeys && !hotkeys[key] && start ? (
+                  <span className="welcome-none">No hotkey</span>
+                ) : (
+                  <span className="keys" aria-label={hotkeys?.[key] ?? undefined}>
+                    {keyCaps(hotkeys?.[key] ?? "").map((part) => (
+                      <kbd key={part}>{part}</kbd>
+                    ))}
+                  </span>
+                )}
+                {start && (
+                  <button type="button" className="welcome-start" aria-label={`Start ${title}`} onClick={() => void startCapture(start).catch(() => {})}>
+                    Start
+                  </button>
+                )}
               </li>
             ))}
           </ul>

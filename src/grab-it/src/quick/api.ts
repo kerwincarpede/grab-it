@@ -147,4 +147,3 @@ export function isStructured(format: string | undefined): boolean {
 export async function quickDrag(generation: number): Promise<void> {
   await commands.quickDrag(generation);
 }
-
