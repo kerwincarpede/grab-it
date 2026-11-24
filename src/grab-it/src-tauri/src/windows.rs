@@ -241,7 +241,8 @@ pub fn show_recording_editor(app: &AppHandle, recording: &Path) -> tauri::Result
         NEXT_RECORDING.fetch_add(1, Ordering::Relaxed)
     );
     // Registered before the page loads so `recording_info` finds it.
-    state.insert(&label, recording.to_path_buf());
+    let configured = crate::library::current_save_folder(app).join(crate::record::RECORDINGS_DIR);
+    state.register(&label, recording, &configured)?;
     let file_name = recording
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())

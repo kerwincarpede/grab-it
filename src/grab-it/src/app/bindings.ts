@@ -245,7 +245,7 @@ export const commands = {
 	 *  sends the `choice` its toolbar made with it; with a Timer, the area is
 	 *  captured live once the overlays are gone and the time is up.
 	 */
-	overlayFinish: (selection: Selection, choice: Choice_Deserialize | null, options?: InvokeOptions) => __TAURI_INVOKE<null>("overlay_finish", { selection, choice }, options),
+	overlayFinish: (selection: Selection_Deserialize, choice: Choice_Deserialize | null, options?: InvokeOptions) => __TAURI_INVOKE<null>("overlay_finish", { selection, choice }, options),
 	/**
 	 *  The All-in-one toolbar on one monitor changed its mode or Timer: keep
 	 *  it for the session and tell every other overlay, so each toolbar shows
@@ -2278,12 +2278,36 @@ export type SearchQuery_Serialize = {
 };
 
 /**  What the user picked in an overlay. */
-export type Selection =
+export type Selection = Selection_Serialize | Selection_Deserialize;
+
+/**  What the user picked in an overlay. */
+export type Selection_Deserialize =
 /**
  *  A dragged region in the overlay's CSS pixels, with the overlay's
  *  viewport width to derive the scale.
  */
-{ kind: "region"; rect: CssRect; viewportWidth: number | null } |
+{ kind: "region"; rect: CssRect; viewportWidth: number | null;
+/**  The selected window, when confirming its held recording area. */
+windowId?: number | null } |
+/**  A window from [`OverlayInfo::windows`]. */
+{ kind: "window"; id: number } |
+/**  A clicked point in the overlay's CSS pixels, for picking a colour. */
+{ kind: "point"; x: number | null; y: number | null; viewportWidth: number | null } |
+/**
+ *  Every frozen monitor, stitched. Only All-in-one's Screen mode
+ *  sends it.
+ */
+{ kind: "screen" };
+
+/**  What the user picked in an overlay. */
+export type Selection_Serialize =
+/**
+ *  A dragged region in the overlay's CSS pixels, with the overlay's
+ *  viewport width to derive the scale.
+ */
+{ kind: "region"; rect: CssRect; viewportWidth: number | null;
+/**  The selected window, when confirming its held recording area. */
+windowId: number | null } |
 /**  A window from [`OverlayInfo::windows`]. */
 { kind: "window"; id: number } |
 /**  A clicked point in the overlay's CSS pixels, for picking a colour. */
@@ -2870,7 +2894,7 @@ export type MockCommandHandlers = {
     overlayBenchLog: (args: { line: string }) => void | Promise<void>,
     overlayBenchOpaque: () => void | Promise<void>,
     overlayReady: () => null | Promise<null>,
-    overlayFinish: (args: { selection: Selection; choice: Choice_Deserialize | null }) => null | Promise<null>,
+    overlayFinish: (args: { selection: Selection_Deserialize; choice: Choice_Deserialize | null }) => null | Promise<null>,
     overlayChoose: (args: { choice: Choice_Deserialize }) => null | Promise<null>,
     overlayCancel: () => void | Promise<void>,
     editorInfo: () => EditorInfo_Serialize | Promise<EditorInfo_Serialize>,

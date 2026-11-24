@@ -29,11 +29,10 @@ use std::{
     ffi::OsString,
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom},
-    ops::Deref,
     path::{Component, Path, PathBuf},
     process::Stdio,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -53,7 +52,7 @@ use crate::rt::{AppHandle, WebviewWindow};
 use crate::{
     capture::sidecar_path,
     commands::{SettingsState, lock},
-    editor::{EditorState, percent_decode},
+    editor::percent_decode,
     ffmpeg::{self, Video, VideoSpec},
     media::is_month_folder,
     quick::{self, QuickItem},
@@ -91,8 +90,15 @@ const MUX_TIMEOUT: Duration = Duration::from_secs(300);
 /// The recording each recording editor window shows, by window label.
 #[derive(Default)]
 pub struct RecordingEditorState {
-    editors: EditorState,
+    editors: Mutex<HashMap<String, RecordingFile>>,
     exports: Mutex<HashMap<String, ActiveExport>>,
+}
+
+#[derive(Clone)]
+struct RecordingFile {
+    path: PathBuf,
+    source: String,
+    recordings_folder: PathBuf,
 }
 
 struct ActiveExport {
@@ -101,6 +107,53 @@ struct ActiveExport {
 }
 
 impl RecordingEditorState {
+    fn editors(&self) -> MutexGuard<'_, HashMap<String, RecordingFile>> {
+        self.editors.lock().unwrap_or_else(|err| err.into_inner())
+    }
+
+    /// Registers the file and its validated root before the webview opens.
+    pub(crate) fn register(
+        &self,
+        label: &str,
+        path: &Path,
+        configured_root: &Path,
+    ) -> io::Result<()> {
+        let recording = recording_reference(configured_root, path)
+            .or_else(|| recording_reference(named_recordings_root(path)?, path))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "the recording is outside the recordings folder",
+                )
+            })?;
+        self.editors().insert(label.to_owned(), recording);
+        Ok(())
+    }
+
+    pub(crate) fn remove(&self, label: &str) {
+        self.editors().remove(label);
+    }
+
+    pub(crate) fn label_for(&self, path: &Path) -> Option<String> {
+        let canonical = fs::canonicalize(path).ok();
+        self.editors()
+            .iter()
+            .find(|(_, open)| open.path == path || Some(&open.path) == canonical.as_ref())
+            .map(|(label, _)| label.clone())
+    }
+
+    fn recording_for(&self, label: &str) -> Result<RecordingFile, String> {
+        self.editors()
+            .get(label)
+            .cloned()
+            .ok_or_else(|| "this window is not an editor".to_owned())
+    }
+
+    pub(crate) fn source_for(&self, label: &str, source: &str) -> Result<PathBuf, String> {
+        let recording = self.recording_for(label)?;
+        source_file(&recording.recordings_folder, source)
+    }
+
     fn begin_export(&self, label: &str, original: &Path) -> Result<Arc<AtomicBool>, String> {
         let mut exports = self.exports.lock().unwrap_or_else(|err| err.into_inner());
         if exports.contains_key(label) || exports.values().any(|export| export.original == original)
@@ -142,14 +195,6 @@ fn check_cancelled(flag: &AtomicBool) -> Result<(), String> {
         Err("Export cancelled".into())
     } else {
         Ok(())
-    }
-}
-
-impl Deref for RecordingEditorState {
-    type Target = EditorState;
-
-    fn deref(&self) -> &EditorState {
-        &self.editors
     }
 }
 
@@ -525,10 +570,11 @@ pub async fn recording_info(
     app: AppHandle,
     state: State<'_, RecordingEditorState>,
 ) -> Result<RecordingInfo, String> {
-    let path = state.path_for(window.label())?;
-    let recordings_folder = recordings_of(&path)?.to_owned();
-    let (path, source) = recording_reference(&recordings_folder, &path)
-        .ok_or_else(|| "the recording is outside the recordings folder".to_owned())?;
+    let RecordingFile {
+        path,
+        source,
+        recordings_folder,
+    } = state.recording_for(window.label())?;
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -570,8 +616,8 @@ pub fn recording_save_edits(
     window: WebviewWindow,
     state: State<'_, RecordingEditorState>,
 ) -> Result<(), String> {
-    let path = state.path_for(window.label())?;
-    write_edits(&path, &edits)
+    let recording = state.recording_for(window.label())?;
+    write_edits(&recording.path, &edits)
 }
 
 /// A recording a clip of the sequence plays. Mirrors `RecordingSource` in
@@ -613,7 +659,7 @@ fn is_source(source: &str) -> bool {
 }
 
 /// Resolves a clip reference within the recording editor's media root.
-pub(crate) fn source_file(recordings: &Path, source: &str) -> Result<PathBuf, String> {
+fn source_file(recordings: &Path, source: &str) -> Result<PathBuf, String> {
     if is_source(source)
         && let Some(path) = allowed_video(recordings, &recordings.join(source))
     {
@@ -624,11 +670,10 @@ pub(crate) fn source_file(recordings: &Path, source: &str) -> Result<PathBuf, St
     ))
 }
 
-/// The recordings root of the file the editor opened.
-pub(crate) fn recordings_of(original: &Path) -> Result<&Path, String> {
-    let parent = original
-        .parent()
-        .ok_or_else(|| "the recording has no folder".to_owned())?;
+/// The root for an earlier save folder, or for a file named through a
+/// recordings-folder alias rather than its canonical path.
+fn named_recordings_root(original: &Path) -> Option<&Path> {
+    let parent = original.parent()?;
     let root = if parent.file_name().is_some_and(is_month_folder) {
         parent.parent().unwrap_or(parent)
     } else {
@@ -637,7 +682,6 @@ pub(crate) fn recordings_of(original: &Path) -> Result<&Path, String> {
     root.file_name()
         .filter(|name| name.eq_ignore_ascii_case(RECORDINGS_DIR))
         .map(|_| root)
-        .ok_or_else(|| "the recording is outside the recordings folder".to_owned())
 }
 
 /// What the editor needs to play and export `file_name` from the
@@ -652,8 +696,7 @@ pub async fn recording_source(
     app: AppHandle,
     state: State<'_, RecordingEditorState>,
 ) -> Result<RecordingSource, String> {
-    let original = state.path_for(window.label())?;
-    let path = source_file(recordings_of(&original)?, &file_name)?;
+    let path = state.source_for(window.label(), &file_name)?;
     load_source(&app, path, file_name).await
 }
 
@@ -666,9 +709,10 @@ pub async fn recording_pick_source(
     app: AppHandle,
     state: State<'_, RecordingEditorState>,
 ) -> Result<RecordingSource, String> {
-    let original = state.path_for(window.label())?;
-    let (path, source) = recording_reference(recordings_of(&original)?, &path)
-        .ok_or_else(|| "Only recordings in the recordings folder can be added.".to_owned())?;
+    let original = state.recording_for(window.label())?;
+    let RecordingFile { path, source, .. } =
+        recording_reference(&original.recordings_folder, &path)
+            .ok_or_else(|| "Only recordings in the recordings folder can be added.".to_owned())?;
     load_source(&app, path, source).await
 }
 
@@ -704,7 +748,7 @@ async fn load_source(
 
 /// The canonical MP4 a request names, within the flat or monthly layout.
 pub fn allowed_video(recordings: &Path, requested: &Path) -> Option<PathBuf> {
-    recording_reference(recordings, requested).map(|(path, _)| path)
+    recording_reference(recordings, requested).map(|recording| recording.path)
 }
 
 fn is_mp4(path: &Path) -> bool {
@@ -712,7 +756,7 @@ fn is_mp4(path: &Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4"))
 }
 
-fn recording_reference(recordings: &Path, requested: &Path) -> Option<(PathBuf, String)> {
+fn recording_reference(recordings: &Path, requested: &Path) -> Option<RecordingFile> {
     if !is_mp4(requested) {
         return None;
     }
@@ -729,7 +773,11 @@ fn recording_reference(recordings: &Path, requested: &Path) -> Option<(PathBuf, 
         }
         _ => return None,
     };
-    (is_source(&reference) && file.is_file()).then_some((file, reference))
+    (is_source(&reference) && file.is_file()).then_some(RecordingFile {
+        path: file,
+        source: reference,
+        recordings_folder: root,
+    })
 }
 
 /// A `Range` header that cannot be met, answered with 416.
@@ -865,12 +913,11 @@ pub fn serve_video(app: &AppHandle, label: &str, request: &Request<Vec<u8>>) -> 
     }
     let original = app
         .try_state::<RecordingEditorState>()
-        .and_then(|state| state.path_for(label).ok());
-    let recordings = original
-        .as_deref()
-        .and_then(|path| recordings_of(path).ok());
-    let allowed = recordings.zip(requested_path(request.uri().path()));
-    let Some(path) = allowed.and_then(|(folder, path)| allowed_video(folder, &path)) else {
+        .and_then(|state| state.recording_for(label).ok());
+    let allowed = original.zip(requested_path(request.uri().path()));
+    let Some(path) =
+        allowed.and_then(|(original, path)| allowed_video(&original.recordings_folder, &path))
+    else {
         return plain(StatusCode::FORBIDDEN, "not a recording");
     };
     let range = request
@@ -1676,7 +1723,7 @@ pub async fn recording_export(
     app: AppHandle,
     state: State<'_, RecordingEditorState>,
 ) -> Result<PathBuf, String> {
-    let original = state.path_for(window.label())?;
+    let original = state.recording_for(window.label())?;
     let plan = request
         .headers()
         .get(EXPORT_PLAN_HEADER)
@@ -1697,10 +1744,9 @@ pub async fn recording_export(
         );
     };
     let label = window.label().to_owned();
-    let cancelled = state.begin_export(
-        &label,
-        &original.canonicalize().map_err(|err| err.to_string())?,
-    )?;
+    let path = allowed_video(&original.recordings_folder, &original.path)
+        .ok_or("the recording is no longer in the recordings folder")?;
+    let cancelled = state.begin_export(&label, &path)?;
     // Minutes of decoding and encoding: on a thread of its own, not the
     // async runtime's.
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -1748,12 +1794,13 @@ fn clip_sources(
 fn export(
     app: &AppHandle,
     ready: &ffmpeg::Ready,
-    original: &Path,
+    recording: &RecordingFile,
     plan: ExportPlan,
     body: &[u8],
     label: &str,
     cancelled: &AtomicBool,
 ) -> Result<PathBuf, String> {
+    let original = &recording.path;
     let fps = export_fps(&ready.path, original);
     let report = |progress: ExportProgress| {
         let _ = app.emit_to(
@@ -1772,7 +1819,7 @@ fn export(
         .map(|state| lock(&state).get().recording.quality.bits_per_pixel())
         .unwrap_or_else(|| crate::settings::RecordingQuality::High.bits_per_pixel());
     // Every clip comes from the recordings folder the editor opened from.
-    let sources = clip_sources(&ready.path, recordings_of(original)?, &plan, cancelled)?;
+    let sources = clip_sources(&ready.path, &recording.recordings_folder, &plan, cancelled)?;
     // Missing, an export that removes noise from a clip is refused.
     let noise_model = if plan.remove_noise {
         crate::noise::bundled_model(app)
@@ -2607,6 +2654,50 @@ esac
 
         std::os::unix::fs::symlink(dir.path(), recordings.join("2026-04")).unwrap();
         assert!(source_file(&recordings, "2026-04/outside.mp4").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registered_alias_uses_the_original_root_for_legacy_joins() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("video archive");
+        let configured = dir.path().join(RECORDINGS_DIR);
+        fs::create_dir(&target).unwrap();
+        symlink(&target, &configured).unwrap();
+        let own = target.join("original.mp4");
+        let another = target.join("another.mp4");
+        for path in [&own, &another] {
+            fs::write(path, b"video").unwrap();
+        }
+        let edits = json!({
+            "version": 2,
+            "clips": [
+                { "id": "own", "source": "original.mp4", "startMs": 0, "endMs": 4000 },
+                { "id": "other", "source": "another.mp4", "startMs": 500, "endMs": 2500 }
+            ],
+        });
+        write_edits(&own, &edits).unwrap();
+
+        // The Library hands the editor a canonical path, so none of its
+        // components has the configured alias's name.
+        let state = RecordingEditorState::default();
+        let own = fs::canonicalize(own).unwrap();
+        state.register("editor", &own, &configured).unwrap();
+        let recording = state.recording_for("editor").unwrap();
+        assert_eq!(recording.source, "original.mp4");
+        assert_eq!(
+            recording.recordings_folder,
+            fs::canonicalize(&target).unwrap()
+        );
+        assert_eq!(read_edits(&recording.path).unwrap(), Some(edits));
+
+        // The window keeps the root it opened with.
+        fs::remove_file(configured).unwrap();
+        assert_eq!(
+            state.source_for("editor", "another.mp4").unwrap(),
+            fs::canonicalize(another).unwrap()
+        );
     }
 
     #[test]

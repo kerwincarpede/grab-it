@@ -35,7 +35,7 @@ impl SaveDestination {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "bench"))]
     pub(crate) fn flat(folder: &std::path::Path) -> Self {
         Self {
             folder: folder.to_owned(),
@@ -52,11 +52,28 @@ impl SaveDestination {
         app_name: Option<&str>,
         extension: &str,
     ) -> io::Result<(PathBuf, File)> {
-        let mut dir = self.folder.join(media);
-        if self.layout.by_month {
-            dir.push(time.format("%Y-%m").to_string());
-        }
-        fs::create_dir_all(&dir)?;
+        let root = self.folder.join(media);
+        let dir = if self.layout.by_month {
+            let month = time.format("%Y-%m").to_string();
+            let dir = root.join(&month);
+            fs::create_dir_all(&dir)?;
+            if !fs::symlink_metadata(&dir)?.is_dir()
+                || fs::canonicalize(&dir)? != fs::canonicalize(&root)?.join(month)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "{} must be a month folder inside {}",
+                        dir.display(),
+                        root.display()
+                    ),
+                ));
+            }
+            dir
+        } else {
+            fs::create_dir_all(&root)?;
+            root
+        };
         let app_label = if self.layout.include_app_name {
             app_name.and_then(safe_app_label)
         } else {
@@ -221,5 +238,28 @@ mod tests {
         );
         assert_eq!(safe_app_label(".."), None);
         assert_eq!(safe_app_label(&"界".repeat(40)).unwrap(), "界".repeat(26));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_month_folder_symlink_cannot_redirect_a_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let destination = SaveDestination {
+            folder: dir.path().to_owned(),
+            layout: SaveLayout {
+                by_month: true,
+                include_app_name: false,
+            },
+        };
+        let recordings = dir.path().join(RECORDINGS_DIR);
+        fs::create_dir(&recordings).unwrap();
+        std::os::unix::fs::symlink(external.path(), recordings.join("2026-03")).unwrap();
+        let time = Local.with_ymd_and_hms(2026, 3, 7, 9, 5, 1).unwrap();
+        let err = destination
+            .reserve(RECORDINGS_DIR, &time, None, "mp4")
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(fs::read_dir(external.path()).unwrap().count(), 0);
     }
 }

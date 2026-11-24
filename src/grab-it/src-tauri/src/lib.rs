@@ -69,7 +69,7 @@ mod ipc_tests;
 pub mod bench {
     use std::path::{Path, PathBuf};
 
-    pub use crate::capture::{CaptureMode, Foreground, save_capture};
+    pub use crate::capture::{CaptureMode, Foreground};
     pub use crate::codes::decode as decode_codes;
     pub use crate::faces::Faces;
     pub use crate::library::{
@@ -78,6 +78,25 @@ pub mod bench {
     };
     pub use crate::ocr::Ocr;
     pub use crate::search::SearchQuery;
+
+    /// Saves the benchmark's fixture with the default flat layout.
+    pub fn save_capture(
+        save_folder: &Path,
+        image: &image::RgbaImage,
+        mode: CaptureMode,
+        foreground: &Foreground,
+        scale_factor: Option<f64>,
+        time: chrono::DateTime<chrono::Local>,
+    ) -> Result<crate::capture::SavedCapture, crate::capture::SaveError> {
+        crate::capture::save_capture(
+            &crate::media::SaveDestination::flat(save_folder),
+            image,
+            mode,
+            foreground,
+            scale_factor,
+            time,
+        )
+    }
 
     /// The OCR models as the app bundles them.
     pub fn ocr_models_dir() -> PathBuf {

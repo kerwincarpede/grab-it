@@ -667,7 +667,7 @@ function RegionOverlay() {
   function finish(picked: Selection) {
     if (done.current) return;
     done.current = true;
-    // A recording's window or display is sent as the region it covers.
+    // Recording uses region geometry for each target.
     const mode =
       picked.kind === "screen" ? "screen" : windowMode && intent !== "record" ? "window" : "region";
     finishOverlay(picked, allInOne ? toolbarChoice(mode) : undefined).catch((err: unknown) => {
@@ -694,7 +694,12 @@ function RegionOverlay() {
   /** Captures, reads or records the held selection: Enter or its button. */
   function confirmHeld() {
     if (!held || !isDrag(held)) return;
-    finish({ kind: "region", rect: held, viewportWidth: view.width });
+    finish({
+      kind: "region",
+      rect: held,
+      viewportWidth: view.width,
+      ...(source === "window" && windowPick ? { windowId: windowPick.window.id } : {}),
+    });
   }
 
   // What Enter or the main button acts on: the window or pixel under the

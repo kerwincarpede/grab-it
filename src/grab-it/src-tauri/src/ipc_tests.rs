@@ -359,12 +359,16 @@ fn recording_editor_uses_the_opened_recordings_root_for_streams_and_sources() {
     }
     h.app
         .state::<RecordingEditorState>()
-        .insert(LABEL, own.clone());
+        .register(LABEL, &own, &h.default_save_folder().join(RECORDINGS_DIR))
+        .unwrap();
 
     let info = h.ok("recording_info", json!({}));
     assert_eq!(info["fileName"], "same.mp4");
     assert_eq!(info["source"], "2026-03/same.mp4");
-    assert_eq!(info["recordingsFolder"], json!(recordings));
+    assert_eq!(
+        info["recordingsFolder"],
+        json!(fs::canonicalize(&recordings).unwrap())
+    );
     let chosen = h.ok("recording_pick_source", json!({ "path": other }));
     assert_eq!(chosen["source"], "2026-04/same.mp4");
     let clip = h.ok(
