@@ -41,6 +41,7 @@ const DEFAULT_HOTKEYS = {
   colour: "Ctrl+Shift+PrintScreen",
   library: "Alt+Shift+PrintScreen",
   steps: "Ctrl+Alt+Shift+PrintScreen",
+  scroll: "",
 };
 
 interface Backend {
@@ -280,7 +281,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
       },
       set_hotkeys: ({ hotkeys }) => {
         guard();
-        backend.hotkeys = { ...hotkeys, steps: hotkeys.steps ?? DEFAULT_HOTKEYS.steps };
+        backend.hotkeys = { ...hotkeys, steps: hotkeys.steps ?? DEFAULT_HOTKEYS.steps, scroll: hotkeys.scroll ?? "" };
         return { settings: settings(), warnings: backend.hotkeyWarnings };
       },
       pause_hotkeys: () => undefined,
@@ -629,6 +630,9 @@ describe("SettingsWindow", () => {
     expect(screen.getByLabelText("Open library")).toHaveValue("Alt+Shift+PrintScreen");
     expect(screen.getByLabelText("Capture & record…")).toHaveValue("Ctrl+Alt+PrintScreen");
     expect(screen.getByLabelText("Step capture")).toHaveValue("Ctrl+Alt+Shift+PrintScreen");
+    // Scrolling capture has no hotkey until one is set.
+    expect(screen.getByLabelText("Scrolling capture")).toHaveValue("");
+    expect(screen.getByLabelText("Scrolling capture")).toHaveAttribute("placeholder", "None");
     expect(screen.getByRole("button", { name: "Save hotkeys" })).toBeDisabled();
   });
 

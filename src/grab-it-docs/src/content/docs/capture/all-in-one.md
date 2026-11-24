@@ -39,7 +39,7 @@ Click a mode, or press its number while the chooser is open. You can switch mode
 | `4` | **Text** | Drag over text or a code to copy it ([Text and codes](/grab-it/capture/text-and-codes/)) |
 | `5` | **Colour** | Click a pixel, or press `Enter`, to copy the colour under the pointer ([Pick a colour](/grab-it/capture/colour/)) |
 | `6` | **Record** | Choose what to record and start a recording (see below) |
-| `7` | **Scroll** | Choose an area or window and stitch a scrolling capture (see below) |
+| `7` | **Scroll** | Choose an area or window and stitch a [scrolling capture](/grab-it/capture/scrolling/) |
 | `8` | **Timer** | Steps through off, 3, 5 and 10 seconds (see below) |
 
 `Esc` or right-click cancels at any point.
@@ -91,16 +91,4 @@ Press **Record** or `6` again to go back to screenshots, or pick another tool. P
 
 ## Scroll
 
-Choose **Scroll**, drag an area or click a window, then press **Start scrolling** or `Enter`. Grab-it moves the pointer to the middle of the area and tries scrolling down. Once content has scrolled, it saves when several wheel steps move no new content. The first detected movement sets the direction. If nothing scrolls automatically, the card asks you to scroll by hand instead of saving. You can scroll horizontal-only content by hand, then choose **Done**.
-
-Move the mouse more than 8 px from where Grab-it placed it to pause automatic scrolling for the rest of that capture. The card changes to **Scroll by hand**. Scroll slowly by hand vertically or horizontally, keeping some content visible between movements. Keep the content still apart from scrolling.
-
-The Quick Access card shows the image size so far. **Done** saves one stitched image; **Cancel** discards it. At 30,000 px along the scroll direction, the image stops growing and the card shows the cap was reached. Choose **Done** or **Cancel** to finish.
-
-On macOS, automatic scrolling asks for **Accessibility** permission. If you don't allow it, capture continues by hand and the card explains why. See [Permissions](/grab-it/recording/permissions/#automatic-scrolling).
-
-Scroll capture is not available on Wayland.
-
-:::note
-On Wayland your desktop's own picker shows instead of the chooser toolbar, as for a region. See [Wayland](/grab-it/capture/wayland/).
-:::
+Choose **Scroll**, drag an area or click a window, then press **Start scrolling** or `Enter`. A guide panel walks you through it and lets you choose who scrolls. See [Scrolling capture](/grab-it/capture/scrolling/).

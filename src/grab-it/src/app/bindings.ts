@@ -95,7 +95,7 @@ export const commands = {
 	installAgentSkill: (options?: InvokeOptions) => __TAURI_INVOKE<AgentSkill>("install_agent_skill", undefined, options),
 	/**
 	 *  Starts a capture from the hub once it has hidden. `kind` is `region`,
-	 *  `allInOne`, `window`, `screen`, `monitor`, `repeat`, `record`, `text`, `colour` or `steps`.
+	 *  `allInOne`, `window`, `screen`, `monitor`, `repeat`, `record`, `text`, `colour`, `steps` or `scroll`.
 	 */
 	hubCapture: (kind: string, delaySeconds: number | null, monitor: number | null, options?: InvokeOptions) => __TAURI_INVOKE<null>("hub_capture", { kind, delaySeconds, monitor }, options),
 	effectiveHotkeys: (options?: InvokeOptions) => __TAURI_INVOKE<{ [key in string]: string }>("effective_hotkeys", undefined, options),
@@ -462,6 +462,10 @@ export const commands = {
 	updateLater: (options?: InvokeOptions) => __TAURI_INVOKE<void>("update_later", undefined, options),
 	/**  Where each permission stands, for the Permissions page, which polls it. */
 	permissionStatus: (options?: InvokeOptions) => __TAURI_INVOKE<PermissionStatus>("permission_status", undefined, options),
+	/**  Whether automatic scrolling is allowed, for the Scroll guide. Never prompts. */
+	accessibilityStatus: (options?: InvokeOptions) => __TAURI_INVOKE<boolean>("accessibility_status", undefined, options),
+	/**  Opens the Accessibility pane, for the Scroll guide's Open Settings. */
+	accessibilityOpenSettings: (options?: InvokeOptions) => __TAURI_INVOKE<null>("accessibility_open_settings", undefined, options),
 	/**  Allow all: asks for each permission in turn. */
 	permissionRequestAll: (options?: InvokeOptions) => __TAURI_INVOKE<PermissionStatus>("permission_request_all", undefined, options),
 	/**
@@ -930,6 +934,8 @@ export type Choice_Deserialize = {
 	 *  chosen area is captured as it looks then.
 	 */
 	delaySeconds?: number | null,
+	/**  Scroll: the user scrolls by hand instead of Grab-it scrolling. */
+	scrollByHand?: boolean | null,
 };
 
 /**
@@ -944,6 +950,8 @@ export type Choice_Serialize = {
 	 *  chosen area is captured as it looks then.
 	 */
 	delaySeconds: number | null,
+	/**  Scroll: the user scrolls by hand instead of Grab-it scrolling. */
+	scrollByHand?: boolean,
 };
 
 /**  What a cleanup removed. Mirrors `Cleaned` in src/library/api.ts. */
@@ -1280,6 +1288,11 @@ export type Hotkeys_Deserialize = {
 	 *  from before step capture get the default.
 	 */
 	steps?: string,
+	/**
+	 *  Scrolling capture. Empty by default, and allowed to stay empty, which
+	 *  registers nothing; settings from before it load as empty.
+	 */
+	scroll?: string,
 };
 
 export type Hotkeys_Serialize = {
@@ -1299,6 +1312,11 @@ export type Hotkeys_Serialize = {
 	 *  from before step capture get the default.
 	 */
 	steps: string,
+	/**
+	 *  Scrolling capture. Empty by default, and allowed to stay empty, which
+	 *  registers nothing; settings from before it load as empty.
+	 */
+	scroll: string,
 };
 
 /**
@@ -2958,6 +2976,8 @@ export type MockCommandHandlers = {
     updateInstall: () => null | Promise<null>,
     updateLater: () => void | Promise<void>,
     permissionStatus: () => PermissionStatus | Promise<PermissionStatus>,
+    accessibilityStatus: () => boolean | Promise<boolean>,
+    accessibilityOpenSettings: () => null | Promise<null>,
     permissionRequestAll: () => PermissionStatus | Promise<PermissionStatus>,
     permissionPrimeCapture: () => null | Promise<null>,
     permissionFinish: () => void | Promise<void>,
@@ -3132,6 +3152,8 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "update_install": return mockCommandHandler(mockHandlers.updateInstall, "update_install", args);
             case "update_later": return mockCommandHandler(mockHandlers.updateLater, "update_later", args);
             case "permission_status": return mockCommandHandler(mockHandlers.permissionStatus, "permission_status", args);
+            case "accessibility_status": return mockCommandHandler(mockHandlers.accessibilityStatus, "accessibility_status", args);
+            case "accessibility_open_settings": return mockCommandHandler(mockHandlers.accessibilityOpenSettings, "accessibility_open_settings", args);
             case "permission_request_all": return mockCommandHandler(mockHandlers.permissionRequestAll, "permission_request_all", args);
             case "permission_prime_capture": return mockCommandHandler(mockHandlers.permissionPrimeCapture, "permission_prime_capture", args);
             case "permission_finish": return mockCommandHandler(mockHandlers.permissionFinish, "permission_finish", args);

@@ -104,6 +104,8 @@ export interface OverlayChoice {
   mode: "region" | "window" | "screen";
   /** The Timer: seconds to wait, with the overlay closed, before capturing live. */
   delaySeconds: number;
+  /** Scroll: the user scrolls by hand instead of Grab-it. */
+  scrollByHand?: boolean;
 }
 
 /**

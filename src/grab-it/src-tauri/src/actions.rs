@@ -58,6 +58,8 @@ pub enum Action {
     /// Start a step capture, saving each click as a guide step, or stop the
     /// one under way and open its guide (see `steps.rs`).
     Steps,
+    /// Scrolling capture: Capture & record… with Scroll already picked.
+    Scroll,
 }
 
 impl Action {
@@ -68,7 +70,8 @@ impl Action {
             | Self::Text
             | Self::Colour
             | Self::Record
-            | Self::AllInOne => CaptureMode::Region,
+            | Self::AllInOne
+            | Self::Scroll => CaptureMode::Region,
             Self::Steps => CaptureMode::Window,
             Self::Window => CaptureMode::Window,
             Self::Screen => CaptureMode::Screen,
@@ -83,6 +86,21 @@ impl Action {
         matches!(self, Self::Record | Self::AllInOne)
     }
 
+    /// Whether the overlay opens with Capture & record…'s toolbar.
+    fn chooser(self) -> bool {
+        matches!(self, Self::AllInOne | Self::Scroll)
+    }
+
+    /// What the toolbar starts with already picked.
+    fn choice(self) -> Option<overlay::Choice> {
+        (self == Self::Scroll).then_some(overlay::Choice {
+            intent: Some(Intent::Scroll),
+            mode: None,
+            delay_seconds: None,
+            scroll_by_hand: None,
+        })
+    }
+
     /// What the region overlay is asked to pick, for the actions that use it.
     fn intent(self) -> Intent {
         match self {
@@ -92,6 +110,18 @@ impl Action {
             _ => Intent::Capture,
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+const SCROLL_ON_WAYLAND: &str =
+    "Scrolling capture is not available on Wayland yet: apps cannot scroll other windows there.";
+/// Says why scrolling capture cannot start on this desktop, if it cannot.
+fn scroll_available() -> Result<(), &'static str> {
+    #[cfg(target_os = "linux")]
+    if crate::portal::is_wayland() {
+        return Err(SCROLL_ON_WAYLAND);
+    }
+    Ok(())
 }
 
 /// Starts `action` after `delay`, leaving time to open a menu or hover a
@@ -125,6 +155,12 @@ fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool) {
     }
     // Refused before a region is picked; record::start_with refuses
     // every other way of starting one too.
+    if action == Action::Scroll
+        && let Err(message) = scroll_available()
+    {
+        report_failure(app, message);
+        return;
+    }
     if action == Action::Record && crate::steps::is_running() {
         report_failure(app, record::STEPS_RUNNING);
         return;
@@ -192,14 +228,15 @@ fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool) {
         Screen,
         Monitor(usize),
     }
-    let chooser = action == Action::AllInOne;
+    let chooser = action.chooser();
     let job = match action {
         Action::Region
         | Action::Window
         | Action::Text
         | Action::Colour
         | Action::Record
-        | Action::AllInOne => {
+        | Action::AllInOne
+        | Action::Scroll => {
             let Some(id) = overlay::begin(app, chooser) else {
                 return;
             };
@@ -213,9 +250,14 @@ fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool) {
     let app = app.clone();
     std::thread::spawn(move || {
         let result = match job {
-            CaptureJob::Overlay(id) => {
-                overlay::open(&app, action.mode(), action.intent(), chooser, id)
-            }
+            CaptureJob::Overlay(id) => overlay::open(
+                &app,
+                action.mode(),
+                action.intent(),
+                chooser,
+                action.choice(),
+                id,
+            ),
             CaptureJob::Repeat => {
                 let foreground = screen::foreground();
                 overlay::capture_last_region(&app).map(|(image, scale, pointer)| {
@@ -830,5 +872,25 @@ mod tests {
         assert_eq!(text, "Scan for the menu\n");
         assert_eq!(codes.len(), 1);
         assert!(codes[0].is_link);
+    }
+
+    #[test]
+    fn scrolling_capture_opens_the_chooser_with_scroll_picked() {
+        assert!(Action::Scroll.chooser());
+        assert!(Action::AllInOne.chooser());
+        assert!(!Action::Region.chooser());
+        assert_eq!(Action::Scroll.mode(), CaptureMode::Region);
+        assert_eq!(
+            Action::Scroll.choice(),
+            Some(overlay::Choice {
+                intent: Some(Intent::Scroll),
+                mode: None,
+                delay_seconds: None,
+                scroll_by_hand: None,
+            })
+        );
+        assert_eq!(Action::AllInOne.choice(), None);
+        // The shortcut that opens it does not stop a recording.
+        assert!(!Action::Scroll.stops_recording());
     }
 }

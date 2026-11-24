@@ -2,7 +2,7 @@
 title: Wayland
 description: What works differently on Linux desktops running Wayland, and why.
 sidebar:
-  order: 12
+  order: 13
 ---
 
 Most Linux desktops today (GNOME and KDE Plasma among them) run **Wayland**. Wayland doesn't let any app read the screen or listen for keys by itself. Only the desktop may, and apps ask it through *desktop portals*. Grab-it does that, so it works on Wayland, with a few differences.

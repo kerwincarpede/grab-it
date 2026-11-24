@@ -1,11 +1,7 @@
 //! Automatic and manual scrolling capture. Unmatched frames never alter the accepted reference.
-use image::{RgbaImage, imageops};
-use std::{
-    borrow::Cow,
-    sync::{Mutex, OnceLock},
-};
-
-pub const MAX_LENGTH: u32 = 30_000;
+use crate::stitch::{Axis, Push, Stitcher};
+use image::RgbaImage;
+use std::sync::{Mutex, OnceLock};
 /// Serializes recording/scroll startup, including their state reservations.
 pub fn start_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -41,65 +37,26 @@ pub fn report_start_failure(error: StartError, report: impl FnOnce(&str)) {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Axis {
-    Vertical,
-    Horizontal,
-}
-fn length(i: &RgbaImage, a: Axis) -> u32 {
-    if a == Axis::Vertical {
-        i.height()
-    } else {
-        i.width()
-    }
-}
-fn pixel(i: &RgbaImage, a: Axis, along: u32, across: u32) -> &image::Rgba<u8> {
-    if a == Axis::Vertical {
-        i.get_pixel(across, along)
-    } else {
-        i.get_pixel(along, across)
-    }
-}
-fn line_error(a: &RgbaImage, b: &RgbaImage, axis: Axis, x: u32, y: u32) -> f64 {
-    let cross = length(
-        a,
-        if axis == Axis::Vertical {
-            Axis::Horizontal
-        } else {
-            Axis::Vertical
-        },
-    );
-    let mut sum = 0u64;
-    let mut count = 0;
-    for c in (0..cross).step_by((cross / 64).max(1) as usize) {
-        for k in 0..3 {
-            sum += pixel(a, axis, x, c)[k].abs_diff(pixel(b, axis, y, c)[k]) as u64;
-            count += 1;
-        }
-    }
-    sum as f64 / count.max(1) as f64
-}
-
-fn flip(i: &RgbaImage, axis: Axis) -> RgbaImage {
-    if axis == Axis::Vertical {
-        imageops::flip_vertical(i)
-    } else {
-        imageops::flip_horizontal(i)
-    }
-}
+/// Shown when the user chose to scroll by hand.
+const BY_HAND: &str = "Scroll at a steady pace, then choose Done.";
+/// Shown by hand while frames cannot be placed.
+const TOO_FAST: &str = "Scrolled too fast. Scroll back a little.";
 
 /// A session never resumes synthetic input after yielding to the user.
 struct AutoScroll {
     center: (i32, i32),
+    /// Image pixels per point, so the Mouse moved rule is 8 points everywhere.
+    scale: f64,
     reason: Option<&'static str>,
     still_steps: u8,
     /// Whether a frame after a wheel step ever differed from the one before.
     moved: bool,
 }
 impl AutoScroll {
-    fn new(center: (i32, i32), allowed: bool) -> Self {
+    fn new(center: (i32, i32), allowed: bool, scale: f64) -> Self {
         Self {
             center,
+            scale: usable_scale(scale),
             reason: (!allowed)
                 .then_some("Accessibility permission is needed. Scroll by hand, then choose Done."),
             still_steps: 0,
@@ -109,9 +66,10 @@ impl AutoScroll {
     fn observe_pointer(&mut self, pointer: Option<(i32, i32)>) {
         if self.reason.is_none()
             && pointer.is_some_and(|(x, y)| {
-                let dx = i64::from(x) - i64::from(self.center.0);
-                let dy = i64::from(y) - i64::from(self.center.1);
-                dx * dx + dy * dy > 64
+                let dx = f64::from(x) - f64::from(self.center.0);
+                let dy = f64::from(y) - f64::from(self.center.1);
+                let limit = 8.0 * self.scale;
+                dx * dx + dy * dy > limit * limit
             })
         {
             self.reason = Some("Mouse moved. Scroll by hand, then choose Done.");
@@ -202,174 +160,6 @@ fn step_amount(pixels: u32, scale: f64) -> i32 {
         step_points(pixels, scale)
     } else {
         step_notches(pixels, scale)
-    }
-}
-
-pub struct Stitcher {
-    pub image: RgbaImage,
-    last: RgbaImage,
-    axis: Option<Axis>,
-    reverse: Option<bool>,
-    pub capped: bool,
-    limit: u32,
-}
-impl Stitcher {
-    pub fn new(first: RgbaImage) -> Self {
-        let capped = first.width() >= MAX_LENGTH || first.height() >= MAX_LENGTH;
-        let image = imageops::crop_imm(
-            &first,
-            0,
-            0,
-            first.width().min(MAX_LENGTH),
-            first.height().min(MAX_LENGTH),
-        )
-        .to_image();
-        Self {
-            image,
-            last: first,
-            axis: None,
-            reverse: None,
-            capped,
-            limit: MAX_LENGTH,
-        }
-    }
-    /// Accepts only a well-supported overlap. Sticky edge strips are retained
-    /// once, replacing the old trailing strip on each accepted frame.
-    pub fn push(&mut self, next: RgbaImage) -> bool {
-        if self.capped || next.dimensions() != self.last.dimensions() || next == self.last {
-            return false;
-        }
-        let axes = self
-            .axis
-            .map(|a| vec![a])
-            .unwrap_or(vec![Axis::Vertical, Axis::Horizontal]);
-        let mut best: Option<(f64, Axis, u32, u32, bool)> = None;
-        let mut runner_up = f64::INFINITY;
-        for axis in axes {
-            for reverse in self.reverse.map(|r| vec![r]).unwrap_or(vec![false, true]) {
-                let last_image = if reverse {
-                    Cow::Owned(flip(&self.last, axis))
-                } else {
-                    Cow::Borrowed(&self.last)
-                };
-                let next_image = if reverse {
-                    Cow::Owned(flip(&next, axis))
-                } else {
-                    Cow::Borrowed(&next)
-                };
-                let last = &last_image;
-                let next = &next_image;
-                let n = length(next, axis);
-                let fixed = |p| line_error(last, next, axis, p, p) < 0.5;
-                let head = (0..n).take_while(|&p| fixed(p)).count() as u32;
-                let tail = (0..n.saturating_sub(head))
-                    .take_while(|&p| fixed(n - 1 - p))
-                    .count() as u32;
-                let end = n - tail;
-                let body = end.saturating_sub(head);
-                let minimum = (body / 4).max(8);
-                if body <= minimum {
-                    continue;
-                }
-                let motion: f64 = (head..end)
-                    .step_by((body / 48).max(1) as usize)
-                    .map(|p| line_error(last, next, axis, p, p))
-                    .sum();
-                if motion < 48. {
-                    continue;
-                }
-                for offset in 1..body - minimum + 1 {
-                    let overlap = body - offset;
-                    let mut error = 0.;
-                    let mut samples = 0;
-                    for p in (head..end - offset).step_by((overlap / 48).max(1) as usize) {
-                        error += line_error(last, next, axis, p + offset, p);
-                        samples += 1;
-                    }
-                    let score = error / samples.max(1) as f64;
-                    if score < 2.0 {
-                        if best.as_ref().is_none_or(|b| score < b.0) {
-                            runner_up = best.as_ref().map(|b| b.0).unwrap_or(f64::INFINITY);
-                            best = Some((score, axis, offset, tail, reverse));
-                        } else {
-                            runner_up = runner_up.min(score);
-                        }
-                    }
-                }
-            }
-        }
-        let Some((score, axis, offset, tail, reverse)) = best else {
-            return false;
-        };
-        // Repeating patterns can support several different offsets. Waiting
-        // for another frame is safer than permanently duplicating content.
-        if runner_up - score < 0.1 {
-            return false;
-        }
-        let normalized = if reverse {
-            Cow::Owned(flip(&self.image, axis))
-        } else {
-            Cow::Borrowed(&self.image)
-        };
-        let input = if reverse {
-            Cow::Owned(flip(&next, axis))
-        } else {
-            Cow::Borrowed(&next)
-        };
-        let old = length(&self.image, axis);
-        let add = offset.min(self.limit.saturating_sub(old));
-        self.capped = old + add >= self.limit;
-        if add == 0 {
-            return false;
-        }
-        let (w, h) = if axis == Axis::Vertical {
-            (self.image.width(), old + add)
-        } else {
-            (old + add, self.image.height())
-        };
-        let mut output = RgbaImage::new(w, h);
-        imageops::replace(&mut output, normalized.as_ref(), 0, 0);
-        let start = length(&next, axis) - tail - offset;
-        let strip = if axis == Axis::Vertical {
-            imageops::crop_imm(input.as_ref(), 0, start, w, add).to_image()
-        } else {
-            imageops::crop_imm(input.as_ref(), start, 0, add, h).to_image()
-        };
-        let at = old - tail;
-        imageops::replace(
-            &mut output,
-            &strip,
-            if axis == Axis::Horizontal {
-                at as i64
-            } else {
-                0
-            },
-            if axis == Axis::Vertical { at as i64 } else { 0 },
-        );
-        if tail > 0 {
-            let n = length(&input, axis);
-            let footer = if axis == Axis::Vertical {
-                imageops::crop_imm(input.as_ref(), 0, n - tail, w, tail).to_image()
-            } else {
-                imageops::crop_imm(input.as_ref(), n - tail, 0, tail, h).to_image()
-            };
-            let at = old + add - tail;
-            imageops::replace(
-                &mut output,
-                &footer,
-                if axis == Axis::Horizontal {
-                    at as i64
-                } else {
-                    0
-                },
-                if axis == Axis::Vertical { at as i64 } else { 0 },
-            );
-        }
-        self.image = if reverse { flip(&output, axis) } else { output };
-        self.last = next;
-        self.axis = Some(axis);
-        self.reverse = Some(reverse);
-        true
     }
 }
 
@@ -494,6 +284,7 @@ pub fn start(
     rect: Rect,
     image_size: (u32, u32),
     foreground: Foreground,
+    automatic: bool,
 ) -> Result<(), StartError> {
     #[cfg(target_os = "linux")]
     if crate::portal::is_wayland() {
@@ -517,9 +308,14 @@ pub fn start(
             let (result, restore_fade) = without_card_fade(|on| set_card_fade(&handle, on), |card_fade| -> Result<(), String> {
                 std::thread::sleep(Duration::from_millis(250));
                 hide_card(&handle)?;
-                let allowed = crate::permissions::ensure_accessibility(&handle);
+                // Checked without a prompt: the guide offered Open Settings
+                // before the capture started.
+                let allowed = automatic && crate::permissions::accessibility_trusted();
                 let center = ((rect.width / 2) as i32, (rect.height / 2) as i32);
-                let mut auto = AutoScroll::new(center, allowed);
+                let mut auto = AutoScroll::new(center, allowed, monitor.scale_factor);
+                if !automatic {
+                    auto.reason = Some(BY_HAND);
+                }
                 if allowed {
                     if place_pointer(&monitor, (rect.x + center.0, rect.y + center.1)).is_err() {
                         auto.reason = Some("Automatic scrolling is unavailable. Scroll by hand, then choose Done.");
@@ -538,17 +334,21 @@ pub fn start(
                     || restore_card(&handle),
                 )?;
                 auto.observe_pointer(first.pointer);
-                let mut previous = first.image.clone();
                 let mut stitch = Stitcher::new(first.image);
-                let item = |s: &Stitcher, a: &AutoScroll| QuickItem::Scrolling {
+                let mut too_fast = false;
+                let item = |s: &Stitcher, a: &AutoScroll, too_fast: bool| QuickItem::Scrolling {
                     session_id: control.id,
                     width: s.image.width(),
                     height: s.image.height(),
                     capped: s.capped,
                     auto_scrolling: a.reason.is_none() && !s.capped,
-                    manual_reason: a.reason.map(str::to_owned),
+                    manual_reason: if too_fast {
+                        Some(TOO_FAST.to_owned())
+                    } else {
+                        a.reason.map(str::to_owned)
+                    },
                 };
-                let mut generation = quick::show(&handle, item(&stitch, &auto));
+                let mut generation = quick::show(&handle, item(&stitch, &auto, too_fast));
                 // quick::show can create the card, which then has its fade.
                 card_fade(false);
                 let overlaps = place_card(&handle, &monitor, rect, image_size);
@@ -562,14 +362,18 @@ pub fn start(
                 // now cannot show it. The Stitcher starts again from the
                 // reader every later frame comes from.
                 let use_buffered;
-                (stitch, previous, use_buffered) = if overlaps {
-                    (stitch, previous, false)
+                (stitch, use_buffered) = if overlaps {
+                    (stitch, false)
                 } else {
-                    restart_stitch(source.as_mut(), synchronous.as_mut())?
+                    let (restarted, _, use_buffered) =
+                        restart_stitch(source.as_mut(), synchronous.as_mut())?;
+                    (restarted, use_buffered)
                 };
                 let mut wheel_pending = false;
                 while control.end.load(Ordering::SeqCst) == 0 {
-                    std::thread::sleep(Duration::from_millis(250));
+                    // By hand, frames are read faster so a quick scroll still
+                    // leaves an overlap to match.
+                    std::thread::sleep(Duration::from_millis(if auto.reason.is_some() { 100 } else { 250 }));
                     if !quick::is_current(&handle, generation) {
                         control.end.store(2, Ordering::SeqCst);
                         break;
@@ -594,17 +398,30 @@ pub fn start(
                         synchronous.grab()?
                     };
                     let old_reason = auto.reason;
+                    let old_too_fast = too_fast;
                     auto.observe_pointer(frame.pointer);
-                    let unchanged = frame.image == previous;
-                    previous = frame.image.clone();
-                    let changed = stitch.push(frame.image);
+                    // The automatic step breaks ties between offsets.
+                    let hint = wheel_pending.then(|| {
+                        let step = i64::from(step_pixels(rect.width, rect.height, stitch.axis));
+                        if stitch.reverse == Some(true) { -step } else { step }
+                    });
+                    let outcome = stitch.push_with_hint(frame.image, hint);
+                    // Only content that stayed put counts toward the end, so
+                    // a blinking caret or an animation cannot keep it going.
+                    let unchanged = outcome == Push::Still;
+                    let changed = outcome == Push::Grew;
+                    match outcome {
+                        Push::Grew | Push::Placed => too_fast = false,
+                        Push::Lost => too_fast = auto.reason.is_some(),
+                        Push::Still | Push::Capped => {}
+                    }
                     if wheel_pending && auto.at_end(unchanged, stitch.axis.is_some()) {
                         let _ = control.end.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
                         break;
                     }
                     wheel_pending = false;
-                    if changed || old_reason != auto.reason {
-                        if let Some(g) = quick::replace(&handle, generation, item(&stitch, &auto)) {
+                    if changed || old_reason != auto.reason || old_too_fast != too_fast {
+                        if let Some(g) = quick::replace(&handle, generation, item(&stitch, &auto, too_fast)) {
                             generation = g;
                         } else {
                             control.end.store(2, Ordering::SeqCst);
@@ -619,7 +436,7 @@ pub fn start(
                             wheel_pending = true;
                         } else {
                             auto.reason = Some("Automatic scrolling is unavailable. Scroll by hand, then choose Done.");
-                            if let Some(g) = quick::replace(&handle, generation, item(&stitch, &auto)) {
+                            if let Some(g) = quick::replace(&handle, generation, item(&stitch, &auto, too_fast)) {
                                 generation = g;
                             } else {
                                 control.end.store(2, Ordering::SeqCst);
@@ -854,6 +671,7 @@ fn place_card(app: &AppHandle, info: &MonitorInfo, rect: Rect, image_size: (u32,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stitch::tests::frame;
     fn rejected_start_preserves_scroll() {
         let control = Control {
             id: 17,
@@ -885,7 +703,7 @@ mod tests {
         let target = desktop_pointer_target((-1920, -1080), (300 + 400, 100 + 300));
         assert_eq!(target, (-1220, -680));
         // The frame reports coordinates relative to the captured region.
-        let mut auto = AutoScroll::new((400, 300), true);
+        let mut auto = AutoScroll::new((400, 300), true, 1.0);
         auto.observe_pointer(Some((target.0 - (-1920 + 300), target.1 - (-1080 + 100))));
         assert!(auto.reason.is_none());
     }
@@ -1331,7 +1149,7 @@ mod tests {
     }
     #[test]
     fn content_that_moved_but_never_lined_up_is_not_called_unscrolled() {
-        let mut auto = AutoScroll::new((0, 0), true);
+        let mut auto = AutoScroll::new((0, 0), true, 1.0);
         // The page moves for a while, then stops at its end.
         for _ in 0..3 {
             assert!(!auto.at_end(false, false));
@@ -1350,7 +1168,7 @@ mod tests {
 
     #[test]
     fn pointer_threshold_is_radial_and_pause_is_permanent() {
-        let mut auto = AutoScroll::new((100, 100), true);
+        let mut auto = AutoScroll::new((100, 100), true, 1.0);
         auto.observe_pointer(None);
         auto.observe_pointer(Some((108, 100)));
         assert!(auto.reason.is_none());
@@ -1363,8 +1181,20 @@ mod tests {
         assert!(auto.reason.is_some());
     }
     #[test]
+    fn mouse_moved_is_measured_in_points() {
+        // At 2x, 8 points are 16 image pixels.
+        let mut auto = AutoScroll::new((100, 100), true, 2.0);
+        auto.observe_pointer(Some((116, 100)));
+        assert!(auto.reason.is_none());
+        auto.observe_pointer(Some((112, 112)));
+        assert_eq!(
+            auto.reason,
+            Some("Mouse moved. Scroll by hand, then choose Done.")
+        );
+    }
+    #[test]
     fn end_requires_five_consecutive_unchanged_wheel_steps() {
-        let mut auto = AutoScroll::new((0, 0), true);
+        let mut auto = AutoScroll::new((0, 0), true, 1.0);
         for _ in 0..4 {
             assert!(!auto.at_end(true, true));
         }
@@ -1373,14 +1203,14 @@ mod tests {
             assert!(!auto.at_end(true, true));
         }
         assert!(auto.at_end(true, true));
-        let mut refused = AutoScroll::new((0, 0), false);
+        let mut refused = AutoScroll::new((0, 0), false, 1.0);
         for _ in 0..10 {
             assert!(!refused.at_end(true, true));
         }
     }
     #[test]
     fn never_moved_capture_yields_to_manual_without_saving() {
-        let mut auto = AutoScroll::new((0, 0), true);
+        let mut auto = AutoScroll::new((0, 0), true, 1.0);
         let first = frame(Axis::Horizontal, 0, false);
         let mut stitch = Stitcher::new(first.clone());
         for _ in 0..4 {
@@ -1403,7 +1233,7 @@ mod tests {
     }
     #[test]
     fn wheel_follows_first_accepted_axis_and_direction() {
-        let auto = AutoScroll::new((0, 0), true);
+        let auto = AutoScroll::new((0, 0), true, 1.0);
         assert!(matches!(
             auto.wheel(None, None, 7),
             rdev::EventType::Wheel {
@@ -1449,7 +1279,7 @@ mod tests {
     }
     #[test]
     fn horizontal_wheel_continues_toward_new_content() {
-        let auto = AutoScroll::new((0, 0), true);
+        let auto = AutoScroll::new((0, 0), true, 1.0);
         for reverse in [false, true] {
             let mut stitch = Stitcher::new(frame(Axis::Horizontal, 20, false));
             let next = if reverse { 0 } else { 40 };
@@ -1519,103 +1349,5 @@ mod tests {
             step_amount(step_pixels(1800, 1200, Some(Axis::Horizontal)), 2.0),
             if cfg!(target_os = "macos") { 300 } else { 3 }
         );
-    }
-    fn frame(axis: Axis, offset: u32, sticky: bool) -> RgbaImage {
-        let (w, h) = if axis == Axis::Vertical {
-            (24, 80)
-        } else {
-            (80, 24)
-        };
-        RgbaImage::from_fn(w, h, |x, y| {
-            let p = if axis == Axis::Vertical { y } else { x };
-            let c = if axis == Axis::Vertical { x } else { y };
-            let v = if sticky && !(5..75).contains(&p) {
-                p
-            } else {
-                p + offset
-            };
-            image::Rgba([
-                ((v * 37 + c * 13) % 251) as u8,
-                ((v * 71 + c * 7) % 253) as u8,
-                ((v * 19 + c * 41) % 255) as u8,
-                255,
-            ])
-        })
-    }
-    #[test]
-    fn offsets_axes_and_sticky_edges() {
-        for axis in [Axis::Vertical, Axis::Horizontal] {
-            for sticky in [false, true] {
-                let mut s = Stitcher::new(frame(axis, 0, sticky));
-                assert!(!s.push(frame(axis, 0, sticky)));
-                assert!(s.push(frame(axis, 13, sticky)));
-                assert_eq!(length(&s.image, axis), 93);
-                assert!(s.push(frame(axis, 32, sticky)));
-                assert_eq!(length(&s.image, axis), 112);
-                let expected = frame(axis, 32, sticky);
-                assert_eq!(
-                    pixel(&s.image, axis, 111, 10),
-                    pixel(&expected, axis, 79, 10)
-                );
-                assert!(!s.push(RgbaImage::new(2, 2)));
-            }
-        }
-    }
-    #[test]
-    fn reverse_motion_prepends_in_reading_order() {
-        for axis in [Axis::Vertical, Axis::Horizontal] {
-            let mut s = Stitcher::new(frame(axis, 32, false));
-            assert!(s.push(frame(axis, 13, false)));
-            assert!(s.push(frame(axis, 0, false)));
-            assert_eq!(length(&s.image, axis), 112);
-            assert_eq!(
-                pixel(&s.image, axis, 0, 10),
-                pixel(&frame(axis, 0, false), axis, 0, 10)
-            );
-        }
-    }
-    #[test]
-    fn cap_waits_without_growing() {
-        let mut s = Stitcher::new(frame(Axis::Vertical, 0, false));
-        s.limit = 90;
-        assert!(s.push(frame(Axis::Vertical, 20, false)));
-        assert_eq!(s.image.height(), 90);
-        assert!(s.capped);
-        assert!(!s.push(frame(Axis::Vertical, 30, false)));
-    }
-    #[test]
-    fn partial_cap_retains_one_footer() {
-        let mut s = Stitcher::new(frame(Axis::Vertical, 0, true));
-        s.limit = 90;
-        assert!(s.push(frame(Axis::Vertical, 20, true)));
-        assert_eq!(s.image.height(), 90);
-        for p in 0..5 {
-            assert_eq!(
-                s.image.get_pixel(10, 85 + p),
-                frame(Axis::Vertical, 20, true).get_pixel(10, 75 + p)
-            );
-        }
-    }
-    #[test]
-    fn ambiguous_repeating_rows_are_not_guessed() {
-        let pattern = |offset| {
-            RgbaImage::from_fn(24, 80, |_, y| {
-                let v = (((y + offset) % 8) * 30) as u8;
-                image::Rgba([v, v, v, 255])
-            })
-        };
-        let mut s = Stitcher::new(pattern(0));
-        assert!(!s.push(pattern(3)));
-        assert_eq!(s.image.height(), 80);
-    }
-    #[test]
-    fn unrelated_frames_do_not_poison_reference() {
-        let mut s = Stitcher::new(frame(Axis::Vertical, 0, false));
-        assert!(!s.push(RgbaImage::from_pixel(
-            24,
-            80,
-            image::Rgba([255, 255, 255, 255])
-        )));
-        assert!(s.push(frame(Axis::Vertical, 10, false)));
     }
 }

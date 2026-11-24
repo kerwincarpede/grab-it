@@ -45,6 +45,10 @@ pub struct Hotkeys {
     /// from before step capture get the default.
     #[serde(default = "default_steps")]
     pub steps: String,
+    /// Scrolling capture. Empty by default, and allowed to stay empty, which
+    /// registers nothing; settings from before it load as empty.
+    #[serde(default)]
+    pub scroll: String,
 }
 
 /// The step capture hotkey's default.
@@ -92,6 +96,7 @@ impl Default for Hotkeys {
                 colour: "Cmd+Shift+9".into(),
                 library: "Cmd+Shift+0".into(),
                 steps: default_steps(),
+                scroll: String::new(),
             }
         } else {
             Self {
@@ -103,6 +108,7 @@ impl Default for Hotkeys {
                 colour: "Ctrl+Shift+PrintScreen".into(),
                 library: "Alt+Shift+PrintScreen".into(),
                 steps: default_steps(),
+                scroll: String::new(),
             }
         }
     }
@@ -110,7 +116,7 @@ impl Default for Hotkeys {
 
 impl Hotkeys {
     /// Each hotkey with what it does and its name in Settings.
-    pub fn entries(&self) -> [(HotkeyAction, &'static str, &str); 8] {
+    pub fn entries(&self) -> [(HotkeyAction, &'static str, &str); 9] {
         use HotkeyAction::{Capture, Library};
         [
             (
@@ -129,6 +135,11 @@ impl Hotkeys {
             ),
             (Library, "Open library", self.library.as_str()),
             (Capture(Action::Steps), "Step capture", self.steps.as_str()),
+            (
+                Capture(Action::Scroll),
+                "Scrolling capture",
+                self.scroll.as_str(),
+            ),
         ]
     }
 
@@ -143,9 +154,13 @@ impl Hotkeys {
             colour: self.colour.trim().to_owned(),
             library: self.library.trim().to_owned(),
             steps: self.steps.trim().to_owned(),
+            scroll: self.scroll.trim().to_owned(),
         };
         let mut seen: Vec<(Shortcut, &str)> = Vec::new();
-        for (_, name, accelerator) in trimmed.entries() {
+        for (action, name, accelerator) in trimmed.entries() {
+            if accelerator.is_empty() && action.may_be_empty() {
+                continue;
+            }
             if accelerator.is_empty() {
                 return Err(format!("Choose a hotkey for {name}."));
             }
@@ -180,6 +195,11 @@ impl HotkeyState {
 pub type BindingLabels = BTreeMap<String, String>;
 
 impl HotkeyAction {
+    /// Hotkeys that have none by default and register nothing when empty.
+    pub fn may_be_empty(self) -> bool {
+        self == Self::Capture(Action::Scroll)
+    }
+
     fn binding_key(self) -> Option<&'static str> {
         match self {
             Self::Capture(Action::AllInOne) => Some("allInOne"),
@@ -189,6 +209,7 @@ impl HotkeyAction {
             Self::Capture(Action::Text) => Some("text"),
             Self::Capture(Action::Colour) => Some("colour"),
             Self::Capture(Action::Steps) => Some("steps"),
+            Self::Capture(Action::Scroll) => Some("scroll"),
             Self::Library => Some("library"),
             Self::Capture(_) => None,
         }
@@ -351,6 +372,9 @@ pub fn apply(app: &AppHandle, hotkeys: &Hotkeys) -> Vec<String> {
     let mut bound = Vec::new();
     let mut labels = Vec::new();
     for (action, name, accelerator) in hotkeys.entries() {
+        if accelerator.trim().is_empty() && action.may_be_empty() {
+            continue;
+        }
         let shortcut = match Shortcut::from_str(accelerator) {
             Ok(shortcut) => shortcut,
             Err(err) => {
@@ -453,6 +477,23 @@ mod tests {
     }
 
     #[test]
+    fn scrolling_capture_has_no_hotkey_by_default_and_may_stay_empty() {
+        let defaults = Hotkeys::default();
+        assert_eq!(defaults.scroll, "");
+        assert_eq!(defaults.validated().unwrap().scroll, "");
+        let blank = Hotkeys {
+            scroll: "  ".into(),
+            ..Hotkeys::default()
+        };
+        assert_eq!(blank.validated().unwrap().scroll, "");
+        // Settings from before scrolling capture load with it empty.
+        let mut old = serde_json::to_value(Hotkeys::default()).unwrap();
+        old.as_object_mut().unwrap().remove("scroll");
+        let loaded: Hotkeys = serde_json::from_value(old).unwrap();
+        assert_eq!(loaded.scroll, "");
+    }
+
+    #[test]
     fn hotkeys_are_trimmed() {
         let hotkeys = Hotkeys {
             region: "  Ctrl+Shift+R ".into(),
@@ -502,6 +543,15 @@ mod tests {
         assert_eq!(
             all_in_one_clash.validated(),
             Err("Region and Capture & record… use the same hotkey.".into())
+        );
+
+        let scroll_clash = Hotkeys {
+            scroll: Hotkeys::default().region,
+            ..Hotkeys::default()
+        };
+        assert_eq!(
+            scroll_clash.validated(),
+            Err("Scrolling capture and Region use the same hotkey.".into())
         );
 
         let library_clash = Hotkeys {

@@ -323,7 +323,7 @@ fn hub_position(
 }
 
 /// Starts a capture from the hub once it has hidden. `kind` is `region`,
-/// `allInOne`, `window`, `screen`, `monitor`, `repeat`, `record`, `text`, `colour` or `steps`.
+/// `allInOne`, `window`, `screen`, `monitor`, `repeat`, `record`, `text`, `colour`, `steps` or `scroll`.
 #[tauri::command]
 #[specta::specta]
 pub fn hub_capture(
@@ -344,6 +344,7 @@ pub fn hub_capture(
     }
     let action = match kind.as_str() {
         "allInOne" => Action::AllInOne,
+        "scroll" => Action::Scroll,
         "region" => Action::Region,
         "window" => Action::Window,
         "screen" => Action::Screen,

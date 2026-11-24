@@ -20,6 +20,7 @@ const SETTINGS = testSettings({
     colour: "Cmd+Shift+9",
     library: "Cmd+Shift+0",
     steps: "Cmd+Shift+8",
+    scroll: "",
   },
 });
 
@@ -258,8 +259,10 @@ describe("AppWindow", () => {
     await userEvent.click(screen.getByRole("button", { name: "New capture" }));
     await userEvent.click(screen.getByRole("button", { name: "More captures" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "Record" }));
+    await userEvent.click(screen.getByRole("button", { name: "More captures" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Scrolling capture" }));
     const captures = calls.filter(({ cmd }) => cmd === "hub_capture").map(({ payload }) => (payload as { kind: string }).kind);
-    expect(captures).toEqual(["region", "record"]);
+    expect(captures).toEqual(["region", "record", "scroll"]);
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 

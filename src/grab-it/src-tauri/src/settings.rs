@@ -1091,6 +1091,8 @@ struct StoredHotkeys {
     colour: Option<String>,
     library: Option<String>,
     steps: Option<String>,
+    /// May be empty: Scrolling capture has no hotkey by default.
+    scroll: Option<String>,
 }
 
 impl StoredHotkeys {
@@ -1109,6 +1111,10 @@ impl StoredHotkeys {
             colour: pick(self.colour, defaults.colour),
             library: pick(self.library, defaults.library),
             steps: pick(self.steps, defaults.steps),
+            scroll: self
+                .scroll
+                .map(|value| value.trim().to_owned())
+                .unwrap_or(defaults.scroll),
         }
     }
 }

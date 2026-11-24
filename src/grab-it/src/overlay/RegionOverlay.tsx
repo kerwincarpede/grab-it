@@ -67,6 +67,8 @@ import { drawBackdrop } from "./backdrop";
 import Loupe from "./Loupe";
 import { benchMark, benchOpaque, benchSpan, benchSwitch, runBench, setupBench } from "./bench";
 import RecordSetup, { RecordOptionsFields } from "./RecordSetup";
+import ScrollGuide from "./ScrollGuide";
+import { useAccessibility } from "./useAccessibility";
 import { nextCountdown } from "./recordOptions";
 import { ChooserToolbar, SizeFields } from "./ChooserToolbar";
 import { EMPTY_TRAIL, movedTo, pointedAt, reachedToolbar } from "./pointerRest";
@@ -109,6 +111,8 @@ const SETUP_HALF = 23;
 const SETUP_HINT_GAP = 10;
 /** How near the edge the setup toolbar's centre may be dragged. */
 const SETUP_EDGE = 40;
+/** How much of the bottom edge Scroll's guide needs before it moves to the top. */
+const SCROLL_GUIDE_ROOM = 220;
 /**
  * The hovered window's rounded corners, in CSS px. Matches `.overlay-window`
  * and `.overlay-dim-corner`.
@@ -351,6 +355,8 @@ function RegionOverlay() {
   // All-in-one's toolbar: the mode picked, and the Timer in seconds.
   const [tool, setTool] = useState<Tool>("region");
   const [timer, setTimer] = useState(0);
+  // Scroll's setup: Grab-it scrolls unless the user chooses to.
+  const [scrollByHand, setScrollByHand] = useState(false);
   const toolbar = useRef<HTMLDivElement>(null);
   // Each mode's global shortcut, for the toolbar's tooltips.
   // As the tray, hub and Library show them: only those registered, or the desktop's own on Wayland.
@@ -565,6 +571,7 @@ function RegionOverlay() {
 
   const allInOne = info?.allInOne === true;
   const intent = allInOne ? toolIntent(tool) : (info?.intent ?? "capture");
+  const accessibility = useAccessibility(intent === "scroll");
   const recording = useRecordingOptions(intent === "record");
   // What a recording records: the source used last, until another is picked.
   const source: RecordingSource | null =
@@ -645,7 +652,12 @@ function RegionOverlay() {
 
   /** What All-in-one's toolbar chose, sent with a selection made in `mode`. */
   function toolbarChoice(mode: OverlayChoice["mode"]): OverlayChoice {
-    return { intent, mode, delaySeconds: isTimed(tool) ? timer : 0 };
+    return {
+      intent,
+      mode,
+      delaySeconds: isTimed(tool) ? timer : 0,
+      ...(intent === "scroll" ? { scrollByHand } : {}),
+    };
   }
 
   /**
@@ -1289,6 +1301,16 @@ function RegionOverlay() {
             onCancel={cancel}
           />
         </div>
+      )}
+      {intent === "scroll" && info !== null && !dragging && (
+        <ScrollGuide
+          stage={held ? "adjust" : "choose"}
+          byHand={scrollByHand}
+          onByHand={setScrollByHand}
+          accessibility={accessibility}
+          edge={held && held.y + held.height > view.height - SCROLL_GUIDE_ROOM ? "top" : "bottom"}
+          top={top + (allInOne ? toolbarRoom : 0)}
+        />
       )}
       {showHint && (
         <div

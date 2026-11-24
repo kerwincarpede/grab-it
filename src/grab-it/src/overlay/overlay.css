@@ -1201,3 +1201,105 @@
 .overlay-toolbar[data-layout="stacked"] .overlay-toolbar-actions {
   margin-left: 0;
 }
+
+/* Scroll's guide: the steps, what Grab-it will do, and who scrolls. */
+.scroll-guide {
+  position: absolute;
+  left: 50%;
+  z-index: 4;
+  display: grid;
+  gap: 10px;
+  width: min(440px, calc(100% - 32px));
+  padding: 14px 16px;
+  color: #ecedef;
+  font-family: "Instrument Sans Variable", system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  line-height: 18px;
+  background: rgb(23 24 27 / 94%);
+  border: 1px solid var(--overlay-panel-edge);
+  border-radius: 12px;
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+
+.scroll-guide[data-edge="bottom"] {
+  bottom: 24px;
+}
+
+.scroll-guide[data-edge="top"] {
+  margin-top: 8px;
+}
+
+.scroll-guide-steps {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scroll-guide-steps li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: rgb(236 237 239 / 60%);
+}
+
+.scroll-guide-steps li[data-state="current"] {
+  color: #fff;
+  font-weight: 600;
+}
+
+.scroll-guide-steps li[data-state="done"] {
+  text-decoration: line-through;
+}
+
+.scroll-guide-number {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  font-size: 12px;
+  border: 1px solid currentcolor;
+  border-radius: 50%;
+}
+
+.scroll-guide-steps li[data-state="current"] .scroll-guide-number {
+  color: #fff;
+  background: var(--overlay-accent);
+  border-color: var(--overlay-accent);
+}
+
+.scroll-guide-text,
+.scroll-guide-warning {
+  margin: 0;
+}
+
+.scroll-guide-warning {
+  color: #f5c46b;
+}
+
+.scroll-guide button {
+  padding: 4px 10px;
+  color: inherit;
+  font: inherit;
+  background: rgb(255 255 255 / 8%);
+  border: 1px solid var(--overlay-panel-edge);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.scroll-guide-who {
+  display: flex;
+  gap: 6px;
+}
+
+.scroll-guide-who button[aria-checked="true"] {
+  background: var(--overlay-accent);
+  border-color: var(--overlay-accent);
+}
+
+.scroll-guide-who button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}

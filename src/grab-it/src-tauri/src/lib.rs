@@ -51,6 +51,7 @@ mod search;
 mod settings;
 mod steps;
 mod steps_bar;
+mod stitch;
 mod storage;
 mod tidy;
 mod timer_bar;
@@ -501,6 +502,8 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             update::update_install,
             update::update_later,
             permissions::permission_status,
+            permissions::accessibility_status,
+            permissions::accessibility_open_settings,
             permissions::permission_request_all,
             permissions::permission_prime_capture,
             permissions::permission_finish,

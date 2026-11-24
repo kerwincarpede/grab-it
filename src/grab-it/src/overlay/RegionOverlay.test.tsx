@@ -55,7 +55,7 @@ function settings(recording: RecordingSettings): Settings_Serialize {
   return {
     saveFolder: "/home/me/Pictures/Grab-it",
     saveLayout: { byMonth: false, includeAppName: false },
-    hotkeys: { allInOne: "", region: "", window: "", screen: "", text: "", colour: "", library: "", steps: "" },
+    hotkeys: { allInOne: "", region: "", window: "", screen: "", text: "", colour: "", library: "", steps: "", scroll: "" },
     editor: {},
     showInDock: true,
     appearance: DEFAULT_APPEARANCE,
@@ -2434,7 +2434,29 @@ describe("scrolling capture", () => {
     fireEvent.mouseUp(overlay, { button: 0, clientX: 400, clientY: 400 });
     fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
     await waitFor(() => expect(calls).toContainEqual(expect.objectContaining({
-      cmd: "overlay_finish", payload: expect.objectContaining({ choice: { intent: "scroll", mode: "region", delaySeconds: 0 } }),
+      cmd: "overlay_finish", payload: expect.objectContaining({ choice: { intent: "scroll", mode: "region", delaySeconds: 0, scrollByHand: false } }),
+    })));
+  });
+
+  it("guides the setup and sends who scrolls", async () => {
+    const calls = mockOverlay({ allInOne: true });
+    render(<RegionOverlay />);
+    await ready();
+    fireEvent.keyDown(window, { key: "7", code: "Digit7" });
+    const guide = screen.getByRole("complementary", { name: "Scrolling capture" });
+    expect(guide).toHaveTextContent("Choose a window, or drag an area");
+    expect(guide).toHaveTextContent(/Leave the mouse and trackpad alone/);
+    fireEvent.click(screen.getByRole("radio", { name: "I’ll scroll myself" }));
+    const overlay = screen.getByTestId("overlay");
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(overlay, { clientX: 400, clientY: 400 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 400, clientY: 400 });
+    expect(screen.getAllByRole("listitem").find((item) => item.getAttribute("aria-current") === "step")).toHaveTextContent(
+      "Drag the edges to the part that scrolls",
+    );
+    fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
+    await waitFor(() => expect(calls).toContainEqual(expect.objectContaining({
+      cmd: "overlay_finish", payload: expect.objectContaining({ choice: { intent: "scroll", mode: "region", delaySeconds: 0, scrollByHand: true } }),
     })));
   });
 });

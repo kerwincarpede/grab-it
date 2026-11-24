@@ -384,6 +384,7 @@ pub fn open(
     mode: CaptureMode,
     intent: Intent,
     all_in_one: bool,
+    choice: Option<Choice>,
     id: u64,
 ) -> Result<(), String> {
     if !app.state::<OverlayState>().lock().opening(id) {
@@ -429,7 +430,8 @@ pub fn open(
         mode,
         intent,
         all_in_one,
-        choice: None,
+        // A choice made before the overlay opens, such as Scrolling capture's.
+        choice: choice.filter(|_| all_in_one),
         foreground: desktop.foreground,
         previous_app: desktop.active_app,
         frames: HashMap::new(),
@@ -1314,6 +1316,9 @@ pub struct Choice {
     /// The Timer: how long to wait, with the overlay closed, before the
     /// chosen area is captured as it looks then.
     pub delay_seconds: Option<u64>,
+    /// Scroll: the user scrolls by hand instead of Grab-it scrolling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll_by_hand: Option<bool>,
 }
 
 /// The longest Timer the toolbar offers.
@@ -1804,6 +1809,10 @@ pub fn overlay_finish(
         .frames
         .get(window.label())
         .ok_or("this window is not a capture overlay")?;
+    let scroll_by_hand = choice
+        .or(session.choice)
+        .and_then(|choice| choice.scroll_by_hand)
+        .unwrap_or(false);
     let Resolved {
         intent,
         mode,
@@ -1884,7 +1893,7 @@ pub fn overlay_finish(
         let foreground = session.foreground.clone();
         std::thread::spawn(move || {
             let result = if intent == Intent::Scroll {
-                crate::scroll::start(&app, &monitor, rect, size, foreground)
+                crate::scroll::start(&app, &monitor, rect, size, foreground, !scroll_by_hand)
             } else {
                 crate::record::start(&app, &monitor, size, rect, app_name)
             };
@@ -2522,6 +2531,7 @@ mod tests {
             intent: Some(Intent::Text),
             mode: Some(CaptureMode::Region),
             delay_seconds: None,
+            scroll_by_hand: None,
         };
         assert_eq!(
             resolve(true, Intent::Capture, CaptureMode::Region, Some(choice)),
@@ -2557,6 +2567,7 @@ mod tests {
             intent: Some(intent),
             mode: Some(CaptureMode::Screen),
             delay_seconds: Some(seconds),
+            scroll_by_hand: None,
         };
         let delay =
             |choice| resolve(true, Intent::Capture, CaptureMode::Region, Some(choice)).delay;
@@ -2592,6 +2603,7 @@ mod tests {
             intent: Some(Intent::Text),
             mode: Some(CaptureMode::Region),
             delay_seconds: Some(5),
+            scroll_by_hand: None,
         };
         assert_eq!(
             serde_json::to_value(choice).unwrap(),
@@ -2619,6 +2631,7 @@ mod tests {
                 intent: Some(Intent::Text),
                 mode: Some(CaptureMode::Region),
                 delay_seconds: Some(3),
+                scroll_by_hand: None,
             }),
             monitor_width: 100,
             monitor_height: 100,
@@ -2653,6 +2666,7 @@ mod tests {
                 intent: Some(Intent::Colour),
                 mode: Some(CaptureMode::Window),
                 delay_seconds: Some(3),
+                scroll_by_hand: None,
             }
         );
         assert_eq!(

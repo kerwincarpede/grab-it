@@ -190,7 +190,10 @@ fn shortcut_id(action: HotkeyAction) -> Option<&'static str> {
         HotkeyAction::Capture(Action::Text) => Some("capture-text"),
         HotkeyAction::Capture(Action::Colour) => Some("pick-colour"),
         HotkeyAction::Capture(Action::Steps) => Some("step-capture"),
-        HotkeyAction::Capture(Action::Monitor(_) | Action::Repeat | Action::Record) => None,
+        // Scrolling capture is unavailable on Wayland, so it binds nothing.
+        HotkeyAction::Capture(
+            Action::Monitor(_) | Action::Repeat | Action::Record | Action::Scroll,
+        ) => None,
         HotkeyAction::Library => Some("open-library"),
     }
 }
@@ -207,6 +210,7 @@ fn description(action: HotkeyAction) -> &'static str {
         HotkeyAction::Capture(Action::Colour) => "Pick a colour",
         HotkeyAction::Capture(Action::Record) => "Record the screen",
         HotkeyAction::Capture(Action::Steps) => "Start or stop a step capture",
+        HotkeyAction::Capture(Action::Scroll) => "Scrolling capture",
         HotkeyAction::Library => "Open the Grab-it library",
     }
 }
@@ -243,6 +247,10 @@ mod tests {
     #[test]
     fn shortcut_ids_round_trip() {
         for (action, _, _) in Hotkeys::default().entries() {
+            if action == HotkeyAction::Capture(Action::Scroll) {
+                assert_eq!(shortcut_id(action), None);
+                continue;
+            }
             let id = shortcut_id(action).expect("every hotkey has an id");
             assert_eq!(action_for_id(id), Some(action));
         }
