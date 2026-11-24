@@ -1151,6 +1151,52 @@ pub(crate) mod tests {
             }
         }
     }
+    /// A held window with no header: an outline on all four edges and
+    /// rounded corners at the top and bottom, its page scrolled by `offset`.
+    fn framed(offset: u32) -> RgbaImage {
+        let (w, h) = (480, 160);
+        RgbaImage::from_fn(w, h, |x, y| {
+            let (cx, cy) = (x.min(w - 1 - x), y.min(h - 1 - y));
+            if cx < RADIUS && cy < RADIUS {
+                let (dx, dy) = (RADIUS - cx, RADIUS - cy);
+                if dx * dx + dy * dy > RADIUS * RADIUS {
+                    return WALLPAPER;
+                }
+            }
+            let under = column(y + offset, x);
+            if x == 0 || x == w - 1 || y == 0 || y == h - 1 {
+                outlined(under)
+            } else {
+                under
+            }
+        })
+    }
+    #[test]
+    fn a_framed_windows_start_is_rewritten_after_scrolling_on_a_little() {
+        // Upward, on a little, then up again, in a window whose top edge is
+        // its outline and rounded corners: the image's start still comes
+        // from the frame before the one scrolled to.
+        let mut s = Stitcher::new(framed(120));
+        assert_eq!(s.push_with_hint(framed(80), None), Push::Grew);
+        assert_eq!(s.push_with_hint(framed(100), None), Push::Placed);
+        assert_eq!(s.push_with_hint(framed(60), None), Push::Grew);
+        let height = s.image.height();
+        assert_eq!(height, 220);
+        for y in 1..height - 1 {
+            for x in RADIUS..480 - RADIUS {
+                assert_eq!(
+                    *s.image.get_pixel(x, y),
+                    column(y + 60, x),
+                    "row {y}, x {x}"
+                );
+            }
+        }
+        for y in RADIUS..height - RADIUS {
+            for x in 0..480 {
+                assert_ne!(*s.image.get_pixel(x, y), WALLPAPER, "row {y}, x {x}");
+            }
+        }
+    }
     #[test]
     fn a_fixed_sidebar_in_a_held_window_ends_above_its_corners() {
         let mut s = Stitcher::new(held_with(0, true));
