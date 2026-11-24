@@ -6,7 +6,7 @@
 //! as fixed for that pair. Frames are placed on a canvas by position, so every
 //! row of the page is written once.
 use image::{Rgba, RgbaImage, imageops};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 pub const MAX_LENGTH: u32 = 30_000;
 const STRIPS: u32 = 48;
@@ -326,22 +326,7 @@ fn estimate(last: &[Vec<u64>], next: &[Vec<u64>], hint: Option<i64>) -> Result<M
     if support < 0.6 {
         return Err(Miss::Lost);
     }
-    let lines_up = |y: usize| {
-        let from = y as i64 - offset;
-        (0..h as i64).contains(&from) && {
-            let from = from as usize;
-            let equal = moving
-                .iter()
-                .filter(|&&s| last[s][y] == next[s][from])
-                .count();
-            equal * 20 >= moving.len() * 19
-        }
-    };
-    let edge = if offset > 0 {
-        (0..h).rev().take_while(|&y| !lines_up(y)).count()
-    } else {
-        (0..h).take_while(|&y| !lines_up(y)).count()
-    };
+    let edge = unmatched_rows(last, next, offset, offset > 0, &moving);
     Ok(Match {
         offset,
         head: head as u32,
@@ -395,6 +380,35 @@ fn strip_colours(image: &RgbaImage, axis: Axis) -> Vec<Rgba<u8>> {
             )
         })
         .collect()
+}
+
+/// Rows at one end of `reference` (its end when `at_end`) that do not line
+/// up with `next` placed `offset` rows further along: a held window's
+/// outline, which is not the page. Only the `moving` strips are compared.
+fn unmatched_rows(
+    reference: &[Vec<u64>],
+    next: &[Vec<u64>],
+    offset: i64,
+    at_end: bool,
+    moving: &[usize],
+) -> usize {
+    let h = reference.first().map_or(0, Vec::len);
+    let lines_up = |y: usize| {
+        let from = y as i64 - offset;
+        (0..h as i64).contains(&from) && {
+            let from = from as usize;
+            let equal = moving
+                .iter()
+                .filter(|&&s| reference[s][y] == next[s][from])
+                .count();
+            equal * 20 >= moving.len() * 19
+        }
+    };
+    if at_end {
+        (0..h).rev().take_while(|&y| !lines_up(y)).count()
+    } else {
+        (0..h).take_while(|&y| !lines_up(y)).count()
+    }
 }
 
 /// Rows at one end of `image` (its end when `at_end`) where its outermost
@@ -497,6 +511,11 @@ pub struct Stitcher {
     /// Rows of fixed edge at the image's start and end.
     header: Option<u32>,
     footer: Option<u32>,
+    /// The frames that wrote the image's start and end, with their canvas
+    /// positions, so their outline and corners are rewritten whenever the
+    /// image grows past them, even after the reference has moved on.
+    start_frame: (Arc<RgbaImage>, i64),
+    end_frame: (Arc<RgbaImage>, i64),
     sides: Option<Sides>,
 }
 impl Stitcher {
@@ -510,8 +529,11 @@ impl Stitcher {
             first.height().min(MAX_LENGTH),
         )
         .to_image();
+        let shared = Arc::new(first.clone());
         Self {
             image,
+            start_frame: (shared.clone(), 0),
+            end_frame: (shared, 0),
             last: first.clone(),
             last_sigs: [None, None],
             axis: None,
@@ -585,7 +607,7 @@ impl Stitcher {
                 filled: vec![false; n],
             });
         }
-        let grew = self.compose(axis, &next, &m);
+        let grew = self.compose(axis, &next, &next_sig, &m);
         self.last = next;
         self.last_sigs = [None, None];
         self.last_sigs[axis as usize] = Some(next_sig);
@@ -599,7 +621,7 @@ impl Stitcher {
     }
 
     /// Places `next` on the canvas and writes the rows the image lacks.
-    fn compose(&mut self, axis: Axis, next: &RgbaImage, m: &Match) -> bool {
+    fn compose(&mut self, axis: Axis, next: &RgbaImage, next_sig: &[Vec<u64>], m: &Match) -> bool {
         let n = i64::from(length(next, axis));
         let cross = length(next, other(axis));
         let old_pos = self.pos;
@@ -608,19 +630,27 @@ impl Stitcher {
         let lo = self.lo;
         let hi = lo + i64::from(length(&self.image, axis));
         let limit = i64::from(self.limit);
-        // Where the image ends with the reference frame, that frame's own
-        // edge is not the page: rewrite it from inside the new frame.
-        let edge = |at_end: bool| {
-            let corners = corner_rows(&self.last, axis, at_end);
-            i64::from(m.edge.max(corners))
+        // The edge of the frame that wrote the image's end (or start) is
+        // not the page: rewrite it from inside the new frame. That frame is
+        // the reference unless the user scrolled back in between.
+        let moving: Vec<usize> = (0..m.fixed.len()).filter(|&s| !m.fixed[s]).collect();
+        let edge = |(frame, pos): &(Arc<RgbaImage>, i64), at_end: bool| {
+            let rows = if *pos == old_pos {
+                m.edge
+            } else {
+                let sig = signatures(frame, axis);
+                let unmatched = unmatched_rows(&sig, next_sig, new_pos - pos, at_end, &moving);
+                (unmatched as u32).min(length(frame, axis) / 8)
+            };
+            i64::from(rows.max(corner_rows(frame, axis, at_end)))
         };
 
         let added: (i64, i64) = if new_pos + n > hi {
             let tail = i64::from(m.tail);
             let mut footer = i64::from(self.footer.unwrap_or(m.tail));
-            if old_pos + n == hi {
+            if self.end_frame.1 + n == hi {
                 let inside = hi - new_pos - i64::from(m.head);
-                footer = footer.max(edge(true).min(inside));
+                footer = footer.max(edge(&self.end_frame, true).min(inside));
             }
             let content_end = hi - footer;
             self.first_span.1 = self.first_span.1.min(content_end);
@@ -641,14 +671,15 @@ impl Stitcher {
                 place(&mut out, next, axis, n - tail, n, end - tail - lo);
             }
             self.footer = Some(m.tail);
+            self.end_frame = (Arc::new(next.clone()), new_pos);
             self.image = out;
             (content_end, end)
         } else if new_pos < lo {
             let head = i64::from(m.head);
             let mut header = i64::from(self.header.unwrap_or(m.head));
-            if old_pos == lo {
+            if self.start_frame.1 == lo {
                 let inside = new_pos + n - i64::from(m.tail) - lo;
-                header = header.max(edge(false).min(inside));
+                header = header.max(edge(&self.start_frame, false).min(inside));
             }
             let content_start = lo + header;
             self.first_span.0 = self.first_span.0.max(content_start);
@@ -675,6 +706,7 @@ impl Stitcher {
                 place(&mut out, next, axis, 0, head, 0);
             }
             self.header = Some(m.head);
+            self.start_frame = (Arc::new(next.clone()), new_pos);
             self.lo = start;
             self.image = out;
             (start, content_start)
@@ -1075,6 +1107,47 @@ pub(crate) mod tests {
         for y in 0..height - RADIUS {
             for x in 0..480 {
                 assert_ne!(*s.image.get_pixel(x, y), WALLPAPER, "row {y}, x {x}");
+            }
+        }
+    }
+    #[test]
+    fn a_held_windows_edge_is_rewritten_after_scrolling_back_a_little() {
+        // Down, back a little (trackpad momentum), then on: the image's end
+        // still comes from the frame before the one scrolled back to.
+        let mut s = Stitcher::new(held(0));
+        assert_eq!(s.push_with_hint(held(40), None), Push::Grew);
+        assert_eq!(s.push_with_hint(held(20), None), Push::Placed);
+        assert_eq!(s.push_with_hint(held(60), None), Push::Grew);
+        let height = s.image.height();
+        assert_eq!(height, 220);
+        for y in HEADER..height - 1 {
+            for x in RADIUS..480 - RADIUS {
+                assert_eq!(*s.image.get_pixel(x, y), column(y, x), "row {y}, x {x}");
+            }
+        }
+        for y in 0..height - RADIUS {
+            for x in 0..480 {
+                assert_ne!(*s.image.get_pixel(x, y), WALLPAPER, "row {y}, x {x}");
+            }
+        }
+    }
+    #[test]
+    fn a_held_windows_start_is_rewritten_after_scrolling_on_a_little() {
+        // Upward, on a little, then up again: the image's start still comes
+        // from the frame before the one scrolled to.
+        let mut s = Stitcher::new(held(120));
+        assert_eq!(s.push_with_hint(held(80), None), Push::Grew);
+        assert_eq!(s.push_with_hint(held(100), None), Push::Placed);
+        assert_eq!(s.push_with_hint(held(60), None), Push::Grew);
+        assert_eq!(s.image.height(), 220);
+        // The page joins in order below the newest frame's header.
+        for y in HEADER..s.image.height() - RADIUS {
+            for x in RADIUS..480 - RADIUS {
+                assert_eq!(
+                    *s.image.get_pixel(x, y),
+                    column(y + 60, x),
+                    "row {y}, x {x}"
+                );
             }
         }
     }
