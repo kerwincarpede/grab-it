@@ -47,6 +47,7 @@ mod recording_suggest;
 mod rt;
 mod screen;
 mod scroll;
+mod scroll_bar;
 mod search;
 mod settings;
 mod steps;
@@ -295,6 +296,7 @@ fn manage_states(builder: Builder<Rt>) -> Builder<Rt> {
         .manage(pin::PinState::default())
         .manage(record::RecordState::default())
         .manage(scroll::ScrollState::default())
+        .manage(scroll_bar::ScrollBarStore::default())
         .manage(record_bar::RecordBarState::default())
         .manage(hotkeys::HotkeyState::default())
         .manage(editor::EditorState::default())
@@ -413,6 +415,7 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             record::record_stop,
             scroll::scroll_done,
             scroll::scroll_cancel,
+            scroll_bar::scroll_bar_state,
             record::record_pause,
             record::record_mute,
             record::record_webcam,

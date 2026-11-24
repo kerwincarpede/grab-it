@@ -34,11 +34,13 @@ Before you start, choose who scrolls:
 
 ## If you move the mouse
 
-Moving the pointer more than 8 points from where Grab-it placed it switches that capture to scrolling by hand. Keep scrolling yourself, then choose **Done**. If you scroll so fast that the views no longer overlap, the card says **Scrolled too fast. Scroll back a little.** Scroll back until it grows again.
+Moving the pointer more than 8 points from where Grab-it placed it switches that capture to scrolling by hand. Keep scrolling yourself, then choose **Done**. If you scroll so fast that the views no longer overlap, the capture bar says **Scrolled too fast. Scroll back a little.** Scroll back until it grows again.
 
 ## Finish
 
-The card shows the size of the image so far. **Done** saves one stitched image; **Cancel** throws it away. At 30,000 px along the scroll direction the image stops growing; choose **Done** or **Cancel**.
+While it runs, a capture bar shows a stripe for how far the image is toward its 30,000 px limit, the size so far, a live preview of the newest part and what to do next. The bar stays out of the image. **Done** saves one stitched image and shows **Saving…** until it is saved; **Cancel** throws it away. At 30,000 px along the scroll direction the image stops growing; choose **Done** or **Cancel**.
+
+On Linux (X11) the bar moves outside the area you chose. When the area leaves it no room, it hides briefly for each view Grab-it reads.
 
 ## What it joins
 

@@ -58,7 +58,7 @@ export function onQuickChanged(handler: (shown: QuickShown) => void): Promise<Un
  * seconds chosen in Settings. `null` stays until something replaces it.
  */
 export function dismissAfter(item: QuickItem, seconds = 8): number | null {
-  if (item.kind === "working" || item.kind === "scrolling") return null;
+  if (item.kind === "working") return null;
   // The AI's text is on its way.
   if (item.kind === "text" && item.tidy?.state === "working") return null;
   // 0 is the user's "until I close it".
@@ -148,10 +148,3 @@ export async function quickDrag(generation: number): Promise<void> {
   await commands.quickDrag(generation);
 }
 
-export function scrollDone(sessionId: number): Promise<void> {
-  return commands.scrollDone(sessionId);
-}
-
-export function scrollCancel(sessionId: number): Promise<void> {
-  return commands.scrollCancel(sessionId);
-}

@@ -10,7 +10,7 @@ pub fn start_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|p| p.into_inner())
 }
 
-/// A busy rejection must not replace the card controlling an existing session.
+/// A busy rejection must not replace the bar controlling an existing session.
 #[derive(Debug, PartialEq, Eq)]
 pub enum StartError {
     Busy,
@@ -39,6 +39,8 @@ pub fn report_start_failure(error: StartError, report: impl FnOnce(&str)) {
 
 /// Shown when the user chose to scroll by hand.
 const BY_HAND: &str = "Scroll at a steady pace, then choose Done.";
+/// Shown once the image has reached its length limit.
+const CAPPED: &str = "The image has reached its length limit. Choose Done to save it.";
 /// Shown by hand while frames cannot be placed.
 const TOO_FAST: &str = "Scrolled too fast. Scroll back a little.";
 
@@ -168,8 +170,8 @@ use crate::{
     actions,
     capture::{CaptureMode, Foreground, Rect},
     frames,
-    quick::{self, QuickItem},
     screen::MonitorInfo,
+    scroll_bar::{self, ScrollBarState},
 };
 use std::{
     sync::{
@@ -305,9 +307,8 @@ pub fn start(
     let spawned = std::thread::Builder::new()
         .name("grab-it-scroll".into())
         .spawn(move || {
-            let (result, restore_fade) = without_card_fade(|on| set_card_fade(&handle, on), |card_fade| -> Result<(), String> {
+            let result = (|| -> Result<(), String> {
                 std::thread::sleep(Duration::from_millis(250));
-                hide_card(&handle)?;
                 // Checked without a prompt: the guide offered Open Settings
                 // before the capture started.
                 let allowed = automatic && crate::permissions::accessibility_trusted();
@@ -330,37 +331,36 @@ pub fn start(
                     source.as_mut(),
                     synchronous.as_mut(),
                     true,
-                    || hide_card(&handle),
-                    || restore_card(&handle),
+                    || Ok(()),
+                    || Ok(()),
                 )?;
                 auto.observe_pointer(first.pointer);
                 let mut stitch = Stitcher::new(first.image);
                 let mut too_fast = false;
-                let item = |s: &Stitcher, a: &AutoScroll, too_fast: bool| QuickItem::Scrolling {
-                    session_id: control.id,
-                    width: s.image.width(),
-                    height: s.image.height(),
-                    capped: s.capped,
-                    auto_scrolling: a.reason.is_none() && !s.capped,
-                    manual_reason: if too_fast {
+                let state = |s: &Stitcher, a: &AutoScroll, too_fast: bool, saving: bool| {
+                    let mut state = ScrollBarState::new(control.id, s.image.dimensions(), s.axis);
+                    state.capped = s.capped;
+                    state.auto_scrolling = a.reason.is_none() && !s.capped;
+                    state.message = if s.capped {
+                        Some(CAPPED.to_owned())
+                    } else if too_fast {
                         Some(TOO_FAST.to_owned())
                     } else {
                         a.reason.map(str::to_owned)
-                    },
+                    };
+                    state.saving = saving;
+                    state.preview = scroll_bar::preview_url(&s.image, s.axis, s.reverse == Some(true));
+                    state
                 };
-                let mut generation = quick::show(&handle, item(&stitch, &auto, too_fast));
-                // quick::show can create the card, which then has its fade.
-                card_fade(false);
-                let overlaps = place_card(&handle, &monitor, rect, image_size);
-                if !overlaps {
-                    // Start the video cache only after the old card has moved
-                    // out of the selection; its previous frames are unsafe.
-                    drop(source);
-                    source = frames::open(&monitor, rect, 10, false)?;
-                }
-                // place_card has confirmed the card's move, so a frame read
-                // now cannot show it. The Stitcher starts again from the
-                // reader every later frame comes from.
+                // Kept out of the frames where the system allows; on X11 it
+                // moves outside the area, or with no room hides for each grab.
+                let overlaps = scroll_bar::show(&handle, &monitor, rect, image_size, state(&stitch, &auto, too_fast, false))?;
+                // The bar may have opened over the area before it was placed:
+                // start the video cache only once it is in its place.
+                drop(source);
+                source = frames::open(&monitor, rect, 10, false)?;
+                // The Stitcher starts again from the reader every later frame
+                // comes from.
                 let use_buffered;
                 (stitch, use_buffered) = if overlaps {
                     (stitch, false)
@@ -374,7 +374,7 @@ pub fn start(
                     // By hand, frames are read faster so a quick scroll still
                     // leaves an overlap to match.
                     std::thread::sleep(Duration::from_millis(if auto.reason.is_some() { 100 } else { 250 }));
-                    if !quick::is_current(&handle, generation) {
+                    if !scroll_bar::is_open(&handle) {
                         control.end.store(2, Ordering::SeqCst);
                         break;
                     }
@@ -391,8 +391,8 @@ pub fn start(
                             source.as_mut(),
                             synchronous.as_mut(),
                             true,
-                            || hide_card(&handle),
-                            || restore_card(&handle),
+                            || hide_bar(&handle),
+                            || restore_bar(&handle),
                         )?
                     } else {
                         synchronous.grab()?
@@ -421,11 +421,7 @@ pub fn start(
                     }
                     wheel_pending = false;
                     if changed || old_reason != auto.reason || old_too_fast != too_fast {
-                        if let Some(g) = quick::replace(&handle, generation, item(&stitch, &auto, too_fast)) {
-                            generation = g;
-                        } else {
-                            control.end.store(2, Ordering::SeqCst);
-                        }
+                        scroll_bar::update(&handle, state(&stitch, &auto, too_fast, false));
                     }
                     if auto.reason.is_none() && !stitch.capped && control.end.load(Ordering::SeqCst) == 0 {
                         let step = step_amount(
@@ -436,18 +432,14 @@ pub fn start(
                             wheel_pending = true;
                         } else {
                             auto.reason = Some("Automatic scrolling is unavailable. Scroll by hand, then choose Done.");
-                            if let Some(g) = quick::replace(&handle, generation, item(&stitch, &auto, too_fast)) {
-                                generation = g;
-                            } else {
-                                control.end.store(2, Ordering::SeqCst);
-                            }
+                            scroll_bar::update(&handle, state(&stitch, &auto, too_fast, false));
                         }
                     }
                 }
                 // Drop the frame source before saving or allowing a new session.
                 drop(source);
-                quick::dismiss(&handle, generation);
                 if control.end.load(Ordering::SeqCst) == 1 {
+                    scroll_bar::update(&handle, state(&stitch, &auto, too_fast, true));
                     actions::finish(
                         &handle,
                         &stitch.image,
@@ -458,8 +450,9 @@ pub fn start(
                     );
                 }
                 Ok(())
-            });
-            restore_fade();
+            })();
+            scroll_bar::close(&handle);
+            scroll_bar::clear(&handle);
             *state_lock(&handle.state::<ScrollState>()) = None;
             if let Err(e) = result {
                 actions::report_failure(&handle, &e);
@@ -470,31 +463,6 @@ pub fn start(
         return Err(e.to_string().into());
     }
     Ok(())
-}
-
-/// Runs a scroll session with the Quick Access card's fade off, so a hidden
-/// card is gone from the next frame. `body` gets the setter to turn it off
-/// again on a card it creates. The returned closure turns the fade back on;
-/// the caller runs it beside the ScrollState reset, so it follows Done,
-/// Cancel and an early error alike.
-fn without_card_fade<T, F: FnMut(bool)>(
-    mut set_fade: F,
-    body: impl FnOnce(&mut dyn FnMut(bool)) -> T,
-) -> (T, impl FnOnce()) {
-    set_fade(false);
-    let result = body(&mut set_fade);
-    (result, move || set_fade(true))
-}
-/// Windows only: the card's DWM fade. Elsewhere the card leaves at once.
-fn set_card_fade(app: &AppHandle, enabled: bool) {
-    #[cfg(target_os = "windows")]
-    if let Some(window) = app.get_webview_window(quick::LABEL)
-        && let Ok(hwnd) = window.hwnd()
-    {
-        crate::freeze::set_transitions(hwnd.0, enabled);
-    }
-    #[cfg(not(target_os = "windows"))]
-    let _ = (app, enabled);
 }
 
 /// How long the buffered reader may take to send its own first frame.
@@ -553,8 +521,8 @@ fn grab_clean(
         }
     }
 }
-fn hide_card(app: &AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window(quick::LABEL) {
+fn hide_bar(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(scroll_bar::LABEL) {
         hide_and_wait(
             || window.hide().map_err(|e| e.to_string()),
             || window.is_visible().map_err(|e| e.to_string()),
@@ -574,7 +542,7 @@ fn hide_and_wait(
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     while is_visible()? {
         if std::time::Instant::now() >= deadline {
-            return Err("Quick Access did not become invisible before capture".into());
+            return Err("The scrolling capture bar did not hide before the capture".into());
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -583,89 +551,11 @@ fn hide_and_wait(
     std::thread::sleep(Duration::from_millis(50));
     Ok(())
 }
-/// Off-main-thread set_position() only enqueues the move. The position getter
-/// round-trips through the UI event loop, as is_visible() does for
-/// hide_and_wait, so a reply at `target` acknowledges that the move has run.
-/// Nothing may read the area as clear of the card before that.
-fn move_and_wait<P: PartialEq>(
-    move_to: impl FnOnce() -> Result<(), String>,
-    mut position: impl FnMut() -> Result<P, String>,
-    target: P,
-) -> Result<(), String> {
-    move_to()?;
-    let deadline = std::time::Instant::now() + Duration::from_millis(500);
-    while position()? != target {
-        if std::time::Instant::now() >= deadline {
-            return Err("Quick Access did not move clear of the area".into());
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    // Let the compositor repaint the area the card left.
-    std::thread::sleep(Duration::from_millis(50));
-    Ok(())
-}
-fn restore_card(app: &AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window(quick::LABEL) {
+fn restore_bar(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(scroll_bar::LABEL) {
         window.show().map_err(|e| e.to_string())?;
     }
     Ok(())
-}
-
-/// Picks a clear corner on the captured monitor, independent of the pointer.
-/// Returns whether all corners overlap and grabs must hide the card briefly.
-fn place_card(app: &AppHandle, info: &MonitorInfo, rect: Rect, image_size: (u32, u32)) -> bool {
-    let monitor = app
-        .monitor_from_point(info.x as f64 + 1., info.y as f64 + 1.)
-        .ok()
-        .flatten();
-    let Some(monitor) = monitor else {
-        return true;
-    };
-    let scale = monitor.scale_factor();
-    let origin = monitor.position();
-    let size = monitor.size();
-    let sx = size.width as f64 / image_size.0.max(1) as f64;
-    let sy = size.height as f64 / image_size.1.max(1) as f64;
-    let region = (
-        origin.x as f64 + rect.x as f64 * sx,
-        origin.y as f64 + rect.y as f64 * sy,
-        rect.width as f64 * sx,
-        rect.height as f64 * sy,
-    );
-    let area = monitor.work_area();
-    let corners = [
-        quick::preferred_corner(app),
-        quick::Corner::TopLeft,
-        quick::Corner::TopRight,
-        quick::Corner::BottomLeft,
-        quick::Corner::BottomRight,
-    ];
-    for corner in corners {
-        let p = quick::place_in_corner(
-            (area.position.x, area.position.y),
-            (area.size.width, area.size.height),
-            scale,
-            corner,
-        );
-        let clear = p.x as f64 + 336. * scale <= region.0
-            || p.y as f64 + 232. * scale <= region.1
-            || p.x as f64 >= region.0 + region.2
-            || p.y as f64 >= region.1 + region.3;
-        if clear {
-            let Some(w) = app.get_webview_window(quick::LABEL) else {
-                return false;
-            };
-            // Unconfirmed, the card may still be over the area: hide it
-            // for each grab, as when no corner is clear.
-            return move_and_wait(
-                || w.set_position(p).map_err(|e| e.to_string()),
-                || w.outer_position().map_err(|e| e.to_string()),
-                p,
-            )
-            .is_err();
-        }
-    }
-    true
 }
 
 #[cfg(test)]
@@ -677,24 +567,13 @@ mod tests {
             id: 17,
             end: AtomicU8::new(0),
         };
-        let mut card = QuickItem::Scrolling {
-            session_id: 17,
-            width: 800,
-            height: 1200,
-            capped: false,
-            auto_scrolling: true,
-            manual_reason: None,
-        };
-        let before = card.clone();
+        let mut bar = Some(ScrollBarState::new(17, (800, 1200), None));
+        let before = bar.clone();
         // Both start paths use this guard before changing state, and the
-        // overlay/restart handler must not publish an Error card for Busy.
+        // overlay/restart handler must not report Busy over the running bar.
         let error = ensure_idle(false, true).unwrap_err();
-        report_start_failure(error, |message| {
-            card = QuickItem::Error {
-                message: message.to_owned(),
-            };
-        });
-        assert_eq!(card, before);
+        report_start_failure(error, |_| bar = None);
+        assert_eq!(bar, before);
         assert_eq!(control.end.load(Ordering::SeqCst), 0);
     }
     #[test]
@@ -709,11 +588,11 @@ mod tests {
     }
 
     #[test]
-    fn recording_rejection_preserves_scrolling_card() {
+    fn recording_rejection_preserves_scrolling_bar() {
         rejected_start_preserves_scroll();
     }
     #[test]
-    fn second_scroll_rejection_preserves_scrolling_card() {
+    fn second_scroll_rejection_preserves_scrolling_bar() {
         rejected_start_preserves_scroll();
     }
     #[test]
@@ -739,8 +618,8 @@ mod tests {
             if self.fail {
                 return Err("grab failed".into());
             }
-            // A buffered source can retain a card-visible image indefinitely.
-            let includes_card = if self.cached {
+            // A buffered source can retain a bar-visible image indefinitely.
+            let includes_bar = if self.cached {
                 true
             } else {
                 self.visible.get()
@@ -749,7 +628,7 @@ mod tests {
                 image: RgbaImage::from_pixel(
                     2,
                     2,
-                    image::Rgba([if includes_card { 255 } else { 0 }, 0, 0, 255]),
+                    image::Rgba([if includes_bar { 255 } else { 0 }, 0, 0, 255]),
                 ),
                 pointer: None,
             })
@@ -911,59 +790,6 @@ mod tests {
         assert_eq!(buffered.calls + synchronous.calls, 0);
     }
 
-    /// Runs a session shaped like the scroll thread's: hide the card, maybe
-    /// fail before it shows, show it, then end with Done or Cancel.
-    fn fade_sequence(outcome: Result<u8, &str>) -> (Vec<&'static str>, Result<u8, String>) {
-        use std::cell::RefCell;
-        let log = RefCell::new(Vec::new());
-        let (result, restore_fade) = without_card_fade(
-            |on| {
-                log.borrow_mut()
-                    .push(if on { "fade on" } else { "fade off" })
-            },
-            |card_fade| -> Result<u8, String> {
-                hide_and_wait(
-                    || {
-                        log.borrow_mut().push("hide");
-                        Ok(())
-                    },
-                    || Ok(false),
-                )?;
-                let action = outcome.map_err(str::to_owned)?;
-                log.borrow_mut().push("show");
-                card_fade(false);
-                log.borrow_mut().push("dismiss");
-                Ok(action)
-            },
-        );
-        restore_fade();
-        log.borrow_mut().push("reset");
-        (log.into_inner(), result)
-    }
-    #[test]
-    fn card_fade_is_off_for_a_session_ending_in_done_or_cancel() {
-        for action in [1, 2] {
-            let (log, result) = fade_sequence(Ok(action));
-            assert_eq!(result, Ok(action));
-            assert_eq!(
-                log,
-                [
-                    "fade off", "hide", "show", "fade off", "dismiss", "fade on", "reset"
-                ]
-            );
-        }
-    }
-    #[test]
-    fn card_fade_comes_back_after_an_early_error() {
-        let (log, result) = fade_sequence(Err("capture unavailable"));
-        assert_eq!(result.err().as_deref(), Some("capture unavailable"));
-        assert_eq!(log, ["fade off", "hide", "fade on", "reset"]);
-    }
-
-    /// A reader that sees the page `offset` lines down, with every colour
-    /// `tint` levels off, as two capture paths differ for the same screen.
-    /// Until `settled`, it reads through a fallback 3 levels off, as Windows
-    /// duplication does through GDI before its first frame.
     struct PageSource {
         offset: u32,
         tint: u8,
@@ -1086,66 +912,6 @@ mod tests {
         let (_, previous, use_buffered) = restart_stitch(&mut buffered, &mut synchronous).unwrap();
         assert!(!use_buffered);
         assert_eq!(previous, synchronous.grab().unwrap().image);
-    }
-    /// A reader that shows the card in the area while it sits at `(0, 0)`.
-    struct CardSource<'a> {
-        card: &'a std::cell::Cell<(i32, i32)>,
-    }
-    impl frames::FrameSource for CardSource<'_> {
-        fn grab(&mut self) -> Result<frames::Grabbed, String> {
-            let covered = self.card.get() == (0, 0);
-            Ok(frames::Grabbed {
-                image: RgbaImage::from_pixel(
-                    2,
-                    2,
-                    image::Rgba([if covered { 255 } else { 0 }, 0, 0, 255]),
-                ),
-                pointer: None,
-            })
-        }
-    }
-    #[test]
-    fn the_reference_is_read_only_after_the_queued_move_has_run() {
-        use std::cell::{Cell, RefCell};
-        use std::collections::VecDeque;
-        let card = Cell::new((0, 0));
-        // Model Tauri's UI queue: set_position returns with the card still
-        // in place. A position query drives queued work.
-        let queue = RefCell::new(VecDeque::new());
-        let queries = Cell::new(0);
-        move_and_wait(
-            || {
-                queue.borrow_mut().push_back((400, 0));
-                assert_eq!(card.get(), (0, 0), "enqueueing must not move at once");
-                Ok(())
-            },
-            || {
-                queries.set(queries.get() + 1);
-                if queries.get() > 1
-                    && let Some(at) = queue.borrow_mut().pop_front()
-                {
-                    card.set(at);
-                }
-                Ok(card.get())
-            },
-            (400, 0),
-        )
-        .unwrap();
-        assert_eq!(queries.get(), 2);
-        let (_, previous, _) = restart_stitch(
-            &mut CardSource { card: &card },
-            &mut CardSource { card: &card },
-        )
-        .unwrap();
-        assert_eq!(previous.get_pixel(0, 0)[0], 0);
-    }
-    #[test]
-    fn an_unconfirmed_move_is_reported() {
-        let result = move_and_wait(|| Ok(()), || Ok((0, 0)), (400, 0));
-        assert_eq!(
-            result.err().as_deref(),
-            Some("Quick Access did not move clear of the area")
-        );
     }
     #[test]
     fn content_that_moved_but_never_lined_up_is_not_called_unscrolled() {

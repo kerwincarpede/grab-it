@@ -142,6 +142,8 @@ export const commands = {
 	recordStop: (options?: InvokeOptions) => __TAURI_INVOKE<void>("record_stop", undefined, options),
 	scrollDone: (sessionId: number, options?: InvokeOptions) => __TAURI_INVOKE<void>("scroll_done", { sessionId }, options),
 	scrollCancel: (sessionId: number, options?: InvokeOptions) => __TAURI_INVOKE<void>("scroll_cancel", { sessionId }, options),
+	/**  The bar's latest state, for its page as it loads. */
+	scrollBarState: (options?: InvokeOptions) => __TAURI_INVOKE<ScrollBarState_Serialize | null>("scroll_bar_state", undefined, options),
 	/**  Pauses the recording under way, or carries it on. */
 	recordPause: (paused: boolean, options?: InvokeOptions) => __TAURI_INVOKE<void>("record_pause", { paused }, options),
 	/**
@@ -1742,7 +1744,7 @@ export type QuickAction = "copy" | "edit" | "pin" | "reveal" |
 export type QuickItem = QuickItem_Serialize | QuickItem_Deserialize;
 
 /**  What the card shows. Mirrors `QuickItem` in src/quick/api.ts. */
-export type QuickItem_Deserialize = { kind: "scrolling"; sessionId: number; width: number; height: number; capped: boolean; autoScrolling: boolean; manualReason?: string | null } | { kind: "capture"; path: string; fileName: string; width: number; height: number;
+export type QuickItem_Deserialize = { kind: "capture"; path: string; fileName: string; width: number; height: number;
 /**  Whether the capture is on the clipboard already. */
 copied: boolean } |
 /**  Text read from the screen, already on the clipboard. */
@@ -1777,7 +1779,7 @@ format: RecordingFormat;
 fallback?: string | null };
 
 /**  What the card shows. Mirrors `QuickItem` in src/quick/api.ts. */
-export type QuickItem_Serialize = { kind: "scrolling"; sessionId: number; width: number; height: number; capped: boolean; autoScrolling: boolean; manualReason: string | null } | { kind: "capture"; path: string; fileName: string; width: number; height: number;
+export type QuickItem_Serialize = { kind: "capture"; path: string; fileName: string; width: number; height: number;
 /**  Whether the capture is on the clipboard already. */
 copied: boolean } |
 /**  Text read from the screen, already on the clipboard. */
@@ -2205,6 +2207,47 @@ export type SaveLayout_Serialize = {
 	byMonth: boolean,
 	/**  Add the app name when it can be identified. */
 	includeAppName: boolean,
+};
+
+/**  What the bar shows. Mirrors `ScrollBarState` in src/scrollbar/api.ts. */
+export type ScrollBarState = ScrollBarState_Serialize | ScrollBarState_Deserialize;
+
+/**  What the bar shows. Mirrors `ScrollBarState` in src/scrollbar/api.ts. */
+export type ScrollBarState_Deserialize = {
+	sessionId: number,
+	width: number,
+	height: number,
+	/**  The image's length along the scroll axis, in pixels. */
+	length: number,
+	/**  How far the image is toward its length limit, from 0 to 1. */
+	progress: number | null,
+	capped: boolean,
+	autoScrolling: boolean,
+	/**  What to do now, or why automatic scrolling stopped. */
+	message?: string | null,
+	/**  Done was chosen and the image is being saved. */
+	saving: boolean,
+	/**  The newest part of the image as a PNG data URL, up to 240 px wide. */
+	preview?: string | null,
+};
+
+/**  What the bar shows. Mirrors `ScrollBarState` in src/scrollbar/api.ts. */
+export type ScrollBarState_Serialize = {
+	sessionId: number,
+	width: number,
+	height: number,
+	/**  The image's length along the scroll axis, in pixels. */
+	length: number,
+	/**  How far the image is toward its length limit, from 0 to 1. */
+	progress: number | null,
+	capped: boolean,
+	autoScrolling: boolean,
+	/**  What to do now, or why automatic scrolling stopped. */
+	message: string | null,
+	/**  Done was chosen and the image is being saved. */
+	saving: boolean,
+	/**  The newest part of the image as a PNG data URL, up to 240 px wide. */
+	preview: string | null,
 };
 
 /**
@@ -2887,6 +2930,7 @@ export type MockCommandHandlers = {
     recordStop: () => void | Promise<void>,
     scrollDone: (args: { sessionId: number }) => void | Promise<void>,
     scrollCancel: (args: { sessionId: number }) => void | Promise<void>,
+    scrollBarState: () => ScrollBarState_Serialize | null | Promise<ScrollBarState_Serialize | null>,
     recordPause: (args: { paused: boolean }) => void | Promise<void>,
     recordMute: (args: { input: MutedInput; muted: boolean }) => void | Promise<void>,
     recordWebcam: (args: { shown: boolean }) => void | Promise<void>,
@@ -3063,6 +3107,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "record_stop": return mockCommandHandler(mockHandlers.recordStop, "record_stop", args);
             case "scroll_done": return mockCommandHandler(mockHandlers.scrollDone, "scroll_done", args);
             case "scroll_cancel": return mockCommandHandler(mockHandlers.scrollCancel, "scroll_cancel", args);
+            case "scroll_bar_state": return mockCommandHandler(mockHandlers.scrollBarState, "scroll_bar_state", args);
             case "record_pause": return mockCommandHandler(mockHandlers.recordPause, "record_pause", args);
             case "record_mute": return mockCommandHandler(mockHandlers.recordMute, "record_mute", args);
             case "record_webcam": return mockCommandHandler(mockHandlers.recordWebcam, "record_webcam", args);

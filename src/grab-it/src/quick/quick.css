@@ -503,22 +503,3 @@
   text-overflow: ellipsis;
 }
 
-/* A running scroll cannot be dismissed by a timer: both exits are explicit. */
-.quick-scrolling {
-  padding: 18px 14px 8px;
-  gap: 10px;
-}
-
-.quick-scrolling .quick-body {
-  flex: 1;
-  align-content: center;
-  gap: 8px;
-}
-
-.quick-scrolling .quick-actions {
-  padding: 0;
-}
-
-.quick-scrolling .quick-actions button {
-  background: var(--q-fill);
-}
