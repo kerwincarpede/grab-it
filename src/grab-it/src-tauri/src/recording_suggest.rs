@@ -19,7 +19,7 @@ use tauri::State;
 use crate::ffmpeg;
 use crate::recording_editor::{
     AudioKind, ClipSound, KeptSound, NO_NOISE_MODEL, RecordingEditorState, SoundFrom,
-    audio_sources, clip_sound_file, kept_sound, push_clip_sound, recordings_of, source_file,
+    audio_sources, clip_sound_file, kept_sound, push_clip_sound,
 };
 use crate::rt::{AppHandle, WebviewWindow};
 use crate::zoom::CursorPath;
@@ -192,17 +192,6 @@ fn stderr_of(ffmpeg_path: &Path, args: Vec<OsString>, timeout: Duration) -> Resu
     }
 }
 
-/// The recording `file_name` names: the opened one, or one beside it in
-/// the recordings folder.
-fn recording_named(
-    window: &WebviewWindow,
-    state: &RecordingEditorState,
-    file_name: &str,
-) -> Result<PathBuf, String> {
-    let original = state.path_for(window.label())?;
-    source_file(recordings_of(&original)?, file_name)
-}
-
 /// The pauses in recording `file_name`'s sound, for Suggest edits.
 #[tauri::command]
 #[specta::specta]
@@ -212,7 +201,7 @@ pub async fn recording_pauses(
     app: AppHandle,
     state: State<'_, RecordingEditorState>,
 ) -> Result<RecordingPauses, String> {
-    let path = recording_named(&window, &state, &file_name)?;
+    let path = state.source_for(window.label(), &file_name)?;
     let Some(ready) = ffmpeg::ready(&app) else {
         ffmpeg::prepare_in_background(&app);
         return Err("ffmpeg is not ready yet; see Settings → Recording, then try again".to_owned());
@@ -326,7 +315,7 @@ pub async fn recording_audition(
         return Err("the stretch to play is empty".to_owned());
     }
     let end_ms = end_ms.min(start_ms + MAX_AUDITION_MS);
-    let path = recording_named(&window, &state, &file_name)?;
+    let path = state.source_for(window.label(), &file_name)?;
     let Some(ready) = ffmpeg::ready(&app) else {
         ffmpeg::prepare_in_background(&app);
         return Err("ffmpeg is not ready yet; see Settings → Recording, then try again".to_owned());

@@ -25,6 +25,7 @@ mod hub;
 mod input;
 mod keychain;
 mod library;
+mod media;
 mod net;
 mod noise;
 mod ocr;
@@ -68,7 +69,7 @@ mod ipc_tests;
 pub mod bench {
     use std::path::{Path, PathBuf};
 
-    pub use crate::capture::{CaptureMode, Foreground, save_capture};
+    pub use crate::capture::{CaptureMode, Foreground};
     pub use crate::codes::decode as decode_codes;
     pub use crate::faces::Faces;
     pub use crate::library::{
@@ -77,6 +78,25 @@ pub mod bench {
     };
     pub use crate::ocr::Ocr;
     pub use crate::search::SearchQuery;
+
+    /// Saves the benchmark's fixture with the default flat layout.
+    pub fn save_capture(
+        save_folder: &Path,
+        image: &image::RgbaImage,
+        mode: CaptureMode,
+        foreground: &Foreground,
+        scale_factor: Option<f64>,
+        time: chrono::DateTime<chrono::Local>,
+    ) -> Result<crate::capture::SavedCapture, crate::capture::SaveError> {
+        crate::capture::save_capture(
+            &crate::media::SaveDestination::flat(save_folder),
+            image,
+            mode,
+            foreground,
+            scale_factor,
+            time,
+        )
+    }
 
     /// The OCR models as the app bundles them.
     pub fn ocr_models_dir() -> PathBuf {
@@ -145,8 +165,9 @@ pub fn run() {
             recording_editor::VIDEO_SCHEME,
             |ctx, request, responder| {
                 let app = ctx.app_handle().clone();
+                let label = ctx.webview_label().to_owned();
                 std::thread::spawn(move || {
-                    let response = recording_editor::serve_video(&app, &request);
+                    let response = recording_editor::serve_video(&app, &label, &request);
                     // WebKit on macOS hands a reply made on another thread
                     // to the main thread, and raises there if the player
                     // has cancelled the request meanwhile, as it often does
@@ -344,6 +365,7 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
         .commands(tauri_specta::collect_commands![
             commands::get_settings,
             commands::set_save_folder,
+            commands::set_save_layout,
             commands::set_hotkeys,
             commands::set_preferences,
             commands::set_copy_sound,
@@ -430,6 +452,7 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             recording_editor::recording_info,
             recording_editor::recording_save_edits,
             recording_editor::recording_source,
+            recording_editor::recording_pick_source,
             recording_suggest::recording_pauses,
             library::library_list,
             library::library_set_tags,

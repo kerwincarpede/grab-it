@@ -956,6 +956,8 @@ pub struct Settings {
     pub(crate) ai_key_slot: Option<bool>,
     /// Where new captures are saved. Holds `originals/` and `thumbs/`.
     pub save_folder: PathBuf,
+    /// How new screenshots and recordings are organised on disk.
+    pub save_layout: SaveLayout,
     /// Folder most recently chosen for an export.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_export_folder: Option<PathBuf>,
@@ -998,6 +1000,7 @@ impl Settings {
         Self {
             ai_key_slot: None,
             save_folder: pictures_dir.join(DEFAULT_FOLDER_NAME),
+            save_layout: SaveLayout::default(),
             hotkeys: Hotkeys::default(),
             preferences: Preferences::default(),
             copy_sound: true,
@@ -1013,6 +1016,18 @@ impl Settings {
             update_channel: UpdateChannel::Stable,
         }
     }
+}
+
+/// Independent options for the location and name of new media files.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveLayout {
+    /// Save media in a subfolder named for the local year and month.
+    #[serde(default)]
+    pub by_month: bool,
+    /// Add the app name when it can be identified.
+    #[serde(default)]
+    pub include_app_name: bool,
 }
 
 /// The copy sound's volume for settings files that have none.
@@ -1037,6 +1052,8 @@ fn copy_sound_volume(value: &serde_json::Value) -> Option<u8> {
 struct StoredSettings {
     ai_key_slot: Option<bool>,
     save_folder: Option<PathBuf>,
+    #[serde(default)]
+    save_layout: Option<SaveLayout>,
     hotkeys: Option<StoredHotkeys>,
     after_capture: Option<AfterCapture>,
     copy_to_clipboard: Option<bool>,
@@ -1104,6 +1121,7 @@ impl StoredSettings {
                 .save_folder
                 .filter(|folder| !folder.as_os_str().is_empty())
                 .unwrap_or(defaults.save_folder),
+            save_layout: self.save_layout.unwrap_or(defaults.save_layout),
             hotkeys: match self.hotkeys {
                 Some(stored) => stored.merge_onto(defaults.hotkeys),
                 None => defaults.hotkeys,
@@ -1205,6 +1223,7 @@ struct SettingsOnDisk<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     ai_key_slot: Option<bool>,
     save_folder: &'a Path,
+    save_layout: SaveLayout,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_export_folder: Option<&'a Path>,
     hotkeys: &'a Hotkeys,
@@ -1261,6 +1280,7 @@ impl<'a> SettingsOnDisk<'a> {
         Self {
             ai_key_slot: settings.ai_key_slot,
             save_folder: &settings.save_folder,
+            save_layout: settings.save_layout,
             hotkeys: &settings.hotkeys,
             after_capture: settings.preferences.after_capture,
             copy_to_clipboard: settings.preferences.copy_to_clipboard,
@@ -1456,6 +1476,17 @@ impl SettingsStore {
         fs::create_dir_all(&folder)?;
         let next = Settings {
             save_folder: folder,
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
+    /// Changes how new screenshots and recordings are saved.
+    pub fn set_save_layout(&mut self, layout: SaveLayout) -> Result<Settings, SettingsError> {
+        let next = Settings {
+            save_layout: layout,
             ..self.current.clone()
         };
         save(&self.path, &next)?;
@@ -1863,6 +1894,10 @@ mod tests {
         let settings = Settings {
             ai_key_slot: None,
             save_folder: dir.path().join("Shots"),
+            save_layout: SaveLayout {
+                by_month: true,
+                include_app_name: false,
+            },
             hotkeys: Hotkeys {
                 region: "Ctrl+Shift+R".into(),
                 ..Hotkeys::default()

@@ -269,6 +269,7 @@ fn get_settings_returns_the_settings_shape() {
             "recording",
             "retention",
             "saveFolder",
+            "saveLayout",
             "showInDock",
             "updateChannel",
         ]
@@ -317,6 +318,93 @@ fn get_settings_reads_the_settings_file() {
     assert_eq!(settings["agentAccess"], true);
     assert_eq!(settings["appearance"]["textScale"], 125);
     assert_eq!(settings["appearance"]["popupSeconds"], 8);
+    assert_eq!(
+        settings["saveLayout"],
+        json!({ "byMonth": false, "includeAppName": false })
+    );
+}
+
+#[test]
+fn set_save_layout_saves_both_options_without_changing_the_folder() {
+    let h = Harness::new();
+    let layout = json!({ "byMonth": true, "includeAppName": true });
+    let folder = h.settings()["saveFolder"].clone();
+    let updated = h.ok("set_save_layout", json!({ "layout": layout }));
+    assert_eq!(updated["saveFolder"], folder);
+    assert_eq!(updated["saveLayout"], layout);
+    assert_eq!(h.settings()["saveLayout"], layout);
+    assert_eq!(h.saved()["saveLayout"], layout);
+}
+
+#[test]
+fn recording_editor_uses_the_opened_recordings_root_for_streams_and_sources() {
+    use crate::recording_editor::{RecordingEditorState, serve_video};
+    use tauri::http::{Request, StatusCode, header};
+    let h = Harness::new();
+    let recordings = h
+        .dir
+        .path()
+        .join("earlier save folder")
+        .join(RECORDINGS_DIR);
+    let own = recordings.join("2026-03").join("same.mp4");
+    let other = recordings.join("2026-04").join("same.mp4");
+    let flat = recordings.join("legacy.mp4");
+    let outside = h
+        .default_save_folder()
+        .join(RECORDINGS_DIR)
+        .join("outside.mp4");
+    for path in [&own, &other, &flat, &outside] {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b"video bytes").unwrap();
+    }
+    h.app
+        .state::<RecordingEditorState>()
+        .register(LABEL, &own, &h.default_save_folder().join(RECORDINGS_DIR))
+        .unwrap();
+
+    let info = h.ok("recording_info", json!({}));
+    assert_eq!(info["fileName"], "same.mp4");
+    assert_eq!(info["source"], "2026-03/same.mp4");
+    assert_eq!(
+        info["recordingsFolder"],
+        json!(fs::canonicalize(&recordings).unwrap())
+    );
+    let chosen = h.ok("recording_pick_source", json!({ "path": other }));
+    assert_eq!(chosen["source"], "2026-04/same.mp4");
+    let clip = h.ok(
+        "recording_source",
+        json!({ "fileName": "2026-04/same.mp4" }),
+    );
+    assert_eq!(clip, chosen);
+    let legacy = h.ok("recording_source", json!({ "fileName": "legacy.mp4" }));
+    assert_eq!(legacy["source"], "legacy.mp4");
+    assert!(
+        h.err("recording_pick_source", json!({ "path": outside }))
+            .contains("Only recordings")
+    );
+
+    let request_for = |path: &Path| {
+        use std::fmt::Write;
+        let mut url = String::from("/");
+        for byte in path.to_string_lossy().bytes() {
+            write!(url, "%{byte:02X}").unwrap();
+        }
+        Request::get(url)
+            .header(header::RANGE, "bytes=1-3")
+            .body(Vec::new())
+            .unwrap()
+    };
+    let response = serve_video(h.app.handle(), LABEL, &request_for(&other));
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(response.body(), b"ide");
+    assert_eq!(
+        serve_video(h.app.handle(), LABEL, &request_for(&outside)).status(),
+        StatusCode::FORBIDDEN,
+    );
+    assert_eq!(
+        serve_video(h.app.handle(), "unrelated", &request_for(&own)).status(),
+        StatusCode::FORBIDDEN,
+    );
 }
 
 #[test]

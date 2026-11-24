@@ -12,9 +12,9 @@ Click **Export** at the right of the top bar to render your trim, backdrop and z
 The export goes beside the recording, in the `recordings` folder of your save folder, named after it:
 
 ```
-Grab-it 2026-03-07 09-05-01.mp4            the recording
-Grab-it 2026-03-07 09-05-01 (edited).mp4   the first export
-Grab-it 2026-03-07 09-05-01 (edited 2).mp4 the next one
+2026-03-07 09-05-01.mp4            the recording
+2026-03-07 09-05-01 (edited).mp4   the first export
+2026-03-07 09-05-01 (edited 2).mp4 the next one
 ```
 
 Each export makes a new file, so exporting again never replaces an earlier export, and never the recording itself.
@@ -51,10 +51,10 @@ If the export fails, the status bar says why and nothing is left behind. Exporti
 The editor never changes your recording. Your edits live in a small file beside it, named after it with `.edits.json` on the end:
 
 ```
-Grab-it 2026-03-07 09-05-01.mp4
-Grab-it 2026-03-07 09-05-01.edits.json   your trim, backdrop, zooms and noise removal
-Grab-it 2026-03-07 09-05-01.cursor.json  where the pointer was, for Follow cursor
-Grab-it 2026-03-07 09-05-01.sound.m4a    the microphone and system sound, kept apart
+2026-03-07 09-05-01.mp4
+2026-03-07 09-05-01.edits.json   your trim, backdrop, zooms and noise removal
+2026-03-07 09-05-01.cursor.json  where the pointer was, for Follow cursor
+2026-03-07 09-05-01.sound.m4a    the microphone and system sound, kept apart
 ```
 
 The edits file is saved every time you change something, so closing the editor loses nothing: open the recording again and your trim, backdrop and zooms are back. To start over, delete the `.edits.json` file. Delete the `.cursor.json` file and **Follow cursor** zooms can no longer follow the pointer. The `.sound.m4a` file is there only for recordings made with the microphone, and holds its sound before any noise was removed. Delete it and **Remove background noise** can no longer be changed for that recording, and a recording made with both the microphone and system sound shows its sound as **Mixed sound**.

@@ -61,7 +61,7 @@ If Grab-it isn't running, a command starts it in the tray and waits up to 15 sec
 grab-it windows
 # {"windows":[{"id":4194307,"app":"Firefox","title":"Docs","x":0,"y":25,"width":1280,"height":800}]}
 grab-it shot --window firefox --max-width 1280
-# {"path":"/home/me/Pictures/Grab-it/originals/Grab-it 2026-11-17 09-00-00.png","width":1280,"height":800,"id":42}
+# {"path":"/home/me/Pictures/Grab-it/originals/2026-11-17 09-00-00.png","width":1280,"height":800,"id":42}
 ```
 
 Rectangles are in desktop coordinates, the same ones `--region` takes.
@@ -92,11 +92,11 @@ Shots are saved to your save folder and Library like any capture, tagged **agent
 
 ```sh
 grab-it record --window firefox --for 5
-# {"path":"/home/me/Pictures/Grab-it/recordings/Grab-it 2026-11-17 09-00-00.mp4","durationMs":5012,"format":"mp4","id":43}
+# {"path":"/home/me/Pictures/Grab-it/recordings/2026-11-17 09-00-00.mp4","durationMs":5012,"format":"mp4","id":43}
 grab-it record --region 0,0,1280,720
-# {"path":"/home/me/Pictures/Grab-it/recordings/Grab-it 2026-11-17 09-01-00.mp4","format":"mp4","recording":true}
+# {"path":"/home/me/Pictures/Grab-it/recordings/2026-11-17 09-01-00.mp4","format":"mp4","recording":true}
 grab-it stop
-# {"path":"/home/me/Pictures/Grab-it/recordings/Grab-it 2026-11-17 09-01-00.mp4","durationMs":8400,"format":"mp4","id":44}
+# {"path":"/home/me/Pictures/Grab-it/recordings/2026-11-17 09-01-00.mp4","durationMs":8400,"format":"mp4","id":44}
 ```
 
 Without `--for`, `record` answers as soon as it starts, and the recording runs until `grab-it stop` or the **Stop** button on the [recording toolbar](/grab-it/recording/toolbar/). With `--for`, `record` waits for it to be saved and prints it, sooner if you stop it first. Only one recording runs at a time.
@@ -115,10 +115,10 @@ These recordings ignore your [recording options](/grab-it/recording/options/) fo
 `gif` and `frames` take any video file, such as the `path` of a recording.
 
 ```sh
-grab-it gif "Grab-it 2026-11-17 09-00-00.mp4" --start 1 --end 4 --width 800
-# {"path":"/home/me/Pictures/Grab-it/recordings/Grab-it 2026-11-17 09-02-00.gif","width":800,"height":450,"durationMs":3000,"id":45}
-grab-it frames "Grab-it 2026-11-17 09-00-00.mp4" --count 9
-# {"path":"/home/me/Pictures/Grab-it/originals/Grab-it 2026-11-17 09-03-00.png","width":1464,"height":848,"frames":9,"id":46}
+grab-it gif "2026-11-17 09-00-00.mp4" --start 1 --end 4 --width 800
+# {"path":"/home/me/Pictures/Grab-it/recordings/2026-11-17 09-02-00.gif","width":800,"height":450,"durationMs":3000,"id":45}
+grab-it frames "2026-11-17 09-00-00.mp4" --count 9
+# {"path":"/home/me/Pictures/Grab-it/originals/2026-11-17 09-03-00.png","width":1464,"height":848,"frames":9,"id":46}
 ```
 
 `gif` makes an animated GIF, with a palette picked for the video, in `recordings` in your save folder:
@@ -132,7 +132,7 @@ grab-it frames "Grab-it 2026-11-17 09-00-00.mp4" --count 9
 
 `frames` makes one PNG contact sheet: `--count` frames spread evenly through the video (12 if you don't say, up to 100), in a grid. It's how an agent, which can't watch a video, sees what a recording shows.
 
-Both use Grab-it's ffmpeg, and fail with a message while it's still being set up. GIFs and contact sheets go in the Library tagged **agent** too.
+Both use Grab-it's ffmpeg, and fail with a message while it's still being set up. GIFs and contact sheets go in the Library tagged **agent** too. CLI screenshots, recordings, GIFs and contact sheets follow your [Save folder settings](/grab-it/reference/settings/#general).
 
 :::note[Linux on Wayland]
 Only your desktop may read the screen on Wayland, so `displays`, `windows`, `shot`, `record` and `stop` fail there with a message saying so. Use an X11 session. `gif` and `frames` still work.

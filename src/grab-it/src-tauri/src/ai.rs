@@ -1607,9 +1607,16 @@ mod tests {
             window_title: Some("Billing".into()),
         };
         let when = Local.with_ymd_and_hms(2026, 3, 7, 9, 0, 0).unwrap();
-        let png = save_capture(dir, &image, CaptureMode::Region, &foreground, None, when)
-            .unwrap()
-            .path;
+        let png = save_capture(
+            &crate::media::SaveDestination::flat(dir),
+            &image,
+            CaptureMode::Region,
+            &foreground,
+            None,
+            when,
+        )
+        .unwrap()
+        .path;
         let mut library = Library::open_in_memory().unwrap();
         let id = library.add_capture(&png).unwrap().id;
         match ocr {

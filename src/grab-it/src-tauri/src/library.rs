@@ -32,6 +32,7 @@ use crate::{
     capture::{self, CaptureMeta, ORIGINALS_DIR},
     commands::{SettingsState, lock},
     editor::EditorState,
+    media::is_month_folder,
     ocr::OcrLine,
     record::RECORDINGS_DIR,
     windows,
@@ -1357,7 +1358,7 @@ pub fn prepare_recording(
 }
 
 /// The file side of a rescan: finds rows whose file is gone, regenerates
-/// missing thumbnails and prepares new PNGs in `<save_folder>/originals/`.
+/// missing thumbnails and prepares new media in the flat and monthly folders.
 /// Touches only files, so it runs without the library lock.
 pub fn scan_files(
     known: &[KnownShot],
@@ -1402,7 +1403,10 @@ pub fn scan_files(
         }
     }
     let paths: HashSet<&Path> = known.iter().map(|shot| shot.path.as_path()).collect();
-    for png in originals_in(save_folder)? {
+    for png in media_in(&save_folder.join(ORIGINALS_DIR), |path| {
+        path.extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+    })? {
         let path = canonical(&png);
         if paths.contains(path.as_path()) {
             continue;
@@ -1412,7 +1416,10 @@ pub fn scan_files(
             Err(err) => eprintln!("Grab-it: skipped {}: {err}", path.display()),
         }
     }
-    for video in recordings_in(save_folder)? {
+    for video in media_in(&save_folder.join(RECORDINGS_DIR), |path| {
+        ShotKind::of_recording(path).is_some()
+            && path.metadata().is_ok_and(|metadata| metadata.len() > 0)
+    })? {
         let path = canonical(&video);
         if paths.contains(path.as_path()) {
             continue;
@@ -1592,20 +1599,36 @@ fn canonical(path: &Path) -> PathBuf {
     })
 }
 
-/// Where a capture's thumbnail lives: `thumbs/` in its own save folder,
-/// beside `originals/`, with the same file stem.
+/// Where a thumbnail lives, using a separate cache directory for each month
+/// and keeping existing thumbnail paths for flat media.
 pub fn thumb_path(png: &Path) -> PathBuf {
     let parent = png.parent().unwrap_or_else(|| Path::new(""));
-    let folder = if parent.file_name().is_some_and(|name| name == ORIGINALS_DIR) {
-        parent.parent().unwrap_or(parent)
-    } else {
-        parent
+    let month = parent.file_name().filter(|name| is_month_folder(name));
+    let month_root = parent.parent().filter(|root| {
+        root.file_name()
+            .is_some_and(|name| name == ORIGINALS_DIR || name == RECORDINGS_DIR)
+    });
+    let (media_root, month) = match (month, month_root) {
+        (Some(month), Some(root)) => (root, Some(month)),
+        _ => (parent, None),
     };
+    let folder = if media_root
+        .file_name()
+        .is_some_and(|name| name == ORIGINALS_DIR)
+    {
+        media_root.parent().unwrap_or(media_root)
+    } else {
+        media_root
+    };
+    let mut cache = folder.join(THUMBS_DIR);
+    if let Some(month) = month {
+        cache.push(month);
+    }
     let stem = png
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
         .unwrap_or_default();
-    folder.join(THUMBS_DIR).join(format!("{stem}.png"))
+    cache.join(format!("{stem}.png"))
 }
 
 /// Writes a thumbnail fitting in [`THUMB_SIZE`] unless one already exists.
@@ -1685,41 +1708,34 @@ fn modified_millis(path: &Path) -> i64 {
         .unwrap_or(0)
 }
 
-/// The PNGs in `<save_folder>/originals/`, sorted by name.
-fn originals_in(save_folder: &Path) -> LibraryResult<Vec<PathBuf>> {
-    let dir = save_folder.join(ORIGINALS_DIR);
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err.into()),
+fn media_entries(dir: &Path) -> io::Result<impl Iterator<Item = fs::DirEntry>> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => Some(entries),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err),
     };
-    let mut pngs: Vec<PathBuf> = entries
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| {
-            path.is_file()
-                && path
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
-        })
-        .collect();
-    pngs.sort();
-    Ok(pngs)
+    Ok(entries.into_iter().flatten().filter_map(Result::ok))
 }
 
-/// The MP4s and GIFs in `<save_folder>/recordings/`, sorted by name.
-fn recordings_in(save_folder: &Path) -> LibraryResult<Vec<PathBuf>> {
-    let dir = save_folder.join(RECORDINGS_DIR);
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err.into()),
-    };
-    let mut videos: Vec<PathBuf> = entries
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.is_file() && ShotKind::of_recording(path).is_some())
-        .collect();
-    videos.sort();
-    Ok(videos)
+/// Files in a media root and its direct YYYY-MM children. A symlink named
+/// like a month is not itself a month folder.
+fn media_in(root: &Path, matches_media: impl Fn(&Path) -> bool) -> LibraryResult<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in media_entries(root)? {
+        let path = entry.path();
+        if is_month_folder(&entry.file_name()) && entry.file_type().is_ok_and(|kind| kind.is_dir())
+        {
+            files.extend(media_entries(&path)?.filter_map(|child| {
+                let path = child.path();
+                (child.file_type().is_ok_and(|kind| kind.is_file()) && matches_media(&path))
+                    .then_some(path)
+            }));
+        } else if path.is_file() && matches_media(&path) {
+            files.push(path);
+        }
+    }
+    files.sort();
+    Ok(files)
 }
 
 /// The files that go with a shot besides its main file: its sidecars and
@@ -2864,7 +2880,7 @@ mod tests {
             window_title: Some("Docs".into()),
         };
         save_capture(
-            folder,
+            &crate::media::SaveDestination::flat(folder),
             &image,
             CaptureMode::Region,
             &foreground,
@@ -3484,6 +3500,84 @@ mod tests {
 
         // Nothing changed: nothing to do.
         assert!(!library.rescan(dir.path()).unwrap().changed());
+    }
+
+    #[test]
+    fn rescan_mixes_flat_and_monthly_media_with_distinct_thumbnails() {
+        let dir = TempDir::new().unwrap();
+        let folder = dir.path();
+        let flat = shoot(folder, 1, (4, 4));
+        let flat_legacy = flat.with_file_name("Grab-it 2026-03-07 09-05-01.png");
+        fs::rename(capture::meta_path(&flat), capture::meta_path(&flat_legacy)).unwrap();
+        fs::rename(&flat, &flat_legacy).unwrap();
+
+        let destination = crate::media::SaveDestination {
+            folder: folder.to_owned(),
+            layout: crate::settings::SaveLayout {
+                by_month: true,
+                include_app_name: true,
+            },
+        };
+        let date = Local.with_ymd_and_hms(2026, 4, 9, 12, 30, 0).unwrap();
+        let image = RgbaImage::from_pixel(2, 3, Rgba([200, 100, 50, 255]));
+        let newer = save_capture(
+            &destination,
+            &image,
+            CaptureMode::Window,
+            &Foreground {
+                app: Some("Firefox".into()),
+                window_title: None,
+            },
+            None,
+            date,
+        )
+        .unwrap();
+
+        let pictures = folder.join(ORIGINALS_DIR);
+        for child in ["2026-03", "2026-13", "2026-04/nested"] {
+            fs::create_dir_all(pictures.join(child)).unwrap();
+            fs::copy(
+                &flat_legacy,
+                pictures.join(child).join(flat_legacy.file_name().unwrap()),
+            )
+            .unwrap();
+        }
+        let march_image = pictures
+            .join("2026-03")
+            .join(flat_legacy.file_name().unwrap());
+        fs::copy(
+            capture::meta_path(&flat_legacy),
+            capture::meta_path(&march_image),
+        )
+        .unwrap();
+
+        let video = record_mp4(folder, "same.mp4");
+        let month_video = video.with_file_name("2026-04").join("same.mp4");
+        fs::create_dir_all(month_video.parent().unwrap()).unwrap();
+        fs::copy(&video, &month_video).unwrap();
+        let gif = record_gif(folder, "motion.gif");
+        let month_gif = gif.with_file_name("2026-04").join("motion.gif");
+        fs::rename(&gif, &month_gif).unwrap();
+        fs::File::create(video.with_file_name("reserved.mp4")).unwrap();
+
+        let mut library = Library::open_in_memory().unwrap();
+        assert_eq!(library.rescan(folder).unwrap().added, 6);
+        let by_path = |path: &Path| {
+            library
+                .get(library.id_for_path(path).unwrap().unwrap())
+                .unwrap()
+        };
+        let legacy = by_path(&flat_legacy);
+        let month = by_path(&march_image);
+        assert_eq!(legacy.file_name, month.file_name);
+        assert_ne!(legacy.thumb_path, month.thumb_path);
+        assert!(legacy.thumb_path.is_file() && month.thumb_path.is_file());
+        let newer = by_path(&newer.path);
+        assert_eq!(newer.app.as_deref(), Some("Firefox"));
+        assert!(newer.captured_at > legacy.captured_at);
+        assert_eq!(by_path(&month_gif).kind, ShotKind::Gif);
+        assert_ne!(by_path(&video).thumb_path, by_path(&month_video).thumb_path);
+        assert!(!library.rescan(folder).unwrap().changed());
     }
 
     #[test]

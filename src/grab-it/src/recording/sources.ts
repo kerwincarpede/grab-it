@@ -8,25 +8,13 @@ export interface SourceMeta {
   height: number;
 }
 
-/** The folder a path is in, without the trailing separator. */
-export function folderOf(path: string): string {
-  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return cut < 0 ? "" : path.slice(0, cut);
-}
-
-/** Whether `path` sits directly in `folder`, whichever separators either uses. */
-export function isIn(path: string, folder: string): boolean {
-  const norm = (value: string) => value.replace(/\\/g, "/").replace(/\/+$/, "");
-  return norm(folderOf(path)) === norm(folder);
-}
-
 /** Asks for an MP4 in the recordings folder `folder`. Null when the user cancels. */
 export async function chooseRecording(folder: string): Promise<string | null> {
   const picked = await open({
     multiple: false,
     directory: false,
     title: "Add a recording",
-    defaultPath: folder || undefined,
+    defaultPath: folder,
     filters: [{ name: "Recordings", extensions: ["mp4"] }],
   });
   return typeof picked === "string" ? picked : null;

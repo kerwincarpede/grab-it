@@ -58,6 +58,7 @@ import {
   setHotkeys,
   setPreferences,
   setSaveFolder,
+  setSaveLayout,
   setShowInDock,
   setUpdateChannel,
   UPDATE_CHANNELS,
@@ -65,6 +66,7 @@ import {
   type Hotkeys,
   type HotkeysUpdate,
   type Preferences,
+  type SaveLayout,
   type Settings,
   type SettingsSection,
   type UpdateChannel,
@@ -83,6 +85,19 @@ interface ScaleSliderProps {
   /** Shows a small and a large A at the ends, for text size. */
   letters?: boolean;
 }
+
+const SAVE_LAYOUT_OPTIONS = [
+  {
+    key: "byMonth",
+    label: "Organise by month",
+    hint: "Save new files in folders such as originals/2026-11 and recordings/2026-11.",
+  },
+  {
+    key: "includeAppName",
+    label: "Include app names in filenames",
+    hint: "When Grab-it can identify the app, a name looks like 2026-11-24 14-32-08 – Firefox.png.",
+  },
+] as const;
 
 /** The copy sound's volume slider: every whole percent from 0 to 100. */
 const VOLUME_RANGE = { min: 0, max: 100, step: 1 };
@@ -460,6 +475,19 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
       if (picked === null) return;
       setSettings(await setSaveFolder(picked));
       setStatus({ kind: "saved" });
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function changeSaveLayout(key: keyof SaveLayout, enabled: boolean) {
+    if (!settings) return;
+    setBusy(true);
+    try {
+      setSettings(await setSaveLayout({ ...settings.saveLayout, [key]: enabled }));
+      setStatus({ kind: "preferences-saved" });
     } catch (err) {
       setStatus({ kind: "error", message: errorMessage(err) });
     } finally {
@@ -1217,6 +1245,24 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                 Change…
               </button>
             </div>
+            {SAVE_LAYOUT_OPTIONS.map(({ key, label, hint }) => (
+              <label className="row" key={key}>
+                <span className="row-text">
+                  <span className="row-title" id={`save-layout-${key}-label`}>{label}</span>
+                  <span className="row-hint" id={`save-layout-${key}-hint`}>{hint}</span>
+                </span>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  className="switch"
+                  aria-labelledby={`save-layout-${key}-label`}
+                  aria-describedby={`save-layout-${key}-hint`}
+                  checked={settings?.saveLayout[key] ?? false}
+                  disabled={busy || settings === null}
+                  onChange={(event) => void changeSaveLayout(key, event.target.checked)}
+                />
+              </label>
+            ))}
           </div>
         </section>
       )}

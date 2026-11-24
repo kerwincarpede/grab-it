@@ -15,7 +15,7 @@ No. Capturing, editing, recording, reading text in images and searching all work
 
 ## Where are my captures?
 
-In your save folder, `Pictures/Grab-it` by default, as ordinary PNG files. Recordings are in its `recordings` folder. Click **Show in folder** in the Library to go straight to one. Change the folder in [Settings → General](/grab-it/reference/settings/#general).
+Screenshots are PNGs under `originals` in your save folder, `Pictures/Grab-it` by default. Recordings are under `recordings`. [Settings → General](/grab-it/reference/settings/#general) lets you change the save folder or organise new files by month. Click **Show in folder** in the Library to go straight to a file.
 
 ## Can I edit a capture again later?
 

@@ -9,7 +9,7 @@ The editor **never changes your screenshot**. Everything you do, every arrow, bl
 
 ## Saved as you go
 
-There's no Save button. A moment after each change, your edits are saved to a small file beside the screenshot: `Grab-it 2026-11-15 14-05-09.png` gets `Grab-it 2026-11-15 14-05-09.annotations.json`. The status bar says *Saving…*, then *Annotations saved*. If you close the editor straight after a change, it finishes saving first.
+There's no Save button. A moment after each change, your edits are saved to a small file beside the screenshot: `2026-11-15 14-05-09.png` gets `2026-11-15 14-05-09.annotations.json`. The status bar says *Saving…*, then *Annotations saved*. If you close the editor straight after a change, it finishes saving first.
 
 To pick up where you left off, open the capture again from the [Library](/grab-it/library/) or the Quick Access card. Everything is there, still editable.
 

@@ -17,7 +17,7 @@ When Grab-it starts it **doesn't open a big window**. It sits quietly in your sy
 Your capture is now:
 
 - **on your clipboard**, ready to paste into Slack, an email, a doc or a ticket,
-- **saved** as a PNG in `Pictures/Grab-it`, named after the moment you took it (`Grab-it 2026-11-15 14-05-09.png`), and
+- **saved** as a PNG in `Pictures/Grab-it/originals` by default, named after the moment you took it (`2026-11-15 14-05-09.png`), and
 - shown on a **Quick Access** card in the corner of your screen.
 
 On macOS, Grab-it offers PNG first when you copy an image. It also offers TIFF for apps that need it.

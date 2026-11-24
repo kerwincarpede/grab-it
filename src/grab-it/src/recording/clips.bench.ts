@@ -57,5 +57,5 @@ test("recording/clips", async ({ bench }) => {
     }
   }).run();
 
-  await bench("read 200 saved clips", () => parseClips(SAVED, true)).run();
+  await bench("read 200 saved clips", () => parseClips(SAVED, 3)).run();
 });

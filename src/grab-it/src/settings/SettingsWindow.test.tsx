@@ -23,6 +23,7 @@ import {
   type Microphone,
   type RecordingSettings,
   type Retention,
+  type SaveLayout,
   type UpdateChannel,
 } from "./api";
 
@@ -84,6 +85,7 @@ interface Backend {
   /** What `recording_system_audio` answers. */
   systemSound: boolean;
   saveFolder: string;
+  saveLayout: SaveLayout;
   hotkeys: typeof DEFAULT_HOTKEYS;
   hotkeyWarnings: string[];
   picked: string | null;
@@ -113,6 +115,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     claudePath: "/usr/local/bin/claude",
     codexPath: "/opt/homebrew/bin/codex",
     saveFolder: "/home/me/Pictures/Grab-it",
+    saveLayout: { byMonth: false, includeAppName: false },
     picked: "/data/Shots",
     hotkeys: { ...DEFAULT_HOTKEYS },
     hotkeyWarnings: [],
@@ -136,6 +139,7 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
   };
   const settings = (): Settings_Serialize => ({
     saveFolder: backend.saveFolder,
+    saveLayout: backend.saveLayout,
     hotkeys: backend.hotkeys,
     afterCapture: backend.afterCapture,
     copyToClipboard: backend.copyToClipboard,
@@ -269,6 +273,11 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
         backend.saveFolder = path;
         return settings();
       },
+      set_save_layout: ({ layout }) => {
+        guard();
+        backend.saveLayout = { byMonth: false, includeAppName: false, ...layout };
+        return settings();
+      },
       set_hotkeys: ({ hotkeys }) => {
         guard();
         backend.hotkeys = { ...hotkeys, steps: hotkeys.steps ?? DEFAULT_HOTKEYS.steps };
@@ -313,6 +322,43 @@ describe("SettingsWindow", () => {
     const input = await screen.findByLabelText("Save folder");
     expect(await screen.findByDisplayValue("/home/me/Pictures/Grab-it")).toBe(input);
     expect(screen.getByRole("button", { name: "Change…" })).toBeEnabled();
+  });
+
+  it("saves month folders and app names independently", async () => {
+    const backend = mockBackend();
+    const view = render(<SettingsWindow />);
+    const months = await screen.findByRole("switch", { name: "Organise by month" });
+    const apps = screen.getByRole("switch", { name: "Include app names in filenames" });
+    expect(months).toHaveAccessibleDescription(/originals\/2026-11 and recordings\/2026-11/);
+    expect(apps).toHaveAccessibleDescription(/2026-11-24 14-32-08 – Firefox.png/);
+    expect(months).not.toBeChecked();
+    expect(apps).not.toBeChecked();
+
+    await userEvent.click(apps);
+    await waitFor(() => expect(apps).toBeChecked());
+    expect(months).not.toBeChecked();
+    await userEvent.click(months);
+    await waitFor(() => expect(months).toBeChecked());
+    expect(backend.calls.filter(({ cmd }) => cmd === "set_save_layout").map(({ payload }) => payload)).toEqual([
+      { layout: { byMonth: false, includeAppName: true } },
+      { layout: { byMonth: true, includeAppName: true } },
+    ]);
+
+    view.unmount();
+    render(<SettingsWindow />);
+    await screen.findByDisplayValue(backend.saveFolder);
+    expect(screen.getByRole("switch", { name: "Organise by month" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Include app names in filenames" })).toBeChecked();
+  });
+
+  it("keeps the saved option when changing the layout fails", async () => {
+    mockBackend({ setError: "Could not save the layout" });
+    render(<SettingsWindow />);
+    const apps = screen.getByRole("switch", { name: "Include app names in filenames" });
+    await waitFor(() => expect(apps).toBeEnabled());
+    await userEvent.click(apps);
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Could not save the layout"));
+    expect(apps).not.toBeChecked();
   });
 
   it("changes the save folder to the picked folder", async () => {

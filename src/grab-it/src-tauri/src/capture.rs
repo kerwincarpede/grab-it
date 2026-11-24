@@ -4,12 +4,15 @@
 
 use std::{
     fs, io,
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
 
 use chrono::{DateTime, Local};
-use image::{RgbaImage, imageops};
+use image::{ImageEncoder, RgbaImage, codecs::png::PngEncoder, imageops};
 use serde::{Deserialize, Serialize};
+
+use crate::media::SaveDestination;
 
 pub use crate::pointer::CapturedPointer;
 
@@ -205,29 +208,6 @@ pub fn stitch(tiles: &[Tile<'_>]) -> Option<RgbaImage> {
     Some(out)
 }
 
-/// The file name for a capture taken at `time`, without a folder.
-pub fn capture_file_name(time: &DateTime<Local>, counter: u32) -> String {
-    let stamp = time.format("%Y-%m-%d %H-%M-%S");
-    if counter <= 1 {
-        format!("Grab-it {stamp}.png")
-    } else {
-        format!("Grab-it {stamp} ({counter}).png")
-    }
-}
-
-/// A free path in `dir` for a capture taken at `time`. Captures in the same
-/// second get ` (2)`, ` (3)`, … appended.
-pub fn unique_capture_path(dir: &Path, time: &DateTime<Local>) -> PathBuf {
-    let mut counter = 1;
-    loop {
-        let path = dir.join(capture_file_name(time, counter));
-        if !path.exists() {
-            return path;
-        }
-        counter += 1;
-    }
-}
-
 /// The sidecar path for a capture: `<name>.png` gives `<name>.meta.json`.
 pub fn meta_path(png: &Path) -> PathBuf {
     sidecar_path(png, META_SUFFIX)
@@ -343,11 +323,11 @@ impl From<serde_json::Error> for SaveError {
     }
 }
 
-/// Saves `image` as a timestamped PNG in `<save_folder>/originals/`, with
-/// its `meta.json` sidecar beside it. `scale_factor` is the source
+/// Saves `image` as a timestamped PNG under `originals/`, with its
+/// `meta.json` sidecar beside it. `scale_factor` is the source
 /// monitor's image pixels per point, when known.
 pub fn save_capture(
-    save_folder: &Path,
+    destination: &SaveDestination,
     image: &RgbaImage,
     mode: CaptureMode,
     foreground: &Foreground,
@@ -355,7 +335,7 @@ pub fn save_capture(
     time: DateTime<Local>,
 ) -> Result<SavedCapture, SaveError> {
     save_capture_with_pointer(
-        save_folder,
+        destination,
         image,
         mode,
         foreground,
@@ -367,7 +347,7 @@ pub fn save_capture(
 
 /// [`save_capture`], keeping the mouse `pointer` in `meta.json`.
 pub fn save_capture_with_pointer(
-    save_folder: &Path,
+    destination: &SaveDestination,
     image: &RgbaImage,
     mode: CaptureMode,
     foreground: &Foreground,
@@ -375,11 +355,6 @@ pub fn save_capture_with_pointer(
     pointer: Option<CapturedPointer>,
     time: DateTime<Local>,
 ) -> Result<SavedCapture, SaveError> {
-    let dir = save_folder.join(ORIGINALS_DIR);
-    fs::create_dir_all(&dir)?;
-    let path = unique_capture_path(&dir, &time);
-    image.save_with_format(&path, image::ImageFormat::Png)?;
-
     let meta = CaptureMeta {
         version: 1,
         captured_at: time.to_rfc3339(),
@@ -391,10 +366,35 @@ pub fn save_capture_with_pointer(
         scale_factor: valid_scale(scale_factor),
         pointer,
     };
-    let meta_path = meta_path(&path);
     let mut json = serde_json::to_string_pretty(&meta)?;
     json.push('\n');
-    fs::write(&meta_path, json)?;
+    let (path, file) =
+        destination.reserve(ORIGINALS_DIR, &time, foreground.app.as_deref(), "png")?;
+    let meta_path = meta_path(&path);
+    let write = || -> Result<(), SaveError> {
+        let mut png = BufWriter::new(file);
+        PngEncoder::new(&mut png).write_image(
+            image,
+            image.width(),
+            image.height(),
+            image::ExtendedColorType::Rgba8,
+        )?;
+        png.flush()?;
+        let mut sidecar = fs::File::options()
+            .write(true)
+            .create_new(true)
+            .open(&meta_path)?;
+        if let Err(err) = sidecar.write_all(json.as_bytes()) {
+            drop(sidecar);
+            let _ = fs::remove_file(&meta_path);
+            return Err(err.into());
+        }
+        Ok(())
+    };
+    if let Err(err) = write() {
+        let _ = fs::remove_file(&path);
+        return Err(err);
+    }
     Ok(SavedCapture { path, meta_path })
 }
 
@@ -425,30 +425,6 @@ mod tests {
             width,
             height,
         }
-    }
-
-    #[test]
-    fn file_names_are_timestamped_and_sortable() {
-        assert_eq!(
-            capture_file_name(&time(), 1),
-            "Grab-it 2026-03-07 09-05-01.png"
-        );
-        assert_eq!(
-            capture_file_name(&time(), 3),
-            "Grab-it 2026-03-07 09-05-01 (3).png"
-        );
-    }
-
-    #[test]
-    fn captures_in_the_same_second_get_a_counter() {
-        let dir = TempDir::new().unwrap();
-        let first = unique_capture_path(dir.path(), &time());
-        fs::write(&first, b"").unwrap();
-        let second = unique_capture_path(dir.path(), &time());
-        assert_eq!(
-            second.file_name().unwrap(),
-            "Grab-it 2026-03-07 09-05-01 (2).png"
-        );
     }
 
     #[test]
@@ -616,7 +592,7 @@ mod tests {
         };
 
         let saved = save_capture(
-            dir.path(),
+            &crate::media::SaveDestination::flat(dir.path()),
             &image,
             CaptureMode::Region,
             &foreground,
@@ -651,7 +627,7 @@ mod tests {
         let image = RgbaImage::from_pixel(1, 1, Rgba([0, 0, 0, 255]));
         for scale in [None, Some(0.0), Some(f64::NAN), Some(-1.0)] {
             let saved = save_capture(
-                dir.path(),
+                &crate::media::SaveDestination::flat(dir.path()),
                 &image,
                 CaptureMode::Screen,
                 &Foreground::default(),
@@ -695,7 +671,7 @@ mod tests {
             image: "iVBORw0KGgo=".into(),
         };
         let saved = save_capture_with_pointer(
-            dir.path(),
+            &crate::media::SaveDestination::flat(dir.path()),
             &image,
             CaptureMode::Region,
             &Foreground::default(),
@@ -712,7 +688,7 @@ mod tests {
         assert_eq!(read_meta(&saved.path).unwrap().pointer, Some(pointer));
 
         let saved = save_capture(
-            dir.path(),
+            &crate::media::SaveDestination::flat(dir.path()),
             &image,
             CaptureMode::Region,
             &Foreground::default(),

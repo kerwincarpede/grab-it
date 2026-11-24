@@ -29,11 +29,10 @@ use std::{
     ffi::OsString,
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom},
-    ops::Deref,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Stdio,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -53,8 +52,9 @@ use crate::rt::{AppHandle, WebviewWindow};
 use crate::{
     capture::sidecar_path,
     commands::{SettingsState, lock},
-    editor::{EditorState, percent_decode},
+    editor::percent_decode,
     ffmpeg::{self, Video, VideoSpec},
+    media::is_month_folder,
     quick::{self, QuickItem},
     record::{RECORDINGS_DIR, SoundSource, cursor_path, sound_path},
     settings::RecordingFormat,
@@ -65,11 +65,8 @@ use crate::{
 /// src/recording/api.ts.
 pub const VIDEO_SCHEME: &str = "grab-it-video";
 /// The newest edits sidecar format version this build reads and writes:
-/// 2 adds `clips`, and 3 lets them hold gaps (`{id, gapMs}`). The page
-/// writes the oldest version that holds its edits: 1 (a trim of the
-/// recording itself) whenever the sequence is that one clip, 2 for clips
-/// without gaps.
-pub const EDITS_VERSION: u64 = 3;
+/// 2 adds clips, 3 adds gaps, and 4 adds month-qualified source references.
+pub const EDITS_VERSION: u64 = 4;
 /// Ends the name of the edits sidecar beside an MP4.
 pub const EDITS_SUFFIX: &str = ".edits.json";
 /// The request header carrying the export plan as URI-encoded JSON.
@@ -93,8 +90,15 @@ const MUX_TIMEOUT: Duration = Duration::from_secs(300);
 /// The recording each recording editor window shows, by window label.
 #[derive(Default)]
 pub struct RecordingEditorState {
-    editors: EditorState,
+    editors: Mutex<HashMap<String, RecordingFile>>,
     exports: Mutex<HashMap<String, ActiveExport>>,
+}
+
+#[derive(Clone)]
+struct RecordingFile {
+    path: PathBuf,
+    source: String,
+    recordings_folder: PathBuf,
 }
 
 struct ActiveExport {
@@ -103,6 +107,53 @@ struct ActiveExport {
 }
 
 impl RecordingEditorState {
+    fn editors(&self) -> MutexGuard<'_, HashMap<String, RecordingFile>> {
+        self.editors.lock().unwrap_or_else(|err| err.into_inner())
+    }
+
+    /// Registers the file and its validated root before the webview opens.
+    pub(crate) fn register(
+        &self,
+        label: &str,
+        path: &Path,
+        configured_root: &Path,
+    ) -> io::Result<()> {
+        let recording = recording_reference(configured_root, path)
+            .or_else(|| recording_reference(named_recordings_root(path)?, path))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "the recording is outside the recordings folder",
+                )
+            })?;
+        self.editors().insert(label.to_owned(), recording);
+        Ok(())
+    }
+
+    pub(crate) fn remove(&self, label: &str) {
+        self.editors().remove(label);
+    }
+
+    pub(crate) fn label_for(&self, path: &Path) -> Option<String> {
+        let canonical = fs::canonicalize(path).ok();
+        self.editors()
+            .iter()
+            .find(|(_, open)| open.path == path || Some(&open.path) == canonical.as_ref())
+            .map(|(label, _)| label.clone())
+    }
+
+    fn recording_for(&self, label: &str) -> Result<RecordingFile, String> {
+        self.editors()
+            .get(label)
+            .cloned()
+            .ok_or_else(|| "this window is not an editor".to_owned())
+    }
+
+    pub(crate) fn source_for(&self, label: &str, source: &str) -> Result<PathBuf, String> {
+        let recording = self.recording_for(label)?;
+        source_file(&recording.recordings_folder, source)
+    }
+
     fn begin_export(&self, label: &str, original: &Path) -> Result<Arc<AtomicBool>, String> {
         let mut exports = self.exports.lock().unwrap_or_else(|err| err.into_inner());
         if exports.contains_key(label) || exports.values().any(|export| export.original == original)
@@ -147,14 +198,6 @@ fn check_cancelled(flag: &AtomicBool) -> Result<(), String> {
     }
 }
 
-impl Deref for RecordingEditorState {
-    type Target = EditorState;
-
-    fn deref(&self) -> &EditorState {
-        &self.editors
-    }
-}
-
 /// The edits sidecar of a recording: `<name>.mp4` gives `<name>.edits.json`.
 pub fn edits_path(video: &Path) -> PathBuf {
     sidecar_path(video, EDITS_SUFFIX)
@@ -163,17 +206,15 @@ pub fn edits_path(video: &Path) -> PathBuf {
 /// Accepts `{version: 1, ...}` with an optional `trim` object holding
 /// `startMs` and `endMs` and an optional `zooms` list, or `{version: 2,
 /// ...}` which may also hold a `clips` list of `{id, source, startMs,
-/// endMs}`, or `{version: 3, ...}` whose `clips` may also hold gaps of
-/// `{id, gapMs}`; any other fields are kept as they are. The page drops a
-/// zoom it cannot read on its own.
+/// endMs}`. Version 3 adds gaps of `{id, gapMs}`, and version 4 permits
+/// month-qualified clip and zoom sources. The page skips unknown zooms.
 pub fn validate_edits(value: &Value) -> Result<(), String> {
-    let version = value.get("version").and_then(Value::as_u64);
-    if !matches!(version, Some(1..=EDITS_VERSION)) {
+    let Some(version @ 1..=EDITS_VERSION) = value.get("version").and_then(Value::as_u64) else {
         return Err(format!(
             "unsupported edits version {}",
             value.get("version").unwrap_or(&Value::Null)
         ));
-    }
+    };
     if !matches!(
         value.get("zooms"),
         None | Some(Value::Null | Value::Array(_))
@@ -182,11 +223,10 @@ pub fn validate_edits(value: &Value) -> Result<(), String> {
     }
     match value.get("clips") {
         None | Some(Value::Null) => {}
-        Some(Value::Array(clips)) if version >= Some(2) => {
-            let gaps = version >= Some(3);
+        Some(Value::Array(clips)) if version >= 2 => {
             clips
                 .iter()
-                .try_for_each(|clip| validate_clip(clip, gaps))?;
+                .try_for_each(|clip| validate_clip(clip, version))?;
         }
         Some(Value::Array(_)) => return Err("clips need edits version 2".to_owned()),
         Some(_) => return Err("the clips must be a list".to_owned()),
@@ -203,10 +243,8 @@ pub fn validate_edits(value: &Value) -> Result<(), String> {
     }
 }
 
-/// One entry of a version 2 `clips` list: an id, the file name of a
-/// recording (no folders), and a stretch of it. With `gaps` (version 3) it
-/// may instead be an id and a `gapMs` length.
-fn validate_clip(clip: &Value, gaps: bool) -> Result<(), String> {
+/// A clip plays a stretch of one source, or is a gap of a specified length.
+fn validate_clip(clip: &Value, version: u64) -> Result<(), String> {
     let text = |key: &str| {
         clip.get(key)
             .and_then(Value::as_str)
@@ -216,7 +254,7 @@ fn validate_clip(clip: &Value, gaps: bool) -> Result<(), String> {
         return Err("a clip needs an id".to_owned());
     }
     if let Some(gap) = clip.get("gapMs") {
-        if !gaps {
+        if version < 3 {
             return Err("gaps need edits version 3".to_owned());
         }
         return match gap.as_f64() {
@@ -224,9 +262,15 @@ fn validate_clip(clip: &Value, gaps: bool) -> Result<(), String> {
             _ => Err("a gap needs a gapMs above 0".to_owned()),
         };
     }
-    match text("source") {
-        Some(source) if !source.contains(['/', '\\']) && source != ".." => {}
-        _ => return Err("a clip needs the file name of a recording".to_owned()),
+    let valid_source = text("source").is_some_and(|source| {
+        if version >= 4 {
+            is_source(source)
+        } else {
+            !source.contains(['/', '\\']) && source != ".."
+        }
+    });
+    if !valid_source {
+        return Err("a clip needs the name of a recording in the recordings folder".to_owned());
     }
     let ms = |key: &str| clip.get(key).and_then(Value::as_f64);
     match (ms("startMs"), ms("endMs")) {
@@ -497,6 +541,10 @@ fn audio_sources_with(video: &Path, has_audio: impl FnOnce() -> bool) -> Vec<Aud
 pub struct RecordingInfo {
     pub path: PathBuf,
     pub file_name: String,
+    /// The recording's source reference within the recordings folder.
+    pub source: String,
+    /// The folder the file picker starts in, containing flat files and months.
+    pub recordings_folder: PathBuf,
     /// The saved sidecar, or `None` when the recording has no edits yet.
     pub edits: Option<Value>,
     /// The frame rate it was recorded at.
@@ -522,7 +570,11 @@ pub async fn recording_info(
     app: AppHandle,
     state: State<'_, RecordingEditorState>,
 ) -> Result<RecordingInfo, String> {
-    let path = state.path_for(window.label())?;
+    let RecordingFile {
+        path,
+        source,
+        recordings_folder,
+    } = state.recording_for(window.label())?;
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -547,6 +599,8 @@ pub async fn recording_info(
         remove_noise: sidecar_remove_noise(&path),
         path,
         file_name,
+        source,
+        recordings_folder,
         edits,
         fps,
         cursor,
@@ -562,8 +616,8 @@ pub fn recording_save_edits(
     window: WebviewWindow,
     state: State<'_, RecordingEditorState>,
 ) -> Result<(), String> {
-    let path = state.path_for(window.label())?;
-    write_edits(&path, &edits)
+    let recording = state.recording_for(window.label())?;
+    write_edits(&recording.path, &edits)
 }
 
 /// A recording a clip of the sequence plays. Mirrors `RecordingSource` in
@@ -575,6 +629,8 @@ pub fn recording_save_edits(
 pub struct RecordingSource {
     pub path: PathBuf,
     pub file_name: String,
+    /// The recording's source reference within the recordings folder.
+    pub source: String,
     /// The frame rate it was recorded at.
     pub fps: u32,
     /// Its pointer path, for follow-the-pointer zooms.
@@ -589,26 +645,43 @@ pub struct RecordingSource {
     pub separate_microphone: bool,
 }
 
-/// The MP4 `file_name` names in `recordings`: a bare file name, never a
-/// path, of a file that is there.
-pub fn source_file(recordings: &Path, file_name: &str) -> Result<PathBuf, String> {
-    let bare = !file_name.is_empty()
-        && !file_name.contains(['/', '\\'])
-        && Path::new(file_name).file_name() == Some(std::ffi::OsStr::new(file_name));
-    let file = if bare {
-        allowed_video(recordings, &recordings.join(file_name))
-    } else {
-        None
+/// A source is a bare MP4 name or `YYYY-MM/name.mp4`, with a portable
+/// slash as the separator in edits and IPC.
+fn is_source(source: &str) -> bool {
+    let file = match source.split_once('/') {
+        Some((month, file)) if is_month_folder(month.as_ref()) => file,
+        Some(_) => return false,
+        None => source,
     };
-    file.ok_or_else(|| format!("{file_name} is not a recording in the recordings folder"))
+    !(file.contains(['/', '\\', '\0']) || cfg!(windows) && file.contains(':'))
+        && Path::new(file).file_name() == Some(file.as_ref())
+        && is_mp4(Path::new(file))
 }
 
-/// The folder clips are taken from: the one holding the recording the
-/// editor opened, which is a recordings folder.
-pub(crate) fn recordings_of(original: &Path) -> Result<&Path, String> {
-    original
-        .parent()
-        .ok_or_else(|| "the recording has no folder".to_owned())
+/// Resolves a clip reference within the recording editor's media root.
+fn source_file(recordings: &Path, source: &str) -> Result<PathBuf, String> {
+    if is_source(source)
+        && let Some(path) = allowed_video(recordings, &recordings.join(source))
+    {
+        return Ok(path);
+    }
+    Err(format!(
+        "{source} is not a recording in the recordings folder"
+    ))
+}
+
+/// The root for an earlier save folder, or for a file named through a
+/// recordings-folder alias rather than its canonical path.
+fn named_recordings_root(original: &Path) -> Option<&Path> {
+    let parent = original.parent()?;
+    let root = if parent.file_name().is_some_and(is_month_folder) {
+        parent.parent().unwrap_or(parent)
+    } else {
+        parent
+    };
+    root.file_name()
+        .filter(|name| name.eq_ignore_ascii_case(RECORDINGS_DIR))
+        .map(|_| root)
 }
 
 /// What the editor needs to play and export `file_name` from the
@@ -623,9 +696,32 @@ pub async fn recording_source(
     app: AppHandle,
     state: State<'_, RecordingEditorState>,
 ) -> Result<RecordingSource, String> {
-    let original = state.path_for(window.label())?;
-    let path = source_file(recordings_of(&original)?, &file_name)?;
-    let ffmpeg = ffmpeg::ready(&app).map(|ready| ready.path);
+    let path = state.source_for(window.label(), &file_name)?;
+    load_source(&app, path, file_name).await
+}
+
+/// Resolves the file picker result to a source in the editor's recordings folder.
+#[tauri::command]
+#[specta::specta]
+pub async fn recording_pick_source(
+    path: PathBuf,
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<'_, RecordingEditorState>,
+) -> Result<RecordingSource, String> {
+    let original = state.recording_for(window.label())?;
+    let RecordingFile { path, source, .. } =
+        recording_reference(&original.recordings_folder, &path)
+            .ok_or_else(|| "Only recordings in the recordings folder can be added.".to_owned())?;
+    load_source(&app, path, source).await
+}
+
+async fn load_source(
+    app: &AppHandle,
+    path: PathBuf,
+    source: String,
+) -> Result<RecordingSource, String> {
+    let ffmpeg = ffmpeg::ready(app).map(|ready| ready.path);
     tauri::async_runtime::spawn_blocking(move || {
         let has_audio = ffmpeg
             .as_deref()
@@ -633,7 +729,11 @@ pub async fn recording_source(
         RecordingSource {
             fps: recording_fps(&path),
             cursor: CursorPath::load(&path),
-            file_name,
+            file_name: path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            source,
             has_audio,
             remove_noise: sidecar_remove_noise(&path),
             separate_microphone: kept_sound(&path).is_some(),
@@ -646,19 +746,38 @@ pub async fn recording_source(
 
 // --- Serving the recording ------------------------------------------------
 
-/// The file a `grab-it-video` request names, when it is an MP4 directly in
-/// `recordings`. Both are compared by the files they name, so `..` and
-/// symlinks cannot reach anything else.
+/// The canonical MP4 a request names, within the flat or monthly layout.
 pub fn allowed_video(recordings: &Path, requested: &Path) -> Option<PathBuf> {
-    let is_mp4 = requested
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"));
-    if !is_mp4 {
+    recording_reference(recordings, requested).map(|recording| recording.path)
+}
+
+fn is_mp4(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4"))
+}
+
+fn recording_reference(recordings: &Path, requested: &Path) -> Option<RecordingFile> {
+    if !is_mp4(requested) {
         return None;
     }
-    let folder = fs::canonicalize(recordings).ok()?;
+    let root = fs::canonicalize(recordings).ok()?;
     let file = fs::canonicalize(requested).ok()?;
-    (file.is_file() && file.parent() == Some(folder.as_path())).then_some(file)
+    let mut relative = file.strip_prefix(&root).ok()?.components();
+    let Some(Component::Normal(first)) = relative.next() else {
+        return None;
+    };
+    let reference = match relative.next() {
+        None => first.to_str()?.to_owned(),
+        Some(Component::Normal(name)) if is_month_folder(first) && relative.next().is_none() => {
+            format!("{}/{}", first.to_str()?, name.to_str()?)
+        }
+        _ => return None,
+    };
+    (is_source(&reference) && file.is_file()).then_some(RecordingFile {
+        path: file,
+        source: reference,
+        recordings_folder: root,
+    })
 }
 
 /// A `Range` header that cannot be met, answered with 416.
@@ -786,18 +905,19 @@ pub fn requested_path(uri_path: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Serves a `grab-it-video` request: MP4s in the current save folder's
-/// recordings only.
-pub fn serve_video(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
+/// Serves MP4s in the recordings folder associated with this webview.
+pub fn serve_video(app: &AppHandle, label: &str, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     // A fetch with a Range header from the page's origin asks first.
     if request.method() == tauri::http::Method::OPTIONS {
         return preflight();
     }
-    let recordings = app
-        .try_state::<SettingsState>()
-        .map(|state| lock(&state).get().save_folder.join(RECORDINGS_DIR));
-    let allowed = recordings.zip(requested_path(request.uri().path()));
-    let Some(path) = allowed.and_then(|(folder, path)| allowed_video(&folder, &path)) else {
+    let original = app
+        .try_state::<RecordingEditorState>()
+        .and_then(|state| state.recording_for(label).ok());
+    let allowed = original.zip(requested_path(request.uri().path()));
+    let Some(path) =
+        allowed.and_then(|(original, path)| allowed_video(&original.recordings_folder, &path))
+    else {
         return plain(StatusCode::FORBIDDEN, "not a recording");
     };
     let range = request
@@ -1603,7 +1723,7 @@ pub async fn recording_export(
     app: AppHandle,
     state: State<'_, RecordingEditorState>,
 ) -> Result<PathBuf, String> {
-    let original = state.path_for(window.label())?;
+    let original = state.recording_for(window.label())?;
     let plan = request
         .headers()
         .get(EXPORT_PLAN_HEADER)
@@ -1624,10 +1744,9 @@ pub async fn recording_export(
         );
     };
     let label = window.label().to_owned();
-    let cancelled = state.begin_export(
-        &label,
-        &original.canonicalize().map_err(|err| err.to_string())?,
-    )?;
+    let path = allowed_video(&original.recordings_folder, &original.path)
+        .ok_or("the recording is no longer in the recordings folder")?;
+    let cancelled = state.begin_export(&label, &path)?;
     // Minutes of decoding and encoding: on a thread of its own, not the
     // async runtime's.
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -1675,12 +1794,13 @@ fn clip_sources(
 fn export(
     app: &AppHandle,
     ready: &ffmpeg::Ready,
-    original: &Path,
+    recording: &RecordingFile,
     plan: ExportPlan,
     body: &[u8],
     label: &str,
     cancelled: &AtomicBool,
 ) -> Result<PathBuf, String> {
+    let original = &recording.path;
     let fps = export_fps(&ready.path, original);
     let report = |progress: ExportProgress| {
         let _ = app.emit_to(
@@ -1698,9 +1818,8 @@ fn export(
         .try_state::<SettingsState>()
         .map(|state| lock(&state).get().recording.quality.bits_per_pixel())
         .unwrap_or_else(|| crate::settings::RecordingQuality::High.bits_per_pixel());
-    // Clips are looked for beside the opened recording, which is in the
-    // recordings folder the editor was opened from.
-    let sources = clip_sources(&ready.path, recordings_of(original)?, &plan, cancelled)?;
+    // Every clip comes from the recordings folder the editor opened from.
+    let sources = clip_sources(&ready.path, &recording.recordings_folder, &plan, cancelled)?;
     // Missing, an export that removes noise from a clip is refused.
     let noise_model = if plan.remove_noise {
         crate::noise::bundled_model(app)
@@ -2332,7 +2451,7 @@ esac
 
     #[test]
     fn unknown_or_broken_edits_are_refused() {
-        assert!(validate_edits(&json!({ "version": 4 })).is_err());
+        assert!(validate_edits(&json!({ "version": 5 })).is_err());
         assert!(validate_edits(&json!({})).is_err());
         assert!(validate_edits(&json!({ "version": 1 })).is_ok());
         assert!(validate_edits(&json!({ "version": 1, "trim": null })).is_ok());
@@ -2409,6 +2528,33 @@ esac
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn version_4_round_trips_flat_and_month_qualified_recording_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("own.mp4");
+        let edits = json!({
+            "version": 4,
+            "clips": [
+                { "id": "c1", "source": "2026-03/same.mp4", "startMs": 0, "endMs": 1500 },
+                { "id": "g1", "gapMs": 200 },
+                { "id": "c2", "source": "2026-04/same.MP4", "startMs": 500, "endMs": 1800 },
+                { "id": "c3", "source": "legacy.mp4", "startMs": 500, "endMs": 1800 },
+            ],
+            "zooms": [{
+                "id": "z1", "source": "2026-04/same.MP4", "startMs": 500, "endMs": 1800,
+                "scale": 2, "focus": { "kind": "cursor" },
+            }],
+        });
+        write_edits(&path, &edits).unwrap();
+        assert_eq!(read_edits(&path).unwrap(), Some(edits.clone()));
+        let mut legacy_version = edits.clone();
+        legacy_version["version"] = json!(3);
+        assert!(validate_edits(&legacy_version).is_err());
+        let mut invalid = edits;
+        invalid["clips"][0]["source"] = json!("2026-03/../own.mp4");
+        assert!(validate_edits(&invalid).is_err());
     }
 
     #[test]
@@ -2505,6 +2651,53 @@ esac
         let link = recordings.join("link.mp4");
         std::os::unix::fs::symlink(&outside, &link).unwrap();
         assert_eq!(allowed_video(&recordings, &link), None);
+
+        std::os::unix::fs::symlink(dir.path(), recordings.join("2026-04")).unwrap();
+        assert!(source_file(&recordings, "2026-04/outside.mp4").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registered_alias_uses_the_original_root_for_legacy_joins() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("video archive");
+        let configured = dir.path().join(RECORDINGS_DIR);
+        fs::create_dir(&target).unwrap();
+        symlink(&target, &configured).unwrap();
+        let own = target.join("original.mp4");
+        let another = target.join("another.mp4");
+        for path in [&own, &another] {
+            fs::write(path, b"video").unwrap();
+        }
+        let edits = json!({
+            "version": 2,
+            "clips": [
+                { "id": "own", "source": "original.mp4", "startMs": 0, "endMs": 4000 },
+                { "id": "other", "source": "another.mp4", "startMs": 500, "endMs": 2500 }
+            ],
+        });
+        write_edits(&own, &edits).unwrap();
+
+        // The Library hands the editor a canonical path, so none of its
+        // components has the configured alias's name.
+        let state = RecordingEditorState::default();
+        let own = fs::canonicalize(own).unwrap();
+        state.register("editor", &own, &configured).unwrap();
+        let recording = state.recording_for("editor").unwrap();
+        assert_eq!(recording.source, "original.mp4");
+        assert_eq!(
+            recording.recordings_folder,
+            fs::canonicalize(&target).unwrap()
+        );
+        assert_eq!(read_edits(&recording.path).unwrap(), Some(edits));
+
+        // The window keeps the root it opened with.
+        fs::remove_file(configured).unwrap();
+        assert_eq!(
+            state.source_for("editor", "another.mp4").unwrap(),
+            fs::canonicalize(another).unwrap()
+        );
     }
 
     #[test]

@@ -34,4 +34,4 @@ Type anything in **Notes**: why you took it, the ticket it belongs to, what to d
 
 ## Where captures live
 
-Captures are files in your [save folder](/grab-it/reference/settings/#general), `Pictures/Grab-it` by default, so you can open them in any app. The Library keeps track of them: when it looks through the save folder again, new files are added and files you deleted are dropped. Changing the save folder leaves earlier captures where they are, and they stay in your Library.
+Captures are files in your [save folder](/grab-it/reference/settings/#general), `Pictures/Grab-it` by default, so you can open them in any app. The Library scans `originals` and `recordings`, including their month folders, and shows the files together by date. Changing the save folder leaves earlier captures where they are, and they stay in your Library.

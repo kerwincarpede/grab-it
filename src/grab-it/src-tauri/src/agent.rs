@@ -24,6 +24,7 @@ use crate::{
     capture::{self, CaptureMode, Foreground, Rect},
     control::{FramesRequest, GifRequest, RecordRequest, Request, ShotRequest, ShotTarget},
     library::{self, LibraryState},
+    media::SaveDestination,
     quick::{self, QuickItem},
     record::{self, AgentOptions},
     screen::{self, MonitorInfo, WindowInfo},
@@ -290,9 +291,15 @@ fn take_shot(app: &AppHandle, shot: &ShotRequest) -> Result<SavedShot, String> {
     let (image, mode, foreground, scale) = grab(&shot.target)?;
     let (image, ratio) = fit_width(image, shot.max_width);
     let scale = scale.map(|scale| scale * ratio);
-    let folder = library::current_save_folder(app);
-    let saved = capture::save_capture(&folder, &image, mode, &foreground, scale, Local::now())
-        .map_err(|err| err.to_string())?;
+    let saved = capture::save_capture(
+        &SaveDestination::current(app),
+        &image,
+        mode,
+        &foreground,
+        scale,
+        Local::now(),
+    )
+    .map_err(|err| err.to_string())?;
     let id = add_to_library(app, &saved.path);
     let _ = app.emit(crate::actions::CAPTURE_SAVED_EVENT, &saved);
     quick::show(app, captured_notice(&saved.path));
@@ -382,11 +389,18 @@ pub struct Recording {
     pub recording: bool,
 }
 
-/// The display a recording of `target` is on, the size of that display's
-/// image, and the part of the image to record.
-fn recording_area(target: &ShotTarget) -> Result<(MonitorInfo, (u32, u32), Rect), String> {
+/// The recording's rectangle in the chosen monitor's image and, for a
+/// selected window, the name of its app.
+struct RecordingArea {
+    monitor: MonitorInfo,
+    image_size: (u32, u32),
+    rect: Rect,
+    app_name: Option<String>,
+}
+
+fn recording_area(target: &ShotTarget) -> Result<RecordingArea, String> {
     let monitors = screen::monitors()?;
-    let (monitor, rect) = match target {
+    let (monitor, rect, app_name) = match target {
         ShotTarget::Screen => (
             monitors
                 .iter()
@@ -394,14 +408,15 @@ fn recording_area(target: &ShotTarget) -> Result<(MonitorInfo, (u32, u32), Rect)
                 .or_else(|| monitors.first())
                 .ok_or("there is no display to record")?,
             None,
+            None,
         ),
-        ShotTarget::Display { display } => (match_display(&monitors, display)?, None),
+        ShotTarget::Display { display } => (match_display(&monitors, display)?, None, None),
         ShotTarget::Window { window } => {
             let windows = screen::desktop().windows;
             let window = match_window(&windows, window)?;
             let monitor =
                 monitor_for(&monitors, window.rect).ok_or("the window is off every display")?;
-            (monitor, Some(window.rect))
+            (monitor, Some(window.rect), Some(window.app_name.clone()))
         }
         ShotTarget::Region {
             x,
@@ -419,7 +434,7 @@ fn recording_area(target: &ShotTarget) -> Result<(MonitorInfo, (u32, u32), Rect)
                 "the region is off every display; run `grab-it displays` to see where they are"
                     .to_string()
             })?;
-            (monitor, Some(rect))
+            (monitor, Some(rect), None)
         }
     };
     // The size of the display's image, which a recording's area is in.
@@ -433,7 +448,12 @@ fn recording_area(target: &ShotTarget) -> Result<(MonitorInfo, (u32, u32), Rect)
         },
         Some(rect) => region_in_image(monitor, rect, size).ok_or("the area is off the display")?,
     };
-    Ok((monitor.clone(), size, area))
+    Ok(RecordingArea {
+        monitor: monitor.clone(),
+        image_size: size,
+        rect: area,
+        app_name,
+    })
 }
 
 /// Starts the recording `request` asks for. Without `--for` replies at
@@ -443,14 +463,14 @@ fn start_recording(app: &AppHandle, request: &RecordRequest) -> Result<Value, St
     if !crate::permissions::ensure_screen_capture(app) {
         return Err("Grab-it needs the Screen Recording permission to record the screen. Turn it on in System Settings › Privacy & Security › Screen Recording, then try again.".into());
     }
-    let (monitor, size, area) = recording_area(&request.target)?;
+    let area = recording_area(&request.target)?;
     let options = AgentOptions {
         format: request.format,
         fps: request.fps,
         show_cursor: request.cursor,
     };
     let session =
-        record::start_with(app, &monitor, size, area, Some(options)).map_err(|err| match err {
+        record::start_with(app, &area.monitor, area.image_size, area.rect, area.app_name, Some(options)).map_err(|err| match err {
             crate::scroll::StartError::Busy => "a recording or scrolling capture is already under way; end it with `grab-it stop` first".to_string(),
             crate::scroll::StartError::Failed(message) => message,
         })?;
@@ -572,10 +592,12 @@ pub fn gif_args(request: &GifRequest, output: &Path) -> Vec<OsString> {
 fn make_gif(app: &AppHandle, request: &GifRequest) -> Result<Made, String> {
     let ffmpeg = ffmpeg_for_video(app)?;
     existing_video(&request.video)?;
-    let folder = library::current_save_folder(app).join(record::RECORDINGS_DIR);
-    std::fs::create_dir_all(&folder)
-        .map_err(|err| format!("could not create {}: {err}", folder.display()))?;
-    let output = record::unique_recording_path(&folder, &Local::now(), RecordingFormat::Gif);
+    let output = record::reserve_recording(
+        &SaveDestination::current(app),
+        &Local::now(),
+        None,
+        RecordingFormat::Gif,
+    )?;
     crate::ffmpeg::run(&ffmpeg, gif_args(request, &output), ENCODE_TIMEOUT).map_err(|err| {
         let _ = std::fs::remove_file(&output);
         format!("could not make a GIF of {}: {err}", request.video.display())
@@ -662,9 +684,8 @@ fn make_frames(app: &AppHandle, request: &FramesRequest) -> Result<Made, String>
             )
         })?
         .to_rgba8();
-    let folder = library::current_save_folder(app);
     let saved = capture::save_capture(
-        &folder,
+        &SaveDestination::current(app),
         &image,
         CaptureMode::Screen,
         &Foreground::default(),

@@ -1226,7 +1226,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let image = image::RgbaImage::new(2, 2);
         let saved = save_capture(
-            dir.path(),
+            &crate::media::SaveDestination::flat(dir.path()),
             &image,
             CaptureMode::Region,
             &Foreground::default(),

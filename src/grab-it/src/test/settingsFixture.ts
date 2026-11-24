@@ -5,6 +5,7 @@ import { DEFAULT_AI_PREFERENCES, DEFAULT_APPEARANCE, DEFAULT_RECORDING, DEFAULT_
 export function testSettings(overrides: Partial<Settings_Serialize> = {}): Settings_Serialize {
   return {
     saveFolder: "/home/me/Pictures/Grab-it",
+    saveLayout: { byMonth: false, includeAppName: false },
     hotkeys: {
       allInOne: "Ctrl+Alt+PrintScreen",
       region: "PrintScreen",

@@ -54,6 +54,7 @@ function overlayInfo(info: Partial<OverlayInfo> = {}): OverlayInfo {
 function settings(recording: RecordingSettings): Settings_Serialize {
   return {
     saveFolder: "/home/me/Pictures/Grab-it",
+    saveLayout: { byMonth: false, includeAppName: false },
     hotkeys: { allInOne: "", region: "", window: "", screen: "", text: "", colour: "", library: "", steps: "" },
     editor: {},
     showInDock: true,
@@ -2016,8 +2017,9 @@ describe("RegionOverlay", () => {
 
       fireEvent.click(screen.getByTestId("overlay-record"));
       await waitFor(() => expect(finishes(calls)).toHaveLength(1));
-      const { selection } = finishes(calls)[0].payload as { selection: { kind: string; rect: Box } };
+      const { selection } = finishes(calls)[0].payload as { selection: { kind: string; rect: Box; windowId?: number } };
       expect(selection.kind).toBe("region");
+      expect(selection.windowId).toBe(7);
       expect(selection.rect.x).toBeCloseTo(100, 2);
       expect(selection.rect.width).toBeCloseTo(200, 2);
     });
@@ -2166,8 +2168,9 @@ describe("RegionOverlay", () => {
         expect(main).not.toHaveAttribute("aria-disabled");
         fireEvent.click(main);
         await waitFor(() => expect(finishes(calls)).toHaveLength(1));
-        const payload = finishes(calls)[0].payload as { selection: { kind: string; rect: Box }; choice: unknown };
+        const payload = finishes(calls)[0].payload as { selection: { kind: string; rect: Box; windowId?: number }; choice: unknown };
         expect(payload.selection.kind).toBe("region");
+        expect(payload.selection.windowId).toBe(7);
         expect(payload.selection.rect.width).toBeCloseTo(200, 2);
         expect(payload.choice).toEqual({ intent: "record", mode: "region", delaySeconds: 0 });
       });

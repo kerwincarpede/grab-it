@@ -1287,7 +1287,13 @@ pub enum Selection {
     /// A dragged region in the overlay's CSS pixels, with the overlay's
     /// viewport width to derive the scale.
     #[serde(rename_all = "camelCase")]
-    Region { rect: CssRect, viewport_width: f64 },
+    Region {
+        rect: CssRect,
+        viewport_width: f64,
+        /// The selected window, when confirming its held recording area.
+        #[serde(default)]
+        window_id: Option<u32>,
+    },
     /// A window from [`OverlayInfo::windows`].
     Window { id: u32 },
     /// A clicked point in the overlay's CSS pixels, for picking a colour.
@@ -1844,16 +1850,26 @@ pub fn overlay_finish(
 
     if matches!(intent, Intent::Record | Intent::Scroll) {
         let size = frame.image.dimensions();
+        let mut app_name = None;
         let rect = match selection {
             Selection::Region {
                 rect,
                 viewport_width,
+                window_id,
             } => {
                 let scale =
                     capture::image_scale(size.0, viewport_width, frame.monitor.scale_factor);
+                app_name = window_id.and_then(|id| {
+                    session
+                        .windows
+                        .iter()
+                        .find(|window| window.id == id)
+                        .map(|window| window.app_name.clone())
+                });
                 capture::css_to_image_rect(rect, scale, size)
             }
             Selection::Window { id } => session.windows.iter().find(|w| w.id == id).and_then(|w| {
+                app_name = Some(w.app_name.clone());
                 let relative = Rect {
                     x: w.rect.x - frame.monitor.x,
                     y: w.rect.y - frame.monitor.y,
@@ -1870,7 +1886,7 @@ pub fn overlay_finish(
             let result = if intent == Intent::Scroll {
                 crate::scroll::start(&app, &monitor, rect, size, foreground)
             } else {
-                crate::record::start(&app, &monitor, size, rect)
+                crate::record::start(&app, &monitor, size, rect, app_name)
             };
             if let Err(err) = result {
                 crate::scroll::report_start_failure(err, |message| {
@@ -1902,6 +1918,7 @@ pub fn overlay_finish(
         Selection::Region {
             rect,
             viewport_width,
+            ..
         } => {
             let scale = capture::image_scale(
                 frame.image.width(),
@@ -2326,6 +2343,7 @@ mod tests {
                 height: 10.0,
             },
             viewport_width: 100.0,
+            window_id: None,
         };
         let point = Selection::Point {
             x: 1.0,
@@ -2448,7 +2466,8 @@ mod tests {
                     width: 3.0,
                     height: 4.0
                 },
-                viewport_width: 800.0
+                viewport_width: 800.0,
+                window_id: None,
             }
         );
         let window: Selection = serde_json::from_str(r#"{"kind":"window","id":7}"#).unwrap();

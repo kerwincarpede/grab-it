@@ -17,8 +17,12 @@ Most changes save as soon as you make them. Hotkeys save when you press **Save h
 | --- | --- | --- |
 | **Show Grab-it in the Dock** (macOS) | On | Click the Dock icon to open the Grab-it window. Off, Grab-it lives in the menu bar only. |
 | **Start Grab-it when you sign in** | Off | It waits in the menu bar or tray, ready for your hotkeys. |
-| **Save folder** | `Pictures/Grab-it` | New captures are saved here; click **Change…** to pick another. Earlier captures stay where they are and stay in your Library. Recordings go in its `recordings` folder. Export dialogs open here until you choose an export folder. The image editor, Library and guide then remember that folder together. |
+| **Save folder** | `Pictures/Grab-it` | Click **Change…** to choose where Grab-it saves new screenshots and recordings. Screenshots go in `originals` and videos and GIFs in `recordings`. Export dialogs open here until you choose an export folder. The image editor, Library and guide then remember that folder together. |
+| **Organise by month** | Off | Save new files in folders such as `originals/2026-11` and `recordings/2026-11`. The month comes from the local date in the filename. |
+| **Include app names in filenames** | Off | When Grab-it can identify the app in a screenshot or a window recording, it adds the app name after the date and time, for example `2026-11-24 14-32-08 – Firefox.png`. |
 | **Update channel** | Stable | Which releases Grab-it updates to. **Stable** gets updates after they’ve been tried on Edge. **Edge** gets new features and fixes sooner, with a higher chance of bugs, and shows an **Edge** badge by the version. Leaving Edge keeps your version until Stable passes it. See [Updates](/grab-it/get-started/updates/#stable-and-edge). |
+
+Both **Save folder** options apply to future saves. Earlier files stay where they are, and the Library shows files from both layouts together.
 
 ## Appearance
 

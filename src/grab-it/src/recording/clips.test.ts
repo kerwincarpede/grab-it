@@ -176,10 +176,10 @@ describe("clips", () => {
     expect(serializeEdits(withClips(gapped, [A], OWN, 8000)).version).toBe(1);
     // A gap needs version 3; gaps alone hold nothing to play.
     expect(parseClips([A, { id: "g", gapMs: 1500 }])).toEqual([A]);
-    expect(parseClips([{ id: "g", gapMs: 1500 }], true)).toEqual([]);
-    expect(parseClips([A, { id: "g", gapMs: 0 }, { id: "h", gapMs: 500 }, { id: "i", gapMs: 500 }], true)).toEqual([A, gapOf("h", 1000)]);
+    expect(parseClips([{ id: "g", gapMs: 1500 }], 3)).toEqual([]);
+    expect(parseClips([A, { id: "g", gapMs: 0 }, { id: "h", gapMs: 500 }, { id: "i", gapMs: 500 }], 3)).toEqual([A, gapOf("h", 1000)]);
     expect(parseEdits({ version: 3, clips: [A, B] }).version).toBe(2);
-    expect(() => parseEdits({ version: 4 })).toThrow();
+    expect(() => parseEdits({ version: 5 })).toThrow();
   });
 
   it("trims a clip within its recording, keeping it long enough", () => {
