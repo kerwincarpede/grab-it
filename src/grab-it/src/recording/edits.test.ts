@@ -21,8 +21,28 @@ describe("recording edits sidecar", () => {
     expect(serializeEdits({ version: 1, trim: { startMs: 10.4, endMs: 2000.6 } })).toEqual({ version: 1, trim: { startMs: 10, endMs: 2001 } });
   });
 
+  it("round-trips month references on clips and zooms as version 4", () => {
+    const source = "2026-11/2026-11-24 14-32-08 – Firefox.mp4";
+    const zoom = { id: "z", source, startMs: 500, endMs: 1000, scale: 2, focus: { kind: "cursor" as const } };
+    const clip = { id: "c", source, startMs: 0, endMs: 2000 };
+    const sidecar = serializeEdits({ version: 2, clips: [clip], zooms: [zoom] });
+    expect(sidecar).toEqual({ version: 4, clips: [clip], zooms: [zoom] });
+    expect(parseEdits(sidecar)).toEqual(sidecar);
+    expect(serializeEdits({ version: 1, zooms: [zoom] })).toEqual({ version: 4, zooms: [zoom] });
+    expect(parseEdits({ ...sidecar, version: 3 })).toEqual({ version: 1 });
+  });
+
+  it("skips invalid month paths in a version 4 sidecar", () => {
+    const entries = [
+      { id: "flat", source: "legacy.mp4", startMs: 0, endMs: 1000 },
+      { id: "bad-month", source: "2026-13/file.mp4", startMs: 0, endMs: 1000 },
+      { id: "bad-depth", source: "2026-11/nested/file.mp4", startMs: 0, endMs: 1000 },
+    ];
+    expect(parseEdits({ version: 4, clips: entries })).toEqual({ version: 2, clips: [entries[0]] });
+  });
+
   it("refuses a version it does not know, so it is never overwritten", () => {
-    expect(() => parseEdits({ version: 4 })).toThrow(EditsError);
+    expect(() => parseEdits({ version: 5 })).toThrow(EditsError);
     expect(() => parseEdits("edits")).toThrow(EditsError);
   });
 

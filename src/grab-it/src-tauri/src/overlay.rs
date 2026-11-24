@@ -1844,6 +1844,7 @@ pub fn overlay_finish(
 
     if matches!(intent, Intent::Record | Intent::Scroll) {
         let size = frame.image.dimensions();
+        let mut app_name = None;
         let rect = match selection {
             Selection::Region {
                 rect,
@@ -1854,6 +1855,7 @@ pub fn overlay_finish(
                 capture::css_to_image_rect(rect, scale, size)
             }
             Selection::Window { id } => session.windows.iter().find(|w| w.id == id).and_then(|w| {
+                app_name = Some(w.app_name.clone());
                 let relative = Rect {
                     x: w.rect.x - frame.monitor.x,
                     y: w.rect.y - frame.monitor.y,
@@ -1870,7 +1872,7 @@ pub fn overlay_finish(
             let result = if intent == Intent::Scroll {
                 crate::scroll::start(&app, &monitor, rect, size, foreground)
             } else {
-                crate::record::start(&app, &monitor, size, rect)
+                crate::record::start(&app, &monitor, size, rect, app_name)
             };
             if let Err(err) = result {
                 crate::scroll::report_start_failure(err, |message| {

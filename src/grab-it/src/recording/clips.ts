@@ -11,18 +11,19 @@
  * single clip of its own recording; otherwise it keeps the version 1
  * `trim`, so a sidecar older builds read stays readable by them. A
  * sequence holding a gap, a stretch with no clip, is written as version 3,
- * which builds without gaps refuse and so never write over.
+ * which builds without gaps refuse and so never write over. Month-qualified
+ * sources are written as version 4.
  *
  * In memory a gap is a `Clip` with `gap: true`, no source, and `endMs` its
  * length from a `startMs` of 0, so lengths and sequence times work for
  * both; the sidecar holds it as `{id, gapMs}`.
  */
-import { MIN_CLIP_MS, isWhole, trimOf, type RecordingEdits } from "./edits";
+import { MIN_CLIP_MS, isWhole, trimOf, versionForEdits, type RecordingEdits } from "./edits";
 import type { Zoom } from "./zooms";
 
 export interface Clip {
   id: string;
-  /** The file name of its recording, in `<save folder>/recordings/`; empty for a gap. */
+  /** The recording's reference within `recordings/`; empty for a gap. */
   source: string;
   /** The stretch kept, in its recording's time; for a gap, 0 and its length. */
   startMs: number;
@@ -58,11 +59,10 @@ export function newClipId(): string {
 
 /**
  * Reads the sidecar's `clips`: an entry that is not understood is dropped
- * on its own, and so is a second clip with an id already taken. Gaps
- * (`{id, gapMs}`) are read only with `gaps` (version 3); neighbouring ones
- * are merged.
+ * on its own, and so is a second clip with an id already taken.
+ * Neighbouring gaps are merged.
  */
-export function parseClips(value: unknown, gaps = false): Clip[] {
+export function parseClips(value: unknown, version: RecordingEdits["version"] = 2): Clip[] {
   if (!Array.isArray(value)) return [];
   const clips: Clip[] = [];
   const ids = new Set<string>();
@@ -71,18 +71,24 @@ export function parseClips(value: unknown, gaps = false): Clip[] {
     const clip = entry as Record<string, unknown>;
     if (typeof clip.id !== "string" || !clip.id || ids.has(clip.id)) continue;
     if ("gapMs" in clip) {
-      if (!gaps || !isNum(clip.gapMs) || clip.gapMs <= 0) continue;
+      if (version < 3 || !isNum(clip.gapMs) || clip.gapMs <= 0) continue;
       ids.add(clip.id);
       clips.push(gapOf(clip.id, clip.gapMs));
       continue;
     }
-    if (typeof clip.source !== "string" || !clip.source || /[\\/]/.test(clip.source)) continue;
+    if (typeof clip.source !== "string" || !isClipSource(clip.source, version)) continue;
     if (!isNum(clip.startMs) || !isNum(clip.endMs) || clip.startMs < 0 || clip.endMs <= clip.startMs) continue;
     ids.add(clip.id);
     clips.push({ id: clip.id, source: clip.source, startMs: Math.round(clip.startMs), endMs: Math.round(clip.endMs) });
   }
   // A sequence of gaps alone has nothing to play.
   return sourceClips(clips).length > 0 ? mergeGaps(clips) : [];
+}
+
+/** A source path as supported by this edits version. */
+export function isClipSource(source: string, version: RecordingEdits["version"]): boolean {
+  if (version < 4) return source !== "" && source !== ".." && !/[\\/]/.test(source);
+  return !source.includes("\0") && /^(?:\d{4}-(?:0[1-9]|1[0-2])\/)?[^/\\]+\.mp4$/i.test(source);
 }
 
 /**
@@ -98,7 +104,7 @@ export function clipsOf(edits: RecordingEdits, own: string, ownDurationMs: numbe
 /**
  * `edits` holding `clips`: a single clip of `own` is written as the
  * version 1 trim (none when it keeps all `ownDurationMs`), a sequence with
- * a gap as version 3 `clips`, anything else as version 2 `clips`.
+ * a gap as version 3 `clips`, and month-qualified sources as version 4.
  */
 export function withClips(edits: RecordingEdits, clips: Clip[], own: string, ownDurationMs: number): RecordingEdits {
   const rest = { ...edits };
@@ -107,9 +113,9 @@ export function withClips(edits: RecordingEdits, clips: Clip[], own: string, own
   if (clips.length === 1 && clips[0].source === own && !isGap(clips[0])) {
     const { startMs, endMs } = clips[0];
     const trim = { startMs, endMs };
-    return { ...rest, version: 1, ...(isWhole(trim, ownDurationMs) ? {} : { trim }) };
+    return { ...rest, version: versionForEdits(null, rest.zooms), ...(isWhole(trim, ownDurationMs) ? {} : { trim }) };
   }
-  return { ...rest, version: clips.some(isGap) ? 3 : 2, clips };
+  return { ...rest, version: versionForEdits(clips, rest.zooms), clips };
 }
 
 /** How long a clip plays. */
@@ -281,11 +287,6 @@ export function trimClip(clips: Clip[], id: string, edge: "start" | "end", ms: n
       ? { ...clip, startMs: Math.round(clamp(ms, 0, clip.endMs - shortest)) }
       : { ...clip, endMs: Math.round(clamp(ms, clip.startMs + shortest, duration)) };
   });
-}
-
-/** A file name, without folders, as the sidecar holds it. */
-export function fileNameOf(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path;
 }
 
 /**

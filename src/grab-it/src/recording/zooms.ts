@@ -14,7 +14,7 @@ export type ZoomFocus = { kind: "area"; x: number; y: number } | { kind: "cursor
 export interface Zoom {
   id: string;
   /**
-   * The recordings-folder file name of the recording the zoom is on;
+   * The recordings-folder reference of the recording the zoom is on;
    * absent for the sidecar's own recording. Zooms keep their source's
    * time, so they move with its clip.
    */

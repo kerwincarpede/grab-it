@@ -17,6 +17,7 @@ vi.mock("./sources", async (importOriginal) => {
 });
 
 const PATH = "/shots/recordings/Grab-it 2026-03-07 09-05-01.mp4";
+const RECORDINGS = "/shots/recordings";
 const OWN = "Grab-it 2026-03-07 09-05-01.mp4";
 const OTHER = "Other take.mp4";
 const OTHER_PATH = "/shots/recordings/Other take.mp4";
@@ -43,14 +44,29 @@ interface Backend {
   exported?: { resolve: (path: string) => void; reject: (err: string) => void };
 }
 
-function mockBackend(edits: Value | null = null, cursor: CursorPath | null = null, audio: AudioKind[] = [], noise: Noise = {}): Backend {
+function mockBackend(edits: Value | null = null, cursor: CursorPath | null = null, audio: AudioKind[] = [], noise: Noise = {}, own = OWN): Backend {
   const backend: Backend = { calls: [] };
   mockConvertFileSrc("linux");
+  const source = (name: string) => {
+    if (gone.includes(name)) return Promise.reject(`${name} is not in the recordings folder`);
+    return {
+      path: `${RECORDINGS}/${name}`,
+      fileName: name.slice(name.lastIndexOf("/") + 1),
+      source: name,
+      fps: 30,
+      cursor: null,
+      hasAudio: true,
+      removeNoise: false,
+      separateMicrophone: separate.includes(name),
+    };
+  };
   backend.calls = mockCommands(
     {
       recording_info: () => ({
-        path: PATH,
-        fileName: "Grab-it 2026-03-07 09-05-01.mp4",
+        path: `${RECORDINGS}/${own}`,
+        fileName: own.slice(own.lastIndexOf("/") + 1),
+        source: own,
+        recordingsFolder: RECORDINGS,
         edits,
         fps: 60,
         cursor,
@@ -60,9 +76,10 @@ function mockBackend(edits: Value | null = null, cursor: CursorPath | null = nul
       }),
       get_editor_preferences: () => ({}),
       recording_save_edits: () => null,
-      recording_source: ({ fileName: name }) => {
-        if (gone.includes(name)) return Promise.reject(`${name} is not in the recordings folder`);
-        return { path: `/shots/recordings/${name}`, fileName: name, fps: 30, cursor: null, hasAudio: true, removeNoise: false, separateMicrophone: separate.includes(name) };
+      recording_source: ({ fileName }) => source(fileName),
+      recording_pick_source: ({ path }) => {
+        if (!path.startsWith(`${RECORDINGS}/`)) return Promise.reject("Only recordings in the recordings folder can be added.");
+        return source(path.slice(RECORDINGS.length + 1));
       },
       recording_export_cancel: () => undefined,
       recording_pauses: () => (typeof heard === "string" ? Promise.reject(heard) : heard),
@@ -148,8 +165,8 @@ async function previewVideo(source: string): Promise<HTMLVideoElement> {
 }
 
 /** Loads a 12-second 1920×1080 recording into the page's video. */
-async function loadVideo(): Promise<HTMLVideoElement> {
-  const video = await previewVideo(OWN);
+async function loadVideo(source = OWN): Promise<HTMLVideoElement> {
+  const video = await previewVideo(source);
   setVideoMetadata(video, 12, 1920, 1080);
   fireEvent.loadedMetadata(video);
   await waitFor(() => expect(screen.getByRole("slider", { name: "Trim end" })).toHaveAttribute("aria-valuemax", "12000"));
@@ -729,6 +746,42 @@ describe("RecordingEditor", () => {
       await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Only recordings in the recordings folder can be added."));
       expect(saved(backend)).toEqual([]);
       expect(backend.calls.some((call) => call.cmd === "recording_source")).toBe(false);
+    });
+
+    it("reopens and exports a join of same-named files from different months", async () => {
+      const own = `2026-03/${OTHER}`;
+      const other = `2026-04/${OTHER}`;
+      const backend = mockBackend(null, null, [], {}, own);
+      const view = render(<RecordingEditor />);
+      await loadVideo(own);
+      picked = `${RECORDINGS}/${other}`;
+      await userEvent.click(screen.getByRole("button", { name: "Recording" }));
+      const joined = await waitFor(() => {
+        const edits = lastSaved(backend);
+        expect(edits).toMatchObject({ version: 4, clips: [{ source: own }, { source: other }] });
+        return edits;
+      });
+      expect(backend.calls.find(({ cmd }) => cmd === "plugin:dialog|open")?.payload).toMatchObject({ options: { defaultPath: RECORDINGS } });
+      view.unmount();
+
+      const reopened = mockBackend(joined as Value, null, [], {}, own);
+      render(<RecordingEditor />);
+      const ownVideo = await previewVideo(own);
+      setVideoMetadata(ownVideo, 12, 1920, 1080);
+      fireEvent.loadedMetadata(ownVideo);
+      const otherVideo = await previewVideo(other);
+      setVideoMetadata(otherVideo, 6, 720, 720);
+      fireEvent.loadedMetadata(otherVideo);
+      expect(otherVideo.getAttribute("src")).toBe(`grab-it-video://localhost/${encodeURIComponent(picked)}`);
+
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      await waitFor(() => expect(reopened.calls.filter(({ cmd }) => cmd === "recording_pauses").map(({ payload }) => payload)).toEqual([
+        { fileName: own },
+        { fileName: other },
+      ]));
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan } = await exportCall(reopened);
+      expect(plan.clips).toMatchObject([{ source: own, sourceWidth: 1920 }, { source: other, sourceWidth: 720 }]);
     });
 
     it("reopens a joined sequence and reorders it with Alt and the arrow keys, undoably", async () => {

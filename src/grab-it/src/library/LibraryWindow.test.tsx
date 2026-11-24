@@ -78,6 +78,7 @@ function settings(backend: Backend): Settings_Serialize {
   return {
     lastExportFolder: backend.lastExportFolder,
     saveFolder: "/home/me/Pictures/Grab-it",
+    saveLayout: { byMonth: false, includeAppName: false },
     hotkeys: {
       allInOne: "",
       region: "",

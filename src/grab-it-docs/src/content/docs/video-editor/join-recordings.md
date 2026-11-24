@@ -11,9 +11,9 @@ The video editor can join several recordings into one video. Add recordings afte
 
 1. Move the playhead into the clip the new recording should follow.
 2. Click **Recording** in the top bar.
-3. Pick an MP4 in the recordings folder. The file picker opens there.
+3. Pick an MP4 in the recordings folder or one of its month folders. The file picker starts in the recordings folder.
 
-The recording joins right after the clip under the playhead, whole. Only MP4s in the same recordings folder as the recording you opened can be added. A file from anywhere else is refused with a message, and GIFs can't be joined.
+The recording joins right after the clip under the playhead, whole. You can join MP4s from any month or from directly inside `recordings` as long as they share the same save folder.
 
 ## The clips on the timeline
 
@@ -39,7 +39,7 @@ The recording you opened sets the video's size and frame rate, whatever order th
 
 The clips and their order are saved in the edits file beside the recording you opened, so the editor opens the joined sequence again next time. None of the recordings is changed, and the Library gets nothing new until you export.
 
-If a recording you joined is moved or deleted, its clip shows as **Missing** and **Export** is turned off. Remove that clip, or put the file back in the recordings folder.
+If a recording you joined is moved or deleted, its clip shows as **Missing** and **Export** is turned off. Remove that clip, or put the file back where it was.
 
 ## Export
 

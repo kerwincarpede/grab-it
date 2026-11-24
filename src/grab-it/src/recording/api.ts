@@ -36,7 +36,7 @@ export const EXPORT_PROGRESS_EVENT = "recording-export-progress";
  * src-tauri/src/recording_editor.rs.
  */
 export interface ExportClip {
-  /** Its recording's file name in the recordings folder. */
+  /** Its recording's reference within the recordings folder. */
   source: string;
   /** The stretch kept, in its recording's time. */
   startMs: number;
@@ -102,9 +102,14 @@ export function recordingInfo(): Promise<RecordingInfo> {
   return commands.recordingInfo() as Promise<RecordingInfo>;
 }
 
-/** A recordings-folder MP4 by file name; refused for anything else or a file that is gone. */
+/** A recordings-folder MP4 by its flat or month-qualified reference. */
 export function recordingSource(fileName: string): Promise<RecordingSource> {
   return commands.recordingSource(fileName) as Promise<RecordingSource>;
+}
+
+/** An MP4 picked from this recording editor's recordings folder. */
+export function recordingPickSource(path: string): Promise<RecordingSource> {
+  return commands.recordingPickSource(path) as Promise<RecordingSource>;
 }
 
 /** Where the page plays `path` from: the recordings folder, served by `grab-it-video`. */

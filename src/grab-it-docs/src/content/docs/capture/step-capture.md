@@ -30,7 +30,7 @@ Step capture isn't available on [Wayland](/grab-it/capture/wayland/), where apps
 - The frame is taken as soon as the button goes down, so it shows the screen just before the click. Saving happens in the background and never delays the next click's frame.
 - Grab-it captures the window under the pointer. When you click a menu, a popover or a window smaller than 400 × 300 points, such as a small dialog, it captures the whole monitor instead, for context.
 - Clicks on Grab-it's own windows and menus aren't steps. When you stop from the tray or the hub, the clicks that opened it are left out too.
-- Each step is an ordinary capture in your save folder, listed in the Library like any other. Steps aren't copied to the clipboard and don't open Quick Access.
+- Each step is an ordinary capture that follows your [Save folder settings](/grab-it/reference/settings/#general) and appears in the Library. Steps aren't copied to the clipboard and don't open Quick Access.
 - The badge sits where you clicked and shows the step's place in the guide. Open the capture in the editor to move it or add more marks.
 - A double click counts as one step. A click within 24 pixels of the last step's badge, in the same window, on a screen that has barely changed, is skipped as a repeat.
 

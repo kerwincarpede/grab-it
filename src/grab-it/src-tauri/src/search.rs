@@ -407,9 +407,16 @@ mod tests {
             app: Some(app.into()),
             window_title: Some(title.into()),
         };
-        save_capture(folder, &image, CaptureMode::Region, &foreground, None, when)
-            .unwrap()
-            .path
+        save_capture(
+            &crate::media::SaveDestination::flat(folder),
+            &image,
+            CaptureMode::Region,
+            &foreground,
+            None,
+            when,
+        )
+        .unwrap()
+        .path
     }
 
     fn ids(page: &SearchPage) -> Vec<i64> {

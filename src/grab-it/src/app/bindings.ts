@@ -9,6 +9,8 @@ import { mockIPC as __TAURI_MOCK_IPC } from "@tauri-apps/api/mocks";
 export const commands = {
 	getSettings: (options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("get_settings", undefined, options),
 	setSaveFolder: (path: string, options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("set_save_folder", { path }, options),
+	/**  Saves the folder layout and naming options for new media. */
+	setSaveLayout: (layout: SaveLayout_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("set_save_layout", { layout }, options),
 	setHotkeys: (hotkeys: Hotkeys_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<HotkeysUpdate_Serialize>("set_hotkeys", { hotkeys }, options),
 	/**
 	 *  Saves the capture and AI preferences. Without `ai`, the AI settings
@@ -297,6 +299,8 @@ export const commands = {
 	 *  it is assumed to have some.
 	 */
 	recordingSource: (fileName: string, options?: InvokeOptions) => __TAURI_INVOKE<RecordingClipSource_Serialize>("recording_source", { fileName }, options),
+	/**  Resolves the file picker result to a source in the editor's recordings folder. */
+	recordingPickSource: (path: string, options?: InvokeOptions) => __TAURI_INVOKE<RecordingClipSource_Serialize>("recording_pick_source", { path }, options),
 	/**  The pauses in recording `file_name`'s sound, for Suggest edits. */
 	recordingPauses: (fileName: string, options?: InvokeOptions) => __TAURI_INVOKE<RecordingPauses_Serialize>("recording_pauses", { fileName }, options),
 	libraryList: (offset: number, limit: number, options?: InvokeOptions) => __TAURI_INVOKE<ShotPage_Serialize>("library_list", { offset, limit }, options),
@@ -1819,6 +1823,8 @@ export type RecordingClipSource = RecordingClipSource_Serialize | RecordingClipS
 export type RecordingClipSource_Deserialize = {
 	path: string,
 	fileName: string,
+	/**  The recording's source reference within the recordings folder. */
+	source: string,
 	/**  The frame rate it was recorded at. */
 	fps: number,
 	/**  Its pointer path, for follow-the-pointer zooms. */
@@ -1844,6 +1850,8 @@ export type RecordingClipSource_Deserialize = {
 export type RecordingClipSource_Serialize = {
 	path: string,
 	fileName: string,
+	/**  The recording's source reference within the recordings folder. */
+	source: string,
 	/**  The frame rate it was recorded at. */
 	fps: number,
 	/**  Its pointer path, for follow-the-pointer zooms. */
@@ -1876,6 +1884,10 @@ export type RecordingInfo = RecordingInfo_Serialize | RecordingInfo_Deserialize;
 export type RecordingInfo_Deserialize = {
 	path: string,
 	fileName: string,
+	/**  The recording's source reference within the recordings folder. */
+	source: string,
+	/**  The folder the file picker starts in, containing flat files and months. */
+	recordingsFolder: string,
 	/**  The saved sidecar, or `None` when the recording has no edits yet. */
 	edits?: Value | null,
 	/**  The frame rate it was recorded at. */
@@ -1906,6 +1918,10 @@ export type RecordingInfo_Deserialize = {
 export type RecordingInfo_Serialize = {
 	path: string,
 	fileName: string,
+	/**  The recording's source reference within the recordings folder. */
+	source: string,
+	/**  The folder the file picker starts in, containing flat files and months. */
+	recordingsFolder: string,
 	/**  The saved sidecar, or `None` when the recording has no edits yet. */
 	edits: Value | null,
 	/**  The frame rate it was recorded at. */
@@ -2154,6 +2170,25 @@ export type Retention_Serialize = {
 	removal: Removal,
 };
 
+/**  Independent options for the location and name of new media files. */
+export type SaveLayout = SaveLayout_Serialize | SaveLayout_Deserialize;
+
+/**  Independent options for the location and name of new media files. */
+export type SaveLayout_Deserialize = {
+	/**  Save media in a subfolder named for the local year and month. */
+	byMonth?: boolean,
+	/**  Add the app name when it can be identified. */
+	includeAppName?: boolean,
+};
+
+/**  Independent options for the location and name of new media files. */
+export type SaveLayout_Serialize = {
+	/**  Save media in a subfolder named for the local year and month. */
+	byMonth: boolean,
+	/**  Add the app name when it can be identified. */
+	includeAppName: boolean,
+};
+
 /**
  *  A shot that matched, with where and how. Mirrors `SearchHit` in
  *  src/library/api.ts.
@@ -2264,6 +2299,8 @@ export type Settings = Settings_Serialize | Settings_Deserialize;
 export type Settings_Deserialize = {
 	/**  Where new captures are saved. Holds `originals/` and `thumbs/`. */
 	saveFolder: string,
+	/**  How new screenshots and recordings are organised on disk. */
+	saveLayout: SaveLayout_Deserialize,
 	/**  Folder most recently chosen for an export. */
 	lastExportFolder?: string | null,
 	/**  Global hotkeys for region, window and screen captures. */
@@ -2299,6 +2336,8 @@ export type Settings_Deserialize = {
 export type Settings_Serialize = {
 	/**  Where new captures are saved. Holds `originals/` and `thumbs/`. */
 	saveFolder: string,
+	/**  How new screenshots and recordings are organised on disk. */
+	saveLayout: SaveLayout_Serialize,
 	/**  Folder most recently chosen for an export. */
 	lastExportFolder?: string,
 	/**  Global hotkeys for region, window and screen captures. */
@@ -2759,6 +2798,7 @@ export type WebcamShape_Serialize =
 export type MockCommandHandlers = {
     getSettings: () => Settings_Serialize | Promise<Settings_Serialize>,
     setSaveFolder: (args: { path: string }) => Settings_Serialize | Promise<Settings_Serialize>,
+    setSaveLayout: (args: { layout: SaveLayout_Deserialize }) => Settings_Serialize | Promise<Settings_Serialize>,
     setHotkeys: (args: { hotkeys: Hotkeys_Deserialize }) => HotkeysUpdate_Serialize | Promise<HotkeysUpdate_Serialize>,
     setPreferences: (args: { preferences: PreferencesUpdate_Deserialize }) => Settings_Serialize | Promise<Settings_Serialize>,
     setCopySound: (args: { enabled: boolean }) => Settings_Serialize | Promise<Settings_Serialize>,
@@ -2845,6 +2885,7 @@ export type MockCommandHandlers = {
     recordingInfo: () => RecordingInfo_Serialize | Promise<RecordingInfo_Serialize>,
     recordingSaveEdits: (args: { edits: Value }) => null | Promise<null>,
     recordingSource: (args: { fileName: string }) => RecordingClipSource_Serialize | Promise<RecordingClipSource_Serialize>,
+    recordingPickSource: (args: { path: string }) => RecordingClipSource_Serialize | Promise<RecordingClipSource_Serialize>,
     recordingPauses: (args: { fileName: string }) => RecordingPauses_Serialize | Promise<RecordingPauses_Serialize>,
     libraryList: (args: { offset: number; limit: number }) => ShotPage_Serialize | Promise<ShotPage_Serialize>,
     librarySetTags: (args: { id: number; tags: string[] }) => Shot_Serialize | Promise<Shot_Serialize>,
@@ -2931,6 +2972,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
         switch (cmd) {
             case "get_settings": return mockCommandHandler(mockHandlers.getSettings, "get_settings", args);
             case "set_save_folder": return mockCommandHandler(mockHandlers.setSaveFolder, "set_save_folder", args);
+            case "set_save_layout": return mockCommandHandler(mockHandlers.setSaveLayout, "set_save_layout", args);
             case "set_hotkeys": return mockCommandHandler(mockHandlers.setHotkeys, "set_hotkeys", args);
             case "set_preferences": return mockCommandHandler(mockHandlers.setPreferences, "set_preferences", args);
             case "set_copy_sound": return mockCommandHandler(mockHandlers.setCopySound, "set_copy_sound", args);
@@ -3017,6 +3059,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "recording_info": return mockCommandHandler(mockHandlers.recordingInfo, "recording_info", args);
             case "recording_save_edits": return mockCommandHandler(mockHandlers.recordingSaveEdits, "recording_save_edits", args);
             case "recording_source": return mockCommandHandler(mockHandlers.recordingSource, "recording_source", args);
+            case "recording_pick_source": return mockCommandHandler(mockHandlers.recordingPickSource, "recording_pick_source", args);
             case "recording_pauses": return mockCommandHandler(mockHandlers.recordingPauses, "recording_pauses", args);
             case "library_list": return mockCommandHandler(mockHandlers.libraryList, "library_list", args);
             case "library_set_tags": return mockCommandHandler(mockHandlers.librarySetTags, "library_set_tags", args);

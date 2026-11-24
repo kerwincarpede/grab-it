@@ -9,7 +9,7 @@ use crate::rt::AppHandle;
 use crate::{
     hotkeys::{self, Hotkeys},
     settings::{
-        BackdropPreset, EditorPreferences, PreferencesUpdate, Settings, SettingsStore,
+        BackdropPreset, EditorPreferences, PreferencesUpdate, SaveLayout, Settings, SettingsStore,
         UpdateChannel,
     },
 };
@@ -41,6 +41,18 @@ pub fn set_save_folder(
     // Captures already in the new folder join the library; older ones stay.
     crate::library::rescan_in_background(&app, settings.save_folder.clone());
     Ok(settings)
+}
+
+/// Saves the folder layout and naming options for new media.
+#[tauri::command]
+#[specta::specta]
+pub fn set_save_layout(
+    layout: SaveLayout,
+    state: State<'_, SettingsState>,
+) -> Result<Settings, String> {
+    lock(&state)
+        .set_save_layout(layout)
+        .map_err(|err| err.to_string())
 }
 
 /// Saves whether successful clipboard copies play a confirmation sound.

@@ -107,7 +107,7 @@ describe("Capture", () => {
     await dragRegionOnOverlay(from, to);
 
     const capture = await waitForCapture(sandbox, 1);
-    expect(path.basename(capture)).toMatch(/^Grab-it \d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}\.png$/);
+    expect(path.basename(capture)).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}\.png$/);
     const meta = await waitForJson<Meta>(sidecar(capture, "meta.json"));
     expect(meta.mode).toBe("region");
     const size = pngSize(capture);

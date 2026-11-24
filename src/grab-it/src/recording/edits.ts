@@ -1,6 +1,6 @@
 import type { Backdrop } from "../editor/model";
 import { parseBackdrop } from "../editor/sidecar";
-import { parseClips, type Clip } from "./clips";
+import { isClipSource, isGap, parseClips, type Clip } from "./clips";
 import { parseZooms, type Zoom } from "./zooms";
 
 /** The stretch of the recording kept, in milliseconds from its start. */
@@ -15,14 +15,15 @@ export interface Trim {
  * rendered on export. Absent fields mean unchanged.
  */
 export interface RecordingEdits {
-  /** 3 when `clips` holds a gap, 2 when `clips` is set, else 1; see `withClips` in ./clips. */
-  version: 1 | 2 | 3;
+  /** The oldest format that can hold the edits. */
+  version: 1 | 2 | 3 | 4;
   /** Absent or null keeps the whole recording. Ignored when `clips` is set. */
   trim?: Trim | null;
   /**
    * The joined sequence, in order; absent for one clip of the sidecar's
    * own recording cut by `trim`. Written with version 2, or 3 when it
-   * holds a gap (`{id, gapMs}` in the sidecar).
+   * holds a gap (`{id, gapMs}` in the sidecar). Version 4 lets clips and
+   * zooms refer to recordings inside month folders.
    */
   clips?: Clip[];
   /** The same backdrop captures have; its aspect is the export's shape. */
@@ -57,14 +58,12 @@ export function parseEdits(value: unknown): RecordingEdits {
   if (value === null || value === undefined) return emptyEdits();
   if (typeof value !== "object") throw new EditsError("the edits are not an object");
   const doc = value as Record<string, unknown>;
-  if (doc.version !== 1 && doc.version !== 2 && doc.version !== 3) throw new EditsError(`unsupported edits version ${String(doc.version)}`);
+  const version = doc.version;
+  if (version !== 1 && version !== 2 && version !== 3 && version !== 4) throw new EditsError(`unsupported edits version ${String(version)}`);
   const edits = emptyEdits();
-  if (doc.version === 2 || doc.version === 3) {
-    const clips = parseClips(doc.clips, doc.version === 3);
-    if (clips.length > 0) {
-      edits.version = clips.some((clip) => clip.gap) ? 3 : 2;
-      edits.clips = clips;
-    }
+  if (version >= 2) {
+    const clips = parseClips(doc.clips, version);
+    if (clips.length > 0) edits.clips = clips;
   }
   const trim = doc.trim as Record<string, unknown> | null | undefined;
   if (trim && typeof trim === "object" && isNum(trim.startMs) && isNum(trim.endMs) && trim.startMs >= 0 && trim.endMs > trim.startMs) {
@@ -72,10 +71,18 @@ export function parseEdits(value: unknown): RecordingEdits {
   }
   const backdrop = parseBackdrop(doc.backdrop);
   if (backdrop) edits.backdrop = backdrop;
-  const zooms = parseZooms(doc.zooms);
+  const zooms = parseZooms(doc.zooms).filter((zoom) => !zoom.source || isClipSource(zoom.source, version));
   if (zooms.length > 0) edits.zooms = zooms;
   if (typeof doc.removeNoise === "boolean") edits.removeNoise = doc.removeNoise;
+  edits.version = versionForEdits(edits.clips ?? null, edits.zooms);
   return edits;
+}
+
+/** The minimum sidecar version for the given sequence and zoom sources. */
+export function versionForEdits(clips: Clip[] | null, zooms: Zoom[] = []): RecordingEdits["version"] {
+  if (clips?.some((clip) => clip.source.includes("/")) || zooms.some((zoom) => zoom.source?.includes("/"))) return 4;
+  if (clips?.some(isGap)) return 3;
+  return clips ? 2 : 1;
 }
 
 /** A gap as the sidecar holds it (version 3). */
@@ -90,9 +97,8 @@ export type SidecarEdits = Omit<RecordingEdits, "clips"> & { clips?: (Clip | Sav
 /** The JSON written to the sidecar: only what is set. */
 export function serializeEdits(edits: RecordingEdits): SidecarEdits {
   const clips = edits.clips && edits.clips.length > 0 ? edits.clips : null;
-  const gaps = clips?.some((clip) => clip.gap) ?? false;
   return {
-    version: gaps ? 3 : clips ? 2 : 1,
+    version: versionForEdits(clips, edits.zooms),
     ...(clips
       ? {
           clips: clips.map((clip) =>

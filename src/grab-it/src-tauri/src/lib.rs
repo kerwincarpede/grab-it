@@ -25,6 +25,7 @@ mod hub;
 mod input;
 mod keychain;
 mod library;
+mod media;
 mod net;
 mod noise;
 mod ocr;
@@ -145,8 +146,9 @@ pub fn run() {
             recording_editor::VIDEO_SCHEME,
             |ctx, request, responder| {
                 let app = ctx.app_handle().clone();
+                let label = ctx.webview_label().to_owned();
                 std::thread::spawn(move || {
-                    let response = recording_editor::serve_video(&app, &request);
+                    let response = recording_editor::serve_video(&app, &label, &request);
                     // WebKit on macOS hands a reply made on another thread
                     // to the main thread, and raises there if the player
                     // has cancelled the request meanwhile, as it often does
@@ -344,6 +346,7 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
         .commands(tauri_specta::collect_commands![
             commands::get_settings,
             commands::set_save_folder,
+            commands::set_save_layout,
             commands::set_hotkeys,
             commands::set_preferences,
             commands::set_copy_sound,
@@ -430,6 +433,7 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             recording_editor::recording_info,
             recording_editor::recording_save_edits,
             recording_editor::recording_source,
+            recording_editor::recording_pick_source,
             recording_suggest::recording_pauses,
             library::library_list,
             library::library_set_tags,

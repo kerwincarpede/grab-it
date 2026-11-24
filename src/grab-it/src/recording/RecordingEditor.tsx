@@ -17,6 +17,7 @@ import {
   exportRecording,
   onExportProgress,
   recordingInfo,
+  recordingPickSource,
   recordingSource,
   saveEdits,
   type AudioKind,
@@ -32,7 +33,6 @@ import {
   clipStarts,
   clipsOf,
   duplicateClip,
-  fileNameOf,
   fitInside,
   insertClip,
   isGap,
@@ -56,7 +56,7 @@ import {
 import ClipTrack from "./ClipTrack";
 import SuggestEditsPanel from "./SuggestEditsPanel";
 import RecordingVideo from "./RecordingVideo";
-import { chooseRecording, folderOf, isIn, probeVideo, type SourceMeta } from "./sources";
+import { chooseRecording, probeVideo, type SourceMeta } from "./sources";
 import { clampTrim, emptyEdits, formatTime, isWhole, parseEdits, serializeEdits, trimOf, type RecordingEdits, type Trim } from "./edits";
 import { exportLayers, paintUnderlay, recordingLayout } from "./layout";
 import { useBackdropPresets } from "./useBackdropPresets";
@@ -289,7 +289,7 @@ export default function RecordingEditor() {
     };
   }, []);
 
-  const own = info?.fileName ?? "";
+  const own = info?.source ?? "";
   const ownMeta = meta[own] as SourceMeta | undefined;
   /** The opened recording's length; it sets the output's size and frame rate whatever the order. */
   const durationMs = ownMeta?.durationMs ?? 0;
@@ -468,24 +468,19 @@ export default function RecordingEditor() {
   /** Asks for a recording in the recordings folder and joins it after the clip under the playhead. */
   const addRecording = async () => {
     if (!info || exporting) return;
-    const folder = folderOf(info.path);
     let picked: string | null;
     try {
-      picked = await chooseRecording(folder);
+      picked = await chooseRecording(info.recordingsFolder);
     } catch (err) {
       setMessage(`Could not choose a recording: ${errorText(err)}`);
       return;
     }
     if (!picked) return;
-    if (!isIn(picked, folder)) {
-      setMessage("Only recordings in the recordings folder can be added.");
-      return;
-    }
-    const name = fileNameOf(picked);
     try {
-      const found = name === own ? null : await recordingSource(name);
-      const learned = latestRef.current.meta[name] ?? (await probeVideo(found?.path ?? info.path));
-      if (found) setSourceInfo((known) => ({ ...known, [name]: found }));
+      const found = await recordingPickSource(picked);
+      const name = found.source;
+      const learned = latestRef.current.meta[name] ?? (await probeVideo(found.path));
+      if (name !== own) setSourceInfo((known) => ({ ...known, [name]: found }));
       setMeta((known) => ({ ...known, [name]: learned }));
       requested.current.add(name);
       setMissing((gone) => {
@@ -504,7 +499,7 @@ export default function RecordingEditor() {
       setMessage(null);
       latest.seek(timelineMs(next, own, after + 1, 0), next);
     } catch (err) {
-      setMessage(`Could not add ${name}: ${errorText(err)}`);
+      setMessage(`Could not add ${fileName(picked)}: ${errorText(err)}`);
     }
   };
 

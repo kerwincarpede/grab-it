@@ -41,6 +41,7 @@ use crate::{
     commands::{SettingsState, lock as lock_settings},
     editor, guide_export,
     input::{self, InputKind},
+    media::SaveDestination,
     permissions,
     quick::{self, QuickItem},
     screen, tray, windows,
@@ -947,8 +948,15 @@ fn save_step(
     grabbed: &Grabbed,
     number: usize,
 ) -> Result<DescribeJob, String> {
+    // A guide and its captures share the save folder it started with.
+    let destination = SaveDestination {
+        folder: folder.to_owned(),
+        layout: lock_settings(&app.state::<SettingsState>())
+            .get()
+            .save_layout,
+    };
     let saved = capture::save_capture(
-        folder,
+        &destination,
         &grabbed.image,
         grabbed.mode,
         &grabbed.foreground,

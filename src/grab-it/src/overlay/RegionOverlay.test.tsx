@@ -54,6 +54,7 @@ function overlayInfo(info: Partial<OverlayInfo> = {}): OverlayInfo {
 function settings(recording: RecordingSettings): Settings_Serialize {
   return {
     saveFolder: "/home/me/Pictures/Grab-it",
+    saveLayout: { byMonth: false, includeAppName: false },
     hotkeys: { allInOne: "", region: "", window: "", screen: "", text: "", colour: "", library: "", steps: "" },
     editor: {},
     showInDock: true,

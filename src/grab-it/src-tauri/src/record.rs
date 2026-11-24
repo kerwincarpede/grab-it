@@ -55,6 +55,7 @@ use crate::{
     ffmpeg::{self, Video, VideoSpec},
     frame_overlays::Overlays,
     frames::{self, FrameSource, Grabbed},
+    media::SaveDestination,
     quick::{self, QuickItem},
     screen::MonitorInfo,
     settings::{RecordingFormat, RecordingSettings},
@@ -569,34 +570,22 @@ pub fn record_bar_level(app: AppHandle) -> Option<f32> {
     Some(meter.take())
 }
 
-/// The file name for a recording started at `time`, without a folder.
-pub fn recording_file_name(
+/// Reserves a new recording path for an encoder that opens its own output.
+pub(crate) fn reserve_recording(
+    destination: &SaveDestination,
     time: &DateTime<Local>,
-    counter: u32,
+    app_name: Option<&str>,
     format: RecordingFormat,
-) -> String {
-    let stamp = time.format("%Y-%m-%d %H-%M-%S");
-    let extension = format.extension();
-    if counter <= 1 {
-        format!("Grab-it {stamp}.{extension}")
-    } else {
-        format!("Grab-it {stamp} ({counter}).{extension}")
-    }
-}
-
-pub fn unique_recording_path(
-    dir: &Path,
-    time: &DateTime<Local>,
-    format: RecordingFormat,
-) -> PathBuf {
-    let mut counter = 1;
-    loop {
-        let path = dir.join(recording_file_name(time, counter, format));
-        if !path.exists() {
-            return path;
-        }
-        counter += 1;
-    }
+) -> Result<PathBuf, String> {
+    destination
+        .reserve(RECORDINGS_DIR, time, app_name, format.extension())
+        .map(|(path, _)| path)
+        .map_err(|err| {
+            format!(
+                "could not create a recording in {}: {err}",
+                destination.folder.display()
+            )
+        })
 }
 
 /// The size frames are written at: the region's own size, or scaled down
@@ -839,8 +828,9 @@ pub fn start(
     monitor: &MonitorInfo,
     image_size: (u32, u32),
     rect: Rect,
+    app_name: Option<String>,
 ) -> Result<(), crate::scroll::StartError> {
-    start_with(app, monitor, image_size, rect, None).map(|_| ())
+    start_with(app, monitor, image_size, rect, app_name, None).map(|_| ())
 }
 
 /// [`start`], with `agent`'s options in place of the settings' format,
@@ -851,18 +841,19 @@ pub fn start_with(
     monitor: &MonitorInfo,
     image_size: (u32, u32),
     rect: Rect,
+    app_name: Option<String>,
     agent: Option<AgentOptions>,
 ) -> Result<Arc<Session>, crate::scroll::StartError> {
     let _gate = crate::scroll::start_lock();
     crate::scroll::ensure_idle(session(app).is_some(), crate::scroll::active(app))?;
     refuse_during_steps(crate::steps::is_running())?;
-    let (folder, recording) = {
+    let (destination, recording) = {
         let state = app.state::<SettingsState>();
         let store = lock(&state);
         let settings = store.get();
         let recording = settings.recording.clone();
         (
-            settings.save_folder.join(RECORDINGS_DIR),
+            SaveDestination::from_settings(settings),
             match agent {
                 Some(options) => options.apply(recording),
                 None => recording,
@@ -887,10 +878,7 @@ pub fn start_with(
         Output::Gif => RecordingFormat::Gif,
         Output::Mp4(..) => RecordingFormat::Mp4,
     };
-    let started = Local::now();
-    let path = fs::create_dir_all(&folder)
-        .map(|()| unique_recording_path(&folder, &started, format))
-        .map_err(|err| format!("could not create {}: {err}", folder.display()))?;
+    let path = reserve_recording(&destination, &Local::now(), app_name.as_deref(), format)?;
     let session = Arc::new(Session {
         controls: Arc::new(Controls::default()),
         monitor: monitor.clone(),
@@ -922,7 +910,10 @@ pub fn start_with(
         ended: Condvar::new(),
     });
     let state = app.state::<RecordState>();
-    state.start(Arc::clone(&session))?;
+    if let Err(err) = state.start(Arc::clone(&session)) {
+        let _ = fs::remove_file(&path);
+        return Err(err);
+    }
     crate::tray::set_recording(app, true);
 
     // Only an MP4 has sound. macOS asks for the microphone first, the
@@ -1072,7 +1063,10 @@ pub fn start_with(
             }
             let outcome = match result {
                 // Stopped during the countdown: nothing was recorded.
-                None => Err("the recording was stopped before it began".to_owned()),
+                None => {
+                    let _ = fs::remove_file(&path);
+                    Err("the recording was stopped before it began".to_owned())
+                }
                 Some(Ok(_)) if discard => {
                     remove_recording(&path);
                     Err(if restart {
@@ -1131,6 +1125,7 @@ pub fn start_with(
                     &session.monitor,
                     session.image_size,
                     session.rect,
+                    app_name,
                     session.agent,
                 )
             {
@@ -1142,6 +1137,7 @@ pub fn start_with(
             }
         });
     if let Err(err) = spawned {
+        let _ = fs::remove_file(session.path());
         crate::webcam::close(app);
         crate::record_bar::close(app);
         crate::record_frame::close(app);
@@ -1505,7 +1501,6 @@ fn write_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
     use image::{AnimationDecoder, Rgba, codecs::gif::GifDecoder};
 
     #[test]
@@ -1610,44 +1605,6 @@ mod tests {
         assert_eq!(final_note(&[], true, Ok(())), None);
         // No sound was wanted at all.
         assert_eq!(final_note(&[], false, Ok(())), None);
-    }
-
-    #[test]
-    fn recordings_are_named_like_captures() {
-        let time = Local.with_ymd_and_hms(2026, 3, 7, 9, 5, 1).unwrap();
-        assert_eq!(
-            recording_file_name(&time, 1, RecordingFormat::Gif),
-            "Grab-it 2026-03-07 09-05-01.gif"
-        );
-        assert_eq!(
-            recording_file_name(&time, 2, RecordingFormat::Gif),
-            "Grab-it 2026-03-07 09-05-01 (2).gif"
-        );
-    }
-
-    #[test]
-    fn mp4_recordings_end_in_mp4_and_never_overwrite_one() {
-        let time = Local.with_ymd_and_hms(2026, 3, 7, 9, 5, 1).unwrap();
-        assert_eq!(
-            recording_file_name(&time, 1, RecordingFormat::Mp4),
-            "Grab-it 2026-03-07 09-05-01.mp4"
-        );
-        assert_eq!(
-            recording_file_name(&time, 3, RecordingFormat::Mp4),
-            "Grab-it 2026-03-07 09-05-01 (3).mp4"
-        );
-        let dir = tempfile::tempdir().unwrap();
-        let first = unique_recording_path(dir.path(), &time, RecordingFormat::Mp4);
-        fs::write(&first, b"video").unwrap();
-        assert_eq!(
-            unique_recording_path(dir.path(), &time, RecordingFormat::Mp4),
-            dir.path().join("Grab-it 2026-03-07 09-05-01 (2).mp4")
-        );
-        // A GIF of the same second does not take the MP4's name.
-        assert_eq!(
-            unique_recording_path(dir.path(), &time, RecordingFormat::Gif),
-            dir.path().join("Grab-it 2026-03-07 09-05-01.gif")
-        );
     }
 
     #[test]

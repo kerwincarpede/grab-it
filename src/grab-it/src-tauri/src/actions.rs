@@ -20,7 +20,9 @@ use crate::{
     capture::{self, CaptureMode, CapturedPointer, Foreground, SavedCapture},
     codes::{self, Code},
     commands::{SettingsState, lock},
-    file_clipboard, ocr, overlay,
+    file_clipboard,
+    media::SaveDestination,
+    ocr, overlay,
     overlay::Intent,
     permissions, pointer,
     quick::{self, QuickItem, TextTidy},
@@ -349,10 +351,7 @@ fn save(
     copy: bool,
     show_pointer: bool,
 ) -> Result<(SavedCapture, bool), String> {
-    let folder = lock(&app.state::<SettingsState>())
-        .get()
-        .save_folder
-        .clone();
+    let destination = SaveDestination::current(app);
     let Capture {
         image,
         mode,
@@ -362,7 +361,7 @@ fn save(
     } = shot;
     let clip_pointer = pointer.clone().filter(|_| show_pointer);
     let saved = capture::save_capture_with_pointer(
-        &folder,
+        &destination,
         image,
         mode,
         foreground,

@@ -24,6 +24,7 @@ import {
   type Preferences_Serialize,
   type RecordingSettings_Serialize,
   type Retention_Serialize,
+  type SaveLayout_Serialize,
   type Settings_Serialize,
   type WebcamShape_Serialize,
 } from "../app/bindings";
@@ -261,6 +262,7 @@ export type BackdropPreset<B = unknown> = Omit<GeneratedBackdropPreset, "backdro
 
 /** `Settings` in src-tauri/src/settings.rs. */
 export type Settings = Omit<Settings_Serialize, "editor"> & { editor: EditorPreferences };
+export type SaveLayout = SaveLayout_Serialize;
 
 /** The update channels in the order Settings lists them. */
 export const UPDATE_CHANNELS: { value: UpdateChannel; title: string; hint: string }[] = [
@@ -643,6 +645,10 @@ export function getSettings(): Promise<Settings> {
 
 export function setSaveFolder(path: string): Promise<Settings> {
   return commands.setSaveFolder(path);
+}
+
+export function setSaveLayout(layout: SaveLayout): Promise<Settings> {
+  return commands.setSaveLayout(layout);
 }
 
 export function setPreferences(preferences: Preferences): Promise<Settings> {
