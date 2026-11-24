@@ -10,6 +10,7 @@ import {
   RefreshIcon,
   RegionIcon,
   ScreenIcon,
+  ScrollIcon,
   SlidersIcon,
   TextIcon,
   WindowIcon,
@@ -47,6 +48,7 @@ const MORE_CAPTURES: { kind: CaptureKind; title: string; icon: ReactNode }[] = [
   { kind: "window", title: "Capture window", icon: <WindowIcon /> },
   { kind: "screen", title: "Capture screen", icon: <ScreenIcon /> },
   { kind: "record", title: "Record", icon: <RecordIcon /> },
+  { kind: "scroll", title: "Scrolling capture", icon: <ScrollIcon /> },
   { kind: "text", title: "Capture text", icon: <TextIcon /> },
   { kind: "colour", title: "Pick a colour", icon: <ColourIcon /> },
 ];

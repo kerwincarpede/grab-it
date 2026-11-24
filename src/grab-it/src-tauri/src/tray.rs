@@ -166,6 +166,7 @@ const MENU_MONITOR_PREFIX: &str = "capture-monitor-";
 const MENU_REPEAT: &str = "capture-repeat";
 const MENU_RECORD: &str = "record-gif";
 const MENU_STEPS: &str = "step-capture";
+const MENU_SCROLL: &str = "scrolling-capture";
 const MENU_TEXT: &str = "capture-text";
 const MENU_COLOUR: &str = "pick-colour";
 /// Timed captures are `timed-<region|screen>-<seconds>`.
@@ -190,6 +191,7 @@ fn action_for(id: &str) -> Option<Action> {
         MENU_REPEAT => Some(Action::Repeat),
         MENU_RECORD => Some(Action::Record),
         MENU_STEPS => Some(Action::Steps),
+        MENU_SCROLL => Some(Action::Scroll),
         MENU_TEXT => Some(Action::Text),
         MENU_COLOUR => Some(Action::Colour),
         _ => id
@@ -328,6 +330,8 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let record = MenuItem::with_id(app, MENU_RECORD, RECORD_LABEL, true, None::<&str>)?;
     // Choosing it during a step capture stops it and opens the guide.
     let steps = MenuItem::with_id(app, MENU_STEPS, STEPS_LABEL, true, None::<&str>)?;
+    // Capture & record… with Scroll already picked.
+    let scroll = MenuItem::with_id(app, MENU_SCROLL, "Scrolling capture…", true, None::<&str>)?;
     let text = MenuItem::with_id(app, MENU_TEXT, "Capture text", true, None::<&str>)?;
     let colour = MenuItem::with_id(app, MENU_COLOUR, "Pick a colour", true, None::<&str>)?;
     // Disabled until a pin is locked: a locked pin takes no clicks, so this
@@ -369,6 +373,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             &tools_separator,
             &record,
             &steps,
+            &scroll,
             &text,
             &colour,
             &unlock,
@@ -505,6 +510,7 @@ mod tests {
     fn menu_ids_map_to_captures() {
         assert_eq!(action_for(MENU_ALL_IN_ONE), Some(Action::AllInOne));
         assert_eq!(action_for(MENU_STEPS), Some(Action::Steps));
+        assert_eq!(action_for(MENU_SCROLL), Some(Action::Scroll));
         assert_eq!(action_for(MENU_REGION), Some(Action::Region));
         assert_eq!(action_for(MENU_WINDOW), Some(Action::Window));
         assert_eq!(action_for(MENU_SCREEN), Some(Action::Screen));

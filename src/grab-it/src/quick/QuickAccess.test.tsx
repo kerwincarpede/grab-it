@@ -56,8 +56,6 @@ function mockBackend(item: QuickItem | null, options: Partial<Backend> = {}): Ba
         if (backend.failAction) throw backend.failAction;
         return null;
       },
-      scroll_done: () => undefined,
-      scroll_cancel: () => undefined,
       library_shot_id: () => (backend.text ? SHOT_ID : null),
       library_text: () => {
         if (!backend.text) throw new Error("not in the library");
@@ -698,74 +696,5 @@ describe("Quick Access native dragging", () => {
     pointer(window, "pointercancel", 0, 0);
     pointer(window, "pointermove", 20, 0);
     expect(dragCalls(backend)).toEqual([]);
-  });
-});
-
-
-describe("scrolling card", () => {
-  it("keeps scrolling controls operable across a saved-image drag", async () => {
-    const scrolling: QuickItem = { kind: "scrolling", sessionId: 42, width: 800, height: 1600, capped: false, autoScrolling: false, manualReason: null };
-    const backend = mockBackend(scrolling, { events: true });
-    render(<QuickAccess />);
-    await screen.findByText("Scrolling capture");
-    await waitFor(() => expect(backend.calls.filter((call) => call.cmd === "quick_info")).toHaveLength(2));
-    const done = screen.getByRole("button", { name: "Done" });
-    pointer(done, "pointerdown", 0, 0);
-    pointer(window, "pointermove", 20, 0);
-    pointer(window, "pointerup", 20, 0);
-    await userEvent.click(done);
-    expect(dragCalls(backend)).toEqual([]);
-    expect(backend.calls).toContainEqual({ cmd: "scroll_done", payload: { sessionId: 42 } });
-
-    await act(async () => {
-      await emit("quick-changed", { generation: 8, item: CAPTURE });
-    });
-    const source = screen.getByRole("button", { name: `Annotate ${CAPTURE.fileName}` });
-    pointer(source, "pointerdown", 0, 0);
-    pointer(window, "pointermove", 20, 0);
-    pointer(window, "pointerup", 20, 0);
-    fireEvent.click(source, { detail: 1 });
-    await waitFor(() => expect(dragCalls(backend)).toHaveLength(1));
-    expect(dragCalls(backend)[0].payload).toEqual({ generation: 8 });
-    expect(actions(backend)).toEqual([]);
-
-    await act(async () => {
-      await emit("quick-changed", { generation: 9, item: { ...scrolling, sessionId: 43 } });
-    });
-    const cancel = screen.getByRole("button", { name: "Cancel" });
-    pointer(cancel, "pointerdown", 0, 0);
-    pointer(window, "pointermove", 20, 0);
-    pointer(window, "pointerup", 20, 0);
-    await userEvent.click(cancel);
-    expect(backend.calls).toContainEqual({ cmd: "scroll_cancel", payload: { sessionId: 43 } });
-    expect(dragCalls(backend)).toHaveLength(1);
-    expect(screen.getByRole("button", { name: "Done" })).toBeEnabled();
-  });
-
-  it.each([
-    [true, null, "Scrolling automatically. Move the mouse to scroll by hand."],
-    [false, "Mouse moved. Scroll by hand, then choose Done.", "Mouse moved. Scroll by hand, then choose Done."],
-    [false, "Nothing scrolled automatically. Scroll by hand, then choose Done.", "Nothing scrolled automatically. Scroll by hand, then choose Done."],
-    [false, "Accessibility permission is needed. Scroll by hand, then choose Done.", "Accessibility permission is needed. Scroll by hand, then choose Done."],
-  ] as const)("shows auto/manual status (%s, %s)", async (autoScrolling, manualReason, message) => {
-    mockBackend({ kind: "scrolling", sessionId: 42, width: 800, height: 1600, capped: false, autoScrolling, manualReason });
-    render(<QuickAccess />);
-    expect(await screen.findByText(message)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Done" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
-  });
-
-  it.each([false, true])("shows progress and session-scoped controls (cap %s)", async (capped) => {
-    const item: QuickItem = { kind: "scrolling", sessionId: 42, width: 800, height: capped ? 30000 : 1600, capped, autoScrolling: !capped, manualReason: null };
-    const backend = mockBackend(item);
-    render(<QuickAccess />);
-    await screen.findByText("Scrolling capture");
-    expect(dismissAfter(item, 1)).toBeNull();
-    if (capped) expect(screen.getByText(/Stopped at the 30,000 px limit/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
-    expect(backend.calls).toContainEqual({ cmd: "scroll_done", payload: { sessionId: 42 } });
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(backend.calls).toContainEqual({ cmd: "scroll_cancel", payload: { sessionId: 42 } });
-    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
   });
 });

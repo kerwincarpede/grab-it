@@ -547,55 +547,46 @@ pub fn permission_open_settings(permission: Permission) -> Result<(), String> {
     }
 }
 
-/// Synthetic scrolling needs Accessibility on macOS. The system prompt is
-/// asynchronous: until a grant is visible, this capture remains manual.
-#[cfg(target_os = "macos")]
-pub fn ensure_accessibility(_app: &AppHandle) -> bool {
-    use std::ffi::c_void;
-    #[link(name = "ApplicationServices", kind = "framework")]
-    unsafe extern "C" {
-        static kAXTrustedCheckOptionPrompt: *const c_void;
-        fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
-    }
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        static kCFBooleanTrue: *const c_void;
-        fn CFDictionaryCreate(
-            allocator: *const c_void,
-            keys: *const *const c_void,
-            values: *const *const c_void,
-            count: isize,
-            key_callbacks: *const c_void,
-            value_callbacks: *const c_void,
-        ) -> *const c_void;
-        fn CFRelease(value: *const c_void);
-    }
-    // SAFETY: the key and value are immortal framework constants. Null
-    // callbacks leave them unretained, valid for this dictionary's lifetime.
-    // Release the owned dictionary after the synchronous trust query.
-    unsafe {
-        let key = kAXTrustedCheckOptionPrompt;
-        let value = kCFBooleanTrue;
-        let options = CFDictionaryCreate(
-            std::ptr::null(),
-            &key,
-            &value,
-            1,
-            std::ptr::null(),
-            std::ptr::null(),
-        );
-        if options.is_null() {
-            return false;
+/// Whether Grab-it may send synthetic input, asked without a prompt. Only
+/// macOS asks; elsewhere it is always allowed.
+pub fn accessibility_trusted() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "ApplicationServices", kind = "framework")]
+        unsafe extern "C" {
+            fn AXIsProcessTrusted() -> bool;
         }
-        let trusted = AXIsProcessTrustedWithOptions(options);
-        CFRelease(options);
-        trusted
+        // SAFETY: a plain query with no arguments.
+        unsafe { AXIsProcessTrusted() }
     }
+    #[cfg(not(target_os = "macos"))]
+    true
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn ensure_accessibility(_app: &AppHandle) -> bool {
-    true
+/// System Settings' Accessibility pane.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub const ACCESSIBILITY_SETTINGS_URL: &str =
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+
+/// Whether automatic scrolling is allowed, for the Scroll guide. Never prompts.
+#[tauri::command]
+#[specta::specta]
+pub fn accessibility_status() -> bool {
+    accessibility_trusted()
+}
+
+/// Opens the Accessibility pane, for the Scroll guide's Open Settings.
+#[tauri::command]
+#[specta::specta]
+pub fn accessibility_open_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(ACCESSIBILITY_SETTINGS_URL)
+            .status()
+            .map_err(|err| format!("could not open System Settings: {err}"))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

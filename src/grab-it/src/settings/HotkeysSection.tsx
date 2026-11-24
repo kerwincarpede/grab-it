@@ -11,6 +11,7 @@ const FIELDS: { key: keyof Hotkeys; label: string }[] = [
   { key: "colour", label: "Pick a colour" },
   { key: "library", label: "Open library" },
   { key: "steps", label: "Step capture" },
+  { key: "scroll", label: "Scrolling capture" },
 ];
 
 interface HotkeysSectionProps {
@@ -124,6 +125,7 @@ function HotkeysSection({ saved, disabled, onSave }: HotkeysSectionProps) {
               type="text"
               readOnly
               value={current[key]}
+              placeholder="None"
               data-hotkey-field=""
               onKeyDown={record(key)}
               onKeyUp={recordPrintScreen(key)}

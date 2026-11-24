@@ -7,6 +7,7 @@
     "webcam",
     "record-bar",
     "steps-bar",
+    "scroll-bar",
     "record-frame"
   ],
   "permissions": [

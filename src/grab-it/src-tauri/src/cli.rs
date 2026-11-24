@@ -49,6 +49,8 @@ pub enum OpenTarget {
     Pin(PathBuf),
     /// Starts a step capture, or stops the one under way.
     Steps,
+    /// Opens Capture & record… with Scroll picked.
+    Scroll,
     /// Opens a step guide in the Guide window: `--open guide <file>`.
     Guide(PathBuf),
 }
@@ -70,7 +72,7 @@ impl fmt::Display for ArgsError {
             Self::UnknownTarget(name) => {
                 write!(
                     f,
-                    "unknown --open target `{name}`; expected `settings`, `library`, `welcome`, `region`, `all-in-one`, `repeat`, `record`, `steps`, `text`, `colour`, `editor <file>`, `quick <file>`, `pin <file>` or `guide <file>`"
+                    "unknown --open target `{name}`; expected `settings`, `library`, `welcome`, `region`, `all-in-one`, `repeat`, `record`, `steps`, `scroll`, `text`, `colour`, `editor <file>`, `quick <file>`, `pin <file>` or `guide <file>`"
                 )
             }
             Self::MissingFile(target) => {
@@ -121,6 +123,7 @@ where
             "repeat" => Ok(Some(OpenTarget::Repeat)),
             "record" => Ok(Some(OpenTarget::Record)),
             "steps" => Ok(Some(OpenTarget::Steps)),
+            "scroll" => Ok(Some(OpenTarget::Scroll)),
             "editor" | "quick" | "pin" | "guide" => match args.next() {
                 Some(file) if !file.as_ref().is_empty() => {
                     let file = PathBuf::from(file.as_ref());
@@ -679,6 +682,7 @@ mod tests {
     #[test]
     fn open_steps_and_a_guide() {
         assert_eq!(parse(&["--open", "steps"]), Ok(Some(OpenTarget::Steps)));
+        assert_eq!(parse(&["--open", "scroll"]), Ok(Some(OpenTarget::Scroll)));
         assert_eq!(
             parse(&["--open", "guide", "a.guide.json"]),
             Ok(Some(OpenTarget::Guide(PathBuf::from("a.guide.json"))))

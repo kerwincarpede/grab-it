@@ -2,7 +2,7 @@
 title: Step capture
 description: Click through a task and get a numbered how-to guide, then reorder, edit and export it as Markdown, HTML, Word or PowerPoint.
 sidebar:
-  order: 11
+  order: 12
 ---
 
 Step capture turns doing a task into a how-to guide. While it runs, every click saves the window under the pointer as a normal capture, with a numbered step badge where you clicked and a short description of the step. Stopping opens the **Guide** window, where you reorder, edit and delete the steps, then export or copy the guide.

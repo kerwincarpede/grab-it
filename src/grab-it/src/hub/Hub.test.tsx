@@ -60,7 +60,7 @@ describe("Hub", () => {
   it("starts each capture by its kind", async () => {
     const calls = backend();
     render(<Hub />);
-    for (const name of [/^Capture region/, /^Capture & record…/, /^Window/, /^Screen/, /^Record/, /^Grab text/, /^Pick colour/, /^Step capture/]) {
+    for (const name of [/^Capture region/, /^Capture & record…/, /^Window/, /^Screen/, /^Record/, /^Scrolling capture/, /^Grab text/, /^Pick colour/, /^Step capture/]) {
       await userEvent.click(screen.getByRole("button", { name }));
     }
     await userEvent.click(screen.getByRole("button", { name: "Repeat last region" }));
@@ -70,6 +70,7 @@ describe("Hub", () => {
       "window",
       "screen",
       "record",
+      "scroll",
       "text",
       "colour",
       "steps",

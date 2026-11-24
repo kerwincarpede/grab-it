@@ -52,15 +52,6 @@ const THUMB_MAX: u32 = 672;
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum QuickItem {
     #[serde(rename_all = "camelCase")]
-    Scrolling {
-        session_id: u64,
-        width: u32,
-        height: u32,
-        capped: bool,
-        auto_scrolling: bool,
-        manual_reason: Option<String>,
-    },
-    #[serde(rename_all = "camelCase")]
     Capture {
         path: PathBuf,
         file_name: String,
@@ -310,12 +301,6 @@ pub fn show_last(app: &AppHandle) -> bool {
 /// Takes the card off screen, if it still shows item `generation`; a
 /// newer item stays. The window is hidden, not destroyed, and reused for
 /// the next item, so the next card appears without waiting for a webview.
-pub(crate) fn is_current(app: &AppHandle, generation: u64) -> bool {
-    lock(&app.state::<QuickState>().current)
-        .as_ref()
-        .is_some_and(|s| s.generation == generation)
-}
-
 pub(crate) fn dismiss(app: &AppHandle, generation: u64) {
     {
         let state = app.state::<QuickState>();

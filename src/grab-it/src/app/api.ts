@@ -25,7 +25,7 @@ export function onNavigate(handler: (view: MainView) => void): Promise<UnlistenF
 }
 
 /** A capture the Grab-it window and the hub can start. */
-export type CaptureKind = "allInOne" | "region" | "window" | "screen" | "monitor" | "repeat" | "record" | "text" | "colour" | "steps";
+export type CaptureKind = "allInOne" | "region" | "window" | "screen" | "monitor" | "repeat" | "record" | "text" | "colour" | "steps" | "scroll";
 
 /** `BindingLabels` in hotkeys.rs, keyed by capture. Missing actions have no registered shortcut. */
 export type BindingLabels = Partial<Record<CaptureKind | "library", string>>;

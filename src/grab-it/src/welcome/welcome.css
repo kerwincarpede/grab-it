@@ -168,3 +168,27 @@
     margin-left: 27px;
   }
 }
+
+/* A hotkey row with no hotkey set: says so, and offers to start it. */
+.welcome-none {
+  color: var(--text-muted, #8a8d93);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.welcome-start {
+  flex: none;
+  padding: 3px 10px;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  background: transparent;
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.welcome-start:hover {
+  opacity: 1;
+}

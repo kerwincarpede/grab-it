@@ -15,6 +15,7 @@ export function testSettings(overrides: Partial<Settings_Serialize> = {}): Setti
       colour: "Ctrl+Shift+PrintScreen",
       library: "Alt+Shift+PrintScreen",
       steps: "Ctrl+Alt+Shift+PrintScreen",
+      scroll: "",
     },
     afterCapture: "quickAccess",
     copyToClipboard: true,

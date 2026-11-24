@@ -287,7 +287,8 @@ fn get_settings_returns_the_settings_shape() {
     assert_eq!(
         keys(&settings["hotkeys"]),
         [
-            "allInOne", "colour", "library", "region", "screen", "steps", "text", "window",
+            "allInOne", "colour", "library", "region", "screen", "scroll", "steps", "text",
+            "window",
         ]
     );
     assert_eq!(

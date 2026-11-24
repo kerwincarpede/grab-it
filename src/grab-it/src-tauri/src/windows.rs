@@ -114,6 +114,10 @@ pub fn open(app: &AppHandle, target: OpenTarget) -> tauri::Result<()> {
             actions::start(app, actions::Action::Steps);
             Ok(())
         }
+        OpenTarget::Scroll => {
+            actions::start(app, actions::Action::Scroll);
+            Ok(())
+        }
         OpenTarget::Guide(path) => match existing_file(&path) {
             Some(path) => crate::steps::show_guide(app, &path),
             None => Ok(()),

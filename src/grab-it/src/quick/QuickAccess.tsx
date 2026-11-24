@@ -15,8 +15,6 @@ import {
   quickInfo,
   quickDrag,
   quickThumbnail,
-  scrollDone,
-  scrollCancel,
   type QuickAction,
   type QuickItem,
   type QuickShown,
@@ -327,33 +325,6 @@ function QuickAccess() {
             {close}
           </>
         )}
-      </main>
-    );
-  }
-
-  if (item.kind === "scrolling") {
-    return (
-      <main className="quick quick-scrolling" data-testid="quick" {...hover}>
-        <div className="quick-body" role="status">
-          <p className="quick-title">Scrolling capture</p>
-          <p className="quick-detail">{item.width} × {item.height} px</p>
-          <p className="quick-detail">
-            {item.capped
-              ? "Stopped at the 30,000 px limit. Choose Done to save."
-              : item.autoScrolling
-                ? "Scrolling automatically. Move the mouse to scroll by hand."
-                : item.manualReason ?? "Scroll by hand, then choose Done to save."}
-          </p>
-        </div>
-        {error && <p className="quick-detail" role="alert">{error}</p>}
-        <div className="quick-actions">
-          <button type="button" onClick={() => {
-            void scrollDone(item.sessionId).catch((e: unknown) => setError(String(e)));
-          }}>Done</button>
-          <button type="button" className="danger" onClick={() => {
-            void scrollCancel(item.sessionId).catch((e: unknown) => setError(String(e)));
-          }}>Cancel</button>
-        </div>
       </main>
     );
   }

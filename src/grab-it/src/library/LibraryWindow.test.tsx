@@ -88,6 +88,7 @@ function settings(backend: Backend): Settings_Serialize {
       colour: "",
       library: "",
       steps: "",
+      scroll: "",
     },
     editor: {},
     showInDock: true,
