@@ -21,7 +21,7 @@ Click **Backdrop** in the top bar and pick a background. That turns it on; the b
 | **Solids** | White, Black, any colour from the picker, **Transparent**, **Blurred capture** and **Image** |
 
 - The **custom gradient** shows a start colour, an end colour and an **Angle** (0 to 359°) to mix your own.
-- **Transparent** keeps the shape, corners and shadow with nothing behind them. Export as PNG to keep the transparency.
+- **Transparent** keeps the shape, corners and shadow with nothing behind them. Export as PNG, WebP or TIFF to keep the transparency.
 - **Blurred capture** uses a blurred copy of your screenshot as its own background.
 - **Image** asks for a PNG, JPEG, WebP or GIF to use as the background.
 

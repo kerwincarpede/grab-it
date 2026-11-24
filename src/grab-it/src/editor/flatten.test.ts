@@ -14,6 +14,8 @@ import {
   composeBackdrop,
   coverCrop,
   exportArea,
+  exportMime,
+  exportsOnWhite,
   exportTarget,
   flatten,
   gradientStops,
@@ -166,6 +168,23 @@ describe("flatten", () => {
     expect(exportTarget("/tmp/a.jpeg")).toEqual({ path: "/tmp/a.jpeg", format: "jpg" });
     expect(exportTarget("/tmp/a.png")).toEqual({ path: "/tmp/a.png", format: "png" });
     expect(exportTarget("/tmp/a")).toEqual({ path: "/tmp/a.png", format: "png" });
+  });
+
+  it("picks WebP, GIF, TIFF, BMP or PDF from the file name, whatever its case", () => {
+    expect(exportTarget("/tmp/a.webp")).toEqual({ path: "/tmp/a.webp", format: "webp" });
+    expect(exportTarget("/tmp/a.GIF")).toEqual({ path: "/tmp/a.GIF", format: "gif" });
+    expect(exportTarget("/tmp/a.tif")).toEqual({ path: "/tmp/a.tif", format: "tiff" });
+    expect(exportTarget("/tmp/a.TIFF")).toEqual({ path: "/tmp/a.TIFF", format: "tiff" });
+    expect(exportTarget("/tmp/a.bmp")).toEqual({ path: "/tmp/a.bmp", format: "bmp" });
+    expect(exportTarget("/tmp/a.Pdf")).toEqual({ path: "/tmp/a.Pdf", format: "pdf" });
+    // An unknown ending is kept and saved as PNG.
+    expect(exportTarget("/tmp/a.heic")).toEqual({ path: "/tmp/a.heic.png", format: "png" });
+  });
+
+  it("sends a PNG for every format but JPEG, on white where the format has no transparency", () => {
+    const formats = ["png", "jpg", "webp", "gif", "tiff", "bmp", "pdf"] as const;
+    expect(formats.map(exportMime)).toEqual(["image/png", "image/jpeg", "image/png", "image/png", "image/png", "image/png", "image/png"]);
+    expect(formats.filter(exportsOnWhite)).toEqual(["jpg", "gif", "bmp", "pdf"]);
   });
 });
 

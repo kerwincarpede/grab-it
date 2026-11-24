@@ -20,7 +20,32 @@ export interface View {
   y: number;
 }
 
-export type ExportFormat = "png" | "jpg";
+/**
+ * The formats Export… writes. The page encodes PNG and JPEG itself and sends
+ * a PNG for the others, which the backend re-encodes by the file's ending.
+ */
+export type ExportFormat = "png" | "jpg" | "webp" | "gif" | "tiff" | "bmp" | "pdf";
+
+/** The file endings of each export format, lower case, the first one preferred. */
+const EXPORT_ENDINGS: [ExportFormat, string[]][] = [
+  ["png", [".png"]],
+  ["jpg", [".jpg", ".jpeg"]],
+  ["webp", [".webp"]],
+  ["gif", [".gif"]],
+  ["tiff", [".tif", ".tiff"]],
+  ["bmp", [".bmp"]],
+  ["pdf", [".pdf"]],
+];
+
+/** Whether `format` has no transparency, so the image goes on white: JPEG, GIF, BMP and PDF. */
+export function exportsOnWhite(format: ExportFormat): boolean {
+  return format === "jpg" || format === "gif" || format === "bmp" || format === "pdf";
+}
+
+/** The type the page encodes `format` in: JPEG for JPEG, PNG for the rest (the backend re-encodes those). */
+export function exportMime(format: ExportFormat): "image/jpeg" | "image/png" {
+  return format === "jpg" ? "image/jpeg" : "image/png";
+}
 
 /**
  * The area to flatten, in stage (screen) pixels, and the ratio that maps it
@@ -48,8 +73,9 @@ export function exportArea(
 /** Picks the format from the chosen file name, adding `.png` when it has none. */
 export function exportTarget(path: string): { path: string; format: ExportFormat } {
   const lower = path.toLowerCase();
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return { path, format: "jpg" };
-  if (lower.endsWith(".png")) return { path, format: "png" };
+  for (const [format, endings] of EXPORT_ENDINGS) {
+    if (endings.some((ending) => lower.endsWith(ending))) return { path, format };
+  }
   return { path: `${path}.png`, format: "png" };
 }
 
@@ -655,7 +681,7 @@ function drawResized(source: HTMLCanvasElement, size: { width: number; height: n
   return canvas;
 }
 
-/** JPEG has no transparency: what is see-through becomes white, not black. */
+/** For formats without transparency (see `exportsOnWhite`): what is see-through becomes white, not black. */
 export function onWhite(source: HTMLCanvasElement): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = source.width;
@@ -697,9 +723,8 @@ export async function flatten(
   const clear = reachesPast(area, image, orientation);
   const framed = doc.backdrop ? composeBackdrop(flat, doc.backdrop, { ...compose, clear }) : flat;
   const resized = resample(framed, doc.scale ?? 1);
-  const canvas = format === "jpg" ? onWhite(resized) : resized;
-  const mime = format === "jpg" ? "image/jpeg" : "image/png";
-  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, mime, 0.92));
+  const canvas = exportsOnWhite(format) ? onWhite(resized) : resized;
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, exportMime(format), 0.92));
   if (!blob) throw new Error("could not encode the image");
   return new Uint8Array(await blob.arrayBuffer());
 }

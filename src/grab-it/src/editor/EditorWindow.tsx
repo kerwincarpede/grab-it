@@ -1874,6 +1874,11 @@ export default function EditorWindow() {
         filters: [
           { name: "PNG image", extensions: ["png"] },
           { name: "JPEG image", extensions: ["jpg", "jpeg"] },
+          { name: "WebP image", extensions: ["webp"] },
+          { name: "GIF image", extensions: ["gif"] },
+          { name: "TIFF image", extensions: ["tif", "tiff"] },
+          { name: "BMP image", extensions: ["bmp"] },
+          { name: "PDF document", extensions: ["pdf"] },
         ],
       });
       if (!chosen) return;
