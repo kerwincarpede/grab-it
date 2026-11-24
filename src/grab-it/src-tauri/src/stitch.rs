@@ -32,7 +32,6 @@ pub(crate) fn length(i: &RgbaImage, a: Axis) -> u32 {
         i.width()
     }
 }
-#[cfg(test)]
 pub(crate) fn pixel(i: &RgbaImage, a: Axis, along: u32, across: u32) -> &Rgba<u8> {
     if a == Axis::Vertical {
         i.get_pixel(across, along)
@@ -92,6 +91,10 @@ struct Match {
     offset: i64,
     head: u32,
     tail: u32,
+    /// Rows at the end of the reference frame the page moved away from that
+    /// do not line up with the new frame: a window's translucent outline, a
+    /// fade or a sticky bar drawn over the page.
+    edge: u32,
     /// Textured strips that stayed where they were while the page moved.
     fixed: Vec<bool>,
     /// Strips with enough feature rows to vote.
@@ -323,10 +326,27 @@ fn estimate(last: &[Vec<u64>], next: &[Vec<u64>], hint: Option<i64>) -> Result<M
     if support < 0.6 {
         return Err(Miss::Lost);
     }
+    let lines_up = |y: usize| {
+        let from = y as i64 - offset;
+        (0..h as i64).contains(&from) && {
+            let from = from as usize;
+            let equal = moving
+                .iter()
+                .filter(|&&s| last[s][y] == next[s][from])
+                .count();
+            equal * 20 >= moving.len() * 19
+        }
+    };
+    let edge = if offset > 0 {
+        (0..h).rev().take_while(|&y| !lines_up(y)).count()
+    } else {
+        (0..h).take_while(|&y| !lines_up(y)).count()
+    };
     Ok(Match {
         offset,
         head: head as u32,
         tail: tail as u32,
+        edge: edge.min(h / 8) as u32,
         fixed,
         textured,
         support,
@@ -375,6 +395,45 @@ fn strip_colours(image: &RgbaImage, axis: Axis) -> Vec<Rgba<u8>> {
             )
         })
         .collect()
+}
+
+/// Rows at one end of `image` (its end when `at_end`) where its outermost
+/// pixels across the axis leave the colour they keep along the rest of
+/// their length: a held window's rounded corners, showing the desktop.
+fn corner_rows(image: &RgbaImage, axis: Axis, at_end: bool) -> u32 {
+    let n = length(image, axis);
+    let cross = length(image, other(axis));
+    if n == 0 || cross < 2 {
+        return 0;
+    }
+    let sides = [0, cross - 1];
+    let mut modes = vec![];
+    for c in sides {
+        let mut counts: HashMap<[u8; 4], u32> = HashMap::new();
+        for p in 0..n {
+            *counts.entry(pixel(image, axis, p, c).0).or_default() += 1;
+        }
+        let Some((colour, count)) = counts.into_iter().max_by_key(|(_, count)| *count) else {
+            return 0;
+        };
+        // Only an edge that keeps one colour, like a window's outline.
+        if count * 4 < n * 3 {
+            return 0;
+        }
+        modes.push(colour);
+    }
+    let off = |p: u32| {
+        sides
+            .iter()
+            .zip(&modes)
+            .any(|(&c, mode)| pixel(image, axis, p, c).0 != *mode)
+    };
+    let rows = if at_end {
+        (0..n).rev().take_while(|&p| off(p)).count()
+    } else {
+        (0..n).take_while(|&p| off(p)).count()
+    };
+    (rows as u32).min(n / 8)
 }
 
 /// Copies `src`'s rows `from..to` along `axis` to `dst` at row `at`.
@@ -543,16 +602,28 @@ impl Stitcher {
     fn compose(&mut self, axis: Axis, next: &RgbaImage, m: &Match) -> bool {
         let n = i64::from(length(next, axis));
         let cross = length(next, other(axis));
-        let new_pos = self.pos + m.offset;
+        let old_pos = self.pos;
+        let new_pos = old_pos + m.offset;
         self.pos = new_pos;
         let lo = self.lo;
         let hi = lo + i64::from(length(&self.image, axis));
         let limit = i64::from(self.limit);
+        // Where the image ends with the reference frame, that frame's own
+        // edge is not the page: rewrite it from inside the new frame.
+        let edge = |at_end: bool| {
+            let corners = corner_rows(&self.last, axis, at_end);
+            i64::from(m.edge.max(corners))
+        };
 
         let added: (i64, i64) = if new_pos + n > hi {
             let tail = i64::from(m.tail);
-            let footer = i64::from(self.footer.unwrap_or(m.tail));
+            let mut footer = i64::from(self.footer.unwrap_or(m.tail));
+            if old_pos + n == hi {
+                let inside = hi - new_pos - i64::from(m.head);
+                footer = footer.max(edge(true).min(inside));
+            }
             let content_end = hi - footer;
+            self.first_span.1 = self.first_span.1.min(content_end);
             let new_len = (new_pos + n - lo).min(limit);
             if new_len <= hi - lo {
                 self.capped = true;
@@ -574,8 +645,13 @@ impl Stitcher {
             (content_end, end)
         } else if new_pos < lo {
             let head = i64::from(m.head);
-            let header = i64::from(self.header.unwrap_or(m.head));
+            let mut header = i64::from(self.header.unwrap_or(m.head));
+            if old_pos == lo {
+                let inside = new_pos + n - i64::from(m.tail) - lo;
+                header = header.max(edge(false).min(inside));
+            }
             let content_start = lo + header;
+            self.first_span.0 = self.first_span.0.max(content_start);
             let new_len = (hi - new_pos).min(limit);
             if new_len <= hi - lo {
                 self.capped = true;
@@ -919,5 +995,109 @@ pub(crate) mod tests {
         };
         let mut s = Stitcher::new(blinking(false));
         assert_eq!(s.push_with_hint(blinking(true), Some(40)), Push::Still);
+    }
+
+    const WALLPAPER: Rgba<u8> = Rgba([92, 37, 69, 255]);
+    const BACKGROUND: Rgba<u8> = Rgba([12, 13, 15, 255]);
+    /// Radius of a held window's rounded corners, in pixels.
+    const RADIUS: u32 = 8;
+    const HEADER: u32 = 12;
+    /// The page inside a held window: plain margins around a column.
+    fn column(v: u32, x: u32) -> Rgba<u8> {
+        if (24..456).contains(&x) {
+            page(v, x)
+        } else {
+            BACKGROUND
+        }
+    }
+    /// Mixes the translucent outline macOS draws around a window over `under`.
+    fn outlined(under: Rgba<u8>) -> Rgba<u8> {
+        let mix = |c: u8| ((u16::from(c) + 60) / 2) as u8;
+        Rgba([mix(under[0]), mix(under[1]), mix(under[2]), 255])
+    }
+    /// A browser window held as an area on macOS, its page scrolled by
+    /// `offset`: a fixed header with a 1 px rule, a translucent outline along
+    /// the window's edges and rounded bottom corners that show the wallpaper.
+    fn held(offset: u32) -> RgbaImage {
+        held_with(offset, false)
+    }
+    /// A held window, with a fixed sidebar beside the page when `side`.
+    fn held_with(offset: u32, side: bool) -> RgbaImage {
+        let (w, h) = (480, 160);
+        RgbaImage::from_fn(w, h, |x, y| {
+            let (cx, cy) = (x.min(w - 1 - x), h - 1 - y);
+            if cx < RADIUS && cy < RADIUS {
+                let (dx, dy) = (RADIUS - cx, RADIUS - cy);
+                if dx * dx + dy * dy > RADIUS * RADIUS {
+                    return WALLPAPER;
+                }
+            }
+            let under = if y + 1 == HEADER {
+                Rgba([31, 31, 34, 255])
+            } else if y < HEADER {
+                Rgba([43, 43, 43, 255])
+            } else if side && (24..104).contains(&x) {
+                sidebar(x, y)
+            } else {
+                column(y + offset, x)
+            };
+            if x == 0 || x == w - 1 || y == h - 1 {
+                outlined(under)
+            } else {
+                under
+            }
+        })
+    }
+
+    #[test]
+    fn a_held_windows_outline_does_not_show_at_the_seams() {
+        let mut s = Stitcher::new(held(0));
+        for step in 1..=4 {
+            assert_eq!(s.push_with_hint(held(step * 40), Some(40)), Push::Grew);
+        }
+        let height = s.image.height();
+        assert_eq!(height, 160 + 160);
+        // Below the header, every row is the page's own, down to the last
+        // frame's outline.
+        for y in HEADER..height - 1 {
+            for x in RADIUS..480 - RADIUS {
+                assert_eq!(*s.image.get_pixel(x, y), column(y, x), "row {y}, x {x}");
+            }
+        }
+    }
+    #[test]
+    fn a_held_windows_rounded_corners_show_only_at_the_end() {
+        let mut s = Stitcher::new(held(0));
+        for step in 1..=4 {
+            assert_eq!(s.push_with_hint(held(step * 40), Some(40)), Push::Grew);
+        }
+        let height = s.image.height();
+        for y in 0..height - RADIUS {
+            for x in 0..480 {
+                assert_ne!(*s.image.get_pixel(x, y), WALLPAPER, "row {y}, x {x}");
+            }
+        }
+    }
+    #[test]
+    fn a_fixed_sidebar_in_a_held_window_ends_above_its_corners() {
+        let mut s = Stitcher::new(held_with(0, true));
+        for step in 1..=4 {
+            assert_eq!(
+                s.push_with_hint(held_with(step * 40, true), Some(40)),
+                Push::Grew
+            );
+        }
+        // The first frame's sidebar shows down to its rounded corners; the
+        // rows rewritten from the next frame take the sidebar's colour.
+        for y in HEADER..160 - RADIUS {
+            assert_eq!(*s.image.get_pixel(31, y), sidebar(31, y), "row {y}");
+        }
+        for y in 160 - RADIUS..s.image.height() - 1 {
+            assert_eq!(
+                *s.image.get_pixel(31, y),
+                Rgba([240, 240, 245, 255]),
+                "row {y}"
+            );
+        }
     }
 }

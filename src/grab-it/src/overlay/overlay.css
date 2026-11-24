@@ -1270,7 +1270,19 @@
   border-color: var(--overlay-accent);
 }
 
-.scroll-guide-text,
+.scroll-guide-text {
+  display: grid;
+}
+
+.scroll-guide-text > p {
+  grid-area: 1 / 1;
+}
+
+.scroll-guide-spacer {
+  visibility: hidden;
+}
+
+.scroll-guide-text > p,
 .scroll-guide-warning {
   margin: 0;
 }

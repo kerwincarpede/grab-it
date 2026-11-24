@@ -15,6 +15,11 @@ interface ScrollGuideProps {
   top: number;
 }
 
+const AUTOMATIC =
+  "Grab-it moves the pointer to the middle of the area and scrolls for you. Leave the mouse and trackpad alone until it finishes. Moving it switches to scrolling by hand: keep scrolling, then choose Done.";
+const BY_HAND =
+  "Scroll the page yourself at a steady pace. Grab-it joins what it sees; choose Done on the bar when you reach the end.";
+
 const STEPS: { stage: ScrollStage | "start"; title: string }[] = [
   { stage: "choose", title: "Choose a window, or drag an area" },
   { stage: "adjust", title: "Drag the edges to the part that scrolls" },
@@ -48,11 +53,14 @@ export default function ScrollGuide({ stage, byHand, onByHand, accessibility, ed
           </li>
         ))}
       </ol>
-      <p className="scroll-guide-text" role="status">
-        {manual
-          ? "Scroll the page yourself at a steady pace. Grab-it joins what it sees; choose Done on the bar when you reach the end."
-          : "Grab-it moves the pointer to the middle of the area and scrolls for you. Leave the mouse and trackpad alone until it finishes. Moving it switches to scrolling by hand: keep scrolling, then choose Done."}
-      </p>
+      {/* Both explanations share one cell, so the panel keeps its height and
+          the choice below stays under the pointer when it changes. */}
+      <div className="scroll-guide-text">
+        <p role="status">{manual ? BY_HAND : AUTOMATIC}</p>
+        <p className="scroll-guide-spacer" aria-hidden="true">
+          {manual ? AUTOMATIC : BY_HAND}
+        </p>
+      </div>
       {blocked && (
         <p className="scroll-guide-warning">
           To let Grab-it scroll for you, allow it in Accessibility settings. Until then you scroll by hand.{" "}
