@@ -259,6 +259,12 @@ export const commands = {
 	 *  it and a selection on any monitor finishes with it.
 	 */
 	overlayChoose: (choice: Choice_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<null>("overlay_choose", { choice }, options),
+	/**
+	 *  This overlay now holds an area, or let it go. Tells every overlay
+	 *  whether the area held last is on another display, so only one shows
+	 *  Scroll's guide.
+	 */
+	overlayHold: (held: boolean, options?: InvokeOptions) => __TAURI_INVOKE<null>("overlay_hold", { held }, options),
 	overlayCancel: (options?: InvokeOptions) => __TAURI_INVOKE<void>("overlay_cancel", undefined, options),
 	/**
 	 *  The scrolling capture guide's docs link: closes the overlays, as Cancel
@@ -1529,6 +1535,11 @@ export type OverlayInfo_Deserialize = {
 	 *  Me. The guide starts on it.
 	 */
 	scrollByHand: boolean,
+	/**
+	 *  The area held last is on another display, so Scroll's guide shows
+	 *  there instead. Updated by `HOLD_EVENT`.
+	 */
+	heldElsewhere: boolean,
 };
 
 export type OverlayInfo_Serialize = {
@@ -1579,6 +1590,11 @@ export type OverlayInfo_Serialize = {
 	 *  Me. The guide starts on it.
 	 */
 	scrollByHand: boolean,
+	/**
+	 *  The area held last is on another display, so Scroll's guide shows
+	 *  there instead. Updated by `HOLD_EVENT`.
+	 */
+	heldElsewhere: boolean,
 };
 
 /**
@@ -2981,6 +2997,7 @@ export type MockCommandHandlers = {
     overlayReady: () => null | Promise<null>,
     overlayFinish: (args: { selection: Selection_Deserialize; choice: Choice_Deserialize | null }) => null | Promise<null>,
     overlayChoose: (args: { choice: Choice_Deserialize }) => null | Promise<null>,
+    overlayHold: (args: { held: boolean }) => null | Promise<null>,
     overlayCancel: () => void | Promise<void>,
     overlayScrollDocs: () => void | Promise<void>,
     editorInfo: () => EditorInfo_Serialize | Promise<EditorInfo_Serialize>,
@@ -3160,6 +3177,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "overlay_ready": return mockCommandHandler(mockHandlers.overlayReady, "overlay_ready", args);
             case "overlay_finish": return mockCommandHandler(mockHandlers.overlayFinish, "overlay_finish", args);
             case "overlay_choose": return mockCommandHandler(mockHandlers.overlayChoose, "overlay_choose", args);
+            case "overlay_hold": return mockCommandHandler(mockHandlers.overlayHold, "overlay_hold", args);
             case "overlay_cancel": return mockCommandHandler(mockHandlers.overlayCancel, "overlay_cancel", args);
             case "overlay_scroll_docs": return mockCommandHandler(mockHandlers.overlayScrollDocs, "overlay_scroll_docs", args);
             case "editor_info": return mockCommandHandler(mockHandlers.editorInfo, "editor_info", args);

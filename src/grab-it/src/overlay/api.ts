@@ -135,6 +135,26 @@ export function onOverlayChoice(handler: (choice: OverlayChoice) => void): Promi
   return listen<OverlayChoice>(CHOICE_EVENT, (event) => handler(event.payload));
 }
 
+/** Mirrors `HOLD_EVENT` in src-tauri/src/overlay.rs. */
+export const HOLD_EVENT = "overlay-hold";
+
+/**
+ * Tells the backend this overlay now holds an area, or let it go, so only
+ * the display holding the area shown last keeps Scroll's guide.
+ */
+export async function holdOverlay(held: boolean): Promise<void> {
+  await commands.overlayHold(held);
+}
+
+/**
+ * Calls `handler` with whether the area held last is on another display,
+ * each time an area is held or let go on any of them. Resolves to a
+ * function that stops listening.
+ */
+export function onOverlayHold(handler: (heldElsewhere: boolean) => void): Promise<() => void> {
+  return listen<boolean>(HOLD_EVENT, (event) => handler(event.payload));
+}
+
 export function cancelOverlay(): Promise<void> {
   return commands.overlayCancel();
 }

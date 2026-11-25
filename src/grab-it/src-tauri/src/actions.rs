@@ -168,7 +168,9 @@ fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool) {
     if !permissions::ensure_screen_capture(app) {
         return;
     }
-    if overlay::is_open(app) {
+    // A selection left behind that can no longer be seen or finished is
+    // let go first, or this start would be turned away with nothing shown.
+    if overlay::is_open(app) && !overlay::clear_stale(app) {
         // A region or window selection is already on screen.
         return;
     }

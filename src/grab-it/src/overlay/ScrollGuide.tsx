@@ -11,9 +11,11 @@ interface ScrollGuideProps {
   onByHand: (byHand: boolean) => void;
   /** Whether Grab-it may scroll for the user; null until known. */
   accessibility: boolean | null;
-  /** Under the toolbar, or above the bottom edge when the area is up there. */
+  /** Under the toolbar, or above the bottom edge (the default). */
   edge: "top" | "bottom";
+  /** How far down it sits against the top edge, and up against the bottom one, in CSS px. */
   top: number;
+  bottom?: number;
   /** Starts the capture of the held area: Start scrolling or Enter. */
   onStart: () => void;
   /** Closes Capture & record and opens the Scrolling capture docs page. */
@@ -68,6 +70,7 @@ export default function ScrollGuide({
   accessibility,
   edge,
   top,
+  bottom,
   onStart,
   onDocs,
 }: ScrollGuideProps) {
@@ -81,7 +84,7 @@ export default function ScrollGuide({
       className="scroll-guide"
       aria-label="Scrolling capture"
       data-edge={edge}
-      style={edge === "top" ? { top } : undefined}
+      style={edge === "top" ? { top } : bottom === undefined ? undefined : { bottom }}
       onMouseDown={(event) => event.stopPropagation()}
     >
       <header className="scroll-guide-head">
