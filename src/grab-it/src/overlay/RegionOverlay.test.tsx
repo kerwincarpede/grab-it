@@ -3,7 +3,7 @@ import { emit } from "@tauri-apps/api/event";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RegionOverlay from "./RegionOverlay";
-import { CHOICE_EVENT, START_EVENT, type OverlayInfo } from "./api";
+import { CHOICE_EVENT, HOLD_EVENT, START_EVENT, type OverlayInfo } from "./api";
 import type { Box } from "./geometry";
 import {
   DEFAULT_AI_PREFERENCES,
@@ -47,6 +47,7 @@ function overlayInfo(info: Partial<OverlayInfo> = {}): OverlayInfo {
     barCentre: null,
     monitorName: "",
     scrollByHand: false,
+    heldElsewhere: false,
     ...info,
   };
 }
@@ -105,6 +106,7 @@ function mockOverlay(
       record_bar_remember: () => null,
       overlay_finish: () => null,
       overlay_choose: () => null,
+      overlay_hold: () => null,
       overlay_cancel: () => undefined,
       overlay_scroll_docs: () => undefined,
       remember_scroll_by_hand: () => null,
@@ -2599,6 +2601,138 @@ describe("scrolling capture", () => {
     await waitFor(() => expect(calls).toContainEqual(expect.objectContaining({
       cmd: "overlay_finish", payload: expect.objectContaining({ choice: { intent: "scroll", mode: "region", delaySeconds: 0, scrollByHand: false } }),
     })));
+  });
+
+  /** Scroll's guide, or null where it is not shown. */
+  const guide = () => screen.queryByRole("complementary", { name: "Scrolling capture" });
+
+  it("shows the guide only on the display the pointer is on", async () => {
+    mockOverlay({ allInOne: true, choice: { intent: "scroll", mode: "region", delaySeconds: 0 }, pointerHere: false });
+    render(<RegionOverlay />);
+    const overlay = await ready();
+    expect(overlay).toHaveAttribute("data-intent", "scroll");
+    expect(guide()).not.toBeInTheDocument();
+    // The pointer comes over to this display, and leaves again.
+    fireEvent.mouseMove(overlay, { clientX: 500, clientY: 300 });
+    expect(guide()).toBeInTheDocument();
+    fireEvent.mouseLeave(overlay);
+    expect(guide()).not.toBeInTheDocument();
+    // It may come back over the toolbar.
+    fireEvent.mouseMove(screen.getByTestId("overlay-toolbar"), { clientX: 500, clientY: 20 });
+    expect(guide()).toBeInTheDocument();
+    // Only macOS moves the focus with the pointer: elsewhere an overlay
+    // takes it as it is shown, wherever the pointer is.
+    fireEvent.blur(window);
+    expect(guide()).toBeInTheDocument();
+    fireEvent.mouseLeave(overlay);
+    fireEvent.focus(window);
+    expect(guide()).not.toBeInTheDocument();
+  });
+
+  it("shows the guide where the focus arrives on macOS, which moves it with the pointer", async () => {
+    window.location.hash = "#/overlay?instant";
+    try {
+      mockOverlay({ allInOne: true, choice: { intent: "scroll", mode: "region", delaySeconds: 0 }, pointerHere: false });
+      render(<RegionOverlay />);
+      await ready();
+      expect(guide()).not.toBeInTheDocument();
+      fireEvent.focus(window);
+      expect(guide()).toBeInTheDocument();
+      // Another display's overlay took the focus as the pointer moved onto it.
+      fireEvent.blur(window);
+      expect(guide()).not.toBeInTheDocument();
+    } finally {
+      window.location.hash = "";
+    }
+  });
+
+  it("keeps the guide with the area held last, on whichever display it is", async () => {
+    // What the backend answers when this display asks after a hold anywhere.
+    let elsewhere = false;
+    const calls = mockOverlay(
+      { allInOne: true, choice: { intent: "scroll", mode: "region", delaySeconds: 0 } },
+      {},
+      KNOWN_CAMERAS,
+      { overlay_held_elsewhere: () => elsewhere },
+    );
+    const held = async (value: boolean) => {
+      elsewhere = value;
+      await emit(HOLD_EVENT);
+    };
+    render(<RegionOverlay />);
+    const overlay = await ready();
+    expect(guide()).toBeInTheDocument();
+    // An area was held on another display: its guide shows there instead.
+    await waitFor(async () => {
+      await held(true);
+      expect(guide()).not.toBeInTheDocument();
+    });
+    // Holding one here takes it back, and tells the other displays.
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(overlay, { clientX: 250, clientY: 250 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 250, clientY: 250 });
+    await waitFor(() => expect(calls).toContainEqual({ cmd: "overlay_hold", payload: { held: true } }));
+    await held(false);
+    await waitFor(() => expect(guide()).toBeInTheDocument());
+    // Another display holds an area after this one: a new area here takes the guide back.
+    await held(true);
+    await waitFor(() => expect(guide()).not.toBeInTheDocument());
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 600, clientY: 100 });
+    fireEvent.mouseMove(overlay, { clientX: 700, clientY: 250 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 700, clientY: 250 });
+    const holds = () => calls.filter(({ cmd }) => cmd === "overlay_hold").map(({ payload }) => payload);
+    await waitFor(() => expect(holds()).toEqual([{ held: true }, { held: true }]));
+    // A click inside it, or on a handle of an area held to a ratio, that
+    // moves nothing reports nothing new.
+    fireEvent.click(screen.getByRole("button", { name: "Aspect ratio" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "16:9" }));
+    await waitFor(() => expect(holds()).toHaveLength(3));
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 650, clientY: 200 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 650, clientY: 200 });
+    const handle = overlay.querySelector<HTMLElement>('[data-handle="se"]');
+    expect(handle).not.toBeNull();
+    fireEvent.mouseDown(handle as HTMLElement, { button: 0, clientX: 700, clientY: 250 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 700, clientY: 250 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(holds()).toHaveLength(3);
+    // Letting it go tells them too.
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 900, clientY: 100 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 900, clientY: 100 });
+    await waitFor(() => expect(calls).toContainEqual({ cmd: "overlay_hold", payload: { held: false } }));
+  });
+
+  it("starts with the area held elsewhere when the page opens late", async () => {
+    mockOverlay({ allInOne: true, choice: { intent: "scroll", mode: "region", delaySeconds: 0 }, heldElsewhere: true });
+    render(<RegionOverlay />);
+    const overlay = await ready();
+    fireEvent.mouseMove(overlay, { clientX: 500, clientY: 300 });
+    expect(guide()).not.toBeInTheDocument();
+  });
+
+  it("keeps the guide in place while the area is adjusted, and moves it once if the area ends up under it", async () => {
+    mockOverlay({ allInOne: true, choice: { intent: "scroll", mode: "region", delaySeconds: 0 } });
+    render(<RegionOverlay />);
+    const overlay = await ready();
+    expect(guide()).toHaveAttribute("data-edge", "bottom");
+    // An area clear of the guide leaves it where it is.
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 20, clientY: 120 });
+    fireEvent.mouseMove(overlay, { clientX: 200, clientY: 740 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 200, clientY: 740 });
+    expect(guide()).toHaveAttribute("data-edge", "bottom");
+    // A wide area low down would lie under it: it goes to the top, once.
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 600, clientY: 30 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 600, clientY: 30 });
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 520 });
+    fireEvent.mouseMove(overlay, { clientX: 900, clientY: 740 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 900, clientY: 740 });
+    expect(guide()).toHaveAttribute("data-edge", "top");
+    // Moving the area up under it: the guide stays put while it moves...
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 500, clientY: 600 });
+    fireEvent.mouseMove(overlay, { clientX: 500, clientY: 200 });
+    expect(guide()).toHaveAttribute("data-edge", "top");
+    // ...and settles once it is let go.
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 500, clientY: 200 });
+    expect(guide()).toHaveAttribute("data-edge", "bottom");
   });
 
   it("opens the docs page from the guide, which closes the overlay", async () => {

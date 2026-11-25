@@ -60,6 +60,10 @@ const START_EVENT: &str = "overlay-start";
 /// `CHOICE_EVENT` in src/overlay/api.ts.
 const CHOICE_EVENT: &str = "overlay-choice";
 
+/// Sent when an area is held or let go on any display; each overlay then
+/// asks [`overlay_held_elsewhere`]. Mirrors `HOLD_EVENT` in src/overlay/api.ts.
+const HOLD_EVENT: &str = "overlay-hold";
+
 /// Sent when the Windows overlays have been shown together.
 #[cfg(target_os = "windows")]
 const REVEALED_EVENT: &str = "overlay-revealed";
@@ -127,6 +131,12 @@ struct Session {
     /// focus back when it closes ([`give_back_focus`]).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     previous_app: Option<u32>,
+    /// When the overlays were put on screen, so one that can no longer be
+    /// seen is told apart from one still being shown ([`clear_stale`]).
+    opened: Instant,
+    /// The overlays holding an area, oldest first: Scroll's guide shows
+    /// only on the last one ([`overlay_hold`]).
+    holders: Vec<String>,
     /// Frozen monitors, by overlay window label.
     frames: HashMap<String, Frame>,
     /// Visible windows, front to back, in desktop coordinates.
@@ -152,6 +162,9 @@ enum Phase {
     Opening {
         id: u64,
         chooser: bool,
+        /// When the claim was made, so one whose capture never finished is
+        /// let go ([`clear_stale`]).
+        since: Instant,
     },
     Open(Session),
 }
@@ -340,14 +353,40 @@ pub fn begin(app: &AppHandle, chooser: bool) -> Option<u64> {
     app.state::<OverlayState>().lock().begin(chooser)
 }
 
+impl Session {
+    /// Whether the area held last is on another overlay than `label`.
+    fn held_elsewhere(&self, label: &str) -> bool {
+        self.holders.last().is_some_and(|holder| holder != label)
+    }
+
+    /// Records that overlay `label` now holds an area, or no longer does.
+    fn hold(&mut self, label: &str, held: bool) {
+        self.holders.retain(|holder| holder != label);
+        if held {
+            self.holders.push(label.to_owned());
+        }
+    }
+}
+
 impl Phase {
     fn begin(&mut self, chooser: bool) -> Option<u64> {
         if !matches!(self, Self::Idle) {
             return None;
         }
         let id = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
-        *self = Self::Opening { id, chooser };
+        *self = Self::Opening {
+            id,
+            chooser,
+            since: Instant::now(),
+        };
         Some(id)
+    }
+
+    /// Whether this is a claim still freezing the monitors at `now`, long
+    /// after any capture would have finished: the capture is stuck, and
+    /// the claim would turn every later start away.
+    fn stale_opening(&self, now: Instant) -> bool {
+        matches!(self, Self::Opening { since, .. } if now.saturating_duration_since(*since) > STALE_OPENING)
     }
 
     fn take_chooser(&mut self) -> Option<Phase> {
@@ -362,6 +401,53 @@ impl Phase {
     fn opening(&self, claim: u64) -> bool {
         matches!(self, Self::Opening { id, .. } if *id == claim)
     }
+}
+
+/// How long monitors may take to freeze before the claim is let go.
+const STALE_OPENING: Duration = Duration::from_secs(10);
+
+/// Whether an open session `age` old, whose overlays are `visible`, can no
+/// longer be seen or finished. Overlays still being shown are given until
+/// their pages had time to respond.
+fn abandoned(age: Duration, visible: &[bool]) -> bool {
+    age > READY_TIMEOUT + Duration::from_secs(1) && !visible.contains(&true)
+}
+
+/// Lets go of a selection nobody can see or finish, so a new capture can
+/// start: a claim whose monitors never froze, or a session whose overlays
+/// are all gone or hidden. Without this every later start, from the tray,
+/// the hub or a shortcut, was turned away with nothing on screen until
+/// Grab-it restarted. Returns true when it let one go.
+pub fn clear_stale(app: &AppHandle) -> bool {
+    let Some(state) = app.try_state::<OverlayState>() else {
+        return false;
+    };
+    let (id, age, labels) = {
+        let mut phase = state.lock();
+        if phase.stale_opening(Instant::now()) {
+            eprintln!("Grab-it: let go of a capture whose screens never froze");
+            *phase = Phase::Idle;
+            return true;
+        }
+        let Phase::Open(session) = &*phase else {
+            return false;
+        };
+        let labels: Vec<String> = session.frames.keys().cloned().collect();
+        (session.id, session.opened.elapsed(), labels)
+    };
+    // Read without the lock: asking a window blocks on the main thread.
+    let visible: Vec<bool> = labels
+        .iter()
+        .map(|label| {
+            app.get_webview_window(label)
+                .is_some_and(|window| window.is_visible().unwrap_or(false))
+        })
+        .collect();
+    if !abandoned(age, &visible) {
+        return false;
+    }
+    eprintln!("Grab-it: closed a capture whose overlays were no longer on screen");
+    take_session(app, |s| s.id == id, |_| false).is_some()
 }
 
 /// Dismisses only the chooser claimed by an earlier invocation.
@@ -430,6 +516,8 @@ pub fn open(
         mode,
         intent,
         all_in_one,
+        opened: Instant::now(),
+        holders: Vec::new(),
         // A choice made before the overlay opens, such as Scrolling capture's.
         choice: choice.filter(|_| all_in_one),
         foreground: desktop.foreground,
@@ -1193,6 +1281,9 @@ pub struct OverlayInfo {
     /// Scrolling capture: the Who scrolls? card the user picked last was
     /// Me. The guide starts on it.
     pub scroll_by_hand: bool,
+    /// The area held last is on another display, so Scroll's guide shows
+    /// there instead. Asked again on each `HOLD_EVENT`.
+    pub held_elsewhere: bool,
 }
 
 /// The last region as a starting selection for an overlay on `monitor`
@@ -1464,6 +1555,7 @@ pub fn overlay_info(
         bar_centre: crate::record_bar::bar_centre_on(&app, &frame.monitor),
         monitor_name: frame.monitor.name.clone(),
         scroll_by_hand,
+        held_elsewhere: session.held_elsewhere(window.label()),
     })
 }
 
@@ -1780,6 +1872,44 @@ pub fn overlay_choose(
         }
     }
     Ok(())
+}
+
+/// This overlay now holds an area, or let it go. Tells every overlay, which
+/// then asks [`overlay_held_elsewhere`], so only one shows Scroll's guide.
+#[tauri::command]
+#[specta::specta]
+pub fn overlay_hold(
+    window: WebviewWindow,
+    state: State<'_, OverlayState>,
+    held: bool,
+) -> Result<(), String> {
+    {
+        let mut guard = state.lock();
+        let Phase::Open(session) = &mut *guard else {
+            return Err("no capture in progress".into());
+        };
+        if !session.frames.contains_key(window.label()) {
+            return Err("this window is not part of the current capture".into());
+        }
+        session.hold(window.label(), held);
+    }
+    // Sent without the lock held. Every page hears an event whatever its
+    // target, so each asks for its own answer.
+    if let Err(err) = window.emit(HOLD_EVENT, ()) {
+        eprintln!("Grab-it: could not share the held area: {err}");
+    }
+    Ok(())
+}
+
+/// Whether the area held last is on another display than this overlay's,
+/// so its Scroll guide stays hidden.
+#[tauri::command]
+#[specta::specta]
+pub fn overlay_held_elsewhere(window: WebviewWindow, state: State<'_, OverlayState>) -> bool {
+    match &*state.lock() {
+        Phase::Open(session) => session.held_elsewhere(window.label()),
+        _ => false,
+    }
 }
 
 #[tauri::command]
@@ -2281,6 +2411,61 @@ mod tests {
     }
 
     #[test]
+    fn the_area_held_last_decides_where_the_guide_shows() {
+        let mut session = Session {
+            id: 1,
+            mode: CaptureMode::Region,
+            intent: Intent::Scroll,
+            all_in_one: true,
+            opened: Instant::now(),
+            holders: Vec::new(),
+            choice: None,
+            foreground: Foreground::default(),
+            previous_app: None,
+            frames: HashMap::new(),
+            windows: Vec::new(),
+            pointer: None,
+            #[cfg(target_os = "windows")]
+            freeze: None,
+        };
+        assert!(!session.held_elsewhere("a"));
+        session.hold("a", true);
+        assert!(!session.held_elsewhere("a"));
+        assert!(session.held_elsewhere("b"));
+        session.hold("b", true);
+        assert!(session.held_elsewhere("a"));
+        assert!(!session.held_elsewhere("b"));
+        // Letting go hands the guide back to the area still held.
+        session.hold("b", false);
+        assert!(!session.held_elsewhere("a"));
+        assert!(session.held_elsewhere("b"));
+        session.hold("a", false);
+        assert!(!session.held_elsewhere("b"));
+    }
+
+    #[test]
+    fn a_claim_whose_screens_never_froze_goes_stale() {
+        let mut phase = Phase::Idle;
+        assert!(!phase.stale_opening(Instant::now()));
+        phase.begin(false).unwrap();
+        let now = Instant::now();
+        assert!(!phase.stale_opening(now));
+        assert!(!phase.stale_opening(now + STALE_OPENING / 2));
+        assert!(phase.stale_opening(now + STALE_OPENING + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn only_a_session_with_no_overlay_on_screen_is_abandoned() {
+        let late = READY_TIMEOUT + Duration::from_secs(2);
+        // Still being shown: its windows may not be visible yet.
+        assert!(!abandoned(Duration::from_millis(200), &[false, false]));
+        assert!(!abandoned(late, &[true, false]));
+        assert!(abandoned(late, &[false, false]));
+        // Every window gone.
+        assert!(abandoned(late, &[]));
+    }
+
+    #[test]
     fn only_the_chooser_can_be_dismissed_by_its_shortcut() {
         let mut phase = Phase::Idle;
         let direct = phase.begin(false).unwrap();
@@ -2293,6 +2478,8 @@ mod tests {
                 mode: CaptureMode::Region,
                 intent: Intent::Record,
                 all_in_one: chooser,
+                opened: Instant::now(),
+                holders: Vec::new(),
                 choice: None,
                 foreground: Foreground::default(),
                 previous_app: None,
@@ -2672,6 +2859,7 @@ mod tests {
             bar_centre: None,
             monitor_name: "eDP-1".into(),
             scroll_by_hand: false,
+            held_elsewhere: false,
         };
         let value = serde_json::to_value(&info).unwrap();
         assert_eq!(value["allInOne"], true);
@@ -2824,6 +3012,7 @@ mod tests {
             bar_centre: Some(crate::record_bar::CssPoint { x: 960.0, y: 42.0 }),
             monitor_name: "DELL U2720Q".into(),
             scroll_by_hand: true,
+            held_elsewhere: true,
         };
         let value = serde_json::to_value(&info).unwrap();
         assert_eq!(
@@ -2843,6 +3032,7 @@ mod tests {
         );
         assert_eq!(value["monitorName"], "DELL U2720Q");
         assert_eq!(value["scrollByHand"], true);
+        assert_eq!(value["heldElsewhere"], true);
         let unknown = OverlayInfo {
             bar_centre: None,
             ..none

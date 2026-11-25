@@ -21,7 +21,7 @@ Each one opens Capture & record… with **Scroll** already picked.
 
 ## Follow the guide
 
-A panel headed **Scrolling capture** walks you through the setup. It shows the step you're on, ticks the steps you've done, and reminds you that `Esc` cancels.
+A panel headed **Scrolling capture** walks you through the setup. It shows the step you're on, ticks the steps you've done, and reminds you that `Esc` cancels. With more than one display, it shows on the display the pointer is on, or on the one where you picked an area. It sits at the bottom of the screen and stays there while you adjust the area. It moves to the top only if the area you pick lies under it.
 
 1. **Click a window or drag over an area.** Pick the part of the screen that scrolls.
 2. **Trim the edges** (optional). Drag the edges in if you want less. Fixed headers and sidebars are fine: they appear once, at the top.

@@ -444,6 +444,8 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             overlay::overlay_ready,
             overlay::overlay_finish,
             overlay::overlay_choose,
+            overlay::overlay_hold,
+            overlay::overlay_held_elsewhere,
             overlay::overlay_cancel,
             overlay::overlay_scroll_docs,
             editor::editor_info,

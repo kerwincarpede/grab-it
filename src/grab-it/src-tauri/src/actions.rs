@@ -150,6 +150,12 @@ fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool) {
     if action.stops_recording() && record::stop(app) {
         return;
     }
+    // A selection left behind that can no longer be seen or finished is
+    // let go first, or this start would be turned away (or spent on
+    // dismissing it) with nothing shown.
+    if overlay::is_open(app) {
+        overlay::clear_stale(app);
+    }
     if toggle_chooser && overlay::cancel_chooser(app) {
         return;
     }
