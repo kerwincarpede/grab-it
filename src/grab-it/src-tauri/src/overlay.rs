@@ -60,9 +60,8 @@ const START_EVENT: &str = "overlay-start";
 /// `CHOICE_EVENT` in src/overlay/api.ts.
 const CHOICE_EVENT: &str = "overlay-choice";
 
-/// Sent to each overlay when an area is held or let go on any display,
-/// with whether the newest held area is on another display. Mirrors
-/// `HOLD_EVENT` in src/overlay/api.ts.
+/// Sent when an area is held or let go on any display; each overlay then
+/// asks [`overlay_held_elsewhere`]. Mirrors `HOLD_EVENT` in src/overlay/api.ts.
 const HOLD_EVENT: &str = "overlay-hold";
 
 /// Sent when the Windows overlays have been shown together.
@@ -1283,7 +1282,7 @@ pub struct OverlayInfo {
     /// Me. The guide starts on it.
     pub scroll_by_hand: bool,
     /// The area held last is on another display, so Scroll's guide shows
-    /// there instead. Updated by `HOLD_EVENT`.
+    /// there instead. Asked again on each `HOLD_EVENT`.
     pub held_elsewhere: bool,
 }
 
@@ -1875,9 +1874,8 @@ pub fn overlay_choose(
     Ok(())
 }
 
-/// This overlay now holds an area, or let it go. Tells every overlay
-/// whether the area held last is on another display, so only one shows
-/// Scroll's guide.
+/// This overlay now holds an area, or let it go. Tells every overlay, which
+/// then asks [`overlay_held_elsewhere`], so only one shows Scroll's guide.
 #[tauri::command]
 #[specta::specta]
 pub fn overlay_hold(
@@ -1885,7 +1883,7 @@ pub fn overlay_hold(
     state: State<'_, OverlayState>,
     held: bool,
 ) -> Result<(), String> {
-    let updates: Vec<(String, bool)> = {
+    {
         let mut guard = state.lock();
         let Phase::Open(session) = &mut *guard else {
             return Err("no capture in progress".into());
@@ -1894,19 +1892,24 @@ pub fn overlay_hold(
             return Err("this window is not part of the current capture".into());
         }
         session.hold(window.label(), held);
-        session
-            .frames
-            .keys()
-            .map(|label| (label.clone(), session.held_elsewhere(label)))
-            .collect()
-    };
-    // Sent without the lock held.
-    for (label, elsewhere) in updates {
-        if let Err(err) = window.emit_to(label.as_str(), HOLD_EVENT, elsewhere) {
-            eprintln!("Grab-it: could not share the held area: {err}");
-        }
+    }
+    // Sent without the lock held. Every page hears an event whatever its
+    // target, so each asks for its own answer.
+    if let Err(err) = window.emit(HOLD_EVENT, ()) {
+        eprintln!("Grab-it: could not share the held area: {err}");
     }
     Ok(())
+}
+
+/// Whether the area held last is on another display than this overlay's,
+/// so its Scroll guide stays hidden.
+#[tauri::command]
+#[specta::specta]
+pub fn overlay_held_elsewhere(window: WebviewWindow, state: State<'_, OverlayState>) -> bool {
+    match &*state.lock() {
+        Phase::Open(session) => session.held_elsewhere(window.label()),
+        _ => false,
+    }
 }
 
 #[tauri::command]

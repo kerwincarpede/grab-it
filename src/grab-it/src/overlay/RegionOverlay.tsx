@@ -24,6 +24,7 @@ import {
   onOverlayHold,
   onOverlayStart,
   openScrollDocs,
+  overlayHeldElsewhere,
   overlayImage,
   overlayInfo,
   overlayReady,
@@ -121,6 +122,8 @@ const SETUP_EDGE = 40;
 /** Scroll's guide's height until it has been measured, and its widest, in CSS px. */
 const SCROLL_GUIDE_HEIGHT = 360;
 const SCROLL_GUIDE_WIDTH = 440;
+/** Its padding and border across, outside that width. */
+const SCROLL_GUIDE_EDGES = 34;
 /** Scroll's guide's gap above the bottom edge (`.scroll-guide[data-edge="bottom"]`) and below the toolbar. */
 const SCROLL_GUIDE_BOTTOM = 24;
 const SCROLL_GUIDE_TOP_GAP = 8;
@@ -380,8 +383,8 @@ function RegionOverlay() {
   const [pointerOn, setPointerOn] = useState<boolean | null>(null);
   // The area held last is on another display, which shows the guide.
   const [heldElsewhere, setHeldElsewhere] = useState(false);
-  // What this overlay last told the backend it holds.
-  const toldHeld = useRef(false);
+  // The area this overlay last told the backend it holds, or null.
+  const toldHeld = useRef<string | null>(null);
   const toolbar = useRef<HTMLDivElement>(null);
   // Each mode's global shortcut, for the toolbar's tooltips.
   // As the tray, hub and Library show them: only those registered, or the desktop's own on Wayland.
@@ -558,6 +561,10 @@ function RegionOverlay() {
       if (event.key === "Shift") setSquare(false);
       else if (event.code === "Space" || event.key === " ") setMoving(false);
     }
+    // On macOS the focus follows the pointer from display to display
+    // (`follow_pointer`), so it arrives with the pointer even before it
+    // moves. Elsewhere each overlay takes the focus as it is shown.
+    const focusFollowsPointer = isInstantOverlay();
     // A key released while another window has focus never reports its keyup.
     // Another display's overlay takes the focus as the pointer moves onto it,
     // so the crosshair and loupe go until the pointer comes back.
@@ -566,16 +573,21 @@ function RegionOverlay() {
       setMoving(false);
       setGrab(null);
       setPointer(null);
-      setPointerOn(false);
+      if (focusFollowsPointer) setPointerOn(false);
       trail.current = EMPTY_TRAIL;
+    }
+    function onFocus() {
+      if (focusFollowsPointer) setPointerOn(true);
     }
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
     };
   }, []);
 
@@ -672,16 +684,25 @@ function RegionOverlay() {
             : picked
           : null;
 
-  // Tells the other displays when this one holds an area or lets it go.
-  const holds = held !== null;
-  const loaded = info !== null;
+  // Tells the other displays when this one holds a new area or lets it go,
+  // once a move or resize is let go.
+  // Its edges in image pixels, as `capture::css_to_image_rect` captures them.
+  const heldKey = held
+    ? [
+        Math.floor(held.x * scale),
+        Math.floor(held.y * scale),
+        Math.ceil((held.x + held.width) * scale),
+        Math.ceil((held.y + held.height) * scale),
+      ].join(",")
+    : null;
+  const reportsHold = allInOne && grab === null;
   useEffect(() => {
-    if (!loaded || holds === toldHeld.current) return;
-    toldHeld.current = holds;
-    holdOverlay(holds).catch(() => {
+    if (!reportsHold || heldKey === toldHeld.current) return;
+    toldHeld.current = heldKey;
+    holdOverlay(heldKey !== null).catch(() => {
       // Then the other displays keep their own guide.
     });
-  }, [holds, loaded]);
+  }, [heldKey, reportsHold]);
 
   const selection = drag && canDrag ? dragBox(drag, square, view, ratioValue) : null;
   const dragging = selection !== null && isDrag(selection);
@@ -869,7 +890,15 @@ function RegionOverlay() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    onOverlayHold((elsewhere) => setHeldElsewhere(elsewhere))
+    onOverlayHold(() => {
+      overlayHeldElsewhere()
+        .then((elsewhere) => {
+          if (!cancelled) setHeldElsewhere(elsewhere);
+        })
+        .catch(() => {
+          // Then this display keeps what it knew.
+        });
+    })
       .then((stop) => {
         if (cancelled) stop();
         else unlisten = stop;
@@ -959,6 +988,8 @@ function RegionOverlay() {
   /** The held selection as `grab` leaves it with the pointer at `point`. */
   function grabbed(current: Grab, point: Point, shift: boolean): Box {
     const delta = { x: point.x - current.from.x, y: point.y - current.from.y };
+    // A click that moves nothing leaves the area as it was.
+    if (delta.x === 0 && delta.y === 0) return current.box;
     if (current.handle === "move") {
       // Moved by whole image pixels, so a box on the pixel grid (a typed
       // size, the last region) stays on it and keeps its exact size at any
@@ -974,6 +1005,7 @@ function RegionOverlay() {
   }
 
   function onMouseMove(event: MouseEvent) {
+    setPointerOn(true);
     // Over a toolbar the pointer stands for where it last rested, so the
     // main button acts on the window or pixel pointed at, not on what lies
     // under the toolbar or what the pointer crossed on its way there.
@@ -993,7 +1025,6 @@ function RegionOverlay() {
         setDrag(advanceDrag(drag, pointer ?? point, point, options));
       }
       setPointer(point);
-      setPointerOn(true);
       // The event knows best: Shift may have changed while we were not focused.
       setSquare(event.shiftKey);
     };
@@ -1135,7 +1166,9 @@ function RegionOverlay() {
   const guideTop = top + (allInOne && toolbarEdge === "top" ? toolbarRoom : 0);
   const guideBottom = SCROLL_GUIDE_BOTTOM + (allInOne && toolbarEdge === "bottom" ? toolbarRoom : 0);
   const guideHeight = guideBand ? guideBand.bottom - guideBand.top : SCROLL_GUIDE_HEIGHT;
-  const guideWidth = Math.min(SCROLL_GUIDE_WIDTH, view.width - 32);
+  const guideWidth = guideBand
+    ? guideBand.right - guideBand.left
+    : Math.min(SCROLL_GUIDE_WIDTH, view.width - 32) + SCROLL_GUIDE_EDGES;
   const guideLeft = (view.width - guideWidth) / 2;
   const guideBands: Record<GuideEdge, Blocker> = {
     top: {

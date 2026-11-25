@@ -260,11 +260,15 @@ export const commands = {
 	 */
 	overlayChoose: (choice: Choice_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<null>("overlay_choose", { choice }, options),
 	/**
-	 *  This overlay now holds an area, or let it go. Tells every overlay
-	 *  whether the area held last is on another display, so only one shows
-	 *  Scroll's guide.
+	 *  This overlay now holds an area, or let it go. Tells every overlay, which
+	 *  then asks [`overlay_held_elsewhere`], so only one shows Scroll's guide.
 	 */
 	overlayHold: (held: boolean, options?: InvokeOptions) => __TAURI_INVOKE<null>("overlay_hold", { held }, options),
+	/**
+	 *  Whether the area held last is on another display than this overlay's,
+	 *  so its Scroll guide stays hidden.
+	 */
+	overlayHeldElsewhere: (options?: InvokeOptions) => __TAURI_INVOKE<boolean>("overlay_held_elsewhere", undefined, options),
 	overlayCancel: (options?: InvokeOptions) => __TAURI_INVOKE<void>("overlay_cancel", undefined, options),
 	/**
 	 *  The scrolling capture guide's docs link: closes the overlays, as Cancel
@@ -1537,7 +1541,7 @@ export type OverlayInfo_Deserialize = {
 	scrollByHand: boolean,
 	/**
 	 *  The area held last is on another display, so Scroll's guide shows
-	 *  there instead. Updated by `HOLD_EVENT`.
+	 *  there instead. Asked again on each `HOLD_EVENT`.
 	 */
 	heldElsewhere: boolean,
 };
@@ -1592,7 +1596,7 @@ export type OverlayInfo_Serialize = {
 	scrollByHand: boolean,
 	/**
 	 *  The area held last is on another display, so Scroll's guide shows
-	 *  there instead. Updated by `HOLD_EVENT`.
+	 *  there instead. Asked again on each `HOLD_EVENT`.
 	 */
 	heldElsewhere: boolean,
 };
@@ -2998,6 +3002,7 @@ export type MockCommandHandlers = {
     overlayFinish: (args: { selection: Selection_Deserialize; choice: Choice_Deserialize | null }) => null | Promise<null>,
     overlayChoose: (args: { choice: Choice_Deserialize }) => null | Promise<null>,
     overlayHold: (args: { held: boolean }) => null | Promise<null>,
+    overlayHeldElsewhere: () => boolean | Promise<boolean>,
     overlayCancel: () => void | Promise<void>,
     overlayScrollDocs: () => void | Promise<void>,
     editorInfo: () => EditorInfo_Serialize | Promise<EditorInfo_Serialize>,
@@ -3178,6 +3183,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "overlay_finish": return mockCommandHandler(mockHandlers.overlayFinish, "overlay_finish", args);
             case "overlay_choose": return mockCommandHandler(mockHandlers.overlayChoose, "overlay_choose", args);
             case "overlay_hold": return mockCommandHandler(mockHandlers.overlayHold, "overlay_hold", args);
+            case "overlay_held_elsewhere": return mockCommandHandler(mockHandlers.overlayHeldElsewhere, "overlay_held_elsewhere", args);
             case "overlay_cancel": return mockCommandHandler(mockHandlers.overlayCancel, "overlay_cancel", args);
             case "overlay_scroll_docs": return mockCommandHandler(mockHandlers.overlayScrollDocs, "overlay_scroll_docs", args);
             case "editor_info": return mockCommandHandler(mockHandlers.editorInfo, "editor_info", args);

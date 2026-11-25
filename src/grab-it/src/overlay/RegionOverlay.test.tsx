@@ -2617,20 +2617,54 @@ describe("scrolling capture", () => {
     expect(guide()).toBeInTheDocument();
     fireEvent.mouseLeave(overlay);
     expect(guide()).not.toBeInTheDocument();
-    fireEvent.mouseMove(overlay, { clientX: 500, clientY: 300 });
-    // Another display's overlay took the focus as the pointer moved onto it.
+    // It may come back over the toolbar.
+    fireEvent.mouseMove(screen.getByTestId("overlay-toolbar"), { clientX: 500, clientY: 20 });
+    expect(guide()).toBeInTheDocument();
+    // Only macOS moves the focus with the pointer: elsewhere an overlay
+    // takes it as it is shown, wherever the pointer is.
     fireEvent.blur(window);
+    expect(guide()).toBeInTheDocument();
+    fireEvent.mouseLeave(overlay);
+    fireEvent.focus(window);
     expect(guide()).not.toBeInTheDocument();
   });
 
+  it("shows the guide where the focus arrives on macOS, which moves it with the pointer", async () => {
+    window.location.hash = "#/overlay?instant";
+    try {
+      mockOverlay({ allInOne: true, choice: { intent: "scroll", mode: "region", delaySeconds: 0 }, pointerHere: false });
+      render(<RegionOverlay />);
+      await ready();
+      expect(guide()).not.toBeInTheDocument();
+      fireEvent.focus(window);
+      expect(guide()).toBeInTheDocument();
+      // Another display's overlay took the focus as the pointer moved onto it.
+      fireEvent.blur(window);
+      expect(guide()).not.toBeInTheDocument();
+    } finally {
+      window.location.hash = "";
+    }
+  });
+
   it("keeps the guide with the area held last, on whichever display it is", async () => {
-    const calls = mockOverlay({ allInOne: true, choice: { intent: "scroll", mode: "region", delaySeconds: 0 } });
+    // What the backend answers when this display asks after a hold anywhere.
+    let elsewhere = false;
+    const calls = mockOverlay(
+      { allInOne: true, choice: { intent: "scroll", mode: "region", delaySeconds: 0 } },
+      {},
+      KNOWN_CAMERAS,
+      { overlay_held_elsewhere: () => elsewhere },
+    );
+    const held = async (value: boolean) => {
+      elsewhere = value;
+      await emit(HOLD_EVENT);
+    };
     render(<RegionOverlay />);
     const overlay = await ready();
     expect(guide()).toBeInTheDocument();
     // An area was held on another display: its guide shows there instead.
     await waitFor(async () => {
-      await emit(HOLD_EVENT, true);
+      await held(true);
       expect(guide()).not.toBeInTheDocument();
     });
     // Holding one here takes it back, and tells the other displays.
@@ -2638,8 +2672,29 @@ describe("scrolling capture", () => {
     fireEvent.mouseMove(overlay, { clientX: 250, clientY: 250 });
     fireEvent.mouseUp(overlay, { button: 0, clientX: 250, clientY: 250 });
     await waitFor(() => expect(calls).toContainEqual({ cmd: "overlay_hold", payload: { held: true } }));
-    await emit(HOLD_EVENT, false);
+    await held(false);
     await waitFor(() => expect(guide()).toBeInTheDocument());
+    // Another display holds an area after this one: a new area here takes the guide back.
+    await held(true);
+    await waitFor(() => expect(guide()).not.toBeInTheDocument());
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 600, clientY: 100 });
+    fireEvent.mouseMove(overlay, { clientX: 700, clientY: 250 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 700, clientY: 250 });
+    const holds = () => calls.filter(({ cmd }) => cmd === "overlay_hold").map(({ payload }) => payload);
+    await waitFor(() => expect(holds()).toEqual([{ held: true }, { held: true }]));
+    // A click inside it, or on a handle of an area held to a ratio, that
+    // moves nothing reports nothing new.
+    fireEvent.click(screen.getByRole("button", { name: "Aspect ratio" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "16:9" }));
+    await waitFor(() => expect(holds()).toHaveLength(3));
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 650, clientY: 200 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 650, clientY: 200 });
+    const handle = overlay.querySelector<HTMLElement>('[data-handle="se"]');
+    expect(handle).not.toBeNull();
+    fireEvent.mouseDown(handle as HTMLElement, { button: 0, clientX: 700, clientY: 250 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 700, clientY: 250 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(holds()).toHaveLength(3);
     // Letting it go tells them too.
     fireEvent.mouseDown(overlay, { button: 0, clientX: 900, clientY: 100 });
     fireEvent.mouseUp(overlay, { button: 0, clientX: 900, clientY: 100 });

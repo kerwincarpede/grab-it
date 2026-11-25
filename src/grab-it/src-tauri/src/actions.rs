@@ -150,6 +150,12 @@ fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool) {
     if action.stops_recording() && record::stop(app) {
         return;
     }
+    // A selection left behind that can no longer be seen or finished is
+    // let go first, or this start would be turned away (or spent on
+    // dismissing it) with nothing shown.
+    if overlay::is_open(app) {
+        overlay::clear_stale(app);
+    }
     if toggle_chooser && overlay::cancel_chooser(app) {
         return;
     }
@@ -168,9 +174,7 @@ fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool) {
     if !permissions::ensure_screen_capture(app) {
         return;
     }
-    // A selection left behind that can no longer be seen or finished is
-    // let go first, or this start would be turned away with nothing shown.
-    if overlay::is_open(app) && !overlay::clear_stale(app) {
+    if overlay::is_open(app) {
         // A region or window selection is already on screen.
         return;
     }

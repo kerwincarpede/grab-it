@@ -147,12 +147,16 @@ export async function holdOverlay(held: boolean): Promise<void> {
 }
 
 /**
- * Calls `handler` with whether the area held last is on another display,
- * each time an area is held or let go on any of them. Resolves to a
- * function that stops listening.
+ * Calls `handler` each time an area is held or let go on any display.
+ * Resolves to a function that stops listening.
  */
-export function onOverlayHold(handler: (heldElsewhere: boolean) => void): Promise<() => void> {
-  return listen<boolean>(HOLD_EVENT, (event) => handler(event.payload));
+export function onOverlayHold(handler: () => void): Promise<() => void> {
+  return listen(HOLD_EVENT, () => handler());
+}
+
+/** Whether the area held last is on another display than this overlay's. */
+export function overlayHeldElsewhere(): Promise<boolean> {
+  return commands.overlayHeldElsewhere();
 }
 
 export function cancelOverlay(): Promise<void> {
