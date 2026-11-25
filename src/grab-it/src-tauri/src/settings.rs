@@ -1006,7 +1006,7 @@ impl Settings {
             copy_sound: true,
             copy_sound_volume: DEFAULT_COPY_SOUND_VOLUME,
             editor: EditorPreferences::default(),
-            show_in_dock: true,
+            show_in_dock: false,
             appearance: Appearance::default(),
             recording: RecordingSettings::default(),
             retention: Retention::default(),
@@ -1924,7 +1924,7 @@ mod tests {
                 color: Some("#0090ff".into()),
                 ..EditorPreferences::default()
             },
-            show_in_dock: false,
+            show_in_dock: true,
             appearance: Appearance::default(),
             recording: RecordingSettings {
                 format: RecordingFormat::Gif,
@@ -1965,9 +1965,9 @@ mod tests {
     fn older_settings_have_no_export_folder() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(SETTINGS_FILE);
-        fs::write(&path, r#"{"showInDock": false}"#).unwrap();
+        fs::write(&path, r#"{"showInDock": true}"#).unwrap();
         let settings = load(&path, defaults(&dir)).unwrap();
-        assert!(!settings.show_in_dock);
+        assert!(settings.show_in_dock);
         assert!(settings.last_export_folder.is_none());
         save(&path, &settings).unwrap();
         assert!(
@@ -2028,33 +2028,45 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["updateChannel"], "edge");
         // A file from before the setting existed stays on Stable.
-        fs::write(&path, r#"{"showInDock": false}"#).unwrap();
+        fs::write(&path, r#"{"showInDock": true}"#).unwrap();
         let loaded = load(&path, defaults(&dir)).unwrap();
         assert_eq!(loaded.update_channel, UpdateChannel::Stable);
-        assert!(!loaded.show_in_dock);
+        assert!(loaded.show_in_dock);
         // A channel this build does not know is read as Stable, and the
         // rest of the file still loads.
-        fs::write(
-            &path,
-            r#"{"showInDock": false, "updateChannel": "nightly"}"#,
-        )
-        .unwrap();
+        fs::write(&path, r#"{"showInDock": true, "updateChannel": "nightly"}"#).unwrap();
         let loaded = load(&path, defaults(&dir)).unwrap();
         assert_eq!(loaded.update_channel, UpdateChannel::Stable);
-        assert!(!loaded.show_in_dock);
+        assert!(loaded.show_in_dock);
     }
 
     #[test]
-    fn dock_icon_is_on_by_default_and_remembered() {
+    fn dock_icon_is_off_by_default_and_remembered() {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
-        assert!(defaults(&dir).show_in_dock);
-        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
-        assert!(!store.set_show_in_dock(false).unwrap().show_in_dock);
+        assert!(!defaults(&dir).show_in_dock);
         assert!(!load(&path, defaults(&dir)).unwrap().show_in_dock);
+        let mut store = SettingsStore::open(path.clone(), defaults(&dir));
+        assert!(store.set_show_in_dock(true).unwrap().show_in_dock);
+        assert!(load(&path, defaults(&dir)).unwrap().show_in_dock);
         let value: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(value["showInDock"], false);
+        assert_eq!(value["showInDock"], true);
+        assert!(!store.set_show_in_dock(false).unwrap().show_in_dock);
+        assert!(!load(&path, defaults(&dir)).unwrap().show_in_dock);
+    }
+
+    #[test]
+    fn an_existing_install_keeps_its_dock_icon() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Every settings file written since the switch shipped stores it.
+        fs::write(&path, r#"{"showInDock": true}"#).unwrap();
+        assert!(load(&path, defaults(&dir)).unwrap().show_in_dock);
+        // A file without the key gets the new default.
+        fs::write(&path, r#"{"copySound": true}"#).unwrap();
+        assert!(!load(&path, defaults(&dir)).unwrap().show_in_dock);
     }
 
     #[test]
@@ -2239,7 +2251,7 @@ mod tests {
         let path = settings_path(&dir);
         // A file from before recording settings existed records MP4.
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, r#"{"showInDock": false}"#).unwrap();
+        fs::write(&path, r#"{"showInDock": true}"#).unwrap();
         assert_eq!(
             load(&path, defaults(&dir)).unwrap().recording,
             RecordingSettings::default()
@@ -2281,7 +2293,7 @@ mod tests {
                 "source": "region",
             })
         );
-        assert_eq!(json["showInDock"], false);
+        assert_eq!(json["showInDock"], true);
 
         // One bad value keeps its default; the other still loads.
         fs::write(
@@ -2458,10 +2470,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = settings_path(&dir);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, r#"{"showInDock": false, "recording": {"fps": 60}}"#).unwrap();
+        fs::write(&path, r#"{"showInDock": true, "recording": {"fps": 60}}"#).unwrap();
         let loaded = load(&path, defaults(&dir)).unwrap();
         assert_eq!(loaded.retention, Retention::default());
-        assert!(!loaded.show_in_dock);
+        assert!(loaded.show_in_dock);
     }
 
     #[test]

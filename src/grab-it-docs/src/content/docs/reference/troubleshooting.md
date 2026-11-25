@@ -7,7 +7,7 @@ sidebar:
 
 ## I can't see Grab-it anywhere
 
-It runs in the menu bar or system tray. Look for its icon near the clock (on Windows, check the **^** overflow arrow). On a Mac it's also in the Dock unless you turned that off. Opening Grab-it again from your app menu opens the Grab-it window.
+It runs in the menu bar or system tray. Look for its icon near the clock (on Windows, check the **^** overflow arrow). On a Mac it has no Dock icon unless you turn on **Settings → Show Grab-it in the Dock**. Opening Grab-it again from your app menu opens the Grab-it window.
 
 ## My PrintScreen key opens a different screenshot tool
 

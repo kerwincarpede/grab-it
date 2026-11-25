@@ -15,7 +15,7 @@ Most changes save as soon as you make them. Hotkeys save when you press **Save h
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| **Show Grab-it in the Dock** (macOS) | On | Click the Dock icon to open the Grab-it window. Off, Grab-it lives in the menu bar only. |
+| **Show Grab-it in the Dock** (macOS) | Off | Off, Grab-it lives in the menu bar only. On, click its Dock icon to open the Grab-it window. Copies installed before this default changed keep their choice. |
 | **Start Grab-it when you sign in** | Off | It waits in the menu bar or tray, ready for your hotkeys. |
 | **Save folder** | `Pictures/Grab-it` | Click **Change…** to choose where Grab-it saves new screenshots and recordings. Screenshots go in `originals` and videos and GIFs in `recordings`. Export dialogs open here until you choose an export folder. The image editor, Library and guide then remember that folder together. |
 | **Organise by month** | Off | Save new files in folders such as `originals/2026-11` and `recordings/2026-11`. The month comes from the local date in the filename. |
