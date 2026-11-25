@@ -314,42 +314,77 @@ fn shortcuts(app: &AppHandle) -> Option<tauri::State<'_, GlobalShortcut<crate::r
     app.try_state::<GlobalShortcut<crate::rt::Rt>>()
 }
 
+/// Runs `task` on the main thread, where [`apply`] and [`pause`] run and
+/// the plugin registers shortcuts, so holding, releasing and restoring Esc
+/// never interleave: each reads the flag and changes the registration in
+/// one step.
+fn on_main(app: &AppHandle, task: impl FnOnce(&AppHandle) + Send + 'static) {
+    let handle = app.clone();
+    if let Err(err) = app.run_on_main_thread(move || task(&handle)) {
+        eprintln!("Grab-it: could not change the Esc shortcut: {err}");
+    }
+}
+
+/// Marks Esc as held by a running scrolling capture.
+fn hold(state: &HotkeyState) {
+    state.escape.store(true, Ordering::SeqCst);
+}
+
+/// Marks Esc as released; true when a capture held it.
+fn release(state: &HotkeyState) -> bool {
+    state.escape.swap(false, Ordering::SeqCst)
+}
+
+/// Whether a running scrolling capture holds Esc.
+fn held(state: &HotkeyState) -> bool {
+    state.escape.load(Ordering::SeqCst)
+}
+
 /// Registers Esc to cancel the scrolling capture that is starting. Its bar
 /// never takes the focus, so the key would otherwise go to the page being
 /// captured. A failure is logged: the bar's Cancel still works.
 pub fn hold_escape(app: &AppHandle) {
-    let Some(state) = app.try_state::<HotkeyState>() else {
-        return;
-    };
-    state.escape.store(true, Ordering::SeqCst);
-    register_escape(app);
+    on_main(app, |app| {
+        let Some(state) = app.try_state::<HotkeyState>() else {
+            return;
+        };
+        hold(&state);
+        register_escape(app);
+    });
 }
 
 /// Releases Esc once the scrolling capture has ended, however it ended.
+/// Queued on the main thread after any earlier hold, so a release never
+/// undoes the next capture's Esc.
 pub fn release_escape(app: &AppHandle) {
-    let Some(state) = app.try_state::<HotkeyState>() else {
-        return;
-    };
-    if !state.escape.swap(false, Ordering::SeqCst) {
-        return;
-    }
-    if let Some(shortcuts) = shortcuts(app)
-        && shortcuts.is_registered(escape())
-        && let Err(err) = shortcuts.unregister(escape())
-    {
-        eprintln!("Grab-it: could not release Esc after the scrolling capture: {err}");
-    }
+    on_main(app, |app| {
+        let Some(state) = app.try_state::<HotkeyState>() else {
+            return;
+        };
+        if !release(&state) {
+            return;
+        }
+        if let Some(shortcuts) = shortcuts(app)
+            && shortcuts.is_registered(escape())
+            && let Err(err) = shortcuts.unregister(escape())
+        {
+            eprintln!("Grab-it: could not release Esc after the scrolling capture: {err}");
+        }
+    });
 }
 
 /// Registers Esc again after every hotkey was unregistered, while a
-/// scrolling capture still runs.
+/// scrolling capture still runs. Queued on the main thread, so it sees a
+/// release that happened while the hotkeys were being replaced.
 fn restore_escape(app: &AppHandle) {
-    if app
-        .try_state::<HotkeyState>()
-        .is_some_and(|state| state.escape.load(Ordering::SeqCst))
-    {
-        register_escape(app);
-    }
+    on_main(app, |app| {
+        if app
+            .try_state::<HotkeyState>()
+            .is_some_and(|state| held(&state))
+        {
+            register_escape(app);
+        }
+    });
 }
 
 fn register_escape(app: &AppHandle) {
@@ -509,6 +544,26 @@ pub fn start(app: &AppHandle, hotkeys: &Hotkeys) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn esc_is_held_only_while_a_scrolling_capture_runs() {
+        let state = HotkeyState::default();
+        assert!(!held(&state));
+        // Nothing to release before a capture holds it.
+        assert!(!release(&state));
+        hold(&state);
+        assert!(held(&state));
+        assert!(release(&state));
+        assert!(!held(&state));
+        // A second release, from a session that already ended, does nothing.
+        assert!(!release(&state));
+    }
+
+    #[test]
+    fn esc_is_its_own_bare_key() {
+        assert_eq!(escape(), Shortcut::new(None, Code::Escape));
+        assert_ne!(escape(), Shortcut::from_str("Shift+Escape").unwrap());
+    }
 
     #[test]
     fn defaults_are_valid_and_distinct() {

@@ -261,7 +261,12 @@ pub fn cancel_running(app: &AppHandle) {
     let Some(state) = app.try_state::<ScrollState>() else {
         return;
     };
-    if let Some(c) = state_lock(&state).as_ref() {
+    cancel(state_lock(&state).as_deref());
+}
+/// Cancels `control`'s session unless it is already ending, with Done or
+/// Cancel.
+fn cancel(control: Option<&Control>) {
+    if let Some(c) = control {
         let _ = c
             .end
             .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst);
@@ -523,8 +528,8 @@ pub fn start(
             })();
             scroll_bar::close(&handle);
             scroll_bar::clear(&handle);
-            // Released before the state is cleared, so it cannot undo the
-            // next session's Esc.
+            // Queued on the main thread before the state is cleared, so it
+            // runs ahead of the next session's hold and cannot undo it.
             crate::hotkeys::release_escape(&handle);
             *state_lock(&handle.state::<ScrollState>()) = None;
             if let Err(e) = result {
@@ -1026,6 +1031,23 @@ mod tests {
         assert!(too_fast_after(Push::Still, true, true));
         assert!(!too_fast_after(Push::Still, true, false));
         assert!(too_fast_after(Push::Capped, true, true));
+    }
+    #[test]
+    fn esc_cancels_a_running_session_but_not_one_already_saving() {
+        let running = Control {
+            id: 1,
+            end: AtomicU8::new(0),
+        };
+        cancel(Some(&running));
+        assert_eq!(running.end.load(Ordering::SeqCst), 2);
+        let saving = Control {
+            id: 2,
+            end: AtomicU8::new(1),
+        };
+        cancel(Some(&saving));
+        assert_eq!(saving.end.load(Ordering::SeqCst), 1);
+        // With no session, nothing happens.
+        cancel(None);
     }
     #[test]
     fn the_limit_message_names_the_real_limit() {

@@ -2502,7 +2502,9 @@ describe("scrolling capture", () => {
     fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 100 });
     fireEvent.mouseMove(overlay, { clientX: 400, clientY: 400 });
     fireEvent.mouseUp(overlay, { button: 0, clientX: 400, clientY: 400 });
-    expect(within(guide).getAllByRole("listitem").find((item) => item.getAttribute("aria-current") === "step")).toHaveTextContent(
+    // The guide steps aside while dragging, so it is a new panel now.
+    const held = screen.getByRole("complementary", { name: "Scrolling capture" });
+    expect(within(held).getAllByRole("listitem").find((item) => item.getAttribute("aria-current") === "step")).toHaveTextContent(
       "Trim the edges",
     );
     fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
