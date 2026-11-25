@@ -124,7 +124,8 @@
   font-size: 12px;
   line-height: 16px;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  /* Three lines: the longest message, in a 660 pt window (SIZE in scroll_bar.rs). */
+  -webkit-line-clamp: 3;
 }
 
 .scrollbar-actions {

@@ -27,8 +27,10 @@ pub const LABEL: &str = "scroll-bar";
 /// Sent to the bar with each new [`ScrollBarState`].
 pub const STATE_EVENT: &str = "scroll-bar-state";
 /// The window's size in points: the pill and the room for its shadow
-/// (`.scrollbar` padding in src/scrollbar/scrollbar.css).
-const SIZE: (f64, f64) = (580.0, 132.0);
+/// (`.scrollbar` padding in src/scrollbar/scrollbar.css). Wide enough that
+/// the longest message fits in the message's three lines beside the preview
+/// and the buttons.
+const SIZE: (f64, f64) = (660.0, 132.0);
 /// The live preview's largest size, in pixels.
 const PREVIEW: (u32, u32) = (240, 96);
 
@@ -267,8 +269,8 @@ mod tests {
             height: 400,
         };
         let (((x, y), size), covers) = placement(&display(WORK, 1.0), area);
-        assert_eq!(size, (580, 132));
-        assert_eq!((x, y), ((1920 - 580) / 2, 12));
+        assert_eq!(size, (660, 132));
+        assert_eq!((x, y), ((1920 - 660) / 2, 12));
         assert!(!covers);
     }
 
