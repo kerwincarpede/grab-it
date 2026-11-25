@@ -120,7 +120,7 @@ function HotkeysSection({ saved, disabled, onSave }: HotkeysSectionProps) {
       <h2 className="group-heading" id="hotkeys-heading">
         Capture hotkeys
       </h2>
-      <PrintScreenNotice recheck={saves} />
+      <PrintScreenNotice recheck={saves} hotkeysPlace="below" />
       <div className="group">
         {FIELDS.map(({ key, label }) => (
           <div className="row hotkey-row" key={key}>

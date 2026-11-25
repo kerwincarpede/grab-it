@@ -243,6 +243,7 @@ describe("WelcomeWindow's PrintScreen notice", () => {
     const calls = mockBackend({ printScreen: { on: true } });
     render(<WelcomeWindow />);
     expect(await screen.findByRole("heading", { name: NOTICE })).toBeInTheDocument();
+    expect(screen.getByText(/choose another hotkey instead of PrintScreen in Settings\./)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Use PrintScreen for Grab-it" }));
     await waitFor(() => expect(screen.queryByRole("heading", { name: NOTICE })).not.toBeInTheDocument());
     expect(calls.map((call) => call.cmd)).toContain("printscreen_fix");

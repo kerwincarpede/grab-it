@@ -753,7 +753,7 @@ describe("SettingsWindow", () => {
     const backend = mockBackend({ printScreenOn: true });
     render(<SettingsWindow />);
     const notice = await screen.findByRole("region", { name: PRINTSCREEN_NOTICE });
-    expect(notice).toHaveTextContent("choose another hotkey instead of PrintScreen");
+    expect(notice).toHaveTextContent("choose another hotkey instead of PrintScreen below.");
     expect(within(notice).queryByRole("button", { name: "Dismiss PrintScreen notice" })).not.toBeInTheDocument();
 
     await userEvent.click(within(notice).getByRole("button", { name: "Use PrintScreen for Grab-it" }));

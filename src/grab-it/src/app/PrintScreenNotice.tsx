@@ -8,6 +8,8 @@ interface PrintScreenNoticeProps {
   recheck?: unknown;
   /** Shows a button that hides the notice until the page opens again. */
   dismissable?: boolean;
+  /** Where another hotkey can be chosen, ending the sentence: "in Settings", or "below" in Settings. */
+  hotkeysPlace?: string;
 }
 
 function message(err: unknown): string {
@@ -21,7 +23,7 @@ function message(err: unknown): string {
  * button turns the setting off; the other opens Windows Settings.
  * Elsewhere the check always says no, and nothing shows.
  */
-function PrintScreenNotice({ recheck, dismissable = false }: PrintScreenNoticeProps) {
+function PrintScreenNotice({ recheck, dismissable = false, hotkeysPlace = "in Settings" }: PrintScreenNoticeProps) {
   const [conflict, setConflict] = useState(false);
   const [stillOn, setStillOn] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -89,7 +91,7 @@ function PrintScreenNotice({ recheck, dismissable = false }: PrintScreenNoticePr
       <p>
         Windows&apos; Use the Print screen key to open screen capture setting is on, so PrintScreen switches between
         Windows&apos; tool and Grab-it. Turn it off to make PrintScreen open Grab-it, or choose another hotkey instead of
-        PrintScreen in Settings.
+        PrintScreen {hotkeysPlace}.
       </p>
       {stillOn && (
         <p className="printscreen-notice-still" role="status">

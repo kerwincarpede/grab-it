@@ -19,6 +19,11 @@
   line-height: 1.45;
 }
 
+.printscreen-notice .status-error {
+  color: var(--danger);
+  font-weight: 500;
+}
+
 .printscreen-notice .printscreen-notice-still {
   color: var(--text);
   font-weight: 500;
@@ -58,4 +63,15 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* The secondary button keeps an edge and a fill against the tinted notice,
+   which a plain .btn loses in dark mode. */
+.printscreen-notice .btn:not(.btn-primary) {
+  background: var(--panel);
+  border-color: var(--border-strong);
+}
+
+.printscreen-notice .btn:not(.btn-primary):where(:hover:not(:disabled)) {
+  background: var(--fill-hover);
 }
