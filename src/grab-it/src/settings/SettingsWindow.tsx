@@ -706,7 +706,7 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                   type="checkbox"
                   role="switch"
                   className="switch"
-                  checked={settings?.showInDock ?? true}
+                  checked={settings?.showInDock ?? false}
                   disabled={busy || settings === null}
                   onChange={(event) => void changeShowInDock(event.target.checked)}
                 />

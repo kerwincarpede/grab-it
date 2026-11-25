@@ -12,7 +12,7 @@ The Library is the Grab-it window: every screenshot and recording you've taken, 
 
 ## Open it
 
-- Click the Grab-it icon in the menu bar or tray and choose **Open Grab-it…**, or click its Dock icon on a Mac.
+- Click the Grab-it icon in the menu bar or tray and choose **Open Grab-it…**. On a Mac with **Settings → Show Grab-it in the Dock** turned on, you can also click its Dock icon.
 - Press the **Open library** hotkey: `Alt + Shift + PrintScreen` on Windows and Linux, `⌘ ⇧ 0` on macOS.
 - Open Grab-it again from your app menu while it's running.
 

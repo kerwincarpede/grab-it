@@ -21,7 +21,7 @@ import {
 import { useEffectiveHotkeys } from "../app/useEffectiveHotkeys";
 import { keyCaps } from "../hub/keys";
 import { onAiStatus } from "../library/api";
-import { aiDescribes, aiProvider, getSettings, type Hotkeys } from "../settings/api";
+import { aiDescribes, aiProvider, getSettings, hasDock, type Hotkeys } from "../settings/api";
 import { openTarget } from "./api";
 import { startCapture, type CaptureKind } from "../app/api";
 import PermissionsPage from "./PermissionsPage";
@@ -144,6 +144,8 @@ function WelcomeWindow({ onClose }: { onClose?: () => void } = {}) {
 function HotkeysPage({ onClose }: { onClose?: () => void }) {
   const hotkeys = useEffectiveHotkeys();
   const [claudeDescribes, setClaudeDescribes] = useState(false);
+  // Only once the settings say so: a Mac with the Dock icon turned off.
+  const [noDockIcon, setNoDockIcon] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -154,6 +156,7 @@ function HotkeysPage({ onClose }: { onClose?: () => void }) {
         .then((settings) => {
           if (cancelled) return;
           setClaudeDescribes(aiDescribes(settings.ai) && aiProvider(settings.ai) === "claudeCode");
+          setNoDockIcon(hasDock() && !settings.showInDock);
         })
         .catch(() => {
           // The tips still read well without the hotkeys.
@@ -193,6 +196,11 @@ function HotkeysPage({ onClose }: { onClose?: () => void }) {
             Click the Grab-it icon in the menu bar, or use a hotkey. Every capture is saved, copied and searchable
             here.
           </p>
+          {noDockIcon && (
+            <p className="welcome-lead">
+              To add a Dock icon too, turn on Show Grab-it in the Dock in Settings.
+            </p>
+          )}
         </div>
       </header>
 

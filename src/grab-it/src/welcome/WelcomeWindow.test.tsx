@@ -63,6 +63,7 @@ function mockBackend(
     failSettings?: boolean;
     failOpen?: string;
     ai?: Partial<AiPreferences>;
+    showInDock?: boolean;
     /** What permission_status reports; everything allowed, as off macOS, by default. */
     permissions?: PermissionStatus;
     failPermissions?: boolean;
@@ -83,7 +84,12 @@ function mockBackend(
       effective_hotkeys: () => (options.failSettings ? {} : HOTKEYS),
       get_settings: () => {
         if (options.failSettings) throw "no settings";
-        return testSettings({ saveFolder: "/shots", hotkeys: HOTKEYS, ai: { ...DEFAULT_AI_PREFERENCES, ...options.ai } });
+        return testSettings({
+          saveFolder: "/shots",
+          hotkeys: HOTKEYS,
+          ai: { ...DEFAULT_AI_PREFERENCES, ...options.ai },
+          showInDock: options.showInDock ?? false,
+        });
       },
       open_target: () => {
         if (options.failOpen) throw options.failOpen;
@@ -155,6 +161,31 @@ describe("WelcomeWindow", () => {
       for (const listener of aiEvents.listeners) listener();
     });
     expect(await screen.findByText(/Claude Code describes each new capture/)).toBeInTheDocument();
+  });
+
+  describe("the Dock line", () => {
+    const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)";
+    const LINUX = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko)";
+    const DOCK_LINE = /turn on Show Grab-it in the Dock in Settings/;
+
+    it("says where to add a Dock icon on a Mac without one", async () => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(MAC);
+      mockBackend({ showInDock: false });
+      render(<WelcomeWindow />);
+      expect(await screen.findByText(DOCK_LINE)).toBeInTheDocument();
+    });
+
+    it.each([
+      ["a Mac with the Dock icon on", MAC, true],
+      ["off macOS", LINUX, false],
+    ])("is hidden on %s", async (_name, userAgent, showInDock) => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(userAgent);
+      const calls = mockBackend({ showInDock });
+      render(<WelcomeWindow />);
+      await screen.findByLabelText("Shift+PrintScreen");
+      await waitFor(() => expect(calls.map((call) => call.cmd)).toContain("get_settings"));
+      expect(screen.queryByText(DOCK_LINE)).not.toBeInTheDocument();
+    });
   });
 
   it("still explains itself when the hotkeys cannot be read", async () => {
