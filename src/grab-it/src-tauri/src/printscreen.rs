@@ -6,8 +6,9 @@
 //! [`printscreen_conflict`] when they open and show a notice whose buttons
 //! call [`printscreen_fix`] and [`printscreen_open_settings`]. The setting
 //! is the `PrintScreenKeyForSnippingEnabled` value under
-//! `HKCU\Control Panel\Keyboard`; only 1 counts as on. Other systems never
-//! report a conflict.
+//! `HKCU\Control Panel\Keyboard`: 1 is on and 0 is off, and a missing
+//! value is Windows' default, on from Windows 11 (build 22000) and off on
+//! Windows 10. Other systems never report a conflict.
 
 use std::str::FromStr;
 
@@ -37,6 +38,20 @@ pub fn uses_bare_print_screen(hotkeys: &Hotkeys) -> bool {
         .any(|(_, _, accelerator)| is_bare_print_screen(accelerator))
 }
 
+/// The first Windows 11 build, from which a missing value means on.
+const WINDOWS_11_BUILD: u32 = 22000;
+
+/// Whether Windows' Print screen setting is on, from its registry `value`
+/// (None when it is missing) and the Windows `build` number. A written
+/// value is taken as it is; a missing one is the build's default.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn setting_on(value: Option<u32>, build: u32) -> bool {
+    match value {
+        Some(value) => value == 1,
+        None => build >= WINDOWS_11_BUILD,
+    }
+}
+
 /// A conflict: Windows' setting is on and a Grab-it hotkey is a bare
 /// `PrintScreen`.
 fn conflicts(windows_setting_on: bool, hotkeys: &Hotkeys) -> bool {
@@ -53,7 +68,8 @@ mod win {
         Win32::{
             Foundation::{ERROR_SUCCESS, LPARAM, WPARAM},
             System::Registry::{
-                HKEY_CURRENT_USER, REG_DWORD, RRF_RT_REG_DWORD, RegGetValueW, RegSetKeyValueW,
+                HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, REG_DWORD, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
+                RegGetValueW, RegSetKeyValueW,
             },
             UI::WindowsAndMessaging::{
                 HWND_BROADCAST, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_SETTINGCHANGE,
@@ -64,12 +80,14 @@ mod win {
 
     const KEY: PCWSTR = w!("Control Panel\\Keyboard");
     const VALUE: PCWSTR = w!("PrintScreenKeyForSnippingEnabled");
+    const VERSION_KEY: PCWSTR = w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion");
+    const BUILD_VALUE: PCWSTR = w!("CurrentBuildNumber");
 
     /// How long each window gets to take the settings change, in ms.
     const BROADCAST_TIMEOUT_MS: u32 = 2000;
 
-    /// True when the value is 1. A missing or unreadable value is off.
-    pub fn setting_on() -> bool {
+    /// The setting's value, or None when it is missing or unreadable.
+    pub fn setting_value() -> Option<u32> {
         let mut data: u32 = 0;
         let mut size = std::mem::size_of::<u32>() as u32;
         // SAFETY: `data` and `size` outlive the call, and `size` is the
@@ -85,7 +103,38 @@ mod win {
                 Some(&raw mut size),
             )
         };
-        result == ERROR_SUCCESS && data == 1
+        (result == ERROR_SUCCESS).then_some(data)
+    }
+
+    /// The Windows build number, such as 22631, or 0 when it cannot be read.
+    pub fn build() -> u32 {
+        let mut data = [0u16; 32];
+        let mut size = std::mem::size_of_val(&data) as u32;
+        // SAFETY: `data` and `size` outlive the call, and `size` is the
+        // byte length of `data`, which RRF_RT_REG_SZ fills with a
+        // null-terminated string or leaves alone when it is too small.
+        let result = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                VERSION_KEY,
+                BUILD_VALUE,
+                RRF_RT_REG_SZ,
+                None,
+                Some(data.as_mut_ptr().cast()),
+                Some(&raw mut size),
+            )
+        };
+        if result != ERROR_SUCCESS {
+            return 0;
+        }
+        let len = data
+            .iter()
+            .position(|&unit| unit == 0)
+            .unwrap_or(data.len());
+        String::from_utf16_lossy(&data[..len])
+            .trim()
+            .parse()
+            .unwrap_or(0)
     }
 
     /// Sets the value to 0 and tells running apps the settings changed.
@@ -130,7 +179,7 @@ mod win {
 fn windows_setting_on() -> bool {
     #[cfg(target_os = "windows")]
     {
-        win::setting_on()
+        setting_on(win::setting_value(), win::build())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -208,6 +257,24 @@ mod tests {
             steps: "Ctrl+Alt+Shift+PrintScreen".into(),
             scroll: String::new(),
         }
+    }
+
+    #[test]
+    fn a_written_value_is_taken_as_it_is() {
+        assert!(setting_on(Some(1), 22631));
+        assert!(setting_on(Some(1), 19045));
+        assert!(!setting_on(Some(0), 22631));
+        assert!(!setting_on(Some(0), 19045));
+    }
+
+    #[test]
+    fn a_missing_value_is_on_from_windows_11_and_off_on_windows_10() {
+        assert!(setting_on(None, 22000));
+        assert!(setting_on(None, 26100));
+        assert!(!setting_on(None, 21999));
+        assert!(!setting_on(None, 19045));
+        // An unreadable build counts as Windows 10.
+        assert!(!setting_on(None, 0));
     }
 
     #[test]
