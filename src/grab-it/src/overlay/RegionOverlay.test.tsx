@@ -46,6 +46,7 @@ function overlayInfo(info: Partial<OverlayInfo> = {}): OverlayInfo {
     pointerHere: true,
     barCentre: null,
     monitorName: "",
+    scrollByHand: false,
     ...info,
   };
 }
@@ -105,6 +106,8 @@ function mockOverlay(
       overlay_finish: () => null,
       overlay_choose: () => null,
       overlay_cancel: () => undefined,
+      overlay_scroll_docs: () => undefined,
+      remember_scroll_by_hand: () => null,
     },
     { shouldMockEvents: true },
   );
@@ -2445,15 +2448,15 @@ describe("scrolling capture", () => {
     render(<RegionOverlay />);
     const overlay = await ready();
     fireEvent.keyDown(window, { key: "7", code: "Digit7" });
-    fireEvent.click(screen.getByRole("radio", { name: "I’ll scroll myself" }));
-    expect(last(calls)).toEqual({
+    fireEvent.click(screen.getByRole("radio", { name: "Me" }));
+    expect(calls).toContainEqual({
       cmd: "overlay_choose",
       payload: { choice: { intent: "scroll", mode: "region", delaySeconds: 0, scrollByHand: true } },
     });
     // Another monitor's guide switches back to Grab-it scrolling.
     await waitFor(async () => {
       await emit(CHOICE_EVENT, { intent: "scroll", mode: "region", delaySeconds: 0, scrollByHand: false });
-      expect(screen.getByRole("radio", { name: "Scroll for me" })).toBeChecked();
+      expect(screen.getByRole("radio", { name: "Grab-it" })).toBeChecked();
     });
     fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 100 });
     fireEvent.mouseMove(overlay, { clientX: 400, clientY: 400 });
@@ -2471,7 +2474,7 @@ describe("scrolling capture", () => {
     const overlay = await ready();
     fireEvent.keyDown(window, { key: "7", code: "Digit7" });
     expect(await screen.findByRole("button", { name: "Open Settings" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "I’ll scroll myself" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Me" })).toBeChecked();
     fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 100 });
     fireEvent.mouseMove(overlay, { clientX: 400, clientY: 400 });
     fireEvent.mouseUp(overlay, { button: 0, clientX: 400, clientY: 400 });
@@ -2479,7 +2482,7 @@ describe("scrolling capture", () => {
     allowed = true;
     fireEvent.focus(window);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Open Settings" })).not.toBeInTheDocument());
-    expect(screen.getByRole("radio", { name: "Scroll for me" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Grab-it" })).toBeChecked();
     fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
     await waitFor(() => expect(calls).toContainEqual(expect.objectContaining({
       cmd: "overlay_finish", payload: expect.objectContaining({ choice: { intent: "scroll", mode: "region", delaySeconds: 0, scrollByHand: false } }),
@@ -2492,19 +2495,119 @@ describe("scrolling capture", () => {
     await ready();
     fireEvent.keyDown(window, { key: "7", code: "Digit7" });
     const guide = screen.getByRole("complementary", { name: "Scrolling capture" });
-    expect(guide).toHaveTextContent("Choose a window, or drag an area");
-    expect(guide).toHaveTextContent(/Leave the mouse and trackpad alone/);
-    fireEvent.click(screen.getByRole("radio", { name: "I’ll scroll myself" }));
+    expect(guide).toHaveTextContent("Click a window or drag over an area");
+    expect(guide).toHaveTextContent(/Hands off the mouse and trackpad/);
+    fireEvent.click(screen.getByRole("radio", { name: "Me" }));
     const overlay = screen.getByTestId("overlay");
     fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 100 });
     fireEvent.mouseMove(overlay, { clientX: 400, clientY: 400 });
     fireEvent.mouseUp(overlay, { button: 0, clientX: 400, clientY: 400 });
-    expect(screen.getAllByRole("listitem").find((item) => item.getAttribute("aria-current") === "step")).toHaveTextContent(
-      "Drag the edges to the part that scrolls",
+    // The guide steps aside while dragging, so it is a new panel now.
+    const held = screen.getByRole("complementary", { name: "Scrolling capture" });
+    expect(within(held).getAllByRole("listitem").find((item) => item.getAttribute("aria-current") === "step")).toHaveTextContent(
+      "Trim the edges",
     );
     fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
     await waitFor(() => expect(calls).toContainEqual(expect.objectContaining({
       cmd: "overlay_finish", payload: expect.objectContaining({ choice: { intent: "scroll", mode: "region", delaySeconds: 0, scrollByHand: true } }),
     })));
+  });
+
+  it("remembers the card picked, and starts with the one picked last time", async () => {
+    const calls = mockOverlay({ allInOne: true, scrollByHand: true });
+    render(<RegionOverlay />);
+    await ready();
+    fireEvent.keyDown(window, { key: "7", code: "Digit7" });
+    expect(screen.getByRole("radio", { name: "Me" })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: "Grab-it" }));
+    expect(calls).toContainEqual({ cmd: "remember_scroll_by_hand", payload: { byHand: false } });
+    expect(screen.getByRole("radio", { name: "Grab-it" })).toBeChecked();
+  });
+
+  it("does not remember the fallback to Me while Accessibility is off", async () => {
+    const calls = mockOverlay({ allInOne: true }, {}, KNOWN_CAMERAS, { accessibility_status: () => false });
+    render(<RegionOverlay />);
+    await ready();
+    fireEvent.keyDown(window, { key: "7", code: "Digit7" });
+    expect(await screen.findByRole("button", { name: "Open Settings" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Me" })).toBeChecked();
+    expect(calls.map(({ cmd }) => cmd)).not.toContain("remember_scroll_by_hand");
+  });
+
+  it("marks where the image starts, and which way Grab-it scrolls", async () => {
+    mockOverlay({ allInOne: true });
+    render(<RegionOverlay />);
+    const overlay = await ready();
+    fireEvent.keyDown(window, { key: "7", code: "Digit7" });
+    expect(screen.queryByTestId("scroll-start-label")).not.toBeInTheDocument();
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(overlay, { clientX: 400, clientY: 400 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 400, clientY: 400 });
+    const start = screen.getByTestId("scroll-start-label");
+    expect(start).toHaveTextContent("Image starts here");
+    // On the held area's top edge.
+    expect(start.style.transform).toContain("100px, 0)");
+    expect(screen.getByTestId("scroll-direction")).toHaveTextContent("Grab-it scrolls down to the end");
+    // Scrolling by hand, there is no arrow.
+    fireEvent.click(screen.getByRole("radio", { name: "Me" }));
+    expect(screen.queryByTestId("scroll-direction")).not.toBeInTheDocument();
+    expect(screen.getByTestId("scroll-start-label")).toBeInTheDocument();
+  });
+
+  it("moves Image starts here below the toolbar when the area's top is under it", async () => {
+    mockOverlay({ allInOne: true });
+    render(<RegionOverlay />);
+    const overlay = await ready();
+    fireEvent.keyDown(window, { key: "7", code: "Digit7" });
+    // A tall window at the top: the toolbar stays at the top, over its edge.
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 10 });
+    fireEvent.mouseMove(overlay, { clientX: 400, clientY: 790 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 400, clientY: 790 });
+    expect(screen.getByTestId("overlay-toolbar")).toHaveAttribute("data-edge", "top");
+    const start = screen.getByTestId("scroll-start-label");
+    expect(start).toHaveAttribute("data-inside", "true");
+    const y = Number(/translate3d\([^,]+, ([\d.]+)px/.exec(start.style.transform)?.[1]);
+    // Below the toolbar's room (58 px) and its label's half height.
+    expect(y).toBeGreaterThanOrEqual(58 + 12);
+  });
+
+  it("keeps the guide's title in the panel's colour under a light appearance", async () => {
+    mockOverlay({ allInOne: true });
+    render(
+      <>
+        <style>{`h2 { color: #16181c; } ${overlayStyles}`}</style>
+        <RegionOverlay />
+      </>,
+    );
+    await ready();
+    fireEvent.keyDown(window, { key: "7", code: "Digit7" });
+    const title = screen.getByRole("heading", { name: "Scrolling capture" });
+    expect(getComputedStyle(title).color).not.toBe("rgb(22, 24, 28)");
+    expect(getComputedStyle(title).color).toBe(getComputedStyle(title.closest("aside") as HTMLElement).color);
+  });
+
+  it("starts the held area from the guide's Start scrolling", async () => {
+    const calls = mockOverlay({ allInOne: true });
+    render(<RegionOverlay />);
+    const overlay = await ready();
+    fireEvent.keyDown(window, { key: "7", code: "Digit7" });
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(overlay, { clientX: 400, clientY: 400 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 400, clientY: 400 });
+    const guide = screen.getByRole("complementary", { name: "Scrolling capture" });
+    fireEvent.click(within(guide).getByRole("button", { name: /Start scrolling/ }));
+    await waitFor(() => expect(calls).toContainEqual(expect.objectContaining({
+      cmd: "overlay_finish", payload: expect.objectContaining({ choice: { intent: "scroll", mode: "region", delaySeconds: 0, scrollByHand: false } }),
+    })));
+  });
+
+  it("opens the docs page from the guide, which closes the overlay", async () => {
+    const calls = mockOverlay({ allInOne: true });
+    render(<RegionOverlay />);
+    await ready();
+    fireEvent.keyDown(window, { key: "7", code: "Digit7" });
+    fireEvent.click(screen.getByRole("link", { name: "How scrolling capture works" }));
+    await waitFor(() => expect(calls.map(({ cmd }) => cmd)).toContain("overlay_scroll_docs"));
+    expect(calls.map(({ cmd }) => cmd)).not.toContain("overlay_finish");
   });
 });

@@ -76,6 +76,11 @@ export const commands = {
 	/**  Remembers the chosen folder for the next image, Library or guide export. */
 	setLastExportFolder: (folder: string, options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("set_last_export_folder", { folder }, options),
 	/**
+	 *  Remembers the Who scrolls? card picked in a scrolling capture's guide,
+	 *  so the next capture starts with it.
+	 */
+	rememberScrollByHand: (byHand: boolean, options?: InvokeOptions) => __TAURI_INVOKE<null>("remember_scroll_by_hand", { byHand }, options),
+	/**
 	 *  Turns Settings › AI agents' access switch on or off. The control
 	 *  connection reads it with every request, so it applies at once.
 	 */
@@ -255,6 +260,11 @@ export const commands = {
 	 */
 	overlayChoose: (choice: Choice_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<null>("overlay_choose", { choice }, options),
 	overlayCancel: (options?: InvokeOptions) => __TAURI_INVOKE<void>("overlay_cancel", undefined, options),
+	/**
+	 *  The scrolling capture guide's docs link: closes the overlays, as Cancel
+	 *  does, and opens the Scrolling capture page in the browser.
+	 */
+	overlayScrollDocs: (options?: InvokeOptions) => __TAURI_INVOKE<void>("overlay_scroll_docs", undefined, options),
 	editorInfo: (options?: InvokeOptions) => __TAURI_INVOKE<EditorInfo_Serialize>("editor_info", undefined, options),
 	/**
 	 *  Copies an image file dropped on the editor into its capture's assets
@@ -1514,6 +1524,11 @@ export type OverlayInfo_Deserialize = {
 	barCentre?: CssPoint | null,
 	/**  The monitor's name, shown when Screen records it. */
 	monitorName: string,
+	/**
+	 *  Scrolling capture: the Who scrolls? card the user picked last was
+	 *  Me. The guide starts on it.
+	 */
+	scrollByHand: boolean,
 };
 
 export type OverlayInfo_Serialize = {
@@ -1559,6 +1574,11 @@ export type OverlayInfo_Serialize = {
 	barCentre: CssPoint | null,
 	/**  The monitor's name, shown when Screen records it. */
 	monitorName: string,
+	/**
+	 *  Scrolling capture: the Who scrolls? card the user picked last was
+	 *  Me. The guide starts on it.
+	 */
+	scrollByHand: boolean,
 };
 
 /**
@@ -2222,6 +2242,7 @@ export type ScrollBarState_Deserialize = {
 	/**  How far the image is toward its length limit, from 0 to 1. */
 	progress: number | null,
 	capped: boolean,
+	/**  Grab-it is the one scrolling, or was when the limit was reached. */
 	autoScrolling: boolean,
 	/**  What to do now, or why automatic scrolling stopped. */
 	message?: string | null,
@@ -2241,6 +2262,7 @@ export type ScrollBarState_Serialize = {
 	/**  How far the image is toward its length limit, from 0 to 1. */
 	progress: number | null,
 	capped: boolean,
+	/**  Grab-it is the one scrolling, or was when the limit was reached. */
 	autoScrolling: boolean,
 	/**  What to do now, or why automatic scrolling stopped. */
 	message: string | null,
@@ -2905,6 +2927,7 @@ export type MockCommandHandlers = {
     setRecording: (args: { recording: RecordingSettings_Deserialize }) => Settings_Serialize | Promise<Settings_Serialize>,
     setRetention: (args: { retention: Retention_Deserialize }) => Settings_Serialize | Promise<Settings_Serialize>,
     setLastExportFolder: (args: { folder: string }) => Settings_Serialize | Promise<Settings_Serialize>,
+    rememberScrollByHand: (args: { byHand: boolean }) => null | Promise<null>,
     setAgentAccess: (args: { enabled: boolean }) => Settings_Serialize | Promise<Settings_Serialize>,
     setUpdateChannel: (args: { channel: UpdateChannel }) => Settings_Serialize | Promise<Settings_Serialize>,
     agentSkillStatus: () => AgentSkill | Promise<AgentSkill>,
@@ -2959,6 +2982,7 @@ export type MockCommandHandlers = {
     overlayFinish: (args: { selection: Selection_Deserialize; choice: Choice_Deserialize | null }) => null | Promise<null>,
     overlayChoose: (args: { choice: Choice_Deserialize }) => null | Promise<null>,
     overlayCancel: () => void | Promise<void>,
+    overlayScrollDocs: () => void | Promise<void>,
     editorInfo: () => EditorInfo_Serialize | Promise<EditorInfo_Serialize>,
     editorAddImageFile: (args: { path: string }) => string | Promise<string>,
     editorAddClipboardImage: () => string | Promise<string>,
@@ -3082,6 +3106,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "set_recording": return mockCommandHandler(mockHandlers.setRecording, "set_recording", args);
             case "set_retention": return mockCommandHandler(mockHandlers.setRetention, "set_retention", args);
             case "set_last_export_folder": return mockCommandHandler(mockHandlers.setLastExportFolder, "set_last_export_folder", args);
+            case "remember_scroll_by_hand": return mockCommandHandler(mockHandlers.rememberScrollByHand, "remember_scroll_by_hand", args);
             case "set_agent_access": return mockCommandHandler(mockHandlers.setAgentAccess, "set_agent_access", args);
             case "set_update_channel": return mockCommandHandler(mockHandlers.setUpdateChannel, "set_update_channel", args);
             case "agent_skill_status": return mockCommandHandler(mockHandlers.agentSkillStatus, "agent_skill_status", args);
@@ -3136,6 +3161,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "overlay_finish": return mockCommandHandler(mockHandlers.overlayFinish, "overlay_finish", args);
             case "overlay_choose": return mockCommandHandler(mockHandlers.overlayChoose, "overlay_choose", args);
             case "overlay_cancel": return mockCommandHandler(mockHandlers.overlayCancel, "overlay_cancel", args);
+            case "overlay_scroll_docs": return mockCommandHandler(mockHandlers.overlayScrollDocs, "overlay_scroll_docs", args);
             case "editor_info": return mockCommandHandler(mockHandlers.editorInfo, "editor_info", args);
             case "editor_add_image_file": return mockCommandHandler(mockHandlers.editorAddImageFile, "editor_add_image_file", args);
             case "editor_add_clipboard_image": return mockCommandHandler(mockHandlers.editorAddClipboardImage, "editor_add_clipboard_image", args);

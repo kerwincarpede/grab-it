@@ -1,6 +1,6 @@
 ---
 title: Keyboard shortcuts
-description: Every Grab-it hotkey on Windows, Linux and macOS, and the keys in the capture overlay, editor, video editor, pins, Guide window and Library.
+description: Every Grab-it hotkey on Windows, Linux and macOS, and the keys in the capture overlay, scrolling capture, editor, video editor, pins, Guide window and Library.
 sidebar:
   order: 1
 ---
@@ -43,6 +43,15 @@ While you're picking an area to capture or record:
 | `1` to `7` | In Capture & record…: Region, Window, Screen, Text, Colour, Record, Scroll |
 | `8` | In Capture & record…: step the timer through off, 3, 5 and 10 seconds, or Record's countdown |
 | `1` to `3` | When recording, in Record and in Capture & record…'s **Record**: record a region, a window or the screen |
+| `Enter` | In **Scroll**: start the scrolling capture of the held area |
+
+## Scrolling capture
+
+While a [scrolling capture](/grab-it/capture/scrolling/) runs:
+
+| Key | What it does |
+| --- | --- |
+| `Esc` | Cancel the capture and throw the image away, as **Cancel** on the capture bar does |
 
 ## Image editor
 

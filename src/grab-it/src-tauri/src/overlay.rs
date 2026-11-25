@@ -1190,6 +1190,9 @@ pub struct OverlayInfo {
     pub bar_centre: Option<crate::record_bar::CssPoint>,
     /// The monitor's name, shown when Screen records it.
     pub monitor_name: String,
+    /// Scrolling capture: the Who scrolls? card the user picked last was
+    /// Me. The guide starts on it.
+    pub scroll_by_hand: bool,
 }
 
 /// The last region as a starting selection for an overlay on `monitor`
@@ -1421,6 +1424,8 @@ pub fn overlay_info(
     state: State<'_, OverlayState>,
     last: State<'_, LastRegionState>,
 ) -> Option<OverlayInfo> {
+    // Read before the session is locked, so the two locks are never nested.
+    let scroll_by_hand = remembered_scroll_by_hand(&app);
     let mut guard = state.lock();
     let Phase::Open(session) = &mut *guard else {
         return None;
@@ -1458,7 +1463,14 @@ pub fn overlay_info(
         pointer_here: crate::record_bar::pointer_on(&app, &frame.monitor),
         bar_centre: crate::record_bar::bar_centre_on(&app, &frame.monitor),
         monitor_name: frame.monitor.name.clone(),
+        scroll_by_hand,
     })
+}
+
+/// Whether the user picked Me as who scrolls last time, from settings.json.
+fn remembered_scroll_by_hand(app: &AppHandle) -> bool {
+    app.try_state::<crate::commands::SettingsState>()
+        .is_some_and(|state| crate::commands::lock(&state).get().scroll_by_hand)
 }
 
 /// How far down `window`'s monitor the menu bar or a notch reaches, as a
@@ -1776,6 +1788,21 @@ pub fn overlay_cancel(app: AppHandle, window: WebviewWindow) {
     let _ = take_session(&app, |s| s.frames.contains_key(window.label()), |_| true);
 }
 
+/// The Scrolling capture page on the docs site.
+pub const SCROLL_DOCS_URL: &str = "https://kerwincarpede.github.io/grab-it/capture/scrolling/";
+
+/// The scrolling capture guide's docs link: closes the overlays, as Cancel
+/// does, and opens the Scrolling capture page in the browser.
+#[tauri::command]
+#[specta::specta]
+pub fn overlay_scroll_docs(app: AppHandle, window: WebviewWindow) {
+    use tauri_plugin_opener::OpenerExt;
+    let _ = take_session(&app, |s| s.frames.contains_key(window.label()), |_| true);
+    if let Err(err) = app.opener().open_url(SCROLL_DOCS_URL, None::<&str>) {
+        eprintln!("Grab-it: could not open the scrolling capture docs: {err}");
+    }
+}
+
 /// Closes the overlays and saves the selection. An All-in-one overlay
 /// sends the `choice` its toolbar made with it; with a Timer, the area is
 /// captured live once the overlays are gone and the time is up.
@@ -1809,10 +1836,12 @@ pub fn overlay_finish(
         .frames
         .get(window.label())
         .ok_or("this window is not a capture overlay")?;
+    // An overlay opened for Scroll alone may never share a choice: it
+    // starts with the card picked last.
     let scroll_by_hand = choice
         .or(session.choice)
         .and_then(|choice| choice.scroll_by_hand)
-        .unwrap_or(false);
+        .unwrap_or_else(|| remembered_scroll_by_hand(&app));
     let Resolved {
         intent,
         mode,
@@ -2642,6 +2671,7 @@ mod tests {
             pointer_here: true,
             bar_centre: None,
             monitor_name: "eDP-1".into(),
+            scroll_by_hand: false,
         };
         let value = serde_json::to_value(&info).unwrap();
         assert_eq!(value["allInOne"], true);
@@ -2793,6 +2823,7 @@ mod tests {
             pointer_here: false,
             bar_centre: Some(crate::record_bar::CssPoint { x: 960.0, y: 42.0 }),
             monitor_name: "DELL U2720Q".into(),
+            scroll_by_hand: true,
         };
         let value = serde_json::to_value(&info).unwrap();
         assert_eq!(
@@ -2811,6 +2842,7 @@ mod tests {
             serde_json::json!({ "x": 960.0, "y": 42.0 })
         );
         assert_eq!(value["monitorName"], "DELL U2720Q");
+        assert_eq!(value["scrollByHand"], true);
         let unknown = OverlayInfo {
             bar_centre: None,
             ..none

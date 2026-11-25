@@ -79,15 +79,21 @@
 .scrollbar-head {
   display: flex;
   gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
   align-items: baseline;
   justify-content: space-between;
 }
 
 .scrollbar-title {
+  min-width: 0;
+  overflow: hidden;
   font-weight: 600;
+  text-overflow: ellipsis;
 }
 
 .scrollbar-length {
+  flex: none;
   color: var(--scb-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -118,7 +124,8 @@
   font-size: 12px;
   line-height: 16px;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  /* Three lines: the longest message, in a 660 pt window (SIZE in scroll_bar.rs). */
+  -webkit-line-clamp: 3;
 }
 
 .scrollbar-actions {
@@ -147,4 +154,32 @@
 .scrollbar-actions button:disabled {
   cursor: default;
   opacity: 0.6;
+}
+
+/* Who is scrolling: Grab-it, or the user. */
+.scrollbar-who {
+  justify-self: start;
+  padding: 0 8px;
+  color: var(--scb-text);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  background: #24262b;
+  border-radius: 999px;
+}
+
+.scrollbar-who[data-who="grab-it"] {
+  color: #fff;
+  background: rgb(130 151 255 / 30%);
+}
+
+.scrollbar-actions kbd {
+  margin-left: 4px;
+  padding: 0 4px;
+  color: var(--scb-muted);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  border: 1px solid var(--scb-border);
+  border-radius: 4px;
 }

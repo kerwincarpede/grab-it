@@ -10,14 +10,17 @@ function errorText(err: unknown): string {
 function statusOf(state: ScrollBarState): string {
   if (state.saving) return "Saving…";
   if (state.message) return state.message;
-  if (state.autoScrolling) return "Scrolling for you. Leave the mouse and trackpad alone.";
-  return "Scroll by hand, then choose Done.";
+  if (state.autoScrolling) return "Hands off the mouse. It stops and saves at the end.";
+  return "Scroll at a steady pace. Choose Done at the end.";
 }
 
 /**
  * The bar shown while a scrolling capture runs (src-tauri/src/scroll_bar.rs):
- * a progress stripe toward the length limit, the length so far, a live
- * preview of the newest part, what to do, Done and Cancel.
+ * a progress stripe toward the length limit, the length so far, who is
+ * scrolling, a live preview of the newest part, what to do, Done and
+ * Cancel. The bar never takes the focus, so Esc reaches Cancel through a
+ * global shortcut the capture holds while it runs (src-tauri/src/scroll.rs);
+ * the key is also handled here for a bar that has been clicked.
  */
 function ScrollBar() {
   const [state, setState] = useState<ScrollBarState | null>(null);
@@ -64,6 +67,17 @@ function ScrollBar() {
     });
   }
 
+  // Esc on a bar that has the focus; the global Esc covers the rest.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      end("cancel");
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
+
   const saving = state?.saving === true || ending === "done";
   const percent = Math.round(Math.min(Math.max(state?.progress ?? 0, 0), 1) * 100);
   return (
@@ -77,6 +91,12 @@ function ScrollBar() {
             <span className="scrollbar-title">Scrolling capture</span>
             <span className="scrollbar-length">{state ? `${state.width} × ${state.height}` : "Starting…"}</span>
           </div>
+          {/* A row of its own: the head has no room for it beside the title and length. */}
+          {state && !saving && !state.capped && (
+            <span className="scrollbar-who" data-who={state.autoScrolling ? "grab-it" : "me"}>
+              {state.autoScrolling ? "Grab-it is scrolling" : "You're scrolling"}
+            </span>
+          )}
           <div
             className="scrollbar-progress"
             role="progressbar"
@@ -96,8 +116,14 @@ function ScrollBar() {
           <button type="button" className="scrollbar-done" disabled={!state || ending !== null} onClick={() => end("done")}>
             {saving ? "Saving…" : "Done"}
           </button>
-          <button type="button" className="scrollbar-cancel" disabled={!state || ending !== null} onClick={() => end("cancel")}>
-            Cancel
+          <button
+            type="button"
+            className="scrollbar-cancel"
+            aria-keyshortcuts="Escape"
+            disabled={!state || ending !== null}
+            onClick={() => end("cancel")}
+          >
+            Cancel <kbd aria-hidden="true">Esc</kbd>
           </button>
         </div>
       </div>

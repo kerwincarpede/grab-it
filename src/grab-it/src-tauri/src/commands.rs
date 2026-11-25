@@ -197,6 +197,20 @@ pub fn set_show_in_dock(
     Ok(settings)
 }
 
+/// Remembers the Who scrolls? card picked in a scrolling capture's guide,
+/// so the next capture starts with it.
+#[tauri::command]
+#[specta::specta]
+pub fn remember_scroll_by_hand(
+    by_hand: bool,
+    state: State<'_, SettingsState>,
+) -> Result<(), String> {
+    lock(&state)
+        .set_scroll_by_hand(by_hand)
+        .map(|_| ())
+        .map_err(|err| err.to_string())
+}
+
 /// Remembers the chosen folder for the next image, Library or guide export.
 #[tauri::command]
 #[specta::specta]

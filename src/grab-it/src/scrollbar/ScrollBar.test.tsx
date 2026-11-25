@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { emit } from "@tauri-apps/api/event";
 import { describe, expect, it } from "vitest";
@@ -44,7 +44,31 @@ describe("ScrollBar", () => {
     expect(await screen.findByText("1200 × 4800")).toBeInTheDocument();
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "16");
     expect(screen.getByRole("img")).toHaveAttribute("src", STATE.preview);
-    expect(screen.getByRole("status")).toHaveTextContent("Scrolling for you. Leave the mouse and trackpad alone.");
+    expect(screen.getByRole("status")).toHaveTextContent("Hands off the mouse. It stops and saves at the end.");
+    expect(screen.getByText("Grab-it is scrolling")).toBeInTheDocument();
+  });
+
+  it("says what to do by hand when the capture sends no message", async () => {
+    backend({ ...STATE, autoScrolling: false });
+    render(<ScrollBar />);
+    await screen.findByText("You're scrolling");
+    expect(screen.getByRole("status")).toHaveTextContent("Scroll at a steady pace. Choose Done at the end.");
+  });
+
+  it("switches the chip when the user takes over", async () => {
+    backend();
+    render(<ScrollBar />);
+    await screen.findByText("Grab-it is scrolling");
+    await act(() =>
+      emit(SCROLL_BAR_STATE_EVENT, {
+        ...STATE,
+        autoScrolling: false,
+        message: "You moved the mouse, so you're scrolling now. Keep going, then choose Done.",
+      }),
+    );
+    expect(await screen.findByText("You're scrolling")).toBeInTheDocument();
+    expect(screen.queryByText("Grab-it is scrolling")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("You moved the mouse, so you're scrolling now.");
   });
 
   it("follows the states the capture sends, such as scrolling too fast", async () => {
@@ -56,15 +80,32 @@ describe("ScrollBar", () => {
         ...STATE,
         height: 6000,
         autoScrolling: false,
-        message: "Scrolled too fast. Scroll back a little.",
+        message: "Too fast to join. Scroll back a little.",
       }),
     );
     expect(await screen.findByText("1200 × 6000")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Scrolled too fast. Scroll back a little.");
+    expect(screen.getByRole("status")).toHaveTextContent("Too fast to join. Scroll back a little.");
+  });
+
+  it("puts the chip on a row of its own, clear of the title and length", async () => {
+    backend();
+    render(<ScrollBar />);
+    const chip = await screen.findByText("Grab-it is scrolling");
+    const head = screen.getByText("Scrolling capture").parentElement as HTMLElement;
+    expect(head).toContainElement(screen.getByText("1200 × 4800"));
+    expect(head).not.toContainElement(chip);
+  });
+
+  it("hides the chip once the limit stops the image growing", async () => {
+    backend({ ...STATE, capped: true, message: "Reached the 30,000 px limit. Choose Done to save it." });
+    render(<ScrollBar />);
+    await screen.findByText("Reached the 30,000 px limit. Choose Done to save it.");
+    expect(screen.queryByText("Grab-it is scrolling")).not.toBeInTheDocument();
+    expect(screen.queryByText("You're scrolling")).not.toBeInTheDocument();
   });
 
   it("marks the length limit", async () => {
-    backend({ ...STATE, progress: 1, capped: true, message: "The image has reached its length limit. Choose Done to save it." });
+    backend({ ...STATE, progress: 1, capped: true, message: "Reached the 30,000 px limit. Choose Done to save it." });
     render(<ScrollBar />);
     await waitFor(() => expect(screen.getByRole("progressbar")).toHaveAttribute("data-capped", "true"));
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
@@ -88,6 +129,20 @@ describe("ScrollBar", () => {
     await waitFor(() => expect(cancel).toBeEnabled());
     await userEvent.click(cancel);
     expect(calls.filter((call) => call.cmd === "scroll_cancel").map((call) => call.payload)).toEqual([{ sessionId: 7 }]);
+  });
+
+  it("cancels with Esc, which Cancel shows", async () => {
+    const calls = backend();
+    render(<ScrollBar />);
+    const cancel = await screen.findByRole("button", { name: "Cancel" });
+    await waitFor(() => expect(cancel).toBeEnabled());
+    expect(cancel).toHaveAttribute("aria-keyshortcuts", "Escape");
+    expect(cancel).toHaveTextContent("Esc");
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() =>
+      expect(calls.filter((call) => call.cmd === "scroll_cancel").map((call) => call.payload)).toEqual([{ sessionId: 7 }]),
+    );
   });
 
   it("can be pressed again when Done failed", async () => {

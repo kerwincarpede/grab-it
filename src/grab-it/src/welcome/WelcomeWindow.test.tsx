@@ -120,6 +120,7 @@ describe("WelcomeWindow", () => {
     const calls = mockBackend();
     render(<WelcomeWindow />);
     const row = (await screen.findByText("Scrolling capture")).closest("li") as HTMLElement;
+    expect(row).toHaveTextContent("Grab-it scrolls down from what's on screen");
     expect(within(row).getByText("No hotkey")).toBeInTheDocument();
     expect(row.querySelector("kbd")).toBeNull();
     await userEvent.click(within(row).getByRole("button", { name: "Start Scrolling capture" }));
