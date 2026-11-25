@@ -1202,7 +1202,7 @@
   margin-left: 0;
 }
 
-/* Scroll's guide: the steps, what Grab-it will do, and who scrolls. */
+/* Scroll's guide: the step the setup is on, who scrolls, what happens and Start. */
 .scroll-guide {
   position: absolute;
   left: 50%;
@@ -1230,6 +1230,44 @@
   margin-top: 8px;
 }
 
+.scroll-guide kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 19px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  color: #c9ccd2;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  background: #1c1e22;
+  border: 1px solid #2e3036;
+  border-bottom-width: 2px;
+  border-radius: 5px;
+}
+
+.scroll-guide-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.scroll-guide-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.scroll-guide-esc {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  color: rgb(236 237 239 / 60%);
+  font-size: 12px;
+}
+
 .scroll-guide-steps {
   display: grid;
   gap: 6px;
@@ -1241,27 +1279,32 @@
 .scroll-guide-steps li {
   display: flex;
   gap: 8px;
-  align-items: center;
+  align-items: flex-start;
   color: rgb(236 237 239 / 60%);
 }
 
 .scroll-guide-steps li[data-state="current"] {
   color: #fff;
-  font-weight: 600;
 }
 
-.scroll-guide-steps li[data-state="done"] {
-  text-decoration: line-through;
+.scroll-guide-steps li[data-state="current"] .scroll-guide-title {
+  font-weight: 600;
 }
 
 .scroll-guide-number {
   display: inline-grid;
+  flex: none;
   place-items: center;
   width: 20px;
   height: 20px;
+  box-sizing: border-box;
   font-size: 12px;
   border: 1px solid currentcolor;
   border-radius: 50%;
+}
+
+.scroll-guide-number [role="img"] {
+  display: inline-grid;
 }
 
 .scroll-guide-steps li[data-state="current"] .scroll-guide-number {
@@ -1270,25 +1313,46 @@
   border-color: var(--overlay-accent);
 }
 
-.scroll-guide-text {
+.scroll-guide-steps li[data-state="done"] .scroll-guide-number {
+  color: #7ee2a8;
+  border-color: #7ee2a8;
+}
+
+.scroll-guide-step {
   display: grid;
+  gap: 2px;
+  padding-top: 1px;
 }
 
-.scroll-guide-text > p {
-  grid-area: 1 / 1;
+.scroll-guide-title {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
 }
 
-.scroll-guide-spacer {
-  visibility: hidden;
+.scroll-guide-optional {
+  padding: 0 6px;
+  color: rgb(236 237 239 / 70%);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  border: 1px solid var(--overlay-panel-edge);
+  border-radius: 999px;
 }
 
-.scroll-guide-text > p,
-.scroll-guide-warning {
+.scroll-guide-sub {
+  color: rgb(236 237 239 / 70%);
+  font-size: 12px;
+}
+
+.scroll-guide-label {
   margin: 0;
-}
-
-.scroll-guide-warning {
-  color: #f5c46b;
+  color: rgb(236 237 239 / 60%);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .scroll-guide button {
@@ -1301,17 +1365,143 @@
   cursor: pointer;
 }
 
+.scroll-guide button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 .scroll-guide-who {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 6px;
 }
 
-.scroll-guide-who button[aria-checked="true"] {
+.scroll-guide-who .scroll-guide-label {
+  grid-column: 1 / -1;
+}
+
+.scroll-guide .scroll-guide-card {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  padding: 8px 10px;
+  text-align: left;
+  border-radius: 8px;
+}
+
+.scroll-guide .scroll-guide-card[aria-checked="true"] {
+  background: rgb(47 129 247 / 22%);
+  border-color: var(--overlay-accent);
+}
+
+.scroll-guide-card-name {
+  font-weight: 600;
+}
+
+.scroll-guide-card-use {
+  color: rgb(236 237 239 / 70%);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.scroll-guide-what {
+  display: grid;
+  gap: 6px;
+}
+
+.scroll-guide-text {
+  display: grid;
+}
+
+.scroll-guide-text > div {
+  grid-area: 1 / 1;
+}
+
+.scroll-guide-spacer {
+  visibility: hidden;
+}
+
+.scroll-guide-points {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.scroll-guide-foot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.scroll-guide-docs {
+  color: #8ab8ff;
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.scroll-guide .scroll-guide-start {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-weight: 600;
   background: var(--overlay-accent);
   border-color: var(--overlay-accent);
 }
 
-.scroll-guide-who button:disabled {
-  cursor: default;
-  opacity: 0.5;
+.scroll-guide-warning {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 -16px -14px;
+  padding: 10px 16px;
+  color: #f5c46b;
+  background: rgb(245 196 107 / 10%);
+  border-top: 1px solid rgb(245 196 107 / 30%);
+  border-radius: 0 0 12px 12px;
+}
+
+.scroll-guide-warning button {
+  flex: none;
+}
+
+/* The held area's top edge, where the image starts, and which way it grows. */
+.scroll-start-label,
+.scroll-direction {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 10px;
+  color: #fff;
+  font-family: "Instrument Sans Variable", system-ui, -apple-system, sans-serif;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.scroll-start-label {
+  background: var(--overlay-accent);
+}
+
+.scroll-direction {
+  flex-direction: column;
+  gap: 2px;
+  color: #ecedef;
+  background: rgb(16 17 19 / 88%);
+  border: 1px solid #2a2c31;
+  border-radius: 10px;
+}
+
+.scroll-direction-arrow {
+  font-size: 18px;
+  line-height: 18px;
 }

@@ -20,9 +20,11 @@ import {
   onOverlayRevealed,
   onOverlayChoice,
   onOverlayStart,
+  openScrollDocs,
   overlayImage,
   overlayInfo,
   overlayReady,
+  rememberScrollByHand,
   type OverlayChoice,
   type OverlayInfo,
   type OverlayIntent,
@@ -112,7 +114,9 @@ const SETUP_HINT_GAP = 10;
 /** How near the edge the setup toolbar's centre may be dragged. */
 const SETUP_EDGE = 40;
 /** How much of the bottom edge Scroll's guide needs before it moves to the top. */
-const SCROLL_GUIDE_ROOM = 220;
+const SCROLL_GUIDE_ROOM = 380;
+/** How far in from the held area's left edge Image starts here sits, clear of the corner handle. */
+const SCROLL_START_INSET = 16;
 /**
  * The hovered window's rounded corners, in CSS px. Matches `.overlay-window`
  * and `.overlay-dim-corner`.
@@ -355,7 +359,7 @@ function RegionOverlay() {
   // All-in-one's toolbar: the mode picked, and the Timer in seconds.
   const [tool, setTool] = useState<Tool>("region");
   const [timer, setTimer] = useState(0);
-  // Scroll's setup: Grab-it scrolls unless the user chooses to.
+  // Scroll's setup: Grab-it scrolls unless the user chose Me, now or last time.
   const [scrollByHand, setScrollByHand] = useState(false);
   const toolbar = useRef<HTMLDivElement>(null);
   // Each mode's global shortcut, for the toolbar's tooltips.
@@ -411,6 +415,8 @@ function RegionOverlay() {
           started = true;
           benchMark("info");
           setInfo(loaded);
+          // The Who scrolls? card picked last time.
+          setScrollByHand(loaded.scrollByHand === true);
           // Another monitor's toolbar may have chosen before this page loaded.
           if (loaded.allInOne && loaded.choice) follow(loaded.choice);
           return overlayImage().then((bytes) => {
@@ -575,10 +581,17 @@ function RegionOverlay() {
   const accessibility = useAccessibility(intent === "scroll");
   const scrollManual = scrollByHand || accessibility === false;
 
-  /** Who scrolls, chosen in the guide, shared with every monitor's overlay. */
+  /**
+   * Who scrolls, chosen in the guide, shared with every monitor's overlay
+   * and remembered for the next capture. Only a card the user picks is
+   * remembered, never the fallback to Me while Accessibility is off.
+   */
   function chooseWhoScrolls(byHand: boolean) {
     setScrollByHand(byHand);
     share(tool, timer, byHand);
+    rememberScrollByHand(byHand).catch(() => {
+      // The next capture starts with the card picked before.
+    });
   }
   const recording = useRecordingOptions(intent === "record");
   // What a recording records: the source used last, until another is picked.
@@ -656,6 +669,13 @@ function RegionOverlay() {
     if (done.current) return;
     done.current = true;
     void cancelOverlay();
+  }
+
+  /** The scrolling capture guide's docs link: cancels, then opens the page. */
+  function openDocs() {
+    if (done.current) return;
+    done.current = true;
+    openScrollDocs().catch(() => cancelOverlay());
   }
 
   /** What All-in-one's toolbar chose, sent with a selection made in `mode`. */
@@ -1174,6 +1194,33 @@ function RegionOverlay() {
       {held && !dragging && placement && source !== "screen" && (
         <SelectionFrame box={held} placement={placement} handles={source === null || source === "region"} />
       )}
+      {intent === "scroll" && held && !dragging && isDrag(held) && (
+        <>
+          <span
+            className="scroll-start-label"
+            data-testid="scroll-start-label"
+            style={{
+              transform: `translate3d(${held.x + SCROLL_START_INSET}px, ${Math.max(held.y, 12)}px, 0) translateY(-50%)`,
+            }}
+          >
+            Image starts here
+          </span>
+          {!scrollManual && (
+            <span
+              className="scroll-direction"
+              data-testid="scroll-direction"
+              style={{
+                transform: `translate3d(${held.x + held.width / 2}px, ${held.y + held.height - 12}px, 0) translate(-50%, -100%)`,
+              }}
+            >
+              <span className="scroll-direction-arrow" aria-hidden="true">
+                ↓
+              </span>
+              Grab-it scrolls down to the end
+            </span>
+          )}
+        </>
+      )}
       {held && source === "screen" && (
         <div className="overlay-screen-frame" data-testid="overlay-screen" aria-hidden="true" />
       )}
@@ -1320,6 +1367,8 @@ function RegionOverlay() {
           accessibility={accessibility}
           edge={held && held.y + held.height > view.height - SCROLL_GUIDE_ROOM ? "top" : "bottom"}
           top={top + (allInOne ? toolbarRoom : 0)}
+          onStart={confirmHeld}
+          onDocs={openDocs}
         />
       )}
       {showHint && (

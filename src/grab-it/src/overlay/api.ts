@@ -140,6 +140,19 @@ export function cancelOverlay(): Promise<void> {
 }
 
 /**
+ * The scrolling capture guide's docs link: closes the overlays, as Cancel
+ * does, and opens the Scrolling capture page in the browser.
+ */
+export function openScrollDocs(): Promise<void> {
+  return commands.overlayScrollDocs();
+}
+
+/** Remembers the Who scrolls? card picked, for the next scrolling capture. */
+export async function rememberScrollByHand(byHand: boolean): Promise<void> {
+  await commands.rememberScrollByHand(byHand);
+}
+
+/**
  * Remembers where the setup toolbar was dragged to, its centre in this
  * overlay's CSS px, as the spot the recording toolbar opens at on this
  * display (`record_bar_remember`).

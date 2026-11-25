@@ -148,3 +148,32 @@
   cursor: default;
   opacity: 0.6;
 }
+
+/* Who is scrolling: Grab-it, or the user. */
+.scrollbar-who {
+  flex: none;
+  margin-right: auto;
+  padding: 0 8px;
+  color: var(--scb-text);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  background: #24262b;
+  border-radius: 999px;
+}
+
+.scrollbar-who[data-who="grab-it"] {
+  color: #fff;
+  background: rgb(130 151 255 / 30%);
+}
+
+.scrollbar-actions kbd {
+  margin-left: 4px;
+  padding: 0 4px;
+  color: var(--scb-muted);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  border: 1px solid var(--scb-border);
+  border-radius: 4px;
+}

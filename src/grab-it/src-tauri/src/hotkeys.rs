@@ -19,7 +19,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{
+    Code, GlobalShortcut, GlobalShortcutExt, Shortcut, ShortcutState,
+};
 
 use crate::rt::{AppHandle, TauriPlugin};
 use crate::{
@@ -183,6 +185,8 @@ pub struct HotkeyState {
     /// Set while Settings records a hotkey, so pressing a current hotkey
     /// there records it instead of starting a capture.
     paused: AtomicBool,
+    /// Set while a scrolling capture runs: Esc is registered to cancel it.
+    escape: AtomicBool,
 }
 
 impl HotkeyState {
@@ -297,6 +301,71 @@ pub fn pause(app: &AppHandle) {
     }
     state.bound().clear();
     publish_labels(app, Vec::new());
+    restore_escape(app);
+}
+
+/// Esc, which cancels a running scrolling capture.
+fn escape() -> Shortcut {
+    Shortcut::new(None, Code::Escape)
+}
+
+/// The global-shortcut plugin, when it is running; the IPC tests have none.
+fn shortcuts(app: &AppHandle) -> Option<tauri::State<'_, GlobalShortcut<crate::rt::Rt>>> {
+    app.try_state::<GlobalShortcut<crate::rt::Rt>>()
+}
+
+/// Registers Esc to cancel the scrolling capture that is starting. Its bar
+/// never takes the focus, so the key would otherwise go to the page being
+/// captured. A failure is logged: the bar's Cancel still works.
+pub fn hold_escape(app: &AppHandle) {
+    let Some(state) = app.try_state::<HotkeyState>() else {
+        return;
+    };
+    state.escape.store(true, Ordering::SeqCst);
+    register_escape(app);
+}
+
+/// Releases Esc once the scrolling capture has ended, however it ended.
+pub fn release_escape(app: &AppHandle) {
+    let Some(state) = app.try_state::<HotkeyState>() else {
+        return;
+    };
+    if !state.escape.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    if let Some(shortcuts) = shortcuts(app)
+        && shortcuts.is_registered(escape())
+        && let Err(err) = shortcuts.unregister(escape())
+    {
+        eprintln!("Grab-it: could not release Esc after the scrolling capture: {err}");
+    }
+}
+
+/// Registers Esc again after every hotkey was unregistered, while a
+/// scrolling capture still runs.
+fn restore_escape(app: &AppHandle) {
+    if app
+        .try_state::<HotkeyState>()
+        .is_some_and(|state| state.escape.load(Ordering::SeqCst))
+    {
+        register_escape(app);
+    }
+}
+
+fn register_escape(app: &AppHandle) {
+    #[cfg(target_os = "linux")]
+    if crate::portal::is_wayland() {
+        return;
+    }
+    let Some(shortcuts) = shortcuts(app) else {
+        return;
+    };
+    if shortcuts.is_registered(escape()) {
+        return;
+    }
+    if let Err(err) = shortcuts.register(escape()) {
+        eprintln!("Grab-it: could not register Esc to cancel the scrolling capture: {err}");
+    }
 }
 
 /// Undoes [`pause`], registering the saved hotkeys again.
@@ -336,7 +405,15 @@ pub fn resume_hotkeys(app: AppHandle) {
 pub fn plugin() -> TauriPlugin {
     tauri_plugin_global_shortcut::Builder::new()
         .with_handler(|app, shortcut, event| {
-            if event.state != ShortcutState::Pressed || is_paused(app) {
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+            // Esc is only registered while a scrolling capture runs.
+            if *shortcut == escape() {
+                crate::scroll::cancel_running(app);
+                return;
+            }
+            if is_paused(app) {
                 return;
             }
             let action = app.try_state::<HotkeyState>().and_then(|state| {
@@ -396,6 +473,7 @@ pub fn apply(app: &AppHandle, hotkeys: &Hotkeys) -> Vec<String> {
         *state.bound() = bound;
     }
     publish_labels(app, labels);
+    restore_escape(app);
     problems
 }
 

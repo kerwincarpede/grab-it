@@ -21,24 +21,34 @@ Each one opens Capture & record… with **Scroll** already picked.
 
 ## Follow the guide
 
-A panel walks you through three steps:
+A panel headed **Scrolling capture** walks you through the setup. It shows the step you're on, ticks the steps you've done, and reminds you that `Esc` cancels.
 
-1. **Choose a window, or drag an area.** Click the window you want, or drag over the part of the screen that scrolls.
-2. **Adjust it.** Drag the edges to keep the whole window or just the part that scrolls.
-3. **Start.** Press **Start scrolling** or `Enter`.
+1. **Click a window or drag over an area.** Pick the part of the screen that scrolls.
+2. **Trim the edges** (optional). Drag the edges in if you want less. Fixed headers and sidebars are fine: they appear once, at the top.
+3. **Start.** Choose **Start scrolling** or press `Enter`.
 
-Before you start, choose who scrolls:
+The image starts at the top edge of the area, marked **Image starts here**, from what's on screen now. Grab-it doesn't scroll to the top first, so if the page isn't at the top, press `Esc`, scroll up, and start again.
 
-- **Scroll for me** (the default): Grab-it moves the pointer to the middle of the area and scrolls it. Leave the mouse and trackpad alone until it finishes. It saves once the page stops moving, even if something on the page keeps animating.
-- **I'll scroll myself**: scroll the page at a steady pace, then choose **Done**.
+**How scrolling capture works** at the foot of the panel closes Capture & record… and opens this page.
+
+## Choose who scrolls
+
+Under **Who scrolls?** pick one of two cards. Grab-it remembers your choice for the next capture. **What happens** below them lists what to expect from the one you picked.
+
+| Card | Pick it for | What happens |
+| --- | --- | --- |
+| **Grab-it** (the default) | Hands-free capture. Best for most pages. | An arrow on the area says **Grab-it scrolls down to the end**. Grab-it moves the pointer to the middle of the area and scrolls it. Keep your hands off the mouse and trackpad. It stops at the end and saves on its own, even if something on the page keeps animating. |
+| **Me** | Pages that load more as you scroll, or apps Grab-it can't scroll. | Scroll at a steady pace. If the bar says you went too fast, scroll back a little. Choose **Done** on the bar at the top of the screen when you reach the end. |
 
 ## If you move the mouse
 
-Moving the pointer more than 8 points from where Grab-it placed it switches that capture to scrolling by hand. Keep scrolling yourself, then choose **Done**. If you scroll so fast that the views no longer overlap, the capture bar says **Scrolled too fast. Scroll back a little.** Scroll back until it grows again.
+Moving the pointer more than 8 points from where Grab-it placed it hands scrolling to you for the rest of that capture. The bar says **You moved the mouse, so you're scrolling now. Keep going, then choose Done.** If you scroll so fast that the views no longer overlap, it says **Too fast to join. Scroll back a little.** Scroll back until the image grows again.
+
+If the page doesn't move when Grab-it scrolls, or moves but the views don't line up, the bar asks you to scroll it yourself and choose **Done**.
 
 ## Finish
 
-While it runs, a capture bar shows a stripe for how far the image is toward its 30,000 px limit, the size so far, a live preview of the newest part and what to do next. The bar stays out of the image. **Done** saves one stitched image and shows **Saving…** until it is saved; **Cancel** throws it away. At 30,000 px along the scroll direction the image stops growing; choose **Done** or **Cancel**.
+While it runs, a capture bar at the top of the screen shows who is scrolling (**Grab-it is scrolling** or **You're scrolling**), a stripe for how far the image is toward its 30,000 px limit, the size so far, a live preview of the newest part and what to do next. The bar stays out of the image. **Done** saves one stitched image and shows **Saving…** until it is saved; **Cancel** or `Esc` throws it away. At 30,000 px along the scroll direction the image stops growing and the bar says **Reached the 30,000 px limit. Choose Done to save it.**
 
 On Linux (X11) the bar moves outside the area you chose. When the area leaves it no room, it hides briefly for each view Grab-it reads.
 
@@ -50,6 +60,6 @@ On Linux (X11) the bar moves outside the area you chose. When the area leaves it
 
 ## Permissions and platforms
 
-On macOS, Grab-it needs **Accessibility** permission to scroll for you. When it is off, the guide says so and offers **Open Settings**, and the capture runs by hand. See [Permissions](/grab-it/recording/permissions/#automatic-scrolling).
+On macOS, Grab-it needs **Accessibility** permission to scroll for you. When it is off, the **Grab-it** card says **Needs Accessibility permission.**, a banner at the foot of the guide offers **Open Settings**, and you scroll. See [Permissions](/grab-it/recording/permissions/#automatic-scrolling).
 
 Scrolling capture is not available on Wayland.

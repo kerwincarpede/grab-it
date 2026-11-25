@@ -78,11 +78,25 @@ fn bar_state(
 }
 
 /// Shown when the user chose to scroll by hand.
-const BY_HAND: &str = "Scroll at a steady pace, then choose Done.";
-/// Shown once the image has reached its length limit.
-const CAPPED: &str = "The image has reached its length limit. Choose Done to save it.";
+const BY_HAND: &str = "Scroll at a steady pace. Choose Done at the end.";
+/// Shown once the image has reached its length limit, [`crate::stitch::MAX_LENGTH`].
+const CAPPED: &str = "Reached the 30,000 px limit. Choose Done to save it.";
 /// Shown by hand while frames cannot be placed.
-const TOO_FAST: &str = "Scrolled too fast. Scroll back a little.";
+const TOO_FAST: &str = "Too fast to join. Scroll back a little.";
+/// Shown when Grab-it may not post scroll events.
+const NO_ACCESSIBILITY: &str =
+    "Grab-it can't scroll without Accessibility permission. Scroll yourself, then choose Done.";
+/// Shown once the pointer moved while Grab-it was scrolling.
+const MOUSE_MOVED: &str =
+    "You moved the mouse, so you're scrolling now. Keep going, then choose Done.";
+/// Shown when Grab-it's scrolling never moved the page.
+const DID_NOT_SCROLL: &str =
+    "This page didn't scroll for Grab-it. Scroll it yourself, then choose Done.";
+/// Shown when the page moved under Grab-it's scrolling but no frame lined up.
+const NOT_JOINED: &str =
+    "The page moved, but the views didn't line up. Scroll it yourself, slowly, then choose Done.";
+/// Shown when the pointer could not be placed or a scroll event not posted.
+const CANNOT_SCROLL: &str = "Grab-it can't scroll here. Scroll it yourself, then choose Done.";
 
 /// A session never resumes synthetic input after yielding to the user.
 struct AutoScroll {
@@ -99,8 +113,7 @@ impl AutoScroll {
         Self {
             center,
             scale: usable_scale(scale),
-            reason: (!allowed)
-                .then_some("Accessibility permission is needed. Scroll by hand, then choose Done."),
+            reason: (!allowed).then_some(NO_ACCESSIBILITY),
             still_steps: 0,
             moved: false,
         }
@@ -114,7 +127,7 @@ impl AutoScroll {
                 dx * dx + dy * dy > limit * limit
             })
         {
-            self.reason = Some("Mouse moved. Scroll by hand, then choose Done.");
+            self.reason = Some(MOUSE_MOVED);
         }
     }
     /// Count only unchanged frames after successful wheel events. Rejected
@@ -132,9 +145,9 @@ impl AutoScroll {
             // Content that moved but never lined up did scroll; saying
             // nothing scrolled would send the user looking for the wrong fault.
             self.reason = Some(if self.moved {
-                "The page scrolled, but Grab-it could not join the views. Scroll by hand, then choose Done."
+                NOT_JOINED
             } else {
-                "Nothing scrolled automatically. Scroll by hand, then choose Done."
+                DID_NOT_SCROLL
             });
             return false;
         }
@@ -243,6 +256,17 @@ pub fn scroll_done(app: AppHandle, session_id: u64) {
 pub fn scroll_cancel(app: AppHandle, session_id: u64) {
     end(&app, session_id, 2);
 }
+/// Esc while a scrolling capture runs: cancels it, as the bar's Cancel does.
+pub fn cancel_running(app: &AppHandle) {
+    let Some(state) = app.try_state::<ScrollState>() else {
+        return;
+    };
+    if let Some(c) = state_lock(&state).as_ref() {
+        let _ = c
+            .end
+            .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst);
+    }
+}
 fn end(app: &AppHandle, id: u64, action: u8) {
     if let Some(c) = state_lock(&app.state::<ScrollState>())
         .as_ref()
@@ -342,6 +366,9 @@ pub fn start(
         end: AtomicU8::new(0),
     });
     *state_lock(&app.state::<ScrollState>()) = Some(control.clone());
+    // The bar never takes the focus, so Esc is held globally until the
+    // session ends.
+    crate::hotkeys::hold_escape(app);
     let handle = app.clone();
     let monitor = monitor.clone();
     let spawned = std::thread::Builder::new()
@@ -359,7 +386,7 @@ pub fn start(
                 }
                 if allowed {
                     if place_pointer(&monitor, (rect.x + center.0, rect.y + center.1)).is_err() {
-                        auto.reason = Some("Automatic scrolling is unavailable. Scroll by hand, then choose Done.");
+                        auto.reason = Some(CANNOT_SCROLL);
                     }
                     std::thread::sleep(Duration::from_millis(100));
                 }
@@ -379,12 +406,19 @@ pub fn start(
                 let mut too_fast = false;
                 let state = |s: &Stitcher, a: &AutoScroll, too_fast: bool, saving: bool| {
                     let mut state = bar_state(control.id, s, a.reason, too_fast, saving);
-                    state.preview = scroll_bar::preview_url(&s.image, s.axis, s.reverse == Some(true));
+                    state.preview =
+                        scroll_bar::preview_url(&s.image, s.axis, s.reverse == Some(true));
                     state
                 };
                 // Kept out of the frames where the system allows; on X11 it
                 // moves outside the area, or with no room hides for each grab.
-                let overlaps = scroll_bar::show(&handle, &monitor, rect, image_size, state(&stitch, &auto, too_fast, false))?;
+                let overlaps = scroll_bar::show(
+                    &handle,
+                    &monitor,
+                    rect,
+                    image_size,
+                    state(&stitch, &auto, too_fast, false),
+                )?;
                 // The bar may have opened over the area before it was placed:
                 // start the video cache only once it is in its place.
                 drop(source);
@@ -433,7 +467,11 @@ pub fn start(
                     // The automatic step breaks ties between offsets.
                     let hint = wheel_pending.then(|| {
                         let step = i64::from(step_pixels(rect.width, rect.height, stitch.axis));
-                        if stitch.reverse == Some(true) { -step } else { step }
+                        if stitch.reverse == Some(true) {
+                            -step
+                        } else {
+                            step
+                        }
                     });
                     let outcome = stitch.push_with_hint(frame.image, hint);
                     // Only content that stayed put counts toward the end, so
@@ -442,14 +480,20 @@ pub fn start(
                     let changed = outcome == Push::Grew;
                     too_fast = too_fast_after(outcome, auto.reason.is_some(), too_fast);
                     if wheel_pending && auto.at_end(unchanged, stitch.axis.is_some()) {
-                        let _ = control.end.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
+                        let _ =
+                            control
+                                .end
+                                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
                         break;
                     }
                     wheel_pending = false;
                     if changed || old_reason != auto.reason || old_too_fast != too_fast {
                         scroll_bar::update(&handle, state(&stitch, &auto, too_fast, false));
                     }
-                    if auto.reason.is_none() && !stitch.capped && control.end.load(Ordering::SeqCst) == 0 {
+                    if auto.reason.is_none()
+                        && !stitch.capped
+                        && control.end.load(Ordering::SeqCst) == 0
+                    {
                         let step = step_amount(
                             step_pixels(rect.width, rect.height, stitch.axis),
                             monitor.scale_factor,
@@ -457,7 +501,7 @@ pub fn start(
                         if post_wheel(&auto.wheel(stitch.axis, stitch.reverse, step)).is_ok() {
                             wheel_pending = true;
                         } else {
-                            auto.reason = Some("Automatic scrolling is unavailable. Scroll by hand, then choose Done.");
+                            auto.reason = Some(CANNOT_SCROLL);
                             scroll_bar::update(&handle, state(&stitch, &auto, too_fast, false));
                         }
                     }
@@ -479,12 +523,16 @@ pub fn start(
             })();
             scroll_bar::close(&handle);
             scroll_bar::clear(&handle);
+            // Released before the state is cleared, so it cannot undo the
+            // next session's Esc.
+            crate::hotkeys::release_escape(&handle);
             *state_lock(&handle.state::<ScrollState>()) = None;
             if let Err(e) = result {
                 actions::report_failure(&handle, &e);
             }
         });
     if let Err(e) = spawned {
+        crate::hotkeys::release_escape(app);
         *state_lock(&app.state::<ScrollState>()) = None;
         return Err(e.to_string().into());
     }
@@ -950,12 +998,7 @@ mod tests {
             assert!(!auto.at_end(true, false));
         }
         assert!(!auto.at_end(true, false));
-        assert_eq!(
-            auto.reason,
-            Some(
-                "The page scrolled, but Grab-it could not join the views. Scroll by hand, then choose Done."
-            )
-        );
+        assert_eq!(auto.reason, Some(NOT_JOINED));
     }
 
     #[test]
@@ -985,6 +1028,16 @@ mod tests {
         assert!(too_fast_after(Push::Capped, true, true));
     }
     #[test]
+    fn the_limit_message_names_the_real_limit() {
+        assert_eq!(crate::stitch::MAX_LENGTH, 30_000);
+        assert!(CAPPED.contains("30,000 px"));
+    }
+    #[test]
+    fn accessibility_off_says_why_and_hands_scrolling_over() {
+        let auto = AutoScroll::new((0, 0), false, 1.0);
+        assert_eq!(auto.reason, Some(NO_ACCESSIBILITY));
+    }
+    #[test]
     fn frames_are_read_faster_by_hand() {
         assert_eq!(read_interval(true), Duration::from_millis(100));
         assert_eq!(read_interval(false), Duration::from_millis(250));
@@ -992,7 +1045,7 @@ mod tests {
     #[test]
     fn the_bar_says_the_limit_then_too_fast_then_why() {
         let mut stitch = Stitcher::new(frame(Axis::Vertical, 0, false));
-        let reason = Some("Mouse moved. Scroll by hand, then choose Done.");
+        let reason = Some(MOUSE_MOVED);
         let auto = bar_state(1, &stitch, None, false, false);
         assert!(auto.auto_scrolling);
         assert_eq!(auto.message, None);
@@ -1015,10 +1068,7 @@ mod tests {
         auto.observe_pointer(Some((116, 100)));
         assert!(auto.reason.is_none());
         auto.observe_pointer(Some((112, 112)));
-        assert_eq!(
-            auto.reason,
-            Some("Mouse moved. Scroll by hand, then choose Done.")
-        );
+        assert_eq!(auto.reason, Some(MOUSE_MOVED));
     }
     #[test]
     fn end_requires_five_consecutive_unchanged_wheel_steps() {
@@ -1047,10 +1097,7 @@ mod tests {
             assert!(auto.reason.is_none());
         }
         assert!(!auto.at_end(true, stitch.axis.is_some()));
-        assert_eq!(
-            auto.reason,
-            Some("Nothing scrolled automatically. Scroll by hand, then choose Done.")
-        );
+        assert_eq!(auto.reason, Some(DID_NOT_SCROLL));
         assert_eq!(stitch.image, first);
         // A horizontal gesture can still grow the image, but yielding to the
         // user is permanent: a later stall must wait for Done or Cancel.

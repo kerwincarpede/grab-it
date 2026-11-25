@@ -991,6 +991,10 @@ pub struct Settings {
     /// Settings › Updates: which releases the updater checks.
     #[serde(default)]
     pub update_channel: UpdateChannel,
+    /// Scrolling capture: the Who scrolls? card picked last was Me. Kept in
+    /// settings.json only; Settings has no control for it.
+    #[serde(skip)]
+    pub(crate) scroll_by_hand: bool,
 }
 
 impl Settings {
@@ -1014,6 +1018,7 @@ impl Settings {
             agent_access: false,
             last_export_folder: None,
             update_channel: UpdateChannel::Stable,
+            scroll_by_hand: false,
         }
     }
 }
@@ -1077,6 +1082,8 @@ struct StoredSettings {
     last_export_folder: Option<PathBuf>,
     /// Read leniently by [`UpdateChannel::from_stored`].
     update_channel: Option<serde_json::Value>,
+    #[serde(default)]
+    scroll_by_hand: Option<bool>,
 }
 
 /// Hotkeys on disk; a missing or empty one keeps its default.
@@ -1174,6 +1181,7 @@ impl StoredSettings {
                 .update_channel
                 .map(UpdateChannel::from_stored)
                 .unwrap_or(defaults.update_channel),
+            scroll_by_hand: self.scroll_by_hand.unwrap_or(defaults.scroll_by_hand),
         }
     }
 }
@@ -1246,6 +1254,7 @@ struct SettingsOnDisk<'a> {
     permissions: PermissionSetup,
     agent_access: bool,
     update_channel: UpdateChannel,
+    scroll_by_hand: bool,
 }
 
 #[derive(Serialize)]
@@ -1317,6 +1326,7 @@ impl<'a> SettingsOnDisk<'a> {
             agent_access: settings.agent_access,
             last_export_folder: settings.last_export_folder.as_deref(),
             update_channel: settings.update_channel,
+            scroll_by_hand: settings.scroll_by_hand,
         }
     }
 }
@@ -1766,6 +1776,18 @@ impl SettingsStore {
         Ok(self.current.clone())
     }
 
+    /// Remembers who scrolls in the next scrolling capture: the user (Me)
+    /// or Grab-it.
+    pub fn set_scroll_by_hand(&mut self, by_hand: bool) -> Result<Settings, SettingsError> {
+        let next = Settings {
+            scroll_by_hand: by_hand,
+            ..self.current.clone()
+        };
+        save(&self.path, &next)?;
+        self.current = next;
+        Ok(self.current.clone())
+    }
+
     /// Remembers the folder chosen in an export dialog.
     pub fn set_last_export_folder(&mut self, folder: PathBuf) -> Result<Settings, SettingsError> {
         let next = Settings {
@@ -1956,6 +1978,7 @@ mod tests {
             agent_access: true,
             last_export_folder: Some(dir.path().join("exports")),
             update_channel: UpdateChannel::Edge,
+            scroll_by_hand: true,
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path, defaults(&dir)).unwrap(), settings);
@@ -1987,6 +2010,22 @@ mod tests {
         assert_eq!(updated.last_export_folder.as_ref(), Some(&folder));
         let reopened = open_store(path, defaults(&dir));
         assert_eq!(reopened.get().last_export_folder.as_ref(), Some(&folder));
+    }
+
+    #[test]
+    fn who_scrolls_is_grab_it_by_default_and_remembered() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        assert!(!store.get().scroll_by_hand);
+        assert!(store.set_scroll_by_hand(true).unwrap().scroll_by_hand);
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("\"scrollByHand\": true")
+        );
+        let reopened = open_store(path, defaults(&dir));
+        assert!(reopened.get().scroll_by_hand);
     }
 
     #[test]
