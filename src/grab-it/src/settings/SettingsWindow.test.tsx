@@ -89,6 +89,10 @@ interface Backend {
   saveLayout: SaveLayout;
   hotkeys: typeof DEFAULT_HOTKEYS;
   hotkeyWarnings: string[];
+  /** Windows' Print screen setting is on; off Windows it never is. */
+  printScreenOn?: boolean;
+  /** Use PrintScreen for Grab-it leaves Windows' setting on. */
+  printScreenStaysOn?: boolean;
   picked: string | null;
   setError?: string;
   /** What `ai_capture_count` answers. */
@@ -162,6 +166,8 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
   const guard = () => {
     if (backend.setError) throw backend.setError;
   };
+  const printScreenConflict = () =>
+    (backend.printScreenOn ?? false) && Object.values(backend.hotkeys).includes("PrintScreen");
   backend.calls = mockCommands(
     {
       get_settings: () => settings(),
@@ -286,6 +292,12 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
       },
       pause_hotkeys: () => undefined,
       resume_hotkeys: () => undefined,
+      printscreen_conflict: () => printScreenConflict(),
+      printscreen_fix: () => {
+        backend.printScreenOn = backend.printScreenStaysOn ?? false;
+        return printScreenConflict();
+      },
+      printscreen_open_settings: () => null,
       set_agent_access: ({ enabled }) => {
         guard();
         backend.agentAccess = enabled;
@@ -315,6 +327,8 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
 }
 
 const commands = (backend: Backend) => backend.calls.map((call) => call.cmd);
+
+const PRINTSCREEN_NOTICE = "PrintScreen also opens Windows' screen capture";
 
 describe("SettingsWindow", () => {
   it("shows the current save folder", async () => {
@@ -648,10 +662,9 @@ describe("SettingsWindow", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save hotkeys" }));
 
     expect(await screen.findByText("Hotkeys updated.")).toBe(screen.getByRole("status"));
-    expect(backend.calls[backend.calls.length - 1]).toEqual({
-      cmd: "set_hotkeys",
-      payload: { hotkeys: { ...DEFAULT_HOTKEYS, region: "Ctrl+Shift+R" } },
-    });
+    expect(backend.calls.filter((call) => call.cmd === "set_hotkeys")).toEqual([
+      { cmd: "set_hotkeys", payload: { hotkeys: { ...DEFAULT_HOTKEYS, region: "Ctrl+Shift+R" } } },
+    ]);
     expect(screen.getByRole("button", { name: "Save hotkeys" })).toBeDisabled();
   });
 
@@ -726,6 +739,50 @@ describe("SettingsWindow", () => {
     // The next press with no key down falls back to key up again.
     fireEvent.keyUp(windowField, { key: "PrintScreen", code: "PrintScreen", ctrlKey: true });
     expect(windowField).toHaveValue("Ctrl+PrintScreen");
+  });
+
+  it("shows no PrintScreen notice without a conflict, as off Windows", async () => {
+    const backend = mockBackend();
+    render(<SettingsWindow />);
+    await screen.findByLabelText("Region");
+    await waitFor(() => expect(commands(backend)).toContain("printscreen_conflict"));
+    expect(screen.queryByRole("heading", { name: PRINTSCREEN_NOTICE })).not.toBeInTheDocument();
+  });
+
+  it("turns off Windows' Print screen setting from the PrintScreen notice", async () => {
+    const backend = mockBackend({ printScreenOn: true });
+    render(<SettingsWindow />);
+    const notice = await screen.findByRole("region", { name: PRINTSCREEN_NOTICE });
+    expect(notice).toHaveTextContent("choose another hotkey instead of PrintScreen");
+    expect(within(notice).queryByRole("button", { name: "Dismiss PrintScreen notice" })).not.toBeInTheDocument();
+
+    await userEvent.click(within(notice).getByRole("button", { name: "Use PrintScreen for Grab-it" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: PRINTSCREEN_NOTICE })).not.toBeInTheDocument());
+    expect(commands(backend)).toContain("printscreen_fix");
+    expect(backend.printScreenOn).toBe(false);
+  });
+
+  it("says when Windows still has its Print screen setting on", async () => {
+    mockBackend({ printScreenOn: true, printScreenStaysOn: true });
+    render(<SettingsWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Use PrintScreen for Grab-it" }));
+    expect(await screen.findByText(/Windows still has the setting on/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open Windows settings" }));
+    await waitFor(() => expect(screen.queryByText(/Windows still has the setting on/)).toBeInTheDocument());
+  });
+
+  it("checks the PrintScreen conflict again after Save hotkeys", async () => {
+    const backend = mockBackend({ printScreenOn: true });
+    render(<SettingsWindow />);
+    expect(await screen.findByRole("heading", { name: PRINTSCREEN_NOTICE })).toBeInTheDocument();
+
+    const region = screen.getByLabelText("Region");
+    await userEvent.click(region);
+    await userEvent.keyboard("{Control>}{Shift>}[KeyR]{/Shift}{/Control}");
+    await userEvent.click(screen.getByRole("button", { name: "Save hotkeys" }));
+
+    await waitFor(() => expect(screen.queryByRole("heading", { name: PRINTSCREEN_NOTICE })).not.toBeInTheDocument());
+    expect(commands(backend).filter((cmd) => cmd === "printscreen_conflict")).toHaveLength(2);
   });
 
   it("pauses the global hotkeys while a hotkey field has focus", async () => {

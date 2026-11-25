@@ -54,3 +54,22 @@ export function checkForUpdates(): Promise<void> {
 
 /** Where a sidebar item leads: the library (maybe one app) or a Settings page. */
 export type Place = { view: "library"; app: string } | { view: "settings"; section: SettingsSection } | { view: "welcome" };
+
+/**
+ * True when Windows' "Use the Print screen key to open screen capture" is
+ * on and a Grab-it hotkey is a bare PrintScreen, so the two take turns.
+ * Always false off Windows.
+ */
+export function printScreenConflict(): Promise<boolean> {
+  return commands.printscreenConflict();
+}
+
+/** Turns Windows' Print screen setting off, then resolves to whether the conflict is still there. */
+export function fixPrintScreen(): Promise<boolean> {
+  return commands.printscreenFix();
+}
+
+/** Opens the Windows Settings page with the Print screen switch. */
+export async function openPrintScreenSettings(): Promise<void> {
+  await commands.printscreenOpenSettings();
+}

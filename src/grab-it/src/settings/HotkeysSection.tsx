@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
+import PrintScreenNotice from "../app/PrintScreenNotice";
 import { acceleratorFromEvent, isMacPlatform } from "./accelerator";
 import { pauseHotkeys, resumeHotkeys, type Hotkeys, type HotkeysUpdate } from "./api";
 
@@ -33,6 +34,8 @@ interface HotkeysSectionProps {
 function HotkeysSection({ saved, disabled, onSave }: HotkeysSectionProps) {
   const [draft, setDraft] = useState<Hotkeys | null>(null);
   const [busy, setBusy] = useState(false);
+  // Counts saves, so the PrintScreen notice checks again after each one.
+  const [saves, setSaves] = useState(0);
   const current = draft ?? saved;
   const changed = FIELDS.some(({ key }) => current[key] !== saved[key]);
   const paused = useRef(false);
@@ -103,7 +106,10 @@ function HotkeysSection({ saved, disabled, onSave }: HotkeysSectionProps) {
     setBusy(true);
     try {
       const update = await onSave(current);
-      if (update) setDraft(null);
+      if (update) {
+        setDraft(null);
+        setSaves((count) => count + 1);
+      }
     } finally {
       setBusy(false);
     }
@@ -114,6 +120,7 @@ function HotkeysSection({ saved, disabled, onSave }: HotkeysSectionProps) {
       <h2 className="group-heading" id="hotkeys-heading">
         Capture hotkeys
       </h2>
+      <PrintScreenNotice recheck={saves} />
       <div className="group">
         {FIELDS.map(({ key, label }) => (
           <div className="row hotkey-row" key={key}>
