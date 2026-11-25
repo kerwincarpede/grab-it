@@ -2554,6 +2554,38 @@ describe("scrolling capture", () => {
     expect(screen.getByTestId("scroll-start-label")).toBeInTheDocument();
   });
 
+  it("moves Image starts here below the toolbar when the area's top is under it", async () => {
+    mockOverlay({ allInOne: true });
+    render(<RegionOverlay />);
+    const overlay = await ready();
+    fireEvent.keyDown(window, { key: "7", code: "Digit7" });
+    // A tall window at the top: the toolbar stays at the top, over its edge.
+    fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 10 });
+    fireEvent.mouseMove(overlay, { clientX: 400, clientY: 790 });
+    fireEvent.mouseUp(overlay, { button: 0, clientX: 400, clientY: 790 });
+    expect(screen.getByTestId("overlay-toolbar")).toHaveAttribute("data-edge", "top");
+    const start = screen.getByTestId("scroll-start-label");
+    expect(start).toHaveAttribute("data-inside", "true");
+    const y = Number(/translate3d\([^,]+, ([\d.]+)px/.exec(start.style.transform)?.[1]);
+    // Below the toolbar's room (58 px) and its label's half height.
+    expect(y).toBeGreaterThanOrEqual(58 + 12);
+  });
+
+  it("keeps the guide's title in the panel's colour under a light appearance", async () => {
+    mockOverlay({ allInOne: true });
+    render(
+      <>
+        <style>{`h2 { color: #16181c; } ${overlayStyles}`}</style>
+        <RegionOverlay />
+      </>,
+    );
+    await ready();
+    fireEvent.keyDown(window, { key: "7", code: "Digit7" });
+    const title = screen.getByRole("heading", { name: "Scrolling capture" });
+    expect(getComputedStyle(title).color).not.toBe("rgb(22, 24, 28)");
+    expect(getComputedStyle(title).color).toBe(getComputedStyle(title.closest("aside") as HTMLElement).color);
+  });
+
   it("starts the held area from the guide's Start scrolling", async () => {
     const calls = mockOverlay({ allInOne: true });
     render(<RegionOverlay />);

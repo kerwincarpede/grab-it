@@ -44,6 +44,7 @@ pub struct ScrollBarState {
     /// How far the image is toward its length limit, from 0 to 1.
     pub progress: f64,
     pub capped: bool,
+    /// Grab-it is the one scrolling, or was when the limit was reached.
     pub auto_scrolling: bool,
     /// What to do now, or why automatic scrolling stopped.
     pub message: Option<String>,

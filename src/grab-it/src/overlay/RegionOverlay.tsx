@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -70,6 +71,7 @@ import Loupe from "./Loupe";
 import { benchMark, benchOpaque, benchSpan, benchSwitch, runBench, setupBench } from "./bench";
 import RecordSetup, { RecordOptionsFields } from "./RecordSetup";
 import ScrollGuide from "./ScrollGuide";
+import { startLabelY, type Blocker } from "./scrollStart";
 import { useAccessibility } from "./useAccessibility";
 import { nextCountdown } from "./recordOptions";
 import { ChooserToolbar, SizeFields } from "./ChooserToolbar";
@@ -361,6 +363,9 @@ function RegionOverlay() {
   const [timer, setTimer] = useState(0);
   // Scroll's setup: Grab-it scrolls unless the user chose Me, now or last time.
   const [scrollByHand, setScrollByHand] = useState(false);
+  // Where Scroll's guide panel is drawn, so Image starts here stays clear of it.
+  const guideWrap = useRef<HTMLDivElement>(null);
+  const [guideBand, setGuideBand] = useState<Blocker | null>(null);
   const toolbar = useRef<HTMLDivElement>(null);
   // Each mode's global shortcut, for the toolbar's tooltips.
   // As the tray, hub and Library show them: only those registered, or the desktop's own on Wayland.
@@ -1071,6 +1076,15 @@ function RegionOverlay() {
     held.y + held.height <= view.height - TOOLBAR_BOTTOM - toolbarRoom
       ? "bottom"
       : "top";
+  // Scroll's Image starts here: on the held area's top edge, or just inside
+  // it when the toolbar or the guide panel covers that edge.
+  const startAt =
+    intent === "scroll" && held
+      ? startLabelY(held.y, held.x + SCROLL_START_INSET, [
+          ...(allInOne && toolbarEdge === "top" ? [{ top, bottom: top + toolbarRoom, left: 0, right: view.width }] : []),
+          ...(guideBand ? [guideBand] : []),
+        ])
+      : null;
   // The Record overlay's setup toolbar: on the display the pointer is on
   // (or with a pick of its own), centred where the recording toolbar opens.
   // Capture & record shows Record in its own toolbar.
@@ -1105,6 +1119,36 @@ function RegionOverlay() {
       : windowMode
         ? WINDOW_HINT
         : HINTS[intent]);
+
+  // Measured once laid out: the panel's height follows its text and its
+  // place follows the held area.
+  useLayoutEffect(() => {
+    const rect = guideWrap.current?.firstElementChild?.getBoundingClientRect();
+    const next = rect && rect.height > 0 ? { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right } : null;
+    setGuideBand((current) =>
+      current === next ||
+      (current &&
+        next &&
+        current.top === next.top &&
+        current.bottom === next.bottom &&
+        current.left === next.left &&
+        current.right === next.right)
+        ? current
+        : next,
+    );
+  }, [
+    intent,
+    info,
+    dragging,
+    held?.y,
+    held?.height,
+    scrollByHand,
+    accessibility,
+    view.width,
+    view.height,
+    top,
+    toolbarRoom,
+  ]);
 
   return (
     <div
@@ -1194,13 +1238,14 @@ function RegionOverlay() {
       {held && !dragging && placement && source !== "screen" && (
         <SelectionFrame box={held} placement={placement} handles={source === null || source === "region"} />
       )}
-      {intent === "scroll" && held && !dragging && isDrag(held) && (
+      {intent === "scroll" && held && startAt && !dragging && isDrag(held) && (
         <>
           <span
             className="scroll-start-label"
             data-testid="scroll-start-label"
+            data-inside={startAt.inside ? "true" : "false"}
             style={{
-              transform: `translate3d(${held.x + SCROLL_START_INSET}px, ${Math.max(held.y, 12)}px, 0) translateY(-50%)`,
+              transform: `translate3d(${held.x + SCROLL_START_INSET}px, ${startAt.y}px, 0) translateY(-50%)`,
             }}
           >
             Image starts here
@@ -1360,16 +1405,18 @@ function RegionOverlay() {
         </div>
       )}
       {intent === "scroll" && info !== null && !dragging && (
-        <ScrollGuide
-          stage={held ? "adjust" : "choose"}
-          byHand={scrollByHand}
-          onByHand={chooseWhoScrolls}
-          accessibility={accessibility}
-          edge={held && held.y + held.height > view.height - SCROLL_GUIDE_ROOM ? "top" : "bottom"}
-          top={top + (allInOne ? toolbarRoom : 0)}
-          onStart={confirmHeld}
-          onDocs={openDocs}
-        />
+        <div ref={guideWrap}>
+          <ScrollGuide
+            stage={held ? "adjust" : "choose"}
+            byHand={scrollByHand}
+            onByHand={chooseWhoScrolls}
+            accessibility={accessibility}
+            edge={held && held.y + held.height > view.height - SCROLL_GUIDE_ROOM ? "top" : "bottom"}
+            top={top + (allInOne ? toolbarRoom : 0)}
+            onStart={confirmHeld}
+            onDocs={openDocs}
+          />
+        </div>
       )}
       {showHint && (
         <div

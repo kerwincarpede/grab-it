@@ -89,13 +89,14 @@ function ScrollBar() {
         <div className="scrollbar-body">
           <div className="scrollbar-head">
             <span className="scrollbar-title">Scrolling capture</span>
-            {state && !saving && (
-              <span className="scrollbar-who" data-who={state.autoScrolling ? "grab-it" : "me"}>
-                {state.autoScrolling ? "Grab-it is scrolling" : "You're scrolling"}
-              </span>
-            )}
             <span className="scrollbar-length">{state ? `${state.width} × ${state.height}` : "Starting…"}</span>
           </div>
+          {/* A row of its own: the head has no room for it beside the title and length. */}
+          {state && !saving && !state.capped && (
+            <span className="scrollbar-who" data-who={state.autoScrolling ? "grab-it" : "me"}>
+              {state.autoScrolling ? "Grab-it is scrolling" : "You're scrolling"}
+            </span>
+          )}
           <div
             className="scrollbar-progress"
             role="progressbar"

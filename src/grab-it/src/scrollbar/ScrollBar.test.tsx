@@ -87,6 +87,23 @@ describe("ScrollBar", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Too fast to join. Scroll back a little.");
   });
 
+  it("puts the chip on a row of its own, clear of the title and length", async () => {
+    backend();
+    render(<ScrollBar />);
+    const chip = await screen.findByText("Grab-it is scrolling");
+    const head = screen.getByText("Scrolling capture").parentElement as HTMLElement;
+    expect(head).toContainElement(screen.getByText("1200 × 4800"));
+    expect(head).not.toContainElement(chip);
+  });
+
+  it("hides the chip once the limit stops the image growing", async () => {
+    backend({ ...STATE, capped: true, message: "Reached the 30,000 px limit. Choose Done to save it." });
+    render(<ScrollBar />);
+    await screen.findByText("Reached the 30,000 px limit. Choose Done to save it.");
+    expect(screen.queryByText("Grab-it is scrolling")).not.toBeInTheDocument();
+    expect(screen.queryByText("You're scrolling")).not.toBeInTheDocument();
+  });
+
   it("marks the length limit", async () => {
     backend({ ...STATE, progress: 1, capped: true, message: "Reached the 30,000 px limit. Choose Done to save it." });
     render(<ScrollBar />);

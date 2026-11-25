@@ -79,15 +79,21 @@
 .scrollbar-head {
   display: flex;
   gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
   align-items: baseline;
   justify-content: space-between;
 }
 
 .scrollbar-title {
+  min-width: 0;
+  overflow: hidden;
   font-weight: 600;
+  text-overflow: ellipsis;
 }
 
 .scrollbar-length {
+  flex: none;
   color: var(--scb-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -151,8 +157,7 @@
 
 /* Who is scrolling: Grab-it, or the user. */
 .scrollbar-who {
-  flex: none;
-  margin-right: auto;
+  justify-self: start;
   padding: 0 8px;
   color: var(--scb-text);
   font-size: 11px;

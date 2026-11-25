@@ -1256,6 +1256,8 @@
 
 .scroll-guide-head h2 {
   margin: 0;
+  /* The app's global h2 colour is for light pages, not this dark panel. */
+  color: inherit;
   font-size: 14px;
   font-weight: 600;
 }

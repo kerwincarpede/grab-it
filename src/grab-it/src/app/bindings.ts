@@ -2242,6 +2242,7 @@ export type ScrollBarState_Deserialize = {
 	/**  How far the image is toward its length limit, from 0 to 1. */
 	progress: number | null,
 	capped: boolean,
+	/**  Grab-it is the one scrolling, or was when the limit was reached. */
 	autoScrolling: boolean,
 	/**  What to do now, or why automatic scrolling stopped. */
 	message?: string | null,
@@ -2261,6 +2262,7 @@ export type ScrollBarState_Serialize = {
 	/**  How far the image is toward its length limit, from 0 to 1. */
 	progress: number | null,
 	capped: boolean,
+	/**  Grab-it is the one scrolling, or was when the limit was reached. */
 	autoScrolling: boolean,
 	/**  What to do now, or why automatic scrolling stopped. */
 	message: string | null,

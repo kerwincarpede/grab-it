@@ -65,7 +65,8 @@ fn bar_state(
 ) -> ScrollBarState {
     let mut state = ScrollBarState::new(session_id, stitch.image.dimensions(), stitch.axis);
     state.capped = stitch.capped;
-    state.auto_scrolling = reason.is_none() && !stitch.capped;
+    // Who was scrolling, even once the limit stops the image growing.
+    state.auto_scrolling = reason.is_none();
     state.message = if stitch.capped {
         Some(CAPPED.to_owned())
     } else if too_fast {
@@ -1080,8 +1081,12 @@ mod tests {
         stitch.capped = true;
         let capped = bar_state(1, &stitch, None, true, true);
         assert!(capped.capped && capped.saving);
-        assert!(!capped.auto_scrolling);
+        // The chip still says Grab-it was the one scrolling.
+        assert!(capped.auto_scrolling);
         assert_eq!(capped.message.as_deref(), Some(CAPPED));
+        let capped_by_hand = bar_state(1, &stitch, reason, false, false);
+        assert!(!capped_by_hand.auto_scrolling);
+        assert_eq!(capped_by_hand.message.as_deref(), Some(CAPPED));
     }
     #[test]
     fn mouse_moved_is_measured_in_points() {
