@@ -16,6 +16,18 @@ Playback runs only over the part you keep: it stops at the trimmed end, and pres
 
 `Space` plays and pauses unless a button, slider or field has the keyboard; press `Tab` away or click the video first.
 
+## Zoom and scroll
+
+To work on a few seconds at a time, zoom the timeline in. The clip and zoom rows under it zoom with it, so everything stays lined up with the playhead.
+
+- **Zoom in**, after the timeline, doubles the zoom, so you see half as much of it, up to 400 pixels a second. **Zoom out** halves it. The playhead stays where it is on screen, or the middle of the view when the playhead is out of sight.
+- Hold `Ctrl` (`⌘` on macOS) and scroll over the timeline to zoom in or out at the pointer.
+- **Fit** shows the whole timeline again.
+
+When zoomed in, scroll the timeline sideways with its scrollbar, a sideways swipe on a trackpad, or `Shift` and the scroll wheel. Clicking, dragging handles, clips and zooms works the same at any zoom. While playing, the timeline moves on by itself to keep the playhead in view, through gaps too.
+
+The zoom isn't saved: the timeline fits again when you open the editor next time.
+
 ## Trim
 
 The handles at each end of the timeline set where the clip starts and ends. The parts outside them are dimmed, and are left out of the export.
@@ -55,6 +67,7 @@ The status bar names the recording's sound:
 | Key | Where | What it does |
 | --- | --- | --- |
 | `Space` | Anywhere but a control | Play or pause |
+| `Ctrl` (`⌘`) + scroll | The timeline | Zoom it in or out at the pointer |
 | `←` `→` (`↑` `↓`) | A trim handle | Move it 0.1 s |
 | `Shift` + arrow | A trim handle | Move it 1 s |
 | `Home` / `End` | A trim handle | Move it to the start or end |

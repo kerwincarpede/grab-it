@@ -99,7 +99,36 @@
 
 .timeline {
   flex: 1;
-  padding: 0 8px;
+  min-width: 0;
+}
+
+/* The track and its rows scroll sideways together when zoomed. */
+.timeline-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* As wide as the zoom makes the track; the padding leaves room for the handles and playhead. */
+.timeline-content {
+  position: relative;
+  box-sizing: border-box;
+  padding: 4px 12px;
+}
+
+/* Keeps the scroller as wide as when a drag began, so a shorter timeline can't pull its scroll offset back. */
+.timeline-hold {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 1px;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.timeline-zoom {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .timeline-track {
@@ -190,9 +219,14 @@
   touch-action: none;
 }
 
+/* Sticky, as wide as the visible track, so it stays in view however the row is zoomed and scrolled. */
 .zoom-track-hint {
-  position: absolute;
-  inset: 0;
+  position: sticky;
+  left: 12px;
+  box-sizing: border-box;
+  width: var(--timeline-view, 100%);
+  max-width: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
