@@ -596,3 +596,73 @@
 .suggest-tuning output {
   min-width: 3.5em;
 }
+
+/* Waveform lanes, one per kind of sound, under the zoom row. */
+.waveform-lanes {
+  margin-top: 6px;
+}
+
+.waveform-lane {
+  position: relative;
+  margin-top: 2px;
+  border-radius: 6px;
+  background: var(--ed-bg);
+}
+
+/* As wide as the view and kept in it while the timeline scrolls. */
+.waveform-view {
+  position: sticky;
+  left: 12px;
+  height: 100%;
+}
+
+.waveform-canvas {
+  display: block;
+}
+
+.waveform-label,
+.waveform-status {
+  position: absolute;
+  top: 2px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--ed-bg);
+  color: var(--ed-muted);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.waveform-label {
+  left: 2px;
+}
+
+.waveform-status {
+  right: 2px;
+}
+
+/* Drags, or takes the arrow keys, to change the lanes' height. */
+.waveform-resize {
+  height: 6px;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.waveform-resize::after {
+  content: "";
+  display: block;
+  width: 32px;
+  height: 2px;
+  margin: 2px auto 0;
+  border-radius: 1px;
+  background: var(--ed-border);
+}
+
+.waveform-resize:hover::after,
+.waveform-resize:focus-visible::after {
+  background: var(--ed-accent);
+}
+
+.waveform-resize:focus-visible {
+  outline: 2px solid var(--ed-accent);
+  outline-offset: 1px;
+}

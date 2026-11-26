@@ -204,3 +204,16 @@ export async function recordingAudition(fileName: string, startMs: number, endMs
   const bytes = await invoke<ArrayBuffer>("recording_audition", { fileName, startMs: Math.round(startMs), endMs: Math.round(endMs), cleaned });
   return new Blob([bytes], { type: "audio/wav" });
 }
+
+/** How many peaks `recordingWaveform` gives for each second of sound. */
+export const WAVEFORM_PEAKS_PER_SECOND = 100;
+
+/**
+ * The peaks of source `audio` of `fileName`'s sound, in the order its
+ * `audio` kinds list them: one byte (0 silent, 255 full scale) for each
+ * 10 ms from the start of the recording. Computed once, then cached.
+ */
+export async function recordingWaveform(fileName: string, audio: number): Promise<Uint8Array> {
+  const bytes = await invoke<ArrayBuffer>("recording_waveform", { fileName, audio });
+  return new Uint8Array(bytes);
+}

@@ -1912,6 +1912,13 @@ export type RecordingClipSource_Deserialize = {
 	/**  Whether it holds sound. */
 	hasAudio: boolean,
 	/**
+	 *  Each source of its sound, by kind, in [`audio_sources`]' order, as
+	 *  `RecordingInfo.audio` lists the opened recording's: what its
+	 *  waveform lanes draw. Before ffmpeg is ready an older recording
+	 *  lists none.
+	 */
+	audio: AudioKind[],
+	/**
 	 *  Whether background noise was removed from the microphone in the
 	 *  MP4's sound, from its pointer sidecar.
 	 */
@@ -1938,6 +1945,13 @@ export type RecordingClipSource_Serialize = {
 	cursor: CursorPath | null,
 	/**  Whether it holds sound. */
 	hasAudio: boolean,
+	/**
+	 *  Each source of its sound, by kind, in [`audio_sources`]' order, as
+	 *  `RecordingInfo.audio` lists the opened recording's: what its
+	 *  waveform lanes draw. Before ffmpeg is ready an older recording
+	 *  lists none.
+	 */
+	audio: AudioKind[],
 	/**
 	 *  Whether background noise was removed from the microphone in the
 	 *  MP4's sound, from its pointer sidecar.

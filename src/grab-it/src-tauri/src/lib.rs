@@ -59,6 +59,7 @@ mod tidy;
 mod timer_bar;
 mod tray;
 mod update;
+mod waveform;
 mod webcam;
 mod windows;
 mod zoom;
@@ -357,6 +358,7 @@ byte_commands![
     library::library_save_thumbnail,
     recording_editor::recording_export,
     recording_suggest::recording_audition,
+    waveform::recording_waveform,
     steps::guide_image,
 ];
 

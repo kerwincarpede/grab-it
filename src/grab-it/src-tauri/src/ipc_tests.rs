@@ -2542,3 +2542,32 @@ fn byte_commands_reach_their_handler() {
         );
     }
 }
+
+#[test]
+fn recording_waveform_refuses_unknown_sources_and_waits_for_ffmpeg() {
+    use crate::recording_editor::RecordingEditorState;
+    let h = Harness::new();
+    let recordings = h.default_save_folder().join(RECORDINGS_DIR);
+    let own = recordings.join("clip.mp4");
+    fs::create_dir_all(&recordings).unwrap();
+    fs::write(&own, b"video bytes").unwrap();
+    h.app
+        .state::<RecordingEditorState>()
+        .register(LABEL, &own, &recordings)
+        .unwrap();
+
+    let args = |file: &str| json!({ "fileName": file, "audio": 0 });
+    assert!(
+        h.err("recording_waveform", args("elsewhere.mp4"))
+            .contains("is not a recording in the recordings folder")
+    );
+    assert!(
+        h.err("recording_waveform", args("../clip.mp4"))
+            .contains("is not a recording")
+    );
+    // ffmpeg is never managed here, so it is never ready.
+    assert!(
+        h.err("recording_waveform", args("clip.mp4"))
+            .contains("ffmpeg is not ready yet")
+    );
+}
