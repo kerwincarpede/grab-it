@@ -656,11 +656,11 @@ export default function RecordingEditor() {
     if ([...chosenIds].some((id) => isLockedClip(tracks, id))) setMessage(LOCKED_CLIP);
     else commitTracks(unlinkClips(tracks, chosenIds));
   };
+  /** Where the output ends, in sequence time: the later of Video 1's end and the last overlay clip's. Drags stop short of it. */
+  const trackEndMs = Math.max(sequenceDuration(savedClips), sequenceDuration(flattenPicture(tracks)));
   /** Moves a clip off Video 1, with its links, to start at sequence time `atMs`. */
   const moveTrackClip = (id: string, atMs: number, toTrack?: string) => {
-    // The timeline ends with the later of Video 1's end and the last overlay clip's.
-    const endMs = Math.max(sequenceDuration(savedClips), sequenceDuration(flattenPicture(tracks)));
-    const next = moveInTime(tracks, id, atMs, toTrack, endMs);
+    const next = moveInTime(tracks, id, atMs, toTrack, trackEndMs);
     if (isRefusal(next)) setMessage(next.refused);
     else commitTracks(next);
   };
@@ -2113,6 +2113,7 @@ export default function RecordingEditor() {
             timeline={shownTracks}
             durationMs={timelineDuration}
             offsetMs={joined ? 0 : trim.startMs}
+            endMs={trackEndMs}
             currentMs={joined ? currentMs : currentMs - trim.startMs}
             selected={chosenIds}
             onSelect={(id, adding) => {
@@ -2171,7 +2172,7 @@ export default function RecordingEditor() {
             timeline={shownTracks}
             durationMs={timelineDuration}
             offsetMs={joined ? 0 : trim.startMs}
-            endMs={sequenceDuration(savedClips)}
+            endMs={trackEndMs}
             currentMs={joined ? currentMs : currentMs - trim.startMs}
             selected={chosenIds}
             onSelect={(id, adding) => {
