@@ -344,6 +344,8 @@ describe("painting each look", () => {
   /** A canvas that records what is drawn on it. */
   const fakeCanvas = () => {
     const calls: string[] = [];
+    /** The lines stroked or filled, with the font they were drawn in. */
+    const drawn: { text: string; width: number }[] = [];
     const ctx = {
       font: "",
       fillStyle: "",
@@ -354,16 +356,20 @@ describe("painting each look", () => {
       textAlign: "",
       textBaseline: "",
       lineJoin: "",
-      measureText: (text: string) => ({ width: text.length * 10 }),
+      // Each character half as wide as the font is tall, as the font says.
+      measureText: function (this: { font: string }, text: string) {
+        return { width: text.length * 0.5 * Number(/(\d+)px/.exec(this.font)?.[1] ?? 20) };
+      },
       clearRect: () => calls.push("clear"),
       fillRect: () => calls.push("box"),
       strokeText: () => calls.push("outline"),
-      fillText: function (this: { shadowBlur: number }) {
+      fillText: function (this: { shadowBlur: number; measureText: (text: string) => { width: number } }, text: string) {
         calls.push(this.shadowBlur > 0 ? "shadowed text" : "text");
+        drawn.push({ text, width: this.measureText(text).width });
       },
     };
     const canvas = { width: 0, height: 0, getContext: () => ctx } as unknown as HTMLCanvasElement;
-    return { canvas, calls };
+    return { canvas, calls, drawn };
   };
 
   it("draws a box, an outline or a shadow behind the text", () => {
@@ -375,6 +381,22 @@ describe("painting each look", () => {
     expect(drawn("box")).toEqual(["clear", "box", "text"]);
     expect(drawn("outline")).toEqual(["clear", "outline", "text"]);
     expect(drawn("plain")).toEqual(["clear", "shadowed text"]);
+  });
+
+  it("wraps Large and Outline text by its measured width, inside the box", () => {
+    const text = "Captions wrap by how wide their words are drawn";
+    const painted = (style: Partial<typeof DEFAULT_CAPTION_STYLE>) => {
+      const { canvas, calls, drawn } = fakeCanvas();
+      paintCue(text, { ...DEFAULT_CAPTION_STYLE, ...style }, 400, 600, canvas);
+      for (const line of drawn) expect(line.width).toBeLessThanOrEqual(canvas.width);
+      return { lines: drawn.map((line) => line.text), outlines: calls.filter((call) => call === "outline").length };
+    };
+    const small = painted({ look: "outline", size: "small" });
+    const large = painted({ look: "outline", size: "large" });
+    expect(large.lines.length).toBeGreaterThan(small.lines.length);
+    expect(large.outlines).toBe(large.lines.length);
+    expect(large.lines.join(" ")).toBe(text);
+    expect(painted({ look: "plain", size: "large" }).lines).toEqual(large.lines);
   });
 
   it("sizes the canvas to the cue's box and paints nothing for empty text", () => {
