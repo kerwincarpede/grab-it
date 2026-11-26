@@ -120,6 +120,7 @@ See [Mark it up](/grab-it/image-editor/mark-it-up/) for what each tool does.
 | Key | What it does |
 | --- | --- |
 | `Space` | Play and pause |
+| `⌘` + scroll on the timeline | Zoom it in or out at the pointer |
 | `⌘ Z` | Undo the last trim, clip, split, backdrop or zoom change |
 | `⌘ ⇧ Z` or `⌘ Y` | Redo |
 | Arrow keys on a trim handle | Move it 0.1 seconds; with `Shift`, 1 second |

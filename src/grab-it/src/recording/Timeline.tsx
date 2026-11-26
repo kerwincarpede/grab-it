@@ -84,8 +84,16 @@ export default function Timeline({
   /** The visible track's width as last measured, which bounds the zoom. */
   const [measured, setMeasured] = useState(0);
   const zoom = clampZoom(askedZoom, durationMs, measured);
-  /** The zoom the scroll offset was last set for, and the time to hold through the next change. */
-  const shown = useRef({ zoom, anchor: null as Anchor | null });
+  /**
+   * What the scroll offset was last set for: the zoom, length and width,
+   * the time to hold through the next zoom change, and a scroll offset to
+   * put back once a rescaled zoom arrives.
+   */
+  const shown = useRef({ zoom, durationMs, width: 0, anchor: null as Anchor | null, keep: null as number | null });
+  /** The view last told to the parent, so an unchanged one isn't told again. */
+  const told = useRef<TimelineView | null>(null);
+  /** True while a pointer is down on the track or a row, so following the playhead can't move the view under it. */
+  const pressed = useRef(false);
   const latest = useRef({ zoom, durationMs, onZoomChange, onViewChange });
   useLayoutEffect(() => {
     latest.current = { zoom, durationMs, onZoomChange, onViewChange };
@@ -97,7 +105,11 @@ export default function Timeline({
     const { onViewChange: tell, zoom: now, durationMs: length } = latest.current;
     if (!scroller || !tell) return;
     const width = viewWidth(scroller);
-    tell({ ...visibleRange(scroller.scrollLeft, now, length, width), width });
+    const view = { ...visibleRange(scroller.scrollLeft, now, length, width), width };
+    const last = told.current;
+    if (last && last.startMs === view.startMs && last.endMs === view.endMs && last.width === view.width) return;
+    told.current = view;
+    tell(view);
   }, []);
 
   /** Measures the view again, after a scroll or a resize, and reports it. */
@@ -110,11 +122,30 @@ export default function Timeline({
 
   // A zoom keeps the anchored time in place: the pointer's for the wheel,
   // otherwise the playhead when it is in view, or the middle of the view.
+  // At the same zoom, a new length or width keeps the pixels a second, so
+  // what is under the pointer stays there, as while a clip edge is dragged.
   useLayoutEffect(() => {
     const scroller = scrollRef.current;
+    if (!scroller) return;
     const before = shown.current;
-    if (!scroller || before.zoom === zoom) return;
     const width = viewWidth(scroller);
+    if (before.zoom === zoom) {
+      if (before.keep !== null) {
+        scroller.scrollLeft = before.keep;
+        before.keep = null;
+        report();
+      }
+      const rescaled = zoom > 1 && before.durationMs > 0 && before.width > 0 && durationMs > 0 && width > 0 && (before.durationMs !== durationMs || before.width !== width);
+      const ask = latest.current.onZoomChange;
+      if (rescaled && ask) {
+        const kept = clampZoom(zoom * (durationMs / before.durationMs) * (before.width / width), durationMs, width);
+        shown.current = { zoom: kept, durationMs, width, anchor: null, keep: scroller.scrollLeft };
+        if (kept !== zoom) ask(kept);
+        return;
+      }
+      shown.current = { ...before, durationMs, width };
+      return;
+    }
     let anchor = before.anchor;
     if (!anchor) {
       const playheadX = durationMs > 0 ? (currentMs / durationMs) * width * before.zoom - scroller.scrollLeft : -1;
@@ -123,7 +154,7 @@ export default function Timeline({
           ? { ms: currentMs, offset: playheadX }
           : { ms: msAtOffset(width / 2, scroller.scrollLeft, before.zoom, durationMs, width), offset: width / 2 };
     }
-    shown.current = { zoom, anchor: null };
+    shown.current = { zoom, durationMs, width, anchor: null, keep: null };
     scroller.scrollLeft = scrollToKeep(anchor.ms, anchor.offset, zoom, durationMs, width);
     report();
   });
@@ -131,7 +162,7 @@ export default function Timeline({
   // While playing, the view moves on with the playhead, over clips and gaps alike.
   useEffect(() => {
     const scroller = scrollRef.current;
-    if (!follow || !scroller || zoom <= 1) return;
+    if (!follow || !scroller || zoom <= 1 || pressed.current) return;
     const next = followScroll(currentMs, scroller.scrollLeft, zoom, durationMs, viewWidth(scroller));
     if (next !== scroller.scrollLeft) scroller.scrollLeft = next;
   }, [follow, currentMs, zoom, durationMs]);
@@ -271,25 +302,33 @@ export default function Timeline({
 
   return (
     <div className="timeline">
-      <div ref={scrollRef} className="timeline-scroll" data-testid="timeline-scroll" onScroll={measure}>
-        <div className="timeline-content" data-testid="timeline-content" data-zoom={zoom} style={{ width: `calc(${zoom} * (100% - ${SIDE_PAD * 2}px) + ${SIDE_PAD * 2}px)` }}>
       <div
-        ref={trackRef}
-        className="timeline-track"
-        data-testid="timeline-track"
-        onPointerDown={(event) => startDrag(event, "seek")}
-        onPointerMove={drag}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
+        ref={scrollRef}
+        className="timeline-scroll"
+        data-testid="timeline-scroll"
+        onScroll={measure}
+        onPointerDownCapture={() => (pressed.current = true)}
+        onPointerUpCapture={() => (pressed.current = false)}
+        onPointerCancelCapture={() => (pressed.current = false)}
       >
-        <div className="timeline-cut" style={{ left: 0, width: percent(trim.startMs, durationMs) }} />
-        <div className="timeline-cut" style={{ left: percent(trim.endMs, durationMs), right: 0 }} />
-        <div className="timeline-kept" style={{ left: percent(trim.startMs, durationMs), width: percent(trim.endMs - trim.startMs, durationMs) }} />
-        <div className="timeline-playhead" data-testid="playhead" style={{ left: percent(currentMs, durationMs) }} />
-        {handle("start")}
-        {handle("end")}
-      </div>
-      {children}
+        <div className="timeline-content" data-testid="timeline-content" data-zoom={zoom} style={{ width: `calc(${zoom} * (100% - ${SIDE_PAD * 2}px) + ${SIDE_PAD * 2}px)` }}>
+          <div
+            ref={trackRef}
+            className="timeline-track"
+            data-testid="timeline-track"
+            onPointerDown={(event) => startDrag(event, "seek")}
+            onPointerMove={drag}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+          >
+            <div className="timeline-cut" style={{ left: 0, width: percent(trim.startMs, durationMs) }} />
+            <div className="timeline-cut" style={{ left: percent(trim.endMs, durationMs), right: 0 }} />
+            <div className="timeline-kept" style={{ left: percent(trim.startMs, durationMs), width: percent(trim.endMs - trim.startMs, durationMs) }} />
+            <div className="timeline-playhead" data-testid="playhead" style={{ left: percent(currentMs, durationMs) }} />
+            {handle("start")}
+            {handle("end")}
+          </div>
+          {children}
         </div>
       </div>
     </div>

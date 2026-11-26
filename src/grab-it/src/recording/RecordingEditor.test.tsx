@@ -821,6 +821,65 @@ describe("RecordingEditor", () => {
       fireEvent.pointerMove(segment, { clientX: 40 });
       fireEvent.pointerUp(segment, { clientX: 40 });
       await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, trim: { startMs: 0, endMs: 10_500 }, zooms: [{ ...AREA_ZOOM, startMs: 4400, endMs: 6400 }] }));
+
+      // Its end edge goes to the pointer too: 150 px along is 9 s.
+      const edge = screen.getByTestId("zoom-edge-end");
+      fireEvent.pointerDown(edge, { clientX: 70 });
+      fireEvent.pointerMove(edge, { clientX: 100 });
+      fireEvent.pointerUp(edge, { clientX: 100 });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, trim: { startMs: 0, endMs: 10_500 }, zooms: [{ ...AREA_ZOOM, startMs: 4400, endMs: 9000 }] }));
+    });
+
+    it("zooms around the middle of the view when the playhead is out of it", async () => {
+      mockBackend();
+      render(<RecordingEditor />);
+      await loadVideo();
+      const scroller = layOutTimeline();
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      // At 2x, scrolled to show 6 s to 12 s: the playhead at 0 is off to the left.
+      scroller.scrollLeft = 100;
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      // 9 s stays in the middle: 300 px along the 400 px track, 50 px into the view.
+      expect(scroller.scrollLeft).toBe(250);
+    });
+
+    it("doesn't move the view under a scrub or a trim while playing", async () => {
+      mockBackend();
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+      vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+      vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+      render(<RecordingEditor />);
+      const video = await loadVideo();
+      const scroller = layOutTimeline();
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      // 4x: the 400 px track starts 12 px into the scroller, less its scroll.
+      const track = screen.getByTestId("timeline-track");
+      vi.spyOn(track, "getBoundingClientRect").mockImplementation(() => {
+        const left = 12 - scroller.scrollLeft;
+        return { left, top: 0, x: left, y: 0, width: 400, height: 40, right: left + 400, bottom: 40, toJSON: () => ({}) } as DOMRect;
+      });
+      await userEvent.click(screen.getByRole("button", { name: "Play" }));
+      fireEvent.play(video);
+      expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+
+      // 95 px into the view is past where following would page on.
+      fireEvent.pointerDown(track, { clientX: 107 });
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:02.8 / 0:12.0");
+      fireEvent.pointerMove(track, { clientX: 111 });
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:02.9 / 0:12.0");
+      fireEvent.pointerUp(track, { clientX: 111 });
+      expect(scroller.scrollLeft).toBe(0);
+
+      const start = screen.getByRole("slider", { name: "Trim start" });
+      fireEvent.pointerDown(start, { clientX: 0 });
+      fireEvent.pointerMove(start, { clientX: 108 });
+      expect(start).toHaveAttribute("aria-valuenow", "2880");
+      fireEvent.pointerMove(start, { clientX: 109 });
+      expect(start).toHaveAttribute("aria-valuenow", "2910");
+      fireEvent.pointerUp(start, { clientX: 109 });
+      expect(scroller.scrollLeft).toBe(0);
     });
 
     it("trims and reorders clips at the pointer while zoomed", async () => {
@@ -837,10 +896,11 @@ describe("RecordingEditor", () => {
       setVideoMetadata(video, 12, 1920, 1080);
       fireEvent.loadedMetadata(video);
       await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
-      layOutTimeline();
+      const scroller = layOutTimeline();
       await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
       await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
       expect(zoomOf()).toBe("4");
+      scroller.scrollLeft = 100;
       // The 10 s clip row is 400 px at 4x, scrolled 100 px: 25 ms a pixel.
       const row = screen.getByRole("listbox", { name: "Clips" });
       spanAt(row, -100, 400);
@@ -849,9 +909,15 @@ describe("RecordingEditor", () => {
       fireEvent.pointerMove(edge, { clientX: 260 });
       fireEvent.pointerUp(edge, { clientX: 260 });
       await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [joined.clips[0], { ...joined.clips[1], endMs: 5000 }] }));
+      // The sequence is 9 s now, at the same 40 px a second: 3.6x, still scrolled 100 px,
+      // so the clip's end stays under the pointer, 360 px along.
+      expect(Number(zoomOf())).toBeCloseTo(3.6);
+      expect(scroller.scrollLeft).toBe(100);
+      const second = screen.getByRole("option", { name: `${OTHER}, 0:05.0` });
+      expect(parseFloat(second.style.left) + parseFloat(second.style.width)).toBeCloseTo(100);
 
-      // 350 px along the 9 s sequence's 400 px is 7.9 s, in the second clip.
-      spanAt(screen.getByRole("listbox", { name: "Clips" }), -100, 400);
+      // 350 px along the 9 s sequence's 360 px is 8.75 s, in the second clip.
+      spanAt(screen.getByRole("listbox", { name: "Clips" }), -100, 360);
       const first = screen.getByRole("option", { name: `${OWN}, 0:04.0` });
       fireEvent.pointerDown(first, { clientX: 10 });
       fireEvent.pointerMove(first, { clientX: 250 });
@@ -886,6 +952,52 @@ describe("RecordingEditor", () => {
       act(() => frames.splice(0).forEach((frame) => frame(0)));
       // Past the edge, the view pages on to put it 10 px in.
       expect(scroller.scrollLeft).toBe(90);
+    });
+
+    it("keeps the playhead in view through a gap", async () => {
+      const clips: Value[] = [
+        { id: "a", source: OWN, startMs: 8000, endMs: 12_000 },
+        { id: "g", gapMs: 4000 },
+        { id: "b", source: OWN, startMs: 0, endMs: 2000 },
+      ];
+      mockBackend({ version: 3, clips });
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+      render(<RecordingEditor />);
+      const video = await previewVideo(OWN);
+      setVideoMetadata(video, 12, 1920, 1080);
+      fireEvent.loadedMetadata(video);
+      await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3));
+      const scroller = layOutTimeline();
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      // 4x: 400 px for the 10 s sequence, 40 px a second, with 2.5 s in view.
+      expect(scroller.scrollLeft).toBe(0);
+      const runFrames = () => act(() => frames.splice(0).forEach((frame) => frame(now)));
+      await userEvent.click(screen.getByRole("button", { name: "Play" }));
+      fireEvent.play(video);
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 12 });
+      Object.defineProperty(video, "paused", { configurable: true, value: true });
+      runFrames();
+      // Into the gap at 4 s, 160 px along: paged on to 10 px in.
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:04.0 / 0:10.0");
+      expect(scroller.scrollLeft).toBe(150);
+      now = 1000;
+      runFrames();
+      expect(scroller.scrollLeft).toBe(150);
+      // 6.5 s in the gap is 260 px along, past the view's edge at 240.
+      now = 2500;
+      runFrames();
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:06.5 / 0:10.0");
+      expect(scroller.scrollLeft).toBe(250);
     });
   });
 

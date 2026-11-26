@@ -20,7 +20,7 @@ Playback runs only over the part you keep: it stops at the trimmed end, and pres
 
 To work on a few seconds at a time, zoom the timeline in. The clip and zoom rows under it zoom with it, so everything stays lined up with the playhead.
 
-- **Zoom in** and **Zoom out**, after the timeline, double or halve how much of it you see, up to 400 pixels a second. The playhead stays where it is on screen, or the middle of the view when the playhead is out of sight.
+- **Zoom in**, after the timeline, doubles the zoom, so you see half as much of it, up to 400 pixels a second. **Zoom out** halves it. The playhead stays where it is on screen, or the middle of the view when the playhead is out of sight.
 - Hold `Ctrl` (`⌘` on macOS) and scroll over the timeline to zoom in or out at the pointer.
 - **Fit** shows the whole timeline again.
 

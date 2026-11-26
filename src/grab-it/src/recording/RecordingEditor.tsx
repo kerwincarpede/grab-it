@@ -62,6 +62,7 @@ import { exportLayers, paintUnderlay, recordingLayout } from "./layout";
 import { useBackdropPresets } from "./useBackdropPresets";
 import Timeline from "./Timeline";
 import { maxZoom, stepZoom } from "./timelineZoom";
+import { isMacPlatform } from "../settings/accelerator";
 import ZoomAreaPicker from "./ZoomAreaPicker";
 import ZoomTrack from "./ZoomTrack";
 import {
@@ -134,6 +135,9 @@ function isEditingText(target: EventTarget | null): boolean {
   if (target.isContentEditable || target.matches("textarea, select")) return true;
   return target instanceof HTMLInputElement && !["range", "checkbox", "radio", "button", "color", "file"].includes(target.type);
 }
+
+/** The wheel gesture that zooms the timeline, as the platform names its key. */
+const ZOOM_WHEEL = isMacPlatform() ? "⌘ + scroll" : "Ctrl + scroll";
 
 /** Whether `clips` is more than one clip of the recording `own`: then the timeline is the joined sequence's. */
 const isJoined = (clips: Clip[], own: string) => clips.length > 1 || (clips.length === 1 && clips[0].source !== own);
@@ -1520,7 +1524,7 @@ export default function RecordingEditor() {
             onClick={() => setTimelineZoom(stepZoom(shownZoom, -1, timelineDuration, timelineWidth))}
             disabled={shownZoom <= 1}
             aria-label="Zoom out"
-            title="Zoom the timeline out (Ctrl or Cmd + scroll)"
+            title={`Zoom the timeline out (${ZOOM_WHEEL})`}
           >
             <ZoomOutIcon />
           </button>
@@ -1530,7 +1534,7 @@ export default function RecordingEditor() {
             onClick={() => setTimelineZoom(stepZoom(shownZoom, 1, timelineDuration, timelineWidth))}
             disabled={shownZoom >= zoomLimit}
             aria-label="Zoom in"
-            title="Zoom the timeline in (Ctrl or Cmd + scroll)"
+            title={`Zoom the timeline in (${ZOOM_WHEEL})`}
           >
             <ZoomInIcon />
           </button>
