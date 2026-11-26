@@ -1191,7 +1191,15 @@ export default function RecordingEditor() {
   const cueRoom = (key: string) => {
     const showing = savedShowings.find((each) => each.key === key);
     if (!showing) return { low: 0, high: timelineDuration };
-    const { low, high } = spanOf(clips, own, showing.index, durationMs);
+    const clip = spanOf(clips, own, showing.index, durationMs);
+    // Cues never overlap by hand: a showing stops at its neighbours in the same clip.
+    let low = clip.low;
+    let high = clip.high;
+    for (const other of savedShowings) {
+      if (other.key === key || other.index !== showing.index || other.cue.id === showing.cue.id) continue;
+      if (other.endMs <= showing.startMs) low = Math.max(low, other.endMs);
+      else if (other.startMs >= showing.endMs) high = Math.min(high, other.startMs);
+    }
     return { low, high };
   };
 

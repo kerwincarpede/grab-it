@@ -15,7 +15,7 @@ interface CaptionTrackProps {
   showings: CueShowing[];
   selectedKey: string | null;
   onSelect: (key: string | null) => void;
-  /** Where showing `key` may reach on the sequence: its clip. */
+  /** Where showing `key` may reach on the sequence: its clip, up to the cues either side of it there. */
   room: (key: string) => { low: number; high: number };
   /** Shows a showing at a new place while it is still moving. */
   onPreview: (span: CueSpan | null) => void;

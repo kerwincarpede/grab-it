@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   cueBox,
+  fitCueLines,
   cueShowings,
   cuesFromTranscript,
   DEFAULT_CAPTION_STYLE,
@@ -206,6 +207,46 @@ describe("painting a cue", () => {
     expect(bottom.y).toBeGreaterThan(250);
     const top = cueBox(["Hello"], { ...DEFAULT_CAPTION_STYLE, position: "top" }, 1000, 500, measure);
     expect(top.y).toBeLessThan(100);
+  });
+
+  /** Measures as a font `em` wide per character does, at the font's size. */
+  const sized = (em = 0.55) => {
+    const fake = {
+      font: "",
+      measureText: (text: string) => ({ width: Array.from(text).length * em * Number(/(\d+)px/.exec(fake.font)?.[1] ?? 0) }),
+    };
+    return fake;
+  };
+  const fontPx = (fake: { font: string }) => Number(/(\d+)px/.exec(fake.font)?.[1]);
+
+  it.each([
+    ["16:9", 1920, 1080, 59],
+    ["1:1", 1080, 1080, 33],
+    ["9:16", 1080, 1920, 33],
+  ])("keeps every line of a long cue inside a %s video", (_, width, height, px) => {
+    for (const size of ["small", "medium", "large"] as const) {
+      const style = { ...DEFAULT_CAPTION_STYLE, size };
+      const fake = sized();
+      const text = "This caption is exactly as long as the line limit allows, twice over here";
+      const lines = fitCueLines(text, style, width, height, fake);
+      if (size === "medium") expect(fontPx(fake)).toBe(px);
+      expect(lines.join(" ")).toBe(text);
+      for (const line of lines) expect(fake.measureText(line).width).toBeLessThanOrEqual(width * 0.9);
+      const box = cueBox(lines, style, width, height, fake);
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      expect(box.width).toBeLessThanOrEqual(Math.ceil(width * 0.9));
+      expect(box.y + box.height).toBeLessThanOrEqual(height);
+    }
+  });
+
+  it("re-splits a line too wide for a narrow video, breaking a long word between characters", () => {
+    // A wide font, as for full-width characters.
+    const fake = sized(1);
+    const lines = fitCueLines("short words then Supercalifragilisticexpialidocious", DEFAULT_CAPTION_STYLE, 400, 400, fake);
+    expect(lines.length).toBeGreaterThan(2);
+    for (const line of lines) expect(fake.measureText(line).width).toBeLessThanOrEqual(400 * 0.9);
+    expect(lines.join("").replace(/ /g, "")).toBe("shortwordsthenSupercalifragilisticexpialidocious");
   });
 
   it("grows with size and never leaves the video", () => {

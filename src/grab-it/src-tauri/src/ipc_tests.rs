@@ -518,6 +518,53 @@ fn recording_transcript_reads_the_sidecar_of_a_source_in_the_recordings_folder()
 }
 
 #[test]
+fn recording_transcribe_refuses_sources_it_cannot_resolve() {
+    use crate::recording_editor::RecordingEditorState;
+    let h = Harness::new();
+    assert_eq!(
+        h.err("recording_transcribe", json!({ "source": "talk.mp4" })),
+        "this window is not an editor"
+    );
+    let recordings = h.default_save_folder().join(RECORDINGS_DIR);
+    let own = recordings.join("2026-03").join("talk.mp4");
+    fs::create_dir_all(own.parent().unwrap()).unwrap();
+    fs::write(&own, b"video bytes").unwrap();
+    h.app
+        .state::<RecordingEditorState>()
+        .register(LABEL, &own, &recordings)
+        .unwrap();
+    let outside = h.default_save_folder().join("outside.mp4");
+    fs::write(&outside, b"video bytes").unwrap();
+    assert_eq!(
+        h.err(
+            "recording_transcribe",
+            json!({ "source": "../outside.mp4" })
+        ),
+        "../outside.mp4 is not a recording in the recordings folder"
+    );
+    assert_eq!(
+        h.err(
+            "recording_transcribe",
+            json!({ "source": "2026-03/gone.mp4" })
+        ),
+        "2026-03/gone.mp4 is not a recording in the recordings folder"
+    );
+    assert_invalid_arg(
+        &h.err("recording_transcribe", json!({})),
+        "recording_transcribe",
+        "source",
+    );
+    // A refused source writes no transcript and leaves no run in progress.
+    assert!(!crate::transcribe::transcript_path(&outside).exists());
+    assert!(
+        h.app
+            .state::<crate::transcribe::TranscribeState>()
+            .begin(LABEL)
+            .is_ok()
+    );
+}
+
+#[test]
 fn set_save_folder_saves_and_rescans_the_new_folder() {
     let h = Harness::new();
     let folder = h.dir.path().join("elsewhere");

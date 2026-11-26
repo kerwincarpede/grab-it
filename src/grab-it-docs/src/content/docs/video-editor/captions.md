@@ -28,7 +28,7 @@ Each recording's transcript is saved beside it as `<name>.transcript.json`, with
 
 Captions are made from the transcript: each is at most two lines of 42 characters and 6 seconds long, split between words. Their times are fitted to where the recording has speech, which follows it closely but not exactly, so a caption can show a little early or late: drag its edges on the caption row to retime it. Editing a caption never changes the transcript or the recording.
 
-Clicking **Transcribe** again when the video already has captions asks first, then replaces them with fresh ones.
+Clicking **Transcribe** again when the video already has captions asks first, then replaces them with fresh ones made from each recording's saved transcript: Whisper doesn't run again on a recording that already has one.
 
 ## The caption row
 

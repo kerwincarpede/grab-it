@@ -400,8 +400,12 @@ export function resizeCueWithin(cue: Cue, edge: "start" | "end", ms: number, low
 
 // --- Painting ---------------------------------------------------------------
 
-/** The text height for each size, as a share of the video's height. */
+/** The text height for each size, as a share of the video's height, or of its width × `WIDTH_SHARE` when that is less. */
 const SIZE_SHARE: Record<CaptionSize, number> = { small: 0.04, medium: 0.055, large: 0.075 };
+/** Sizes text on square and portrait videos as on a landscape 16:9 one as wide. */
+const WIDTH_SHARE = 9 / 16;
+/** The most of the video's width a cue's box may take. */
+const MAX_BOX_SHARE = 0.9;
 /** Space between the cue and the video's edge, as a share of its height. */
 const MARGIN_SHARE = 0.05;
 
@@ -418,16 +422,54 @@ interface Measure {
   font: string;
 }
 
-/** The font for a cue on a video `videoHeight` tall. */
-export const cueFont = (style: CaptionStyle, videoHeight: number) => `600 ${Math.max(8, Math.round(videoHeight * SIZE_SHARE[style.size]))}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+/** The text height of a cue on a video `width` by `height`, in pixels. */
+const cueFontPx = (style: CaptionStyle, width: number, height: number) => Math.max(8, Math.round(Math.min(height, width * WIDTH_SHARE) * SIZE_SHARE[style.size]));
+
+/** The font for a cue on a video `width` by `height`. */
+export const cueFont = (style: CaptionStyle, width: number, height: number) => `600 ${cueFontPx(style, width, height)}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+
+/**
+ * The lines `text` paints as on a video `width` by `height`: wrapped at
+ * `MAX_LINE_CHARS`, then each line too wide for its box to take at most
+ * `MAX_BOX_SHARE` of the width wrapped again at the measured width, a word
+ * wider than that broken between characters.
+ */
+export function fitCueLines(text: string, style: CaptionStyle, width: number, height: number, measure: Measure): string[] {
+  measure.font = cueFont(style, width, height);
+  const padding = Math.round(cueFontPx(style, width, height) * 0.4);
+  const room = Math.max(1, width * MAX_BOX_SHARE - padding * 2);
+  const fits = (line: string) => (Number(measure.measureText(line).width) || 0) <= room;
+  const pieces = (word: string): string[] => {
+    if (fits(word)) return [word];
+    const out: string[] = [];
+    let part = "";
+    for (const char of Array.from(word)) {
+      if (part && !fits(part + char)) {
+        out.push(part);
+        part = char;
+      } else part += char;
+    }
+    return part ? [...out, part] : out;
+  };
+  return cueLines(text).flatMap((line) => {
+    if (fits(line)) return [line];
+    const lines: string[] = [];
+    for (const word of line.split(" ").filter(Boolean).flatMap(pieces)) {
+      const last = lines[lines.length - 1];
+      if (last !== undefined && fits(`${last} ${word}`)) lines[lines.length - 1] = `${last} ${word}`;
+      else lines.push(word);
+    }
+    return lines;
+  });
+}
 
 /**
  * Where a cue sits on a video `width` by `height`: centred, at the bottom
  * or top, with its lines and padding. Whole pixels, inside the video.
  */
 export function cueBox(lines: string[], style: CaptionStyle, width: number, height: number, measure: Measure): CueBox & { fontPx: number; padding: number; lineHeight: number } {
-  const fontPx = Math.max(8, Math.round(height * SIZE_SHARE[style.size]));
-  measure.font = cueFont(style, height);
+  const fontPx = cueFontPx(style, width, height);
+  measure.font = cueFont(style, width, height);
   const padding = Math.round(fontPx * 0.4);
   const lineHeight = Math.round(fontPx * 1.25);
   const textWidth = Math.max(0, ...lines.map((line) => Number(measure.measureText(line).width) || 0));
@@ -444,9 +486,10 @@ export function cueBox(lines: string[], style: CaptionStyle, width: number, heig
  * box sits on a video `width` by `height`. Null for empty text.
  */
 export function paintCue(text: string, style: CaptionStyle, width: number, height: number, canvas: HTMLCanvasElement): CueBox | null {
-  const lines = cueLines(text);
   const ctx = canvas.getContext("2d");
-  if (lines.length === 0 || !ctx) return null;
+  if (!ctx) return null;
+  const lines = fitCueLines(text, style, width, height, ctx);
+  if (lines.length === 0) return null;
   const box = cueBox(lines, style, width, height, ctx);
   canvas.width = box.width;
   canvas.height = box.height;
@@ -455,7 +498,7 @@ export function paintCue(text: string, style: CaptionStyle, width: number, heigh
     ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
     ctx.fillRect(0, 0, box.width, box.height);
   }
-  ctx.font = cueFont(style, height);
+  ctx.font = cueFont(style, width, height);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.lineJoin = "round";

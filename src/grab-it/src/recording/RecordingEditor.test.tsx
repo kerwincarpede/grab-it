@@ -2647,6 +2647,33 @@ describe("RecordingEditor", () => {
       expect(saved(backend)).toEqual([]);
     });
 
+    it("stops a moved or resized cue at its neighbours", async () => {
+      const a = { id: "a", startMs: 1000, endMs: 2000, text: "One" };
+      const b = { id: "b", startMs: 3000, endMs: 4000, text: "Two" };
+      const backend = mockBackend({ version: CAPTIONS_VERSION, captions: { burnIn: true, cues: [a, b] } });
+      render(<RecordingEditor />);
+      await loadVideo();
+      // 100 ms a pixel.
+      placeAt(screen.getByTestId("caption-track"), 120, 26);
+      const startOfB = screen.getAllByTestId("caption-edge-start")[1];
+      fireEvent.pointerDown(startOfB, { clientX: 30 });
+      fireEvent.pointerMove(startOfB, { clientX: 5 });
+      fireEvent.pointerUp(startOfB, { clientX: 5 });
+      await waitFor(() => expect(savedCaptions(backend)?.cues).toEqual([a, { ...b, startMs: 2000 }]));
+
+      const cueB = () => screen.getAllByTestId("caption-cue")[1];
+      fireEvent.pointerDown(cueB(), { clientX: 30 });
+      fireEvent.pointerMove(cueB(), { clientX: 80 });
+      fireEvent.pointerUp(cueB(), { clientX: 80 });
+      await waitFor(() => expect(savedCaptions(backend)?.cues).toEqual([a, { ...b, startMs: 7000, endMs: 9000 }]));
+
+      const cueA = screen.getAllByTestId("caption-cue")[0];
+      fireEvent.pointerDown(cueA, { clientX: 15 });
+      fireEvent.pointerMove(cueA, { clientX: 100 });
+      fireEvent.pointerUp(cueA, { clientX: 100 });
+      await waitFor(() => expect(savedCaptions(backend)?.cues).toEqual([{ ...a, startMs: 6000, endMs: 7000 }, { ...b, startMs: 7000, endMs: 9000 }]));
+    });
+
     it("moves, edits, deletes and adds cues on the caption row", async () => {
       const cue = { id: "q", startMs: 2000, endMs: 4000, text: "Hello" };
       const backend = mockBackend({ version: CAPTIONS_VERSION, captions: { burnIn: true, cues: [cue] } });

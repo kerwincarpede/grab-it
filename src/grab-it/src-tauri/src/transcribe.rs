@@ -14,15 +14,15 @@
 //! caption cues.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rten::Model;
 use rten_generate::filter::LogitsFilter;
@@ -201,7 +201,7 @@ pub struct TranscribeState {
 }
 
 impl TranscribeState {
-    fn begin(&self, label: &str) -> Result<Arc<AtomicBool>, String> {
+    pub(crate) fn begin(&self, label: &str) -> Result<Arc<AtomicBool>, String> {
         let mut running = self.running.lock().unwrap_or_else(|err| err.into_inner());
         if running.contains_key(label) {
             return Err("Transcribing is already running".into());
@@ -291,6 +291,98 @@ pub fn model_present(dir: &Path) -> bool {
     })
 }
 
+/// Deletes every model file in `dir`, as when one fails to load, so the
+/// next Transcribe downloads them again.
+pub fn remove_model(dir: &Path) {
+    for file in &MODEL_FILES {
+        let _ = fs::remove_file(file.local(dir));
+    }
+}
+
+/// Numbers each partial download, so two windows downloading at once
+/// never write the same file.
+static NEXT_PART: AtomicU64 = AtomicU64::new(0);
+/// The partial downloads this process is writing now.
+static ACTIVE_PARTS: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
+
+/// A partial download of this process, deregistered when dropped.
+struct Part(PathBuf);
+
+impl Part {
+    fn new(to: &Path) -> Self {
+        let n = NEXT_PART.fetch_add(1, Ordering::Relaxed);
+        let path = to.with_extension(format!("part-{}-{n}", std::process::id()));
+        if let Ok(mut active) = ACTIVE_PARTS.lock() {
+            active.get_or_insert_with(HashSet::new).insert(path.clone());
+        }
+        Self(path)
+    }
+}
+
+impl Drop for Part {
+    fn drop(&mut self) {
+        if let Ok(mut active) = ACTIVE_PARTS.lock()
+            && let Some(active) = active.as_mut()
+        {
+            active.remove(&self.0);
+        }
+    }
+}
+
+/// Removes the partial downloads in `dir` that no download of this process
+/// is writing: ones a crash or a lost connection left behind.
+fn remove_stale_parts(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let active = ACTIVE_PARTS
+        .lock()
+        .ok()
+        .and_then(|active| active.clone())
+        .unwrap_or_default();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let partial = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.starts_with("part-"));
+        if partial && !active.contains(&path) {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
+
+/// Passes progress on at most once per 1% or [`PROGRESS_EVERY`], and
+/// always the end, so a fast download doesn't flood the page with events.
+struct Throttle {
+    sent: Option<(u64, Instant)>,
+}
+
+/// The longest a download goes without telling its progress.
+const PROGRESS_EVERY: Duration = Duration::from_millis(250);
+
+impl Throttle {
+    fn new() -> Self {
+        Self { sent: None }
+    }
+
+    /// Whether progress `done` of `total`, told at `now`, is passed on.
+    fn due(&mut self, done: u64, total: u64, now: Instant) -> bool {
+        let due = match self.sent {
+            None => true,
+            Some((last, at)) => {
+                done >= total
+                    || done.saturating_sub(last) >= total / 100
+                    || now.duration_since(at) >= PROGRESS_EVERY
+            }
+        };
+        if due {
+            self.sent = Some((done, now));
+        }
+        due
+    }
+}
+
 /// Where a model file is downloaded from.
 fn model_url(base_url: &str, file: &ModelFile) -> String {
     format!(
@@ -312,7 +404,14 @@ pub fn download_model(
     mut progress: impl FnMut(u64, u64),
 ) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|err| format!("could not make {}: {err}", dir.display()))?;
+    remove_stale_parts(dir);
     let total: u64 = files.iter().map(|file| file.bytes).sum();
+    let mut throttle = Throttle::new();
+    let mut progress = |done: u64, total: u64| {
+        if throttle.due(done, total, Instant::now()) {
+            progress(done, total);
+        }
+    };
     let mut before = 0u64;
     for file in files {
         let to = file.local(dir);
@@ -321,11 +420,12 @@ pub fn download_model(
             progress(before, total);
             continue;
         }
-        let part = to.with_extension(format!("part-{}", std::process::id()));
+        let part = Part::new(&to);
+        let part = &part.0;
         let result = ffmpeg::download_hashed_until(
             agent,
             &model_url(base_url, file),
-            &part,
+            part,
             &mut |done, _| progress(before + done, total),
             &|| cancelled.load(Ordering::Relaxed),
         )
@@ -338,7 +438,7 @@ pub fn download_model(
         })
         .and_then(|actual| {
             if actual == file.sha256 {
-                fs::rename(&part, &to).map_err(|err| err.to_string())
+                fs::rename(part, &to).map_err(|err| err.to_string())
             } else {
                 Err(format!(
                     "the speech model's {} did not match its checksum",
@@ -347,7 +447,7 @@ pub fn download_model(
             }
         });
         if result.is_err() {
-            let _ = fs::remove_file(&part);
+            let _ = fs::remove_file(part);
         }
         result?;
         before += file.bytes;
@@ -806,9 +906,11 @@ fn voiced_runs(samples: &[f32]) -> Vec<(u64, u64)> {
 /// Fits `segment` to the voice in it: shrinks it to its voiced stretches,
 /// [`VOICE_PAD_MS`] either side and never past its own bounds, and spreads
 /// its words over those stretches by their length in characters, so no
-/// word sits in the quiet between them. A segment with no voice, or too
-/// little to give each character a millisecond, keeps Whisper's times.
-fn fit_to_voice(segment: &mut TranscriptSegment, runs: &[(u64, u64)]) {
+/// word sits in the quiet between them. Returns false for a segment with
+/// no voice in it, which Whisper invented from silence (often "Thank
+/// you."), so it is dropped. A segment with voice too short to give each
+/// character a millisecond keeps Whisper's times.
+fn fit_to_voice(segment: &mut TranscriptSegment, runs: &[(u64, u64)]) -> bool {
     let (from, to) = (segment.start_ms, segment.end_ms);
     let mut inside: Vec<(u64, u64)> = runs
         .iter()
@@ -816,7 +918,7 @@ fn fit_to_voice(segment: &mut TranscriptSegment, runs: &[(u64, u64)]) {
         .filter(|(start, end)| start < end)
         .collect();
     let (Some(first), Some(last)) = (inside.first().copied(), inside.last().copied()) else {
-        return;
+        return false;
     };
     let weights: Vec<u64> = segment
         .words
@@ -829,7 +931,7 @@ fn fit_to_voice(segment: &mut TranscriptSegment, runs: &[(u64, u64)]) {
     inside[count - 1].1 = (last.1 + VOICE_PAD_MS).min(to);
     let voiced: u64 = inside.iter().map(|(start, end)| end - start).sum();
     if voiced < total {
-        return;
+        return true;
     }
     segment.start_ms = inside[0].0;
     segment.end_ms = inside[count - 1].1;
@@ -852,6 +954,7 @@ fn fit_to_voice(segment: &mut TranscriptSegment, runs: &[(u64, u64)]) {
         word.end_ms = at(after * voiced / total.max(1), false);
         before = after;
     }
+    true
 }
 
 /// The most UTF-8 bytes, and so byte tokens, one character takes.
@@ -1141,9 +1244,7 @@ impl Whisper {
             progress(ms(seek).min(total), total);
         }
         let runs = voiced_runs(samples);
-        for segment in &mut segments {
-            fit_to_voice(segment, &runs);
-        }
+        segments.retain_mut(|segment| fit_to_voice(segment, &runs));
         let language = language
             .filter(|_| !segments.is_empty())
             .and_then(language_code)
@@ -1267,7 +1368,9 @@ pub async fn recording_transcribe(
                     )?;
                 }
                 let samples = read_sound(&ready.path, &file, stream, &cancelled)?;
-                let whisper = Whisper::load(&dir)?;
+                // A file of the right size can still be damaged; drop the
+                // model so the next Transcribe downloads it again.
+                let whisper = Whisper::load(&dir).inspect_err(|_| remove_model(&dir))?;
                 whisper.transcribe(&samples, &cancelled, |done, total| {
                     report(TranscribeStage::Transcribe, done, total)
                 })?
@@ -1513,7 +1616,7 @@ mod tests {
             "The", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog.",
         ];
         let mut segment = spoken(0, 7000, &words);
-        fit_to_voice(&mut segment, &runs);
+        assert!(fit_to_voice(&mut segment, &runs));
         assert_eq!((segment.start_ms, segment.end_ms), (400, 3060));
         let voiced = |ms: u64| (400..=1500).contains(&ms) || (2500..=3060).contains(&ms);
         for word in &segment.words {
@@ -1530,16 +1633,23 @@ mod tests {
     }
 
     #[test]
-    fn a_segment_keeps_its_times_without_voice_and_its_bounds_with_it() {
+    fn a_segment_without_voice_is_dropped_and_one_with_it_keeps_its_bounds() {
         let samples = sound(7000, &[(500, 1500)]);
         let runs = voiced_runs(&samples);
-        let quiet = spoken(3000, 6000, &["hm"]);
-        let mut kept = quiet.clone();
-        fit_to_voice(&mut kept, &runs);
-        assert_eq!(kept, quiet);
+        // Whisper's invention over silence is dropped.
+        let mut quiet = spoken(3000, 6000, &["Thank", "you."]);
+        assert!(!fit_to_voice(&mut quiet, &runs));
+        assert!(!fit_to_voice(&mut quiet, &voiced_runs(&sound(7000, &[]))));
+        // Voice too short for its characters keeps Whisper's times.
+        let sliver = sound(7000, &[(3000, 3020)]);
+        let long = "a".repeat(400);
+        let wordy = spoken(2000, 6000, &[long.as_str()]);
+        let mut kept = wordy.clone();
+        assert!(fit_to_voice(&mut kept, &voiced_runs(&sliver)));
+        assert_eq!(kept, wordy);
         // Voice from before the segment starts reaches no further back.
         let mut late = spoken(1000, 4000, &["late", "words"]);
-        fit_to_voice(&mut late, &runs);
+        assert!(fit_to_voice(&mut late, &runs));
         assert_eq!((late.start_ms, late.end_ms), (1000, 1600));
         assert_eq!(late.words[0].start_ms, 1000);
         assert_eq!(late.words[1].end_ms, 1600);
@@ -1926,6 +2036,73 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(left, [std::ffi::OsString::from("good.onnx")]);
+    }
+
+    #[test]
+    fn a_download_clears_stale_parts_but_not_ones_being_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join("encoder_model.part-1-0");
+        fs::write(&stale, b"left by a crash").unwrap();
+        let busy = Part::new(&dir.path().join("decoder_model_merged.onnx"));
+        fs::write(&busy.0, b"another window").unwrap();
+        let kept = dir.path().join("tokenizer.json");
+        fs::write(&kept, b"{}").unwrap();
+        download_model(
+            &ffmpeg::download_agent(Duration::from_secs(5)),
+            "http://127.0.0.1:9",
+            &[],
+            dir.path(),
+            &AtomicBool::new(false),
+            |_, _| {},
+        )
+        .unwrap();
+        assert!(!stale.exists());
+        assert!(busy.0.exists());
+        assert!(kept.exists());
+    }
+
+    #[test]
+    fn each_partial_download_has_its_own_file() {
+        let to = Path::new("/models/encoder_model.onnx");
+        let (one, two) = (Part::new(to), Part::new(to));
+        assert_ne!(one.0, two.0);
+        let name = one.0.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with(&format!("encoder_model.part-{}-", std::process::id())),
+            "{name}"
+        );
+    }
+
+    #[test]
+    fn progress_is_sent_per_percent_or_quarter_second_and_at_the_end() {
+        let start = Instant::now();
+        let mut throttle = Throttle::new();
+        let sent: Vec<u64> = (0..=1000u64)
+            .filter(|done| throttle.due(*done, 1000, start))
+            .collect();
+        assert_eq!(sent.len(), 101, "{sent:?}");
+        assert_eq!(sent.last(), Some(&1000));
+        let mut throttle = Throttle::new();
+        assert!(throttle.due(0, 1_000_000, start));
+        assert!(!throttle.due(1, 1_000_000, start + PROGRESS_EVERY / 2));
+        assert!(throttle.due(2, 1_000_000, start + PROGRESS_EVERY));
+        assert!(!throttle.due(3, 1_000_000, start + PROGRESS_EVERY));
+        assert!(throttle.due(1_000_000, 1_000_000, start + PROGRESS_EVERY));
+    }
+
+    #[test]
+    fn removing_the_model_deletes_its_files_only() {
+        let dir = tempfile::tempdir().unwrap();
+        for file in &MODEL_FILES {
+            fs::write(file.local(dir.path()), b"damaged").unwrap();
+        }
+        fs::write(dir.path().join("other"), b"x").unwrap();
+        remove_model(dir.path());
+        let left: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, [std::ffi::OsString::from("other")]);
     }
 
     #[test]

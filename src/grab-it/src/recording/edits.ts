@@ -16,8 +16,9 @@ export interface Trim {
  * rendered on export. Absent fields mean unchanged.
  */
 /**
- * The sidecar version that adds caption cues; older builds open a sidecar
- * with cues read-only. Mirrors `CAPTIONS_VERSION` in recording_editor.rs.
+ * The sidecar version that adds caption cues. Older builds refuse to open
+ * a sidecar with cues, so they never overwrite it and nothing is lost.
+ * Mirrors `CAPTIONS_VERSION` in recording_editor.rs.
  */
 export const CAPTIONS_VERSION = 5;
 /** The newest sidecar version this build reads and writes. Mirrors `EDITS_VERSION`. */

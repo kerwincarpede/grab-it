@@ -38,4 +38,4 @@ Grab-it updates itself, so every release opens files that older releases wrote, 
   ```
 
   Times are in the recording. Editing captions never rewrites it; only transcribing again does.
-- `<name>.edits.json` is at version 5 when it holds `captions` (`{burnIn, style?, cues: [{id, source?, startMs, endMs, text}]}`), so builds that read only versions 1 to 4 open it read-only and never drop the cues. A sidecar without captions keeps the oldest version its other edits need. A cue's `source` works as a zoom's: absent for the sidecar's own recording.
+- `<name>.edits.json` is at version 5 when it holds `captions` (`{burnIn, style?, cues: [{id, source?, startMs, endMs, text}]}`), so builds that read only versions 1 to 4 refuse to open the recording ("unsupported edits version 5") and never overwrite the sidecar: nothing is lost, and a build that reads version 5 opens it again. A sidecar without captions keeps the oldest version its other edits need. A cue's `source` works as a zoom's: absent for the sidecar's own recording.

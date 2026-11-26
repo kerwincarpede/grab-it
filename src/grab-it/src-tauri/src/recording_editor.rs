@@ -68,8 +68,9 @@ pub const VIDEO_SCHEME: &str = "grab-it-video";
 /// 2 adds clips, 3 adds gaps, 4 adds month-qualified source references, and
 /// [`CAPTIONS_VERSION`] adds caption cues.
 pub const EDITS_VERSION: u64 = CAPTIONS_VERSION;
-/// The edits sidecar version that adds caption cues; older builds open a
-/// sidecar with cues read-only. Mirrors `CAPTIONS_VERSION` in
+/// The edits sidecar version that adds caption cues. Older builds refuse to
+/// open a recording whose sidecar is at this version, and never overwrite
+/// it, so nothing is lost. Mirrors `CAPTIONS_VERSION` in
 /// src/recording/edits.ts.
 pub const CAPTIONS_VERSION: u64 = 5;
 /// Ends the name of the edits sidecar beside an MP4.
@@ -212,7 +213,7 @@ pub fn edits_path(video: &Path) -> PathBuf {
 /// `startMs` and `endMs` and an optional `zooms` list, or `{version: 2,
 /// ...}` which may also hold a `clips` list of `{id, source, startMs,
 /// endMs}`. Version 3 adds gaps of `{id, gapMs}`, and version 4 permits
-/// month-qualified clip and zoom sources. Version 5 adds `captions`, a
+/// month-qualified clip and zoom sources. [`CAPTIONS_VERSION`] adds `captions`, a
 /// `{burnIn, cues, style?}` object whose cues are `{id, source?, startMs,
 /// endMs, text}`. The page skips unknown zooms.
 pub fn validate_edits(value: &Value) -> Result<(), String> {
@@ -1195,14 +1196,18 @@ impl ExportOverlay {
     }
 }
 
-/// An overlay's image, read from the body, and when it shows.
+/// An overlay's PNG, read from the body, and when it shows. The PNG is
+/// decoded only when its time comes and dropped once it has passed, so a
+/// long export holds the pixels of only the overlays on screen.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OverlayImage {
     pub start_ms: u64,
     pub end_ms: u64,
     pub x: u32,
     pub y: u32,
-    pub image: RgbaImage,
+    pub png: Vec<u8>,
+    /// The decoded image while it shows.
+    pub image: Option<RgbaImage>,
 }
 
 impl OverlayImage {
@@ -1211,11 +1216,20 @@ impl OverlayImage {
         (self.start_ms..self.end_ms).contains(&ms)
     }
 
-    /// Lays the image over `frame` with its own transparency.
-    fn draw(&self, frame: &mut RgbaImage) {
+    /// The decoded image, decoding the PNG the first time.
+    fn decoded(&mut self) -> Result<&RgbaImage, String> {
+        match &mut self.image {
+            Some(image) => Ok(image),
+            empty => Ok(empty.insert(decode_png(&self.png, "overlay")?)),
+        }
+    }
+
+    /// Lays `image` over `frame` at `(x, y)` with its own transparency.
+    fn draw(image: &RgbaImage, x: u32, y: u32, frame: &mut RgbaImage) {
+        let (left, top) = (x, y);
         let (frame_width, frame_height) = frame.dimensions();
-        for (col, row, pixel) in self.image.enumerate_pixels() {
-            let (x, y) = (self.x + col, self.y + row);
+        for (col, row, pixel) in image.enumerate_pixels() {
+            let (x, y) = (left + col, top + row);
             if x >= frame_width || y >= frame_height {
                 continue;
             }
@@ -1235,11 +1249,23 @@ impl OverlayImage {
     }
 }
 
-/// Lays every overlay showing `ms` into the output over `frame`, in order.
-fn draw_overlays(frame: &mut RgbaImage, overlays: &[OverlayImage], ms: u64) {
-    for overlay in overlays.iter().filter(|overlay| overlay.shows_at(ms)) {
-        overlay.draw(frame);
+/// Lays every overlay showing `ms` into the output over `frame`, in order,
+/// decoding each as its time comes and dropping the pixels of those whose
+/// time has passed. Frames come in order, so a dropped one never shows again.
+fn draw_overlays(
+    frame: &mut RgbaImage,
+    overlays: &mut [OverlayImage],
+    ms: u64,
+) -> Result<(), String> {
+    for overlay in overlays.iter_mut() {
+        if ms >= overlay.end_ms {
+            overlay.image = None;
+        } else if overlay.shows_at(ms) {
+            let (x, y) = (overlay.x, overlay.y);
+            OverlayImage::draw(overlay.decoded()?, x, y, frame);
+        }
     }
+    Ok(())
 }
 
 /// How far into the output frame `index` is, at `fps`.
@@ -1614,11 +1640,20 @@ fn decode_png(bytes: &[u8], what: &str) -> Result<RgbaImage, String> {
         .map_err(|err| format!("could not read the {what}: {err}"))
 }
 
-/// Splits the export request's body into the backdrop and mask images
-/// and the overlays' images, whose PNGs come last.
-/// The backdrop and mask images, when sent, and the overlays' images.
+/// The width and height a PNG says it has, read from its header without
+/// decoding its pixels.
+fn png_size(bytes: &[u8]) -> Result<(u32, u32), String> {
+    image::ImageReader::with_format(io::Cursor::new(bytes), image::ImageFormat::Png)
+        .into_dimensions()
+        .map_err(|err| format!("could not read the overlay: {err}"))
+}
+
+/// The backdrop and mask images, when sent, and the overlays' PNGs.
 type ExportBody = (Option<(RgbaImage, RgbaImage)>, Vec<OverlayImage>);
 
+/// Splits the export request's body into the backdrop and mask images
+/// and the overlays' PNGs, which come last. Each overlay's size is checked
+/// from its PNG's header; its pixels are decoded only while it shows.
 fn read_body(body: &[u8], plan: &ExportPlan) -> Result<ExportBody, String> {
     let overlay_bytes = plan
         .overlays
@@ -1634,8 +1669,7 @@ fn read_body(body: &[u8], plan: &ExportPlan) -> Result<ExportBody, String> {
         .map(|overlay| {
             let (png, next) = rest.split_at(overlay.bytes);
             rest = next;
-            let image = decode_png(png, "overlay")?;
-            if image.dimensions() != (overlay.width, overlay.height) {
+            if png_size(png)? != (overlay.width, overlay.height) {
                 return Err(format!(
                     "an overlay must be {}×{}",
                     overlay.width, overlay.height
@@ -1646,7 +1680,8 @@ fn read_body(body: &[u8], plan: &ExportPlan) -> Result<ExportBody, String> {
                 end_ms: overlay.end_ms,
                 x: overlay.x,
                 y: overlay.y,
-                image,
+                png: png.to_vec(),
+                image: None,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -1777,7 +1812,7 @@ fn render(
         plan,
         sources,
         layers,
-        overlays,
+        mut overlays,
         fps,
         bits_per_pixel,
         noise_model,
@@ -1847,7 +1882,7 @@ fn render(
                         let ms = frame_ms(done, fps);
                         if overlays.iter().any(|overlay| overlay.shows_at(ms)) {
                             let mut covered = frame.clone();
-                            draw_overlays(&mut covered, &overlays, ms);
+                            draw_overlays(&mut covered, &mut overlays, ms)?;
                             video.write(&covered).map_err(|err| err.to_string())?;
                         } else {
                             video.write(&frame).map_err(|err| err.to_string())?;
@@ -1891,7 +1926,7 @@ fn render(
                     None => RgbaImage::from_raw(plan.width, plan.height, shown.to_vec())
                         .ok_or("a frame was the wrong size")?,
                 };
-                draw_overlays(&mut frame, &overlays, frame_ms(done, fps));
+                draw_overlays(&mut frame, &mut overlays, frame_ms(done, fps))?;
                 video.write(&frame).map_err(|err| err.to_string())?;
                 done += 1;
                 report(done);
@@ -2688,7 +2723,11 @@ esac
             .is_ok()
         );
         assert!(
-            validate_edits(&with(4, json!({ "burnIn": true, "cues": [cue.clone()] }))).is_err()
+            validate_edits(&with(
+                CAPTIONS_VERSION - 1,
+                json!({ "burnIn": true, "cues": [cue.clone()] })
+            ))
+            .is_err()
         );
         // No cues needs no new version.
         assert!(validate_edits(&with(1, json!({ "burnIn": false, "cues": [] }))).is_ok());
@@ -3530,9 +3569,15 @@ esac
         assert_eq!(read_backdrop.get_pixel(0, 0), &Rgba([1, 2, 3, 255]));
         assert_eq!(read_mask.get_pixel(1, 1).0[3], 0);
         assert_eq!(read.len(), 2);
-        assert_eq!(read[0].image.dimensions(), (3, 1));
+        // Kept as PNGs, decoded only when they show.
+        assert!(read.iter().all(|overlay| overlay.image.is_none()));
+        assert_eq!(read[0].png, first);
         assert_eq!((read[1].start_ms, read[1].end_ms), (500, 900));
-        assert_eq!(read[1].image.get_pixel(0, 1), &Rgba([7, 7, 7, 128]));
+        let mut second_read = read[1].clone();
+        assert_eq!(
+            second_read.decoded().unwrap().get_pixel(0, 1),
+            &Rgba([7, 7, 7, 128])
+        );
 
         // Without a backdrop the overlays are the whole body.
         let alone = ExportPlan {
@@ -3567,29 +3612,61 @@ esac
         image.put_pixel(0, 0, Rgba([255, 255, 255, 255]));
         // Half see-through.
         image.put_pixel(1, 0, Rgba([255, 255, 255, 128]));
-        let overlays = [OverlayImage {
+        let mut png = Vec::new();
+        image
+            .write_to(&mut io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut overlays = [OverlayImage {
             start_ms: 1000,
             end_ms: 2000,
             x: 1,
             y: 1,
-            image,
+            png,
+            image: None,
         }];
         let frame = || RgbaImage::from_pixel(4, 2, Rgba([0, 0, 0, 255]));
 
+        // Not decoded before its time.
         let mut before = frame();
-        draw_overlays(&mut before, &overlays, 999);
+        draw_overlays(&mut before, &mut overlays, 999).unwrap();
         assert_eq!(before, frame());
-        let mut after = frame();
-        draw_overlays(&mut after, &overlays, 2000);
-        assert_eq!(after, frame());
+        assert!(overlays[0].image.is_none());
 
         let mut shown = frame();
-        draw_overlays(&mut shown, &overlays, 1000);
+        draw_overlays(&mut shown, &mut overlays, 1000).unwrap();
+        assert!(overlays[0].image.is_some());
         assert_eq!(shown.get_pixel(0, 1), &Rgba([0, 0, 0, 255]));
         assert_eq!(shown.get_pixel(1, 1), &Rgba([255, 255, 255, 255]));
         assert_eq!(shown.get_pixel(2, 1), &Rgba([128, 128, 128, 255]));
         assert_eq!(shown.get_pixel(3, 1), &Rgba([0, 0, 0, 255]));
         assert_eq!(shown.get_pixel(1, 0), &Rgba([0, 0, 0, 255]));
+
+        // Dropped once its time has passed.
+        let mut after = frame();
+        draw_overlays(&mut after, &mut overlays, 2000).unwrap();
+        assert_eq!(after, frame());
+        assert!(overlays[0].image.is_none());
+    }
+
+    #[test]
+    fn an_overlay_whose_pixels_cannot_be_read_fails_the_frame() {
+        let mut png = Vec::new();
+        RgbaImage::new(2, 2)
+            .write_to(&mut io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        // The header still reads, but the pixel data is cut off.
+        png.truncate(png.len() - 16);
+        assert_eq!(png_size(&png), Ok((2, 2)));
+        let mut overlays = [OverlayImage {
+            start_ms: 0,
+            end_ms: 100,
+            x: 0,
+            y: 0,
+            png,
+            image: None,
+        }];
+        let mut frame = RgbaImage::new(2, 2);
+        assert!(draw_overlays(&mut frame, &mut overlays, 0).is_err());
     }
 
     #[test]

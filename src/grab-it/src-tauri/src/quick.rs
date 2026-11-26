@@ -760,10 +760,16 @@ fn delete_recording(app: &AppHandle, path: &Path) -> Result<(), String> {
         let _ = app.emit(crate::library::LIBRARY_CHANGED_EVENT, ());
         return Ok(());
     }
+    delete_loose_recording(path)
+}
+
+/// Deletes a recording the library doesn't know, with its sidecars.
+fn delete_loose_recording(path: &Path) -> Result<(), String> {
     fs::remove_file(path).map_err(|err| format!("could not delete the recording: {err}"))?;
     let _ = fs::remove_file(crate::record::cursor_path(path));
     let _ = fs::remove_file(crate::record::sound_path(path));
     let _ = fs::remove_file(crate::recording_editor::edits_path(path));
+    let _ = fs::remove_file(crate::transcribe::transcript_path(path));
     Ok(())
 }
 
@@ -805,6 +811,31 @@ fn delete_loose_capture(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_loose_recording_goes_with_its_sidecars_and_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp4 = dir.path().join("clip.mp4");
+        let sidecars = [
+            crate::record::cursor_path(&mp4),
+            crate::record::sound_path(&mp4),
+            crate::recording_editor::edits_path(&mp4),
+            crate::transcribe::transcript_path(&mp4),
+        ];
+        fs::write(&mp4, b"mp4").unwrap();
+        for sidecar in &sidecars {
+            fs::write(sidecar, b"{}").unwrap();
+        }
+        let other = dir.path().join("other.transcript.json");
+        fs::write(&other, b"{}").unwrap();
+        delete_loose_recording(&mp4).unwrap();
+        assert!(!mp4.exists());
+        for sidecar in &sidecars {
+            assert!(!sidecar.exists(), "{}", sidecar.display());
+        }
+        assert!(other.exists());
+        assert!(delete_loose_recording(&mp4).is_err());
+    }
 
     #[test]
     fn a_loose_capture_goes_with_its_sidecars_and_assets() {
