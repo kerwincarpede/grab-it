@@ -544,7 +544,7 @@ export default function EditorWindow() {
 
 function CaptureEditor({ onMoved }: { onMoved: () => void }) {
   const annotations = useAnnotations();
-  const { doc: storedDoc, commit, adopt, info, undo: undoDoc, redo: redoDoc, flush } = annotations;
+  const { doc: storedDoc, commit, adopt, info, undo: undoDoc, redo: redoDoc, freeze, thaw } = annotations;
   const { image: capture, error: imageError } = useCaptureImage(info !== null);
   /** The stored cuts that fit the capture: a malformed sidecar's others are left out, in the editor as on export. */
   const doc = useMemo(() => {
@@ -1712,23 +1712,32 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
   const stepping = useRef(false);
   /**
    * Steps to the newer ("newer", Previous) or older ("older", Next) image capture in the Library.
-   * The pending edit is written to this capture's sidecar first.
+   * Edits stop and the pending one is written to this capture's sidecar first; if that write
+   * fails, the editor stays here with the edit, rather than losing it.
    */
   const stepCapture = useCallback(
     async (direction: Neighbour) => {
       if (stepping.current) return;
       if (!(direction === "newer" ? info?.hasNewer : info?.hasOlder)) return;
       stepping.current = true;
+      const which = direction === "newer" ? "previous" : "next";
+      let moved = false;
       try {
-        await flush();
-        if ((await editorStep(direction)) === "moved") onMoved();
+        if (!(await freeze())) {
+          setMessage(`Could not save your edits, so the ${which} capture was not opened.`);
+          return;
+        }
+        moved = (await editorStep(direction)) === "moved";
       } catch (err) {
-        setMessage(`Could not open the ${direction === "newer" ? "previous" : "next"} capture: ${errorText(err)}`);
+        setMessage(`Could not open the ${which} capture: ${errorText(err)}`);
       } finally {
         stepping.current = false;
+        // Moved, this editor is replaced and takes no more edits; otherwise it carries on.
+        if (moved) onMoved();
+        else thaw();
       }
     },
-    [flush, info, onMoved],
+    [freeze, thaw, info, onMoved],
   );
 
   const copyAndClose = useCallback(async () => {

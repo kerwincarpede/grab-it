@@ -43,6 +43,8 @@ export function useAnnotations() {
   /** The document the sidecar holds: as loaded, then as last saved. */
   const saved = useRef<Annotations | null>(null);
   const pending = useRef<Annotations | null>(null);
+  /** Set while the editor steps to another capture: edits are ignored, so none can land in the next capture's sidecar. */
+  const frozen = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,21 +64,33 @@ export function useAnnotations() {
     };
   }, []);
 
-  /** The latest sidecar write; writes run one after another. */
-  const writing = useRef<Promise<void>>(Promise.resolve());
+  /** The latest sidecar write and whether it worked; writes run one after another. */
+  const writing = useRef<Promise<boolean>>(Promise.resolve(true));
 
-  /** Writes the pending edit, if any; resolves once every write so far has finished. */
-  const flush = useCallback((): Promise<void> => {
+  /**
+   * Writes the pending edit, if any; resolves once every write so far has finished, with
+   * whether the last one worked. A failed edit stays pending, so the next flush tries again.
+   */
+  const flush = useCallback((): Promise<boolean> => {
     const doc = pending.current;
     if (!doc) return writing.current;
+    const before = saved.current;
     pending.current = null;
     saved.current = doc;
     setStatus("saving");
     writing.current = writing.current
       .then(() => saveAnnotations(serializeAnnotations(doc)))
       .then(
-        () => setStatus((now) => (now === "saving" ? "saved" : now)),
-        () => setStatus("error"),
+        () => {
+          setStatus((now) => (now === "saving" ? "saved" : now));
+          return true;
+        },
+        () => {
+          if (saved.current === doc) saved.current = before;
+          pending.current ??= doc;
+          setStatus("error");
+          return false;
+        },
       );
     return writing.current;
   }, []);
@@ -102,7 +116,9 @@ export function useAnnotations() {
     let disposed = false;
     let listening: Promise<() => void>;
     try {
-      listening = getCurrentWindow().onCloseRequested(() => flush());
+      listening = getCurrentWindow().onCloseRequested(async () => {
+        await flush();
+      });
     } catch (err) {
       // Outside a Tauri window (no window metadata): nothing to hold.
       listening = Promise.reject(err);
@@ -124,11 +140,27 @@ export function useAnnotations() {
     };
   }, [flush]);
 
-  const commitDoc = useCallback((doc: Annotations) => dispatch({ type: "commit", doc }), []);
+  /** Applies an edit, unless the editor is stepping away. */
+  const edit = useCallback((action: Action) => {
+    if (!frozen.current) dispatch(action);
+  }, []);
+  const commitDoc = useCallback((doc: Annotations) => edit({ type: "commit", doc }), [edit]);
   /** Starts from `doc` as if it had been loaded (no undo step), and saves it. */
-  const adoptDoc = useCallback((doc: Annotations) => dispatch({ type: "load", doc }), []);
-  const undoDoc = useCallback(() => dispatch({ type: "undo" }), []);
-  const redoDoc = useCallback(() => dispatch({ type: "redo" }), []);
+  const adoptDoc = useCallback((doc: Annotations) => edit({ type: "load", doc }), [edit]);
+  const undoDoc = useCallback(() => edit({ type: "undo" }), [edit]);
+  const redoDoc = useCallback(() => edit({ type: "redo" }), [edit]);
+  /**
+   * Stops taking edits and writes the pending one; resolves with whether the sidecar holds
+   * every edit. Edits stay off until `thaw`, so nothing changes while the editor steps away.
+   */
+  const freeze = useCallback((): Promise<boolean> => {
+    frozen.current = true;
+    return flush();
+  }, [flush]);
+  /** Takes edits again after a step that did not leave this capture. */
+  const thaw = useCallback(() => {
+    frozen.current = false;
+  }, []);
 
   return {
     info,
@@ -141,7 +173,7 @@ export function useAnnotations() {
     adopt: adoptDoc,
     undo: undoDoc,
     redo: redoDoc,
-    /** Writes any pending edit now; resolves once the sidecar holds it. */
-    flush,
+    freeze,
+    thaw,
   };
 }

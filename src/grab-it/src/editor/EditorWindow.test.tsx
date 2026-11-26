@@ -370,7 +370,9 @@ interface StepsMock {
   hasNewer: boolean;
   hasOlder: boolean;
   /** What `editor_step` answers; "moved" when unset. */
-  answer?: EditorStepped;
+  answer?: EditorStepped | Promise<EditorStepped>;
+  /** Makes every sidecar write fail, as a read-only sidecar or a full disk would. */
+  saveFails?: boolean;
   /** Each step asked for, with how many sidecar writes had been made by then. */
   stepped: { direction: Neighbour; saved: number }[];
   /** How many times the editor loaded its capture. */
@@ -462,6 +464,7 @@ function mockEditor(
         return preferences.asset ?? new ArrayBuffer(4);
       },
       editor_save_annotations: (payload) => {
+        if (preferences.steps?.saveFails) throw "the disk is full";
         saved.push(payload.annotations as unknown as Annotations);
         return null;
       },
@@ -947,6 +950,48 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
       await waitFor(() => expect(mock.stepped).toHaveLength(1));
       await act(async () => {});
       expect(mock.loads).toBe(1);
+    });
+
+    it("takes no edits while stepping, so none reach the next capture's sidecar", async () => {
+      let answer: (stepped: EditorStepped) => void = () => undefined;
+      const mock = steps({ answer: new Promise<EditorStepped>((resolve) => (answer = resolve)) });
+      const saved = mockEditor(sidecar, [], { steps: mock });
+      await ready();
+      fireEvent.click(topbar().getByRole("button", { name: "Next capture" }));
+      await waitFor(() => expect(mock.stepped).toEqual([{ direction: "older", saved: 0 }]));
+
+      // An edit lands after the old sidecar was written but before editor_step answers.
+      fireEvent.click(screen.getByRole("button", { name: "Select" }));
+      fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+      fireEvent.keyDown(window, { key: "Delete" });
+      await act(async () => answer("moved"));
+
+      await waitFor(() => expect(mock.loads).toBe(2));
+      await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 100));
+      expect(saved).toEqual([]);
+    });
+
+    it("stays on the capture, with the edit, when the sidecar cannot be written", async () => {
+      const mock = steps({ saveFails: true });
+      const saved = mockEditor(sidecar, [], { steps: mock });
+      await ready();
+      fireEvent.click(screen.getByRole("button", { name: "Select" }));
+      fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+      fireEvent.keyDown(window, { key: "Delete" });
+
+      fireEvent.click(topbar().getByRole("button", { name: "Next capture" }));
+      expect(await screen.findByText("Could not save your edits, so the next capture was not opened.")).toBeInTheDocument();
+      expect(mock.stepped).toEqual([]);
+      expect(mock.loads).toBe(1);
+      expect(saved).toEqual([]);
+      expect(shapeIds()).not.toContain("a1");
+
+      // The editor still takes edits, and the step goes ahead once the write works.
+      expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+      mock.saveFails = false;
+      fireEvent.click(topbar().getByRole("button", { name: "Next capture" }));
+      await waitFor(() => expect(mock.stepped).toEqual([{ direction: "older", saved: 1 }]));
+      expect(saved[0].shapes.map((shape) => shape.id)).not.toContain("a1");
     });
   });
 
