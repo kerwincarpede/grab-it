@@ -742,6 +742,8 @@ export default function RecordingEditor() {
         if (isRefusal(placed)) setMessage(placed.refused);
         else {
           latest.commitTracks(placed.timeline);
+          // One recording's own time becomes sequence time under the overlay: the playhead keeps its place.
+          latest.seek(latest.playheadMs, latest.clips, placed.timeline);
           setTrackSelection(new Set([placed.id]));
           setSelectedClipId(null);
           setSelectedZoomId(null);
@@ -789,7 +791,7 @@ export default function RecordingEditor() {
     setSelectedClipId(null);
     // The playhead goes to where the removed stretch was, now the start of what followed it.
     const pos = toSource(next, Math.min(start, sequenceDuration(next)));
-    if (pos) seek(timelineMs(next, own, pos.index, pos.sourceMs, overlay), next, rippled);
+    if (pos) seek(timelineMs(next, own, pos.index, pos.sourceMs, hasOverlay(rippled)), next, rippled);
   };
 
   /** Deletes the selected clip and leaves a gap of its length; on a gap, closes it. */
@@ -878,14 +880,17 @@ export default function RecordingEditor() {
     if (durationMs > 0) {
       const nextClips = clipsOf(next.present, own, durationMs);
       const nextTracks = timelineOf(next.present, nextClips, hasAudio);
-      if (isJoined(nextClips, own) || joined) {
+      const nextOverlay = hasOverlay(nextTracks);
+      if (isJoined(nextClips, own) || nextOverlay) {
         // The playhead stays where it was in the clip it was on, else goes to the start.
         const index = at ? nextClips.findIndex((clip) => clip.id === at.clip.id) : -1;
-        if (index >= 0 && at) seek(timelineMs(nextClips, own, index, at.sourceMs, overlay), nextClips, nextTracks);
-        else seek(timelineMs(nextClips, own, 0, nextClips[0].startMs, overlay), nextClips, nextTracks);
+        if (index >= 0 && at) seek(timelineMs(nextClips, own, index, at.sourceMs, nextOverlay), nextClips, nextTracks);
+        else seek(timelineMs(nextClips, own, 0, nextClips[0].startMs, nextOverlay), nextClips, nextTracks);
       } else {
+        // In the opened recording's own time: from a sequence, where the playhead was in its recording.
         const kept = keptOf(next.present, durationMs);
-        seek(Math.min(Math.max(currentMs, kept.startMs), kept.endMs), nextClips);
+        const ms = !joined ? currentMs : at && !isGap(at.clip) && at.clip.source === own ? at.sourceMs : nextClips[0].startMs;
+        seek(Math.min(Math.max(ms, kept.startMs), kept.endMs), nextClips, nextTracks);
       }
     }
   };

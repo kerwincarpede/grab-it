@@ -1858,6 +1858,80 @@ describe("RecordingEditor", () => {
       );
     });
 
+    it("keeps the playhead's place in a trimmed recording when an overlay comes and goes", async () => {
+      const backend = mockBackend({
+        version: TRACKS_VERSION,
+        tracks: [
+          { id: "video-2", name: "Video 2", kind: "video", clips: [] },
+          { id: "video-1", name: "Video 1", kind: "video", clips: [{ id: "own", source: OWN, startMs: 2000, endMs: 8000 }] },
+          { id: "audio-1", name: "Audio 1", kind: "audio", clips: [] },
+        ],
+      });
+      render(<RecordingEditor />);
+      const video = await loadVideo();
+      // 12 s over 120 px: the playhead goes to 5 s of the recording, 3 s into its trim.
+      const track = screen.getByTestId("timeline-track");
+      placeAt(track, 120, 26);
+      fireEvent.pointerDown(track, { clientX: 50 });
+      fireEvent.pointerUp(track, { clientX: 50 });
+      await waitFor(() => expect(screen.getByLabelText("Time")).toHaveTextContent("0:05.0 /"));
+      await userEvent.click(screen.getByText("Video 2"));
+      picked = OTHER_PATH;
+      await userEvent.click(screen.getByRole("button", { name: "Recording" }));
+      await waitFor(() => expect((lastSaved(backend) as { tracks: { clips: { atMs: number }[] }[] }).tracks[0].clips).toEqual([expect.objectContaining({ source: OTHER, atMs: 3000 })]));
+      // Now on the sequence's time: the playhead is where the new clip starts.
+      await waitFor(() => expect(screen.getByLabelText("Time")).toHaveTextContent("0:03.0 /"));
+
+      await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(screen.getByLabelText("Time")).toHaveTextContent("0:05.0 /"));
+      expect(video.currentTime).toBe(5);
+    });
+
+    it("gives the piece on show only its own recording's zooms", async () => {
+      mockBackend({
+        version: TRACKS_VERSION,
+        zooms: [{ ...AREA_ZOOM, startMs: 2000, endMs: 4500 }],
+        tracks: [
+          { id: "video-2", name: "Video 2", kind: "video", clips: [{ id: "c", source: OTHER, startMs: 0, endMs: 2000, atMs: 1000 }] },
+          { id: "video-1", name: "Video 1", kind: "video", clips: JOINED.clips },
+          { id: "audio-1", name: "Audio 1", kind: "audio", clips: [] },
+        ],
+      });
+      render(<RecordingEditor />);
+      const first = await loadJoined();
+      const second = await previewVideo(OTHER);
+      // 10 s over 100 px. The zoom is on the opened recording's 2 s to 4.5 s, 1 s to 3.5 s on the timeline.
+      const track = screen.getByTestId("timeline-track");
+      placeAt(track, 100, 26);
+      fireEvent.pointerDown(track, { clientX: 15 });
+      fireEvent.pointerUp(track, { clientX: 15 });
+      // Video 2's recording shows, unzoomed, as the export gives it.
+      await waitFor(() => expect(second).toBeVisible());
+      expect(second.style.transform).toBe("none");
+      fireEvent.pointerDown(track, { clientX: 32 });
+      fireEvent.pointerUp(track, { clientX: 32 });
+      await waitFor(() => expect(first).toBeVisible());
+      expect(first.style.transform).toContain("scale(2)");
+    });
+
+    it("puts the picture after a ripple delete where the shifted overlay now is", async () => {
+      mockBackend({
+        version: TRACKS_VERSION,
+        tracks: [
+          { id: "video-2", name: "Video 2", kind: "video", clips: [{ id: "c", source: OWN, startMs: 8000, endMs: 10_000, atMs: 4000 }] },
+          { id: "video-1", name: "Video 1", kind: "video", clips: JOINED.clips },
+          { id: "audio-1", name: "Audio 1", kind: "audio", clips: [] },
+        ],
+      });
+      render(<RecordingEditor />);
+      const first = await loadJoined();
+      // Deleting the 4 s first clip shifts Video 2 back to 0, where the playhead goes.
+      fireEvent.focus(screen.getByRole("option", { name: `${OWN}, 0:04.0` }));
+      fireEvent.keyDown(document.body, { key: "Delete" });
+      await waitFor(() => expect(clipOptions()).toHaveLength(1));
+      expect(first.currentTime).toBe(8);
+    });
+
     it("moves a clip dropped on another video track there", async () => {
       const backend = mockBackend({
         version: TRACKS_VERSION,
