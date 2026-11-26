@@ -24,6 +24,6 @@ Your edits are saved automatically and you can change them any time. The origina
 
 ## Step through your captures
 
-**Previous capture** and **Next capture**, the arrows at the right of the top bar, open the capture taken just after or just before this one, in the same window. `⌥ ←` and `⌥ →` (`Alt ←` and `Alt →` on Windows and Linux) do the same. Your edits are saved first, and undo starts again for each capture.
+Click **Previous capture** or **Next capture**, the arrows at the right of the top bar, to open the neighbouring capture in the same window. Press `←` or `→` to do the same. When an annotation is selected, the plain arrows nudge it, and `⌥ ←` or `⌥ →` (`Alt ←` or `Alt →` on Windows and Linux) steps through captures. Your edits are saved first, and undo starts again for each capture.
 
 They step through every screenshot in the [Library](/grab-it/library/), newest first, whatever the Library is showing. Recordings and GIFs are skipped. If the capture is already open in another editor window, that window comes to the front instead. A file opened from outside the Library has both arrows turned off.

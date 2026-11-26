@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { chooseExportFile } from "../app/exportDialog";
 import "./editor.css";
 import { getEditorPreferences, MAX_BACKDROP_PRESETS, MAX_FAVORITE_COLORS, setBackdropPresets, setFavoriteColors } from "../settings/api";
+import { isMacPlatform } from "../settings/accelerator";
 import Loupe from "../overlay/Loupe";
 import {
   addClipboardImage,
@@ -428,6 +429,9 @@ function fitView(bounds: Rect, size: { width: number; height: number }, captureS
 
 const isTyping = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+
+const IS_MAC = isMacPlatform();
+const STEP_MODIFIER = IS_MAC ? "⌥ " : "Alt+";
 
 /**
  * What a pointer went down on: an annotation (its draggable node), a resize
@@ -1946,13 +1950,19 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
         void copyAndClose();
         return;
       }
-      if (event.altKey && !mod && !event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
-        // Alt+Left would take the webview back a page on Windows; here it steps captures, unless typing.
-        event.preventDefault();
-        if (!isTyping(event.target)) void stepCapture(event.key === "ArrowLeft" ? "newer" : "older");
-        return;
+      const typing = isTyping(event.target);
+      if (!event.defaultPrevented && !mod && !event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+        const target = event.target;
+        const inControl = target instanceof Element && target.closest("select, [role='dialog'], [role='menu']");
+        if (event.altKey || (!typing && !selectedId && !inControl)) {
+          // Alt+Left would otherwise navigate back in the Windows webview.
+          // On macOS Option+arrow moves the cursor by a word when typing.
+          if (!typing || !IS_MAC) event.preventDefault();
+          if (!typing) void stepCapture(event.key === "ArrowLeft" ? "newer" : "older");
+          return;
+        }
       }
-      if (isTyping(event.target)) return;
+      if (typing) return;
       const key = event.key.toLowerCase();
       const nudge = mod || event.altKey ? null : nudgeDelta(event.key, event.shiftKey);
       // 1–7 pick the colour swatches, in bar order.
@@ -2604,7 +2614,7 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
             type="button"
             className="icon-button"
             aria-label="Previous capture"
-            title="Previous capture (Alt+←)"
+            title={`Previous capture (${selectedId ? STEP_MODIFIER : ""}←)`}
             disabled={!info?.hasNewer}
             onClick={() => void stepCapture("newer")}
           >
@@ -2614,7 +2624,7 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
             type="button"
             className="icon-button"
             aria-label="Next capture"
-            title="Next capture (Alt+→)"
+            title={`Next capture (${selectedId ? STEP_MODIFIER : ""}→)`}
             disabled={!info?.hasOlder}
             onClick={() => void stepCapture("older")}
           >
