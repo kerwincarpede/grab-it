@@ -2146,7 +2146,8 @@ fn render(
             )?;
             // Media duration is saved to the nearest millisecond. Retry only
             // the final scheduled sample, within that rounding tolerance of
-            // the saved end, and let the video decoder verify there is a frame.
+            // the saved end. Sample one tick inside picture when EOF is
+            // exactly at the inclusive lower bound of the rounding interval.
             let last_sample = first_sample + u128::from(count - 1) * TICKS_PER_FRAME;
             let earliest_rounded_end = u128::from(clip.end_ms) * ticks_per_ms - ticks_per_ms / 2;
             if frames == count - 1 && last_sample >= earliest_rounded_end {
@@ -2156,7 +2157,7 @@ fn render(
                     &source.path,
                     clip,
                     fps,
-                    earliest_rounded_end,
+                    earliest_rounded_end - 1,
                     1,
                     |buffer, _| render(buffer, count - 1),
                 )?;
@@ -2983,6 +2984,7 @@ mod tests {
         start_ms: u64,
         end_ms: u64,
         audio_tail: bool,
+        last_packet_ticks: Option<u32>,
     ) {
         let dir = tempfile::tempdir().unwrap();
         let ready = ffmpeg::Ready {
@@ -2994,6 +2996,7 @@ mod tests {
         let output = dir.path().join("edited.mp4");
         // Paint only the last input frame green, so the EOF test verifies
         // that the export recovers that frame rather than any earlier one.
+        let timescale = (input_fps * 200).to_string();
         ffmpeg::run(
             &ready.path,
             vec![
@@ -3007,6 +3010,10 @@ mod tests {
                 format!("drawbox=c=lime:t=fill:enable=eq(n\\,{})", len - 1).into(),
                 "-c:v".into(),
                 "libx264".into(),
+                "-bf".into(),
+                "0".into(),
+                "-video_track_timescale".into(),
+                timescale.clone().into(),
                 input.as_os_str().to_owned(),
             ],
             Duration::from_secs(10),
@@ -3031,6 +3038,30 @@ mod tests {
             )
             .unwrap();
             fs::rename(mixed, &input).unwrap();
+        }
+        if let Some(ticks) = last_packet_ticks {
+            let shortened = dir.path().join("shortened.mp4");
+            ffmpeg::run(
+                &ready.path,
+                vec![
+                    "-i".into(),
+                    input.as_os_str().to_owned(),
+                    "-c".into(),
+                    "copy".into(),
+                    "-bsf:v".into(),
+                    format!(
+                        "setts=duration=if(eq(N\\,{})\\,{ticks}\\,DURATION)",
+                        len - 1
+                    )
+                    .into(),
+                    "-video_track_timescale".into(),
+                    timescale.into(),
+                    shortened.as_os_str().to_owned(),
+                ],
+                Duration::from_secs(10),
+            )
+            .unwrap();
+            fs::rename(shortened, &input).unwrap();
         }
         let cut = ExportClip {
             start_ms,
@@ -3135,32 +3166,34 @@ mod tests {
     #[test]
     #[ignore = "needs ffmpeg with libx264 installed"]
     fn ffmpeg_boundary_recovers_the_last_frame_past_the_rounded_probe_duration() {
-        ffmpeg_boundary_export(30, 30, 31, 1020, 1033, false);
+        ffmpeg_boundary_export(30, 30, 31, 1020, 1033, false, None);
     }
 
     #[test]
     #[ignore = "needs ffmpeg with libx264 installed"]
     fn ffmpeg_boundary_fills_a_multi_frame_deficit_at_a_low_fps_cut() {
-        ffmpeg_boundary_export(10, 30, 20, 1701, 2000, false);
+        ffmpeg_boundary_export(10, 30, 20, 1701, 2000, false, None);
     }
 
     #[test]
     #[ignore = "needs ffmpeg with libx264 installed"]
     fn ffmpeg_boundary_recovers_a_slow_tail_and_stops_at_video_eof() {
-        ffmpeg_boundary_export(5, 30, 10, 1850, 2000, true);
+        ffmpeg_boundary_export(5, 30, 10, 1850, 2000, true, None);
     }
 
     #[test]
     #[ignore = "needs ffmpeg with libx264 installed"]
     fn ffmpeg_boundary_exports_all_frames_of_a_non_integral_cut() {
-        ffmpeg_boundary_export(30, 30, 32, 520, 1067, false);
-        ffmpeg_boundary_export(60, 60, 64, 520, 1067, false);
+        ffmpeg_boundary_export(30, 30, 32, 520, 1067, false, None);
+        ffmpeg_boundary_export(60, 60, 64, 520, 1067, false, None);
     }
 
     #[test]
     #[ignore = "needs ffmpeg with libx264 installed"]
     fn ffmpeg_boundary_recovers_only_the_last_sample_at_the_rounded_end() {
-        ffmpeg_boundary_export(30, 30, 32, 0, 1067, false);
+        ffmpeg_boundary_export(30, 30, 32, 0, 1067, false, None);
+        // Thirty-one 200-tick packets and one 199-tick packet end at 1066.5 ms.
+        ffmpeg_boundary_export(30, 30, 32, 0, 1067, false, Some(199));
     }
 
     #[test]
