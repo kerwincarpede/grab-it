@@ -27,6 +27,30 @@ export function stepZoom(zoom: number, direction: 1 | -1, durationMs: number, vi
   return clampZoom(direction > 0 ? zoom * ZOOM_STEP : zoom / ZOOM_STEP, durationMs, viewWidth);
 }
 
+/**
+ * The zoom chosen as pixels a second, or null to fit. It stays as chosen
+ * while the timeline's length or width changes, so what is on screen keeps
+ * its size; only what shows is clamped.
+ */
+export type TimelineScale = number | null;
+
+/** The multiple of fit that `scale` shows at, clamped to 1x and 400 px a second. */
+export function zoomFor(scale: TimelineScale, durationMs: number, viewWidth: number): number {
+  if (scale === null || durationMs <= 0 || viewWidth <= 0) return 1;
+  return clampZoom((scale * durationMs) / 1000 / viewWidth, durationMs, viewWidth);
+}
+
+/** The scale that shows at `zoom`: null at 1x, which fits. */
+export function scaleFor(zoom: number, durationMs: number, viewWidth: number): TimelineScale {
+  if (zoom <= 1 || durationMs <= 0 || viewWidth <= 0) return null;
+  return (zoom * viewWidth * 1000) / durationMs;
+}
+
+/** One step in (`1`) or out (`-1`) from the zoom `scale` shows at. */
+export function stepScale(scale: TimelineScale, direction: 1 | -1, durationMs: number, viewWidth: number): TimelineScale {
+  return scaleFor(stepZoom(zoomFor(scale, durationMs, viewWidth), direction, durationMs, viewWidth), durationMs, viewWidth);
+}
+
 /** The furthest the track scrolls at `zoom`. */
 export function maxScroll(zoom: number, viewWidth: number): number {
   return Math.max(0, viewWidth * zoom - viewWidth);
@@ -40,7 +64,8 @@ export function maxScroll(zoom: number, viewWidth: number): number {
 export function scrollToKeep(ms: number, offset: number, zoom: number, durationMs: number, viewWidth: number): number {
   if (durationMs <= 0 || viewWidth <= 0) return 0;
   const x = (ms / durationMs) * viewWidth * zoom;
-  return Math.min(maxScroll(zoom, viewWidth), Math.max(0, x - offset));
+  // Whole pixels, as the browser keeps them.
+  return Math.round(Math.min(maxScroll(zoom, viewWidth), Math.max(0, x - offset)));
 }
 
 /** The time at `offset` pixels into the visible track, scrolled by `scrollLeft` at `zoom`. */

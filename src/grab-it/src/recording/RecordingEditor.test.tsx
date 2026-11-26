@@ -695,6 +695,22 @@ describe("RecordingEditor", () => {
   });
 
   describe("zooming the timeline", () => {
+    const JOINED_ZOOM = {
+      version: 2,
+      clips: [
+        { id: "a", source: OWN, startMs: 1000, endMs: 5000 },
+        { id: "b", source: OTHER, startMs: 0, endMs: 6000 },
+      ],
+    };
+
+    /** Loads the opened recording at the start of the 10 s JOINED_ZOOM sequence. */
+    async function loadJoinedZoom() {
+      const video = await previewVideo(OWN);
+      setVideoMetadata(video, 12, 1920, 1080);
+      fireEvent.loadedMetadata(video);
+      await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
+    }
+
     /** Gives the timeline's scroller a 100 px track in view, with a scroll offset jsdom keeps. */
     function layOutTimeline(): HTMLElement {
       const scroller = screen.getByTestId("timeline-scroll");
@@ -843,9 +859,13 @@ describe("RecordingEditor", () => {
       expect(scroller.scrollLeft).toBe(250);
     });
 
-    it("doesn't move the view under a scrub or a trim while playing", async () => {
+    it("doesn't move the view under a scrub or a trim while playing, and follows again once let go", async () => {
       mockBackend();
-      vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
       vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
       vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
       vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
@@ -880,6 +900,75 @@ describe("RecordingEditor", () => {
       expect(start).toHaveAttribute("aria-valuenow", "2910");
       fireEvent.pointerUp(start, { clientX: 109 });
       expect(scroller.scrollLeft).toBe(0);
+
+      // Let go, the view follows again: 3.5 s is 117 px along, so it pages on to 10 px in.
+      const runFrames = () => act(() => frames.splice(0).forEach((frame) => frame(0)));
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 3.5 });
+      runFrames();
+      expect(scroller.scrollLeft).toBe(107);
+
+      // A press on an empty stretch of the zoom row let go outside the timeline doesn't stop it either.
+      fireEvent.pointerDown(screen.getByTestId("zoom-track"), { clientX: 50 });
+      fireEvent.pointerUp(document.body, { clientX: 50 });
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 6 });
+      runFrames();
+      expect(scroller.scrollLeft).toBe(190);
+
+      // Nor does one whose release the window never sees, as it lost focus.
+      fireEvent.pointerDown(track, { clientX: 150 });
+      fireEvent.blur(window);
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 8.5 });
+      runFrames();
+      expect(scroller.scrollLeft).toBe(273);
+    });
+
+    it("keeps a clip edge under the pointer at the zoom limit", async () => {
+      const backend = mockBackend(JOINED_ZOOM);
+      render(<RecordingEditor />);
+      await loadJoinedZoom();
+      const scroller = layOutTimeline();
+      const zoomIn = screen.getByRole("button", { name: "Zoom in" });
+      for (let i = 0; i < 6; i++) await userEvent.click(zoomIn);
+      // 10 s over 100 px: 40x is 400 px a second, the most.
+      expect(zoomIn).toBeDisabled();
+      expect(Number(zoomOf())).toBeCloseTo(40);
+      scroller.scrollLeft = 1550;
+      // Clip a ends at 4 s, 1600 px along: 50 px into the view.
+      spanAt(screen.getByRole("listbox", { name: "Clips" }), -1550, 4000);
+      const edge = screen.getByRole("option", { name: `${OWN}, 0:04.0` }).querySelector(".clip-edge.end") as HTMLElement;
+      fireEvent.pointerDown(edge, { clientX: 50 });
+      fireEvent.pointerMove(edge, { clientX: 10 });
+      // 40 px is 0.1 s: the 9.9 s sequence shows at 39.6x, still 400 px a second and scrolled as it was.
+      expect(Number(zoomOf())).toBeCloseTo(39.6);
+      expect(scroller.scrollLeft).toBe(1550);
+      const first = screen.getByRole("option", { name: `${OWN}, 0:03.9` });
+      expect((parseFloat(first.style.width) / 100) * 3960 - 1550).toBeCloseTo(10);
+      fireEvent.pointerUp(edge, { clientX: 10 });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [{ ...JOINED_ZOOM.clips[0], endMs: 4900 }, JOINED_ZOOM.clips[1]] }));
+      expect(scroller.scrollLeft).toBe(1550);
+    });
+
+    it("comes back to the chosen zoom after a drag shortens the sequence past fitting", async () => {
+      // Clip a's recording is the opened one, so its length is known and it can grow back.
+      mockBackend({ version: 2, clips: [{ id: "a", source: OWN, startMs: 0, endMs: 8000 }, JOINED_ZOOM.clips[1]] });
+      render(<RecordingEditor />);
+      await loadJoinedZoom();
+      layOutTimeline();
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      // 2x of the 14 s sequence: the clip row 200 px wide, 70 ms a pixel.
+      expect(zoomOf()).toBe("2");
+      spanAt(screen.getByRole("listbox", { name: "Clips" }), 0, 200);
+      const edge = screen.getByRole("option", { name: `${OWN}, 0:08.0` }).querySelector(".clip-edge.end") as HTMLElement;
+      const at = (8000 / 14_000) * 200;
+      fireEvent.pointerDown(edge, { clientX: at });
+      // Down to half a second, the 6.5 s sequence is narrower than the view at that scale, so it fits.
+      fireEvent.pointerMove(edge, { clientX: at - 110 });
+      expect(screen.getByRole("option", { name: `${OWN}, 0:00.5` })).toBeInTheDocument();
+      expect(zoomOf()).toBe("1");
+      fireEvent.pointerMove(edge, { clientX: at });
+      fireEvent.pointerUp(edge, { clientX: at });
+      expect(screen.getByRole("option", { name: `${OWN}, 0:08.0` })).toBeInTheDocument();
+      expect(Number(zoomOf())).toBeCloseTo(2);
     });
 
     it("trims and reorders clips at the pointer while zoomed", async () => {

@@ -61,7 +61,7 @@ import { clampTrim, emptyEdits, formatTime, isWhole, parseEdits, serializeEdits,
 import { exportLayers, paintUnderlay, recordingLayout } from "./layout";
 import { useBackdropPresets } from "./useBackdropPresets";
 import Timeline from "./Timeline";
-import { maxZoom, stepZoom } from "./timelineZoom";
+import { maxZoom, stepScale, zoomFor, type TimelineScale } from "./timelineZoom";
 import { isMacPlatform } from "../settings/accelerator";
 import ZoomAreaPicker from "./ZoomAreaPicker";
 import ZoomTrack from "./ZoomTrack";
@@ -260,8 +260,8 @@ export default function RecordingEditor() {
   const loadedRef = useRef<string | null>(null);
   const [currentMs, setCurrentMs] = useState(0);
   const [playing, setPlaying] = useState(false);
-  /** How far in the timeline is zoomed, kept only while the editor is open; 1 fits it. */
-  const [timelineZoom, setTimelineZoom] = useState(1);
+  /** The timeline's zoom in pixels a second, kept only while the editor is open; null fits it. */
+  const [timelineScale, setTimelineScale] = useState<TimelineScale>(null);
   /** How wide the visible timeline track is, which bounds its zoom. */
   const [timelineWidth, setTimelineWidth] = useState(0);
   /** Bumped when a new frame shows, so the blurred backdrop follows it. */
@@ -1199,7 +1199,7 @@ export default function RecordingEditor() {
   const picking = selectedZoom?.focus.kind === "area" && !playing && !exporting;
   /** The timeline zoom as shown: never past what its length and width allow. */
   const zoomLimit = maxZoom(timelineDuration, timelineWidth);
-  const shownZoom = Math.min(Math.max(1, timelineZoom), zoomLimit);
+  const shownZoom = zoomFor(timelineScale, timelineDuration, timelineWidth);
   // The view comes from the current clip's zooms, in its recording's time.
   const currentOffset = at ? spanOf(clips, own, at.index, durationMs).offset : 0;
   const currentZooms = zooms
@@ -1465,8 +1465,8 @@ export default function RecordingEditor() {
             seek(next.startMs !== trim.startMs ? next.startMs : next.endMs);
           }}
           onTrimCommit={commitTrim}
-          zoom={timelineZoom}
-          onZoomChange={setTimelineZoom}
+          scale={timelineScale}
+          onScaleChange={setTimelineScale}
           follow={playing}
           onViewChange={(view) => setTimelineWidth(view.width)}
         >
@@ -1521,7 +1521,7 @@ export default function RecordingEditor() {
           <button
             type="button"
             className="icon-button"
-            onClick={() => setTimelineZoom(stepZoom(shownZoom, -1, timelineDuration, timelineWidth))}
+            onClick={() => setTimelineScale(stepScale(timelineScale, -1, timelineDuration, timelineWidth))}
             disabled={shownZoom <= 1}
             aria-label="Zoom out"
             title={`Zoom the timeline out (${ZOOM_WHEEL})`}
@@ -1531,14 +1531,14 @@ export default function RecordingEditor() {
           <button
             type="button"
             className="icon-button"
-            onClick={() => setTimelineZoom(stepZoom(shownZoom, 1, timelineDuration, timelineWidth))}
+            onClick={() => setTimelineScale(stepScale(timelineScale, 1, timelineDuration, timelineWidth))}
             disabled={shownZoom >= zoomLimit}
             aria-label="Zoom in"
             title={`Zoom the timeline in (${ZOOM_WHEEL})`}
           >
             <ZoomInIcon />
           </button>
-          <button type="button" className="icon-button" onClick={() => setTimelineZoom(1)} disabled={shownZoom <= 1} aria-label="Fit" title="Fit the whole timeline in view">
+          <button type="button" className="icon-button" onClick={() => setTimelineScale(null)} disabled={shownZoom <= 1} aria-label="Fit" title="Fit the whole timeline in view">
             <FitIcon />
           </button>
         </div>
