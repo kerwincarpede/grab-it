@@ -26,7 +26,7 @@ Transcribing runs entirely on your computer. Your recordings and their sound are
 
 Each recording's transcript is saved beside it as `<name>.transcript.json`, with the time of every word. It moves, and is deleted, with its recording in the [Library](/grab-it/library/).
 
-Captions are made from the transcript: each is at most two lines of 42 characters and 6 seconds long, split between words. Their times follow the speech closely but not exactly, so a caption can show a little early or late: drag its edges on the caption row to retime it. Editing a caption never changes the transcript or the recording.
+Captions are made from the transcript: each is at most two lines of 42 characters and 6 seconds long, split between words. Their times are fitted to where the recording has speech, which follows it closely but not exactly, so a caption can show a little early or late: drag its edges on the caption row to retime it. Editing a caption never changes the transcript or the recording.
 
 Clicking **Transcribe** again when the video already has captions asks first, then replaces them with fresh ones.
 

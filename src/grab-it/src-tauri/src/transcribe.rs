@@ -762,6 +762,98 @@ fn spread(words: &mut [(Vec<TokenId>, u64, u64)], at: u64, until: u64) {
     }
 }
 
+/// The length of one frame of sound weighed for voice.
+const VOICE_FRAME_MS: u64 = 20;
+/// A frame is voiced when it is within this many dB of the loudest frame
+/// of the recording...
+const VOICE_RANGE_DB: f32 = 30.0;
+/// ...and louder than this, in dBFS.
+const VOICE_FLOOR_DB: f32 = -50.0;
+/// Quiet shorter than this, between words, belongs to the voice around it.
+const VOICE_BRIDGE_MS: u64 = 200;
+/// How far a fitted segment reaches before and after its voice.
+const VOICE_PAD_MS: u64 = 100;
+
+/// The voiced stretches of 16 kHz mono `samples`, in ms, in order: runs of
+/// frames loud enough to be speech, with short quiet between them bridged.
+fn voiced_runs(samples: &[f32]) -> Vec<(u64, u64)> {
+    let frame = (VOICE_FRAME_MS as usize * SAMPLE_RATE) / 1000;
+    let levels: Vec<f32> = samples
+        .chunks(frame)
+        .map(|chunk| {
+            let power = chunk.iter().map(|x| x * x).sum::<f32>() / chunk.len() as f32;
+            10.0 * power.max(1e-12).log10()
+        })
+        .collect();
+    let loudest = levels.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let threshold = VOICE_FLOOR_DB.max(loudest - VOICE_RANGE_DB);
+    let end_ms = (samples.len() as u64 * 1000) / SAMPLE_RATE as u64;
+    let mut runs: Vec<(u64, u64)> = Vec::new();
+    for (i, level) in levels.iter().enumerate() {
+        if *level < threshold {
+            continue;
+        }
+        let start = i as u64 * VOICE_FRAME_MS;
+        let end = (start + VOICE_FRAME_MS).min(end_ms);
+        match runs.last_mut() {
+            Some(last) if start <= last.1 + VOICE_BRIDGE_MS => last.1 = end,
+            _ => runs.push((start, end)),
+        }
+    }
+    runs
+}
+
+/// Fits `segment` to the voice in it: shrinks it to its voiced stretches,
+/// [`VOICE_PAD_MS`] either side and never past its own bounds, and spreads
+/// its words over those stretches by their length in characters, so no
+/// word sits in the quiet between them. A segment with no voice, or too
+/// little to give each character a millisecond, keeps Whisper's times.
+fn fit_to_voice(segment: &mut TranscriptSegment, runs: &[(u64, u64)]) {
+    let (from, to) = (segment.start_ms, segment.end_ms);
+    let mut inside: Vec<(u64, u64)> = runs
+        .iter()
+        .map(|&(start, end)| (start.max(from), end.min(to)))
+        .filter(|(start, end)| start < end)
+        .collect();
+    let (Some(first), Some(last)) = (inside.first().copied(), inside.last().copied()) else {
+        return;
+    };
+    let weights: Vec<u64> = segment
+        .words
+        .iter()
+        .map(|word| word.text.chars().count().max(1) as u64)
+        .collect();
+    let total: u64 = weights.iter().sum();
+    let count = inside.len();
+    inside[0].0 = first.0.saturating_sub(VOICE_PAD_MS).max(from);
+    inside[count - 1].1 = (last.1 + VOICE_PAD_MS).min(to);
+    let voiced: u64 = inside.iter().map(|(start, end)| end - start).sum();
+    if voiced < total {
+        return;
+    }
+    segment.start_ms = inside[0].0;
+    segment.end_ms = inside[count - 1].1;
+    // The time `into` ms of voice in, starting the next stretch at a
+    // boundary when `forward`, else ending the one before.
+    let at = |mut into: u64, forward: bool| {
+        for &(start, end) in &inside {
+            let length = end - start;
+            if into < length || (into == length && !forward) {
+                return start + into;
+            }
+            into -= length;
+        }
+        inside[count - 1].1
+    };
+    let mut before = 0;
+    for (word, weight) in segment.words.iter_mut().zip(&weights) {
+        let after = before + weight;
+        word.start_ms = at(before * voiced / total.max(1), true);
+        word.end_ms = at(after * voiced / total.max(1), false);
+        before = after;
+    }
+}
+
 /// The most UTF-8 bytes, and so byte tokens, one character takes.
 const MAX_CHAR_TOKENS: usize = 4;
 
@@ -1047,6 +1139,10 @@ impl Whisper {
             };
             seek += advance.max(1);
             progress(ms(seek).min(total), total);
+        }
+        let runs = voiced_runs(samples);
+        for segment in &mut segments {
+            fit_to_voice(segment, &runs);
         }
         let language = language
             .filter(|_| !segments.is_empty())
@@ -1364,6 +1460,89 @@ mod tests {
             .map(|w| (w.text.as_str(), w.start_ms))
             .collect();
         assert_eq!(words, [("tiế", 0), ("ok", 800)]);
+    }
+
+    /// `ms` of 16 kHz sound: a 440 Hz tone during `tone`, else a faint hiss.
+    fn sound(ms: u64, tone: &[(u64, u64)]) -> Vec<f32> {
+        (0..(ms as usize * SAMPLE_RATE) / 1000)
+            .map(|i| {
+                let t = (i * 1000 / SAMPLE_RATE) as u64;
+                if tone.iter().any(|&(start, end)| (start..end).contains(&t)) {
+                    0.3 * (i as f32 * 440.0 * std::f32::consts::TAU / SAMPLE_RATE as f32).sin()
+                } else if i % 2 == 0 {
+                    0.0005
+                } else {
+                    -0.0005
+                }
+            })
+            .collect()
+    }
+
+    fn spoken(start_ms: u64, end_ms: u64, words: &[&str]) -> TranscriptSegment {
+        let step = (end_ms - start_ms) / words.len() as u64;
+        TranscriptSegment {
+            start_ms,
+            end_ms,
+            text: words.join(" "),
+            words: words
+                .iter()
+                .enumerate()
+                .map(|(i, text)| TranscriptWord {
+                    text: (*text).to_owned(),
+                    start_ms: start_ms + step * i as u64,
+                    end_ms: start_ms + step * (i as u64 + 1),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn voice_is_found_with_short_quiet_bridged() {
+        let samples = sound(4000, &[(500, 1000), (1100, 1500), (2500, 3000)]);
+        assert_eq!(voiced_runs(&samples), [(500, 1500), (2500, 3000)]);
+        assert!(voiced_runs(&sound(1000, &[])).is_empty());
+    }
+
+    #[test]
+    fn segments_and_words_fit_the_voice_inside_them() {
+        // Speech at 0.5-1.5 s and 2.5-2.95 s, in a segment Whisper gave
+        // as 0-7 s.
+        let samples = sound(7000, &[(500, 1500), (2500, 2950)]);
+        let runs = voiced_runs(&samples);
+        let words = [
+            "The", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog.",
+        ];
+        let mut segment = spoken(0, 7000, &words);
+        fit_to_voice(&mut segment, &runs);
+        assert_eq!((segment.start_ms, segment.end_ms), (400, 3060));
+        let voiced = |ms: u64| (400..=1500).contains(&ms) || (2500..=3060).contains(&ms);
+        for word in &segment.words {
+            assert!(word.start_ms < word.end_ms, "{word:?}");
+            assert!(voiced(word.start_ms) && voiced(word.end_ms), "{word:?}");
+        }
+        assert_eq!(segment.words[0].start_ms, 400);
+        assert_eq!(segment.words.last().map(|w| w.end_ms), Some(3060));
+        for pair in segment.words.windows(2) {
+            assert!(pair[0].end_ms <= pair[1].start_ms, "{pair:?}");
+        }
+        // "lazy dog." now ends before a trim at 5 s.
+        assert!(segment.words.iter().all(|w| w.end_ms <= 5000));
+    }
+
+    #[test]
+    fn a_segment_keeps_its_times_without_voice_and_its_bounds_with_it() {
+        let samples = sound(7000, &[(500, 1500)]);
+        let runs = voiced_runs(&samples);
+        let quiet = spoken(3000, 6000, &["hm"]);
+        let mut kept = quiet.clone();
+        fit_to_voice(&mut kept, &runs);
+        assert_eq!(kept, quiet);
+        // Voice from before the segment starts reaches no further back.
+        let mut late = spoken(1000, 4000, &["late", "words"]);
+        fit_to_voice(&mut late, &runs);
+        assert_eq!((late.start_ms, late.end_ms), (1000, 1600));
+        assert_eq!(late.words[0].start_ms, 1000);
+        assert_eq!(late.words[1].end_ms, 1600);
     }
 
     /// Decodes byte tokens strictly, as the tokenizer does.
