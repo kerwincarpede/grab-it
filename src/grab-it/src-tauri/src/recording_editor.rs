@@ -1331,7 +1331,24 @@ impl ExportPlan {
             .try_for_each(|overlay| overlay.check((self.width, self.height)))?;
         self.clips
             .iter()
-            .try_for_each(|entry| entry.check((self.video_width, self.video_height)))
+            .try_for_each(|entry| entry.check((self.video_width, self.video_height)))?;
+        if self
+            .audio
+            .iter()
+            .flatten()
+            .any(|clip| clip.end_ms <= clip.start_ms)
+        {
+            return Err("an audio clip has an empty or backwards time range".to_owned());
+        }
+        Ok(())
+    }
+
+    /// Ignore saved placements that would contribute no sound to this export.
+    fn keep_audible_placements(&mut self) {
+        let end_ms = self.duration_ms();
+        if let Some(audio) = &mut self.audio {
+            audio.retain(|clip| clip.at_ms < end_ms);
+        }
     }
 
     /// How many frames the export holds at `fps`, over all its clips and gaps.
@@ -2225,11 +2242,12 @@ fn export(
     app: &AppHandle,
     ready: &ffmpeg::Ready,
     recording: &RecordingFile,
-    plan: ExportPlan,
+    mut plan: ExportPlan,
     body: &[u8],
     label: &str,
     cancelled: &AtomicBool,
 ) -> Result<PathBuf, String> {
+    plan.keep_audible_placements();
     let original = &recording.path;
     let fps = export_fps(&ready.path, original);
     let report = |progress: ExportProgress| {
@@ -2803,6 +2821,51 @@ mod tests {
                 at_ms: 500,
             }])
         );
+    }
+
+    #[test]
+    fn mixed_audio_requires_a_positive_source_interval() {
+        for end_ms in [500, 400] {
+            let mut plan = plan();
+            plan.audio = Some(vec![ExportAudio {
+                source: "a.mp4".to_owned(),
+                start_ms: 500,
+                end_ms,
+                at_ms: 0,
+            }]);
+            assert_eq!(
+                plan.check(),
+                Err("an audio clip has an empty or backwards time range".to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_audio_at_or_past_the_output_end_does_not_need_a_source_probe() {
+        let mut plan = plan();
+        let end_ms = plan.duration_ms();
+        let at_end = ExportAudio {
+            source: "gone.mp4".to_owned(),
+            start_ms: 0,
+            end_ms: 1000,
+            at_ms: end_ms,
+        };
+        plan.audio = Some(vec![
+            at_end.clone(),
+            ExportAudio {
+                at_ms: end_ms + 1,
+                ..at_end
+            },
+        ]);
+        assert_eq!(plan.check(), Ok(()));
+        plan.keep_audible_placements();
+        let cancelled = AtomicBool::new(true);
+        assert!(
+            sound_sources(Path::new("unused"), Path::new("unused"), &plan, &cancelled)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(plan.audio, Some(Vec::new()));
     }
 
     fn strings(args: Vec<OsString>) -> String {

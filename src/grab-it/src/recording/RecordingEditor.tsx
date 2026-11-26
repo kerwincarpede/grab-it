@@ -38,7 +38,6 @@ import {
 } from "./api";
 import {
   canRemove,
-  canSplit,
   clipLength,
   clipStarts,
   clipsOf,
@@ -91,7 +90,7 @@ import {
 import SuggestEditsPanel, { type ShownCuts } from "./SuggestEditsPanel";
 import TrackAudio from "./TrackAudio";
 import TrackRows from "./TrackRows";
-import { clipPlaces, exportAudio, isRefusal, linkClips, moveInTime, needsTracks, reconcile, renameTrack, rippleDelete, shiftUnlinked, splitAt, timelineOf, unlinkClips, withTimeline, type Timeline as Tracks } from "./tracks";
+import { canSplitAt, clipPlaces, exportAudio, isRefusal, linkClips, moveInTime, needsTracks, reconcile, renameTrack, rippleDelete, shiftUnlinked, splitAt, timelineOf, unlinkClips, withTimeline, type Timeline as Tracks } from "./tracks";
 import RecordingVideo from "./RecordingVideo";
 import { chooseRecording, probeVideo, type SourceMeta } from "./sources";
 import { clampTrim, emptyEdits, formatTime, isWhole, parseEdits, serializeEdits, trimOf, type RecordingEdits, type Trim } from "./edits";
@@ -421,23 +420,28 @@ export default function RecordingEditor() {
   // Keep the DOM order stable even when the user reorders clips. Moving a
   // playing element in the DOM can reset its media pipeline in WebKitGTK.
   const previewSources = useMemo(() => [...new Set(clips.filter((clip) => !isGap(clip)).map((clip) => clip.source))].sort(), [clips]);
+  const plannedAudio = useMemo(() => {
+    const endMs = sequenceDuration(tracks.main);
+    return ownSound ? exportAudio(tracks).filter((clip) => clip.atMs < endMs) : null;
+  }, [ownSound, tracks]);
+  const audioSources = useMemo(() => [...new Set(plannedAudio?.map((clip) => clip.source))], [plannedAudio]);
   const currentMeta = meta[currentSource] as SourceMeta | undefined;
   const cursorOf = (source: string) => (source === own ? (info?.cursor ?? null) : (sourceInfo[source]?.cursor ?? null));
   const cursor = cursorOf(currentSource);
   const selectedClip = joined ? (clips.find((clip) => clip.id === selectedClipId) ?? null) : null;
-  const missingClip = clips.find((clip) => !isGap(clip) && missing.has(clip.source)) ?? null;
+  const missingSource = previewSources.find((source) => missing.has(source)) ?? audioSources.find((source) => missing.has(source));
   /** Recording `source`'s sound sources by kind, or null until known. */
   const audioOf = (source: string) => (source === own ? (info?.audio ?? null) : (sourceInfo[source]?.audio ?? null));
   /** Whether the sound sidecar of recording `source` keeps its microphone apart. */
   const separateMicrophone = (source: string) => (source === own ? (info?.separateMicrophone ?? false) : (sourceInfo[source]?.separateMicrophone ?? false));
-  /** Noise can be removed when any clip's recording keeps its microphone apart. */
-  const canRemoveNoise = clips.some((clip) => !isGap(clip) && separateMicrophone(clip.source));
+  /** Noise can be removed when a recording in the mix keeps its microphone apart. */
+  const canRemoveNoise = (plannedAudio ? audioSources : previewSources).some(separateMicrophone);
   /** Until it is changed, the export follows how the opened recording was made. */
   const removeNoise = edits.removeNoise ?? info?.removeNoise ?? false;
   // Proposals are hatched while Suggest edits is open, on the sequence they were proposed against.
   const hatchedCuts = suggestOpen && !suggestPreview && !clipDraft && shownCuts ? shownCuts.cuts : [];
   /** Every clip's recording is there and its size known. */
-  const canExport = !suggestPreview && !missingClip && clips.every((clip) => isGap(clip) || meta[clip.source] !== undefined);
+  const canExport = !suggestPreview && !missingSource && previewSources.every((source) => meta[source] !== undefined) && audioSources.every((source) => pathOf(source) !== null);
 
   // Zooms keep their recording's time; the timeline shows each on its clip.
   const allZooms = useMemo(() => edits.zooms ?? [], [edits.zooms]);
@@ -554,7 +558,7 @@ export default function RecordingEditor() {
   // has no clips, its size is still needed for the output canvas.
   useEffect(() => {
     if (!info) return;
-    for (const source of previewSources) {
+    for (const source of new Set([...previewSources, ...audioSources])) {
       if (source === own || requested.current.has(source)) continue;
       requested.current.add(source);
       recordingSource(source)
@@ -567,7 +571,7 @@ export default function RecordingEditor() {
         .then((learned) => setMeta((known) => ({ ...known, [own]: learned })))
         .catch(() => setMissing((gone) => new Set(gone).add(own)));
     }
-  }, [info, previewSources, own, ownMeta]);
+  }, [info, previewSources, audioSources, own, ownMeta]);
 
   /** Keeps `next` as every track: one undo entry. `sound` answers for recordings not yet probed. */
   const commitTracks = (next: Tracks, applying = false, sound: (source: string) => boolean = hasAudio) => {
@@ -741,19 +745,16 @@ export default function RecordingEditor() {
     seek(timelineMs(next, own, index, next[index].startMs), next);
   };
 
-  /** Whether the clip under the playhead can be split there, each part long enough. */
-  const canSplitHere = at !== null && !exporting && durationMs > 0 && canSplit(clips, at.index, at.sourceMs);
+  const splitMs = at ? toSequence(clips, at.index, at.sourceMs) : 0;
+  const splitSelection = selectedClipId ?? [...trackSelection][0];
+  const selectionAtPlayhead = splitSelection && clipPlaces(tracks).some((place) => place.id === splitSelection && place.atMs < splitMs && place.endMs > splitMs);
+  // A selection elsewhere falls back to the picture here, when there is one.
+  const splitTarget = selectionAtPlayhead ? splitSelection : splitSelection && !onGap ? at?.clip.id : undefined;
+  const canSplitHere = at !== null && !exporting && durationMs > 0 && canSplitAt(tracks, splitMs, splitTarget);
 
-  /** Splits the clip under the playhead in two that meet at the playhead. */
   const splitAtPlayhead = () => {
     if (!at || !canSplitHere) return;
-    const ms = toSequence(clips, at.index, at.sourceMs);
-    const chosen = selectedClipId ?? [...trackSelection][0];
-    // A selected clip under the playhead splits with its links; any other
-    // selection splits the clip under the playhead and its links.
-    const chosenHere = chosen && clipPlaces(tracks).some((place) => place.id === chosen && place.atMs < ms && place.endMs > ms);
-    const next = splitAt(tracks, ms, chosenHere ? chosen : chosen ? at.clip.id : undefined);
-    if (JSON.stringify(next) === JSON.stringify(tracks)) return;
+    const next = splitAt(tracks, splitMs, splitTarget);
     commitTracks(next);
     // The playhead moves onto the second part only when the picture was split.
     if (next.main.length > tracks.main.length) seek(timelineMs(next.main, own, at.index + 1, at.sourceMs), next.main);
@@ -1539,7 +1540,7 @@ export default function RecordingEditor() {
           videoHeight: shape.videoHeight,
           backdropBytes: 0,
           removeNoise,
-          ...(ownSound ? { audio: exportAudio(tracks) } : {}),
+          ...(plannedAudio ? { audio: plannedAudio } : {}),
         },
         layers,
         overlays,
@@ -1900,7 +1901,7 @@ export default function RecordingEditor() {
         <div className="bar-group end">
           <button type="button" className="primary" onClick={() => void exportNow()}
             disabled={!videoSize || exporting || !canExport}
-            title={missingClip ? `${missingClip.source} is missing, so the sequence cannot be exported` : "Save the edited recording beside the original"}
+            title={missingSource ? `${missingSource} is missing, so the sequence cannot be exported` : "Save the edited recording beside the original"}
           >
             <ExportIcon />
             {exporting ? "Exporting…" : "Export"}

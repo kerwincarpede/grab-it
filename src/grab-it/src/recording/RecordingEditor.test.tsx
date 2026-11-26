@@ -1973,6 +1973,60 @@ describe("RecordingEditor", () => {
       expect(screen.queryByRole("button", { name: /Lock/ })).not.toBeInTheDocument();
     });
 
+    /** Reopened after the second recording's picture was replaced by a gap. */
+    const SOUND_OVER_GAP = {
+      version: TRACKS_VERSION,
+      tracks: [
+        { id: "video-1", name: "Video 1", kind: "video", clips: [JOINED.clips[0], { id: "gap", gapMs: 6000 }] },
+        { id: "audio-1", name: "Audio 1", kind: "audio", clips: [{ id: "other-sound", source: OTHER, startMs: 0, endMs: 6000, atMs: 4000 }] },
+      ],
+    };
+
+    it("reopens a recording used only for sound and exports it with noise removal", async () => {
+      separate = [OTHER];
+      const backend = mockBackend(SOUND_OVER_GAP);
+      render(<RecordingEditor />);
+      await loadJoined();
+      await waitFor(() => expect(document.querySelector('audio[data-clip="other-sound"]')).toHaveAttribute("src"));
+      expect(backend.calls).toContainEqual(expect.objectContaining({ cmd: "recording_source", payload: { fileName: OTHER } }));
+      expect(screen.getByTestId("recording-stage").querySelector(`video[data-source="${OTHER}"]`)).toBeNull();
+
+      await userEvent.click(screen.getByRole("button", { name: "Remove background noise" }));
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan } = await exportCall(backend);
+      expect(plan.removeNoise).toBe(true);
+      expect(plan.audio).toEqual([{ source: OTHER, startMs: 0, endMs: 6000, atMs: 4000 }]);
+    });
+
+    it("holds Export back when a recording used only for sound is missing", async () => {
+      gone = [OTHER];
+      mockBackend(SOUND_OVER_GAP);
+      render(<RecordingEditor />);
+      await loadJoined();
+      const button = screen.getByRole("button", { name: "Export" });
+      await waitFor(() => expect(button).toHaveAttribute("title", `${OTHER} is missing, so the sequence cannot be exported`));
+      expect(button).toBeDisabled();
+    });
+
+    it("splits audio under a Video 1 gap", async () => {
+      const backend = mockBackend(SOUND_OVER_GAP);
+      render(<RecordingEditor />);
+      await loadJoined();
+      const timeline = screen.getByTestId("timeline-track");
+      placeAt(timeline, 1000, 20);
+      fireEvent.pointerDown(timeline, { clientX: 700 });
+      fireEvent.pointerUp(timeline, { clientX: 700 });
+      expect(screen.getByTestId("recording-fit")).toHaveAttribute("data-gap", "true");
+      expect(screen.getByRole("button", { name: "Split" })).toBeEnabled();
+      fireEvent.keyDown(document.body, { key: "s" });
+      await waitFor(() => expect(lastSaved(backend)).toMatchObject({
+        tracks: [
+          { clips: [{ id: "a", startMs: 1000, endMs: 5000 }, { id: "gap", gapMs: 6000 }] },
+          { clips: [{ startMs: 0, endMs: 3000, atMs: 4000 }, { startMs: 3000, endMs: 6000, atMs: 7000 }] },
+        ],
+      }));
+    });
+
     it("splits the clip under the playhead when another clip is selected", async () => {
       const backend = mockBackend(JOINED);
       render(<RecordingEditor />);

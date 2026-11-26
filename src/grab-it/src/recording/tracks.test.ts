@@ -19,6 +19,7 @@ import {
   rippleDelete,
   snapClip,
   snapMs,
+  canSplitAt,
   snapTargets,
   splitAt,
   timelineOf,
@@ -162,6 +163,15 @@ describe("tracks", () => {
     expect(audio(splitAt(timeline, 1000, "a-sound", 500, makeId))).toHaveLength(2);
   });
 
+  it("keeps an intersected link group whole when its shorter sound cannot split", () => {
+    const timeline = defaultTimeline([a], sound);
+    audio(timeline)[0].endMs = 3000;
+    expect(canSplitAt(timeline, 2800, "a")).toBe(false);
+    expect(splitAt(timeline, 2800, "a")).toBe(timeline);
+    // Ripple cuts still use a one-millisecond minimum.
+    expect(splitAt(timeline, 2800, "a", 1).main).toHaveLength(2);
+  });
+
   it("ripple-deletes a clip with its sound and shifts later clips", () => {
     const timeline = defaultTimeline([a, b], sound);
     const next = expectTimeline(rippleDelete(timeline, "a"));
@@ -261,6 +271,8 @@ describe("tracks", () => {
     expect(snapMs(1100, [0, 1000], 0.1)).toBe(1100);
     expect(snapMs(1030, [1000], 0.2, false)).toBe(1030);
     expect(snapClip(2960, 1000, [4000], 0.2)).toBe(3000);
+    expect(snapClip(1000, 4000, [1000, 5050], 0.1)).toBe(1000);
+    expect(snapClip(1000, 4000, [950, 5000], 0.1)).toBe(1000);
     expect(snapTargets(defaultTimeline([a], sound), 1500, new Set(["a-sound"]))).toEqual([0, 1500, 4000]);
   });
 });

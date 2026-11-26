@@ -377,16 +377,33 @@ export function moveInTime(timeline: Timeline, id: string, atMs: number, toTrack
   return { ...timeline, tracks };
 }
 
+/** Clips with room on both sides, unless an intersected partner is too short. */
+function splittableIds(timeline: Timeline, at: number, only: string | undefined, minMs: number): Set<string> {
+  const selected = only ? linkedIds(timeline, only) : null;
+  const blockedLinks = new Set<string>();
+  const candidates = clipPlaces(timeline).filter((place) => (!selected || selected.has(place.id)) && place.atMs < at && at < place.endMs);
+  const fits = (place: ClipPlace) => at - place.atMs >= minMs && place.endMs - at >= minMs;
+  for (const place of candidates) {
+    if (place.link && !fits(place)) blockedLinks.add(place.link);
+  }
+  return new Set(candidates.filter((place) => fits(place) && (!place.link || !blockedLinks.has(place.link))).map((place) => place.id));
+}
+
+/** Whether a Split at this time would cut any clips. */
+export function canSplitAt(timeline: Timeline, ms: number, only?: string): boolean {
+  return splittableIds(timeline, Math.round(ms), only, MIN_CLIP_MS).size > 0;
+}
+
 /**
  * Splits at timeline time `ms`: with `only` set, that clip and its links;
  * otherwise every clip there on every track. Second parts take new
  * ids, and the second parts of one link group share a new link. Each part
- * keeps at least `minMs`; a clip that cannot is left whole.
+ * keeps at least `minMs`; a clip that cannot is left whole with its links.
  */
 export function splitAt(timeline: Timeline, ms: number, only?: string, minMs: number = MIN_CLIP_MS, makeId: () => string = newClipId): Timeline {
   const at = Math.round(ms);
-  const ids = only ? linkedIds(timeline, only) : null;
-  const take = (id: string) => (ids ? ids.has(id) : true);
+  const ids = splittableIds(timeline, at, only, minMs);
+  if (ids.size === 0) return timeline;
   const links = new Map<string, string>();
   const nextLink = (link?: string) => {
     if (!link) return undefined;
@@ -396,12 +413,11 @@ export function splitAt(timeline: Timeline, ms: number, only?: string, minMs: nu
   const starts = clipStarts(timeline.main);
   const main: Clip[] = [];
   timeline.main.forEach((clip, index) => {
-    const inside = at - starts[index];
-    if (isGap(clip) || !take(clip.id) || inside < minMs || clipLength(clip) - inside < minMs) {
+    if (!ids.has(clip.id)) {
       main.push(clip);
       return;
     }
-    const cut = clip.startMs + inside;
+    const cut = clip.startMs + at - starts[index];
     const second: Clip = { ...clip, id: makeId(), startMs: cut };
     const link = nextLink(clip.link);
     if (link) second.link = link;
@@ -411,9 +427,8 @@ export function splitAt(timeline: Timeline, ms: number, only?: string, minMs: nu
   const tracks = timeline.tracks.map((track) => ({
     ...track,
     clips: track.clips.flatMap((clip) => {
-      const inside = at - clip.atMs;
-      if (!take(clip.id) || inside < minMs || clipLength(clip) - inside < minMs) return [clip];
-      const cut = clip.startMs + inside;
+      if (!ids.has(clip.id)) return [clip];
+      const cut = clip.startMs + at - clip.atMs;
       const second: PlacedClip = { ...clip, id: makeId(), startMs: cut, atMs: at };
       const link = nextLink(clip.link);
       if (link) second.link = link;
@@ -488,10 +503,10 @@ export function rippleDelete(timeline: Timeline, id: string, makeId: () => strin
   };
 }
 
-/** Where a drag lands: `ms` pulled to the nearest of `targets` within `thresholdPx`, unless `enabled` is false. */
-export function snapMs(ms: number, targets: readonly number[], pxPerMs: number, enabled: boolean = true, thresholdPx: number = 8): number {
-  if (!enabled || pxPerMs <= 0) return ms;
-  let best = ms;
+/** The nearest target within the snap radius, including an exact match. */
+function snapTarget(ms: number, targets: readonly number[], pxPerMs: number, thresholdPx: number): number | undefined {
+  if (pxPerMs <= 0) return undefined;
+  let best: number | undefined;
   let bestPx = thresholdPx;
   for (const target of targets) {
     const px = Math.abs(target - ms) * pxPerMs;
@@ -501,6 +516,11 @@ export function snapMs(ms: number, targets: readonly number[], pxPerMs: number, 
     }
   }
   return best;
+}
+
+/** Where a drag lands: `ms` pulled to the nearest of `targets` within `thresholdPx`, unless `enabled` is false. */
+export function snapMs(ms: number, targets: readonly number[], pxPerMs: number, enabled: boolean = true, thresholdPx: number = 8): number {
+  return enabled ? (snapTarget(ms, targets, pxPerMs, thresholdPx) ?? ms) : ms;
 }
 
 /** What drags snap to: 0, the playhead and every clip edge, leaving out the clips in `except`. */
@@ -519,12 +539,13 @@ export function snapTargets(timeline: Timeline, playheadMs: number, except: Read
  * of its edges is nearer a target snaps, unless `enabled` is false (Shift).
  */
 export function snapClip(atMs: number, lengthMs: number, targets: readonly number[], pxPerMs: number, enabled: boolean = true): number {
-  const start = snapMs(atMs, targets, pxPerMs, enabled);
-  const end = snapMs(atMs + lengthMs, targets, pxPerMs, enabled) - lengthMs;
-  const moved = (value: number) => Math.abs(value - atMs);
-  const choices = [start, end].filter((value) => value !== atMs);
-  if (choices.length === 0) return Math.max(0, atMs);
-  return Math.max(0, choices.sort((a, b) => moved(a) - moved(b))[0]);
+  if (!enabled) return Math.max(0, atMs);
+  const start = snapTarget(atMs, targets, pxPerMs, 8);
+  const end = snapTarget(atMs + lengthMs, targets, pxPerMs, 8);
+  const endAligned = end === undefined ? undefined : end - lengthMs;
+  if (start === undefined) return Math.max(0, endAligned ?? atMs);
+  if (endAligned === undefined || Math.abs(start - atMs) <= Math.abs(endAligned - atMs)) return Math.max(0, start);
+  return Math.max(0, endAligned);
 }
 
 /** Every clip on an audio track, as the export plan's `audio` mixes them. */
