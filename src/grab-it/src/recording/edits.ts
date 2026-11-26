@@ -1,5 +1,6 @@
 import type { Backdrop } from "../editor/model";
 import { parseBackdrop } from "../editor/sidecar";
+import { parseCaptions, serializeCaptions, type Captions } from "./captions";
 import { isClipSource, isGap, parseClips, type Clip } from "./clips";
 import { parseZooms, type Zoom } from "./zooms";
 
@@ -16,7 +17,7 @@ export interface Trim {
  */
 export interface RecordingEdits {
   /** The oldest format that can hold the edits. */
-  version: 1 | 2 | 3 | 4;
+  version: 1 | 2 | 3 | 4 | 5;
   /** Absent or null keeps the whole recording. Ignored when `clips` is set. */
   trim?: Trim | null;
   /**
@@ -36,6 +37,8 @@ export interface RecordingEdits {
    * was made (its `removeNoise`).
    */
   removeNoise?: boolean;
+  /** Caption cues and how the export shows them; version 5 when it holds cues. */
+  captions?: Captions;
 }
 
 /** The shortest a trimmed recording may be. */
@@ -59,7 +62,7 @@ export function parseEdits(value: unknown): RecordingEdits {
   if (typeof value !== "object") throw new EditsError("the edits are not an object");
   const doc = value as Record<string, unknown>;
   const version = doc.version;
-  if (version !== 1 && version !== 2 && version !== 3 && version !== 4) throw new EditsError(`unsupported edits version ${String(version)}`);
+  if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5) throw new EditsError(`unsupported edits version ${String(version)}`);
   const edits = emptyEdits();
   if (version >= 2) {
     const clips = parseClips(doc.clips, version);
@@ -74,12 +77,15 @@ export function parseEdits(value: unknown): RecordingEdits {
   const zooms = parseZooms(doc.zooms).filter((zoom) => !zoom.source || isClipSource(zoom.source, version));
   if (zooms.length > 0) edits.zooms = zooms;
   if (typeof doc.removeNoise === "boolean") edits.removeNoise = doc.removeNoise;
-  edits.version = versionForEdits(edits.clips ?? null, edits.zooms);
+  const captions = parseCaptions(doc.captions);
+  if (captions) edits.captions = { ...captions, cues: captions.cues.filter((cue) => !cue.source || isClipSource(cue.source, version)) };
+  edits.version = versionForEdits(edits.clips ?? null, edits.zooms, edits.captions);
   return edits;
 }
 
-/** The minimum sidecar version for the given sequence and zoom sources. */
-export function versionForEdits(clips: Clip[] | null, zooms: Zoom[] = []): RecordingEdits["version"] {
+/** The minimum sidecar version for the given sequence, zoom sources and caption cues. */
+export function versionForEdits(clips: Clip[] | null, zooms: Zoom[] = [], captions?: Captions): RecordingEdits["version"] {
+  if (captions && captions.cues.length > 0) return 5;
   if (clips?.some((clip) => clip.source.includes("/")) || zooms.some((zoom) => zoom.source?.includes("/"))) return 4;
   if (clips?.some(isGap)) return 3;
   return clips ? 2 : 1;
@@ -98,7 +104,7 @@ export type SidecarEdits = Omit<RecordingEdits, "clips"> & { clips?: (Clip | Sav
 export function serializeEdits(edits: RecordingEdits): SidecarEdits {
   const clips = edits.clips && edits.clips.length > 0 ? edits.clips : null;
   return {
-    version: versionForEdits(clips, edits.zooms),
+    version: versionForEdits(clips, edits.zooms, edits.captions),
     ...(clips
       ? {
           clips: clips.map((clip) =>
@@ -123,6 +129,7 @@ export function serializeEdits(edits: RecordingEdits): SidecarEdits {
         }
       : {}),
     ...(edits.removeNoise !== undefined ? { removeNoise: edits.removeNoise } : {}),
+    ...(serializeCaptions(edits.captions) ? { captions: serializeCaptions(edits.captions) } : {}),
   };
 }
 

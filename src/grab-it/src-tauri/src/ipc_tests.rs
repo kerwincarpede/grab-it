@@ -452,6 +452,72 @@ fn recording_pauses_takes_a_threshold_within_its_range() {
 }
 
 #[test]
+fn recording_transcript_reads_the_sidecar_of_a_source_in_the_recordings_folder() {
+    use crate::recording_editor::RecordingEditorState;
+    use crate::transcribe::{MODEL_NAME, transcript_path};
+    let h = Harness::new();
+    let recordings = h.default_save_folder().join(RECORDINGS_DIR);
+    let own = recordings.join("2026-03").join("talk.mp4");
+    let other = recordings.join("2026-04").join("other.mp4");
+    for path in [&own, &other] {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b"video bytes").unwrap();
+    }
+    h.app
+        .state::<RecordingEditorState>()
+        .register(LABEL, &own, &recordings)
+        .unwrap();
+
+    assert_eq!(
+        h.ok(
+            "recording_transcript",
+            json!({ "source": "2026-04/other.mp4" })
+        ),
+        Value::Null
+    );
+    let transcript = json!({
+        "version": 1,
+        "model": MODEL_NAME,
+        "language": "en",
+        "segments": [{
+            "startMs": 0,
+            "endMs": 1200,
+            "text": "Hello there",
+            "words": [
+                { "text": "Hello", "startMs": 0, "endMs": 500 },
+                { "text": "there", "startMs": 500, "endMs": 1200 },
+            ],
+        }],
+    });
+    fs::write(transcript_path(&other), transcript.to_string()).unwrap();
+    assert_eq!(
+        h.ok(
+            "recording_transcript",
+            json!({ "source": "2026-04/other.mp4" })
+        ),
+        transcript
+    );
+    assert!(
+        !h.err(
+            "recording_transcript",
+            json!({ "source": "../outside.mp4" })
+        )
+        .is_empty()
+    );
+    assert_invalid_arg(
+        &h.err("recording_transcript", json!({})),
+        "recording_transcript",
+        "source",
+    );
+
+    let model = h.ok("recording_transcribe_model", json!({}));
+    assert!(model["downloaded"].is_boolean());
+    assert_eq!(model["bytes"], crate::transcribe::model_bytes());
+    // Nothing is running: cancelling does nothing.
+    assert_eq!(h.ok("recording_transcribe_cancel", json!({})), Value::Null);
+}
+
+#[test]
 fn set_save_folder_saves_and_rescans_the_new_folder() {
     let h = Harness::new();
     let folder = h.dir.path().join("elsewhere");

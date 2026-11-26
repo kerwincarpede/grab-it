@@ -328,6 +328,19 @@ export const commands = {
 	 *  stretches quieter than `noise_db` dBFS, from -60 to -20.
 	 */
 	recordingPauses: (fileName: string, noiseDb: number, options?: InvokeOptions) => __TAURI_INVOKE<RecordingPauses_Serialize>("recording_pauses", { fileName, noiseDb }, options),
+	/**  Whether the speech model is downloaded, and its size. */
+	recordingTranscribeModel: (options?: InvokeOptions) => __TAURI_INVOKE<TranscribeModel>("recording_transcribe_model", undefined, options),
+	/**  The saved transcript of recording `source`, if it has one. */
+	recordingTranscript: (source: string, options?: InvokeOptions) => __TAURI_INVOKE<Transcript_Serialize | null>("recording_transcript", { source }, options),
+	/**  Requests cancellation of the transcription running in this window. */
+	recordingTranscribeCancel: (options?: InvokeOptions) => __TAURI_INVOKE<void>("recording_transcribe_cancel", undefined, options),
+	/**
+	 *  Transcribes recording `source`, downloading the model first if needed,
+	 *  saves its transcript beside it and returns it. A recording with only
+	 *  system sound, or none, gets a transcript with no segments. Progress
+	 *  goes to the window as [`TRANSCRIBE_PROGRESS_EVENT`].
+	 */
+	recordingTranscribe: (source: string, options?: InvokeOptions) => __TAURI_INVOKE<Transcript_Serialize>("recording_transcribe", { source }, options),
 	libraryList: (offset: number, limit: number, options?: InvokeOptions) => __TAURI_INVOKE<ShotPage_Serialize>("library_list", { offset, limit }, options),
 	librarySetTags: (id: number, tags: string[], options?: InvokeOptions) => __TAURI_INVOKE<Shot_Serialize>("library_set_tags", { id, tags }, options),
 	librarySidebar: (options?: InvokeOptions) => __TAURI_INVOKE<SidebarSummary>("library_sidebar", undefined, options),
@@ -2822,6 +2835,59 @@ export type TextTidy_Serialize =
 { state: "failed"; by: string; message: string };
 
 /**
+ *  Whether the model is downloaded, and how big it is, so Transcribe can
+ *  say what it will download.
+ */
+export type TranscribeModel = {
+	downloaded: boolean,
+	bytes: number,
+};
+
+/**  `<name>.transcript.json`: what was said in one recording. */
+export type Transcript = Transcript_Serialize | Transcript_Deserialize;
+
+/**  One stretch Whisper heard, in the recording's own time. */
+export type TranscriptSegment = {
+	startMs: number,
+	endMs: number,
+	text: string,
+	words: TranscriptWord[],
+};
+
+/**  One word, in the recording's own time. */
+export type TranscriptWord = {
+	text: string,
+	startMs: number,
+	endMs: number,
+};
+
+/**  `<name>.transcript.json`: what was said in one recording. */
+export type Transcript_Deserialize = {
+	version: number,
+	model: string,
+	/**
+	 *  The language Whisper heard, as its code (`en`); None when nothing
+	 *  was heard.
+	 */
+	language?: string | null,
+	/**  Sorted, never overlapping; empty when there was no voice to hear. */
+	segments: TranscriptSegment[],
+};
+
+/**  `<name>.transcript.json`: what was said in one recording. */
+export type Transcript_Serialize = {
+	version: number,
+	model: string,
+	/**
+	 *  The language Whisper heard, as its code (`en`); None when nothing
+	 *  was heard.
+	 */
+	language: string | null,
+	/**  Sorted, never overlapping; empty when there was no voice to hear. */
+	segments: TranscriptSegment[],
+};
+
+/**
  *  Which releases Grab-it updates to. Mirrors `UpdateChannel` in
  *  src/settings/api.ts.
  */
@@ -3053,6 +3119,10 @@ export type MockCommandHandlers = {
     recordingSource: (args: { fileName: string }) => RecordingClipSource_Serialize | Promise<RecordingClipSource_Serialize>,
     recordingPickSource: (args: { path: string }) => RecordingClipSource_Serialize | Promise<RecordingClipSource_Serialize>,
     recordingPauses: (args: { fileName: string; noiseDb: number }) => RecordingPauses_Serialize | Promise<RecordingPauses_Serialize>,
+    recordingTranscribeModel: () => TranscribeModel | Promise<TranscribeModel>,
+    recordingTranscript: (args: { source: string }) => Transcript_Serialize | null | Promise<Transcript_Serialize | null>,
+    recordingTranscribeCancel: () => void | Promise<void>,
+    recordingTranscribe: (args: { source: string }) => Transcript_Serialize | Promise<Transcript_Serialize>,
     libraryList: (args: { offset: number; limit: number }) => ShotPage_Serialize | Promise<ShotPage_Serialize>,
     librarySetTags: (args: { id: number; tags: string[] }) => Shot_Serialize | Promise<Shot_Serialize>,
     librarySidebar: () => SidebarSummary | Promise<SidebarSummary>,
@@ -3237,6 +3307,10 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "recording_source": return mockCommandHandler(mockHandlers.recordingSource, "recording_source", args);
             case "recording_pick_source": return mockCommandHandler(mockHandlers.recordingPickSource, "recording_pick_source", args);
             case "recording_pauses": return mockCommandHandler(mockHandlers.recordingPauses, "recording_pauses", args);
+            case "recording_transcribe_model": return mockCommandHandler(mockHandlers.recordingTranscribeModel, "recording_transcribe_model", args);
+            case "recording_transcript": return mockCommandHandler(mockHandlers.recordingTranscript, "recording_transcript", args);
+            case "recording_transcribe_cancel": return mockCommandHandler(mockHandlers.recordingTranscribeCancel, "recording_transcribe_cancel", args);
+            case "recording_transcribe": return mockCommandHandler(mockHandlers.recordingTranscribe, "recording_transcribe", args);
             case "library_list": return mockCommandHandler(mockHandlers.libraryList, "library_list", args);
             case "library_set_tags": return mockCommandHandler(mockHandlers.librarySetTags, "library_set_tags", args);
             case "library_sidebar": return mockCommandHandler(mockHandlers.librarySidebar, "library_sidebar", args);

@@ -113,9 +113,9 @@ export function withClips(edits: RecordingEdits, clips: Clip[], own: string, own
   if (clips.length === 1 && clips[0].source === own && !isGap(clips[0])) {
     const { startMs, endMs } = clips[0];
     const trim = { startMs, endMs };
-    return { ...rest, version: versionForEdits(null, rest.zooms), ...(isWhole(trim, ownDurationMs) ? {} : { trim }) };
+    return { ...rest, version: versionForEdits(null, rest.zooms, rest.captions), ...(isWhole(trim, ownDurationMs) ? {} : { trim }) };
   }
-  return { ...rest, version: versionForEdits(clips, rest.zooms), clips };
+  return { ...rest, version: versionForEdits(clips, rest.zooms, rest.captions), clips };
 }
 
 /** How long a clip plays. */

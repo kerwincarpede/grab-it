@@ -421,12 +421,28 @@ fn download_from(
 }
 
 /// Streams `url` into `to`, returning the SHA-256 of what was written.
-fn download_hashed(
+pub(crate) fn download_hashed(
     agent: &ureq::Agent,
     url: &str,
     to: &Path,
     progress: &mut impl FnMut(u64, u64),
 ) -> FfmpegResult<String> {
+    download_hashed_until(agent, url, to, progress, &|| false)
+}
+
+/// [`download_hashed`], stopping between chunks once `cancelled` says so;
+/// `to` is then left for the caller to remove.
+pub(crate) fn download_hashed_until(
+    agent: &ureq::Agent,
+    url: &str,
+    to: &Path,
+    progress: &mut impl FnMut(u64, u64),
+    cancelled: &dyn Fn() -> bool,
+) -> FfmpegResult<String> {
+    let stopped = || FfmpegError::Download("the download was cancelled".to_owned());
+    if cancelled() {
+        return Err(stopped());
+    }
     let response = agent
         .get(url)
         .call()
@@ -444,6 +460,9 @@ fn download_hashed(
     let mut buffer = vec![0; 64 * 1024];
     let mut written = 0u64;
     loop {
+        if cancelled() {
+            return Err(stopped());
+        }
         let read = match reader.read(&mut buffer) {
             Ok(0) => break,
             Ok(read) => read,
@@ -1123,7 +1142,7 @@ pub(crate) fn wait_for(child: &mut Child, timeout: Duration) -> Option<ExitStatu
     wait_for_unless(child, timeout, || false)
 }
 
-fn wait_for_unless(
+pub(crate) fn wait_for_unless(
     child: &mut Child,
     timeout: Duration,
     cancelled: impl Fn() -> bool,

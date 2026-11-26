@@ -42,7 +42,7 @@ describe("recording edits sidecar", () => {
   });
 
   it("refuses a version it does not know, so it is never overwritten", () => {
-    expect(() => parseEdits({ version: 5 })).toThrow(EditsError);
+    expect(() => parseEdits({ version: 6 })).toThrow(EditsError);
     expect(() => parseEdits("edits")).toThrow(EditsError);
   });
 

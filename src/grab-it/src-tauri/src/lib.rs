@@ -57,6 +57,7 @@ mod stitch;
 mod storage;
 mod tidy;
 mod timer_bar;
+mod transcribe;
 mod tray;
 mod update;
 mod waveform;
@@ -303,6 +304,7 @@ fn manage_states(builder: Builder<Rt>) -> Builder<Rt> {
         .manage(hotkeys::HotkeyState::default())
         .manage(editor::EditorState::default())
         .manage(recording_editor::RecordingEditorState::default())
+        .manage(transcribe::TranscribeState::default())
         .manage(update::UpdateState::default())
         .manage(hub::HubState::default())
 }
@@ -465,6 +467,10 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             recording_editor::recording_source,
             recording_editor::recording_pick_source,
             recording_suggest::recording_pauses,
+            transcribe::recording_transcribe_model,
+            transcribe::recording_transcript,
+            transcribe::recording_transcribe_cancel,
+            transcribe::recording_transcribe,
             library::library_list,
             library::library_set_tags,
             search::library_sidebar,

@@ -14,17 +14,25 @@ import { useBackdropImage } from "../editor/useBackdropImage";
 import type { BackdropSources } from "../editor/flatten";
 import {
   cancelExport,
+  cancelTranscribe,
   exportRecording,
   onExportProgress,
+  onTranscribeProgress,
   recordingInfo,
   recordingPickSource,
   recordingSource,
+  recordingTranscribe,
+  recordingTranscript,
   saveEdits,
+  transcribeModel,
   type AudioKind,
   type ExportEntry,
+  type ExportOverlayImage,
   type ExportProgress,
   type RecordingInfo,
   type RecordingSource,
+  type TranscribeModel,
+  type TranscribeProgress,
 } from "./api";
 import {
   canRemove,
@@ -54,6 +62,27 @@ import {
   type ClipAt,
 } from "./clips";
 import ClipTrack from "./ClipTrack";
+import CaptionPreview from "./CaptionPreview";
+import CaptionTrack, { type CueSpan } from "./CaptionTrack";
+import {
+  cuePng,
+  cueShowings,
+  cuesFromTranscript,
+  DEFAULT_CUE_MS,
+  emptyCaptions,
+  MIN_CUE_MS,
+  removeCue,
+  replaceCue,
+  showingAt,
+  sortCues,
+  styleOf,
+  tagCue,
+  newCueId,
+  type Captions,
+  type CaptionStyle,
+  type Cue,
+  type CueShowing,
+} from "./captions";
 import SuggestEditsPanel, { type ShownCuts } from "./SuggestEditsPanel";
 import RecordingVideo from "./RecordingVideo";
 import { chooseRecording, probeVideo, type SourceMeta } from "./sources";
@@ -277,6 +306,22 @@ export default function RecordingEditor() {
   const [zoomDraft, setZoomDraft] = useState<Zoom[] | null>(null);
   const [selectedZoomId, setSelectedZoomId] = useState<string | null>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
+  /** A caption still being dragged; null when none is. */
+  const [captionDraft, setCaptionDraft] = useState<CueSpan | null>(null);
+  /** The selected showing of a cue: the cue and the clip it shows in. */
+  const [selectedCueKey, setSelectedCueKey] = useState<string | null>(null);
+  /** The selected cue's text while it is typed, saved when the field is left. */
+  const [cueTextDraft, setCueTextDraft] = useState<string | null>(null);
+  const [captionsOpen, setCaptionsOpen] = useState(false);
+  const captionsRef = useRef<HTMLDivElement>(null);
+  /** Transcribing: how far it has got; null when it is not. */
+  const [transcribing, setTranscribing] = useState<TranscribeProgress | null>(null);
+  const [cancellingTranscribe, setCancellingTranscribe] = useState(false);
+  /** Transcribing again waits for this confirmation, as it replaces the cues. */
+  const [confirmReplace, setConfirmReplace] = useState(false);
+  const [captionsMessage, setCaptionsMessage] = useState<string | null>(null);
+  /** The speech model's state, asked for when the popover opens. */
+  const [model, setModel] = useState<TranscribeModel | null>(null);
   const [progress, setProgress] = useState<ExportProgress | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
@@ -368,6 +413,18 @@ export default function RecordingEditor() {
   }, [clips, own, durationMs, joined, allZooms]);
   const zooms = zoomDraft ?? shown.list;
   const selectedZoom = zooms.find((zoom) => zoom.id === selectedZoomId) ?? null;
+
+  // Cues keep their recording's time; each shows in every clip playing it.
+  const captions: Captions = useMemo(() => edits.captions ?? emptyCaptions(), [edits.captions]);
+  const captionStyle: CaptionStyle = styleOf(edits.captions);
+  const savedShowings = useMemo(() => cueShowings(captions.cues, clips, own, joined), [captions.cues, clips, own, joined]);
+  const showings = captionDraft
+    ? savedShowings.map((each) => (each.key === captionDraft.key ? { ...each, startMs: captionDraft.startMs, endMs: captionDraft.endMs } : each))
+    : savedShowings;
+  const selectedShowing = showings.find((each) => each.key === selectedCueKey) ?? null;
+  const playheadCue = showingAt(showings, currentMs);
+  /** Recordings the sequence plays, each transcribed once. */
+  const sequenceSources = [...new Set(clips.filter((clip) => !isGap(clip)).map((clip) => clip.source))];
   // A preview that leaves the opened recording one clip plays that clip as its trim.
   const trim = joined ? { startMs: 0, endMs: sequenceMs } : suggestPreview ? { startMs: clips[0].startMs, endMs: clips[0].endMs } : (trimDraft ?? savedTrim);
   const layout = useMemo(() => (videoSize ? recordingLayout(videoSize, backdrop) : null), [videoSize, backdrop]);
@@ -1002,9 +1059,9 @@ export default function RecordingEditor() {
       duplicateSelectedClip,
       splitAtPlayhead,
       endSuggestPreview,
-      hasClip: selectedClip !== null && !selectedZoom && !exporting,
+      hasClip: selectedClip !== null && !selectedZoom && !selectedShowing && !exporting,
       previewing: suggestPreview !== null,
-      dialogOpen: backdropOpen,
+      dialogOpen: backdropOpen || captionsOpen,
     };
   });
   useEffect(() => {
@@ -1056,6 +1113,16 @@ export default function RecordingEditor() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // A click outside the captions panel closes it.
+  useEffect(() => {
+    if (!captionsOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !captionsRef.current?.contains(event.target)) setCaptionsOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [captionsOpen]);
 
   // A click outside the backdrop panel closes it.
   useEffect(() => {
@@ -1113,6 +1180,137 @@ export default function RecordingEditor() {
     if (saved !== current) commitBackdrop(saved);
   };
 
+  // --- Captions -----------------------------------------------------------
+
+  const commitCaptions = (next: Captions) => commitEdits({ ...edits, captions: { ...next, cues: sortCues(next.cues) } });
+
+  /** Where showing `key` may reach on the timeline: its clip. */
+  const cueRoom = (key: string) => {
+    const showing = savedShowings.find((each) => each.key === key);
+    if (!showing) return { low: 0, high: timelineDuration };
+    const { low, high } = spanOf(clips, own, showing.index, durationMs);
+    return { low, high };
+  };
+
+  /** Keeps a showing's new place, moving its cue in its recording's time. */
+  const commitCueSpan = (span: CueSpan) => {
+    setCaptionDraft(null);
+    const showing = savedShowings.find((each) => each.key === span.key);
+    if (!showing || (showing.startMs === span.startMs && showing.endMs === span.endMs)) return;
+    const { offset } = spanOf(clips, own, showing.index, durationMs);
+    commitCaptions({ ...captions, cues: replaceCue(captions.cues, { ...showing.cue, startMs: span.startMs - offset, endMs: span.endMs - offset }) });
+  };
+
+  const deleteShowing = (key: string) => {
+    const showing = savedShowings.find((each) => each.key === key);
+    if (!showing) return;
+    setSelectedCueKey(null);
+    setCueTextDraft(null);
+    commitCaptions({ ...captions, cues: removeCue(captions.cues, showing.cue.id) });
+  };
+
+  /** Adds an empty cue at timeline time `ms`, on a clip and clear of the cues there. */
+  const addCueAt = (ms: number) => {
+    const target = positionIn(clips, own, ms);
+    if (!target || isGap(target.clip)) {
+      setMessage("Captions go on clips, not gaps.");
+      return;
+    }
+    if (showings.some((each) => ms >= each.startMs && ms < each.endMs)) return;
+    const { low, high } = spanOf(clips, own, target.index, durationMs);
+    const next = Math.min(high, ...showings.filter((each) => each.index === target.index && each.startMs > ms).map((each) => each.startMs));
+    const startMs = Math.max(low, Math.min(ms, next - MIN_CUE_MS));
+    const endMs = Math.min(next, startMs + DEFAULT_CUE_MS);
+    if (endMs - startMs < MIN_CUE_MS) {
+      setMessage("There is no room for a caption there.");
+      return;
+    }
+    const { offset } = spanOf(clips, own, target.index, durationMs);
+    const cue: Cue = tagCue({ id: newCueId(), startMs: startMs - offset, endMs: endMs - offset, text: "" }, target.clip.source, own);
+    commitCaptions({ ...captions, cues: [...captions.cues, cue] });
+    const clip = clips[target.index];
+    setSelectedCueKey(joined ? `${cue.id}@${clip.id}` : cue.id);
+    setSelectedZoomId(null);
+    setSelectedClipId(null);
+    setCueTextDraft("");
+  };
+
+  /** Keeps the selected cue's typed text. */
+  const commitCueText = (showing: CueShowing, text: string) => {
+    setCueTextDraft(null);
+    if (text === showing.cue.text) return;
+    commitCaptions({ ...captions, cues: replaceCue(captions.cues, { ...showing.cue, text }) });
+  };
+
+  const toggleBurnIn = () => commitCaptions({ ...captions, burnIn: !captions.burnIn });
+
+  /** Replaces the cues with the latest edits, for when transcribing ends after other edits. */
+  const replaceCuesRef = useRef<(cues: Cue[]) => void>(() => undefined);
+  useEffect(() => {
+    replaceCuesRef.current = (cues: Cue[]) => commitCaptions({ ...captions, cues });
+  });
+
+  /**
+   * Transcribes every recording in the sequence that has no transcript yet,
+   * reads the saved transcript of the rest, and replaces the cues with
+   * theirs. Cues already there wait for `confirmed`.
+   */
+  const transcribe = async (confirmed: boolean) => {
+    if (transcribing || readOnly) return;
+    if (captions.cues.length > 0 && !confirmed) {
+      setConfirmReplace(true);
+      return;
+    }
+    setConfirmReplace(false);
+    setCaptionsMessage(null);
+    setTranscribing({ source: "", stage: "transcribe", done: 0, total: 0 });
+    let unlisten: (() => void) | null = null;
+    try {
+      unlisten = await onTranscribeProgress(setTranscribing).catch(() => null);
+      const cues: Cue[] = [];
+      for (const source of sequenceSources) {
+        const transcript = (await recordingTranscript(source)) ?? (await recordingTranscribe(source));
+        cues.push(...cuesFromTranscript(transcript, source, own));
+      }
+      if (cues.length === 0) {
+        setCaptionsMessage("No sound to transcribe. Double-click the caption row to add captions by hand.");
+        return;
+      }
+      replaceCuesRef.current(cues);
+      setCaptionsMessage(`Made ${cues.length} caption${cues.length === 1 ? "" : "s"}.`);
+    } catch (err) {
+      const reason = errorText(err);
+      setCaptionsMessage(reason === "Transcribing cancelled" ? reason : `Could not transcribe: ${reason}`);
+    } finally {
+      unlisten?.();
+      setTranscribing(null);
+      setCancellingTranscribe(false);
+    }
+  };
+
+  const stopTranscribe = async () => {
+    setCancellingTranscribe(true);
+    try {
+      await cancelTranscribe();
+    } catch (err) {
+      setCaptionsMessage(`Could not cancel: ${errorText(err)}`);
+      setCancellingTranscribe(false);
+    }
+  };
+
+  /** Each showing's caption painted as a PNG over the export's video box. */
+  const captionOverlays = async (shape: { x: number; y: number; videoWidth: number; videoHeight: number }): Promise<ExportOverlayImage[]> => {
+    if (!captions.burnIn) return [];
+    const overlays: ExportOverlayImage[] = [];
+    // In the exported sequence's time: a lone trimmed recording is one clip from 0.
+    for (const { cue, startMs, endMs } of cueShowings(captions.cues, savedClips, own, true)) {
+      const painted = await cuePng(cue.text, captionStyle, shape.videoWidth, shape.videoHeight);
+      if (!painted) continue;
+      overlays.push({ startMs, endMs, x: shape.x + painted.box.x, y: shape.y + painted.box.y, width: painted.box.width, height: painted.box.height, png: painted.png });
+    }
+    return overlays;
+  };
+
   // --- Export -------------------------------------------------------------
 
   const stopExport = async () => {
@@ -1156,6 +1354,7 @@ export default function RecordingEditor() {
           }),
         };
       });
+      const overlays = await captionOverlays(shape);
       const saved = await exportRecording(
         {
           clips: exportClips,
@@ -1169,6 +1368,7 @@ export default function RecordingEditor() {
           removeNoise,
         },
         layers,
+        overlays,
       );
       setMessage(`Exported ${fileName(saved)}`);
     } catch (err) {
@@ -1266,6 +1466,83 @@ export default function RecordingEditor() {
             />
           )}
         </div>
+        <div
+          className="bar-group backdrop-anchor"
+          ref={captionsRef}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setCaptionsOpen(false);
+          }}
+        >
+          <button
+            type="button"
+            className="text-button"
+            aria-haspopup="dialog"
+            aria-expanded={captionsOpen}
+            data-on={captions.cues.length > 0 ? "true" : undefined}
+            disabled={!info || exporting}
+            onClick={() => {
+              if (!captionsOpen) {
+                transcribeModel()
+                  .then(setModel)
+                  .catch(() => setModel(null));
+              }
+              setCaptionsOpen(!captionsOpen);
+            }}
+          >
+            Captions
+          </button>
+          {captionsOpen && (
+            <section className="captions-panel" role="dialog" aria-label="Captions">
+              {transcribing ? (
+                <>
+                  <p role="status">
+                    {transcribing.stage === "download" ? "Downloading the speech model…" : "Transcribing…"}
+                    {transcribing.total > 0 ? ` ${Math.round((transcribing.done / transcribing.total) * 100)}%` : ""}
+                  </p>
+                  <div
+                    className="recording-progress"
+                    role="progressbar"
+                    aria-label="Transcribe progress"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={transcribing.total > 0 ? Math.round((transcribing.done / transcribing.total) * 100) : 0}
+                  >
+                    <div style={{ width: `${transcribing.total > 0 ? (transcribing.done / transcribing.total) * 100 : 0}%` }} />
+                  </div>
+                  <button type="button" className="text-button" disabled={cancellingTranscribe} onClick={() => void stopTranscribe()}>
+                    {cancellingTranscribe ? "Cancelling…" : "Cancel"}
+                  </button>
+                </>
+              ) : confirmReplace ? (
+                <>
+                  <p>Replace the {captions.cues.length} caption{captions.cues.length === 1 ? "" : "s"} with new ones? Your corrections are lost.</p>
+                  <div className="captions-actions">
+                    <button type="button" className="primary" onClick={() => void transcribe(true)}>
+                      Replace captions
+                    </button>
+                    <button type="button" className="text-button" onClick={() => setConfirmReplace(false)}>
+                      Keep them
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p>
+                    Transcribes each recording in the sequence on this computer; nothing leaves it.
+                    {model?.downloaded ? "" : ` First Grab-it downloads the speech model once${model ? `, ${Math.round(model.bytes / 1_000_000)} MB` : ""}.`}
+                  </p>
+                  <button type="button" className="primary" disabled={readOnly || sequenceSources.length === 0} onClick={() => void transcribe(false)}>
+                    Transcribe
+                  </button>
+                </>
+              )}
+              {captionsMessage && <p role="status">{captionsMessage}</p>}
+              <label>
+                <input type="checkbox" checked={captions.burnIn} disabled={readOnly || exporting} onChange={toggleBurnIn} /> Burn in captions
+              </label>
+            </section>
+          )}
+        </div>
         <div className="bar-group">
           <button
             type="button"
@@ -1321,7 +1598,28 @@ export default function RecordingEditor() {
             Split
           </button>
         </div>
-        {selectedClip && !selectedZoom && (
+        {selectedShowing && (
+          <div className="bar-group caption-controls" role="group" aria-label="Caption">
+            <input
+              type="text"
+              className="caption-text-field"
+              aria-label="Caption text"
+              placeholder="Type the caption"
+              value={cueTextDraft ?? selectedShowing.cue.text}
+              disabled={exporting || readOnly}
+              onChange={(event) => setCueTextDraft(event.target.value)}
+              onBlur={(event) => commitCueText(selectedShowing, event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") commitCueText(selectedShowing, event.currentTarget.value);
+                if (event.key === "Escape") setCueTextDraft(null);
+              }}
+            />
+            <button type="button" className="icon-button" aria-label="Delete caption" title="Delete caption" onClick={() => deleteShowing(selectedShowing.key)} disabled={exporting}>
+              <TrashIcon />
+            </button>
+          </div>
+        )}
+        {selectedClip && !selectedZoom && !selectedShowing && (
           <div className="bar-group" role="group" aria-label={isGap(selectedClip) ? "Gap" : `Clip ${selectedClip.source}`}>
             {!isGap(selectedClip) && (
               <button type="button" className="text-button" onClick={duplicateSelectedClip} disabled={exporting} title="Copy the clip right after itself (Ctrl+D)">
@@ -1447,6 +1745,9 @@ export default function RecordingEditor() {
               />
             )}
             </div>
+            {playheadCue && layout && !onGap && playheadCue.cue.text.trim() && (
+              <CaptionPreview text={playheadCue.cue.text} style={captionStyle} width={layout.videoWidth} height={layout.videoHeight} />
+            )}
           </div>
         </div>
       </div>
@@ -1490,6 +1791,7 @@ export default function RecordingEditor() {
               onSelect={(id) => {
                 setSelectedClipId(id);
                 setSelectedZoomId(null);
+                setSelectedCueKey(null);
               }}
               onTrimPreview={setClipDraft}
               onTrimCommit={(next) => {
@@ -1513,11 +1815,33 @@ export default function RecordingEditor() {
             selectedId={selectedZoom?.id ?? null}
             onSelect={(id) => {
               setSelectedZoomId(id);
-              if (id) setSelectedClipId(null);
+              if (id) {
+                setSelectedClipId(null);
+                setSelectedCueKey(null);
+              }
             }}
             onPreview={setZoomDraft}
             onCommit={commitZooms}
             onAdd={addZoomAt}
+            onSeek={(ms) => seek(Math.min(Math.max(ms, trim.startMs), trim.endMs))}
+          />
+          <CaptionTrack
+            durationMs={timelineDuration}
+            showings={showings}
+            selectedKey={selectedShowing?.key ?? null}
+            onSelect={(key) => {
+              if (key !== selectedCueKey) setCueTextDraft(null);
+              setSelectedCueKey(key);
+              if (key) {
+                setSelectedClipId(null);
+                setSelectedZoomId(null);
+              }
+            }}
+            room={cueRoom}
+            onPreview={setCaptionDraft}
+            onCommit={commitCueSpan}
+            onDelete={deleteShowing}
+            onAdd={addCueAt}
             onSeek={(ms) => seek(Math.min(Math.max(ms, trim.startMs), trim.endMs))}
           />
           <WaveformLanes

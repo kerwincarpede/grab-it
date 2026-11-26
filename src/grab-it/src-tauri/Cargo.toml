@@ -69,6 +69,11 @@ ocrs = { version = "=0.12.2", default-features = false, features = ["onnx"] }
 rten = { version = "0.24", default-features = false, features = ["onnx_format"] }
 # Already in the tree through rten; builds the face detector's input (faces.rs).
 rten-tensor = "0.24"
+# Captions (transcribe.rs): Whisper's decoding loop and its tokenizer, on
+# the same rten, and the FFT behind its log-mel input.
+rten-generate = { version = "0.24", default-features = false }
+rten-text = "0.24"
+rustfft = "6"
 # `platform-verifier` checks certificates against the OS trust store
 # (net.rs), so roots installed by IT, such as a TLS-inspecting proxy's,
 # are trusted.

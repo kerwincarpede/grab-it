@@ -9,6 +9,7 @@ import type { AudioKind, Value } from "../app/bindings";
 import { mockCommands, type CommandCall } from "../test/mockCommands";
 import type { CursorPath } from "./zooms";
 import type { RecordingPauses } from "./api";
+import type { Transcript } from "./captions";
 
 vi.mock("./sources", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./sources")>();
@@ -29,6 +30,8 @@ let gone: string[] = [];
 let separate: string[] = [];
 /** What `recording_pauses` gives, or the error it rejects with; a function hears each threshold apart. */
 let heard: RecordingPauses | string | ((noiseDb: number) => RecordingPauses | Promise<RecordingPauses>) = { sound: "microphone", pauses: [], canClean: true, pointer: null };
+/** What `recording_transcribe` hears in each recording; absent hears nothing. */
+let spoken: Record<string, Transcript> = {};
 /** What `recording_audition` resolves with, when a test holds it back. */
 let auditioned: (() => Promise<ArrayBuffer>) | null = null;
 /** The sound sources `recording_source` says each other recording has. */
@@ -92,6 +95,10 @@ function mockBackend(edits: Value | null = null, cursor: CursorPath | null = nul
       recording_pauses: ({ noiseDb }) => (typeof heard === "function" ? heard(noiseDb) : typeof heard === "string" ? Promise.reject(heard) : heard),
       recording_audition: () => (auditioned ? auditioned() : new ArrayBuffer(4)),
       recording_waveform: ({ fileName, audio }) => waveform(fileName, audio),
+      recording_transcribe_model: () => ({ downloaded: false, bytes: 290_000_000 }),
+      recording_transcript: () => null,
+      recording_transcribe: ({ source }) => spoken[source] ?? { version: 1, model: "whisper-base", language: null, segments: [] },
+      recording_transcribe_cancel: () => undefined,
       recording_export: () =>
         new Promise<string>((resolve, reject) => {
           backend.exported = { resolve, reject };
@@ -151,6 +158,7 @@ afterEach(() => {
   auditioned = null;
   sourceAudio = {};
   waveform = PEAKS;
+  spoken = {};
 });
 
 const saved = (backend: Backend) => backend.calls.filter((call) => call.cmd === "recording_save_edits").map((call) => (call.payload as { edits: unknown }).edits);
@@ -2454,6 +2462,166 @@ describe("RecordingEditor", () => {
       // Moving after letting go changes nothing.
       fireEvent.pointerMove(separator, { clientY: 100, pointerId: 1 });
       expect(separator).toHaveAttribute("aria-valuenow", "90");
+    });
+  });
+
+  describe("Captions", () => {
+    const said = (text: string, startMs: number, endMs: number): Transcript => {
+      const words = text.split(" ");
+      const step = (endMs - startMs) / words.length;
+      return {
+        version: 1,
+        model: "whisper-base",
+        language: "en",
+        segments: [{ startMs, endMs, text, words: words.map((word, index) => ({ text: word, startMs: startMs + index * step, endMs: startMs + (index + 1) * step })) }],
+      };
+    };
+    const CLIPS = [
+      { id: "a", source: OWN, startMs: 1000, endMs: 5000 },
+      { id: "b", source: OTHER, startMs: 0, endMs: 6000 },
+    ];
+    /** One recording in two clips: source seconds 1–5, then 2–6. */
+    const TWICE = [
+      { id: "a", source: OWN, startMs: 1000, endMs: 5000 },
+      { id: "c", source: OWN, startMs: 2000, endMs: 6000 },
+    ];
+    const HELLO = { id: "q", startMs: 2500, endMs: 3500, text: "Hello" };
+
+    async function loadSequence(): Promise<HTMLVideoElement> {
+      const video = await previewVideo(OWN);
+      setVideoMetadata(video, 12, 1920, 1080);
+      fireEvent.loadedMetadata(video);
+      await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
+      return video;
+    }
+
+    it("transcribes every recording in a joined sequence into tagged cues, and asks before replacing them", async () => {
+      spoken = { [OWN]: said("Hello there", 1500, 3000), [OTHER]: said("Second take", 500, 2000) };
+      const backend = mockBackend({ version: 2, clips: CLIPS });
+      render(<RecordingEditor />);
+      await loadSequence();
+      await userEvent.click(screen.getByRole("button", { name: "Captions" }));
+      const panel = screen.getByRole("dialog", { name: "Captions" });
+      await waitFor(() => expect(panel).toHaveTextContent("downloads the speech model once, 290 MB"));
+      await userEvent.click(screen.getByRole("button", { name: "Transcribe" }));
+      await waitFor(() =>
+        expect(lastSaved(backend)).toEqual({
+          version: 5,
+          clips: CLIPS,
+          captions: {
+            burnIn: true,
+            cues: [
+              { id: expect.any(String), source: OTHER, startMs: 500, endMs: 2000, text: "Second take" },
+              { id: expect.any(String), startMs: 1500, endMs: 3000, text: "Hello there" },
+            ],
+          },
+        }),
+      );
+      expect(backend.calls.filter(({ cmd }) => cmd === "recording_transcribe").map(({ payload }) => payload)).toEqual([{ source: OWN }, { source: OTHER }]);
+      // Each shows on its clip: the opened recording's from 0.5 s, the other's from 4.5 s.
+      expect(screen.getAllByTestId("caption-cue").map((cue) => cue.getAttribute("aria-label"))).toEqual([
+        "Caption “Hello there”, 0:00.5 to 0:02.0",
+        "Caption “Second take”, 0:04.5 to 0:06.0",
+      ]);
+
+      await userEvent.click(screen.getByRole("button", { name: "Transcribe" }));
+      expect(screen.getByRole("dialog", { name: "Captions" })).toHaveTextContent("Replace the 2 captions");
+      await userEvent.click(screen.getByRole("button", { name: "Keep them" }));
+      expect(backend.calls.filter(({ cmd }) => cmd === "recording_transcribe")).toHaveLength(2);
+      await userEvent.click(screen.getByRole("button", { name: "Transcribe" }));
+      await userEvent.click(screen.getByRole("button", { name: "Replace captions" }));
+      await waitFor(() => expect(backend.calls.filter(({ cmd }) => cmd === "recording_transcribe")).toHaveLength(4));
+    });
+
+    it("says when there is no sound to transcribe", async () => {
+      const backend = mockBackend();
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Captions" }));
+      await userEvent.click(screen.getByRole("button", { name: "Transcribe" }));
+      await waitFor(() => expect(screen.getByRole("dialog", { name: "Captions" })).toHaveTextContent("No sound to transcribe"));
+      expect(saved(backend)).toEqual([]);
+    });
+
+    it("moves, edits, deletes and adds cues on the caption row", async () => {
+      const cue = { id: "q", startMs: 2000, endMs: 4000, text: "Hello" };
+      const backend = mockBackend({ version: 5, captions: { burnIn: true, cues: [cue] } });
+      render(<RecordingEditor />);
+      await loadVideo();
+      // 100 ms a pixel.
+      const track = screen.getByTestId("caption-track");
+      placeAt(track, 120, 26);
+      const segment = screen.getByTestId("caption-cue");
+      fireEvent.pointerDown(segment, { clientX: 25 });
+      fireEvent.pointerMove(segment, { clientX: 45 });
+      fireEvent.pointerUp(segment, { clientX: 45 });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 5, captions: { burnIn: true, cues: [{ ...cue, startMs: 4000, endMs: 6000 }] } }));
+
+      act(() => screen.getByTestId("caption-cue").focus());
+      const field = screen.getByRole("textbox", { name: "Caption text" });
+      fireEvent.change(field, { target: { value: "Hello, world" } });
+      fireEvent.blur(field);
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 5, captions: { burnIn: true, cues: [{ ...cue, startMs: 4000, endMs: 6000, text: "Hello, world" }] } }));
+
+      fireEvent.keyDown(screen.getByTestId("caption-cue"), { key: "Delete" });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1 }));
+      expect(screen.queryByTestId("caption-cue")).not.toBeInTheDocument();
+
+      fireEvent.doubleClick(track, { clientX: 30 });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 5, captions: { burnIn: true, cues: [{ id: expect.any(String), startMs: 3000, endMs: 5000, text: "" }] } }));
+      expect(screen.getByRole("textbox", { name: "Caption text" })).toHaveValue("");
+    });
+
+    it("shows a cue in every copy of its clip and draws the playhead's cue on the preview", async () => {
+      mockBackend({ version: 5, clips: TWICE, captions: { burnIn: true, cues: [HELLO] } });
+      render(<RecordingEditor />);
+      await loadSequence();
+      expect(screen.getAllByTestId("caption-cue").map((cue) => cue.getAttribute("aria-label"))).toEqual([
+        "Caption “Hello”, 0:01.5 to 0:02.5",
+        "Caption “Hello”, 0:04.5 to 0:05.5",
+      ]);
+      expect(screen.queryByTestId("caption-preview")).not.toBeInTheDocument();
+      // 8 s over 80 px.
+      const timeline = screen.getByTestId("timeline-track");
+      placeAt(timeline, 80, 26);
+      fireEvent.pointerDown(timeline, { clientX: 50 });
+      fireEvent.pointerUp(timeline, { clientX: 50 });
+      await waitFor(() => expect(screen.getByTestId("caption-preview")).toHaveAccessibleName("Hello"));
+      fireEvent.pointerDown(timeline, { clientX: 30 });
+      fireEvent.pointerUp(timeline, { clientX: 30 });
+      await waitFor(() => expect(screen.queryByTestId("caption-preview")).not.toBeInTheDocument());
+    });
+
+    it("burns each cue in for every clip it plays in, after the mask", async () => {
+      stubCanvas([[1, 2, 3], [4, 5]]);
+      const backend = mockBackend({ version: 5, clips: TWICE, captions: { burnIn: true, cues: [HELLO] } });
+      render(<RecordingEditor />);
+      await loadSequence();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Export" })).toBeEnabled());
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan, body } = await exportCall(backend);
+      const overlays = (plan as { overlays: { startMs: number; endMs: number; x: number; y: number; width: number; height: number; bytes: number }[] }).overlays;
+      expect(overlays.map(({ startMs, endMs, bytes }) => ({ startMs, endMs, bytes }))).toEqual([
+        { startMs: 1500, endMs: 2500, bytes: 3 },
+        { startMs: 4500, endMs: 5500, bytes: 2 },
+      ]);
+      for (const overlay of overlays) {
+        expect(overlay.x).toBeGreaterThanOrEqual(0);
+        expect(overlay.y + overlay.height).toBeLessThanOrEqual(1080);
+      }
+      expect(body).toEqual([1, 2, 3, 4, 5]);
+    });
+
+    it("sends no captions with Burn in captions off", async () => {
+      const backend = mockBackend({ version: 5, captions: { burnIn: true, cues: [HELLO] } });
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Captions" }));
+      await userEvent.click(screen.getByRole("checkbox", { name: "Burn in captions" }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 5, captions: { burnIn: false, cues: [HELLO] } }));
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan } = await exportCall(backend);
+      expect(plan).not.toHaveProperty("overlays");
     });
   });
 });

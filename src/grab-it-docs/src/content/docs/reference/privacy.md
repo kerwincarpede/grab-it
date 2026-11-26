@@ -20,6 +20,7 @@ Grab-it has no account, no analytics and no tracking. Your captures stay on your
 | --- | --- | --- |
 | Update check | Shortly after Grab-it starts, then every few hours, when you click **Check for updates…** or the refresh button next to the version, and when you switch update channel | GitHub: the latest Grab-it release on Stable; on Edge, GitHub’s releases API to find the newest published version, then that version’s update manifest |
 | ffmpeg | Once, the first time you record an MP4, if your computer has no ffmpeg that works (not on macOS) | A pinned FFmpeg-Builds release on GitHub, checked against a checksum built into Grab-it |
+| Speech model (Whisper base, about 290 MB) | Once, the first time you click **Transcribe** in the video editor's [Captions](/grab-it/video-editor/captions/), after it says the size | Hugging Face: `onnx-community/whisper-base` at a pinned revision (`27a07b4b52b3a4c5886134bb4320e93e1a4bbc7c`), checked against checksums built into Grab-it |
 | Your screenshots, with their text, app and window title | Only with AI descriptions on, for each capture described or text tidied, and for each click in a [step capture](/grab-it/capture/step-capture/): its screenshot with the step's badge drawn on it | Your chosen [AI provider](/grab-it/ai/providers/#what-goes-where) |
 | The capture open in the editor, the text read in it with its positions, and your request | Each time you press **Suggest** in [Annotate with AI](/grab-it/ai/annotate/), with a provider chosen | Your chosen [AI provider](/grab-it/ai/providers/#what-goes-where) |
 
@@ -45,3 +46,5 @@ Turn off **Use an AI provider** in **Settings → AI integration** and nothing m
 Microphone, system sound and webcam are off by default, and recorded only when you turn them on in [Settings → Recording](/grab-it/reference/settings/#recording). **Show keystrokes** draws the keys you press into the recording. On macOS, keys typed into a password field are left out; on Windows and Linux they aren't, so turn it off before you type a password.
 
 [Suggest edits](/grab-it/video-editor/suggest-edits/) listens for pauses and plays its **Original** and **Cleaned** auditions on your computer, with Grab-it's own ffmpeg and noise model. The sound is never sent anywhere.
+
+[Captions](/grab-it/video-editor/captions/) are transcribed on your computer with the downloaded speech model. Your recordings, their sound and their transcripts are never sent anywhere, and no AI provider is used.

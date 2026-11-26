@@ -1,6 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { commands, type AudioKind, type RecordingClipSource_Serialize, type RecordingInfo_Serialize, type RecordingPauses_Serialize, type Value } from "../app/bindings";
+import type { Transcript } from "./captions";
 import type { SidecarEdits } from "./edits";
 import type { CursorPath, Zoom } from "./zooms";
 
@@ -90,6 +91,32 @@ export interface ExportPlan {
    * the sound they were recorded with.
    */
   removeNoise: boolean;
+  /**
+   * Images laid over the finished frames for a stretch of the output, such
+   * as captions; their PNGs follow the mask in the body. Absent means none.
+   */
+  overlays?: ExportOverlay[];
+}
+
+/**
+ * An image laid over every output frame from `startMs` until `endMs`, in the
+ * exported sequence's time, with its top-left corner at `x`, `y` in output
+ * pixels. Mirrors `ExportOverlay` in src-tauri/src/recording_editor.rs.
+ */
+export interface ExportOverlay {
+  startMs: number;
+  endMs: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** How many bytes of the body its PNG takes; `exportRecording` fills it in. */
+  bytes: number;
+}
+
+/** An overlay to export: where and when it shows, and its PNG, `width` × `height`. */
+export interface ExportOverlayImage extends Omit<ExportOverlay, "bytes"> {
+  png: Uint8Array;
 }
 
 /** Mirrors `ExportProgress` in src-tauri/src/recording_editor.rs: frames written so far. */
@@ -159,16 +186,25 @@ export async function saveEdits(edits: SidecarEdits): Promise<void> {
 
 /**
  * Exports the recording as `plan` says, with the backdrop and mask PNGs
- * (none without a backdrop). Resolves to the new file's path once it is
- * written; Grab-it shows it in Quick Access too.
+ * (none without a backdrop) and `overlays` laid over the frames. Resolves to
+ * the new file's path once it is written; Grab-it shows it in Quick Access too.
  */
-export function exportRecording(plan: ExportPlan, layers: { backdrop: Uint8Array; mask: Uint8Array } | null): Promise<string> {
-  const body = new Uint8Array((layers?.backdrop.length ?? 0) + (layers?.mask.length ?? 0));
-  if (layers) {
-    body.set(layers.backdrop, 0);
-    body.set(layers.mask, layers.backdrop.length);
+export function exportRecording(
+  plan: ExportPlan,
+  layers: { backdrop: Uint8Array; mask: Uint8Array } | null,
+  overlays: readonly ExportOverlayImage[] = [],
+): Promise<string> {
+  const parts = [...(layers ? [layers.backdrop, layers.mask] : []), ...overlays.map((overlay) => overlay.png)];
+  const body = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    body.set(part, offset);
+    offset += part.length;
   }
   const sent: ExportPlan = { ...plan, backdropBytes: layers?.backdrop.length ?? 0 };
+  if (overlays.length > 0) {
+    sent.overlays = overlays.map(({ png, ...overlay }) => ({ ...overlay, bytes: png.length }));
+  }
   return invoke<string>("recording_export", body, {
     headers: { [EXPORT_PLAN_HEADER]: encodeURIComponent(JSON.stringify(sent)) },
   });
@@ -216,4 +252,50 @@ export const WAVEFORM_PEAKS_PER_SECOND = 100;
 export async function recordingWaveform(fileName: string, audio: number): Promise<Uint8Array> {
   const bytes = await invoke<ArrayBuffer>("recording_waveform", { fileName, audio });
   return new Uint8Array(bytes);
+}
+
+/** Mirrors `TRANSCRIBE_PROGRESS_EVENT` in src-tauri/src/transcribe.rs. */
+export const TRANSCRIBE_PROGRESS_EVENT = "recording-transcribe-progress";
+
+/**
+ * How far transcribing one recording is: the model download in bytes, then
+ * its sound in milliseconds. Mirrors `TranscribeProgress` in src-tauri/src/transcribe.rs.
+ */
+export interface TranscribeProgress {
+  /** The recording being transcribed. */
+  source: string;
+  stage: "download" | "transcribe";
+  done: number;
+  total: number;
+}
+
+export type { TranscribeModel };
+
+/** Whether the speech model is downloaded, and its size in bytes. */
+export function transcribeModel(): Promise<TranscribeModel> {
+  return commands.recordingTranscribeModel();
+}
+
+/**
+ * Transcribes recordings-folder recording `source` on this computer and
+ * saves `<name>.transcript.json` beside it, downloading the model first
+ * when it is not here yet. No sound to hear gives no segments.
+ */
+export function recordingTranscribe(source: string): Promise<Transcript> {
+  return commands.recordingTranscribe(source);
+}
+
+/** The saved transcript of `source`, or null when it has none. */
+export function recordingTranscript(source: string): Promise<Transcript | null> {
+  return commands.recordingTranscript(source);
+}
+
+/** Stops transcribing, or the model download, in this window. */
+export async function cancelTranscribe(): Promise<void> {
+  await commands.recordingTranscribeCancel();
+}
+
+/** Calls `handler` as transcribing in this window moves on. */
+export function onTranscribeProgress(handler: (progress: TranscribeProgress) => void): Promise<UnlistenFn> {
+  return listen<TranscribeProgress>(TRANSCRIBE_PROGRESS_EVENT, (event) => handler(event.payload));
 }

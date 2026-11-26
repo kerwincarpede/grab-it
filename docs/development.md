@@ -353,7 +353,7 @@ The sidecar keeps a single clip of its own recording as `trim` (version 1). Sequ
 }
 ```
 
-With `clips`, `trim` is not written. A zoom keeps its recording's time and gains `source` (absent for the sidecar's own recording), so it moves with its clip; one outside its clip's kept stretch stays saved but is hidden. `validate_edits` reads versions 1 to 4. Legacy bare filenames still resolve from the recordings root. The Library gains nothing until Export.
+With `clips`, `trim` is not written. A zoom keeps its recording's time and gains `source` (absent for the sidecar's own recording), so it moves with its clip; one outside its clip's kept stretch stays saved but is hidden. `validate_edits` reads versions 1 to 5 (5 holds [captions](#captions)). Legacy bare filenames still resolve from the recordings root. The Library gains nothing until Export.
 
 The recording the editor opened sets the output size, the video box on the backdrop and the frame rate, whatever the order; other recordings are fitted inside that box, centred, with black bars (`fitInside`). `recording_source` gives the page another recording's path, frame rate, pointer path and whether it has sound, resolving its reference to a canonical MP4 in the same recordings root. A recording that is gone shows as missing and disables Export. The preview keeps one video element for each recording in the sequence. At a cut it seeks the next clip's player to its start and continues playback. Other players stay mounted and paused so repeated seeks can reuse the same media and, on Linux, the same blob URL.
 
@@ -377,6 +377,20 @@ In memory a gap is a `Clip` with `gap: true`, no `source`, and `endMs` its lengt
 ```
 
 The preview shows a gap as the backdrop with a black video box: every player is paused and hidden, and while playing, the playhead runs on a `requestAnimationFrame` clock (`performance.now`) until the next clip, whose player then seeks and plays. The export renders a gap's frames (`ExportEntry::frames`, counted in the total and progress) as the backdrop with a black video box, or all black without a backdrop, and its sound as `anullsrc` silence of its length.
+
+#### Captions
+
+**Captions** in the top bar opens a popover with **Transcribe**, its progress and **Cancel**, the model's size while it is not downloaded (`recording_transcribe_model`), and **Burn in captions** (on by default). The look, size and position are read from `captions.style` when present and otherwise default to Box, Medium and Bottom; `captions.ts` paints all three looks, sizes and positions.
+
+Transcription runs on the device in `src-tauri/src/transcribe.rs`, with Whisper base (multilingual, language detected) through rten, as `rten-examples/src/whisper.rs` decodes it: 16 kHz mono, log-mel with `N_FFT` 400 and hop 160, 30 s windows, and greedy decoding with timestamps. Each text token's word time is its likeliest timestamp token, clamped to its segment. The model (`onnx-community/whisper-base` at revision `27a07b4b52b3a4c5886134bb4320e93e1a4bbc7c`: `onnx/encoder_model.onnx`, `onnx/decoder_model_merged.onnx` and `tokenizer.json`, about 290 MB) is downloaded once into `whisper-models/` in the app data folder with `ffmpeg::download_agent` and `ffmpeg::download_hashed`, each file checked against its pinned SHA-256; the popover states the size before it starts. The sound is what `recording_suggest::pause_source` picks: the kept microphone, else the MP4's mixed or microphone track, read as 16 kHz mono `s16le` through `ffmpeg::command`. System sound alone or silence gives **No sound to transcribe**.
+
+The page calls `recording_transcribe(source)` for each recording of the sequence that has no transcript (sources resolve with `source_for`); it writes the sidecar, returns the transcript, and an empty `segments` shows **No sound to transcribe**. It and emits `recording-transcribe-progress`; `recording_transcribe_cancel` sets the window's flag, which the decoder checks between windows and the download between chunks, as the export does. `recording_transcript(source)` reads one back. All four are in `collect_commands` and the generated bindings. Each transcript is written beside its recording as `<name>.transcript.json` (see [saved-data.md](standards/saved-data.md)), the way `write_edits` writes the edits, and moves and is deleted with it.
+
+`src/recording/captions.ts` parses and serializes the edits sidecar's `captions` (`{burnIn, style?, cues: [{id, source?, startMs, endMs, text}]}`) and splits each segment at word times into cues of at most two 42-character lines and 6 s. Transcribing again replaces the cues after a confirmation; editing a cue never changes the transcript or the video. Cue times are in their recording, and `source` is as a zoom's. A sidecar with cues is version 5, which `validate_edits` checks, refusing bad or under-versioned captions.
+
+Cues sit on their own row under the zoom row (`src/recording/CaptionTrack.tsx`, built like `ZoomTrack.tsx`): drag to move, drag an edge to resize, double-click an empty stretch over a clip to add one (never over a gap), Delete to remove it, and the selected cue's text is edited in the top bar. Unlike a zoom, which belongs to one clip, a cue shows in every clip playing its time, so a duplicated clip shows its captions too; it is cut to the clip and placed with `toSequence`. The preview draws the cue under the playhead inside the video's box, painted as the export paints it.
+
+With **Burn in captions** on, the page paints each cue as a PNG at the export's size for every clip it plays in and sends it in the plan's `overlays` (`[{startMs, endMs, x, y, width, height, bytes}]`, times in the exported sequence, `serde(default)`). Rust checks each box lies inside the frame and draws the overlays, in order, over each composed frame after the mask. `overlays` is general: anything drawn over the finished frame at a time span can use it.
 
 ### Search and OCR
 
