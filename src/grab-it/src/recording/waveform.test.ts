@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AudioKind } from "./api";
 import { gapOf, type Clip } from "./clips";
-import { BAR_PX, laneKinds, laneSegments, layoutLane, peaksKey, type LaneSegment, type PeaksState } from "./waveform";
+import { BAR_PX, laneKinds, laneSegments, layoutLane, peaksKey, soundSegments, type LaneSegment, type PeaksState } from "./waveform";
 
 const clip = (id: string, source: string, startMs: number, endMs: number): Clip => ({ id, source, startMs, endMs });
 const AUDIO: Record<string, AudioKind[]> = { a: ["microphone", "system"], b: ["mixed"], silent: [] };
@@ -30,6 +30,29 @@ describe("laneSegments", () => {
       { clipId: "1", source: "a", audio: 0, atMs: 0, lengthMs: 10_000, fromMs: 0, keptStartMs: 2000, keptEndMs: 8000 },
     ]);
     expect(laneSegments([clip("1", "a", 0, 1000)], "mixed", audioOf, false, 1000)).toEqual([]);
+  });
+});
+
+describe("soundSegments", () => {
+  it("draws a shifted, unlinked sound clip at its own place, not its picture's", () => {
+    // The picture is 1-3 s of "a" at 0; its sound, unlinked, moved to 1.5 s.
+    const sound = [{ id: "s", source: "a", startMs: 1000, endMs: 3000, atMs: 1500 }];
+    expect(soundSegments(sound, "system", audioOf, 10_000)).toEqual([
+      { clipId: "s", source: "a", audio: 1, atMs: 1500, lengthMs: 2000, fromMs: 1000, keptStartMs: 1500, keptEndMs: 3500 },
+    ]);
+    // One recording trimmed to start at 2 s: sequence time 0 is 2 s on its timeline, and nothing runs past the end.
+    expect(soundSegments(sound, "microphone", audioOf, 4000, 2000)).toEqual([
+      { clipId: "s", source: "a", audio: 0, atMs: 3500, lengthMs: 500, fromMs: 1000, keptStartMs: 3500, keptEndMs: 4000 },
+    ]);
+    expect(soundSegments(sound, "mixed", audioOf, 10_000)).toEqual([]);
+    // A 12 s recording trimmed to 0-8 s: sound running past 8 s is dimmed there, as trimmed-away ends are.
+    const long = [{ id: "t", source: "a", startMs: 0, endMs: 9000, atMs: 1000 }];
+    expect(soundSegments(long, "microphone", audioOf, 12_000, 0, 8000)).toEqual([
+      { clipId: "t", source: "a", audio: 0, atMs: 1000, lengthMs: 9000, fromMs: 0, keptStartMs: 1000, keptEndMs: 8000 },
+    ]);
+    const { bars } = layoutLane(soundSegments(long, "microphone", audioOf, 12_000, 0, 8000), () => ({ status: "ready", peaks: new Uint8Array(1200).fill(255) }), { startMs: 0, endMs: 12_000, width: 12 });
+    // One bar every 2 s up to the sound's end at 10 s: the one past 8 s is dimmed.
+    expect(bars.map((bar) => [bar.x, bar.dim])).toEqual([[0, false], [2, false], [4, false], [6, false], [8, true]]);
   });
 });
 

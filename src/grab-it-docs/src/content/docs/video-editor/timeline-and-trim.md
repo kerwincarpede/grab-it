@@ -52,6 +52,8 @@ To cut a mistake out of the middle of a recording, split it on each side of the 
 
 A gap shows on the timeline as an empty block. It plays as the backdrop with a black video box and no sound, in the preview and in the export. Click a gap to select it, and press `Delete` or click **Delete** to close it. Gaps side by side become one gap.
 
+A recording's sound is linked to its picture on **Audio 1**, so it is split, copied and deleted with it. With tracks, **Split** with nothing selected cuts every track at the playhead; see [Tracks and sound](/grab-it/video-editor/tracks/).
+
 The last clip can't be deleted. Zooms stay on the moment of the recording they were made on, whatever you split, copy or delete. Each of these edits is saved at once, and you can [undo](/grab-it/video-editor/#undo-and-redo) it.
 
 ## Sound

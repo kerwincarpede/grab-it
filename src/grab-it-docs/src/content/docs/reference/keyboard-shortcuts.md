@@ -131,7 +131,9 @@ See [Mark it up](/grab-it/image-editor/mark-it-up/) for what each tool does.
 | `Delete` or `Backspace` on a zoom | Remove it |
 | `Esc` on a zoom | Deselect it |
 | `⌥ ←` and `⌥ →` (`Alt` on Windows and Linux) on a clip | Move it earlier or later in the sequence |
-| `S` | Split the clip under the playhead |
+| `S` | Split every track at the playhead, or, with a clip selected, the clip under the playhead and its linked clips |
+| `Shift`-click a clip | Add it to the selection, to **Link** |
+| Press `Shift` after starting to drag a sound clip | Turn snapping off |
 | `⌘ D` on a clip | Duplicate it |
 | `Delete` or `Backspace` on a clip | Delete it and close the space, unless it's the last |
 | `⇧ Delete` on a clip | Delete it and leave a gap, unless it's the last |

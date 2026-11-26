@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { recordingAudition, recordingPauses, type RecordingPauses } from "./api";
 import { isGap, sequenceDuration, type Clip } from "./clips";
 import { formatTime } from "./edits";
+import type { Track } from "./tracks";
 import {
   applyCuts,
+  applyTimelineCuts,
   cutSequenceMs,
   cutsLength,
   INITIAL_TUNING,
@@ -54,19 +56,34 @@ export interface SuggestEditsPanelProps {
    */
   previewing: boolean;
   /**
+   * The timeline's tracks (see tracks.ts), when it has them: cuts then cut
+   * linked sound too, and a cut over a clip not linked to its picture is
+   * skipped.
+   */
+  tracks?: Track[];
+  /**
    * Plays `next` in place of the sequence from `fromMs`, or ends the
    * preview with null. With `endMs` it plays at once and ends the preview
    * on its own once the playhead reaches `endMs` of `next`, leaving the
-   * playhead at `returnMs` of the saved sequence.
+   * playhead at `returnMs` of the saved sequence. `tracks` are the tracks
+   * as the cuts leave them, when the panel has tracks.
    */
-  onPreview: (next: Clip[] | null, fromMs?: number, endMs?: number, returnMs?: number) => void;
-  /** Keeps `next` as the sequence, as one undo entry. */
-  onApply: (next: Clip[]) => void;
+  onPreview: (next: Clip[] | null, fromMs?: number, endMs?: number, returnMs?: number, tracks?: Track[]) => void;
+  /** Keeps `next` as the sequence, and `tracks` when given, as one undo entry. */
+  onApply: (next: Clip[], tracks?: Track[]) => void;
   onClose: () => void;
   /** Hears which proposals the clip track should hatch; null once the panel closes. */
   onShowCuts?: (shown: ShownCuts | null) => void;
   /** A proposal clicked on the clip track, to bring into focus; a new object each click. */
   focusRequest?: { id: string } | null;
+}
+
+/**
+ * `cuts` applied to `clips`: with `tracks`, on every track (see
+ * `applyTimelineCuts`), counting those skipped over unlinked sound.
+ */
+function cutWith(clips: Clip[], tracks: Track[] | undefined, cuts: readonly CutProposal[]): { timeline: { main: Clip[]; tracks?: Track[] }; skipped: number; locked: number } {
+  return tracks ? applyTimelineCuts({ main: clips, tracks }, cuts) : { timeline: { main: applyCuts(clips, cuts) }, skipped: 0, locked: 0 };
 }
 
 /** The pauses of one recording, or why they could not be found. */
@@ -77,7 +94,7 @@ type Heard = { pauses: RecordingPauses } | { error: string };
  * one, previewed together and applied in one undo entry; and the sound
  * around a cut played as recorded and as the export cleans it.
  */
-export default function SuggestEditsPanel({ clips, own, joined, previewing, onPreview, onApply, onClose, onShowCuts, focusRequest = null }: SuggestEditsPanelProps) {
+export default function SuggestEditsPanel({ clips, own, joined, previewing, tracks, onPreview, onApply, onClose, onShowCuts, focusRequest = null }: SuggestEditsPanelProps) {
   const sources = useMemo(() => [...new Set(clips.filter((clip) => !isGap(clip)).map((clip) => clip.source))].sort(), [clips]);
   /** The pauses heard in each recording at each threshold listened at, by `heardKey`. */
   const [heard, setHeard] = useState<Record<string, Heard>>({});
@@ -93,6 +110,8 @@ export default function SuggestEditsPanel({ clips, own, joined, previewing, onPr
   const [focusId, setFocusId] = useState<string | null>(null);
   /** The cut whose own preview is playing, while `previewing`. */
   const [previewCutId, setPreviewCutId] = useState<string | null>(null);
+  /** Whether that cut's own preview plays it uncut, as Apply would skip it. */
+  const [previewSkipped, setPreviewSkipped] = useState<"locked" | "overlap" | null>(null);
   /** The audition playing, for the cut it was made for. */
   const [audition, setAudition] = useState<{ cutId: string; cleaned: boolean; url: string } | null>(null);
   /** The cut an audition is being prepared for. */
@@ -157,6 +176,8 @@ export default function SuggestEditsPanel({ clips, own, joined, previewing, onPr
     return found && "error" in found ? [`${source}: ${found.error}`] : [];
   });
   const selected = useMemo(() => proposals.filter((cut) => !dropped.has(cut.id) && isValidCut(clips, cut)), [proposals, dropped, clips]);
+  // The chosen cuts as applied; with tracks, the skipped ones are counted.
+  const applied = useMemo(() => cutWith(clips, tracks, selected), [clips, tracks, selected]);
   const focus = proposals.find((cut) => cut.id === focusId) ?? selected[0] ?? proposals[0] ?? null;
   const focusSound = focus ? heardNow(focus.source) : undefined;
   const focusPauses = focusSound && "pauses" in focusSound ? focusSound.pauses : null;
@@ -213,7 +234,8 @@ export default function SuggestEditsPanel({ clips, own, joined, previewing, onPr
     if (selected.length === 0) return;
     const first = Math.min(...selected.map((cut) => cutSequenceMs(clips, cut) ?? 0));
     setPreviewCutId(null);
-    onPreview(applyCuts(clips, selected), Math.max(0, first - PREVIEW_LEAD_MS));
+    setPreviewSkipped(null);
+    onPreview(applied.timeline.main, Math.max(0, first - PREVIEW_LEAD_MS), undefined, undefined, applied.timeline.tracks);
   };
 
   /** Plays `cut` alone, ticked or not: from a little before it to a little after, its pause skipped. */
@@ -226,7 +248,12 @@ export default function SuggestEditsPanel({ clips, own, joined, previewing, onPr
     setPreviewCutId(cut.id);
     // Where the preview stops, 2 s after the cut, is that much after the cut's end in the saved sequence.
     const returnMs = Math.min(at + (cut.endMs - cut.startMs) + CUT_PREVIEW_CONTEXT_MS, sequenceDuration(clips));
-    onPreview(applyCuts(clips, [cut]), Math.max(0, at - CUT_PREVIEW_CONTEXT_MS), at + CUT_PREVIEW_CONTEXT_MS, returnMs);
+    // With tracks it cuts the linked sound too, as Apply would, or is skipped.
+    const single = cutWith(clips, tracks, [cut]);
+    const skipped = single.locked ? "locked" : single.skipped ? "overlap" : null;
+    setPreviewSkipped(skipped);
+    // A skipped cut plays uncut, so it stops where the playhead returns, after the whole pause.
+    onPreview(single.timeline.main, Math.max(0, at - CUT_PREVIEW_CONTEXT_MS), skipped ? returnMs : at + CUT_PREVIEW_CONTEXT_MS, returnMs, single.timeline.tracks);
   };
 
   const stopPreview = () => onPreview(null);
@@ -246,7 +273,7 @@ export default function SuggestEditsPanel({ clips, own, joined, previewing, onPr
 
   const apply = () => {
     if (selected.length === 0) return;
-    onApply(applyCuts(clips, selected));
+    onApply(applied.timeline.main, applied.timeline.tracks);
     onClose();
   };
 
@@ -417,7 +444,25 @@ export default function SuggestEditsPanel({ clips, own, joined, previewing, onPr
           <button type="button" className="text-button" data-primary="true" onClick={apply} disabled={selected.length === 0}>
             Apply {selected.length} {selected.length === 1 ? "cut" : "cuts"} ({formatTime(cutsLength(selected))})
           </button>
-          {previewing && <span role="status">{previewCutId ? "Previewing one cut." : "Previewing: press Play to hear the chosen cuts."}</span>}
+          {applied.locked > 0 && (
+            <p className="suggest-hint">{applied.locked} {applied.locked === 1 ? "cut is" : "cuts are"} skipped to leave clips on locked tracks unchanged.</p>
+          )}
+          {applied.skipped > 0 && (
+            <span role="status">
+              {applied.skipped} {applied.skipped === 1 ? "cut is" : "cuts are"} skipped: {applied.skipped === 1 ? "it overlaps" : "they overlap"} a clip not linked to its picture.
+            </span>
+          )}
+          {previewing && (
+            <span role="status">
+              {previewCutId
+                ? previewSkipped === "locked"
+                  ? "Previewing one cut, which is skipped: it would change a clip on a locked track."
+                  : previewSkipped === "overlap"
+                    ? "Previewing one cut, which is skipped: it overlaps a clip not linked to its picture."
+                    : "Previewing one cut."
+                : "Previewing: press Play to hear the chosen cuts."}
+            </span>
+          )}
         </div>
       )}
       {focus && (

@@ -83,6 +83,36 @@ export function laneSegments(
   return segments;
 }
 
+/**
+ * The stretches lane `kind` draws when the sound is arranged on audio
+ * tracks apart from the pictures (see tracks.ts): each audio-track clip in
+ * `sound` whose recording has that kind, at its own `atMs` in sequence
+ * time. `offsetMs` is where sequence time 0 sits on the timeline (the
+ * trim's start for one recording); nothing is drawn past `durationMs`, and
+ * past `outputEndMs`, sequence time where the output ends (a trimmed
+ * recording's end), the bars are dimmed as trimmed-away ends are.
+ */
+export function soundSegments(
+  sound: readonly { id: string; source: string; startMs: number; endMs: number; atMs: number }[],
+  kind: AudioKind,
+  audioOf: (source: string) => readonly AudioKind[] | null,
+  durationMs: number,
+  offsetMs = 0,
+  outputEndMs = Infinity,
+): LaneSegment[] {
+  const keptUntil = offsetMs + outputEndMs;
+  const segments: LaneSegment[] = [];
+  for (const clip of [...sound].sort((a, b) => a.atMs - b.atMs)) {
+    const audio = (audioOf(clip.source) ?? []).indexOf(kind);
+    const atMs = offsetMs + clip.atMs;
+    const lengthMs = Math.min(clipLength(clip), durationMs - atMs);
+    if (audio < 0 || lengthMs <= 0) continue;
+    const keptEndMs = Math.max(atMs, Math.min(atMs + lengthMs, keptUntil));
+    segments.push({ clipId: clip.id, source: clip.source, audio, atMs, lengthMs, fromMs: clip.startMs, keptStartMs: atMs, keptEndMs });
+  }
+  return segments;
+}
+
 /** One bar of a lane: `x` px into the visible lane, `height` 0 to 1 of it. */
 export interface LaneBar {
   x: number;

@@ -18,7 +18,7 @@
  * length from a `startMs` of 0, so lengths and sequence times work for
  * both; the sidecar holds it as `{id, gapMs}`.
  */
-import { MIN_CLIP_MS, isWhole, trimOf, versionForEdits, type RecordingEdits } from "./edits";
+import { MIN_CLIP_MS, TRACKS_VERSION, isWhole, trimOf, versionForEdits, type RecordingEdits } from "./edits";
 import type { Zoom } from "./zooms";
 
 export interface Clip {
@@ -30,6 +30,8 @@ export interface Clip {
   endMs: number;
   /** Set on a gap: the backdrop with a black video box, and silence. */
   gap?: true;
+  /** Clips sharing a link are edited together (see tracks.ts); from `TRACKS_VERSION`. */
+  link?: string;
 }
 
 /** Whether `clip` is a gap rather than a stretch of a recording. */
@@ -79,13 +81,15 @@ export function parseClips(value: unknown, version: RecordingEdits["version"] = 
     if (typeof clip.source !== "string" || !isClipSource(clip.source, version)) continue;
     if (!isNum(clip.startMs) || !isNum(clip.endMs) || clip.startMs < 0 || clip.endMs <= clip.startMs) continue;
     ids.add(clip.id);
-    clips.push({ id: clip.id, source: clip.source, startMs: Math.round(clip.startMs), endMs: Math.round(clip.endMs) });
+    const kept: Clip = { id: clip.id, source: clip.source, startMs: Math.round(clip.startMs), endMs: Math.round(clip.endMs) };
+    if (version >= TRACKS_VERSION && typeof clip.link === "string" && clip.link) kept.link = clip.link;
+    clips.push(kept);
   }
   // A sequence of gaps alone has nothing to play.
   return sourceClips(clips).length > 0 ? mergeGaps(clips) : [];
 }
 
-/** A source path as supported by this edits version. */
+/** A source path as supported by this edits version (versions 4 and later take month folders). */
 export function isClipSource(source: string, version: RecordingEdits["version"]): boolean {
   if (version < 4) return source !== "" && source !== ".." && !/[\\/]/.test(source);
   return !source.includes("\0") && /^(?:\d{4}-(?:0[1-9]|1[0-2])\/)?[^/\\]+\.mp4$/i.test(source);
@@ -110,12 +114,13 @@ export function withClips(edits: RecordingEdits, clips: Clip[], own: string, own
   const rest = { ...edits };
   delete rest.clips;
   delete rest.trim;
+  delete rest.tracks;
   if (clips.length === 1 && clips[0].source === own && !isGap(clips[0])) {
     const { startMs, endMs } = clips[0];
     const trim = { startMs, endMs };
-    return { ...rest, version: versionForEdits(null, rest.zooms, rest.captions), ...(isWhole(trim, ownDurationMs) ? {} : { trim }) };
+    return { ...rest, version: versionForEdits(null, rest.zooms, { captions: rest.captions }), ...(isWhole(trim, ownDurationMs) ? {} : { trim }) };
   }
-  return { ...rest, version: versionForEdits(clips, rest.zooms, rest.captions), clips };
+  return { ...rest, version: versionForEdits(clips, rest.zooms, { captions: rest.captions }), clips };
 }
 
 /** How long a clip plays. */

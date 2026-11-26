@@ -763,3 +763,135 @@
   position: absolute;
   pointer-events: none;
 }
+
+/* Tracks other than Video 1: a named head over a lane of placed clips. */
+.track-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.track-row {
+  position: relative;
+}
+
+/* Stays in view while the rows scroll sideways (see .timeline-scroll). */
+.track-head {
+  position: sticky;
+  left: 12px;
+  /* Only as wide as its name and controls, so it can stick while the lane scrolls. */
+  width: fit-content;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--ed-muted);
+}
+
+.track-name-input {
+  font: inherit;
+  width: 10em;
+}
+
+.track-lock {
+  font: inherit;
+  padding: 0 6px;
+  border: 1px solid var(--ed-muted);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.track-remove {
+  font: inherit;
+  padding: 0 6px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.track-row[data-selected="true"] .track-name {
+  color: var(--ed-text);
+  font-weight: 600;
+}
+
+.track-row[data-kind="video"] .track-name {
+  cursor: pointer;
+}
+
+.track-rows:empty {
+  display: none;
+}
+
+.track-menu {
+  position: relative;
+}
+
+.track-menu > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.track-menu-items {
+  position: absolute;
+  z-index: 5;
+  top: 100%;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--ed-border);
+  border-radius: var(--ed-radius);
+  background: var(--ed-raised);
+  box-shadow: var(--ed-shadow);
+  white-space: nowrap;
+}
+
+.track-lock[aria-pressed="true"] {
+  color: var(--ed-text);
+  border-color: var(--ed-text);
+}
+
+.track-lane {
+  position: relative;
+  height: 22px;
+  /* Nothing past the timeline's end shows or widens the page. */
+  overflow: hidden;
+}
+
+.track-clip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  border: 1px solid var(--ed-muted);
+  background: rgba(95, 180, 130, 0.25);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: grab;
+  touch-action: none;
+}
+
+.track-clip[aria-selected="true"] {
+  box-shadow: 0 0 0 2px var(--ed-text);
+}
+
+/* A clip linked to others: edited together with them. */
+.track-clip[data-linked="true"],
+.clip[data-linked="true"] {
+  border-left: 3px solid var(--ed-accent);
+}
+
+.track-clip:focus-visible {
+  outline: 2px solid var(--ed-accent);
+  outline-offset: 2px;
+}

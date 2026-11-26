@@ -70,6 +70,17 @@ export type ExportEntry = ExportClip | ExportGap;
 export const isExportGap = (entry: ExportEntry): entry is ExportGap => "gapMs" in entry;
 
 /**
+ * One clip on an audio track: a stretch of a recording's sound placed at
+ * `atMs` on the timeline. Mirrors `ExportAudio` in src-tauri/src/recording_editor.rs.
+ */
+export interface ExportAudio {
+  source: string;
+  startMs: number;
+  endMs: number;
+  atMs: number;
+}
+
+/**
  * What an export makes. Mirrors `ExportPlan` in
  * src-tauri/src/recording_editor.rs; sizes are in output pixels.
  */
@@ -97,6 +108,12 @@ export interface ExportPlan {
    * as captions; their PNGs follow the mask in the body. Absent means none.
    */
   overlays?: ExportOverlay[];
+  /**
+   * Every audio clip, each delayed to its place and mixed together, cut to
+   * the sequence's length. Absent, each clip's own sound plays joined in
+   * order, as before tracks.
+   */
+  audio?: ExportAudio[];
 }
 
 /**

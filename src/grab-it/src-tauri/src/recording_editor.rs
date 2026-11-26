@@ -65,14 +65,18 @@ use crate::{
 /// src/recording/api.ts.
 pub const VIDEO_SCHEME: &str = "grab-it-video";
 /// The newest edits sidecar format version this build reads and writes:
-/// 2 adds clips, 3 adds gaps, 4 adds month-qualified source references, and
-/// [`CAPTIONS_VERSION`] adds caption cues.
-pub const EDITS_VERSION: u64 = CAPTIONS_VERSION;
+/// 2 adds clips, 3 adds gaps, 4 adds month-qualified source references,
+/// [`CAPTIONS_VERSION`] adds caption cues, and [`TRACKS_VERSION`] adds
+/// named video and audio `tracks`.
+pub const EDITS_VERSION: u64 = TRACKS_VERSION;
 /// The edits sidecar version that adds caption cues. Older builds refuse to
 /// open a recording whose sidecar is at this version, and never overwrite
 /// it, so nothing is lost. Mirrors `CAPTIONS_VERSION` in
 /// src/recording/edits.ts.
 pub const CAPTIONS_VERSION: u64 = 5;
+/// The edits sidecar version that adds `tracks`; every tracks gate reads
+/// it. Mirrors `TRACKS_VERSION` in src/recording/edits.ts.
+pub const TRACKS_VERSION: u64 = 6;
 /// Ends the name of the edits sidecar beside an MP4.
 pub const EDITS_SUFFIX: &str = ".edits.json";
 /// The request header carrying the export plan as URI-encoded JSON.
@@ -88,8 +92,6 @@ const DEFAULT_FPS: u32 = 30;
 const MAX_EXPORT_SIDE: u32 = 4096;
 /// The largest recording a zoomed export decodes frames at.
 const MAX_SOURCE_SIDE: u32 = 8192;
-/// The shortest clip an export may be.
-const MIN_EXPORT_MS: u64 = 100;
 /// How long adding the trimmed sound may take.
 const MUX_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -215,7 +217,12 @@ pub fn edits_path(video: &Path) -> PathBuf {
 /// endMs}`. Version 3 adds gaps of `{id, gapMs}`, and version 4 permits
 /// month-qualified clip and zoom sources. [`CAPTIONS_VERSION`] adds `captions`, a
 /// `{burnIn, cues, style?}` object whose cues are `{id, source?, startMs,
-/// endMs, text}`. The page skips unknown zooms.
+/// endMs, text}`. [`TRACKS_VERSION`] adds `tracks`, a list of `{id, name,
+/// kind: "video" | "audio", locked?, clips}`: Video 1's clips are the
+/// sequence, as `clips` holds it, and every other track's are clips with an
+/// `atMs`. Within a known version an entry that is not understood is
+/// skipped, not refused (docs/standards/saved-data.md): the page drops
+/// unknown zooms, tracks and clips, so here `tracks` need only be a list.
 pub fn validate_edits(value: &Value) -> Result<(), String> {
     let Some(version @ 1..=EDITS_VERSION) = value.get("version").and_then(Value::as_u64) else {
         return Err(format!(
@@ -240,6 +247,14 @@ pub fn validate_edits(value: &Value) -> Result<(), String> {
         Some(_) => return Err("the clips must be a list".to_owned()),
     }
     validate_captions(value.get("captions"), version)?;
+    match value.get("tracks") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(_)) if version >= TRACKS_VERSION => {}
+        Some(Value::Array(_)) => {
+            return Err(format!("tracks need edits version {TRACKS_VERSION}"));
+        }
+        Some(_) => return Err("the tracks must be a list".to_owned()),
+    }
     match value.get("trim") {
         None | Some(Value::Null) => Ok(()),
         Some(trim) => {
@@ -1044,8 +1059,11 @@ impl ExportClip {
         {
             return Err(format!("{} does not fit inside the video", self.source));
         }
-        if self.end_ms < self.start_ms.saturating_add(MIN_EXPORT_MS) {
-            return Err(format!("{} is trimmed too short to export", self.source));
+        if self.end_ms <= self.start_ms {
+            return Err(format!(
+                "{} has an empty or backwards time range",
+                self.source
+            ));
         }
         let fits = |side: u32| (1..=MAX_SOURCE_SIDE).contains(&side);
         if !fits(self.source_width) || !fits(self.source_height) {
@@ -1112,9 +1130,7 @@ impl ExportEntry {
     pub fn check(&self, video: (u32, u32)) -> Result<(), String> {
         match self {
             Self::Clip(clip) => clip.check(video),
-            Self::Gap(gap) if gap.gap_ms < MIN_EXPORT_MS => {
-                Err("a gap is too short to export".to_owned())
-            }
+            Self::Gap(gap) if gap.gap_ms == 0 => Err("a gap is too short to export".to_owned()),
             Self::Gap(_) => Ok(()),
         }
     }
@@ -1126,11 +1142,12 @@ impl ExportEntry {
             Self::Gap(gap) => gap.gap_ms,
         }
     }
+}
 
-    /// How many frames it gives at `fps`.
-    pub fn frames(&self, fps: u32) -> u64 {
-        (self.duration_ms() * u64::from(fps)).div_ceil(1000)
-    }
+// Round boundaries, not individual lengths, so many tiny slices do not
+// lengthen the picture or put it out of step with sound and captions.
+fn frames_until(ms: u64, fps: u32) -> u64 {
+    u64::try_from((u128::from(ms) * u128::from(fps)).div_ceil(1000)).unwrap_or(u64::MAX)
 }
 
 /// What an export makes, from the page. Mirrors `ExportPlan` in
@@ -1160,6 +1177,10 @@ pub struct ExportPlan {
     /// such as captions. Their PNGs follow the mask in the body, in order.
     #[serde(default)]
     pub overlays: Vec<ExportOverlay>,
+    /// Every stretch of sound on the timeline, mixed together; absent
+    /// for each clip's own sound joined in order, as before tracks.
+    #[serde(default)]
+    pub audio: Option<Vec<ExportAudio>>,
 }
 
 /// An image laid over every output frame from `start_ms` until `end_ms`,
@@ -1274,6 +1295,17 @@ fn frame_ms(index: u64, fps: u32) -> u64 {
     index * 1000 / u64::from(fps.max(1))
 }
 
+/// One clip on an audio track: a stretch of a recording's sound placed at
+/// `at_ms` on the timeline. Mirrors `ExportAudio` in src/recording/api.ts.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportAudio {
+    pub source: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub at_ms: u64,
+}
+
 impl ExportPlan {
     /// Refuses a plan that could not be encoded or would not fit.
     pub fn check(&self) -> Result<(), String> {
@@ -1299,12 +1331,33 @@ impl ExportPlan {
             .try_for_each(|overlay| overlay.check((self.width, self.height)))?;
         self.clips
             .iter()
-            .try_for_each(|entry| entry.check((self.video_width, self.video_height)))
+            .try_for_each(|entry| entry.check((self.video_width, self.video_height)))?;
+        self.clips
+            .iter()
+            .try_fold(0u64, |ms, entry| ms.checked_add(entry.duration_ms()))
+            .ok_or("the export duration is too long")?;
+        if self
+            .audio
+            .iter()
+            .flatten()
+            .any(|clip| clip.end_ms <= clip.start_ms)
+        {
+            return Err("an audio clip has an empty or backwards time range".to_owned());
+        }
+        Ok(())
+    }
+
+    /// Ignore saved placements that would contribute no sound to this export.
+    fn keep_audible_placements(&mut self) {
+        let end_ms = self.duration_ms();
+        if let Some(audio) = &mut self.audio {
+            audio.retain(|clip| clip.at_ms < end_ms);
+        }
     }
 
     /// How many frames the export holds at `fps`, over all its clips and gaps.
     pub fn frames(&self, fps: u32) -> u64 {
-        self.clips.iter().map(|entry| entry.frames(fps)).sum()
+        frames_until(self.duration_ms(), fps)
     }
 
     /// How long the export plays.
@@ -1326,26 +1379,46 @@ fn seconds(ms: u64) -> String {
     format!("{}.{:03}", ms / 1000, ms % 1000)
 }
 
+// An integer time base for both frame boundaries and millisecond edits.
+const TICKS_PER_FRAME: u128 = 1_000_000;
+
 /// ffmpeg's arguments to decode `clip`'s stretch of `input` as raw RGBA
 /// frames on stdout, scaled to [`ExportClip::decode_size`], at a constant
-/// `fps`. Seeking before `-i` is exact when decoding.
-pub fn decode_args(input: &Path, clip: &ExportClip, fps: u32) -> Vec<OsString> {
-    let mut args: Vec<OsString> = ["-hide_banner", "-loglevel", "error", "-ss"]
-        .into_iter()
-        .map(OsString::from)
-        .collect();
-    args.push(seconds(clip.start_ms).into());
+/// `fps`. Keep the seek's preroll so the filter can sample the frame
+/// already on screen at the cut, including a slow recording's last frame.
+fn decode_args(
+    input: &Path,
+    clip: &ExportClip,
+    fps: u32,
+    first_sample_tick: u128,
+    count: u64,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-xerror",
+        "-copyts",
+        "-start_at_zero",
+        "-ss",
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect();
+    let ticks_per_second = u128::from(fps) * TICKS_PER_FRAME;
+    args.push(seconds((first_sample_tick / (ticks_per_second / 1000)) as u64).into());
+    args.push("-noaccurate_seek".into());
     args.push("-i".into());
     args.push(input.as_os_str().to_owned());
     let mut push = |arg: &str| args.push(OsString::from(arg));
-    push("-t");
-    push(&seconds(clip.duration_ms()));
+    push("-frames:v");
+    push(&count.to_string());
     for arg in ["-map", "0:v:0", "-an", "-vf"] {
         push(arg);
     }
     let (width, height) = clip.decode_size();
     push(&format!(
-        "scale={width}:{height}:flags=bicubic,fps={fps},format=rgba"
+        "settb=1/{ticks_per_second},setpts=PTS-{first_sample_tick},fps={fps}:start_time=0:round=up,scale={width}:{height}:flags=bicubic,format=rgba"
     ));
     for arg in ["-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"] {
         push(arg);
@@ -1500,6 +1573,84 @@ pub fn push_clip_sound(
     }
 }
 
+/// One stretch of sound placed on the timeline: `sound` delayed `at_ms`.
+pub struct PlacedSound<'a> {
+    pub at_ms: u64,
+    pub sound: ClipSound<'a>,
+}
+
+/// ffmpeg's arguments to write `output` from the silent `video` with every
+/// `sounds` stretch, each brought to 48 kHz stereo as `push_clip_sound`
+/// does (noise removal included), delayed to its place with `adelay`,
+/// mixed over silence and cut to `duration_ms`, as AAC.
+pub fn mixed_sound_args(
+    video: &Path,
+    sounds: &[PlacedSound<'_>],
+    duration_ms: u64,
+    output: &Path,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = ["-hide_banner", "-loglevel", "error", "-y", "-i"]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+    args.push(video.as_os_str().to_owned());
+    // Silence as long as the export, so the mix always has its length.
+    let mut filters = vec![format!(
+        "anullsrc=r=48000:cl=stereo,atrim=duration={},\
+         aformat=sample_fmts=fltp:channel_layouts=stereo[bed]",
+        seconds(duration_ms)
+    )];
+    let mut inputs = 0;
+    for (index, placed) in sounds.iter().enumerate() {
+        let input = clip_sound_file(&placed.sound).map(|file| {
+            args.push("-i".into());
+            args.push(file.as_os_str().to_owned());
+            inputs += 1;
+            inputs
+        });
+        push_clip_sound(&mut filters, &placed.sound, input, index);
+        filters.push(format!(
+            "[a{index}]adelay=delays={}:all=1[d{index}]",
+            placed.at_ms
+        ));
+    }
+    let joined: String = std::iter::once("[bed]".to_owned())
+        .chain((0..sounds.len()).map(|index| format!("[d{index}]")))
+        .collect();
+    filters.push(format!(
+        "{joined}{},atrim=duration={}[sound]",
+        ffmpeg::mix(sounds.len() + 1),
+        seconds(duration_ms)
+    ));
+    args.push("-filter_complex".into());
+    args.push(filters.join(";").into());
+    push_mux_tail(&mut args, output);
+    args
+}
+
+/// The arguments that map the picture and sound into `output`. Each ends
+/// at the planned time (rounded to a whole frame for picture), so
+/// `-shortest` would risk dropping a frame that starts before the cut.
+fn push_mux_tail(args: &mut Vec<OsString>, output: &Path) {
+    for arg in [
+        "-map",
+        "0:v:0",
+        "-map",
+        "[sound]",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        ffmpeg::AUDIO_BITRATE,
+        "-movflags",
+        "+faststart",
+    ] {
+        args.push(arg.into());
+    }
+    args.push(output.as_os_str().to_owned());
+}
+
 /// ffmpeg's arguments to write `output` from the silent `video` with each
 /// clip's stretch of its recording's sound, resampled to 48 kHz stereo
 /// and joined in order, as AAC. Each clip's sound is exactly its length:
@@ -1531,24 +1682,7 @@ pub fn clip_sound_args(video: &Path, clips: &[ClipSound<'_>], output: &Path) -> 
     filters.push(format!("{joined}concat=n={}:v=0:a=1[sound]", clips.len()));
     args.push("-filter_complex".into());
     args.push(filters.join(";").into());
-    for arg in [
-        "-map",
-        "0:v:0",
-        "-map",
-        "[sound]",
-        "-c:v",
-        "copy",
-        "-c:a",
-        "aac",
-        "-b:a",
-        ffmpeg::AUDIO_BITRATE,
-        "-shortest",
-        "-movflags",
-        "+faststart",
-    ] {
-        args.push(arg.into());
-    }
-    args.push(output.as_os_str().to_owned());
+    push_mux_tail(&mut args, output);
     args
 }
 
@@ -1729,6 +1863,8 @@ struct ExportJob<'a> {
     plan: ExportPlan,
     /// Each clip's recording, in the plan's order; `None` for a gap.
     sources: Vec<Option<ClipSource>>,
+    /// The recording of each of the plan's `audio`, in its order.
+    audio_sources: Vec<ClipSource>,
     /// The backdrop and mask, or none for the video alone.
     layers: Option<(RgbaImage, RgbaImage)>,
     /// What is laid over the finished frames, and when.
@@ -1742,17 +1878,18 @@ struct ExportJob<'a> {
 }
 
 /// Decodes `clip` of `input` at `fps` and calls `frame` with each frame,
-/// `clip.decode_size()` RGBA, until ffmpeg runs out. Returns how many
-/// frames there were.
+/// `clip.decode_size()` RGBA, until ffmpeg runs out. Returns the frame count.
 fn decode_clip(
     ffmpeg_path: &Path,
     input: &Path,
     clip: &ExportClip,
     fps: u32,
+    first_sample_tick: u128,
+    count: u64,
     mut frame: impl FnMut(&[u8], u64) -> Result<(), String>,
 ) -> Result<u64, String> {
     let mut decoder = ffmpeg::command(ffmpeg_path)
-        .args(decode_args(input, clip, fps))
+        .args(decode_args(input, clip, fps, first_sample_tick, count))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1796,6 +1933,64 @@ fn decode_clip(
     }
 }
 
+/// An export's sound: the audio tracks mixed, or each clip's own sound
+/// joined in order (a plan without `audio`).
+enum ExportSound<'a> {
+    Mixed(Vec<PlacedSound<'a>>),
+    Joined(Vec<ClipSound<'a>>),
+}
+
+impl ExportSound<'_> {
+    /// ffmpeg's arguments to add this sound to the silent `video`.
+    fn args(&self, video: &Path, duration_ms: u64, output: &Path) -> Vec<OsString> {
+        match self {
+            Self::Mixed(sounds) => mixed_sound_args(video, sounds, duration_ms, output),
+            Self::Joined(sounds) => clip_sound_args(video, sounds, output),
+        }
+    }
+}
+
+/// Where `plan`'s sound comes from: each of its `audio` from the matching
+/// `audio_sources` recording, or each clip's from `sources`, picked by
+/// `sound_from` so noise removal applies either way.
+fn export_sound<'a>(
+    plan: &ExportPlan,
+    sources: &'a [Option<ClipSource>],
+    audio_sources: &'a [ClipSource],
+    noise_model: Option<&'a Path>,
+) -> Result<ExportSound<'a>, String> {
+    let Some(audio) = &plan.audio else {
+        return plan
+            .clips
+            .iter()
+            .zip(sources)
+            .map(|(entry, source)| {
+                sound_from(source.as_ref(), plan.remove_noise, noise_model)
+                    .map(|from| ClipSound::of(entry, from))
+            })
+            .collect::<Result<Vec<_>, String>>()
+            .map(ExportSound::Joined);
+    };
+    if audio_sources.len() != audio.len() {
+        return Err("every sound needs its recording".to_owned());
+    }
+    audio
+        .iter()
+        .zip(audio_sources)
+        .map(|(clip, source)| {
+            sound_from(Some(source), plan.remove_noise, noise_model).map(|from| PlacedSound {
+                at_ms: clip.at_ms,
+                sound: ClipSound {
+                    start_ms: clip.start_ms,
+                    end_ms: clip.end_ms,
+                    from,
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()
+        .map(ExportSound::Mixed)
+}
+
 /// Renders `job` with `ready`'s ffmpeg, calling `progress` as frames are
 /// written. Each clip is decoded in turn into one encoder, at the opened
 /// recording's frame rate. The silent video is written beside the output
@@ -1812,6 +2007,7 @@ fn render(
         output,
         plan,
         sources,
+        audio_sources,
         layers,
         mut overlays,
         fps,
@@ -1824,15 +2020,7 @@ fn render(
     }
     // Where each clip's sound comes from, settled before minutes of
     // encoding.
-    let sounds = plan
-        .clips
-        .iter()
-        .zip(&sources)
-        .map(|(entry, source)| {
-            sound_from(source.as_ref(), plan.remove_noise, noise_model.as_deref())
-                .map(|from| ClipSound::of(entry, from))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+    let sound = export_sound(plan, &sources, &audio_sources, noise_model.as_deref())?;
     let composer = layers
         .map(|(backdrop, mask)| Composer::new(backdrop, &mask, plan))
         .transpose()?;
@@ -1873,12 +2061,20 @@ fn render(
                 });
             }
         };
+        let mut end_ms = 0;
         for (entry, source) in plan.clips.iter().zip(&sources) {
+            check_cancelled(cancelled)?;
+            end_ms += entry.duration_ms();
+            let count = frames_until(end_ms, fps) - done;
+            if count == 0 {
+                // No output frame falls within this sub-frame stretch.
+                continue;
+            }
             let (clip, source) = match (entry, source) {
                 (ExportEntry::Clip(clip), Some(source)) => (clip, source),
                 (ExportEntry::Gap(_), _) => {
                     let frame = gap_frame()?;
-                    for _ in 0..entry.frames(fps) {
+                    for _ in 0..count {
                         check_cancelled(cancelled)?;
                         let ms = frame_ms(done, fps);
                         if overlays.iter().any(|overlay| overlay.shows_at(ms)) {
@@ -1908,12 +2104,18 @@ fn render(
             } else {
                 black(plan.video_width, plan.video_height)
             };
-            let frames = decode_clip(&ready.path, &source.path, clip, fps, |buffer, index| {
+            let first_frame = done;
+            let start_ms = end_ms - entry.duration_ms();
+            let ticks_per_ms = u128::from(fps) * TICKS_PER_FRAME / 1000;
+            let first_sample = u128::from(clip.start_ms) * ticks_per_ms
+                + (u128::from(first_frame) * TICKS_PER_FRAME - u128::from(start_ms) * ticks_per_ms);
+            let mut render = |buffer: &[u8], index: u64| {
                 check_cancelled(cancelled)?;
                 let mut shown: &[u8] = if clip.zooms.is_empty() {
                     buffer
                 } else {
-                    let ms = clip.start_ms as f64 + index as f64 * 1000.0 / f64::from(fps);
+                    let ms = (first_sample + u128::from(index) * TICKS_PER_FRAME) as f64
+                        / ticks_per_ms as f64;
                     let view: View = zoom::view_at(&clip.zooms, ms, source.cursor.as_ref());
                     zoom::draw_view(buffer, decoded_size, view, &mut zoomed, clip_size);
                     &zoomed
@@ -1932,13 +2134,43 @@ fn render(
                 done += 1;
                 report(done);
                 Ok(())
-            })?;
-            if frames == 0 {
+            };
+            let mut frames = decode_clip(
+                &ready.path,
+                &source.path,
+                clip,
+                fps,
+                first_sample,
+                count,
+                &mut render,
+            )?;
+            // Media duration is saved to the nearest millisecond. Retry only
+            // the final scheduled sample, within that rounding tolerance of
+            // the saved end. Sample one tick inside picture when EOF is
+            // exactly at the inclusive lower bound of the rounding interval.
+            let last_sample = first_sample + u128::from(count - 1) * TICKS_PER_FRAME;
+            let earliest_rounded_end = u128::from(clip.end_ms) * ticks_per_ms - ticks_per_ms / 2;
+            if frames == count - 1 && last_sample >= earliest_rounded_end {
+                check_cancelled(cancelled)?;
+                frames += decode_clip(
+                    &ready.path,
+                    &source.path,
+                    clip,
+                    fps,
+                    earliest_rounded_end - 1,
+                    1,
+                    |buffer, _| render(buffer, count - 1),
+                )?;
+            }
+            // A short read means there is less picture than the export requires,
+            // even when an audio stream continues past the video.
+            if frames < count {
                 return Err(format!(
-                    "the trimmed stretch of {} holds no frames",
+                    "the trimmed stretch of {} holds too few frames",
                     clip.source
                 ));
             }
+            debug_assert_eq!(done, first_frame + count);
         }
         check_cancelled(cancelled)?;
         let finished = video.finish_cancellable(|| cancelled.load(Ordering::Relaxed));
@@ -1947,7 +2179,7 @@ fn render(
         check_cancelled(cancelled)?;
         let mux = ffmpeg::run_cancellable(
             &ready.path,
-            clip_sound_args(&silent, &sounds, output),
+            sound.args(&silent, plan.duration_ms(), output),
             MUX_TIMEOUT,
             || cancelled.load(Ordering::Relaxed),
         );
@@ -2030,20 +2262,48 @@ fn clip_sources(
             let Some(clip) = entry.clip() else {
                 return Ok(None);
             };
-            let path = source_file(recordings, &clip.source)?;
-            let probe = ffmpeg::probe_file_cancellable(ffmpeg_path, &path, || {
-                cancelled.load(Ordering::Relaxed)
-            });
-            check_cancelled(cancelled)?;
-            Ok(Some(ClipSource {
-                cursor: CursorPath::load(&path),
-                has_audio: probe.audio,
-                remove_noise: sidecar_remove_noise(&path),
-                kept: kept_sound(&path),
-                path,
-            }))
+            probe_source(ffmpeg_path, recordings, &clip.source, cancelled).map(Some)
         })
         .collect()
+}
+
+/// The recording of each of `plan`'s `audio`, probed as `clip_sources`
+/// probes clips; none when the plan has no `audio`.
+fn sound_sources(
+    ffmpeg_path: &Path,
+    recordings: &Path,
+    plan: &ExportPlan,
+    cancelled: &AtomicBool,
+) -> Result<Vec<ClipSource>, String> {
+    plan.audio
+        .iter()
+        .flatten()
+        .map(|clip| {
+            check_cancelled(cancelled)?;
+            probe_source(ffmpeg_path, recordings, &clip.source, cancelled)
+        })
+        .collect()
+}
+
+/// Recordings-folder recording `source`, probed for sound; stops when
+/// `cancelled`.
+fn probe_source(
+    ffmpeg_path: &Path,
+    recordings: &Path,
+    source: &str,
+    cancelled: &AtomicBool,
+) -> Result<ClipSource, String> {
+    let path = source_file(recordings, source)?;
+    let probe =
+        ffmpeg::probe_file_cancellable(ffmpeg_path, &path, || cancelled.load(Ordering::Relaxed));
+    check_cancelled(cancelled)?;
+    Ok(ClipSource {
+        cursor: CursorPath::load(&path),
+        has_audio: probe.audio,
+        remove_noise: sidecar_remove_noise(&path),
+        kept: kept_sound(&path),
+        path,
+    })
 }
 
 /// Renders `plan`'s sequence beside `original`, the recording the editor
@@ -2052,11 +2312,12 @@ fn export(
     app: &AppHandle,
     ready: &ffmpeg::Ready,
     recording: &RecordingFile,
-    plan: ExportPlan,
+    mut plan: ExportPlan,
     body: &[u8],
     label: &str,
     cancelled: &AtomicBool,
 ) -> Result<PathBuf, String> {
+    plan.keep_audible_placements();
     let original = &recording.path;
     let fps = export_fps(&ready.path, original);
     let report = |progress: ExportProgress| {
@@ -2077,6 +2338,7 @@ fn export(
         .unwrap_or_else(|| crate::settings::RecordingQuality::High.bits_per_pixel());
     // Every clip comes from the recordings folder the editor opened from.
     let sources = clip_sources(&ready.path, &recording.recordings_folder, &plan, cancelled)?;
+    let audio_sources = sound_sources(&ready.path, &recording.recordings_folder, &plan, cancelled)?;
     // Missing, an export that removes noise from a clip is refused.
     let noise_model = if plan.remove_noise {
         crate::noise::bundled_model(app)
@@ -2089,6 +2351,7 @@ fn export(
         output: &output,
         plan,
         sources,
+        audio_sources,
         layers,
         overlays,
         fps,
@@ -2519,7 +2782,7 @@ mod tests {
              aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,\
              apad,atrim=duration=8.250[a0];\
              [a0]concat=n=1:v=0:a=1[sound] \
-             -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k -shortest \
+             -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k \
              -movflags +faststart /rec/clip (edited).mp4"
         );
     }
@@ -2553,6 +2816,126 @@ mod tests {
         );
         assert!(!args.contains("arnndn"));
         assert!(!args.contains("amix"));
+    }
+
+    #[test]
+    fn mixed_sound_delays_each_clip_and_keeps_noise_removal() {
+        let kept = KeptSound {
+            file: PathBuf::from("/rec/clip.sound.m4a"),
+            system: true,
+        };
+        let model = Path::new("/opt/grab-it/noise-models/bd.rnnn");
+        let original = Path::new("/rec/other.mp4");
+        let sounds = [
+            PlacedSound {
+                at_ms: 500,
+                sound: ClipSound {
+                    start_ms: 0,
+                    end_ms: 2000,
+                    from: SoundFrom::Kept {
+                        kept: &kept,
+                        noise_model: Some(model),
+                    },
+                },
+            },
+            PlacedSound {
+                at_ms: 1000,
+                sound: ClipSound {
+                    start_ms: 1000,
+                    end_ms: 3000,
+                    from: SoundFrom::Video(original),
+                },
+            },
+        ];
+        let args = strings(mixed_sound_args(
+            Path::new("/rec/clip (edited).exporting.mp4"),
+            &sounds,
+            4000,
+            Path::new("/rec/clip (edited).mp4"),
+        ));
+        assert!(
+            args.contains("-i /rec/clip.sound.m4a -i /rec/other.mp4 "),
+            "{args}"
+        );
+        assert!(
+            args.contains("anullsrc=r=48000:cl=stereo,atrim=duration=4.000,"),
+            "{args}"
+        );
+        assert!(args.contains("arnndn=m="), "{args}");
+        assert!(args.contains("[a0]adelay=delays=500:all=1[d0]"), "{args}");
+        assert!(args.contains("[a1]adelay=delays=1000:all=1[d1]"), "{args}");
+        assert!(
+            args.contains(&format!(
+                "[bed][d0][d1]{},atrim=duration=4.000[sound]",
+                ffmpeg::mix(3)
+            )),
+            "{args}"
+        );
+        assert!(!args.contains("concat"), "{args}");
+    }
+
+    #[test]
+    fn export_plans_may_carry_audio() {
+        let plan: ExportPlan = serde_json::from_value(serde_json::json!({
+            "clips": [], "width": 2, "height": 2, "x": 0, "y": 0,
+            "videoWidth": 2, "videoHeight": 2, "backdropBytes": 0,
+            "audio": [{ "source": "a.mp4", "startMs": 0, "endMs": 1000, "atMs": 500 }],
+        }))
+        .unwrap();
+        assert_eq!(
+            plan.audio,
+            Some(vec![ExportAudio {
+                source: "a.mp4".to_owned(),
+                start_ms: 0,
+                end_ms: 1000,
+                at_ms: 500,
+            }])
+        );
+    }
+
+    #[test]
+    fn mixed_audio_requires_a_positive_source_interval() {
+        for end_ms in [500, 400] {
+            let mut plan = plan();
+            plan.audio = Some(vec![ExportAudio {
+                source: "a.mp4".to_owned(),
+                start_ms: 500,
+                end_ms,
+                at_ms: 0,
+            }]);
+            assert_eq!(
+                plan.check(),
+                Err("an audio clip has an empty or backwards time range".to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_audio_at_or_past_the_output_end_does_not_need_a_source_probe() {
+        let mut plan = plan();
+        let end_ms = plan.duration_ms();
+        let at_end = ExportAudio {
+            source: "gone.mp4".to_owned(),
+            start_ms: 0,
+            end_ms: 1000,
+            at_ms: end_ms,
+        };
+        plan.audio = Some(vec![
+            at_end.clone(),
+            ExportAudio {
+                at_ms: end_ms + 1,
+                ..at_end
+            },
+        ]);
+        assert_eq!(plan.check(), Ok(()));
+        plan.keep_audible_placements();
+        let cancelled = AtomicBool::new(true);
+        assert!(
+            sound_sources(Path::new("unused"), Path::new("unused"), &plan, &cancelled)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(plan.audio, Some(Vec::new()));
     }
 
     fn strings(args: Vec<OsString>) -> String {
@@ -2590,7 +2973,270 @@ mod tests {
             backdrop_bytes: 10,
             remove_noise: false,
             overlays: Vec::new(),
+            audio: None,
         }
+    }
+
+    fn ffmpeg_boundary_export(
+        input_fps: u32,
+        output_fps: u32,
+        len: u32,
+        start_ms: u64,
+        end_ms: u64,
+        audio_tail: bool,
+        last_packet_ticks: Option<u32>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = ffmpeg::Ready {
+            path: std::env::var_os(ffmpeg::FFMPEG_ENV)
+                .map_or_else(|| "ffmpeg".into(), PathBuf::from),
+            encoder: ffmpeg::X264,
+        };
+        let input = dir.path().join("clip.mp4");
+        let output = dir.path().join("edited.mp4");
+        // Paint only the last input frame green, so the EOF test verifies
+        // that the export recovers that frame rather than any earlier one.
+        let timescale = (input_fps * 200).to_string();
+        ffmpeg::run(
+            &ready.path,
+            vec![
+                "-f".into(),
+                "lavfi".into(),
+                "-i".into(),
+                format!("color=red:s=32x32:r={input_fps}").into(),
+                "-frames:v".into(),
+                len.to_string().into(),
+                "-vf".into(),
+                format!("drawbox=c=lime:t=fill:enable=eq(n\\,{})", len - 1).into(),
+                "-c:v".into(),
+                "libx264".into(),
+                "-bf".into(),
+                "0".into(),
+                "-video_track_timescale".into(),
+                timescale.clone().into(),
+                input.as_os_str().to_owned(),
+            ],
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        if audio_tail {
+            let mixed = dir.path().join("longer-audio.mp4");
+            ffmpeg::run(
+                &ready.path,
+                vec![
+                    "-i".into(),
+                    input.as_os_str().to_owned(),
+                    "-f".into(),
+                    "lavfi".into(),
+                    "-i".into(),
+                    "sine=d=8".into(),
+                    "-c:v".into(),
+                    "copy".into(),
+                    mixed.as_os_str().to_owned(),
+                ],
+                Duration::from_secs(10),
+            )
+            .unwrap();
+            fs::rename(mixed, &input).unwrap();
+        }
+        if let Some(ticks) = last_packet_ticks {
+            let shortened = dir.path().join("shortened.mp4");
+            ffmpeg::run(
+                &ready.path,
+                vec![
+                    "-i".into(),
+                    input.as_os_str().to_owned(),
+                    "-c".into(),
+                    "copy".into(),
+                    "-bsf:v".into(),
+                    format!(
+                        "setts=duration=if(eq(N\\,{})\\,{ticks}\\,DURATION)",
+                        len - 1
+                    )
+                    .into(),
+                    "-video_track_timescale".into(),
+                    timescale.into(),
+                    shortened.as_os_str().to_owned(),
+                ],
+                Duration::from_secs(10),
+            )
+            .unwrap();
+            fs::rename(shortened, &input).unwrap();
+        }
+        let cut = ExportClip {
+            start_ms,
+            end_ms,
+            width: 32,
+            height: 32,
+            source_width: 32,
+            source_height: 32,
+            ..clip()
+        };
+        let cancelled = AtomicBool::new(false);
+        let job = |cut: ExportClip, gap_ms| {
+            let mut clips = Vec::new();
+            if gap_ms > 0 {
+                clips.push(ExportEntry::Gap(ExportGap { gap_ms }));
+            }
+            clips.push(cut.into());
+            let plan = ExportPlan {
+                clips,
+                width: 32,
+                height: 32,
+                video_width: 32,
+                video_height: 32,
+                x: 0,
+                y: 0,
+                backdrop_bytes: 0,
+                ..plan()
+            };
+            let sources = clip_sources(&ready.path, dir.path(), &plan, &cancelled).unwrap();
+            ExportJob {
+                output: &output,
+                plan,
+                sources,
+                audio_sources: vec![],
+                layers: None,
+                overlays: vec![],
+                fps: output_fps,
+                bits_per_pixel: 0.1,
+                noise_model: None,
+            }
+        };
+        let expected = frames_until(end_ms - start_ms, output_fps);
+        let mut done = 0;
+        render(&ready, job(cut.clone(), 0), &cancelled, |progress| {
+            assert_eq!(progress.total, expected);
+            done = progress.done;
+        })
+        .unwrap();
+        assert_eq!(done, expected);
+        let exported = ExportClip {
+            start_ms: 0,
+            end_ms: 1000,
+            ..cut.clone()
+        };
+        let mut last = [0; 4];
+        let count = decode_clip(
+            &ready.path,
+            &output,
+            &exported,
+            output_fps,
+            0,
+            expected + 1,
+            |frame, _| {
+                last.copy_from_slice(&frame[..4]);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(count, expected);
+        assert!(last[1] > 200 && last[0] < 40, "last pixel: {last:?}");
+        fs::remove_file(&output).unwrap();
+
+        // The same seek cannot be padded if its requested end is well past EOF.
+        let outside = ExportClip {
+            end_ms: end_ms + 50,
+            ..cut.clone()
+        };
+        let result = render(&ready, job(outside, 0), &cancelled, |_| {});
+        assert_eq!(
+            result,
+            Err("the trimmed stretch of clip.mp4 holds too few frames".into())
+        );
+        assert!(!output.exists());
+
+        if audio_tail {
+            // The only frame after a 1 ms gap falls at source time
+            // 2002.333 ms, after the 2 s picture ends.
+            let off_grid = ExportClip {
+                start_ms: 1970,
+                end_ms: 2020,
+                ..cut
+            };
+            let result = render(&ready, job(off_grid, 1), &cancelled, |_| {});
+            assert_eq!(
+                result,
+                Err("the trimmed stretch of clip.mp4 holds too few frames".into())
+            );
+            assert!(!output.exists());
+        }
+    }
+
+    #[test]
+    #[ignore = "needs ffmpeg with libx264 installed"]
+    fn ffmpeg_boundary_recovers_the_last_frame_past_the_rounded_probe_duration() {
+        ffmpeg_boundary_export(30, 30, 31, 1020, 1033, false, None);
+    }
+
+    #[test]
+    #[ignore = "needs ffmpeg with libx264 installed"]
+    fn ffmpeg_boundary_fills_a_multi_frame_deficit_at_a_low_fps_cut() {
+        ffmpeg_boundary_export(10, 30, 20, 1701, 2000, false, None);
+    }
+
+    #[test]
+    #[ignore = "needs ffmpeg with libx264 installed"]
+    fn ffmpeg_boundary_recovers_a_slow_tail_and_stops_at_video_eof() {
+        ffmpeg_boundary_export(5, 30, 10, 1850, 2000, true, None);
+    }
+
+    #[test]
+    #[ignore = "needs ffmpeg with libx264 installed"]
+    fn ffmpeg_boundary_exports_all_frames_of_a_non_integral_cut() {
+        ffmpeg_boundary_export(30, 30, 32, 520, 1067, false, None);
+        ffmpeg_boundary_export(60, 60, 64, 520, 1067, false, None);
+    }
+
+    #[test]
+    #[ignore = "needs ffmpeg with libx264 installed"]
+    fn ffmpeg_boundary_recovers_only_the_last_sample_at_the_rounded_end() {
+        ffmpeg_boundary_export(30, 30, 32, 0, 1067, false, None);
+        // Thirty-one 200-tick packets and one 199-tick packet end at 1066.5 ms.
+        ffmpeg_boundary_export(30, 30, 32, 0, 1067, false, Some(199));
+    }
+
+    #[test]
+    #[ignore = "needs ffmpeg with libx264 installed"]
+    fn ffmpeg_boundary_rejects_a_damaged_video_stream() {
+        let ffmpeg =
+            std::env::var_os(ffmpeg::FFMPEG_ENV).map_or_else(|| "ffmpeg".into(), PathBuf::from);
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("clip.mp4");
+        ffmpeg::run(
+            &ffmpeg,
+            vec![
+                "-f".into(),
+                "lavfi".into(),
+                "-i".into(),
+                "testsrc2=s=32x32:r=30:d=2".into(),
+                "-c:v".into(),
+                "libx264".into(),
+                input.as_os_str().to_owned(),
+            ],
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        // Damage packets in the middle of the media data, leaving the MP4 index intact.
+        let mut bytes = fs::read(&input).unwrap();
+        let tag = bytes.windows(4).position(|chunk| chunk == b"mdat").unwrap();
+        let size = u32::from_be_bytes(bytes[tag - 4..tag].try_into().unwrap()) as usize;
+        bytes[tag + size / 3..tag + size * 2 / 3].fill(0);
+        fs::write(&input, bytes).unwrap();
+        let cut = ExportClip {
+            start_ms: 0,
+            end_ms: 2000,
+            width: 32,
+            height: 32,
+            source_width: 32,
+            source_height: 32,
+            ..clip()
+        };
+        let error = decode_clip(&ffmpeg, &input, &cut, 30, 0, 60, |_, _| Ok(())).unwrap_err();
+        assert!(
+            error.starts_with("ffmpeg could not read clip.mp4:"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -2634,6 +3280,7 @@ mod tests {
             layers: None,
             overlays: Vec::new(),
             sources: vec![],
+            audio_sources: vec![],
             fps: 30,
             bits_per_pixel: 0.1,
             noise_model: None,
@@ -2721,8 +3368,10 @@ esac
                 backdrop_bytes: 0,
                 remove_noise: false,
                 overlays: Vec::new(),
+                audio: None,
             },
             sources: vec![source],
+            audio_sources: vec![],
             layers: None,
             overlays: Vec::new(),
             fps: 4,
@@ -2782,6 +3431,37 @@ esac
             assert_eq!(result.err().as_deref(), Some("Export cancelled"));
         });
         assert!(start.elapsed() < Duration::from_secs(10));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_during_audio_probe_stops_preflight() {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = render_fixture(dir.path());
+        fs::write(dir.path().join("clip.mp4"), []).unwrap();
+        let probing = dir.path().join("clip.mp4.probing");
+        let cancelled = AtomicBool::new(false);
+        let plan = ExportPlan {
+            audio: Some(vec![ExportAudio {
+                source: "clip.mp4".to_owned(),
+                start_ms: 0,
+                end_ms: 1000,
+                at_ms: 0,
+            }]),
+            ..plan()
+        };
+        let start = std::time::Instant::now();
+        thread::scope(|scope| {
+            scope.spawn(|| cancel_when_created(&probing, &cancelled));
+            let result = sound_sources(&ready.path, dir.path(), &plan, &cancelled);
+            assert_eq!(result.err().as_deref(), Some("Export cancelled"));
+        });
+        assert!(start.elapsed() < Duration::from_secs(10));
+        // Without audio there is nothing to probe.
+        assert!(
+            sound_sources(&ready.path, dir.path(), &self::plan(), &cancelled)
+                .is_ok_and(|sources| sources.is_empty())
+        );
     }
 
     #[cfg(unix)]
@@ -2913,6 +3593,118 @@ esac
         fs::write(dir.path().join("clip.edits.json"), "{").unwrap();
         assert!(read_edits(&video).is_err());
         assert!(write_edits(&video, &json!({ "version": 9 })).is_err());
+    }
+
+    #[test]
+    fn edits_hold_tracks_from_tracks_version() {
+        let clip =
+            json!({ "id": "c1", "source": "a.mp4", "startMs": 0, "endMs": 4000, "link": "l" });
+        let sound =
+            json!({ "id": "s1", "source": "a.mp4", "startMs": 0, "endMs": 4000, "atMs": 500 });
+        let tracks = |main: Value, audio: Value| {
+            json!({ "version": TRACKS_VERSION, "tracks": [
+                { "id": "video-1", "name": "Video 1", "kind": "video", "clips": main },
+                { "id": "audio-1", "name": "Audio 1", "kind": "audio", "locked": true, "clips": audio },
+            ] })
+        };
+        assert!(
+            validate_edits(&tracks(
+                json!([clip.clone(), { "id": "g", "gapMs": 500 }]),
+                json!([sound.clone()])
+            ))
+            .is_ok()
+        );
+        // Tracks are new in `TRACKS_VERSION`.
+        let mut older = tracks(json!([clip.clone()]), json!([]));
+        older["version"] = json!(TRACKS_VERSION - 1);
+        assert!(validate_edits(&older).is_err());
+        // Entries it does not understand are skipped by the page, not refused.
+        assert!(validate_edits(&tracks(json!([clip.clone()]), json!([clip.clone()]))).is_ok());
+        assert!(
+            validate_edits(
+                &json!({ "version": TRACKS_VERSION, "tracks": [{ "id": "t", "kind": "text", "clips": [] }] })
+            )
+            .is_ok()
+        );
+        assert!(validate_edits(&json!({ "version": TRACKS_VERSION, "tracks": {} })).is_err());
+    }
+
+    /// A recording at `path` with sound, kept apart as `kept` when given.
+    fn heard_at(path: &str, kept: Option<KeptSound>) -> ClipSource {
+        ClipSource {
+            path: PathBuf::from(path),
+            cursor: None,
+            has_audio: true,
+            remove_noise: false,
+            kept,
+        }
+    }
+
+    #[test]
+    fn export_sound_mixes_the_plans_audio_through_sound_from() {
+        let audio = |at_ms| ExportAudio {
+            source: "clip.mp4".to_owned(),
+            start_ms: 0,
+            end_ms: 2000,
+            at_ms,
+        };
+        let plan = ExportPlan {
+            remove_noise: true,
+            audio: Some(vec![audio(500), audio(3000)]),
+            ..plan()
+        };
+        let kept = KeptSound {
+            file: PathBuf::from("/rec/clip.sound.m4a"),
+            system: false,
+        };
+        let model = Path::new("/opt/grab-it/noise-models/bd.rnnn");
+        let sources = [Some(heard_at("/rec/clip.mp4", None))];
+        let audio_sources = [
+            heard_at("/rec/clip.mp4", Some(kept.clone())),
+            heard_at("/rec/other.mp4", None),
+        ];
+        let sound = export_sound(&plan, &sources, &audio_sources, Some(model)).unwrap();
+        let ExportSound::Mixed(placed) = &sound else {
+            panic!("a plan with audio is mixed");
+        };
+        assert_eq!(
+            placed.iter().map(|each| each.at_ms).collect::<Vec<_>>(),
+            [500, 3000]
+        );
+        // Noise is removed from the kept microphone, as for a clip.
+        assert_eq!(
+            placed[0].sound.from,
+            SoundFrom::Kept {
+                kept: &kept,
+                noise_model: Some(model)
+            }
+        );
+        let args = strings(sound.args(
+            Path::new("/rec/silent.mp4"),
+            9000,
+            Path::new("/rec/out.mp4"),
+        ));
+        assert!(args.contains("arnndn"), "{args}");
+        assert!(args.contains("amix"), "{args}");
+        assert!(!args.contains("concat"), "{args}");
+        // Each sound needs its recording.
+        assert_eq!(
+            export_sound(&plan, &sources, &audio_sources[..1], Some(model))
+                .err()
+                .as_deref(),
+            Some("every sound needs its recording")
+        );
+        // Without audio, each clip's own sound is joined.
+        let joined = export_sound(&self::plan(), &sources, &[], None).unwrap();
+        assert!(matches!(joined, ExportSound::Joined(ref sounds) if sounds.len() == 1));
+        assert!(
+            strings(joined.args(
+                Path::new("/rec/silent.mp4"),
+                8250,
+                Path::new("/rec/out.mp4")
+            ))
+            .contains("concat")
+        );
     }
 
     #[test]
@@ -3250,10 +4042,10 @@ esac
             clips: vec![self::clip().into(), clip.into()],
             ..plan()
         };
-        // Every clip is long enough, fits in the box and has its size.
+        // Every clip has a positive length, fits in the box and has its size.
         assert!(
             with(ExportClip {
-                end_ms: 1300,
+                end_ms: 1250,
                 ..clip()
             })
             .check()
@@ -3269,13 +4061,13 @@ esac
             .is_err()
         );
         assert_eq!(plan().frames(60), 495);
-        assert_eq!(
-            ExportEntry::from(ExportClip {
-                end_ms: 1251,
+        assert!(
+            with(ExportClip {
+                end_ms: 1249,
                 ..clip()
             })
-            .frames(30),
-            1
+            .check()
+            .is_err()
         );
     }
 
@@ -3311,6 +4103,31 @@ esac
     }
 
     #[test]
+    fn flattened_picture_accepts_short_clips_and_gaps_without_rounding_each_up() {
+        let plan = ExportPlan {
+            clips: vec![
+                ExportClip {
+                    end_ms: 1300,
+                    ..clip()
+                }
+                .into(),
+                ExportEntry::Gap(ExportGap { gap_ms: 50 }),
+                ExportClip {
+                    end_ms: 1251,
+                    ..clip()
+                }
+                .into(),
+            ],
+            ..plan()
+        };
+        assert_eq!(plan.check(), Ok(()));
+        assert_eq!(plan.duration_ms(), 101);
+        assert_eq!(frames_until(50, 30), 2);
+        assert_eq!(frames_until(100, 30), 3);
+        assert_eq!(plan.frames(30), 4);
+    }
+
+    #[test]
     fn a_gap_plays_silence() {
         let first = clip();
         let original = Path::new("/rec/clip.mp4");
@@ -3334,7 +4151,7 @@ esac
              anullsrc=r=48000:cl=stereo,atrim=duration=1.500,\
              aformat=sample_fmts=fltp:channel_layouts=stereo[a1];\
              [a0][a1]concat=n=2:v=0:a=1[sound] \
-             -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k -shortest \
+             -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k \
              -movflags +faststart /rec/clip (edited).mp4"
         );
     }
@@ -3385,9 +4202,17 @@ esac
     #[test]
     fn trimmed_frames_are_decoded_at_the_size_they_take_on_the_backdrop() {
         assert_eq!(
-            strings(decode_args(Path::new("/rec/clip.mp4"), &clip(), 60)),
-            "-hide_banner -loglevel error -ss 1.250 -i /rec/clip.mp4 -t 8.250 -map 0:v:0 -an \
-             -vf scale=960:540:flags=bicubic,fps=60,format=rgba -f rawvideo -pix_fmt rgba pipe:1"
+            strings(decode_args(
+                Path::new("/rec/clip.mp4"),
+                &clip(),
+                60,
+                75_000_000,
+                495
+            )),
+            "-hide_banner -loglevel error -xerror -copyts -start_at_zero -ss 1.250 -noaccurate_seek \
+             -i /rec/clip.mp4 -frames:v 495 -map 0:v:0 -an \
+             -vf settb=1/60000000,setpts=PTS-75000000,fps=60:start_time=0:round=up,scale=960:540:flags=bicubic,format=rgba \
+             -f rawvideo -pix_fmt rgba pipe:1"
         );
     }
 
@@ -3445,9 +4270,11 @@ esac
             strings(decode_args(
                 Path::new("/rec/clip.mp4"),
                 &zoomed(vec![area_zoom(1.5)]),
-                60
+                60,
+                75_000_000,
+                495
             ))
-            .contains("-vf scale=1440:810:flags=bicubic,fps=60,format=rgba")
+            .contains("scale=1440:810:flags=bicubic,format=rgba")
         );
     }
 
@@ -3488,7 +4315,7 @@ esac
              aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,\
              apad,atrim=duration=0.500[a2];\
              [a0][a1][a2]concat=n=3:v=0:a=1[sound] \
-             -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k -shortest \
+             -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k \
              -movflags +faststart /rec/clip (edited).mp4"
         );
     }
