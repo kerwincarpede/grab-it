@@ -230,11 +230,21 @@ function piecesOf(word: TranscriptWord): Piece[] {
   }));
 }
 
-/** The text of `pieces`, spaced between words but not inside one. */
+/**
+ * The text of `pieces`, spaced between words but not inside one, nor
+ * between words of a script written without spaces: the transcript's
+ * words are trimmed, so two such words meeting are joined as written.
+ */
 const joinPieces = (pieces: Piece[]) =>
   pieces
     .filter((piece) => piece.text)
-    .reduce((text, piece) => (text === "" ? piece.text : piece.glued ? text + piece.text : `${text} ${piece.text}`), "");
+    .reduce((text, piece) => (text === "" ? piece.text : piece.glued || runsOn(text, piece.text) ? text + piece.text : `${text} ${piece.text}`), "");
+
+/** Whether `next` follows `text` with no space: both meet in a script written without spaces. */
+const runsOn = (text: string, next: string) => {
+  const chars = Array.from(text);
+  return UNSPACED.test(chars[chars.length - 1] ?? "") && UNSPACED.test(Array.from(next)[0] ?? "");
+};
 
 /** A segment's words spread evenly over it, for a segment without word times. */
 function spreadWords(segment: TranscriptSegment): TranscriptWord[] {

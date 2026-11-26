@@ -592,8 +592,15 @@ fn segment(
     if text.is_empty() {
         return None;
     }
-    // Group tokens into words at each leading space.
+    // Group tokens into words at each leading space. Scripts written
+    // without spaces take each character as a word. A token that holds
+    // only part of a character stays with the word before it until the
+    // character is complete; only then is it known whether it starts a
+    // word of its own.
     let mut groups: Vec<(Vec<TokenId>, u64)> = Vec::new();
+    // Where in the last group a character cut across tokens starts, and
+    // the time of its first token.
+    let mut pending: Option<(usize, u64)> = None;
     let mut floor = from;
     for step in steps {
         let piece = decode(&[step.token]);
@@ -603,17 +610,45 @@ fn segment(
             .map(timestamp_ms)
             .unwrap_or(floor)
             .clamp(floor, to);
-        // A token that finishes a character cut across tokens stays with
-        // it; scripts written without spaces take each token as a word.
-        let unfinished = groups
+        if let (Some((split, split_at)), Some((tokens, _))) = (pending, groups.last_mut()) {
+            tokens.push(step.token);
+            let tail = decode(&tokens[split..]);
+            if is_partial(&tail) {
+                continue;
+            }
+            pending = None;
+            let before = decode(&tokens[..split]);
+            let starts_word = tail.starts_with(' ')
+                || tail.trim_start().chars().next().is_some_and(is_unspaced)
+                || before.chars().last().is_some_and(is_unspaced);
+            if split > 0 && starts_word {
+                let rest = tokens.split_off(split);
+                floor = split_at;
+                groups.push((rest, split_at));
+            }
+            continue;
+        }
+        if is_partial(&piece) {
+            match groups.last_mut() {
+                Some((tokens, _)) => {
+                    pending = Some((tokens.len(), at));
+                    tokens.push(step.token);
+                }
+                None => {
+                    pending = Some((0, at));
+                    floor = at;
+                    groups.push((vec![step.token], at));
+                }
+            }
+            continue;
+        }
+        let after_unspaced = groups
             .last()
-            .is_some_and(|(tokens, _)| is_partial(&decode(tokens)));
-        let unspaced = groups
-            .last()
-            .is_some_and(|(tokens, _)| decode(tokens).chars().last().is_some_and(is_unspaced))
+            .is_some_and(|(tokens, _)| decode(tokens).chars().last().is_some_and(is_unspaced));
+        let starts_word = piece.starts_with(' ')
             || piece.chars().next().is_some_and(is_unspaced)
-            || is_partial(&piece);
-        if groups.is_empty() || (!unfinished && (piece.starts_with(' ') || unspaced)) {
+            || after_unspaced;
+        if groups.is_empty() || starts_word {
             floor = at;
             groups.push((vec![step.token], at));
         } else if let Some((tokens, _)) = groups.last_mut() {
@@ -1170,6 +1205,31 @@ mod tests {
                 ("ok", 1800)
             ]
         );
+    }
+
+    #[test]
+    fn a_character_cut_across_tokens_stays_in_its_word_in_a_spaced_script() {
+        // " ti", then the two halves of "ế", then " ok".
+        const PIECES: &[&str] = &[" ti", "\u{FFFD}", "\u{FFFD}e", " ok"];
+        let steps = [
+            stamp(0),
+            text(0, 0),
+            text(1, 400),
+            text(2, 500),
+            text(3, 800),
+            stamp(1000),
+        ];
+        let decode = |tokens: &[TokenId]| -> String {
+            let joined: String = tokens.iter().map(|t| PIECES[*t as usize]).collect();
+            joined.replace("\u{FFFD}\u{FFFD}e", "ế")
+        };
+        let (segments, _) = segments_from_steps(&steps, 0, decode);
+        let words: Vec<_> = segments[0]
+            .words
+            .iter()
+            .map(|w| (w.text.as_str(), w.start_ms))
+            .collect();
+        assert_eq!(words, [("tiế", 0), ("ok", 800)]);
     }
 
     #[test]

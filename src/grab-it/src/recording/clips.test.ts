@@ -24,7 +24,7 @@ import {
   zoomsIn,
   type Clip,
 } from "./clips";
-import { parseEdits, serializeEdits } from "./edits";
+import { EDITS_VERSION, parseEdits, serializeEdits } from "./edits";
 import type { Zoom } from "./zooms";
 
 const OWN = "own.mp4";
@@ -179,7 +179,7 @@ describe("clips", () => {
     expect(parseClips([{ id: "g", gapMs: 1500 }], 3)).toEqual([]);
     expect(parseClips([A, { id: "g", gapMs: 0 }, { id: "h", gapMs: 500 }, { id: "i", gapMs: 500 }], 3)).toEqual([A, gapOf("h", 1000)]);
     expect(parseEdits({ version: 3, clips: [A, B] }).version).toBe(2);
-    expect(() => parseEdits({ version: 5 })).toThrow();
+    expect(() => parseEdits({ version: EDITS_VERSION + 1 })).toThrow();
   });
 
   it("trims a clip within its recording, keeping it long enough", () => {

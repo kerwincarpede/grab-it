@@ -15,9 +15,17 @@ export interface Trim {
  * non-destructive: the recording is never changed, and the edits are only
  * rendered on export. Absent fields mean unchanged.
  */
+/**
+ * The sidecar version that adds caption cues; older builds open a sidecar
+ * with cues read-only. Mirrors `CAPTIONS_VERSION` in recording_editor.rs.
+ */
+export const CAPTIONS_VERSION = 5;
+/** The newest sidecar version this build reads and writes. Mirrors `EDITS_VERSION`. */
+export const EDITS_VERSION = CAPTIONS_VERSION;
+
 export interface RecordingEdits {
   /** The oldest format that can hold the edits. */
-  version: 1 | 2 | 3 | 4 | 5;
+  version: 1 | 2 | 3 | 4 | typeof CAPTIONS_VERSION;
   /** Absent or null keeps the whole recording. Ignored when `clips` is set. */
   trim?: Trim | null;
   /**
@@ -37,7 +45,7 @@ export interface RecordingEdits {
    * was made (its `removeNoise`).
    */
   removeNoise?: boolean;
-  /** Caption cues and how the export shows them; version 5 when it holds cues. */
+  /** Caption cues and how the export shows them; `CAPTIONS_VERSION` when it holds cues. */
   captions?: Captions;
 }
 
@@ -61,8 +69,9 @@ export function parseEdits(value: unknown): RecordingEdits {
   if (value === null || value === undefined) return emptyEdits();
   if (typeof value !== "object") throw new EditsError("the edits are not an object");
   const doc = value as Record<string, unknown>;
-  const version = doc.version;
-  if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5) throw new EditsError(`unsupported edits version ${String(version)}`);
+  const raw = doc.version;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > EDITS_VERSION) throw new EditsError(`unsupported edits version ${String(raw)}`);
+  const version = raw as RecordingEdits["version"];
   const edits = emptyEdits();
   if (version >= 2) {
     const clips = parseClips(doc.clips, version);
@@ -85,7 +94,7 @@ export function parseEdits(value: unknown): RecordingEdits {
 
 /** The minimum sidecar version for the given sequence, zoom sources and caption cues. */
 export function versionForEdits(clips: Clip[] | null, zooms: Zoom[] = [], captions?: Captions): RecordingEdits["version"] {
-  if (captions && captions.cues.length > 0) return 5;
+  if (captions && captions.cues.length > 0) return CAPTIONS_VERSION;
   if (clips?.some((clip) => clip.source.includes("/")) || zooms.some((zoom) => zoom.source?.includes("/"))) return 4;
   if (clips?.some(isGap)) return 3;
   return clips ? 2 : 1;

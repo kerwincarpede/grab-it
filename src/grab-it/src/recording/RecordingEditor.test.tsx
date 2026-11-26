@@ -10,6 +10,7 @@ import { mockCommands, type CommandCall } from "../test/mockCommands";
 import type { CursorPath } from "./zooms";
 import type { RecordingPauses } from "./api";
 import type { Transcript } from "./captions";
+import { CAPTIONS_VERSION } from "./edits";
 
 vi.mock("./sources", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./sources")>();
@@ -2521,7 +2522,7 @@ describe("RecordingEditor", () => {
       await userEvent.click(screen.getByRole("button", { name: "Transcribe" }));
       await waitFor(() =>
         expect(lastSaved(backend)).toEqual({
-          version: 5,
+          version: CAPTIONS_VERSION,
           clips: CLIPS,
           captions: {
             burnIn: true,
@@ -2570,7 +2571,7 @@ describe("RecordingEditor", () => {
       await waitFor(() => expect(screen.getByRole("dialog", { name: "Captions" })).toHaveTextContent("Transcribing cancelled"));
       expect(screen.queryByRole("progressbar", { name: "Transcribe progress" })).not.toBeInTheDocument();
       expect(lastSaved(backend)).toEqual({
-        version: 5,
+        version: CAPTIONS_VERSION,
         clips: CLIPS,
         captions: { burnIn: true, cues: [{ id: expect.any(String), startMs: 1500, endMs: 3000, text: "Hello there" }] },
       });
@@ -2615,7 +2616,7 @@ describe("RecordingEditor", () => {
     it("moves and resizes a clipped showing without losing its hidden part", async () => {
       // In the second copy (source 2–6 s at 4–8 s) the cue at source 1.5–3 s shows clipped, at 4–5 s.
       const cue = { id: "q", startMs: 1500, endMs: 3000, text: "Hello" };
-      const backend = mockBackend({ version: 5, clips: TWICE, captions: { burnIn: true, cues: [cue] } });
+      const backend = mockBackend({ version: CAPTIONS_VERSION, clips: TWICE, captions: { burnIn: true, cues: [cue] } });
       render(<RecordingEditor />);
       await loadSequence();
       // 8 s over 80 px: 100 ms a pixel.
@@ -2648,7 +2649,7 @@ describe("RecordingEditor", () => {
 
     it("moves, edits, deletes and adds cues on the caption row", async () => {
       const cue = { id: "q", startMs: 2000, endMs: 4000, text: "Hello" };
-      const backend = mockBackend({ version: 5, captions: { burnIn: true, cues: [cue] } });
+      const backend = mockBackend({ version: CAPTIONS_VERSION, captions: { burnIn: true, cues: [cue] } });
       render(<RecordingEditor />);
       await loadVideo();
       // 100 ms a pixel.
@@ -2658,25 +2659,25 @@ describe("RecordingEditor", () => {
       fireEvent.pointerDown(segment, { clientX: 25 });
       fireEvent.pointerMove(segment, { clientX: 45 });
       fireEvent.pointerUp(segment, { clientX: 45 });
-      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 5, captions: { burnIn: true, cues: [{ ...cue, startMs: 4000, endMs: 6000 }] } }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: CAPTIONS_VERSION, captions: { burnIn: true, cues: [{ ...cue, startMs: 4000, endMs: 6000 }] } }));
 
       act(() => screen.getByTestId("caption-cue").focus());
       const field = screen.getByRole("textbox", { name: "Caption text" });
       fireEvent.change(field, { target: { value: "Hello, world" } });
       fireEvent.blur(field);
-      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 5, captions: { burnIn: true, cues: [{ ...cue, startMs: 4000, endMs: 6000, text: "Hello, world" }] } }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: CAPTIONS_VERSION, captions: { burnIn: true, cues: [{ ...cue, startMs: 4000, endMs: 6000, text: "Hello, world" }] } }));
 
       fireEvent.keyDown(screen.getByTestId("caption-cue"), { key: "Delete" });
       await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1 }));
       expect(screen.queryByTestId("caption-cue")).not.toBeInTheDocument();
 
       fireEvent.doubleClick(track, { clientX: 30 });
-      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 5, captions: { burnIn: true, cues: [{ id: expect.any(String), startMs: 3000, endMs: 5000, text: "" }] } }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: CAPTIONS_VERSION, captions: { burnIn: true, cues: [{ id: expect.any(String), startMs: 3000, endMs: 5000, text: "" }] } }));
       expect(screen.getByRole("textbox", { name: "Caption text" })).toHaveValue("");
     });
 
     it("shows a cue in every copy of its clip and draws the playhead's cue on the preview", async () => {
-      mockBackend({ version: 5, clips: TWICE, captions: { burnIn: true, cues: [HELLO] } });
+      mockBackend({ version: CAPTIONS_VERSION, clips: TWICE, captions: { burnIn: true, cues: [HELLO] } });
       render(<RecordingEditor />);
       await loadSequence();
       expect(screen.getAllByTestId("caption-cue").map((cue) => cue.getAttribute("aria-label"))).toEqual([
@@ -2697,7 +2698,7 @@ describe("RecordingEditor", () => {
 
     it("burns each cue in for every clip it plays in, after the mask", async () => {
       stubCanvas([[1, 2, 3], [4, 5]]);
-      const backend = mockBackend({ version: 5, clips: TWICE, captions: { burnIn: true, cues: [HELLO] } });
+      const backend = mockBackend({ version: CAPTIONS_VERSION, clips: TWICE, captions: { burnIn: true, cues: [HELLO] } });
       render(<RecordingEditor />);
       await loadSequence();
       await waitFor(() => expect(screen.getByRole("button", { name: "Export" })).toBeEnabled());
@@ -2716,12 +2717,12 @@ describe("RecordingEditor", () => {
     });
 
     it("sends no captions with Burn in captions off", async () => {
-      const backend = mockBackend({ version: 5, captions: { burnIn: true, cues: [HELLO] } });
+      const backend = mockBackend({ version: CAPTIONS_VERSION, captions: { burnIn: true, cues: [HELLO] } });
       render(<RecordingEditor />);
       await loadVideo();
       await userEvent.click(screen.getByRole("button", { name: "Captions" }));
       await userEvent.click(screen.getByRole("checkbox", { name: "Burn in captions" }));
-      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 5, captions: { burnIn: false, cues: [HELLO] } }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: CAPTIONS_VERSION, captions: { burnIn: false, cues: [HELLO] } }));
       await userEvent.click(screen.getByRole("button", { name: "Export" }));
       const { plan } = await exportCall(backend);
       expect(plan).not.toHaveProperty("overlays");

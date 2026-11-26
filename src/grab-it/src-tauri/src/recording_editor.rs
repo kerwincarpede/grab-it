@@ -66,8 +66,12 @@ use crate::{
 pub const VIDEO_SCHEME: &str = "grab-it-video";
 /// The newest edits sidecar format version this build reads and writes:
 /// 2 adds clips, 3 adds gaps, 4 adds month-qualified source references, and
-/// 5 adds caption cues.
-pub const EDITS_VERSION: u64 = 5;
+/// [`CAPTIONS_VERSION`] adds caption cues.
+pub const EDITS_VERSION: u64 = CAPTIONS_VERSION;
+/// The edits sidecar version that adds caption cues; older builds open a
+/// sidecar with cues read-only. Mirrors `CAPTIONS_VERSION` in
+/// src/recording/edits.ts.
+pub const CAPTIONS_VERSION: u64 = 5;
 /// Ends the name of the edits sidecar beside an MP4.
 pub const EDITS_SUFFIX: &str = ".edits.json";
 /// The request header carrying the export plan as URI-encoded JSON.
@@ -248,7 +252,7 @@ pub fn validate_edits(value: &Value) -> Result<(), String> {
 }
 
 /// Captions are `{burnIn, cues: [{id, source?, startMs, endMs, text}],
-/// style?}`; cues need edits version 5 so older builds open them read-only.
+/// style?}`; cues need [`CAPTIONS_VERSION`] so older builds open them read-only.
 fn validate_captions(captions: Option<&Value>, version: u64) -> Result<(), String> {
     let captions = match captions {
         None | Some(Value::Null) => return Ok(()),
@@ -269,8 +273,8 @@ fn validate_captions(captions: Option<&Value>, version: u64) -> Result<(), Strin
         Some(Value::Array(cues)) => cues,
         Some(_) => return Err("the cues must be a list".to_owned()),
     };
-    if !cues.is_empty() && version < 5 {
-        return Err("cues need edits version 5".to_owned());
+    if !cues.is_empty() && version < CAPTIONS_VERSION {
+        return Err(format!("cues need edits version {CAPTIONS_VERSION}"));
     }
     cues.iter().try_for_each(|cue| {
         let text = |key: &str| cue.get(key).and_then(Value::as_str);
@@ -2672,26 +2676,32 @@ esac
     }
 
     #[test]
-    fn captions_need_valid_cues_and_version_5() {
+    fn captions_need_valid_cues_and_the_captions_version() {
         let cue = json!({ "id": "c1", "startMs": 0, "endMs": 1500, "text": "Hello" });
         let with =
             |version: u64, captions: Value| json!({ "version": version, "captions": captions });
-        assert!(validate_edits(&with(5, json!({ "burnIn": true, "cues": [cue.clone()] }))).is_ok());
+        assert!(
+            validate_edits(&with(
+                CAPTIONS_VERSION,
+                json!({ "burnIn": true, "cues": [cue.clone()] })
+            ))
+            .is_ok()
+        );
         assert!(
             validate_edits(&with(4, json!({ "burnIn": true, "cues": [cue.clone()] }))).is_err()
         );
         // No cues needs no new version.
         assert!(validate_edits(&with(1, json!({ "burnIn": false, "cues": [] }))).is_ok());
-        assert!(validate_edits(&with(5, json!([]))).is_err());
-        assert!(validate_edits(&with(5, json!({ "burnIn": "yes" }))).is_err());
-        assert!(validate_edits(&with(5, json!({ "cues": {} }))).is_err());
-        assert!(validate_edits(&with(5, json!({ "style": 3 }))).is_err());
+        assert!(validate_edits(&with(CAPTIONS_VERSION, json!([]))).is_err());
+        assert!(validate_edits(&with(CAPTIONS_VERSION, json!({ "burnIn": "yes" }))).is_err());
+        assert!(validate_edits(&with(CAPTIONS_VERSION, json!({ "cues": {} }))).is_err());
+        assert!(validate_edits(&with(CAPTIONS_VERSION, json!({ "style": 3 }))).is_err());
         let bad = |change: Value| {
             let mut cue = cue.clone();
             cue.as_object_mut()
                 .unwrap()
                 .extend(change.as_object().unwrap().clone());
-            validate_edits(&with(5, json!({ "cues": [cue] }))).is_err()
+            validate_edits(&with(CAPTIONS_VERSION, json!({ "cues": [cue] }))).is_err()
         };
         assert!(bad(json!({ "id": "" })));
         assert!(bad(json!({ "text": 3 })));
@@ -2703,8 +2713,8 @@ esac
 
     #[test]
     fn unknown_or_broken_edits_are_refused() {
-        assert!(validate_edits(&json!({ "version": 6 })).is_err());
-        assert!(validate_edits(&json!({ "version": 5 })).is_ok());
+        assert!(validate_edits(&json!({ "version": EDITS_VERSION + 1 })).is_err());
+        assert!(validate_edits(&json!({ "version": EDITS_VERSION })).is_ok());
         assert!(validate_edits(&json!({})).is_err());
         assert!(validate_edits(&json!({ "version": 1 })).is_ok());
         assert!(validate_edits(&json!({ "version": 1, "trim": null })).is_ok());

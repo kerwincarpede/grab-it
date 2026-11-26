@@ -15,7 +15,7 @@ import {
   type Cue,
   type Transcript,
 } from "./captions";
-import { parseEdits, serializeEdits } from "./edits";
+import { CAPTIONS_VERSION, parseEdits, serializeEdits } from "./edits";
 import type { Clip } from "./clips";
 
 const ids = () => {
@@ -27,10 +27,10 @@ const words = (text: string, startMs: number, stepMs: number) =>
   text.split(" ").map((word, index) => ({ text: word, startMs: startMs + index * stepMs, endMs: startMs + (index + 1) * stepMs }));
 
 describe("captions sidecar", () => {
-  it("round-trips cues as version 5 and drops ones it does not understand", () => {
+  it("round-trips cues as the captions version and drops ones it does not understand", () => {
     const cue: Cue = { id: "a", startMs: 100, endMs: 900, text: "Hello there" };
     const sidecar = serializeEdits({ version: 1, captions: { burnIn: true, cues: [cue] } });
-    expect(sidecar).toEqual({ version: 5, captions: { burnIn: true, cues: [cue] } });
+    expect(sidecar).toEqual({ version: CAPTIONS_VERSION, captions: { burnIn: true, cues: [cue] } });
     expect(parseEdits(sidecar)).toEqual(sidecar);
     const parsed = parseCaptions({ burnIn: false, cues: [cue, { id: "b", startMs: 5, endMs: 5, text: "x" }, { id: "c", startMs: 0, endMs: 1 }] });
     expect(parsed).toEqual({ burnIn: false, cues: [cue] });
@@ -88,6 +88,18 @@ describe("cues from a transcript", () => {
       expect(lines!.every((line) => Array.from(line).length <= MAX_LINE_CHARS)).toBe(true);
     }
     expect(wrapLines("字".repeat(50))).toEqual(["字".repeat(42), "字".repeat(8)]);
+  });
+
+  it("joins per-character words of unspaced text without spaces, and spaced words with one", () => {
+    // As segments_from_steps gives them: one trimmed word per character.
+    const words = ["你", "好", "世", "界"].map((text, index) => ({ text, startMs: index * 500, endMs: (index + 1) * 500 }));
+    const zh = { version: 1, model: "whisper-base", language: "zh", segments: [{ startMs: 0, endMs: 2000, text: "你好世界", words }] };
+    expect(cuesFromTranscript(zh, "a.mp4", "a.mp4", ids()).map((cue) => cue.text)).toEqual(["你好世界"]);
+    const mixed = {
+      ...zh,
+      segments: [{ startMs: 0, endMs: 3000, text: "你好 Grab-it 世界", words: [...words.slice(0, 2), { text: "Grab-it", startMs: 1000, endMs: 2000 }, ...words.slice(2).map((word) => ({ ...word, startMs: word.startMs + 1000, endMs: word.endMs + 1000 }))] }],
+    };
+    expect(cuesFromTranscript(mixed, "a.mp4", "a.mp4", ids()).map((cue) => cue.text)).toEqual(["你好 Grab-it 世界"]);
   });
 
   it("wraps text into lines no longer than the limit", () => {
