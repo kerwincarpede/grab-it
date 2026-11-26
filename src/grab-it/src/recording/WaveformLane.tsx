@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import type { AudioKind } from "./api";
 import { BAR_PX, layoutLane, type LaneSegment, type LaneView, type PeaksState } from "./waveform";
 
@@ -29,11 +29,11 @@ const token = (element: Element, name: string, fallback: string) => getComputedS
  * "Waveform unavailable" when they cannot be read, beside the lane's name
  * so they stay in view with it.
  */
-export default function WaveformLane({ kind, label, hint, segments, peaksOf, view, height }: WaveformLaneProps) {
+function WaveformLane({ kind, label, hint, segments, peaksOf, view, height }: WaveformLaneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { bars, spans } = layoutLane(segments, peaksOf, view);
+  const { bars, spans } = useMemo(() => layoutLane(segments, peaksOf, view), [segments, peaksOf, view]);
   // Said for the whole lane, whatever part of it is scrolled into view.
-  const states = segments.map(peaksOf);
+  const states = useMemo(() => segments.map(peaksOf), [segments, peaksOf]);
   const failed = states.find((state) => state?.status === "failed");
   const loading = !failed && states.some((state) => state?.status !== "ready");
   const width = Math.max(0, Math.floor(view.width));
@@ -49,8 +49,9 @@ export default function WaveformLane({ kind, label, hint, segments, peaksOf, vie
     canvas.height = Math.round(height * scale);
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    // Each clip's stretch, so a quiet clip still shows where it is.
-    ctx.fillStyle = token(canvas, "--ed-surface", "#1e2128");
+    // Each clip's stretch, raised like the track, so a quiet clip still
+    // shows where it is and gaps stay flat.
+    ctx.fillStyle = token(canvas, "--ed-raised", "#272b34");
     for (const span of spans) ctx.fillRect(span.x, 0, span.width, height);
     const accent = token(canvas, "--ed-accent", "#4c8dff");
     const middle = height / 2;
@@ -61,7 +62,7 @@ export default function WaveformLane({ kind, label, hint, segments, peaksOf, vie
       ctx.fillRect(bar.x, middle - tall / 2, BAR_PX - 1, tall);
     }
     ctx.globalAlpha = 1;
-  });
+  }, [bars, spans, width, height]);
 
   const state = failed ? "failed" : loading ? "loading" : "ready";
   return (
@@ -84,3 +85,6 @@ export default function WaveformLane({ kind, label, hint, segments, peaksOf, vie
     </div>
   );
 }
+
+/** Redrawn only when its clips, peaks, view or height change. */
+export default memo(WaveformLane);

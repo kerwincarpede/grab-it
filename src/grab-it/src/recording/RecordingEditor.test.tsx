@@ -2292,6 +2292,28 @@ describe("RecordingEditor", () => {
       expect(lane("Microphone").querySelector("canvas")).toHaveAttribute("data-bars", "50");
     });
 
+    it("redraws a lane only when what it shows changes, not as the playhead moves", async () => {
+      stubCanvas([]);
+      mockBackend(null, null, ["microphone"]);
+      render(<RecordingEditor />);
+      await loadVideo();
+      layOutTimeline();
+      await waitFor(() => expect(lane("Microphone")).toHaveAttribute("data-state", "ready"));
+      const canvas = lane("Microphone").querySelector("canvas") as HTMLCanvasElement;
+      const draws = () => vi.mocked(HTMLCanvasElement.prototype.getContext).mock.contexts.filter((context) => context === canvas).length;
+      await waitFor(() => expect(draws()).toBeGreaterThan(0));
+      const before = draws();
+      const track = screen.getByTestId("timeline-track");
+      placeAt(track, 100, 40);
+      fireEvent.pointerDown(track, { clientX: 50 });
+      fireEvent.pointerUp(track, { clientX: 50 });
+      await waitFor(() => expect(screen.getByLabelText("Time")).toHaveTextContent(/^0:06/));
+      expect(draws()).toBe(before);
+      // Taller lanes are drawn again.
+      fireEvent.keyDown(screen.getByRole("separator", { name: "Waveform height" }), { key: "ArrowDown" });
+      expect(draws()).toBe(before + 1);
+    });
+
     it("draws over all the track the timeline shows when zoomed, the side padding's share included", async () => {
       mockBackend(null, null, ["microphone"]);
       render(<RecordingEditor />);

@@ -70,7 +70,7 @@ Under the zoom row, each kind of sound gets its own lane with its waveform, so y
 - In a joined sequence there is a lane for each kind any clip has, in that order. Each clip draws its own recording's sound at its place on the timeline; gaps, and clips without that kind of sound, stay empty.
 - For a single recording, the waveform covers its whole length, and the ends you trimmed away are dimmed like the timeline.
 
-The waveforms zoom and scroll with the timeline and follow clips as you trim, move or preview them. They show the sound as recorded, before background noise is removed, as the preview plays it.
+The waveforms zoom and scroll with the timeline and follow clips as you trim, move or preview them. They show the sound as recorded, before background noise is removed.
 
 Grab-it reads a recording's sound the first time it's shown, which can take a moment for a long one; meanwhile its lane says **Reading sound…**. After that it's remembered, so it shows at once. If the sound can't be read, the lane says **Waveform unavailable**: hover over it to see why.
 

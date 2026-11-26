@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { onFfmpegStatus } from "../settings/api";
 import { recordingWaveform, type AudioKind } from "./api";
 import type { Clip } from "./clips";
 import type { Trim } from "./edits";
 import WaveformLane from "./WaveformLane";
-import { laneKinds, laneSegments, peaksKey, type LaneView, type PeaksState } from "./waveform";
+import { laneKinds, laneSegments, peaksKey, type LaneSegment, type LaneView, type PeaksState } from "./waveform";
 
 /** The lanes' height in px: the least, the most, and at first. */
 export const MIN_LANE_HEIGHT = 24;
@@ -55,7 +55,16 @@ export default function WaveformLanes({ clips, joined, durationMs, trim, audioOf
   const [height, setHeight] = useState(DEFAULT_LANE_HEIGHT);
   const drag = useRef<{ y: number; height: number } | null>(null);
 
-  const lanes = laneKinds(clips, audioOf).map((kind) => ({ kind, segments: laneSegments(clips, kind, audioOf, joined, durationMs, trim) }));
+  // Kept the same from render to render until a lane's clips change, so
+  // the lanes redraw only when what they show does, not on every frame
+  // the editor plays.
+  const lanesKey = JSON.stringify(laneKinds(clips, audioOf).map((kind) => ({ kind, segments: laneSegments(clips, kind, audioOf, joined, durationMs, trim) })));
+  const lanes = useMemo(() => JSON.parse(lanesKey) as { kind: AudioKind; segments: LaneSegment[] }[], [lanesKey]);
+  const peaksOf = useCallback((segment: LaneSegment) => peaks[peaksKey(segment.source, segment.audio)], [peaks]);
+  const startMs = view?.startMs ?? 0;
+  const endMs = view?.endMs ?? durationMs;
+  const viewWidth = view?.width ?? 0;
+  const shown = useMemo<LaneView>(() => ({ startMs, endMs, width: viewWidth }), [startMs, endMs, viewWidth]);
   const wanted = [...new Set(lanes.flatMap((lane) => lane.segments.map((segment) => JSON.stringify([segment.source, segment.audio]))))].sort().join("\n");
 
   useEffect(() => {
@@ -144,7 +153,6 @@ export default function WaveformLanes({ clips, joined, durationMs, trim, audioOf
     setHeight(clampHeight(next));
   };
 
-  const shown: LaneView = view ?? { startMs: 0, endMs: durationMs, width: 0 };
   return (
     <div className="waveform-lanes">
       {lanes.map(({ kind, segments }) => (
@@ -154,7 +162,7 @@ export default function WaveformLanes({ clips, joined, durationMs, trim, audioOf
           label={nameOf(kind)}
           hint={hintOf?.(kind)}
           segments={segments}
-          peaksOf={(segment) => peaks[peaksKey(segment.source, segment.audio)]}
+          peaksOf={peaksOf}
           view={shown}
           height={height}
         />

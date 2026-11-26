@@ -11,6 +11,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
@@ -219,7 +220,13 @@ impl PeaksCache {
             return;
         }
         // Written aside and renamed, so a reader never sees half an entry.
-        let partial = entry.with_extension(format!("partial-{}", std::process::id()));
+        // Each write has its own name, so two at once never share a file.
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let partial = entry.with_extension(format!(
+            "partial-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         let mut bytes = CACHE_MAGIC.to_vec();
         bytes.extend_from_slice(peaks);
         if fs::write(&partial, bytes).is_err() || fs::rename(&partial, entry).is_err() {
@@ -426,6 +433,29 @@ mod tests {
             cached_peaks(Some(&cache), &source, |_, _| Ok(vec![2])),
             Ok(vec![2])
         );
+    }
+
+    #[test]
+    fn each_write_goes_through_its_own_partial_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = PeaksCache::new(dir.path().join(WAVEFORMS_DIR));
+        let source = sound_in(dir.path());
+        let entry = cache.entry(&source.file, 0).unwrap();
+        // A partial another write left behind is neither reused nor read.
+        fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        let stray = entry.with_extension(format!("partial-{}", std::process::id()));
+        fs::write(&stray, b"cut off").unwrap();
+        cache.store(&entry, &[1, 2]);
+        cache.store(&entry, &[3]);
+        assert_eq!(cache.load(&entry), Some(vec![3]));
+        let mut left: Vec<_> = fs::read_dir(entry.parent().unwrap())
+            .unwrap()
+            .map(|file| file.unwrap().path())
+            .collect();
+        left.sort();
+        let mut expected = vec![entry, stray];
+        expected.sort();
+        assert_eq!(left, expected);
     }
 
     #[test]
