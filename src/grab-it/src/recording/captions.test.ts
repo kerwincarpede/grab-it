@@ -345,7 +345,7 @@ describe("painting each look", () => {
   const fakeCanvas = () => {
     const calls: string[] = [];
     /** The lines stroked or filled, with the font they were drawn in. */
-    const drawn: { text: string; width: number }[] = [];
+    const drawn: { text: string; width: number; fontPx: number }[] = [];
     const ctx = {
       font: "",
       fillStyle: "",
@@ -363,9 +363,9 @@ describe("painting each look", () => {
       clearRect: () => calls.push("clear"),
       fillRect: () => calls.push("box"),
       strokeText: () => calls.push("outline"),
-      fillText: function (this: { shadowBlur: number; measureText: (text: string) => { width: number } }, text: string) {
+      fillText: function (this: { font: string; shadowBlur: number; measureText: (text: string) => { width: number } }, text: string) {
         calls.push(this.shadowBlur > 0 ? "shadowed text" : "text");
-        drawn.push({ text, width: this.measureText(text).width });
+        drawn.push({ text, width: this.measureText(text).width, fontPx: Number(/(\d+)px/.exec(this.font)?.[1]) });
       },
     };
     const canvas = { width: 0, height: 0, getContext: () => ctx } as unknown as HTMLCanvasElement;
@@ -383,20 +383,23 @@ describe("painting each look", () => {
     expect(drawn("plain")).toEqual(["clear", "shadowed text"]);
   });
 
-  it("wraps Large and Outline text by its measured width, inside the box", () => {
-    const text = "Captions wrap by how wide their words are drawn";
-    const painted = (style: Partial<typeof DEFAULT_CAPTION_STYLE>) => {
+  it("paints every look at the font size and lines fitCueLines chose, inside the box", () => {
+    const text = "Captions wrap by how wide their words are drawn, so long ones step the font down";
+    const style = (look: "box" | "outline" | "plain") => ({ look, size: "large" as const, position: "bottom" as const });
+    const fitted = fitCueLines(text, style("box"), 400, 600, fakeCanvas().canvas.getContext("2d") as unknown as CanvasRenderingContext2D);
+    // Large on a narrow video steps the font down to keep two lines.
+    expect(fitted.lines).toHaveLength(2);
+    expect(fitted.fontPx).toBeLessThan(fitCueLines("Hi", style("box"), 400, 600, fakeCanvas().canvas.getContext("2d") as unknown as CanvasRenderingContext2D).fontPx);
+    for (const look of ["box", "outline", "plain"] as const) {
       const { canvas, calls, drawn } = fakeCanvas();
-      paintCue(text, { ...DEFAULT_CAPTION_STYLE, ...style }, 400, 600, canvas);
-      for (const line of drawn) expect(line.width).toBeLessThanOrEqual(canvas.width);
-      return { lines: drawn.map((line) => line.text), outlines: calls.filter((call) => call === "outline").length };
-    };
-    const small = painted({ look: "outline", size: "small" });
-    const large = painted({ look: "outline", size: "large" });
-    expect(large.lines.length).toBeGreaterThan(small.lines.length);
-    expect(large.outlines).toBe(large.lines.length);
-    expect(large.lines.join(" ")).toBe(text);
-    expect(painted({ look: "plain", size: "large" }).lines).toEqual(large.lines);
+      paintCue(text, style(look), 400, 600, canvas);
+      expect(drawn.map((line) => line.text)).toEqual(fitted.lines);
+      for (const line of drawn) {
+        expect(line.fontPx).toBe(fitted.fontPx);
+        expect(line.width).toBeLessThanOrEqual(canvas.width);
+      }
+      expect(calls.filter((call) => call === "outline")).toHaveLength(look === "outline" ? fitted.lines.length : 0);
+    }
   });
 
   it("sizes the canvas to the cue's box and paints nothing for empty text", () => {
