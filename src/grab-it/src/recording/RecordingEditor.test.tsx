@@ -1142,6 +1142,14 @@ describe("RecordingEditor", () => {
 
   describe("Suggest edits", () => {
     const PAUSE = { startMs: 3000, endMs: 6000 };
+    /** The opened recording's 1–5 s, then the other recording's 0–6 s. */
+    const JOINED_TWO = {
+      version: 2,
+      clips: [
+        { id: "a", source: OWN, startMs: 1000, endMs: 5000 },
+        { id: "b", source: OTHER, startMs: 0, endMs: 6000 },
+      ],
+    };
 
     it("proposes a cut at a pause with its reason, range and length", async () => {
       heard = { sound: "microphone", pauses: [PAUSE], canClean: true, pointer: null };
@@ -1484,7 +1492,7 @@ describe("RecordingEditor", () => {
       expect(pause).toHaveBeenCalled();
       expect(screen.getByText("Clip 0:12.0")).toBeInTheDocument();
       // Where it stopped, 2 s after the cut, in the recording as saved.
-      expect(screen.getByLabelText("Time")).toHaveTextContent("0:07.8 / 0:12.0");
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:07.7 / 0:12.0");
       expect(screen.getByRole("button", { name: "Preview 0:03.2–0:05.7" })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Stop preview" })).not.toBeInTheDocument();
       expect(saved(backend)).toEqual([]);
@@ -1611,6 +1619,106 @@ describe("RecordingEditor", () => {
       expect(saved(backend)).toEqual([]);
       // Trimming stays on the timeline's handles.
       expect(screen.getByRole("slider", { name: "Trim end" })).toBeVisible();
+    });
+
+    it("previews an edge cut of a lone clip, kept with no padding, in the recording's own time", async () => {
+      heard = { sound: "microphone", pauses: [{ startMs: 0, endMs: 2000 }], canClean: true, pointer: null };
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+      const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+      mockBackend(null, null, ["microphone"], { separateMicrophone: true });
+      render(<RecordingEditor />);
+      const video = await loadVideo();
+      const runFrames = () => act(() => frames.splice(0).forEach((frame) => frame(0)));
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      fireEvent.change(await screen.findByRole("slider", { name: "Keep padding" }), { target: { value: "0" } });
+      await userEvent.click(screen.getByRole("button", { name: "Preview 0:00.0–0:02.0" }));
+      // One clip is left, which plays in the recording's own time.
+      expect(screen.getByText("Clip 0:10.0")).toBeInTheDocument();
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:02.0 / 0:12.0");
+      expect(video.currentTime).toBe(2);
+      expect(play).toHaveBeenCalled();
+      fireEvent.play(video);
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 4.1 });
+      runFrames();
+      runFrames();
+      expect(screen.getByText("Clip 0:12.0")).toBeInTheDocument();
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:04.0 / 0:12.0");
+    });
+
+    it("ends a cut's own preview on the clip it was proposed on, even a duplicated one", async () => {
+      heard = { sound: "microphone", pauses: [{ startMs: 2000, endMs: 4000 }], canClean: true, pointer: null };
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+      vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+      const clips = [
+        { id: "a", source: OWN, startMs: 0, endMs: 6000 },
+        { id: "b", source: OWN, startMs: 0, endMs: 6000 },
+      ];
+      mockBackend({ version: 2, clips });
+      render(<RecordingEditor />);
+      const video = await previewVideo(OWN);
+      setVideoMetadata(video, 12, 1920, 1080);
+      fireEvent.loadedMetadata(video);
+      await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
+      const runFrames = () => act(() => frames.splice(0).forEach((frame) => frame(0)));
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      await screen.findByRole("list", { name: "Proposed cuts" });
+      const previews = screen.getAllByRole("button", { name: /^Preview .*0:02\.2–0:03\.7$/ });
+      expect(previews).toHaveLength(2);
+      await userEvent.click(previews[1]);
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:06.2 / 0:10.5");
+      fireEvent.play(video);
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 2.3 });
+      runFrames();
+      expect(video.currentTime).toBe(3.75);
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 5.8 });
+      runFrames();
+      runFrames();
+      // 2 s after the cut on the second copy, not the first.
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:11.7 / 0:12.0");
+      expect(screen.queryByRole("button", { name: "Stop preview" })).not.toBeInTheDocument();
+    });
+
+    it("does not set another recording playing when a preview stops", async () => {
+      heard = { sound: "microphone", pauses: [PAUSE], canClean: true, pointer: null };
+      const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+      mockBackend(JOINED_TWO, null, ["microphone"], { separateMicrophone: true });
+      render(<RecordingEditor />);
+      const first = await previewVideo(OWN);
+      setVideoMetadata(first, 12, 1920, 1080);
+      fireEvent.loadedMetadata(first);
+      await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
+      const second = await previewVideo(OTHER);
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Preview" }));
+      // The preview is 2.25 s of the first recording, then 6 s of the second, over 100 px.
+      expect(screen.getByLabelText("Time")).toHaveTextContent("/ 0:08.2");
+      const track = screen.getByTestId("timeline-track");
+      placeAt(track, 100, 26);
+      fireEvent.pointerDown(track, { clientX: 37 });
+      fireEvent.pointerUp(track, { clientX: 37 });
+      setVideoMetadata(second, 6, 720, 720);
+      fireEvent.canPlay(second);
+      await userEvent.click(screen.getByRole("button", { name: "Play" }));
+      fireEvent.play(second);
+      const played = play.mock.calls.length;
+      // Stopping puts the playhead back in the first recording, which then loads.
+      await userEvent.click(screen.getByRole("button", { name: "Stop preview" }));
+      fireEvent.canPlay(first);
+      expect(play.mock.calls.length).toBe(played);
+      expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
     });
   });
 });

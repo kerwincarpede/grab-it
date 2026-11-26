@@ -126,6 +126,18 @@ describe("proposeCuts", () => {
     expect(proposeCuts(whole, OWN, "microphone", pauses, null, { ...INITIAL_TUNING, padMs: PAD_RANGE.max })).toEqual([{ id: "own:3500", clipId: "own", source: OWN, startMs: 3500, endMs: 5500, reason: "pause" }]);
   });
 
+  it("still leaves at least MIN_CLIP_MS of a clip at the lowest padding and Minimum cut", () => {
+    const tightest = { minCutMs: MIN_CUT_RANGE.min, padMs: PAD_RANGE.min };
+    const spans = (pauses: { startMs: number; endMs: number }[]) => proposeCuts(whole, OWN, "microphone", pauses, null, tightest).map((each) => [each.startMs, each.endMs]);
+    // A cut may take a clip's very start or end...
+    expect(spans([{ startMs: 0, endMs: 900 }])).toEqual([[0, 900]]);
+    expect(spans([{ startMs: 11_400, endMs: 12_000 }])).toEqual([[11_400, 12_000]]);
+    // ...but never leave a sliver shorter than half a second before or after it.
+    expect(spans([{ startMs: 300, endMs: 1200 }])).toEqual([]);
+    expect(spans([{ startMs: 11_000, endMs: 11_700 }])).toEqual([]);
+    expect(spans([{ startMs: 500, endMs: 1100 }])).toEqual([[500, 1100]]);
+  });
+
   it("starts from the values Suggest edits always used", () => {
     expect(INITIAL_TUNING).toEqual({ minCutMs: 1200, padMs: 250 });
   });

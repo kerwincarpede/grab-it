@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { recordingAudition, recordingPauses, type RecordingPauses } from "./api";
-import { isGap, type Clip } from "./clips";
+import { isGap, sequenceDuration, type Clip } from "./clips";
 import { formatTime } from "./edits";
 import {
   applyCuts,
@@ -56,9 +56,10 @@ export interface SuggestEditsPanelProps {
   /**
    * Plays `next` in place of the sequence from `fromMs`, or ends the
    * preview with null. With `endMs` it plays at once and ends the preview
-   * on its own once the playhead reaches `endMs` of `next`.
+   * on its own once the playhead reaches `endMs` of `next`, leaving the
+   * playhead at `returnMs` of the saved sequence.
    */
-  onPreview: (next: Clip[] | null, fromMs?: number, endMs?: number) => void;
+  onPreview: (next: Clip[] | null, fromMs?: number, endMs?: number, returnMs?: number) => void;
   /** Keeps `next` as the sequence, as one undo entry. */
   onApply: (next: Clip[]) => void;
   onClose: () => void;
@@ -219,8 +220,13 @@ export default function SuggestEditsPanel({ clips, own, joined, previewing, onPr
   const previewCut = (cut: CutProposal) => {
     const at = cutSequenceMs(clips, cut);
     if (at === null) return;
+    // Its row comes into focus, and an audition playing gives way to it.
+    letGoOfAudition();
+    setFocusId(cut.id);
     setPreviewCutId(cut.id);
-    onPreview(applyCuts(clips, [cut]), Math.max(0, at - CUT_PREVIEW_CONTEXT_MS), at + CUT_PREVIEW_CONTEXT_MS);
+    // Where the preview stops, 2 s after the cut, is that much after the cut's end in the saved sequence.
+    const returnMs = Math.min(at + (cut.endMs - cut.startMs) + CUT_PREVIEW_CONTEXT_MS, sequenceDuration(clips));
+    onPreview(applyCuts(clips, [cut]), Math.max(0, at - CUT_PREVIEW_CONTEXT_MS), at + CUT_PREVIEW_CONTEXT_MS, returnMs);
   };
 
   const stopPreview = () => onPreview(null);
@@ -266,13 +272,18 @@ export default function SuggestEditsPanel({ clips, own, joined, previewing, onPr
   /** Moves the audition to cut `id`, letting go of any sound for another. */
   const focusOn = (id: string) => {
     if (id === focus?.id) return;
+    letGoOfAudition();
+    setFocusId(id);
+  };
+
+  /** Stops any audition, playing or being prepared, and forgets why one failed. */
+  function letGoOfAudition() {
     auditionTicket.current += 1;
     audioRef.current?.pause();
     setAudition(null);
     setAuditionBusy(null);
     setAuditionError(null);
-    setFocusId(id);
-  };
+  }
 
   const stopAudition = () => {
     auditionTicket.current += 1;
