@@ -658,7 +658,9 @@ export default function RecordingEditor() {
   };
   /** Moves a clip off Video 1, with its links, to start at sequence time `atMs`. */
   const moveTrackClip = (id: string, atMs: number, toTrack?: string) => {
-    const next = moveInTime(tracks, id, atMs, toTrack, sequenceDuration(savedClips));
+    // The timeline ends with the later of Video 1's end and the last overlay clip's.
+    const endMs = Math.max(sequenceDuration(savedClips), sequenceDuration(flattenPicture(tracks)));
+    const next = moveInTime(tracks, id, atMs, toTrack, endMs);
     if (isRefusal(next)) setMessage(next.refused);
     else commitTracks(next);
   };

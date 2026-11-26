@@ -1932,6 +1932,27 @@ describe("RecordingEditor", () => {
       expect(first.currentTime).toBe(8);
     });
 
+    it("lets a sound clip move up to the end of an overlay running past Video 1", async () => {
+      const backend = mockBackend({
+        version: TRACKS_VERSION,
+        tracks: [
+          { id: "video-2", name: "Video 2", kind: "video", clips: [{ id: "c", source: OTHER, startMs: 0, endMs: 4000, atMs: 8000 }] },
+          { id: "video-1", name: "Video 1", kind: "video", clips: JOINED.clips },
+          { id: "audio-1", name: "Audio 1", kind: "audio", clips: [{ id: "s", source: OTHER, startMs: 0, endMs: 1000, atMs: 0 }] },
+        ],
+      });
+      render(<RecordingEditor />);
+      await loadJoined();
+      // The timeline runs 12 s, to the end of Video 2; 120 px.
+      await waitFor(() => expect(screen.getByLabelText("Time")).toHaveTextContent("/ 0:12.0"));
+      placeAt(screen.getByRole("listbox", { name: "Audio track Audio 1" }), 120, 20);
+      const sound = screen.getByRole("option", { name: `${OTHER}, 0:01.0 at 0:00.0` });
+      fireEvent.pointerDown(sound, { clientX: 0 });
+      fireEvent.pointerMove(sound, { clientX: 105, shiftKey: true });
+      fireEvent.pointerUp(sound, { clientX: 105 });
+      await waitFor(() => expect((lastSaved(backend) as { tracks: { id: string; clips: { atMs: number }[] }[] }).tracks[2].clips[0].atMs).toBe(10_500));
+    });
+
     it("moves a clip dropped on another video track there", async () => {
       const backend = mockBackend({
         version: TRACKS_VERSION,
