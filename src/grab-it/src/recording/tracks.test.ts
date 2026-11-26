@@ -2,12 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { Clip } from "./clips";
 import { parseEdits, serializeEdits, type RecordingEdits } from "./edits";
 import {
+  addTrack,
   cutSpan,
+  flattenPicture,
+  hasOverlay,
+  isLockedClip,
+  placeRecording,
+  removeTrack,
   defaultTimeline,
   exportAudio,
   FIRST_AUDIO_ID,
   isRefusal,
   linkClips,
+  lockTrack,
   MAIN_TRACK_ID,
   moveInTime,
   needsTracks,
@@ -286,5 +293,123 @@ describe("tracks", () => {
     expect(snapClip(1000, 4000, [1000, 5050], 0.1)).toBe(1000);
     expect(snapClip(1000, 4000, [950, 5000], 0.1)).toBe(1000);
     expect(snapTargets(defaultTimeline([a], sound), 1500, new Set(["a-sound"]))).toEqual([0, 1500, 4000]);
+  });
+});
+
+describe("more tracks", () => {
+  const withVideo2 = () => {
+    ids = 0;
+    return addTrack(defaultTimeline([a], sound), "video", makeId);
+  };
+
+  it("adds video tracks on top and audio tracks last, and removes only empty extra tracks", () => {
+    const { timeline, id } = withVideo2();
+    expect(timeline.tracks.map((track) => track.name)).toEqual(["Video 2", "Video 1", "Audio 1"]);
+    const withAudio = addTrack(timeline, "audio", makeId);
+    expect(withAudio.timeline.tracks.map((track) => track.name)).toEqual(["Video 2", "Video 1", "Audio 1", "Audio 2"]);
+    expect(needsTracks(timeline, sound)).toBe(true);
+    expect(expectTimeline(removeTrack(withAudio.timeline, withAudio.id)).tracks).toHaveLength(3);
+    expect(isRefusal(removeTrack(timeline, MAIN_TRACK_ID))).toBe(true);
+    expect(isRefusal(removeTrack(timeline, FIRST_AUDIO_ID))).toBe(true);
+    const placed = placeRecording(timeline, id, b, 0, () => false, makeId);
+    if (isRefusal(placed)) throw new Error(placed.refused);
+    expect(removeTrack(placed.timeline, id)).toEqual({ refused: "Video 2 still holds clips. Move or delete them first." });
+  });
+
+  it("places a recording on an extra video track at the playhead with its sound linked", () => {
+    const { timeline, id } = withVideo2();
+    const placed = placeRecording(timeline, id, b, 1500, sound, makeId);
+    if (isRefusal(placed)) throw new Error(placed.refused);
+    const video2 = placed.timeline.tracks.find((track) => track.id === id)!;
+    expect(video2.clips).toEqual([{ id: placed.id, source: "b.mp4", startMs: 1000, endMs: 3000, atMs: 1500, link: expect.any(String) }]);
+    // Audio 1 holds a's sound over 0-4000, so b's goes on a new Audio 2, linked.
+    const audio2 = placed.timeline.tracks.find((track) => track.name === "Audio 2")!;
+    expect(audio2.clips).toEqual([{ id: expect.any(String), source: "b.mp4", startMs: 1000, endMs: 3000, atMs: 1500, link: video2.clips[0].link }]);
+    expect(isRefusal(placeRecording(placed.timeline, id, b, 2000, sound, makeId))).toBe(true);
+    expect(isRefusal(placeRecording(timeline, MAIN_TRACK_ID, b, 0, sound, makeId))).toBe(true);
+    const locked = lockTrack(timeline, id, true);
+    expect(isRefusal(placeRecording(locked, id, b, 0, sound, makeId))).toBe(true);
+  });
+
+  it("moves clips between tracks of one kind, refusing overlaps and other kinds", () => {
+    const { timeline, id } = withVideo2();
+    const third = addTrack(timeline, "video", makeId);
+    const placed = placeRecording(third.timeline, id, b, 0, () => false, makeId);
+    if (isRefusal(placed)) throw new Error(placed.refused);
+    const moved = expectTimeline(moveInTime(placed.timeline, placed.id, 500, third.id));
+    expect(moved.tracks.find((track) => track.id === third.id)!.clips.map((clip) => clip.atMs)).toEqual([500]);
+    expect(moved.tracks.find((track) => track.id === id)!.clips).toEqual([]);
+    expect(isRefusal(moveInTime(placed.timeline, placed.id, 0, FIRST_AUDIO_ID))).toBe(true);
+    expect(isRefusal(moveInTime(placed.timeline, placed.id, 0, MAIN_TRACK_ID))).toBe(true);
+    const busy = placeRecording(placed.timeline, third.id, b, 0, () => false, makeId);
+    if (isRefusal(busy)) throw new Error(busy.refused);
+    expect(moveInTime(busy.timeline, placed.id, 100, third.id)).toEqual({ refused: "It would overlap another clip on that track." });
+  });
+
+  it("flattens video tracks so the highest one with a clip shows", () => {
+    const { timeline, id } = withVideo2();
+    expect(flattenPicture(timeline)).toBe(timeline.main);
+    expect(hasOverlay(timeline)).toBe(false);
+    const placed = placeRecording(timeline, id, b, 1000, () => false, makeId);
+    if (isRefusal(placed)) throw new Error(placed.refused);
+    expect(hasOverlay(placed.timeline)).toBe(true);
+    const picture = flattenPicture(placed.timeline);
+    expect(picture.map((clip) => [clip.source, clip.startMs, clip.endMs])).toEqual([
+      ["a.mp4", 0, 1000],
+      ["b.mp4", 1000, 3000],
+      ["a.mp4", 3000, 4000],
+    ]);
+    expect(picture[0].id).toBe("a");
+    expect(picture[2].id).toBe("a@3000");
+  });
+
+  it("fills time no video track covers with gaps and ends with the last video clip", () => {
+    const { timeline, id } = withVideo2();
+    const placed = placeRecording(timeline, id, b, 6000, () => false, makeId);
+    if (isRefusal(placed)) throw new Error(placed.refused);
+    const picture = flattenPicture(placed.timeline);
+    expect(picture.map((clip) => [clip.gap === true, clip.endMs - clip.startMs])).toEqual([
+      [false, 4000],
+      [true, 2000],
+      [false, 2000],
+    ]);
+  });
+
+  it("keeps locked clips out of selection", () => {
+    const timeline = lockTrack(defaultTimeline([a], sound), FIRST_AUDIO_ID, true);
+    expect(isLockedClip(timeline, "a-sound")).toBe(true);
+    expect(isLockedClip(timeline, "a")).toBe(false);
+    expect(isRefusal(moveInTime(unlinkClips(timeline, new Set(["a"])), "a-sound", 500))).toBe(true);
+  });
+
+  it("splits every unlocked track's clip under the playhead, extra tracks too", () => {
+    const { timeline, id } = withVideo2();
+    const placed = placeRecording(timeline, id, b, 0, () => false, makeId);
+    if (isRefusal(placed)) throw new Error(placed.refused);
+    const all = splitAt(placed.timeline, 1000, undefined, 500, makeId);
+    expect(all.main).toHaveLength(2);
+    expect(all.tracks.find((track) => track.id === id)!.clips.map((clip) => [clip.startMs, clip.atMs])).toEqual([[1000, 0], [2000, 1000]]);
+    const locked = splitAt(lockTrack(placed.timeline, id, true), 1000, undefined, 500, makeId);
+    expect(locked.tracks.find((track) => track.id === id)!.clips).toHaveLength(1);
+    expect(locked.main).toHaveLength(2);
+  });
+
+  it("saves and reopens three tracks with a locked one", () => {
+    const { timeline, id } = withVideo2();
+    const placed = placeRecording(timeline, id, b, 1000, sound, makeId);
+    if (isRefusal(placed)) throw new Error(placed.refused);
+    const audio2 = placed.timeline.tracks.find((track) => track.name === "Audio 2")!;
+    const arranged = lockTrack(placed.timeline, audio2.id, true);
+    const edits = withTimeline({ version: 1 }, arranged, "a.mp4", 4000, sound);
+    const sidecar = JSON.parse(JSON.stringify(serializeEdits(edits)));
+    expect(sidecar.version).toBe(TRACKS_VERSION);
+    expect(sidecar.tracks.map((track: { name: string; locked?: boolean }) => [track.name, track.locked === true])).toEqual([
+      ["Video 2", false],
+      ["Video 1", false],
+      ["Audio 1", false],
+      ["Audio 2", true],
+    ]);
+    const read = parseEdits(sidecar);
+    expect(timelineOf(read, read.clips!, sound)).toEqual(arranged);
   });
 });

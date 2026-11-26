@@ -794,6 +794,68 @@
   width: 10em;
 }
 
+.track-lock {
+  font: inherit;
+  padding: 0 6px;
+  border: 1px solid var(--ed-muted);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.track-remove {
+  font: inherit;
+  padding: 0 6px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.track-row[data-selected="true"] .track-name {
+  color: var(--ed-text);
+  font-weight: 600;
+}
+
+.track-row[data-kind="video"] .track-name {
+  cursor: pointer;
+}
+
+.track-rows:empty {
+  display: none;
+}
+
+.track-menu {
+  position: relative;
+}
+
+.track-menu > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.track-menu-items {
+  position: absolute;
+  z-index: 5;
+  top: 100%;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--ed-border);
+  border-radius: var(--ed-radius);
+  background: var(--ed-raised);
+  box-shadow: var(--ed-shadow);
+  white-space: nowrap;
+}
+
+.track-lock[aria-pressed="true"] {
+  color: var(--ed-text);
+  border-color: var(--ed-text);
+}
+
 .track-lane {
   position: relative;
   height: 22px;

@@ -671,3 +671,149 @@ export function renameTrack(timeline: Timeline, id: string, name: string): Timel
   if (!trimmed) return timeline;
   return { ...timeline, tracks: timeline.tracks.map((track) => (track.id === id ? { ...track, name: trimmed } : track)) };
 }
+
+/** Locks or unlocks track `id`. */
+export function lockTrack(timeline: Timeline, id: string, locked: boolean): Timeline {
+  return {
+    ...timeline,
+    tracks: timeline.tracks.map((track) => {
+      if (track.id !== id) return track;
+      const rest = { ...track };
+      delete rest.locked;
+      return locked ? { ...rest, locked: true } : rest;
+    }),
+  };
+}
+
+/** A new, empty track of `kind`: a video track goes on top, so it shows over the others; an audio track goes last. */
+export function addTrack(timeline: Timeline, kind: TrackKind, makeId: () => string = newClipId): { timeline: Timeline; id: string } {
+  const names = new Set(timeline.tracks.map((track) => track.name));
+  let number = timeline.tracks.filter((track) => track.kind === kind).length + 1;
+  const base = kind === "video" ? "Video" : "Audio";
+  while (names.has(`${base} ${number}`)) number++;
+  const track: Track = { id: `${kind}-${makeId()}`, name: `${base} ${number}`, kind, clips: [] };
+  const tracks = kind === "video" ? [track, ...timeline.tracks] : [...timeline.tracks, track];
+  return { timeline: { ...timeline, tracks }, id: track.id };
+}
+
+/** Removes track `id`; refused for Video 1, Audio 1 and a track that holds clips. */
+export function removeTrack(timeline: Timeline, id: string): Timeline | Refusal {
+  const track = timeline.tracks.find((each) => each.id === id);
+  if (!track) return timeline;
+  if (isMain(track) || track.id === FIRST_AUDIO_ID) return { refused: `${track.name} always stays.` };
+  if (track.clips.length > 0) return { refused: `${track.name} still holds clips. Move or delete them first.` };
+  return { ...timeline, tracks: timeline.tracks.filter((each) => each.id !== id) };
+}
+
+/** Whether clip `id` sits on a locked track, so it can't be selected or edited. */
+export function isLockedClip(timeline: Timeline, id: string): boolean {
+  const locked = lockedIds(timeline);
+  return clipPlaces(timeline).some((place) => place.id === id && locked.has(place.trackId));
+}
+
+/** The track clip `id` sits on. */
+export const trackOf = (timeline: Timeline, id: string): Track | undefined => {
+  if (timeline.main.some((clip) => clip.id === id)) return mainTrack(timeline);
+  return timeline.tracks.find((track) => track.clips.some((clip) => clip.id === id));
+};
+
+/**
+ * Places recording `source` (its stretch `startMs`-`endMs`) on extra video
+ * track `trackId` at timeline time `atMs`. When the recording `hasAudio`,
+ * its sound goes, linked, on the first unlocked audio track with room, or
+ * a new one. Refused on Video 1, a locked track or over another clip.
+ */
+export function placeRecording(
+  timeline: Timeline,
+  trackId: string,
+  clip: { source: string; startMs: number; endMs: number },
+  atMs: number,
+  hasAudio: (source: string) => boolean,
+  makeId: () => string = newClipId,
+): { timeline: Timeline; id: string } | Refusal {
+  const track = timeline.tracks.find((each) => each.id === trackId);
+  if (!track || isMain(track) || track.kind !== "video") return { refused: "Choose an extra video track to place the recording on." };
+  if (track.locked) return { refused: `${track.name} is locked.` };
+  const at = Math.max(0, Math.round(atMs));
+  const sound = hasAudio(clip.source);
+  const link = sound ? `link-${makeId()}` : undefined;
+  const picture: PlacedClip = { id: makeId(), source: clip.source, startMs: Math.round(clip.startMs), endMs: Math.round(clip.endMs), atMs: at, ...(link ? { link } : {}) };
+  if (track.clips.some((each) => overlaps(each, picture))) return { refused: `It would overlap another clip on ${track.name}.` };
+  let tracks: Track[] = timeline.tracks.map((each) => (each.id === trackId ? { ...each, clips: [...each.clips, picture].sort((a, b) => a.atMs - b.atMs) } : each));
+  let next: Timeline = { ...timeline, tracks };
+  if (link) {
+    const placed: PlacedClip = { ...picture, id: makeId() };
+    const free = tracks.find((each) => each.kind === "audio" && !each.locked && !each.clips.some((other) => overlaps(other, placed)));
+    if (free) tracks = tracks.map((each) => (each.id === free.id ? { ...each, clips: [...each.clips, placed].sort((a, b) => a.atMs - b.atMs) } : each));
+    else {
+      const added = addTrack(next, "audio", makeId);
+      tracks = added.timeline.tracks.map((each) => (each.id === added.id ? { ...each, clips: [placed] } : each));
+    }
+    next = { ...timeline, tracks };
+  }
+  return { timeline: next, id: picture.id };
+}
+
+/** One video track's clips as timeline spans: Video 1's sequence, or a track's placed clips. */
+function videoSpans(timeline: Timeline, track: Track): { atMs: number; clip: Clip }[] {
+  if (isMain(track)) {
+    const starts = clipStarts(timeline.main);
+    return timeline.main.flatMap((clip, index) => (isGap(clip) ? [] : [{ atMs: starts[index], clip }]));
+  }
+  return track.clips.map((clip) => ({ atMs: clip.atMs, clip: { id: clip.id, source: clip.source, startMs: clip.startMs, endMs: clip.endMs } }));
+}
+
+/** Whether a video track other than Video 1 holds a clip, so the picture is no longer Video 1 alone. */
+export const hasOverlay = (timeline: Timeline) => timeline.tracks.some((track) => track.kind === "video" && !isMain(track) && track.clips.length > 0);
+
+/**
+ * The picture every video track makes, as one sequence of clips and gaps
+ * (what `ExportPlan.clips` holds): at each moment the highest video track
+ * with a clip there shows; where none has one is a gap. It ends with the
+ * last video clip. Pieces keep their clip's id, the later pieces of one
+ * clip taking `<id>@<ms>`. A timeline with only Video 1 gives `main` back.
+ */
+export function flattenPicture(timeline: Timeline): Clip[] {
+  if (!hasOverlay(timeline)) return timeline.main;
+  const layers = timeline.tracks.filter((track) => track.kind === "video").map((track) => videoSpans(timeline, track));
+  const edges = new Set<number>();
+  for (const layer of layers) for (const span of layer) {
+    edges.add(span.atMs);
+    edges.add(span.atMs + clipLength(span.clip));
+  }
+  const sorted = [...edges].sort((a, b) => a - b);
+  const out: Clip[] = [];
+  let lastClip: { id: string; endAt: number } | null = null;
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const from = sorted[i];
+    const to = sorted[i + 1];
+    let found: { atMs: number; clip: Clip } | undefined;
+    for (const layer of layers) {
+      found = layer.find((span) => span.atMs <= from && span.atMs + clipLength(span.clip) >= to);
+      if (found) break;
+    }
+    const hit = found;
+    const prev = out[out.length - 1];
+    if (!hit) {
+      if (from === 0 || out.length > 0) {
+        if (prev && isGap(prev)) prev.endMs += to - from;
+        else out.push({ id: `gap@${from}`, source: "", startMs: 0, endMs: to - from, gap: true });
+      }
+      lastClip = null;
+      continue;
+    }
+    const startMs = hit.clip.startMs + (from - hit.atMs);
+    if (prev && !isGap(prev) && lastClip && lastClip.id === hit.clip.id && lastClip.endAt === from) {
+      prev.endMs = startMs + (to - from);
+    } else {
+      const used = out.some((clip) => clip.id === hit.clip.id);
+      out.push({ id: used ? `${hit.clip.id}@${from}` : hit.clip.id, source: hit.clip.source, startMs, endMs: startMs + (to - from) });
+    }
+    lastClip = { id: hit.clip.id, endAt: to };
+  }
+  // A leading stretch with no clip is a gap from 0.
+  const first = sorted[0] ?? 0;
+  if (first > 0) out.unshift({ id: "gap@0", source: "", startMs: 0, endMs: first, gap: true });
+  while (out.length > 0 && isGap(out[out.length - 1])) out.pop();
+  return out;
+}

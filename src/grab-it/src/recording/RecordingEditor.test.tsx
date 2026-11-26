@@ -1703,6 +1703,76 @@ describe("RecordingEditor", () => {
       expect(screen.getByRole("option", { name: `${OTHER}, 0:06.0 at 0:04.0` })).not.toHaveAttribute("data-linked");
     });
 
+    it("shows the highest video track's clip in the preview, switching recording at each change", async () => {
+      mockBackend({
+        version: TRACKS_VERSION,
+        tracks: [
+          { id: "video-2", name: "Video 2", kind: "video", clips: [{ id: "c", source: OTHER, startMs: 0, endMs: 2000, atMs: 1000 }] },
+          { id: "video-1", name: "Video 1", kind: "video", clips: JOINED.clips },
+          { id: "audio-1", name: "Audio 1", kind: "audio", clips: [] },
+        ],
+      });
+      render(<RecordingEditor />);
+      const first = await loadJoined();
+      const second = await previewVideo(OTHER);
+      expect(screen.getByRole("listbox", { name: "Video track Video 2" })).toBeInTheDocument();
+      // 10 s over 100 px; Video 2 covers 1 s to 3 s.
+      const track = screen.getByTestId("timeline-track");
+      placeAt(track, 100, 26);
+      const seekTo = (clientX: number) => {
+        fireEvent.pointerDown(track, { clientX });
+        fireEvent.pointerUp(track, { clientX });
+      };
+      seekTo(5);
+      expect(first).toBeVisible();
+      seekTo(20);
+      await waitFor(() => expect(second).toBeVisible());
+      expect(first).not.toBeVisible();
+      seekTo(35);
+      await waitFor(() => expect(first).toBeVisible());
+      expect(second).not.toBeVisible();
+    });
+
+    it("adds, removes and undoes tracks from the Track menu, saving them with the tracks", async () => {
+      const backend = mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      await userEvent.click(screen.getByText("Track"));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Add video track" }));
+      await waitFor(() => expect((lastSaved(backend) as { version: number }).version).toBe(TRACKS_VERSION));
+      const saved = lastSaved(backend) as { tracks: { name: string; kind: string }[] };
+      expect(saved.tracks.map((track) => track.name)).toEqual(["Video 2", "Video 1", "Audio 1"]);
+      expect(screen.getByRole("listbox", { name: "Video track Video 2" })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Remove Video 2" }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual(JOINED));
+      await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(screen.getByRole("listbox", { name: "Video track Video 2" })).toBeInTheDocument());
+      // Audio 1 always stays, so it has no Remove.
+      expect(screen.queryByRole("button", { name: "Remove Audio 1" })).not.toBeInTheDocument();
+    });
+
+    it("keeps a locked track's clips from being selected, nor a locked Video 1's", async () => {
+      const backend = mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      await userEvent.click(screen.getByRole("button", { name: "Lock Audio 1" }));
+      await waitFor(() => expect((lastSaved(backend) as { version: number }).version).toBe(TRACKS_VERSION));
+      const sound = screen.getByRole("option", { name: `${OTHER}, 0:06.0 at 0:04.0, linked` });
+      fireEvent.pointerDown(sound, { clientX: 0 });
+      fireEvent.pointerUp(sound, { clientX: 0 });
+      expect(sound).toHaveAttribute("aria-selected", "false");
+      expect(sound).toHaveAttribute("aria-disabled", "true");
+
+      await userEvent.click(screen.getByRole("button", { name: "Lock Video 1" }));
+      await waitFor(() => expect((lastSaved(backend) as { tracks: { id: string; locked?: boolean }[] }).tracks[0]).toMatchObject({ id: "video-1", locked: true }));
+      const count = saved(backend).length;
+      const picture = screen.getByRole("option", { name: `${OTHER}, 0:06.0` });
+      fireEvent.focus(picture);
+      fireEvent.keyDown(document.body, { key: "ArrowLeft", altKey: true });
+      expect(picture).toHaveAttribute("aria-selected", "false");
+      expect(saved(backend)).toHaveLength(count);
+    });
+
     it("adds a clip to the selection with Shift-click and links them", async () => {
       const backend = mockBackend({
         version: TRACKS_VERSION,

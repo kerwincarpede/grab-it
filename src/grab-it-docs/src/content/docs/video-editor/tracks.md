@@ -1,6 +1,6 @@
 ---
 title: Tracks and sound
-description: See a recording's sound on its own track, unlink it from the picture, move it in time, and link it again.
+description: Add video and audio tracks, lay recordings over each other, unlink a recording's sound and move it in time, and lock tracks you don't want changed.
 sidebar:
   order: 7
 ---
@@ -23,14 +23,29 @@ To link clips again, click one, `Shift`-click the others, and click **Link**. Wi
 
 With one recording, unlinked sound keeps playing at the same moment of the recording when you move its trim start.
 
-## Rename a track
+## Add and remove tracks
 
-Double-click a track's name to rename it. Press `Enter` to keep the name or `Esc` to cancel.
+Click **Track** in the top bar, then **Add video track** or **Add audio track**. A new video track goes above the others; a new audio track goes at the bottom. An empty track you added has **Remove** beside its name. **Video 1** and **Audio 1** always stay.
+
+## Lay one recording over another
+
+1. Add a video track, or click the name of one you added, so it is chosen.
+2. Move the playhead to where the recording should start.
+3. Click **Recording** and pick it.
+
+The recording goes on the chosen track at the playhead, with its sound linked on the first audio track that has room, or on a new one. Drag a clip onto another track of its kind to move it there. Clips never overlap on one track: a move or a placement that would is refused.
+
+Where video tracks overlap, the highest one shows and covers the ones under it completely. Where no video track has a clip, the picture is black. The export ends with the last video clip, and every sound clip under it plays, mixed together.
+
+## Rename and lock a track
+
+- Double-click a track's name to rename it. Press `Enter` to keep the name or `Esc` to cancel.
+- Click **Lock** beside a track's name to keep it as it is. Splitting at the playhead, deleting and [suggested cuts](/grab-it/video-editor/suggest-edits/) leave a locked track alone, and its clips can't be selected or dragged. **Video 1** has its own **Lock** above its clips; while it is locked its clips can't be trimmed, moved or deleted. Click **Locked** to unlock a track.
 
 ## Split and delete with tracks
 
-- **Split** with nothing selected cuts every track at the playhead. With a clip under the playhead selected, it cuts that clip and the clips linked to it; with a clip elsewhere selected, it cuts the clip under the playhead and its linked clips.
-- **Delete** removes the selected clip with its linked sound, and moves everything after it up on every track. Deleting a gap closes it the same way. When that would cut into sound that isn't linked to the clip, nothing is deleted and the status bar says why: move or link that sound first.
+- **Split** with nothing selected cuts every unlocked track at the playhead. With a clip under the playhead selected, it cuts that clip and the clips linked to it; with a clip elsewhere selected, it cuts the clip under the playhead and its linked clips.
+- **Delete** removes the selected clip with its linked sound, and moves everything after it up on every unlocked track. Deleting a gap closes it the same way. When that would cut into sound that isn't linked to the clip, nothing is deleted and the status bar says why: move or link that sound first.
 
 ## Hear and export it
 

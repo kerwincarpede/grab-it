@@ -1,7 +1,7 @@
 import { useRef, useState, type PointerEvent } from "react";
 import { clipLength } from "./clips";
 import { formatTime } from "./edits";
-import { END_MARGIN_MS, isMain, placedEnd, snapClip, snapTargets, type PlacedClip, type Timeline, type Track } from "./tracks";
+import { END_MARGIN_MS, FIRST_AUDIO_ID, isMain, placedEnd, snapClip, snapTargets, type PlacedClip, type Timeline, type Track } from "./tracks";
 
 interface TrackRowsProps {
   timeline: Timeline;
@@ -20,9 +20,26 @@ interface TrackRowsProps {
   selected: ReadonlySet<string>;
   /** Selects clip `id`; `adding` (Shift) adds it to the selection. */
   onSelect: (id: string, adding: boolean) => void;
-  /** Moves clip `id` and its links so it starts at sequence time `atMs`. */
-  onMove: (id: string, atMs: number) => void;
+  /** Moves clip `id` and its links so it starts at sequence time `atMs`, onto track `toTrack` when dropped on another row. */
+  onMove: (id: string, atMs: number, toTrack?: string) => void;
   onRename: (trackId: string, name: string) => void;
+  onLock: (trackId: string, locked: boolean) => void;
+  /** Removes an empty track. */
+  onRemove?: (trackId: string) => void;
+  /** Which tracks to show: those above Video 1 (with Video 1's own head), or those under it. */
+  placement?: "above" | "below";
+  /** The track chosen by clicking its name, which Add recording places onto. */
+  selectedTrackId?: string | null;
+  onSelectTrack?: (trackId: string) => void;
+}
+
+/** The track row under screen point `y`, found by the rows' `data-track-id`. */
+function rowAt(y: number): string | undefined {
+  for (const row of document.querySelectorAll<HTMLElement>(".track-row[data-track-id]")) {
+    const box = row.getBoundingClientRect();
+    if (box.height > 0 && y >= box.top && y < box.bottom) return row.dataset.trackId;
+  }
+  return undefined;
 }
 
 const percent = (ms: number, durationMs: number) => `${durationMs > 0 ? (ms / durationMs) * 100 : 0}%`;
@@ -37,31 +54,49 @@ type Drag = { id: string; x: number; atMs: number; width: number; moved: boolean
  * (double-click to rename) and its clips at their places. A clip
  * linked to others is marked. Click selects a clip, Shift-click adds it to
  * the selection; dragging moves it and its links in time, snapping to the
- * playhead, clip edges and 0 unless Shift is held.
+ * playhead, clip edges and 0 unless Shift is held, and dropping it on
+ * another row of its kind moves it there. A locked track's clips can't be
+ * selected or dragged; an empty extra track can be removed. Placed
+ * `above`, it shows the video tracks over Video 1 and Video 1's own lock.
  */
-export default function TrackRows({ timeline, durationMs, offsetMs, endMs, currentMs, selected, onSelect, onMove, onRename }: TrackRowsProps) {
+export default function TrackRows(props: TrackRowsProps) {
+  const { timeline, placement = "below", onLock } = props;
+  const mainAt = timeline.tracks.findIndex(isMain);
+  const shown = timeline.tracks.filter((track, index) => !isMain(track) && (placement === "above" ? index < mainAt : index > mainAt));
+  const main = timeline.tracks[mainAt];
   return (
-    <div className="track-rows">
-      {timeline.tracks.filter((track) => !isMain(track)).map((track) => (
-        <TrackRow
-          key={track.id}
-          track={track}
-          timeline={timeline}
-          durationMs={durationMs}
-          offsetMs={offsetMs}
-          endMs={endMs}
-          currentMs={currentMs}
-          selected={selected}
-          onSelect={onSelect}
-          onMove={onMove}
-          onRename={onRename}
-        />
+    <div className="track-rows" data-placement={placement}>
+      {shown.map((track) => (
+        <TrackRow key={track.id} {...props} track={track} />
       ))}
+      {placement === "above" && main && (
+        <div className="track-row track-row-main" data-kind="video" data-locked={main.locked ? "true" : undefined}>
+          <div className="track-head">
+            <span className="track-name">{main.name}</span>
+            <LockButton track={main} onLock={onLock} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function TrackRow({ track, timeline, durationMs, offsetMs, endMs, currentMs, selected, onSelect, onMove, onRename }: TrackRowsProps & { track: Track }) {
+function LockButton({ track, onLock }: { track: Track; onLock: TrackRowsProps["onLock"] }) {
+  return (
+    <button
+      type="button"
+      className="track-lock"
+      aria-pressed={track.locked === true}
+      aria-label={`${track.locked ? "Unlock" : "Lock"} ${track.name}`}
+      title={track.locked ? "Locked: edits leave this track alone" : "Lock this track"}
+      onClick={() => onLock(track.id, !track.locked)}
+    >
+      {track.locked ? "Locked" : "Lock"}
+    </button>
+  );
+}
+
+function TrackRow({ track, timeline, durationMs, offsetMs, endMs, currentMs, selected, onSelect, onMove, onRename, onLock, onRemove, selectedTrackId, onSelectTrack }: TrackRowsProps & { track: Track }) {
   /** Where the output ends on the rows; nothing is drawn past it. */
   const limit = Math.min(durationMs, offsetMs + endMs);
   const rowRef = useRef<HTMLDivElement>(null);
@@ -75,6 +110,8 @@ function TrackRow({ track, timeline, durationMs, offsetMs, endMs, currentMs, sel
   const begin = (event: PointerEvent<HTMLElement>, clip: PlacedClip) => {
     event.preventDefault();
     event.stopPropagation();
+    // A locked track's clips can't be selected or moved.
+    if (track.locked) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
     onSelect(clip.id, event.shiftKey);
     // Shift at the press adds to the selection; Shift during a drag turns snapping off.
@@ -96,14 +133,16 @@ function TrackRow({ track, timeline, durationMs, offsetMs, endMs, currentMs, sel
 
   const end = (event: PointerEvent<HTMLElement>) => {
     event.currentTarget.releasePointerCapture?.(event.pointerId);
-    if (drag?.moved && draftAt !== null && draftAt !== drag.atMs) onMove(drag.id, draftAt);
+    const over = drag?.moved ? rowAt(event.clientY) : undefined;
+    const toTrack = over && over !== track.id ? over : undefined;
+    if (drag?.moved && draftAt !== null && (draftAt !== drag.atMs || toTrack)) onMove(drag.id, draftAt, toTrack);
     setDrag(null);
     setDraftAt(null);
   };
 
   const label = track.kind === "audio" ? "Audio track" : "Video track";
   return (
-    <div className="track-row" data-kind={track.kind}>
+    <div className="track-row" data-track-id={track.id} data-selected={selectedTrackId === track.id ? "true" : undefined} data-kind={track.kind} data-locked={track.locked ? "true" : undefined}>
       <div className="track-head">
         {renaming ? (
           <input
@@ -131,7 +170,8 @@ function TrackRow({ track, timeline, durationMs, offsetMs, endMs, currentMs, sel
         ) : (
           <span
             className="track-name"
-            title="Double-click to rename"
+            title={track.kind === "video" ? "Click to place recordings here; double-click to rename" : "Double-click to rename"}
+            onClick={() => track.kind === "video" && onSelectTrack?.(track.id)}
             onDoubleClick={() => {
               cancelled.current = false;
               setName(track.name);
@@ -140,6 +180,12 @@ function TrackRow({ track, timeline, durationMs, offsetMs, endMs, currentMs, sel
           >
             {track.name}
           </span>
+        )}
+        <LockButton track={track} onLock={onLock} />
+        {onRemove && track.clips.length === 0 && track.id !== FIRST_AUDIO_ID && (
+          <button type="button" className="track-remove" aria-label={`Remove ${track.name}`} title="Remove this empty track" onClick={() => onRemove(track.id)}>
+            Remove
+          </button>
         )}
       </div>
       <div className="track-lane" ref={rowRef} role="listbox" aria-label={`${label} ${track.name}`} aria-orientation="horizontal" aria-multiselectable="true">
@@ -151,10 +197,11 @@ function TrackRow({ track, timeline, durationMs, offsetMs, endMs, currentMs, sel
               key={clip.id}
               className="track-clip"
               role="option"
-              tabIndex={0}
+              tabIndex={track.locked ? -1 : 0}
+              aria-disabled={track.locked ? true : undefined}
               aria-selected={selected.has(clip.id)}
               aria-label={text}
-              title={`${text}. ${clip.link ? "Unlink to move it on its own" : "Drag to move; Shift turns off snapping"}; Shift-click adds to the selection`}
+              title={track.locked ? `${text}. ${track.name} is locked` : `${text}. ${clip.link ? "Unlink to move it on its own" : "Drag to move, or onto another track of its kind; Shift turns off snapping"}; Shift-click adds to the selection`}
               data-linked={clip.link ? "true" : undefined}
               // The output ends with the last picture: sound past the timeline's end is not drawn,
               // and a clip starting there is a sliver at the right edge, to select and move back.
