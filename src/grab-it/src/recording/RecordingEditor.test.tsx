@@ -1763,14 +1763,124 @@ describe("RecordingEditor", () => {
       expect(sound).toHaveAttribute("aria-selected", "false");
       expect(sound).toHaveAttribute("aria-disabled", "true");
 
+      // A Video 1 clip selected before the lock can't be moved once it is on.
+      const picture = screen.getByRole("option", { name: `${OTHER}, 0:06.0` });
+      fireEvent.focus(picture);
+      expect(picture).toHaveAttribute("aria-selected", "true");
       await userEvent.click(screen.getByRole("button", { name: "Lock Video 1" }));
       await waitFor(() => expect((lastSaved(backend) as { tracks: { id: string; locked?: boolean }[] }).tracks[0]).toMatchObject({ id: "video-1", locked: true }));
       const count = saved(backend).length;
-      const picture = screen.getByRole("option", { name: `${OTHER}, 0:06.0` });
-      fireEvent.focus(picture);
       fireEvent.keyDown(document.body, { key: "ArrowLeft", altKey: true });
-      expect(picture).toHaveAttribute("aria-selected", "false");
+      await waitFor(() => expect(screen.getByText(/Video 1 is locked/)).toBeInTheDocument());
       expect(saved(backend)).toHaveLength(count);
+      // Nor can a Video 1 clip be selected while it is locked.
+      const first = screen.getByRole("option", { name: `${OWN}, 0:04.0` });
+      fireEvent.pointerDown(first, { clientX: 0 });
+      fireEvent.pointerUp(first, { clientX: 0 });
+      fireEvent.focus(first);
+      expect(first).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("refuses a Video 1 edit that would change linked sound on a locked track", async () => {
+      const backend = mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      await userEvent.click(screen.getByRole("button", { name: "Lock Audio 1" }));
+      await waitFor(() => expect((lastSaved(backend) as { version: number }).version).toBe(TRACKS_VERSION));
+      const count = saved(backend).length;
+      fireEvent.focus(screen.getByRole("option", { name: `${OTHER}, 0:06.0` }));
+      fireEvent.keyDown(document.body, { key: "ArrowLeft", altKey: true });
+      await waitFor(() => expect(screen.getByText(/linked clips on a locked track/)).toBeInTheDocument());
+      expect(saved(backend)).toHaveLength(count);
+    });
+
+    it("places a recording on the chosen video track at the playhead, its sound linked on a new audio track", async () => {
+      const backend = mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      await userEvent.click(screen.getByText("Track"));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Add video track" }));
+      const add = screen.getByRole("button", { name: "Recording" });
+      await waitFor(() => expect(add).toHaveAttribute("title", expect.stringContaining("on Video 2")));
+      // Clicking the track's name lets it go, and clicking again chooses it.
+      await userEvent.click(screen.getByText("Video 2"));
+      expect(add).toHaveAttribute("title", expect.stringContaining("after the clip under the playhead"));
+      await userEvent.click(screen.getByText("Video 2"));
+      expect(add).toHaveAttribute("title", expect.stringContaining("on Video 2"));
+      // 10 s over 100 px: the playhead goes to 2 s.
+      const track = screen.getByTestId("timeline-track");
+      placeAt(track, 100, 26);
+      fireEvent.pointerDown(track, { clientX: 20 });
+      fireEvent.pointerUp(track, { clientX: 20 });
+      picked = OTHER_PATH;
+      await userEvent.click(add);
+      await waitFor(() => expect((lastSaved(backend) as { tracks: unknown[] }).tracks).toHaveLength(4));
+      const saved = lastSaved(backend) as { tracks: { name: string; clips: { source: string; startMs: number; endMs: number; atMs: number; link?: string }[] }[] };
+      expect(saved.tracks.map((each) => each.name)).toEqual(["Video 2", "Video 1", "Audio 1", "Audio 2"]);
+      const [placed] = saved.tracks[0].clips;
+      expect(placed).toMatchObject({ source: OTHER, startMs: 0, endMs: 6000, atMs: 2000 });
+      expect(saved.tracks[3].clips).toEqual([expect.objectContaining({ source: OTHER, atMs: 2000, link: placed.link })]);
+      // Video 1 is untouched.
+      expect(clipOptions()).toHaveLength(2);
+    });
+
+    it("plays, scrubs and splits a second recording laid over one recording, past its end", async () => {
+      const backend = mockBackend({
+        version: TRACKS_VERSION,
+        tracks: [
+          { id: "video-2", name: "Video 2", kind: "video", clips: [{ id: "c", source: OTHER, startMs: 0, endMs: 3000, atMs: 3000 }] },
+          { id: "video-1", name: "Video 1", kind: "video", clips: [{ id: "own", source: OWN, startMs: 0, endMs: 4000 }] },
+          { id: "audio-1", name: "Audio 1", kind: "audio", clips: [] },
+        ],
+      });
+      render(<RecordingEditor />);
+      const first = await loadJoined(1);
+      const second = await previewVideo(OTHER);
+      // The timeline runs to the end of the overlay, 6 s.
+      await waitFor(() => expect(screen.getByLabelText("Time")).toHaveTextContent("/ 0:06.0"));
+      const track = screen.getByTestId("timeline-track");
+      placeAt(track, 60, 26);
+      fireEvent.pointerDown(track, { clientX: 10 });
+      fireEvent.pointerUp(track, { clientX: 10 });
+      expect(first).toBeVisible();
+      // At 5 s only Video 2 has a clip: it shows, and Split cuts it.
+      fireEvent.pointerDown(track, { clientX: 50 });
+      fireEvent.pointerUp(track, { clientX: 50 });
+      await waitFor(() => expect(second).toBeVisible());
+      const split = screen.getByRole("button", { name: "Split" });
+      expect(split).toBeEnabled();
+      await userEvent.click(split);
+      await waitFor(() =>
+        expect((lastSaved(backend) as { tracks: { clips: { startMs: number; atMs: number }[] }[] }).tracks[0].clips.map((clip) => [clip.startMs, clip.atMs])).toEqual([
+          [0, 3000],
+          [2000, 5000],
+        ]),
+      );
+    });
+
+    it("moves a clip dropped on another video track there", async () => {
+      const backend = mockBackend({
+        version: TRACKS_VERSION,
+        tracks: [
+          { id: "video-3", name: "Video 3", kind: "video", clips: [] },
+          { id: "video-2", name: "Video 2", kind: "video", clips: [{ id: "c", source: OTHER, startMs: 0, endMs: 2000, atMs: 1000 }] },
+          { id: "video-1", name: "Video 1", kind: "video", clips: JOINED.clips },
+          { id: "audio-1", name: "Audio 1", kind: "audio", clips: [] },
+        ],
+      });
+      render(<RecordingEditor />);
+      await loadJoined();
+      const rowOf = (name: string) => screen.getByRole("listbox", { name: `Video track ${name}` }).closest(".track-row") as HTMLElement;
+      vi.spyOn(rowOf("Video 3"), "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, x: 0, y: 0, width: 100, height: 20, right: 100, bottom: 20, toJSON: () => ({}) } as DOMRect);
+      vi.spyOn(rowOf("Video 2"), "getBoundingClientRect").mockReturnValue({ left: 0, top: 20, x: 0, y: 20, width: 100, height: 20, right: 100, bottom: 40, toJSON: () => ({}) } as DOMRect);
+      // 10 s over 100 px.
+      placeAt(screen.getByRole("listbox", { name: "Video track Video 2" }), 100, 20);
+      const clip = screen.getByRole("option", { name: `${OTHER}, 0:02.0 at 0:01.0` });
+      fireEvent.pointerDown(clip, { clientX: 10, clientY: 30 });
+      fireEvent.pointerMove(clip, { clientX: 20, clientY: 10 });
+      fireEvent.pointerUp(clip, { clientX: 20, clientY: 10 });
+      await waitFor(() => expect((lastSaved(backend) as { tracks: { id: string }[] } | undefined)?.tracks?.[0]).toMatchObject({ id: "video-3", clips: [{ id: "c", atMs: 2000 }] }));
+      expect((lastSaved(backend) as { tracks: { clips: unknown[] }[] }).tracks[1].clips).toEqual([]);
     });
 
     it("adds a clip to the selection with Shift-click and links them", async () => {

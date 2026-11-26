@@ -347,7 +347,7 @@ export const END_MARGIN_MS = 100;
 
 /** Why an edit was refused; `overlap` when it would cut into sound not linked to the picture it removes. */
 export type Refusal = { refused: string; overlap?: true };
-export const isRefusal = (value: Timeline | Refusal): value is Refusal => "refused" in value;
+export const isRefusal = <T extends object>(value: T | Refusal): value is Refusal => "refused" in value;
 
 /**
  * Moves clip `id` (not on Video 1) and its links by the same amount so it
@@ -704,6 +704,9 @@ export function removeTrack(timeline: Timeline, id: string): Timeline | Refusal 
   if (track.clips.length > 0) return { refused: `${track.name} still holds clips. Move or delete them first.` };
   return { ...timeline, tracks: timeline.tracks.filter((each) => each.id !== id) };
 }
+
+/** The ids of the locked tracks. */
+const lockedIds = (timeline: Timeline) => new Set(timeline.tracks.filter((track) => track.locked).map((track) => track.id));
 
 /** Whether clip `id` sits on a locked track, so it can't be selected or edited. */
 export function isLockedClip(timeline: Timeline, id: string): boolean {

@@ -200,21 +200,23 @@ const isJoined = (clips: Clip[], own: string) => clips.length > 1 || (clips.leng
 /**
  * Where timeline time `ms` falls. Joined, the timeline is the sequence;
  * otherwise it is the opened recording's own time, cut by its trim.
+ * `joinedView` holds the timeline as the sequence even for one clip of
+ * the opened recording, as other video tracks over it do.
  */
-function positionIn(clips: Clip[], own: string, ms: number): ClipAt | null {
+function positionIn(clips: Clip[], own: string, ms: number, joinedView = false): ClipAt | null {
   if (clips.length === 0) return null;
-  if (!isJoined(clips, own)) return { index: 0, clip: clips[0], sourceMs: ms };
+  if (!joinedView && !isJoined(clips, own)) return { index: 0, clip: clips[0], sourceMs: ms };
   return toSource(clips, ms);
 }
 
 /** The timeline time of `sourceMs` in clip `index`. */
-function timelineMs(clips: Clip[], own: string, index: number, sourceMs: number): number {
-  return isJoined(clips, own) ? toSequence(clips, index, sourceMs) : sourceMs;
+function timelineMs(clips: Clip[], own: string, index: number, sourceMs: number, joinedView = false): number {
+  return joinedView || isJoined(clips, own) ? toSequence(clips, index, sourceMs) : sourceMs;
 }
 
 /** How far clip `index` is shifted onto the timeline, and the stretch it takes there. */
-function spanOf(clips: Clip[], own: string, index: number, ownDurationMs: number): { offset: number; low: number; high: number } {
-  if (!isJoined(clips, own)) return { offset: 0, low: 0, high: ownDurationMs };
+function spanOf(clips: Clip[], own: string, index: number, ownDurationMs: number, joinedView = false): { offset: number; low: number; high: number } {
+  if (!joinedView && !isJoined(clips, own)) return { offset: 0, low: 0, high: ownDurationMs };
   const start = clipStarts(clips)[index] ?? 0;
   const clip = clips[index];
   return { offset: start - clip.startMs, low: start, high: start + clipLength(clip) };
@@ -407,21 +409,24 @@ export default function RecordingEditor() {
   /** Whether the sound is arranged apart from the pictures, so it plays from the audio tracks. */
   const ownSound = needsTracks(tracks, hasAudio);
   /** The tracks on show: while suggested cuts are previewed, as they leave them. */
-  const shownTracks: Tracks = suggestPreview && suggestTracks ? { main: suggestPreview, tracks: suggestTracks } : tracks;
+  const shownTracks: Tracks = useMemo(() => (suggestPreview && suggestTracks ? { main: suggestPreview, tracks: suggestTracks } : tracks), [suggestPreview, suggestTracks, tracks]);
   /** Clips chosen with Shift-click besides the selected clip, for Link. */
   const [trackSelection, setTrackSelection] = useState<ReadonlySet<string>>(() => new Set());
   /** The extra video track chosen by clicking its name, for Add recording. */
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
   const clips = clipDraft ?? suggestPreview ?? savedClips;
-  const joined = isJoined(clips, own);
+  /** Whether another video track holds a clip: the timeline is then the sequence, even for one clip of the opened recording. */
+  const overlay = hasOverlay(shownTracks);
+  const joined = overlay || isJoined(clips, own);
   const sequenceMs = sequenceDuration(clips);
-  const timelineDuration = joined ? sequenceMs : durationMs;
-  const at = positionIn(clips, own, currentMs);
-  /** The picture `list` (a main sequence) makes with the other video tracks, the highest winning (see tracks.ts), while joined. */
-  const pictureOf = (list: Clip[]) => (joined && hasOverlay(tracks) ? flattenPicture({ ...tracks, main: list }) : list);
+  /** The picture `list` (a main sequence) makes with the video tracks of `timeline`, the highest winning (see tracks.ts). */
+  const pictureOf = (list: Clip[], timeline: Tracks = shownTracks) => (hasOverlay(timeline) ? flattenPicture({ ...timeline, main: list }) : list);
   /** What the preview plays: the flattened picture, switching recording at each change. */
-  const picture = useMemo(() => (joined && hasOverlay(shownTracks) ? flattenPicture({ ...shownTracks, main: clips }) : clips), [joined, shownTracks, clips]);
-  const shownAt = picture === clips ? at : positionIn(picture, own, currentMs);
+  const picture = useMemo(() => (overlay ? flattenPicture({ ...shownTracks, main: clips }) : clips), [overlay, shownTracks, clips]);
+  /** The timeline's length: the sequence, or the picture when another video track runs past it. */
+  const timelineDuration = joined ? Math.max(sequenceMs, sequenceDuration(picture)) : durationMs;
+  const at = positionIn(clips, own, currentMs, overlay);
+  const shownAt = picture === clips ? at : positionIn(picture, own, currentMs, overlay);
   /** Over a gap nothing plays: the video box is black and the sound silent. */
   const onGap = shownAt ? isGap(shownAt.clip) : false;
   // Over a gap the player of the nearest clip stays on show, hidden, so it is ready.
@@ -462,7 +467,7 @@ export default function RecordingEditor() {
     const list: Zoom[] = [];
     const owner = new Map<string, number>();
     clips.forEach((clip, index) => {
-      const { offset, low, high } = spanOf(clips, own, index, durationMs);
+      const { offset, low, high } = spanOf(clips, own, index, durationMs, overlay);
       const mine = joined ? zoomsIn(allZooms, clip, own) : allZooms.filter((zoom) => zoomOnSource(zoom, own, own));
       for (const zoom of mine) {
         if (owner.has(zoom.id)) continue;
@@ -473,7 +478,7 @@ export default function RecordingEditor() {
       }
     });
     return { list: list.sort((a, b) => a.startMs - b.startMs), owner };
-  }, [clips, own, durationMs, joined, allZooms]);
+  }, [clips, own, durationMs, joined, overlay, allZooms]);
   const zooms = zoomDraft ?? shown.list;
   const selectedZoom = zooms.find((zoom) => zoom.id === selectedZoomId) ?? null;
 
@@ -489,7 +494,7 @@ export default function RecordingEditor() {
   /** Recordings the sequence plays, each transcribed once. */
   const sequenceSources = [...new Set(clips.filter((clip) => !isGap(clip)).map((clip) => clip.source))];
   // A preview that leaves the opened recording one clip plays that clip as its trim.
-  const trim = joined ? { startMs: 0, endMs: sequenceMs } : suggestPreview ? { startMs: clips[0].startMs, endMs: clips[0].endMs } : (trimDraft ?? savedTrim);
+  const trim = joined ? { startMs: 0, endMs: timelineDuration } : suggestPreview ? { startMs: clips[0].startMs, endMs: clips[0].endMs } : (trimDraft ?? savedTrim);
   const layout = useMemo(() => (videoSize ? recordingLayout(videoSize, backdrop) : null), [videoSize, backdrop]);
   const backdropImageEl = useBackdropImage(backdrop?.fill === BACKDROP_FILLS.image ? (backdrop.image ?? null) : null);
 
@@ -527,10 +532,12 @@ export default function RecordingEditor() {
   );
 
   /** Moves the playhead to timeline time `ms` of `list`, switching recording when it must. */
-  const seek = (ms: number, list: Clip[] = clips) => {
+  /** `timeline` is the one just committed or previewed, whose other video tracks `list` plays under. */
+  const seek = (ms: number, list: Clip[] = clips, timeline?: Tracks) => {
     const video = videoRef.current;
     setCurrentMs(ms);
-    const pos = positionIn(list === clips ? picture : pictureOf(list), own, ms);
+    const view = timeline ?? shownTracks;
+    const pos = positionIn(list === clips && !timeline ? picture : pictureOf(list, view), own, ms, hasOverlay(view));
     if (!pos) return;
     if (isGap(pos.clip)) {
       // Nothing plays over a gap; when playing, its clock runs on to the next clip.
@@ -606,6 +613,17 @@ export default function RecordingEditor() {
     if (!result) {
       setClipDraft(null);
       setMessage("That would put linked sound over another clip on its track. Unlink or move it first.");
+      return null;
+    }
+    // Linked clips on a locked track must stay as they are.
+    const lockedChanged = result.tracks.some((track) => {
+      const before = tracks.tracks.find((each) => each.id === track.id);
+      return (track.locked || before?.locked) && JSON.stringify(track.clips) !== JSON.stringify(before?.clips);
+    });
+    if (lockedChanged) {
+      setClipDraft(null);
+      setMessage("That would change linked clips on a locked track. Unlock it or unlink them first.");
+      return null;
     }
     return result;
   };
@@ -739,7 +757,7 @@ export default function RecordingEditor() {
       setSelectedClipId(clip.id);
       setSelectedZoomId(null);
       setMessage(null);
-      latest.seek(timelineMs(next, own, after + 1, 0), next);
+      latest.seek(timelineMs(next, own, after + 1, 0, overlay), next);
     } catch (err) {
       setMessage(`Could not add ${fileName(picked)}: ${errorText(err)}`);
     }
@@ -753,7 +771,7 @@ export default function RecordingEditor() {
     commitClips(next);
     const index = movedIndex(next, selectedClip.id, from + by);
     setSelectedClipId(next[index].id);
-    seek(timelineMs(next, own, index, next[index].startMs), next);
+    seek(timelineMs(next, own, index, next[index].startMs, overlay), next);
   };
 
   /** Deletes the selected clip or gap and closes the stretch it took (a ripple delete). */
@@ -771,7 +789,7 @@ export default function RecordingEditor() {
     setSelectedClipId(null);
     // The playhead goes to where the removed stretch was, now the start of what followed it.
     const pos = toSource(next, Math.min(start, sequenceDuration(next)));
-    if (pos) seek(timelineMs(next, own, pos.index, pos.sourceMs), next);
+    if (pos) seek(timelineMs(next, own, pos.index, pos.sourceMs, overlay), next, rippled);
   };
 
   /** Deletes the selected clip and leaves a gap of its length; on a gap, closes it. */
@@ -800,22 +818,35 @@ export default function RecordingEditor() {
     setSelectedClipId(copyId);
     setSelectedZoomId(null);
     const index = next.findIndex((clip) => clip.id === copyId);
-    seek(timelineMs(next, own, index, next[index].startMs), next);
+    seek(timelineMs(next, own, index, next[index].startMs, overlay), next);
   };
 
-  const splitMs = at ? toSequence(clips, at.index, at.sourceMs) : 0;
-  const splitSelection = selectedClipId ?? [...trackSelection][0];
-  const selectionAtPlayhead = splitSelection && clipPlaces(tracks).some((place) => place.id === splitSelection && place.atMs < splitMs && place.endMs > splitMs);
-  // A selection elsewhere falls back to the picture here, when there is one.
-  const splitTarget = selectionAtPlayhead ? splitSelection : splitSelection && !onGap ? at?.clip.id : undefined;
-  const canSplitHere = at !== null && !exporting && durationMs > 0 && canSplitAt(tracks, splitMs, splitTarget);
+  /** The playhead in sequence time, as the tracks place clips. */
+  const playheadSeqMs = joined || !at ? currentMs : toSequence(clips, at.index, at.sourceMs);
+  /** The clip Split cuts with its links; none cuts every unlocked track. */
+  const splitChosen = selectedClipId ?? [...trackSelection][0] ?? undefined;
+  /**
+   * What Split cuts with its links: a selected clip under the playhead, else
+   * with another clip selected the Video 1 clip under the playhead; with
+   * nothing selected, every unlocked track's clip there (undefined).
+   */
+  const splitTarget = !splitChosen
+    ? undefined
+    : clipPlaces(tracks).some((place) => place.id === splitChosen && place.atMs < playheadSeqMs && place.endMs > playheadSeqMs)
+      ? splitChosen
+      : at && !isGap(at.clip)
+        ? at.clip.id
+        : undefined;
+  /** Whether Split cuts something: a clip under the playhead on any unlocked track (or the chosen one), each part long enough. */
+  const canSplitHere = !exporting && durationMs > 0 && canSplitAt(tracks, playheadSeqMs, splitTarget);
 
+  /** Splits the chosen group, or every eligible group, at the playhead. */
   const splitAtPlayhead = () => {
-    if (!at || !canSplitHere) return;
-    const next = splitAt(tracks, splitMs, splitTarget);
+    if (!canSplitHere) return;
+    const next = splitAt(tracks, playheadSeqMs, splitTarget);
     commitTracks(next);
     // The playhead moves onto the second part only when the picture was split.
-    if (next.main.length > tracks.main.length) seek(timelineMs(next.main, own, at.index + 1, at.sourceMs), next.main);
+    if (at && next.main.length > tracks.main.length) seek(timelineMs(next.main, own, at.index + 1, at.sourceMs, overlay), next.main, next);
   };
 
   const commitTrim = (next: Trim) => {
@@ -846,11 +877,12 @@ export default function RecordingEditor() {
     save(next.present);
     if (durationMs > 0) {
       const nextClips = clipsOf(next.present, own, durationMs);
+      const nextTracks = timelineOf(next.present, nextClips, hasAudio);
       if (isJoined(nextClips, own) || joined) {
         // The playhead stays where it was in the clip it was on, else goes to the start.
         const index = at ? nextClips.findIndex((clip) => clip.id === at.clip.id) : -1;
-        if (index >= 0 && at) seek(timelineMs(nextClips, own, index, at.sourceMs), nextClips);
-        else seek(timelineMs(nextClips, own, 0, nextClips[0].startMs), nextClips);
+        if (index >= 0 && at) seek(timelineMs(nextClips, own, index, at.sourceMs, overlay), nextClips, nextTracks);
+        else seek(timelineMs(nextClips, own, 0, nextClips[0].startMs, overlay), nextClips, nextTracks);
       } else {
         const kept = keptOf(next.present, durationMs);
         seek(Math.min(Math.max(currentMs, kept.startMs), kept.endMs), nextClips);
@@ -879,11 +911,11 @@ export default function RecordingEditor() {
     const before = new Map(shown.list.map((zoom) => [zoom.id, zoom]));
     const originals = new Map(allZooms.map((zoom) => [zoom.id, zoom]));
     const placed = next.flatMap((zoom): Zoom[] => {
-      const index = shown.owner.get(zoom.id) ?? positionIn(clips, own, zoom.startMs)?.index ?? 0;
+      const index = shown.owner.get(zoom.id) ?? positionIn(clips, own, zoom.startMs, overlay)?.index ?? 0;
       const clip = clips[index];
       // A gap shows nothing to zoom on.
       if (isGap(clip)) return [];
-      const { offset, low, high } = spanOf(clips, own, index, durationMs);
+      const { offset, low, high } = spanOf(clips, own, index, durationMs, overlay);
       const was = before.get(zoom.id);
       const original = originals.get(zoom.id);
       // Unmoved, it keeps its own times, even the part its clip hides.
@@ -900,7 +932,7 @@ export default function RecordingEditor() {
   const canAddZoom = timelineDuration > 0 && !onGap && addZoom(zooms, currentMs, timelineDuration) !== null;
 
   const addZoomAt = (ms: number) => {
-    const target = positionIn(clips, own, ms);
+    const target = positionIn(clips, own, ms, overlay);
     const added = target && isGap(target.clip) ? null : addZoom(zooms, ms, timelineDuration);
     if (!added) {
       setMessage("There is no room for a zoom there.");
@@ -916,7 +948,7 @@ export default function RecordingEditor() {
     if (zoom.focus.kind === kind) return;
     // An area starts where the pointer was, when that is known.
     const index = shown.owner.get(zoom.id) ?? at?.index ?? 0;
-    const { offset } = spanOf(clips, own, index, durationMs);
+    const { offset } = spanOf(clips, own, index, durationMs, overlay);
     const [x, y] = clampCentre(cursorAt(cursorOf(clips[index]?.source ?? own), zoom.startMs - offset) ?? [0.5, 0.5], zoom.scale);
     commitZooms(updateZoom(zooms, zoom.id, { focus: kind === "cursor" ? { kind: "cursor" } : { kind: "area", x, y } }));
   };
@@ -984,10 +1016,10 @@ export default function RecordingEditor() {
     const video = videoRef.current;
     if (joined) {
       // From the first clip when at (or past) the end of the last.
-      const from = currentMs >= sequenceMs - 50 ? 0 : currentMs;
+      const from = currentMs >= timelineDuration - 50 ? 0 : currentMs;
       if (from !== currentMs) seek(0);
       // Over a gap the playhead runs on its own clock; the video waits for the next clip.
-      const pos = positionIn(picture, own, from);
+      const pos = positionIn(picture, own, from, overlay);
       if (pos && isGap(pos.clip)) {
         throughGapRef.current = true;
         gapClockRef.current = null;
@@ -1628,7 +1660,7 @@ export default function RecordingEditor() {
 
   // The video's place on the preview, as shares of the output.
   const share = (part: number, whole: number) => `${(part / whole) * 100}%`;
-  const clipMs = joined ? sequenceMs : trim.endMs - trim.startMs;
+  const clipMs = joined ? timelineDuration : trim.endMs - trim.startMs;
   const fit =
     layout && currentMeta && currentSource !== own ? fitInside(currentMeta.width, currentMeta.height, layout.videoWidth, layout.videoHeight) : null;
   const fitStyle = fit && layout ? { left: share(fit.x, layout.videoWidth), top: share(fit.y, layout.videoHeight), width: share(fit.width, layout.videoWidth), height: share(fit.height, layout.videoHeight) } : { inset: 0 };
@@ -1640,11 +1672,14 @@ export default function RecordingEditor() {
   const zoomLimit = maxZoom(timelineDuration, timelineWidth);
   const shownZoom = zoomFor(timelineScale, timelineDuration, timelineWidth);
   // The view comes from the current clip's zooms, in its recording's time.
-  const currentOffset = at ? spanOf(clips, own, at.index, durationMs).offset : 0;
+  const currentOffset = at ? spanOf(clips, own, at.index, durationMs, overlay).offset : 0;
   const currentZooms = zooms
-    .filter((zoom) => !joined || (shown.owner.get(zoom.id) ?? positionIn(clips, own, zoom.startMs)?.index) === at?.index)
+    .filter((zoom) => !joined || (shown.owner.get(zoom.id) ?? positionIn(clips, own, zoom.startMs, overlay)?.index) === at?.index)
     .map((zoom) => ({ ...zoom, startMs: zoom.startMs - currentOffset, endMs: zoom.endMs - currentOffset }));
-  const view = picking ? FULL_VIEW : viewAt(currentZooms, at?.sourceMs ?? currentMs, cursor);
+  // Under other video tracks the piece on show takes the zooms on its own recording, as the export gives it.
+  const shownPiece = overlay && shownAt && !isGap(shownAt.clip) ? shownAt : null;
+  const pieceZooms = shownPiece ? zoomsIn(allZooms, shownPiece.clip, own).filter((zoom) => zoomOwners(picture, allZooms, own).get(zoom.id) === shownPiece.index) : null;
+  const view = picking ? FULL_VIEW : pieceZooms && shownPiece ? viewAt(pieceZooms, shownPiece.sourceMs, cursor) : viewAt(currentZooms, at?.sourceMs ?? currentMs, cursor);
   const frameStyle = layout
     ? {
         left: share(layout.x, layout.width),
@@ -2087,7 +2122,7 @@ export default function RecordingEditor() {
           {(joined || (suggestOpen && !exporting)) && (
             <ClipTrack
               clips={clips}
-              durationMs={joined ? sequenceMs : timelineDuration}
+              durationMs={timelineDuration}
               offsetMs={joined ? 0 : (clips[0]?.startMs ?? 0)}
               // A lone clip is trimmed with the timeline's handles; here it only carries the hatches.
               editable={joined}
@@ -2112,7 +2147,7 @@ export default function RecordingEditor() {
               onTrimCommit={(next) => {
                 commitClips(next);
                 const pos = at ? next.findIndex((clip) => clip.id === at.clip.id) : -1;
-                if (pos >= 0 && at) seek(timelineMs(next, own, pos, at.sourceMs), next);
+                if (pos >= 0 && at) seek(timelineMs(next, own, pos, at.sourceMs, overlay), next);
               }}
               onMove={(id, to) => {
                 const next = moveClip(clips, id, to);
@@ -2120,7 +2155,7 @@ export default function RecordingEditor() {
                 commitClips(next);
                 const index = movedIndex(next, id, to);
                 setSelectedClipId(next[index].id);
-                seek(timelineMs(next, own, index, next[index].startMs), next);
+                seek(timelineMs(next, own, index, next[index].startMs, overlay), next);
               }}
             />
           )}
@@ -2243,7 +2278,7 @@ export default function RecordingEditor() {
               endMs === undefined ? null : { clips: next, endMs: Math.min(onTimeline(endMs), lastMs), returnMs: returnMs === undefined ? undefined : savedTimeline(returnMs) },
             );
             const from = onTimeline(fromMs ?? 0);
-            seek(from, next);
+            seek(from, next, cutTracks ? { main: next, tracks: cutTracks } : tracks);
             if (endMs !== undefined) playFrom(next, from);
           }}
           onShowCuts={setShownCuts}
@@ -2253,7 +2288,7 @@ export default function RecordingEditor() {
             setMessage(null);
             if (cutTracks) commitTracks({ main: next, tracks: cutTracks }, true);
             else commitClips(next, true);
-            seek(Math.min(currentMs, sequenceDuration(next)), next);
+            seek(Math.min(currentMs, sequenceDuration(next)), next, cutTracks ? { main: next, tracks: cutTracks } : tracks);
           }}
           onClose={closeSuggestions}
         />
