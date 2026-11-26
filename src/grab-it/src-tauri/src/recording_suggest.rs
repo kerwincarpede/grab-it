@@ -24,9 +24,6 @@ use crate::recording_editor::{
 use crate::rt::{AppHandle, WebviewWindow};
 use crate::zoom::CursorPath;
 
-/// How quiet sound must be to count as a pause, in dBFS, unless the page
-/// asks for another threshold.
-pub const PAUSE_NOISE_DB: i32 = -40;
 /// The quietest and loudest thresholds the page may ask for, in dBFS.
 pub const PAUSE_NOISE_DB_RANGE: std::ops::RangeInclusive<i32> = -60..=-20;
 /// The shortest stretch of quiet reported as a pause: the page's lowest
@@ -429,11 +426,7 @@ size=N/A time=00:00:09.00
 
     #[test]
     fn silence_is_listened_for_on_one_stream() {
-        let args = text(&silence_args(
-            Path::new("/r/clip.sound.m4a"),
-            0,
-            PAUSE_NOISE_DB,
-        ));
+        let args = text(&silence_args(Path::new("/r/clip.sound.m4a"), 0, -40));
         assert!(args.windows(2).any(|pair| pair == ["-map", "0:a:0"]));
         assert!(
             args.iter()
@@ -455,7 +448,7 @@ size=N/A time=00:00:09.00
     fn a_threshold_outside_its_range_is_refused() {
         assert_eq!(pause_threshold(-60), Ok(-60));
         assert_eq!(pause_threshold(-20), Ok(-20));
-        assert_eq!(pause_threshold(PAUSE_NOISE_DB), Ok(-40));
+        assert_eq!(pause_threshold(-40), Ok(-40));
         for outside in [-61, -19, 0, i32::MIN] {
             assert_eq!(
                 pause_threshold(outside),

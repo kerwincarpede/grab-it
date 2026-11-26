@@ -346,6 +346,10 @@
   touch-action: none;
 }
 
+.clip[data-fixed="true"] {
+  cursor: default;
+}
+
 .clip[aria-selected="true"] {
   box-shadow: 0 0 0 2px var(--ed-text);
 }

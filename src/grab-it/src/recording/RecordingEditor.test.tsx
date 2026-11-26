@@ -1539,5 +1539,54 @@ describe("RecordingEditor", () => {
       expect(screen.queryByRole("button", { name: /^Proposed cut/ })).not.toBeInTheDocument();
       expect(screen.queryByRole("listbox", { name: "Clips" })).not.toBeInTheDocument();
     });
+
+    it("ends a cut's own preview when the sequence runs out before 2 s after the cut", async () => {
+      // 950 ms of the recording are left after this cut.
+      heard = { sound: "microphone", pauses: [{ startMs: 8000, endMs: 11_300 }], canClean: true, pointer: null };
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+      vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+      mockBackend(null, null, ["microphone"], { separateMicrophone: true });
+      render(<RecordingEditor />);
+      const video = await loadVideo();
+      const runFrames = () => act(() => frames.splice(0).forEach((frame) => frame(0)));
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Preview 0:08.2–0:11.0" }));
+      expect(screen.getByText("2 clips, 0:09.2")).toBeInTheDocument();
+      fireEvent.play(video);
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 8.3 });
+      runFrames();
+      expect(video.currentTime).toBe(11.05);
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 12 });
+      runFrames();
+      expect(screen.getByText("Clip 0:12.0")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Stop preview" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Export" })).toBeEnabled();
+    });
+
+    it("shows a lone clip under the hatches without edges to trim or a body to drag", async () => {
+      heard = { sound: "microphone", pauses: [PAUSE], canClean: true, pointer: null };
+      const backend = mockBackend(null, null, ["microphone"], { separateMicrophone: true });
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      await screen.findByRole("button", { name: "Proposed cut 0:03.2–0:05.7" });
+      const track = screen.getByRole("listbox", { name: "Clips" });
+      expect(track.querySelector(".clip-edge")).toBeNull();
+      const clip = within(track).getByRole("option");
+      fireEvent.pointerDown(clip, { clientX: 10 });
+      fireEvent.pointerMove(clip, { clientX: 40 });
+      fireEvent.pointerUp(clip, { clientX: 40 });
+      expect(screen.getByRole("button", { name: "Proposed cut 0:03.2–0:05.7" })).toBeInTheDocument();
+      expect(screen.getByText("Clip 0:12.0")).toBeInTheDocument();
+      expect(saved(backend)).toEqual([]);
+      // Trimming stays on the timeline's handles.
+      expect(screen.getByRole("slider", { name: "Trim end" })).toBeVisible();
+    });
   });
 });

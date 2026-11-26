@@ -30,6 +30,8 @@ interface ClipTrackProps {
   focusedCutId?: string | null;
   /** Brings proposal `id` into focus in Suggest edits. */
   onFocusCut?: (id: string) => void;
+  /** False shows the clips without edges to trim or a body to drag. */
+  editable?: boolean;
 }
 
 /** An edge drag keeps the row's width and the sequence's length from when it began. */
@@ -63,6 +65,7 @@ export default function ClipTrack({
   cuts = NO_CUTS,
   focusedCutId = null,
   onFocusCut,
+  editable = true,
 }: ClipTrackProps) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -127,7 +130,7 @@ export default function ClipTrack({
     <div className="clip-track" ref={rowRef} role="listbox" aria-label="Clips" aria-orientation="horizontal">
       {clips.map((clip, index) => {
         const gap = isGap(clip);
-        const edges = gap ? NO_EDGES : EDGES;
+        const edges = gap || !editable ? NO_EDGES : EDGES;
         const gone = !gap && missing.has(clip.source);
         const label = gap ? `Gap, ${formatTime(clipLength(clip))}` : `${clip.source}${gone ? " (missing)" : ""}, ${formatTime(clipLength(clip))}`;
         return (
@@ -138,11 +141,12 @@ export default function ClipTrack({
             tabIndex={0}
             aria-selected={clip.id === selectedId}
             aria-label={label}
-            title={gap ? `${label}. Delete closes it` : `${label}. Drag to reorder; Alt+Left or Right moves it, Delete removes it, Shift+Delete leaves a gap`}
+            title={!editable ? label : gap ? `${label}. Delete closes it` : `${label}. Drag to reorder; Alt+Left or Right moves it, Delete removes it, Shift+Delete leaves a gap`}
+            data-fixed={editable ? undefined : "true"}
             data-missing={gone ? "true" : undefined}
             data-gap={gap ? "true" : undefined}
             style={{ left: percent(starts[index], durationMs), width: percent(clipLength(clip), durationMs) }}
-            onPointerDown={(event) => begin(event, { kind: "move", id: clip.id, moved: false })}
+            onPointerDown={editable ? (event) => begin(event, { kind: "move", id: clip.id, moved: false }) : undefined}
             onPointerMove={move}
             onPointerUp={end}
             onPointerCancel={end}

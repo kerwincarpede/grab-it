@@ -822,6 +822,7 @@ export default function RecordingEditor() {
         video?.pause();
         setCurrentMs(sequenceDuration(now.clips));
         setPlaying(false);
+        stopRef.current?.end();
         return false;
       }
       playRef.current = { ...now, at: { index: index + 1, clip: next, sourceMs: next.startMs }, ms: start };
@@ -893,6 +894,8 @@ export default function RecordingEditor() {
           if (index === now.clips.length - 1) {
             video.pause();
             setCurrentMs(sequenceDuration(now.clips));
+            // A cut's own preview that runs out before its stop ends here.
+            stopRef.current?.end();
             return;
           }
           if (!enter(video, index, clipStarts(now.clips)[index + 1])) return;
@@ -906,6 +909,7 @@ export default function RecordingEditor() {
         video.pause();
         video.currentTime = endRef.current / 1000;
         setCurrentMs(endRef.current);
+        stopRef.current?.end();
         return;
       }
       setCurrentMs(ms);
@@ -1450,6 +1454,8 @@ export default function RecordingEditor() {
               clips={clips}
               durationMs={joined ? sequenceMs : timelineDuration}
               offsetMs={joined ? 0 : (clips[0]?.startMs ?? 0)}
+              // A lone clip is trimmed with the timeline's handles; here it only carries the hatches.
+              editable={joined}
               cuts={hatchedCuts}
               focusedCutId={shownCuts?.focusId ?? null}
               onFocusCut={(id) => setCutFocusRequest({ id })}
@@ -1506,7 +1512,9 @@ export default function RecordingEditor() {
             const onTimeline = (ms: number) => (isJoined(next, own) ? ms : next[0].startMs + ms);
             setClipDraft(null);
             setSuggestPreview(next);
-            setPreviewStop(endMs === undefined ? null : { clips: next, endMs: onTimeline(endMs) });
+            // The stop never lies past the preview's end, where playback halts on its own.
+            const lastMs = isJoined(next, own) ? sequenceDuration(next) : next[0].endMs;
+            setPreviewStop(endMs === undefined ? null : { clips: next, endMs: Math.min(onTimeline(endMs), lastMs) });
             const from = onTimeline(fromMs ?? 0);
             seek(from, next);
             if (endMs !== undefined) playFrom(next, from);
