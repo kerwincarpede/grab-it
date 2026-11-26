@@ -999,7 +999,13 @@ export default function RecordingEditor() {
       ? zoomsIn(allZooms, target.clip, own).map((zoom) => ({ ...zoom, startMs: zoom.startMs + offset, endMs: zoom.endMs + offset }))
       : zooms;
     const added = addZoom(mine, ms, overlay ? high : timelineDuration);
-    return added && added.zoom.startMs >= low ? added : null;
+    if (!added || added.zoom.startMs < low) return null;
+    if (overlay) {
+      const zoom = tagZoom({ ...added.zoom, startMs: added.zoom.startMs - offset, endMs: added.zoom.endMs - offset }, target.clip.source, own);
+      // Zooms are stored in source time. Don't add one that would show on an earlier piece instead.
+      if (zoomOwners(picture, [zoom], own).get(zoom.id) !== target.index) return null;
+    }
+    return added;
   };
   const canAddZoom = timelineDuration > 0 && zoomAt(currentMs) !== null;
 

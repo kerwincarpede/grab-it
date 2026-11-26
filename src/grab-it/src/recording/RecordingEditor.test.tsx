@@ -1998,6 +1998,36 @@ describe("RecordingEditor", () => {
       expect(screen.getByRole("status")).toHaveTextContent("Captions go on clips on Video 1");
     });
 
+    it("does not add a zoom to an overlay copy when an earlier piece would own it", async () => {
+      const backend = mockBackend({ version: TRACKS_VERSION, tracks: [
+        { id: "video-2", name: "Video 2", kind: "video", clips: [{ id: "c", source: OWN, startMs: 0, endMs: 4000, atMs: 4000 }] },
+        { id: "video-1", name: "Video 1", kind: "video", clips: [{ id: "a", source: OWN, startMs: 0, endMs: 4000 }] },
+      ] });
+      render(<RecordingEditor />);
+      const video = await previewVideo(OWN);
+      setVideoMetadata(video, 12, 1920, 1080);
+      fireEvent.loadedMetadata(video);
+      const timeline = screen.getByTestId("timeline-track");
+      placeAt(timeline, 800, 20);
+      fireEvent.pointerDown(timeline, { clientX: 450 });
+      fireEvent.pointerUp(timeline, { clientX: 450 });
+      const zoom = screen.getByRole("button", { name: /^Zoom$/ });
+      expect(zoom).toBeDisabled();
+      const row = screen.getByTestId("zoom-track");
+      placeAt(row, 800, 20);
+      fireEvent.doubleClick(row, { clientX: 450 });
+      expect(saved(backend)).toHaveLength(0);
+
+      fireEvent.pointerDown(timeline, { clientX: 50 });
+      fireEvent.pointerUp(timeline, { clientX: 50 });
+      await userEvent.click(zoom);
+      expect(lastSaved(backend)).toMatchObject({ zooms: [{ startMs: 500, endMs: 2500 }] });
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan } = await exportCall(backend);
+      expect(plan.clips[0]).toMatchObject({ zooms: [{ startMs: 500, endMs: 2500 }] });
+      expect(plan.clips[1]).toMatchObject({ zooms: [] });
+    });
+
     it("adds and exports a zoom on an overlay-only tail in its source time", async () => {
       const backend = mockBackend({ version: TRACKS_VERSION, tracks: [
         { id: "video-2", name: "Video 2", kind: "video", clips: [{ id: "c", source: OTHER, startMs: 1000, endMs: 6000, atMs: 4000 }] },

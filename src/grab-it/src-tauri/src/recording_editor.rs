@@ -2124,12 +2124,16 @@ fn render(
                         check_cancelled(cancelled)
                     }
                 })?;
+            // `ffmpeg -i` reports duration to hundredths of a second.
+            // Allow one such tick, not an arbitrary stretch past EOF.
+            let in_range = source
+                .duration_ms
+                .map(|end| clip.end_ms <= end.saturating_add(10));
             // An accurate seek can pass the last frame even though it is
             // still on screen. Recover that frame for a short, in-range tail.
-            let short_slice = clip.duration_ms() < SHORT_SLICE_MS;
             if frames == 0
-                && short_slice
-                && source.duration_ms.is_some_and(|end| clip.end_ms <= end)
+                && clip.duration_ms() < SHORT_SLICE_MS
+                && in_range == Some(true)
                 && clip.start_ms > 0
             {
                 let lead = ExportClip {
@@ -2141,7 +2145,10 @@ fn render(
                     check_cancelled(cancelled)
                 })?;
             }
-            if frames < count && (last.is_empty() || count - frames > 1 && !short_slice) {
+            // At low source rates, a seek can lose several output frames
+            // at one input boundary. Without a duration, allow only the
+            // usual single output frame of rounding, not a larger deficit.
+            if frames < count && (last.is_empty() || !in_range.unwrap_or(count - frames == 1)) {
                 return Err(format!(
                     "the trimmed stretch of {} holds too few frames",
                     clip.source
@@ -2959,6 +2966,124 @@ mod tests {
             overlays: Vec::new(),
             audio: None,
         }
+    }
+
+    fn ffmpeg_boundary_export(input_fps: u32, len: u32, start_ms: u64, end_ms: u64, decoded: u64) {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = ffmpeg::Ready {
+            path: std::env::var_os(ffmpeg::FFMPEG_ENV)
+                .map_or_else(|| "ffmpeg".into(), PathBuf::from),
+            encoder: ffmpeg::X264,
+        };
+        let input = dir.path().join("clip.mp4");
+        let output = dir.path().join("edited.mp4");
+        // Paint only the last input frame green, so the EOF test verifies
+        // that the export recovers that frame rather than any earlier one.
+        ffmpeg::run(
+            &ready.path,
+            vec![
+                "-f".into(),
+                "lavfi".into(),
+                "-i".into(),
+                format!("color=red:s=32x32:r={input_fps}").into(),
+                "-frames:v".into(),
+                len.to_string().into(),
+                "-vf".into(),
+                format!("drawbox=c=lime:t=fill:enable=eq(n\\,{})", len - 1).into(),
+                "-c:v".into(),
+                "libx264".into(),
+                input.as_os_str().to_owned(),
+            ],
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let cut = ExportClip {
+            start_ms,
+            end_ms,
+            width: 32,
+            height: 32,
+            source_width: 32,
+            source_height: 32,
+            ..clip()
+        };
+        assert_eq!(
+            decode_clip(&ready.path, &input, &cut, 30, |_, _| Ok(()))
+                .unwrap()
+                .0,
+            decoded
+        );
+        let cancelled = AtomicBool::new(false);
+        let job = |cut: ExportClip| {
+            let plan = ExportPlan {
+                clips: vec![cut.into()],
+                width: 32,
+                height: 32,
+                video_width: 32,
+                video_height: 32,
+                x: 0,
+                y: 0,
+                backdrop_bytes: 0,
+                ..plan()
+            };
+            let sources = clip_sources(&ready.path, dir.path(), &plan, &cancelled).unwrap();
+            ExportJob {
+                output: &output,
+                plan,
+                sources,
+                audio_sources: vec![],
+                layers: None,
+                overlays: vec![],
+                fps: 30,
+                bits_per_pixel: 0.1,
+                noise_model: None,
+            }
+        };
+        let expected = frames_until(end_ms - start_ms, 30);
+        let mut done = 0;
+        render(&ready, job(cut.clone()), &cancelled, |progress| {
+            assert_eq!(progress.total, expected);
+            done = progress.done;
+        })
+        .unwrap();
+        assert_eq!(done, expected);
+        let exported = ExportClip {
+            start_ms: 0,
+            end_ms: 1000,
+            ..cut.clone()
+        };
+        let (count, last) =
+            decode_clip(&ready.path, &output, &exported, 30, |_, _| Ok(())).unwrap();
+        assert_eq!(count, expected);
+        assert!(
+            last[1] > 200 && last[0] < 40,
+            "last pixel: {:?}",
+            &last[..4]
+        );
+        fs::remove_file(&output).unwrap();
+
+        // The same seek cannot be padded if its requested end is well past EOF.
+        let outside = ExportClip {
+            end_ms: end_ms + 50,
+            ..cut
+        };
+        let result = render(&ready, job(outside), &cancelled, |_| {});
+        assert_eq!(
+            result,
+            Err("the trimmed stretch of clip.mp4 holds too few frames".into())
+        );
+        assert!(!output.exists());
+    }
+
+    #[test]
+    #[ignore = "needs ffmpeg with libx264 installed"]
+    fn ffmpeg_boundary_recovers_the_last_frame_past_the_rounded_probe_duration() {
+        ffmpeg_boundary_export(30, 31, 1020, 1033, 0);
+    }
+
+    #[test]
+    #[ignore = "needs ffmpeg with libx264 installed"]
+    fn ffmpeg_boundary_fills_a_multi_frame_deficit_at_a_low_fps_cut() {
+        ffmpeg_boundary_export(10, 20, 1701, 2000, 6);
     }
 
     #[test]
