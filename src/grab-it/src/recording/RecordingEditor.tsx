@@ -459,9 +459,14 @@ export default function RecordingEditor() {
     commitEdits(withClips(edits, next, own, durationMs), applying);
   };
 
-  /** Ends a preview of suggested cuts, back to the saved sequence: at `toMs` of it when given. */
+  /**
+   * Ends a preview of suggested cuts, back to the saved sequence: at
+   * `toMs` of it when given. Playback stops with it, so the sequence
+   * without the cuts never plays on unasked.
+   */
   const endSuggestPreview = (toMs?: number) => {
     if (!suggestPreview) return;
+    pause();
     setSuggestPreview(null);
     setMessage(null);
     seek(toMs ?? Math.min(currentMs, sequenceDuration(savedClips)), savedClips);
@@ -801,7 +806,6 @@ export default function RecordingEditor() {
         : {
             atMs: stopAt,
             end: () => {
-              pause();
               // The playhead stays on the moment it stopped at, in the sequence as saved.
               const now = playRef.current.at;
               const index = now && !isGap(now.clip) ? savedClips.findIndex((clip) => !isGap(clip) && clip.source === now.clip.source && now.sourceMs >= clip.startMs && now.sourceMs <= clip.endMs) : -1;

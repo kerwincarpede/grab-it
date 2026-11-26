@@ -1490,19 +1490,43 @@ describe("RecordingEditor", () => {
       expect(saved(backend)).toEqual([]);
     });
 
-    it("stops a cut's own preview from its row", async () => {
+    it("stops a cut's own preview from its row, and playback with it", async () => {
       heard = { sound: "microphone", pauses: [PAUSE], canClean: true, pointer: null };
       vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
-      vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+      const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
       mockBackend(null, null, ["microphone"], { separateMicrophone: true });
       render(<RecordingEditor />);
-      await loadVideo();
+      const video = await loadVideo();
       await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
       await userEvent.click(await screen.findByRole("button", { name: "Preview 0:03.2–0:05.7" }));
       expect(screen.getByText("2 clips, 0:09.5")).toBeInTheDocument();
+      fireEvent.play(video);
+      expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+      pause.mockClear();
       await userEvent.click(screen.getByRole("button", { name: "Stop preview of 0:03.2–0:05.7" }));
       expect(screen.getByText("Clip 0:12.0")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Preview 0:03.2–0:05.7" })).toBeInTheDocument();
+      // The sequence as saved does not play on.
+      expect(pause).toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+    });
+
+    it("stops playback when the preview of all the chosen cuts stops", async () => {
+      heard = { sound: "microphone", pauses: [PAUSE], canClean: true, pointer: null };
+      vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+      mockBackend(null, null, ["microphone"], { separateMicrophone: true });
+      render(<RecordingEditor />);
+      const video = await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Preview" }));
+      await userEvent.click(screen.getByRole("button", { name: "Play" }));
+      fireEvent.play(video);
+      pause.mockClear();
+      await userEvent.click(screen.getByRole("button", { name: "Stop preview" }));
+      expect(screen.getByText("Clip 0:12.0")).toBeInTheDocument();
+      expect(pause).toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
     });
 
     it("hatches the proposals on the clip track, ticked or not, and finds a row from its stretch", async () => {

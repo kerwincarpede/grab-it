@@ -350,45 +350,48 @@ export default function SuggestEditsPanel({ clips, own, joined, previewing, onPr
           <output>{seconds(tuning.padMs)}</output>
         </label>
       </div>
-      {loading && <p role="status">Listening for pauses…</p>}
-      {errors.map((error) => (
-        <p key={error} role="alert">
-          Could not listen for pauses in {error}
-        </p>
-      ))}
-      {!loading && proposals.length === 0 && errors.length === 0 && <p>No pauses long enough to cut were found.</p>}
-      {proposals.length > 0 && (
-        <ul className="suggest-list" aria-label="Proposed cuts" ref={listRef}>
-          {proposals.map((cut) => (
-            <li key={cut.id} data-focus={focus?.id === cut.id ? "true" : undefined}>
-              <label>
-                <input type="checkbox" checked={selected.some((each) => each.id === cut.id)} onChange={() => toggle(cut)} />
-                <span className="suggest-reason">{reasonLabel(cut.reason)}</span>
-              </label>
-              <button type="button" className="suggest-range" onClick={() => focusOn(cut.id)} aria-label={`Listen around ${range(cut)}`}>
-                {range(cut)}
-              </button>
-              <span className="suggest-length">{formatTime(cut.endMs - cut.startMs)}</span>
-              {previewing && previewCutId === cut.id ? (
-                <button type="button" className="text-button" onClick={stopPreview} aria-label={`Stop preview of ${range(cut)}`}>
-                  Stop
+      {/* A steady height, so the controls above stay put as tuning adds or removes rows. */}
+      <div className="suggest-rows">
+        {loading && <p role="status">Listening for pauses…</p>}
+        {errors.map((error) => (
+          <p key={error} role="alert">
+            Could not listen for pauses in {error}
+          </p>
+        ))}
+        {!loading && proposals.length === 0 && errors.length === 0 && <p>No pauses long enough to cut were found.</p>}
+        {proposals.length > 0 && (
+          <ul className="suggest-list" aria-label="Proposed cuts" ref={listRef}>
+            {proposals.map((cut) => (
+              <li key={cut.id} data-focus={focus?.id === cut.id ? "true" : undefined}>
+                <label>
+                  <input type="checkbox" checked={selected.some((each) => each.id === cut.id)} onChange={() => toggle(cut)} />
+                  <span className="suggest-reason">{reasonLabel(cut.reason)}</span>
+                </label>
+                <button type="button" className="suggest-range" onClick={() => focusOn(cut.id)} aria-label={`Listen around ${range(cut)}`}>
+                  {range(cut)}
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={() => previewCut(cut)}
-                  disabled={!isValidCut(clips, cut)}
-                  aria-label={`Preview ${range(cut)}`}
-                  title="Play from 2 s before this cut to 2 s after it, with the pause skipped"
-                >
-                  Preview
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
+                <span className="suggest-length">{formatTime(cut.endMs - cut.startMs)}</span>
+                {previewing && previewCutId === cut.id ? (
+                  <button type="button" className="text-button" onClick={stopPreview} aria-label={`Stop preview of ${range(cut)}`}>
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => previewCut(cut)}
+                    disabled={!isValidCut(clips, cut)}
+                    aria-label={`Preview ${range(cut)}`}
+                    title="Play from 2 s before this cut to 2 s after it, with the pause skipped"
+                  >
+                    Preview
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
       {proposals.length > 0 && (
         <div className="bar-group">
           {previewing ? (
