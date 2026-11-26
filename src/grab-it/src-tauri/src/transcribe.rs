@@ -676,6 +676,32 @@ fn segment(
     })
 }
 
+/// The most UTF-8 bytes, and so byte tokens, one character takes.
+const MAX_CHAR_TOKENS: usize = 4;
+
+/// `tokens` as text, skipping each token that cannot complete a character
+/// with the few after it. `strict` decodes a run, or gives `None` when its
+/// bytes are not valid UTF-8, as the tokenizer does. A character cut off
+/// at the end is skipped too, so a run holding only part of one is empty.
+fn decode_lossy(tokens: &[TokenId], strict: impl Fn(&[TokenId]) -> Option<String>) -> String {
+    if let Some(text) = strict(tokens) {
+        return text;
+    }
+    let mut text = String::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        let longest = (i + MAX_CHAR_TOKENS).min(tokens.len());
+        match (i + 1..=longest).find_map(|j| strict(&tokens[i..j]).map(|piece| (j, piece))) {
+            Some((j, piece)) => {
+                text.push_str(&piece);
+                i = j;
+            }
+            None => i += 1,
+        }
+    }
+    text
+}
+
 /// Whether `text` holds a character cut across tokens: the tokenizer
 /// gives nothing, or a replacement character, for part of one.
 fn is_partial(text: &str) -> bool {
@@ -803,7 +829,7 @@ impl Whisper {
     }
 
     fn decode(&self, tokens: &[TokenId]) -> String {
-        self.tokenizer.decode(tokens).unwrap_or_default()
+        decode_lossy(tokens, |run| self.tokenizer.decode(run).ok())
     }
 
     /// Runs the encoder on one window's log-mel input.
@@ -1230,6 +1256,53 @@ mod tests {
             .map(|w| (w.text.as_str(), w.start_ms))
             .collect();
         assert_eq!(words, [("tiế", 0), ("ok", 800)]);
+    }
+
+    /// Decodes byte tokens strictly, as the tokenizer does.
+    fn strict_bytes(pieces: &'static [&'static [u8]]) -> impl Fn(&[TokenId]) -> Option<String> {
+        move |tokens| {
+            let bytes: Vec<u8> = tokens
+                .iter()
+                .flat_map(|t| pieces[*t as usize].iter().copied())
+                .collect();
+            String::from_utf8(bytes).ok()
+        }
+    }
+
+    #[test]
+    fn decoding_skips_bytes_that_complete_no_character() {
+        // " a", a stray byte, the two halves of "é", " b", then half of "é".
+        const PIECES: &[&[u8]] = &[b" a", &[0xFF], &[0xC3], &[0xA9], b" b"];
+        let strict = strict_bytes(PIECES);
+        assert_eq!(decode_lossy(&[0, 1, 2, 3, 4, 2], &strict), " a\u{e9} b");
+        assert_eq!(decode_lossy(&[0, 2, 3], &strict), " a\u{e9}");
+        assert_eq!(decode_lossy(&[2], &strict), "");
+        assert_eq!(decode_lossy(&[1], &strict), "");
+        assert_eq!(decode_lossy(&[], &strict), "");
+    }
+
+    #[test]
+    fn an_invalid_byte_drops_no_other_words() {
+        // " Hello", a byte that completes no character, " world", " again".
+        const PIECES: &[&[u8]] = &[b" Hello", &[0xFF], b" world", b" again"];
+        let steps = [
+            stamp(0),
+            text(0, 0),
+            text(1, 400),
+            text(2, 500),
+            text(3, 800),
+            stamp(1000),
+        ];
+        let strict = strict_bytes(PIECES);
+        let (segments, _) = segments_from_steps(&steps, 0, |tokens| decode_lossy(tokens, &strict));
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "Hello world again");
+        let words: Vec<_> = segments[0]
+            .words
+            .iter()
+            .map(|w| (w.text.as_str(), w.start_ms))
+            .collect();
+        assert_eq!(words, [("Hello", 0), ("world", 400), ("again", 800)]);
     }
 
     #[test]
