@@ -347,7 +347,8 @@ pub fn bring_to_front(window: &WebviewWindow) -> tauri::Result<()> {
     window.unminimize()?;
     window.show()?;
     window.set_focus()?;
-    #[cfg(target_os = "macos")]
+    // The mock runtime's windows in the IPC tests have no NSWindow to message.
+    #[cfg(all(target_os = "macos", not(test)))]
     activate(window)?;
     Ok(())
 }
@@ -358,7 +359,7 @@ pub fn bring_to_front(window: &WebviewWindow) -> tauri::Result<()> {
 /// turn down for an app in the background; asking the app's
 /// `NSRunningApplication` as well, and ordering the window front regardless,
 /// brings it forward even then.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(test)))]
 fn activate(window: &WebviewWindow) -> tauri::Result<()> {
     use objc2::runtime::AnyObject;
 
