@@ -62,6 +62,20 @@ The status bar names the recording's sound:
 - **Mixed sound** when the microphone and system sound are mixed into one track, so they can only be edited together. Recordings made before Grab-it kept the sound apart show this, and so does one whose separate sound file couldn't be saved. Hover over it to see why.
 - Nothing for a silent recording.
 
+### Waveforms
+
+Under the zoom row, each kind of sound gets its own lane with its waveform, so you can see where someone speaks and where they pause without scrubbing:
+
+- **Microphone** and **System sound** when the recording kept its sound apart, or **Mixed sound** for one track of both (hover over its name to see why).
+- In a joined sequence there is a lane for each kind any clip has, in that order. Each clip draws its own recording's sound at its place on the timeline; gaps, and clips without that kind of sound, stay empty.
+- For a single recording, the waveform covers its whole length, and the ends you trimmed away are dimmed like the timeline.
+
+The waveforms zoom and scroll with the timeline and follow clips as you trim, move or preview them. They show the sound as recorded, before background noise is removed.
+
+Grab-it reads a recording's sound the first time it's shown, which can take a moment for a long one; meanwhile its lane says **Reading sound…**. After that it's remembered, so it shows at once. If the sound can't be read, the lane says **Waveform unavailable**: hover over it to see why.
+
+Drag the bar under the lanes to make them taller or shorter, or focus it and press `↑` or `↓`. Their height, like the zoom, is kept only while the editor is open.
+
 ## Keys
 
 | Key | Where | What it does |
@@ -80,6 +94,7 @@ The status bar names the recording's sound:
 | `Ctrl D` (`⌘ D`) | A clip | Duplicate it |
 | `Delete` / `Backspace` | A clip | Delete it and close the space, unless it's the last |
 | `Shift Delete` | A clip | Delete it and leave a gap, unless it's the last |
+| `↑` `↓` | The bar under the waveforms | Make them shorter or taller |
 | `Delete` / `Backspace` | A gap | Close it |
 | `Esc` | The backdrop panel | Close it |
 

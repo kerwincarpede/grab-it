@@ -637,6 +637,11 @@ pub struct RecordingSource {
     pub cursor: Option<CursorPath>,
     /// Whether it holds sound.
     pub has_audio: bool,
+    /// Each source of its sound, by kind, in [`audio_sources`]' order, as
+    /// `RecordingInfo.audio` lists the opened recording's: what its
+    /// waveform lanes draw. Before ffmpeg is ready an older recording
+    /// lists none.
+    pub audio: Vec<AudioKind>,
     /// Whether background noise was removed from the microphone in the
     /// MP4's sound, from its pointer sidecar.
     pub remove_noise: bool,
@@ -726,6 +731,10 @@ async fn load_source(
         let has_audio = ffmpeg
             .as_deref()
             .is_none_or(|ffmpeg| ffmpeg::probe_file(ffmpeg, &path).audio);
+        let audio = audio_sources(&path, ffmpeg.as_deref())
+            .into_iter()
+            .map(|source| source.kind)
+            .collect();
         RecordingSource {
             fps: recording_fps(&path),
             cursor: CursorPath::load(&path),
@@ -735,6 +744,7 @@ async fn load_source(
                 .unwrap_or_default(),
             source,
             has_audio,
+            audio,
             remove_noise: sidecar_remove_noise(&path),
             separate_microphone: kept_sound(&path).is_some(),
             path,

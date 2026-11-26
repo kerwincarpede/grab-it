@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { clampTrim, formatTime, type Trim } from "./edits";
-import { followScroll, msAtOffset, scrollToKeep, stepScale, visibleRange, zoomFor, type TimelineScale } from "./timelineZoom";
+import { followScroll, msAtOffset, scrollToKeep, stepScale, trackInView, visibleRange, zoomFor, type TimelineScale } from "./timelineZoom";
 
 /** The stretch of the timeline in view, and how wide the visible track is in px. */
 export interface TimelineView {
   startMs: number;
   endMs: number;
   width: number;
+  /**
+   * The stretch of track the scroller shows and its width in px, at the
+   * rows' scale: once scrolled, the side padding's share of the track too,
+   * and narrower than the view when a held drag's spacer takes its end.
+   */
+  track: { startMs: number; endMs: number; width: number };
 }
 
 interface TimelineProps {
@@ -129,9 +135,11 @@ export default function Timeline({
     const { onViewChange: tell, zoom: now, durationMs: length } = latest.current;
     if (!scroller || !tell) return;
     const width = viewWidth(scroller);
-    const view = { ...visibleRange(scroller.scrollLeft, now, length, width), width };
+    const track = trackInView(scroller.scrollLeft, scroller.clientWidth, SIDE_PAD, now, length, width);
+    const view = { ...visibleRange(scroller.scrollLeft, now, length, width), width, track };
     const last = told.current;
-    if (last && last.startMs === view.startMs && last.endMs === view.endMs && last.width === view.width) return;
+    const same = (a: Omit<TimelineView, "track">, b: Omit<TimelineView, "track">) => a.startMs === b.startMs && a.endMs === b.endMs && a.width === b.width;
+    if (last && same(last, view) && same(last.track, view.track)) return;
     told.current = view;
     tell(view);
   }, []);
@@ -179,7 +187,8 @@ export default function Timeline({
     if (next !== scroller.scrollLeft) scroller.scrollLeft = next;
   }, [follow, currentMs, zoom, durationMs]);
 
-  useEffect(() => report(), [report, zoom, durationMs]);
+  // Letting go of a held drag drops its spacer, which can clamp the scroll offset without a scroll event.
+  useEffect(() => report(), [report, zoom, durationMs, held]);
 
   useEffect(() => {
     const scroller = scrollRef.current;

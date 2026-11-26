@@ -60,11 +60,12 @@ import { chooseRecording, probeVideo, type SourceMeta } from "./sources";
 import { clampTrim, emptyEdits, formatTime, isWhole, parseEdits, serializeEdits, trimOf, type RecordingEdits, type Trim } from "./edits";
 import { exportLayers, paintUnderlay, recordingLayout } from "./layout";
 import { useBackdropPresets } from "./useBackdropPresets";
-import Timeline from "./Timeline";
+import Timeline, { type TimelineView } from "./Timeline";
 import { maxZoom, stepScale, zoomFor, type TimelineScale } from "./timelineZoom";
 import { isMacPlatform } from "../settings/accelerator";
 import ZoomAreaPicker from "./ZoomAreaPicker";
 import ZoomTrack from "./ZoomTrack";
+import WaveformLanes from "./WaveformLanes";
 import {
   addZoom,
   clampCentre,
@@ -262,8 +263,9 @@ export default function RecordingEditor() {
   const [playing, setPlaying] = useState(false);
   /** The timeline's zoom in pixels a second, kept only while the editor is open; null fits it. */
   const [timelineScale, setTimelineScale] = useState<TimelineScale>(null);
-  /** How wide the visible timeline track is, which bounds its zoom. */
-  const [timelineWidth, setTimelineWidth] = useState(0);
+  /** The stretch of the timeline in view, which the waveforms draw; its width bounds the zoom. */
+  const [timelineView, setTimelineView] = useState<TimelineView | null>(null);
+  const timelineWidth = timelineView?.width ?? 0;
   /** Bumped when a new frame shows, so the blurred backdrop follows it. */
   const [frameTick, setFrameTick] = useState(0);
 
@@ -333,6 +335,8 @@ export default function RecordingEditor() {
   const cursor = cursorOf(currentSource);
   const selectedClip = joined ? (clips.find((clip) => clip.id === selectedClipId) ?? null) : null;
   const missingClip = clips.find((clip) => !isGap(clip) && missing.has(clip.source)) ?? null;
+  /** Recording `source`'s sound sources by kind, or null until known. */
+  const audioOf = (source: string) => (source === own ? (info?.audio ?? null) : (sourceInfo[source]?.audio ?? null));
   /** Whether the sound sidecar of recording `source` keeps its microphone apart. */
   const separateMicrophone = (source: string) => (source === own ? (info?.separateMicrophone ?? false) : (sourceInfo[source]?.separateMicrophone ?? false));
   /** Noise can be removed when any clip's recording keeps its microphone apart. */
@@ -1468,7 +1472,7 @@ export default function RecordingEditor() {
           scale={timelineScale}
           onScaleChange={setTimelineScale}
           follow={playing}
-          onViewChange={(view) => setTimelineWidth(view.width)}
+          onViewChange={setTimelineView}
         >
           {(joined || (suggestOpen && !exporting)) && (
             <ClipTrack
@@ -1515,6 +1519,16 @@ export default function RecordingEditor() {
             onCommit={commitZooms}
             onAdd={addZoomAt}
             onSeek={(ms) => seek(Math.min(Math.max(ms, trim.startMs), trim.endMs))}
+          />
+          <WaveformLanes
+            clips={clips}
+            joined={joined}
+            durationMs={timelineDuration}
+            trim={trim}
+            audioOf={audioOf}
+            nameOf={(kind) => SOURCE_NAMES[kind]}
+            hintOf={(kind) => (kind === "mixed" ? MIXED_SOUND_HINT : undefined)}
+            view={timelineView?.track ?? null}
           />
         </Timeline>
         <div className="timeline-zoom" role="group" aria-label="Timeline zoom">

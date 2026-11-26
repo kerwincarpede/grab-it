@@ -31,6 +31,12 @@ let separate: string[] = [];
 let heard: RecordingPauses | string | ((noiseDb: number) => RecordingPauses | Promise<RecordingPauses>) = { sound: "microphone", pauses: [], canClean: true, pointer: null };
 /** What `recording_audition` resolves with, when a test holds it back. */
 let auditioned: (() => Promise<ArrayBuffer>) | null = null;
+/** The sound sources `recording_source` says each other recording has. */
+let sourceAudio: Record<string, AudioKind[]> = {};
+/** 12 seconds of half-loud peaks, 100 a second. */
+const PEAKS = () => new Uint8Array(1200).fill(128).buffer;
+/** What `recording_waveform` gives for each recording and sound source. */
+let waveform: (fileName: string, audio: number) => ArrayBuffer | Promise<ArrayBuffer> = PEAKS;
 
 /** How the opened recording's sound was kept and whether noise was removed from it. */
 interface Noise {
@@ -56,6 +62,7 @@ function mockBackend(edits: Value | null = null, cursor: CursorPath | null = nul
       fps: 30,
       cursor: null,
       hasAudio: true,
+      audio: sourceAudio[name] ?? [],
       removeNoise: false,
       separateMicrophone: separate.includes(name),
     };
@@ -84,6 +91,7 @@ function mockBackend(edits: Value | null = null, cursor: CursorPath | null = nul
       recording_export_cancel: () => undefined,
       recording_pauses: ({ noiseDb }) => (typeof heard === "function" ? heard(noiseDb) : typeof heard === "string" ? Promise.reject(heard) : heard),
       recording_audition: () => (auditioned ? auditioned() : new ArrayBuffer(4)),
+      recording_waveform: ({ fileName, audio }) => waveform(fileName, audio),
       recording_export: () =>
         new Promise<string>((resolve, reject) => {
           backend.exported = { resolve, reject };
@@ -141,6 +149,8 @@ afterEach(() => {
   separate = [];
   heard = { sound: "microphone", pauses: [], canClean: true, pointer: null };
   auditioned = null;
+  sourceAudio = {};
+  waveform = PEAKS;
 });
 
 const saved = (backend: Backend) => backend.calls.filter((call) => call.cmd === "recording_save_edits").map((call) => (call.payload as { edits: unknown }).edits);
@@ -680,7 +690,9 @@ describe("RecordingEditor", () => {
     it("says why mixed sound can only be edited together", async () => {
       mockBackend(null, null, ["mixed"]);
       render(<RecordingEditor />);
-      expect(await screen.findByText("Mixed sound")).toHaveAttribute(
+      await screen.findByText("Grab-it 2026-03-07 09-05-01.mp4");
+      const status = document.querySelector<HTMLElement>(".editor-status");
+      expect(await within(status!).findByText("Mixed sound")).toHaveAttribute(
         "title",
         "This recording's microphone and system sound are mixed into one track, so they can only be edited together.",
       );
@@ -1128,6 +1140,51 @@ describe("RecordingEditor", () => {
       // Let go, the scroller is as wide as the sequence again.
       expect(screen.queryByTestId("timeline-hold")).not.toBeInTheDocument();
       expect(scroller.scrollLeft).toBe(250);
+    });
+
+    it("draws the waveforms only over the track in view while a held drag shortens the sequence", async () => {
+      sourceAudio = { [OTHER]: ["mixed"] };
+      mockBackend(JOINED_ZOOM, null, ["mixed"]);
+      render(<RecordingEditor />);
+      await loadJoinedZoom();
+      const scroller = layOutTimeline();
+      let offset = 0;
+      const contentWidth = () => {
+        const hold = screen.queryByTestId("timeline-hold");
+        return Math.max(Number(zoomOf()) * 100 + 24, hold ? parseFloat(hold.style.width) : 0);
+      };
+      Object.defineProperty(scroller, "scrollLeft", {
+        configurable: true,
+        get: () => (offset = Math.min(offset, Math.max(0, contentWidth() - 124))),
+        set: (value: number) => {
+          offset = Math.max(0, value);
+        },
+      });
+      const lane = () => screen.getByRole("group", { name: "Mixed sound waveform" });
+      await waitFor(() => expect(lane()).toHaveAttribute("data-state", "ready"));
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      scroller.scrollLeft = 1000;
+      fireEvent.scroll(scroller);
+      const canvas = () => lane().querySelector("canvas") as HTMLCanvasElement;
+      // 4x, scrolled to the end: the 100 px view and the 12 px of left padding are track.
+      expect(canvas().style.width).toBe("112px");
+      spanAt(screen.getByRole("listbox", { name: "Clips" }), -300, 400);
+      const edge = screen.getByRole("option", { name: `${OTHER}, 0:06.0` }).querySelector(".clip-edge.end") as HTMLElement;
+      fireEvent.pointerDown(edge, { clientX: 100 });
+      fireEvent.pointerMove(edge, { clientX: 50 });
+      // The 8.75 s sequence is 350 px with the offset held at 300: only 62 px of
+      // the scroller is track, from 288 px, and the lane's bars end there, with the clip.
+      expect(scroller.scrollLeft).toBe(300);
+      await waitFor(() => expect(canvas().style.width).toBe("62px"));
+      expect(canvas()).toHaveAttribute("data-bars", "31");
+      fireEvent.pointerUp(edge, { clientX: 50 });
+      await waitFor(() => expect(screen.queryByTestId("timeline-hold")).not.toBeInTheDocument());
+      // Let go, the offset clamps to 250 and the view and its left padding are
+      // track again, 5.95 s to 8.75 s, the second clip across all of it.
+      expect(scroller.scrollLeft).toBe(250);
+      await waitFor(() => expect(canvas().style.width).toBe("112px"));
+      expect(canvas()).toHaveAttribute("data-bars", "56");
     });
 
     it("keeps the chosen scale and the scroll offset when the view is resized", async () => {
@@ -2199,6 +2256,204 @@ describe("RecordingEditor", () => {
       fireEvent.canPlay(first);
       expect(play.mock.calls.length).toBe(played);
       expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+    });
+  });
+
+  describe("waveform lanes", () => {
+    const lanes = () => screen.queryAllByRole("group", { name: / waveform$/ }).map((lane) => lane.getAttribute("aria-label"));
+    const lane = (name: string) => screen.getByRole("group", { name: `${name} waveform` });
+    const waveformCalls = (backend: Backend) => backend.calls.filter((call) => call.cmd === "recording_waveform").map((call) => call.payload);
+    /** Gives the timeline a 100 px track in view and reports it to the lanes. */
+    function layOutTimeline() {
+      const scroller = screen.getByTestId("timeline-scroll");
+      Object.defineProperty(scroller, "clientWidth", { configurable: true, value: 124 });
+      Object.defineProperty(scroller, "scrollLeft", { configurable: true, writable: true, value: 0 });
+      fireEvent.scroll(scroller);
+      return scroller;
+    }
+
+    it("draws a lane for each source kept apart, from the opened recording's own sound", async () => {
+      stubCanvas([]);
+      const backend = mockBackend(null, null, ["microphone", "system"]);
+      render(<RecordingEditor />);
+      await loadVideo();
+      layOutTimeline();
+      expect(lanes()).toEqual(["Microphone waveform", "System sound waveform"]);
+      await waitFor(() => expect(lane("System sound")).toHaveAttribute("data-state", "ready"));
+      expect(lane("Microphone")).toHaveAttribute("data-state", "ready");
+      expect(waveformCalls(backend)).toEqual(
+        expect.arrayContaining([
+          { fileName: OWN, audio: 0 },
+          { fileName: OWN, audio: 1 },
+        ]),
+      );
+      expect(waveformCalls(backend)).toHaveLength(2);
+      // 12 s across 100 px: a bar every 2 px.
+      expect(lane("Microphone").querySelector("canvas")).toHaveAttribute("data-bars", "50");
+    });
+
+    it("redraws a lane only when what it shows changes, not as the playhead moves", async () => {
+      stubCanvas([]);
+      mockBackend(null, null, ["microphone"]);
+      render(<RecordingEditor />);
+      await loadVideo();
+      layOutTimeline();
+      await waitFor(() => expect(lane("Microphone")).toHaveAttribute("data-state", "ready"));
+      const canvas = lane("Microphone").querySelector("canvas") as HTMLCanvasElement;
+      const draws = () => vi.mocked(HTMLCanvasElement.prototype.getContext).mock.contexts.filter((context) => context === canvas).length;
+      await waitFor(() => expect(draws()).toBeGreaterThan(0));
+      const before = draws();
+      const track = screen.getByTestId("timeline-track");
+      placeAt(track, 100, 40);
+      fireEvent.pointerDown(track, { clientX: 50 });
+      fireEvent.pointerUp(track, { clientX: 50 });
+      await waitFor(() => expect(screen.getByLabelText("Time")).toHaveTextContent(/^0:06/));
+      expect(draws()).toBe(before);
+      // Taller lanes are drawn again.
+      fireEvent.keyDown(screen.getByRole("separator", { name: "Waveform height" }), { key: "ArrowDown" });
+      expect(draws()).toBe(before + 1);
+    });
+
+    it("draws over all the track the timeline shows when zoomed, the side padding's share included", async () => {
+      mockBackend(null, null, ["microphone"]);
+      render(<RecordingEditor />);
+      await loadVideo();
+      const scroller = layOutTimeline();
+      const canvas = () => lane("Microphone").querySelector("canvas") as HTMLCanvasElement;
+      await waitFor(() => expect(lane("Microphone")).toHaveAttribute("data-state", "ready"));
+      // Fitted, the 100 px track is all there is.
+      expect(canvas().style.width).toBe("100px");
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      expect(screen.getByTestId("timeline-content").dataset.zoom).toBe("2");
+      // 2x, unscrolled: the track runs on under the right padding, to 112 px.
+      await waitFor(() => expect(canvas().style.width).toBe("112px"));
+      expect(canvas()).toHaveAttribute("data-bars", "56");
+      // Scrolled mid-way, under both paddings: all 124 px of the scroller.
+      scroller.scrollLeft = 50;
+      fireEvent.scroll(scroller);
+      await waitFor(() => expect(canvas().style.width).toBe("124px"));
+      expect(canvas()).toHaveAttribute("data-bars", "62");
+      // At the end, under the left padding only.
+      scroller.scrollLeft = 100;
+      fireEvent.scroll(scroller);
+      await waitFor(() => expect(canvas().style.width).toBe("112px"));
+      expect(canvas()).toHaveAttribute("data-bars", "56");
+    });
+
+    it("names mixed sound as the status bar does, with why", async () => {
+      mockBackend(null, null, ["mixed"]);
+      render(<RecordingEditor />);
+      await loadVideo();
+      expect(lanes()).toEqual(["Mixed sound waveform"]);
+      expect(within(lane("Mixed sound")).getByText("Mixed sound")).toHaveAttribute(
+        "title",
+        "This recording's microphone and system sound are mixed into one track, so they can only be edited together.",
+      );
+    });
+
+    it("draws nothing for a silent recording", async () => {
+      const backend = mockBackend();
+      render(<RecordingEditor />);
+      await loadVideo();
+      expect(lanes()).toEqual([]);
+      expect(screen.queryByRole("separator", { name: "Waveform height" })).not.toBeInTheDocument();
+      expect(waveformCalls(backend)).toEqual([]);
+    });
+
+    it("draws each clip of a joined sequence from its own recording, and leaves the gap empty", async () => {
+      stubCanvas([]);
+      sourceAudio = { [OTHER]: ["mixed"] };
+      const backend = mockBackend(
+        {
+          version: 3,
+          clips: [
+            { id: "a", source: OWN, startMs: 1000, endMs: 5000 },
+            { id: "g", gapMs: 1500 },
+            { id: "b", source: OTHER, startMs: 0, endMs: 6000 },
+          ],
+        },
+        null,
+        ["microphone"],
+      );
+      render(<RecordingEditor />);
+      await previewVideo(OWN);
+      await waitFor(() => expect(lanes()).toEqual(["Microphone waveform", "Mixed sound waveform"]));
+      layOutTimeline();
+      await waitFor(() => expect(lane("Mixed sound")).toHaveAttribute("data-state", "ready"));
+      await waitFor(() => expect(lane("Microphone")).toHaveAttribute("data-state", "ready"));
+      expect(waveformCalls(backend)).toEqual(
+        expect.arrayContaining([
+          { fileName: OWN, audio: 0 },
+          { fileName: OTHER, audio: 0 },
+        ]),
+      );
+      // 11.5 s across 100 px. The microphone is the first 4 s only (to
+      // 34.8 px); the mixed sound starts after the 1.5 s gap, at 47.8 px.
+      expect(lane("Microphone").querySelector("canvas")).toHaveAttribute("data-bars", "18");
+      expect(lane("Mixed sound").querySelector("canvas")).toHaveAttribute("data-bars", "27");
+    });
+
+    it("shows a placeholder until the peaks arrive", async () => {
+      let release: (peaks: ArrayBuffer) => void = () => undefined;
+      waveform = () => new Promise((resolve) => (release = resolve));
+      mockBackend(null, null, ["microphone"]);
+      render(<RecordingEditor />);
+      await loadVideo();
+      await waitFor(() => expect(lane("Microphone")).toHaveAttribute("data-state", "loading"));
+      expect(within(lane("Microphone")).getByText("Reading sound…")).toBeInTheDocument();
+      await act(async () => release(PEAKS()));
+      await waitFor(() => expect(lane("Microphone")).toHaveAttribute("data-state", "ready"));
+      expect(within(lane("Microphone")).queryByText("Reading sound…")).not.toBeInTheDocument();
+    });
+
+    it("says the waveform is unavailable when it cannot be read, with why", async () => {
+      waveform = () => Promise.reject("ffmpeg could not read the sound");
+      mockBackend(null, null, ["microphone"]);
+      render(<RecordingEditor />);
+      await loadVideo();
+      const status = await within(lane("Microphone")).findByText("Waveform unavailable");
+      expect(status).toHaveAttribute("title", "ffmpeg could not read the sound");
+      expect(lane("Microphone")).toHaveAttribute("data-state", "failed");
+      // Beside the lane's name, in the part of the lane kept in view, not at its far end.
+      expect(status.parentElement).toBe(within(lane("Microphone")).getByText("Microphone").parentElement);
+      expect(status.closest(".waveform-view")).not.toBeNull();
+    });
+
+    it("asks again for a waveform that failed once ffmpeg is ready", async () => {
+      let ready = false;
+      waveform = () => (ready ? PEAKS() : Promise.reject("ffmpeg is not ready yet; see Settings → Recording, then try again"));
+      const backend = mockBackend(null, null, ["microphone"]);
+      render(<RecordingEditor />);
+      await loadVideo();
+      expect(await within(lane("Microphone")).findByText("Waveform unavailable")).toHaveAttribute("title", expect.stringContaining("ffmpeg is not ready yet"));
+      ready = true;
+      await act(async () => emit("ffmpeg-status", { state: "ready", path: "/usr/bin/ffmpeg", encoder: "libx264" }));
+      await waitFor(() => expect(lane("Microphone")).toHaveAttribute("data-state", "ready"));
+      expect(within(lane("Microphone")).queryByText("Waveform unavailable")).not.toBeInTheDocument();
+      expect(waveformCalls(backend)).toHaveLength(2);
+    });
+
+    it("changes every lane's height by dragging or with the arrow keys", async () => {
+      mockBackend(null, null, ["microphone", "system"]);
+      render(<RecordingEditor />);
+      await loadVideo();
+      const separator = screen.getByRole("separator", { name: "Waveform height" });
+      const heights = () => [lane("Microphone").style.height, lane("System sound").style.height];
+      expect(separator).toHaveAttribute("aria-valuenow", "40");
+      expect(heights()).toEqual(["40px", "40px"]);
+      fireEvent.keyDown(separator, { key: "ArrowDown" });
+      expect(heights()).toEqual(["48px", "48px"]);
+      for (let i = 0; i < 5; i++) fireEvent.keyDown(separator, { key: "ArrowUp" });
+      expect(separator).toHaveAttribute("aria-valuenow", "24");
+      fireEvent.keyDown(separator, { key: "End" });
+      expect(separator).toHaveAttribute("aria-valuenow", "120");
+      fireEvent.pointerDown(separator, { clientY: 200, pointerId: 1 });
+      fireEvent.pointerMove(separator, { clientY: 170, pointerId: 1 });
+      fireEvent.pointerUp(separator, { clientY: 170, pointerId: 1 });
+      expect(heights()).toEqual(["90px", "90px"]);
+      // Moving after letting go changes nothing.
+      fireEvent.pointerMove(separator, { clientY: 100, pointerId: 1 });
+      expect(separator).toHaveAttribute("aria-valuenow", "90");
     });
   });
 });
