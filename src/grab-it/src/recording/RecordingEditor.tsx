@@ -5,7 +5,7 @@ import { NoiseIcon } from "../app/icons";
 import { MAX_BACKDROP_PRESETS } from "../settings/api";
 import { chooseBackdropImage, saveBackdropPresetImage } from "../editor/api";
 import BackdropPanel from "../editor/BackdropPanel";
-import { BackdropIcon, CopyIcon, ExportIcon, RedoIcon, TrashIcon, UndoIcon, ZoomInIcon } from "../editor/icons";
+import { BackdropIcon, CopyIcon, ExportIcon, FitIcon, RedoIcon, TrashIcon, UndoIcon, ZoomInIcon, ZoomOutIcon } from "../editor/icons";
 import { canRedo, canUndo, commit, initHistory, redo, undo, type History } from "../editor/history";
 import { BACKDROP_FILLS, type Backdrop } from "../editor/model";
 import { presetName } from "../editor/preferences";
@@ -61,6 +61,7 @@ import { clampTrim, emptyEdits, formatTime, isWhole, parseEdits, serializeEdits,
 import { exportLayers, paintUnderlay, recordingLayout } from "./layout";
 import { useBackdropPresets } from "./useBackdropPresets";
 import Timeline from "./Timeline";
+import { maxZoom, stepZoom } from "./timelineZoom";
 import ZoomAreaPicker from "./ZoomAreaPicker";
 import ZoomTrack from "./ZoomTrack";
 import {
@@ -255,6 +256,10 @@ export default function RecordingEditor() {
   const loadedRef = useRef<string | null>(null);
   const [currentMs, setCurrentMs] = useState(0);
   const [playing, setPlaying] = useState(false);
+  /** How far in the timeline is zoomed, kept only while the editor is open; 1 fits it. */
+  const [timelineZoom, setTimelineZoom] = useState(1);
+  /** How wide the visible timeline track is, which bounds its zoom. */
+  const [timelineWidth, setTimelineWidth] = useState(0);
   /** Bumped when a new frame shows, so the blurred backdrop follows it. */
   const [frameTick, setFrameTick] = useState(0);
 
@@ -1188,6 +1193,9 @@ export default function RecordingEditor() {
   const status = exporting ? `Exporting… ${percent}%` : (message ?? saveText(saveStatus));
   // While an area zoom is chosen, the whole frame shows with the area on it.
   const picking = selectedZoom?.focus.kind === "area" && !playing && !exporting;
+  /** The timeline zoom as shown: never past what its length and width allow. */
+  const zoomLimit = maxZoom(timelineDuration, timelineWidth);
+  const shownZoom = Math.min(Math.max(1, timelineZoom), zoomLimit);
   // The view comes from the current clip's zooms, in its recording's time.
   const currentOffset = at ? spanOf(clips, own, at.index, durationMs).offset : 0;
   const currentZooms = zooms
@@ -1453,6 +1461,10 @@ export default function RecordingEditor() {
             seek(next.startMs !== trim.startMs ? next.startMs : next.endMs);
           }}
           onTrimCommit={commitTrim}
+          zoom={timelineZoom}
+          onZoomChange={setTimelineZoom}
+          follow={playing}
+          onViewChange={(view) => setTimelineWidth(view.width)}
         >
           {(joined || (suggestOpen && !exporting)) && (
             <ClipTrack
@@ -1501,6 +1513,31 @@ export default function RecordingEditor() {
             onSeek={(ms) => seek(Math.min(Math.max(ms, trim.startMs), trim.endMs))}
           />
         </Timeline>
+        <div className="timeline-zoom" role="group" aria-label="Timeline zoom">
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => setTimelineZoom(stepZoom(shownZoom, -1, timelineDuration, timelineWidth))}
+            disabled={shownZoom <= 1}
+            aria-label="Zoom out"
+            title="Zoom the timeline out (Ctrl or Cmd + scroll)"
+          >
+            <ZoomOutIcon />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => setTimelineZoom(stepZoom(shownZoom, 1, timelineDuration, timelineWidth))}
+            disabled={shownZoom >= zoomLimit}
+            aria-label="Zoom in"
+            title="Zoom the timeline in (Ctrl or Cmd + scroll)"
+          >
+            <ZoomInIcon />
+          </button>
+          <button type="button" className="icon-button" onClick={() => setTimelineZoom(1)} disabled={shownZoom <= 1} aria-label="Fit" title="Fit the whole timeline in view">
+            <FitIcon />
+          </button>
+        </div>
       </div>
       {suggestOpen && info && !exporting && (
         <SuggestEditsPanel

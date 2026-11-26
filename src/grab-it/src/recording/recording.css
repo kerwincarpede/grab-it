@@ -99,7 +99,25 @@
 
 .timeline {
   flex: 1;
-  padding: 0 8px;
+  min-width: 0;
+}
+
+/* The track and its rows scroll sideways together when zoomed. */
+.timeline-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* As wide as the zoom makes the track; the padding leaves room for the handles and playhead. */
+.timeline-content {
+  box-sizing: border-box;
+  padding: 4px 12px;
+}
+
+.timeline-zoom {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .timeline-track {

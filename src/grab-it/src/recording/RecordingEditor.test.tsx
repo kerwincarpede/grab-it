@@ -694,6 +694,180 @@ describe("RecordingEditor", () => {
     });
   });
 
+  describe("zooming the timeline", () => {
+    /** Gives the timeline's scroller a 100 px track in view, with a scroll offset jsdom keeps. */
+    function layOutTimeline(): HTMLElement {
+      const scroller = screen.getByTestId("timeline-scroll");
+      // 12 px of padding each side around a 100 px track.
+      Object.defineProperty(scroller, "clientWidth", { configurable: true, value: 124 });
+      Object.defineProperty(scroller, "scrollLeft", { configurable: true, writable: true, value: 0 });
+      placeAt(scroller, 124, 80);
+      fireEvent.scroll(scroller);
+      return scroller;
+    }
+
+    /** Gives `element` a box starting at `left`, as a zoomed and scrolled row has. */
+    function spanAt(element: Element, left: number, width: number) {
+      vi.spyOn(element, "getBoundingClientRect").mockReturnValue({ left, top: 0, x: left, y: 0, width, height: 26, right: left + width, bottom: 26, toJSON: () => ({}) } as DOMRect);
+    }
+
+    const zoomOf = () => screen.getByTestId("timeline-content").dataset.zoom;
+
+    it("zooms in and out with the buttons around the playhead, and Fit shows it all", async () => {
+      mockBackend();
+      render(<RecordingEditor />);
+      await loadVideo();
+      expect(screen.getByRole("button", { name: "Zoom out" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Fit" })).toBeDisabled();
+      const scroller = layOutTimeline();
+      // Seek to 6 s, half way along the fitted track.
+      const track = screen.getByTestId("timeline-track");
+      placeAt(track, 100, 40);
+      fireEvent.pointerDown(track, { clientX: 50 });
+      fireEvent.pointerUp(track, { clientX: 50 });
+
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      expect(zoomOf()).toBe("2");
+      // The playhead stays 50 px into the view: 6 s is now 100 px along.
+      expect(scroller.scrollLeft).toBe(50);
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      expect(zoomOf()).toBe("4");
+      expect(scroller.scrollLeft).toBe(150);
+      await userEvent.click(screen.getByRole("button", { name: "Zoom out" }));
+      expect(zoomOf()).toBe("2");
+      expect(scroller.scrollLeft).toBe(50);
+
+      await userEvent.click(screen.getByRole("button", { name: "Fit" }));
+      expect(zoomOf()).toBe("1");
+      expect(scroller.scrollLeft).toBe(0);
+      expect(screen.getByRole("button", { name: "Fit" })).toBeDisabled();
+    });
+
+    it("stops at 400 px a second", async () => {
+      mockBackend();
+      render(<RecordingEditor />);
+      await loadVideo();
+      layOutTimeline();
+      // 12 s over 100 px: 48x is 400 px a second.
+      const zoomIn = screen.getByRole("button", { name: "Zoom in" });
+      for (let i = 0; i < 6; i++) await userEvent.click(zoomIn);
+      expect(zoomOf()).toBe("48");
+      expect(zoomIn).toBeDisabled();
+    });
+
+    it("zooms with Ctrl or Cmd + wheel at the pointer, and leaves a plain wheel alone", async () => {
+      mockBackend();
+      render(<RecordingEditor />);
+      await loadVideo();
+      const scroller = layOutTimeline();
+      fireEvent.wheel(scroller, { deltaY: -100, clientX: 37 });
+      expect(zoomOf()).toBe("1");
+      // 25 px into the track is 3 s; at 2x it is 50 px along, still under the pointer.
+      fireEvent.wheel(scroller, { deltaY: -100, clientX: 37, ctrlKey: true });
+      expect(zoomOf()).toBe("2");
+      expect(scroller.scrollLeft).toBe(25);
+      fireEvent.wheel(scroller, { deltaY: -100, clientX: 37, metaKey: true });
+      expect(zoomOf()).toBe("4");
+      expect(scroller.scrollLeft).toBe(75);
+      fireEvent.wheel(scroller, { deltaY: 100, clientX: 37, ctrlKey: true });
+      expect(zoomOf()).toBe("2");
+      expect(scroller.scrollLeft).toBe(25);
+    });
+
+    it("seeks, trims and drags zooms at the pointer while zoomed", async () => {
+      const backend = mockBackend({ version: 1, zooms: [AREA_ZOOM] });
+      render(<RecordingEditor />);
+      await loadVideo();
+      layOutTimeline();
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      // At 2x the 12 s track is 200 px; scrolled 50 px, it starts off screen: 60 ms a pixel.
+      const track = screen.getByTestId("timeline-track");
+      spanAt(track, -50, 200);
+      fireEvent.pointerDown(track, { clientX: 100 });
+      fireEvent.pointerUp(track, { clientX: 100 });
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:09.0 / 0:12.0");
+
+      const end = screen.getByRole("slider", { name: "Trim end" });
+      fireEvent.pointerDown(end, { clientX: 150 });
+      fireEvent.pointerMove(end, { clientX: 125 });
+      fireEvent.pointerUp(end, { clientX: 125 });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, trim: { startMs: 0, endMs: 10_500 }, zooms: [AREA_ZOOM] }));
+
+      // The zoom row is as wide as the track: 40 px is 2.4 s.
+      spanAt(screen.getByTestId("zoom-track"), -50, 200);
+      const segment = screen.getByTestId("zoom-segment");
+      fireEvent.pointerDown(segment, { clientX: 0 });
+      fireEvent.pointerMove(segment, { clientX: 40 });
+      fireEvent.pointerUp(segment, { clientX: 40 });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 1, trim: { startMs: 0, endMs: 10_500 }, zooms: [{ ...AREA_ZOOM, startMs: 4400, endMs: 6400 }] }));
+    });
+
+    it("trims and reorders clips at the pointer while zoomed", async () => {
+      const joined = {
+        version: 2,
+        clips: [
+          { id: "a", source: OWN, startMs: 1000, endMs: 5000 },
+          { id: "b", source: OTHER, startMs: 0, endMs: 6000 },
+        ],
+      };
+      const backend = mockBackend(joined);
+      render(<RecordingEditor />);
+      const video = await previewVideo(OWN);
+      setVideoMetadata(video, 12, 1920, 1080);
+      fireEvent.loadedMetadata(video);
+      await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
+      layOutTimeline();
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      expect(zoomOf()).toBe("4");
+      // The 10 s clip row is 400 px at 4x, scrolled 100 px: 25 ms a pixel.
+      const row = screen.getByRole("listbox", { name: "Clips" });
+      spanAt(row, -100, 400);
+      const edge = screen.getByRole("option", { name: `${OTHER}, 0:06.0` }).querySelector(".clip-edge.end") as HTMLElement;
+      fireEvent.pointerDown(edge, { clientX: 300 });
+      fireEvent.pointerMove(edge, { clientX: 260 });
+      fireEvent.pointerUp(edge, { clientX: 260 });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [joined.clips[0], { ...joined.clips[1], endMs: 5000 }] }));
+
+      // 350 px along the 9 s sequence's 400 px is 7.9 s, in the second clip.
+      spanAt(screen.getByRole("listbox", { name: "Clips" }), -100, 400);
+      const first = screen.getByRole("option", { name: `${OWN}, 0:04.0` });
+      fireEvent.pointerDown(first, { clientX: 10 });
+      fireEvent.pointerMove(first, { clientX: 250 });
+      fireEvent.pointerUp(first, { clientX: 250 });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [{ ...joined.clips[1], endMs: 5000 }, joined.clips[0]] }));
+    });
+
+    it("keeps the playhead in view while playing", async () => {
+      mockBackend();
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+      vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+      render(<RecordingEditor />);
+      const video = await loadVideo();
+      const scroller = layOutTimeline();
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      // 4x: 400 px for 12 s, with 3 s in view.
+      expect(scroller.scrollLeft).toBe(0);
+      await userEvent.click(screen.getByRole("button", { name: "Play" }));
+      fireEvent.play(video);
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 1.5 });
+      act(() => frames.splice(0).forEach((frame) => frame(0)));
+      // Well inside the view, it stays put.
+      expect(scroller.scrollLeft).toBe(0);
+      Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 3 });
+      act(() => frames.splice(0).forEach((frame) => frame(0)));
+      // Past the edge, the view pages on to put it 10 px in.
+      expect(scroller.scrollLeft).toBe(90);
+    });
+  });
+
   describe("joining recordings", () => {
     const JOINED = {
       version: 2,
