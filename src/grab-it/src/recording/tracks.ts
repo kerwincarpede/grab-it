@@ -404,9 +404,13 @@ export function splitAt(timeline: Timeline, ms: number, only?: string, minMs: nu
   const at = Math.round(ms);
   const ids = splittableIds(timeline, at, only, minMs);
   if (ids.size === 0) return timeline;
+  const splitPartners = new Map<string, number>();
+  for (const place of clipPlaces(timeline)) {
+    if (place.link && ids.has(place.id)) splitPartners.set(place.link, (splitPartners.get(place.link) ?? 0) + 1);
+  }
   const links = new Map<string, string>();
   const nextLink = (link?: string) => {
-    if (!link) return undefined;
+    if (!link || (splitPartners.get(link) ?? 0) < 2) return undefined;
     if (!links.has(link)) links.set(link, `link-${makeId()}`);
     return links.get(link);
   };

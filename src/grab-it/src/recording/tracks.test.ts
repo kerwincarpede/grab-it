@@ -172,6 +172,18 @@ describe("tracks", () => {
     expect(splitAt(timeline, 2800, "a", 1).main).toHaveLength(2);
   });
 
+  it("does not link a split picture tail to a partner that ends at the split", () => {
+    const timeline = defaultTimeline([a], sound);
+    audio(timeline)[0].endMs = 3000;
+    for (const minMs of [500, 1]) {
+      const next = splitAt(timeline, 3000, "a", minMs);
+      expect(next.main).toHaveLength(2);
+      expect(next.main[0].link).toBe(audio(next)[0].link);
+      expect(next.main[1].link).toBeUndefined();
+      expect(audio(next)).toHaveLength(1);
+    }
+  });
+
   it("ripple-deletes a clip with its sound and shifts later clips", () => {
     const timeline = defaultTimeline([a, b], sound);
     const next = expectTimeline(rippleDelete(timeline, "a"));
