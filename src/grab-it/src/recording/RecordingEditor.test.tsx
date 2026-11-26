@@ -20,7 +20,7 @@ vi.mock("./sources", async (importOriginal) => {
 
 /** Where Save subtitles… is told to save next; null cancels. */
 let subtitlesAt: string | null = null;
-const chooseExportFile = vi.fn((_name: string) => Promise.resolve(subtitlesAt));
+const chooseExportFile = vi.fn<(name: string) => Promise<string | null>>(() => Promise.resolve(subtitlesAt));
 vi.mock("../app/exportDialog", () => ({ chooseExportFile: (name: string) => chooseExportFile(name) }));
 
 const PATH = "/shots/recordings/Grab-it 2026-03-07 09-05-01.mp4";
