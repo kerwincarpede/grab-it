@@ -21,3 +21,9 @@ Click **Annotate** on the Quick Access card or a pin, or open a capture from the
 - [Your original is safe](/grab-it/image-editor/non-destructive/): how edits are saved, and changed later.
 
 Your edits are saved automatically and you can change them any time. The original screenshot is never altered.
+
+## Step through your captures
+
+**Previous capture** and **Next capture**, the arrows at the right of the top bar, open the capture taken just after or just before this one, in the same window. `⌥ ←` and `⌥ →` (`Alt ←` and `Alt →` on Windows and Linux) do the same. Your edits are saved first, and undo starts again for each capture.
+
+They step through every screenshot in the [Library](/grab-it/library/), newest first, whatever the Library is showing. Recordings and GIFs are skipped. If the capture is already open in another editor window, that window comes to the front instead. A file opened from outside the Library has both arrows turned off.

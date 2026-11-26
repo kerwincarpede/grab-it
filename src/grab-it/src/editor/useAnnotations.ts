@@ -141,5 +141,7 @@ export function useAnnotations() {
     adopt: adoptDoc,
     undo: undoDoc,
     redo: redoDoc,
+    /** Writes any pending edit now; resolves once the sidecar holds it. */
+    flush,
   };
 }

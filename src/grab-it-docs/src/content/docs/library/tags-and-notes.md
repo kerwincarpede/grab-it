@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-Click a tile to open its **details** on the right. Click **Previous capture** and **Next capture** (the arrows at the top) to step through the grid, and **Close details** or `Esc` to close it. Drag the panel's left edge to make it wider or narrower; double-click the edge to reset it.
+Click a tile to open its **details** on the right. Click **Previous capture** and **Next capture** (the arrows at the top) to step through the grid, or press `←` or `↑` and `→` or `↓` while the details have focus (not while you're typing in a field), and **Close details** or `Esc` to close it. Drag the panel's left edge to make it wider or narrower; double-click the edge to reset it.
 
 ## What the details show
 

@@ -14,10 +14,12 @@ import {
   copyImage,
   editorFaces,
   editorImage,
+  editorStep,
   editorWords,
   exportImage,
   pinImage,
   saveBackdropPresetImage,
+  type Neighbour,
 } from "./api";
 import BackdropPanel from "./BackdropPanel";
 import AiAnnotatePanel from "./AiAnnotatePanel";
@@ -65,6 +67,8 @@ import {
 import {
   BackdropIcon,
   ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   CopyIcon,
   CopyTextIcon,
   CropResetIcon,
@@ -528,9 +532,19 @@ interface ToolHold {
 }
 
 /** The annotation editor: a react-konva stage over the original capture. */
+/**
+ * The editor window. Stepping to another capture remounts the editor, so its image, crop,
+ * images, history and every other per-capture state start fresh.
+ */
 export default function EditorWindow() {
+  const [capture, setCapture] = useState(0);
+  const moved = useCallback(() => setCapture((count) => count + 1), []);
+  return <CaptureEditor key={capture} onMoved={moved} />;
+}
+
+function CaptureEditor({ onMoved }: { onMoved: () => void }) {
   const annotations = useAnnotations();
-  const { doc: storedDoc, commit, adopt, info, undo: undoDoc, redo: redoDoc } = annotations;
+  const { doc: storedDoc, commit, adopt, info, undo: undoDoc, redo: redoDoc, flush } = annotations;
   const { image: capture, error: imageError } = useCaptureImage(info !== null);
   /** The stored cuts that fit the capture: a malformed sidecar's others are left out, in the editor as on export. */
   const doc = useMemo(() => {
@@ -1694,6 +1708,29 @@ export default function EditorWindow() {
     }
   }, [render]);
 
+  /** A step is on its way: a second press waits for it rather than stepping twice. */
+  const stepping = useRef(false);
+  /**
+   * Steps to the newer ("newer", Previous) or older ("older", Next) image capture in the Library.
+   * The pending edit is written to this capture's sidecar first.
+   */
+  const stepCapture = useCallback(
+    async (direction: Neighbour) => {
+      if (stepping.current) return;
+      if (!(direction === "newer" ? info?.hasNewer : info?.hasOlder)) return;
+      stepping.current = true;
+      try {
+        await flush();
+        if ((await editorStep(direction)) === "moved") onMoved();
+      } catch (err) {
+        setMessage(`Could not open the ${direction === "newer" ? "previous" : "next"} capture: ${errorText(err)}`);
+      } finally {
+        stepping.current = false;
+      }
+    },
+    [flush, info, onMoved],
+  );
+
   const copyAndClose = useCallback(async () => {
     if (!(await copy())) return;
     try {
@@ -1900,6 +1937,12 @@ export default function EditorWindow() {
         void copyAndClose();
         return;
       }
+      if (event.altKey && !mod && !event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+        // Alt+Left would take the webview back a page on Windows; here it steps captures, unless typing.
+        event.preventDefault();
+        if (!isTyping(event.target)) void stepCapture(event.key === "ArrowLeft" ? "newer" : "older");
+        return;
+      }
       if (isTyping(event.target)) return;
       const key = event.key.toLowerCase();
       const nudge = mod || event.altKey ? null : nudgeDelta(event.key, event.shiftKey);
@@ -1991,7 +2034,7 @@ export default function EditorWindow() {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [undoDoc, redoDoc, copy, copyAndClose, removeSelected, duplicateSelected, nudgeSelected, reorderSelected, pasteImage, selectedId, changeStyle, stepWidth, pickTool, restoreTool, tool, image, rotateBy, eyedropper, stopEyedropper, toggleEyedropper]);
+  }, [undoDoc, redoDoc, copy, copyAndClose, stepCapture, removeSelected, duplicateSelected, nudgeSelected, reorderSelected, pasteImage, selectedId, changeStyle, stepWidth, pickTool, restoreTool, tool, image, rotateBy, eyedropper, stopEyedropper, toggleEyedropper]);
 
   // A dropped image file goes on the capture, centred where it was dropped.
   const dropView = useRef({ view: currentView, imageSize, orientation });
@@ -2545,6 +2588,28 @@ export default function EditorWindow() {
           <button type="button" className="text-button primary" onClick={() => void exportAs()} disabled={!image}>
             <ExportIcon />
             Export…
+          </button>
+        </div>
+        <div className="bar-group" role="group" aria-label="Captures">
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Previous capture"
+            title="Previous capture (Alt+←)"
+            disabled={!info?.hasNewer}
+            onClick={() => void stepCapture("newer")}
+          >
+            <ChevronLeftIcon />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Next capture"
+            title="Next capture (Alt+→)"
+            disabled={!info?.hasOlder}
+            onClick={() => void stepCapture("older")}
+          >
+            <ChevronRightIcon />
           </button>
         </div>
       </div>

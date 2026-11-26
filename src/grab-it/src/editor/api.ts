@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { commands, type EditorInfo_Serialize, type OcrLine, type Rect, type Value } from "../app/bindings";
+import { commands, type EditorInfo_Serialize, type EditorStepped, type Neighbour, type OcrLine, type Rect, type Value } from "../app/bindings";
 import type { Annotations } from "./model";
 
 /** What the editor opens with: `EditorInfo` in src-tauri/src/editor.rs. */
@@ -14,6 +14,17 @@ export const EXPORT_PATH_HEADER = "x-export-path";
 
 export function editorInfo(): Promise<EditorInfo> {
   return commands.editorInfo();
+}
+
+/** Which way to step: `Neighbour` in src-tauri/src/library.rs. "newer" is Previous, "older" is Next. */
+export type { Neighbour, EditorStepped } from "../app/bindings";
+
+/**
+ * Steps this editor to the newer or older image capture in the Library. "moved" means this
+ * window now shows it and the page should load afresh; "focused" that another editor showing it came forward.
+ */
+export function editorStep(direction: Neighbour): Promise<EditorStepped> {
+  return commands.editorStep(direction);
 }
 
 /** The original capture as PNG bytes. */

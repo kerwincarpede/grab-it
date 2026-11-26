@@ -8,6 +8,7 @@ import {
   type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { chooseExportFile } from "../app/exportDialog";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -746,6 +747,26 @@ const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, 
 
 type TileAction = "copy" | "text" | "pin" | "play" | "reveal";
 
+/**
+ * Controls inside the details that use the arrow keys themselves: fields, the resizer, and
+ * anything with a role that moves within it.
+ */
+const ARROW_CONTROLS =
+  "input, textarea, select, video, audio, [contenteditable], [role='separator'], [role='slider'], [role='listbox'], [role='combobox'], [role='menu'], [role='menubar'], [role='radiogroup'], [role='tablist'], [role='option'], [role='menuitem']";
+
+/**
+ * Which way an arrow key steps the details: -1 for Left/Up (the previous capture), 1 for
+ * Right/Down (the next), or null when the key is not a plain arrow or its target handles arrows.
+ */
+function stepKeyDelta(event: KeyboardEvent<HTMLElement>): -1 | 1 | null {
+  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return null;
+  const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : null;
+  if (delta === null) return null;
+  const target = event.target as HTMLElement | null;
+  if (target?.closest(ARROW_CONTROLS)) return null;
+  return delta;
+}
+
 interface DetailsProps {
   shot: Shot;
   /** AI descriptions are turned off in Settings. */
@@ -755,9 +776,11 @@ interface DetailsProps {
   onError: (message: string) => void;
   onNotice: (message: string) => void;
   onClose: () => void;
-  /** Moves to the capture before (-1) or after (1), when there is one. */
-  onStep: (delta: -1 | 1) => void;
+  /** Moves to the capture before (-1) or after (1), when there is one; `fromKeys` when an arrow key asked. */
+  onStep: (delta: -1 | 1, fromKeys?: boolean) => void;
   canStep: { back: boolean; forward: boolean };
+  /** Set when an arrow key stepped here: the new details take focus, so the next arrow steps again. */
+  focusOnOpenRef: RefObject<boolean>;
   /** The pane's width in pixels, set by dragging its left edge. */
   width: number;
   onWidth: (width: number) => void;
@@ -787,7 +810,13 @@ function useShotText(shot: Shot): ShotText | null {
 }
 
 /** The selected shot: open, tag, annotate with notes or delete it. */
-function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onClose, onStep, canStep, width, onWidth }: DetailsProps) {
+function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onClose, onStep, canStep, focusOnOpenRef, width, onWidth }: DetailsProps) {
+  const pane = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!focusOnOpenRef.current) return;
+    focusOnOpenRef.current = false;
+    pane.current?.focus();
+  }, [focusOnOpenRef]);
   // Local so quick successive edits build on each other before the saves land.
   const [tags, setTags] = useState(shot.tags);
   const [notes, setNotes] = useState(shot.notes);
@@ -902,7 +931,20 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
   const recording = isRecording(shot);
   const video = shot.kind === "video";
   return (
-    <aside className="details" aria-label={recording ? "Recording details" : "Capture details"} style={{ width }}>
+    <aside
+      ref={pane}
+      className="details"
+      aria-label={recording ? "Recording details" : "Capture details"}
+      style={{ width }}
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        const delta = stepKeyDelta(event);
+        if (delta === null) return;
+        if (delta < 0 ? !canStep.back : !canStep.forward) return;
+        event.preventDefault();
+        onStep(delta, true);
+      }}
+    >
       <DetailsResizer width={width} onWidth={onWidth} />
       <div className="details-top">
         <span className="details-heading">Details</span>
@@ -1927,9 +1969,12 @@ function LibraryWindow({
   // Every tag in the library, those on the most loaded shots first.
   const menuTags = useMemo(() => suggestedTags(options.tags, shots, [], options.tags.length), [options.tags, shots]);
 
-  function step(delta: -1 | 1) {
+  /** Set when an arrow key in the details steps, so the next capture's details keep the focus. */
+  const focusDetails = useRef(false);
+  function step(delta: -1 | 1, fromKeys = false) {
     const next = shots[selectedIndex + delta];
     if (!next) return;
+    focusDetails.current = fromKeys;
     selectOnly(next.id);
     scroller.current
       ?.querySelector<HTMLElement>(`[data-shot-id="${next.id}"]`)
@@ -2073,6 +2118,7 @@ function LibraryWindow({
             onClose={() => selectOnly(null)}
             canStep={{ back: selectedIndex > 0, forward: selectedIndex < shots.length - 1 }}
             onStep={step}
+            focusOnOpenRef={focusDetails}
             width={detailsWidth}
             onWidth={setDetailsWidth}
           />
