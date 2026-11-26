@@ -1311,7 +1311,8 @@ export default function RecordingEditor() {
           stopIfCancelled();
           transcript = await recordingTranscribe(source);
         }
-        cues.push(...cuesFromTranscript(transcript, source, own));
+        // A recording's length cuts off any cue Whisper heard past its end.
+        cues.push(...cuesFromTranscript(transcript, source, own, newCueId, meta[source]?.durationMs || undefined));
         done.push(source);
       }
       if (cues.length === 0) {

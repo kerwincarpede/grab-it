@@ -173,23 +173,41 @@ export function cueLines(text: string): string[] {
 
 /**
  * The cues for a transcript: each segment split at word times so a cue
- * holds at most two 42-character lines and lasts at most 6 s. A segment
- * without words splits evenly by its text. Each cue is tagged with
- * `source`, untagged when that is the sidecar's own recording.
+ * holds at most two 42-character lines and lasts at most 6 s. Cues stay
+ * inside their segment and the recording's `lengthMs`, when known, and
+ * each lasts some time: a segment past the recording's end makes none.
+ * Each cue is tagged with `source`, untagged when that is the sidecar's
+ * own recording.
  */
-export function cuesFromTranscript(transcript: Transcript, source: string, own: string, makeId: () => string = newCueId): Cue[] {
+export function cuesFromTranscript(
+  transcript: Transcript,
+  source: string,
+  own: string,
+  makeId: () => string = newCueId,
+  lengthMs: number = Number.POSITIVE_INFINITY,
+): Cue[] {
   const tag = source === own ? {} : { source };
   const cues: Cue[] = [];
   for (const segment of transcript.segments) {
-    const words: Piece[] = (segment.words.length > 0 ? segment.words : spreadWords(segment)).flatMap(piecesOf);
+    const segmentStart = Math.max(0, segment.startMs);
+    const segmentEnd = Math.min(segment.endMs, lengthMs);
+    if (!(segmentEnd > segmentStart)) continue;
+    const words: Piece[] = timedWords(segment, segmentStart, segmentEnd).flatMap(piecesOf);
+    const made: Cue[] = [];
     let group: Piece[] = [];
     const flush = () => {
       const text = joinPieces(group);
-      if (text) {
-        const startMs = Math.max(segment.startMs, group[0].startMs);
-        const endMs = Math.max(startMs + 1, Math.min(segment.endMs, group[group.length - 1].endMs));
-        cues.push({ id: makeId(), ...tag, startMs: Math.round(startMs), endMs: Math.round(endMs), text });
+      if (!text) {
+        group = [];
+        return;
       }
+      const startMs = Math.round(group[0].startMs);
+      const endMs = Math.round(group[group.length - 1].endMs);
+      const last = made[made.length - 1];
+      if (endMs > startMs) made.push({ id: makeId(), ...tag, startMs, endMs, text });
+      // Too short to show: it joins the cue before, or the next one.
+      else if (last) made[made.length - 1] = { ...last, endMs: Math.max(last.endMs, endMs), text: joinText(last.text, text) };
+      else return;
       group = [];
     };
     for (const word of words) {
@@ -200,6 +218,7 @@ export function cuesFromTranscript(transcript: Transcript, source: string, own: 
       group.push(word);
     }
     if (group.length > 0) flush();
+    cues.push(...made);
   }
   return sortCues(cues);
 }
@@ -246,11 +265,57 @@ const runsOn = (text: string, next: string) => {
   return UNSPACED.test(chars[chars.length - 1] ?? "") && UNSPACED.test(Array.from(next)[0] ?? "");
 };
 
-/** A segment's words spread evenly over it, for a segment without word times. */
-function spreadWords(segment: TranscriptSegment): TranscriptWord[] {
-  const texts = segment.text.split(/\s+/).filter(Boolean);
-  const step = (segment.endMs - segment.startMs) / Math.max(1, texts.length);
-  return texts.map((text, index) => ({ text, startMs: segment.startMs + index * step, endMs: segment.startMs + (index + 1) * step }));
+/** `text` and `next` as one, spaced unless both meet in a script written without spaces. */
+const joinText = (text: string, next: string) => (runsOn(text, next) ? text + next : `${text} ${next}`);
+
+/**
+ * A segment's words, placed as `place_words` in src-tauri/src/transcribe.rs
+ * places them, for transcripts saved before it did: each inside
+ * `startMs`..`endMs`, starting where the one before ends and lasting some
+ * time. When most words share one start, or the segment has no word
+ * times, every word is spread over the segment by its length in
+ * characters; otherwise words sharing a start split the time until the
+ * next word. A word left with no time joins the word before it, or the one
+ * after it when it comes first.
+ */
+function timedWords(segment: TranscriptSegment, startMs: number, endMs: number): TranscriptWord[] {
+  const given = segment.words.length > 0 ? segment.words : segment.text.split(/\s+/).map((text) => ({ text, startMs, endMs: startMs }));
+  let floor = startMs;
+  const words = given
+    .map((word) => ({ text: word.text.trim(), at: word.startMs }))
+    .filter((word) => word.text)
+    .map((word) => {
+      floor = clamp(word.at, floor, endMs);
+      return { text: word.text, at: floor, weight: Math.max(1, Array.from(word.text).length) };
+    });
+  const spread = (run: typeof words, at: number, until: number) => {
+    const total = run.reduce((sum, word) => sum + word.weight, 0);
+    let before = 0;
+    for (const word of run) {
+      word.at = at + ((until - at) * before) / total;
+      before += word.weight;
+    }
+  };
+  const runs: (typeof words)[] = [];
+  for (const word of words) {
+    const run = runs[runs.length - 1];
+    if (run && run[0].at === word.at) run.push(word);
+    else runs.push([word]);
+  }
+  if (Math.max(0, ...runs.map((run) => run.length)) * 2 > words.length) spread(words, startMs, endMs);
+  else runs.forEach((run, index) => run.length > 1 && spread(run, run[0].at, runs[index + 1]?.[0].at ?? endMs));
+  const placed: TranscriptWord[] = [];
+  let carried = "";
+  words.forEach((word, index) => {
+    const end = words[index + 1]?.at ?? endMs;
+    const last = placed[placed.length - 1];
+    if (end > word.at) {
+      placed.push({ text: carried ? joinText(carried, word.text) : word.text, startMs: word.at, endMs: end });
+      carried = "";
+    } else if (last) last.text = joinText(last.text, word.text);
+    else carried = carried ? joinText(carried, word.text) : word.text;
+  });
+  return placed;
 }
 
 // --- On the sequence ---------------------------------------------------------

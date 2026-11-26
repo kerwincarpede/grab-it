@@ -534,17 +534,18 @@ fn timestamp_ms(token: TokenId) -> u64 {
     u64::from(token - TIMESTAMP_BEGIN) * TIMESTAMP_MS
 }
 
-/// The segments in one window's tokens, `offset_ms` into the recording.
-/// A segment runs between a pair of timestamp tokens; each word starts at
-/// its first token's likeliest timestamp, clamped to its segment and never
-/// before the word before, and ends where the next word starts or the
-/// segment ends. `decode` turns a run of text tokens into text, and a word
-/// starts at a token whose text starts with a space. Text after the last
-/// timestamp is dropped, as Whisper leaves it unfinished. Returns the
-/// segments and where the last one ended, in the window's time.
+/// The segments in one window's tokens, `offset_ms` into the recording,
+/// the window holding `window_ms` of sound. A segment runs between a pair
+/// of timestamp tokens, cut at the window's end, and one starting after
+/// the sound ends is dropped. Its words are timed by [`place_words`].
+/// `decode` turns a run of text tokens into text, and a word starts at a
+/// token whose text starts with a space. Text after the last timestamp is
+/// dropped, as Whisper leaves it unfinished. Returns the segments and
+/// where the last one ended, in the window's time.
 pub fn segments_from_steps(
     steps: &[Step],
     offset_ms: u64,
+    window_ms: u64,
     decode: impl Fn(&[TokenId]) -> String,
 ) -> (Vec<TranscriptSegment>, Option<u64>) {
     let mut segments = Vec::new();
@@ -562,9 +563,14 @@ pub fn segments_from_steps(
                     // A closing timestamp no later than its opening one
                     // still keeps the text, one timestamp step long.
                     let to = at.max(from + TIMESTAMP_MS);
-                    if let Some(segment) = segment(&text_steps, from, to, offset_ms, &decode) {
+                    // Whisper hears a short last window as padded to 30 s,
+                    // so its times can run past the sound.
+                    let end = to.min(window_ms);
+                    if from < end
+                        && let Some(segment) = segment(&text_steps, from, end, offset_ms, &decode)
+                    {
                         segments.push(segment);
-                        last_end = Some(to);
+                        last_end = Some(end);
                     }
                     text_steps.clear();
                     // A closing timestamp also opens the next segment, for
@@ -655,25 +661,105 @@ fn segment(
             tokens.push(step.token);
         }
     }
-    let mut words = Vec::new();
-    for (i, (tokens, at)) in groups.iter().enumerate() {
-        let text = decode(tokens).trim().to_owned();
-        if text.is_empty() {
-            continue;
-        }
-        let end = groups.get(i + 1).map_or(to, |(_, next)| *next).max(*at);
-        words.push(TranscriptWord {
+    let words = place_words(groups, from, to, decode)
+        .into_iter()
+        .map(|(text, start, end)| TranscriptWord {
             text,
-            start_ms: offset_ms + at,
+            start_ms: offset_ms + start,
             end_ms: offset_ms + end,
-        });
-    }
+        })
+        .collect();
     Some(TranscriptSegment {
         start_ms: offset_ms + from,
         end_ms: offset_ms + to,
         text,
         words,
     })
+}
+
+/// Times for a segment's words, from `groups`: each word's tokens and the
+/// time it starts, in order. Every word lies within `from..to`, starts
+/// where the word before ends and lasts some time; the last ends at `to`.
+///
+/// Whisper's timestamp guesses often collapse, most words of a segment
+/// landing on one instant (often its end). Then every word is spread over
+/// the segment by its length in characters instead, as it is when there
+/// is only one word. Otherwise words that share a start are spread over
+/// the time until the next word. A word still left with no time, such as
+/// one placed at the segment's end, joins the word before it, or the one
+/// after it when it comes first. Returns each word's text, start and end.
+fn place_words(
+    groups: Vec<(Vec<TokenId>, u64)>,
+    from: u64,
+    to: u64,
+    decode: &impl Fn(&[TokenId]) -> String,
+) -> Vec<(String, u64, u64)> {
+    let mut words: Vec<(Vec<TokenId>, u64, u64)> = Vec::new();
+    let mut floor = from;
+    for (tokens, at) in groups {
+        let text = decode(&tokens);
+        if text.trim().is_empty() {
+            continue;
+        }
+        let at = at.clamp(floor, to);
+        floor = at;
+        let weight = text.trim().chars().count().max(1) as u64;
+        words.push((tokens, at, weight));
+    }
+    let count = words.len();
+    let longest_run = words
+        .chunk_by(|a, b| a.1 == b.1)
+        .map(<[_]>::len)
+        .max()
+        .unwrap_or(0);
+    if longest_run * 2 > count {
+        spread(&mut words, from, to);
+    } else {
+        let mut i = 0;
+        while i < count {
+            let at = words[i].1;
+            let run = words[i..].iter().take_while(|word| word.1 == at).count();
+            let until = words.get(i + run).map_or(to, |word| word.1);
+            if run > 1 {
+                spread(&mut words[i..i + run], at, until);
+            }
+            i += run;
+        }
+    }
+    let mut placed: Vec<(Vec<TokenId>, u64, u64)> = Vec::new();
+    let mut carried: Vec<TokenId> = Vec::new();
+    for i in 0..count {
+        let start = words[i].1;
+        let end = words.get(i + 1).map_or(to, |word| word.1);
+        let tokens = std::mem::take(&mut words[i].0);
+        match placed.last_mut() {
+            Some(last) if end <= start => last.0.extend(tokens),
+            None if end <= start => carried.extend(tokens),
+            _ => {
+                let mut all = std::mem::take(&mut carried);
+                all.extend(tokens);
+                placed.push((all, start, end));
+            }
+        }
+    }
+    if !carried.is_empty() {
+        placed.push((carried, from, to));
+    }
+    placed
+        .into_iter()
+        .map(|(tokens, start, end)| (decode(&tokens).trim().to_owned(), start, end))
+        .collect()
+}
+
+/// Spreads `words` (tokens, start, weight) over `at..until`, each taking
+/// time in proportion to its weight.
+fn spread(words: &mut [(Vec<TokenId>, u64, u64)], at: u64, until: u64) {
+    let total: u64 = words.iter().map(|word| word.2).sum();
+    let mut before = 0;
+    for word in words {
+        word.1 = at + (until - at) * before / total.max(1);
+        before += word.2;
+    }
 }
 
 /// The most UTF-8 bytes, and so byte tokens, one character takes.
@@ -803,6 +889,25 @@ impl LogitsFilter for TimestampFilter {
     }
 }
 
+/// The tokenizer in a Hugging Face `tokenizer.json`. The pinned model's
+/// file predates the `ignore_merges` field rten-text requires of a BPE
+/// model, so a missing one is filled in as false, the tokenizers
+/// library's default, before it is read; the file on disk is untouched,
+/// so its checksum still holds.
+fn tokenizer_from_json(json: &str) -> Result<Tokenizer, String> {
+    let mut value: serde_json::Value = serde_json::from_str(json).map_err(|err| err.to_string())?;
+    if let Some(model) = value
+        .get_mut("model")
+        .and_then(serde_json::Value::as_object_mut)
+        .filter(|model| model.get("type").and_then(serde_json::Value::as_str) == Some("BPE"))
+    {
+        model
+            .entry("ignore_merges")
+            .or_insert(serde_json::Value::Bool(false));
+    }
+    Tokenizer::from_json(&value.to_string()).map_err(|err| err.to_string())
+}
+
 /// A loaded Whisper model.
 pub struct Whisper {
     encoder: Model,
@@ -818,7 +923,9 @@ impl Whisper {
             Model::load_file(file.local(dir))
                 .map_err(|err| format!("could not load the speech model: {err}"))
         };
-        let tokenizer = Tokenizer::from_file(MODEL_FILES[2].local(dir))
+        let tokenizer = fs::read_to_string(MODEL_FILES[2].local(dir))
+            .map_err(|err| err.to_string())
+            .and_then(|json| tokenizer_from_json(&json))
             .map_err(|err| format!("could not load the speech model's words: {err}"))?;
         Ok(Self {
             encoder: load(&MODEL_FILES[0])?,
@@ -928,11 +1035,8 @@ impl Whisper {
             let offset = ms(seek);
             let window_ms = ms(window.len());
             let (found, last_end) =
-                segments_from_steps(&steps, offset, |tokens| self.decode(tokens));
-            segments.extend(found.into_iter().filter_map(|mut segment| {
-                segment.end_ms = segment.end_ms.min(offset + window_ms);
-                (segment.start_ms < segment.end_ms).then_some(segment)
-            }));
+                segments_from_steps(&steps, offset, window_ms, |tokens| self.decode(tokens));
+            segments.extend(found);
             // A full window ends where its last finished segment did;
             // anything later is heard again in the next window.
             let advance = match last_end {
@@ -1095,6 +1199,9 @@ mod tests {
     use std::io::Write;
     use std::net::TcpListener;
 
+    /// One full window, in milliseconds.
+    const WINDOW_MS: u64 = (WINDOW_SAMPLES as u64 * 1000) / SAMPLE_RATE as u64;
+
     /// A fake tokenizer: token `n` is the text in `vocab[n]`.
     fn decoder(vocab: &'static [&'static str]) -> impl Fn(&[TokenId]) -> String {
         move |tokens| tokens.iter().map(|t| vocab[*t as usize]).collect()
@@ -1131,11 +1238,12 @@ mod tests {
             stamp(1000),
             stamp(1000),
             text(4, 1200),
-            // Earlier than the word before: held at it.
+            // Earlier than the word before: held at it, so both words share
+            // a start and are spread over their segment.
             text(5, 1100),
             stamp(2000),
         ];
-        let (segments, last) = segments_from_steps(&steps, 5000, decoder(VOCAB));
+        let (segments, last) = segments_from_steps(&steps, 5000, WINDOW_MS, decoder(VOCAB));
         assert_eq!(last, Some(2000));
         assert_eq!(segments.len(), 2);
         assert_eq!(segments[0].text, "Hello world.");
@@ -1151,13 +1259,13 @@ mod tests {
             .iter()
             .map(|w| (w.text.as_str(), w.start_ms, w.end_ms))
             .collect();
-        assert_eq!(again, [("Again", 6200, 6200), ("now", 6200, 7000)]);
+        assert_eq!(again, [("Again", 6000, 6625), ("now", 6625, 7000)]);
     }
 
     #[test]
     fn unfinished_text_after_the_last_timestamp_is_dropped() {
         let steps = [stamp(0), text(0, 0), stamp(500), text(4, 600)];
-        let (segments, last) = segments_from_steps(&steps, 0, decoder(VOCAB));
+        let (segments, last) = segments_from_steps(&steps, 0, WINDOW_MS, decoder(VOCAB));
         assert_eq!(segments.len(), 1);
         assert_eq!(last, Some(500));
     }
@@ -1172,7 +1280,7 @@ mod tests {
             text(5, 3000),
             stamp(5000),
         ];
-        let (segments, last) = segments_from_steps(&steps, 0, decoder(VOCAB));
+        let (segments, last) = segments_from_steps(&steps, 0, WINDOW_MS, decoder(VOCAB));
         let spans: Vec<_> = segments
             .iter()
             .map(|s| (s.text.as_str(), s.start_ms, s.end_ms))
@@ -1184,7 +1292,7 @@ mod tests {
     #[test]
     fn a_zero_length_segment_keeps_its_text() {
         let steps = [stamp(1000), text(0, 1000), stamp(1000)];
-        let (segments, last) = segments_from_steps(&steps, 0, decoder(VOCAB));
+        let (segments, last) = segments_from_steps(&steps, 0, WINDOW_MS, decoder(VOCAB));
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].text, "Hello");
         assert_eq!(
@@ -1214,7 +1322,7 @@ mod tests {
             // Two halves of one character decode to it.
             joined.replace("\u{FFFD}\u{FFFD}好", "们")
         };
-        let (segments, _) = segments_from_steps(&steps, 0, decode);
+        let (segments, _) = segments_from_steps(&steps, 0, WINDOW_MS, decode);
         let words: Vec<_> = segments[0]
             .words
             .iter()
@@ -1249,7 +1357,7 @@ mod tests {
             let joined: String = tokens.iter().map(|t| PIECES[*t as usize]).collect();
             joined.replace("\u{FFFD}\u{FFFD}e", "ế")
         };
-        let (segments, _) = segments_from_steps(&steps, 0, decode);
+        let (segments, _) = segments_from_steps(&steps, 0, WINDOW_MS, decode);
         let words: Vec<_> = segments[0]
             .words
             .iter()
@@ -1294,7 +1402,8 @@ mod tests {
             stamp(1000),
         ];
         let strict = strict_bytes(PIECES);
-        let (segments, _) = segments_from_steps(&steps, 0, |tokens| decode_lossy(tokens, &strict));
+        let (segments, _) =
+            segments_from_steps(&steps, 0, WINDOW_MS, |tokens| decode_lossy(tokens, &strict));
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].text, "Hello world again");
         let words: Vec<_> = segments[0]
@@ -1331,11 +1440,128 @@ mod tests {
 
     #[test]
     fn word_times_are_clamped_to_their_segment() {
+        // " now" is placed after the segment: clamped to its end, it has no
+        // time, so it joins the word before.
         let steps = [stamp(1000), text(0, 0), text(5, 9000), stamp(2000)];
-        let (segments, _) = segments_from_steps(&steps, 0, decoder(VOCAB));
-        let words = &segments[0].words;
-        assert_eq!((words[0].start_ms, words[0].end_ms), (1000, 2000));
-        assert_eq!((words[1].start_ms, words[1].end_ms), (2000, 2000));
+        let (segments, _) = segments_from_steps(&steps, 0, WINDOW_MS, decoder(VOCAB));
+        assert_eq!(timed(&segments[0]), [("Hello now", 1000, 2000)]);
+    }
+
+    fn timed(segment: &TranscriptSegment) -> Vec<(&str, u64, u64)> {
+        segment
+            .words
+            .iter()
+            .map(|w| (w.text.as_str(), w.start_ms, w.end_ms))
+            .collect()
+    }
+
+    const SPEECH: &[&str] = &[" Banana's", " are", " yellow", " in", " bunches.", " The"];
+
+    #[test]
+    fn a_segment_past_the_end_of_the_sound_is_cut_there() {
+        // A 12 s recording: Whisper places a segment's words, and the next
+        // segment, after the sound ends.
+        let steps = [
+            stamp(8000),
+            text(0, 8000),
+            text(1, 14160),
+            text(2, 14160),
+            text(3, 14160),
+            text(4, 14160),
+            stamp(15000),
+            text(5, 16000),
+            stamp(17000),
+        ];
+        let (segments, last) = segments_from_steps(&steps, 2000, 12_000, decoder(SPEECH));
+        assert_eq!(last, Some(12_000));
+        assert_eq!(segments.len(), 1);
+        assert_eq!((segments[0].start_ms, segments[0].end_ms), (10_000, 14_000));
+        // Most words collapsed onto the segment's end: all are spread over
+        // it by their length.
+        assert_eq!(
+            timed(&segments[0]),
+            [
+                ("Banana's", 10_000, 11_185),
+                ("are", 11_185, 11_629),
+                ("yellow", 11_629, 12_518),
+                ("in", 12_518, 12_814),
+                ("bunches.", 12_814, 14_000),
+            ]
+        );
+    }
+
+    #[test]
+    fn collapsed_word_times_are_spread_over_the_segment_by_length() {
+        let steps = [
+            stamp(0),
+            text(5, 1000),
+            text(0, 7000),
+            text(1, 7000),
+            text(2, 7000),
+            stamp(7000),
+        ];
+        let (segments, _) = segments_from_steps(&steps, 0, WINDOW_MS, decoder(SPEECH));
+        assert_eq!(
+            timed(&segments[0]),
+            [
+                ("The", 0, 1050),
+                ("Banana's", 1050, 3850),
+                ("are", 3850, 4900),
+                ("yellow", 4900, 7000),
+            ]
+        );
+    }
+
+    #[test]
+    fn words_sharing_a_start_split_the_time_until_the_next_word() {
+        let steps = [
+            stamp(0),
+            text(0, 0),
+            text(4, 1000),
+            text(5, 1000),
+            text(3, 3000),
+            text(0, 4000),
+            stamp(5000),
+        ];
+        let (segments, _) = segments_from_steps(&steps, 0, WINDOW_MS, decoder(VOCAB));
+        assert_eq!(
+            timed(&segments[0]),
+            [
+                ("Hello", 0, 1000),
+                ("Again", 1000, 2666),
+                ("now.", 2666, 4000),
+                ("Hello", 4000, 5000),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_segment_too_short_for_its_words_keeps_them_in_one() {
+        // A 1 ms segment cut at the sound's end: no word gets time of its
+        // own, so they all join.
+        let steps = [stamp(0), text(0, 0), text(4, 0), text(5, 0), stamp(1000)];
+        let (segments, _) = segments_from_steps(&steps, 0, 1, decoder(VOCAB));
+        assert_eq!(timed(&segments[0]), [("Hello Again now", 0, 1)]);
+    }
+
+    #[test]
+    fn a_tokenizer_without_ignore_merges_still_loads() {
+        // A byte-level BPE vocabulary, as Whisper's, with one merge.
+        let mut vocab: serde_json::Map<String, serde_json::Value> =
+            rten_text::models::char_to_byte()
+                .into_iter()
+                .map(|(c, byte)| (c.to_string(), byte.into()))
+                .collect();
+        vocab.insert("hi".into(), 256.into());
+        let json = serde_json::json!({
+            "model": {"type": "BPE", "vocab": vocab, "merges": ["h i"], "end_of_word_suffix": ""}
+        })
+        .to_string();
+        assert!(Tokenizer::from_json(&json).is_err());
+        let tokenizer = tokenizer_from_json(&json).unwrap();
+        assert_eq!(tokenizer.decode(&[256]).unwrap(), "hi");
+        assert_eq!(tokenizer.decode(&[104, 105]).unwrap(), "hi");
+        assert!(tokenizer_from_json("{").is_err());
     }
 
     #[test]

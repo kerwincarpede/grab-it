@@ -102,6 +102,47 @@ describe("cues from a transcript", () => {
     expect(cuesFromTranscript(mixed, "a.mp4", "a.mp4", ids()).map((cue) => cue.text)).toEqual(["你好 Grab-it 世界"]);
   });
 
+  it("keeps cues inside their segment and the recording, and makes none past its end", () => {
+    // As a transcript saved before word times were placed: a 12 s recording
+    // whose words run past both their segment and the recording.
+    const segment = (startMs: number, endMs: number, words: [string, number, number][]) => ({
+      startMs,
+      endMs,
+      text: words.map(([text]) => text).join(" "),
+      words: words.map(([text, start, end]) => ({ text, startMs: start, endMs: end })),
+    });
+    const transcript: Transcript = {
+      version: 1,
+      model: "whisper-base",
+      language: "en",
+      segments: [
+        segment(0, 5000, [["The", 1000, 5000], ["bananas", 5000, 5000], ["are", 5000, 5000]]),
+        segment(8000, 15_000, [["Banana's", 8000, 14_160], ["are", 14_160, 14_160], ["yellow", 14_160, 15_000]]),
+        segment(12_500, 14_000, [["gone", 12_500, 14_000]]),
+      ],
+    };
+    const cues = cuesFromTranscript(transcript, "a.mp4", "a.mp4", ids(), 12_000);
+    expect(cues.map((cue) => [cue.text, cue.startMs, cue.endMs])).toEqual([
+      ["The bananas are", 0, 5000],
+      ["Banana's are yellow", 8000, 12_000],
+    ]);
+    for (const cue of cues) expect(cue.endMs).toBeGreaterThan(cue.startMs);
+  });
+
+  it("spreads words that share a start over the time until the next, and joins a word with no time", () => {
+    const transcript: Transcript = {
+      version: 1,
+      model: "m",
+      language: "en",
+      segments: [{ startMs: 0, endMs: 9000, text: "", words: [{ text: "one", startMs: 0, endMs: 0 }, { text: "two", startMs: 1000, endMs: 1000 }, { text: "three", startMs: 1000, endMs: 4000 }, { text: "four", startMs: 4000, endMs: 9000 }, { text: "five", startMs: 9000, endMs: 9000 }] }],
+    };
+    const cues = cuesFromTranscript(transcript, "a.mp4", "a.mp4", ids());
+    expect(cues.map((cue) => [cue.text, cue.startMs, cue.endMs])).toEqual([
+      ["one two three", 0, 4000],
+      ["four five", 4000, 9000],
+    ]);
+  });
+
   it("wraps text into lines no longer than the limit", () => {
     expect(wrapLines("a ".repeat(30).trim())?.every((line) => line.length <= MAX_LINE_CHARS)).toBe(true);
     expect(wrapLines("word ".repeat(40))).toBeNull();
