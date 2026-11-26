@@ -774,6 +774,27 @@ describe("RecordingEditor", () => {
       expect(scroller.scrollLeft).toBe(25);
     });
 
+    it("adds small wheel moves up to one zoom step, as a trackpad sends them", async () => {
+      mockBackend();
+      render(<RecordingEditor />);
+      await loadVideo();
+      const scroller = layOutTimeline();
+      fireEvent.wheel(scroller, { deltaY: -10, clientX: 37, ctrlKey: true });
+      expect(zoomOf()).toBe("1");
+      for (let i = 0; i < 9; i++) fireEvent.wheel(scroller, { deltaY: -10, clientX: 37, ctrlKey: true });
+      expect(zoomOf()).toBe("2");
+      // Three lines are about half a notch; seven make the next step.
+      fireEvent.wheel(scroller, { deltaY: -3, deltaMode: 1, clientX: 37, metaKey: true });
+      expect(zoomOf()).toBe("2");
+      fireEvent.wheel(scroller, { deltaY: -4, deltaMode: 1, clientX: 37, metaKey: true });
+      expect(zoomOf()).toBe("4");
+      // Turning back drops what was left over the other way.
+      fireEvent.wheel(scroller, { deltaY: 90, clientX: 37, ctrlKey: true });
+      expect(zoomOf()).toBe("4");
+      fireEvent.wheel(scroller, { deltaY: 10, clientX: 37, ctrlKey: true });
+      expect(zoomOf()).toBe("2");
+    });
+
     it("seeks, trims and drags zooms at the pointer while zoomed", async () => {
       const backend = mockBackend({ version: 1, zooms: [AREA_ZOOM] });
       render(<RecordingEditor />);

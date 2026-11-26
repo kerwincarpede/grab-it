@@ -37,6 +37,12 @@ interface TimelineProps {
 /** The scroller's side padding, room for the start handle and the playhead's ends. */
 const SIDE_PAD = 12;
 
+/** How much wheel movement makes one zoom step: about one notch of a mouse wheel. */
+const WHEEL_STEP_PX = 100;
+/** Pixels for a wheel delta given in lines or pages. */
+const WHEEL_LINE_PX = 16;
+const WHEEL_PAGE_PX = 800;
+
 /** The visible track's width: the scroller's, less its padding. At 1x it is the whole track's. */
 const viewWidth = (scroller: HTMLElement) => Math.max(0, scroller.clientWidth - SIDE_PAD * 2);
 
@@ -136,12 +142,20 @@ export default function Timeline({
     const scroller = scrollRef.current;
     if (!scroller) return;
     // Ctrl/Cmd + wheel zooms at the pointer; it must be able to stop the page zooming.
+    // A trackpad sends many small deltas per gesture: they add up to one step per notch's worth.
+    let pending = 0;
     const wheel = (event: WheelEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.deltaY === 0) return;
       event.preventDefault();
+      const delta = event.deltaY * (event.deltaMode === 1 ? WHEEL_LINE_PX : event.deltaMode === 2 ? scroller.clientWidth || WHEEL_PAGE_PX : 1);
+      // Turning back starts afresh.
+      pending = Math.sign(pending) === -Math.sign(delta) ? delta : pending + delta;
+      if (Math.abs(pending) < WHEEL_STEP_PX) return;
+      const direction = pending < 0 ? 1 : -1;
+      pending = Math.sign(pending) * Math.min(Math.abs(pending) - WHEEL_STEP_PX, WHEEL_STEP_PX);
       const { zoom: now, durationMs: length, onZoomChange: ask } = latest.current;
       const width = viewWidth(scroller);
-      const next = stepZoom(now, event.deltaY < 0 ? 1 : -1, length, width);
+      const next = stepZoom(now, direction, length, width);
       if (!ask || next === now) return;
       const offset = Math.min(width, Math.max(0, event.clientX - scroller.getBoundingClientRect().left - SIDE_PAD));
       shown.current.anchor = { ms: msAtOffset(offset, scroller.scrollLeft, now, length, width), offset };
