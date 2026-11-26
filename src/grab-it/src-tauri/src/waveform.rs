@@ -86,11 +86,11 @@ impl Peaks {
             self.sample(i16::from_le_bytes([low, high]));
             bytes = rest;
         }
-        let mut pairs = bytes.chunks_exact(2);
-        for pair in &mut pairs {
-            self.sample(i16::from_le_bytes([pair[0], pair[1]]));
+        let (pairs, rest) = bytes.as_chunks::<2>();
+        for pair in pairs {
+            self.sample(i16::from_le_bytes(*pair));
         }
-        self.odd = pairs.remainder().first().copied();
+        self.odd = rest.first().copied();
     }
 
     fn sample(&mut self, sample: i16) {
@@ -119,13 +119,6 @@ impl Peaks {
 /// A sample's magnitude, 0 to 32768, as a byte, 0 to 255, rounded.
 fn peak_byte(magnitude: u16) -> u8 {
     ((u32::from(magnitude) * 255 + 16_384) / 32_768).min(255) as u8
-}
-
-/// The peaks of `samples`, little-endian 16-bit.
-pub fn peaks_of(samples: &[u8]) -> Vec<u8> {
-    let mut peaks = Peaks::new();
-    peaks.push(samples);
-    peaks.finish()
 }
 
 /// Decodes audio stream `stream` of `file` with `ffmpeg_path` into peaks,
@@ -189,7 +182,7 @@ impl PeaksCache {
 
     /// The entry for stream `stream` of `file` as it is now, or `None`
     /// when the file cannot be read.
-    fn entry(&self, file: &Path, stream: usize) -> Option<PathBuf> {
+    pub fn entry(&self, file: &Path, stream: usize) -> Option<PathBuf> {
         let meta = fs::metadata(file).ok()?;
         let modified = meta
             .modified()
@@ -210,21 +203,18 @@ impl PeaksCache {
         Some(self.dir.join(format!("{name}.peaks")))
     }
 
-    /// The cached peaks of stream `stream` of `file`, or `None` when there
-    /// are none for it as it is now, or they cannot be read.
-    pub fn load(&self, file: &Path, stream: usize) -> Option<Vec<u8>> {
-        let bytes = fs::read(self.entry(file, stream)?).ok()?;
+    /// The peaks kept in `entry`, or `None` when there are none or they
+    /// cannot be read.
+    pub fn load(&self, entry: &Path) -> Option<Vec<u8>> {
+        let bytes = fs::read(entry).ok()?;
         bytes
             .strip_prefix(CACHE_MAGIC.as_slice())
             .map(<[u8]>::to_vec)
     }
 
-    /// Keeps `peaks` for stream `stream` of `file`. Best effort: a cache
-    /// that cannot be written only means reading the sound again.
-    pub fn store(&self, file: &Path, stream: usize, peaks: &[u8]) {
-        let Some(entry) = self.entry(file, stream) else {
-            return;
-        };
+    /// Keeps `peaks` in `entry`. Best effort: a cache that cannot be
+    /// written only means reading the sound again.
+    pub fn store(&self, entry: &Path, peaks: &[u8]) {
         if fs::create_dir_all(&self.dir).is_err() {
             return;
         }
@@ -232,25 +222,28 @@ impl PeaksCache {
         let partial = entry.with_extension(format!("partial-{}", std::process::id()));
         let mut bytes = CACHE_MAGIC.to_vec();
         bytes.extend_from_slice(peaks);
-        if fs::write(&partial, bytes).is_err() || fs::rename(&partial, &entry).is_err() {
+        if fs::write(&partial, bytes).is_err() || fs::rename(&partial, entry).is_err() {
             let _ = fs::remove_file(&partial);
         }
     }
 }
 
 /// The peaks of `source`, from `cache` when it holds them, else from
-/// `compute`, which are then kept there.
+/// `compute`, which are then kept there. The entry is named for the file
+/// as it was before `compute` read it, so a file that changes meanwhile
+/// is read again next time.
 pub fn cached_peaks(
     cache: Option<&PeaksCache>,
     source: &AudioSource,
     compute: impl FnOnce(&Path, usize) -> Result<Vec<u8>, String>,
 ) -> Result<Vec<u8>, String> {
-    if let Some(peaks) = cache.and_then(|cache| cache.load(&source.file, source.stream)) {
+    let entry = cache.and_then(|cache| Some((cache, cache.entry(&source.file, source.stream)?)));
+    if let Some(peaks) = entry.as_ref().and_then(|(cache, entry)| cache.load(entry)) {
         return Ok(peaks);
     }
     let peaks = compute(&source.file, source.stream)?;
-    if let Some(cache) = cache {
-        cache.store(&source.file, source.stream, &peaks);
+    if let Some((cache, entry)) = &entry {
+        cache.store(entry, &peaks);
     }
     Ok(peaks)
 }
@@ -301,6 +294,18 @@ mod tests {
     use super::*;
     use crate::recording_editor::AudioKind;
     use std::cell::Cell;
+
+    /// The peaks of `samples`, little-endian 16-bit, in one piece.
+    fn peaks_of(samples: &[u8]) -> Vec<u8> {
+        let mut peaks = Peaks::new();
+        peaks.push(samples);
+        peaks.finish()
+    }
+
+    /// What `cache` holds for stream `stream` of `file` as it is now.
+    fn cached(cache: &PeaksCache, file: &Path, stream: usize) -> Option<Vec<u8>> {
+        cache.load(&cache.entry(file, stream)?)
+    }
 
     fn samples(values: &[i16]) -> Vec<u8> {
         values
@@ -390,7 +395,7 @@ mod tests {
             stream: 1,
             ..source.clone()
         };
-        assert_eq!(cache.load(&system.file, 1), None);
+        assert_eq!(cached(&cache, &system.file, 1), None);
     }
 
     #[test]
@@ -398,11 +403,29 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = PeaksCache::new(dir.path().join(WAVEFORMS_DIR));
         let source = sound_in(dir.path());
-        cache.store(&source.file, 0, &[9, 9]);
+        cache.store(&cache.entry(&source.file, 0).unwrap(), &[9, 9]);
         fs::write(&source.file, b"longer sound").unwrap();
         let fresh = cached_peaks(Some(&cache), &source, |_, _| Ok(vec![4]));
         assert_eq!(fresh, Ok(vec![4]));
-        assert_eq!(cache.load(&source.file, 0), Some(vec![4]));
+        assert_eq!(cached(&cache, &source.file, 0), Some(vec![4]));
+    }
+
+    #[test]
+    fn a_sound_file_changed_while_it_is_read_is_read_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = PeaksCache::new(dir.path().join(WAVEFORMS_DIR));
+        let source = sound_in(dir.path());
+        let changing = |file: &Path, _: usize| {
+            fs::write(file, b"sound recorded on").unwrap();
+            Ok(vec![1])
+        };
+        assert_eq!(cached_peaks(Some(&cache), &source, changing), Ok(vec![1]));
+        // Kept for the file as it was, not as it is now.
+        assert_eq!(cached(&cache, &source.file, 0), None);
+        assert_eq!(
+            cached_peaks(Some(&cache), &source, |_, _| Ok(vec![2])),
+            Ok(vec![2])
+        );
     }
 
     #[test]
@@ -413,10 +436,10 @@ mod tests {
         let entry = cache.entry(&source.file, 0).unwrap();
         fs::create_dir_all(entry.parent().unwrap()).unwrap();
         fs::write(&entry, b"not peaks").unwrap();
-        assert_eq!(cache.load(&source.file, 0), None);
+        assert_eq!(cached(&cache, &source.file, 0), None);
         let fresh = cached_peaks(Some(&cache), &source, |_, _| Ok(vec![7, 8]));
         assert_eq!(fresh, Ok(vec![7, 8]));
-        assert_eq!(cache.load(&source.file, 0), Some(vec![7, 8]));
+        assert_eq!(cached(&cache, &source.file, 0), Some(vec![7, 8]));
         // An entry that is a folder is no better.
         let other = AudioSource {
             stream: 2,
@@ -435,7 +458,7 @@ mod tests {
         let cache = PeaksCache::new(dir.path().join(WAVEFORMS_DIR));
         let source = sound_in(dir.path());
         assert!(cached_peaks(Some(&cache), &source, |_, _| Err("no".into())).is_err());
-        assert_eq!(cache.load(&source.file, 0), None);
+        assert_eq!(cached(&cache, &source.file, 0), None);
         assert_eq!(cached_peaks(None, &source, |_, _| Ok(vec![1])), Ok(vec![1]));
     }
 

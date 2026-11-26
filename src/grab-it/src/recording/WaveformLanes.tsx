@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { onFfmpegStatus } from "../settings/api";
 import { recordingWaveform, type AudioKind } from "./api";
 import type { Clip } from "./clips";
 import type { Trim } from "./edits";
@@ -38,11 +39,16 @@ const errorText = (err: unknown) => String(err instanceof Error ? err.message : 
  * A waveform lane for each kind of sound any clip has, under the zoom row,
  * and a separator under them that drags, or takes the arrow keys, to
  * change their height. Each recording source's peaks are asked for once
- * while the editor is open.
+ * while the editor is open; those that failed are asked for again when
+ * ffmpeg becomes ready, as before then every request fails.
  */
 export default function WaveformLanes({ clips, joined, durationMs, trim, audioOf, nameOf, hintOf, view }: WaveformLanesProps) {
   const [peaks, setPeaks] = useState<Record<string, PeaksState>>({});
   const requested = useRef(new Set<string>());
+  /** Requests that failed, dropped from `requested` to ask again once ffmpeg is ready. */
+  const failed = useRef(new Set<string>());
+  /** Bumped to ask again for the peaks that failed. */
+  const [attempt, setAttempt] = useState(0);
   const [height, setHeight] = useState(DEFAULT_LANE_HEIGHT);
   const drag = useRef<{ y: number; height: number } | null>(null);
 
@@ -65,9 +71,39 @@ export default function WaveformLanes({ clips, joined, durationMs, trim, audioOf
       }
       loading
         .then((found) => setPeaks((known) => ({ ...known, [key]: { status: "ready", peaks: found } })))
-        .catch((err: unknown) => setPeaks((known) => ({ ...known, [key]: { status: "failed", error: errorText(err) } })));
+        .catch((err: unknown) => {
+          failed.current.add(key);
+          setPeaks((known) => ({ ...known, [key]: { status: "failed", error: errorText(err) } }));
+        });
     }
-  }, [wanted]);
+  }, [wanted, attempt]);
+
+  useEffect(() => {
+    let stopped = false;
+    let unlisten: (() => void) | null = null;
+    const listening = (() => {
+      try {
+        return onFfmpegStatus((status) => {
+          if (status.state !== "ready" || failed.current.size === 0) return;
+          for (const key of failed.current) requested.current.delete(key);
+          failed.current.clear();
+          setAttempt((n) => n + 1);
+        });
+      } catch (err) {
+        return Promise.reject(err);
+      }
+    })();
+    listening
+      .then((stop) => {
+        if (stopped) stop();
+        else unlisten = stop;
+      })
+      .catch(() => undefined);
+    return () => {
+      stopped = true;
+      unlisten?.();
+    };
+  }, []);
 
   if (lanes.length === 0) return null;
 

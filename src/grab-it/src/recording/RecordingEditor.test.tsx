@@ -2321,6 +2321,20 @@ describe("RecordingEditor", () => {
       expect(lane("Microphone")).toHaveAttribute("data-state", "failed");
     });
 
+    it("asks again for a waveform that failed once ffmpeg is ready", async () => {
+      let ready = false;
+      waveform = () => (ready ? PEAKS() : Promise.reject("ffmpeg is not ready yet; see Settings → Recording, then try again"));
+      const backend = mockBackend(null, null, ["microphone"]);
+      render(<RecordingEditor />);
+      await loadVideo();
+      expect(await within(lane("Microphone")).findByText("Waveform unavailable")).toHaveAttribute("title", expect.stringContaining("ffmpeg is not ready yet"));
+      ready = true;
+      await act(async () => emit("ffmpeg-status", { state: "ready", path: "/usr/bin/ffmpeg", encoder: "libx264" }));
+      await waitFor(() => expect(lane("Microphone")).toHaveAttribute("data-state", "ready"));
+      expect(within(lane("Microphone")).queryByText("Waveform unavailable")).not.toBeInTheDocument();
+      expect(waveformCalls(backend)).toHaveLength(2);
+    });
+
     it("changes every lane's height by dragging or with the arrow keys", async () => {
       mockBackend(null, null, ["microphone", "system"]);
       render(<RecordingEditor />);

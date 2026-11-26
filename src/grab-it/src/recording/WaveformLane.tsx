@@ -31,12 +31,16 @@ const token = (element: Element, name: string, fallback: string) => getComputedS
 export default function WaveformLane({ kind, label, hint, segments, peaksOf, view, height }: WaveformLaneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { bars, spans } = layoutLane(segments, peaksOf, view);
-  const failed = spans.find((span) => span.state?.status === "failed");
-  const loading = !failed && spans.some((span) => span.state?.status !== "ready");
+  // Said for the whole lane, whatever part of it is scrolled into view.
+  const states = segments.map(peaksOf);
+  const failed = states.find((state) => state?.status === "failed");
+  const loading = !failed && states.some((state) => state?.status !== "ready");
   const width = Math.max(0, Math.floor(view.width));
 
   useEffect(() => {
     const canvas = canvasRef.current;
+    // Nothing to draw before the view is measured.
+    if (width <= 0) return;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
     const scale = window.devicePixelRatio || 1;
@@ -66,8 +70,8 @@ export default function WaveformLane({ kind, label, hint, segments, peaksOf, vie
         <span className="waveform-label" title={hint}>
           {label}
         </span>
-        {failed?.state?.status === "failed" ? (
-          <span className="waveform-status" title={failed.state.error}>
+        {failed?.status === "failed" ? (
+          <span className="waveform-status" title={failed.error}>
             Waveform unavailable
           </span>
         ) : (
