@@ -694,7 +694,7 @@ export default function RecordingEditor() {
     pause();
     setSuggestPreview(null);
     setMessage(null);
-    seek(toMs ?? Math.min(currentMs, sequenceDuration(savedClips)), savedClips);
+    seek(toMs ?? Math.min(currentMs, Math.max(sequenceDuration(savedClips), sequenceDuration(pictureOf(savedClips, tracks)))), savedClips, tracks);
     // `seek` still sees the playing from before the pause: a recording it
     // has to load, or a gap it lands in, must not set playback off again.
     if (pendingRef.current) pendingRef.current.play = false;
@@ -1049,9 +1049,10 @@ export default function RecordingEditor() {
    * Starts the video at timeline time `ms` of `list`, where `seek` has just
    * put it, before `list` is on show: a preview of one cut plays at once.
    */
-  const playFrom = (list: Clip[], ms: number) => {
+  /** Starts playback from `ms` of `list`, played under the other video tracks of `timeline` when given. */
+  const playFrom = (list: Clip[], ms: number, timeline?: Tracks) => {
     if (playing) return;
-    const pos = positionIn(list, own, ms);
+    const pos = timeline ? positionIn(pictureOf(list, timeline), own, ms, hasOverlay(timeline)) : positionIn(list, own, ms);
     if (pos && isGap(pos.clip)) {
       throughGapRef.current = true;
       gapClockRef.current = null;
@@ -2270,21 +2271,23 @@ export default function RecordingEditor() {
               endSuggestPreview();
               return;
             }
-            // The panel gives sequence time; a lone clip of the opened recording plays in its own time.
-            const onTimeline = (ms: number) => (isJoined(next, own) ? ms : next[0].startMs + ms);
+            // The panel gives sequence time; a lone clip of the opened recording plays in its own time, unless other video tracks hold clips.
+            const previewTracks: Tracks = cutTracks ? { main: next, tracks: cutTracks } : tracks;
+            const previewJoined = isJoined(next, own) || hasOverlay(previewTracks);
+            const onTimeline = (ms: number) => (previewJoined ? ms : next[0].startMs + ms);
             setClipDraft(null);
             setSuggestPreview(next);
             setSuggestTracks(cutTracks ?? null);
             // The stop never lies past the preview's end, where playback halts on its own.
-            const lastMs = isJoined(next, own) ? sequenceDuration(next) : next[0].endMs;
+            const lastMs = previewJoined ? Math.max(sequenceDuration(next), sequenceDuration(pictureOf(next, previewTracks))) : next[0].endMs;
             // The saved sequence's time, too, is the recording's own when it is a lone clip of it.
-            const savedTimeline = (ms: number) => (isJoined(savedClips, own) ? ms : savedClips[0].startMs + ms);
+            const savedTimeline = (ms: number) => (isJoined(savedClips, own) || hasOverlay(tracks) ? ms : savedClips[0].startMs + ms);
             setPreviewStop(
               endMs === undefined ? null : { clips: next, endMs: Math.min(onTimeline(endMs), lastMs), returnMs: returnMs === undefined ? undefined : savedTimeline(returnMs) },
             );
             const from = onTimeline(fromMs ?? 0);
-            seek(from, next, cutTracks ? { main: next, tracks: cutTracks } : tracks);
-            if (endMs !== undefined) playFrom(next, from);
+            seek(from, next, previewTracks);
+            if (endMs !== undefined) playFrom(next, from, previewTracks);
           }}
           onShowCuts={setShownCuts}
           focusRequest={cutFocusRequest}
