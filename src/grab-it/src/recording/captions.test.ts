@@ -16,6 +16,7 @@ import {
   type Transcript,
 } from "./captions";
 import { parseEdits, serializeEdits } from "./edits";
+import type { Clip } from "./clips";
 
 const ids = () => {
   let n = 0;
@@ -72,6 +73,23 @@ describe("cues from a transcript", () => {
     expect(cuesFromTranscript(transcript, "a.mp4", "a.mp4", ids())).toEqual([{ id: "c1", startMs: 1000, endMs: 2000, text: "Hi all" }]);
   });
 
+  it("splits text written without spaces between characters, keeping the line and time limits", () => {
+    // One 100-character "word" over 20 s, as Whisper gives a Chinese segment.
+    const text = "这是一个很长的句子".repeat(12).slice(0, 100);
+    const transcript = { version: 1, model: "whisper-base", language: "zh", segments: [{ startMs: 0, endMs: 20_000, text, words: [{ text: ` ${text}`, startMs: 0, endMs: 20_000 }] }] };
+    const cues = cuesFromTranscript(transcript, "a.mp4", "a.mp4", ids());
+    expect(cues.length).toBeGreaterThan(3);
+    expect(cues.map((cue) => cue.text).join("")).toBe(text);
+    for (const cue of cues) {
+      expect(cue.endMs - cue.startMs).toBeLessThanOrEqual(MAX_CUE_MS);
+      expect(cue.text).not.toContain(" ");
+      const lines = wrapLines(cue.text);
+      expect(lines).not.toBeNull();
+      expect(lines!.every((line) => Array.from(line).length <= MAX_LINE_CHARS)).toBe(true);
+    }
+    expect(wrapLines("字".repeat(50))).toEqual(["字".repeat(42), "字".repeat(8)]);
+  });
+
   it("wraps text into lines no longer than the limit", () => {
     expect(wrapLines("a ".repeat(30).trim())?.every((line) => line.length <= MAX_LINE_CHARS)).toBe(true);
     expect(wrapLines("word ".repeat(40))).toBeNull();
@@ -80,7 +98,7 @@ describe("cues from a transcript", () => {
 
 describe("cues on the sequence", () => {
   const cue: Cue = { id: "q", startMs: 1000, endMs: 3000, text: "Hello" };
-  const clips = [
+  const clips: Clip[] = [
     { id: "one", source: "a.mp4", startMs: 0, endMs: 2000 },
     { id: "gap", source: "", startMs: 0, endMs: 500, gap: true },
     { id: "two", source: "a.mp4", startMs: 1500, endMs: 4000 },

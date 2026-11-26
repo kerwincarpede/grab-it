@@ -1612,10 +1612,10 @@ fn decode_png(bytes: &[u8], what: &str) -> Result<RgbaImage, String> {
 
 /// Splits the export request's body into the backdrop and mask images
 /// and the overlays' images, whose PNGs come last.
-fn read_body(
-    body: &[u8],
-    plan: &ExportPlan,
-) -> Result<(Option<(RgbaImage, RgbaImage)>, Vec<OverlayImage>), String> {
+/// The backdrop and mask images, when sent, and the overlays' images.
+type ExportBody = (Option<(RgbaImage, RgbaImage)>, Vec<OverlayImage>);
+
+fn read_body(body: &[u8], plan: &ExportPlan) -> Result<ExportBody, String> {
     let overlay_bytes = plan
         .overlays
         .iter()

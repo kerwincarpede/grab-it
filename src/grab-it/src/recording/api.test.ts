@@ -64,7 +64,7 @@ describe("exportRecording", () => {
     removeNoise: false,
   };
   const sent = () => {
-    const [, body, options] = vi.mocked(invoke).mock.calls.at(-1) as [string, Uint8Array, { headers: Record<string, string> }];
+    const [, body, options] = vi.mocked(invoke).mock.calls[vi.mocked(invoke).mock.calls.length - 1] as [string, Uint8Array, { headers: Record<string, string> }];
     return { plan: JSON.parse(decodeURIComponent(options.headers[EXPORT_PLAN_HEADER] ?? "")) as ExportPlan, body: Array.from(body) };
   };
 

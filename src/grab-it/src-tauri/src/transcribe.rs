@@ -382,8 +382,10 @@ pub fn sound_args(file: &Path, stream: usize) -> Vec<std::ffi::OsString> {
 /// Samples in [-1, 1] from little-endian signed 16-bit ones.
 pub fn samples_from_s16le(bytes: &[u8]) -> Vec<f32> {
     bytes
-        .chunks_exact(2)
-        .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / 32768.0)
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| f32::from(i16::from_le_bytes(*pair)) / 32768.0)
         .collect()
 }
 
@@ -557,14 +559,17 @@ pub fn segments_from_steps(
                 // second of `<|a|><|a|>` opens the next one at `a`).
                 _ if text_steps.is_empty() => start = Some(at),
                 Some(from) => {
-                    if at > from
-                        && let Some(segment) = segment(&text_steps, from, at, offset_ms, &decode)
-                    {
+                    // A closing timestamp no later than its opening one
+                    // still keeps the text, one timestamp step long.
+                    let to = at.max(from + TIMESTAMP_MS);
+                    if let Some(segment) = segment(&text_steps, from, to, offset_ms, &decode) {
                         segments.push(segment);
-                        last_end = Some(at);
+                        last_end = Some(to);
                     }
                     text_steps.clear();
-                    start = None;
+                    // A closing timestamp also opens the next segment, for
+                    // when the model does not repeat it.
+                    start = Some(to);
                 }
                 None => {}
             }
@@ -598,7 +603,17 @@ fn segment(
             .map(timestamp_ms)
             .unwrap_or(floor)
             .clamp(floor, to);
-        if piece.starts_with(' ') || groups.is_empty() {
+        // A token that finishes a character cut across tokens stays with
+        // it; scripts written without spaces take each token as a word.
+        let unfinished = groups
+            .last()
+            .is_some_and(|(tokens, _)| is_partial(&decode(tokens)));
+        let unspaced = groups
+            .last()
+            .is_some_and(|(tokens, _)| decode(tokens).chars().last().is_some_and(is_unspaced))
+            || piece.chars().next().is_some_and(is_unspaced)
+            || is_partial(&piece);
+        if groups.is_empty() || (!unfinished && (piece.starts_with(' ') || unspaced)) {
             floor = at;
             groups.push((vec![step.token], at));
         } else if let Some((tokens, _)) = groups.last_mut() {
@@ -626,6 +641,66 @@ fn segment(
     })
 }
 
+/// Whether `text` holds a character cut across tokens: the tokenizer
+/// gives nothing, or a replacement character, for part of one.
+fn is_partial(text: &str) -> bool {
+    text.is_empty() || text.contains('\u{FFFD}')
+}
+
+/// Whether `c` belongs to a script written without spaces between words
+/// (Chinese, Japanese, Thai, Lao, Khmer, Myanmar and Tibetan), whose
+/// characters each count as a word.
+fn is_unspaced(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x0E00..=0x0EFF // Thai, Lao
+            | 0x0F00..=0x0FFF // Tibetan
+            | 0x1000..=0x109F // Myanmar
+            | 0x1780..=0x17FF // Khmer
+            | 0x3000..=0x303F // CJK punctuation
+            | 0x3040..=0x30FF // Hiragana, Katakana
+            | 0x3400..=0x4DBF // CJK extension A
+            | 0x4E00..=0x9FFF // CJK
+            | 0xF900..=0xFAFF // CJK compatibility
+            | 0xFF00..=0xFFEF // Full-width forms
+            | 0x20000..=0x2FFFF // CJK extensions
+    )
+}
+
+/// Whether Whisper may produce timestamp `token` after `generated`, by
+/// its timestamp rules: timestamps come in pairs, so after a closing one
+/// (a timestamp after text) only another timestamp or the end follows,
+/// and after an opening one only text; a closing timestamp is later than
+/// the one before it, and an opening one no earlier; the first is within
+/// a second.
+fn timestamp_allowed(generated: &[TokenId], token: TokenId) -> bool {
+    let is_time = |t: &TokenId| *t >= TIMESTAMP_BEGIN;
+    let Some(last) = generated.last() else {
+        return token <= TIMESTAMP_BEGIN + 50;
+    };
+    let last_was_time = is_time(last);
+    let penultimate_was_time = generated.len() < 2 || is_time(&generated[generated.len() - 2]);
+    if last_was_time && penultimate_was_time {
+        return false;
+    }
+    match generated.iter().rev().find(|t| is_time(t)) {
+        Some(&last_time) if last_was_time => token >= last_time,
+        Some(&last_time) => token > last_time,
+        None => true,
+    }
+}
+
+/// Whether Whisper may produce text `token` after `generated`: never
+/// first, and never straight after a closing timestamp.
+fn text_allowed(generated: &[TokenId]) -> bool {
+    let is_time = |t: &TokenId| *t >= TIMESTAMP_BEGIN;
+    match generated {
+        [] => false,
+        [.., before, last] if is_time(last) && !is_time(before) => false,
+        _ => true,
+    }
+}
+
 /// Keeps Whisper's timestamps in order, and notes the timestamp each step
 /// scored highest, for the words' times.
 struct TimestampFilter {
@@ -636,12 +711,7 @@ struct TimestampFilter {
 impl LogitsFilter for TimestampFilter {
     fn filter(&self, logits: Logits, prev_tokens: &[TokenId]) -> Logits {
         let generated = &prev_tokens[self.prompt_len.min(prev_tokens.len())..];
-        let last_time = generated
-            .iter()
-            .rev()
-            .find(|token| **token >= TIMESTAMP_BEGIN)
-            .copied();
-        // A timestamp may never go back, and the first is within a second.
+        let text_ok = text_allowed(generated);
         let (values, indices) = logits.into_logits_indices();
         let mut best: Option<(TokenId, f32)> = None;
         let mut kept_values = Vec::with_capacity(values.len());
@@ -654,14 +724,12 @@ impl LogitsFilter for TimestampFilter {
                 if best.is_none_or(|(_, score)| value > score) {
                     best = Some((token, value));
                 }
-                if generated.is_empty() && token > TIMESTAMP_BEGIN + 50 {
+                if !timestamp_allowed(generated, token) {
                     continue;
                 }
-                if last_time.is_some_and(|last| token < last) {
-                    continue;
-                }
-            } else if generated.is_empty() {
-                // The first token is a timestamp.
+            } else if (token < END_OF_TEXT && !text_ok)
+                || (token == END_OF_TEXT && generated.is_empty())
+            {
                 continue;
             }
             kept_values.push(value);
@@ -1031,6 +1099,101 @@ mod tests {
         let (segments, last) = segments_from_steps(&steps, 0, decoder(VOCAB));
         assert_eq!(segments.len(), 1);
         assert_eq!(last, Some(500));
+    }
+
+    #[test]
+    fn a_lone_closing_timestamp_also_opens_the_next_segment() {
+        let steps = [
+            stamp(0),
+            text(0, 200),
+            stamp(2400),
+            text(4, 2600),
+            text(5, 3000),
+            stamp(5000),
+        ];
+        let (segments, last) = segments_from_steps(&steps, 0, decoder(VOCAB));
+        let spans: Vec<_> = segments
+            .iter()
+            .map(|s| (s.text.as_str(), s.start_ms, s.end_ms))
+            .collect();
+        assert_eq!(spans, [("Hello", 0, 2400), ("Again now", 2400, 5000)]);
+        assert_eq!(last, Some(5000));
+    }
+
+    #[test]
+    fn a_zero_length_segment_keeps_its_text() {
+        let steps = [stamp(1000), text(0, 1000), stamp(1000)];
+        let (segments, last) = segments_from_steps(&steps, 0, decoder(VOCAB));
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "Hello");
+        assert_eq!(
+            (segments[0].start_ms, segments[0].end_ms),
+            (1000, 1000 + TIMESTAMP_MS)
+        );
+        assert_eq!(last, Some(1000 + TIMESTAMP_MS));
+    }
+
+    #[test]
+    fn unspaced_scripts_take_each_token_as_a_word() {
+        // "\u{FFFD}" stands for the first token of a character cut across two.
+        const CJK: &[&str] = &["你", "好", "世", "界", "\u{FFFD}", "\u{FFFD}好", " ok"];
+        let steps = [
+            stamp(0),
+            text(0, 0),
+            text(1, 400),
+            text(2, 800),
+            text(3, 1200),
+            text(4, 1600),
+            text(5, 1700),
+            text(6, 1800),
+            stamp(2000),
+        ];
+        let decode = |tokens: &[TokenId]| -> String {
+            let joined: String = tokens.iter().map(|t| CJK[*t as usize]).collect();
+            // Two halves of one character decode to it.
+            joined.replace("\u{FFFD}\u{FFFD}好", "们")
+        };
+        let (segments, _) = segments_from_steps(&steps, 0, decode);
+        let words: Vec<_> = segments[0]
+            .words
+            .iter()
+            .map(|w| (w.text.as_str(), w.start_ms))
+            .collect();
+        assert_eq!(
+            words,
+            [
+                ("你", 0),
+                ("好", 400),
+                ("世", 800),
+                ("界", 1200),
+                ("们", 1600),
+                ("ok", 1800)
+            ]
+        );
+    }
+
+    #[test]
+    fn timestamps_come_in_pairs_and_move_forward() {
+        let (t0, t1, t2) = (ts(0), ts(1000), ts(2000));
+        let hello = 0;
+        // First: a timestamp within a second, never text.
+        assert!(timestamp_allowed(&[], t0));
+        assert!(!timestamp_allowed(&[], ts(2000)));
+        assert!(!text_allowed(&[]));
+        // After an opening timestamp: text only.
+        assert!(!timestamp_allowed(&[t0], t1));
+        assert!(text_allowed(&[t0]));
+        // After text: a strictly later timestamp closes the segment.
+        assert!(!timestamp_allowed(&[t1, hello], t1));
+        assert!(timestamp_allowed(&[t1, hello], t2));
+        // After a lone closing timestamp: a timestamp no earlier, or the
+        // end, but no text.
+        assert!(!text_allowed(&[t0, hello, t1]));
+        assert!(timestamp_allowed(&[t0, hello, t1], t1));
+        assert!(!timestamp_allowed(&[t0, hello, t1], t0));
+        // After a pair: text again, no timestamp.
+        assert!(!timestamp_allowed(&[t0, hello, t1, t1], t2));
+        assert!(text_allowed(&[t0, hello, t1, t1]));
     }
 
     #[test]

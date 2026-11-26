@@ -32,6 +32,11 @@ let separate: string[] = [];
 let heard: RecordingPauses | string | ((noiseDb: number) => RecordingPauses | Promise<RecordingPauses>) = { sound: "microphone", pauses: [], canClean: true, pointer: null };
 /** What `recording_transcribe` hears in each recording; absent hears nothing. */
 let spoken: Record<string, Transcript> = {};
+/** Transcripts already saved beside their recordings, as `recording_transcript` reads them. */
+let transcripts: Record<string, Transcript> = {};
+/** Holds `recording_transcribe` back for these recordings until the test settles it. */
+let heldTranscribe: Record<string, { resolve: (transcript: Transcript) => void; reject: (err: string) => void }> = {};
+let holdTranscribe: string[] = [];
 /** What `recording_audition` resolves with, when a test holds it back. */
 let auditioned: (() => Promise<ArrayBuffer>) | null = null;
 /** The sound sources `recording_source` says each other recording has. */
@@ -96,8 +101,13 @@ function mockBackend(edits: Value | null = null, cursor: CursorPath | null = nul
       recording_audition: () => (auditioned ? auditioned() : new ArrayBuffer(4)),
       recording_waveform: ({ fileName, audio }) => waveform(fileName, audio),
       recording_transcribe_model: () => ({ downloaded: false, bytes: 290_000_000 }),
-      recording_transcript: () => null,
-      recording_transcribe: ({ source }) => spoken[source] ?? { version: 1, model: "whisper-base", language: null, segments: [] },
+      recording_transcript: ({ source }) => transcripts[source] ?? null,
+      recording_transcribe: ({ source }) =>
+        holdTranscribe.includes(source)
+          ? new Promise<Transcript>((resolve, reject) => {
+              heldTranscribe[source] = { resolve, reject };
+            })
+          : (spoken[source] ?? { version: 1, model: "whisper-base", language: null, segments: [] }),
       recording_transcribe_cancel: () => undefined,
       recording_export: () =>
         new Promise<string>((resolve, reject) => {
@@ -159,10 +169,15 @@ afterEach(() => {
   sourceAudio = {};
   waveform = PEAKS;
   spoken = {};
+  transcripts = {};
+  heldTranscribe = {};
+  holdTranscribe = [];
 });
 
 const saved = (backend: Backend) => backend.calls.filter((call) => call.cmd === "recording_save_edits").map((call) => (call.payload as { edits: unknown }).edits);
 const lastSaved = (backend: Backend) => saved(backend)[saved(backend).length - 1];
+/** The captions the last save held. */
+const savedCaptions = (backend: Backend) => (lastSaved(backend) as { captions?: { burnIn: boolean; cues: { startMs: number; endMs: number }[] } } | undefined)?.captions;
 
 /** jsdom has no media decoder. Supply the metadata a loaded element would expose. */
 function setVideoMetadata(video: HTMLVideoElement, duration: number, width: number, height: number) {
@@ -2533,6 +2548,94 @@ describe("RecordingEditor", () => {
       await waitFor(() => expect(backend.calls.filter(({ cmd }) => cmd === "recording_transcribe")).toHaveLength(4));
     });
 
+    it("shows progress, and on Cancel keeps the captions of the recordings already transcribed", async () => {
+      spoken = { [OWN]: said("Hello there", 1500, 3000) };
+      holdTranscribe = [OTHER];
+      const backend = mockBackend({ version: 2, clips: CLIPS });
+      render(<RecordingEditor />);
+      await loadSequence();
+      await userEvent.click(screen.getByRole("button", { name: "Captions" }));
+      await userEvent.click(screen.getByRole("button", { name: "Transcribe" }));
+      await waitFor(() => expect(heldTranscribe[OTHER]).toBeDefined());
+      await act(() => emit("recording-transcribe-progress", { source: OTHER, stage: "download", done: 25, total: 100 }));
+      expect(screen.getByRole("dialog", { name: "Captions" })).toHaveTextContent("Downloading the speech model… 25%");
+      await act(() => emit("recording-transcribe-progress", { source: OTHER, stage: "transcribe", done: 500, total: 1000 }));
+      expect(screen.getByRole("dialog", { name: "Captions" })).toHaveTextContent("Transcribing… 50%");
+      expect(screen.getByRole("progressbar", { name: "Transcribe progress" })).toHaveAttribute("aria-valuenow", "50");
+
+      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(screen.getByRole("button", { name: "Cancelling…" })).toBeDisabled();
+      expect(backend.calls.some(({ cmd }) => cmd === "recording_transcribe_cancel")).toBe(true);
+      await act(async () => heldTranscribe[OTHER].reject("Transcribing cancelled"));
+      await waitFor(() => expect(screen.getByRole("dialog", { name: "Captions" })).toHaveTextContent("Transcribing cancelled"));
+      expect(screen.queryByRole("progressbar", { name: "Transcribe progress" })).not.toBeInTheDocument();
+      expect(lastSaved(backend)).toEqual({
+        version: 5,
+        clips: CLIPS,
+        captions: { burnIn: true, cues: [{ id: expect.any(String), startMs: 1500, endMs: 3000, text: "Hello there" }] },
+      });
+    });
+
+    it("stops before the next recording when Cancel is pressed between two", async () => {
+      holdTranscribe = [OWN];
+      const backend = mockBackend({ version: 2, clips: CLIPS });
+      render(<RecordingEditor />);
+      await loadSequence();
+      await userEvent.click(screen.getByRole("button", { name: "Captions" }));
+      await userEvent.click(screen.getByRole("button", { name: "Transcribe" }));
+      await waitFor(() => expect(heldTranscribe[OWN]).toBeDefined());
+      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      // The backend had already finished this recording, so the cancel missed it.
+      await act(async () => heldTranscribe[OWN].resolve(said("Hello there", 1500, 3000)));
+      await waitFor(() => expect(screen.getByRole("dialog", { name: "Captions" })).toHaveTextContent("Transcribing cancelled"));
+      expect(backend.calls.filter(({ cmd }) => cmd === "recording_transcribe").map(({ payload }) => payload)).toEqual([{ source: OWN }]);
+      expect(savedCaptions(backend)).toEqual({ burnIn: true, cues: [{ id: expect.any(String), startMs: 1500, endMs: 3000, text: "Hello there" }] });
+    });
+
+    it("reads a saved transcript instead of transcribing its recording again", async () => {
+      transcripts = { [OWN]: said("Saved words", 1500, 3000) };
+      spoken = { [OTHER]: said("Second take", 500, 2000) };
+      const backend = mockBackend({ version: 2, clips: CLIPS });
+      render(<RecordingEditor />);
+      await loadSequence();
+      await userEvent.click(screen.getByRole("button", { name: "Captions" }));
+      await userEvent.click(screen.getByRole("button", { name: "Transcribe" }));
+      await waitFor(() =>
+        expect(savedCaptions(backend)).toEqual({
+          burnIn: true,
+          cues: [
+            { id: expect.any(String), source: OTHER, startMs: 500, endMs: 2000, text: "Second take" },
+            { id: expect.any(String), startMs: 1500, endMs: 3000, text: "Saved words" },
+          ],
+        }),
+      );
+      expect(backend.calls.filter(({ cmd }) => cmd === "recording_transcribe").map(({ payload }) => payload)).toEqual([{ source: OTHER }]);
+    });
+
+    it("moves and resizes a clipped showing without losing its hidden part", async () => {
+      // In the second copy (source 2–6 s at 4–8 s) the cue at source 1.5–3 s shows clipped, at 4–5 s.
+      const cue = { id: "q", startMs: 1500, endMs: 3000, text: "Hello" };
+      const backend = mockBackend({ version: 5, clips: TWICE, captions: { burnIn: true, cues: [cue] } });
+      render(<RecordingEditor />);
+      await loadSequence();
+      // 8 s over 80 px: 100 ms a pixel.
+      const track = screen.getByTestId("caption-track");
+      placeAt(track, 80, 26);
+      const second = () => screen.getAllByTestId("caption-cue")[1];
+      expect(second()).toHaveAttribute("aria-label", "Caption “Hello”, 0:04.0 to 0:05.0");
+      const end = screen.getAllByTestId("caption-edge-end")[1];
+      fireEvent.pointerDown(end, { clientX: 50 });
+      fireEvent.pointerMove(end, { clientX: 52 });
+      fireEvent.pointerUp(end, { clientX: 52 });
+      await waitFor(() => expect(savedCaptions(backend)).toEqual({ burnIn: true, cues: [{ ...cue, endMs: 3200 }] }));
+
+      act(() => second().focus());
+      fireEvent.keyDown(second(), { key: "ArrowRight" });
+      await waitFor(() => expect((savedCaptions(backend)!).cues[0].startMs).toBeGreaterThan(1500));
+      const moved = (savedCaptions(backend)!).cues[0];
+      expect(moved.endMs - moved.startMs).toBe(1700);
+    });
+
     it("says when there is no sound to transcribe", async () => {
       const backend = mockBackend();
       render(<RecordingEditor />);
@@ -2586,7 +2689,7 @@ describe("RecordingEditor", () => {
       placeAt(timeline, 80, 26);
       fireEvent.pointerDown(timeline, { clientX: 50 });
       fireEvent.pointerUp(timeline, { clientX: 50 });
-      await waitFor(() => expect(screen.getByTestId("caption-preview")).toHaveAccessibleName("Hello"));
+      await waitFor(() => expect(screen.getByTestId("caption-preview")).toHaveAttribute("aria-label", "Hello"));
       fireEvent.pointerDown(timeline, { clientX: 30 });
       fireEvent.pointerUp(timeline, { clientX: 30 });
       await waitFor(() => expect(screen.queryByTestId("caption-preview")).not.toBeInTheDocument());

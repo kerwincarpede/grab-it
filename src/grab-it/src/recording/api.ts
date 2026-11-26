@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { commands, type AudioKind, type RecordingClipSource_Serialize, type RecordingInfo_Serialize, type RecordingPauses_Serialize, type Value } from "../app/bindings";
+import { commands, type AudioKind, type RecordingClipSource_Serialize, type RecordingInfo_Serialize, type RecordingPauses_Serialize, type TranscribeModel, type Value } from "../app/bindings";
 import type { Transcript } from "./captions";
 import type { SidecarEdits } from "./edits";
 import type { CursorPath, Zoom } from "./zooms";

@@ -139,15 +139,28 @@ export function serializeCaptions(captions: Captions | undefined): Captions | un
 
 // --- From a transcript ---------------------------------------------------------
 
-/** `words` broken into at most `MAX_CUE_LINES` lines of `MAX_LINE_CHARS`; null when they do not fit. */
+/**
+ * `text` broken at spaces into at most `maxLines` lines of `maxChars`; null
+ * when it does not fit. A word longer than a line, such as text in a script
+ * written without spaces, is broken between characters.
+ */
 export function wrapLines(text: string, maxChars = MAX_LINE_CHARS, maxLines = MAX_CUE_LINES): string[] | null {
   const lines: string[] = [];
-  for (const word of text.split(/\s+/).filter(Boolean)) {
+  for (const word of text.split(/\s+/).filter(Boolean).flatMap((each) => chunks(each, maxChars))) {
     const last = lines[lines.length - 1];
-    if (last !== undefined && last.length + 1 + word.length <= maxChars) lines[lines.length - 1] = `${last} ${word}`;
+    if (last !== undefined && Array.from(last).length + 1 + Array.from(word).length <= maxChars) lines[lines.length - 1] = `${last} ${word}`;
     else lines.push(word);
   }
   return lines.length <= maxLines ? lines : null;
+}
+
+/** `word` cut into pieces of at most `size` characters. */
+function chunks(word: string, size: number): string[] {
+  const chars = Array.from(word);
+  if (chars.length <= size) return [word];
+  const pieces: string[] = [];
+  for (let at = 0; at < chars.length; at += size) pieces.push(chars.slice(at, at + size).join(""));
+  return pieces;
 }
 
 /** Lines to paint: wrapped at `MAX_LINE_CHARS`, however many there are, and kept line breaks. */
@@ -168,13 +181,10 @@ export function cuesFromTranscript(transcript: Transcript, source: string, own: 
   const tag = source === own ? {} : { source };
   const cues: Cue[] = [];
   for (const segment of transcript.segments) {
-    const words: TranscriptWord[] =
-      segment.words.length > 0
-        ? segment.words
-        : spreadWords(segment);
-    let group: TranscriptWord[] = [];
+    const words: Piece[] = (segment.words.length > 0 ? segment.words : spreadWords(segment)).flatMap(piecesOf);
+    let group: Piece[] = [];
     const flush = () => {
-      const text = group.map((word) => word.text.trim()).filter(Boolean).join(" ");
+      const text = joinPieces(group);
       if (text) {
         const startMs = Math.max(segment.startMs, group[0].startMs);
         const endMs = Math.max(startMs + 1, Math.min(segment.endMs, group[group.length - 1].endMs));
@@ -184,7 +194,7 @@ export function cuesFromTranscript(transcript: Transcript, source: string, own: 
     };
     for (const word of words) {
       if (group.length > 0) {
-        const text = [...group, word].map((each) => each.text.trim()).filter(Boolean).join(" ");
+        const text = joinPieces([...group, word]);
         if (wrapLines(text) === null || word.endMs - group[0].startMs > MAX_CUE_MS) flush();
       }
       group.push(word);
@@ -193,6 +203,38 @@ export function cuesFromTranscript(transcript: Transcript, source: string, own: 
   }
   return sortCues(cues);
 }
+
+/** A word, or one character of a word written without spaces; `glued` ones follow the one before with no space. */
+interface Piece extends TranscriptWord {
+  glued: boolean;
+}
+
+/** Scripts written without spaces between words: Thai, Lao, Myanmar, Khmer, Japanese kana and CJK ideographs. */
+const UNSPACED = /[\u0E00-\u0EFF\u1000-\u109F\u1780-\u17FF\u3040-\u30FF\u3400-\u9FFF\uF900-\uFAFF]/u;
+
+/**
+ * `word` as pieces cues can split between: itself, or, for text written
+ * without spaces or longer than a line, each of its characters, its time
+ * spread evenly over them.
+ */
+function piecesOf(word: TranscriptWord): Piece[] {
+  const text = word.text.trim();
+  const chars = Array.from(text);
+  if (!UNSPACED.test(text) && chars.length <= MAX_LINE_CHARS) return [{ ...word, text, glued: false }];
+  const step = (word.endMs - word.startMs) / Math.max(1, chars.length);
+  return chars.map((char, index) => ({
+    text: char,
+    startMs: word.startMs + step * index,
+    endMs: word.startMs + step * (index + 1),
+    glued: index > 0,
+  }));
+}
+
+/** The text of `pieces`, spaced between words but not inside one. */
+const joinPieces = (pieces: Piece[]) =>
+  pieces
+    .filter((piece) => piece.text)
+    .reduce((text, piece) => (text === "" ? piece.text : piece.glued ? text + piece.text : `${text} ${piece.text}`), "");
 
 /** A segment's words spread evenly over it, for a segment without word times. */
 function spreadWords(segment: TranscriptSegment): TranscriptWord[] {

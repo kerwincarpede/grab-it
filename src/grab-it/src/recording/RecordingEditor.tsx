@@ -65,6 +65,7 @@ import ClipTrack from "./ClipTrack";
 import CaptionPreview from "./CaptionPreview";
 import CaptionTrack, { type CueSpan } from "./CaptionTrack";
 import {
+  cueOnSource,
   cuePng,
   cueShowings,
   cuesFromTranscript,
@@ -118,6 +119,8 @@ type SaveStatus = "idle" | "saving" | "saved" | "error";
 /** Why an edit was refused during a preview of suggested cuts. */
 const PREVIEW_BLOCKS_EDITS = "Stop the preview or apply the suggested cuts before editing.";
 
+/** The error text `recording_transcribe` and a page-side cancel stop with. */
+const TRANSCRIBE_CANCELLED = "Transcribing cancelled";
 const errorText = (err: unknown) => String(err instanceof Error ? err.message : err);
 const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
@@ -1192,13 +1195,31 @@ export default function RecordingEditor() {
     return { low, high };
   };
 
-  /** Keeps a showing's new place, moving its cue in its recording's time. */
+  /**
+   * Keeps a showing's new place, moving its cue in its recording's time.
+   * A showing may be clipped to its clip, so a move shifts the whole cue by
+   * the same amount and a resize changes only the edge that was dragged:
+   * the part of the cue hidden outside the clip is kept.
+   */
   const commitCueSpan = (span: CueSpan) => {
     setCaptionDraft(null);
     const showing = savedShowings.find((each) => each.key === span.key);
-    if (!showing || (showing.startMs === span.startMs && showing.endMs === span.endMs)) return;
+    if (!showing) return;
+    const startDelta = span.startMs - showing.startMs;
+    const endDelta = span.endMs - showing.endMs;
+    if (startDelta === 0 && endDelta === 0) return;
     const { offset } = spanOf(clips, own, showing.index, durationMs);
-    commitCaptions({ ...captions, cues: replaceCue(captions.cues, { ...showing.cue, startMs: span.startMs - offset, endMs: span.endMs - offset }) });
+    const { cue } = showing;
+    const next =
+      startDelta === endDelta
+        ? { ...cue, startMs: cue.startMs + startDelta, endMs: cue.endMs + endDelta }
+        : {
+            ...cue,
+            startMs: startDelta === 0 ? cue.startMs : span.startMs - offset,
+            endMs: endDelta === 0 ? cue.endMs : span.endMs - offset,
+          };
+    if (next.endMs <= next.startMs) return;
+    commitCaptions({ ...captions, cues: replaceCue(captions.cues, next) });
   };
 
   const deleteShowing = (key: string) => {
@@ -1244,16 +1265,26 @@ export default function RecordingEditor() {
 
   const toggleBurnIn = () => commitCaptions({ ...captions, burnIn: !captions.burnIn });
 
-  /** Replaces the cues with the latest edits, for when transcribing ends after other edits. */
-  const replaceCuesRef = useRef<(cues: Cue[]) => void>(() => undefined);
+  /**
+   * Puts in the cues of the recordings in `done`, with the latest edits, for
+   * when transcribing ends after other edits. With `all`, every other cue
+   * goes; otherwise only `done`'s recordings' cues are replaced.
+   */
+  const replaceCuesRef = useRef<(cues: Cue[], done: string[], all: boolean) => void>(() => undefined);
   useEffect(() => {
-    replaceCuesRef.current = (cues: Cue[]) => commitCaptions({ ...captions, cues });
+    replaceCuesRef.current = (cues: Cue[], done: string[], all: boolean) => {
+      const kept = all ? [] : captions.cues.filter((cue) => !done.some((source) => cueOnSource(cue, source, own)));
+      commitCaptions({ ...captions, cues: [...kept, ...cues] });
+    };
   });
+  /** Set by Cancel, so a cancel between two recordings still stops the run. */
+  const transcribeCancelledRef = useRef(false);
 
   /**
    * Transcribes every recording in the sequence that has no transcript yet,
    * reads the saved transcript of the rest, and replaces the cues with
-   * theirs. Cues already there wait for `confirmed`.
+   * theirs. Cues already there wait for `confirmed`. When cancelled or
+   * failing part way, the recordings already done keep their new cues.
    */
   const transcribe = async (confirmed: boolean) => {
     if (transcribing || readOnly) return;
@@ -1263,24 +1294,36 @@ export default function RecordingEditor() {
     }
     setConfirmReplace(false);
     setCaptionsMessage(null);
+    transcribeCancelledRef.current = false;
     setTranscribing({ source: "", stage: "transcribe", done: 0, total: 0 });
     let unlisten: (() => void) | null = null;
+    const cues: Cue[] = [];
+    const done: string[] = [];
     try {
       unlisten = await onTranscribeProgress(setTranscribing).catch(() => null);
-      const cues: Cue[] = [];
+      const stopIfCancelled = () => {
+        if (transcribeCancelledRef.current) throw new Error(TRANSCRIBE_CANCELLED);
+      };
       for (const source of sequenceSources) {
-        const transcript = (await recordingTranscript(source)) ?? (await recordingTranscribe(source));
+        stopIfCancelled();
+        let transcript = await recordingTranscript(source);
+        if (!transcript) {
+          stopIfCancelled();
+          transcript = await recordingTranscribe(source);
+        }
         cues.push(...cuesFromTranscript(transcript, source, own));
+        done.push(source);
       }
       if (cues.length === 0) {
         setCaptionsMessage("No sound to transcribe. Double-click the caption row to add captions by hand.");
         return;
       }
-      replaceCuesRef.current(cues);
+      replaceCuesRef.current(cues, done, true);
       setCaptionsMessage(`Made ${cues.length} caption${cues.length === 1 ? "" : "s"}.`);
     } catch (err) {
+      if (cues.length > 0) replaceCuesRef.current(cues, done, false);
       const reason = errorText(err);
-      setCaptionsMessage(reason === "Transcribing cancelled" ? reason : `Could not transcribe: ${reason}`);
+      setCaptionsMessage(reason === TRANSCRIBE_CANCELLED ? reason : `Could not transcribe: ${reason}`);
     } finally {
       unlisten?.();
       setTranscribing(null);
@@ -1289,6 +1332,7 @@ export default function RecordingEditor() {
   };
 
   const stopTranscribe = async () => {
+    transcribeCancelledRef.current = true;
     setCancellingTranscribe(true);
     try {
       await cancelTranscribe();
