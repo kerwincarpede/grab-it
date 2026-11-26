@@ -2495,11 +2495,11 @@ describe("RecordingEditor", () => {
     });
 
     /** One recording, 0 to 12 s, its sound on Audio 1 named `name`, `linked` to it or not. */
-    const ownTracks = (linked: boolean, name = "Audio 1") => ({
+    const ownTracks = (linked: boolean, name = "Audio 1", locked = false): Value => ({
       version: TRACKS_VERSION,
       tracks: [
         { id: "video-1", name: "Video 1", kind: "video", clips: [{ id: "own", source: OWN, startMs: 0, endMs: 12_000, ...(linked ? { link: "L" } : {}) }] },
-        { id: "audio-1", name, kind: "audio", clips: [{ id: "own-sound", source: OWN, startMs: 0, endMs: 12_000, atMs: 0, ...(linked ? { link: "L" } : {}) }] },
+        { id: "audio-1", name, kind: "audio", locked, clips: [{ id: "own-sound", source: OWN, startMs: 0, endMs: 12_000, atMs: 0, ...(linked ? { link: "L" } : {}) }] },
       ],
     });
 
@@ -2569,6 +2569,15 @@ describe("RecordingEditor", () => {
       await loadVideo();
       await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
       expect(await screen.findByText("1 cut is skipped: it overlaps a clip not linked to its picture.")).toBeInTheDocument();
+    });
+
+    it("explains why a suggested cut cannot change locked sound", async () => {
+      heard = { sound: "microphone", pauses: [PAUSE], canClean: true, pointer: null };
+      mockBackend(ownTracks(true, "Audio 1", true), null, ["microphone"], { separateMicrophone: true });
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      expect(await screen.findByText("1 cut is skipped to leave clips on locked tracks unchanged.")).toBeInTheDocument();
     });
 
     it("offers only the original for mixed sound", async () => {

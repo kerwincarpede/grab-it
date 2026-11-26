@@ -44,7 +44,7 @@ Where video tracks overlap, the highest one shows and covers the ones under it c
 
 ## Split and delete with tracks
 
-- **Split** with nothing selected cuts every unlocked track at the playhead. With a clip under the playhead selected, it cuts that clip and the clips linked to it; with a clip elsewhere selected, it cuts the clip under the playhead and its linked clips.
+- **Split** with nothing selected cuts every eligible clip at the playhead. With a clip under the playhead selected, it cuts that clip and the clips linked to it; with a clip elsewhere selected, it cuts the clip under the playhead and its linked clips. If a clip at the playhead is locked, its linked clips are left whole too.
 - **Delete** removes the selected clip with its linked sound, and moves everything after it up on every unlocked track. Deleting a gap closes it the same way. When that would cut into sound that isn't linked to the clip, nothing is deleted and the status bar says why: move or link that sound first.
 
 ## Hear and export it
