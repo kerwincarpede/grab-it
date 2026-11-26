@@ -594,6 +594,22 @@ describe("LibraryWindow", () => {
     expect(screen.getByLabelText("Capture details")).toHaveStyle({ width: `${DETAILS_WIDTH.min}px` });
   });
 
+  it("keeps arrow navigation after clicking a tile or a details arrow", async () => {
+    mockBackend([shot(1), shot(2), shot(3)]);
+    render(<LibraryWindow />);
+    const middle = await screen.findByRole("button", { name: "Grab-it 2.png" });
+    // WebKit on macOS dispatches the click without focusing the button first.
+    fireEvent.click(middle);
+    expect(middle).toHaveFocus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(screen.getByRole("button", { name: "Grab-it 1.png" })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Previous capture" }));
+    expect(screen.getByLabelText("Capture details")).toHaveFocus();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(screen.getByRole("button", { name: "Grab-it 3.png" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("steps captures with the arrow keys while the details have focus", async () => {
     mockBackend([shot(1), shot(2), shot(3)]);
     render(<LibraryWindow />);

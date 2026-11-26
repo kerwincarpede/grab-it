@@ -379,6 +379,8 @@ interface StepsMock {
   loads: number;
 }
 
+const steps = (overrides: Partial<StepsMock> = {}): StepsMock => ({ hasNewer: true, hasOlder: true, stepped: [], loads: 0, ...overrides });
+
 /** A sidecar as Rust sends it: plain JSON, which `Annotations` types. */
 const sidecarValue = (annotations: Annotations | null) => annotations as unknown as Value | null;
 
@@ -870,7 +872,6 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
   });
 
   describe("stepping captures", () => {
-    const steps = (overrides: Partial<StepsMock> = {}): StepsMock => ({ hasNewer: true, hasOlder: true, stepped: [], loads: 0, ...overrides });
     const topbar = () => within(screen.getByRole("toolbar", { name: "Style and actions" }));
 
     it("writes a pending edit to the old sidecar, then steps and loads the next capture afresh", async () => {
@@ -919,27 +920,25 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
       expect(topbar().getByRole("button", { name: "Next capture" })).toBeDisabled();
     });
 
-    it("steps with Alt+Left and Alt+Right, but not while typing", async () => {
+    it.each([false, true])("steps with Left and Right (Alt held: %s)", async (altKey) => {
       const mock = steps();
       mockEditor(sidecar, [], { steps: mock });
       await ready();
 
-      expect(fireEvent.keyDown(window, { key: "ArrowRight", altKey: true })).toBe(false);
+      const field = document.createElement("input");
+      document.body.append(field);
+      fireEvent.keyDown(field, { key: "ArrowRight", altKey });
+      field.remove();
+      await act(async () => {});
+      expect(mock.stepped).toEqual([]);
+
+      expect(fireEvent.keyDown(window, { key: "ArrowRight", altKey })).toBe(false);
       await waitFor(() => expect(mock.stepped.map((step) => step.direction)).toEqual(["older"]));
       await waitFor(() => expect(mock.loads).toBe(2));
       await waitFor(() => expect(screen.getByTestId("editor")).toHaveAttribute("data-ready", "true"));
       await act(async () => {});
-      expect(fireEvent.keyDown(window, { key: "ArrowLeft", altKey: true })).toBe(false);
+      expect(fireEvent.keyDown(window, { key: "ArrowLeft", altKey })).toBe(false);
       await waitFor(() => expect(mock.stepped.map((step) => step.direction)).toEqual(["older", "newer"]));
-
-      // A plain arrow is not a step, nor is Alt+arrow in a text field.
-      fireEvent.keyDown(window, { key: "ArrowRight" });
-      const field = document.createElement("input");
-      document.body.append(field);
-      fireEvent.keyDown(field, { key: "ArrowRight", altKey: true });
-      field.remove();
-      await act(async () => {});
-      expect(mock.stepped).toHaveLength(2);
     });
 
     it("keeps its capture when another editor already showing the neighbour comes forward", async () => {
@@ -1644,7 +1643,8 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
   });
 
   it("nudges the selected shape the way it shows once turned or flipped", async () => {
-    const saved = mockEditor();
+    const mock = steps();
+    const saved = mockEditor(sidecar, [], { steps: mock });
     await ready();
     fireEvent.click(screen.getByRole("button", { name: "Rotate right" }));
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
@@ -1657,6 +1657,7 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
     // Mirrored, left on show is right on the capture.
     fireEvent.keyDown(window, { key: "ArrowLeft" });
     await waitFor(() => expect(last(saved)?.shapes.find((shape) => shape.id === "s1")).toMatchObject({ x: 51, y: 49 }));
+    expect(mock.stepped).toEqual([]);
   });
 
   it("resizes by width, ratio locked, or by a percentage, and undoes it", async () => {

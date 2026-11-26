@@ -110,7 +110,8 @@ Tap a tool key to switch to it. Hold it instead, and the old tool comes back whe
 | `⌘ C` | Copy the capture with its annotations |
 | `⌘ Enter` | Copy and close |
 | `⌘ [` and `⌘ ]` | Rotate left and right |
-| `⌥ ←` and `⌥ →` (`Alt` on Windows and Linux) | Open the previous (newer) and next (older) capture in the Library |
+| `←` and `→` with no annotation selected | Open the previous (newer) and next (older) capture in the Library |
+| `⌥ ←` and `⌥ →` (`Alt` on Windows and Linux) | Step through captures, including while an annotation is selected |
 
 See [Mark it up](/grab-it/image-editor/mark-it-up/) for what each tool does.
 

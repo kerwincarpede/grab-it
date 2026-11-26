@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-Click a tile to open its **details** on the right. Click **Previous capture** and **Next capture** (the arrows at the top) to step through the grid, or press `←` or `↑` and `→` or `↓` while the details have focus (not while you're typing in a field), and **Close details** or `Esc` to close it. Drag the panel's left edge to make it wider or narrower; double-click the edge to reset it.
+Click a tile to open its **details** on the right. The arrow keys move between tiles while the grid has focus. Click **Previous capture** or **Next capture** at the top of the details pane to step through the grid and focus the pane. With focus on the pane, press `←` or `↑` for the previous capture and `→` or `↓` for the next. When a field has focus, the arrows move within that field. Click **Close details** or press `Esc` to close the pane. Drag its left edge to resize it, or double-click the edge to reset it.
 
 ## What the details show
 

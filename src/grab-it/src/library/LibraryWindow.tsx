@@ -667,6 +667,8 @@ const Tile = memo(function Tile({ shot, hit, selected, index, onSelect, onOpen, 
         onClick={(event) => {
           // A double-click's second click: its first click already selected, and may have moved the grid.
           if (event.detail > 1) return;
+          // On macOS WebKit does not focus buttons on click. The grid's arrow keys need focus on a tile.
+          event.currentTarget.focus({ preventScroll: true });
           onSelect(shot.id, { toggle: event.metaKey || event.ctrlKey, range: event.shiftKey });
         }}
         // Shift-click selects tiles, not the text in them.
@@ -776,10 +778,10 @@ interface DetailsProps {
   onError: (message: string) => void;
   onNotice: (message: string) => void;
   onClose: () => void;
-  /** Moves to the capture before (-1) or after (1), when there is one; `fromKeys` when an arrow key asked. */
-  onStep: (delta: -1 | 1, fromKeys?: boolean) => void;
+  /** Moves to the capture before (-1) or after (1), when there is one. */
+  onStep: (delta: -1 | 1) => void;
   canStep: { back: boolean; forward: boolean };
-  /** Set when an arrow key stepped here: the new details take focus, so the next arrow steps again. */
+  /** Set when the details step here, so the new details can take focus. */
   focusOnOpenRef: RefObject<boolean>;
   /** The pane's width in pixels, set by dragging its left edge. */
   width: number;
@@ -815,7 +817,7 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
   useEffect(() => {
     if (!focusOnOpenRef.current) return;
     focusOnOpenRef.current = false;
-    pane.current?.focus();
+    pane.current?.focus({ preventScroll: true });
   }, [focusOnOpenRef]);
   // Local so quick successive edits build on each other before the saves land.
   const [tags, setTags] = useState(shot.tags);
@@ -942,7 +944,7 @@ function ShotDetails({ shot, aiOff, onUpdated, onDeleted, onError, onNotice, onC
         if (delta === null) return;
         if (delta < 0 ? !canStep.back : !canStep.forward) return;
         event.preventDefault();
-        onStep(delta, true);
+        onStep(delta);
       }}
     >
       <DetailsResizer width={width} onWidth={onWidth} />
@@ -1969,12 +1971,12 @@ function LibraryWindow({
   // Every tag in the library, those on the most loaded shots first.
   const menuTags = useMemo(() => suggestedTags(options.tags, shots, [], options.tags.length), [options.tags, shots]);
 
-  /** Set when an arrow key in the details steps, so the next capture's details keep the focus. */
+  /** Set when a details button or arrow key steps, so the next capture's details take focus. */
   const focusDetails = useRef(false);
-  function step(delta: -1 | 1, fromKeys = false) {
+  function step(delta: -1 | 1) {
     const next = shots[selectedIndex + delta];
     if (!next) return;
-    focusDetails.current = fromKeys;
+    focusDetails.current = true;
     selectOnly(next.id);
     scroller.current
       ?.querySelector<HTMLElement>(`[data-shot-id="${next.id}"]`)
