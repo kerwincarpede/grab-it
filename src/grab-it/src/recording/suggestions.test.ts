@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { parseEdits, serializeEdits } from "./edits";
 import { clipsOf, gapOf, sequenceDuration, withClips, type Clip } from "./clips";
-import { applyCuts, cleanSpans, cutSequenceMs, INITIAL_TUNING, intersect, isValidCut, MIN_CUT_RANGE, PAD_RANGE, proposeCuts, soundLabel, stillSpans, type CutProposal } from "./suggestions";
+import { applyCuts, applyTimelineCuts, cleanSpans, cutSequenceMs, INITIAL_TUNING, intersect, isValidCut, MIN_CUT_RANGE, PAD_RANGE, proposeCuts, soundLabel, stillSpans, type CutProposal } from "./suggestions";
+import { defaultTimeline, unlinkClips } from "./tracks";
 import type { CursorPath } from "./zooms";
 
 const OWN = "own.mp4";
@@ -217,5 +218,28 @@ describe("soundLabel", () => {
     expect(soundLabel("microphone")).toMatch(/Original and Cleaned/);
     expect(soundLabel("mixed")).toMatch(/only the original/);
     expect(soundLabel("silent")).toMatch(/Silent/);
+  });
+});
+
+describe("applyTimelineCuts", () => {
+  const a = { id: "a", source: "a.mp4", startMs: 0, endMs: 10_000 };
+  const cut = (id: string, startMs: number, endMs: number): CutProposal => ({ id, source: "a.mp4", clipId: "a", startMs, endMs, reason: "pause" });
+  let n = 0;
+  const makeId = () => `t${++n}`;
+
+  it("cuts the linked sound with the picture", () => {
+    const { timeline, skipped } = applyTimelineCuts(defaultTimeline([a], () => true), [cut("1", 1000, 2000), cut("2", 5000, 6000)], makeId);
+    expect(skipped).toBe(0);
+    expect(timeline.main.map((clip) => [clip.startMs, clip.endMs])).toEqual([[0, 1000], [2000, 5000], [6000, 10_000]]);
+    const sound = timeline.tracks[1].clips;
+    expect(sound.map((clip) => [clip.startMs, clip.endMs, clip.atMs])).toEqual([[0, 1000, 0], [2000, 5000, 1000], [6000, 10_000, 4000]]);
+  });
+
+  it("skips a cut over sound not linked to its picture", () => {
+    const base = defaultTimeline([a], () => true);
+    const free = unlinkClips(base, new Set(["a"]));
+    const { timeline, skipped } = applyTimelineCuts(free, [cut("1", 1000, 2000)], makeId);
+    expect(skipped).toBe(1);
+    expect(timeline).toBe(free);
   });
 });

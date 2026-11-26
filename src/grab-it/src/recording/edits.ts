@@ -2,6 +2,7 @@ import type { Backdrop } from "../editor/model";
 import { parseBackdrop } from "../editor/sidecar";
 import { parseCaptions, serializeCaptions, type Captions } from "./captions";
 import { isClipSource, isGap, parseClips, type Clip } from "./clips";
+import { parseTracks, serializeTracks, type Track } from "./tracks";
 import { parseZooms, type Zoom } from "./zooms";
 
 /** The stretch of the recording kept, in milliseconds from its start. */
@@ -21,12 +22,22 @@ export interface Trim {
  * Mirrors `CAPTIONS_VERSION` in recording_editor.rs.
  */
 export const CAPTIONS_VERSION = 5;
-/** The newest sidecar version this build reads and writes. Mirrors `EDITS_VERSION`. */
-export const EDITS_VERSION = CAPTIONS_VERSION;
+/**
+ * The sidecar version that adds `tracks` (see tracks.ts). Every version
+ * gate for tracks and links reads it, so it moves in one place. Mirrors
+ * `TRACKS_VERSION` in recording_editor.rs.
+ */
+export const TRACKS_VERSION = 6;
+/**
+ * The newest sidecar version this build reads and writes: every version
+ * from 1 up to it is read, skipping what it does not understand; a newer
+ * one is refused. Mirrors `EDITS_VERSION`.
+ */
+export const EDITS_VERSION = TRACKS_VERSION;
 
 export interface RecordingEdits {
   /** The oldest format that can hold the edits. */
-  version: 1 | 2 | 3 | 4 | typeof CAPTIONS_VERSION;
+  version: 1 | 2 | 3 | 4 | typeof CAPTIONS_VERSION | typeof TRACKS_VERSION;
   /** Absent or null keeps the whole recording. Ignored when `clips` is set. */
   trim?: Trim | null;
   /**
@@ -36,6 +47,12 @@ export interface RecordingEdits {
    * zooms refer to recordings inside month folders.
    */
   clips?: Clip[];
+  /**
+   * Every track, top first (see tracks.ts), with `clips` as Video 1's
+   * sequence; written as `TRACKS_VERSION` `tracks` in place of `clips` and
+   * `trim`. Absent while the timeline is the default its sequence loads as.
+   */
+  tracks?: Track[];
   /** The same backdrop captures have; its aspect is the export's shape. */
   backdrop?: Backdrop | null;
   /** Zoom segments, sorted and never overlapping on one source; absent or empty for none. */
@@ -49,6 +66,7 @@ export interface RecordingEdits {
   /** Caption cues and how the export shows them; `CAPTIONS_VERSION` when it holds cues. */
   captions?: Captions;
 }
+
 
 /** The shortest a trimmed recording may be. */
 export const MIN_CLIP_MS = 500;
@@ -74,12 +92,16 @@ export function parseEdits(value: unknown): RecordingEdits {
   if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > EDITS_VERSION) throw new EditsError(`unsupported edits version ${String(raw)}`);
   const version = raw as RecordingEdits["version"];
   const edits = emptyEdits();
-  if (version >= 2) {
+  const timeline = version >= TRACKS_VERSION ? parseTracks(doc.tracks, version) : null;
+  if (timeline) {
+    edits.clips = timeline.main;
+    edits.tracks = timeline.tracks;
+  } else if (version >= 2) {
     const clips = parseClips(doc.clips, version);
     if (clips.length > 0) edits.clips = clips;
   }
   const trim = doc.trim as Record<string, unknown> | null | undefined;
-  if (trim && typeof trim === "object" && isNum(trim.startMs) && isNum(trim.endMs) && trim.startMs >= 0 && trim.endMs > trim.startMs) {
+  if (!timeline && trim && typeof trim === "object" && isNum(trim.startMs) && isNum(trim.endMs) && trim.startMs >= 0 && trim.endMs > trim.startMs) {
     edits.trim = { startMs: Math.round(trim.startMs), endMs: Math.round(trim.endMs) };
   }
   const backdrop = parseBackdrop(doc.backdrop);
@@ -89,12 +111,13 @@ export function parseEdits(value: unknown): RecordingEdits {
   if (typeof doc.removeNoise === "boolean") edits.removeNoise = doc.removeNoise;
   const captions = parseCaptions(doc.captions);
   if (captions) edits.captions = { ...captions, cues: captions.cues.filter((cue) => !cue.source || isClipSource(cue.source, version)) };
-  edits.version = versionForEdits(edits.clips ?? null, edits.zooms, edits.captions);
+  edits.version = versionForEdits(edits.clips ?? null, edits.zooms, { tracks: edits.tracks, captions: edits.captions });
   return edits;
 }
 
-/** The minimum sidecar version for the given sequence, zoom sources and caption cues. */
-export function versionForEdits(clips: Clip[] | null, zooms: Zoom[] = [], captions?: Captions): RecordingEdits["version"] {
+/** The minimum sidecar version for the given sequence, zoom sources, tracks and caption cues. */
+export function versionForEdits(clips: Clip[] | null, zooms: Zoom[] = [], { tracks, captions }: { tracks?: Track[]; captions?: Captions } = {}): RecordingEdits["version"] {
+  if (tracks && tracks.length > 0) return TRACKS_VERSION;
   if (captions && captions.cues.length > 0) return CAPTIONS_VERSION;
   if (clips?.some((clip) => clip.source.includes("/")) || zooms.some((zoom) => zoom.source?.includes("/"))) return 4;
   if (clips?.some(isGap)) return 3;
@@ -108,14 +131,16 @@ export interface SavedGap {
 }
 
 /** The sidecar's JSON: `RecordingEdits` with gaps written as `SavedGap`. */
-export type SidecarEdits = Omit<RecordingEdits, "clips"> & { clips?: (Clip | SavedGap)[] };
+export type SidecarEdits = Omit<RecordingEdits, "clips" | "tracks"> & { clips?: (Clip | SavedGap)[]; tracks?: unknown[] };
 
 /** The JSON written to the sidecar: only what is set. */
 export function serializeEdits(edits: RecordingEdits): SidecarEdits {
   const clips = edits.clips && edits.clips.length > 0 ? edits.clips : null;
+  const tracks = clips && edits.tracks && edits.tracks.length > 0 ? edits.tracks : undefined;
   return {
-    version: versionForEdits(clips, edits.zooms, edits.captions),
-    ...(clips
+    version: versionForEdits(clips, edits.zooms, { tracks, captions: edits.captions }),
+    ...(tracks && clips ? { tracks: serializeTracks({ main: clips, tracks }) } : {}),
+    ...(clips && !tracks
       ? {
           clips: clips.map((clip) =>
             clip.gap

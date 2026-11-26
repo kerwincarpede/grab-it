@@ -8,6 +8,8 @@ interface RecordingVideoProps extends VideoHTMLAttributes<HTMLVideoElement> {
   activeRef: RefObject<HTMLVideoElement | null>;
   onReady: (video: HTMLVideoElement) => void;
   onFailure: (source: string, message: string) => void;
+  /** Muted even on show, while the audio tracks play the sound (see TrackAudio). */
+  silent?: boolean;
 }
 
 /**
@@ -17,7 +19,7 @@ interface RecordingVideoProps extends VideoHTMLAttributes<HTMLVideoElement> {
  * only when the player goes, as WebKitGTK does not reliably show a
  * recording again in a new element or from a new URL.
  */
-export default function RecordingVideo({ source, path, active, activeRef, onReady, onFailure, ...events }: RecordingVideoProps) {
+export default function RecordingVideo({ source, path, active, activeRef, onReady, onFailure, silent = false, ...events }: RecordingVideoProps) {
   const ref = useRef<HTMLVideoElement>(null);
   const download = useRef<Promise<Blob> | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
@@ -66,7 +68,7 @@ export default function RecordingVideo({ source, path, active, activeRef, onRead
       data-source={source}
       hidden={!active}
       // Only the recording on show is heard.
-      muted={!active}
+      muted={!active || silent}
       src={src}
       crossOrigin={fromBlob ? undefined : "anonymous"}
       preload="auto"

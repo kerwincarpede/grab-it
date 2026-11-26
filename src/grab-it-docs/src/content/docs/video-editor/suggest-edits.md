@@ -37,7 +37,7 @@ The panel under the timeline lists each proposed cut with its reason, its range 
 
 - **Preview** on a row plays that one cut on its own, from two seconds before it to two seconds after, with the pause skipped, then stops. It works whether the cut is ticked or not, and **Stop** on the row ends it early.
 - **Preview** under the list plays the sequence as it would be with the chosen cuts, starting just before the first one. Press **Play** to hear it. **Stop preview**, closing the panel, `Esc` or **Undo** puts the timeline back as it was and stops playback. Other edits and **Export** wait until the preview ends, so nothing you haven't applied is ever saved.
-- **Apply** removes the chosen cuts together, closing each gap. The timeline then shows the recording as [clips](/grab-it/video-editor/join-recordings/), and **Undo** brings it all back in one step.
+- **Apply** removes the chosen cuts together, closing each gap. The timeline then shows the recording as [clips](/grab-it/video-editor/join-recordings/), and **Undo** brings it all back in one step. Each cut removes the linked sound on **Audio 1** too, and moves later sound up with the picture. A cut that would go through sound you [unlinked](/grab-it/video-editor/tracks/) is skipped, and the panel says how many were.
 
 ## Original and Cleaned
 

@@ -21,7 +21,7 @@ GIFs can't be edited: the card for one has no **Edit**.
 
 - **Top bar**: **Undo** and **Redo**, **Recording**, **Backdrop**, **Zoom**, **Captions**, the selected zoom's or caption's controls, and **Export** on the right.
 - **Middle**: the preview, showing the recording on its backdrop with its zooms, as the export will look.
-- **Bottom**: play and pause, the time, the [timeline](/grab-it/video-editor/timeline-and-trim/) with its trim handles, or the clips once you [join recordings](/grab-it/video-editor/join-recordings/), and the zoom and caption rows under it.
+- **Bottom**: play and pause, the time, the [timeline](/grab-it/video-editor/timeline-and-trim/) with its trim handles, or the clips once you [join recordings](/grab-it/video-editor/join-recordings/), the [sound tracks](/grab-it/video-editor/tracks/), and the zoom and caption rows under it.
 - **Status bar**: the file name, how long the trimmed clip is, the size the export will have, and whether your edits are saved.
 
 ## Your edits are safe
@@ -43,3 +43,4 @@ Each undo and redo is saved straight away, like any other edit. The steps last w
 - [Join recordings](/grab-it/video-editor/join-recordings/): add other recordings, reorder them and trim each one.
 - [Suggest edits](/grab-it/video-editor/suggest-edits/): cut the pauses Grab-it finds, and compare the sound before and after noise removal.
 - [Captions](/grab-it/video-editor/captions/): transcribe the speech into captions, correct them, and burn them into the export.
+- [Tracks and sound](/grab-it/video-editor/tracks/): unlink a recording's sound from its picture, move it in time, and link it again.

@@ -12,7 +12,8 @@ interface ClipTrackProps {
   /** Sources whose file is gone or cannot be played. */
   missing: ReadonlySet<string>;
   selectedId: string | null;
-  onSelect: (id: string) => void;
+  /** Selects clip `id`; `adding` (Shift-click) adds it to the selection for Link. */
+  onSelect: (id: string, adding?: boolean) => void;
   /** Shows trimmed clips while an edge is still moving. */
   onTrimPreview: (clips: Clip[]) => void;
   /** Keeps a trim: one undo entry. */
@@ -88,7 +89,8 @@ export default function ClipTrack({
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    onSelect(next.id);
+    onSelect(next.id, event.shiftKey);
+    if (event.shiftKey) return;
     setDrag(next);
   };
 
@@ -145,6 +147,7 @@ export default function ClipTrack({
             data-fixed={editable ? undefined : "true"}
             data-missing={gone ? "true" : undefined}
             data-gap={gap ? "true" : undefined}
+            data-linked={clip.link ? "true" : undefined}
             style={{ left: percent(starts[index], durationMs), width: percent(clipLength(clip), durationMs) }}
             onPointerDown={editable ? (event) => begin(event, { kind: "move", id: clip.id, moved: false }) : undefined}
             onPointerMove={move}

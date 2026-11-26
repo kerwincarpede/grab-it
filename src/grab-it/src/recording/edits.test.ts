@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { clampTrim, EDITS_VERSION, EditsError, formatTime, isWhole, MIN_CLIP_MS, parseEdits, serializeEdits, trimOf, type RecordingEdits } from "./edits";
+import type { Track } from "./tracks";
+import { clampTrim, EDITS_VERSION, EditsError, formatTime, isWhole, MIN_CLIP_MS, parseEdits, serializeEdits, TRACKS_VERSION, trimOf, type RecordingEdits } from "./edits";
 
 const BACKDROP = { fill: "sunset", padding: 48, radius: 24, radiusUnit: "pt" as const, shadow: true, aspect: "9:16" as const };
 
@@ -41,8 +42,30 @@ describe("recording edits sidecar", () => {
     expect(parseEdits({ version: 4, clips: entries })).toEqual({ version: 2, clips: [entries[0]] });
   });
 
+  it("saves tracks and captions together as TRACKS_VERSION and reads both back", () => {
+    const clip = { id: "c", source: "own.mp4", startMs: 0, endMs: 4000 };
+    const tracks: Track[] = [
+      { id: "video-1", name: "Video 1", kind: "video", clips: [] },
+      { id: "audio-1", name: "Audio 1", kind: "audio", clips: [{ id: "s", source: "own.mp4", startMs: 0, endMs: 4000, atMs: 500 }] },
+    ];
+    const captions = { burnIn: true, cues: [{ id: "q", startMs: 1000, endMs: 2000, text: "Hello" }] };
+    const sidecar = JSON.parse(JSON.stringify(serializeEdits({ version: 1, clips: [clip], tracks, captions })));
+    expect(sidecar.version).toBe(TRACKS_VERSION);
+    expect(sidecar.tracks).toHaveLength(2);
+    expect(sidecar.captions.cues).toHaveLength(1);
+    const read = parseEdits(sidecar);
+    expect(read.version).toBe(TRACKS_VERSION);
+    expect(read.tracks).toEqual(tracks);
+    expect(read.clips).toEqual([clip]);
+    expect(read.captions).toEqual(captions);
+  });
+
   it("refuses a version it does not know, so it is never overwritten", () => {
     expect(() => parseEdits({ version: EDITS_VERSION + 1 })).toThrow(EditsError);
+    expect(() => parseEdits({ version: 2.5 })).toThrow(EditsError);
+    expect(() => parseEdits({ version: 0 })).toThrow(EditsError);
+    // Every version up to the newest is read, what it does not hold skipped.
+    for (let version = 1; version <= EDITS_VERSION; version++) expect(parseEdits({ version }).version).toBe(1);
     expect(() => parseEdits("edits")).toThrow(EditsError);
   });
 

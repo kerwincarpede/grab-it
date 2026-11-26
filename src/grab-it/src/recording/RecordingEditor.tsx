@@ -50,13 +50,10 @@ import {
   leaveGap,
   moveClip,
   newClipId,
-  removeClip,
   sequenceDuration,
-  splitClip,
   tagZoom,
   toSequence,
   toSource,
-  withClips,
   zoomOnSource,
   zoomOwners,
   zoomsIn,
@@ -92,6 +89,9 @@ import {
   type CueShowing,
 } from "./captions";
 import SuggestEditsPanel, { type ShownCuts } from "./SuggestEditsPanel";
+import TrackAudio from "./TrackAudio";
+import TrackRows from "./TrackRows";
+import { clipPlaces, exportAudio, isRefusal, linkClips, moveInTime, needsTracks, reconcile, renameTrack, rippleDelete, shiftUnlinked, splitAt, timelineOf, unlinkClips, withTimeline, type Timeline as Tracks } from "./tracks";
 import RecordingVideo from "./RecordingVideo";
 import { chooseRecording, probeVideo, type SourceMeta } from "./sources";
 import { clampTrim, emptyEdits, formatTime, isWhole, parseEdits, serializeEdits, trimOf, type RecordingEdits, type Trim } from "./edits";
@@ -187,6 +187,15 @@ function isEditingText(target: EventTarget | null): boolean {
 const ZOOM_WHEEL = isMacPlatform() ? "⌘ + scroll" : "Ctrl + scroll";
 
 /** Whether `clips` is more than one clip of the recording `own`: then the timeline is the joined sequence's. */
+/**
+ * The stretch of one recording `edits` keep: with tracks the sidecar holds
+ * it as Video 1's one clip, not as `trim`.
+ */
+function keptOf(edits: RecordingEdits, durationMs: number): Trim {
+  const only = edits.tracks && edits.clips?.length === 1 ? edits.clips[0] : null;
+  return only && !isGap(only) ? { startMs: only.startMs, endMs: only.endMs } : trimOf(edits, durationMs);
+}
+
 const isJoined = (clips: Clip[], own: string) => clips.length > 1 || (clips.length === 1 && clips[0].source !== own);
 
 /**
@@ -296,6 +305,8 @@ export default function RecordingEditor() {
   const [shownCuts, setShownCuts] = useState<ShownCuts | null>(null);
   /** A proposal clicked on the clip track, for Suggest edits to bring into focus. */
   const [cutFocusRequest, setCutFocusRequest] = useState<{ id: string } | null>(null);
+  /** The tracks as the previewed cuts leave them, beside `suggestPreview`. */
+  const [suggestTracks, setSuggestTracks] = useState<Tracks["tracks"] | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   /** While playing over a gap: when its clock started and the playhead then. */
   const gapClockRef = useRef<{ at: number; ms: number } | null>(null);
@@ -377,8 +388,26 @@ export default function RecordingEditor() {
   const durationMs = ownMeta?.durationMs ?? 0;
   const videoSize = useMemo(() => (ownMeta ? { width: ownMeta.width, height: ownMeta.height } : null), [ownMeta]);
   const backdrop = backdropDraft !== undefined ? backdropDraft : (edits.backdrop ?? null);
-  const savedTrim = trimOf(edits, durationMs);
-  const savedClips = useMemo(() => clipsOf(edits, own, durationMs), [edits, own, durationMs]);
+  /** Whether recording `source` has sound; one not yet probed is taken to. */
+  const hasAudio = useCallback(
+    (source: string) => (source === own ? (info?.audio.length ?? 0) > 0 : (sourceInfo[source]?.hasAudio ?? true)),
+    [own, info, sourceInfo],
+  );
+  const sequenceClips = useMemo(() => clipsOf(edits, own, durationMs), [edits, own, durationMs]);
+  /** Every track (see tracks.ts); its `main` is the saved sequence, links included. */
+  const tracks = useMemo(() => timelineOf(edits, sequenceClips, hasAudio), [edits, sequenceClips, hasAudio]);
+  const savedClips = tracks.main;
+  /**
+   * The stretch of one recording kept: with tracks the sidecar holds it as
+   * Video 1's one clip, not as `trim`.
+   */
+  const savedTrim = keptOf(edits, durationMs);
+  /** Whether the sound is arranged apart from the pictures, so it plays from the audio tracks. */
+  const ownSound = needsTracks(tracks, hasAudio);
+  /** The tracks on show: while suggested cuts are previewed, as they leave them. */
+  const shownTracks: Tracks = suggestPreview && suggestTracks ? { main: suggestPreview, tracks: suggestTracks } : tracks;
+  /** Clips chosen with Shift-click besides the selected clip, for Link. */
+  const [trackSelection, setTrackSelection] = useState<ReadonlySet<string>>(() => new Set());
   const clips = clipDraft ?? suggestPreview ?? savedClips;
   const joined = isJoined(clips, own);
   const sequenceMs = sequenceDuration(clips);
@@ -540,10 +569,51 @@ export default function RecordingEditor() {
     }
   }, [info, previewSources, own, ownMeta]);
 
-  /** Keeps `next` as the sequence: one undo entry. */
-  const commitClips = (next: Clip[], applying = false) => {
+  /** Keeps `next` as every track: one undo entry. `sound` answers for recordings not yet probed. */
+  const commitTracks = (next: Tracks, applying = false, sound: (source: string) => boolean = hasAudio) => {
     setClipDraft(null);
-    commitEdits(withClips(edits, next, own, durationMs), applying);
+    commitEdits(withTimeline(edits, next, own, durationMs, sound), applying);
+  };
+
+  /**
+   * `next` as the sequence with its linked sound following it, trims
+   * clamped together; null, with a message, when it cannot be.
+   */
+  const reconciled = (next: Clip[], sound: (source: string) => boolean = hasAudio): Tracks | null => {
+    const result = reconcile(tracks, next, sound, undefined, (source) => meta[source]?.durationMs ?? 0);
+    if (!result) {
+      setClipDraft(null);
+      setMessage("That would put linked sound over another clip on its track. Unlink or move it first.");
+    }
+    return result;
+  };
+
+  /** Keeps `next` as the sequence, its linked sound following it: one undo entry. */
+  const commitClips = (next: Clip[], applying = false, sound: (source: string) => boolean = hasAudio) => {
+    const result = reconciled(next, sound);
+    if (result) commitTracks(result, applying, sound);
+  };
+
+  /** The clips selected for Link and Unlink: the selected clip and those Shift-clicked. */
+  // One recording has no clip row: its picture counts as chosen with any sound clip.
+  const ownPicture = !joined && savedClips.length === 1 ? savedClips[0].id : null;
+  const chosenIds = useMemo(
+    () => new Set([...trackSelection, ...(selectedClipId ? [selectedClipId] : []), ...(ownPicture && trackSelection.size > 0 ? [ownPicture] : [])]),
+    [trackSelection, selectedClipId, ownPicture],
+  );
+  const canLink = chosenIds.size >= 2;
+  const canUnlink = [...tracks.main, ...tracks.tracks.flatMap((track) => track.clips)].some((clip) => chosenIds.has(clip.id) && clip.link);
+  const linkChosen = () => {
+    const next = linkClips(tracks, chosenIds);
+    if (next) commitTracks(next);
+    else setMessage("Link needs two or more clips, at most one of them on Video 1, that can line up without overlapping another clip.");
+  };
+  const unlinkChosen = () => commitTracks(unlinkClips(tracks, chosenIds));
+  /** Moves a clip off Video 1, with its links, to start at sequence time `atMs`. */
+  const moveTrackClip = (id: string, atMs: number) => {
+    const next = moveInTime(tracks, id, atMs, undefined, sequenceDuration(savedClips));
+    if (isRefusal(next)) setMessage(next.refused);
+    else commitTracks(next);
   };
 
   /**
@@ -569,9 +639,9 @@ export default function RecordingEditor() {
     setCutFocusRequest(null);
   };
 
-  const latestRef = useRef({ clips, at, commitClips, seek, meta });
+  const latestRef = useRef({ clips, at, commitClips, seek, meta, hasAudio });
   useEffect(() => {
-    latestRef.current = { clips, at, commitClips, seek, meta };
+    latestRef.current = { clips, at, commitClips, seek, meta, hasAudio };
   });
 
   /** Asks for a recording in the recordings folder and joins it after the clip under the playhead. */
@@ -602,7 +672,8 @@ export default function RecordingEditor() {
       const after = latest.at?.index ?? latest.clips.length - 1;
       const clip: Clip = { id: newClipId(), source: name, startMs: 0, endMs: learned.durationMs };
       const next = insertClip(latest.clips, after, clip);
-      latest.commitClips(next);
+      // `sourceInfo` is not updated yet: the probe says whether it has sound.
+      latest.commitClips(next, false, (source) => (source === name ? found.hasAudio : latest.hasAudio(source)));
       setSelectedClipId(clip.id);
       setSelectedZoomId(null);
       setMessage(null);
@@ -628,8 +699,13 @@ export default function RecordingEditor() {
     if (!selectedClip || !canRemove(clips, selectedClip.id)) return;
     const index = clips.findIndex((clip) => clip.id === selectedClip.id);
     const start = clipStarts(clips)[index];
-    const next = removeClip(clips, selectedClip.id);
-    commitClips(next);
+    const rippled = rippleDelete(tracks, selectedClip.id);
+    if (isRefusal(rippled)) {
+      setMessage(rippled.refused);
+      return;
+    }
+    const next = rippled.main;
+    commitTracks(rippled);
     setSelectedClipId(null);
     // The playhead goes to where the removed stretch was, now the start of what followed it.
     const pos = toSource(next, Math.min(start, sequenceDuration(next)));
@@ -671,16 +747,27 @@ export default function RecordingEditor() {
   /** Splits the clip under the playhead in two that meet at the playhead. */
   const splitAtPlayhead = () => {
     if (!at || !canSplitHere) return;
-    const next = splitClip(clips, at.index, at.sourceMs);
-    if (next === clips) return;
-    commitClips(next);
-    seek(timelineMs(next, own, at.index + 1, at.sourceMs), next);
+    const ms = toSequence(clips, at.index, at.sourceMs);
+    const chosen = selectedClipId ?? [...trackSelection][0];
+    // A selected clip under the playhead splits with its links; any other
+    // selection splits the clip under the playhead and its links.
+    const chosenHere = chosen && clipPlaces(tracks).some((place) => place.id === chosen && place.atMs < ms && place.endMs > ms);
+    const next = splitAt(tracks, ms, chosenHere ? chosen : chosen ? at.clip.id : undefined);
+    if (JSON.stringify(next) === JSON.stringify(tracks)) return;
+    commitTracks(next);
+    // The playhead moves onto the second part only when the picture was split.
+    if (next.main.length > tracks.main.length) seek(timelineMs(next.main, own, at.index + 1, at.sourceMs), next.main);
   };
 
   const commitTrim = (next: Trim) => {
     setTrimDraft(null);
     const fitted = clampTrim(next, durationMs);
-    commitEdits({ ...edits, trim: isWhole(fitted, durationMs) ? null : fitted });
+    if (edits.tracks) {
+      // Unlinked sound keeps playing at the same moment of the recording.
+      const result = reconciled([{ ...savedClips[0], ...fitted }]);
+      if (result) commitTracks(shiftUnlinked(result, result.main[0].startMs - savedClips[0].startMs));
+    }
+    else commitEdits({ ...edits, trim: isWhole(fitted, durationMs) ? null : fitted });
     seek(Math.min(Math.max(currentMs, fitted.startMs), fitted.endMs));
   };
 
@@ -706,7 +793,7 @@ export default function RecordingEditor() {
         if (index >= 0 && at) seek(timelineMs(nextClips, own, index, at.sourceMs), nextClips);
         else seek(timelineMs(nextClips, own, 0, nextClips[0].startMs), nextClips);
       } else {
-        const kept = trimOf(next.present, durationMs);
+        const kept = keptOf(next.present, durationMs);
         seek(Math.min(Math.max(currentMs, kept.startMs), kept.endMs), nextClips);
       }
     }
@@ -1034,7 +1121,7 @@ export default function RecordingEditor() {
     if (!pending && loadedRef.current === source) return;
     loadedRef.current = source;
     pendingRef.current = null;
-    const sourceMs = pending?.sourceMs ?? (joined ? at?.sourceMs ?? 0 : trimOf(edits, duration).startMs);
+    const sourceMs = pending?.sourceMs ?? (joined ? at?.sourceMs ?? 0 : keptOf(edits, duration).startMs);
     try {
       video.currentTime = sourceMs / 1000;
     } catch {
@@ -1452,6 +1539,7 @@ export default function RecordingEditor() {
           videoHeight: shape.videoHeight,
           backdropBytes: 0,
           removeNoise,
+          ...(ownSound ? { audio: exportAudio(tracks) } : {}),
         },
         layers,
         overlays,
@@ -1515,6 +1603,14 @@ export default function RecordingEditor() {
           </button>
           <button type="button" className="icon-button" onClick={redoEdit} disabled={!canRedo(history) || exporting} aria-label="Redo" title="Redo (Ctrl+Shift+Z)">
             <RedoIcon />
+          </button>
+        </div>
+        <div className="bar-group">
+          <button type="button" className="text-button" onClick={linkChosen} disabled={!canLink || exporting} title="Link the selected clips so they are edited together">
+            Link
+          </button>
+          <button type="button" className="text-button" onClick={unlinkChosen} disabled={!canUnlink || exporting} title="Unlink the selected clips, so the sound can move on its own">
+            Unlink
           </button>
         </div>
         <div
@@ -1832,6 +1928,7 @@ export default function RecordingEditor() {
                   source={source}
                   active={active}
                   activeRef={videoRef}
+                  silent={ownSound}
                   onReady={onMediaReady}
                   onFailure={onVideoFailure}
                   style={{ transform: viewTransform(view) }}
@@ -1848,6 +1945,8 @@ export default function RecordingEditor() {
                 />
               );
             })}
+            {/* Sound plays on over gaps, as the export mixes it there. */}
+            {ownSound && <TrackAudio clips={shownTracks.tracks.filter((track) => track.kind === "audio").flatMap((track) => track.clips)} pathOf={pathOf} currentMs={joined ? currentMs : currentMs - trim.startMs} playing={playing} />}
             {picking && selectedZoom?.focus.kind === "area" && (
               <ZoomAreaPicker
                 scale={selectedZoom.scale}
@@ -1901,8 +2000,13 @@ export default function RecordingEditor() {
               sourceDuration={(source) => meta[source]?.durationMs ?? 0}
               missing={missing}
               selectedId={selectedClip?.id ?? null}
-              onSelect={(id) => {
+              onSelect={(id, adding) => {
+                if (adding) {
+                  setTrackSelection((chosen) => new Set(chosen).add(id));
+                  return;
+                }
                 setSelectedClipId(id);
+                setTrackSelection(new Set());
                 setSelectedZoomId(null);
                 setSelectedCueKey(null);
               }}
@@ -1922,6 +2026,21 @@ export default function RecordingEditor() {
               }}
             />
           )}
+          <TrackRows
+            timeline={shownTracks}
+            durationMs={timelineDuration}
+            offsetMs={joined ? 0 : trim.startMs}
+            endMs={sequenceDuration(savedClips)}
+            currentMs={joined ? currentMs : currentMs - trim.startMs}
+            selected={chosenIds}
+            onSelect={(id, adding) => {
+              setTrackSelection((chosen) => (adding ? new Set(chosen).add(id) : new Set([id])));
+              if (!adding) setSelectedClipId(null);
+              setSelectedZoomId(null);
+            }}
+            onMove={moveTrackClip}
+            onRename={(id, name) => commitTracks(renameTrack(tracks, id, name))}
+          />
           <ZoomTrack
             durationMs={timelineDuration}
             zooms={zooms}
@@ -1966,6 +2085,9 @@ export default function RecordingEditor() {
             nameOf={(kind) => SOURCE_NAMES[kind]}
             hintOf={(kind) => (kind === "mixed" ? MIXED_SOUND_HINT : undefined)}
             view={timelineView?.track ?? null}
+            sound={ownSound ? shownTracks.tracks.filter((track) => track.kind === "audio").flatMap((track) => track.clips) : null}
+            soundOffsetMs={joined ? 0 : trim.startMs}
+            soundEndMs={sequenceDuration(savedClips)}
           />
         </Timeline>
         <div className="timeline-zoom" role="group" aria-label="Timeline zoom">
@@ -2000,7 +2122,8 @@ export default function RecordingEditor() {
           own={own}
           joined={isJoined(savedClips, own)}
           previewing={suggestPreview !== null}
-          onPreview={(next, fromMs, endMs, returnMs) => {
+          tracks={tracks.tracks}
+          onPreview={(next, fromMs, endMs, returnMs, cutTracks) => {
             if (!next) {
               endSuggestPreview();
               return;
@@ -2009,6 +2132,7 @@ export default function RecordingEditor() {
             const onTimeline = (ms: number) => (isJoined(next, own) ? ms : next[0].startMs + ms);
             setClipDraft(null);
             setSuggestPreview(next);
+            setSuggestTracks(cutTracks ?? null);
             // The stop never lies past the preview's end, where playback halts on its own.
             const lastMs = isJoined(next, own) ? sequenceDuration(next) : next[0].endMs;
             // The saved sequence's time, too, is the recording's own when it is a lone clip of it.
@@ -2022,10 +2146,11 @@ export default function RecordingEditor() {
           }}
           onShowCuts={setShownCuts}
           focusRequest={cutFocusRequest}
-          onApply={(next) => {
+          onApply={(next, cutTracks) => {
             setSuggestPreview(null);
             setMessage(null);
-            commitClips(next, true);
+            if (cutTracks) commitTracks({ main: next, tracks: cutTracks }, true);
+            else commitClips(next, true);
             seek(Math.min(currentMs, sequenceDuration(next)), next);
           }}
           onClose={closeSuggestions}

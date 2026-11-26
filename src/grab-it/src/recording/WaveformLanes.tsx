@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import { onFfmpegStatus } from "../settings/api";
 import { recordingWaveform, type AudioKind } from "./api";
 import type { Clip } from "./clips";
+import type { PlacedClip } from "./tracks";
 import type { Trim } from "./edits";
 import WaveformLane from "./WaveformLane";
-import { laneKinds, laneSegments, peaksKey, type LaneSegment, type LaneView, type PeaksState } from "./waveform";
+import { laneKinds, laneSegments, peaksKey, soundSegments, type LaneSegment, type LaneView, type PeaksState } from "./waveform";
 
 /** The lanes' height in px: the least, the most, and at first. */
 export const MIN_LANE_HEIGHT = 24;
@@ -34,6 +35,15 @@ interface WaveformLanesProps {
    * scale (the timeline view's `track`); nothing is drawn before it is known.
    */
   view: LaneView | null;
+  /**
+   * The audio-track clips, when the sound is arranged apart from the
+   * pictures (see tracks.ts): the lanes then draw them at their own
+   * places, `soundOffsetMs` being where sequence time 0 sits.
+   */
+  sound?: readonly PlacedClip[] | null;
+  soundOffsetMs?: number;
+  /** Where the output ends, in sequence time; sound past it is dimmed. */
+  soundEndMs?: number;
 }
 
 const errorText = (err: unknown) => String(err instanceof Error ? err.message : err);
@@ -45,7 +55,7 @@ const errorText = (err: unknown) => String(err instanceof Error ? err.message : 
  * while the editor is open; those that failed are asked for again when
  * ffmpeg becomes ready, as before then every request fails.
  */
-export default function WaveformLanes({ clips, joined, durationMs, trim, audioOf, nameOf, hintOf, view }: WaveformLanesProps) {
+export default function WaveformLanes({ clips, joined, durationMs, trim, audioOf, nameOf, hintOf, view, sound = null, soundOffsetMs = 0, soundEndMs = Infinity }: WaveformLanesProps) {
   const [peaks, setPeaks] = useState<Record<string, PeaksState>>({});
   const requested = useRef(new Set<string>());
   /** Requests that failed, dropped from `requested` to ask again once ffmpeg is ready. */
@@ -58,7 +68,12 @@ export default function WaveformLanes({ clips, joined, durationMs, trim, audioOf
   // Kept the same from render to render until a lane's clips change, so
   // the lanes redraw only when what they show does, not on every frame
   // the editor plays.
-  const lanesKey = JSON.stringify(laneKinds(clips, audioOf).map((kind) => ({ kind, segments: laneSegments(clips, kind, audioOf, joined, durationMs, trim) })));
+  const lanesKey = JSON.stringify(
+    laneKinds(sound ? sound.map((clip) => ({ id: clip.id, source: clip.source, startMs: clip.startMs, endMs: clip.endMs })) : clips, audioOf).map((kind) => ({
+      kind,
+      segments: sound ? soundSegments(sound, kind, audioOf, durationMs, soundOffsetMs, soundEndMs) : laneSegments(clips, kind, audioOf, joined, durationMs, trim),
+    })),
+  );
   const lanes = useMemo(() => JSON.parse(lanesKey) as { kind: AudioKind; segments: LaneSegment[] }[], [lanesKey]);
   const peaksOf = useCallback((segment: LaneSegment) => peaks[peaksKey(segment.source, segment.audio)], [peaks]);
   const startMs = view?.startMs ?? 0;

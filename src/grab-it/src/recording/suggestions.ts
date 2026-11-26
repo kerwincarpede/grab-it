@@ -13,6 +13,7 @@
 import type { PauseSound } from "../app/bindings";
 import { MIN_CLIP_MS } from "./edits";
 import { clipLength, clipStarts, isGap, mergeGaps, newClipId, type Clip } from "./clips";
+import { cutSpan, isRefusal, type Timeline } from "./tracks";
 import type { CursorPath } from "./zooms";
 
 /** A stretch of a recording, in its own time. */
@@ -214,6 +215,28 @@ export function applyCuts(clips: readonly Clip[], cuts: readonly CutProposal[], 
     next = replaced;
   }
   return mergeGaps(next);
+}
+
+/**
+ * `timeline` without each of `cuts`, as `applyCuts` cuts the sequence,
+ * with linked sound cut along and later clips on every track shifted
+ * back (see `cutSpan`). A cut that overlaps a clip not linked to the
+ * picture it removes is skipped and counted in `skipped`; one refused for
+ * another reason, such as leaving no clip, is skipped as `applyCuts` does.
+ */
+export function applyTimelineCuts(timeline: Timeline, cuts: readonly CutProposal[], makeId: () => string = newClipId): { timeline: Timeline; skipped: number } {
+  let next = timeline;
+  let skipped = 0;
+  // Latest first, so each earlier cut's clip keeps its id and its time.
+  const placed = cuts.map((cut) => ({ cut, at: cutSequenceMs(timeline.main, cut) })).filter((each) => each.at !== null) as { cut: CutProposal; at: number }[];
+  for (const { cut } of placed.sort((a, b) => b.at - a.at)) {
+    const at = cutSequenceMs(next.main, cut);
+    if (at === null) continue;
+    const result = cutSpan(next, at, at + clipLength(cut), makeId);
+    if (!isRefusal(result)) next = result;
+    else if (result.overlap) skipped += 1;
+  }
+  return { timeline: next, skipped };
 }
 
 /** Where `cut` begins on the sequence `clips` play, or null when its clip no longer holds it. */
