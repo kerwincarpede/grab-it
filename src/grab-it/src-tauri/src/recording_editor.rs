@@ -92,8 +92,8 @@ const DEFAULT_FPS: u32 = 30;
 const MAX_EXPORT_SIDE: u32 = 4096;
 /// The largest recording a zoomed export decodes frames at.
 const MAX_SOURCE_SIDE: u32 = 8192;
-/// The shortest clip an export may be.
-const MIN_EXPORT_MS: u64 = 100;
+/// Only short, flattened pieces may need a retry with an earlier seek.
+const SHORT_SLICE_MS: u64 = 100;
 /// How long adding the trimmed sound may take.
 const MUX_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -1061,8 +1061,11 @@ impl ExportClip {
         {
             return Err(format!("{} does not fit inside the video", self.source));
         }
-        if self.end_ms < self.start_ms.saturating_add(MIN_EXPORT_MS) {
-            return Err(format!("{} is trimmed too short to export", self.source));
+        if self.end_ms <= self.start_ms {
+            return Err(format!(
+                "{} has an empty or backwards time range",
+                self.source
+            ));
         }
         let fits = |side: u32| (1..=MAX_SOURCE_SIDE).contains(&side);
         if !fits(self.source_width) || !fits(self.source_height) {
@@ -1129,9 +1132,7 @@ impl ExportEntry {
     pub fn check(&self, video: (u32, u32)) -> Result<(), String> {
         match self {
             Self::Clip(clip) => clip.check(video),
-            Self::Gap(gap) if gap.gap_ms < MIN_EXPORT_MS => {
-                Err("a gap is too short to export".to_owned())
-            }
+            Self::Gap(gap) if gap.gap_ms == 0 => Err("a gap is too short to export".to_owned()),
             Self::Gap(_) => Ok(()),
         }
     }
@@ -1143,11 +1144,12 @@ impl ExportEntry {
             Self::Gap(gap) => gap.gap_ms,
         }
     }
+}
 
-    /// How many frames it gives at `fps`.
-    pub fn frames(&self, fps: u32) -> u64 {
-        (self.duration_ms() * u64::from(fps)).div_ceil(1000)
-    }
+// Round boundaries, not individual lengths, so many tiny slices do not
+// lengthen the picture or put it out of step with sound and captions.
+fn frames_until(ms: u64, fps: u32) -> u64 {
+    u64::try_from((u128::from(ms) * u128::from(fps)).div_ceil(1000)).unwrap_or(u64::MAX)
 }
 
 /// What an export makes, from the page. Mirrors `ExportPlan` in
@@ -1332,6 +1334,10 @@ impl ExportPlan {
         self.clips
             .iter()
             .try_for_each(|entry| entry.check((self.video_width, self.video_height)))?;
+        self.clips
+            .iter()
+            .try_fold(0u64, |ms, entry| ms.checked_add(entry.duration_ms()))
+            .ok_or("the export duration is too long")?;
         if self
             .audio
             .iter()
@@ -1353,7 +1359,7 @@ impl ExportPlan {
 
     /// How many frames the export holds at `fps`, over all its clips and gaps.
     pub fn frames(&self, fps: u32) -> u64 {
-        self.clips.iter().map(|entry| entry.frames(fps)).sum()
+        frames_until(self.duration_ms(), fps)
     }
 
     /// How long the export plays.
@@ -1604,7 +1610,9 @@ pub fn mixed_sound_args(
     args
 }
 
-/// The arguments that map the video and `[sound]` into `output`.
+/// The arguments that map the picture and sound into `output`. Each ends
+/// at the planned time (rounded to a whole frame for picture), so
+/// `-shortest` would risk dropping a frame that starts before the cut.
 fn push_mux_tail(args: &mut Vec<OsString>, output: &Path) {
     for arg in [
         "-map",
@@ -1617,7 +1625,6 @@ fn push_mux_tail(args: &mut Vec<OsString>, output: &Path) {
         "aac",
         "-b:a",
         ffmpeg::AUDIO_BITRATE,
-        "-shortest",
         "-movflags",
         "+faststart",
     ] {
@@ -1823,6 +1830,8 @@ fn backdrop_and_mask(
 /// The recording behind one clip of an export.
 struct ClipSource {
     path: PathBuf,
+    /// The probed duration, to distinguish an exposed tail from a seek past EOF.
+    duration_ms: Option<u64>,
     /// The pointer path follow-the-pointer zooms centre on.
     cursor: Option<CursorPath>,
     has_audio: bool,
@@ -1853,15 +1862,15 @@ struct ExportJob<'a> {
 }
 
 /// Decodes `clip` of `input` at `fps` and calls `frame` with each frame,
-/// `clip.decode_size()` RGBA, until ffmpeg runs out. Returns how many
-/// frames there were.
+/// `clip.decode_size()` RGBA, until ffmpeg runs out. Returns the count
+/// and the last frame (empty when none were decoded).
 fn decode_clip(
     ffmpeg_path: &Path,
     input: &Path,
     clip: &ExportClip,
     fps: u32,
     mut frame: impl FnMut(&[u8], u64) -> Result<(), String>,
-) -> Result<u64, String> {
+) -> Result<(u64, Vec<u8>), String> {
     let mut decoder = ffmpeg::command(ffmpeg_path)
         .args(decode_args(input, clip, fps))
         .stdin(Stdio::null())
@@ -1898,7 +1907,7 @@ fn decode_clip(
         .unwrap_or_default();
     decoded?;
     match status {
-        Some(status) if status.success() => Ok(done),
+        Some(status) if status.success() => Ok((done, if done == 0 { Vec::new() } else { buffer })),
         _ => Err(format!(
             "ffmpeg could not read {}: {}",
             clip.source,
@@ -2035,12 +2044,20 @@ fn render(
                 });
             }
         };
+        let mut end_ms = 0;
         for (entry, source) in plan.clips.iter().zip(&sources) {
+            check_cancelled(cancelled)?;
+            end_ms += entry.duration_ms();
+            let count = frames_until(end_ms, fps) - done;
+            if count == 0 {
+                // No output frame falls within this sub-frame stretch.
+                continue;
+            }
             let (clip, source) = match (entry, source) {
                 (ExportEntry::Clip(clip), Some(source)) => (clip, source),
                 (ExportEntry::Gap(_), _) => {
                     let frame = gap_frame()?;
-                    for _ in 0..entry.frames(fps) {
+                    for _ in 0..count {
                         check_cancelled(cancelled)?;
                         let ms = frame_ms(done, fps);
                         if overlays.iter().any(|overlay| overlay.shows_at(ms)) {
@@ -2070,12 +2087,16 @@ fn render(
             } else {
                 black(plan.video_width, plan.video_height)
             };
-            let frames = decode_clip(&ready.path, &source.path, clip, fps, |buffer, index| {
+            let first_frame = done;
+            let start_ms = end_ms - entry.duration_ms();
+            let mut render = |buffer: &[u8], index: u64| {
                 check_cancelled(cancelled)?;
                 let mut shown: &[u8] = if clip.zooms.is_empty() {
                     buffer
                 } else {
-                    let ms = clip.start_ms as f64 + index as f64 * 1000.0 / f64::from(fps);
+                    let ms = clip.start_ms as f64
+                        + (first_frame + index) as f64 * 1000.0 / f64::from(fps)
+                        - start_ms as f64;
                     let view: View = zoom::view_at(&clip.zooms, ms, source.cursor.as_ref());
                     zoom::draw_view(buffer, decoded_size, view, &mut zoomed, clip_size);
                     &zoomed
@@ -2094,13 +2115,44 @@ fn render(
                 done += 1;
                 report(done);
                 Ok(())
-            })?;
-            if frames == 0 {
+            };
+            let (frames, mut last) =
+                decode_clip(&ready.path, &source.path, clip, fps, |buffer, index| {
+                    if index < count {
+                        render(buffer, index)
+                    } else {
+                        check_cancelled(cancelled)
+                    }
+                })?;
+            // An accurate seek can pass the last frame even though it is
+            // still on screen. Recover that frame for a short, in-range tail.
+            let short_slice = clip.duration_ms() < SHORT_SLICE_MS;
+            if frames == 0
+                && short_slice
+                && source.duration_ms.is_some_and(|end| clip.end_ms <= end)
+                && clip.start_ms > 0
+            {
+                let lead = ExportClip {
+                    start_ms: clip.start_ms.saturating_sub(1000),
+                    end_ms: clip.start_ms,
+                    ..clip.clone()
+                };
+                (_, last) = decode_clip(&ready.path, &source.path, &lead, fps, |_, _| {
+                    check_cancelled(cancelled)
+                })?;
+            }
+            if frames < count && (last.is_empty() || count - frames > 1 && !short_slice) {
                 return Err(format!(
-                    "the trimmed stretch of {} holds no frames",
+                    "the trimmed stretch of {} holds too few frames",
                     clip.source
                 ));
             }
+            // If the decoder rounds down at an input boundary, repeat its
+            // last frame rather than shifting the following cuts.
+            for index in frames..count {
+                render(&last, index)?;
+            }
+            debug_assert_eq!(done, first_frame + count);
         }
         check_cancelled(cancelled)?;
         let finished = video.finish_cancellable(|| cancelled.load(Ordering::Relaxed));
@@ -2228,6 +2280,7 @@ fn probe_source(
         ffmpeg::probe_file_cancellable(ffmpeg_path, &path, || cancelled.load(Ordering::Relaxed));
     check_cancelled(cancelled)?;
     Ok(ClipSource {
+        duration_ms: probe.duration_ms,
         cursor: CursorPath::load(&path),
         has_audio: probe.audio,
         remove_noise: sidecar_remove_noise(&path),
@@ -2597,6 +2650,7 @@ mod tests {
     fn sounding(remove_noise: bool, kept: bool) -> ClipSource {
         ClipSource {
             path: PathBuf::from("/rec/clip.mp4"),
+            duration_ms: None,
             cursor: None,
             has_audio: true,
             remove_noise,
@@ -2712,7 +2766,7 @@ mod tests {
              aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,\
              apad,atrim=duration=8.250[a0];\
              [a0]concat=n=1:v=0:a=1[sound] \
-             -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k -shortest \
+             -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k \
              -movflags +faststart /rec/clip (edited).mp4"
         );
     }
@@ -3016,6 +3070,7 @@ esac
                 clip.into(),
                 Some(ClipSource {
                     path: output.with_file_name("clip.mp4"),
+                    duration_ms: None,
                     cursor: None,
                     has_audio: false,
                     remove_noise: false,
@@ -3301,6 +3356,7 @@ esac
     fn heard_at(path: &str, kept: Option<KeptSound>) -> ClipSource {
         ClipSource {
             path: PathBuf::from(path),
+            duration_ms: None,
             cursor: None,
             has_audio: true,
             remove_noise: false,
@@ -3710,10 +3766,10 @@ esac
             clips: vec![self::clip().into(), clip.into()],
             ..plan()
         };
-        // Every clip is long enough, fits in the box and has its size.
+        // Every clip has a positive length, fits in the box and has its size.
         assert!(
             with(ExportClip {
-                end_ms: 1300,
+                end_ms: 1250,
                 ..clip()
             })
             .check()
@@ -3729,13 +3785,13 @@ esac
             .is_err()
         );
         assert_eq!(plan().frames(60), 495);
-        assert_eq!(
-            ExportEntry::from(ExportClip {
-                end_ms: 1251,
+        assert!(
+            with(ExportClip {
+                end_ms: 1249,
                 ..clip()
             })
-            .frames(30),
-            1
+            .check()
+            .is_err()
         );
     }
 
@@ -3771,6 +3827,31 @@ esac
     }
 
     #[test]
+    fn flattened_picture_accepts_short_clips_and_gaps_without_rounding_each_up() {
+        let plan = ExportPlan {
+            clips: vec![
+                ExportClip {
+                    end_ms: 1300,
+                    ..clip()
+                }
+                .into(),
+                ExportEntry::Gap(ExportGap { gap_ms: 50 }),
+                ExportClip {
+                    end_ms: 1251,
+                    ..clip()
+                }
+                .into(),
+            ],
+            ..plan()
+        };
+        assert_eq!(plan.check(), Ok(()));
+        assert_eq!(plan.duration_ms(), 101);
+        assert_eq!(frames_until(50, 30), 2);
+        assert_eq!(frames_until(100, 30), 3);
+        assert_eq!(plan.frames(30), 4);
+    }
+
+    #[test]
     fn a_gap_plays_silence() {
         let first = clip();
         let original = Path::new("/rec/clip.mp4");
@@ -3794,7 +3875,7 @@ esac
              anullsrc=r=48000:cl=stereo,atrim=duration=1.500,\
              aformat=sample_fmts=fltp:channel_layouts=stereo[a1];\
              [a0][a1]concat=n=2:v=0:a=1[sound] \
-             -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k -shortest \
+             -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k \
              -movflags +faststart /rec/clip (edited).mp4"
         );
     }
@@ -3948,7 +4029,7 @@ esac
              aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,\
              apad,atrim=duration=0.500[a2];\
              [a0][a1][a2]concat=n=3:v=0:a=1[sound] \
-             -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k -shortest \
+             -map 0:v:0 -map [sound] -c:v copy -c:a aac -b:a 160k \
              -movflags +faststart /rec/clip (edited).mp4"
         );
     }

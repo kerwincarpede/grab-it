@@ -1,11 +1,13 @@
 import { useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import { formatTime } from "./edits";
-import { moveZoom, removeZoom, resizeZoom, zoomLabel, type Zoom } from "./zooms";
+import { MIN_ZOOM_MS, moveZoom, removeZoom, resizeZoom, zoomLabel, type Zoom } from "./zooms";
 
 interface ZoomTrackProps {
   durationMs: number;
   zooms: Zoom[];
   selectedId: string | null;
+  /** Limits an edit to the piece of picture the zoom belongs to. */
+  room?: (id: string) => { low: number; high: number };
   onSelect: (id: string | null) => void;
   /** Shows zooms while a segment is still moving. */
   onPreview: (zooms: Zoom[]) => void;
@@ -40,7 +42,7 @@ const percent = (ms: number, durationMs: number) => `${durationMs > 0 ? (ms / du
  * click selects one, Delete removes it, the arrow keys move it, and a
  * double-click on an empty stretch adds one.
  */
-export default function ZoomTrack({ durationMs, zooms, selectedId, onSelect, onPreview, onCommit, onAdd, onSeek }: ZoomTrackProps) {
+export default function ZoomTrack({ durationMs, zooms, selectedId, room, onSelect, onPreview, onCommit, onAdd, onSeek }: ZoomTrackProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -64,16 +66,24 @@ export default function ZoomTrack({ durationMs, zooms, selectedId, onSelect, onP
     setDragging(true);
   };
 
+  const editSpan = (base: Zoom[], zoom: Zoom, kind: DragKind, ms: number) => {
+    const bounds = room?.(zoom.id);
+    if (!bounds) return kind === "move" ? moveZoom(base, zoom.id, ms, durationMs) : resizeZoom(base, zoom.id, kind, ms, durationMs);
+    if (bounds.high - bounds.low < MIN_ZOOM_MS) return base;
+    if (kind === "move") {
+      const start = Math.max(bounds.low, Math.min(ms, bounds.high - (zoom.endMs - zoom.startMs)));
+      return moveZoom(base, zoom.id, start, bounds.high);
+    }
+    return resizeZoom(base, zoom.id, kind, Math.max(bounds.low, Math.min(ms, bounds.high)), bounds.high);
+  };
+
   const move = (event: PointerEvent<HTMLElement>) => {
     const current = drag.current;
     if (!current) return;
     const ms = msAt(event.clientX);
     const zoom = current.base.find((each) => each.id === current.id);
     if (!zoom) return;
-    const next =
-      current.kind === "move"
-        ? moveZoom(current.base, current.id, zoom.startMs + ms - current.fromMs, durationMs)
-        : resizeZoom(current.base, current.id, current.kind, ms, durationMs);
+    const next = editSpan(current.base, zoom, current.kind, current.kind === "move" ? zoom.startMs + ms - current.fromMs : ms);
     current.moved = next;
     onPreview(next);
     const changed = next.find((each) => each.id === current.id);
@@ -100,7 +110,7 @@ export default function ZoomTrack({ durationMs, zooms, selectedId, onSelect, onP
       case "ArrowLeft":
       case "ArrowRight": {
         event.preventDefault();
-        const next = moveZoom(zooms, zoom.id, zoom.startMs + (event.key === "ArrowLeft" ? -step : step), durationMs);
+        const next = editSpan(zooms, zoom, "move", zoom.startMs + (event.key === "ArrowLeft" ? -step : step));
         onCommit(next);
         return;
       }

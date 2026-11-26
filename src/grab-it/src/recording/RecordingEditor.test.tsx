@@ -1771,7 +1771,7 @@ describe("RecordingEditor", () => {
       await waitFor(() => expect((lastSaved(backend) as { tracks: { id: string; locked?: boolean }[] }).tracks[0]).toMatchObject({ id: "video-1", locked: true }));
       const count = saved(backend).length;
       fireEvent.keyDown(document.body, { key: "ArrowLeft", altKey: true });
-      await waitFor(() => expect(screen.getByText(/Video 1 is locked/)).toBeInTheDocument());
+      expect(picture).toHaveAttribute("aria-selected", "false");
       expect(saved(backend)).toHaveLength(count);
       // Nor can a Video 1 clip be selected while it is locked.
       const first = screen.getByRole("option", { name: `${OWN}, 0:04.0` });
@@ -1893,6 +1893,175 @@ describe("RecordingEditor", () => {
       await userEvent.click(screen.getByRole("button", { name: "Undo" }));
       await waitFor(() => expect(screen.getByLabelText("Time")).toHaveTextContent("0:05.0 /"));
       expect(video.currentTime).toBe(5);
+    });
+
+    it("re-seeks a paused same-source overlay after its placement moves", async () => {
+      mockBackend({ version: TRACKS_VERSION, tracks: [
+        { id: "video-2", name: "Video 2", kind: "video", clips: [{ id: "c", source: OWN, startMs: 8000, endMs: 10_000, atMs: 1000 }] },
+        { id: "video-1", name: "Video 1", kind: "video", clips: [{ id: "a", source: OWN, startMs: 0, endMs: 10_000 }] },
+      ] });
+      render(<RecordingEditor />);
+      const video = await previewVideo(OWN);
+      setVideoMetadata(video, 12, 1920, 1080);
+      fireEvent.loadedMetadata(video);
+      const timeline = screen.getByTestId("timeline-track");
+      placeAt(timeline, 1000, 20);
+      fireEvent.pointerDown(timeline, { clientX: 200 });
+      fireEvent.pointerUp(timeline, { clientX: 200 });
+      expect(video.currentTime).toBe(9);
+      const row = screen.getByRole("listbox", { name: "Video track Video 2" });
+      placeAt(row, 1000, 20);
+      const clip = within(row).getByRole("option");
+      fireEvent.pointerDown(clip, { clientX: 100 });
+      fireEvent.pointerMove(clip, { clientX: 400 });
+      fireEvent.pointerUp(clip, { clientX: 400 });
+      expect(video.currentTime).toBe(2);
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:02.0 / 0:10.0");
+    });
+
+    it("clears locked selections, prevents Video 1 gestures, and keeps a refused join visible", async () => {
+      const backend = mockBackend(JOINED);
+      render(<RecordingEditor />);
+      const video = await loadJoined();
+      const clip = clipOptions()[0];
+      fireEvent.focus(clip);
+      expect(clip).toHaveAttribute("aria-selected", "true");
+      await userEvent.click(screen.getByRole("button", { name: "Lock Video 1" }));
+      fireEvent.focus(clip);
+      fireEvent.pointerDown(clip, { clientX: 1 });
+      fireEvent.pointerMove(clip, { clientX: 100 });
+      fireEvent.pointerUp(clip, { clientX: 100 });
+      fireEvent.keyDown(document.body, { key: "ArrowRight", altKey: true });
+      expect(clip).toHaveAttribute("aria-disabled", "true");
+      expect(clip).toHaveAttribute("aria-selected", "false");
+      expect(clip.querySelector(".clip-edge")).toBeNull();
+      picked = `${RECORDINGS}/Quiet take.mp4`;
+      const before = video.currentTime;
+      await userEvent.click(screen.getByRole("button", { name: "Recording" }));
+      await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Video 1 is locked"));
+      expect(saved(backend)).toHaveLength(1);
+      expect(video.currentTime).toBe(before);
+      await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+      fireEvent.focus(clip);
+      expect(clip).toHaveAttribute("aria-selected", "true");
+      await userEvent.click(screen.getByRole("button", { name: "Redo" }));
+      expect(clip).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("places a silent recording on Video 2 without creating audio, then deletes it and removes the row", async () => {
+      silent = [OTHER];
+      const backend = mockBackend();
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByText("Track"));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Add video track" }));
+      picked = OTHER_PATH;
+      await userEvent.click(screen.getByRole("button", { name: "Recording" }));
+      const row = screen.getByRole("listbox", { name: "Video track Video 2" });
+      const clip = await within(row).findByRole("option");
+      expect(clip).toHaveAttribute("aria-selected", "true");
+      expect(clip).not.toHaveAttribute("data-linked");
+      expect(within(screen.getByRole("listbox", { name: "Audio track Audio 1" })).queryByRole("option")).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Lock Video 2" }));
+      expect(clip).toHaveAttribute("aria-selected", "false");
+      expect(screen.queryByRole("button", { name: "Delete track clip" })).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Unlock Video 2" }));
+      fireEvent.pointerDown(clip);
+      fireEvent.pointerUp(clip);
+      fireEvent.keyDown(document.body, { key: "Delete" });
+      expect(within(row).queryByRole("option")).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Remove Video 2" }));
+      expect(row).not.toBeInTheDocument();
+      expect(lastSaved(backend)).toEqual({ version: 1 });
+    });
+
+    it("adds and resizes captions in trimmed Video 1 time despite an overlay", async () => {
+      const backend = mockBackend({ version: TRACKS_VERSION, tracks: [
+        { id: "video-2", name: "Video 2", kind: "video", clips: [{ id: "c", source: OWN, startMs: 8000, endMs: 12_000, atMs: 1000 }] },
+        { id: "video-1", name: "Video 1", kind: "video", clips: [{ id: "a", source: OWN, startMs: 3000, endMs: 7000 }] },
+      ] });
+      render(<RecordingEditor />);
+      const video = await previewVideo(OWN);
+      setVideoMetadata(video, 12, 1920, 1080);
+      fireEvent.loadedMetadata(video);
+      const row = screen.getByTestId("caption-track");
+      placeAt(row, 500, 20);
+      fireEvent.doubleClick(row, { clientX: 150 });
+      const cues = () => (lastSaved(backend) as { captions: { cues: unknown[] } }).captions.cues;
+      expect(cues()).toEqual([expect.objectContaining({ startMs: 4500, endMs: 6500 })]);
+      const edge = screen.getByTestId("caption-edge-end");
+      fireEvent.pointerDown(edge, { clientX: 350 });
+      fireEvent.pointerMove(edge, { clientX: 390 });
+      fireEvent.pointerUp(edge, { clientX: 390 });
+      expect(cues()).toEqual([expect.objectContaining({ startMs: 4500, endMs: 6900 })]);
+      fireEvent.doubleClick(row, { clientX: 450 });
+      expect(screen.getByRole("status")).toHaveTextContent("Captions go on clips on Video 1");
+    });
+
+    it("adds and exports a zoom on an overlay-only tail in its source time", async () => {
+      const backend = mockBackend({ version: TRACKS_VERSION, tracks: [
+        { id: "video-2", name: "Video 2", kind: "video", clips: [{ id: "c", source: OTHER, startMs: 1000, endMs: 6000, atMs: 4000 }] },
+        { id: "video-1", name: "Video 1", kind: "video", clips: [JOINED.clips[0]] },
+      ] });
+      render(<RecordingEditor />);
+      const first = await previewVideo(OWN);
+      const second = await previewVideo(OTHER);
+      setVideoMetadata(first, 12, 1920, 1080);
+      setVideoMetadata(second, 6, 720, 720);
+      fireEvent.loadedMetadata(first);
+      fireEvent.loadedMetadata(second);
+      const timeline = screen.getByTestId("timeline-track");
+      placeAt(timeline, 900, 20);
+      fireEvent.pointerDown(timeline, { clientX: 600 });
+      fireEvent.pointerUp(timeline, { clientX: 600 });
+      await userEvent.click(screen.getByRole("button", { name: /^Zoom$/ }));
+      expect(lastSaved(backend)).toMatchObject({ zooms: [{ source: OTHER, startMs: 3000, endMs: 5000 }] });
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan } = await exportCall(backend);
+      expect(plan.clips[1]).toMatchObject({ source: OTHER, zooms: [{ startMs: 3000, endMs: 5000 }] });
+    });
+
+    it("shows the edited zoom span before committing it on an overlay", async () => {
+      const backend = mockBackend({ version: TRACKS_VERSION,
+        zooms: [{ ...AREA_ZOOM, startMs: 2000, endMs: 3000, focus: { kind: "cursor" } }],
+        tracks: [
+          { id: "video-2", name: "Video 2", kind: "video", clips: [
+            { id: "c", source: OWN, startMs: 1000, endMs: 5000, atMs: 4000 },
+            { id: "d", source: OWN, startMs: 6000, endMs: 8000, atMs: 8000 },
+          ] },
+          { id: "video-1", name: "Video 1", kind: "video", clips: [{ id: "a", source: OWN, startMs: 0, endMs: 1000 }] },
+        ],
+      });
+      render(<RecordingEditor />);
+      const video = await previewVideo(OWN);
+      setVideoMetadata(video, 12, 1920, 1080);
+      fireEvent.loadedMetadata(video);
+      const row = screen.getByTestId("zoom-track");
+      const timeline = screen.getByTestId("timeline-track");
+      placeAt(row, 1000, 20);
+      placeAt(timeline, 1000, 20);
+      const edge = screen.getByTestId("zoom-edge-end");
+      fireEvent.pointerDown(edge, { button: 0, clientX: 600 });
+      fireEvent.pointerMove(row, { clientX: 750 });
+      fireEvent.pointerDown(timeline, { clientX: 675 });
+      fireEvent.pointerUp(timeline, { clientX: 675 });
+      expect(video.style.transform).toContain("scale(2)");
+      expect(saved(backend)).toHaveLength(0);
+      fireEvent.pointerMove(row, { clientX: 900 });
+      fireEvent.pointerUp(row, { clientX: 900 });
+      expect(lastSaved(backend)).toMatchObject({ zooms: [{ startMs: 2000, endMs: 5000 }] });
+    });
+
+    it("renames Video 1 without changing its clips", async () => {
+      const backend = mockBackend(JOINED);
+      render(<RecordingEditor />);
+      await loadJoined();
+      await userEvent.dblClick(screen.getByText("Video 1"));
+      const field = screen.getByRole("textbox", { name: "Rename Video 1" });
+      await userEvent.clear(field);
+      await userEvent.type(field, "Main picture{Enter}");
+      expect(lastSaved(backend)).toMatchObject({ tracks: [{ id: "video-1", name: "Main picture", clips: JOINED.clips }, expect.anything()] });
+      expect(screen.getByRole("button", { name: "Lock Main picture" })).toBeInTheDocument();
     });
 
     it("gives the piece on show only its own recording's zooms", async () => {
@@ -3122,6 +3291,22 @@ describe("RecordingEditor", () => {
       layOutTimeline();
       await waitFor(() => expect(lane("Microphone")).toHaveAttribute("data-state", "ready"));
       // 12 s across 100 px, the sound only over its second half: 25 bars, not 50.
+      expect(lane("Microphone").querySelector("canvas")).toHaveAttribute("data-bars", "25");
+    });
+
+    it("draws the sound over an overlay-only tail past Video 1", async () => {
+      stubCanvas([]);
+      mockBackend({ version: TRACKS_VERSION, tracks: [
+        { id: "video-2", name: "Video 2", kind: "video", clips: [{ id: "v", source: OWN, startMs: 6000, endMs: 12_000, atMs: 6000 }] },
+        { id: "video-1", name: "Video 1", kind: "video", clips: [{ id: "a", source: OWN, startMs: 0, endMs: 6000 }] },
+        { id: "audio-1", name: "Audio 1", kind: "audio", clips: [{ id: "s", source: OWN, startMs: 0, endMs: 6000, atMs: 6000 }] },
+      ] }, null, ["microphone"]);
+      render(<RecordingEditor />);
+      const video = await previewVideo(OWN);
+      setVideoMetadata(video, 12, 1920, 1080);
+      fireEvent.loadedMetadata(video);
+      layOutTimeline();
+      await waitFor(() => expect(lane("Microphone")).toHaveAttribute("data-state", "ready"));
       expect(lane("Microphone").querySelector("canvas")).toHaveAttribute("data-bars", "25");
     });
 

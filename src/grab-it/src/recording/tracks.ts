@@ -22,7 +22,7 @@
  * written only when something differs from that: an extra track, an
  * unaligned or unlinked clip, a lock or a rename.
  */
-import { clipLength, clipStarts, isClipSource, isGap, mergeGaps, newClipId, parseClips, sourceClips, withClips, type Clip } from "./clips";
+import { canRemove, clipLength, clipStarts, isClipSource, isGap, leaveGap, mergeGaps, newClipId, parseClips, sourceClips, withClips, type Clip } from "./clips";
 import { MIN_CLIP_MS, TRACKS_VERSION, versionForEdits, type RecordingEdits } from "./edits";
 
 export type TrackKind = "video" | "audio";
@@ -45,7 +45,7 @@ export interface Track {
   id: string;
   name: string;
   kind: TrackKind;
-  /** Kept as saved so a file round-trips; this build edits no lock. */
+  /** Protects this track's clips from edits, including through links. */
   locked?: boolean;
   /** Empty for Video 1, whose clips are the timeline's `main`. */
   clips: PlacedClip[];
@@ -519,6 +519,22 @@ export function rippleDelete(timeline: Timeline, id: string, makeId: () => strin
   };
 }
 
+/** Removes a clip and its links without shifting any other clips. On Video 1, leaves a gap. */
+export function deleteTrackClip(timeline: Timeline, id: string): Timeline | Refusal {
+  const ids = linkedIds(timeline, id);
+  if ([...ids].some((each) => isLockedClip(timeline, each))) {
+    return { refused: "That would change clips on a locked track. Unlock it first." };
+  }
+  const mainClip = timeline.main.find((clip) => ids.has(clip.id));
+  if (mainClip && !canRemove(timeline.main, mainClip.id)) {
+    return { refused: "The last clip on Video 1 cannot be deleted. Unlink it first." };
+  }
+  return {
+    main: mainClip ? leaveGap(timeline.main, mainClip.id, newClipId()) : timeline.main,
+    tracks: timeline.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => !ids.has(clip.id)) })),
+  };
+}
+
 /** The nearest target within the snap radius, including an exact match. */
 function snapTarget(ms: number, targets: readonly number[], pxPerMs: number, thresholdPx: number): number | undefined {
   if (pxPerMs <= 0) return undefined;
@@ -722,8 +738,7 @@ const lockedIds = (timeline: Timeline) => new Set(timeline.tracks.filter((track)
 
 /** Whether clip `id` sits on a locked track, so it can't be selected or edited. */
 export function isLockedClip(timeline: Timeline, id: string): boolean {
-  const locked = lockedIds(timeline);
-  return clipPlaces(timeline).some((place) => place.id === id && locked.has(place.trackId));
+  return trackOf(timeline, id)?.locked === true;
 }
 
 /** The track clip `id` sits on. */

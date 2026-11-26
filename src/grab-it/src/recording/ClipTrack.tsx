@@ -33,6 +33,8 @@ interface ClipTrackProps {
   onFocusCut?: (id: string) => void;
   /** False shows the clips without edges to trim or a body to drag. */
   editable?: boolean;
+  /** A locked track's clips cannot be selected or dragged. */
+  locked?: boolean;
 }
 
 /** An edge drag keeps the row's width and the sequence's length from when it began. */
@@ -67,6 +69,7 @@ export default function ClipTrack({
   focusedCutId = null,
   onFocusCut,
   editable = true,
+  locked = false,
 }: ClipTrackProps) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -100,7 +103,7 @@ export default function ClipTrack({
   };
 
   const move = (event: PointerEvent<HTMLElement>) => {
-    if (!drag) return;
+    if (!drag || locked) return;
     if (drag.kind === "move") {
       if (!drag.moved) setDrag({ ...drag, moved: true });
       return;
@@ -118,10 +121,10 @@ export default function ClipTrack({
 
   const end = (event: PointerEvent<HTMLElement>) => {
     event.currentTarget.releasePointerCapture?.(event.pointerId);
-    if (drag?.kind === "move" && drag.moved) {
+    if (!locked && drag?.kind === "move" && drag.moved) {
       const target = toSource(clips, msAt(event.clientX));
       if (target) onMove(drag.id, target.index);
-    } else if (drag && drag.kind !== "move" && moved.current) {
+    } else if (!locked && drag && drag.kind !== "move" && moved.current) {
       onTrimCommit(moved.current);
     }
     moved.current = null;
@@ -140,7 +143,8 @@ export default function ClipTrack({
             key={clip.id}
             className="clip"
             role="option"
-            tabIndex={0}
+            tabIndex={locked ? -1 : 0}
+            aria-disabled={locked || undefined}
             aria-selected={clip.id === selectedId}
             aria-label={label}
             title={!editable ? label : gap ? `${label}. Delete closes it` : `${label}. Drag to reorder; Alt+Left or Right moves it, Delete removes it, Shift+Delete leaves a gap`}
@@ -153,7 +157,7 @@ export default function ClipTrack({
             onPointerMove={move}
             onPointerUp={end}
             onPointerCancel={end}
-            onFocus={() => onSelect(clip.id)}
+            onFocus={locked ? undefined : () => onSelect(clip.id)}
           >
             <span className="clip-name">{gap ? "Gap" : gone ? `Missing: ${clip.source}` : clip.source}</span>
             {edges.map((edge) => (

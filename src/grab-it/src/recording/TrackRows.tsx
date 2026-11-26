@@ -60,7 +60,7 @@ type Drag = { id: string; x: number; atMs: number; width: number; moved: boolean
  * `above`, it shows the video tracks over Video 1 and Video 1's own lock.
  */
 export default function TrackRows(props: TrackRowsProps) {
-  const { timeline, placement = "below", onLock } = props;
+  const { timeline, placement = "below" } = props;
   const mainAt = timeline.tracks.findIndex(isMain);
   const shown = timeline.tracks.filter((track, index) => !isMain(track) && (placement === "above" ? index < mainAt : index > mainAt));
   const main = timeline.tracks[mainAt];
@@ -69,14 +69,7 @@ export default function TrackRows(props: TrackRowsProps) {
       {shown.map((track) => (
         <TrackRow key={track.id} {...props} track={track} />
       ))}
-      {placement === "above" && main && (
-        <div className="track-row track-row-main" data-kind="video" data-locked={main.locked ? "true" : undefined}>
-          <div className="track-head">
-            <span className="track-name">{main.name}</span>
-            <LockButton track={main} onLock={onLock} />
-          </div>
-        </div>
-      )}
+      {placement === "above" && main && <TrackRow {...props} track={main} onRemove={undefined} onSelectTrack={undefined} />}
     </div>
   );
 }
@@ -140,9 +133,10 @@ function TrackRow({ track, timeline, durationMs, offsetMs, endMs, currentMs, sel
     setDraftAt(null);
   };
 
+  const main = isMain(track);
   const label = track.kind === "audio" ? "Audio track" : "Video track";
   return (
-    <div className="track-row" data-track-id={track.id} data-selected={selectedTrackId === track.id ? "true" : undefined} data-kind={track.kind} data-locked={track.locked ? "true" : undefined}>
+    <div className={main ? "track-row track-row-main" : "track-row"} data-track-id={main ? undefined : track.id} data-selected={selectedTrackId === track.id ? "true" : undefined} data-kind={track.kind} data-locked={track.locked ? "true" : undefined}>
       <div className="track-head">
         {renaming ? (
           <input
@@ -170,7 +164,7 @@ function TrackRow({ track, timeline, durationMs, offsetMs, endMs, currentMs, sel
         ) : (
           <span
             className="track-name"
-            title={track.kind === "video" ? "Click to place recordings here; double-click to rename" : "Double-click to rename"}
+            title={track.kind === "video" && !main ? "Click to place recordings here; double-click to rename" : "Double-click to rename"}
             onClick={() => track.kind === "video" && onSelectTrack?.(track.id)}
             onDoubleClick={() => {
               cancelled.current = false;
@@ -188,7 +182,7 @@ function TrackRow({ track, timeline, durationMs, offsetMs, endMs, currentMs, sel
           </button>
         )}
       </div>
-      <div className="track-lane" ref={rowRef} role="listbox" aria-label={`${label} ${track.name}`} aria-orientation="horizontal" aria-multiselectable="true">
+      {!main && <div className="track-lane" ref={rowRef} role="listbox" aria-label={`${label} ${track.name}`} aria-orientation="horizontal" aria-multiselectable="true">
         {track.clips.map((clip) => {
           const at = drag?.id === clip.id && draftAt !== null ? draftAt : clip.atMs;
           const text = `${clip.source}, ${formatTime(clipLength(clip))} at ${formatTime(at)}${clip.link ? ", linked" : ""}`;
@@ -220,7 +214,7 @@ function TrackRow({ track, timeline, durationMs, offsetMs, endMs, currentMs, sel
             </div>
           );
         })}
-      </div>
+      </div>}
     </div>
   );
 }

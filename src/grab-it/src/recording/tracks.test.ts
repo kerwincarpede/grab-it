@@ -4,6 +4,7 @@ import { parseEdits, serializeEdits, type RecordingEdits } from "./edits";
 import {
   addTrack,
   cutSpan,
+  deleteTrackClip,
   flattenPicture,
   hasOverlay,
   isLockedClip,
@@ -387,6 +388,35 @@ describe("more tracks", () => {
       [true, 2000],
       [false, 2000],
     ]);
+  });
+
+  it("keeps a 50 ms exposed slice and a 50 ms gap in the flattened picture", () => {
+    const { timeline, id } = withVideo2();
+    const cover = placeRecording(timeline, id, b, 50, () => false, makeId);
+    if (isRefusal(cover)) throw new Error(cover.refused);
+    const tail = placeRecording(cover.timeline, id, b, 4050, () => false, makeId);
+    if (isRefusal(tail)) throw new Error(tail.refused);
+    const picture = flattenPicture(tail.timeline);
+    expect(picture[0]).toMatchObject({ source: "a.mp4", startMs: 0, endMs: 50 });
+    expect(picture[3]).toMatchObject({ gap: true, startMs: 0, endMs: 50 });
+  });
+
+  it("directly deletes linked clips without shifting others, except on locked tracks or the last main clip", () => {
+    const { timeline, id } = withVideo2();
+    const added = placeRecording(timeline, id, b, 1000, sound, makeId);
+    if (isRefusal(added)) throw new Error(added.refused);
+    const audio2 = added.timeline.tracks.find((track) => track.name === "Audio 2")!;
+    expect(deleteTrackClip(lockTrack(added.timeline, audio2.id, true), added.id)).toMatchObject({ refused: expect.stringContaining("locked") });
+    expect(deleteTrackClip(added.timeline, "a-sound")).toMatchObject({ refused: expect.stringContaining("last clip") });
+    const deleted = expectTimeline(deleteTrackClip(added.timeline, added.id));
+    expect(deleted.main).toBe(timeline.main);
+    expect(deleted.tracks.find((track) => track.id === audio2.id)?.clips).toEqual([]);
+    expect(deleted.tracks.find((track) => track.id === id)?.clips).toEqual([]);
+    expect(deleted.tracks.find((track) => track.id === FIRST_AUDIO_ID)?.clips).toEqual(timeline.tracks.find((track) => track.id === FIRST_AUDIO_ID)?.clips);
+    const two = defaultTimeline([a, b], sound);
+    const withGap = expectTimeline(deleteTrackClip(two, "a-sound"));
+    expect(withGap.main).toMatchObject([{ gap: true, endMs: 4000 }, { id: b.id }]);
+    expect(withGap.tracks.find((track) => track.id === FIRST_AUDIO_ID)?.clips).toMatchObject([{ id: "b-sound", atMs: 4000 }]);
   });
 
   it("keeps locked clips out of selection", () => {
