@@ -86,6 +86,32 @@ export const emptyCaptions = (): Captions => ({ burnIn: true, cues: [] });
 
 export const styleOf = (captions: Captions | undefined): CaptionStyle => captions?.style ?? DEFAULT_CAPTION_STYLE;
 
+const isDefaultStyle = (style: CaptionStyle) =>
+  style.look === DEFAULT_CAPTION_STYLE.look && style.size === DEFAULT_CAPTION_STYLE.size && style.position === DEFAULT_CAPTION_STYLE.position;
+
+/** `captions` with `change` applied to its style; the default style is left out of the sidecar. */
+export function withStyle(captions: Captions, change: Partial<CaptionStyle>): Captions {
+  const style = { ...styleOf(captions), ...change };
+  const rest = { ...captions };
+  delete rest.style;
+  return isDefaultStyle(style) ? rest : { ...rest, style };
+}
+
+export const CAPTION_LOOKS: { value: CaptionLook; label: string }[] = [
+  { value: "box", label: "Box" },
+  { value: "outline", label: "Outline" },
+  { value: "plain", label: "Plain" },
+];
+export const CAPTION_SIZES: { value: CaptionSize; label: string }[] = [
+  { value: "small", label: "Small" },
+  { value: "medium", label: "Medium" },
+  { value: "large", label: "Large" },
+];
+export const CAPTION_POSITIONS: { value: CaptionPosition; label: string }[] = [
+  { value: "bottom", label: "Bottom" },
+  { value: "top", label: "Top" },
+];
+
 function parseStyle(value: unknown): CaptionStyle | undefined {
   if (!value || typeof value !== "object") return undefined;
   const style = value as Record<string, unknown>;
@@ -382,6 +408,43 @@ export function cueShowings(cues: Cue[], clips: Clip[], own: string, joined: boo
 
 /** The showing at sequence time `ms`, if any. */
 export const showingAt = (showings: CueShowing[], ms: number) => showings.find((each) => ms >= each.startMs && ms < each.endMs) ?? null;
+
+/** A cue as a subtitle file holds it, in the exported sequence's time. */
+export interface SubtitleCue {
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
+/**
+ * A cue's lines as a subtitle file holds them: each kept line break, and
+ * each line wrapped at `MAX_LINE_CHARS` graphemes. Players size subtitles
+ * themselves, so these are not fitted to a measured width.
+ */
+export function subtitleLines(text: string): string[] {
+  return text
+    .split("\n")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .flatMap((part) => wrapFitting(part, MAX_LINE_CHARS, () => true));
+}
+
+/**
+ * The cues a subtitle file holds, in the exported sequence's time: each
+ * cue once per clip it plays in, empty ones left out. A cue running on
+ * across two clips that play on from each other is kept whole.
+ */
+export function subtitleCues(cues: Cue[], clips: Clip[], own: string): SubtitleCue[] {
+  const out: (SubtitleCue & { id: string })[] = [];
+  for (const { cue, startMs, endMs } of cueShowings(cues, clips, own, true)) {
+    const text = subtitleLines(cue.text).join("\n");
+    if (!text || endMs <= startMs) continue;
+    const joined = out.find((each) => each.id === cue.id && each.endMs === Math.round(startMs));
+    if (joined) joined.endMs = Math.round(endMs);
+    else out.push({ id: cue.id, startMs: Math.round(startMs), endMs: Math.round(endMs), text });
+  }
+  return out.map(({ startMs, endMs, text }) => ({ startMs, endMs, text }));
+}
 
 /** `cue` tagged with `source`, untagged when that is the sidecar's own recording. */
 export function tagCue(cue: Cue, source: string, own: string): Cue {

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { describe, expect, it, vi } from "vitest";
-import { EXPORT_PLAN_HEADER, exportRecording, fetchRecording, playsFromBlob, type ExportPlan } from "./api";
+import { EXPORT_PLAN_HEADER, exportRecording, fetchRecording, playsFromBlob, subtitleFileName, type ExportPlan } from "./api";
 
 vi.mock("@tauri-apps/api/core", async (original) => ({
   ...(await original<typeof import("@tauri-apps/api/core")>()),
@@ -89,5 +89,12 @@ describe("exportRecording", () => {
     await exportRecording(plan, null);
     expect(sent().body).toEqual([]);
     expect(sent().plan).not.toHaveProperty("overlays");
+  });
+});
+
+describe("subtitle files", () => {
+  it("are named after the recording, as SRT", () => {
+    expect(subtitleFileName("Talk 2026-03-04.mp4")).toBe("Talk 2026-03-04.srt");
+    expect(subtitleFileName("talk")).toBe("talk.srt");
   });
 });

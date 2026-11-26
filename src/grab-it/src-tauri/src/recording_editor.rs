@@ -2115,8 +2115,148 @@ fn export(
     Ok(output)
 }
 
+/// A cue a subtitle file holds, in the exported sequence's time. Mirrors
+/// `SubtitleCue` in src/recording/captions.ts.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SubtitleCue {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub text: String,
+}
+
+/// The subtitle formats Save subtitles… writes, chosen by the extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubtitleFormat {
+    Srt,
+    WebVtt,
+}
+
+impl SubtitleFormat {
+    fn of(path: &Path) -> Result<Self, String> {
+        match path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("srt") => Ok(Self::Srt),
+            Some("vtt") => Ok(Self::WebVtt),
+            _ => Err("subtitles are saved as .srt or .vtt".to_owned()),
+        }
+    }
+}
+
+/// `ms` as `HH:MM:SS` and milliseconds after `separator`.
+fn subtitle_time(ms: u64, separator: char) -> String {
+    format!(
+        "{:02}:{:02}:{:02}{separator}{:03}",
+        ms / 3_600_000,
+        ms / 60_000 % 60,
+        ms / 1000 % 60,
+        ms % 1000
+    )
+}
+
+/// A cue's lines, without blank ones, which would end the cue early.
+fn subtitle_lines(text: &str) -> Vec<&str> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// `line` with every `-->`, which SRT reads as a timing line, shortened
+/// to `->`, again until none is left (`--->` holds one after a pass).
+fn without_arrows(line: &str) -> String {
+    let mut line = line.to_owned();
+    while line.contains("-->") {
+        line = line.replace("-->", "->");
+    }
+    line
+}
+
+/// `cues` as a subtitle file, in start order. Cues that show for no time
+/// or hold no text are left out.
+fn subtitles(format: SubtitleFormat, cues: &[SubtitleCue]) -> String {
+    let mut cues: Vec<&SubtitleCue> = cues
+        .iter()
+        .filter(|cue| cue.end_ms > cue.start_ms && !subtitle_lines(&cue.text).is_empty())
+        .collect();
+    cues.sort_by_key(|cue| (cue.start_ms, cue.end_ms));
+    let mut out = String::new();
+    if format == SubtitleFormat::WebVtt {
+        out.push_str("WEBVTT\n\n");
+    }
+    for (index, cue) in cues.iter().enumerate() {
+        let separator = if format == SubtitleFormat::Srt {
+            ','
+        } else {
+            '.'
+        };
+        if format == SubtitleFormat::Srt {
+            out.push_str(&format!("{}\n", index + 1));
+        }
+        out.push_str(&format!(
+            "{} --> {}\n",
+            subtitle_time(cue.start_ms, separator),
+            subtitle_time(cue.end_ms, separator)
+        ));
+        for line in subtitle_lines(&cue.text) {
+            match format {
+                SubtitleFormat::Srt => out.push_str(&without_arrows(line)),
+                // WebVTT reads markup in cue text, and `-->` ends it.
+                SubtitleFormat::WebVtt => out.push_str(
+                    &line
+                        .replace('&', "&amp;")
+                        .replace('<', "&lt;")
+                        .replace('>', "&gt;"),
+                ),
+            }
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Saves `cues`, in the exported sequence's time, to `path` the user
+/// chose: SRT, or WebVTT for a `.vtt` path. Only a recording editor saves
+/// subtitles.
+#[tauri::command]
+#[specta::specta]
+pub fn recording_save_subtitles(
+    path: PathBuf,
+    cues: Vec<SubtitleCue>,
+    window: WebviewWindow,
+    state: State<'_, RecordingEditorState>,
+) -> Result<(), String> {
+    state.recording_for(window.label())?;
+    if !path.is_absolute() {
+        return Err("subtitles are saved to an absolute path".to_owned());
+    }
+    let format = SubtitleFormat::of(&path)?;
+    write_subtitles(&path, &subtitles(format, &cues))
+}
+
+/// Writes `text` to a temporary file beside `path`, then renames it over
+/// `path`, so a failed save leaves an existing file as it was.
+fn write_subtitles(path: &Path, text: &str) -> Result<(), String> {
+    let mut name = path.file_name().map(OsString::from).unwrap_or_default();
+    name.push(".tmp");
+    let tmp = path.with_file_name(name);
+    fs::write(&tmp, text)
+        .and_then(|()| fs::rename(&tmp, path))
+        .map_err(|err| {
+            let _ = fs::remove_file(&tmp);
+            // The page says it could not save them; this says why.
+            err.to_string()
+        })
+}
+
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use image::Rgba;
     use serde_json::json;
@@ -3676,5 +3816,93 @@ esac
         assert_eq!(frame_ms(30, 30), 1000);
         assert_eq!(frame_ms(45, 30), 1500);
         assert_eq!(frame_ms(5, 4), 1250);
+    }
+    #[test]
+    fn subtitles_are_written_as_srt_or_webvtt_in_start_order() {
+        let cues = [
+            SubtitleCue {
+                start_ms: 3_725_042,
+                end_ms: 3_727_000,
+                text: "Later <b> & on\n\nsecond --> line".to_owned(),
+            },
+            SubtitleCue {
+                start_ms: 1500,
+                end_ms: 2500,
+                text: "Hello".to_owned(),
+            },
+            SubtitleCue {
+                start_ms: 100,
+                end_ms: 900,
+                text: "  ".to_owned(),
+            },
+            SubtitleCue {
+                start_ms: 900,
+                end_ms: 900,
+                text: "No time".to_owned(),
+            },
+        ];
+        assert_eq!(
+            subtitles(SubtitleFormat::Srt, &cues),
+            "1\n00:00:01,500 --> 00:00:02,500\nHello\n\n\
+             2\n01:02:05,042 --> 01:02:07,000\nLater <b> & on\nsecond -> line\n\n"
+        );
+        assert_eq!(
+            subtitles(SubtitleFormat::WebVtt, &cues),
+            "WEBVTT\n\n00:00:01.500 --> 00:00:02.500\nHello\n\n\
+             01:02:05.042 --> 01:02:07.000\nLater &lt;b&gt; &amp; on\nsecond --&gt; line\n\n"
+        );
+        assert_eq!(subtitles(SubtitleFormat::WebVtt, &[]), "WEBVTT\n\n");
+    }
+
+    #[test]
+    fn srt_text_never_holds_an_arrow() {
+        assert_eq!(without_arrows("a --> b"), "a -> b");
+        assert_eq!(without_arrows("a ---> b"), "a -> b");
+        assert_eq!(without_arrows("a ----> b --> c"), "a -> b -> c");
+        assert_eq!(without_arrows("a -> b"), "a -> b");
+        let cue = |text: &str| SubtitleCue {
+            start_ms: 0,
+            end_ms: 1000,
+            text: text.to_owned(),
+        };
+        for text in ["a ---> b", "a ----> b"] {
+            assert!(
+                !subtitles(SubtitleFormat::Srt, &[cue(text)])
+                    .lines()
+                    .skip(2)
+                    .any(|line| line.contains("-->"))
+            );
+        }
+    }
+
+    #[test]
+    fn subtitles_replace_an_existing_file_whole_and_leave_it_when_saving_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("talk.srt");
+        fs::write(&path, "old subtitles").unwrap();
+        write_subtitles(&path, "new").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        assert!(!dir.path().join("talk.srt.tmp").exists());
+        // A folder where the file would go cannot be replaced by a file.
+        let folder = dir.path().join("folder.srt");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("inside"), "kept").unwrap();
+        assert!(write_subtitles(&folder, "new").is_err());
+        assert_eq!(fs::read_to_string(folder.join("inside")).unwrap(), "kept");
+        assert!(!dir.path().join("folder.srt.tmp").exists());
+    }
+
+    #[test]
+    fn subtitle_formats_follow_the_extension() {
+        assert_eq!(
+            SubtitleFormat::of(Path::new("/a/talk.SRT")),
+            Ok(SubtitleFormat::Srt)
+        );
+        assert_eq!(
+            SubtitleFormat::of(Path::new("/a/talk.vtt")),
+            Ok(SubtitleFormat::WebVtt)
+        );
+        assert!(SubtitleFormat::of(Path::new("/a/talk.txt")).is_err());
+        assert!(SubtitleFormat::of(Path::new("/a/talk")).is_err());
     }
 }

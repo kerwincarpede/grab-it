@@ -467,6 +467,7 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             recording_editor::recording_save_edits,
             recording_editor::recording_source,
             recording_editor::recording_pick_source,
+            recording_editor::recording_save_subtitles,
             recording_suggest::recording_pauses,
             transcribe::recording_transcribe_model,
             transcribe::recording_transcript,

@@ -565,6 +565,75 @@ fn recording_transcribe_refuses_sources_it_cannot_resolve() {
 }
 
 #[test]
+fn recording_save_subtitles_writes_srt_or_webvtt_by_extension_from_an_editor() {
+    use crate::recording_editor::RecordingEditorState;
+    let h = Harness::new();
+    let recordings = h.default_save_folder().join(RECORDINGS_DIR);
+    let own = recordings.join("2026-03").join("talk.mp4");
+    fs::create_dir_all(own.parent().unwrap()).unwrap();
+    fs::write(&own, b"video bytes").unwrap();
+    let out = h.default_save_folder();
+    let cues = json!([{ "startMs": 1500, "endMs": 2500, "text": "Hello" }]);
+
+    // Not a recording editor yet.
+    assert!(
+        !h.err(
+            "recording_save_subtitles",
+            json!({ "path": out.join("talk.srt"), "cues": cues })
+        )
+        .is_empty()
+    );
+    h.app
+        .state::<RecordingEditorState>()
+        .register(LABEL, &own, &recordings)
+        .unwrap();
+
+    assert_eq!(
+        h.ok(
+            "recording_save_subtitles",
+            json!({ "path": out.join("talk.srt"), "cues": cues })
+        ),
+        Value::Null
+    );
+    assert_eq!(
+        fs::read_to_string(out.join("talk.srt")).unwrap(),
+        "1\n00:00:01,500 --> 00:00:02,500\nHello\n\n"
+    );
+    h.ok(
+        "recording_save_subtitles",
+        json!({ "path": out.join("talk.vtt"), "cues": cues }),
+    );
+    assert_eq!(
+        fs::read_to_string(out.join("talk.vtt")).unwrap(),
+        "WEBVTT\n\n00:00:01.500 --> 00:00:02.500\nHello\n\n"
+    );
+    assert!(
+        !h.err(
+            "recording_save_subtitles",
+            json!({ "path": out.join("talk.txt"), "cues": cues })
+        )
+        .is_empty()
+    );
+    assert!(!out.join("talk.txt").exists());
+    // A relative path would land wherever the app happens to run from.
+    assert!(
+        h.err(
+            "recording_save_subtitles",
+            json!({ "path": "relative.srt", "cues": cues })
+        )
+        .contains("absolute path")
+    );
+    assert_invalid_arg(
+        &h.err(
+            "recording_save_subtitles",
+            json!({ "path": out.join("talk.srt") }),
+        ),
+        "recording_save_subtitles",
+        "cues",
+    );
+}
+
+#[test]
 fn set_save_folder_saves_and_rescans_the_new_folder() {
     let h = Harness::new();
     let folder = h.dir.path().join("elsewhere");
