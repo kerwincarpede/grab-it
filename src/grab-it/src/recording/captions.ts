@@ -65,6 +65,8 @@ export const MAX_CUE_LINES = 2;
 /** The longest a cue made from a transcript lasts. */
 export const MAX_CUE_MS = 6000;
 export const MIN_CUE_MS = 300;
+/** Quiet between two words at least this long ends a cue, so no cue shows over it. */
+export const CUE_PAUSE_MS = 200;
 export const DEFAULT_CUE_MS = 2000;
 
 const LOOKS: CaptionLook[] = ["box", "outline", "plain"];
@@ -213,7 +215,8 @@ export function cuesFromTranscript(
     for (const word of words) {
       if (group.length > 0) {
         const text = joinPieces([...group, word]);
-        if (wrapLines(text) === null || word.endMs - group[0].startMs > MAX_CUE_MS) flush();
+        const pause = word.startMs - group[group.length - 1].endMs >= CUE_PAUSE_MS;
+        if (pause || wrapLines(text) === null || word.endMs - group[0].startMs > MAX_CUE_MS) flush();
       }
       group.push(word);
     }
@@ -275,24 +278,29 @@ const joinText = (text: string, next: string) => (runsOn(text, next) ? text + ne
  * time. When most words share one start, or the segment has no word
  * times, every word is spread over the segment by its length in
  * characters; otherwise words sharing a start split the time until the
- * next word. A word left with no time joins the word before it, or the one
+ * next word. A word keeps its own end when it has one after its start and
+ * before the next word's, so quiet between words (as the transcript's
+ * fitting to the voice leaves) stays outside them; otherwise, as for spread
+ * words and older transcripts' collapsed times, it ends where the next word
+ * starts. A word left with no time joins the word before it, or the one
  * after it when it comes first.
  */
 function timedWords(segment: TranscriptSegment, startMs: number, endMs: number): TranscriptWord[] {
   const given = segment.words.length > 0 ? segment.words : segment.text.split(/\s+/).map((text) => ({ text, startMs, endMs: startMs }));
   let floor = startMs;
   const words = given
-    .map((word) => ({ text: word.text.trim(), at: word.startMs }))
+    .map((word) => ({ text: word.text.trim(), at: word.startMs, end: word.endMs }))
     .filter((word) => word.text)
     .map((word) => {
       floor = clamp(word.at, floor, endMs);
-      return { text: word.text, at: floor, weight: Math.max(1, Array.from(word.text).length) };
+      return { text: word.text, at: floor, own: word.end as number | null, weight: Math.max(1, Array.from(word.text).length) };
     });
   const spread = (run: typeof words, at: number, until: number) => {
     const total = run.reduce((sum, word) => sum + word.weight, 0);
     let before = 0;
     for (const word of run) {
       word.at = at + ((until - at) * before) / total;
+      word.own = null;
       before += word.weight;
     }
   };
@@ -307,7 +315,8 @@ function timedWords(segment: TranscriptSegment, startMs: number, endMs: number):
   const placed: TranscriptWord[] = [];
   let carried = "";
   words.forEach((word, index) => {
-    const end = words[index + 1]?.at ?? endMs;
+    const next = words[index + 1]?.at ?? endMs;
+    const end = word.own !== null && word.own > word.at ? Math.min(next, word.own) : next;
     const last = placed[placed.length - 1];
     if (end > word.at) {
       placed.push({ text: carried ? joinText(carried, word.text) : word.text, startMs: word.at, endMs: end });

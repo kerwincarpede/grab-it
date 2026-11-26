@@ -143,6 +143,24 @@ describe("cues from a transcript", () => {
     ]);
   });
 
+  it("keeps fitted words' own ends, so no cue covers the quiet between them", () => {
+    // Fitted to voice at 0.5-1.5 s and 3.5-4.5 s, with quiet between.
+    const before = words("The quick fox", 500, 1000 / 3).map((word, index) => (index === 2 ? { ...word, endMs: 1500 } : word));
+    const after = words("jumps over it", 3500, 1000 / 3).map((word, index) => (index === 2 ? { ...word, endMs: 4500 } : word));
+    const transcript: Transcript = {
+      version: 1,
+      model: "whisper-base",
+      language: "en",
+      segments: [{ startMs: 400, endMs: 4600, text: "The quick fox jumps over it", words: [...before, ...after] }],
+    };
+    const cues = cuesFromTranscript(transcript, "a.mp4", "a.mp4", ids());
+    expect(cues.map((cue) => [cue.text, cue.startMs, cue.endMs])).toEqual([
+      ["The quick fox", 500, 1500],
+      ["jumps over it", 3500, 4500],
+    ]);
+    expect(cues.some((cue) => cue.startMs < 3500 && cue.endMs > 1500)).toBe(false);
+  });
+
   it("wraps text into lines no longer than the limit", () => {
     expect(wrapLines("a ".repeat(30).trim())?.every((line) => line.length <= MAX_LINE_CHARS)).toBe(true);
     expect(wrapLines("word ".repeat(40))).toBeNull();
