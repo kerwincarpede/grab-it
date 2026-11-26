@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { clampTrim, formatTime, type Trim } from "./edits";
 import { followScroll, msAtOffset, scrollToKeep, stepScale, visibleRange, zoomFor, type TimelineScale } from "./timelineZoom";
 
@@ -91,6 +91,12 @@ export default function Timeline({
   const told = useRef<TimelineView | null>(null);
   /** The pointer held down on the track or a row, so following the playhead can't move the view under it. */
   const pressed = useRef<{ id: number; release: () => void } | null>(null);
+  /**
+   * The zoom shown when a pointer was pressed. Until it is let go the
+   * scroller stays at least that wide, so a drag that shortens the timeline
+   * can't make the browser pull the scroll offset back from under the pointer.
+   */
+  const [held, setHeld] = useState<{ scale: TimelineScale; zoom: number } | null>(null);
   const latest = useRef({ scale, zoom, durationMs, onScaleChange, onViewChange });
   useLayoutEffect(() => {
     latest.current = { scale, zoom, durationMs, onScaleChange, onViewChange };
@@ -106,11 +112,14 @@ export default function Timeline({
     const release = () => {
       for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) window.removeEventListener(type, up, true);
       window.removeEventListener("blur", up);
-      if (pressed.current?.id === id) pressed.current = null;
+      if (pressed.current?.id !== id) return;
+      pressed.current = null;
+      setHeld(null);
     };
     for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) window.addEventListener(type, up, true);
     window.addEventListener("blur", up);
     pressed.current = { id, release };
+    setHeld({ scale: latest.current.scale, zoom: latest.current.zoom });
   };
   useEffect(() => () => pressed.current?.release(), []);
 
@@ -303,6 +312,14 @@ export default function Timeline({
     );
   };
 
+  const contentStyle = {
+    width: `calc(${zoom} * (100% - ${SIDE_PAD * 2}px) + ${SIDE_PAD * 2}px)`,
+    // How wide the visible track is, for what must stay in view as it scrolls.
+    "--timeline-view": measured > 0 ? `${measured}px` : undefined,
+  } as CSSProperties;
+  // The rows keep the live length's scale; only the scrolled width is held. A zoom chosen during the press drops it.
+  const holdWidth = held && held.scale === scale && held.zoom > zoom && measured > 0 ? held.zoom * measured + SIDE_PAD * 2 : 0;
+
   return (
     <div className="timeline">
       <div
@@ -312,7 +329,7 @@ export default function Timeline({
         onScroll={measure}
         onPointerDownCapture={press}
       >
-        <div className="timeline-content" data-testid="timeline-content" data-zoom={zoom} style={{ width: `calc(${zoom} * (100% - ${SIDE_PAD * 2}px) + ${SIDE_PAD * 2}px)` }}>
+        <div className="timeline-content" data-testid="timeline-content" data-zoom={zoom} style={contentStyle}>
           <div
             ref={trackRef}
             className="timeline-track"
@@ -330,6 +347,7 @@ export default function Timeline({
             {handle("end")}
           </div>
           {children}
+          {holdWidth > 0 && <div className="timeline-hold" data-testid="timeline-hold" aria-hidden="true" style={{ width: holdWidth }} />}
         </div>
       </div>
     </div>

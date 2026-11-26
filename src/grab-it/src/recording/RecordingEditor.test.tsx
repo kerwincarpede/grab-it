@@ -1088,6 +1088,90 @@ describe("RecordingEditor", () => {
       expect(screen.getByLabelText("Time")).toHaveTextContent("0:06.5 / 0:10.0");
       expect(scroller.scrollLeft).toBe(250);
     });
+
+    it("keeps a clip edge under the pointer when a drag shortens the sequence scrolled to its end", async () => {
+      const backend = mockBackend(JOINED_ZOOM);
+      render(<RecordingEditor />);
+      await loadJoinedZoom();
+      const scroller = layOutTimeline();
+      // A browser keeps the scroll offset within the content less the view; jsdom doesn't.
+      let offset = 0;
+      const contentWidth = () => {
+        const hold = screen.queryByTestId("timeline-hold");
+        return Math.max(Number(zoomOf()) * 100 + 24, hold ? parseFloat(hold.style.width) : 0);
+      };
+      Object.defineProperty(scroller, "scrollLeft", {
+        configurable: true,
+        get: () => (offset = Math.min(offset, Math.max(0, contentWidth() - 124))),
+        set: (value: number) => {
+          offset = Math.max(0, value);
+        },
+      });
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      // 4x: the 10 s clip row is 400 px, 40 px a second, scrolled to its end.
+      expect(zoomOf()).toBe("4");
+      scroller.scrollLeft = 1000;
+      expect(scroller.scrollLeft).toBe(300);
+      spanAt(screen.getByRole("listbox", { name: "Clips" }), -300, 400);
+      const edge = screen.getByRole("option", { name: `${OTHER}, 0:06.0` }).querySelector(".clip-edge.end") as HTMLElement;
+      fireEvent.pointerDown(edge, { clientX: 100 });
+      fireEvent.pointerMove(edge, { clientX: 50 });
+      // 50 px is 1.25 s: the 8.75 s sequence shows at 3.5x, 350 px, but the scroller keeps its width,
+      // so the offset holds and the clip's end is at the pointer, 50 px into the view.
+      expect(Number(zoomOf())).toBeCloseTo(3.5);
+      expect(scroller.scrollLeft).toBe(300);
+      const second = screen.getByRole("option", { name: new RegExp(`^${OTHER}, 0:04`) });
+      expect(((parseFloat(second.style.left) + parseFloat(second.style.width)) / 100) * 350 - scroller.scrollLeft).toBeCloseTo(50);
+      fireEvent.pointerUp(edge, { clientX: 50 });
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: 2, clips: [JOINED_ZOOM.clips[0], { ...JOINED_ZOOM.clips[1], endMs: 4750 }] }));
+      // Let go, the scroller is as wide as the sequence again.
+      expect(screen.queryByTestId("timeline-hold")).not.toBeInTheDocument();
+      expect(scroller.scrollLeft).toBe(250);
+    });
+
+    it("keeps the chosen scale and the scroll offset when the view is resized", async () => {
+      mockBackend();
+      render(<RecordingEditor />);
+      await loadVideo();
+      const scroller = layOutTimeline();
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      // 4x: 400 px for 12 s.
+      expect(zoomOf()).toBe("4");
+      scroller.scrollLeft = 100;
+      // Twice as wide a view shows the same pixels a second at half the multiple of fit.
+      Object.defineProperty(scroller, "clientWidth", { configurable: true, value: 224 });
+      fireEvent.scroll(scroller);
+      expect(zoomOf()).toBe("2");
+      expect(scroller.scrollLeft).toBe(100);
+      Object.defineProperty(scroller, "clientWidth", { configurable: true, value: 124 });
+      fireEvent.scroll(scroller);
+      expect(zoomOf()).toBe("4");
+      expect(scroller.scrollLeft).toBe(100);
+    });
+
+    it("keeps the chosen scale and the scroll offset when a Suggest edits preview changes the length", async () => {
+      heard = { sound: "microphone", pauses: [{ startMs: 3000, endMs: 6000 }], canClean: true, pointer: null };
+      mockBackend(null, null, ["microphone"], { separateMicrophone: true });
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Suggest edits" }));
+      const preview = await screen.findByRole("button", { name: "Preview" });
+      const scroller = layOutTimeline();
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      expect(zoomOf()).toBe("4");
+      scroller.scrollLeft = 100;
+      await userEvent.click(preview);
+      // The 9.5 s preview at the same 33.3 px a second is 9.5 / 12 of 4x.
+      expect(screen.getByText("2 clips, 0:09.5")).toBeInTheDocument();
+      expect(Number(zoomOf())).toBeCloseTo((4 * 9.5) / 12);
+      expect(scroller.scrollLeft).toBe(100);
+      await userEvent.click(screen.getByRole("button", { name: "Stop preview" }));
+      expect(zoomOf()).toBe("4");
+      expect(scroller.scrollLeft).toBe(100);
+    });
   });
 
   describe("joining recordings", () => {

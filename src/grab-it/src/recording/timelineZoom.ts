@@ -10,10 +10,19 @@ export const MAX_PX_PER_SECOND = 400;
 /** Each Zoom in doubles the zoom; each Zoom out halves it. */
 export const ZOOM_STEP = 2;
 
+/**
+ * The multiple of fit that `pxPerSecond` shows at, at least 1. The zoom
+ * limit and the shown zoom both come from here, so a scale at the limit
+ * shows exactly at it.
+ */
+function multipleOfFit(pxPerSecond: number, durationMs: number, viewWidth: number): number {
+  if (durationMs <= 0 || viewWidth <= 0) return 1;
+  return Math.max(1, (pxPerSecond * durationMs) / 1000 / viewWidth);
+}
+
 /** How far in the timeline can zoom: at least 1, so a short timeline still fits. */
 export function maxZoom(durationMs: number, viewWidth: number): number {
-  if (durationMs <= 0 || viewWidth <= 0) return 1;
-  return Math.max(1, ((durationMs / 1000) * MAX_PX_PER_SECOND) / viewWidth);
+  return multipleOfFit(MAX_PX_PER_SECOND, durationMs, viewWidth);
 }
 
 /** `zoom` kept between 1 and the most the timeline allows. */
@@ -36,14 +45,15 @@ export type TimelineScale = number | null;
 
 /** The multiple of fit that `scale` shows at, clamped to 1x and 400 px a second. */
 export function zoomFor(scale: TimelineScale, durationMs: number, viewWidth: number): number {
-  if (scale === null || durationMs <= 0 || viewWidth <= 0) return 1;
-  return clampZoom((scale * durationMs) / 1000 / viewWidth, durationMs, viewWidth);
+  if (scale === null || !Number.isFinite(scale)) return 1;
+  return multipleOfFit(Math.min(MAX_PX_PER_SECOND, scale), durationMs, viewWidth);
 }
 
-/** The scale that shows at `zoom`: null at 1x, which fits. */
+/** The scale that shows at `zoom`: null at 1x, which fits, and never past 400 px a second. */
 export function scaleFor(zoom: number, durationMs: number, viewWidth: number): TimelineScale {
   if (zoom <= 1 || durationMs <= 0 || viewWidth <= 0) return null;
-  return (zoom * viewWidth * 1000) / durationMs;
+  if (zoom >= maxZoom(durationMs, viewWidth)) return MAX_PX_PER_SECOND;
+  return Math.min(MAX_PX_PER_SECOND, (zoom * viewWidth * 1000) / durationMs);
 }
 
 /** One step in (`1`) or out (`-1`) from the zoom `scale` shows at. */

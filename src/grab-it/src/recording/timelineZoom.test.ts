@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampZoom, followScroll, maxScroll, maxZoom, msAtOffset, scaleFor, scrollToKeep, stepScale, stepZoom, visibleRange, zoomFor } from "./timelineZoom";
+import { clampZoom, followScroll, MAX_PX_PER_SECOND, maxScroll, maxZoom, msAtOffset, scaleFor, scrollToKeep, stepScale, stepZoom, visibleRange, zoomFor, type TimelineScale } from "./timelineZoom";
 
 describe("timelineZoom", () => {
   it("zooms from 1x up to 400 px a second", () => {
@@ -34,6 +34,26 @@ describe("timelineZoom", () => {
     expect(stepScale(null, 1, 10_000, 1000)).toBe(200);
     expect(stepScale(200, -1, 10_000, 1000)).toBeNull();
     expect(stepScale(400, 1, 10_000, 1000)).toBe(400);
+  });
+
+  it("shows a scale stepped to the limit exactly at the limit, however the length changes", () => {
+    // 30 s over 776 px stepped to 400 px a second, then lengthened to 32.7 s.
+    let scale: TimelineScale = null;
+    for (let i = 0; i < 6; i++) scale = stepScale(scale, 1, 30_000, 776);
+    expect(scale).toBe(MAX_PX_PER_SECOND);
+    expect(zoomFor(scale, 32_700, 776)).toBe(maxZoom(32_700, 776));
+    expect(stepScale(scale, 1, 32_700, 776)).toBe(MAX_PX_PER_SECOND);
+    // And across widths, lengths and lengthenings.
+    for (const width of [101, 333, 776, 1234, 1999]) {
+      for (const durationMs of [3_000, 7_700, 30_000, 61_234]) {
+        let at: TimelineScale = null;
+        for (let i = 0; i < 12; i++) at = stepScale(at, 1, durationMs, width);
+        for (const longer of [1, 1.09, 1.37, 2.5]) {
+          const length = Math.round(durationMs * longer);
+          if (at !== null) expect(zoomFor(at, length, width)).toBe(maxZoom(length, width));
+        }
+      }
+    }
   });
 
   it("keeps a time at the same place in view after zooming", () => {
