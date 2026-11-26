@@ -15,6 +15,7 @@ import type { BackdropSources } from "../editor/flatten";
 import {
   cancelExport,
   cancelTranscribe,
+  chooseSubtitlesFile,
   exportRecording,
   onExportProgress,
   onTranscribeProgress,
@@ -24,6 +25,7 @@ import {
   recordingTranscribe,
   recordingTranscript,
   saveEdits,
+  saveSubtitles,
   transcribeModel,
   type AudioKind,
   type ExportEntry,
@@ -65,6 +67,9 @@ import ClipTrack from "./ClipTrack";
 import CaptionPreview from "./CaptionPreview";
 import CaptionTrack, { type CueSpan } from "./CaptionTrack";
 import {
+  CAPTION_LOOKS,
+  CAPTION_POSITIONS,
+  CAPTION_SIZES,
   cueOnSource,
   cuePng,
   cueShowings,
@@ -77,8 +82,10 @@ import {
   showingAt,
   sortCues,
   styleOf,
+  subtitleCues,
   tagCue,
   newCueId,
+  withStyle,
   type Captions,
   type CaptionStyle,
   type Cue,
@@ -122,6 +129,13 @@ const PREVIEW_BLOCKS_EDITS = "Stop the preview or apply the suggested cuts befor
 /** The error text `recording_transcribe` and a page-side cancel stop with. */
 const TRANSCRIBE_CANCELLED = "Transcribing cancelled";
 const errorText = (err: unknown) => String(err instanceof Error ? err.message : err);
+/** The Captions panel's style choices, one row each. */
+const CAPTION_STYLE_CONTROLS: { label: string; key: keyof CaptionStyle; options: { value: string; label: string }[] }[] = [
+  { label: "Look", key: "look", options: CAPTION_LOOKS },
+  { label: "Size", key: "size", options: CAPTION_SIZES },
+  { label: "Position", key: "position", options: CAPTION_POSITIONS },
+];
+
 const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
 const AddIcon = () => (
@@ -1273,6 +1287,25 @@ export default function RecordingEditor() {
 
   const toggleBurnIn = () => commitCaptions({ ...captions, burnIn: !captions.burnIn });
 
+  const setCaptionStyle = (change: Partial<CaptionStyle>) => commitCaptions(withStyle(captions, change));
+
+  /** The saved sequence's cues, in its exported time. */
+  const savedSubtitles = useMemo(() => subtitleCues(captions.cues, savedClips, own), [captions.cues, savedClips, own]);
+
+  /** Asks where, then saves the captions as SRT or WebVTT, chosen by the file's extension. */
+  const saveSubtitlesNow = async () => {
+    if (!info || savedSubtitles.length === 0) return;
+    setCaptionsMessage(null);
+    try {
+      const path = await chooseSubtitlesFile(info.fileName);
+      if (!path) return;
+      await saveSubtitles(path, savedSubtitles);
+      setCaptionsMessage(`Saved ${fileName(path)}`);
+    } catch (err) {
+      setCaptionsMessage(`Could not save subtitles: ${errorText(err)}`);
+    }
+  };
+
   /**
    * Puts in the cues of the recordings in `done`, with the latest edits, for
    * when transcribing ends after other edits. With `all`, every other cue
@@ -1593,6 +1626,33 @@ export default function RecordingEditor() {
               <label>
                 <input type="checkbox" checked={captions.burnIn} disabled={readOnly || exporting} onChange={toggleBurnIn} /> Burn in captions
               </label>
+              {CAPTION_STYLE_CONTROLS.map(({ label, key, options }) => (
+                <div className="captions-style" key={key}>
+                  <span id={`caption-${key}`}>{label}</span>
+                  <div className="bar-group segmented" role="group" aria-labelledby={`caption-${key}`}>
+                    {options.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        aria-pressed={captionStyle[key] === option.value}
+                        disabled={readOnly || exporting}
+                        onClick={() => setCaptionStyle({ [key]: option.value } as Partial<CaptionStyle>)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="text-button"
+                disabled={savedSubtitles.length === 0 || exporting}
+                title={savedSubtitles.length === 0 ? "Add captions to save them as subtitles" : "Save the captions as an SRT or WebVTT file"}
+                onClick={() => void saveSubtitlesNow()}
+              >
+                Save subtitles…
+              </button>
             </section>
           )}
         </div>

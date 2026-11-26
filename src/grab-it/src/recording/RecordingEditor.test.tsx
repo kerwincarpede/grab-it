@@ -18,6 +18,11 @@ vi.mock("./sources", async (importOriginal) => {
   return { ...actual, probeVideo: vi.fn((path: string) => Promise.resolve(path.includes("Other") ? { durationMs: 6000, width: 720, height: 720 } : { durationMs: 12_000, width: 1920, height: 1080 })) };
 });
 
+/** Where Save subtitles… is told to save next; null cancels. */
+let subtitlesAt: string | null = null;
+const chooseExportFile = vi.fn((_name: string) => Promise.resolve(subtitlesAt));
+vi.mock("../app/exportDialog", () => ({ chooseExportFile: (name: string) => chooseExportFile(name) }));
+
 const PATH = "/shots/recordings/Grab-it 2026-03-07 09-05-01.mp4";
 const RECORDINGS = "/shots/recordings";
 const OWN = "Grab-it 2026-03-07 09-05-01.mp4";
@@ -110,6 +115,7 @@ function mockBackend(edits: Value | null = null, cursor: CursorPath | null = nul
             })
           : (spoken[source] ?? { version: 1, model: "whisper-base", language: null, segments: [] }),
       recording_transcribe_cancel: () => undefined,
+      recording_save_subtitles: () => null,
       recording_export: () =>
         new Promise<string>((resolve, reject) => {
           backend.exported = { resolve, reject };
@@ -173,6 +179,8 @@ afterEach(() => {
   transcripts = {};
   heldTranscribe = {};
   holdTranscribe = [];
+  subtitlesAt = null;
+  chooseExportFile.mockClear();
 });
 
 const saved = (backend: Backend) => backend.calls.filter((call) => call.cmd === "recording_save_edits").map((call) => (call.payload as { edits: unknown }).edits);
@@ -2741,6 +2749,61 @@ describe("RecordingEditor", () => {
         expect(overlay.y + overlay.height).toBeLessThanOrEqual(1080);
       }
       expect(body).toEqual([1, 2, 3, 4, 5]);
+    });
+
+    it("styles the captions from the popover and keeps the default style out of the sidecar", async () => {
+      const backend = mockBackend({ version: CAPTIONS_VERSION, captions: { burnIn: true, cues: [HELLO] } });
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Captions" }));
+      const look = screen.getByRole("group", { name: "Look" });
+      expect(within(look).getByRole("button", { name: "Box" })).toHaveAttribute("aria-pressed", "true");
+      await userEvent.click(within(look).getByRole("button", { name: "Outline" }));
+      await userEvent.click(within(screen.getByRole("group", { name: "Position" })).getByRole("button", { name: "Top" }));
+      await userEvent.click(within(screen.getByRole("group", { name: "Size" })).getByRole("button", { name: "Large" }));
+      await waitFor(() =>
+        expect(lastSaved(backend)).toEqual({ version: CAPTIONS_VERSION, captions: { burnIn: true, cues: [HELLO], style: { look: "outline", size: "large", position: "top" } } }),
+      );
+      expect(within(look).getByRole("button", { name: "Outline" })).toHaveAttribute("aria-pressed", "true");
+      await userEvent.click(within(look).getByRole("button", { name: "Box" }));
+      await userEvent.click(within(screen.getByRole("group", { name: "Position" })).getByRole("button", { name: "Bottom" }));
+      await userEvent.click(within(screen.getByRole("group", { name: "Size" })).getByRole("button", { name: "Medium" }));
+      await waitFor(() => expect(lastSaved(backend)).toEqual({ version: CAPTIONS_VERSION, captions: { burnIn: true, cues: [HELLO] } }));
+    });
+
+    it("saves subtitles for every clip a cue plays in, in the sequence's time", async () => {
+      subtitlesAt = "/out/talk.vtt";
+      const backend = mockBackend({ version: CAPTIONS_VERSION, clips: TWICE, captions: { burnIn: true, cues: [HELLO] } });
+      render(<RecordingEditor />);
+      await loadSequence();
+      await userEvent.click(screen.getByRole("button", { name: "Captions" }));
+      await userEvent.click(screen.getByRole("button", { name: "Save subtitles…" }));
+      await waitFor(() => expect(screen.getByRole("dialog", { name: "Captions" })).toHaveTextContent("Saved talk.vtt"));
+      expect(chooseExportFile).toHaveBeenLastCalledWith("Grab-it 2026-03-07 09-05-01.srt");
+      expect(backend.calls.find((call) => call.cmd === "recording_save_subtitles")?.payload).toEqual({
+        path: "/out/talk.vtt",
+        cues: [
+          { startMs: 1500, endMs: 2500, text: "Hello" },
+          { startMs: 4500, endMs: 5500, text: "Hello" },
+        ],
+      });
+    });
+
+    it("saves no subtitles when the file dialog is cancelled, and none without captions", async () => {
+      subtitlesAt = null;
+      const backend = mockBackend({ version: CAPTIONS_VERSION, captions: { burnIn: true, cues: [HELLO] } });
+      const { unmount } = render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Captions" }));
+      await userEvent.click(screen.getByRole("button", { name: "Save subtitles…" }));
+      await waitFor(() => expect(chooseExportFile).toHaveBeenCalled());
+      expect(backend.calls.some((call) => call.cmd === "recording_save_subtitles")).toBe(false);
+      unmount();
+      mockBackend({ version: CAPTIONS_VERSION });
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Captions" }));
+      expect(screen.getByRole("button", { name: "Save subtitles…" })).toBeDisabled();
     });
 
     it("sends no captions with Burn in captions off", async () => {

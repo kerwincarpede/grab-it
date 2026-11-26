@@ -1,11 +1,11 @@
 ---
 title: Captions
-description: Transcribe the speech in your recordings into captions on this computer, correct and retime them, and burn them into the export.
+description: Transcribe the speech in your recordings into captions on this computer, correct, retime and style them, then burn them into the export or save a subtitle file.
 sidebar:
   order: 7
 ---
 
-Captions make a narrated recording easy to follow with the sound off. **Transcribe** turns what's said in each recording of the video into timed captions, on your computer. You can then correct their words, move and resize them on the caption row and burn them into the exported MP4.
+Captions make a narrated recording easy to follow with the sound off. **Transcribe** turns what's said in each recording of the video into timed captions, on your computer. You can then correct their words, move and resize them on the caption row, choose how they look, and burn them into the exported MP4 or save them as an SRT or WebVTT subtitle file.
 
 ## Transcribe
 
@@ -43,10 +43,28 @@ Click an empty part of the row, or press `Esc`, to deselect it. Every change is 
 
 ## How they look
 
-The preview shows the caption under the playhead as the export will: white text on a dark box at the bottom of the video.
+The **Captions** panel sets how every caption in the video looks:
+
+- **Look**: **Box** (the default) puts white text on a dark box, **Outline** draws a dark edge around white text, and **Plain** shows white text with a soft shadow.
+- **Size**: **Small**, **Medium** (the default) or **Large**, in step with the video's height.
+- **Position**: **Bottom** (the default) or **Top**, centred across the video.
+
+The preview shows the caption under the playhead as the export will draw it. Each change is one step you can undo, and the style is kept with the video's other edits.
 
 ## Export
 
 **Burn in captions** in the **Captions** panel is on by default: the export draws the captions into the MP4's picture, so they show in any player. Turn it off to export without them.
 
 Captions aren't added to GIFs or screenshots, and the MP4 never gets a subtitle track you can switch off.
+
+## Subtitle files
+
+To give a player or a video site captions viewers can switch on and off, save them as a subtitle file:
+
+1. Click **Captions** in the top bar.
+2. Click **Save subtitles…**.
+3. Choose where to save it. The name starts as the recording's, ending in `.srt`.
+
+End the name in `.srt` for SubRip or `.vtt` for WebVTT; Grab-it writes the format the name asks for. The file's times match the exported MP4, so trims, cuts and gaps are already allowed for. A caption on a clip that plays twice is listed once for each time it plays. Empty captions are left out, and the look, size and position aren't saved in the file: the player chooses how subtitles look.
+
+Saving subtitles doesn't need an export, and whether **Burn in captions** is on doesn't change the file. Burn the captions in and add the subtitle file too, and they show twice.

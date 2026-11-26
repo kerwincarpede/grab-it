@@ -9,10 +9,13 @@ import {
   MAX_CUE_MS,
   MAX_LINE_CHARS,
   moveCueWithin,
+  paintCue,
   parseCaptions,
   resizeCueWithin,
   serializeCaptions,
   showingAt,
+  subtitleCues,
+  withStyle,
   wrapLines,
   type Cue,
   type Transcript,
@@ -191,6 +194,23 @@ describe("cues on the sequence", () => {
     expect(cueShowings([cue], [], "a.mp4", false).map((each) => [each.startMs, each.endMs])).toEqual([[1000, 3000]]);
   });
 
+  it("lists a cue once per clip it plays in for subtitle files, in exported time", () => {
+    const empty: Cue = { id: "e", startMs: 0, endMs: 900, text: "  " };
+    expect(subtitleCues([cue, empty], clips, "a.mp4")).toEqual([
+      { startMs: 1000, endMs: 2000, text: "Hello" },
+      { startMs: 2500, endMs: 4000, text: "Hello" },
+    ]);
+  });
+
+  it("keeps a subtitle whole across clips that play on from each other", () => {
+    const split = [
+      { id: "one", source: "a.mp4", startMs: 0, endMs: 2000 },
+      { id: "two", source: "a.mp4", startMs: 2000, endMs: 4000 },
+    ];
+    const long: Cue = { ...cue, text: "word ".repeat(12).trim() };
+    expect(subtitleCues([long], split, "a.mp4")).toEqual([{ startMs: 1000, endMs: 3000, text: `${"word ".repeat(8).trim()}\n${"word ".repeat(4).trim()}` }]);
+  });
+
   it("moves and resizes a cue inside its room", () => {
     expect(moveCueWithin(cue, 3500, 0, 4000)).toMatchObject({ startMs: 2000, endMs: 4000 });
     expect(resizeCueWithin(cue, "end", 1100, 0, 4000)).toMatchObject({ endMs: 1300 });
@@ -309,5 +329,60 @@ describe("painting a cue", () => {
     const wide = cueBox(["x".repeat(500)], DEFAULT_CAPTION_STYLE, 300, 200, measure);
     expect(wide.x).toBe(0);
     expect(wide.width).toBeLessThanOrEqual(300);
+  });
+});
+
+describe("caption style", () => {
+  it("keeps only a style that differs from the default", () => {
+    const outline = withStyle({ burnIn: true, cues: [] }, { look: "outline", position: "top" });
+    expect(outline.style).toEqual({ look: "outline", size: "medium", position: "top" });
+    expect(withStyle(outline, { look: "box", position: "bottom" })).toEqual({ burnIn: true, cues: [] });
+  });
+});
+
+describe("painting each look", () => {
+  /** A canvas that records what is drawn on it. */
+  const fakeCanvas = () => {
+    const calls: string[] = [];
+    const ctx = {
+      font: "",
+      fillStyle: "",
+      strokeStyle: "",
+      lineWidth: 0,
+      shadowBlur: 0,
+      shadowColor: "",
+      textAlign: "",
+      textBaseline: "",
+      lineJoin: "",
+      measureText: (text: string) => ({ width: text.length * 10 }),
+      clearRect: () => calls.push("clear"),
+      fillRect: () => calls.push("box"),
+      strokeText: () => calls.push("outline"),
+      fillText: function (this: { shadowBlur: number }) {
+        calls.push(this.shadowBlur > 0 ? "shadowed text" : "text");
+      },
+    };
+    const canvas = { width: 0, height: 0, getContext: () => ctx } as unknown as HTMLCanvasElement;
+    return { canvas, calls };
+  };
+
+  it("draws a box, an outline or a shadow behind the text", () => {
+    const drawn = (look: "box" | "outline" | "plain") => {
+      const { canvas, calls } = fakeCanvas();
+      paintCue("Hello", { ...DEFAULT_CAPTION_STYLE, look }, 1000, 500, canvas);
+      return calls;
+    };
+    expect(drawn("box")).toEqual(["clear", "box", "text"]);
+    expect(drawn("outline")).toEqual(["clear", "outline", "text"]);
+    expect(drawn("plain")).toEqual(["clear", "shadowed text"]);
+  });
+
+  it("sizes the canvas to the cue's box and paints nothing for empty text", () => {
+    const { canvas } = fakeCanvas();
+    const box = paintCue("Hello", { look: "plain", size: "large", position: "top" }, 1000, 500, canvas);
+    expect(box).not.toBeNull();
+    expect([canvas.width, canvas.height]).toEqual([box?.width, box?.height]);
+    expect(box?.y).toBeLessThan(100);
+    expect(paintCue(" ", DEFAULT_CAPTION_STYLE, 1000, 500, fakeCanvas().canvas)).toBeNull();
   });
 });

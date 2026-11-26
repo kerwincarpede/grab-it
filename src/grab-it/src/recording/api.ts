@@ -1,7 +1,8 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { commands, type AudioKind, type RecordingClipSource_Serialize, type RecordingInfo_Serialize, type RecordingPauses_Serialize, type TranscribeModel, type Value } from "../app/bindings";
-import type { Transcript } from "./captions";
+import { chooseExportFile } from "../app/exportDialog";
+import type { SubtitleCue, Transcript } from "./captions";
 import type { SidecarEdits } from "./edits";
 import type { CursorPath, Zoom } from "./zooms";
 
@@ -298,4 +299,23 @@ export async function cancelTranscribe(): Promise<void> {
 /** Calls `handler` as transcribing in this window moves on. */
 export function onTranscribeProgress(handler: (progress: TranscribeProgress) => void): Promise<UnlistenFn> {
   return listen<TranscribeProgress>(TRANSCRIBE_PROGRESS_EVENT, (event) => handler(event.payload));
+}
+
+/** A subtitle file's default name: the recording's, as SRT. */
+export const subtitleFileName = (recordingName: string) => `${recordingName.replace(/\.[^./\\]+$/, "")}.srt`;
+
+/** Asks where to save subtitles, `<name>.srt` by default; null when cancelled. */
+export function chooseSubtitlesFile(recordingName: string): Promise<string | null> {
+  return chooseExportFile(subtitleFileName(recordingName), {
+    title: "Save subtitles",
+    filters: [
+      { name: "SubRip subtitles", extensions: ["srt"] },
+      { name: "WebVTT subtitles", extensions: ["vtt"] },
+    ],
+  });
+}
+
+/** Writes `cues` to `path` as SRT or, for a `.vtt` path, WebVTT. */
+export async function saveSubtitles(path: string, cues: SubtitleCue[]): Promise<void> {
+  await commands.recordingSaveSubtitles(path, cues);
 }
