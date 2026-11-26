@@ -2224,7 +2224,7 @@ describe("RecordingEditor", () => {
       await userEvent.type(screen.getByRole("textbox", { name: "Rename Voice" }), " over{Escape}");
       expect(screen.getByText("Voice")).toBeInTheDocument();
       expect(saved(backend)).toHaveLength(1);
-      expect(screen.queryByRole("button", { name: /Lock/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Unlock Voice" })).toHaveAttribute("aria-pressed", "true");
     });
 
     /** Reopened after the second recording's picture was replaced by a gap. */

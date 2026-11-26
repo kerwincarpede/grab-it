@@ -353,8 +353,8 @@ export const isRefusal = <T extends object>(value: T | Refusal): value is Refusa
  * Moves clip `id` (not on Video 1) and its links by the same amount so it
  * starts at `atMs`, onto `toTrack` when given (of the same kind), and
  * with `endMs`, the timeline's end, kept starting `END_MARGIN_MS` before
- * it so it stays in sight. Refused when a link is on Video 1 or a clip
- * would overlap.
+ * it so it stays in sight. Refused when a link is on Video 1, a track is
+ * locked, or a clip would overlap.
  */
 export function moveInTime(timeline: Timeline, id: string, atMs: number, toTrack?: string, endMs?: number): Timeline | Refusal {
   const places = clipPlaces(timeline);
@@ -362,9 +362,12 @@ export function moveInTime(timeline: Timeline, id: string, atMs: number, toTrack
   if (!place) return { refused: "That clip is no longer on the timeline." };
   const ids = linkedIds(timeline, id);
   if (places.some((each) => ids.has(each.id) && each.trackId === MAIN_TRACK_ID)) return { refused: "Unlink it from its picture on Video 1 first." };
+  const locked = lockedIds(timeline);
+  if (places.some((each) => ids.has(each.id) && locked.has(each.trackId))) return { refused: "Its track is locked." };
   const from = timeline.tracks.find((track) => track.id === place.trackId) as Track;
   const target = toTrack ? timeline.tracks.find((track) => track.id === toTrack) : from;
   if (!target || isMain(target) || target.kind !== from.kind) return { refused: "A clip moves only between tracks of its own kind." };
+  if (locked.has(target.id)) return { refused: "That track is locked." };
   const wanted = endMs === undefined ? Math.round(atMs) : Math.min(Math.round(atMs), Math.max(0, endMs - END_MARGIN_MS));
   const delta = Math.max(wanted - place.atMs, -Math.min(...places.filter((each) => ids.has(each.id)).map((each) => each.atMs)));
   const tracks = timeline.tracks.map((track) => ({ ...track, clips: track.clips.filter((clip) => !(clip.id === id && track.id !== target.id)) }));
@@ -381,8 +384,9 @@ export function moveInTime(timeline: Timeline, id: string, atMs: number, toTrack
 function splittableIds(timeline: Timeline, at: number, only: string | undefined, minMs: number): Set<string> {
   const selected = only ? linkedIds(timeline, only) : null;
   const blockedLinks = new Set<string>();
+  const locked = lockedIds(timeline);
   const candidates = clipPlaces(timeline).filter((place) => (!selected || selected.has(place.id)) && place.atMs < at && at < place.endMs);
-  const fits = (place: ClipPlace) => at - place.atMs >= minMs && place.endMs - at >= minMs;
+  const fits = (place: ClipPlace) => !locked.has(place.trackId) && at - place.atMs >= minMs && place.endMs - at >= minMs;
   for (const place of candidates) {
     if (place.link && !fits(place)) blockedLinks.add(place.link);
   }
@@ -396,7 +400,7 @@ export function canSplitAt(timeline: Timeline, ms: number, only?: string): boole
 
 /**
  * Splits at timeline time `ms`: with `only` set, that clip and its links;
- * otherwise every clip there on every track. Second parts take new
+ * otherwise every clip there on an unlocked track. Second parts take new
  * ids, and the second parts of one link group share a new link. Each part
  * keeps at least `minMs`; a clip that cannot is left whole with its links.
  */
