@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampTrim, EditsError, formatTime, isWhole, MIN_CLIP_MS, parseEdits, serializeEdits, trimOf, type RecordingEdits } from "./edits";
+import { clampTrim, EDITS_VERSION, EditsError, formatTime, isWhole, MIN_CLIP_MS, parseEdits, serializeEdits, trimOf, type RecordingEdits } from "./edits";
 
 const BACKDROP = { fill: "sunset", padding: 48, radius: 24, radiusUnit: "pt" as const, shadow: true, aspect: "9:16" as const };
 
@@ -42,7 +42,7 @@ describe("recording edits sidecar", () => {
   });
 
   it("refuses a version it does not know, so it is never overwritten", () => {
-    expect(() => parseEdits({ version: 5 })).toThrow(EditsError);
+    expect(() => parseEdits({ version: EDITS_VERSION + 1 })).toThrow(EditsError);
     expect(() => parseEdits("edits")).toThrow(EditsError);
   });
 

@@ -65,8 +65,14 @@ use crate::{
 /// src/recording/api.ts.
 pub const VIDEO_SCHEME: &str = "grab-it-video";
 /// The newest edits sidecar format version this build reads and writes:
-/// 2 adds clips, 3 adds gaps, and 4 adds month-qualified source references.
-pub const EDITS_VERSION: u64 = 4;
+/// 2 adds clips, 3 adds gaps, 4 adds month-qualified source references, and
+/// [`CAPTIONS_VERSION`] adds caption cues.
+pub const EDITS_VERSION: u64 = CAPTIONS_VERSION;
+/// The edits sidecar version that adds caption cues. Older builds refuse to
+/// open a recording whose sidecar is at this version, and never overwrite
+/// it, so nothing is lost. Mirrors `CAPTIONS_VERSION` in
+/// src/recording/edits.ts.
+pub const CAPTIONS_VERSION: u64 = 5;
 /// Ends the name of the edits sidecar beside an MP4.
 pub const EDITS_SUFFIX: &str = ".edits.json";
 /// The request header carrying the export plan as URI-encoded JSON.
@@ -207,7 +213,9 @@ pub fn edits_path(video: &Path) -> PathBuf {
 /// `startMs` and `endMs` and an optional `zooms` list, or `{version: 2,
 /// ...}` which may also hold a `clips` list of `{id, source, startMs,
 /// endMs}`. Version 3 adds gaps of `{id, gapMs}`, and version 4 permits
-/// month-qualified clip and zoom sources. The page skips unknown zooms.
+/// month-qualified clip and zoom sources. [`CAPTIONS_VERSION`] adds `captions`, a
+/// `{burnIn, cues, style?}` object whose cues are `{id, source?, startMs,
+/// endMs, text}`. The page skips unknown zooms.
 pub fn validate_edits(value: &Value) -> Result<(), String> {
     let Some(version @ 1..=EDITS_VERSION) = value.get("version").and_then(Value::as_u64) else {
         return Err(format!(
@@ -231,6 +239,7 @@ pub fn validate_edits(value: &Value) -> Result<(), String> {
         Some(Value::Array(_)) => return Err("clips need edits version 2".to_owned()),
         Some(_) => return Err("the clips must be a list".to_owned()),
     }
+    validate_captions(value.get("captions"), version)?;
     match value.get("trim") {
         None | Some(Value::Null) => Ok(()),
         Some(trim) => {
@@ -241,6 +250,57 @@ pub fn validate_edits(value: &Value) -> Result<(), String> {
             }
         }
     }
+}
+
+/// Captions are `{burnIn, cues: [{id, source?, startMs, endMs, text}],
+/// style?}`; cues need [`CAPTIONS_VERSION`], so older builds refuse to open
+/// the recording and never overwrite its sidecar: nothing is lost.
+fn validate_captions(captions: Option<&Value>, version: u64) -> Result<(), String> {
+    let captions = match captions {
+        None | Some(Value::Null) => return Ok(()),
+        Some(Value::Object(captions)) => captions,
+        Some(_) => return Err("the captions must be an object".to_owned()),
+    };
+    if !matches!(captions.get("burnIn"), None | Some(Value::Bool(_))) {
+        return Err("burnIn must be true or false".to_owned());
+    }
+    if !matches!(
+        captions.get("style"),
+        None | Some(Value::Null | Value::Object(_))
+    ) {
+        return Err("the caption style must be an object".to_owned());
+    }
+    let cues = match captions.get("cues") {
+        None | Some(Value::Null) => return Ok(()),
+        Some(Value::Array(cues)) => cues,
+        Some(_) => return Err("the cues must be a list".to_owned()),
+    };
+    if !cues.is_empty() && version < CAPTIONS_VERSION {
+        return Err(format!("cues need edits version {CAPTIONS_VERSION}"));
+    }
+    cues.iter().try_for_each(|cue| {
+        let text = |key: &str| cue.get(key).and_then(Value::as_str);
+        if text("id").is_none_or(str::is_empty) {
+            return Err("a cue needs an id".to_owned());
+        }
+        if text("text").is_none() {
+            return Err("a cue needs its text".to_owned());
+        }
+        match cue.get("source") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(source)) if is_source(source) => {}
+            Some(_) => {
+                return Err(
+                    "a cue's source must be a recording in the recordings folder".to_owned(),
+                );
+            }
+        }
+        let ms = |key: &str| cue.get(key).and_then(Value::as_f64);
+        match (ms("startMs"), ms("endMs")) {
+            (Some(start), Some(end)) if start >= 0.0 && end > start => Ok(()),
+            _ => Err("a cue needs a startMs before its endMs".to_owned()),
+        }
+    })
 }
 
 /// A clip plays a stretch of one source, or is a gap of a specified length.
@@ -1096,6 +1156,122 @@ pub struct ExportPlan {
     /// they were recorded with.
     #[serde(default)]
     pub remove_noise: bool,
+    /// Images laid over the finished frames for a stretch of the output,
+    /// such as captions. Their PNGs follow the mask in the body, in order.
+    #[serde(default)]
+    pub overlays: Vec<ExportOverlay>,
+}
+
+/// An image laid over every output frame from `start_ms` until `end_ms`,
+/// in the exported sequence's time, with its top-left corner at `x`, `y`
+/// in output pixels. Mirrors `ExportOverlay` in src/recording/api.ts.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportOverlay {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    /// How many bytes of the body its PNG takes.
+    pub bytes: usize,
+}
+
+impl ExportOverlay {
+    /// Refuses an overlay that shows for no time or would not fit in a
+    /// `width` × `height` output.
+    fn check(&self, (width, height): (u32, u32)) -> Result<(), String> {
+        if self.start_ms >= self.end_ms {
+            return Err("an overlay must end after it starts".to_owned());
+        }
+        if self.width == 0
+            || self.height == 0
+            || self.bytes == 0
+            || self.x.saturating_add(self.width) > width
+            || self.y.saturating_add(self.height) > height
+        {
+            return Err("an overlay does not fit inside the export".to_owned());
+        }
+        Ok(())
+    }
+}
+
+/// An overlay's PNG, read from the body, and when it shows. The PNG is
+/// decoded only when its time comes and dropped once it has passed, so a
+/// long export holds the pixels of only the overlays on screen.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverlayImage {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub x: u32,
+    pub y: u32,
+    pub png: Vec<u8>,
+    /// The decoded image while it shows.
+    pub image: Option<RgbaImage>,
+}
+
+impl OverlayImage {
+    /// Whether it shows on the frame `ms` into the output.
+    fn shows_at(&self, ms: u64) -> bool {
+        (self.start_ms..self.end_ms).contains(&ms)
+    }
+
+    /// The decoded image, decoding the PNG the first time.
+    fn decoded(&mut self) -> Result<&RgbaImage, String> {
+        match &mut self.image {
+            Some(image) => Ok(image),
+            empty => Ok(empty.insert(decode_png(&self.png, "overlay")?)),
+        }
+    }
+
+    /// Lays `image` over `frame` at `(x, y)` with its own transparency.
+    fn draw(image: &RgbaImage, x: u32, y: u32, frame: &mut RgbaImage) {
+        let (left, top) = (x, y);
+        let (frame_width, frame_height) = frame.dimensions();
+        for (col, row, pixel) in image.enumerate_pixels() {
+            let (x, y) = (left + col, top + row);
+            if x >= frame_width || y >= frame_height {
+                continue;
+            }
+            let alpha = u32::from(pixel.0[3]);
+            if alpha == 0 {
+                continue;
+            }
+            let under = frame.get_pixel_mut(x, y);
+            for channel in 0..3 {
+                let below = u32::from(under.0[channel]);
+                let over = u32::from(pixel.0[channel]);
+                under.0[channel] = ((over * alpha + below * (255 - alpha) + 127) / 255) as u8;
+            }
+            let below = u32::from(under.0[3]);
+            under.0[3] = (alpha + (below * (255 - alpha) + 127) / 255) as u8;
+        }
+    }
+}
+
+/// Lays every overlay showing `ms` into the output over `frame`, in order,
+/// decoding each as its time comes and dropping the pixels of those whose
+/// time has passed. Frames come in order, so a dropped one never shows again.
+fn draw_overlays(
+    frame: &mut RgbaImage,
+    overlays: &mut [OverlayImage],
+    ms: u64,
+) -> Result<(), String> {
+    for overlay in overlays.iter_mut() {
+        if ms >= overlay.end_ms {
+            overlay.image = None;
+        } else if overlay.shows_at(ms) {
+            let (x, y) = (overlay.x, overlay.y);
+            OverlayImage::draw(overlay.decoded()?, x, y, frame);
+        }
+    }
+    Ok(())
+}
+
+/// How far into the output frame `index` is, at `fps`.
+fn frame_ms(index: u64, fps: u32) -> u64 {
+    index * 1000 / u64::from(fps.max(1))
 }
 
 impl ExportPlan {
@@ -1118,6 +1294,9 @@ impl ExportPlan {
         if !self.clips.iter().any(|entry| entry.clip().is_some()) {
             return Err("there is nothing to export".to_owned());
         }
+        self.overlays
+            .iter()
+            .try_for_each(|overlay| overlay.check((self.width, self.height)))?;
         self.clips
             .iter()
             .try_for_each(|entry| entry.check((self.video_width, self.video_height)))
@@ -1455,24 +1634,81 @@ impl Composer {
     }
 }
 
-/// Splits the export request's body into the backdrop and mask images.
+/// Reads a PNG from the export request's body.
+fn decode_png(bytes: &[u8], what: &str) -> Result<RgbaImage, String> {
+    image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+        .map(|image| image.into_rgba8())
+        .map_err(|err| format!("could not read the {what}: {err}"))
+}
+
+/// The width and height a PNG says it has, read from its header without
+/// decoding its pixels.
+fn png_size(bytes: &[u8]) -> Result<(u32, u32), String> {
+    image::ImageReader::with_format(io::Cursor::new(bytes), image::ImageFormat::Png)
+        .into_dimensions()
+        .map_err(|err| format!("could not read the overlay: {err}"))
+}
+
+/// The backdrop and mask images, when sent, and the overlays' PNGs.
+type ExportBody = (Option<(RgbaImage, RgbaImage)>, Vec<OverlayImage>);
+
+/// Splits the export request's body into the backdrop and mask images
+/// and the overlays' PNGs, which come last. Each overlay's size is checked
+/// from its PNG's header; its pixels are decoded only while it shows.
+fn read_body(body: &[u8], plan: &ExportPlan) -> Result<ExportBody, String> {
+    let overlay_bytes = plan
+        .overlays
+        .iter()
+        .try_fold(0usize, |total, overlay| total.checked_add(overlay.bytes))
+        .filter(|&total| total <= body.len())
+        .ok_or("the export is missing its overlays")?;
+    let (layers, mut rest) = body.split_at(body.len() - overlay_bytes);
+    let layers = backdrop_and_mask(layers, plan)?;
+    let overlays = plan
+        .overlays
+        .iter()
+        .map(|overlay| {
+            let (png, next) = rest.split_at(overlay.bytes);
+            rest = next;
+            if png_size(png)? != (overlay.width, overlay.height) {
+                return Err(format!(
+                    "an overlay must be {}×{}",
+                    overlay.width, overlay.height
+                ));
+            }
+            Ok(OverlayImage {
+                start_ms: overlay.start_ms,
+                end_ms: overlay.end_ms,
+                x: overlay.x,
+                y: overlay.y,
+                png: png.to_vec(),
+                image: None,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((layers, overlays))
+}
+
+/// Splits the body's layers, everything before the overlays, into the
+/// backdrop and mask images.
 fn backdrop_and_mask(
     body: &[u8],
     plan: &ExportPlan,
 ) -> Result<Option<(RgbaImage, RgbaImage)>, String> {
     if plan.backdrop_bytes == 0 {
+        if !body.is_empty() {
+            return Err("the export has a mask without a backdrop".to_owned());
+        }
         return Ok(None);
     }
     if plan.backdrop_bytes >= body.len() {
         return Err("the export is missing its mask".to_owned());
     }
     let (backdrop, mask) = body.split_at(plan.backdrop_bytes);
-    let decode = |bytes: &[u8], what: &str| {
-        image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
-            .map(|image| image.into_rgba8())
-            .map_err(|err| format!("could not read the {what}: {err}"))
-    };
-    Ok(Some((decode(backdrop, "backdrop")?, decode(mask, "mask")?)))
+    Ok(Some((
+        decode_png(backdrop, "backdrop")?,
+        decode_png(mask, "mask")?,
+    )))
 }
 
 /// The recording behind one clip of an export.
@@ -1495,6 +1731,8 @@ struct ExportJob<'a> {
     sources: Vec<Option<ClipSource>>,
     /// The backdrop and mask, or none for the video alone.
     layers: Option<(RgbaImage, RgbaImage)>,
+    /// What is laid over the finished frames, and when.
+    overlays: Vec<OverlayImage>,
     /// The opened recording's frame rate, which every clip is decoded at.
     fps: u32,
     bits_per_pixel: f64,
@@ -1575,6 +1813,7 @@ fn render(
         plan,
         sources,
         layers,
+        mut overlays,
         fps,
         bits_per_pixel,
         noise_model,
@@ -1641,7 +1880,14 @@ fn render(
                     let frame = gap_frame()?;
                     for _ in 0..entry.frames(fps) {
                         check_cancelled(cancelled)?;
-                        video.write(&frame).map_err(|err| err.to_string())?;
+                        let ms = frame_ms(done, fps);
+                        if overlays.iter().any(|overlay| overlay.shows_at(ms)) {
+                            let mut covered = frame.clone();
+                            draw_overlays(&mut covered, &mut overlays, ms)?;
+                            video.write(&covered).map_err(|err| err.to_string())?;
+                        } else {
+                            video.write(&frame).map_err(|err| err.to_string())?;
+                        }
                         done += 1;
                         report(done);
                     }
@@ -1676,11 +1922,12 @@ fn render(
                     place_in_box(shown, clip, &mut boxed, plan.video_width);
                     shown = &boxed;
                 }
-                let frame = match &composer {
+                let mut frame = match &composer {
                     Some(composer) => composer.compose(shown),
                     None => RgbaImage::from_raw(plan.width, plan.height, shown.to_vec())
                         .ok_or("a frame was the wrong size")?,
                 };
+                draw_overlays(&mut frame, &mut overlays, frame_ms(done, fps))?;
                 video.write(&frame).map_err(|err| err.to_string())?;
                 done += 1;
                 report(done);
@@ -1823,7 +2070,7 @@ fn export(
         done: 0,
         total: plan.frames(fps),
     });
-    let layers = backdrop_and_mask(body, &plan)?;
+    let (layers, overlays) = read_body(body, &plan)?;
     let bits_per_pixel = app
         .try_state::<SettingsState>()
         .map(|state| lock(&state).get().recording.quality.bits_per_pixel())
@@ -1843,6 +2090,7 @@ fn export(
         plan,
         sources,
         layers,
+        overlays,
         fps,
         bits_per_pixel,
         noise_model,
@@ -2201,6 +2449,7 @@ mod tests {
             video_height: 540,
             backdrop_bytes: 10,
             remove_noise: false,
+            overlays: Vec::new(),
         }
     }
 
@@ -2243,6 +2492,7 @@ mod tests {
             output: &output,
             plan: plan(),
             layers: None,
+            overlays: Vec::new(),
             sources: vec![],
             fps: 30,
             bits_per_pixel: 0.1,
@@ -2330,9 +2580,11 @@ esac
                 y: 0,
                 backdrop_bytes: 0,
                 remove_noise: false,
+                overlays: Vec::new(),
             },
             sources: vec![source],
             layers: None,
+            overlays: Vec::new(),
             fps: 4,
             bits_per_pixel: 0.1,
             noise_model: None,
@@ -2460,8 +2712,49 @@ esac
     }
 
     #[test]
+    fn captions_need_valid_cues_and_the_captions_version() {
+        let cue = json!({ "id": "c1", "startMs": 0, "endMs": 1500, "text": "Hello" });
+        let with =
+            |version: u64, captions: Value| json!({ "version": version, "captions": captions });
+        assert!(
+            validate_edits(&with(
+                CAPTIONS_VERSION,
+                json!({ "burnIn": true, "cues": [cue.clone()] })
+            ))
+            .is_ok()
+        );
+        assert!(
+            validate_edits(&with(
+                CAPTIONS_VERSION - 1,
+                json!({ "burnIn": true, "cues": [cue.clone()] })
+            ))
+            .is_err()
+        );
+        // No cues needs no new version.
+        assert!(validate_edits(&with(1, json!({ "burnIn": false, "cues": [] }))).is_ok());
+        assert!(validate_edits(&with(CAPTIONS_VERSION, json!([]))).is_err());
+        assert!(validate_edits(&with(CAPTIONS_VERSION, json!({ "burnIn": "yes" }))).is_err());
+        assert!(validate_edits(&with(CAPTIONS_VERSION, json!({ "cues": {} }))).is_err());
+        assert!(validate_edits(&with(CAPTIONS_VERSION, json!({ "style": 3 }))).is_err());
+        let bad = |change: Value| {
+            let mut cue = cue.clone();
+            cue.as_object_mut()
+                .unwrap()
+                .extend(change.as_object().unwrap().clone());
+            validate_edits(&with(CAPTIONS_VERSION, json!({ "cues": [cue] }))).is_err()
+        };
+        assert!(bad(json!({ "id": "" })));
+        assert!(bad(json!({ "text": 3 })));
+        assert!(bad(json!({ "endMs": 0 })));
+        assert!(bad(json!({ "startMs": -1 })));
+        assert!(bad(json!({ "source": "../escape.mp4" })));
+        assert!(!bad(json!({ "source": "2026-05/talk.mp4" })));
+    }
+
+    #[test]
     fn unknown_or_broken_edits_are_refused() {
-        assert!(validate_edits(&json!({ "version": 5 })).is_err());
+        assert!(validate_edits(&json!({ "version": EDITS_VERSION + 1 })).is_err());
+        assert!(validate_edits(&json!({ "version": EDITS_VERSION })).is_ok());
         assert!(validate_edits(&json!({})).is_err());
         assert!(validate_edits(&json!({ "version": 1 })).is_ok());
         assert!(validate_edits(&json!({ "version": 1, "trim": null })).is_ok());
@@ -3145,5 +3438,243 @@ esac
             Ok(None)
         );
         assert!(backdrop_and_mask(&backdrop, &plan).is_err());
+    }
+
+    fn overlay(start_ms: u64, end_ms: u64) -> ExportOverlay {
+        ExportOverlay {
+            start_ms,
+            end_ms,
+            x: 10,
+            y: 1800,
+            width: 200,
+            height: 100,
+            bytes: 64,
+        }
+    }
+
+    #[test]
+    fn overlays_come_with_the_plan_and_are_none_without_them() {
+        let json = |extra: &str| {
+            format!(
+                r#"{{"clips":[{{"source":"a.mp4","startMs":0,"endMs":5000,
+                    "sourceWidth":1920,"sourceHeight":1080,"x":0,"y":0,"width":1920,"height":1080}}],
+                    "width":1920,"height":1080,"x":0,"y":0,
+                    "videoWidth":1920,"videoHeight":1080,"backdropBytes":0{extra}}}"#
+            )
+        };
+        let plan = |extra: &str| serde_json::from_str::<ExportPlan>(&json(extra)).unwrap();
+        assert!(plan("").overlays.is_empty());
+        assert_eq!(
+            plan(
+                r#","overlays":[{"startMs":100,"endMs":900,"x":4,"y":8,"width":20,"height":10,"bytes":55}]"#
+            )
+            .overlays,
+            vec![ExportOverlay {
+                start_ms: 100,
+                end_ms: 900,
+                x: 4,
+                y: 8,
+                width: 20,
+                height: 10,
+                bytes: 55,
+            }]
+        );
+    }
+
+    #[test]
+    fn overlays_must_fit_and_show_for_a_while() {
+        let with = |overlay: ExportOverlay| ExportPlan {
+            overlays: vec![overlay],
+            ..plan()
+        };
+        assert_eq!(with(overlay(0, 1000)).check(), Ok(()));
+        // The output is 1080×1920.
+        assert_eq!(
+            with(ExportOverlay {
+                x: 880,
+                y: 1820,
+                ..overlay(0, 1000)
+            })
+            .check(),
+            Ok(())
+        );
+        for refused in [
+            overlay(1000, 1000),
+            overlay(2000, 1000),
+            ExportOverlay {
+                x: 881,
+                ..overlay(0, 1000)
+            },
+            ExportOverlay {
+                y: 1821,
+                ..overlay(0, 1000)
+            },
+            ExportOverlay {
+                width: 0,
+                ..overlay(0, 1000)
+            },
+            ExportOverlay {
+                bytes: 0,
+                ..overlay(0, 1000)
+            },
+            ExportOverlay {
+                x: u32::MAX,
+                ..overlay(0, 1000)
+            },
+        ] {
+            assert!(with(refused.clone()).check().is_err(), "{refused:?}");
+        }
+    }
+
+    #[test]
+    fn overlay_pngs_follow_the_mask_in_the_body() {
+        let png = |colour: [u8; 4], width: u32, height: u32| {
+            let mut bytes = Vec::new();
+            RgbaImage::from_pixel(width, height, Rgba(colour))
+                .write_to(&mut io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+                .unwrap();
+            bytes
+        };
+        let backdrop = png([1, 2, 3, 255], 2, 2);
+        let mask = png([255, 255, 255, 0], 2, 2);
+        let first = png([9, 9, 9, 255], 3, 1);
+        let second = png([7, 7, 7, 128], 1, 2);
+        let overlays = vec![
+            ExportOverlay {
+                width: 3,
+                height: 1,
+                bytes: first.len(),
+                ..overlay(0, 500)
+            },
+            ExportOverlay {
+                width: 1,
+                height: 2,
+                bytes: second.len(),
+                ..overlay(500, 900)
+            },
+        ];
+        let plan = ExportPlan {
+            backdrop_bytes: backdrop.len(),
+            overlays: overlays.clone(),
+            ..plan()
+        };
+        let body = [
+            backdrop.clone(),
+            mask.clone(),
+            first.clone(),
+            second.clone(),
+        ]
+        .concat();
+        let (layers, read) = read_body(&body, &plan).unwrap();
+        let (read_backdrop, read_mask) = layers.unwrap();
+        assert_eq!(read_backdrop.get_pixel(0, 0), &Rgba([1, 2, 3, 255]));
+        assert_eq!(read_mask.get_pixel(1, 1).0[3], 0);
+        assert_eq!(read.len(), 2);
+        // Kept as PNGs, decoded only when they show.
+        assert!(read.iter().all(|overlay| overlay.image.is_none()));
+        assert_eq!(read[0].png, first);
+        assert_eq!((read[1].start_ms, read[1].end_ms), (500, 900));
+        let mut second_read = read[1].clone();
+        assert_eq!(
+            second_read.decoded().unwrap().get_pixel(0, 1),
+            &Rgba([7, 7, 7, 128])
+        );
+
+        // Without a backdrop the overlays are the whole body.
+        let alone = ExportPlan {
+            backdrop_bytes: 0,
+            ..plan.clone()
+        };
+        let (layers, read) = read_body(&[first.clone(), second.clone()].concat(), &alone).unwrap();
+        assert!(layers.is_none());
+        assert_eq!(read.len(), 2);
+
+        // Missing or wrongly sized overlays refuse the export.
+        assert!(
+            read_body(
+                &[backdrop.clone(), mask.clone(), first.clone()].concat(),
+                &plan
+            )
+            .is_err()
+        );
+        let wrong_size = ExportPlan {
+            overlays: vec![ExportOverlay {
+                width: 2,
+                ..overlays[0].clone()
+            }],
+            ..plan.clone()
+        };
+        assert!(read_body(&[backdrop, mask, first].concat(), &wrong_size).is_err());
+    }
+
+    #[test]
+    fn overlays_are_laid_over_the_frames_they_show_on() {
+        let mut image = RgbaImage::new(2, 1);
+        image.put_pixel(0, 0, Rgba([255, 255, 255, 255]));
+        // Half see-through.
+        image.put_pixel(1, 0, Rgba([255, 255, 255, 128]));
+        let mut png = Vec::new();
+        image
+            .write_to(&mut io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut overlays = [OverlayImage {
+            start_ms: 1000,
+            end_ms: 2000,
+            x: 1,
+            y: 1,
+            png,
+            image: None,
+        }];
+        let frame = || RgbaImage::from_pixel(4, 2, Rgba([0, 0, 0, 255]));
+
+        // Not decoded before its time.
+        let mut before = frame();
+        draw_overlays(&mut before, &mut overlays, 999).unwrap();
+        assert_eq!(before, frame());
+        assert!(overlays[0].image.is_none());
+
+        let mut shown = frame();
+        draw_overlays(&mut shown, &mut overlays, 1000).unwrap();
+        assert!(overlays[0].image.is_some());
+        assert_eq!(shown.get_pixel(0, 1), &Rgba([0, 0, 0, 255]));
+        assert_eq!(shown.get_pixel(1, 1), &Rgba([255, 255, 255, 255]));
+        assert_eq!(shown.get_pixel(2, 1), &Rgba([128, 128, 128, 255]));
+        assert_eq!(shown.get_pixel(3, 1), &Rgba([0, 0, 0, 255]));
+        assert_eq!(shown.get_pixel(1, 0), &Rgba([0, 0, 0, 255]));
+
+        // Dropped once its time has passed.
+        let mut after = frame();
+        draw_overlays(&mut after, &mut overlays, 2000).unwrap();
+        assert_eq!(after, frame());
+        assert!(overlays[0].image.is_none());
+    }
+
+    #[test]
+    fn an_overlay_whose_pixels_cannot_be_read_fails_the_frame() {
+        let mut png = Vec::new();
+        RgbaImage::new(2, 2)
+            .write_to(&mut io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        // The header still reads, but the pixel data is cut off.
+        png.truncate(png.len() - 16);
+        assert_eq!(png_size(&png), Ok((2, 2)));
+        let mut overlays = [OverlayImage {
+            start_ms: 0,
+            end_ms: 100,
+            x: 0,
+            y: 0,
+            png,
+            image: None,
+        }];
+        let mut frame = RgbaImage::new(2, 2);
+        assert!(draw_overlays(&mut frame, &mut overlays, 0).is_err());
+    }
+
+    #[test]
+    fn frames_are_timed_in_the_output() {
+        assert_eq!(frame_ms(0, 30), 0);
+        assert_eq!(frame_ms(30, 30), 1000);
+        assert_eq!(frame_ms(45, 30), 1500);
+        assert_eq!(frame_ms(5, 4), 1250);
     }
 }

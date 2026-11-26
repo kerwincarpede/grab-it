@@ -24,3 +24,18 @@ Grab-it updates itself, so every release opens files that older releases wrote, 
 - `<name>.meta.json`, `<name>.annotations.json` and `<name>.edits.json` are formats with versions.
 - A version this build can't read throws, so the file is never overwritten. Keep it that way. Within a version it knows, a reader skips entries it doesn't recognise (such as an unknown annotation shape) instead of failing.
 - Adding an optional field doesn't need a new version. Changing what an existing field means does.
+- `<name>.transcript.json` is written by **Transcribe** in the video editor and kept beside its recording, moved, renamed and deleted with it (`library::extra_files`, and the mp4 and gif siblings `SaveDestination::reserve` keeps free). Version 1:
+
+  ```json
+  {
+    "version": 1,
+    "model": "whisper-base",
+    "language": "en",
+    "segments": [
+      { "startMs": 0, "endMs": 2400, "text": "Click Save.", "words": [{ "text": "Click", "startMs": 0, "endMs": 600 }, { "text": "Save.", "startMs": 650, "endMs": 1300 }] }
+    ]
+  }
+  ```
+
+  Times are in the recording. Editing captions never rewrites it; only transcribing again does.
+- `<name>.edits.json` is at version 5 when it holds `captions` (`{burnIn, style?, cues: [{id, source?, startMs, endMs, text}]}`), so builds that read only versions 1 to 4 refuse to open the recording ("unsupported edits version 5") and never overwrite the sidecar: nothing is lost, and a build that reads version 5 opens it again. A sidecar without captions keeps the oldest version its other edits need. A cue's `source` works as a zoom's: absent for the sidecar's own recording.

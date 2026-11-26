@@ -80,7 +80,7 @@ pub struct RecordingPauses {
 /// microphone kept apart in `video`'s sound sidecar when there is one,
 /// else the MP4's one track. A microphone in the MP4 itself (its sidecar
 /// never written) is not kept apart, so it counts as mixed.
-fn pause_source(
+pub(crate) fn pause_source(
     video: &Path,
     kinds: &[(AudioKind, PathBuf, usize)],
 ) -> (PauseSound, Option<(PathBuf, usize)>) {

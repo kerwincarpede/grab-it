@@ -1,0 +1,2378 @@
+//! Transcribe a recording into timed text for its captions, on this
+//! computer.
+//!
+//! The multilingual Whisper base model (`onnx-community/whisper-base`, at a
+//! pinned revision) is downloaded once into `whisper-models/` in the app's
+//! data folder, each file checked against its pinned SHA-256, and runs with
+//! rten. The recording's sound is read through the bundled ffmpeg as 16 kHz
+//! mono, picked as Suggest edits picks it, and decoded 30 seconds at a time
+//! as `rten-examples`' whisper example does. Nothing is sent anywhere but
+//! the model download from Hugging Face.
+//!
+//! The transcript is saved beside its recording as `<name>.transcript.json`
+//! and never changes the recording or its edits: the page turns it into
+//! caption cues.
+
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use rten::Model;
+use rten_generate::filter::LogitsFilter;
+use rten_generate::generator::TokenId;
+use rten_generate::{Generator, GeneratorUtils, Logits};
+use rten_tensor::NdTensor;
+use rten_tensor::prelude::*;
+use rten_text::Tokenizer;
+use rustfft::FftPlanner;
+use rustfft::num_complex::Complex;
+use serde::{Deserialize, Serialize};
+use tauri::{Emitter, EventTarget, Manager, State};
+
+use crate::capture::sidecar_path;
+use crate::ffmpeg;
+use crate::recording_editor::{RecordingEditorState, audio_sources};
+use crate::recording_suggest::{PauseSound, pause_source};
+use crate::rt::{AppHandle, WebviewWindow};
+
+/// The transcript sidecar's format version.
+pub const TRANSCRIPT_VERSION: u64 = 1;
+/// Ends the name of the transcript sidecar beside an MP4.
+pub const TRANSCRIPT_SUFFIX: &str = ".transcript.json";
+/// Emitted to the transcribing window with a [`TranscribeProgress`].
+pub const TRANSCRIBE_PROGRESS_EVENT: &str = "recording-transcribe-progress";
+/// The folder in the app's data folder the model is kept in.
+pub const MODELS_DIR: &str = "whisper-models";
+/// The model, as the transcript names it.
+pub const MODEL_NAME: &str = "whisper-base";
+/// The Hugging Face repository and the revision of it downloaded.
+const MODEL_REPO: &str = "onnx-community/whisper-base";
+const MODEL_REVISION: &str = "27a07b4b52b3a4c5886134bb4320e93e1a4bbc7c";
+
+/// A file of the model: its path in the repository, size and SHA-256.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelFile {
+    pub path: &'static str,
+    pub bytes: u64,
+    pub sha256: &'static str,
+}
+
+impl ModelFile {
+    /// Where it is kept, under the models folder: its own name, so the
+    /// repository's `onnx/` folder is not made.
+    fn local(&self, dir: &Path) -> PathBuf {
+        dir.join(self.path.rsplit('/').next().unwrap_or(self.path))
+    }
+}
+
+/// Every file the model needs, at [`MODEL_REVISION`].
+pub const MODEL_FILES: [ModelFile; 3] = [
+    ModelFile {
+        path: "onnx/encoder_model.onnx",
+        bytes: 82_468_078,
+        sha256: "a9f3b752833b49e880dec91ee5b6d936112be7c3ea07c221024ba493439f46fe",
+    },
+    ModelFile {
+        path: "onnx/decoder_model_merged.onnx",
+        bytes: 208_521_528,
+        sha256: "514903744bb1b45803ec571af99b31110491c6f77b0a154825866995fb124b73",
+    },
+    ModelFile {
+        path: "tokenizer.json",
+        bytes: 2_480_466,
+        sha256: "27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566",
+    },
+];
+
+/// How long the download may stall before it gives up.
+const DOWNLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long reading one recording's sound may take.
+const SOUND_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// The sample rate, FFT size and hop Whisper's log-mel input is made at.
+pub const SAMPLE_RATE: usize = 16_000;
+const N_FFT: usize = 400;
+const HOP: usize = 160;
+const N_MELS: usize = 80;
+/// One window of sound, and its frames of log-mel input.
+pub const WINDOW_SAMPLES: usize = 30 * SAMPLE_RATE;
+const WINDOW_FRAMES: usize = WINDOW_SAMPLES / HOP;
+/// The most tokens one window decodes, as Whisper allows.
+const MAX_TOKENS: usize = 224;
+
+/// Whisper's special tokens (the multilingual vocabulary).
+const END_OF_TEXT: TokenId = 50257;
+const START_OF_TRANSCRIPT: TokenId = 50258;
+const FIRST_LANGUAGE: TokenId = 50259;
+const LAST_LANGUAGE: TokenId = 50357;
+const TRANSCRIBE: TokenId = 50359;
+const NO_TIMESTAMPS: TokenId = 50363;
+/// The language each language token stands for, from `<|en|>` on.
+const LANGUAGES: [&str; 99] = [
+    "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl", "ca", "nl", "ar", "sv", "it",
+    "id", "hi", "fi", "vi", "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no", "th", "ur",
+    "hr", "bg", "lt", "la", "mi", "ml", "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl", "kn",
+    "et", "mk", "br", "eu", "is", "hy", "ne", "mn", "bs", "kk", "sq", "sw", "gl", "mr", "pa", "si",
+    "km", "sn", "yo", "so", "af", "oc", "ka", "be", "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo",
+    "ht", "ps", "tk", "nn", "mt", "sa", "lb", "my", "bo", "tl", "mg", "as", "tt", "haw", "ln",
+    "ha", "ba", "jw", "su",
+];
+/// `<|0.00|>`; each later timestamp token is 20 ms on.
+pub const TIMESTAMP_BEGIN: TokenId = 50364;
+const TIMESTAMP_MS: u64 = 20;
+
+/// The model's input and output names.
+const ENCODER_INPUT: &str = "input_features";
+const ENCODER_OUTPUT: &str = "last_hidden_state";
+const DECODER_ENCODER_INPUT: &str = "encoder_hidden_states";
+
+/// One word, in the recording's own time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptWord {
+    pub text: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+/// One stretch Whisper heard, in the recording's own time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptSegment {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub text: String,
+    pub words: Vec<TranscriptWord>,
+}
+
+/// `<name>.transcript.json`: what was said in one recording.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Transcript {
+    pub version: u64,
+    pub model: String,
+    /// The language Whisper heard, as its code (`en`); None when nothing
+    /// was heard.
+    pub language: Option<String>,
+    /// Sorted, never overlapping; empty when there was no voice to hear.
+    pub segments: Vec<TranscriptSegment>,
+}
+
+/// What transcribing is doing, for its progress bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TranscribeStage {
+    /// Downloading the model, in bytes.
+    Download,
+    /// Hearing the recording, in milliseconds of its sound.
+    Transcribe,
+}
+
+/// How far transcribing one recording is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscribeProgress {
+    pub source: String,
+    pub stage: TranscribeStage,
+    pub done: u64,
+    pub total: u64,
+}
+
+/// Whether the model is downloaded, and how big it is, so Transcribe can
+/// say what it will download.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscribeModel {
+    pub downloaded: bool,
+    pub bytes: u64,
+}
+
+/// The transcription running in each editor window, by window label.
+#[derive(Default)]
+pub struct TranscribeState {
+    running: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+impl TranscribeState {
+    pub(crate) fn begin(&self, label: &str) -> Result<Arc<AtomicBool>, String> {
+        let mut running = self.running.lock().unwrap_or_else(|err| err.into_inner());
+        if running.contains_key(label) {
+            return Err("Transcribing is already running".into());
+        }
+        let flag = Arc::new(AtomicBool::new(false));
+        running.insert(label.to_owned(), flag.clone());
+        Ok(flag)
+    }
+
+    fn cancel(&self, label: &str) {
+        if let Some(flag) = self
+            .running
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .get(label)
+        {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn finish(&self, label: &str) {
+        self.running
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(label);
+    }
+}
+
+const CANCELLED: &str = "Transcribing cancelled";
+
+fn check_cancelled(flag: &AtomicBool) -> Result<(), String> {
+    if flag.load(Ordering::Relaxed) {
+        Err(CANCELLED.into())
+    } else {
+        Ok(())
+    }
+}
+
+/// The transcript sidecar of a recording: `<name>.mp4` gives
+/// `<name>.transcript.json`.
+pub fn transcript_path(video: &Path) -> PathBuf {
+    sidecar_path(video, TRANSCRIPT_SUFFIX)
+}
+
+/// Reads `<recording>.transcript.json`; a missing file is `Ok(None)`. A
+/// newer version is refused, so it is never overwritten by mistake.
+pub fn read_transcript(video: &Path) -> Result<Option<Transcript>, String> {
+    let path = transcript_path(video);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(format!("could not read {}: {err}", path.display())),
+    };
+    let transcript: Transcript = serde_json::from_str(&text)
+        .map_err(|err| format!("could not parse {}: {err}", path.display()))?;
+    if !(1..=TRANSCRIPT_VERSION).contains(&transcript.version) {
+        return Err(format!(
+            "{} is from a newer version of Grab-it",
+            path.display()
+        ));
+    }
+    Ok(Some(transcript))
+}
+
+/// Writes the sidecar through a temporary file, as the edits are written,
+/// so a crash never leaves a half-written one.
+pub fn write_transcript(video: &Path, transcript: &Transcript) -> Result<(), String> {
+    let path = transcript_path(video);
+    let tmp = path.with_extension("json.tmp");
+    let mut json = serde_json::to_string_pretty(transcript).map_err(|err| err.to_string())?;
+    json.push('\n');
+    fs::write(&tmp, json)
+        .and_then(|()| fs::rename(&tmp, &path))
+        .map_err(|err| format!("could not save the transcript: {err}"))
+}
+
+/// The bytes the whole model downloads.
+pub fn model_bytes() -> u64 {
+    MODEL_FILES.iter().map(|file| file.bytes).sum()
+}
+
+/// Whether every model file is in `dir` at its pinned size. Its checksum
+/// was checked when it was downloaded.
+pub fn model_present(dir: &Path) -> bool {
+    MODEL_FILES.iter().all(|file| {
+        fs::metadata(file.local(dir)).is_ok_and(|meta| meta.is_file() && meta.len() == file.bytes)
+    })
+}
+
+/// Deletes every model file in `dir`, as when one fails to load, so the
+/// next Transcribe downloads them again.
+pub fn remove_model(dir: &Path) {
+    for file in &MODEL_FILES {
+        let _ = fs::remove_file(file.local(dir));
+    }
+}
+
+/// Numbers each partial download, so two windows downloading at once
+/// never write the same file.
+static NEXT_PART: AtomicU64 = AtomicU64::new(0);
+/// The partial downloads this process is writing now.
+static ACTIVE_PARTS: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
+
+/// A partial download of this process, deregistered when dropped.
+struct Part(PathBuf);
+
+impl Part {
+    fn new(to: &Path) -> Self {
+        let n = NEXT_PART.fetch_add(1, Ordering::Relaxed);
+        let path = to.with_extension(format!("part-{}-{n}", std::process::id()));
+        if let Ok(mut active) = ACTIVE_PARTS.lock() {
+            active.get_or_insert_with(HashSet::new).insert(path.clone());
+        }
+        Self(path)
+    }
+}
+
+impl Drop for Part {
+    fn drop(&mut self) {
+        if let Ok(mut active) = ACTIVE_PARTS.lock()
+            && let Some(active) = active.as_mut()
+        {
+            active.remove(&self.0);
+        }
+    }
+}
+
+/// Removes the partial downloads in `dir` that no download of this process
+/// is writing: ones a crash or a lost connection left behind.
+fn remove_stale_parts(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    // Held for the whole walk, so no download starts and is removed here.
+    let Ok(active) = ACTIVE_PARTS.lock() else {
+        return;
+    };
+    let active = active.as_ref();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let partial = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.starts_with("part-"));
+        if partial && !active.is_some_and(|active| active.contains(&path)) {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
+
+/// Passes progress on at most once per 1% or [`PROGRESS_EVERY`], and
+/// always the end, so a fast download doesn't flood the page with events.
+struct Throttle {
+    sent: Option<(u64, Instant)>,
+}
+
+/// The longest a download goes without telling its progress.
+const PROGRESS_EVERY: Duration = Duration::from_millis(250);
+
+impl Throttle {
+    fn new() -> Self {
+        Self { sent: None }
+    }
+
+    /// Whether progress `done` of `total`, told at `now`, is passed on.
+    fn due(&mut self, done: u64, total: u64, now: Instant) -> bool {
+        let due = match self.sent {
+            None => true,
+            Some((last, at)) => {
+                done >= total
+                    || done.saturating_sub(last) >= total / 100
+                    || now.duration_since(at) >= PROGRESS_EVERY
+            }
+        };
+        if due {
+            self.sent = Some((done, now));
+        }
+        due
+    }
+}
+
+/// Where a model file is downloaded from.
+fn model_url(base_url: &str, file: &ModelFile) -> String {
+    format!(
+        "{base_url}/{MODEL_REPO}/resolve/{MODEL_REVISION}/{}",
+        file.path
+    )
+}
+
+/// Downloads every model file `dir` lacks from `base_url` (Hugging Face's
+/// in the app), each written beside its place and renamed in only once its
+/// SHA-256 matches. `progress` gets the bytes downloaded of all files and
+/// their total; the download stops between chunks once `cancelled` is set.
+pub fn download_model(
+    agent: &ureq::Agent,
+    base_url: &str,
+    files: &[ModelFile],
+    dir: &Path,
+    cancelled: &AtomicBool,
+    mut progress: impl FnMut(u64, u64),
+) -> Result<(), String> {
+    fs::create_dir_all(dir).map_err(|err| format!("could not make {}: {err}", dir.display()))?;
+    remove_stale_parts(dir);
+    let total: u64 = files.iter().map(|file| file.bytes).sum();
+    let mut throttle = Throttle::new();
+    let mut progress = |done: u64, total: u64| {
+        if throttle.due(done, total, Instant::now()) {
+            progress(done, total);
+        }
+    };
+    let mut before = 0u64;
+    for file in files {
+        let to = file.local(dir);
+        if fs::metadata(&to).is_ok_and(|meta| meta.len() == file.bytes) {
+            before += file.bytes;
+            progress(before, total);
+            continue;
+        }
+        let part = Part::new(&to);
+        let part = &part.0;
+        let result = ffmpeg::download_hashed_until(
+            agent,
+            &model_url(base_url, file),
+            part,
+            &mut |done, _| progress(before + done, total),
+            &|| cancelled.load(Ordering::Relaxed),
+        )
+        .map_err(|err| {
+            if cancelled.load(Ordering::Relaxed) {
+                CANCELLED.to_owned()
+            } else {
+                format!("could not download the speech model: {err}")
+            }
+        })
+        .and_then(|actual| {
+            if actual == file.sha256 {
+                fs::rename(part, &to).map_err(|err| err.to_string())
+            } else {
+                Err(format!(
+                    "the speech model's {} did not match its checksum",
+                    file.path
+                ))
+            }
+        });
+        if result.is_err() {
+            let _ = fs::remove_file(part);
+        }
+        result?;
+        before += file.bytes;
+    }
+    Ok(())
+}
+
+/// ffmpeg's arguments to write audio stream `stream` of `file` to stdout as
+/// 16 kHz mono signed 16-bit samples.
+pub fn sound_args(file: &Path, stream: usize) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = ["-hide_banner", "-loglevel", "error", "-i"]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    args.push(file.as_os_str().to_owned());
+    for arg in [
+        "-map".to_owned(),
+        format!("0:a:{stream}"),
+        "-ac".to_owned(),
+        "1".to_owned(),
+        "-ar".to_owned(),
+        SAMPLE_RATE.to_string(),
+        "-f".to_owned(),
+        "s16le".to_owned(),
+        "-".to_owned(),
+    ] {
+        args.push(arg.into());
+    }
+    args
+}
+
+/// Samples in [-1, 1] from little-endian signed 16-bit ones.
+pub fn samples_from_s16le(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| f32::from(i16::from_le_bytes(*pair)) / 32768.0)
+        .collect()
+}
+
+/// Reads `file`'s audio stream `stream` as Whisper hears it.
+fn read_sound(
+    ffmpeg_path: &Path,
+    file: &Path,
+    stream: usize,
+    cancelled: &AtomicBool,
+) -> Result<Vec<f32>, String> {
+    let mut child = ffmpeg::command(ffmpeg_path)
+        .args(sound_args(file, stream))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("could not start ffmpeg: {err}"))?;
+    let out = child.stdout.take().map(|mut stdout| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = stdout.read_to_end(&mut bytes);
+            bytes
+        })
+    });
+    let err = child.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            let _ = stderr.read_to_string(&mut text);
+            text
+        })
+    });
+    let status = ffmpeg::wait_for_unless(&mut child, SOUND_TIMEOUT, || {
+        cancelled.load(Ordering::Relaxed)
+    });
+    let bytes = out.and_then(|out| out.join().ok()).unwrap_or_default();
+    let said = err.and_then(|err| err.join().ok()).unwrap_or_default();
+    check_cancelled(cancelled)?;
+    match status {
+        Some(status) if status.success() => Ok(samples_from_s16le(&bytes)),
+        Some(_) => Err(ffmpeg::last_line(&said)
+            .unwrap_or("ffmpeg could not read the sound")
+            .to_owned()),
+        None => Err("reading the sound took too long".to_owned()),
+    }
+}
+
+/// Whisper's mel filters, `[N_MELS][N_FFT / 2 + 1]`, as librosa makes them
+/// (Slaney's mel scale and area normalisation).
+pub fn mel_filters() -> Vec<Vec<f32>> {
+    const F_SP: f64 = 200.0 / 3.0;
+    const MIN_LOG_HZ: f64 = 1000.0;
+    const MIN_LOG_MEL: f64 = MIN_LOG_HZ / F_SP;
+    let log_step = 6.4f64.ln() / 27.0;
+    let to_mel = |hz: f64| {
+        if hz < MIN_LOG_HZ {
+            hz / F_SP
+        } else {
+            MIN_LOG_MEL + (hz / MIN_LOG_HZ).ln() / log_step
+        }
+    };
+    let to_hz = |mel: f64| {
+        if mel < MIN_LOG_MEL {
+            mel * F_SP
+        } else {
+            MIN_LOG_HZ * ((mel - MIN_LOG_MEL) * log_step).exp()
+        }
+    };
+    let bins = N_FFT / 2 + 1;
+    let top = to_mel(SAMPLE_RATE as f64 / 2.0);
+    let points: Vec<f64> = (0..N_MELS + 2)
+        .map(|i| to_hz(top * i as f64 / (N_MELS + 1) as f64))
+        .collect();
+    (0..N_MELS)
+        .map(|m| {
+            let (low, mid, high) = (points[m], points[m + 1], points[m + 2]);
+            let norm = 2.0 / (high - low);
+            (0..bins)
+                .map(|k| {
+                    let hz = k as f64 * SAMPLE_RATE as f64 / N_FFT as f64;
+                    let rising = (hz - low) / (mid - low);
+                    let falling = (high - hz) / (high - mid);
+                    (rising.min(falling).max(0.0) * norm) as f32
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Whisper's input for one 30 s window, `[1, N_MELS, WINDOW_FRAMES]`:
+/// `samples`, padded with silence, as a log-mel spectrogram (a periodic
+/// Hann window, reflected at the ends, the last frame dropped), clamped to
+/// 8 below its loudest and scaled as Whisper was trained.
+pub fn log_mel(samples: &[f32], filters: &[Vec<f32>]) -> NdTensor<f32, 3> {
+    let mut window = samples[..samples.len().min(WINDOW_SAMPLES)].to_vec();
+    window.resize(WINDOW_SAMPLES, 0.0);
+    let pad = N_FFT / 2;
+    let reflect = |i: isize| -> f32 {
+        let n = WINDOW_SAMPLES as isize;
+        let j = if i < 0 {
+            -i
+        } else if i >= n {
+            2 * (n - 1) - i
+        } else {
+            i
+        };
+        window[j.clamp(0, n - 1) as usize]
+    };
+    let hann: Vec<f32> = (0..N_FFT)
+        .map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / N_FFT as f32).cos())
+        .collect();
+    let fft = FftPlanner::<f32>::new().plan_fft_forward(N_FFT);
+    let bins = N_FFT / 2 + 1;
+    let mut mel = NdTensor::<f32, 3>::zeros([1, N_MELS, WINDOW_FRAMES]);
+    let mut buffer = vec![Complex::new(0.0f32, 0.0); N_FFT];
+    let mut power = vec![0.0f32; bins];
+    for frame in 0..WINDOW_FRAMES {
+        let start = (frame * HOP) as isize - pad as isize;
+        for (i, slot) in buffer.iter_mut().enumerate() {
+            *slot = Complex::new(reflect(start + i as isize) * hann[i], 0.0);
+        }
+        fft.process(&mut buffer);
+        for (k, value) in power.iter_mut().enumerate() {
+            *value = buffer[k].norm_sqr();
+        }
+        for (m, filter) in filters.iter().enumerate() {
+            let energy: f32 = filter.iter().zip(&power).map(|(w, p)| w * p).sum();
+            mel[[0, m, frame]] = energy.max(1e-10).log10();
+        }
+    }
+    let loudest = mel.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    for value in mel.iter_mut() {
+        *value = (value.max(loudest - 8.0) + 4.0) / 4.0;
+    }
+    mel
+}
+
+/// One token Whisper produced: the token, and the timestamp token it
+/// scored highest when it was produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Step {
+    pub token: TokenId,
+    pub likeliest_timestamp: Option<TokenId>,
+}
+
+fn timestamp_ms(token: TokenId) -> u64 {
+    u64::from(token - TIMESTAMP_BEGIN) * TIMESTAMP_MS
+}
+
+/// The segments in one window's tokens, `offset_ms` into the recording,
+/// the window holding `window_ms` of sound. A segment runs between a pair
+/// of timestamp tokens, cut at the window's end, and one starting after
+/// the sound ends is dropped. Its words are timed by [`place_words`].
+/// `decode` turns a run of text tokens into text, and a word starts at a
+/// token whose text starts with a space. Text after the last timestamp is
+/// dropped, as Whisper leaves it unfinished. Returns the segments and
+/// where the last one ended, in the window's time.
+pub fn segments_from_steps(
+    steps: &[Step],
+    offset_ms: u64,
+    window_ms: u64,
+    decode: impl Fn(&[TokenId]) -> String,
+) -> (Vec<TranscriptSegment>, Option<u64>) {
+    let mut segments = Vec::new();
+    let mut last_end = None;
+    let mut start: Option<u64> = None;
+    let mut text_steps: Vec<Step> = Vec::new();
+    for step in steps {
+        if step.token >= TIMESTAMP_BEGIN {
+            let at = timestamp_ms(step.token);
+            match start {
+                // A timestamp with no text before it opens a segment (the
+                // second of `<|a|><|a|>` opens the next one at `a`).
+                _ if text_steps.is_empty() => start = Some(at),
+                Some(from) => {
+                    // A closing timestamp no later than its opening one
+                    // still keeps the text, one timestamp step long.
+                    let to = at.max(from + TIMESTAMP_MS);
+                    // Whisper hears a short last window as padded to 30 s,
+                    // so its times can run past the sound.
+                    let end = to.min(window_ms);
+                    if from < end
+                        && let Some(segment) = segment(&text_steps, from, end, offset_ms, &decode)
+                    {
+                        segments.push(segment);
+                        last_end = Some(end);
+                    }
+                    text_steps.clear();
+                    // A closing timestamp also opens the next segment, for
+                    // when the model does not repeat it.
+                    start = Some(to);
+                }
+                None => {}
+            }
+        } else if step.token < END_OF_TEXT && start.is_some() {
+            text_steps.push(*step);
+        }
+    }
+    (segments, last_end)
+}
+
+fn segment(
+    steps: &[Step],
+    from: u64,
+    to: u64,
+    offset_ms: u64,
+    decode: &impl Fn(&[TokenId]) -> String,
+) -> Option<TranscriptSegment> {
+    let tokens: Vec<TokenId> = steps.iter().map(|step| step.token).collect();
+    let text = decode(&tokens).trim().to_owned();
+    if text.is_empty() {
+        return None;
+    }
+    // Group tokens into words at each leading space. Scripts written
+    // without spaces take each character as a word. A token that holds
+    // only part of a character stays with the word before it until the
+    // character is complete; only then is it known whether it starts a
+    // word of its own.
+    let mut groups: Vec<(Vec<TokenId>, u64)> = Vec::new();
+    // Where in the last group a character cut across tokens starts, and
+    // the time of its first token.
+    let mut pending: Option<(usize, u64)> = None;
+    let mut floor = from;
+    for step in steps {
+        let piece = decode(&[step.token]);
+        let at = step
+            .likeliest_timestamp
+            .filter(|token| *token >= TIMESTAMP_BEGIN)
+            .map(timestamp_ms)
+            .unwrap_or(floor)
+            .clamp(floor, to);
+        if let (Some((split, split_at)), Some((tokens, _))) = (pending, groups.last_mut()) {
+            tokens.push(step.token);
+            let tail = decode(&tokens[split..]);
+            if is_partial(&tail) {
+                continue;
+            }
+            pending = None;
+            let before = decode(&tokens[..split]);
+            let starts_word = tail.starts_with(' ')
+                || tail.trim_start().chars().next().is_some_and(is_unspaced)
+                || before.chars().last().is_some_and(is_unspaced);
+            if split > 0 && starts_word {
+                let rest = tokens.split_off(split);
+                floor = split_at;
+                groups.push((rest, split_at));
+            }
+            continue;
+        }
+        if is_partial(&piece) {
+            match groups.last_mut() {
+                Some((tokens, _)) => {
+                    pending = Some((tokens.len(), at));
+                    tokens.push(step.token);
+                }
+                None => {
+                    pending = Some((0, at));
+                    floor = at;
+                    groups.push((vec![step.token], at));
+                }
+            }
+            continue;
+        }
+        let after_unspaced = groups
+            .last()
+            .is_some_and(|(tokens, _)| decode(tokens).chars().last().is_some_and(is_unspaced));
+        let starts_word = piece.starts_with(' ')
+            || piece.chars().next().is_some_and(is_unspaced)
+            || after_unspaced;
+        if groups.is_empty() || starts_word {
+            floor = at;
+            groups.push((vec![step.token], at));
+        } else if let Some((tokens, _)) = groups.last_mut() {
+            tokens.push(step.token);
+        }
+    }
+    let words = place_words(groups, from, to, decode)
+        .into_iter()
+        .map(|(text, start, end)| TranscriptWord {
+            text,
+            start_ms: offset_ms + start,
+            end_ms: offset_ms + end,
+        })
+        .collect();
+    Some(TranscriptSegment {
+        start_ms: offset_ms + from,
+        end_ms: offset_ms + to,
+        text,
+        words,
+    })
+}
+
+/// Times for a segment's words, from `groups`: each word's tokens and the
+/// time it starts, in order. Every word lies within `from..to`, starts
+/// where the word before ends and lasts some time; the last ends at `to`.
+///
+/// Whisper's timestamp guesses often collapse, most words of a segment
+/// landing on one instant (often its end). Then every word is spread over
+/// the segment by its length in characters instead, as it is when there
+/// is only one word. Otherwise words that share a start are spread over
+/// the time until the next word. A word still left with no time, such as
+/// one placed at the segment's end, joins the word before it, or the one
+/// after it when it comes first. Returns each word's text, start and end.
+fn place_words(
+    groups: Vec<(Vec<TokenId>, u64)>,
+    from: u64,
+    to: u64,
+    decode: &impl Fn(&[TokenId]) -> String,
+) -> Vec<(String, u64, u64)> {
+    let mut words: Vec<(Vec<TokenId>, u64, u64)> = Vec::new();
+    let mut floor = from;
+    for (tokens, at) in groups {
+        let text = decode(&tokens);
+        if text.trim().is_empty() {
+            continue;
+        }
+        let at = at.clamp(floor, to);
+        floor = at;
+        let weight = text.trim().chars().count().max(1) as u64;
+        words.push((tokens, at, weight));
+    }
+    let count = words.len();
+    let longest_run = words
+        .chunk_by(|a, b| a.1 == b.1)
+        .map(<[_]>::len)
+        .max()
+        .unwrap_or(0);
+    if longest_run * 2 > count {
+        spread(&mut words, from, to);
+    } else {
+        let mut i = 0;
+        while i < count {
+            let at = words[i].1;
+            let run = words[i..].iter().take_while(|word| word.1 == at).count();
+            let until = words.get(i + run).map_or(to, |word| word.1);
+            if run > 1 {
+                spread(&mut words[i..i + run], at, until);
+            }
+            i += run;
+        }
+    }
+    let mut placed: Vec<(Vec<TokenId>, u64, u64)> = Vec::new();
+    let mut carried: Vec<TokenId> = Vec::new();
+    for i in 0..count {
+        let start = words[i].1;
+        let end = words.get(i + 1).map_or(to, |word| word.1);
+        let tokens = std::mem::take(&mut words[i].0);
+        match placed.last_mut() {
+            Some(last) if end <= start => last.0.extend(tokens),
+            None if end <= start => carried.extend(tokens),
+            _ => {
+                let mut all = std::mem::take(&mut carried);
+                all.extend(tokens);
+                placed.push((all, start, end));
+            }
+        }
+    }
+    if !carried.is_empty() {
+        placed.push((carried, from, to));
+    }
+    placed
+        .into_iter()
+        .map(|(tokens, start, end)| (decode(&tokens).trim().to_owned(), start, end))
+        .collect()
+}
+
+/// Spreads `words` (tokens, start, weight) over `at..until`, each taking
+/// time in proportion to its weight.
+fn spread(words: &mut [(Vec<TokenId>, u64, u64)], at: u64, until: u64) {
+    let total: u64 = words.iter().map(|word| word.2).sum();
+    let mut before = 0;
+    for word in words {
+        word.1 = at + (until - at) * before / total.max(1);
+        before += word.2;
+    }
+}
+
+/// The length of one frame of sound weighed for voice.
+const VOICE_FRAME_MS: u64 = 20;
+/// Quieter than this, in dBFS, a frame is silence: a segment with no
+/// frame above it is dropped, and a recording with none is not
+/// transcribed at all.
+const VOICE_FLOOR_DB: f32 = -50.0;
+/// Voice is judged against the sound around it, in blocks of this many
+/// frames (10 s), each weighed with the blocks either side (30 s in all).
+const VOICE_BLOCK_FRAMES: usize = 500;
+/// A voiced frame is at least this many dB above the local noise floor,
+/// the quietest tenth of the frames around it, so steady hiss or hum is
+/// never voice...
+const VOICE_ABOVE_NOISE_DB: f32 = 10.0;
+/// ...and within this many dB of the local loud level, the frame 5% of
+/// the frames around it are louder than, so a short knock sets no level.
+const VOICE_RANGE_DB: f32 = 30.0;
+/// Quiet shorter than this, between words, belongs to the voice around it.
+const VOICE_BRIDGE_MS: u64 = 200;
+/// How far a fitted segment reaches before and after its voice.
+const VOICE_PAD_MS: u64 = 100;
+
+/// The level of each [`VOICE_FRAME_MS`] frame of 16 kHz mono `samples`,
+/// in dBFS.
+fn frame_levels(samples: &[f32]) -> Vec<f32> {
+    let frame = (VOICE_FRAME_MS as usize * SAMPLE_RATE) / 1000;
+    samples
+        .chunks(frame)
+        .map(|chunk| {
+            let power = chunk.iter().map(|x| x * x).sum::<f32>() / chunk.len() as f32;
+            10.0 * power.max(1e-12).log10()
+        })
+        .collect()
+}
+
+/// Whether 16 kHz mono `samples` hold any frame above [`VOICE_FLOOR_DB`]:
+/// without one there is nothing to transcribe, and Whisper would only
+/// invent text from the silence.
+pub fn has_sound(samples: &[f32]) -> bool {
+    frame_levels(samples)
+        .iter()
+        .any(|level| *level >= VOICE_FLOOR_DB)
+}
+
+/// How loud a recording is, frame by frame, and where it has voice.
+struct Voice {
+    /// Each frame's level, in dBFS.
+    levels: Vec<f32>,
+    /// The voiced stretches, in ms, in order.
+    runs: Vec<(u64, u64)>,
+}
+
+/// The value `share` of the way up `levels`, which it sorts.
+fn percentile(levels: &mut [f32], share: f32) -> f32 {
+    levels.sort_by(f32::total_cmp);
+    levels[((levels.len() - 1) as f32 * share) as usize]
+}
+
+/// The voice in 16 kHz mono `samples`: runs of frames loud enough to be
+/// speech, with short quiet between them bridged. A frame is voiced when
+/// it is above [`VOICE_FLOOR_DB`], [`VOICE_ABOVE_NOISE_DB`] above the
+/// noise floor around it and within [`VOICE_RANGE_DB`] of the loud level
+/// around it, both taken over 30 s, so neither a loud knock elsewhere in
+/// the recording nor steady hiss hides or fakes it.
+fn voice(samples: &[f32]) -> Voice {
+    let levels = frame_levels(samples);
+    let blocks = levels.len().div_ceil(VOICE_BLOCK_FRAMES);
+    let thresholds: Vec<f32> = (0..blocks)
+        .map(|block| {
+            let from = block.saturating_sub(1) * VOICE_BLOCK_FRAMES;
+            let to = ((block + 2) * VOICE_BLOCK_FRAMES).min(levels.len());
+            let mut around = levels[from..to].to_vec();
+            let noise = percentile(&mut around, 0.1);
+            let loud = percentile(&mut around, 0.95);
+            VOICE_FLOOR_DB
+                .max(noise + VOICE_ABOVE_NOISE_DB)
+                .max(loud - VOICE_RANGE_DB)
+        })
+        .collect();
+    let end_ms = (samples.len() as u64 * 1000) / SAMPLE_RATE as u64;
+    let mut runs: Vec<(u64, u64)> = Vec::new();
+    for (i, level) in levels.iter().enumerate() {
+        if *level < thresholds[i / VOICE_BLOCK_FRAMES] {
+            continue;
+        }
+        let start = i as u64 * VOICE_FRAME_MS;
+        let end = (start + VOICE_FRAME_MS).min(end_ms);
+        match runs.last_mut() {
+            Some(last) if start <= last.1 + VOICE_BRIDGE_MS => last.1 = end,
+            _ => runs.push((start, end)),
+        }
+    }
+    Voice { levels, runs }
+}
+
+/// Fits `segment` to the voice in it: shrinks it to its voiced stretches,
+/// [`VOICE_PAD_MS`] either side and never past its own bounds, and spreads
+/// its words over those stretches by their length in characters, so no
+/// word sits in the quiet between them. Returns false for a segment with
+/// no frame above [`VOICE_FLOOR_DB`], which Whisper invented from silence
+/// (often "Thank you."), so it is dropped. A segment with sound but no
+/// voice found in it (speech that never pauses, or speech lost in the
+/// noise), or voice too short to give each character a millisecond, keeps
+/// Whisper's times.
+fn fit_to_voice(segment: &mut TranscriptSegment, voice: &Voice) -> bool {
+    let (from, to) = (segment.start_ms, segment.end_ms);
+    let frames = (from / VOICE_FRAME_MS) as usize..to.div_ceil(VOICE_FRAME_MS) as usize;
+    let sounded = voice
+        .levels
+        .get(frames.start.min(voice.levels.len())..frames.end.min(voice.levels.len()))
+        .is_some_and(|levels| levels.iter().any(|level| *level >= VOICE_FLOOR_DB));
+    if !sounded {
+        return false;
+    }
+    let mut inside: Vec<(u64, u64)> = voice
+        .runs
+        .iter()
+        .map(|&(start, end)| (start.max(from), end.min(to)))
+        .filter(|(start, end)| start < end)
+        .collect();
+    let (Some(first), Some(last)) = (inside.first().copied(), inside.last().copied()) else {
+        return true;
+    };
+    let weights: Vec<u64> = segment
+        .words
+        .iter()
+        .map(|word| word.text.chars().count().max(1) as u64)
+        .collect();
+    let total: u64 = weights.iter().sum();
+    let count = inside.len();
+    inside[0].0 = first.0.saturating_sub(VOICE_PAD_MS).max(from);
+    inside[count - 1].1 = (last.1 + VOICE_PAD_MS).min(to);
+    let voiced: u64 = inside.iter().map(|(start, end)| end - start).sum();
+    if voiced < total {
+        return true;
+    }
+    segment.start_ms = inside[0].0;
+    segment.end_ms = inside[count - 1].1;
+    // The time `into` ms of voice in, starting the next stretch at a
+    // boundary when `forward`, else ending the one before.
+    let at = |mut into: u64, forward: bool| {
+        for &(start, end) in &inside {
+            let length = end - start;
+            if into < length || (into == length && !forward) {
+                return start + into;
+            }
+            into -= length;
+        }
+        inside[count - 1].1
+    };
+    let mut before = 0;
+    for (word, weight) in segment.words.iter_mut().zip(&weights) {
+        let after = before + weight;
+        word.start_ms = at(before * voiced / total.max(1), true);
+        word.end_ms = at(after * voiced / total.max(1), false);
+        before = after;
+    }
+    true
+}
+
+/// The most UTF-8 bytes, and so byte tokens, one character takes.
+const MAX_CHAR_TOKENS: usize = 4;
+
+/// `tokens` as text, skipping each token that cannot complete a character
+/// with the few after it. `strict` decodes a run, or gives `None` when its
+/// bytes are not valid UTF-8, as the tokenizer does. A character cut off
+/// at the end is skipped too, so a run holding only part of one is empty.
+fn decode_lossy(tokens: &[TokenId], strict: impl Fn(&[TokenId]) -> Option<String>) -> String {
+    if let Some(text) = strict(tokens) {
+        return text;
+    }
+    let mut text = String::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        let longest = (i + MAX_CHAR_TOKENS).min(tokens.len());
+        match (i + 1..=longest).find_map(|j| strict(&tokens[i..j]).map(|piece| (j, piece))) {
+            Some((j, piece)) => {
+                text.push_str(&piece);
+                i = j;
+            }
+            None => i += 1,
+        }
+    }
+    text
+}
+
+/// Whether `text` holds a character cut across tokens: the tokenizer
+/// gives nothing, or a replacement character, for part of one.
+fn is_partial(text: &str) -> bool {
+    text.is_empty() || text.contains('\u{FFFD}')
+}
+
+/// Whether `c` belongs to a script written without spaces between words
+/// (Chinese, Japanese, Thai, Lao, Khmer, Myanmar and Tibetan), whose
+/// characters each count as a word.
+fn is_unspaced(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x0E00..=0x0EFF // Thai, Lao
+            | 0x0F00..=0x0FFF // Tibetan
+            | 0x1000..=0x109F // Myanmar
+            | 0x1780..=0x17FF // Khmer
+            | 0x3000..=0x303F // CJK punctuation
+            | 0x3040..=0x30FF // Hiragana, Katakana
+            | 0x3400..=0x4DBF // CJK extension A
+            | 0x4E00..=0x9FFF // CJK
+            | 0xF900..=0xFAFF // CJK compatibility
+            | 0xFF00..=0xFFEF // Full-width forms
+            | 0x20000..=0x2FFFF // CJK extensions
+    )
+}
+
+/// Whether Whisper may produce timestamp `token` after `generated`, by
+/// its timestamp rules: timestamps come in pairs, so after a closing one
+/// (a timestamp after text) only another timestamp or the end follows,
+/// and after an opening one only text; a closing timestamp is later than
+/// the one before it, and an opening one no earlier; the first is within
+/// a second.
+fn timestamp_allowed(generated: &[TokenId], token: TokenId) -> bool {
+    let is_time = |t: &TokenId| *t >= TIMESTAMP_BEGIN;
+    let Some(last) = generated.last() else {
+        return token <= TIMESTAMP_BEGIN + 50;
+    };
+    let last_was_time = is_time(last);
+    let penultimate_was_time = generated.len() < 2 || is_time(&generated[generated.len() - 2]);
+    if last_was_time && penultimate_was_time {
+        return false;
+    }
+    match generated.iter().rev().find(|t| is_time(t)) {
+        Some(&last_time) if last_was_time => token >= last_time,
+        Some(&last_time) => token > last_time,
+        None => true,
+    }
+}
+
+/// Whether Whisper may produce text `token` after `generated`: never
+/// first, and never straight after a closing timestamp.
+fn text_allowed(generated: &[TokenId]) -> bool {
+    let is_time = |t: &TokenId| *t >= TIMESTAMP_BEGIN;
+    match generated {
+        [] => false,
+        [.., before, last] if is_time(last) && !is_time(before) => false,
+        _ => true,
+    }
+}
+
+/// Keeps Whisper's timestamps in order, and notes the timestamp each step
+/// scored highest, for the words' times.
+struct TimestampFilter {
+    likeliest: Rc<RefCell<Vec<Option<TokenId>>>>,
+    prompt_len: usize,
+}
+
+impl LogitsFilter for TimestampFilter {
+    fn filter(&self, logits: Logits, prev_tokens: &[TokenId]) -> Logits {
+        let generated = &prev_tokens[self.prompt_len.min(prev_tokens.len())..];
+        let text_ok = text_allowed(generated);
+        let (values, indices) = logits.into_logits_indices();
+        let mut best: Option<(TokenId, f32)> = None;
+        let mut kept_values = Vec::with_capacity(values.len());
+        let mut kept_indices = Vec::with_capacity(indices.len());
+        for (value, token) in values.into_iter().zip(indices) {
+            if token == NO_TIMESTAMPS || (token > END_OF_TEXT && token < TIMESTAMP_BEGIN) {
+                continue;
+            }
+            if token >= TIMESTAMP_BEGIN {
+                if best.is_none_or(|(_, score)| value > score) {
+                    best = Some((token, value));
+                }
+                if !timestamp_allowed(generated, token) {
+                    continue;
+                }
+            } else if (token < END_OF_TEXT && !text_ok)
+                || (token == END_OF_TEXT && generated.is_empty())
+            {
+                continue;
+            }
+            kept_values.push(value);
+            kept_indices.push(token);
+        }
+        self.likeliest
+            .borrow_mut()
+            .push(best.map(|(token, _)| token));
+        Logits::sparse(kept_values, kept_indices)
+    }
+}
+
+/// The tokenizer in a Hugging Face `tokenizer.json`. The pinned model's
+/// file predates the `ignore_merges` field rten-text requires of a BPE
+/// model, so a missing one is filled in as false, the tokenizers
+/// library's default, before it is read; the file on disk is untouched,
+/// so its checksum still holds.
+fn tokenizer_from_json(json: &str) -> Result<Tokenizer, String> {
+    let mut value: serde_json::Value = serde_json::from_str(json).map_err(|err| err.to_string())?;
+    if let Some(model) = value
+        .get_mut("model")
+        .and_then(serde_json::Value::as_object_mut)
+        .filter(|model| model.get("type").and_then(serde_json::Value::as_str) == Some("BPE"))
+    {
+        model
+            .entry("ignore_merges")
+            .or_insert(serde_json::Value::Bool(false));
+    }
+    Tokenizer::from_json(&value.to_string()).map_err(|err| err.to_string())
+}
+
+/// Why the model did not load.
+#[derive(Debug)]
+pub struct LoadFailure {
+    pub message: String,
+    /// Whether a model file is damaged, so downloading it again may help;
+    /// false for errors such as a file that cannot be read, which another
+    /// download would not fix.
+    pub damaged: bool,
+}
+
+/// Whether an rten load error means the model file itself is damaged.
+fn model_damaged(kind: rten::LoadErrorKind) -> bool {
+    use rten::LoadErrorKind as Kind;
+    matches!(
+        kind,
+        Kind::ParseError
+            | Kind::OperatorInvalid
+            | Kind::GraphError
+            | Kind::UnknownFileType
+            | Kind::ExternalDataError
+    )
+}
+
+/// The tokenizer in `json`. Text that is not JSON means the file is
+/// damaged; JSON rten-text refuses is not, as downloading the pinned file
+/// again would give the same.
+fn load_tokenizer(json: &str) -> Result<Tokenizer, LoadFailure> {
+    let failure = |damaged: bool, err: &dyn std::fmt::Display| LoadFailure {
+        message: format!("could not load the speech model's words: {err}"),
+        damaged,
+    };
+    serde_json::from_str::<serde_json::Value>(json).map_err(|err| failure(true, &err))?;
+    tokenizer_from_json(json).map_err(|err| failure(false, &err))
+}
+
+/// A loaded Whisper model.
+pub struct Whisper {
+    encoder: Model,
+    decoder: Model,
+    tokenizer: Tokenizer,
+    filters: Vec<Vec<f32>>,
+}
+
+impl Whisper {
+    /// Loads the model from `dir`.
+    pub fn load(dir: &Path) -> Result<Self, LoadFailure> {
+        let load = |file: &ModelFile| {
+            Model::load_file(file.local(dir)).map_err(|err| LoadFailure {
+                message: format!("could not load the speech model: {err}"),
+                damaged: model_damaged(err.kind()),
+            })
+        };
+        let json = fs::read_to_string(MODEL_FILES[2].local(dir)).map_err(|err| LoadFailure {
+            message: format!("could not load the speech model's words: {err}"),
+            // Bytes that are not text are a damaged file; one that cannot
+            // be read is not.
+            damaged: err.kind() == io::ErrorKind::InvalidData,
+        })?;
+        let tokenizer = load_tokenizer(&json)?;
+        Ok(Self {
+            encoder: load(&MODEL_FILES[0])?,
+            decoder: load(&MODEL_FILES[1])?,
+            tokenizer,
+            filters: mel_filters(),
+        })
+    }
+
+    fn decode(&self, tokens: &[TokenId]) -> String {
+        decode_lossy(tokens, |run| self.tokenizer.decode(run).ok())
+    }
+
+    /// Runs the encoder on one window's log-mel input.
+    fn encode(&self, mel: NdTensor<f32, 3>) -> Result<rten::Value, String> {
+        let engine = |err: rten::RunError| format!("the speech model failed: {err}");
+        let input = self.encoder.node_id(ENCODER_INPUT).map_err(engine)?;
+        let output = self.encoder.node_id(ENCODER_OUTPUT).map_err(engine)?;
+        let [hidden] = self
+            .encoder
+            .run_n(vec![(input, mel.into())], [output], None)
+            .map_err(engine)?;
+        Ok(hidden)
+    }
+
+    fn generator<'a>(&'a self, hidden: &'a rten::Value) -> Result<Generator<'a>, String> {
+        let engine = |err: &dyn std::fmt::Display| format!("the speech model failed: {err}");
+        let input = self
+            .decoder
+            .node_id(DECODER_ENCODER_INPUT)
+            .map_err(|err| engine(&err))?;
+        Ok(Generator::from_model(&self.decoder)
+            .map_err(|err| engine(&err))?
+            .with_constant_input(input, hidden.as_view()))
+    }
+
+    /// The language Whisper hears in a window: its likeliest language token.
+    fn language(&self, hidden: &rten::Value) -> Result<TokenId, String> {
+        let mut generator = self
+            .generator(hidden)?
+            .with_prompt(&[START_OF_TRANSCRIPT])
+            .with_logits_filter(LanguageFilter);
+        match generator.next() {
+            Some(Ok(token)) if (FIRST_LANGUAGE..=LAST_LANGUAGE).contains(&token) => Ok(token),
+            Some(Err(err)) => Err(format!("the speech model failed: {err}")),
+            _ => Ok(FIRST_LANGUAGE),
+        }
+    }
+
+    /// The tokens Whisper hears in a window, each with its likeliest
+    /// timestamp.
+    fn window_steps(
+        &self,
+        hidden: &rten::Value,
+        language: TokenId,
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<Step>, String> {
+        let prompt = [START_OF_TRANSCRIPT, language, TRANSCRIBE];
+        let likeliest = Rc::new(RefCell::new(Vec::new()));
+        let generator = self
+            .generator(hidden)?
+            .with_prompt(&prompt)
+            .with_logits_filter(TimestampFilter {
+                likeliest: likeliest.clone(),
+                prompt_len: prompt.len(),
+            });
+        let mut tokens = Vec::new();
+        for token in generator.stop_on_tokens([END_OF_TEXT]).take(MAX_TOKENS) {
+            check_cancelled(cancelled)?;
+            tokens.push(token.map_err(|err| format!("the speech model failed: {err}"))?);
+        }
+        let likeliest = likeliest.borrow();
+        Ok(tokens
+            .into_iter()
+            .enumerate()
+            .map(|(i, token)| Step {
+                token,
+                likeliest_timestamp: likeliest.get(i).copied().flatten(),
+            })
+            .collect())
+    }
+
+    /// Transcribes 16 kHz mono `samples`, 30 s at a time, each window
+    /// starting where the last finished segment ended. `progress` gets the
+    /// milliseconds heard and the sound's length.
+    pub fn transcribe(
+        &self,
+        samples: &[f32],
+        cancelled: &AtomicBool,
+        mut progress: impl FnMut(u64, u64),
+    ) -> Result<Transcript, String> {
+        let ms = |samples: usize| (samples as u64 * 1000) / SAMPLE_RATE as u64;
+        let total = ms(samples.len());
+        let mut language = None;
+        let mut segments = Vec::new();
+        let mut seek = 0usize;
+        progress(0, total);
+        while seek < samples.len() {
+            check_cancelled(cancelled)?;
+            let window = &samples[seek..samples.len().min(seek + WINDOW_SAMPLES)];
+            let hidden = self.encode(log_mel(window, &self.filters))?;
+            let heard = match language {
+                Some(token) => token,
+                None => *language.insert(self.language(&hidden)?),
+            };
+            let steps = self.window_steps(&hidden, heard, cancelled)?;
+            let offset = ms(seek);
+            let window_ms = ms(window.len());
+            let (found, last_end) =
+                segments_from_steps(&steps, offset, window_ms, |tokens| self.decode(tokens));
+            segments.extend(found);
+            // A full window ends where its last finished segment did;
+            // anything later is heard again in the next window.
+            let advance = match last_end {
+                Some(end) if window.len() == WINDOW_SAMPLES && end > 0 && end < window_ms => {
+                    (end as usize * SAMPLE_RATE) / 1000
+                }
+                _ => window.len(),
+            };
+            seek += advance.max(1);
+            progress(ms(seek).min(total), total);
+        }
+        let voice = voice(samples);
+        segments.retain_mut(|segment| fit_to_voice(segment, &voice));
+        let language = language
+            .filter(|_| !segments.is_empty())
+            .and_then(language_code)
+            .map(str::to_owned);
+        Ok(Transcript {
+            version: TRANSCRIPT_VERSION,
+            model: MODEL_NAME.to_owned(),
+            language,
+            segments,
+        })
+    }
+}
+
+/// The code of language token `token`, such as `en`.
+pub fn language_code(token: TokenId) -> Option<&'static str> {
+    LANGUAGES
+        .get(token.checked_sub(FIRST_LANGUAGE)? as usize)
+        .copied()
+}
+
+/// Lets only language tokens through.
+struct LanguageFilter;
+
+impl LogitsFilter for LanguageFilter {
+    fn filter(&self, logits: Logits, _prev_tokens: &[TokenId]) -> Logits {
+        let (values, indices) = logits.into_logits_indices();
+        let (values, indices) = values
+            .into_iter()
+            .zip(indices)
+            .filter(|(_, token)| (FIRST_LANGUAGE..=LAST_LANGUAGE).contains(token))
+            .unzip();
+        Logits::sparse(values, indices)
+    }
+}
+
+/// The models folder in the app's data folder.
+fn models_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|err| err.to_string())?
+        .join(MODELS_DIR))
+}
+
+/// Whether the speech model is downloaded, and its size.
+#[tauri::command]
+#[specta::specta]
+pub fn recording_transcribe_model(app: AppHandle) -> Result<TranscribeModel, String> {
+    Ok(TranscribeModel {
+        downloaded: model_present(&models_dir(&app)?),
+        bytes: model_bytes(),
+    })
+}
+
+/// The saved transcript of recording `source`, if it has one.
+#[tauri::command]
+#[specta::specta]
+pub fn recording_transcript(
+    source: String,
+    window: WebviewWindow,
+    state: State<'_, RecordingEditorState>,
+) -> Result<Option<Transcript>, String> {
+    read_transcript(&state.source_for(window.label(), &source)?)
+}
+
+/// Requests cancellation of the transcription running in this window.
+#[tauri::command]
+#[specta::specta]
+pub fn recording_transcribe_cancel(window: WebviewWindow, state: State<'_, TranscribeState>) {
+    state.cancel(window.label());
+}
+
+/// The transcript of a recording with nothing to transcribe.
+fn silent_transcript() -> Transcript {
+    Transcript {
+        version: TRANSCRIPT_VERSION,
+        model: MODEL_NAME.to_owned(),
+        language: None,
+        segments: Vec::new(),
+    }
+}
+
+/// Transcribes recording `source`, downloading the model first if needed,
+/// saves its transcript beside it and returns it. A recording with only
+/// system sound, or none, or whose sound never rises above
+/// [`VOICE_FLOOR_DB`], gets a transcript with no segments, without the
+/// model being downloaded or run. Progress
+/// goes to the window as [`TRANSCRIBE_PROGRESS_EVENT`].
+#[tauri::command]
+#[specta::specta]
+pub async fn recording_transcribe(
+    source: String,
+    window: WebviewWindow,
+    app: AppHandle,
+    editors: State<'_, RecordingEditorState>,
+    state: State<'_, TranscribeState>,
+) -> Result<Transcript, String> {
+    let path = editors.source_for(window.label(), &source)?;
+    let Some(ready) = ffmpeg::ready(&app) else {
+        ffmpeg::prepare_in_background(&app);
+        return Err("ffmpeg is not ready yet; see Settings → Recording, then try again".to_owned());
+    };
+    let dir = models_dir(&app)?;
+    let label = window.label().to_owned();
+    let cancelled = state.begin(&label)?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let report = |stage: TranscribeStage, done: u64, total: u64| {
+            let _ = app.emit_to(
+                EventTarget::webview_window(&label),
+                TRANSCRIBE_PROGRESS_EVENT,
+                TranscribeProgress {
+                    source: source.clone(),
+                    stage,
+                    done,
+                    total,
+                },
+            );
+        };
+        let sources: Vec<_> = audio_sources(&path, Some(&ready.path))
+            .into_iter()
+            .map(|source| (source.kind, source.file, source.stream))
+            .collect();
+        let transcript = match pause_source(&path, &sources) {
+            (PauseSound::Microphone | PauseSound::Mixed, Some((file, stream))) => 'heard: {
+                // Silence needs no model: Whisper would only invent text.
+                let samples = read_sound(&ready.path, &file, stream, &cancelled)?;
+                if !has_sound(&samples) {
+                    break 'heard silent_transcript();
+                }
+                if !model_present(&dir) {
+                    download_model(
+                        &ffmpeg::download_agent(DOWNLOAD_STALL_TIMEOUT),
+                        "https://huggingface.co",
+                        &MODEL_FILES,
+                        &dir,
+                        &cancelled,
+                        |done, total| report(TranscribeStage::Download, done, total),
+                    )?;
+                }
+                // A file of the right size can still be damaged; drop the
+                // model so the next Transcribe downloads it again.
+                let whisper = Whisper::load(&dir).map_err(|failure| {
+                    if failure.damaged {
+                        remove_model(&dir);
+                    }
+                    failure.message
+                })?;
+                whisper.transcribe(&samples, &cancelled, |done, total| {
+                    report(TranscribeStage::Transcribe, done, total)
+                })?
+            }
+            _ => silent_transcript(),
+        };
+        check_cancelled(&cancelled)?;
+        write_transcript(&path, &transcript)?;
+        Ok(transcript)
+    })
+    .await;
+    state.finish(window.label());
+    result.map_err(|err| format!("transcribing stopped: {err}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    /// One full window, in milliseconds.
+    const WINDOW_MS: u64 = (WINDOW_SAMPLES as u64 * 1000) / SAMPLE_RATE as u64;
+
+    /// A fake tokenizer: token `n` is the text in `vocab[n]`.
+    fn decoder(vocab: &'static [&'static str]) -> impl Fn(&[TokenId]) -> String {
+        move |tokens| tokens.iter().map(|t| vocab[*t as usize]).collect()
+    }
+
+    fn ts(ms: u64) -> TokenId {
+        TIMESTAMP_BEGIN + (ms / TIMESTAMP_MS) as TokenId
+    }
+
+    fn text(token: TokenId, at_ms: u64) -> Step {
+        Step {
+            token,
+            likeliest_timestamp: Some(ts(at_ms)),
+        }
+    }
+
+    fn stamp(ms: u64) -> Step {
+        Step {
+            token: ts(ms),
+            likeliest_timestamp: Some(ts(ms)),
+        }
+    }
+
+    const VOCAB: &[&str] = &[" Hello", " wor", "ld", ".", " Again", " now"];
+
+    #[test]
+    fn segments_and_words_come_from_timestamps() {
+        let steps = [
+            stamp(0),
+            text(0, 200),
+            text(1, 600),
+            text(2, 700),
+            text(3, 900),
+            stamp(1000),
+            stamp(1000),
+            text(4, 1200),
+            // Earlier than the word before: held at it, so both words share
+            // a start and are spread over their segment.
+            text(5, 1100),
+            stamp(2000),
+        ];
+        let (segments, last) = segments_from_steps(&steps, 5000, WINDOW_MS, decoder(VOCAB));
+        assert_eq!(last, Some(2000));
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].text, "Hello world.");
+        assert_eq!((segments[0].start_ms, segments[0].end_ms), (5000, 6000));
+        let words: Vec<_> = segments[0]
+            .words
+            .iter()
+            .map(|w| (w.text.as_str(), w.start_ms, w.end_ms))
+            .collect();
+        assert_eq!(words, [("Hello", 5200, 5600), ("world.", 5600, 6000)]);
+        let again: Vec<_> = segments[1]
+            .words
+            .iter()
+            .map(|w| (w.text.as_str(), w.start_ms, w.end_ms))
+            .collect();
+        assert_eq!(again, [("Again", 6000, 6625), ("now", 6625, 7000)]);
+    }
+
+    #[test]
+    fn unfinished_text_after_the_last_timestamp_is_dropped() {
+        let steps = [stamp(0), text(0, 0), stamp(500), text(4, 600)];
+        let (segments, last) = segments_from_steps(&steps, 0, WINDOW_MS, decoder(VOCAB));
+        assert_eq!(segments.len(), 1);
+        assert_eq!(last, Some(500));
+    }
+
+    #[test]
+    fn a_lone_closing_timestamp_also_opens_the_next_segment() {
+        let steps = [
+            stamp(0),
+            text(0, 200),
+            stamp(2400),
+            text(4, 2600),
+            text(5, 3000),
+            stamp(5000),
+        ];
+        let (segments, last) = segments_from_steps(&steps, 0, WINDOW_MS, decoder(VOCAB));
+        let spans: Vec<_> = segments
+            .iter()
+            .map(|s| (s.text.as_str(), s.start_ms, s.end_ms))
+            .collect();
+        assert_eq!(spans, [("Hello", 0, 2400), ("Again now", 2400, 5000)]);
+        assert_eq!(last, Some(5000));
+    }
+
+    #[test]
+    fn a_zero_length_segment_keeps_its_text() {
+        let steps = [stamp(1000), text(0, 1000), stamp(1000)];
+        let (segments, last) = segments_from_steps(&steps, 0, WINDOW_MS, decoder(VOCAB));
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "Hello");
+        assert_eq!(
+            (segments[0].start_ms, segments[0].end_ms),
+            (1000, 1000 + TIMESTAMP_MS)
+        );
+        assert_eq!(last, Some(1000 + TIMESTAMP_MS));
+    }
+
+    #[test]
+    fn unspaced_scripts_take_each_token_as_a_word() {
+        // "\u{FFFD}" stands for the first token of a character cut across two.
+        const CJK: &[&str] = &["你", "好", "世", "界", "\u{FFFD}", "\u{FFFD}好", " ok"];
+        let steps = [
+            stamp(0),
+            text(0, 0),
+            text(1, 400),
+            text(2, 800),
+            text(3, 1200),
+            text(4, 1600),
+            text(5, 1700),
+            text(6, 1800),
+            stamp(2000),
+        ];
+        let decode = |tokens: &[TokenId]| -> String {
+            let joined: String = tokens.iter().map(|t| CJK[*t as usize]).collect();
+            // Two halves of one character decode to it.
+            joined.replace("\u{FFFD}\u{FFFD}好", "们")
+        };
+        let (segments, _) = segments_from_steps(&steps, 0, WINDOW_MS, decode);
+        let words: Vec<_> = segments[0]
+            .words
+            .iter()
+            .map(|w| (w.text.as_str(), w.start_ms))
+            .collect();
+        assert_eq!(
+            words,
+            [
+                ("你", 0),
+                ("好", 400),
+                ("世", 800),
+                ("界", 1200),
+                ("们", 1600),
+                ("ok", 1800)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_character_cut_across_tokens_stays_in_its_word_in_a_spaced_script() {
+        // " ti", then the two halves of "ế", then " ok".
+        const PIECES: &[&str] = &[" ti", "\u{FFFD}", "\u{FFFD}e", " ok"];
+        let steps = [
+            stamp(0),
+            text(0, 0),
+            text(1, 400),
+            text(2, 500),
+            text(3, 800),
+            stamp(1000),
+        ];
+        let decode = |tokens: &[TokenId]| -> String {
+            let joined: String = tokens.iter().map(|t| PIECES[*t as usize]).collect();
+            joined.replace("\u{FFFD}\u{FFFD}e", "ế")
+        };
+        let (segments, _) = segments_from_steps(&steps, 0, WINDOW_MS, decode);
+        let words: Vec<_> = segments[0]
+            .words
+            .iter()
+            .map(|w| (w.text.as_str(), w.start_ms))
+            .collect();
+        assert_eq!(words, [("tiế", 0), ("ok", 800)]);
+    }
+
+    /// `ms` of 16 kHz sound: a 440 Hz tone during `tone`, else a faint hiss.
+    fn sound(ms: u64, tone: &[(u64, u64)]) -> Vec<f32> {
+        (0..(ms as usize * SAMPLE_RATE) / 1000)
+            .map(|i| {
+                let t = (i * 1000 / SAMPLE_RATE) as u64;
+                if tone.iter().any(|&(start, end)| (start..end).contains(&t)) {
+                    0.3 * (i as f32 * 440.0 * std::f32::consts::TAU / SAMPLE_RATE as f32).sin()
+                } else if i % 2 == 0 {
+                    0.0005
+                } else {
+                    -0.0005
+                }
+            })
+            .collect()
+    }
+
+    fn spoken(start_ms: u64, end_ms: u64, words: &[&str]) -> TranscriptSegment {
+        let step = (end_ms - start_ms) / words.len() as u64;
+        TranscriptSegment {
+            start_ms,
+            end_ms,
+            text: words.join(" "),
+            words: words
+                .iter()
+                .enumerate()
+                .map(|(i, text)| TranscriptWord {
+                    text: (*text).to_owned(),
+                    start_ms: start_ms + step * i as u64,
+                    end_ms: start_ms + step * (i as u64 + 1),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn voice_is_found_with_short_quiet_bridged() {
+        let samples = sound(4000, &[(500, 1000), (1100, 1500), (2500, 3000)]);
+        assert_eq!(voice(&samples).runs, [(500, 1500), (2500, 3000)]);
+        assert!(voice(&sound(1000, &[])).runs.is_empty());
+    }
+
+    #[test]
+    fn segments_and_words_fit_the_voice_inside_them() {
+        // Speech at 0.5-1.5 s and 2.5-2.95 s, in a segment Whisper gave
+        // as 0-7 s.
+        let samples = sound(7000, &[(500, 1500), (2500, 2950)]);
+        let runs = voice(&samples);
+        let words = [
+            "The", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog.",
+        ];
+        let mut segment = spoken(0, 7000, &words);
+        assert!(fit_to_voice(&mut segment, &runs));
+        assert_eq!((segment.start_ms, segment.end_ms), (400, 3060));
+        let voiced = |ms: u64| (400..=1500).contains(&ms) || (2500..=3060).contains(&ms);
+        for word in &segment.words {
+            assert!(word.start_ms < word.end_ms, "{word:?}");
+            assert!(voiced(word.start_ms) && voiced(word.end_ms), "{word:?}");
+        }
+        assert_eq!(segment.words[0].start_ms, 400);
+        assert_eq!(segment.words.last().map(|w| w.end_ms), Some(3060));
+        for pair in segment.words.windows(2) {
+            assert!(pair[0].end_ms <= pair[1].start_ms, "{pair:?}");
+        }
+        // "lazy dog." now ends before a trim at 5 s.
+        assert!(segment.words.iter().all(|w| w.end_ms <= 5000));
+    }
+
+    #[test]
+    fn a_segment_without_voice_is_dropped_and_one_with_it_keeps_its_bounds() {
+        let samples = sound(7000, &[(500, 1500)]);
+        let runs = voice(&samples);
+        // Whisper's invention over silence is dropped.
+        let mut quiet = spoken(3000, 6000, &["Thank", "you."]);
+        assert!(!fit_to_voice(&mut quiet, &runs));
+        assert!(!fit_to_voice(&mut quiet, &voice(&sound(7000, &[]))));
+        // Voice too short for its characters keeps Whisper's times.
+        let sliver = sound(7000, &[(3000, 3020)]);
+        let long = "a".repeat(400);
+        let wordy = spoken(2000, 6000, &[long.as_str()]);
+        let mut kept = wordy.clone();
+        assert!(fit_to_voice(&mut kept, &voice(&sliver)));
+        assert_eq!(kept, wordy);
+        // Voice from before the segment starts reaches no further back.
+        let mut late = spoken(1000, 4000, &["late", "words"]);
+        assert!(fit_to_voice(&mut late, &runs));
+        assert_eq!((late.start_ms, late.end_ms), (1000, 1600));
+        assert_eq!(late.words[0].start_ms, 1000);
+        assert_eq!(late.words[1].end_ms, 1600);
+    }
+
+    /// A 440 Hz tone with an RMS level of `db` dBFS.
+    fn tone_at(i: usize, db: f32) -> f32 {
+        let amplitude = 10f32.powf(db / 20.0) * std::f32::consts::SQRT_2;
+        amplitude * (i as f32 * 440.0 * std::f32::consts::TAU / SAMPLE_RATE as f32).sin()
+    }
+
+    /// Steady white noise with an RMS level of `db` dBFS, from a fixed seed.
+    fn hiss(len: usize, db: f32) -> Vec<f32> {
+        let peak = 10f32.powf(db / 20.0) * 3f32.sqrt();
+        let mut seed = 0x2545_f491_u32;
+        (0..len)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                (seed as f32 / u32::MAX as f32 * 2.0 - 1.0) * peak
+            })
+            .collect()
+    }
+
+    fn at_ms(ms: u64) -> usize {
+        (ms as usize * SAMPLE_RATE) / 1000
+    }
+
+    #[test]
+    fn a_loud_knock_does_not_hide_quiet_speech() {
+        // A 40 ms knock at about -13.5 dBFS, then speech at about
+        // -45.5 dBFS, over a faint hiss well under the floor.
+        let mut samples = sound(7000, &[]);
+        for (i, sample) in samples.iter_mut().enumerate() {
+            if (at_ms(500)..at_ms(540)).contains(&i) {
+                *sample = tone_at(i, -13.5);
+            } else if (at_ms(3000)..at_ms(4500)).contains(&i) {
+                *sample = tone_at(i, -45.5);
+            }
+        }
+        let voice = voice(&samples);
+        assert_eq!(voice.runs, [(500, 540), (3000, 4500)]);
+        let mut speech = spoken(2000, 7000, &["quiet", "words", "here"]);
+        assert!(fit_to_voice(&mut speech, &voice));
+        assert_eq!((speech.start_ms, speech.end_ms), (2900, 4600));
+        assert!(
+            speech
+                .words
+                .iter()
+                .all(|w| (2900..=4600).contains(&w.start_ms))
+        );
+        assert!(has_sound(&samples));
+    }
+
+    #[test]
+    fn steady_hiss_is_not_voice() {
+        // Hiss at -40 dBFS, above the floor, with speech over it at 2-3 s.
+        let mut samples = hiss(at_ms(7000), -40.0);
+        for (i, sample) in samples.iter_mut().enumerate() {
+            if (at_ms(2000)..at_ms(3000)).contains(&i) {
+                *sample += tone_at(i, -15.0);
+            }
+        }
+        let voice = voice(&samples);
+        assert_eq!(voice.runs, [(2000, 3000)]);
+        let mut speech = spoken(0, 7000, &["over", "the", "hiss"]);
+        assert!(fit_to_voice(&mut speech, &voice));
+        assert_eq!((speech.start_ms, speech.end_ms), (1900, 3100));
+        // Hiss alone is sound, so a segment over it stays, at Whisper's times.
+        let only_hiss = hiss(at_ms(7000), -40.0);
+        let quiet = self::voice(&only_hiss);
+        assert!(quiet.runs.is_empty());
+        let heard = spoken(1000, 6000, &["maybe", "words"]);
+        let mut kept = heard.clone();
+        assert!(fit_to_voice(&mut kept, &quiet));
+        assert_eq!(kept, heard);
+        assert!(has_sound(&only_hiss));
+    }
+
+    #[test]
+    fn silence_under_the_floor_is_no_sound() {
+        assert!(!has_sound(&sound(7000, &[])));
+        assert!(!has_sound(&hiss(at_ms(7000), -55.0)));
+        assert!(!has_sound(&[]));
+        assert!(has_sound(&sound(7000, &[(1000, 1020)])));
+    }
+
+    #[test]
+    fn only_a_damaged_model_is_downloaded_again() {
+        // A missing file cannot be read: downloading it again is up to
+        // the size check, not this.
+        let empty = tempfile::tempdir().unwrap();
+        let missing = Whisper::load(empty.path()).err().unwrap();
+        assert!(!missing.damaged, "{}", missing.message);
+        // Words that are not JSON are a damaged file.
+        let not_json = load_tokenizer("{ cut off").err().unwrap();
+        assert!(not_json.damaged);
+        // JSON the tokenizer refuses is not: the same file would come again.
+        let refused = load_tokenizer(r#"{"model": {"type": "Unknown"}}"#)
+            .err()
+            .unwrap();
+        assert!(!refused.damaged, "{}", refused.message);
+        // Model files that are not models are damaged.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(MODEL_FILES[2].local(dir.path()), byte_tokenizer_json()).unwrap();
+        for file in &MODEL_FILES[..2] {
+            fs::write(file.local(dir.path()), b"not a model at all").unwrap();
+        }
+        let garbled = Whisper::load(dir.path()).err().unwrap();
+        assert!(garbled.damaged, "{}", garbled.message);
+        assert!(model_damaged(rten::LoadErrorKind::ParseError));
+        assert!(!model_damaged(rten::LoadErrorKind::IoError));
+        assert!(!model_damaged(rten::LoadErrorKind::FormatNotEnabled));
+    }
+
+    /// Decodes byte tokens strictly, as the tokenizer does.
+    fn strict_bytes(pieces: &'static [&'static [u8]]) -> impl Fn(&[TokenId]) -> Option<String> {
+        move |tokens| {
+            let bytes: Vec<u8> = tokens
+                .iter()
+                .flat_map(|t| pieces[*t as usize].iter().copied())
+                .collect();
+            String::from_utf8(bytes).ok()
+        }
+    }
+
+    #[test]
+    fn decoding_skips_bytes_that_complete_no_character() {
+        // " a", a stray byte, the two halves of "é", " b", then half of "é".
+        const PIECES: &[&[u8]] = &[b" a", &[0xFF], &[0xC3], &[0xA9], b" b"];
+        let strict = strict_bytes(PIECES);
+        assert_eq!(decode_lossy(&[0, 1, 2, 3, 4, 2], &strict), " a\u{e9} b");
+        assert_eq!(decode_lossy(&[0, 2, 3], &strict), " a\u{e9}");
+        assert_eq!(decode_lossy(&[2], &strict), "");
+        assert_eq!(decode_lossy(&[1], &strict), "");
+        assert_eq!(decode_lossy(&[], &strict), "");
+    }
+
+    #[test]
+    fn an_invalid_byte_drops_no_other_words() {
+        // " Hello", a byte that completes no character, " world", " again".
+        const PIECES: &[&[u8]] = &[b" Hello", &[0xFF], b" world", b" again"];
+        let steps = [
+            stamp(0),
+            text(0, 0),
+            text(1, 400),
+            text(2, 500),
+            text(3, 800),
+            stamp(1000),
+        ];
+        let strict = strict_bytes(PIECES);
+        let (segments, _) =
+            segments_from_steps(&steps, 0, WINDOW_MS, |tokens| decode_lossy(tokens, &strict));
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "Hello world again");
+        let words: Vec<_> = segments[0]
+            .words
+            .iter()
+            .map(|w| (w.text.as_str(), w.start_ms))
+            .collect();
+        assert_eq!(words, [("Hello", 0), ("world", 400), ("again", 800)]);
+    }
+
+    #[test]
+    fn timestamps_come_in_pairs_and_move_forward() {
+        let (t0, t1, t2) = (ts(0), ts(1000), ts(2000));
+        let hello = 0;
+        // First: a timestamp within a second, never text.
+        assert!(timestamp_allowed(&[], t0));
+        assert!(!timestamp_allowed(&[], ts(2000)));
+        assert!(!text_allowed(&[]));
+        // After an opening timestamp: text only.
+        assert!(!timestamp_allowed(&[t0], t1));
+        assert!(text_allowed(&[t0]));
+        // After text: a strictly later timestamp closes the segment.
+        assert!(!timestamp_allowed(&[t1, hello], t1));
+        assert!(timestamp_allowed(&[t1, hello], t2));
+        // After a lone closing timestamp: a timestamp no earlier, or the
+        // end, but no text.
+        assert!(!text_allowed(&[t0, hello, t1]));
+        assert!(timestamp_allowed(&[t0, hello, t1], t1));
+        assert!(!timestamp_allowed(&[t0, hello, t1], t0));
+        // After a pair: text again, no timestamp.
+        assert!(!timestamp_allowed(&[t0, hello, t1, t1], t2));
+        assert!(text_allowed(&[t0, hello, t1, t1]));
+    }
+
+    #[test]
+    fn word_times_are_clamped_to_their_segment() {
+        // " now" is placed after the segment: clamped to its end, it has no
+        // time, so it joins the word before.
+        let steps = [stamp(1000), text(0, 0), text(5, 9000), stamp(2000)];
+        let (segments, _) = segments_from_steps(&steps, 0, WINDOW_MS, decoder(VOCAB));
+        assert_eq!(timed(&segments[0]), [("Hello now", 1000, 2000)]);
+    }
+
+    fn timed(segment: &TranscriptSegment) -> Vec<(&str, u64, u64)> {
+        segment
+            .words
+            .iter()
+            .map(|w| (w.text.as_str(), w.start_ms, w.end_ms))
+            .collect()
+    }
+
+    const SPEECH: &[&str] = &[" Banana's", " are", " yellow", " in", " bunches.", " The"];
+
+    #[test]
+    fn a_segment_past_the_end_of_the_sound_is_cut_there() {
+        // A 12 s recording: Whisper places a segment's words, and the next
+        // segment, after the sound ends.
+        let steps = [
+            stamp(8000),
+            text(0, 8000),
+            text(1, 14160),
+            text(2, 14160),
+            text(3, 14160),
+            text(4, 14160),
+            stamp(15000),
+            text(5, 16000),
+            stamp(17000),
+        ];
+        let (segments, last) = segments_from_steps(&steps, 2000, 12_000, decoder(SPEECH));
+        assert_eq!(last, Some(12_000));
+        assert_eq!(segments.len(), 1);
+        assert_eq!((segments[0].start_ms, segments[0].end_ms), (10_000, 14_000));
+        // Most words collapsed onto the segment's end: all are spread over
+        // it by their length.
+        assert_eq!(
+            timed(&segments[0]),
+            [
+                ("Banana's", 10_000, 11_185),
+                ("are", 11_185, 11_629),
+                ("yellow", 11_629, 12_518),
+                ("in", 12_518, 12_814),
+                ("bunches.", 12_814, 14_000),
+            ]
+        );
+    }
+
+    #[test]
+    fn collapsed_word_times_are_spread_over_the_segment_by_length() {
+        let steps = [
+            stamp(0),
+            text(5, 1000),
+            text(0, 7000),
+            text(1, 7000),
+            text(2, 7000),
+            stamp(7000),
+        ];
+        let (segments, _) = segments_from_steps(&steps, 0, WINDOW_MS, decoder(SPEECH));
+        assert_eq!(
+            timed(&segments[0]),
+            [
+                ("The", 0, 1050),
+                ("Banana's", 1050, 3850),
+                ("are", 3850, 4900),
+                ("yellow", 4900, 7000),
+            ]
+        );
+    }
+
+    #[test]
+    fn words_sharing_a_start_split_the_time_until_the_next_word() {
+        let steps = [
+            stamp(0),
+            text(0, 0),
+            text(4, 1000),
+            text(5, 1000),
+            text(3, 3000),
+            text(0, 4000),
+            stamp(5000),
+        ];
+        let (segments, _) = segments_from_steps(&steps, 0, WINDOW_MS, decoder(VOCAB));
+        assert_eq!(
+            timed(&segments[0]),
+            [
+                ("Hello", 0, 1000),
+                ("Again", 1000, 2666),
+                ("now.", 2666, 4000),
+                ("Hello", 4000, 5000),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_segment_too_short_for_its_words_keeps_them_in_one() {
+        // A 1 ms segment cut at the sound's end: no word gets time of its
+        // own, so they all join.
+        let steps = [stamp(0), text(0, 0), text(4, 0), text(5, 0), stamp(1000)];
+        let (segments, _) = segments_from_steps(&steps, 0, 1, decoder(VOCAB));
+        assert_eq!(timed(&segments[0]), [("Hello Again now", 0, 1)]);
+    }
+
+    /// A byte-level BPE vocabulary, as Whisper's, with one merge and no
+    /// `ignore_merges`.
+    fn byte_tokenizer_json() -> String {
+        let mut vocab: serde_json::Map<String, serde_json::Value> =
+            rten_text::models::char_to_byte()
+                .into_iter()
+                .map(|(c, byte)| (c.to_string(), byte.into()))
+                .collect();
+        vocab.insert("hi".into(), 256.into());
+        serde_json::json!({
+            "model": {"type": "BPE", "vocab": vocab, "merges": ["h i"], "end_of_word_suffix": ""}
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_tokenizer_without_ignore_merges_still_loads() {
+        let json = byte_tokenizer_json();
+        assert!(Tokenizer::from_json(&json).is_err());
+        let tokenizer = tokenizer_from_json(&json).unwrap();
+        assert_eq!(tokenizer.decode(&[256]).unwrap(), "hi");
+        assert_eq!(tokenizer.decode(&[104, 105]).unwrap(), "hi");
+        assert!(tokenizer_from_json("{").is_err());
+    }
+
+    #[test]
+    fn silence_gives_a_flat_log_mel() {
+        let mel = log_mel(&[0.0; 1000], &mel_filters());
+        assert_eq!(mel.shape(), [1, N_MELS, WINDOW_FRAMES]);
+        assert!(mel.iter().all(|value| (*value - -1.5).abs() < 1e-6));
+    }
+
+    #[test]
+    fn a_tone_is_loudest_in_its_mel_band() {
+        let samples: Vec<f32> = (0..SAMPLE_RATE)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SAMPLE_RATE as f32).sin())
+            .collect();
+        let filters = mel_filters();
+        let mel = log_mel(&samples, &filters);
+        let loudest = (0..N_MELS)
+            .max_by(|a, b| mel[[0, *a, 50]].total_cmp(&mel[[0, *b, 50]]))
+            .unwrap();
+        let bin = 440 * N_FFT / SAMPLE_RATE;
+        assert!(filters[loudest][bin] > 0.0 || filters[loudest][bin + 1] > 0.0);
+        // Past the tone the window is silence: the floor, 8 below the top.
+        let top = mel.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!((mel[[0, 0, WINDOW_FRAMES - 1]] - (top - 2.0)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn language_tokens_name_their_language() {
+        assert_eq!(
+            LANGUAGES.len() as TokenId,
+            LAST_LANGUAGE - FIRST_LANGUAGE + 1
+        );
+        assert_eq!(language_code(FIRST_LANGUAGE), Some("en"));
+        assert_eq!(language_code(FIRST_LANGUAGE + 2), Some("de"));
+        assert_eq!(language_code(LAST_LANGUAGE), Some("su"));
+        assert_eq!(language_code(LAST_LANGUAGE + 1), None);
+        assert_eq!(language_code(END_OF_TEXT), None);
+    }
+
+    #[test]
+    fn mel_filters_cover_the_spectrum() {
+        let filters = mel_filters();
+        assert_eq!(filters.len(), N_MELS);
+        assert!(filters.iter().all(|filter| filter.len() == N_FFT / 2 + 1));
+        assert!(filters.iter().all(|filter| filter.iter().any(|w| *w > 0.0)));
+    }
+
+    #[test]
+    fn s16le_samples_are_scaled() {
+        let bytes = [0x00, 0x80, 0x00, 0x00, 0xff, 0x7f];
+        let samples = samples_from_s16le(&bytes);
+        assert_eq!(samples[0], -1.0);
+        assert_eq!(samples[1], 0.0);
+        assert!((samples[2] - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn sound_args_ask_for_16_khz_mono() {
+        let args: Vec<String> = sound_args(Path::new("a.m4a"), 1)
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let joined = args.join(" ");
+        assert!(joined.contains("-i a.m4a -map 0:a:1 -ac 1 -ar 16000 -f s16le -"));
+    }
+
+    #[test]
+    fn transcript_round_trips_beside_its_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let video = dir.path().join("clip.mp4");
+        assert_eq!(read_transcript(&video), Ok(None));
+        let transcript = Transcript {
+            version: 1,
+            model: MODEL_NAME.into(),
+            language: Some("en".into()),
+            segments: vec![TranscriptSegment {
+                start_ms: 0,
+                end_ms: 900,
+                text: "Hi".into(),
+                words: vec![TranscriptWord {
+                    text: "Hi".into(),
+                    start_ms: 0,
+                    end_ms: 900,
+                }],
+            }],
+        };
+        write_transcript(&video, &transcript).unwrap();
+        assert!(dir.path().join("clip.transcript.json").is_file());
+        assert_eq!(read_transcript(&video), Ok(Some(transcript)));
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(transcript_path(&video)).unwrap()).unwrap();
+        assert_eq!(json["segments"][0]["words"][0]["startMs"], 0);
+        assert_eq!(json["language"], "en");
+    }
+
+    #[test]
+    fn a_newer_transcript_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let video = dir.path().join("clip.mp4");
+        fs::write(
+            transcript_path(&video),
+            r#"{"version":2,"model":"x","language":null,"segments":[]}"#,
+        )
+        .unwrap();
+        assert!(read_transcript(&video).is_err());
+    }
+
+    #[test]
+    fn the_model_is_pinned_and_about_290_mb() {
+        assert!((280_000_000..300_000_000).contains(&model_bytes()));
+        for file in MODEL_FILES {
+            assert_eq!(file.sha256.len(), 64);
+            assert!(model_url("https://huggingface.co", &file).contains(MODEL_REVISION));
+        }
+    }
+
+    /// Serves `body` once per connection, `times` times, on a local port.
+    fn serve(body: &'static [u8], times: usize) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(times) {
+                let mut stream = stream.unwrap();
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(body);
+            }
+        });
+        format!("http://{address}")
+    }
+
+    fn sha256(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(bytes))
+    }
+
+    #[test]
+    fn download_keeps_only_files_that_match_their_checksum() {
+        static BODY: &[u8] = b"model bytes";
+        let hash: &'static str = Box::leak(sha256(BODY).into_boxed_str());
+        let dir = tempfile::tempdir().unwrap();
+        let good = ModelFile {
+            path: "onnx/good.onnx",
+            bytes: BODY.len() as u64,
+            sha256: hash,
+        };
+        let agent = ffmpeg::download_agent(Duration::from_secs(5));
+        let mut seen = Vec::new();
+        download_model(
+            &agent,
+            &serve(BODY, 1),
+            &[good],
+            dir.path(),
+            &AtomicBool::new(false),
+            |done, total| seen.push((done, total)),
+        )
+        .unwrap();
+        assert_eq!(fs::read(dir.path().join("good.onnx")).unwrap(), BODY);
+        assert_eq!(seen.last(), Some(&(BODY.len() as u64, BODY.len() as u64)));
+
+        let bad = ModelFile {
+            path: "bad.onnx",
+            sha256: "0000000000000000000000000000000000000000000000000000000000000000",
+            ..good
+        };
+        let err = download_model(
+            &agent,
+            &serve(BODY, 1),
+            &[bad],
+            dir.path(),
+            &AtomicBool::new(false),
+            |_, _| {},
+        )
+        .unwrap_err();
+        assert!(err.contains("checksum"), "{err}");
+        let left: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, [std::ffi::OsString::from("good.onnx")]);
+    }
+
+    #[test]
+    fn a_download_clears_stale_parts_but_not_ones_being_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join("encoder_model.part-1-0");
+        fs::write(&stale, b"left by a crash").unwrap();
+        let busy = Part::new(&dir.path().join("decoder_model_merged.onnx"));
+        fs::write(&busy.0, b"another window").unwrap();
+        let kept = dir.path().join("tokenizer.json");
+        fs::write(&kept, b"{}").unwrap();
+        download_model(
+            &ffmpeg::download_agent(Duration::from_secs(5)),
+            "http://127.0.0.1:9",
+            &[],
+            dir.path(),
+            &AtomicBool::new(false),
+            |_, _| {},
+        )
+        .unwrap();
+        assert!(!stale.exists());
+        assert!(busy.0.exists());
+        assert!(kept.exists());
+    }
+
+    #[test]
+    fn each_partial_download_has_its_own_file() {
+        let to = Path::new("/models/encoder_model.onnx");
+        let (one, two) = (Part::new(to), Part::new(to));
+        assert_ne!(one.0, two.0);
+        let name = one.0.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with(&format!("encoder_model.part-{}-", std::process::id())),
+            "{name}"
+        );
+    }
+
+    #[test]
+    fn progress_is_sent_per_percent_or_quarter_second_and_at_the_end() {
+        let start = Instant::now();
+        let mut throttle = Throttle::new();
+        let sent: Vec<u64> = (0..=1000u64)
+            .filter(|done| throttle.due(*done, 1000, start))
+            .collect();
+        assert_eq!(sent.len(), 101, "{sent:?}");
+        assert_eq!(sent.last(), Some(&1000));
+        let mut throttle = Throttle::new();
+        assert!(throttle.due(0, 1_000_000, start));
+        assert!(!throttle.due(1, 1_000_000, start + PROGRESS_EVERY / 2));
+        assert!(throttle.due(2, 1_000_000, start + PROGRESS_EVERY));
+        assert!(!throttle.due(3, 1_000_000, start + PROGRESS_EVERY));
+        assert!(throttle.due(1_000_000, 1_000_000, start + PROGRESS_EVERY));
+    }
+
+    #[test]
+    fn removing_the_model_deletes_its_files_only() {
+        let dir = tempfile::tempdir().unwrap();
+        for file in &MODEL_FILES {
+            fs::write(file.local(dir.path()), b"damaged").unwrap();
+        }
+        fs::write(dir.path().join("other"), b"x").unwrap();
+        remove_model(dir.path());
+        let left: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, [std::ffi::OsString::from("other")]);
+    }
+
+    #[test]
+    fn a_cancelled_download_stops_and_leaves_nothing() {
+        static BODY: &[u8] = b"model bytes";
+        let dir = tempfile::tempdir().unwrap();
+        let file = ModelFile {
+            path: "m.onnx",
+            bytes: BODY.len() as u64,
+            sha256: "00",
+        };
+        let err = download_model(
+            &ffmpeg::download_agent(Duration::from_secs(5)),
+            &serve(BODY, 1),
+            &[file],
+            dir.path(),
+            &AtomicBool::new(true),
+            |_, _| {},
+        )
+        .unwrap_err();
+        assert_eq!(err, CANCELLED);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn cancelling_is_scoped_to_one_window() {
+        let state = TranscribeState::default();
+        let first = state.begin("first").unwrap();
+        let second = state.begin("second").unwrap();
+        assert!(state.begin("first").is_err());
+        state.cancel("first");
+        assert!(check_cancelled(&first).is_err());
+        assert!(check_cancelled(&second).is_ok());
+        state.finish("first");
+        assert!(state.begin("first").is_ok());
+    }
+}

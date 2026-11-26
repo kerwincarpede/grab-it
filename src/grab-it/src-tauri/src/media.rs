@@ -81,8 +81,20 @@ impl SaveDestination {
         };
         let sibling_extensions: &[&str] = match extension {
             "png" => &["meta.json", "annotations.json", "assets"],
-            "mp4" => &["gif", "edits.json", "cursor.json", "sound.m4a"],
-            "gif" => &["mp4", "edits.json", "cursor.json", "sound.m4a"],
+            "mp4" => &[
+                "gif",
+                "edits.json",
+                "cursor.json",
+                "sound.m4a",
+                "transcript.json",
+            ],
+            "gif" => &[
+                "mp4",
+                "edits.json",
+                "cursor.json",
+                "sound.m4a",
+                "transcript.json",
+            ],
             _ => &[],
         };
         // MP4s and GIFs with the same stem would share a thumbnail. Check
@@ -228,6 +240,26 @@ mod tests {
         assert!(fourth.ends_with("recordings/2026-03-07 09-05-01 (4).gif"));
         assert_eq!(fs::read(first).unwrap(), b"first clip");
         assert_eq!(fs::read(sidecar).unwrap(), b"an existing edit");
+    }
+
+    #[test]
+    fn an_orphaned_transcript_keeps_its_name_from_mp4s_and_gifs() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = SaveDestination::flat(dir.path());
+        let time = Local.with_ymd_and_hms(2026, 3, 7, 9, 5, 1).unwrap();
+        let recordings = dir.path().join(RECORDINGS_DIR);
+        fs::create_dir_all(&recordings).unwrap();
+        let transcript = recordings.join("2026-03-07 09-05-01.transcript.json");
+        fs::write(&transcript, b"what was said").unwrap();
+        let (mp4, _) = destination
+            .reserve(RECORDINGS_DIR, &time, None, "mp4")
+            .unwrap();
+        let (gif, _) = destination
+            .reserve(RECORDINGS_DIR, &time, None, "gif")
+            .unwrap();
+        assert!(mp4.ends_with("recordings/2026-03-07 09-05-01 (2).mp4"));
+        assert!(gif.ends_with("recordings/2026-03-07 09-05-01 (3).gif"));
+        assert_eq!(fs::read(transcript).unwrap(), b"what was said");
     }
 
     #[test]
