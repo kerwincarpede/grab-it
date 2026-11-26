@@ -7,6 +7,11 @@ export interface TimelineView {
   startMs: number;
   endMs: number;
   width: number;
+  /**
+   * How much of the view the track fills, in px: `width`, less any of it
+   * a held drag's spacer takes past the track's end.
+   */
+  trackWidth: number;
 }
 
 interface TimelineProps {
@@ -129,9 +134,10 @@ export default function Timeline({
     const { onViewChange: tell, zoom: now, durationMs: length } = latest.current;
     if (!scroller || !tell) return;
     const width = viewWidth(scroller);
-    const view = { ...visibleRange(scroller.scrollLeft, now, length, width), width };
+    const trackWidth = Math.max(0, Math.min(width, now * width - scroller.scrollLeft));
+    const view = { ...visibleRange(scroller.scrollLeft, now, length, width), width, trackWidth };
     const last = told.current;
-    if (last && last.startMs === view.startMs && last.endMs === view.endMs && last.width === view.width) return;
+    if (last && last.startMs === view.startMs && last.endMs === view.endMs && last.width === view.width && last.trackWidth === view.trackWidth) return;
     told.current = view;
     tell(view);
   }, []);

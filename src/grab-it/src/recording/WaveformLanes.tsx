@@ -29,8 +29,12 @@ interface WaveformLanesProps {
   /** What each kind's lane is called, and its tooltip. */
   nameOf: (kind: AudioKind) => string;
   hintOf?: (kind: AudioKind) => string | undefined;
-  /** The stretch of the timeline in view; nothing is drawn before it is known. */
-  view: LaneView | null;
+  /**
+   * The stretch of the timeline in view; nothing is drawn before it is
+   * known. Only `trackWidth` of it is track, when a held drag leaves the
+   * rest as spacer, so the lanes draw that much at the rows' own scale.
+   */
+  view: (LaneView & { trackWidth?: number }) | null;
 }
 
 const errorText = (err: unknown) => String(err instanceof Error ? err.message : err);
@@ -141,7 +145,7 @@ export default function WaveformLanes({ clips, joined, durationMs, trim, audioOf
     setHeight(clampHeight(next));
   };
 
-  const shown = view ?? { startMs: 0, endMs: durationMs, width: 0 };
+  const shown: LaneView = view ? { startMs: view.startMs, endMs: view.endMs, width: view.trackWidth ?? view.width } : { startMs: 0, endMs: durationMs, width: 0 };
   return (
     <div className="waveform-lanes">
       {lanes.map(({ kind, segments }) => (

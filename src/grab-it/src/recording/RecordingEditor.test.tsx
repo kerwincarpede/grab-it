@@ -1142,6 +1142,46 @@ describe("RecordingEditor", () => {
       expect(scroller.scrollLeft).toBe(250);
     });
 
+    it("draws the waveforms only over the track in view while a held drag shortens the sequence", async () => {
+      sourceAudio = { [OTHER]: ["mixed"] };
+      mockBackend(JOINED_ZOOM, null, ["mixed"]);
+      render(<RecordingEditor />);
+      await loadJoinedZoom();
+      const scroller = layOutTimeline();
+      let offset = 0;
+      const contentWidth = () => {
+        const hold = screen.queryByTestId("timeline-hold");
+        return Math.max(Number(zoomOf()) * 100 + 24, hold ? parseFloat(hold.style.width) : 0);
+      };
+      Object.defineProperty(scroller, "scrollLeft", {
+        configurable: true,
+        get: () => (offset = Math.min(offset, Math.max(0, contentWidth() - 124))),
+        set: (value: number) => {
+          offset = Math.max(0, value);
+        },
+      });
+      const lane = () => screen.getByRole("group", { name: "Mixed sound waveform" });
+      await waitFor(() => expect(lane()).toHaveAttribute("data-state", "ready"));
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      scroller.scrollLeft = 1000;
+      fireEvent.scroll(scroller);
+      const canvas = () => lane().querySelector("canvas") as HTMLCanvasElement;
+      // 4x, scrolled to the end: the whole 100 px view is track.
+      expect(canvas().style.width).toBe("100px");
+      spanAt(screen.getByRole("listbox", { name: "Clips" }), -300, 400);
+      const edge = screen.getByRole("option", { name: `${OTHER}, 0:06.0` }).querySelector(".clip-edge.end") as HTMLElement;
+      fireEvent.pointerDown(edge, { clientX: 100 });
+      fireEvent.pointerMove(edge, { clientX: 50 });
+      // The 8.75 s sequence is 350 px with the offset held at 300: only 50 px of
+      // the view is track, and the lane's bars end there, with the clip.
+      expect(scroller.scrollLeft).toBe(300);
+      await waitFor(() => expect(canvas().style.width).toBe("50px"));
+      expect(canvas()).toHaveAttribute("data-bars", "25");
+      fireEvent.pointerUp(edge, { clientX: 50 });
+      await waitFor(() => expect(screen.queryByTestId("timeline-hold")).not.toBeInTheDocument());
+    });
+
     it("keeps the chosen scale and the scroll offset when the view is resized", async () => {
       mockBackend();
       render(<RecordingEditor />);
