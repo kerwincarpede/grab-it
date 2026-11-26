@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   cueBox,
   fitCueLines,
+  graphemes,
   cueShowings,
   cuesFromTranscript,
   DEFAULT_CAPTION_STYLE,
@@ -217,22 +218,23 @@ describe("painting a cue", () => {
     };
     return fake;
   };
-  const fontPx = (fake: { font: string }) => Number(/(\d+)px/.exec(fake.font)?.[1]);
 
   it.each([
     ["16:9", 1920, 1080, 59],
     ["1:1", 1080, 1080, 33],
     ["9:16", 1080, 1920, 33],
-  ])("keeps every line of a long cue inside a %s video", (_, width, height, px) => {
+  ])("keeps every line of a long cue inside a %s video, on two lines", (_, width, height, px) => {
     for (const size of ["small", "medium", "large"] as const) {
       const style = { ...DEFAULT_CAPTION_STYLE, size };
       const fake = sized();
       const text = "This caption is exactly as long as the line limit allows, twice over here";
-      const lines = fitCueLines(text, style, width, height, fake);
-      if (size === "medium") expect(fontPx(fake)).toBe(px);
+      const { lines, fontPx } = fitCueLines(text, style, width, height, fake);
+      if (size === "medium") expect(fontPx).toBe(px);
       expect(lines.join(" ")).toBe(text);
+      expect(lines.length).toBeLessThanOrEqual(2);
       for (const line of lines) expect(fake.measureText(line).width).toBeLessThanOrEqual(width * 0.9);
-      const box = cueBox(lines, style, width, height, fake);
+      const box = cueBox(lines, style, width, height, fake, fontPx);
+      expect(box.fontPx).toBe(fontPx);
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(width);
       expect(box.width).toBeLessThanOrEqual(Math.ceil(width * 0.9));
@@ -240,13 +242,64 @@ describe("painting a cue", () => {
     }
   });
 
-  it("re-splits a line too wide for a narrow video, breaking a long word between characters", () => {
-    // A wide font, as for full-width characters.
+  it("keeps a two-line Large cue at 16:9 on two balanced lines, stepping its font down", () => {
+    const fake = sized();
+    const text = "The quick brown fox jumps over a lazy dog.\nThen it runs off into the woods for good.";
+    const { lines, fontPx } = fitCueLines(text.replace("\n", " "), { ...DEFAULT_CAPTION_STYLE, size: "large" }, 1920, 1080, fake);
+    expect(lines).toHaveLength(2);
+    expect(fontPx).toBeLessThan(81);
+    expect(fontPx).toBeGreaterThanOrEqual(Math.round(81 * 0.6));
+    expect(Math.min(...lines.map((line) => line.length))).toBeGreaterThan(30);
+    for (const line of lines) expect(fake.measureText(line).width).toBeLessThanOrEqual(1920 * 0.9);
+  });
+
+  it("balances the lines of a paragraph so none is left with a short orphan", () => {
+    const fake = sized();
+    // 46 characters: too long for one line, wrapped greedily as 42 + 3.
+    const { lines } = fitCueLines("The quick brown fox jumps over the lazy dogs, ok", DEFAULT_CAPTION_STYLE, 1920, 1080, fake);
+    expect(lines).toHaveLength(2);
+    expect(Math.min(...lines.map((line) => line.length))).toBeGreaterThan(15);
+  });
+
+  it("keeps a full CJK cue at 16:9 to two lines", () => {
     const fake = sized(1);
-    const lines = fitCueLines("short words then Supercalifragilisticexpialidocious", DEFAULT_CAPTION_STYLE, 400, 400, fake);
+    const text = "我们今天来看一下这个新的功能怎么使用以及它可以帮助我们做什么事情".repeat(2);
+    const { lines, fontPx } = fitCueLines(text, DEFAULT_CAPTION_STYLE, 1920, 1080, fake);
+    expect(lines).toHaveLength(2);
+    expect(lines.join("")).toBe(text);
+    expect(Math.abs(lines[0].length - lines[1].length)).toBeLessThanOrEqual(1);
+    for (const line of lines) expect(fake.measureText(line).width).toBeLessThanOrEqual(1920 * 0.9);
+    expect(fontPx).toBeLessThanOrEqual(59);
+  });
+
+  it("takes more lines once the font is as small as it goes", () => {
+    const fake = sized(1);
+    const text = "short words then Supercalifragilisticexpialidocious and a great many more words after it, far more than two lines hold";
+    const { lines, fontPx } = fitCueLines(text, DEFAULT_CAPTION_STYLE, 400, 400, fake);
+    // 12 px at 400 × 400 Medium, stepped down to its floor of 8 px.
+    expect(fontPx).toBe(8);
     expect(lines.length).toBeGreaterThan(2);
     for (const line of lines) expect(fake.measureText(line).width).toBeLessThanOrEqual(400 * 0.9);
-    expect(lines.join("").replace(/ /g, "")).toBe("shortwordsthenSupercalifragilisticexpialidocious");
+    expect(lines.join(" ")).toBe(text);
+  });
+
+  it("keeps a cue's own line breaks", () => {
+    const { lines } = fitCueLines("One\nTwo\nThree", DEFAULT_CAPTION_STYLE, 1920, 1080, sized());
+    expect(lines).toEqual(["One", "Two", "Three"]);
+  });
+
+  it("breaks an over-wide word between graphemes, never inside an emoji or a combining sequence", () => {
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+    const accented = "e\u0301";
+    expect(graphemes(`a${family}${accented}`)).toEqual(["a", family, accented]);
+    const word = `${family}${accented}`.repeat(40);
+    const { lines } = fitCueLines(word, DEFAULT_CAPTION_STYLE, 400, 400, sized(1));
+    expect(lines.length).toBeGreaterThan(1);
+    for (const line of lines) {
+      expect(line.startsWith("\u0301")).toBe(false);
+      expect(line.startsWith("\u200D")).toBe(false);
+      expect(graphemes(line).every((each) => each === family || each === accented)).toBe(true);
+    }
   });
 
   it("grows with size and never leaves the video", () => {

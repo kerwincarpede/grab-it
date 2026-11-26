@@ -335,18 +335,18 @@ fn remove_stale_parts(dir: &Path) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    let active = ACTIVE_PARTS
-        .lock()
-        .ok()
-        .and_then(|active| active.clone())
-        .unwrap_or_default();
+    // Held for the whole walk, so no download starts and is removed here.
+    let Ok(active) = ACTIVE_PARTS.lock() else {
+        return;
+    };
+    let active = active.as_ref();
     for entry in entries.flatten() {
         let path = entry.path();
         let partial = path
             .extension()
             .and_then(|ext| ext.to_str())
             .is_some_and(|ext| ext.starts_with("part-"));
-        if partial && !active.contains(&path) {
+        if partial && !active.is_some_and(|active| active.contains(&path)) {
             let _ = fs::remove_file(&path);
         }
     }
@@ -864,33 +864,86 @@ fn spread(words: &mut [(Vec<TokenId>, u64, u64)], at: u64, until: u64) {
 
 /// The length of one frame of sound weighed for voice.
 const VOICE_FRAME_MS: u64 = 20;
-/// A frame is voiced when it is within this many dB of the loudest frame
-/// of the recording...
-const VOICE_RANGE_DB: f32 = 30.0;
-/// ...and louder than this, in dBFS.
+/// Quieter than this, in dBFS, a frame is silence: a segment with no
+/// frame above it is dropped, and a recording with none is not
+/// transcribed at all.
 const VOICE_FLOOR_DB: f32 = -50.0;
+/// Voice is judged against the sound around it, in blocks of this many
+/// frames (10 s), each weighed with the blocks either side (30 s in all).
+const VOICE_BLOCK_FRAMES: usize = 500;
+/// A voiced frame is at least this many dB above the local noise floor,
+/// the quietest tenth of the frames around it, so steady hiss or hum is
+/// never voice...
+const VOICE_ABOVE_NOISE_DB: f32 = 10.0;
+/// ...and within this many dB of the local loud level, the frame 5% of
+/// the frames around it are louder than, so a short knock sets no level.
+const VOICE_RANGE_DB: f32 = 30.0;
 /// Quiet shorter than this, between words, belongs to the voice around it.
 const VOICE_BRIDGE_MS: u64 = 200;
 /// How far a fitted segment reaches before and after its voice.
 const VOICE_PAD_MS: u64 = 100;
 
-/// The voiced stretches of 16 kHz mono `samples`, in ms, in order: runs of
-/// frames loud enough to be speech, with short quiet between them bridged.
-fn voiced_runs(samples: &[f32]) -> Vec<(u64, u64)> {
+/// The level of each [`VOICE_FRAME_MS`] frame of 16 kHz mono `samples`,
+/// in dBFS.
+fn frame_levels(samples: &[f32]) -> Vec<f32> {
     let frame = (VOICE_FRAME_MS as usize * SAMPLE_RATE) / 1000;
-    let levels: Vec<f32> = samples
+    samples
         .chunks(frame)
         .map(|chunk| {
             let power = chunk.iter().map(|x| x * x).sum::<f32>() / chunk.len() as f32;
             10.0 * power.max(1e-12).log10()
         })
+        .collect()
+}
+
+/// Whether 16 kHz mono `samples` hold any frame above [`VOICE_FLOOR_DB`]:
+/// without one there is nothing to transcribe, and Whisper would only
+/// invent text from the silence.
+pub fn has_sound(samples: &[f32]) -> bool {
+    frame_levels(samples)
+        .iter()
+        .any(|level| *level >= VOICE_FLOOR_DB)
+}
+
+/// How loud a recording is, frame by frame, and where it has voice.
+struct Voice {
+    /// Each frame's level, in dBFS.
+    levels: Vec<f32>,
+    /// The voiced stretches, in ms, in order.
+    runs: Vec<(u64, u64)>,
+}
+
+/// The value `share` of the way up `levels`, which it sorts.
+fn percentile(levels: &mut [f32], share: f32) -> f32 {
+    levels.sort_by(f32::total_cmp);
+    levels[((levels.len() - 1) as f32 * share) as usize]
+}
+
+/// The voice in 16 kHz mono `samples`: runs of frames loud enough to be
+/// speech, with short quiet between them bridged. A frame is voiced when
+/// it is above [`VOICE_FLOOR_DB`], [`VOICE_ABOVE_NOISE_DB`] above the
+/// noise floor around it and within [`VOICE_RANGE_DB`] of the loud level
+/// around it, both taken over 30 s, so neither a loud knock elsewhere in
+/// the recording nor steady hiss hides or fakes it.
+fn voice(samples: &[f32]) -> Voice {
+    let levels = frame_levels(samples);
+    let blocks = levels.len().div_ceil(VOICE_BLOCK_FRAMES);
+    let thresholds: Vec<f32> = (0..blocks)
+        .map(|block| {
+            let from = block.saturating_sub(1) * VOICE_BLOCK_FRAMES;
+            let to = ((block + 2) * VOICE_BLOCK_FRAMES).min(levels.len());
+            let mut around = levels[from..to].to_vec();
+            let noise = percentile(&mut around, 0.1);
+            let loud = percentile(&mut around, 0.95);
+            VOICE_FLOOR_DB
+                .max(noise + VOICE_ABOVE_NOISE_DB)
+                .max(loud - VOICE_RANGE_DB)
+        })
         .collect();
-    let loudest = levels.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let threshold = VOICE_FLOOR_DB.max(loudest - VOICE_RANGE_DB);
     let end_ms = (samples.len() as u64 * 1000) / SAMPLE_RATE as u64;
     let mut runs: Vec<(u64, u64)> = Vec::new();
     for (i, level) in levels.iter().enumerate() {
-        if *level < threshold {
+        if *level < thresholds[i / VOICE_BLOCK_FRAMES] {
             continue;
         }
         let start = i as u64 * VOICE_FRAME_MS;
@@ -900,25 +953,36 @@ fn voiced_runs(samples: &[f32]) -> Vec<(u64, u64)> {
             _ => runs.push((start, end)),
         }
     }
-    runs
+    Voice { levels, runs }
 }
 
 /// Fits `segment` to the voice in it: shrinks it to its voiced stretches,
 /// [`VOICE_PAD_MS`] either side and never past its own bounds, and spreads
 /// its words over those stretches by their length in characters, so no
 /// word sits in the quiet between them. Returns false for a segment with
-/// no voice in it, which Whisper invented from silence (often "Thank
-/// you."), so it is dropped. A segment with voice too short to give each
-/// character a millisecond keeps Whisper's times.
-fn fit_to_voice(segment: &mut TranscriptSegment, runs: &[(u64, u64)]) -> bool {
+/// no frame above [`VOICE_FLOOR_DB`], which Whisper invented from silence
+/// (often "Thank you."), so it is dropped. A segment with sound but no
+/// voice found in it (speech that never pauses, or speech lost in the
+/// noise), or voice too short to give each character a millisecond, keeps
+/// Whisper's times.
+fn fit_to_voice(segment: &mut TranscriptSegment, voice: &Voice) -> bool {
     let (from, to) = (segment.start_ms, segment.end_ms);
-    let mut inside: Vec<(u64, u64)> = runs
+    let frames = (from / VOICE_FRAME_MS) as usize..to.div_ceil(VOICE_FRAME_MS) as usize;
+    let sounded = voice
+        .levels
+        .get(frames.start.min(voice.levels.len())..frames.end.min(voice.levels.len()))
+        .is_some_and(|levels| levels.iter().any(|level| *level >= VOICE_FLOOR_DB));
+    if !sounded {
+        return false;
+    }
+    let mut inside: Vec<(u64, u64)> = voice
+        .runs
         .iter()
         .map(|&(start, end)| (start.max(from), end.min(to)))
         .filter(|(start, end)| start < end)
         .collect();
     let (Some(first), Some(last)) = (inside.first().copied(), inside.last().copied()) else {
-        return false;
+        return true;
     };
     let weights: Vec<u64> = segment
         .words
@@ -1103,6 +1167,41 @@ fn tokenizer_from_json(json: &str) -> Result<Tokenizer, String> {
     Tokenizer::from_json(&value.to_string()).map_err(|err| err.to_string())
 }
 
+/// Why the model did not load.
+#[derive(Debug)]
+pub struct LoadFailure {
+    pub message: String,
+    /// Whether a model file is damaged, so downloading it again may help;
+    /// false for errors such as a file that cannot be read, which another
+    /// download would not fix.
+    pub damaged: bool,
+}
+
+/// Whether an rten load error means the model file itself is damaged.
+fn model_damaged(kind: rten::LoadErrorKind) -> bool {
+    use rten::LoadErrorKind as Kind;
+    matches!(
+        kind,
+        Kind::ParseError
+            | Kind::OperatorInvalid
+            | Kind::GraphError
+            | Kind::UnknownFileType
+            | Kind::ExternalDataError
+    )
+}
+
+/// The tokenizer in `json`. Text that is not JSON means the file is
+/// damaged; JSON rten-text refuses is not, as downloading the pinned file
+/// again would give the same.
+fn load_tokenizer(json: &str) -> Result<Tokenizer, LoadFailure> {
+    let failure = |damaged: bool, err: &dyn std::fmt::Display| LoadFailure {
+        message: format!("could not load the speech model's words: {err}"),
+        damaged,
+    };
+    serde_json::from_str::<serde_json::Value>(json).map_err(|err| failure(true, &err))?;
+    tokenizer_from_json(json).map_err(|err| failure(false, &err))
+}
+
 /// A loaded Whisper model.
 pub struct Whisper {
     encoder: Model,
@@ -1113,15 +1212,20 @@ pub struct Whisper {
 
 impl Whisper {
     /// Loads the model from `dir`.
-    pub fn load(dir: &Path) -> Result<Self, String> {
+    pub fn load(dir: &Path) -> Result<Self, LoadFailure> {
         let load = |file: &ModelFile| {
-            Model::load_file(file.local(dir))
-                .map_err(|err| format!("could not load the speech model: {err}"))
+            Model::load_file(file.local(dir)).map_err(|err| LoadFailure {
+                message: format!("could not load the speech model: {err}"),
+                damaged: model_damaged(err.kind()),
+            })
         };
-        let tokenizer = fs::read_to_string(MODEL_FILES[2].local(dir))
-            .map_err(|err| err.to_string())
-            .and_then(|json| tokenizer_from_json(&json))
-            .map_err(|err| format!("could not load the speech model's words: {err}"))?;
+        let json = fs::read_to_string(MODEL_FILES[2].local(dir)).map_err(|err| LoadFailure {
+            message: format!("could not load the speech model's words: {err}"),
+            // Bytes that are not text are a damaged file; one that cannot
+            // be read is not.
+            damaged: err.kind() == io::ErrorKind::InvalidData,
+        })?;
+        let tokenizer = load_tokenizer(&json)?;
         Ok(Self {
             encoder: load(&MODEL_FILES[0])?,
             decoder: load(&MODEL_FILES[1])?,
@@ -1243,8 +1347,8 @@ impl Whisper {
             seek += advance.max(1);
             progress(ms(seek).min(total), total);
         }
-        let runs = voiced_runs(samples);
-        segments.retain_mut(|segment| fit_to_voice(segment, &runs));
+        let voice = voice(samples);
+        segments.retain_mut(|segment| fit_to_voice(segment, &voice));
         let language = language
             .filter(|_| !segments.is_empty())
             .and_then(language_code)
@@ -1317,9 +1421,21 @@ pub fn recording_transcribe_cancel(window: WebviewWindow, state: State<'_, Trans
     state.cancel(window.label());
 }
 
+/// The transcript of a recording with nothing to transcribe.
+fn silent_transcript() -> Transcript {
+    Transcript {
+        version: TRANSCRIPT_VERSION,
+        model: MODEL_NAME.to_owned(),
+        language: None,
+        segments: Vec::new(),
+    }
+}
+
 /// Transcribes recording `source`, downloading the model first if needed,
 /// saves its transcript beside it and returns it. A recording with only
-/// system sound, or none, gets a transcript with no segments. Progress
+/// system sound, or none, or whose sound never rises above
+/// [`VOICE_FLOOR_DB`], gets a transcript with no segments, without the
+/// model being downloaded or run. Progress
 /// goes to the window as [`TRANSCRIBE_PROGRESS_EVENT`].
 #[tauri::command]
 #[specta::specta]
@@ -1356,7 +1472,12 @@ pub async fn recording_transcribe(
             .map(|source| (source.kind, source.file, source.stream))
             .collect();
         let transcript = match pause_source(&path, &sources) {
-            (PauseSound::Microphone | PauseSound::Mixed, Some((file, stream))) => {
+            (PauseSound::Microphone | PauseSound::Mixed, Some((file, stream))) => 'heard: {
+                // Silence needs no model: Whisper would only invent text.
+                let samples = read_sound(&ready.path, &file, stream, &cancelled)?;
+                if !has_sound(&samples) {
+                    break 'heard silent_transcript();
+                }
                 if !model_present(&dir) {
                     download_model(
                         &ffmpeg::download_agent(DOWNLOAD_STALL_TIMEOUT),
@@ -1367,20 +1488,19 @@ pub async fn recording_transcribe(
                         |done, total| report(TranscribeStage::Download, done, total),
                     )?;
                 }
-                let samples = read_sound(&ready.path, &file, stream, &cancelled)?;
                 // A file of the right size can still be damaged; drop the
                 // model so the next Transcribe downloads it again.
-                let whisper = Whisper::load(&dir).inspect_err(|_| remove_model(&dir))?;
+                let whisper = Whisper::load(&dir).map_err(|failure| {
+                    if failure.damaged {
+                        remove_model(&dir);
+                    }
+                    failure.message
+                })?;
                 whisper.transcribe(&samples, &cancelled, |done, total| {
                     report(TranscribeStage::Transcribe, done, total)
                 })?
             }
-            _ => Transcript {
-                version: TRANSCRIPT_VERSION,
-                model: MODEL_NAME.to_owned(),
-                language: None,
-                segments: Vec::new(),
-            },
+            _ => silent_transcript(),
         };
         check_cancelled(&cancelled)?;
         write_transcript(&path, &transcript)?;
@@ -1602,8 +1722,8 @@ mod tests {
     #[test]
     fn voice_is_found_with_short_quiet_bridged() {
         let samples = sound(4000, &[(500, 1000), (1100, 1500), (2500, 3000)]);
-        assert_eq!(voiced_runs(&samples), [(500, 1500), (2500, 3000)]);
-        assert!(voiced_runs(&sound(1000, &[])).is_empty());
+        assert_eq!(voice(&samples).runs, [(500, 1500), (2500, 3000)]);
+        assert!(voice(&sound(1000, &[])).runs.is_empty());
     }
 
     #[test]
@@ -1611,7 +1731,7 @@ mod tests {
         // Speech at 0.5-1.5 s and 2.5-2.95 s, in a segment Whisper gave
         // as 0-7 s.
         let samples = sound(7000, &[(500, 1500), (2500, 2950)]);
-        let runs = voiced_runs(&samples);
+        let runs = voice(&samples);
         let words = [
             "The", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog.",
         ];
@@ -1635,17 +1755,17 @@ mod tests {
     #[test]
     fn a_segment_without_voice_is_dropped_and_one_with_it_keeps_its_bounds() {
         let samples = sound(7000, &[(500, 1500)]);
-        let runs = voiced_runs(&samples);
+        let runs = voice(&samples);
         // Whisper's invention over silence is dropped.
         let mut quiet = spoken(3000, 6000, &["Thank", "you."]);
         assert!(!fit_to_voice(&mut quiet, &runs));
-        assert!(!fit_to_voice(&mut quiet, &voiced_runs(&sound(7000, &[]))));
+        assert!(!fit_to_voice(&mut quiet, &voice(&sound(7000, &[]))));
         // Voice too short for its characters keeps Whisper's times.
         let sliver = sound(7000, &[(3000, 3020)]);
         let long = "a".repeat(400);
         let wordy = spoken(2000, 6000, &[long.as_str()]);
         let mut kept = wordy.clone();
-        assert!(fit_to_voice(&mut kept, &voiced_runs(&sliver)));
+        assert!(fit_to_voice(&mut kept, &voice(&sliver)));
         assert_eq!(kept, wordy);
         // Voice from before the segment starts reaches no further back.
         let mut late = spoken(1000, 4000, &["late", "words"]);
@@ -1653,6 +1773,117 @@ mod tests {
         assert_eq!((late.start_ms, late.end_ms), (1000, 1600));
         assert_eq!(late.words[0].start_ms, 1000);
         assert_eq!(late.words[1].end_ms, 1600);
+    }
+
+    /// A 440 Hz tone with an RMS level of `db` dBFS.
+    fn tone_at(i: usize, db: f32) -> f32 {
+        let amplitude = 10f32.powf(db / 20.0) * std::f32::consts::SQRT_2;
+        amplitude * (i as f32 * 440.0 * std::f32::consts::TAU / SAMPLE_RATE as f32).sin()
+    }
+
+    /// Steady white noise with an RMS level of `db` dBFS, from a fixed seed.
+    fn hiss(len: usize, db: f32) -> Vec<f32> {
+        let peak = 10f32.powf(db / 20.0) * 3f32.sqrt();
+        let mut seed = 0x2545_f491_u32;
+        (0..len)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                (seed as f32 / u32::MAX as f32 * 2.0 - 1.0) * peak
+            })
+            .collect()
+    }
+
+    fn at_ms(ms: u64) -> usize {
+        (ms as usize * SAMPLE_RATE) / 1000
+    }
+
+    #[test]
+    fn a_loud_knock_does_not_hide_quiet_speech() {
+        // A 40 ms knock at about -13.5 dBFS, then speech at about
+        // -45.5 dBFS, over a faint hiss well under the floor.
+        let mut samples = sound(7000, &[]);
+        for (i, sample) in samples.iter_mut().enumerate() {
+            if (at_ms(500)..at_ms(540)).contains(&i) {
+                *sample = tone_at(i, -13.5);
+            } else if (at_ms(3000)..at_ms(4500)).contains(&i) {
+                *sample = tone_at(i, -45.5);
+            }
+        }
+        let voice = voice(&samples);
+        assert_eq!(voice.runs, [(500, 540), (3000, 4500)]);
+        let mut speech = spoken(2000, 7000, &["quiet", "words", "here"]);
+        assert!(fit_to_voice(&mut speech, &voice));
+        assert_eq!((speech.start_ms, speech.end_ms), (2900, 4600));
+        assert!(
+            speech
+                .words
+                .iter()
+                .all(|w| (2900..=4600).contains(&w.start_ms))
+        );
+        assert!(has_sound(&samples));
+    }
+
+    #[test]
+    fn steady_hiss_is_not_voice() {
+        // Hiss at -40 dBFS, above the floor, with speech over it at 2-3 s.
+        let mut samples = hiss(at_ms(7000), -40.0);
+        for (i, sample) in samples.iter_mut().enumerate() {
+            if (at_ms(2000)..at_ms(3000)).contains(&i) {
+                *sample += tone_at(i, -15.0);
+            }
+        }
+        let voice = voice(&samples);
+        assert_eq!(voice.runs, [(2000, 3000)]);
+        let mut speech = spoken(0, 7000, &["over", "the", "hiss"]);
+        assert!(fit_to_voice(&mut speech, &voice));
+        assert_eq!((speech.start_ms, speech.end_ms), (1900, 3100));
+        // Hiss alone is sound, so a segment over it stays, at Whisper's times.
+        let only_hiss = hiss(at_ms(7000), -40.0);
+        let quiet = self::voice(&only_hiss);
+        assert!(quiet.runs.is_empty());
+        let heard = spoken(1000, 6000, &["maybe", "words"]);
+        let mut kept = heard.clone();
+        assert!(fit_to_voice(&mut kept, &quiet));
+        assert_eq!(kept, heard);
+        assert!(has_sound(&only_hiss));
+    }
+
+    #[test]
+    fn silence_under_the_floor_is_no_sound() {
+        assert!(!has_sound(&sound(7000, &[])));
+        assert!(!has_sound(&hiss(at_ms(7000), -55.0)));
+        assert!(!has_sound(&[]));
+        assert!(has_sound(&sound(7000, &[(1000, 1020)])));
+    }
+
+    #[test]
+    fn only_a_damaged_model_is_downloaded_again() {
+        // A missing file cannot be read: downloading it again is up to
+        // the size check, not this.
+        let empty = tempfile::tempdir().unwrap();
+        let missing = Whisper::load(empty.path()).err().unwrap();
+        assert!(!missing.damaged, "{}", missing.message);
+        // Words that are not JSON are a damaged file.
+        let not_json = load_tokenizer("{ cut off").err().unwrap();
+        assert!(not_json.damaged);
+        // JSON the tokenizer refuses is not: the same file would come again.
+        let refused = load_tokenizer(r#"{"model": {"type": "Unknown"}}"#)
+            .err()
+            .unwrap();
+        assert!(!refused.damaged, "{}", refused.message);
+        // Model files that are not models are damaged.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(MODEL_FILES[2].local(dir.path()), byte_tokenizer_json()).unwrap();
+        for file in &MODEL_FILES[..2] {
+            fs::write(file.local(dir.path()), b"not a model at all").unwrap();
+        }
+        let garbled = Whisper::load(dir.path()).err().unwrap();
+        assert!(garbled.damaged, "{}", garbled.message);
+        assert!(model_damaged(rten::LoadErrorKind::ParseError));
+        assert!(!model_damaged(rten::LoadErrorKind::IoError));
+        assert!(!model_damaged(rten::LoadErrorKind::FormatNotEnabled));
     }
 
     /// Decodes byte tokens strictly, as the tokenizer does.
@@ -1833,19 +2064,24 @@ mod tests {
         assert_eq!(timed(&segments[0]), [("Hello Again now", 0, 1)]);
     }
 
-    #[test]
-    fn a_tokenizer_without_ignore_merges_still_loads() {
-        // A byte-level BPE vocabulary, as Whisper's, with one merge.
+    /// A byte-level BPE vocabulary, as Whisper's, with one merge and no
+    /// `ignore_merges`.
+    fn byte_tokenizer_json() -> String {
         let mut vocab: serde_json::Map<String, serde_json::Value> =
             rten_text::models::char_to_byte()
                 .into_iter()
                 .map(|(c, byte)| (c.to_string(), byte.into()))
                 .collect();
         vocab.insert("hi".into(), 256.into());
-        let json = serde_json::json!({
+        serde_json::json!({
             "model": {"type": "BPE", "vocab": vocab, "merges": ["h i"], "end_of_word_suffix": ""}
         })
-        .to_string();
+        .to_string()
+    }
+
+    #[test]
+    fn a_tokenizer_without_ignore_merges_still_loads() {
+        let json = byte_tokenizer_json();
         assert!(Tokenizer::from_json(&json).is_err());
         let tokenizer = tokenizer_from_json(&json).unwrap();
         assert_eq!(tokenizer.decode(&[256]).unwrap(), "hi");

@@ -253,7 +253,8 @@ pub fn validate_edits(value: &Value) -> Result<(), String> {
 }
 
 /// Captions are `{burnIn, cues: [{id, source?, startMs, endMs, text}],
-/// style?}`; cues need [`CAPTIONS_VERSION`] so older builds open them read-only.
+/// style?}`; cues need [`CAPTIONS_VERSION`], so older builds refuse to open
+/// the recording and never overwrite its sidecar: nothing is lost.
 fn validate_captions(captions: Option<&Value>, version: u64) -> Result<(), String> {
     let captions = match captions {
         None | Some(Value::Null) => return Ok(()),

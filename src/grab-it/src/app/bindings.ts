@@ -337,7 +337,9 @@ export const commands = {
 	/**
 	 *  Transcribes recording `source`, downloading the model first if needed,
 	 *  saves its transcript beside it and returns it. A recording with only
-	 *  system sound, or none, gets a transcript with no segments. Progress
+	 *  system sound, or none, or whose sound never rises above
+	 *  [`VOICE_FLOOR_DB`], gets a transcript with no segments, without the
+	 *  model being downloaded or run. Progress
 	 *  goes to the window as [`TRANSCRIBE_PROGRESS_EVENT`].
 	 */
 	recordingTranscribe: (source: string, options?: InvokeOptions) => __TAURI_INVOKE<Transcript_Serialize>("recording_transcribe", { source }, options),

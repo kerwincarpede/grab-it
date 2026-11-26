@@ -150,28 +150,39 @@ export function wrapLines(text: string, maxChars = MAX_LINE_CHARS, maxLines = MA
   const lines: string[] = [];
   for (const word of text.split(/\s+/).filter(Boolean).flatMap((each) => chunks(each, maxChars))) {
     const last = lines[lines.length - 1];
-    if (last !== undefined && Array.from(last).length + 1 + Array.from(word).length <= maxChars) lines[lines.length - 1] = `${last} ${word}`;
+    if (last !== undefined && graphemes(last).length + 1 + graphemes(word).length <= maxChars) lines[lines.length - 1] = `${last} ${word}`;
     else lines.push(word);
   }
   return lines.length <= maxLines ? lines : null;
 }
 
+/** The grapheme segmenter, where the platform has one (it is not in this project's ES2020 lib). */
+interface GraphemeSegmenter {
+  segment(text: string): Iterable<{ segment: string }>;
+}
+const segmenter: GraphemeSegmenter | null = (() => {
+  const Segmenter = (Intl as unknown as { Segmenter?: new (locale: undefined, options: { granularity: "grapheme" }) => GraphemeSegmenter }).Segmenter;
+  return Segmenter ? new Segmenter(undefined, { granularity: "grapheme" }) : null;
+})();
+
+/**
+ * `text`'s characters as a reader sees them (grapheme clusters), so an
+ * emoji sequence or a letter with combining marks is never split; code
+ * points where the platform cannot segment.
+ */
+export function graphemes(text: string): string[] {
+  return segmenter ? Array.from(segmenter.segment(text), (each) => each.segment) : Array.from(text);
+}
+
 /** `word` cut into pieces of at most `size` characters. */
 function chunks(word: string, size: number): string[] {
-  const chars = Array.from(word);
+  const chars = graphemes(word);
   if (chars.length <= size) return [word];
   const pieces: string[] = [];
   for (let at = 0; at < chars.length; at += size) pieces.push(chars.slice(at, at + size).join(""));
   return pieces;
 }
 
-/** Lines to paint: wrapped at `MAX_LINE_CHARS`, however many there are, and kept line breaks. */
-export function cueLines(text: string): string[] {
-  return text
-    .split("\n")
-    .flatMap((part) => wrapLines(part, MAX_LINE_CHARS, Number.POSITIVE_INFINITY) ?? [])
-    .filter((line) => line.length > 0);
-}
 
 /**
  * The cues for a transcript: each segment split at word times so a cue
@@ -404,6 +415,10 @@ export function resizeCueWithin(cue: Cue, edge: "start" | "end", ms: number, low
 const SIZE_SHARE: Record<CaptionSize, number> = { small: 0.04, medium: 0.055, large: 0.075 };
 /** Sizes text on square and portrait videos as on a landscape 16:9 one as wide. */
 const WIDTH_SHARE = 9 / 16;
+/** The smallest a cue's font is stepped down to, to keep it to two lines, as a share of its size's font. */
+const MIN_FONT_SHARE = 0.6;
+/** Each step down of a cue's font, as a share of the one before. */
+const FONT_STEP = 0.9;
 /** The most of the video's width a cue's box may take. */
 const MAX_BOX_SHARE = 0.9;
 /** Space between the cue and the video's edge, as a share of its height. */
@@ -425,51 +440,98 @@ interface Measure {
 /** The text height of a cue on a video `width` by `height`, in pixels. */
 const cueFontPx = (style: CaptionStyle, width: number, height: number) => Math.max(8, Math.round(Math.min(height, width * WIDTH_SHARE) * SIZE_SHARE[style.size]));
 
-/** The font for a cue on a video `width` by `height`. */
-export const cueFont = (style: CaptionStyle, width: number, height: number) => `600 ${cueFontPx(style, width, height)}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+/** The font for a cue on a video `width` by `height`, or at `fontPx` when given. */
+export const cueFont = (style: CaptionStyle, width: number, height: number, fontPx = cueFontPx(style, width, height)) =>
+  `600 ${fontPx}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+
+/** A cue's lines and the font size they are painted at. */
+export interface CueLayout {
+  lines: string[];
+  fontPx: number;
+}
 
 /**
- * The lines `text` paints as on a video `width` by `height`: wrapped at
- * `MAX_LINE_CHARS`, then each line too wide for its box to take at most
- * `MAX_BOX_SHARE` of the width wrapped again at the measured width, a word
- * wider than that broken between characters.
+ * How `text` paints on a video `width` by `height`. Each paragraph (split
+ * at `\n`) is wrapped as a whole at `MAX_LINE_CHARS` and at the measured
+ * width its box may take (`MAX_BOX_SHARE` of the video's, less padding),
+ * with its lines balanced: the shortest line limit that needs no more
+ * lines, so no short word is left alone on the last one. A word wider than
+ * a line is broken between graphemes. When the cue needs more than two
+ * lines (or one per paragraph, when it has more), the font steps down by
+ * `FONT_STEP` until it fits, to `MIN_FONT_SHARE` of its size's; past that
+ * it takes more lines.
  */
-export function fitCueLines(text: string, style: CaptionStyle, width: number, height: number, measure: Measure): string[] {
-  measure.font = cueFont(style, width, height);
-  const padding = Math.round(cueFontPx(style, width, height) * 0.4);
-  const room = Math.max(1, width * MAX_BOX_SHARE - padding * 2);
+export function fitCueLines(text: string, style: CaptionStyle, width: number, height: number, measure: Measure): CueLayout {
+  const paragraphs = text
+    .split("\n")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const largest = cueFontPx(style, width, height);
+  const smallest = Math.max(8, Math.round(largest * MIN_FONT_SHARE));
+  const most = Math.max(MAX_CUE_LINES, paragraphs.length);
+  let fontPx = largest;
+  for (;;) {
+    const lines = linesAt(paragraphs, fontPx, width, measure, style, height);
+    if (lines.length <= most || fontPx <= smallest) return { lines, fontPx };
+    fontPx = Math.max(smallest, Math.floor(fontPx * FONT_STEP));
+  }
+}
+
+/** `paragraphs` wrapped and balanced at `fontPx` on a video `width` wide. */
+function linesAt(paragraphs: string[], fontPx: number, width: number, measure: Measure, style: CaptionStyle, height: number): string[] {
+  measure.font = cueFont(style, width, height, fontPx);
+  const room = Math.max(1, width * MAX_BOX_SHARE - Math.round(fontPx * 0.4) * 2);
   const fits = (line: string) => (Number(measure.measureText(line).width) || 0) <= room;
-  const pieces = (word: string): string[] => {
-    if (fits(word)) return [word];
-    const out: string[] = [];
-    let part = "";
-    for (const char of Array.from(word)) {
-      if (part && !fits(part + char)) {
-        out.push(part);
-        part = char;
-      } else part += char;
+  return paragraphs.flatMap((paragraph) => {
+    const greedy = wrapFitting(paragraph, MAX_LINE_CHARS, fits);
+    if (greedy.length <= 1) return greedy;
+    const total = graphemes(paragraph).length;
+    for (let limit = Math.ceil(total / greedy.length); limit < MAX_LINE_CHARS; limit++) {
+      const lines = wrapFitting(paragraph, limit, fits);
+      if (lines.length <= greedy.length) return lines;
     }
-    return part ? [...out, part] : out;
-  };
-  return cueLines(text).flatMap((line) => {
-    if (fits(line)) return [line];
-    const lines: string[] = [];
-    for (const word of line.split(" ").filter(Boolean).flatMap(pieces)) {
-      const last = lines[lines.length - 1];
-      if (last !== undefined && fits(`${last} ${word}`)) lines[lines.length - 1] = `${last} ${word}`;
-      else lines.push(word);
-    }
-    return lines;
+    return greedy;
   });
+}
+
+/** `text` wrapped at spaces into lines of at most `maxChars` graphemes that `fits`, an over-long word broken between graphemes. */
+function wrapFitting(text: string, maxChars: number, fits: (line: string) => boolean): string[] {
+  const pieces = (word: string): string[] => {
+    const chars = graphemes(word);
+    if (chars.length <= maxChars && fits(word)) return [word];
+    const out: string[] = [];
+    let part: string[] = [];
+    for (const char of chars) {
+      if (part.length > 0 && (part.length >= maxChars || !fits(part.join("") + char))) {
+        out.push(part.join(""));
+        part = [char];
+      } else part.push(char);
+    }
+    return part.length > 0 ? [...out, part.join("")] : out;
+  };
+  const lines: string[] = [];
+  for (const word of text.split(/\s+/).filter(Boolean).flatMap(pieces)) {
+    const last = lines[lines.length - 1];
+    const joined = `${last} ${word}`;
+    if (last !== undefined && graphemes(joined).length <= maxChars && fits(joined)) lines[lines.length - 1] = joined;
+    else lines.push(word);
+  }
+  return lines;
 }
 
 /**
  * Where a cue sits on a video `width` by `height`: centred, at the bottom
  * or top, with its lines and padding. Whole pixels, inside the video.
  */
-export function cueBox(lines: string[], style: CaptionStyle, width: number, height: number, measure: Measure): CueBox & { fontPx: number; padding: number; lineHeight: number } {
-  const fontPx = cueFontPx(style, width, height);
-  measure.font = cueFont(style, width, height);
+export function cueBox(
+  lines: string[],
+  style: CaptionStyle,
+  width: number,
+  height: number,
+  measure: Measure,
+  fontPx = cueFontPx(style, width, height),
+): CueBox & { fontPx: number; padding: number; lineHeight: number } {
+  measure.font = cueFont(style, width, height, fontPx);
   const padding = Math.round(fontPx * 0.4);
   const lineHeight = Math.round(fontPx * 1.25);
   const textWidth = Math.max(0, ...lines.map((line) => Number(measure.measureText(line).width) || 0));
@@ -488,9 +550,9 @@ export function cueBox(lines: string[], style: CaptionStyle, width: number, heig
 export function paintCue(text: string, style: CaptionStyle, width: number, height: number, canvas: HTMLCanvasElement): CueBox | null {
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
-  const lines = fitCueLines(text, style, width, height, ctx);
+  const { lines, fontPx } = fitCueLines(text, style, width, height, ctx);
   if (lines.length === 0) return null;
-  const box = cueBox(lines, style, width, height, ctx);
+  const box = cueBox(lines, style, width, height, ctx, fontPx);
   canvas.width = box.width;
   canvas.height = box.height;
   ctx.clearRect(0, 0, box.width, box.height);
@@ -498,7 +560,7 @@ export function paintCue(text: string, style: CaptionStyle, width: number, heigh
     ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
     ctx.fillRect(0, 0, box.width, box.height);
   }
-  ctx.font = cueFont(style, width, height);
+  ctx.font = cueFont(style, width, height, fontPx);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.lineJoin = "round";
