@@ -20,6 +20,8 @@ vi.mock("./sources", async (importOriginal) => {
 
 /** Where Save subtitles… is told to save next; null cancels. */
 let subtitlesAt: string | null = null;
+/** What `recording_save_subtitles` rejects with; null saves. */
+let subtitlesRefused: string | null = null;
 const chooseExportFile = vi.fn<(name: string) => Promise<string | null>>(() => Promise.resolve(subtitlesAt));
 vi.mock("../app/exportDialog", () => ({ chooseExportFile: (name: string) => chooseExportFile(name) }));
 
@@ -115,7 +117,7 @@ function mockBackend(edits: Value | null = null, cursor: CursorPath | null = nul
             })
           : (spoken[source] ?? { version: 1, model: "whisper-base", language: null, segments: [] }),
       recording_transcribe_cancel: () => undefined,
-      recording_save_subtitles: () => null,
+      recording_save_subtitles: () => (subtitlesRefused ? Promise.reject(subtitlesRefused) : null),
       recording_export: () =>
         new Promise<string>((resolve, reject) => {
           backend.exported = { resolve, reject };
@@ -180,6 +182,7 @@ afterEach(() => {
   heldTranscribe = {};
   holdTranscribe = [];
   subtitlesAt = null;
+  subtitlesRefused = null;
   chooseExportFile.mockClear();
 });
 
@@ -2787,6 +2790,20 @@ describe("RecordingEditor", () => {
           { startMs: 4500, endMs: 5500, text: "Hello" },
         ],
       });
+    });
+
+    it("says when the subtitles could not be saved", async () => {
+      subtitlesAt = "/out/talk.srt";
+      subtitlesRefused = "Permission denied (os error 13)";
+      mockBackend({ version: CAPTIONS_VERSION, captions: { burnIn: true, cues: [HELLO] } });
+      render(<RecordingEditor />);
+      await loadVideo();
+      await userEvent.click(screen.getByRole("button", { name: "Captions" }));
+      await userEvent.click(screen.getByRole("button", { name: "Save subtitles…" }));
+      await waitFor(() =>
+        expect(screen.getByRole("dialog", { name: "Captions" })).toHaveTextContent("Could not save subtitles: Permission denied (os error 13)"),
+      );
+      expect(screen.getByRole("dialog", { name: "Captions" })).not.toHaveTextContent("Saved talk.srt");
     });
 
     it("saves no subtitles when the file dialog is cancelled, and none without captions", async () => {

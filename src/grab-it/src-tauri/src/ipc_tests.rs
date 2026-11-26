@@ -615,6 +615,14 @@ fn recording_save_subtitles_writes_srt_or_webvtt_by_extension_from_an_editor() {
         .is_empty()
     );
     assert!(!out.join("talk.txt").exists());
+    // A relative path would land wherever the app happens to run from.
+    assert!(
+        h.err(
+            "recording_save_subtitles",
+            json!({ "path": "relative.srt", "cues": cues })
+        )
+        .contains("absolute path")
+    );
     assert_invalid_arg(
         &h.err(
             "recording_save_subtitles",

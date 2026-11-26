@@ -439,8 +439,8 @@ export function subtitleCues(cues: Cue[], clips: Clip[], own: string): SubtitleC
   for (const { cue, startMs, endMs } of cueShowings(cues, clips, own, true)) {
     const text = subtitleLines(cue.text).join("\n");
     if (!text || endMs <= startMs) continue;
-    const joined = out.find((each) => each.id === cue.id && each.endMs === startMs);
-    if (joined) joined.endMs = endMs;
+    const joined = out.find((each) => each.id === cue.id && each.endMs === Math.round(startMs));
+    if (joined) joined.endMs = Math.round(endMs);
     else out.push({ id: cue.id, startMs: Math.round(startMs), endMs: Math.round(endMs), text });
   }
   return out.map(({ startMs, endMs, text }) => ({ startMs, endMs, text }));

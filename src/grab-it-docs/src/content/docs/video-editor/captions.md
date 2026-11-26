@@ -46,7 +46,7 @@ Click an empty part of the row, or press `Esc`, to deselect it. Every change is 
 The **Captions** panel sets how every caption in the video looks:
 
 - **Look**: **Box** (the default) puts white text on a dark box, **Outline** draws a dark edge around white text, and **Plain** shows white text with a soft shadow.
-- **Size**: **Small**, **Medium** (the default) or **Large**, in step with the video's height.
+- **Size**: **Small**, **Medium** (the default) or **Large**. Captions scale with the video's height on widescreen video, and with its width on square and portrait video, so they fit across it. A long caption gets a little smaller to stay on two lines.
 - **Position**: **Bottom** (the default) or **Top**, centred across the video.
 
 The preview shows the caption under the playhead as the export will draw it. Each change is one step you can undo, and the style is kept with the video's other edits.

@@ -202,6 +202,16 @@ describe("cues on the sequence", () => {
     ]);
   });
 
+  it("keeps subtitle times whole when clips meet at a fraction of a millisecond", () => {
+    const split = [
+      { id: "one", source: "a.mp4", startMs: 0, endMs: 1999.6 },
+      { id: "two", source: "a.mp4", startMs: 1999.6, endMs: 2999.3 },
+    ];
+    const cues = subtitleCues([{ id: "q", startMs: 1000, endMs: 4000, text: "Hello" }], split, "a.mp4");
+    expect(cues).toEqual([{ startMs: 1000, endMs: 2999, text: "Hello" }]);
+    for (const cue of cues) expect([cue.startMs, cue.endMs].every(Number.isInteger)).toBe(true);
+  });
+
   it("keeps a subtitle whole across clips that play on from each other", () => {
     const split = [
       { id: "one", source: "a.mp4", startMs: 0, endMs: 2000 },
