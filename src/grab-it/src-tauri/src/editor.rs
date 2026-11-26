@@ -22,7 +22,7 @@ use image::RgbaImage;
 use crate::rt::{AppHandle, WebviewWindow};
 use crate::{
     capture::{Rect, annotations_path},
-    library::LibraryState,
+    library::{LibraryState, Neighbour},
     ocr::OcrLine,
 };
 
@@ -90,6 +90,40 @@ pub struct EditorInfo {
     /// The mouse pointer saved with the capture, from its `meta.json`;
     /// `None` when there was none.
     pub pointer: Option<crate::capture::CapturedPointer>,
+    /// Whether the Library has a newer image capture to step back to.
+    /// `false` for a capture the Library does not know.
+    pub has_newer: bool,
+    /// Whether the Library has an older image capture to step on to.
+    pub has_older: bool,
+}
+
+/// What [`editor_step`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum EditorStepped {
+    /// This editor now shows the neighbour; the page loads it afresh.
+    Moved,
+    /// Another editor already showed the neighbour and came to the front.
+    Focused,
+    /// There is no neighbour that way; nothing changed.
+    Stayed,
+}
+
+/// The image capture beside `path` in the Library, if the Library is
+/// running and knows `path`.
+fn neighbour(app: &AppHandle, path: &Path, direction: Neighbour) -> Option<PathBuf> {
+    let library = app.try_state::<LibraryState>()?;
+    let library = library.lock();
+    library.neighbour_image(path, direction).ok().flatten()
+}
+
+/// The title an editor window shows for `capture`.
+pub fn editor_title(capture: &Path) -> String {
+    let file_name = capture
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    format!("{file_name} - Grab-it Editor")
 }
 
 /// Image types a backdrop may be filled with, by extension.
@@ -353,6 +387,7 @@ fn raw_body(request: &tauri::ipc::Request<'_>) -> Result<Vec<u8>, String> {
 #[specta::specta]
 pub fn editor_info(
     window: WebviewWindow,
+    app: AppHandle,
     state: State<'_, EditorState>,
 ) -> Result<EditorInfo, String> {
     let path = state.path_for(window.label())?;
@@ -365,13 +400,48 @@ pub fn editor_info(
     let scale_factor =
         crate::capture::valid_scale(meta.as_ref().and_then(|meta| meta.scale_factor));
     let pointer = meta.and_then(|meta| meta.pointer);
+    let has_newer = neighbour(&app, &path, Neighbour::Newer).is_some();
+    let has_older = neighbour(&app, &path, Neighbour::Older).is_some();
     Ok(EditorInfo {
         path,
         file_name,
         annotations,
         scale_factor,
         pointer,
+        has_newer,
+        has_older,
     })
+}
+
+/// Steps this editor to the newer or older image capture in the Library.
+/// The page writes its pending annotations first. When another editor
+/// already shows that capture, it comes to the front instead and this one
+/// is left as it is.
+#[tauri::command]
+#[specta::specta]
+pub fn editor_step(
+    direction: Neighbour,
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<'_, EditorState>,
+) -> Result<EditorStepped, String> {
+    let path = state.path_for(window.label())?;
+    let Some(next) = neighbour(&app, &path, direction) else {
+        return Ok(EditorStepped::Stayed);
+    };
+    if let Some(other) = state
+        .label_for(&next)
+        .filter(|label| label != window.label())
+        .and_then(|label| app.get_webview_window(&label))
+    {
+        crate::windows::bring_to_front(&other).map_err(|err| err.to_string())?;
+        return Ok(EditorStepped::Focused);
+    }
+    window
+        .set_title(&editor_title(&next))
+        .map_err(|err| err.to_string())?;
+    state.insert(window.label(), next);
+    Ok(EditorStepped::Moved)
 }
 
 /// The bytes of an image picked as the backdrop fill.

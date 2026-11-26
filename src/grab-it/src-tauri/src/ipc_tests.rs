@@ -2364,12 +2364,77 @@ fn editor_info_describes_the_editors_capture() {
             "annotations": null,
             "scaleFactor": 2.0,
             "pointer": null,
+            "hasNewer": true,
+            "hasOlder": false,
         })
     );
     h.edit(&seeded.plain_path());
     let plain = h.ok("editor_info", json!({}));
     assert_eq!(plain["fileName"], "plain.png");
     assert_eq!(plain["scaleFactor"], Value::Null);
+    assert_eq!(
+        (&plain["hasNewer"], &plain["hasOlder"]),
+        (&json!(false), &json!(true))
+    );
+    // A capture the Library does not know has nothing to step to.
+    let outside = h.dir.path().join("outside.png");
+    write_png(&outside, 2, 2);
+    h.edit(&outside);
+    let info = h.ok("editor_info", json!({}));
+    assert_eq!(
+        (&info["hasNewer"], &info["hasOlder"]),
+        (&json!(false), &json!(false))
+    );
+}
+
+#[test]
+fn editor_step_moves_to_the_neighbouring_image_capture() {
+    let h = Harness::new();
+    let seeded = h.seed();
+    assert_eq!(
+        h.err("editor_step", json!({ "direction": "older" })),
+        "this window is not an editor"
+    );
+    // The plain capture is the newest; the invoice, from 2020, is older.
+    // The GIF recording is never stepped to.
+    h.edit(&seeded.plain_path());
+    assert_eq!(
+        h.ok("editor_step", json!({ "direction": "newer" })),
+        "stayed"
+    );
+    assert_eq!(
+        h.ok("editor_step", json!({ "direction": "older" })),
+        "moved"
+    );
+    let info = h.ok("editor_info", json!({}));
+    assert_eq!(info["fileName"], "invoice.png");
+    assert_eq!(info["path"], path_json(&seeded.invoice_path()));
+    assert_eq!(
+        (&info["hasNewer"], &info["hasOlder"]),
+        (&json!(true), &json!(false))
+    );
+    assert_eq!(
+        h.ok("editor_step", json!({ "direction": "older" })),
+        "stayed"
+    );
+
+    // A neighbour already open in another editor comes to the front, and
+    // this editor keeps its capture.
+    let other = WebviewWindowBuilder::new(&h.app, "editor-other", WebviewUrl::default())
+        .build()
+        .expect("a second mock webview");
+    let editors = h.app.state::<EditorState>();
+    editors.insert(other.label(), seeded.plain_path());
+    assert_eq!(
+        h.ok("editor_step", json!({ "direction": "newer" })),
+        "focused"
+    );
+    assert_eq!(h.ok("editor_info", json!({}))["fileName"], "invoice.png");
+
+    assert!(
+        h.err("editor_step", json!({ "direction": "sideways" }))
+            .contains("sideways")
+    );
 }
 
 #[test]

@@ -277,6 +277,13 @@ export const commands = {
 	overlayScrollDocs: (options?: InvokeOptions) => __TAURI_INVOKE<void>("overlay_scroll_docs", undefined, options),
 	editorInfo: (options?: InvokeOptions) => __TAURI_INVOKE<EditorInfo_Serialize>("editor_info", undefined, options),
 	/**
+	 *  Steps this editor to the newer or older image capture in the Library.
+	 *  The page writes its pending annotations first. When another editor
+	 *  already shows that capture, it comes to the front instead and this one
+	 *  is left as it is.
+	 */
+	editorStep: (direction: Neighbour, options?: InvokeOptions) => __TAURI_INVOKE<EditorStepped>("editor_step", { direction }, options),
+	/**
 	 *  Copies an image file dropped on the editor into its capture's assets
 	 *  folder; returns the copy's file name for the new image shape.
 	 */
@@ -1077,6 +1084,13 @@ export type EditorInfo_Deserialize = {
 	 *  `None` when there was none.
 	 */
 	pointer?: CapturedPointer | null,
+	/**
+	 *  Whether the Library has a newer image capture to step back to.
+	 *  `false` for a capture the Library does not know.
+	 */
+	hasNewer: boolean,
+	/**  Whether the Library has an older image capture to step on to. */
+	hasOlder: boolean,
 };
 
 /**  Mirrors `EditorInfo` in src/editor/api.ts. */
@@ -1096,6 +1110,13 @@ export type EditorInfo_Serialize = {
 	 *  `None` when there was none.
 	 */
 	pointer: CapturedPointer | null,
+	/**
+	 *  Whether the Library has a newer image capture to step back to.
+	 *  `false` for a capture the Library does not know.
+	 */
+	hasNewer: boolean,
+	/**  Whether the Library has an older image capture to step on to. */
+	hasOlder: boolean,
 };
 
 /**
@@ -1228,6 +1249,15 @@ export type EditorPreferences_Serialize = {
 	 */
 	favoriteColors?: string[],
 };
+
+/**  What [`editor_step`] did. */
+export type EditorStepped =
+/**  This editor now shows the neighbour; the page loads it afresh. */
+"moved" |
+/**  Another editor already showed the neighbour and came to the front. */
+"focused" |
+/**  There is no neighbour that way; nothing changed. */
+"stayed";
 
 /**  One flattened step, as the Guide window sends it for export. */
 export type ExportStep = {
@@ -1496,6 +1526,12 @@ export type NameCount = {
 	name: string,
 	count: number,
 };
+
+/**
+ *  Which neighbour of a capture to step to, in Library order (newest
+ *  first): `Newer` is the previous capture, `Older` the next.
+ */
+export type Neighbour = "newer" | "older";
 
 /**
  *  A line of text OCR read, with its box and its words. Stored as JSON in
@@ -3108,6 +3144,7 @@ export type MockCommandHandlers = {
     overlayCancel: () => void | Promise<void>,
     overlayScrollDocs: () => void | Promise<void>,
     editorInfo: () => EditorInfo_Serialize | Promise<EditorInfo_Serialize>,
+    editorStep: (args: { direction: Neighbour }) => EditorStepped | Promise<EditorStepped>,
     editorAddImageFile: (args: { path: string }) => string | Promise<string>,
     editorAddClipboardImage: () => string | Promise<string>,
     saveBackdropPresetImage: (args: { path: string }) => string | Promise<string>,
@@ -3296,6 +3333,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "overlay_cancel": return mockCommandHandler(mockHandlers.overlayCancel, "overlay_cancel", args);
             case "overlay_scroll_docs": return mockCommandHandler(mockHandlers.overlayScrollDocs, "overlay_scroll_docs", args);
             case "editor_info": return mockCommandHandler(mockHandlers.editorInfo, "editor_info", args);
+            case "editor_step": return mockCommandHandler(mockHandlers.editorStep, "editor_step", args);
             case "editor_add_image_file": return mockCommandHandler(mockHandlers.editorAddImageFile, "editor_add_image_file", args);
             case "editor_add_clipboard_image": return mockCommandHandler(mockHandlers.editorAddClipboardImage, "editor_add_clipboard_image", args);
             case "save_backdrop_preset_image": return mockCommandHandler(mockHandlers.saveBackdropPresetImage, "save_backdrop_preset_image", args);

@@ -21,7 +21,7 @@ function mockEditor(annotations: Annotations | Value = { version: 1, shapes: [st
   mockCommands(
     {
       // Any JSON the sidecar might hold, including ones the editor must reject.
-      editor_info: () => ({ path: "/p/originals/shot.png", fileName: "shot.png", annotations: annotations as Value, scaleFactor: null, pointer: null }),
+      editor_info: () => ({ path: "/p/originals/shot.png", fileName: "shot.png", annotations: annotations as Value, scaleFactor: null, pointer: null, hasNewer: false, hasOlder: false }),
       editor_save_annotations: (payload) => {
         saved.push(JSON.parse(JSON.stringify(payload.annotations)));
         calls.push("save");

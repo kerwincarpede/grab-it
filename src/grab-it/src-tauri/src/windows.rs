@@ -199,14 +199,10 @@ pub fn show_editor(app: &AppHandle, capture: &Path) -> tauri::Result<()> {
     );
     // Registered before the page loads so `editor_info` finds it.
     state.insert(&label, capture.to_path_buf());
-    let file_name = capture
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
     let window =
         WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html#/editor".into()))
             .e2e_browser_args()
-            .title(format!("{file_name} - Grab-it Editor"))
+            .title(crate::editor::editor_title(capture))
             .inner_size(1100.0, 760.0)
             .min_inner_size(640.0, 420.0)
             .center()
@@ -351,7 +347,8 @@ pub fn bring_to_front(window: &WebviewWindow) -> tauri::Result<()> {
     window.unminimize()?;
     window.show()?;
     window.set_focus()?;
-    #[cfg(target_os = "macos")]
+    // The mock runtime's windows in the IPC tests have no NSWindow to message.
+    #[cfg(all(target_os = "macos", not(test)))]
     activate(window)?;
     Ok(())
 }
@@ -362,7 +359,7 @@ pub fn bring_to_front(window: &WebviewWindow) -> tauri::Result<()> {
 /// turn down for an app in the background; asking the app's
 /// `NSRunningApplication` as well, and ordering the window front regardless,
 /// brings it forward even then.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(test)))]
 fn activate(window: &WebviewWindow) -> tauri::Result<()> {
     use objc2::runtime::AnyObject;
 

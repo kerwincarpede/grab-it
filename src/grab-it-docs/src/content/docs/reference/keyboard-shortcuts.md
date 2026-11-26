@@ -110,6 +110,7 @@ Tap a tool key to switch to it. Hold it instead, and the old tool comes back whe
 | `⌘ C` | Copy the capture with its annotations |
 | `⌘ Enter` | Copy and close |
 | `⌘ [` and `⌘ ]` | Rotate left and right |
+| `⌥ ←` and `⌥ →` (`Alt` on Windows and Linux) | Open the previous (newer) and next (older) capture in the Library |
 
 See [Mark it up](/grab-it/image-editor/mark-it-up/) for what each tool does.
 
@@ -165,6 +166,7 @@ See [The Guide window](/grab-it/capture/step-capture/#the-guide-window).
 | `Enter` in search | Search now |
 | `Esc` | Clear the search, or close the details |
 | Arrow keys | Move between tiles |
+| Arrow keys in the details | Show the previous capture (`←` `↑`) or the next one (`→` `↓`) |
 | `⌘ Enter` | Open the selected tile (macOS only: this one is not `Ctrl` on Windows and Linux, so double-click the tile there) |
 | `⌘ ,` | Open Settings |
 | `⌘ +`, `⌘ −`, `⌘ 0` | Bigger text, smaller text, default text size |

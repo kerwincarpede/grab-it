@@ -454,6 +454,7 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             overlay::overlay_cancel,
             overlay::overlay_scroll_docs,
             editor::editor_info,
+            editor::editor_step,
             editor::editor_add_image_file,
             editor::editor_add_clipboard_image,
             editor::save_backdrop_preset_image,

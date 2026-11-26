@@ -1199,6 +1199,11 @@
   animation: details-in 180ms var(--ease);
 }
 
+/* Focused only so its arrow keys keep stepping captures; the pane needs no ring. */
+.details:focus {
+  outline: none;
+}
+
 @keyframes details-in {
   from {
     opacity: 0;

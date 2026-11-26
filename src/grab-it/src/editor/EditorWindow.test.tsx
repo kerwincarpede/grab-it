@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import EditorWindow from "./EditorWindow";
 import type { BackdropPreset, EditorPreferences } from "../settings/api";
 import type { OcrLine, ShotText } from "../library/api";
-import type { CapturedPointer } from "./api";
+import type { CapturedPointer, EditorStepped, Neighbour } from "./api";
 import type { Annotations, Shape } from "./model";
 import type { AnnotateOutcome } from "./aiAnnotate";
 import { PREFERENCES_DELAY_MS } from "./preferences";
@@ -361,6 +361,22 @@ interface PreferencesMock {
   pointer?: CapturedPointer;
   /** What `editor_annotate` answers, in turn (an Error makes it fail); no provider when unset. */
   annotate?: (AnnotateOutcome | Error | Promise<AnnotateOutcome>)[];
+  /** The Library neighbours and what stepping does; no neighbours when unset. */
+  steps?: StepsMock;
+}
+
+/** What `editor_info` says about neighbours, and every `editor_step` call. */
+interface StepsMock {
+  hasNewer: boolean;
+  hasOlder: boolean;
+  /** What `editor_step` answers; "moved" when unset. */
+  answer?: EditorStepped | Promise<EditorStepped>;
+  /** Makes every sidecar write fail, as a read-only sidecar or a full disk would. */
+  saveFails?: boolean;
+  /** Each step asked for, with how many sidecar writes had been made by then. */
+  stepped: { direction: Neighbour; saved: number }[];
+  /** How many times the editor loaded its capture. */
+  loads: number;
 }
 
 /** A sidecar as Rust sends it: plain JSON, which `Annotations` types. */
@@ -414,13 +430,22 @@ function mockEditor(
         record("save_backdrop_preset_image", payload);
         return PRESET_COPY;
       },
-      editor_info: () => ({
-        path: "/p/originals/shot.png",
-        fileName: "shot.png",
-        annotations: sidecarValue(annotations),
-        scaleFactor: preferences.scaleFactor ?? null,
-        pointer: preferences.pointer ?? null,
-      }),
+      editor_info: () => {
+        if (preferences.steps) preferences.steps.loads += 1;
+        return {
+          path: "/p/originals/shot.png",
+          fileName: "shot.png",
+          annotations: sidecarValue(annotations),
+          scaleFactor: preferences.scaleFactor ?? null,
+          pointer: preferences.pointer ?? null,
+          hasNewer: preferences.steps?.hasNewer ?? false,
+          hasOlder: preferences.steps?.hasOlder ?? false,
+        };
+      },
+      editor_step: ({ direction }) => {
+        preferences.steps?.stepped.push({ direction, saved: saved.length });
+        return preferences.steps?.answer ?? "moved";
+      },
       editor_backdrop_image: (payload) => {
         record("editor_backdrop_image", payload);
         return new ArrayBuffer(4);
@@ -439,6 +464,7 @@ function mockEditor(
         return preferences.asset ?? new ArrayBuffer(4);
       },
       editor_save_annotations: (payload) => {
+        if (preferences.steps?.saveFails) throw "the disk is full";
         saved.push(payload.annotations as unknown as Annotations);
         return null;
       },
@@ -843,6 +869,132 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
     expect(saved).toEqual([]);
   });
 
+  describe("stepping captures", () => {
+    const steps = (overrides: Partial<StepsMock> = {}): StepsMock => ({ hasNewer: true, hasOlder: true, stepped: [], loads: 0, ...overrides });
+    const topbar = () => within(screen.getByRole("toolbar", { name: "Style and actions" }));
+
+    it("writes a pending edit to the old sidecar, then steps and loads the next capture afresh", async () => {
+      const mock = steps();
+      const saved = mockEditor(sidecar, [], { steps: mock });
+      await ready();
+      expect(mock.loads).toBe(1);
+      fireEvent.click(screen.getByRole("button", { name: "Select" }));
+      fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+      fireEvent.keyDown(window, { key: "Delete" });
+      expect(shapeIds()).not.toContain("a1");
+
+      // Long before the autosave, the edit is written as the step starts.
+      fireEvent.click(topbar().getByRole("button", { name: "Next capture" }));
+      await waitFor(() => expect(mock.stepped).toEqual([{ direction: "older", saved: 1 }]));
+      expect(saved[0].shapes.map((shape) => shape.id)).not.toContain("a1");
+
+      // The editor loads the capture it now shows, with no undo history from the last one.
+      await waitFor(() => expect(mock.loads).toBe(2));
+      await waitFor(() => expect(screen.getByTestId("editor")).toHaveAttribute("data-ready", "true"));
+      expect(shapeIds()).toContain("a1");
+      expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+      expect(saved).toHaveLength(1);
+
+      fireEvent.click(topbar().getByRole("button", { name: "Previous capture" }));
+      await waitFor(() => expect(mock.stepped.map((step) => step.direction)).toEqual(["older", "newer"]));
+    });
+
+    it("disables Previous and Next where there is no neighbour", async () => {
+      const mock = steps({ hasNewer: false, hasOlder: true });
+      mockEditor(sidecar, [], { steps: mock });
+      await ready();
+      expect(topbar().getByRole("button", { name: "Previous capture" })).toBeDisabled();
+      expect(topbar().getByRole("button", { name: "Next capture" })).toBeEnabled();
+
+      // Alt+Left is still kept from the webview, but there is nothing to step to.
+      expect(fireEvent.keyDown(window, { key: "ArrowLeft", altKey: true })).toBe(false);
+      await act(async () => {});
+      expect(mock.stepped).toEqual([]);
+    });
+
+    it("disables both for a capture outside the Library", async () => {
+      mockEditor();
+      await ready();
+      expect(topbar().getByRole("button", { name: "Previous capture" })).toBeDisabled();
+      expect(topbar().getByRole("button", { name: "Next capture" })).toBeDisabled();
+    });
+
+    it("steps with Alt+Left and Alt+Right, but not while typing", async () => {
+      const mock = steps();
+      mockEditor(sidecar, [], { steps: mock });
+      await ready();
+
+      expect(fireEvent.keyDown(window, { key: "ArrowRight", altKey: true })).toBe(false);
+      await waitFor(() => expect(mock.stepped.map((step) => step.direction)).toEqual(["older"]));
+      await waitFor(() => expect(mock.loads).toBe(2));
+      await waitFor(() => expect(screen.getByTestId("editor")).toHaveAttribute("data-ready", "true"));
+      await act(async () => {});
+      expect(fireEvent.keyDown(window, { key: "ArrowLeft", altKey: true })).toBe(false);
+      await waitFor(() => expect(mock.stepped.map((step) => step.direction)).toEqual(["older", "newer"]));
+
+      // A plain arrow is not a step, nor is Alt+arrow in a text field.
+      fireEvent.keyDown(window, { key: "ArrowRight" });
+      const field = document.createElement("input");
+      document.body.append(field);
+      fireEvent.keyDown(field, { key: "ArrowRight", altKey: true });
+      field.remove();
+      await act(async () => {});
+      expect(mock.stepped).toHaveLength(2);
+    });
+
+    it("keeps its capture when another editor already showing the neighbour comes forward", async () => {
+      const mock = steps({ answer: "focused" });
+      mockEditor(sidecar, [], { steps: mock });
+      await ready();
+      fireEvent.click(topbar().getByRole("button", { name: "Next capture" }));
+      await waitFor(() => expect(mock.stepped).toHaveLength(1));
+      await act(async () => {});
+      expect(mock.loads).toBe(1);
+    });
+
+    it("takes no edits while stepping, so none reach the next capture's sidecar", async () => {
+      let answer: (stepped: EditorStepped) => void = () => undefined;
+      const mock = steps({ answer: new Promise<EditorStepped>((resolve) => (answer = resolve)) });
+      const saved = mockEditor(sidecar, [], { steps: mock });
+      await ready();
+      fireEvent.click(topbar().getByRole("button", { name: "Next capture" }));
+      await waitFor(() => expect(mock.stepped).toEqual([{ direction: "older", saved: 0 }]));
+
+      // An edit lands after the old sidecar was written but before editor_step answers.
+      fireEvent.click(screen.getByRole("button", { name: "Select" }));
+      fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+      fireEvent.keyDown(window, { key: "Delete" });
+      await act(async () => answer("moved"));
+
+      await waitFor(() => expect(mock.loads).toBe(2));
+      await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 100));
+      expect(saved).toEqual([]);
+    });
+
+    it("stays on the capture, with the edit, when the sidecar cannot be written", async () => {
+      const mock = steps({ saveFails: true });
+      const saved = mockEditor(sidecar, [], { steps: mock });
+      await ready();
+      fireEvent.click(screen.getByRole("button", { name: "Select" }));
+      fireEvent.mouseDown(document.querySelector('[data-id="a1"]') as Element);
+      fireEvent.keyDown(window, { key: "Delete" });
+
+      fireEvent.click(topbar().getByRole("button", { name: "Next capture" }));
+      expect(await screen.findByText("Could not save your edits, so the next capture was not opened.")).toBeInTheDocument();
+      expect(mock.stepped).toEqual([]);
+      expect(mock.loads).toBe(1);
+      expect(saved).toEqual([]);
+      expect(shapeIds()).not.toContain("a1");
+
+      // The editor still takes edits, and the step goes ahead once the write works.
+      expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+      mock.saveFails = false;
+      fireEvent.click(topbar().getByRole("button", { name: "Next capture" }));
+      await waitFor(() => expect(mock.stepped).toEqual([{ direction: "older", saved: 1 }]));
+      expect(saved[0].shapes.map((shape) => shape.id)).not.toContain("a1");
+    });
+  });
+
   it("keeps the selection when a key picks Select", async () => {
     mockEditor();
     await ready();
@@ -1211,7 +1363,7 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
         editor_add_image_file: () => {
           throw "the image must be a PNG, JPEG, WebP or GIF image";
         },
-        editor_info: () => ({ path: "/p/originals/shot.png", fileName: "shot.png", annotations: sidecarValue(sidecar), scaleFactor: null, pointer: null }),
+        editor_info: () => ({ path: "/p/originals/shot.png", fileName: "shot.png", annotations: sidecarValue(sidecar), scaleFactor: null, pointer: null, hasNewer: false, hasOlder: false }),
         editor_image: () => new ArrayBuffer(8),
         get_editor_preferences: () => ({}),
       },

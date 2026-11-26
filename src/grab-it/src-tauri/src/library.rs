@@ -24,7 +24,7 @@ use std::{
 
 use chrono::DateTime;
 use rusqlite::{Connection, OptionalExtension, Row, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 
 use crate::rt::AppHandle;
@@ -290,6 +290,15 @@ impl From<image::ImageError> for LibraryError {
 }
 
 pub type LibraryResult<T> = std::result::Result<T, LibraryError>;
+
+/// Which neighbour of a capture to step to, in Library order (newest
+/// first): `Newer` is the previous capture, `Older` the next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum Neighbour {
+    Newer,
+    Older,
+}
 
 /// What a library item is. Mirrors `ShotKind` in src/library/api.ts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, specta::Type)]
@@ -929,6 +938,42 @@ impl Library {
                 },
             )
             .optional()?)
+    }
+
+    /// The image capture just newer or older than the one at `path`, in
+    /// Library order (`captured_at DESC, id DESC`), for stepping the editor.
+    /// Recordings are skipped. `None` when there is no such capture or the
+    /// Library does not know `path`.
+    pub fn neighbour_image(
+        &self,
+        path: &Path,
+        direction: Neighbour,
+    ) -> LibraryResult<Option<PathBuf>> {
+        let Some(id) = self.id_for_path(path)? else {
+            return Ok(None);
+        };
+        let captured_at: i64 =
+            self.conn
+                .query_row("SELECT captured_at FROM shots WHERE id = ?1", [id], |row| {
+                    row.get(0)
+                })?;
+        let sql = match direction {
+            Neighbour::Newer => {
+                "SELECT path FROM shots WHERE kind = 'image'
+                 AND (captured_at > ?1 OR (captured_at = ?1 AND id > ?2))
+                 ORDER BY captured_at ASC, id ASC LIMIT 1"
+            }
+            Neighbour::Older => {
+                "SELECT path FROM shots WHERE kind = 'image'
+                 AND (captured_at < ?1 OR (captured_at = ?1 AND id < ?2))
+                 ORDER BY captured_at DESC, id DESC LIMIT 1"
+            }
+        };
+        Ok(self
+            .conn
+            .query_row(sql, params![captured_at, id], |row| row.get::<_, String>(0))
+            .optional()?
+            .map(PathBuf::from))
     }
 
     /// How many shots are waiting for OCR.
@@ -2900,6 +2945,58 @@ mod tests {
             .into_iter()
             .map(|shot| shot.file_name)
             .collect()
+    }
+
+    #[test]
+    fn neighbour_images_follow_library_order_and_skip_recordings() {
+        let dir = TempDir::new().unwrap();
+        let oldest = shoot(dir.path(), 1, (4, 4));
+        let middle = shoot(dir.path(), 2, (4, 4));
+        let newest = shoot(dir.path(), 4, (4, 4));
+        let mut library = Library::open_in_memory().unwrap();
+        for png in [&oldest, &middle, &newest] {
+            library.add_capture(png).unwrap();
+        }
+        // A recording between the middle and newest captures is skipped.
+        record_gif(dir.path(), "Grab-it 2026-03-07 09-05-03.gif");
+        library.rescan(dir.path()).unwrap();
+        let canonical = |path: &Path| Some(fs::canonicalize(path).unwrap());
+
+        let newer = |path: &Path| library.neighbour_image(path, Neighbour::Newer).unwrap();
+        let older = |path: &Path| library.neighbour_image(path, Neighbour::Older).unwrap();
+        assert_eq!(newer(&middle), canonical(&newest));
+        assert_eq!(older(&middle), canonical(&oldest));
+        assert_eq!(newer(&newest), None);
+        assert_eq!(older(&oldest), None);
+        // A capture the Library does not know has no neighbours.
+        assert_eq!(newer(&dir.path().join("elsewhere.png")), None);
+    }
+
+    #[test]
+    fn neighbour_images_with_the_same_time_are_ordered_by_id() {
+        let dir = TempDir::new().unwrap();
+        let first = shoot(dir.path(), 1, (4, 4));
+        let second = shoot(dir.path(), 2, (4, 4));
+        let mut library = Library::open_in_memory().unwrap();
+        let a = library.add_capture(&first).unwrap();
+        let b = library.add_capture(&second).unwrap();
+        assert!(b.id > a.id);
+        library
+            .conn
+            .execute(
+                "UPDATE shots SET captured_at = ?1 WHERE id = ?2",
+                params![a.captured_at, b.id],
+            )
+            .unwrap();
+
+        assert_eq!(
+            library.neighbour_image(&first, Neighbour::Newer).unwrap(),
+            Some(b.path.clone())
+        );
+        assert_eq!(
+            library.neighbour_image(&second, Neighbour::Older).unwrap(),
+            Some(a.path)
+        );
     }
 
     #[test]

@@ -132,6 +132,20 @@ export const ChevronDownIcon = () => (
   </Icon>
 );
 
+/** Points left: the previous (newer) capture. */
+export const ChevronLeftIcon = () => (
+  <Icon>
+    <path d="M14 6l-6 6 6 6" />
+  </Icon>
+);
+
+/** Points right: the next (older) capture. */
+export const ChevronRightIcon = () => (
+  <Icon>
+    <path d="M10 6l6 6-6 6" />
+  </Icon>
+);
+
 /** Two stacked squares, the front one raised. */
 export const BringForwardIcon = () => (
   <Icon>

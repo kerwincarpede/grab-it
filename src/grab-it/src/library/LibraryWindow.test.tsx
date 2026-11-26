@@ -594,6 +594,39 @@ describe("LibraryWindow", () => {
     expect(screen.getByLabelText("Capture details")).toHaveStyle({ width: `${DETAILS_WIDTH.min}px` });
   });
 
+  it("steps captures with the arrow keys while the details have focus", async () => {
+    mockBackend([shot(1), shot(2), shot(3)]);
+    render(<LibraryWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Grab-it 2.png" }));
+    const showing = (name: string) => expect(within(screen.getByLabelText("Capture details")).getAllByText(name).length).toBeGreaterThan(0);
+    showing("Grab-it 2.png");
+
+    screen.getByRole("button", { name: "Keep forever" }).focus();
+    await userEvent.keyboard("{ArrowRight}");
+    showing("Grab-it 1.png");
+    // The new capture's details keep the focus, so the next arrow steps again.
+    expect(screen.getByLabelText("Capture details")).toHaveFocus();
+    // The oldest capture has no next one.
+    await userEvent.keyboard("{ArrowDown}");
+    showing("Grab-it 1.png");
+    await userEvent.keyboard("{ArrowUp}");
+    showing("Grab-it 2.png");
+    await userEvent.keyboard("{ArrowLeft}");
+    showing("Grab-it 3.png");
+
+    // Fields and the resizer keep their arrows.
+    await userEvent.click(screen.getByLabelText("Notes"));
+    await userEvent.keyboard("{ArrowDown}");
+    showing("Grab-it 3.png");
+    fireEvent.keyDown(screen.getByLabelText("Tags"), { key: "ArrowRight" });
+    showing("Grab-it 3.png");
+    fireEvent.keyDown(screen.getByRole("separator", { name: "Resize details" }), { key: "ArrowRight" });
+    showing("Grab-it 3.png");
+    // A modified arrow is not a step.
+    fireEvent.keyDown(screen.getByRole("button", { name: "Keep forever" }), { key: "ArrowRight", altKey: true });
+    showing("Grab-it 3.png");
+  });
+
   it("keeps the details between their minimum and maximum, leaving the grid room", () => {
     expect(clampDetailsWidth(100)).toBe(DETAILS_WIDTH.min);
     expect(clampDetailsWidth(5000)).toBe(DETAILS_WIDTH.max);
