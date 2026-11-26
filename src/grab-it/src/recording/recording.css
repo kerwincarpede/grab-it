@@ -609,10 +609,14 @@
   background: var(--ed-bg);
 }
 
-/* As wide as the view and kept in it while the timeline scrolls. */
+/*
+ * As wide as the track the timeline shows, and kept over it while the
+ * timeline scrolls: from the lane's start, or the scroller's left edge
+ * once the track runs under the side padding.
+ */
 .waveform-view {
   position: sticky;
-  left: 12px;
+  left: 0;
   height: 100%;
 }
 
@@ -620,10 +624,18 @@
   display: block;
 }
 
-.waveform-label,
-.waveform-status {
+/* The lane's name and how its sound is coming, together where the lane is in view. */
+.waveform-tags {
   position: absolute;
   top: 2px;
+  left: 2px;
+  display: flex;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.waveform-label,
+.waveform-status {
   padding: 0 4px;
   border-radius: 4px;
   background: var(--ed-bg);
@@ -632,16 +644,17 @@
   line-height: 14px;
 }
 
-.waveform-label {
-  left: 2px;
-}
-
-.waveform-status {
-  right: 2px;
-}
-
-/* Drags, or takes the arrow keys, to change the lanes' height. */
+/*
+ * Drags, or takes the arrow keys, to change the lanes' height. Sticky and
+ * as wide as the visible track, so its grip stays centred in view however
+ * the timeline is zoomed and scrolled.
+ */
 .waveform-resize {
+  position: sticky;
+  left: 12px;
+  box-sizing: border-box;
+  width: var(--timeline-view, 100%);
+  max-width: 100%;
   height: 6px;
   cursor: row-resize;
   touch-action: none;

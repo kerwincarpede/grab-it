@@ -1167,24 +1167,24 @@ describe("RecordingEditor", () => {
       scroller.scrollLeft = 1000;
       fireEvent.scroll(scroller);
       const canvas = () => lane().querySelector("canvas") as HTMLCanvasElement;
-      // 4x, scrolled to the end: the whole 100 px view is track.
-      expect(canvas().style.width).toBe("100px");
+      // 4x, scrolled to the end: the 100 px view and the 12 px of left padding are track.
+      expect(canvas().style.width).toBe("112px");
       spanAt(screen.getByRole("listbox", { name: "Clips" }), -300, 400);
       const edge = screen.getByRole("option", { name: `${OTHER}, 0:06.0` }).querySelector(".clip-edge.end") as HTMLElement;
       fireEvent.pointerDown(edge, { clientX: 100 });
       fireEvent.pointerMove(edge, { clientX: 50 });
-      // The 8.75 s sequence is 350 px with the offset held at 300: only 50 px of
-      // the view is track, and the lane's bars end there, with the clip.
+      // The 8.75 s sequence is 350 px with the offset held at 300: only 62 px of
+      // the scroller is track, from 288 px, and the lane's bars end there, with the clip.
       expect(scroller.scrollLeft).toBe(300);
-      await waitFor(() => expect(canvas().style.width).toBe("50px"));
-      expect(canvas()).toHaveAttribute("data-bars", "25");
+      await waitFor(() => expect(canvas().style.width).toBe("62px"));
+      expect(canvas()).toHaveAttribute("data-bars", "31");
       fireEvent.pointerUp(edge, { clientX: 50 });
       await waitFor(() => expect(screen.queryByTestId("timeline-hold")).not.toBeInTheDocument());
-      // Let go, the offset clamps to 250 and the whole view is track again,
-      // 6.25 s to 8.75 s, the second clip across all of it.
+      // Let go, the offset clamps to 250 and the view and its left padding are
+      // track again, 5.95 s to 8.75 s, the second clip across all of it.
       expect(scroller.scrollLeft).toBe(250);
-      await waitFor(() => expect(canvas().style.width).toBe("100px"));
-      expect(canvas()).toHaveAttribute("data-bars", "50");
+      await waitFor(() => expect(canvas().style.width).toBe("112px"));
+      expect(canvas()).toHaveAttribute("data-bars", "56");
     });
 
     it("keeps the chosen scale and the scroll offset when the view is resized", async () => {
@@ -2269,6 +2269,7 @@ describe("RecordingEditor", () => {
       Object.defineProperty(scroller, "clientWidth", { configurable: true, value: 124 });
       Object.defineProperty(scroller, "scrollLeft", { configurable: true, writable: true, value: 0 });
       fireEvent.scroll(scroller);
+      return scroller;
     }
 
     it("draws a lane for each source kept apart, from the opened recording's own sound", async () => {
@@ -2289,6 +2290,32 @@ describe("RecordingEditor", () => {
       expect(waveformCalls(backend)).toHaveLength(2);
       // 12 s across 100 px: a bar every 2 px.
       expect(lane("Microphone").querySelector("canvas")).toHaveAttribute("data-bars", "50");
+    });
+
+    it("draws over all the track the timeline shows when zoomed, the side padding's share included", async () => {
+      mockBackend(null, null, ["microphone"]);
+      render(<RecordingEditor />);
+      await loadVideo();
+      const scroller = layOutTimeline();
+      const canvas = () => lane("Microphone").querySelector("canvas") as HTMLCanvasElement;
+      await waitFor(() => expect(lane("Microphone")).toHaveAttribute("data-state", "ready"));
+      // Fitted, the 100 px track is all there is.
+      expect(canvas().style.width).toBe("100px");
+      await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      expect(screen.getByTestId("timeline-content").dataset.zoom).toBe("2");
+      // 2x, unscrolled: the track runs on under the right padding, to 112 px.
+      await waitFor(() => expect(canvas().style.width).toBe("112px"));
+      expect(canvas()).toHaveAttribute("data-bars", "56");
+      // Scrolled mid-way, under both paddings: all 124 px of the scroller.
+      scroller.scrollLeft = 50;
+      fireEvent.scroll(scroller);
+      await waitFor(() => expect(canvas().style.width).toBe("124px"));
+      expect(canvas()).toHaveAttribute("data-bars", "62");
+      // At the end, under the left padding only.
+      scroller.scrollLeft = 100;
+      fireEvent.scroll(scroller);
+      await waitFor(() => expect(canvas().style.width).toBe("112px"));
+      expect(canvas()).toHaveAttribute("data-bars", "56");
     });
 
     it("names mixed sound as the status bar does, with why", async () => {
@@ -2362,8 +2389,12 @@ describe("RecordingEditor", () => {
       mockBackend(null, null, ["microphone"]);
       render(<RecordingEditor />);
       await loadVideo();
-      expect(await within(lane("Microphone")).findByText("Waveform unavailable")).toHaveAttribute("title", "ffmpeg could not read the sound");
+      const status = await within(lane("Microphone")).findByText("Waveform unavailable");
+      expect(status).toHaveAttribute("title", "ffmpeg could not read the sound");
       expect(lane("Microphone")).toHaveAttribute("data-state", "failed");
+      // Beside the lane's name, in the part of the lane kept in view, not at its far end.
+      expect(status.parentElement).toBe(within(lane("Microphone")).getByText("Microphone").parentElement);
+      expect(status.closest(".waveform-view")).not.toBeNull();
     });
 
     it("asks again for a waveform that failed once ffmpeg is ready", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampZoom, followScroll, MAX_PX_PER_SECOND, maxScroll, maxZoom, msAtOffset, scaleFor, scrollToKeep, stepScale, stepZoom, visibleRange, zoomFor, type TimelineScale } from "./timelineZoom";
+import { clampZoom, followScroll, MAX_PX_PER_SECOND, maxScroll, maxZoom, msAtOffset, scaleFor, scrollToKeep, stepScale, stepZoom, trackInView, visibleRange, zoomFor, type TimelineScale } from "./timelineZoom";
 
 describe("timelineZoom", () => {
   it("zooms from 1x up to 400 px a second", () => {
@@ -69,6 +69,22 @@ describe("timelineZoom", () => {
   it("reports the stretch in view", () => {
     expect(visibleRange(0, 1, 10_000, 1000)).toEqual({ startMs: 0, endMs: 10_000 });
     expect(visibleRange(1000, 4, 10_000, 1000)).toEqual({ startMs: 2500, endMs: 5000 });
+  });
+
+  it("reports the track the scroller shows, its padding's share included", () => {
+    // A 1024 px scroller, 12 px of padding each side of a 1000 px track.
+    // Fitted, the track is all there is.
+    expect(trackInView(0, 1024, 12, 1, 10_000, 1000)).toEqual({ startMs: 0, endMs: 10_000, width: 1000 });
+    // At 4x, unscrolled, the right padding shows track too.
+    expect(trackInView(0, 1024, 12, 4, 10_000, 1000)).toEqual({ startMs: 0, endMs: 2530, width: 1012 });
+    // Scrolled mid-way, both paddings do: the whole scroller is track.
+    expect(trackInView(1000, 1024, 12, 4, 10_000, 1000)).toEqual({ startMs: 2470, endMs: 5030, width: 1024 });
+    // At the end, the left padding does.
+    expect(trackInView(3000, 1024, 12, 4, 10_000, 1000)).toEqual({ startMs: 7470, endMs: 10_000, width: 1012 });
+    // Held past the end, it narrows to nothing.
+    expect(trackInView(3500, 1024, 12, 4, 10_000, 1000)).toEqual({ startMs: 8720, endMs: 10_000, width: 512 });
+    expect(trackInView(5000, 1024, 12, 4, 10_000, 1000)).toEqual({ startMs: 10_000, endMs: 10_000, width: 0 });
+    expect(trackInView(0, 1024, 12, 1, 0, 1000)).toEqual({ startMs: 0, endMs: 0, width: 0 });
   });
 
   it("pages the view on to keep a playing playhead in view", () => {

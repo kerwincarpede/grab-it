@@ -12,7 +12,7 @@ interface WaveformLaneProps {
   segments: LaneSegment[];
   /** What is known of a segment's recording's peaks. */
   peaksOf: (segment: LaneSegment) => PeaksState | undefined;
-  /** The stretch of the timeline in view. */
+  /** The stretch of track the timeline shows, and its width. */
   view: LaneView;
   /** The lane's height in px. */
   height: number;
@@ -24,9 +24,10 @@ const token = (element: Element, name: string, fallback: string) => getComputedS
 /**
  * One kind of sound across the timeline: each clip's own recording's
  * peaks at its place, and nothing over gaps or clips without that kind.
- * The canvas is as wide as the view and stays in it while the timeline
- * scrolls. A placeholder shows until the peaks arrive, and "Waveform
- * unavailable" when they cannot be read.
+ * The canvas covers the track the timeline shows and stays over it while
+ * the timeline scrolls. A placeholder shows until the peaks arrive, and
+ * "Waveform unavailable" when they cannot be read, beside the lane's name
+ * so they stay in view with it.
  */
 export default function WaveformLane({ kind, label, hint, segments, peaksOf, view, height }: WaveformLaneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -67,16 +68,18 @@ export default function WaveformLane({ kind, label, hint, segments, peaksOf, vie
     <div className="waveform-lane" role="group" aria-label={`${label} waveform`} data-testid={`waveform-${kind}`} data-state={state} style={{ height }}>
       <div className="waveform-view" style={{ width }}>
         <canvas ref={canvasRef} className="waveform-canvas" data-bars={bars.length} style={{ width, height }} />
-        <span className="waveform-label" title={hint}>
-          {label}
-        </span>
-        {failed?.status === "failed" ? (
-          <span className="waveform-status" title={failed.error}>
-            Waveform unavailable
+        <div className="waveform-tags">
+          <span className="waveform-label" title={hint}>
+            {label}
           </span>
-        ) : (
-          loading && <span className="waveform-status waveform-placeholder">Reading sound…</span>
-        )}
+          {failed?.status === "failed" ? (
+            <span className="waveform-status" title={failed.error}>
+              Waveform unavailable
+            </span>
+          ) : (
+            loading && <span className="waveform-status waveform-placeholder">Reading sound…</span>
+          )}
+        </div>
       </div>
     </div>
   );

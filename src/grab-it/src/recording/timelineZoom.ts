@@ -89,6 +89,21 @@ export function visibleRange(scrollLeft: number, zoom: number, durationMs: numbe
   return { startMs: msAtOffset(0, scrollLeft, zoom, durationMs, viewWidth), endMs: msAtOffset(viewWidth, scrollLeft, zoom, durationMs, viewWidth) };
 }
 
+/**
+ * The stretch of track a scroller `scrollerWidth` px wide shows, with
+ * `pad` px of padding each side of a `viewWidth` px visible track, and how
+ * wide it is in px. Scrolled, the padding's share of the track shows too,
+ * as the rows draw over it; past the track's end, as a held drag's spacer
+ * allows, it narrows to nothing.
+ */
+export function trackInView(scrollLeft: number, scrollerWidth: number, pad: number, zoom: number, durationMs: number, viewWidth: number): { startMs: number; endMs: number; width: number } {
+  const whole = viewWidth * zoom;
+  if (durationMs <= 0 || whole <= 0) return { startMs: 0, endMs: 0, width: 0 };
+  const from = Math.min(whole, Math.max(0, scrollLeft - pad));
+  const to = Math.min(whole, Math.max(from, scrollLeft - pad + scrollerWidth));
+  return { startMs: (from * durationMs) / whole, endMs: (to * durationMs) / whole, width: to - from };
+}
+
 /** Where the playhead lands when following it pages the view on: this share in from the left. */
 const FOLLOW_LEAD = 0.1;
 /** How near the right edge the playhead may come before the view moves on. */

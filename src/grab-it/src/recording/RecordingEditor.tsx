@@ -1528,7 +1528,7 @@ export default function RecordingEditor() {
             audioOf={audioOf}
             nameOf={(kind) => SOURCE_NAMES[kind]}
             hintOf={(kind) => (kind === "mixed" ? MIXED_SOUND_HINT : undefined)}
-            view={timelineView}
+            view={timelineView?.track ?? null}
           />
         </Timeline>
         <div className="timeline-zoom" role="group" aria-label="Timeline zoom">

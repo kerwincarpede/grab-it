@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { clampTrim, formatTime, type Trim } from "./edits";
-import { followScroll, msAtOffset, scrollToKeep, stepScale, visibleRange, zoomFor, type TimelineScale } from "./timelineZoom";
+import { followScroll, msAtOffset, scrollToKeep, stepScale, trackInView, visibleRange, zoomFor, type TimelineScale } from "./timelineZoom";
 
 /** The stretch of the timeline in view, and how wide the visible track is in px. */
 export interface TimelineView {
@@ -8,10 +8,11 @@ export interface TimelineView {
   endMs: number;
   width: number;
   /**
-   * How much of the view the track fills, in px: `width`, less any of it
-   * a held drag's spacer takes past the track's end.
+   * The stretch of track the scroller shows and its width in px, at the
+   * rows' scale: once scrolled, the side padding's share of the track too,
+   * and narrower than the view when a held drag's spacer takes its end.
    */
-  trackWidth: number;
+  track: { startMs: number; endMs: number; width: number };
 }
 
 interface TimelineProps {
@@ -134,10 +135,11 @@ export default function Timeline({
     const { onViewChange: tell, zoom: now, durationMs: length } = latest.current;
     if (!scroller || !tell) return;
     const width = viewWidth(scroller);
-    const trackWidth = Math.max(0, Math.min(width, now * width - scroller.scrollLeft));
-    const view = { ...visibleRange(scroller.scrollLeft, now, length, width), width, trackWidth };
+    const track = trackInView(scroller.scrollLeft, scroller.clientWidth, SIDE_PAD, now, length, width);
+    const view = { ...visibleRange(scroller.scrollLeft, now, length, width), width, track };
     const last = told.current;
-    if (last && last.startMs === view.startMs && last.endMs === view.endMs && last.width === view.width && last.trackWidth === view.trackWidth) return;
+    const same = (a: Omit<TimelineView, "track">, b: Omit<TimelineView, "track">) => a.startMs === b.startMs && a.endMs === b.endMs && a.width === b.width;
+    if (last && same(last, view) && same(last.track, view.track)) return;
     told.current = view;
     tell(view);
   }, []);
