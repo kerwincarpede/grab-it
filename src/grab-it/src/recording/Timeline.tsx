@@ -185,7 +185,8 @@ export default function Timeline({
     if (next !== scroller.scrollLeft) scroller.scrollLeft = next;
   }, [follow, currentMs, zoom, durationMs]);
 
-  useEffect(() => report(), [report, zoom, durationMs]);
+  // Letting go of a held drag drops its spacer, which can clamp the scroll offset without a scroll event.
+  useEffect(() => report(), [report, zoom, durationMs, held]);
 
   useEffect(() => {
     const scroller = scrollRef.current;

@@ -1180,6 +1180,11 @@ describe("RecordingEditor", () => {
       expect(canvas()).toHaveAttribute("data-bars", "25");
       fireEvent.pointerUp(edge, { clientX: 50 });
       await waitFor(() => expect(screen.queryByTestId("timeline-hold")).not.toBeInTheDocument());
+      // Let go, the offset clamps to 250 and the whole view is track again,
+      // 6.25 s to 8.75 s, the second clip across all of it.
+      expect(scroller.scrollLeft).toBe(250);
+      await waitFor(() => expect(canvas().style.width).toBe("100px"));
+      expect(canvas()).toHaveAttribute("data-bars", "50");
     });
 
     it("keeps the chosen scale and the scroll offset when the view is resized", async () => {
