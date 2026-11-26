@@ -11,7 +11,14 @@ It runs in the menu bar or system tray. Look for its icon near the clock (on Win
 
 ## My PrintScreen key opens a different screenshot tool
 
-Another app (or the operating system) has claimed that key. Either pick a different shortcut in Grab-it's [Settings](/grab-it/reference/settings/), or turn off the other tool's shortcut. On Windows 11, turn off the *Print screen key* option (it opens the Snipping Tool) under **Settings → Accessibility → Keyboard**.
+Another app (or the operating system) has claimed that key. Either pick a different shortcut in Grab-it's [Settings](/grab-it/reference/settings/), or turn off the other tool's shortcut.
+
+On Windows 11, the **Use the Print screen key to open screen capture** setting opens Windows' own screen capture, so `PrintScreen` switches between it and Grab-it. It's on unless you've turned it off. When that setting is on and a Grab-it hotkey is `PrintScreen` on its own, the welcome page and **Settings → Capture hotkeys** show a notice:
+
+- **Use PrintScreen for Grab-it** turns the Windows setting off, so `PrintScreen` opens Grab-it. If Windows still has it on afterwards, the notice says so.
+- **Open Windows settings** opens **Settings → Accessibility → Keyboard**, where you can turn it off yourself.
+
+The notice goes away once nothing clashes. To keep Windows' tool on `PrintScreen`, give Grab-it's region capture another hotkey in Settings instead. Combinations such as `Alt PrintScreen` don't clash.
 
 ## macOS captures only show my wallpaper, or nothing
 

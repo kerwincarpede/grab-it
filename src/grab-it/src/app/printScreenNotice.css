@@ -1,0 +1,77 @@
+/* Windows' Print screen setting clashes with a PrintScreen hotkey
+   (PrintScreenNotice.tsx), on the welcome page and in Settings. */
+.printscreen-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  color: var(--text);
+  font-size: 13px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-edge);
+  border-radius: var(--radius);
+}
+
+.printscreen-notice p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.printscreen-notice .status-error {
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.printscreen-notice .printscreen-notice-still {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.printscreen-notice-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.printscreen-notice-title {
+  flex: 1;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.printscreen-notice-dismiss {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--text-muted);
+  background: none;
+  border: 0;
+  border-radius: 5px;
+}
+
+.printscreen-notice-dismiss:where(:hover) {
+  background: var(--fill-hover);
+}
+
+.printscreen-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* The secondary button keeps an edge and a fill against the tinted notice,
+   which a plain .btn loses in dark mode. */
+.printscreen-notice .btn:not(.btn-primary) {
+  background: var(--panel);
+  border-color: var(--border-strong);
+}
+
+.printscreen-notice .btn:not(.btn-primary):where(:hover:not(:disabled)) {
+  background: var(--fill-hover);
+}

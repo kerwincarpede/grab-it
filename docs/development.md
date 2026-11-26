@@ -479,6 +479,8 @@ It holds the save folder (default `~/Pictures/Grab-it/`), the hotkeys, what happ
 
 **Start Grab-it when you sign in** is kept by the operating system rather than in `settings.json`: a login item on macOS, a registry entry on Windows, and an autostart entry on Linux.
 
+On Windows, the welcome hotkeys page and **Settings → Capture hotkeys** call `printscreen_conflict` (`printscreen.rs`) when they open, and again after either of the notice's buttons and after **Save hotkeys**; nothing polls. It reports a conflict when `PrintScreenKeyForSnippingEnabled` under `HKCU\Control Panel\Keyboard` is on and a saved hotkey is a bare `PrintScreen`. A written 1 or 0 is taken as it is; a missing value is Windows' default, on from Windows 11 (build 22000, read from `CurrentBuildNumber` under `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`) and off on Windows 10, and combinations such as `Alt PrintScreen` never conflict. **Use PrintScreen for Grab-it** calls `printscreen_fix`, which sets the value to 0, broadcasts `WM_SETTINGCHANGE` and checks again; **Open Windows settings** opens `ms-settings:easeofaccess-keyboard`. On macOS and Linux the check always reports no conflict. The value is only changed when the user clicks the button.
+
 ## Checks
 
 Run `npm ci` at the repository root, then the rest from `src/grab-it/`. CI runs the same commands.

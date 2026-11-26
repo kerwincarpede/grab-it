@@ -506,6 +506,23 @@ export const commands = {
 	permissionRestart: (options?: InvokeOptions) => __TAURI_INVOKE<void>("permission_restart", undefined, options),
 	/**  Opens `permission`'s pane in System Settings. Only macOS has one. */
 	permissionOpenSettings: (permission: Permission, options?: InvokeOptions) => __TAURI_INVOKE<null>("permission_open_settings", { permission }, options),
+	/**
+	 *  True when Windows' Print screen setting is on and a Grab-it hotkey is a
+	 *  bare `PrintScreen`, so the two take turns. Always false off Windows.
+	 */
+	printscreenConflict: (options?: InvokeOptions) => __TAURI_INVOKE<boolean>("printscreen_conflict", undefined, options),
+	/**
+	 *  Use PrintScreen for Grab-it: turns Windows' setting off, tells running
+	 *  apps, and returns whether the conflict is still there. Does nothing off
+	 *  Windows.
+	 *  Off the main thread, since the broadcast waits on every top-level window.
+	 */
+	printscreenFix: (options?: InvokeOptions) => __TAURI_INVOKE<boolean>("printscreen_fix", undefined, options),
+	/**
+	 *  Opens Windows Settings on the page with the Print screen switch. Does
+	 *  nothing off Windows.
+	 */
+	printscreenOpenSettings: (options?: InvokeOptions) => __TAURI_INVOKE<null>("printscreen_open_settings", undefined, options),
 	guideInfo: (options?: InvokeOptions) => __TAURI_INVOKE<GuideInfo>("guide_info", undefined, options),
 	/**  Writes the guide's steps in their new order and renumbers their badges. */
 	guideSave: (steps: GuideStep[], options?: InvokeOptions) => __TAURI_INVOKE<null>("guide_save", { steps }, options),
@@ -3073,6 +3090,9 @@ export type MockCommandHandlers = {
     permissionFinish: () => void | Promise<void>,
     permissionRestart: () => void | Promise<void>,
     permissionOpenSettings: (args: { permission: Permission }) => null | Promise<null>,
+    printscreenConflict: () => boolean | Promise<boolean>,
+    printscreenFix: () => boolean | Promise<boolean>,
+    printscreenOpenSettings: () => null | Promise<null>,
     guideInfo: () => GuideInfo | Promise<GuideInfo>,
     guideSave: (args: { steps: GuideStep[] }) => null | Promise<null>,
     guideOpenEditor: (args: { capture: string }) => null | Promise<null>,
@@ -3254,6 +3274,9 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "permission_finish": return mockCommandHandler(mockHandlers.permissionFinish, "permission_finish", args);
             case "permission_restart": return mockCommandHandler(mockHandlers.permissionRestart, "permission_restart", args);
             case "permission_open_settings": return mockCommandHandler(mockHandlers.permissionOpenSettings, "permission_open_settings", args);
+            case "printscreen_conflict": return mockCommandHandler(mockHandlers.printscreenConflict, "printscreen_conflict", args);
+            case "printscreen_fix": return mockCommandHandler(mockHandlers.printscreenFix, "printscreen_fix", args);
+            case "printscreen_open_settings": return mockCommandHandler(mockHandlers.printscreenOpenSettings, "printscreen_open_settings", args);
             case "guide_info": return mockCommandHandler(mockHandlers.guideInfo, "guide_info", args);
             case "guide_save": return mockCommandHandler(mockHandlers.guideSave, "guide_save", args);
             case "guide_open_editor": return mockCommandHandler(mockHandlers.guideOpenEditor, "guide_open_editor", args);

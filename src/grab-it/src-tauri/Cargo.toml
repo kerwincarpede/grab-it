@@ -153,6 +153,8 @@ windows = { version = "0.61", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Ole",
+    # Reads and turns off Windows' Print screen key setting (printscreen.rs).
+    "Win32_System_Registry",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
 ] }

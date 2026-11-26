@@ -38,6 +38,7 @@ mod pin;
 mod pointer;
 #[cfg(target_os = "linux")]
 mod portal;
+mod printscreen;
 mod quick;
 mod record;
 mod record_bar;
@@ -516,6 +517,9 @@ fn specta_builder() -> tauri_specta::Builder<Rt> {
             permissions::permission_finish,
             permissions::permission_restart,
             permissions::permission_open_settings,
+            printscreen::printscreen_conflict,
+            printscreen::printscreen_fix,
+            printscreen::printscreen_open_settings,
             steps::guide_info,
             steps::guide_save,
             steps::guide_open_editor,

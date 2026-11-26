@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import "./welcome.css";
 import Logo from "../app/Logo";
+import PrintScreenNotice from "../app/PrintScreenNotice";
 import {
   AllInOneIcon,
   CardIcon,
@@ -203,6 +204,8 @@ function HotkeysPage({ onClose }: { onClose?: () => void }) {
           )}
         </div>
       </header>
+
+      <PrintScreenNotice dismissable />
 
       <div className="welcome-cols">
         <section aria-labelledby="welcome-shortcuts">

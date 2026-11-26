@@ -32,6 +32,12 @@
   font-size: 13px;
 }
 
+/* Lines up with the header and the columns. */
+.welcome > .printscreen-notice {
+  flex: none;
+  margin: 0 28px 14px;
+}
+
 .welcome-cols {
   display: grid;
   grid-template-columns: 1fr 1fr;

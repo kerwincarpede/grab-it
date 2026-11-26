@@ -69,6 +69,8 @@ function mockBackend(
     failPermissions?: boolean;
     /** What permission_status reports once Allow all has run. */
     afterAllowAll?: PermissionStatus;
+    /** Windows' Print screen setting: on, whether Use PrintScreen for Grab-it leaves it on, and why it fails. */
+    printScreen?: { on: boolean; staysOn?: boolean; failFix?: string };
   } = {},
 ) {
   return mockCommands(
@@ -95,6 +97,16 @@ function mockBackend(
         if (options.failOpen) throw options.failOpen;
         return null;
       },
+      // The region hotkey is a bare PrintScreen, so the setting alone decides.
+      printscreen_conflict: () => options.printScreen?.on ?? false,
+      printscreen_fix: () => {
+        const printScreen = options.printScreen;
+        if (!printScreen) return false;
+        if (printScreen.failFix) throw printScreen.failFix;
+        printScreen.on = printScreen.staysOn ?? false;
+        return printScreen.on;
+      },
+      printscreen_open_settings: () => null,
     },
     { shouldMockEvents: true, otherwise: () => null },
   );
@@ -213,6 +225,60 @@ describe("WelcomeWindow", () => {
     render(<WelcomeWindow />);
     await userEvent.click(await screen.findByRole("button", { name: "Open Settings" }));
     expect(await screen.findByText("could not open Settings")).toBeInTheDocument();
+  });
+});
+
+describe("WelcomeWindow's PrintScreen notice", () => {
+  const NOTICE = "PrintScreen also opens Windows' screen capture";
+
+  it("stays hidden without a conflict, as off Windows", async () => {
+    const calls = mockBackend();
+    render(<WelcomeWindow />);
+    await screen.findByRole("heading", { name: "Welcome to Grab-it" });
+    await waitFor(() => expect(calls.map((call) => call.cmd)).toContain("printscreen_conflict"));
+    expect(screen.queryByRole("heading", { name: NOTICE })).not.toBeInTheDocument();
+  });
+
+  it("turns Windows' setting off and goes away", async () => {
+    const calls = mockBackend({ printScreen: { on: true } });
+    render(<WelcomeWindow />);
+    expect(await screen.findByRole("heading", { name: NOTICE })).toBeInTheDocument();
+    expect(screen.getByText(/choose another hotkey instead of PrintScreen in Settings\./)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Use PrintScreen for Grab-it" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: NOTICE })).not.toBeInTheDocument());
+    expect(calls.map((call) => call.cmd)).toContain("printscreen_fix");
+  });
+
+  it("says so when Windows still has the setting on", async () => {
+    mockBackend({ printScreen: { on: true, staysOn: true } });
+    render(<WelcomeWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Use PrintScreen for Grab-it" }));
+    expect(await screen.findByText(/Windows still has the setting on/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: NOTICE })).toBeInTheDocument();
+  });
+
+  it("shows why the setting could not be changed", async () => {
+    mockBackend({ printScreen: { on: true, failFix: "Could not change the Windows setting (error 5)." } });
+    render(<WelcomeWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Use PrintScreen for Grab-it" }));
+    expect(await screen.findByText("Could not change the Windows setting (error 5).")).toBeInTheDocument();
+  });
+
+  it("opens Windows settings and checks again", async () => {
+    const calls = mockBackend({ printScreen: { on: true } });
+    render(<WelcomeWindow />);
+    await userEvent.click(await screen.findByRole("button", { name: "Open Windows settings" }));
+    await waitFor(() => expect(calls.map((call) => call.cmd)).toContain("printscreen_open_settings"));
+    await waitFor(() => expect(calls.filter((call) => call.cmd === "printscreen_conflict")).toHaveLength(2));
+    expect(screen.getByRole("heading", { name: NOTICE })).toBeInTheDocument();
+  });
+
+  it("can be dismissed", async () => {
+    mockBackend({ printScreen: { on: true } });
+    render(<WelcomeWindow />);
+    await screen.findByRole("heading", { name: NOTICE });
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss PrintScreen notice" }));
+    expect(screen.queryByRole("heading", { name: NOTICE })).not.toBeInTheDocument();
   });
 });
 
