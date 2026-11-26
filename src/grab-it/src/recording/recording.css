@@ -458,7 +458,8 @@
   /* A fixed height: the timeline above and the sliders stay put as rows come and go. */
   height: min(40vh, 340px);
   box-sizing: border-box;
-  overflow: hidden;
+  /* In a short window the fixed parts may not fit: the panel scrolls. */
+  overflow-y: auto;
 }
 
 .recording-suggest-panel > * {
@@ -471,7 +472,8 @@
   flex: 1 1 auto;
   flex-direction: column;
   gap: 8px;
-  min-height: 0;
+  /* Room for at least two rows, however short the window. */
+  min-height: 76px;
   overflow-y: auto;
 }
 
