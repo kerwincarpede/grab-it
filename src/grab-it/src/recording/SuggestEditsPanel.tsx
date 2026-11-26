@@ -82,8 +82,8 @@ export interface SuggestEditsPanelProps {
  * `cuts` applied to `clips`: with `tracks`, on every track (see
  * `applyTimelineCuts`), counting those skipped over unlinked sound.
  */
-function cutWith(clips: Clip[], tracks: Track[] | undefined, cuts: readonly CutProposal[]): { timeline: { main: Clip[]; tracks?: Track[] }; skipped: number } {
-  return tracks ? applyTimelineCuts({ main: clips, tracks }, cuts) : { timeline: { main: applyCuts(clips, cuts) }, skipped: 0 };
+function cutWith(clips: Clip[], tracks: Track[] | undefined, cuts: readonly CutProposal[]): { timeline: { main: Clip[]; tracks?: Track[] }; skipped: number; locked: number } {
+  return tracks ? applyTimelineCuts({ main: clips, tracks }, cuts) : { timeline: { main: applyCuts(clips, cuts) }, skipped: 0, locked: 0 };
 }
 
 /** The pauses of one recording, or why they could not be found. */
@@ -111,7 +111,7 @@ export default function SuggestEditsPanel({ clips, own, joined, previewing, trac
   /** The cut whose own preview is playing, while `previewing`. */
   const [previewCutId, setPreviewCutId] = useState<string | null>(null);
   /** Whether that cut's own preview plays it uncut, as Apply would skip it. */
-  const [previewSkipped, setPreviewSkipped] = useState(false);
+  const [previewSkipped, setPreviewSkipped] = useState<"locked" | "overlap" | null>(null);
   /** The audition playing, for the cut it was made for. */
   const [audition, setAudition] = useState<{ cutId: string; cleaned: boolean; url: string } | null>(null);
   /** The cut an audition is being prepared for. */
@@ -234,7 +234,7 @@ export default function SuggestEditsPanel({ clips, own, joined, previewing, trac
     if (selected.length === 0) return;
     const first = Math.min(...selected.map((cut) => cutSequenceMs(clips, cut) ?? 0));
     setPreviewCutId(null);
-    setPreviewSkipped(false);
+    setPreviewSkipped(null);
     onPreview(applied.timeline.main, Math.max(0, first - PREVIEW_LEAD_MS), undefined, undefined, applied.timeline.tracks);
   };
 
@@ -250,7 +250,7 @@ export default function SuggestEditsPanel({ clips, own, joined, previewing, trac
     const returnMs = Math.min(at + (cut.endMs - cut.startMs) + CUT_PREVIEW_CONTEXT_MS, sequenceDuration(clips));
     // With tracks it cuts the linked sound too, as Apply would, or is skipped.
     const single = cutWith(clips, tracks, [cut]);
-    const skipped = single.skipped > 0;
+    const skipped = single.locked ? "locked" : single.skipped ? "overlap" : null;
     setPreviewSkipped(skipped);
     // A skipped cut plays uncut, so it stops where the playhead returns, after the whole pause.
     onPreview(single.timeline.main, Math.max(0, at - CUT_PREVIEW_CONTEXT_MS), skipped ? returnMs : at + CUT_PREVIEW_CONTEXT_MS, returnMs, single.timeline.tracks);
@@ -444,6 +444,9 @@ export default function SuggestEditsPanel({ clips, own, joined, previewing, trac
           <button type="button" className="text-button" data-primary="true" onClick={apply} disabled={selected.length === 0}>
             Apply {selected.length} {selected.length === 1 ? "cut" : "cuts"} ({formatTime(cutsLength(selected))})
           </button>
+          {applied.locked > 0 && (
+            <p className="suggest-hint">{applied.locked} {applied.locked === 1 ? "cut is" : "cuts are"} skipped to leave clips on locked tracks unchanged.</p>
+          )}
           {applied.skipped > 0 && (
             <span role="status">
               {applied.skipped} {applied.skipped === 1 ? "cut is" : "cuts are"} skipped: {applied.skipped === 1 ? "it overlaps" : "they overlap"} a clip not linked to its picture.
@@ -451,7 +454,13 @@ export default function SuggestEditsPanel({ clips, own, joined, previewing, trac
           )}
           {previewing && (
             <span role="status">
-              {previewCutId ? (previewSkipped ? "Previewing one cut, which is skipped: it overlaps a clip not linked to its picture." : "Previewing one cut.") : "Previewing: press Play to hear the chosen cuts."}
+              {previewCutId
+                ? previewSkipped === "locked"
+                  ? "Previewing one cut, which is skipped: it would change a clip on a locked track."
+                  : previewSkipped === "overlap"
+                    ? "Previewing one cut, which is skipped: it overlaps a clip not linked to its picture."
+                    : "Previewing one cut."
+                : "Previewing: press Play to hear the chosen cuts."}
             </span>
           )}
         </div>

@@ -221,12 +221,13 @@ export function applyCuts(clips: readonly Clip[], cuts: readonly CutProposal[], 
  * `timeline` without each of `cuts`, as `applyCuts` cuts the sequence,
  * with linked sound cut along and later clips on every track shifted
  * back (see `cutSpan`). A cut that overlaps a clip not linked to the
- * picture it removes is skipped and counted in `skipped`; one refused for
- * another reason, such as leaving no clip, is skipped as `applyCuts` does.
+ * picture it removes is counted in `skipped`; a cut affecting a locked
+ * track is counted in `locked`. Other refusals follow `applyCuts`.
  */
-export function applyTimelineCuts(timeline: Timeline, cuts: readonly CutProposal[], makeId: () => string = newClipId): { timeline: Timeline; skipped: number } {
+export function applyTimelineCuts(timeline: Timeline, cuts: readonly CutProposal[], makeId: () => string = newClipId): { timeline: Timeline; skipped: number; locked: number } {
   let next = timeline;
   let skipped = 0;
+  let locked = 0;
   // Latest first, so each earlier cut's clip keeps its id and its time.
   const placed = cuts.map((cut) => ({ cut, at: cutSequenceMs(timeline.main, cut) })).filter((each) => each.at !== null) as { cut: CutProposal; at: number }[];
   for (const { cut } of placed.sort((a, b) => b.at - a.at)) {
@@ -235,8 +236,9 @@ export function applyTimelineCuts(timeline: Timeline, cuts: readonly CutProposal
     const result = cutSpan(next, at, at + clipLength(cut), makeId);
     if (!isRefusal(result)) next = result;
     else if (result.overlap) skipped += 1;
+    else if (result.locked) locked += 1;
   }
-  return { timeline: next, skipped };
+  return { timeline: next, skipped, locked };
 }
 
 /** Where `cut` begins on the sequence `clips` play, or null when its clip no longer holds it. */

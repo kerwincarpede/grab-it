@@ -1843,6 +1843,14 @@ describe("RecordingEditor", () => {
       fireEvent.pointerDown(track, { clientX: 10 });
       fireEvent.pointerUp(track, { clientX: 10 });
       expect(first).toBeVisible();
+      // A paused media time update reports the overlay's source time, not timeline time.
+      fireEvent.pointerDown(track, { clientX: 35 });
+      fireEvent.pointerUp(track, { clientX: 35 });
+      await waitFor(() => expect(second).toBeVisible());
+      second.currentTime = 0.5;
+      fireEvent.timeUpdate(second);
+      expect(screen.getByLabelText("Time")).toHaveTextContent("0:03.5 / 0:06.0");
+      expect(second).toBeVisible();
       // At 5 s only Video 2 has a clip: it shows, and Split cuts it.
       fireEvent.pointerDown(track, { clientX: 50 });
       fireEvent.pointerUp(track, { clientX: 50 });

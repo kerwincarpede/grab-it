@@ -97,6 +97,20 @@ describe("tracks", () => {
     expect(parseTracks([{ id: MAIN_TRACK_ID, kind: "video", clips: [a] }], (TRACKS_VERSION - 1) as RecordingEdits["version"])).toBeNull();
   });
 
+  it("does not split one half of a linked group when the other track is locked", () => {
+    const timeline = lockTrack(defaultTimeline([a, b], sound), FIRST_AUDIO_ID, true);
+    expect(canSplitAt(timeline, 1000, a.id)).toBe(false);
+    expect(splitAt(timeline, 1000)).toBe(timeline);
+  });
+
+  it("refuses cuts that would remove or displace locked linked sound", () => {
+    const timeline = lockTrack(defaultTimeline([a, b], sound), FIRST_AUDIO_ID, true);
+    expect(cutSpan(timeline, 1000, 2000)).toMatchObject({ refused: expect.stringContaining("locked track") });
+    expect(rippleDelete(timeline, a.id)).toMatchObject({ refused: expect.stringContaining("locked track") });
+    const laterSound = lockTrack(defaultTimeline([a, b], (source) => source === b.source), FIRST_AUDIO_ID, true);
+    expect(cutSpan(laterSound, 1000, 2000)).toMatchObject({ refused: expect.stringContaining("locked track") });
+  });
+
   it("links two or more clips and unlinks a whole group", () => {
     const timeline = unlinkClips(defaultTimeline([a], sound), new Set(["a-sound"]));
     expect(timeline.main[0].link).toBeUndefined();

@@ -596,6 +596,14 @@ export default function RecordingEditor() {
   /** Keeps `next` as every track: one undo entry. `sound` answers for recordings not yet probed. */
   const commitTracks = (next: Tracks, applying = false, sound: (source: string) => boolean = hasAudio) => {
     setClipDraft(null);
+    // A track lock protects its clips, including edits made through links.
+    if (
+      (mainTrack(tracks).locked && JSON.stringify(tracks.main) !== JSON.stringify(next.main)) ||
+      tracks.tracks.some((track) => track.locked && JSON.stringify(track.clips) !== JSON.stringify(next.tracks.find((each) => each.id === track.id)?.clips ?? []))
+    ) {
+      setMessage(LOCKED_CLIP);
+      return;
+    }
     commitEdits(withTimeline(edits, next, own, durationMs, sound), applying);
   };
 
@@ -2060,7 +2068,7 @@ export default function RecordingEditor() {
                   onTimeUpdate={active ? (event) => {
                     if (playing || pendingRef.current || onGap) return;
                     const ms = event.currentTarget.currentTime * 1000;
-                    setCurrentMs(joined && at ? toSequence(clips, at.index, ms) : ms);
+                    setCurrentMs(joined && shownAt ? toSequence(picture, shownAt.index, ms) : ms);
                   } : undefined}
                   onClick={active ? toggle : undefined}
                 />

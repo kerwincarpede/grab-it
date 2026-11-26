@@ -346,7 +346,7 @@ export function realign(timeline: Timeline): Timeline | null {
 export const END_MARGIN_MS = 100;
 
 /** Why an edit was refused; `overlap` when it would cut into sound not linked to the picture it removes. */
-export type Refusal = { refused: string; overlap?: true };
+export type Refusal = { refused: string; overlap?: true; locked?: true };
 export const isRefusal = <T extends object>(value: T | Refusal): value is Refusal => "refused" in value;
 
 /**
@@ -380,7 +380,7 @@ export function moveInTime(timeline: Timeline, id: string, atMs: number, toTrack
   return { ...timeline, tracks };
 }
 
-/** Clips with room on both sides, unless an intersected partner is too short. */
+/** Unlocked clips with room on both sides, unless an intersected partner is locked or too short. */
 function splittableIds(timeline: Timeline, at: number, only: string | undefined, minMs: number): Set<string> {
   const selected = only ? linkedIds(timeline, only) : null;
   const blockedLinks = new Set<string>();
@@ -457,6 +457,10 @@ export function cutSpan(timeline: Timeline, startMs: number, endMs: number, make
   const start = Math.round(startMs);
   const end = Math.round(endMs);
   if (end <= start) return timeline;
+  const locked = lockedIds(timeline);
+  if (locked.has(MAIN_TRACK_ID) || clipPlaces(timeline).some((place) => locked.has(place.trackId) && place.endMs > start)) {
+    return { refused: "That would change clips on a locked track. Unlock it first.", locked: true };
+  }
   const split = splitAt(splitAt(timeline, start, undefined, 1, makeId), end, undefined, 1, makeId);
   const places = clipPlaces(split);
   const inside = (place: ClipPlace) => place.atMs >= start && place.endMs <= end;
@@ -491,6 +495,10 @@ export function cutSpan(timeline: Timeline, startMs: number, endMs: number, make
 export function rippleDelete(timeline: Timeline, id: string, makeId: () => string = newClipId): Timeline | Refusal {
   const places = clipPlaces(timeline);
   const ids = linkedIds(timeline, id);
+  const locked = lockedIds(timeline);
+  if (places.some((place) => ids.has(place.id) && locked.has(place.trackId))) {
+    return { refused: "That would change clips on a locked track. Unlock it first." };
+  }
   const onMain = places.find((place) => ids.has(place.id) && place.trackId === MAIN_TRACK_ID);
   if (onMain) return cutSpan(timeline, onMain.atMs, onMain.endMs, makeId);
   // A gap's stretch closes on every track, as a clip's does.
