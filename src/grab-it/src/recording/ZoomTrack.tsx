@@ -8,6 +8,8 @@ interface ZoomTrackProps {
   selectedId: string | null;
   /** Limits an edit to the piece of picture the zoom belongs to. */
   room?: (id: string) => { low: number; high: number };
+  /** Whether a proposed span still belongs to its original piece. */
+  canPlace?: (zoom: Zoom) => boolean;
   onSelect: (id: string | null) => void;
   /** Shows zooms while a segment is still moving. */
   onPreview: (zooms: Zoom[]) => void;
@@ -42,7 +44,7 @@ const percent = (ms: number, durationMs: number) => `${durationMs > 0 ? (ms / du
  * click selects one, Delete removes it, the arrow keys move it, and a
  * double-click on an empty stretch adds one.
  */
-export default function ZoomTrack({ durationMs, zooms, selectedId, room, onSelect, onPreview, onCommit, onAdd, onSeek }: ZoomTrackProps) {
+export default function ZoomTrack({ durationMs, zooms, selectedId, room, canPlace, onSelect, onPreview, onCommit, onAdd, onSeek }: ZoomTrackProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -70,11 +72,12 @@ export default function ZoomTrack({ durationMs, zooms, selectedId, room, onSelec
     const bounds = room?.(zoom.id);
     if (!bounds) return kind === "move" ? moveZoom(base, zoom.id, ms, durationMs) : resizeZoom(base, zoom.id, kind, ms, durationMs);
     if (bounds.high - bounds.low < MIN_ZOOM_MS) return base;
-    if (kind === "move") {
-      const start = Math.max(bounds.low, Math.min(ms, bounds.high - (zoom.endMs - zoom.startMs)));
-      return moveZoom(base, zoom.id, start, bounds.high);
-    }
-    return resizeZoom(base, zoom.id, kind, Math.max(bounds.low, Math.min(ms, bounds.high)), bounds.high);
+    const start = Math.max(bounds.low, Math.min(ms, bounds.high - (zoom.endMs - zoom.startMs)));
+    const next = kind === "move"
+      ? moveZoom(base, zoom.id, start, bounds.high)
+      : resizeZoom(base, zoom.id, kind, Math.max(bounds.low, Math.min(ms, bounds.high)), bounds.high);
+    const candidate = next.find((each) => each.id === zoom.id);
+    return candidate && canPlace?.(candidate) === false ? base : next;
   };
 
   const move = (event: PointerEvent<HTMLElement>) => {

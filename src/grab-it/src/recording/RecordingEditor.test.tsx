@@ -2028,6 +2028,39 @@ describe("RecordingEditor", () => {
       expect(plan.clips[1]).toMatchObject({ zooms: [] });
     });
 
+    it("keeps a resized zoom on its overlay copy during the drag and after release", async () => {
+      const backend = mockBackend({ version: TRACKS_VERSION,
+        zooms: [{ ...AREA_ZOOM, startMs: 4500, endMs: 6500 }],
+        tracks: [
+          { id: "video-2", name: "Video 2", kind: "video", clips: [{ id: "c", source: OWN, startMs: 3000, endMs: 8000, atMs: 4000 }] },
+          { id: "video-1", name: "Video 1", kind: "video", clips: [{ id: "a", source: OWN, startMs: 0, endMs: 4000 }] },
+        ],
+      });
+      render(<RecordingEditor />);
+      const video = await previewVideo(OWN);
+      setVideoMetadata(video, 12, 1920, 1080);
+      fireEvent.loadedMetadata(video);
+      const row = screen.getByTestId("zoom-track");
+      placeAt(row, 900, 20);
+      const edge = screen.getByTestId("zoom-edge-start");
+      const segment = screen.getByTestId("zoom-segment");
+      const original = segment.style.left;
+      fireEvent.pointerDown(edge, { clientX: 550 });
+      fireEvent.pointerMove(row, { clientX: 450 });
+      expect(segment.style.left).toBe(original);
+      fireEvent.pointerUp(row, { clientX: 450 });
+      expect(saved(backend)).toHaveLength(0);
+
+      fireEvent.pointerDown(edge, { clientX: 550 });
+      fireEvent.pointerMove(row, { clientX: 520 });
+      fireEvent.pointerUp(row, { clientX: 520 });
+      expect(lastSaved(backend)).toMatchObject({ zooms: [{ startMs: 4200, endMs: 6500 }] });
+      await userEvent.click(screen.getByRole("button", { name: "Export" }));
+      const { plan } = await exportCall(backend);
+      expect(plan.clips[0]).toMatchObject({ zooms: [] });
+      expect(plan.clips[1]).toMatchObject({ zooms: [{ startMs: 4200, endMs: 6500 }] });
+    });
+
     it("adds and exports a zoom on an overlay-only tail in its source time", async () => {
       const backend = mockBackend({ version: TRACKS_VERSION, tracks: [
         { id: "video-2", name: "Video 2", kind: "video", clips: [{ id: "c", source: OTHER, startMs: 1000, endMs: 6000, atMs: 4000 }] },

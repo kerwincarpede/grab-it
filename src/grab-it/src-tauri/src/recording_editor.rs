@@ -92,8 +92,6 @@ const DEFAULT_FPS: u32 = 30;
 const MAX_EXPORT_SIDE: u32 = 4096;
 /// The largest recording a zoomed export decodes frames at.
 const MAX_SOURCE_SIDE: u32 = 8192;
-/// Only short, flattened pieces may need a retry with an earlier seek.
-const SHORT_SLICE_MS: u64 = 100;
 /// How long adding the trimmed sound may take.
 const MUX_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -1383,13 +1381,23 @@ fn seconds(ms: u64) -> String {
 
 /// ffmpeg's arguments to decode `clip`'s stretch of `input` as raw RGBA
 /// frames on stdout, scaled to [`ExportClip::decode_size`], at a constant
-/// `fps`. Seeking before `-i` is exact when decoding.
+/// `fps`. Keep the seek's preroll so the filter can sample the frame
+/// already on screen at the cut, including a slow recording's last frame.
 pub fn decode_args(input: &Path, clip: &ExportClip, fps: u32) -> Vec<OsString> {
-    let mut args: Vec<OsString> = ["-hide_banner", "-loglevel", "error", "-ss"]
-        .into_iter()
-        .map(OsString::from)
-        .collect();
+    let mut args: Vec<OsString> = [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-xerror",
+        "-copyts",
+        "-start_at_zero",
+        "-ss",
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect();
     args.push(seconds(clip.start_ms).into());
+    args.push("-noaccurate_seek".into());
     args.push("-i".into());
     args.push(input.as_os_str().to_owned());
     let mut push = |arg: &str| args.push(OsString::from(arg));
@@ -1400,7 +1408,8 @@ pub fn decode_args(input: &Path, clip: &ExportClip, fps: u32) -> Vec<OsString> {
     }
     let (width, height) = clip.decode_size();
     push(&format!(
-        "scale={width}:{height}:flags=bicubic,fps={fps},format=rgba"
+        "setpts=PTS-{}/TB,fps={fps}:start_time=0:round=up,scale={width}:{height}:flags=bicubic,format=rgba",
+        seconds(clip.start_ms)
     ));
     for arg in ["-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"] {
         push(arg);
@@ -1830,8 +1839,6 @@ fn backdrop_and_mask(
 /// The recording behind one clip of an export.
 struct ClipSource {
     path: PathBuf,
-    /// The probed duration, to distinguish an exposed tail from a seek past EOF.
-    duration_ms: Option<u64>,
     /// The pointer path follow-the-pointer zooms centre on.
     cursor: Option<CursorPath>,
     has_audio: bool,
@@ -1862,15 +1869,14 @@ struct ExportJob<'a> {
 }
 
 /// Decodes `clip` of `input` at `fps` and calls `frame` with each frame,
-/// `clip.decode_size()` RGBA, until ffmpeg runs out. Returns the count
-/// and the last frame (empty when none were decoded).
+/// `clip.decode_size()` RGBA, until ffmpeg runs out. Returns the frame count.
 fn decode_clip(
     ffmpeg_path: &Path,
     input: &Path,
     clip: &ExportClip,
     fps: u32,
     mut frame: impl FnMut(&[u8], u64) -> Result<(), String>,
-) -> Result<(u64, Vec<u8>), String> {
+) -> Result<u64, String> {
     let mut decoder = ffmpeg::command(ffmpeg_path)
         .args(decode_args(input, clip, fps))
         .stdin(Stdio::null())
@@ -1907,7 +1913,7 @@ fn decode_clip(
         .unwrap_or_default();
     decoded?;
     match status {
-        Some(status) if status.success() => Ok((done, if done == 0 { Vec::new() } else { buffer })),
+        Some(status) if status.success() => Ok(done),
         _ => Err(format!(
             "ffmpeg could not read {}: {}",
             clip.source,
@@ -2116,48 +2122,20 @@ fn render(
                 report(done);
                 Ok(())
             };
-            let (frames, mut last) =
-                decode_clip(&ready.path, &source.path, clip, fps, |buffer, index| {
-                    if index < count {
-                        render(buffer, index)
-                    } else {
-                        check_cancelled(cancelled)
-                    }
-                })?;
-            // `ffmpeg -i` reports duration to hundredths of a second.
-            // Allow one such tick, not an arbitrary stretch past EOF.
-            let in_range = source
-                .duration_ms
-                .map(|end| clip.end_ms <= end.saturating_add(10));
-            // An accurate seek can pass the last frame even though it is
-            // still on screen. Recover that frame for a short, in-range tail.
-            if frames == 0
-                && clip.duration_ms() < SHORT_SLICE_MS
-                && in_range == Some(true)
-                && clip.start_ms > 0
-            {
-                let lead = ExportClip {
-                    start_ms: clip.start_ms.saturating_sub(1000),
-                    end_ms: clip.start_ms,
-                    ..clip.clone()
-                };
-                (_, last) = decode_clip(&ready.path, &source.path, &lead, fps, |_, _| {
+            let frames = decode_clip(&ready.path, &source.path, clip, fps, |buffer, index| {
+                if index < count {
+                    render(buffer, index)
+                } else {
                     check_cancelled(cancelled)
-                })?;
-            }
-            // At low source rates, a seek can lose several output frames
-            // at one input boundary. Without a duration, allow only the
-            // usual single output frame of rounding, not a larger deficit.
-            if frames < count && (last.is_empty() || !in_range.unwrap_or(count - frames == 1)) {
+                }
+            })?;
+            // A short read means there is less picture than the export requires,
+            // even when an audio stream continues past the video.
+            if frames < count {
                 return Err(format!(
                     "the trimmed stretch of {} holds too few frames",
                     clip.source
                 ));
-            }
-            // If the decoder rounds down at an input boundary, repeat its
-            // last frame rather than shifting the following cuts.
-            for index in frames..count {
-                render(&last, index)?;
             }
             debug_assert_eq!(done, first_frame + count);
         }
@@ -2287,7 +2265,6 @@ fn probe_source(
         ffmpeg::probe_file_cancellable(ffmpeg_path, &path, || cancelled.load(Ordering::Relaxed));
     check_cancelled(cancelled)?;
     Ok(ClipSource {
-        duration_ms: probe.duration_ms,
         cursor: CursorPath::load(&path),
         has_audio: probe.audio,
         remove_noise: sidecar_remove_noise(&path),
@@ -2657,7 +2634,6 @@ mod tests {
     fn sounding(remove_noise: bool, kept: bool) -> ClipSource {
         ClipSource {
             path: PathBuf::from("/rec/clip.mp4"),
-            duration_ms: None,
             cursor: None,
             has_audio: true,
             remove_noise,
@@ -2968,7 +2944,13 @@ mod tests {
         }
     }
 
-    fn ffmpeg_boundary_export(input_fps: u32, len: u32, start_ms: u64, end_ms: u64, decoded: u64) {
+    fn ffmpeg_boundary_export(
+        input_fps: u32,
+        len: u32,
+        start_ms: u64,
+        end_ms: u64,
+        audio_tail: bool,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let ready = ffmpeg::Ready {
             path: std::env::var_os(ffmpeg::FFMPEG_ENV)
@@ -2997,6 +2979,26 @@ mod tests {
             Duration::from_secs(10),
         )
         .unwrap();
+        if audio_tail {
+            let mixed = dir.path().join("longer-audio.mp4");
+            ffmpeg::run(
+                &ready.path,
+                vec![
+                    "-i".into(),
+                    input.as_os_str().to_owned(),
+                    "-f".into(),
+                    "lavfi".into(),
+                    "-i".into(),
+                    "sine=d=8".into(),
+                    "-c:v".into(),
+                    "copy".into(),
+                    mixed.as_os_str().to_owned(),
+                ],
+                Duration::from_secs(10),
+            )
+            .unwrap();
+            fs::rename(mixed, &input).unwrap();
+        }
         let cut = ExportClip {
             start_ms,
             end_ms,
@@ -3006,12 +3008,6 @@ mod tests {
             source_height: 32,
             ..clip()
         };
-        assert_eq!(
-            decode_clip(&ready.path, &input, &cut, 30, |_, _| Ok(()))
-                .unwrap()
-                .0,
-            decoded
-        );
         let cancelled = AtomicBool::new(false);
         let job = |cut: ExportClip| {
             let plan = ExportPlan {
@@ -3051,14 +3047,14 @@ mod tests {
             end_ms: 1000,
             ..cut.clone()
         };
-        let (count, last) =
-            decode_clip(&ready.path, &output, &exported, 30, |_, _| Ok(())).unwrap();
+        let mut last = [0; 4];
+        let count = decode_clip(&ready.path, &output, &exported, 30, |frame, _| {
+            last.copy_from_slice(&frame[..4]);
+            Ok(())
+        })
+        .unwrap();
         assert_eq!(count, expected);
-        assert!(
-            last[1] > 200 && last[0] < 40,
-            "last pixel: {:?}",
-            &last[..4]
-        );
+        assert!(last[1] > 200 && last[0] < 40, "last pixel: {last:?}");
         fs::remove_file(&output).unwrap();
 
         // The same seek cannot be padded if its requested end is well past EOF.
@@ -3077,13 +3073,62 @@ mod tests {
     #[test]
     #[ignore = "needs ffmpeg with libx264 installed"]
     fn ffmpeg_boundary_recovers_the_last_frame_past_the_rounded_probe_duration() {
-        ffmpeg_boundary_export(30, 31, 1020, 1033, 0);
+        ffmpeg_boundary_export(30, 31, 1020, 1033, false);
     }
 
     #[test]
     #[ignore = "needs ffmpeg with libx264 installed"]
     fn ffmpeg_boundary_fills_a_multi_frame_deficit_at_a_low_fps_cut() {
-        ffmpeg_boundary_export(10, 20, 1701, 2000, 6);
+        ffmpeg_boundary_export(10, 20, 1701, 2000, false);
+    }
+
+    #[test]
+    #[ignore = "needs ffmpeg with libx264 installed"]
+    fn ffmpeg_boundary_recovers_a_slow_tail_and_stops_at_video_eof() {
+        ffmpeg_boundary_export(5, 10, 1850, 2000, true);
+    }
+
+    #[test]
+    #[ignore = "needs ffmpeg with libx264 installed"]
+    fn ffmpeg_boundary_rejects_a_damaged_video_stream() {
+        let ffmpeg =
+            std::env::var_os(ffmpeg::FFMPEG_ENV).map_or_else(|| "ffmpeg".into(), PathBuf::from);
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("clip.mp4");
+        ffmpeg::run(
+            &ffmpeg,
+            vec![
+                "-f".into(),
+                "lavfi".into(),
+                "-i".into(),
+                "testsrc2=s=32x32:r=30:d=2".into(),
+                "-c:v".into(),
+                "libx264".into(),
+                input.as_os_str().to_owned(),
+            ],
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        // Damage packets in the middle of the media data, leaving the MP4 index intact.
+        let mut bytes = fs::read(&input).unwrap();
+        let tag = bytes.windows(4).position(|chunk| chunk == b"mdat").unwrap();
+        let size = u32::from_be_bytes(bytes[tag - 4..tag].try_into().unwrap()) as usize;
+        bytes[tag + size / 3..tag + size * 2 / 3].fill(0);
+        fs::write(&input, bytes).unwrap();
+        let cut = ExportClip {
+            start_ms: 0,
+            end_ms: 2000,
+            width: 32,
+            height: 32,
+            source_width: 32,
+            source_height: 32,
+            ..clip()
+        };
+        let error = decode_clip(&ffmpeg, &input, &cut, 30, |_, _| Ok(())).unwrap_err();
+        assert!(
+            error.starts_with("ffmpeg could not read clip.mp4:"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -3195,7 +3240,6 @@ esac
                 clip.into(),
                 Some(ClipSource {
                     path: output.with_file_name("clip.mp4"),
-                    duration_ms: None,
                     cursor: None,
                     has_audio: false,
                     remove_noise: false,
@@ -3481,7 +3525,6 @@ esac
     fn heard_at(path: &str, kept: Option<KeptSound>) -> ClipSource {
         ClipSource {
             path: PathBuf::from(path),
-            duration_ms: None,
             cursor: None,
             has_audio: true,
             remove_noise: false,
@@ -4052,8 +4095,10 @@ esac
     fn trimmed_frames_are_decoded_at_the_size_they_take_on_the_backdrop() {
         assert_eq!(
             strings(decode_args(Path::new("/rec/clip.mp4"), &clip(), 60)),
-            "-hide_banner -loglevel error -ss 1.250 -i /rec/clip.mp4 -t 8.250 -map 0:v:0 -an \
-             -vf scale=960:540:flags=bicubic,fps=60,format=rgba -f rawvideo -pix_fmt rgba pipe:1"
+            "-hide_banner -loglevel error -xerror -copyts -start_at_zero -ss 1.250 -noaccurate_seek \
+             -i /rec/clip.mp4 -t 8.250 -map 0:v:0 -an \
+             -vf setpts=PTS-1.250/TB,fps=60:start_time=0:round=up,scale=960:540:flags=bicubic,format=rgba \
+             -f rawvideo -pix_fmt rgba pipe:1"
         );
     }
 
@@ -4113,7 +4158,7 @@ esac
                 &zoomed(vec![area_zoom(1.5)]),
                 60
             ))
-            .contains("-vf scale=1440:810:flags=bicubic,fps=60,format=rgba")
+            .contains("scale=1440:810:flags=bicubic,format=rgba")
         );
     }
 

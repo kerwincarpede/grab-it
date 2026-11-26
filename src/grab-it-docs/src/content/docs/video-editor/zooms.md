@@ -61,7 +61,7 @@ A zoom stops where it meets its neighbours or the ends of the recording.
 
 Zooms belong to the recording, not the trimmed clip: [trimming](/grab-it/video-editor/timeline-and-trim/#trim) leaves them where they are, and any part of a zoom outside the trim is left out of the export with the rest.
 
-When a zoom's range appears in more than one piece of the same recording, only the first piece shows the zoom. With a video track over Video 1, you can't add a zoom on a later piece if it would show on an earlier one instead.
+When a zoom's range appears in more than one piece of the same recording, only the first piece shows the zoom. With a video track over Video 1, adding, moving or resizing a zoom on a later piece is blocked if the zoom would appear on an earlier piece.
 
 ## Delete it
 

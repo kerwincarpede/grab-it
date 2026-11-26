@@ -989,6 +989,13 @@ export default function RecordingEditor() {
     return commitEdits({ ...edits, zooms: [...kept, ...placed].sort((a, b) => a.startMs - b.startMs) });
   };
 
+  // Zooms live in source time. The preview and export give them to the first matching piece.
+  const keepsZoomOwner = (zoom: Zoom, index: number) => {
+    const { offset } = spanOf(picture, own, index, durationMs, overlay);
+    const sourceZoom = tagZoom({ ...zoom, startMs: zoom.startMs - offset, endMs: zoom.endMs - offset }, picture[index].source, own);
+    return zoomOwners(picture, [sourceZoom], own).get(zoom.id) === index;
+  };
+
   const zoomAt = (ms: number) => {
     const target = positionIn(picture, own, ms, overlay);
     if (!target || isGap(target.clip)) return null;
@@ -1000,11 +1007,7 @@ export default function RecordingEditor() {
       : zooms;
     const added = addZoom(mine, ms, overlay ? high : timelineDuration);
     if (!added || added.zoom.startMs < low) return null;
-    if (overlay) {
-      const zoom = tagZoom({ ...added.zoom, startMs: added.zoom.startMs - offset, endMs: added.zoom.endMs - offset }, target.clip.source, own);
-      // Zooms are stored in source time. Don't add one that would show on an earlier piece instead.
-      if (zoomOwners(picture, [zoom], own).get(zoom.id) !== target.index) return null;
-    }
+    if (overlay && !keepsZoomOwner(added.zoom, target.index)) return null;
     return added;
   };
   const canAddZoom = timelineDuration > 0 && zoomAt(currentMs) !== null;
@@ -2278,6 +2281,7 @@ export default function RecordingEditor() {
                 setSelectedCueKey(null);
               }
             }}
+            canPlace={overlay ? (zoom) => keepsZoomOwner(zoom, shown.owner.get(zoom.id) ?? 0) : undefined}
             onPreview={setZoomDraft}
             onCommit={commitZooms}
             onAdd={addZoomAt}
