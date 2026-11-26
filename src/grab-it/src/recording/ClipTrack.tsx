@@ -1,6 +1,7 @@
 import { useRef, useState, type PointerEvent } from "react";
 import { clipLength, clipStarts, isGap, toSource, trimClip, type Clip } from "./clips";
 import { formatTime } from "./edits";
+import type { ShownCut } from "./suggestions";
 
 interface ClipTrackProps {
   clips: Clip[];
@@ -18,6 +19,17 @@ interface ClipTrackProps {
   onTrimCommit: (clips: Clip[]) => void;
   /** Moves clip `id` to index `to`. */
   onMove: (id: string, to: number) => void;
+  /**
+   * Where the sequence begins on the row: a lone clip of the opened
+   * recording sits where its trim starts on the recording's own timeline.
+   */
+  offsetMs?: number;
+  /** Suggest edits' proposals, hatched over the clips they cut while its panel is open. */
+  cuts?: readonly ShownCut[];
+  /** The proposal Suggest edits has in focus. */
+  focusedCutId?: string | null;
+  /** Brings proposal `id` into focus in Suggest edits. */
+  onFocusCut?: (id: string) => void;
 }
 
 /** An edge drag keeps the row's width and the sequence's length from when it began. */
@@ -29,17 +41,39 @@ const NO_EDGES: readonly (typeof EDGES)[number][] = [];
 
 const percent = (ms: number, durationMs: number) => `${durationMs > 0 ? (ms / durationMs) * 100 : 0}%`;
 
+const NO_CUTS: readonly ShownCut[] = [];
+
 /**
  * The joined sequence: each clip end to end at its kept length, named by
  * its recording. Click to select, drag its body to reorder, or drag an
  * edge to trim or restore it within its recording. A gap shows as an
  * empty block that can be selected and deleted, but not trimmed.
  */
-export default function ClipTrack({ clips, durationMs, sourceDuration, missing, selectedId, onSelect, onTrimPreview, onTrimCommit, onMove }: ClipTrackProps) {
+export default function ClipTrack({
+  clips,
+  durationMs,
+  sourceDuration,
+  missing,
+  selectedId,
+  onSelect,
+  onTrimPreview,
+  onTrimCommit,
+  onMove,
+  offsetMs = 0,
+  cuts = NO_CUTS,
+  focusedCutId = null,
+  onFocusCut,
+}: ClipTrackProps) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const moved = useRef<Clip[] | null>(null);
-  const starts = clipStarts(clips);
+  const starts = clipStarts(clips).map((start) => start + offsetMs);
+  // Each proposal is hatched over the clip it was proposed on, while that clip still holds it.
+  const hatches = cuts.flatMap((cut) => {
+    const index = clips.findIndex((clip) => clip.id === cut.clipId && !isGap(clip) && cut.startMs >= clip.startMs && cut.endMs <= clip.endMs);
+    if (index < 0) return [];
+    return [{ cut, startMs: starts[index] + cut.startMs - clips[index].startMs }];
+  });
 
   const msAt = (clientX: number) => {
     const rect = rowRef.current?.getBoundingClientRect();
@@ -127,6 +161,25 @@ export default function ClipTrack({ clips, durationMs, sourceDuration, missing, 
               />
             ))}
           </div>
+        );
+      })}
+      {hatches.map(({ cut, startMs }) => {
+        const label = `Proposed cut ${formatTime(cut.startMs)}–${formatTime(cut.endMs)}${cut.chosen ? "" : ", not ticked"}`;
+        return (
+          <button
+            key={cut.id}
+            type="button"
+            className="clip-cut"
+            tabIndex={-1}
+            aria-label={label}
+            title={`${label}. Click to find it in Suggested edits`}
+            data-chosen={cut.chosen ? "true" : "false"}
+            data-focus={cut.id === focusedCutId ? "true" : undefined}
+            style={{ left: percent(startMs, durationMs), width: percent(cut.endMs - cut.startMs, durationMs) }}
+            // A click on a proposal neither selects nor drags the clip under it.
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={() => onFocusCut?.(cut.id)}
+          />
         );
       })}
     </div>

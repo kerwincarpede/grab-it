@@ -323,8 +323,11 @@ export const commands = {
 	recordingSource: (fileName: string, options?: InvokeOptions) => __TAURI_INVOKE<RecordingClipSource_Serialize>("recording_source", { fileName }, options),
 	/**  Resolves the file picker result to a source in the editor's recordings folder. */
 	recordingPickSource: (path: string, options?: InvokeOptions) => __TAURI_INVOKE<RecordingClipSource_Serialize>("recording_pick_source", { path }, options),
-	/**  The pauses in recording `file_name`'s sound, for Suggest edits. */
-	recordingPauses: (fileName: string, options?: InvokeOptions) => __TAURI_INVOKE<RecordingPauses_Serialize>("recording_pauses", { fileName }, options),
+	/**
+	 *  The pauses in recording `file_name`'s sound, for Suggest edits: the
+	 *  stretches quieter than `noise_db` dBFS, from -60 to -20.
+	 */
+	recordingPauses: (fileName: string, noiseDb: number, options?: InvokeOptions) => __TAURI_INVOKE<RecordingPauses_Serialize>("recording_pauses", { fileName, noiseDb }, options),
 	libraryList: (offset: number, limit: number, options?: InvokeOptions) => __TAURI_INVOKE<ShotPage_Serialize>("library_list", { offset, limit }, options),
 	librarySetTags: (id: number, tags: string[], options?: InvokeOptions) => __TAURI_INVOKE<Shot_Serialize>("library_set_tags", { id, tags }, options),
 	librarySidebar: (options?: InvokeOptions) => __TAURI_INVOKE<SidebarSummary>("library_sidebar", undefined, options),
@@ -3035,7 +3038,7 @@ export type MockCommandHandlers = {
     recordingSaveEdits: (args: { edits: Value }) => null | Promise<null>,
     recordingSource: (args: { fileName: string }) => RecordingClipSource_Serialize | Promise<RecordingClipSource_Serialize>,
     recordingPickSource: (args: { path: string }) => RecordingClipSource_Serialize | Promise<RecordingClipSource_Serialize>,
-    recordingPauses: (args: { fileName: string }) => RecordingPauses_Serialize | Promise<RecordingPauses_Serialize>,
+    recordingPauses: (args: { fileName: string; noiseDb: number }) => RecordingPauses_Serialize | Promise<RecordingPauses_Serialize>,
     libraryList: (args: { offset: number; limit: number }) => ShotPage_Serialize | Promise<ShotPage_Serialize>,
     librarySetTags: (args: { id: number; tags: string[] }) => Shot_Serialize | Promise<Shot_Serialize>,
     librarySidebar: () => SidebarSummary | Promise<SidebarSummary>,

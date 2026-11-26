@@ -54,7 +54,7 @@ import {
   type ClipAt,
 } from "./clips";
 import ClipTrack from "./ClipTrack";
-import SuggestEditsPanel from "./SuggestEditsPanel";
+import SuggestEditsPanel, { type ShownCuts } from "./SuggestEditsPanel";
 import RecordingVideo from "./RecordingVideo";
 import { chooseRecording, probeVideo, type SourceMeta } from "./sources";
 import { clampTrim, emptyEdits, formatTime, isWhole, parseEdits, serializeEdits, trimOf, type RecordingEdits, type Trim } from "./edits";
@@ -235,6 +235,15 @@ export default function RecordingEditor() {
    * ends, and only Apply keeps the cuts.
    */
   const [suggestPreview, setSuggestPreview] = useState<Clip[] | null>(null);
+  /**
+   * Where a preview of one suggested cut stops on its own: `endMs` of
+   * `clips`, which holds only while `clips` is the preview playing.
+   */
+  const [previewStop, setPreviewStop] = useState<{ clips: Clip[]; endMs: number } | null>(null);
+  /** Suggest edits' proposals, hatched on the clip track while its panel is open. */
+  const [shownCuts, setShownCuts] = useState<ShownCuts | null>(null);
+  /** A proposal clicked on the clip track, for Suggest edits to bring into focus. */
+  const [cutFocusRequest, setCutFocusRequest] = useState<{ id: string } | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   /** While playing over a gap: when its clock started and the playhead then. */
   const gapClockRef = useRef<{ at: number; ms: number } | null>(null);
@@ -322,6 +331,8 @@ export default function RecordingEditor() {
   /** Until it is changed, the export follows how the opened recording was made. */
   const removeNoise = edits.removeNoise ?? info?.removeNoise ?? false;
   /** Every clip's recording is there and its size known. */
+  // Proposals are hatched while Suggest edits is open, on the sequence they were proposed against.
+  const hatchedCuts = suggestOpen && !suggestPreview && !clipDraft && shownCuts ? shownCuts.cuts : [];
   const canExport = !suggestPreview && !missingClip && clips.every((clip) => isGap(clip) || meta[clip.source] !== undefined);
 
   // Zooms keep their recording's time; the timeline shows each on its clip.
@@ -344,7 +355,8 @@ export default function RecordingEditor() {
   }, [clips, own, durationMs, joined, allZooms]);
   const zooms = zoomDraft ?? shown.list;
   const selectedZoom = zooms.find((zoom) => zoom.id === selectedZoomId) ?? null;
-  const trim = joined ? { startMs: 0, endMs: sequenceMs } : (trimDraft ?? savedTrim);
+  // A preview that leaves the opened recording one clip plays that clip as its trim.
+  const trim = joined ? { startMs: 0, endMs: sequenceMs } : suggestPreview ? { startMs: clips[0].startMs, endMs: clips[0].endMs } : (trimDraft ?? savedTrim);
   const layout = useMemo(() => (videoSize ? recordingLayout(videoSize, backdrop) : null), [videoSize, backdrop]);
   const backdropImageEl = useBackdropImage(backdrop?.fill === BACKDROP_FILLS.image ? (backdrop.image ?? null) : null);
 
@@ -447,17 +459,18 @@ export default function RecordingEditor() {
     commitEdits(withClips(edits, next, own, durationMs), applying);
   };
 
-  /** Ends a preview of suggested cuts, back to the saved sequence. */
-  const endSuggestPreview = () => {
+  /** Ends a preview of suggested cuts, back to the saved sequence: at `toMs` of it when given. */
+  const endSuggestPreview = (toMs?: number) => {
     if (!suggestPreview) return;
     setSuggestPreview(null);
     setMessage(null);
-    seek(Math.min(currentMs, sequenceDuration(savedClips)), savedClips);
+    seek(toMs ?? Math.min(currentMs, sequenceDuration(savedClips)), savedClips);
   };
 
   const closeSuggestions = () => {
     endSuggestPreview();
     setSuggestOpen(false);
+    setCutFocusRequest(null);
   };
 
   const latestRef = useRef({ clips, at, commitClips, seek, meta });
@@ -753,6 +766,28 @@ export default function RecordingEditor() {
 
   const toggle = () => (playing ? pause() : play());
 
+  /**
+   * Starts the video at timeline time `ms` of `list`, where `seek` has just
+   * put it, before `list` is on show: a preview of one cut plays at once.
+   */
+  const playFrom = (list: Clip[], ms: number) => {
+    if (playing) return;
+    const pos = positionIn(list, own, ms);
+    if (pos && isGap(pos.clip)) {
+      throughGapRef.current = true;
+      gapClockRef.current = null;
+      setPlaying(true);
+    } else if (pendingRef.current) {
+      pendingRef.current.play = true;
+    } else if (videoRef.current) {
+      startVideo(videoRef.current);
+    }
+  };
+
+  // A preview of one suggested cut ends itself once the playhead passes a little after the cut.
+  const stopAt = previewStop && previewStop.clips === suggestPreview ? previewStop.endMs : null;
+  const stopRef = useRef<{ atMs: number; end: () => void } | null>(null);
+
   // While playing, the playhead follows every frame and stops at the trimmed end.
   // Joined, it goes on to the next clip at each clip's end, switching recording when it must.
   const endRef = useRef(trim.endMs);
@@ -760,6 +795,19 @@ export default function RecordingEditor() {
   useEffect(() => {
     endRef.current = trim.endMs;
     playRef.current = { clips, joined, own, at, ms: currentMs };
+    stopRef.current =
+      stopAt === null
+        ? null
+        : {
+            atMs: stopAt,
+            end: () => {
+              pause();
+              // The playhead stays on the moment it stopped at, in the sequence as saved.
+              const now = playRef.current.at;
+              const index = now && !isGap(now.clip) ? savedClips.findIndex((clip) => !isGap(clip) && clip.source === now.clip.source && now.sourceMs >= clip.startMs && now.sourceMs <= clip.endMs) : -1;
+              endSuggestPreview(now && index >= 0 ? timelineMs(savedClips, own, index, now.sourceMs) : undefined);
+            },
+          };
   });
   useEffect(() => {
     if (!playing) return;
@@ -797,6 +845,11 @@ export default function RecordingEditor() {
       return true;
     };
     const step = () => {
+      const stop = stopRef.current;
+      if (stop && playRef.current.ms >= stop.atMs) {
+        stop.end();
+        return;
+      }
       const video = videoRef.current;
       const gapNow = playRef.current;
       if (gapNow.joined && gapNow.at && isGap(gapNow.at.clip)) {
@@ -1392,10 +1445,14 @@ export default function RecordingEditor() {
           }}
           onTrimCommit={commitTrim}
         >
-          {joined && (
+          {(joined || hatchedCuts.length > 0) && (
             <ClipTrack
               clips={clips}
-              durationMs={sequenceMs}
+              durationMs={joined ? sequenceMs : timelineDuration}
+              offsetMs={joined ? 0 : (clips[0]?.startMs ?? 0)}
+              cuts={hatchedCuts}
+              focusedCutId={shownCuts?.focusId ?? null}
+              onFocusCut={(id) => setCutFocusRequest({ id })}
               sourceDuration={(source) => meta[source]?.durationMs ?? 0}
               missing={missing}
               selectedId={selectedClip?.id ?? null}
@@ -1440,15 +1497,22 @@ export default function RecordingEditor() {
           own={own}
           joined={isJoined(savedClips, own)}
           previewing={suggestPreview !== null}
-          onPreview={(next, fromMs) => {
+          onPreview={(next, fromMs, endMs) => {
             if (!next) {
               endSuggestPreview();
               return;
             }
+            // The panel gives sequence time; a lone clip of the opened recording plays in its own time.
+            const onTimeline = (ms: number) => (isJoined(next, own) ? ms : next[0].startMs + ms);
             setClipDraft(null);
             setSuggestPreview(next);
-            seek(fromMs ?? 0, next);
+            setPreviewStop(endMs === undefined ? null : { clips: next, endMs: onTimeline(endMs) });
+            const from = onTimeline(fromMs ?? 0);
+            seek(from, next);
+            if (endMs !== undefined) playFrom(next, from);
           }}
+          onShowCuts={setShownCuts}
+          focusRequest={cutFocusRequest}
           onApply={(next) => {
             setSuggestPreview(null);
             setMessage(null);

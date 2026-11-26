@@ -409,6 +409,49 @@ fn recording_editor_uses_the_opened_recordings_root_for_streams_and_sources() {
 }
 
 #[test]
+fn recording_pauses_takes_a_threshold_within_its_range() {
+    use crate::recording_editor::RecordingEditorState;
+    let h = Harness::new();
+    let recordings = h.default_save_folder().join(RECORDINGS_DIR);
+    let own = recordings.join("2026-03").join("talk.mp4");
+    fs::create_dir_all(own.parent().unwrap()).unwrap();
+    fs::write(&own, b"video bytes").unwrap();
+    h.app
+        .state::<RecordingEditorState>()
+        .register(LABEL, &own, &recordings)
+        .unwrap();
+
+    assert_invalid_arg(
+        &h.err(
+            "recording_pauses",
+            json!({ "fileName": "2026-03/talk.mp4" }),
+        ),
+        "recording_pauses",
+        "noiseDb",
+    );
+    for outside in [-61, -19] {
+        assert_eq!(
+            h.err(
+                "recording_pauses",
+                json!({ "fileName": "2026-03/talk.mp4", "noiseDb": outside })
+            ),
+            "the pause threshold must be from -60 to -20 dB"
+        );
+    }
+    // Within the range it goes on to listen, which needs ffmpeg; the
+    // harness never prepares it.
+    for within in [-60, -40, -20] {
+        assert!(
+            h.err(
+                "recording_pauses",
+                json!({ "fileName": "2026-03/talk.mp4", "noiseDb": within })
+            )
+            .contains("ffmpeg is not ready"),
+        );
+    }
+}
+
+#[test]
 fn set_save_folder_saves_and_rescans_the_new_folder() {
     let h = Harness::new();
     let folder = h.dir.path().join("elsewhere");

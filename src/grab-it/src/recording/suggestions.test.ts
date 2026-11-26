@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseEdits, serializeEdits } from "./edits";
 import { clipsOf, gapOf, sequenceDuration, withClips, type Clip } from "./clips";
-import { applyCuts, cleanSpans, cutSequenceMs, intersect, isValidCut, proposeCuts, soundLabel, stillSpans, type CutProposal } from "./suggestions";
+import { applyCuts, cleanSpans, cutSequenceMs, INITIAL_TUNING, intersect, isValidCut, MIN_CUT_RANGE, PAD_RANGE, proposeCuts, soundLabel, stillSpans, type CutProposal } from "./suggestions";
 import type { CursorPath } from "./zooms";
 
 const OWN = "own.mp4";
@@ -55,12 +55,12 @@ describe("stillSpans", () => {
 
 describe("proposeCuts", () => {
   it("cuts a pause, keeping a little of it at both ends", () => {
-    expect(proposeCuts(whole, OWN, "microphone", [{ startMs: 3000, endMs: 6000 }], null)).toEqual([{ id: "own:3250", clipId: "own", source: OWN, startMs: 3250, endMs: 5750, reason: "pause" }]);
+    expect(proposeCuts(whole, OWN, "microphone", [{ startMs: 3000, endMs: 6000 }], null, INITIAL_TUNING)).toEqual([{ id: "own:3250", clipId: "own", source: OWN, startMs: 3250, endMs: 5750, reason: "pause" }]);
   });
 
   it("leaves pauses where the pointer moves", () => {
     const cursor = path(120, [40, 75]);
-    expect(proposeCuts(whole, OWN, "mixed", [{ startMs: 3000, endMs: 8000 }], cursor)).toEqual([{ id: "own:4250", clipId: "own", source: OWN, startMs: 4250, endMs: 7150, reason: "pause" }]);
+    expect(proposeCuts(whole, OWN, "mixed", [{ startMs: 3000, endMs: 8000 }], cursor, INITIAL_TUNING)).toEqual([{ id: "own:4250", clipId: "own", source: OWN, startMs: 4250, endMs: 7150, reason: "pause" }]);
   });
 
   it("cuts a pause the pointer rests through, padded only at its ends", () => {
@@ -73,20 +73,20 @@ describe("proposeCuts", () => {
       { startMs: 6500, endMs: 9000 },
       { startMs: 11_000, endMs: 13_000 },
     ];
-    expect(proposeCuts(clips, OWN, "microphone", pauses, { fps: 10, points })).toEqual([
+    expect(proposeCuts(clips, OWN, "microphone", pauses, { fps: 10, points }, INITIAL_TUNING)).toEqual([
       { id: "own:2250", clipId: "own", source: OWN, startMs: 2250, endMs: 4150, reason: "pause" },
       { id: "own:11250", clipId: "own", source: OWN, startMs: 11_250, endMs: 12_650, reason: "pause" },
     ]);
   });
 
   it("follows the pointer alone in a silent demonstration", () => {
-    const proposals = proposeCuts(whole, OWN, "silent", [], path(120, [30, 80]));
+    const proposals = proposeCuts(whole, OWN, "silent", [], path(120, [30, 80]), INITIAL_TUNING);
     expect(proposals).toEqual([{ id: "own:3250", clipId: "own", source: OWN, startMs: 3250, endMs: 7650, reason: "idle" }]);
-    expect(proposeCuts(whole, OWN, "silent", [], null)).toEqual([]);
+    expect(proposeCuts(whole, OWN, "silent", [], null, INITIAL_TUNING)).toEqual([]);
   });
 
   it("treats system sound alone as no voice to pause", () => {
-    expect(proposeCuts(whole, OWN, "system", [{ startMs: 3000, endMs: 6000 }], null)).toEqual([]);
+    expect(proposeCuts(whole, OWN, "system", [{ startMs: 3000, endMs: 6000 }], null, INITIAL_TUNING)).toEqual([]);
   });
 
   it("never proposes stretches already cut, nor leaves a sliver of a clip", () => {
@@ -99,13 +99,40 @@ describe("proposeCuts", () => {
       { startMs: 2000, endMs: 8000 },
       { startMs: 9000, endMs: 11_900 },
     ];
-    expect(proposeCuts(clips, OWN, "microphone", pauses, null)).toEqual([]);
-    expect(proposeCuts(clips, OWN, "microphone", [{ startMs: 8000, endMs: 10_500 }], null)).toEqual([{ id: "b:8250", clipId: "b", source: OWN, startMs: 8250, endMs: 10_250, reason: "pause" }]);
+    expect(proposeCuts(clips, OWN, "microphone", pauses, null, INITIAL_TUNING)).toEqual([]);
+    expect(proposeCuts(clips, OWN, "microphone", [{ startMs: 8000, endMs: 10_500 }], null, INITIAL_TUNING)).toEqual([{ id: "b:8250", clipId: "b", source: OWN, startMs: 8250, endMs: 10_250, reason: "pause" }]);
+  });
+
+  it("proposes shorter cuts at the lowest Minimum cut and only long ones at the highest", () => {
+    const pauses = [
+      { startMs: 1000, endMs: 2100 },
+      { startMs: 4000, endMs: 9600 },
+    ];
+    const lowest = { ...INITIAL_TUNING, minCutMs: MIN_CUT_RANGE.min };
+    expect(proposeCuts(whole, OWN, "microphone", pauses, null, lowest).map((each) => [each.startMs, each.endMs])).toEqual([
+      [1250, 1850],
+      [4250, 9350],
+    ]);
+    const highest = { ...INITIAL_TUNING, minCutMs: MIN_CUT_RANGE.max };
+    expect(proposeCuts(whole, OWN, "microphone", pauses, null, highest).map((each) => [each.startMs, each.endMs])).toEqual([[4250, 9350]]);
+    // The bound is the cut after padding: 5.1 s of pause leaves a 4.1 s cut at the highest padding.
+    const padded = { minCutMs: MIN_CUT_RANGE.max, padMs: PAD_RANGE.max };
+    expect(proposeCuts(whole, OWN, "microphone", [{ startMs: 4000, endMs: 9100 }], null, padded)).toEqual([]);
+  });
+
+  it("keeps none of a pause at the lowest Keep padding and half a second at the highest", () => {
+    const pauses = [{ startMs: 3000, endMs: 6000 }];
+    expect(proposeCuts(whole, OWN, "microphone", pauses, null, { ...INITIAL_TUNING, padMs: PAD_RANGE.min })).toEqual([{ id: "own:3000", clipId: "own", source: OWN, startMs: 3000, endMs: 6000, reason: "pause" }]);
+    expect(proposeCuts(whole, OWN, "microphone", pauses, null, { ...INITIAL_TUNING, padMs: PAD_RANGE.max })).toEqual([{ id: "own:3500", clipId: "own", source: OWN, startMs: 3500, endMs: 5500, reason: "pause" }]);
+  });
+
+  it("starts from the values Suggest edits always used", () => {
+    expect(INITIAL_TUNING).toEqual({ minCutMs: 1200, padMs: 250 });
   });
 
   it("skips short pauses and other recordings", () => {
-    expect(proposeCuts(whole, OWN, "microphone", [{ startMs: 3000, endMs: 4000 }], null)).toEqual([]);
-    expect(proposeCuts(whole, "other.mp4", "microphone", [{ startMs: 3000, endMs: 6000 }], null)).toEqual([]);
+    expect(proposeCuts(whole, OWN, "microphone", [{ startMs: 3000, endMs: 4000 }], null, INITIAL_TUNING)).toEqual([]);
+    expect(proposeCuts(whole, "other.mp4", "microphone", [{ startMs: 3000, endMs: 6000 }], null, INITIAL_TUNING)).toEqual([]);
   });
 });
 
@@ -142,7 +169,7 @@ describe("applyCuts", () => {
       { id: "a", source: OWN, startMs: 0, endMs: 6000 },
       { id: "b", source: OWN, startMs: 0, endMs: 6000 },
     ];
-    const proposals = proposeCuts(clips, OWN, "microphone", [{ startMs: 2000, endMs: 4000 }], null);
+    const proposals = proposeCuts(clips, OWN, "microphone", [{ startMs: 2000, endMs: 4000 }], null, INITIAL_TUNING);
     expect(proposals.map((each) => each.clipId)).toEqual(["a", "b"]);
     const second = proposals[1];
     expect(cutSequenceMs(clips, second)).toBe(8250);

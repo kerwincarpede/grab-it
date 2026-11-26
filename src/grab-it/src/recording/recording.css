@@ -396,6 +396,31 @@
   right: 0;
 }
 
+/* A cut Suggest edits proposes, hatched over the clip it would cut: solid
+   stripes when ticked, faint ones when not. */
+.clip-cut {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  min-width: 2px;
+  padding: 0;
+  border: 1px solid #e5534b;
+  border-radius: 4px;
+  background: repeating-linear-gradient(135deg, rgba(229, 83, 75, 0.55) 0 4px, transparent 4px 8px);
+  cursor: pointer;
+}
+
+.clip-cut[data-chosen="false"] {
+  border-style: dashed;
+  border-color: var(--ed-muted);
+  background: repeating-linear-gradient(135deg, rgba(127, 127, 127, 0.3) 0 4px, transparent 4px 8px);
+}
+
+.clip-cut[data-focus="true"] {
+  box-shadow: 0 0 0 2px var(--ed-text);
+}
+
 .recording-fit {
   position: absolute;
   overflow: hidden;
@@ -483,4 +508,28 @@
 
 .suggest-length {
   opacity: 0.8;
+}
+
+.suggest-tuning {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+
+.suggest-tuning label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.suggest-tuning input[type="range"] {
+  width: 120px;
+}
+
+.suggest-tuning input[type="range"]:disabled + output {
+  opacity: 0.5;
+}
+
+.suggest-tuning output {
+  min-width: 3.5em;
 }

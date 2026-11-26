@@ -191,9 +191,9 @@ export function onExportProgress(handler: (progress: ExportProgress) => void): P
  */
 export type RecordingPauses = Omit<RecordingPauses_Serialize, "pointer"> & { pointer: CursorPath | null };
 
-/** The quiet stretches of recordings-folder recording `fileName`. */
-export function recordingPauses(fileName: string): Promise<RecordingPauses> {
-  return commands.recordingPauses(fileName) as Promise<RecordingPauses>;
+/** The stretches of recordings-folder recording `fileName` quieter than `noiseDb` dBFS (-60 to -20). */
+export function recordingPauses(fileName: string, noiseDb: number): Promise<RecordingPauses> {
+  return commands.recordingPauses(fileName, noiseDb) as Promise<RecordingPauses>;
 }
 
 /**
