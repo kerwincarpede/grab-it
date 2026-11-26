@@ -24,10 +24,11 @@ use crate::recording_editor::{
 use crate::rt::{AppHandle, WebviewWindow};
 use crate::zoom::CursorPath;
 
-/// How quiet sound must be to count as a pause, in dBFS.
-pub const PAUSE_NOISE_DB: i32 = -40;
-/// The shortest stretch of quiet reported as a pause.
-pub const MIN_PAUSE_MS: u64 = 800;
+/// The quietest and loudest thresholds the page may ask for, in dBFS.
+pub const PAUSE_NOISE_DB_RANGE: std::ops::RangeInclusive<i32> = -60..=-20;
+/// The shortest stretch of quiet reported as a pause: the page's lowest
+/// Minimum cut, so it filters the rest itself without listening again.
+pub const MIN_PAUSE_MS: u64 = 500;
 /// The longest stretch an audition plays.
 pub const MAX_AUDITION_MS: u64 = 30_000;
 /// How long finding the pauses of one recording may take.
@@ -98,9 +99,9 @@ fn pause_source(
     }
 }
 
-/// ffmpeg's arguments to print the quiet stretches of audio stream
-/// `stream` of `file`, at least `MIN_PAUSE_MS` long.
-pub fn silence_args(file: &Path, stream: usize) -> Vec<OsString> {
+/// ffmpeg's arguments to print the stretches of audio stream `stream` of
+/// `file` quieter than `noise_db` dBFS, at least `MIN_PAUSE_MS` long.
+pub fn silence_args(file: &Path, stream: usize, noise_db: i32) -> Vec<OsString> {
     let mut args: Vec<OsString> = ["-hide_banner", "-nostats", "-i"]
         .into_iter()
         .map(OsString::from)
@@ -111,7 +112,7 @@ pub fn silence_args(file: &Path, stream: usize) -> Vec<OsString> {
     args.push("-af".into());
     args.push(
         format!(
-            "silencedetect=noise={PAUSE_NOISE_DB}dB:d={:.3}",
+            "silencedetect=noise={noise_db}dB:d={:.3}",
             MIN_PAUSE_MS as f64 / 1000.0
         )
         .into(),
@@ -192,15 +193,31 @@ fn stderr_of(ffmpeg_path: &Path, args: Vec<OsString>, timeout: Duration) -> Resu
     }
 }
 
-/// The pauses in recording `file_name`'s sound, for Suggest edits.
+/// `noise_db` when it is a threshold the page may ask for, else why not.
+pub fn pause_threshold(noise_db: i32) -> Result<i32, String> {
+    if PAUSE_NOISE_DB_RANGE.contains(&noise_db) {
+        Ok(noise_db)
+    } else {
+        Err(format!(
+            "the pause threshold must be from {} to {} dB",
+            PAUSE_NOISE_DB_RANGE.start(),
+            PAUSE_NOISE_DB_RANGE.end()
+        ))
+    }
+}
+
+/// The pauses in recording `file_name`'s sound, for Suggest edits: the
+/// stretches quieter than `noise_db` dBFS, from -60 to -20.
 #[tauri::command]
 #[specta::specta]
 pub async fn recording_pauses(
     file_name: String,
+    noise_db: i32,
     window: WebviewWindow,
     app: AppHandle,
     state: State<'_, RecordingEditorState>,
 ) -> Result<RecordingPauses, String> {
+    let noise_db = pause_threshold(noise_db)?;
     let path = state.source_for(window.label(), &file_name)?;
     let Some(ready) = ffmpeg::ready(&app) else {
         ffmpeg::prepare_in_background(&app);
@@ -217,7 +234,11 @@ pub async fn recording_pauses(
             Some((file, stream)) => {
                 let duration = ffmpeg::probe_file(&ready.path, &path).duration_ms;
                 parse_silences(
-                    &stderr_of(&ready.path, silence_args(&file, stream), PAUSES_TIMEOUT)?,
+                    &stderr_of(
+                        &ready.path,
+                        silence_args(&file, stream, noise_db),
+                        PAUSES_TIMEOUT,
+                    )?,
                     duration,
                 )
             }
@@ -405,13 +426,35 @@ size=N/A time=00:00:09.00
 
     #[test]
     fn silence_is_listened_for_on_one_stream() {
-        let args = text(&silence_args(Path::new("/r/clip.sound.m4a"), 0));
+        let args = text(&silence_args(Path::new("/r/clip.sound.m4a"), 0, -40));
         assert!(args.windows(2).any(|pair| pair == ["-map", "0:a:0"]));
         assert!(
             args.iter()
-                .any(|arg| arg == "silencedetect=noise=-40dB:d=0.800")
+                .any(|arg| arg == "silencedetect=noise=-40dB:d=0.500")
         );
         assert_eq!(&args[args.len() - 3..], ["-f", "null", "-"]);
+    }
+
+    #[test]
+    fn silence_is_listened_for_at_the_asked_threshold() {
+        let args = text(&silence_args(Path::new("/r/clip.mp4"), 1, -55));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "silencedetect=noise=-55dB:d=0.500")
+        );
+    }
+
+    #[test]
+    fn a_threshold_outside_its_range_is_refused() {
+        assert_eq!(pause_threshold(-60), Ok(-60));
+        assert_eq!(pause_threshold(-20), Ok(-20));
+        assert_eq!(pause_threshold(-40), Ok(-40));
+        for outside in [-61, -19, 0, i32::MIN] {
+            assert_eq!(
+                pause_threshold(outside),
+                Err("the pause threshold must be from -60 to -20 dB".to_owned())
+            );
+        }
     }
 
     fn kinds(list: &[AudioKind]) -> Vec<(AudioKind, PathBuf, usize)> {

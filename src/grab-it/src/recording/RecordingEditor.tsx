@@ -54,7 +54,7 @@ import {
   type ClipAt,
 } from "./clips";
 import ClipTrack from "./ClipTrack";
-import SuggestEditsPanel from "./SuggestEditsPanel";
+import SuggestEditsPanel, { type ShownCuts } from "./SuggestEditsPanel";
 import RecordingVideo from "./RecordingVideo";
 import { chooseRecording, probeVideo, type SourceMeta } from "./sources";
 import { clampTrim, emptyEdits, formatTime, isWhole, parseEdits, serializeEdits, trimOf, type RecordingEdits, type Trim } from "./edits";
@@ -235,6 +235,15 @@ export default function RecordingEditor() {
    * ends, and only Apply keeps the cuts.
    */
   const [suggestPreview, setSuggestPreview] = useState<Clip[] | null>(null);
+  /**
+   * Where a preview of one suggested cut stops on its own: `endMs` of
+   * `clips`, which holds only while `clips` is the preview playing.
+   */
+  const [previewStop, setPreviewStop] = useState<{ clips: Clip[]; endMs: number; returnMs?: number } | null>(null);
+  /** Suggest edits' proposals, hatched on the clip track while its panel is open. */
+  const [shownCuts, setShownCuts] = useState<ShownCuts | null>(null);
+  /** A proposal clicked on the clip track, for Suggest edits to bring into focus. */
+  const [cutFocusRequest, setCutFocusRequest] = useState<{ id: string } | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   /** While playing over a gap: when its clock started and the playhead then. */
   const gapClockRef = useRef<{ at: number; ms: number } | null>(null);
@@ -321,6 +330,8 @@ export default function RecordingEditor() {
   const canRemoveNoise = clips.some((clip) => !isGap(clip) && separateMicrophone(clip.source));
   /** Until it is changed, the export follows how the opened recording was made. */
   const removeNoise = edits.removeNoise ?? info?.removeNoise ?? false;
+  // Proposals are hatched while Suggest edits is open, on the sequence they were proposed against.
+  const hatchedCuts = suggestOpen && !suggestPreview && !clipDraft && shownCuts ? shownCuts.cuts : [];
   /** Every clip's recording is there and its size known. */
   const canExport = !suggestPreview && !missingClip && clips.every((clip) => isGap(clip) || meta[clip.source] !== undefined);
 
@@ -344,7 +355,8 @@ export default function RecordingEditor() {
   }, [clips, own, durationMs, joined, allZooms]);
   const zooms = zoomDraft ?? shown.list;
   const selectedZoom = zooms.find((zoom) => zoom.id === selectedZoomId) ?? null;
-  const trim = joined ? { startMs: 0, endMs: sequenceMs } : (trimDraft ?? savedTrim);
+  // A preview that leaves the opened recording one clip plays that clip as its trim.
+  const trim = joined ? { startMs: 0, endMs: sequenceMs } : suggestPreview ? { startMs: clips[0].startMs, endMs: clips[0].endMs } : (trimDraft ?? savedTrim);
   const layout = useMemo(() => (videoSize ? recordingLayout(videoSize, backdrop) : null), [videoSize, backdrop]);
   const backdropImageEl = useBackdropImage(backdrop?.fill === BACKDROP_FILLS.image ? (backdrop.image ?? null) : null);
 
@@ -447,17 +459,27 @@ export default function RecordingEditor() {
     commitEdits(withClips(edits, next, own, durationMs), applying);
   };
 
-  /** Ends a preview of suggested cuts, back to the saved sequence. */
-  const endSuggestPreview = () => {
+  /**
+   * Ends a preview of suggested cuts, back to the saved sequence: at
+   * `toMs` of it when given. Playback stops with it, so the sequence
+   * without the cuts never plays on unasked.
+   */
+  const endSuggestPreview = (toMs?: number) => {
     if (!suggestPreview) return;
+    pause();
     setSuggestPreview(null);
     setMessage(null);
-    seek(Math.min(currentMs, sequenceDuration(savedClips)), savedClips);
+    seek(toMs ?? Math.min(currentMs, sequenceDuration(savedClips)), savedClips);
+    // `seek` still sees the playing from before the pause: a recording it
+    // has to load, or a gap it lands in, must not set playback off again.
+    if (pendingRef.current) pendingRef.current.play = false;
+    throughGapRef.current = false;
   };
 
   const closeSuggestions = () => {
     endSuggestPreview();
     setSuggestOpen(false);
+    setCutFocusRequest(null);
   };
 
   const latestRef = useRef({ clips, at, commitClips, seek, meta });
@@ -753,6 +775,29 @@ export default function RecordingEditor() {
 
   const toggle = () => (playing ? pause() : play());
 
+  /**
+   * Starts the video at timeline time `ms` of `list`, where `seek` has just
+   * put it, before `list` is on show: a preview of one cut plays at once.
+   */
+  const playFrom = (list: Clip[], ms: number) => {
+    if (playing) return;
+    const pos = positionIn(list, own, ms);
+    if (pos && isGap(pos.clip)) {
+      throughGapRef.current = true;
+      gapClockRef.current = null;
+      setPlaying(true);
+    } else if (pendingRef.current) {
+      pendingRef.current.play = true;
+    } else if (videoRef.current) {
+      startVideo(videoRef.current);
+    }
+  };
+
+  // A preview of one suggested cut ends itself once the playhead passes a little after the cut.
+  const stopAt = previewStop && previewStop.clips === suggestPreview ? previewStop.endMs : null;
+  const stopReturnMs = previewStop?.returnMs;
+  const stopRef = useRef<{ atMs: number; end: () => void } | null>(null);
+
   // While playing, the playhead follows every frame and stops at the trimmed end.
   // Joined, it goes on to the next clip at each clip's end, switching recording when it must.
   const endRef = useRef(trim.endMs);
@@ -760,6 +805,14 @@ export default function RecordingEditor() {
   useEffect(() => {
     endRef.current = trim.endMs;
     playRef.current = { clips, joined, own, at, ms: currentMs };
+    stopRef.current =
+      stopAt === null
+        ? null
+        : {
+            atMs: stopAt,
+            // The playhead stays on the moment it stopped at, in the sequence as saved.
+            end: () => endSuggestPreview(stopReturnMs),
+          };
   });
   useEffect(() => {
     if (!playing) return;
@@ -774,6 +827,7 @@ export default function RecordingEditor() {
         video?.pause();
         setCurrentMs(sequenceDuration(now.clips));
         setPlaying(false);
+        stopRef.current?.end();
         return false;
       }
       playRef.current = { ...now, at: { index: index + 1, clip: next, sourceMs: next.startMs }, ms: start };
@@ -797,6 +851,11 @@ export default function RecordingEditor() {
       return true;
     };
     const step = () => {
+      const stop = stopRef.current;
+      if (stop && playRef.current.ms >= stop.atMs) {
+        stop.end();
+        return;
+      }
       const video = videoRef.current;
       const gapNow = playRef.current;
       if (gapNow.joined && gapNow.at && isGap(gapNow.at.clip)) {
@@ -840,6 +899,8 @@ export default function RecordingEditor() {
           if (index === now.clips.length - 1) {
             video.pause();
             setCurrentMs(sequenceDuration(now.clips));
+            // A cut's own preview that runs out before its stop ends here.
+            stopRef.current?.end();
             return;
           }
           if (!enter(video, index, clipStarts(now.clips)[index + 1])) return;
@@ -853,6 +914,7 @@ export default function RecordingEditor() {
         video.pause();
         video.currentTime = endRef.current / 1000;
         setCurrentMs(endRef.current);
+        stopRef.current?.end();
         return;
       }
       setCurrentMs(ms);
@@ -1392,10 +1454,16 @@ export default function RecordingEditor() {
           }}
           onTrimCommit={commitTrim}
         >
-          {joined && (
+          {(joined || (suggestOpen && !exporting)) && (
             <ClipTrack
               clips={clips}
-              durationMs={sequenceMs}
+              durationMs={joined ? sequenceMs : timelineDuration}
+              offsetMs={joined ? 0 : (clips[0]?.startMs ?? 0)}
+              // A lone clip is trimmed with the timeline's handles; here it only carries the hatches.
+              editable={joined}
+              cuts={hatchedCuts}
+              focusedCutId={shownCuts?.focusId ?? null}
+              onFocusCut={(id) => setCutFocusRequest({ id })}
               sourceDuration={(source) => meta[source]?.durationMs ?? 0}
               missing={missing}
               selectedId={selectedClip?.id ?? null}
@@ -1440,15 +1508,28 @@ export default function RecordingEditor() {
           own={own}
           joined={isJoined(savedClips, own)}
           previewing={suggestPreview !== null}
-          onPreview={(next, fromMs) => {
+          onPreview={(next, fromMs, endMs, returnMs) => {
             if (!next) {
               endSuggestPreview();
               return;
             }
+            // The panel gives sequence time; a lone clip of the opened recording plays in its own time.
+            const onTimeline = (ms: number) => (isJoined(next, own) ? ms : next[0].startMs + ms);
             setClipDraft(null);
             setSuggestPreview(next);
-            seek(fromMs ?? 0, next);
+            // The stop never lies past the preview's end, where playback halts on its own.
+            const lastMs = isJoined(next, own) ? sequenceDuration(next) : next[0].endMs;
+            // The saved sequence's time, too, is the recording's own when it is a lone clip of it.
+            const savedTimeline = (ms: number) => (isJoined(savedClips, own) ? ms : savedClips[0].startMs + ms);
+            setPreviewStop(
+              endMs === undefined ? null : { clips: next, endMs: Math.min(onTimeline(endMs), lastMs), returnMs: returnMs === undefined ? undefined : savedTimeline(returnMs) },
+            );
+            const from = onTimeline(fromMs ?? 0);
+            seek(from, next);
+            if (endMs !== undefined) playFrom(next, from);
           }}
+          onShowCuts={setShownCuts}
+          focusRequest={cutFocusRequest}
           onApply={(next) => {
             setSuggestPreview(null);
             setMessage(null);

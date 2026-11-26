@@ -346,6 +346,10 @@
   touch-action: none;
 }
 
+.clip[data-fixed="true"] {
+  cursor: default;
+}
+
 .clip[aria-selected="true"] {
   box-shadow: 0 0 0 2px var(--ed-text);
 }
@@ -396,6 +400,38 @@
   right: 0;
 }
 
+/* A cut Suggest edits proposes, hatched over the clip it would cut: red
+   stripes when ticked, faint grey dashed ones when not. The selectors
+   outrank the editor's own button rules (`.editor button` and its hover
+   and pressed states), which would otherwise hide the stripes. */
+.clip-track button.clip-cut,
+.clip-track button.clip-cut:hover:not(:disabled),
+.clip-track button.clip-cut:active:not(:disabled) {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  height: auto;
+  box-sizing: border-box;
+  min-width: 2px;
+  padding: 0;
+  border: 1px solid #e5534b;
+  border-radius: 4px;
+  background: repeating-linear-gradient(135deg, rgba(229, 83, 75, 0.6) 0 4px, rgba(229, 83, 75, 0.12) 4px 8px);
+  cursor: pointer;
+}
+
+.clip-track button.clip-cut[data-chosen="false"],
+.clip-track button.clip-cut[data-chosen="false"]:hover:not(:disabled),
+.clip-track button.clip-cut[data-chosen="false"]:active:not(:disabled) {
+  border-style: dashed;
+  border-color: var(--ed-muted);
+  background: repeating-linear-gradient(135deg, rgba(127, 127, 127, 0.3) 0 4px, transparent 4px 8px);
+}
+
+.clip-track button.clip-cut[data-focus="true"] {
+  box-shadow: 0 0 0 2px var(--ed-text);
+}
+
 .recording-fit {
   position: absolute;
   overflow: hidden;
@@ -419,7 +455,25 @@
   background: var(--ed-surface);
   color: var(--ed-text);
   font-variant-numeric: tabular-nums;
-  max-height: 40vh;
+  /* A fixed height: the timeline above and the sliders stay put as rows come and go. */
+  height: min(40vh, 340px);
+  box-sizing: border-box;
+  /* In a short window the fixed parts may not fit: the panel scrolls. */
+  overflow-y: auto;
+}
+
+.recording-suggest-panel > * {
+  flex: none;
+}
+
+/* The rows take what the panel has left, scrolling beyond it. */
+.recording-suggest-panel > .suggest-rows {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  /* Room for at least two rows, however short the window. */
+  min-height: 76px;
   overflow-y: auto;
 }
 
@@ -483,4 +537,28 @@
 
 .suggest-length {
   opacity: 0.8;
+}
+
+.suggest-tuning {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+
+.suggest-tuning label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.suggest-tuning input[type="range"] {
+  width: 120px;
+}
+
+.suggest-tuning input[type="range"]:disabled + output {
+  opacity: 0.5;
+}
+
+.suggest-tuning output {
+  min-width: 3.5em;
 }

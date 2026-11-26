@@ -38,10 +38,30 @@ export interface CutProposal {
   reason: CutReason;
 }
 
-/** The shortest pause worth proposing a cut for. */
-export const MIN_CUT_MS = 1200;
+/** How proposals are tuned: the panel's Minimum cut and Keep padding. */
+export interface CutTuning {
+  /** The shortest cut proposed, after its padding is kept. */
+  minCutMs: number;
+  /** How much of a pause is kept at each end of a cut. */
+  padMs: number;
+}
+
+/** A tuning control's range and where it starts each time the panel opens. */
+export interface TuningRange {
+  min: number;
+  max: number;
+  step: number;
+  initial: number;
+}
+
+/** How quiet sound must be to count as a pause, in dBFS: the range `recording_pauses` accepts. */
+export const NOISE_DB_RANGE: TuningRange = { min: -60, max: -20, step: 1, initial: -40 };
+/** The shortest cut proposed. The lowest is the shortest pause `recording_pauses` reports. */
+export const MIN_CUT_RANGE: TuningRange = { min: 500, max: 5000, step: 100, initial: 1200 };
 /** How much of a pause is kept at each end of a cut. */
-export const CUT_PAD_MS = 250;
+export const PAD_RANGE: TuningRange = { min: 0, max: 500, step: 50, initial: 250 };
+/** The tuning each opening of the panel starts from. */
+export const INITIAL_TUNING: CutTuning = { minCutMs: MIN_CUT_RANGE.initial, padMs: PAD_RANGE.initial };
 /** How long the pointer must stay still to count as idle in a silent recording. */
 export const MIN_IDLE_MS = 2000;
 /** How far, as a share of the frame, the pointer may drift and still count as still. */
@@ -108,16 +128,17 @@ export function intersect(a: readonly Span[], b: readonly Span[]): Span[] {
 
 /**
  * The cuts proposed for recording `source`, played by `clips`: its
- * `pauses` where the pointer, as recorded (`cursor`), stays still for at least `MIN_CUT_MS` (all
+ * `pauses` where the pointer, as recorded (`cursor`), stays still for at least `tuning.minCutMs` (all
  * of them without a pointer path), or, with no sound to pause (`sound` is silent or system sound
- * only), the stretches the pointer is idle. Each keeps `CUT_PAD_MS` at both
+ * only), the stretches the pointer is idle. Each keeps `tuning.padMs` at both
  * ends, lies inside one clip of `source`, leaves that clip at least
- * `MIN_CLIP_MS` either side or not at all, and is at least `MIN_CUT_MS`.
+ * `MIN_CLIP_MS` either side or not at all, and is at least `tuning.minCutMs`.
  */
-export function proposeCuts(clips: readonly Clip[], source: string, sound: PauseSound, pauses: readonly Span[], cursor: CursorPath | null): CutProposal[] {
+export function proposeCuts(clips: readonly Clip[], source: string, sound: PauseSound, pauses: readonly Span[], cursor: CursorPath | null, tuning: CutTuning): CutProposal[] {
+  const { minCutMs, padMs } = tuning;
   const audible = sound === "microphone" || sound === "mixed";
   // Over a pause the pointer need only rest as long as a cut; alone it must rest longer.
-  const still = stillSpans(cursor, audible ? MIN_CUT_MS : MIN_IDLE_MS);
+  const still = stillSpans(cursor, audible ? minCutMs : MIN_IDLE_MS);
   let candidates: Span[];
   let reason: CutReason;
   if (audible) {
@@ -131,19 +152,24 @@ export function proposeCuts(clips: readonly Clip[], source: string, sound: Pause
   for (const clip of clips) {
     if (isGap(clip) || clip.source !== source) continue;
     for (const span of candidates) {
-      let startMs = Math.max(span.startMs + CUT_PAD_MS, clip.startMs);
-      let endMs = Math.min(span.endMs - CUT_PAD_MS, clip.endMs);
+      let startMs = Math.max(span.startMs + padMs, clip.startMs);
+      let endMs = Math.min(span.endMs - padMs, clip.endMs);
       // What is left either side must be a clip, or nothing at all.
       if (startMs > clip.startMs && startMs - clip.startMs < MIN_CLIP_MS) continue;
       if (endMs < clip.endMs && clip.endMs - endMs < MIN_CLIP_MS) continue;
       if (startMs === clip.startMs && endMs === clip.endMs) continue;
       startMs = Math.round(startMs);
       endMs = Math.round(endMs);
-      if (endMs - startMs < MIN_CUT_MS) continue;
+      if (endMs - startMs < minCutMs) continue;
       proposals.push({ id: `${clip.id}:${startMs}`, clipId: clip.id, source, startMs, endMs, reason });
     }
   }
   return proposals;
+}
+
+/** A proposal as the clip track shows it while Suggest edits is open: hatched, ticked or not. */
+export interface ShownCut extends CutProposal {
+  chosen: boolean;
 }
 
 /** The cut a clip may take: where, in which recording, and on which clip. */
