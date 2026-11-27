@@ -273,7 +273,18 @@ fn estimate(last: &[Vec<u64>], next: &[Vec<u64>], hint: Option<i64>) -> Result<M
                 let with = *per_strip[s].get(&offset).unwrap_or(&0);
                 textured[s] && stay(s) as usize * 2 > features[s].len() && with * 5 < stay(s)
             } else {
-                why != Why::HintOnly && textured[s] && !follows(s, offset)
+                // Rows the page brought into view cannot line up with
+                // anything, so they are no evidence that a strip stayed: it
+                // needs enough features that could have lined up, or some
+                // that stayed where they were.
+                let overlapping = features[s]
+                    .iter()
+                    .filter(|&&y| (1..h as i64).contains(&(y as i64 + offset)))
+                    .count();
+                why != Why::HintOnly
+                    && textured[s]
+                    && (overlapping >= TEXTURED || stay(s) >= 6)
+                    && !follows(s, offset)
             }
         })
         .collect();
@@ -948,6 +959,74 @@ pub(crate) mod tests {
                 Rgba([240, 240, 245, 255]),
                 "row {y}"
             );
+        }
+    }
+    /// A plain right-hand margin under a dark banner, with one block of
+    /// text that reaches into it further down the page.
+    fn margin(v: u32, x: u32) -> Rgba<u8> {
+        if v < 80 {
+            Rgba([20, 30, 60, 255])
+        } else if (165..185).contains(&v) {
+            page(v, x)
+        } else {
+            Rgba([255, 255, 255, 255])
+        }
+    }
+    #[test]
+    fn text_reaching_a_plain_margin_is_not_painted_over() {
+        // The block first shows in rows the page has just brought into
+        // view, where nothing can line up: that is not a fixed strip, and
+        // the banner's colour must not be dragged down the image.
+        let framed = |offset: u32| {
+            RgbaImage::from_fn(96, 120, |x, y| {
+                if x < 72 {
+                    page(y + offset, x)
+                } else {
+                    margin(y + offset, x)
+                }
+            })
+        };
+        let mut s = Stitcher::new(framed(0));
+        for step in 1..=4 {
+            assert_eq!(s.push_with_hint(framed(step * 40), Some(40)), Push::Grew);
+        }
+        assert_eq!(s.image.height(), 280);
+        for y in 0..280 {
+            for x in 72..96 {
+                assert_eq!(*s.image.get_pixel(x, y), margin(y, x), "row {y}, x {x}");
+            }
+        }
+    }
+    /// A page with a classic scrollbar along its right edge: a plain track,
+    /// an arrow at each end that never moves and a thumb that moves less
+    /// than the page. Each arrow row has its own shade.
+    fn scrollbar(offset: u32) -> RgbaImage {
+        RgbaImage::from_fn(96, 120, |x, y| {
+            if x < 90 {
+                page(y + offset, x)
+            } else if (92..94).contains(&x) && ((2..8).contains(&y) || (112..118).contains(&y)) {
+                Rgba([(y % 6 * 10) as u8, 80, 80, 255])
+            } else if (10 + offset / 8..30 + offset / 8).contains(&y) {
+                Rgba([193, 193, 193, 255])
+            } else {
+                Rgba([241, 241, 241, 255])
+            }
+        })
+    }
+    #[test]
+    fn a_scrollbars_arrows_are_not_repeated_down_the_image() {
+        // The arrow strip has few features where the page overlaps, but
+        // its arrows stayed put: it is fixed, and shows once at the top.
+        let mut s = Stitcher::new(scrollbar(0));
+        for step in 1..=4 {
+            assert_eq!(s.push_with_hint(scrollbar(step * 40), Some(40)), Push::Grew);
+        }
+        assert_eq!(s.image.height(), 280);
+        for y in 120..280 {
+            assert_ne!(s.image.get_pixel(92, y).0[1..3], [80, 80], "row {y}");
+        }
+        for y in 0..280 {
+            assert_eq!(*s.image.get_pixel(40, y), page(y, 40), "row {y}");
         }
     }
     #[test]
