@@ -1140,6 +1140,11 @@ export type EditorPreferences = EditorPreferences_Serialize | EditorPreferences_
 export type EditorPreferences_Deserialize = {
 	/**  The drawing colour, as `#rrggbb`. */
 	color?: string | null,
+	/**
+	 *  The highlighter's own colour, as `#rrggbb`. Absent until picked with
+	 *  the highlighter, when it falls back to `color`.
+	 */
+	highlighterColor?: string | null,
 	/**  The last tool picked, by its frontend name (`arrow`, `rect`…). */
 	tool?: string | null,
 	/**
@@ -1202,6 +1207,11 @@ export type EditorPreferences_Deserialize = {
 export type EditorPreferences_Serialize = {
 	/**  The drawing colour, as `#rrggbb`. */
 	color?: string,
+	/**
+	 *  The highlighter's own colour, as `#rrggbb`. Absent until picked with
+	 *  the highlighter, when it falls back to `color`.
+	 */
+	highlighterColor?: string,
 	/**  The last tool picked, by its frontend name (`arrow`, `rect`…). */
 	tool?: string,
 	/**

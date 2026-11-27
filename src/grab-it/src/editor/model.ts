@@ -63,6 +63,8 @@ export interface ElbowRoute {
 export interface PathShape extends Stroked {
   type: "freehand" | "highlighter";
   points: number[];
+  /** A fitted highlighter's text-line height, in capture pixels; absent for freehand strokes and older sidecars. */
+  band?: number;
 }
 
 export interface BoxShape extends Stroked, Rect {

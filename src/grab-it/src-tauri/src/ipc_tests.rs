@@ -1166,6 +1166,7 @@ fn editor_preferences_round_trip() {
     assert_eq!(h.ok("get_editor_preferences", json!({})), json!({}));
     let preferences = json!({
         "color": "#ff0000",
+        "highlighterColor": "#f5a524",
         "tool": "arrow",
         "widths": { "arrow": 4, "text": 24 },
         "fill": true,

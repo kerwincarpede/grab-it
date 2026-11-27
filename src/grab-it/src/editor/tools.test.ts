@@ -45,6 +45,7 @@ import {
   fitCropToRatio,
   hasLineHandles,
   HIGHLIGHTER_WIDTH,
+  highlighterPreset,
   highlighterWidth,
   imageAt,
   imageBeside,
@@ -75,6 +76,7 @@ import {
   squareCorner,
   stepNumbers,
   stepStrokeWidth,
+  straightenPath,
   textLook,
   textLookStyle,
   textShadowColor,
@@ -274,10 +276,28 @@ describe("drawing tools", () => {
     expect(shape.points).toEqual([0, 0, 40, 0]);
   });
 
+  it("straightens near-level highlighter drags with jitter, but keeps bumps, steep drags and short strokes", () => {
+    // 3 px vertical jitter on a near-level drag straightens to a level bar from min to max x at mean y.
+    const jitter = [10, 50, 30, 53, 50, 47, 70, 53, 90, 47, 110, 50];
+    expect(straightenPath(jitter, highlighterWidth(4))).toEqual([10, 50, 110, 50]);
+    expect(straightenPath(jitter, highlighterWidth(1))).toEqual([10, 50, 110, 50]);
+    // Right-to-left near-level drag also straightens from min x to max x at mean y.
+    expect(straightenPath([110, 52, 60, 49, 10, 49], highlighterWidth(4))).toEqual([10, 50, 110, 50]);
+    // A 20 px intentional bump keeps its curve even at the widest preset.
+    const bump = tidyPath([0, 50, 25, 55, 50, 70, 75, 55, 100, 50], highlighterWidth(4));
+    expect(straightenPath(bump, highlighterWidth(4))).toEqual(bump);
+    expect(straightenPath([0, 50, 50, 70, 100, 50], highlighterWidth(24))).toEqual([0, 50, 50, 70, 100, 50]);
+    // A 30° drag keeps its smoothed curve.
+    const steep = tidyPath([0, 50, 50, 79, 100, 108], highlighterWidth(4));
+    expect(straightenPath(steep, highlighterWidth(4))).toEqual(steep);
+    // Drags shorter than 24 px or single-point paths are left alone.
+    expect(straightenPath([0, 50, 20, 51], highlighterWidth(4))).toEqual([0, 50, 20, 51]);
+    expect(straightenPath([10, 50], highlighterWidth(4))).toEqual([10, 50]);
+  });
+
   it("draws the highlighter wide", () => {
     const shape = draw("highlighter", [0, 0], [50, 0]);
-    expect(shape).toMatchObject({ type: "highlighter", points: [0, 0, 50, 0] });
-    expect((shape as { strokeWidth: number }).strokeWidth).toBeGreaterThanOrEqual(HIGHLIGHTER_WIDTH);
+    expect(shape).toMatchObject({ type: "highlighter", points: [0, 0, 50, 0], strokeWidth: HIGHLIGHTER_WIDTH });
   });
 
   it("turns a freehand click into a dot", () => {
@@ -578,19 +598,37 @@ describe("style options", () => {
     expect(stepStrokeWidth(DEFAULT_STEP_RADIUS, -1, STEP_RADII)).toBe(16);
   });
 
-  it("resizes text and badges, and widens the highlighter by its own rule", () => {
+  it("resizes text and badges, and widens freehand and fitted highlights by their own rules", () => {
     const step: Shape = { id: "s", type: "step", color: "red", x: 0, y: 0, radius: 20 };
-    const highlight: Shape = { id: "h", type: "highlighter", color: "red", strokeWidth: 18, points: [0, 0, 5, 5] };
+    const freehandHighlight: Shape = { id: "h", type: "highlighter", color: "red", strokeWidth: 18, points: [0, 0, 5, 5] };
+    const fittedHighlight: Shape = { id: "hf", type: "highlighter", color: "red", strokeWidth: 18, points: [0, 57, 100, 57], band: 14 };
     expect(restyleShape(text, { fontSize: 48 })).toMatchObject({ fontSize: 48 });
     expect(restyleShape(step, { stepRadius: 30 })).toMatchObject({ radius: 30 });
     // A stroke width leaves text and badge sizes alone.
     expect(restyleShape(text, { strokeWidth: 12 })).toBe(text);
     expect(restyleShape(step, { strokeWidth: 12 })).toBe(step);
     expect(restyleShape(rect, { fontSize: 48, stepRadius: 30 })).toBe(rect);
-    expect(restyleShape(highlight, { strokeWidth: 8 })).toMatchObject({ strokeWidth: highlighterWidth(8) });
-    expect(highlighterWidth(8)).toBe(24);
-    expect(highlighterWidth(2)).toBe(HIGHLIGHTER_WIDTH);
-    expect(restyleShape(highlight, { strokeWidth: 4 })).toBe(highlight);
+    // Freehand highlighter: 3 * width + 6 (every preset distinct, Width 4 stays 18).
+    expect(highlighterWidth(1)).toBe(9);
+    expect(highlighterWidth(2)).toBe(12);
+    expect(highlighterWidth(4)).toBe(HIGHLIGHTER_WIDTH);
+    expect(highlighterWidth(8)).toBe(30);
+    expect(highlighterWidth(24)).toBe(78);
+    expect(restyleShape(freehandHighlight, { strokeWidth: 8 })).toMatchObject({ strokeWidth: 30 });
+    expect(restyleShape(freehandHighlight, { strokeWidth: 2 })).toMatchObject({ strokeWidth: 12 });
+    expect(restyleShape(freehandHighlight, { strokeWidth: 4 })).toBe(freehandHighlight);
+    // Fitted highlighter: band + width, preserving band.
+    expect(restyleShape(fittedHighlight, { strokeWidth: 2 })).toEqual({ ...fittedHighlight, strokeWidth: 16 });
+    expect(restyleShape(fittedHighlight, { strokeWidth: 12 })).toEqual({ ...fittedHighlight, strokeWidth: 26 });
+    expect(restyleShape(fittedHighlight, { strokeWidth: 4 })).toBe(fittedHighlight);
+    // Mapping drawn thickness back to the nearest Width preset.
+    expect(highlighterPreset({ strokeWidth: 9 })).toBe(1);
+    expect(highlighterPreset({ strokeWidth: 12 })).toBe(2);
+    expect(highlighterPreset({ strokeWidth: 18 })).toBe(4);
+    expect(highlighterPreset({ strokeWidth: 78 })).toBe(24);
+    expect(highlighterPreset({ strokeWidth: 16, band: 14 })).toBe(2);
+    expect(highlighterPreset({ strokeWidth: 18, band: 14 })).toBe(4);
+    expect(highlighterPreset({ strokeWidth: 26, band: 14 })).toBe(12);
   });
 
   it("fades hex colours and picks readable text for a background", () => {

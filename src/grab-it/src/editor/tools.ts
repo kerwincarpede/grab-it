@@ -4,11 +4,13 @@ import {
   CROP_ASPECTS,
   DEFAULT_STAMP_SIZE,
   DEFAULT_STEP_RADIUS,
+  nearestPreset,
   STROKE_WIDTHS,
   type Annotations,
   type CropAspect,
   type ImageShape,
   type LineShape,
+  type PathShape,
   type Point,
   type Rect,
   type Shape,
@@ -20,15 +22,24 @@ import {
 } from "./model";
 import { boundsEdges, toCapture, type Bounds, type Orientation } from "./orient";
 import { DEFAULT_STAMP, KEYCAP, stampPick, takesColor, type StampPick } from "./stamps";
+import { BAND_MAX_ANGLE } from "./textBand";
 
 /** How far a duplicate lands from its original, in capture pixels. */
 export const DUPLICATE_OFFSET = 12;
 /** Shapes smaller than this many pixels are treated as a stray click. */
 export const MIN_SIZE = 3;
 export const HIGHLIGHTER_WIDTH = 18;
-/** The highlighter is drawn wider than the width picked: three times it, and never thinner than `HIGHLIGHTER_WIDTH`. */
+/** The highlighter is drawn wider than the width picked: 3 × width + 6 px (1 → 9 px, 4 → 18 px, 24 → 78 px). */
 export function highlighterWidth(strokeWidth: number): number {
-  return Math.max(HIGHLIGHTER_WIDTH, strokeWidth * 3);
+  return strokeWidth * 3 + 6;
+}
+/**
+ * The Width preset nearest a highlight's drawn thickness: `strokeWidth - band`
+ * for a stroke fitted to text, else `(strokeWidth - 6) / 3`.
+ */
+export function highlighterPreset(shape: Pick<PathShape, "strokeWidth" | "band">, presets: number[] = STROKE_WIDTHS): number {
+  const raw = shape.band !== undefined ? shape.strokeWidth - shape.band : (shape.strokeWidth - 6) / 3;
+  return presets[nearestPreset(presets, raw)];
 }
 export const DEFAULT_PIXEL_SIZE = 12;
 
@@ -255,6 +266,41 @@ export function simplifyPath(points: number[], tolerance: number): number[] {
  */
 export function tidyPath(points: number[], strokeWidth: number): number[] {
   return simplifyPath(smoothPath(points), Math.max(SIMPLIFY_TOLERANCE, strokeWidth / 4));
+}
+
+/** Shortest drag (in capture pixels) that a highlighter without text straightens. */
+export const STRAIGHTEN_MIN_LENGTH = 24;
+/** Minimum chord distance (in capture pixels) for straightening a near-level highlighter drag. */
+export const STRAIGHTEN_TOLERANCE = 4;
+
+/**
+ * Straightens a near-level highlighter path that had no text under it:
+ * drags of at least `STRAIGHTEN_MIN_LENGTH` px within `BAND_MAX_ANGLE` of
+ * horizontal whose points all lie within `max(STRAIGHTEN_TOLERANCE, strokeWidth / 4)`
+ * of the chord become a level bar from min to max x at the mean y.
+ */
+export function straightenPath(points: number[], strokeWidth: number): number[] {
+  const count = Math.floor(points.length / 2);
+  if (count < 2) return points;
+  const start: Point = { x: points[0], y: points[1] };
+  const end: Point = { x: points[(count - 1) * 2], y: points[(count - 1) * 2 + 1] };
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (Math.hypot(dx, dy) < STRAIGHTEN_MIN_LENGTH) return points;
+  if (Math.atan2(Math.abs(dy), Math.abs(dx)) > BAND_MAX_ANGLE) return points;
+  const limit = Math.max(STRAIGHTEN_TOLERANCE, strokeWidth / 4);
+  let minX = start.x;
+  let maxX = start.x;
+  let sumY = 0;
+  for (let i = 0; i < count; i += 1) {
+    const p: Point = { x: points[i * 2], y: points[i * 2 + 1] };
+    if (segmentDistance(p, start, end) > limit) return points;
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    sumY += p.y;
+  }
+  const meanY = sumY / count;
+  return [minX, meanY, maxX, meanY];
 }
 
 /** Ends a drawing: normalises boxes and drops shapes too small to see. */
@@ -817,7 +863,12 @@ export function restyleShape(shape: Shape, style: Partial<Style>): Shape {
   }
   let next: Shape = style.color ? { ...shape, color: style.color } : shape;
   if (style.strokeWidth && "strokeWidth" in next) {
-    const strokeWidth = next.type === "highlighter" ? highlighterWidth(style.strokeWidth) : style.strokeWidth;
+    const strokeWidth =
+      next.type === "highlighter"
+        ? next.band !== undefined
+          ? next.band + style.strokeWidth
+          : highlighterWidth(style.strokeWidth)
+        : style.strokeWidth;
     if (strokeWidth !== next.strokeWidth) next = { ...next, strokeWidth };
   }
   if (style.fontSize && (next.type === "text" || next.type === "callout") && style.fontSize !== next.fontSize) {

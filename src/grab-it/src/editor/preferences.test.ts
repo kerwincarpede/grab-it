@@ -12,6 +12,7 @@ describe("editor preferences", () => {
     expect(
       fromPreferences({
         color: "#30A46C",
+        highlighterColor: "#F5A524",
         tool: "rect",
         widths: { rect: 8, text: 48, step: 30 },
         fill: true,
@@ -21,6 +22,7 @@ describe("editor preferences", () => {
     ).toEqual({
       tool: "rect",
       style: { color: "#30a46c", fill: true, background: true, blurMode: "blur" },
+      highlighterColor: "#f5a524",
       widths: { rect: 8, text: 48, step: 30 },
       backdrop: null,
     });
@@ -30,6 +32,7 @@ describe("editor preferences", () => {
     expect(
       fromPreferences({
         color: "red",
+        highlighterColor: "yellow",
         tool: "lasso",
         widths: { arrow: 6, blur: 12, lasso: 3, line: 0, rect: 9999, ellipse: Number.NaN },
         blurMode: "swirl",
@@ -76,12 +79,14 @@ describe("editor preferences", () => {
     const choices = {
       tool: "highlighter" as const,
       style: { color: "#0090ff", fill: true, blurMode: "blur" as const },
+      highlighterColor: "#f5a524",
       widths: { highlighter: 6, arrow: 12 },
       backdrop: null,
     };
     const stored = toPreferences(choices);
     expect(stored).toEqual({
       color: "#0090ff",
+      highlighterColor: "#f5a524",
       tool: "highlighter",
       widths: { highlighter: 6, arrow: 12 },
       fill: true,
@@ -89,6 +94,7 @@ describe("editor preferences", () => {
       blurMode: "blur",
     });
     expect(fromPreferences(stored)).toEqual(choices);
+    expect(toPreferences(DEFAULT_CHOICES)).not.toHaveProperty("highlighterColor");
   });
 
   it("remembers the last backdrop, checked like a sidecar's", () => {

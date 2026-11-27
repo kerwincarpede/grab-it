@@ -302,6 +302,10 @@ pub struct EditorPreferences {
     /// The drawing colour, as `#rrggbb`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// The highlighter's own colour, as `#rrggbb`. Absent until picked with
+    /// the highlighter, when it falls back to `color`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlighter_color: Option<String>,
     /// The last tool picked, by its frontend name (`arrow`, `rect`…).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
@@ -446,6 +450,7 @@ impl EditorPreferences {
             .unwrap_or_default();
         Self {
             color: text("color"),
+            highlighter_color: text("highlighterColor"),
             tool: text("tool"),
             widths,
             fill: flag("fill"),
@@ -3638,6 +3643,7 @@ mod tests {
     fn editor_preferences() -> EditorPreferences {
         EditorPreferences {
             color: Some("#30a46c".into()),
+            highlighter_color: Some("#f5a524".into()),
             tool: Some("rect".into()),
             widths: BTreeMap::from([
                 ("arrow".to_owned(), 8),
@@ -3691,6 +3697,7 @@ mod tests {
         assert_eq!(loaded.preferences.after_capture, AfterCapture::Editor);
         let json: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(json["editor"]["highlighterColor"], "#f5a524");
         assert_eq!(json["editor"]["textBackground"], false);
         assert_eq!(json["editor"]["textStyle"], "outline");
         assert_eq!(json["editor"]["blurMode"], "blur");
@@ -3735,6 +3742,7 @@ mod tests {
                 "hotkeys": {"region": "Ctrl+Shift+R"},
                 "editor": {
                     "color": "#e5484d",
+                    "highlighterColor": 42,
                     "fill": "yes",
                     "textStyle": 3,
                     "stamp": 7,

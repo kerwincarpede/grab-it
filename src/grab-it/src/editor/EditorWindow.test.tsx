@@ -1,6 +1,6 @@
 /// <reference types="node" />
 
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockWindows } from "@tauri-apps/api/mocks";
 import type { ReactNode, Ref } from "react";
@@ -612,22 +612,138 @@ describe("EditorWindow", { timeout: 20_000 }, () => {
   });
 
   // The first test in the file also renders the editor for the first time, which is slow on a busy machine.
-  it("fits a highlighter drag over a line of text to it, and keeps the stroke where none is found", async () => {
+  it("fits a highlighter drag over a line of text with width, straightens near-level freehand drags and keeps steep ones", async () => {
     const saved = mockEditor({ version: 1, shapes: [], crop: null });
     await ready();
     fireEvent.click(pressed("Highlighter"));
     textBands.band = { top: 50, bottom: 64 };
     drag([20, 58], [120, 60]);
     await waitFor(() => expect(last(saved)?.shapes).toHaveLength(1));
-    expect(last(saved)!.shapes[0]).toMatchObject({ type: "highlighter", points: [20, 57, 120, 57], strokeWidth: 14 });
+    // Band height 14 + default Width 4 = 18 px, with band stored for restyling.
+    expect(last(saved)!.shapes[0]).toMatchObject({ type: "highlighter", points: [20, 57, 120, 57], strokeWidth: 18, band: 14 });
     // It looked at the capture under the drag.
     expect(last(textBands.asked)?.[1]).toEqual([20, 58, 120, 60]);
+    // No text band: a near-level drag straightens to a level bar at the mean y.
     textBands.band = null;
     drag([20, 100], [120, 102]);
     await waitFor(() => expect(last(saved)?.shapes).toHaveLength(2));
-    expect(last(saved)!.shapes[1]).toMatchObject({ type: "highlighter", points: [20, 100, 120, 102] });
-    expect(last(saved)!.shapes[1]).not.toMatchObject({ strokeWidth: 14 });
+    expect(last(saved)!.shapes[1]).toMatchObject({ type: "highlighter", points: [20, 101, 120, 101], strokeWidth: 18 });
+    expect(last(saved)!.shapes[1]).not.toHaveProperty("band");
+    // A steeper drag (45°) keeps its stroke unstraightened.
+    drag([20, 120], [80, 180]);
+    await waitFor(() => expect(last(saved)?.shapes).toHaveLength(3));
+    expect(last(saved)!.shapes[2]).toMatchObject({ type: "highlighter", points: [20, 120, 80, 180], strokeWidth: 18 });
   }, COLD_START_TIMEOUT_MS);
+
+  it("keeps the highlighter's own colour and width across strokes, tool switches, selection edits and reopening", async () => {
+    const savedPrefs: EditorPreferences[] = [];
+    const saved = mockEditor(
+      { version: 1, shapes: [], crop: null },
+      [],
+      { stored: { color: "#0090ff" }, saved: savedPrefs },
+    );
+    await ready();
+    // Wait for stored preferences to restore before picking Highlighter.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Colour #0090ff" })).toHaveAttribute("aria-pressed", "true"));
+
+    // Until a highlighter colour is picked, Highlighter falls back to the shared drawing colour.
+    fireEvent.click(pressed("Highlighter"));
+    expect(screen.getByRole("button", { name: "Colour #0090ff" })).toHaveAttribute("aria-pressed", "true");
+    expect(widthButton("Width")).toHaveTextContent("4px");
+
+    // Pick orange and Width 2 for the highlighter, then draw a fitted stroke.
+    fireEvent.click(screen.getByRole("button", { name: "Colour #f5a524" }));
+    fireEvent.keyDown(window, { key: "[" }); // 4 -> 3
+    fireEvent.keyDown(window, { key: "[" }); // 3 -> 2
+    expect(widthButton("Width")).toHaveTextContent("2px");
+    textBands.band = { top: 50, bottom: 64 };
+    drag([10, 57], [110, 57]);
+    await waitFor(() => expect(last(saved)?.shapes).toHaveLength(1));
+    expect(last(saved)!.shapes[0]).toMatchObject({ type: "highlighter", color: "#f5a524", strokeWidth: 16, band: 14 });
+    const firstId = last(saved)!.shapes[0].id;
+
+    // Restyling the just-drawn stroke while Highlighter is active updates both the stroke and defaults.
+    fireEvent.click(screen.getByRole("button", { name: "Colour #30a46c" }));
+    fireEvent.keyDown(window, { key: "]" }); // 2 -> 3
+    fireEvent.keyDown(window, { key: "]" }); // 3 -> 4
+    fireEvent.keyDown(window, { key: "]" }); // 4 -> 6
+    await waitFor(() =>
+      expect(last(saved)!.shapes[0]).toMatchObject({ type: "highlighter", color: "#30a46c", strokeWidth: 20, band: 14 }),
+    );
+
+    // Switching to Arrow keeps the shared drawing colour (#0090ff) and Arrow's own width (4px).
+    fireEvent.click(pressed("Arrow"));
+    expect(screen.getByRole("button", { name: "Colour #0090ff" })).toHaveAttribute("aria-pressed", "true");
+    expect(widthButton("Width")).toHaveTextContent("4px");
+
+    // Switching back to Highlighter restores its colour (#30a46c) and width (6px), and draws with them.
+    fireEvent.click(pressed("Highlighter"));
+    expect(screen.getByRole("button", { name: "Colour #30a46c" })).toHaveAttribute("aria-pressed", "true");
+    expect(widthButton("Width")).toHaveTextContent("6px");
+    textBands.band = null;
+    drag([10, 120], [110, 120]);
+    await waitFor(() => expect(last(saved)?.shapes).toHaveLength(2));
+    // Freehand at Width 6: 3 * 6 + 6 = 24 px.
+    expect(last(saved)!.shapes[1]).toMatchObject({ type: "highlighter", color: "#30a46c", strokeWidth: 24 });
+    const secondId = last(saved)!.shapes[1].id;
+
+    // Selecting the first highlight with Select shows its own colour and width; editing it preserves defaults.
+    fireEvent.click(pressed("Select"));
+    fireEvent.mouseDown(document.querySelector(`[data-id="${firstId}"]`) as Element);
+    expect(screen.getByRole("button", { name: "Colour #30a46c" })).toHaveAttribute("aria-pressed", "true");
+    expect(widthButton("Width")).toHaveTextContent("6px");
+    fireEvent.click(screen.getByRole("button", { name: "Colour #e5484d" }));
+    fireEvent.keyDown(window, { key: "]" }); // 6 -> 8
+    fireEvent.keyDown(window, { key: "]" }); // 8 -> 12
+    await waitFor(() =>
+      expect(last(saved)!.shapes.find((s) => s.id === firstId)).toMatchObject({ color: "#e5484d", strokeWidth: 26, band: 14 }),
+    );
+    expect(screen.getByRole("button", { name: "Colour #e5484d" })).toHaveAttribute("aria-pressed", "true");
+    expect(widthButton("Width")).toHaveTextContent("12px");
+
+    // Selecting the second (freehand) highlight shows its own colour (#30a46c) and width (6px); editing it preserves defaults too.
+    fireEvent.mouseDown(document.querySelector(`[data-id="${secondId}"]`) as Element);
+    expect(screen.getByRole("button", { name: "Colour #30a46c" })).toHaveAttribute("aria-pressed", "true");
+    expect(widthButton("Width")).toHaveTextContent("6px");
+    fireEvent.keyDown(window, { key: "[" }); // 6 -> 4
+    fireEvent.keyDown(window, { key: "[" }); // 4 -> 3
+    fireEvent.keyDown(window, { key: "[" }); // 3 -> 2
+    await waitFor(() =>
+      expect(last(saved)!.shapes.find((s) => s.id === secondId)).toMatchObject({ color: "#30a46c", strokeWidth: 12 }),
+    );
+
+    // Switching back to Highlighter keeps the defaults (#30a46c, Width 6), not the Select-edited highlight's style.
+    fireEvent.click(pressed("Highlighter"));
+    expect(screen.getByRole("button", { name: "Colour #30a46c" })).toHaveAttribute("aria-pressed", "true");
+    expect(widthButton("Width")).toHaveTextContent("6px");
+    drag([10, 160], [110, 160]);
+    await waitFor(() => expect(last(saved)?.shapes).toHaveLength(3));
+    expect(last(saved)!.shapes[2]).toMatchObject({ type: "highlighter", color: "#30a46c", strokeWidth: 24 });
+
+    // Wait for debounced preference save, then reopen the editor with those saved preferences.
+    await waitFor(
+      () =>
+        expect(last(savedPrefs)).toMatchObject({
+          color: "#0090ff",
+          highlighterColor: "#30a46c",
+          tool: "highlighter",
+          widths: { highlighter: 6 },
+        }),
+      { timeout: PREFERENCES_DELAY_MS + 2000 },
+    );
+    const persisted = last(savedPrefs)!;
+    cleanup();
+    const reopenedSaved = mockEditor({ version: 1, shapes: [], crop: null }, [], { stored: persisted });
+    await ready();
+    await waitFor(() => {
+      expect(pressed("Highlighter")).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("button", { name: "Colour #30a46c" })).toHaveAttribute("aria-pressed", "true");
+      expect(widthButton("Width")).toHaveTextContent("6px");
+    });
+    drag([10, 40], [110, 40]);
+    await waitFor(() => expect(last(reopenedSaved)?.shapes).toHaveLength(1));
+    expect(last(reopenedSaved)!.shapes[0]).toMatchObject({ type: "highlighter", color: "#30a46c", strokeWidth: 24 });
+  });
 
   it("opens Export in the last folder and remembers the folder chosen", async () => {
     const calls: { cmd: string; payload: unknown }[] = [];
