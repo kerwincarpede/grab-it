@@ -204,12 +204,13 @@ objc2-screen-capture-kit = { version = "0.3", default-features = false, features
     "objc2-core-media",
 ] }
 objc2-core-audio-types = "0.3"
-# Reads the text in captures with the system's own on-device recognition
-# (ocr_vision.rs), falling back to ocrs.
+# Reads text (ocr_vision.rs) and barcodes (codes.rs) in captures with the
+# system's own on-device Vision framework, falling back to ocrs and rxing.
 objc2-vision = { version = "0.3", default-features = false, features = [
     "std",
     "VNRequest",
     "VNRecognizeTextRequest",
+    "VNDetectBarcodesRequest",
     "VNRequestHandler",
     "VNObservation",
     "VNTypes",

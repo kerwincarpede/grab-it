@@ -243,13 +243,248 @@ fn clamped(item: &impl TextItem, (width, height): (u32, u32)) -> Rect {
     }
 }
 
-/// The plain text of `lines`, one line of text per line.
+struct MergedLine {
+    text: String,
+    rect: Rect,
+    boxed: bool,
+    on_multi_item_row: bool,
+}
+
+/// The plain text of `lines`, reconstructing layout from bounding boxes when
+/// present: horizontally split same-baseline fragments are rejoined, paragraph
+/// gaps (> 1.5x line height) and column resets emit a blank line, indentation
+/// is reconstructed from line `x` offsets, and malformed ellipses (`…..`) are
+/// normalised to `…`. Lines with `width == 0 || height == 0` are treated as
+/// unboxed and joined with plain newlines.
 pub fn lines_text(lines: &[OcrLine]) -> String {
-    lines
+    if lines.is_empty() {
+        return String::new();
+    }
+    let is_boxed = |line: &OcrLine| line.rect.width > 0 && line.rect.height > 0;
+    if !lines.iter().any(is_boxed) {
+        return lines
+            .iter()
+            .map(|line| normalise_ellipses(&line.text))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+
+    // Pass 1: merge horizontally split same-baseline fragments while leaving
+    // spaced controls (buttons, toolbar items) and unboxed lines separate.
+    let mut merged: Vec<MergedLine> = Vec::with_capacity(lines.len());
+    for line in lines {
+        let text = normalise_ellipses(&line.text);
+        let boxed = is_boxed(line);
+        if boxed
+            && let Some(prev) = merged.last_mut()
+            && prev.boxed
+            && should_merge_fragments(&prev.rect, &line.rect)
+        {
+            if !prev.text.is_empty()
+                && !text.is_empty()
+                && !prev.text.ends_with(char::is_whitespace)
+                && !text.starts_with(char::is_whitespace)
+            {
+                prev.text.push(' ');
+            }
+            prev.text.push_str(&text);
+            prev.rect = union_rect(prev.rect, line.rect);
+            continue;
+        }
+        merged.push(MergedLine {
+            text,
+            rect: line.rect,
+            boxed,
+            on_multi_item_row: false,
+        });
+    }
+
+    // Pass 2: mark distinct lines that share a horizontal row (e.g. button
+    // bars) and segment into blocks at paragraph gaps (> 1.5x line height) or
+    // column resets (y jumping upward).
+    let mut blocks: Vec<Vec<MergedLine>> = Vec::new();
+    let mut current: Vec<MergedLine> = Vec::new();
+    for mut line in merged {
+        let mut start_new_block = false;
+        if let Some(prev) = current.last_mut()
+            && prev.boxed
+            && line.boxed
+        {
+            if same_baseline(&prev.rect, &line.rect) {
+                prev.on_multi_item_row = true;
+                line.on_multi_item_row = true;
+            } else {
+                let ref_h = i64::from(prev.rect.height.max(line.rect.height));
+                let prev_cy2 = 2 * i64::from(prev.rect.y) + i64::from(prev.rect.height);
+                let line_cy2 = 2 * i64::from(line.rect.y) + i64::from(line.rect.height);
+                let column_reset = line_cy2 < prev_cy2;
+                let prev_bottom = i64::from(prev.rect.y) + i64::from(prev.rect.height);
+                let gap = i64::from(line.rect.y) - prev_bottom;
+                let paragraph_gap = 2 * gap > 3 * ref_h;
+                start_new_block = column_reset || paragraph_gap;
+            }
+        }
+        if start_new_block && !current.is_empty() {
+            blocks.push(current);
+            current = Vec::new();
+        }
+        current.push(line);
+    }
+    if !current.is_empty() {
+        blocks.push(current);
+    }
+
+    // Pass 3: reconstruct indentation from x offsets within each block.
+    let mut formatted_blocks: Vec<String> = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        let indent_candidates: Vec<&MergedLine> = block
+            .iter()
+            .filter(|l| l.boxed && !l.on_multi_item_row)
+            .collect();
+        let (base_x, char_w) = if indent_candidates.len() >= 2 {
+            let min_x = indent_candidates
+                .iter()
+                .map(|l| l.rect.x)
+                .min()
+                .unwrap_or(0);
+            let cw = estimate_char_width(&indent_candidates);
+            (min_x, cw)
+        } else {
+            (0, None)
+        };
+
+        let mut out_lines: Vec<String> = Vec::with_capacity(block.len());
+        for line in block {
+            if line.boxed
+                && !line.on_multi_item_row
+                && let Some(cw) = char_w
+            {
+                let delta = (line.rect.x - base_x).max(0) as f32;
+                let spaces = if delta >= cw * 0.75 {
+                    (delta / cw).round().min(64.0) as usize
+                } else {
+                    0
+                };
+                if spaces > 0 {
+                    let mut indented = String::with_capacity(spaces + line.text.len());
+                    for _ in 0..spaces {
+                        indented.push(' ');
+                    }
+                    indented.push_str(&line.text);
+                    out_lines.push(indented);
+                    continue;
+                }
+            }
+            out_lines.push(line.text);
+        }
+        formatted_blocks.push(out_lines.join("\n"));
+    }
+
+    formatted_blocks.join("\n\n")
+}
+
+/// Whether `a` and `b` lie on the same visual text baseline (their vertical
+/// spans overlap by at least half the shorter line's height).
+fn same_baseline(a: &Rect, b: &Rect) -> bool {
+    let a_bottom = i64::from(a.y) + i64::from(a.height);
+    let b_bottom = i64::from(b.y) + i64::from(b.height);
+    let overlap = (a_bottom.min(b_bottom) - i64::from(a.y.max(b.y))).max(0);
+    let min_h = i64::from(a.height.min(b.height));
+    min_h > 0 && overlap * 2 >= min_h
+}
+
+/// Whether `next` is a horizontally split continuation of `prev` on the same
+/// baseline rather than a distinct spaced button or toolbar item.
+fn should_merge_fragments(prev: &Rect, next: &Rect) -> bool {
+    if !same_baseline(prev, next) {
+        return false;
+    }
+    let prev_right = i64::from(prev.x) + i64::from(prev.width);
+    let next_right = i64::from(next.x) + i64::from(next.width);
+    if next.x < prev.x || next_right <= prev_right {
+        return false;
+    }
+    let avg_h = (f64::from(prev.height) + f64::from(next.height)) * 0.5;
+    let gap = (i64::from(next.x) - prev_right) as f64;
+    gap >= -(avg_h * 0.5) && gap <= avg_h * 1.1
+}
+
+/// Smallest box containing both `a` and `b`.
+fn union_rect(a: Rect, b: Rect) -> Rect {
+    let left = a.x.min(b.x);
+    let top = a.y.min(b.y);
+    let right = (i64::from(a.x) + i64::from(a.width)).max(i64::from(b.x) + i64::from(b.width));
+    let bottom = (i64::from(a.y) + i64::from(a.height)).max(i64::from(b.y) + i64::from(b.height));
+    Rect {
+        x: left,
+        y: top,
+        width: (right - i64::from(left)).max(0) as u32,
+        height: (bottom - i64::from(top)).max(0) as u32,
+    }
+}
+
+/// Estimates one character's width in pixels for a block of boxed lines using
+/// the median per-character width of its multi-character lines.
+fn estimate_char_width(lines: &[&MergedLine]) -> Option<f32> {
+    let mut widths: Vec<f32> = lines
         .iter()
-        .map(|line| line.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n")
+        .filter_map(|line| {
+            let chars = line.text.chars().count();
+            (chars >= 4 && line.rect.width > 0).then(|| line.rect.width as f32 / chars as f32)
+        })
+        .collect();
+    if widths.is_empty() {
+        widths = lines
+            .iter()
+            .filter_map(|line| {
+                let chars = line.text.chars().count();
+                (chars >= 1 && line.rect.width > 0).then(|| line.rect.width as f32 / chars as f32)
+            })
+            .collect();
+    }
+    if widths.is_empty() {
+        return None;
+    }
+    widths.sort_by(f32::total_cmp);
+    let median = widths[widths.len() / 2];
+    (median.is_finite() && median > 0.0).then_some(median)
+}
+
+/// Collapses malformed ellipsis sequences that mix `…` with extra dots or
+/// ellipses (such as `…..` -> `…`) while leaving plain ASCII `...` and `..`
+/// unchanged.
+fn normalise_ellipses(text: &str) -> String {
+    if !text.contains('\u{2026}') {
+        return text.to_owned();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '.' || ch == '\u{2026}' {
+            let mut run = String::new();
+            let mut has_ellipsis = ch == '\u{2026}';
+            run.push(ch);
+            while let Some(&next) = chars.peek() {
+                if next == '.' || next == '\u{2026}' {
+                    if next == '\u{2026}' {
+                        has_ellipsis = true;
+                    }
+                    run.push(next);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if has_ellipsis {
+                out.push('\u{2026}');
+            } else {
+                out.push_str(&run);
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// `text` with the values of `codes` after it, one per line, as the
@@ -700,6 +935,114 @@ pub(crate) mod tests {
             lines_text(&[line("Order pineapple"), line("today")]),
             "Order pineapple\ntoday"
         );
+    }
+
+    fn boxed_line(text: &str, x: i32, y: i32, width: u32, height: u32) -> OcrLine {
+        let rect = Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        OcrLine {
+            text: text.to_owned(),
+            rect,
+            words: vec![OcrWord {
+                text: text.to_owned(),
+                rect,
+            }],
+        }
+    }
+
+    #[test]
+    fn lines_text_merges_split_same_baseline_fragments() {
+        let lines = vec![
+            boxed_line("if", 195, 227, 38, 27),
+            boxed_line("!items.is_empty() {", 227, 225, 325, 39),
+        ];
+        assert_eq!(lines_text(&lines), "if !items.is_empty() {");
+    }
+
+    #[test]
+    fn lines_text_keeps_spaced_button_labels_separate_and_unindented() {
+        let lines = vec![
+            boxed_line("Confirm & Save", 94, 490, 194, 26),
+            boxed_line("Cancel (Esc)", 358, 491, 159, 27),
+            boxed_line("More options…..", 587, 490, 188, 28),
+            boxed_line(
+                "Path: /Users/demo/notes — 3 items (100% synced)",
+                64,
+                550,
+                625,
+                34,
+            ),
+        ];
+        assert_eq!(
+            lines_text(&lines),
+            "Confirm & Save\nCancel (Esc)\nMore options…\nPath: /Users/demo/notes — 3 items (100% synced)"
+        );
+    }
+
+    #[test]
+    fn lines_text_emits_blank_lines_for_paragraphs_and_columns() {
+        let paragraphs = vec![
+            boxed_line("First paragraph line one.", 69, 73, 1440, 32),
+            boxed_line("First paragraph line two.", 69, 117, 931, 31),
+            boxed_line("Second paragraph line one.", 69, 208, 1407, 37),
+            boxed_line("Second paragraph line two.", 68, 253, 488, 32),
+        ];
+        assert_eq!(
+            lines_text(&paragraphs),
+            "First paragraph line one.\nFirst paragraph line two.\n\nSecond paragraph line one.\nSecond paragraph line two."
+        );
+
+        let columns = vec![
+            boxed_line("Left Column Heading", 68, 68, 304, 36),
+            boxed_line("First line on the left side.", 68, 130, 322, 31),
+            boxed_line("Right Column Heading", 856, 73, 321, 31),
+            boxed_line("First line on the right side.", 854, 133, 339, 29),
+        ];
+        assert_eq!(
+            lines_text(&columns),
+            "Left Column Heading\nFirst line on the left side.\n\nRight Column Heading\nFirst line on the right side."
+        );
+
+        // Two-line left column transitioning to a taller right-column heading.
+        let tight_columns = vec![
+            boxed_line("Left line one.", 68, 100, 260, 32),
+            boxed_line("Left line two.", 68, 136, 260, 32),
+            boxed_line("Right Heading", 856, 100, 260, 40),
+            boxed_line("Right line two.", 856, 146, 260, 32),
+        ];
+        assert_eq!(
+            lines_text(&tight_columns),
+            "Left line one.\nLeft line two.\n\nRight Heading\nRight line two."
+        );
+    }
+
+    #[test]
+    fn lines_text_reconstructs_code_indentation_from_x_offsets() {
+        let lines = vec![
+            boxed_line("fn demo() {", 67, 70, 180, 33),
+            boxed_line("let items = vec![1];", 99, 110, 320, 33),
+            boxed_line("if !items.is_empty() {", 131, 150, 352, 33),
+            boxed_line("return items;", 195, 190, 208, 33),
+            boxed_line("}", 131, 230, 16, 33),
+            boxed_line("}", 67, 270, 16, 33),
+        ];
+        assert_eq!(
+            lines_text(&lines),
+            "fn demo() {\n  let items = vec![1];\n    if !items.is_empty() {\n        return items;\n    }\n}"
+        );
+    }
+
+    #[test]
+    fn lines_text_normalises_malformed_ellipses_without_touching_ascii_dots() {
+        assert_eq!(normalise_ellipses("More options….."), "More options…");
+        assert_eq!(normalise_ellipses("Wait..…."), "Wait…");
+        assert_eq!(normalise_ellipses("Check alerts..."), "Check alerts...");
+        assert_eq!(normalise_ellipses("for i in 0..10"), "for i in 0..10");
+        assert_eq!(lines_text(&[line("More options…..")]), "More options…");
     }
 
     #[test]
