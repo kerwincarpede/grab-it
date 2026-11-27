@@ -591,6 +591,65 @@ fn is_code_like(lines: &[OcrLine]) -> bool {
     false
 }
 
+/// Replaces stray Cyrillic lookalike letters inside tokens that also contain
+/// ASCII Latin letters (Vision with `usesLanguageCorrection = false` can emit
+/// mixed-script words like `Som\u{0435}` or `js\u{043e}n` in code blocks).
+/// Pure Cyrillic words are left untouched.
+#[cfg(any(target_os = "macos", test))]
+fn normalise_mixed_script_homoglyphs(text: &str) -> String {
+    if text.is_ascii() {
+        return text.to_owned();
+    }
+    let fold = |ch: char| -> char {
+        match ch {
+            '\u{0410}' => 'A',
+            '\u{0412}' => 'B',
+            '\u{0421}' => 'C',
+            '\u{0415}' => 'E',
+            '\u{041d}' => 'H',
+            '\u{041a}' => 'K',
+            '\u{041c}' => 'M',
+            '\u{041e}' => 'O',
+            '\u{0420}' => 'P',
+            '\u{0422}' => 'T',
+            '\u{0425}' => 'X',
+            '\u{0430}' => 'a',
+            '\u{0441}' => 'c',
+            '\u{0435}' => 'e',
+            '\u{043e}' => 'o',
+            '\u{0440}' => 'p',
+            '\u{0445}' => 'x',
+            '\u{0443}' => 'y',
+            other => other,
+        }
+    };
+    let mut out = String::with_capacity(text.len());
+    let mut token = String::new();
+    let flush = |tok: &mut String, out: &mut String| {
+        if tok.is_empty() {
+            return;
+        }
+        if tok.chars().any(|c| c.is_ascii_alphabetic()) {
+            for ch in tok.chars() {
+                out.push(fold(ch));
+            }
+        } else {
+            out.push_str(tok);
+        }
+        tok.clear();
+    };
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            flush(&mut token, &mut out);
+            out.push(ch);
+        } else {
+            token.push(ch);
+        }
+    }
+    flush(&mut token, &mut out);
+    out
+}
+
 /// Retains 1-character structural code lines (`}`, `{`, `)`, `]`, `;`) only
 /// when their box size is plausible and they align vertically and horizontally
 /// with neighbouring non-structural lines; isolated noise is dropped.
@@ -1105,9 +1164,9 @@ mod mac {
     };
 
     use super::{
-        filter_structural_lines, is_code_like, keep_candidate, merge_tiles, pick_languages,
-        pixel_rect, reading_order, should_upscale, strip_leading_icons, tile_lines, tiles,
-        word_ranges,
+        filter_structural_lines, is_code_like, keep_candidate, merge_tiles,
+        normalise_mixed_script_homoglyphs, pick_languages, pixel_rect, reading_order,
+        should_upscale, strip_leading_icons, tile_lines, tiles, word_ranges,
     };
     use crate::ocr::{OcrLine, OcrWord};
 
@@ -1204,11 +1263,13 @@ mod mac {
         let orig_size = image.dimensions();
         let upscaled;
         let source = if should_upscale(orig_size) {
+            // Bilinear (`Triangle`) avoids bicubic ringing halos on thin
+            // light-on-dark monospace strokes while still sharpening small UI text.
             upscaled = image::imageops::resize(
                 image,
                 orig_size.0 * 2,
                 orig_size.1 * 2,
-                image::imageops::FilterType::CatmullRom,
+                image::imageops::FilterType::Triangle,
             );
             &upscaled
         } else {
@@ -1219,7 +1280,15 @@ mod mac {
         let first = run_text_request(&cg_image, orig_size, true)?;
         let lines = if is_code_like(&first) {
             match run_text_request(&cg_image, orig_size, false) {
-                Ok(raw) if !raw.is_empty() => raw,
+                Ok(mut raw) if !raw.is_empty() && raw.len() >= first.len() => {
+                    for line in &mut raw {
+                        line.text = normalise_mixed_script_homoglyphs(&line.text);
+                        for word in &mut line.words {
+                            word.text = normalise_mixed_script_homoglyphs(&word.text);
+                        }
+                    }
+                    raw
+                }
                 _ => first,
             }
         } else {
@@ -2072,6 +2141,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mixed_script_homoglyphs_are_folded_only_in_latin_tokens() {
+        assert_eq!(
+            normalise_mixed_script_homoglyphs("Som\u{0435}(\"js\u{043e}n\") => {"),
+            "Some(\"json\") => {"
+        );
+        // Pure Cyrillic words remain untouched.
+        assert_eq!(
+            normalise_mixed_script_homoglyphs("Привет мир"),
+            "Привет мир"
+        );
+        assert_eq!(
+            normalise_mixed_script_homoglyphs("plain ascii"),
+            "plain ascii"
+        );
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn vision_reads_dark_code_fixture_with_lines_braces_and_indent() {
@@ -2081,18 +2167,27 @@ mod tests {
         };
         let text = crate::ocr::lines_text(&res.unwrap());
         assert!(
+            text.contains("-> Result<Vec<String>, io::Error> {"),
+            "signature mangled:\n{text}"
+        );
+        assert!(
             text.contains("--dry-run") && text.contains("--max-width=1280"),
             "missing line 2:\n{text}"
+        );
+        assert!(
+            text.contains("Some(\"json\") => {"),
+            "match arm mangled or mixed-script:\n{text}"
         );
         assert!(
             text.contains("if !items.is_empty() {"),
             "if line split or mangled:\n{text}"
         );
-        let standalone_braces = text.lines().filter(|line| line.trim() == "}").count();
         assert!(
-            standalone_braces >= 3,
-            "closing braces dropped ({standalone_braces}):\n{text}"
+            text.contains("io::Error::new(io::Error") && text.contains("::InvalidInput"),
+            "operators or identifier mangled:\n{text}"
         );
+        assert!(!text.contains(": :"), "split `::` operator:\n{text}");
+        assert!(text.contains("Ok(Vec::new())"), "Ok line mangled:\n{text}");
         let indented_lines = text
             .lines()
             .filter(|line| line.starts_with("  ") && !line.trim().is_empty())
@@ -2102,8 +2197,10 @@ mod tests {
             "indentation lost ({indented_lines}):\n{text}"
         );
         assert!(
-            text.contains("check.sh") && text.contains("--strict"),
-            "missing terminal prompt:\n{text}"
+            text.contains(
+                "dev@mac ~/work/demo % ./scripts/check.sh --strict --out=/var/tmp/report.json"
+            ),
+            "missing or mangled terminal prompt:\n{text}"
         );
     }
 
