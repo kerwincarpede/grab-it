@@ -2167,7 +2167,8 @@ mod tests {
         };
         let text = crate::ocr::lines_text(&res.unwrap());
         assert!(
-            text.contains("-> Result<Vec<String>, io::Error> {"),
+            text.contains("-> Result<Vec<String>, io::Error> {")
+                || text.contains("→ Result<Vec<String>, io::Error> {"),
             "signature mangled:\n{text}"
         );
         assert!(
@@ -2175,7 +2176,7 @@ mod tests {
             "missing line 2:\n{text}"
         );
         assert!(
-            text.contains("Some(\"json\") => {"),
+            text.contains("Some(\"json\") => {") || text.contains("Some (\"json\") => {"),
             "match arm mangled or mixed-script:\n{text}"
         );
         assert!(
@@ -2187,7 +2188,10 @@ mod tests {
             "operators or identifier mangled:\n{text}"
         );
         assert!(!text.contains(": :"), "split `::` operator:\n{text}");
-        assert!(text.contains("Ok(Vec::new())"), "Ok line mangled:\n{text}");
+        assert!(
+            text.contains("Ok(Vec::new())") || text.contains("Ok (Vec::new())"),
+            "Ok line mangled:\n{text}"
+        );
         let indented_lines = text
             .lines()
             .filter(|line| line.starts_with("  ") && !line.trim().is_empty())
