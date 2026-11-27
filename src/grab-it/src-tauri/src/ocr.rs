@@ -315,7 +315,9 @@ pub fn lines_text(lines: &[OcrLine]) -> String {
                 line.on_multi_item_row = true;
             } else {
                 let ref_h = i64::from(prev.rect.height.max(line.rect.height));
-                let column_reset = i64::from(prev.rect.y) - i64::from(line.rect.y) > ref_h;
+                let prev_cy2 = 2 * i64::from(prev.rect.y) + i64::from(prev.rect.height);
+                let line_cy2 = 2 * i64::from(line.rect.y) + i64::from(line.rect.height);
+                let column_reset = line_cy2 < prev_cy2;
                 let prev_bottom = i64::from(prev.rect.y) + i64::from(prev.rect.height);
                 let gap = i64::from(line.rect.y) - prev_bottom;
                 let paragraph_gap = 2 * gap > 3 * ref_h;
@@ -1003,6 +1005,18 @@ pub(crate) mod tests {
         assert_eq!(
             lines_text(&columns),
             "Left Column Heading\nFirst line on the left side.\n\nRight Column Heading\nFirst line on the right side."
+        );
+
+        // Two-line left column transitioning to a taller right-column heading.
+        let tight_columns = vec![
+            boxed_line("Left line one.", 68, 100, 260, 32),
+            boxed_line("Left line two.", 68, 136, 260, 32),
+            boxed_line("Right Heading", 856, 100, 260, 40),
+            boxed_line("Right line two.", 856, 146, 260, 32),
+        ];
+        assert_eq!(
+            lines_text(&tight_columns),
+            "Left line one.\nLeft line two.\n\nRight Heading\nRight line two."
         );
     }
 

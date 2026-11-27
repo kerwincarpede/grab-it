@@ -255,7 +255,7 @@ fn decode_band_matches(
         return false;
     };
     let mut bitmap = BinaryBitmap::new(HybridBinarizer::new(source));
-    let mut hints = DecodeHints {
+    let hints = DecodeHints {
         PossibleFormats: Some(HashSet::from([format])),
         AlsoInverted: Some(true),
         TryHarder: Some(false),
@@ -263,7 +263,7 @@ fn decode_band_matches(
     };
     let mut reader = MultiFormatReader::default();
     reader
-        .decode_with_hints(&mut bitmap, &mut hints)
+        .decode_with_hints(&mut bitmap, &hints)
         .is_ok_and(|res| res.getBarcodeFormat() == &format && res.getText() == expected_text)
 }
 
@@ -696,5 +696,31 @@ pub(crate) mod tests {
             "GS1 DataBar Expanded"
         );
         assert_eq!(vision_format_name("VNBarcodeSymbologyUnknown"), "Barcode");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn vision_decodes_codes_in_reading_order_and_ignores_prose() {
+        let mut image = canvas(1100, 420);
+        let qr = draw("first", BarcodeFormat::QR_CODE, 260, 260);
+        let bar = draw("second", BarcodeFormat::CODE_128, 440, 140);
+        imageops::overlay(&mut image, &qr, 40, 60);
+        imageops::overlay(&mut image, &bar, 600, 120);
+        let Some(vision_result) = mac::decode(&image) else {
+            return;
+        };
+        let codes = vision_result.expect("Vision barcode detection should succeed");
+        let found: Vec<_> = codes
+            .iter()
+            .map(|code| (code.format.as_str(), code.value.as_str()))
+            .collect();
+        assert_eq!(found, [("QR code", "first"), ("Code 128", "second")]);
+
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("ocr-two-paragraphs.png");
+        let prose = image::open(fixture).unwrap().into_rgba8();
+        assert_eq!(mac::decode(&prose).unwrap().unwrap(), vec![]);
     }
 }
