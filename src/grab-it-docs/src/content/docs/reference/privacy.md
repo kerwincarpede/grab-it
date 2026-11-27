@@ -11,7 +11,7 @@ Grab-it has no account, no analytics and no tracking. Your captures stay on your
 
 - **Your captures and recordings**: files in your save folder.
 - **The Library**: its index, thumbnails, tags and notes, in Grab-it's app data folder and your save folder.
-- **Reading text in images**, and reading QR codes and barcodes. Grab-it does this on your computer: on macOS with the text recognition built into macOS, which runs on your Mac, and elsewhere by itself.
+- **Reading text in images**, and reading QR codes and barcodes. Grab-it does this on your computer: on macOS and Windows with the text recognition built into the system, which runs on your computer, and on Linux, or when Windows has no text recognition for your languages, with its own models.
 - **Settings**: `settings.json` in Grab-it's app data folder. An endpoint API key goes in your system keychain instead, where there is one, stored for that endpoint's address only.
 
 ## What goes over the internet

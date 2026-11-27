@@ -30,6 +30,7 @@ mod net;
 mod noise;
 mod ocr;
 mod ocr_vision;
+mod ocr_windows;
 mod overlay;
 #[cfg(target_os = "macos")]
 mod panel;
