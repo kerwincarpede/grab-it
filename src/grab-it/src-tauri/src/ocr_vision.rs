@@ -31,6 +31,16 @@ const SHORT_LINE_CHARS: usize = 2;
 /// The confidence a short line needs to be kept.
 #[cfg(any(target_os = "macos", test))]
 const MIN_SHORT_CONFIDENCE: f32 = 0.5;
+/// The minimum confidence a 1-character structural code candidate (`}`, `{`,
+/// `)`, `]`, `;`) needs before post-collection alignment filtering.
+#[cfg(any(target_os = "macos", test))]
+const MIN_STRUCTURAL_CONFIDENCE: f32 = 0.3;
+
+/// Compact crops whose width and height are both at most this many pixels are
+/// upscaled 2x before Vision OCR so small 11-13 px UI text and dark monospace
+/// lines are not dropped or mangled.
+#[cfg(any(target_os = "macos", test))]
+const UPSCALE_MAX_EDGE: u32 = 2048;
 
 /// The largest tile Vision reads at once, in pixels either way: larger
 /// images are read in tiles of at most this size.
@@ -189,12 +199,183 @@ fn merge_tiles(mut lines: Vec<TileLine>) -> Vec<OcrLine> {
     kept.into_iter().map(|l| l.line).collect()
 }
 
-/// `lines` gathered from several tiles in reading order: rows top to
-/// bottom, and the lines of a row left to right. A line joins the row of
-/// the line above it when its centre lies within that line's height, so
-/// text on one row whose boxes start a pixel or two apart stays together.
+/// `lines` gathered from several tiles in reading order: multi-line columns
+/// (2+ vertically stacked lines across a wide gutter) are clustered left to
+/// right and read top to bottom within each column, while single-row layouts
+/// keep top-to-bottom then left-to-right order.
 #[cfg(any(target_os = "macos", test))]
-fn reading_order(mut lines: Vec<OcrLine>) -> Vec<OcrLine> {
+fn reading_order(lines: Vec<OcrLine>) -> Vec<OcrLine> {
+    if lines.len() <= 1 {
+        return lines;
+    }
+    let ref_h = median_height(&lines).unwrap_or(20);
+    order_block(lines, ref_h)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn median_height(lines: &[OcrLine]) -> Option<u32> {
+    let mut heights: Vec<u32> = lines
+        .iter()
+        .map(|l| l.rect.height)
+        .filter(|&h| h > 0)
+        .collect();
+    if heights.is_empty() {
+        return None;
+    }
+    heights.sort_unstable();
+    Some(heights[heights.len() / 2])
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn order_block(lines: Vec<OcrLine>, ref_h: u32) -> Vec<OcrLine> {
+    if lines.len() <= 1 {
+        return lines;
+    }
+    if let Some(columns) = split_multiline_columns(&lines, ref_h) {
+        return columns
+            .into_iter()
+            .flat_map(|col| order_block(col, ref_h))
+            .collect();
+    }
+    if let Some(bands) = split_horizontal_bands(&lines)
+        && bands
+            .iter()
+            .any(|band| split_multiline_columns(band, ref_h).is_some())
+    {
+        return bands
+            .into_iter()
+            .flat_map(|band| order_block(band, ref_h))
+            .collect();
+    }
+    row_order(lines)
+}
+
+/// Splits `lines` left-to-right across vertical gutters of at least
+/// `max(2 * ref_h, 24)` px when at least two resulting groups are vertically
+/// overlapping multi-line columns (each containing 2+ stacked rows).
+#[cfg(any(target_os = "macos", test))]
+fn split_multiline_columns(lines: &[OcrLine], ref_h: u32) -> Option<Vec<Vec<OcrLine>>> {
+    if lines.len() < 4 {
+        return None;
+    }
+    let gutter_min = i64::from((ref_h * 2).max(24));
+    let mut indices: Vec<usize> = (0..lines.len()).collect();
+    indices.sort_by_key(|&i| (lines[i].rect.x, lines[i].rect.y));
+
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut current: Vec<usize> = vec![indices[0]];
+    let mut max_right =
+        i64::from(lines[indices[0]].rect.x) + i64::from(lines[indices[0]].rect.width);
+    for &idx in &indices[1..] {
+        let left = i64::from(lines[idx].rect.x);
+        let right = left + i64::from(lines[idx].rect.width);
+        if left - max_right >= gutter_min {
+            groups.push(current);
+            current = vec![idx];
+            max_right = right;
+        } else {
+            current.push(idx);
+            max_right = max_right.max(right);
+        }
+    }
+    groups.push(current);
+
+    if groups.len() < 2 {
+        return None;
+    }
+
+    let is_multiline = |group: &[usize]| -> bool {
+        if group.len() < 2 {
+            return false;
+        }
+        let mut ys: Vec<i64> = group
+            .iter()
+            .map(|&i| 2 * i64::from(lines[i].rect.y) + i64::from(lines[i].rect.height))
+            .collect();
+        ys.sort_unstable();
+        ys.last().copied().unwrap_or(0) - ys.first().copied().unwrap_or(0)
+            >= 2 * i64::from(ref_h.max(1))
+    };
+
+    let multiline_groups: Vec<&Vec<usize>> = groups.iter().filter(|g| is_multiline(g)).collect();
+    if multiline_groups.len() < 2 {
+        return None;
+    }
+
+    // Confirm at least two multi-line groups overlap vertically (side-by-side).
+    let y_span = |group: &[usize]| -> (i64, i64) {
+        let min_y = group
+            .iter()
+            .map(|&i| i64::from(lines[i].rect.y))
+            .min()
+            .unwrap_or(0);
+        let max_y = group
+            .iter()
+            .map(|&i| i64::from(lines[i].rect.y) + i64::from(lines[i].rect.height))
+            .max()
+            .unwrap_or(0);
+        (min_y, max_y)
+    };
+    let spans: Vec<(i64, i64)> = multiline_groups.iter().map(|g| y_span(g)).collect();
+    let any_overlap = spans.iter().enumerate().any(|(i, &(a0, a1))| {
+        spans[i + 1..]
+            .iter()
+            .any(|&(b0, b1)| a0.max(b0) < a1.min(b1))
+    });
+    if !any_overlap {
+        return None;
+    }
+
+    Some(
+        groups
+            .into_iter()
+            .map(|group| group.into_iter().map(|i| lines[i].clone()).collect())
+            .collect(),
+    )
+}
+
+/// Splits `lines` top-to-bottom into non-overlapping horizontal bands.
+#[cfg(any(target_os = "macos", test))]
+fn split_horizontal_bands(lines: &[OcrLine]) -> Option<Vec<Vec<OcrLine>>> {
+    if lines.len() < 2 {
+        return None;
+    }
+    let mut indices: Vec<usize> = (0..lines.len()).collect();
+    indices.sort_by_key(|&i| (lines[i].rect.y, lines[i].rect.x));
+
+    let mut bands: Vec<Vec<usize>> = Vec::new();
+    let mut current = vec![indices[0]];
+    let mut max_bottom =
+        i64::from(lines[indices[0]].rect.y) + i64::from(lines[indices[0]].rect.height);
+    for &idx in &indices[1..] {
+        let top = i64::from(lines[idx].rect.y);
+        let bottom = top + i64::from(lines[idx].rect.height);
+        if top >= max_bottom {
+            bands.push(current);
+            current = vec![idx];
+            max_bottom = bottom;
+        } else {
+            current.push(idx);
+            max_bottom = max_bottom.max(bottom);
+        }
+    }
+    bands.push(current);
+
+    if bands.len() < 2 {
+        return None;
+    }
+    Some(
+        bands
+            .into_iter()
+            .map(|band| band.into_iter().map(|i| lines[i].clone()).collect())
+            .collect(),
+    )
+}
+
+/// Top-to-bottom, same-row left-to-right ordering. A line joins the row of the
+/// line above it when its centre lies within that line's height.
+#[cfg(any(target_os = "macos", test))]
+fn row_order(mut lines: Vec<OcrLine>) -> Vec<OcrLine> {
     lines.sort_by_key(|line| (line.rect.y, line.rect.x));
     let mut ordered = Vec::with_capacity(lines.len());
     let mut rest = lines.into_iter().peekable();
@@ -229,11 +410,475 @@ pub fn read(_image: &RgbImage) -> Option<Result<Vec<OcrLine>, String>> {
 
 /// Whether a line Vision read is worth keeping: single characters never
 /// are (as with ocrs), and lines of [`SHORT_LINE_CHARS`] or fewer only when
-/// Vision is fairly sure of them.
+/// Vision is fairly sure of them. Structural 1-character code lines (`}`, `{`,
+/// `)`, `]`, `;`) are collected separately and filtered against neighbouring
+/// line boxes by [`filter_structural_lines`].
 #[cfg(any(target_os = "macos", test))]
 fn keep_line(text: &str, confidence: f32) -> bool {
     let chars = text.chars().count();
     chars > 1 && (chars > SHORT_LINE_CHARS || confidence >= MIN_SHORT_CONFIDENCE)
+}
+
+/// Whether `text` is a single structural code character that may legitimately
+/// stand on its own line (`}`, `{`, `)`, `]`, `;`).
+#[cfg(any(target_os = "macos", test))]
+fn is_structural_char(text: &str) -> bool {
+    matches!(text, "}" | "{" | ")" | "]" | ";")
+}
+
+/// Whether an image of `size` should be upscaled 2x before Vision OCR.
+#[cfg(any(target_os = "macos", test))]
+fn should_upscale((width, height): (u32, u32)) -> bool {
+    width > 0 && height > 0 && width <= UPSCALE_MAX_EDGE && height <= UPSCALE_MAX_EDGE
+}
+
+/// Whether `line` looks like a line of source code or a shell command.
+#[cfg(any(target_os = "macos", test))]
+fn line_looks_like_code(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed.ends_with('{') || trimmed.ends_with('}') || trimmed.ends_with(';') {
+        return true;
+    }
+    if trimmed.contains('{') || trimmed.contains('}') {
+        return true;
+    }
+    for token in [
+        "::", "->", "=>", "!=", "==", "&&", "||", "()", "[]", "//", "/*", "~/", "% ./", "$ ./",
+    ] {
+        if trimmed.contains(token) {
+            return true;
+        }
+    }
+    // CLI flags like `--strict` or `--dry-run` (two dashes followed by a letter).
+    let bytes = trimmed.as_bytes();
+    for window in bytes.windows(3) {
+        if window[0] == b'-' && window[1] == b'-' && window[2].is_ascii_alphabetic() {
+            return true;
+        }
+    }
+    // snake_case identifier such as `load_config` or `is_empty`.
+    for window in bytes.windows(3) {
+        if window[0].is_ascii_alphanumeric()
+            && window[1] == b'_'
+            && window[2].is_ascii_alphanumeric()
+        {
+            return true;
+        }
+    }
+    for keyword in [
+        "fn ",
+        "let ",
+        "pub ",
+        "match ",
+        "return ",
+        "impl ",
+        "struct ",
+        "enum ",
+        "const ",
+        "def ",
+        "class ",
+        "import ",
+        "function ",
+        "async ",
+    ] {
+        if trimmed.starts_with(keyword) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether `lines` represent a code or terminal block that should be retried
+/// without language correction.
+#[cfg(any(target_os = "macos", test))]
+fn is_code_like(lines: &[OcrLine]) -> bool {
+    if lines.is_empty() {
+        return false;
+    }
+    let code_lines = lines
+        .iter()
+        .filter(|line| line_looks_like_code(&line.text))
+        .count();
+    if code_lines >= 2 && code_lines * 5 >= lines.len() * 2 {
+        return true;
+    }
+    if lines.len() == 1 && code_lines == 1 {
+        let t = lines[0].text.trim();
+        return t.contains("::")
+            || t.contains("=>")
+            || t.contains("->")
+            || t.ends_with('{')
+            || t.ends_with(';');
+    }
+    false
+}
+
+/// Retains 1-character structural code lines (`}`, `{`, `)`, `]`, `;`) only
+/// when their box size is plausible and they align vertically and horizontally
+/// with neighbouring non-structural lines; isolated noise is dropped.
+#[cfg(any(target_os = "macos", test))]
+fn filter_structural_lines(lines: Vec<OcrLine>) -> Vec<OcrLine> {
+    let anchors: Vec<&OcrLine> = lines
+        .iter()
+        .filter(|line| !is_structural_char(&line.text) && line.rect.height > 0)
+        .collect();
+    if anchors.is_empty() {
+        return lines
+            .into_iter()
+            .filter(|line| !is_structural_char(&line.text))
+            .collect();
+    }
+    let mut heights: Vec<u32> = anchors.iter().map(|line| line.rect.height).collect();
+    heights.sort_unstable();
+    let median_h = heights[heights.len() / 2].max(1);
+    let max_dim = median_h * 2 + 4;
+    let x_tol = i64::from(median_h.max(16));
+    let near_y = i64::from((median_h * 5).max(40));
+
+    lines
+        .into_iter()
+        .filter(|line| {
+            if !is_structural_char(&line.text) {
+                return true;
+            }
+            if line.rect.height == 0 || line.rect.height > max_dim || line.rect.width > max_dim {
+                return false;
+            }
+            let top = i64::from(line.rect.y);
+            let bottom = top + i64::from(line.rect.height);
+            let left = i64::from(line.rect.x);
+            let right = left + i64::from(line.rect.width);
+
+            // Must sit vertically near at least one non-structural line in the
+            // same horizontal span so isolated margin/toolbar noise is dropped.
+            let has_nearby_anchor = anchors.iter().any(|anchor| {
+                let a_top = i64::from(anchor.rect.y);
+                let a_bottom = a_top + i64::from(anchor.rect.height);
+                let v_gap = if bottom < a_top {
+                    a_top - bottom
+                } else if a_bottom < top {
+                    top - a_bottom
+                } else {
+                    0
+                };
+                if v_gap > near_y {
+                    return false;
+                }
+                let a_left = i64::from(anchor.rect.x);
+                let a_right = a_left + i64::from(anchor.rect.width);
+                right + x_tol * 4 >= a_left && left <= a_right + x_tol * 4
+            });
+            if !has_nearby_anchor {
+                return false;
+            }
+
+            // Must align with some non-structural line's left margin (closing
+            // brace aligned with its opening line) or sit on the same baseline
+            // right beside an anchor (split trailing `{` or `;`).
+            anchors.iter().any(|anchor| {
+                let a_left = i64::from(anchor.rect.x);
+                let a_right = a_left + i64::from(anchor.rect.width);
+                if (left - a_left).abs() <= x_tol {
+                    return true;
+                }
+                let a_top = i64::from(anchor.rect.y);
+                let a_bottom = a_top + i64::from(anchor.rect.height);
+                let overlap_y = (bottom.min(a_bottom) - top.max(a_top)).max(0);
+                overlap_y > 0 && left >= a_right - x_tol && left <= a_right + x_tol * 2
+            })
+        })
+        .collect()
+}
+
+/// Whether `ch` is a non-alphanumeric symbol that icons commonly decode as
+/// (`•`, `@`, `§`, geometric shapes, dingbats) rather than meaningful text or
+/// code punctuation (`-`, `+`, `#`, `$`, `/`, `(`, `>`, etc.).
+#[cfg(any(target_os = "macos", test))]
+fn is_icon_symbol(ch: char) -> bool {
+    if ch.is_alphanumeric() {
+        return false;
+    }
+    !matches!(
+        ch,
+        '-' | '+'
+            | '*'
+            | '#'
+            | '$'
+            | '%'
+            | '/'
+            | '~'
+            | '('
+            | ')'
+            | '['
+            | ']'
+            | '{'
+            | '}'
+            | '"'
+            | '\''
+            | '>'
+            | '<'
+            | '!'
+            | '&'
+            | '_'
+            | '|'
+            | '='
+            | ':'
+            | ';'
+            | ','
+            | '.'
+            | '?'
+            | '\\'
+            | '€'
+            | '£'
+            | '¥'
+    )
+}
+
+/// Whether `line` is a short UI label starting with a single-character token
+/// followed by an alphanumeric word (e.g. `• Save`, `Q Search`, `v OK`).
+#[cfg(any(target_os = "macos", test))]
+fn is_short_icon_candidate(line: &OcrLine) -> bool {
+    if line.words.len() < 2 || line.words.len() > 4 {
+        return false;
+    }
+    if line.words[0].text.chars().count() != 1 {
+        return false;
+    }
+    if !line.words[1]
+        .text
+        .chars()
+        .next()
+        .is_some_and(char::is_alphanumeric)
+    {
+        return false;
+    }
+    !line_looks_like_code(&line.text)
+}
+
+/// Whether word 0's bounding box or horizontal gap to word 1 marks it as a
+/// leading icon glyph (wide/square icon box or unusually wide gap).
+#[cfg(any(target_os = "macos", test))]
+fn has_icon_box_geometry(line: &OcrLine) -> bool {
+    let first = &line.words[0];
+    let second = &line.words[1];
+    if first.rect.height == 0 || second.rect.height == 0 || second.rect.width == 0 {
+        return false;
+    }
+    let h = first.rect.height.max(second.rect.height) as f32;
+    let gap = second.rect.x - (first.rect.x + first.rect.width as i32);
+    if gap >= 6 && (gap as f32) >= h * 0.35 {
+        return true;
+    }
+    let second_chars = second.text.chars().count().max(1) as f32;
+    let avg_char_w = second.rect.width as f32 / second_chars;
+    let aspect = first.rect.width as f32 / first.rect.height as f32;
+    let width_ratio = first.rect.width as f32 / avg_char_w;
+    aspect >= 1.15 || (aspect >= 0.95 && width_ratio >= 1.85)
+}
+
+/// Whether two characters are sequential list markers (e.g. `1, 2, 3` or
+/// `a, b, c`) so numbered or lettered lists are never stripped as icons.
+#[cfg(any(target_os = "macos", test))]
+fn is_sequential_markers(chars: &[char]) -> bool {
+    if chars.len() < 2 {
+        return false;
+    }
+    let ascending = chars.windows(2).all(|w| {
+        (w[1] as u32) == (w[0] as u32) + 1 && (w[0].is_ascii_digit() || w[0].is_ascii_alphabetic())
+    });
+    ascending
+}
+
+/// Checks whether candidate `lines[idx]` sits in a vertical icon column next
+/// to sibling stacked short labels. Returns `Some(label_x)` when clean sibling
+/// labels anchor the text column, or `Some(None)` for an all-prefixed icon
+/// column, and `None` when no icon column is detected.
+#[cfg(any(target_os = "macos", test))]
+fn vertical_icon_column(idx: usize, lines: &[OcrLine]) -> Option<Option<i32>> {
+    let line = &lines[idx];
+    let first = &line.words[0];
+    let second = &line.words[1];
+    if line.rect.height == 0 {
+        return None;
+    }
+    let h = i64::from(line.rect.height);
+    let line_top = i64::from(line.rect.y);
+    let line_bottom = line_top + h;
+    let first_x = i64::from(first.rect.x);
+    let second_x = i64::from(second.rect.x);
+    let max_v_dist = h * 15;
+
+    let mut clean_label_xs: Vec<i32> = Vec::new();
+    let mut aligned_candidates: Vec<(i32, char)> = Vec::new();
+
+    for (j, other) in lines.iter().enumerate() {
+        if j == idx || other.rect.height == 0 || other.words.is_empty() || other.words.len() > 4 {
+            continue;
+        }
+        // Similar line height.
+        if other.rect.height * 2 < line.rect.height || line.rect.height * 2 < other.rect.height {
+            continue;
+        }
+        // Vertically stacked (not on the same horizontal row) and within reach.
+        let o_top = i64::from(other.rect.y);
+        let o_bottom = o_top + i64::from(other.rect.height);
+        let overlap_y = (line_bottom.min(o_bottom) - line_top.max(o_top)).max(0);
+        if overlap_y * 2 >= i64::from(line.rect.height.min(other.rect.height)) {
+            continue;
+        }
+        let v_dist = if line_bottom < o_top {
+            o_top - line_bottom
+        } else {
+            line_top - o_bottom
+        };
+        if v_dist > max_v_dist {
+            continue;
+        }
+
+        let o_x = i64::from(other.rect.x);
+        if is_short_icon_candidate(other) {
+            let o_first_x = i64::from(other.words[0].rect.x);
+            let o_second_x = i64::from(other.words[1].rect.x);
+            if (o_first_x - first_x).abs() <= (h / 2).max(8)
+                && (o_second_x - second_x).abs() <= h.max(16)
+                && let Some(ch) = other.words[0].text.chars().next()
+            {
+                aligned_candidates.push((other.rect.y, ch));
+            }
+        } else {
+            // A clean sibling label shifted right of our leading token.
+            let shift = o_x - first_x;
+            if shift >= (h * 3) / 5
+                && shift <= (h * 7) / 2
+                && (second_x - o_x).abs() < (first_x - o_x).abs()
+            {
+                clean_label_xs.push(other.rect.x);
+            }
+        }
+    }
+
+    if !clean_label_xs.is_empty() {
+        clean_label_xs.sort_unstable();
+        let median_x = clean_label_xs[clean_label_xs.len() / 2];
+        if clean_label_xs.len() >= 2 || !aligned_candidates.is_empty() {
+            return Some(Some(median_x));
+        }
+    }
+
+    if aligned_candidates.len() >= 2
+        && let Some(ch) = first.text.chars().next()
+    {
+        aligned_candidates.push((line.rect.y, ch));
+        aligned_candidates.sort_by_key(|(y, _)| *y);
+        let chars: Vec<char> = aligned_candidates.into_iter().map(|(_, c)| c).collect();
+        if !is_sequential_markers(&chars) {
+            return Some(None);
+        }
+    }
+
+    None
+}
+
+/// Strips stray leading icon glyphs (such as `•`, `@`, `§`, `o`, `Q`, `v`, `1`)
+/// attached to short UI labels, updating each stripped line's text, words, and
+/// bounding box.
+#[cfg(any(target_os = "macos", test))]
+fn strip_leading_icons(mut lines: Vec<OcrLine>) -> Vec<OcrLine> {
+    let mut decisions: Vec<Option<Option<i32>>> = Vec::with_capacity(lines.len());
+    for idx in 0..lines.len() {
+        let line = &lines[idx];
+        if !is_short_icon_candidate(line) {
+            decisions.push(None);
+            continue;
+        }
+        let Some(ch) = line.words[0].text.chars().next() else {
+            decisions.push(None);
+            continue;
+        };
+        let column = vertical_icon_column(idx, &lines);
+        let is_common_word = matches!(ch, 'a' | 'A' | 'I');
+        let strip = if is_icon_symbol(ch) {
+            true
+        } else if is_common_word {
+            column.is_some()
+        } else {
+            column.is_some() || has_icon_box_geometry(line)
+        };
+        if strip {
+            decisions.push(Some(column.flatten()));
+        } else {
+            decisions.push(None);
+        }
+    }
+
+    for (line, decision) in lines.iter_mut().zip(decisions) {
+        let Some(anchor_x) = decision else {
+            continue;
+        };
+        if line.words.len() < 2 {
+            continue;
+        }
+        let removed = line.words.remove(0);
+        if let Some(rest) = line.text.strip_prefix(&removed.text) {
+            line.text = rest.trim_start().to_owned();
+        } else {
+            line.text = line
+                .words
+                .iter()
+                .map(|w| w.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+        let mut rect = words_union(&line.words);
+        // Vision linearly interpolates `boundingBoxForRange` across a line, so
+        // word 1's box can start left of clean sibling labels when an icon sat
+        // before it. Clamp its left edge to the sibling label column if it
+        // still leaves a positive width so `lines_text` does not infer bogus
+        // indentation on the clean siblings.
+        if let Some(label_x) = anchor_x
+            && rect.x < label_x
+            && rect.x + rect.width as i32 > label_x
+        {
+            let shift = (label_x - rect.x) as u32;
+            rect.x = label_x;
+            rect.width = rect.width.saturating_sub(shift);
+        }
+        line.rect = rect;
+    }
+
+    lines
+}
+
+/// Smallest box holding every word in `words`.
+#[cfg(any(target_os = "macos", test))]
+fn words_union(words: &[crate::ocr::OcrWord]) -> Rect {
+    let Some(first) = words.first() else {
+        return Rect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
+    };
+    let mut left = first.rect.x;
+    let mut top = first.rect.y;
+    let mut right = i64::from(first.rect.x) + i64::from(first.rect.width);
+    let mut bottom = i64::from(first.rect.y) + i64::from(first.rect.height);
+    for word in &words[1..] {
+        left = left.min(word.rect.x);
+        top = top.min(word.rect.y);
+        right = right.max(i64::from(word.rect.x) + i64::from(word.rect.width));
+        bottom = bottom.max(i64::from(word.rect.y) + i64::from(word.rect.height));
+    }
+    Rect {
+        x: left,
+        y: top,
+        width: (right - i64::from(left)).max(0) as u32,
+        height: (bottom - i64::from(top)).max(0) as u32,
+    }
 }
 
 /// A Vision box (normalised, origin at the bottom left) as a box in the
@@ -337,8 +982,9 @@ mod mac {
     };
 
     use super::{
-        keep_line, merge_tiles, pick_languages, pixel_rect, reading_order, tile_lines, tiles,
-        word_ranges,
+        MIN_STRUCTURAL_CONFIDENCE, filter_structural_lines, is_code_like, is_structural_char,
+        keep_line, merge_tiles, pick_languages, pixel_rect, reading_order, should_upscale,
+        strip_leading_icons, tile_lines, tiles, word_ranges,
     };
     use crate::ocr::{OcrLine, OcrWord};
 
@@ -428,14 +1074,48 @@ mod mac {
         Ok(reading_order(merge_tiles(lines)))
     }
 
-    /// The lines in `image`, read with one Vision request.
+    /// The lines in `image`, read with Vision: compact crops are upscaled 2x
+    /// (with boxes mapped back into the original image's pixels), and blocks
+    /// that look like code are retried without language correction.
     fn recognize_one(image: &RgbImage) -> Result<Vec<OcrLine>, String> {
-        let size = image.dimensions();
-        let cg_image = cg_image(image)?;
+        let orig_size = image.dimensions();
+        let upscaled;
+        let source = if should_upscale(orig_size) {
+            upscaled = image::imageops::resize(
+                image,
+                orig_size.0 * 2,
+                orig_size.1 * 2,
+                image::imageops::FilterType::CatmullRom,
+            );
+            &upscaled
+        } else {
+            image
+        };
+        let cg_image = cg_image(source)?;
 
+        let first = run_text_request(&cg_image, orig_size, true)?;
+        let lines = if is_code_like(&first) {
+            match run_text_request(&cg_image, orig_size, false) {
+                Ok(raw) if !raw.is_empty() => raw,
+                _ => first,
+            }
+        } else {
+            first
+        };
+        Ok(strip_leading_icons(lines))
+    }
+
+    /// Runs one `VNRecognizeTextRequest` on `cg_image`, mapping normalised
+    /// boxes into `orig_size` pixels and filtering 1-character structural
+    /// candidates against neighbouring line boxes.
+    fn run_text_request(
+        cg_image: &CGImage,
+        orig_size: (u32, u32),
+        use_language_correction: bool,
+    ) -> Result<Vec<OcrLine>, String> {
         let request = VNRecognizeTextRequest::new();
         request.setRecognitionLevel(VNRequestTextRecognitionLevel::Accurate);
-        request.setUsesLanguageCorrection(true);
+        request.setUsesLanguageCorrection(use_language_correction);
         if let Some(languages) = languages(&request) {
             request.setRecognitionLanguages(&languages);
         }
@@ -444,7 +1124,7 @@ mod mac {
         let handler = unsafe {
             VNImageRequestHandler::initWithCGImage_options(
                 VNImageRequestHandler::alloc(),
-                &cg_image,
+                cg_image,
                 &NSDictionary::new(),
             )
         };
@@ -463,17 +1143,20 @@ mod mac {
             };
             let full = candidate.string().to_string();
             let text = full.trim();
-            if !keep_line(text, candidate.confidence()) {
+            let confidence = candidate.confidence();
+            let keep = keep_line(text, confidence)
+                || (is_structural_char(text) && confidence >= MIN_STRUCTURAL_CONFIDENCE);
+            if !keep {
                 continue;
             }
             // SAFETY: a plain property read on a finished observation.
-            let rect = to_pixels(unsafe { observation.boundingBox() }, size);
+            let rect = to_pixels(unsafe { observation.boundingBox() }, orig_size);
             let words = word_ranges(&full)
                 .into_iter()
                 .map(|(word, start, length)| OcrWord {
                     text: word.to_owned(),
                     rect: word_box(&candidate, start, length)
-                        .map_or(rect, |found| to_pixels(found, size)),
+                        .map_or(rect, |found| to_pixels(found, orig_size)),
                 })
                 .collect();
             lines.push(OcrLine {
@@ -482,7 +1165,7 @@ mod mac {
                 words,
             });
         }
-        Ok(lines)
+        Ok(filter_structural_lines(lines))
     }
 
     fn to_pixels(rect: CGRect, size: (u32, u32)) -> crate::capture::Rect {
@@ -854,7 +1537,7 @@ mod tests {
             .into_iter()
             .map(|line| line.text)
             .collect();
-        assert_eq!(text, ["New issue", "Newest", "Assignee", "Labels"]);
+        assert_eq!(text, ["New issue", "Labels", "Newest", "Assignee"]);
     }
 
     #[test]
@@ -965,6 +1648,354 @@ mod tests {
         let blank = RgbImage::from_pixel(200, 80, image::Rgb([255, 255, 255]));
         if let Some(read) = read(&blank) {
             assert_eq!(read.unwrap(), vec![]);
+        }
+    }
+
+    fn line_with_words(text: &str, words: &[(&str, i32, i32, u32, u32)]) -> OcrLine {
+        let ocr_words: Vec<crate::ocr::OcrWord> = words
+            .iter()
+            .map(|&(w, x, y, width, height)| crate::ocr::OcrWord {
+                text: w.to_owned(),
+                rect: Rect {
+                    x,
+                    y,
+                    width,
+                    height,
+                },
+            })
+            .collect();
+        let rect = words_union(&ocr_words);
+        OcrLine {
+            text: text.to_owned(),
+            rect,
+            words: ocr_words,
+        }
+    }
+
+    #[test]
+    fn upscale_applies_only_to_compact_non_empty_crops() {
+        assert!(should_upscale((1544, 654)));
+        assert!(should_upscale((1664, 706)));
+        assert!(should_upscale((UPSCALE_MAX_EDGE, UPSCALE_MAX_EDGE)));
+        assert!(!should_upscale((3360, 1890)));
+        assert!(!should_upscale((0, 100)));
+        assert!(!should_upscale((100, 0)));
+    }
+
+    #[test]
+    fn code_detection_separates_code_from_ui_and_prose() {
+        let code = vec![
+            boxed("fn load_config(path: &std::path::Path) {", 67, 70, 800, 33),
+            boxed("let items = vec![\"--dry-run\"];", 99, 110, 500, 33),
+            boxed("return Ok(items);", 99, 150, 300, 33),
+        ];
+        assert!(is_code_like(&code));
+
+        let ui = vec![
+            boxed(
+                "Status: Active (98.5% uptime) — @ops-team #release-2026",
+                69,
+                71,
+                632,
+                26,
+            ),
+            boxed("Export CSV (UTF-8) — 12.5% faster", 98, 264, 407, 26),
+            boxed(
+                "Filter: status:open, tag:#ocr-test & author:@alex",
+                98,
+                319,
+                549,
+                34,
+            ),
+            boxed(
+                "Path: /Users/demo/notes — 3 items (100% synced)",
+                64,
+                550,
+                625,
+                34,
+            ),
+        ];
+        assert!(!is_code_like(&ui));
+
+        let prose = vec![
+            boxed("Grab-it reads screenshots locally.", 69, 73, 500, 32),
+            boxed("Keeping paragraph breaks intact helps.", 69, 117, 520, 31),
+        ];
+        assert!(!is_code_like(&prose));
+    }
+
+    #[test]
+    fn structural_lines_are_kept_when_aligned_and_dropped_when_isolated() {
+        let kept = filter_structural_lines(vec![
+            boxed("fn demo() {", 67, 70, 200, 32),
+            boxed("if ready {", 99, 110, 180, 32),
+            boxed("work();", 131, 150, 120, 32),
+            boxed("}", 99, 190, 16, 32),
+            boxed("}", 67, 230, 16, 32),
+            // Isolated stray punctuation far away from the block.
+            boxed(";", 900, 900, 12, 30),
+            // Oversized border glyph.
+            boxed("]", 67, 270, 120, 120),
+        ]);
+        let texts: Vec<&str> = kept.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, ["fn demo() {", "if ready {", "work();", "}", "}"]);
+
+        // Without any non-structural anchor lines, lone structural noise drops.
+        assert!(filter_structural_lines(vec![boxed("}", 50, 50, 16, 30)]).is_empty());
+    }
+
+    #[test]
+    fn icon_stripping_removes_leading_glyphs_without_touching_real_labels() {
+        let stripped = strip_leading_icons(vec![
+            // Symbol prefixes on toolbar buttons.
+            line_with_words(
+                "• Save",
+                &[("•", 97, 81, 24, 31), ("Save", 124, 81, 79, 32)],
+            ),
+            line_with_words(
+                "@ Share link",
+                &[
+                    ("@", 278, 83, 21, 30),
+                    ("Share", 302, 83, 88, 30),
+                    ("link", 393, 83, 49, 30),
+                ],
+            ),
+            // Wide icon box read as lowercase `o`.
+            line_with_words(
+                "o Settings",
+                &[("o", 515, 84, 38, 28), ("Settings", 555, 84, 112, 28)],
+            ),
+            // Vertical SVG icon column beside clean sibling labels.
+            boxed("Save", 147, 249, 59, 23),
+            boxed("Share link", 147, 313, 122, 24),
+            boxed("Settings", 145, 375, 106, 27),
+            line_with_words(
+                "Q Search",
+                &[("Q", 102, 436, 25, 29), ("Search", 129, 436, 105, 29)],
+            ),
+            line_with_words("v OK", &[("v", 104, 506, 17, 22), ("OK", 123, 506, 63, 22)]),
+            // Wide gap between icon digit and label.
+            line_with_words(
+                "1 Save",
+                &[("1", 731, 252, 10, 19), ("Save", 750, 251, 65, 20)],
+            ),
+        ]);
+        let texts: Vec<&str> = stripped.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "Save",
+                "Share link",
+                "Settings",
+                "Save",
+                "Share link",
+                "Settings",
+                "Search",
+                "OK",
+                "Save",
+            ]
+        );
+        // Word 0 and line rect updated for stripped lines.
+        assert_eq!(stripped[0].words.len(), 1);
+        assert_eq!(stripped[0].words[0].text, "Save");
+        assert_eq!(stripped[0].rect.x, 124);
+
+        // Real short labels and numbered lists stay intact.
+        let preserved = strip_leading_icons(vec![
+            line_with_words(
+                "I agree",
+                &[("I", 40, 20, 8, 24), ("agree", 52, 20, 65, 24)],
+            ),
+            line_with_words("A note", &[("A", 40, 60, 14, 24), ("note", 58, 60, 52, 24)]),
+            line_with_words(
+                "- Save",
+                &[("-", 40, 100, 10, 24), ("Save", 54, 100, 56, 24)],
+            ),
+            line_with_words(
+                "1 First",
+                &[("1", 40, 200, 12, 24), ("First", 56, 200, 54, 24)],
+            ),
+            line_with_words(
+                "2 Second",
+                &[("2", 40, 240, 12, 24), ("Second", 56, 240, 74, 24)],
+            ),
+            line_with_words(
+                "3 Third",
+                &[("3", 40, 280, 12, 24), ("Third", 56, 280, 60, 24)],
+            ),
+        ]);
+        let kept_texts: Vec<&str> = preserved.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(
+            kept_texts,
+            [
+                "I agree", "A note", "- Save", "1 First", "2 Second", "3 Third"
+            ]
+        );
+    }
+
+    #[test]
+    fn reading_order_keeps_header_row_above_two_multiline_columns() {
+        let lines = vec![
+            boxed("Right Two", 600, 140, 120, 24),
+            boxed("Toolbar Right", 400, 20, 120, 24),
+            boxed("Left Two", 40, 140, 120, 24),
+            boxed("Right One", 600, 100, 120, 24),
+            boxed("Toolbar Left", 40, 20, 120, 24),
+            boxed("Left One", 40, 100, 120, 24),
+        ];
+        let ordered: Vec<String> = reading_order(lines).into_iter().map(|l| l.text).collect();
+        assert_eq!(
+            ordered,
+            [
+                "Toolbar Left",
+                "Toolbar Right",
+                "Left One",
+                "Left Two",
+                "Right One",
+                "Right Two",
+            ]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    fn fixture_image(name: &str) -> RgbImage {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join(name);
+        image::open(path).unwrap().into_rgb8()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn vision_reads_small_ui_fixture_cleanly() {
+        let image = fixture_image("ocr-small-ui.png");
+        let Some(res) = read(&image) else {
+            return;
+        };
+        let text = crate::ocr::lines_text(&res.unwrap());
+        assert!(text.contains("100% synced"), "small UI read:\n{text}");
+        assert!(!text.contains("svnced"), "small UI read:\n{text}");
+        assert!(!text.contains("….."), "malformed ellipsis:\n{text}");
+        assert!(text.contains("Confirm & Save"), "small UI read:\n{text}");
+        assert!(text.contains("Cancel (Esc)"), "small UI read:\n{text}");
+        assert!(
+            text.contains("More options…") || text.contains("More options..."),
+            "small UI read:\n{text}"
+        );
+        // Distinct button labels stay on separate lines.
+        assert!(
+            !text.contains("Confirm & Save Cancel (Esc)"),
+            "buttons collapsed onto one line:\n{text}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn vision_reads_dark_code_fixture_with_lines_braces_and_indent() {
+        let image = fixture_image("ocr-dark-code.png");
+        let Some(res) = read(&image) else {
+            return;
+        };
+        let text = crate::ocr::lines_text(&res.unwrap());
+        assert!(
+            text.contains("--dry-run") && text.contains("--max-width=1280"),
+            "missing line 2:\n{text}"
+        );
+        assert!(
+            text.contains("if !items.is_empty() {"),
+            "if line split or mangled:\n{text}"
+        );
+        let standalone_braces = text.lines().filter(|line| line.trim() == "}").count();
+        assert!(
+            standalone_braces >= 3,
+            "closing braces dropped ({standalone_braces}):\n{text}"
+        );
+        let indented_lines = text
+            .lines()
+            .filter(|line| line.starts_with("  ") && !line.trim().is_empty())
+            .count();
+        assert!(
+            indented_lines >= 5,
+            "indentation lost ({indented_lines}):\n{text}"
+        );
+        assert!(
+            text.contains("check.sh") && text.contains("--strict"),
+            "missing terminal prompt:\n{text}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn vision_reads_two_columns_fixture_with_column_break() {
+        let image = fixture_image("ocr-two-columns.png");
+        let Some(res) = read(&image) else {
+            return;
+        };
+        let text = crate::ocr::lines_text(&res.unwrap());
+        let left_pos = text.find("Third line finishes the left block.");
+        let right_pos = text.find("Right Column Heading");
+        assert!(
+            left_pos.is_some() && right_pos.is_some() && left_pos < right_pos,
+            "columns out of order:\n{text}"
+        );
+        assert!(
+            text.contains("Third line finishes the left block.\n\nRight Column Heading"),
+            "missing blank line between columns:\n{text}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn vision_reads_two_paragraphs_fixture_with_blank_line() {
+        let image = fixture_image("ocr-two-paragraphs.png");
+        let Some(res) = read(&image) else {
+            return;
+        };
+        let text = crate::ocr::lines_text(&res.unwrap());
+        assert!(
+            text.contains("documents.\n\nThis second paragraph"),
+            "missing blank line between paragraphs:\n{text}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn vision_reads_svg_icons_fixture_without_stray_icon_glyphs() {
+        let image = fixture_image("ocr-svg-icons.png");
+        let Some(res) = read(&image) else {
+            return;
+        };
+        let text = crate::ocr::lines_text(&res.unwrap());
+        let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(
+            lines,
+            ["Save", "Share link", "Settings", "Search", "OK"],
+            "SVG icon list had stray glyphs:\n{text}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn vision_reads_icons_toolbar_fixture_without_stray_glyphs() {
+        let image = fixture_image("ocr-icons-toolbar.png");
+        let Some(res) = read(&image) else {
+            return;
+        };
+        let text = crate::ocr::lines_text(&res.unwrap());
+        for bad in [
+            "• Save",
+            "@ Share link",
+            "o Settings",
+            "§ Settings",
+            "Q Search",
+            "v OK",
+            "1 Save",
+        ] {
+            assert!(!text.contains(bad), "stray icon glyph {bad:?} in:\n{text}");
+        }
+        for expected in ["Save", "Share link", "Settings", "Search", "OK", "Delete"] {
+            assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
         }
     }
 }
