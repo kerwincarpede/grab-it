@@ -49,8 +49,9 @@ export function isShape(value: unknown): value is Shape {
         isOptional(shape.control, (control) => isPoints(control, 2) && control.length === 2)
       );
     case "freehand":
-    case "highlighter":
       return stroked && isPoints(shape.points, 2);
+    case "highlighter":
+      return stroked && isPoints(shape.points, 2) && isOptional(shape.band, (band) => isNum(band) && band > 0);
     case "rect":
     case "ellipse":
       return stroked && isRect(shape) && isOptional(shape.fill, isBool);

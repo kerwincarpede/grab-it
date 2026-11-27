@@ -195,6 +195,7 @@ import {
   finishShape,
   fitCropToRatio,
   hasLineHandles,
+  highlighterPreset,
   holdCropSides,
   MIN_SIZE,
   modifierTool,
@@ -217,6 +218,7 @@ import {
   spotlightDim,
   stepNumbers,
   stepStrokeWidth,
+  straightenPath,
   STRAIGHTEN_SNAP,
   textLook,
   textLookFields,
@@ -579,6 +581,8 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
   const [tool, setTool] = useState<Tool>(DEFAULT_CHOICES.tool);
   /** Colour and options for the next shape; each tool's width is in `widths`. */
   const [style, setStyle] = useState<Omit<Style, "strokeWidth">>(DEFAULT_CHOICES.style);
+  /** The highlighter's own colour; falls back to `style.color` until picked with the highlighter. */
+  const [highlighterColor, setHighlighterColor] = useState<string | undefined>(DEFAULT_CHOICES.highlighterColor);
   const [nextArrowStyle, setNextArrowStyle] = useState<ArrowStyle>("classic");
   const [widths, setWidths] = useState<Widths>(DEFAULT_CHOICES.widths);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -689,6 +693,7 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
   const restoreChoices = useCallback((choices: EditorChoices) => {
     setTool(choices.tool);
     setStyle(choices.style);
+    setHighlighterColor(choices.highlighterColor);
     setWidths(choices.widths);
     setLastBackdrop(choices.backdrop);
     if (choices.autoBackdrop && choices.backdrop) setAutoBackdrop(choices.backdrop);
@@ -698,7 +703,10 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
     favoritesRef.current = choices.favoriteColors ?? [];
     setFavorites(favoritesRef.current);
   }, []);
-  const choices = useMemo(() => ({ tool, style, widths, backdrop: lastBackdrop }), [tool, style, widths, lastBackdrop]);
+  const choices = useMemo(
+    () => ({ tool, style, ...(highlighterColor ? { highlighterColor } : {}), widths, backdrop: lastBackdrop }),
+    [tool, style, highlighterColor, widths, lastBackdrop],
+  );
   useEditorPreferences(choices, restoreChoices);
 
   // With auto-apply on, a capture opened for the first time (no sidecar
@@ -723,6 +731,7 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
 
   const drawStyle = (drawWith: Tool): Style => ({
     ...style,
+    color: drawWith === "highlighter" ? (highlighterColor ?? style.color) : style.color,
     strokeWidth: widthFor(widths, drawWith),
     arrowStyle: nextArrowStyle,
     fontSize: widthFor(widths, "text"),
@@ -1184,9 +1193,15 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
     }
     if (draft) {
       const finished = finishShape(draft);
-      // A level highlighter drag over a line of text becomes a straight bar fitted to it.
-      const band = finished?.type === "highlighter" && image ? imageTextBand(image, finished.points, bandReach(finished.strokeWidth)) : null;
-      const shape = band && finished?.type === "highlighter" ? fitToBand(finished, band) : finished;
+      let shape = finished;
+      if (finished?.type === "highlighter") {
+        // A level highlighter drag over a line of text becomes a straight bar fitted to it;
+        // a near-level drag without text still straightens to a level bar.
+        const band = image ? imageTextBand(image, finished.points, bandReach(finished.strokeWidth)) : null;
+        shape = band
+          ? fitToBand(finished, band, widthFor(widths, "highlighter"))
+          : { ...finished, points: straightenPath(finished.points, finished.strokeWidth) };
+      }
       if (shape) {
         commit(addShape(doc, shape));
         // The new shape keeps its handles, ready to adjust, move or restyle.
@@ -1352,13 +1367,37 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
     [selected, doc, commit],
   );
 
+  // Options for the active tool, or for the selected shape when there is one.
+  const optionsFor = selected?.type ?? tool;
+  /** Editing an existing highlight with another tool (such as Select) leaves new-stroke defaults alone. */
+  const editingHighlight = selected?.type === "highlighter" && tool !== "highlighter";
+  /** The colour on show in the swatches and picker: a selected highlight's own, the highlighter's default, or the shared drawing colour. */
+  const barColor =
+    selected?.type === "highlighter"
+      ? selected.color
+      : optionsFor === "highlighter"
+        ? (highlighterColor ?? style.color)
+        : style.color;
+
   /** Sets the colour or an option for the next shape and applies it to the selected one. */
   const changeStyle = useCallback(
     (next: Partial<Pick<Style, "color" | "fill" | "background" | "textStyle" | "blurMode" | "zoom" | "lens" | "lensLine">>) => {
+      if (editingHighlight) {
+        restyleSelected(next);
+        return;
+      }
+      if (next.color !== undefined && optionsFor === "highlighter") {
+        setHighlighterColor(next.color.toLowerCase());
+        const rest = { ...next };
+        delete rest.color;
+        if (Object.keys(rest).length > 0) setStyle((now) => ({ ...now, ...rest }));
+        restyleSelected(next);
+        return;
+      }
       setStyle((now) => ({ ...now, ...next }));
       restyleSelected(next);
     },
-    [restyleSelected],
+    [editingHighlight, optionsFor, restyleSelected],
   );
 
   /** Puts the eyedropper away, leaving the tool and the selection as they were. */
@@ -1424,7 +1463,7 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
 
   /** Saves the colour on show as a favourite, after the others; a built-in or saved colour is left alone. */
   const saveFavorite = () => {
-    const color = style.color.toLowerCase();
+    const color = barColor.toLowerCase();
     changeFavorites((colors) => (canSaveFavorite(colors, color) ? [...colors, color] : colors));
   };
 
@@ -1440,8 +1479,6 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
     if (selected?.type === "stamp") restyleSelected(selected.color ? { stamp: id } : { stamp: id, color: style.color });
   };
 
-  // Options for the active tool, or for the selected shape when there is one.
-  const optionsFor = selected?.type ?? tool;
   /** The stamp on show in the picker: the selected stamp, else the one the Stamp tool places. */
   const shownStamp = selected?.type === "stamp" ? pickId({ name: selected.name, label: selected.label }) : (style.stamp ?? DEFAULT_STAMP);
   /** Crop and Cut out have no colour, and neither do cursor and emoji stamps: the swatches are hidden for them. */
@@ -1456,16 +1493,18 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
         ? selected.radius
         : selected?.type === "stamp"
           ? selected.size
-          : selected && "strokeWidth" in selected && selected.type !== "highlighter"
-            ? selected.strokeWidth
-            : widthFor(widths, optionsFor),
+          : selected?.type === "highlighter"
+            ? highlighterPreset(selected)
+            : selected && "strokeWidth" in selected
+              ? selected.strokeWidth
+              : widthFor(widths, optionsFor),
   );
 
   /** Remembers `next` as this tool's (or shape type's) width and resizes the selected shape. */
   const changeWidth = useCallback(
     (next: number) => {
       if (!width) return;
-      setWidths((now) => ({ ...now, [optionsFor]: next }));
+      if (!editingHighlight) setWidths((now) => ({ ...now, [optionsFor]: next }));
       restyleSelected(
         width.preview === "text"
           ? { fontSize: next }
@@ -1476,7 +1515,7 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
               : { strokeWidth: next },
       );
     },
-    [width, optionsFor, restyleSelected],
+    [width, editingHighlight, optionsFor, restyleSelected],
   );
 
   /** One width preset thinner (-1) or wider (1): `[`, `]` and ⌥-scroll. */
@@ -2198,7 +2237,7 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
                 className="swatch"
                 style={{ background: color }}
                 aria-label={`Colour ${color}`}
-                aria-pressed={style.color === color}
+                aria-pressed={barColor.toLowerCase() === color}
                 onClick={() => changeStyle({ color })}
               />
             ))}
@@ -2210,7 +2249,7 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
                 style={{ background: color }}
                 aria-label={`Favourite colour ${color}`}
                 title={`${color} (right-click to remove)`}
-                aria-pressed={style.color === color}
+                aria-pressed={barColor.toLowerCase() === color}
                 onClick={() => changeStyle({ color })}
                 onContextMenu={(event) => {
                   event.preventDefault();
@@ -2227,7 +2266,7 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
                   ? `Up to ${MAX_FAVORITE_COLORS} favourites: right-click one to remove it`
                   : "Save this colour as a favourite"
               }
-              disabled={!favorites || !canSaveFavorite(favorites, style.color)}
+              disabled={!favorites || !canSaveFavorite(favorites, barColor)}
               onClick={saveFavorite}
             >
               +
@@ -2237,7 +2276,7 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
               aria-label="Custom colour"
               title="Custom colour"
               type="color"
-              value={style.color}
+              value={barColor.toLowerCase()}
               onChange={(event) => changeStyle({ color: event.target.value })}
             />
             <button
@@ -2257,7 +2296,7 @@ function CaptureEditor({ onMoved }: { onMoved: () => void }) {
           <WidthControl
             kind={width}
             value={shownWidth}
-            color={(selected && "color" in selected ? selected.color : undefined) ?? style.color}
+            color={(selected && "color" in selected ? selected.color : undefined) ?? barColor}
             onChange={changeWidth}
           />
         )}

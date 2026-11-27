@@ -120,8 +120,25 @@ describe("fitting a highlighter", () => {
     expect(bandReach(40)).toBe(80);
   });
 
-  it("swaps the stroke for a straight bar as tall as the band", () => {
+  it("swaps the stroke for a straight bar as tall as the band plus width, storing band", () => {
     const shape: PathShape = { id: "h", type: "highlighter", color: "#f76b15", strokeWidth: 18, points: [110, 58, 60, 60, 15, 56] };
-    expect(fitToBand(shape, { top: 50, bottom: 64 })).toEqual({ ...shape, points: [15, 57, 110, 57], strokeWidth: 14 });
+    expect(fitToBand(shape, { top: 50, bottom: 64 }, 4)).toEqual({
+      ...shape,
+      points: [15, 57, 110, 57],
+      strokeWidth: 18,
+      band: 14,
+    });
+    expect(fitToBand(shape, { top: 50, bottom: 64 }, 2)).toEqual({
+      ...shape,
+      points: [15, 57, 110, 57],
+      strokeWidth: 16,
+      band: 14,
+    });
+    expect(fitToBand(shape, { top: 50, bottom: 64 }, 12)).toEqual({
+      ...shape,
+      points: [15, 57, 110, 57],
+      strokeWidth: 26,
+      band: 14,
+    });
   });
 });

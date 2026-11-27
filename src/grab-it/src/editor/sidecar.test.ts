@@ -10,6 +10,7 @@ const doc: Annotations = {
     { id: "l", type: "line", color: "#e5484d", strokeWidth: 2, points: [1, 2, 3, 4] },
     { id: "f", type: "freehand", color: "#0090ff", strokeWidth: 2, points: [1, 2, 3, 4, 5, 6] },
     { id: "h", type: "highlighter", color: "#f5a524", strokeWidth: 18, points: [0, 0, 9, 0] },
+    { id: "hb", type: "highlighter", color: "#f5a524", strokeWidth: 20, points: [0, 10, 90, 10], band: 14 },
     { id: "r", type: "rect", color: "#30a46c", strokeWidth: 4, x: 5, y: 6, width: 7, height: 8 },
     { id: "e", type: "ellipse", color: "#30a46c", strokeWidth: 4, x: 5, y: 6, width: 7, height: 8 },
     { id: "b", type: "blur", x: 10, y: 10, width: 40, height: 20, pixelSize: 12 },
@@ -32,6 +33,22 @@ describe("annotations sidecar", () => {
   it("writes the documented {version: 1, shapes: [...]} shape", () => {
     const written = JSON.parse(JSON.stringify(serializeAnnotations({ version: 1, shapes: [] })));
     expect(written).toEqual({ version: 1, shapes: [], crop: null });
+  });
+
+  it("keeps a highlighter's band when valid and skips malformed band values", () => {
+    const base = { id: "h", type: "highlighter", color: "#f5a524", strokeWidth: 18, points: [0, 10, 90, 10] };
+    const parsed = parseAnnotations({
+      version: 1,
+      shapes: [
+        base,
+        { ...base, id: "fitted", band: 14 },
+        { ...base, id: "zero", band: 0 },
+        { ...base, id: "neg", band: -4 },
+        { ...base, id: "str", band: "14" },
+        { ...base, id: "nan", band: Number.NaN },
+      ],
+    });
+    expect(parsed.shapes.map((shape) => shape.id)).toEqual(["h", "fitted"]);
   });
 
   it("keeps a guide step's number and drops a step whose number makes no sense", () => {

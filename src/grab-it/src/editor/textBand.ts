@@ -153,10 +153,12 @@ export function imageTextBand(image: CanvasImageSource & { width: number; height
 /**
  * A highlighter stroke swapped for a straight bar over `band`: from the
  * drag's leftmost to its rightmost point, centred on the band and as tall
- * as it.
+ * as the band plus the chosen Width `width`. Stores the band height so
+ * restyling keeps the fit.
  */
-export function fitToBand(shape: PathShape, band: Band): PathShape {
+export function fitToBand(shape: PathShape, band: Band, width: number): PathShape {
   const xs = pathPoints(shape.points).map((point) => point.x);
   const y = (band.top + band.bottom) / 2;
-  return { ...shape, points: [Math.min(...xs), y, Math.max(...xs), y], strokeWidth: band.bottom - band.top };
+  const height = band.bottom - band.top;
+  return { ...shape, points: [Math.min(...xs), y, Math.max(...xs), y], strokeWidth: height + width, band: height };
 }

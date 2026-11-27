@@ -5,11 +5,13 @@ sidebar:
   order: 2
 ---
 
-The left of the top bar shows the style for the tool you're using. Change it with nothing selected and it applies to what you draw next; change it with a shape selected and that shape changes too.
+The left of the top bar shows the style for the tool you're using. Change it with nothing selected and it applies to what you draw next; change it with a shape selected and that shape changes too. Editing an existing [highlight](/grab-it/image-editor/highlighter/) with **Select** changes only that highlight, leaving your highlighter defaults alone.
 
 ## Colour
 
 Seven swatches, in order: red, orange, green, blue, purple, black and white. Press `1` to `7` to pick one from the keyboard. After them come your favourites, then **+**, the colour picker and the eyedropper.
+
+The [Highlighter](/grab-it/image-editor/highlighter/) keeps its own colour, separate from the other drawing tools, falling back to your drawing colour until you pick one with it.
 
 - **Favourites:** pick any colour, then click **+** to keep it as a swatch after the seven. You can keep up to 8, in every capture. Right-click a favourite to remove it. **+** does nothing for one of the seven or a colour you've already saved. `1` to `7` always pick the seven.
 - **Colour picker:** the round swatch after **+** opens a picker for any other colour.
@@ -31,7 +33,7 @@ The button after the colours sets how big the tool draws. Click it for a preview
 | Step | **Badge size** | 10, 12, 14, 16, 20, 24, 30, 36, 48 | 20 |
 | Stamp | **Stamp size** | 24, 32, 40, 48, 64, 80, 96, 128, 160 | 48 |
 
-**Each tool keeps its own size.** A thick highlighter doesn't make your arrows thick. The [highlighter](/grab-it/image-editor/highlighter/) is always drawn wider than its width, to cover a line of text.
+**Each tool keeps its own size.** A thick highlighter doesn't make your arrows thick. The [highlighter](/grab-it/image-editor/highlighter/) draws wider than its width so it covers a line of text, and adds your chosen width to highlights fitted to text.
 
 ## Options
 
@@ -48,4 +50,4 @@ Some tools have one more option in the top bar:
 
 ## Remembered for next time
 
-The editor remembers your tool, colour, each tool's size, **Fill**, the text style, the blur style, your favourite colours, the stamp you picked and your last backdrop, and opens with them the next time, in any capture.
+The editor remembers your tool, colour, highlighter colour, each tool's size, **Fill**, the text style, the blur style, your favourite colours, the stamp you picked and your last backdrop, and opens with them the next time, in any capture.

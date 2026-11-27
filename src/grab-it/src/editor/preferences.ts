@@ -12,6 +12,8 @@ export interface EditorChoices {
   tool: Tool;
   /** Colour, fill, text style (pill or not), blur style and the picked stamp; widths live in `widths`. */
   style: Pick<Style, "color" | "fill" | "background" | "textStyle" | "blurMode" | "stamp">;
+  /** The highlighter's own colour, as `#rrggbb`; absent until picked with the highlighter. */
+  highlighterColor?: string;
   widths: Widths;
   /** The last backdrop picked: new backdrops start from it. */
   backdrop: Backdrop | null;
@@ -115,6 +117,7 @@ export function fromPreferences(stored: EditorPreferences | null | undefined): E
     widths[entry.tool] = Math.round(width);
   }
   const choices: EditorChoices = { tool, style, widths, backdrop: parseBackdrop(prefs.backdrop) };
+  if (isHex(prefs.highlighterColor)) choices.highlighterColor = prefs.highlighterColor.toLowerCase();
   if (prefs.autoBackdrop === true) choices.autoBackdrop = true;
   if (prefs.showPointer === true) choices.showPointer = true;
   const presets = parseBackdropPresets(prefs.backdropPresets);
@@ -137,6 +140,7 @@ export function toPreferences(choices: EditorChoices): EditorPreferences {
   }
   return {
     color: choices.style.color,
+    ...(choices.highlighterColor ? { highlighterColor: choices.highlighterColor } : {}),
     tool: choices.tool,
     widths,
     fill: Boolean(choices.style.fill),
