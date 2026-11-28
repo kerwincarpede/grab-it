@@ -1057,7 +1057,9 @@
   flex-direction: column;
   gap: 1px;
   min-width: 200px;
-  max-height: 260px;
+  /* A list opens the way it fits (ChipMenu), so this only guards an
+     extreme screen. */
+  max-height: calc(100vh - 24px);
   overflow-y: auto;
   padding: 4px;
   background: #17181b;
@@ -1653,16 +1655,16 @@
 
 /*
  * Recording options: a heading, labelled rows, then switches. Its own
- * panel, not a chip's list, so every row shows; it scrolls only when the
- * screen below the toolbar is shorter than it.
+ * panel, never a scroll container: every row shows, it opens the way
+ * there is room for it (OptionsPopover), and the menus its rows open draw
+ * over it in full.
  */
 .overlay-options-popover {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
   z-index: 2;
-  max-height: calc(100vh - 96px);
-  overflow-y: auto;
+  overflow: visible;
   background: #17181b;
   border: 1px solid #2a2c31;
   border-radius: 12px;
@@ -1882,4 +1884,11 @@
 .overlay-chip-option:has(.overlay-chip-detail) {
   display: flex;
   align-items: center;
+}
+
+/* A row's menu lines up with the row's right edge, inside the screen. */
+.overlay-options-popover .overlay-chip-list {
+  right: 0;
+  left: auto;
+  z-index: 3;
 }

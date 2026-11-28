@@ -83,3 +83,24 @@ export function perceivedLevel(level: number): number {
   const decibels = 20 * Math.log10(Math.min(1, level));
   return Math.max(0, Math.min(1, (decibels + 60) / 60));
 }
+
+/** The gap between a control and the list or panel it opens, in CSS px. */
+const POPUP_GAP = 6;
+
+/**
+ * Whether a list or panel `height` px tall opens above its control, which
+ * spans `anchor` on a screen `viewportHeight` px tall: the way it prefers
+ * while it fits, else the way with more room, so it draws in full and
+ * nothing has to scroll.
+ */
+export function opensUp(
+  preferUp: boolean,
+  anchor: { top: number; bottom: number },
+  viewportHeight: number,
+  height: number,
+): boolean {
+  const below = viewportHeight - anchor.bottom - POPUP_GAP;
+  const above = anchor.top - POPUP_GAP;
+  if (preferUp) return above >= height || above >= below;
+  return below < height && above > below;
+}

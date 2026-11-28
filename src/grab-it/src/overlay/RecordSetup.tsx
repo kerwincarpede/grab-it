@@ -24,6 +24,7 @@ import {
   COUNTDOWN_USE,
   countdownText,
   microphoneLabel,
+  opensUp,
   perceivedLevel,
   nextCountdown,
   withCamera,
@@ -68,6 +69,19 @@ function swallowClick() {
   window.addEventListener("click", stopClick, { capture: true, once: true });
 }
 
+/**
+ * How tall a chip's list is, in CSS px, from the sizes in overlay.css:
+ * its padding, and each row by its kind. Known before it opens, so it
+ * opens the way it fits.
+ */
+function listHeight(rows: ChipRow[]): number {
+  const heights = { option: 29, action: 29, separator: 7, heading: 23, meter: 37 };
+  return 10 + rows.reduce((sum, row) => sum + heights[row.kind ?? "option"], 0);
+}
+
+/** How tall Recording options is at most, in CSS px: heading, four rows, two rules and five switches. */
+const OPTIONS_HEIGHT = 440;
+
 /** A row of a chip's list: an option to pick, or a separator, heading or action between them. */
 type ChipRow =
   | { kind?: "option"; key: string; title: string; detail?: string; selected: boolean; onPick: () => void }
@@ -98,6 +112,8 @@ interface ChipMenuProps {
 /** A chip that opens a short list to pick from. */
 export function ChipMenu({ label, icon, title, disabled, up, checks = false, tip, bare = false, options }: ChipMenuProps) {
   const [open, setOpen] = useState(false);
+  // Which way the list opened, chosen from the room there was.
+  const [placedUp, setPlacedUp] = useState(up);
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -128,7 +144,12 @@ export function ChipMenu({ label, icon, title, disabled, up, checks = false, tip
       aria-describedby={describedBy}
       title={tip ? undefined : title}
       disabled={disabled}
-      onClick={() => setOpen((was) => !was)}
+      onClick={() => {
+        if (!open && root.current) {
+          setPlacedUp(opensUp(up, root.current.getBoundingClientRect(), window.innerHeight, listHeight(options)));
+        }
+        setOpen((was) => !was);
+      }}
     >
       {icon}
       {label !== undefined && <span>{label}</span>}
@@ -143,7 +164,7 @@ export function ChipMenu({ label, icon, title, disabled, up, checks = false, tip
           className="overlay-chip-list"
           role="menu"
           aria-label={title}
-          data-up={up ? "true" : "false"}
+          data-up={placedUp ? "true" : "false"}
           data-checks={checks ? "true" : undefined}
         >
           {options.map((row) => {
@@ -483,6 +504,8 @@ function MicLevel({ level }: { level: number }) {
  */
 function OptionsPopover({ up, countdown, children }: { up: boolean; countdown: string | null; children: ReactNode }) {
   const [open, setOpen] = useState(false);
+  // Which way the panel opened, chosen from the room there was.
+  const [placedUp, setPlacedUp] = useState(up);
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -513,7 +536,12 @@ function OptionsPopover({ up, countdown, children }: { up: boolean; countdown: s
             aria-expanded={open}
             aria-label="Recording options"
             aria-describedby={describedBy}
-            onClick={() => setOpen((was) => !was)}
+            onClick={() => {
+              if (!open && root.current) {
+                setPlacedUp(opensUp(up, root.current.getBoundingClientRect(), window.innerHeight, OPTIONS_HEIGHT));
+              }
+              setOpen((was) => !was);
+            }}
           >
             <SlidersIcon size={16} />
             {countdown && <span className="overlay-options-countdown">{countdown}</span>}
@@ -526,7 +554,7 @@ function OptionsPopover({ up, countdown, children }: { up: boolean; countdown: s
           role="dialog"
           aria-label="Recording options"
           data-testid="overlay-record-options-popover"
-          data-up={up ? "true" : "false"}
+          data-up={placedUp ? "true" : "false"}
         >
           {children}
         </div>

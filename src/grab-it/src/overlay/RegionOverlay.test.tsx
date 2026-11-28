@@ -2950,6 +2950,48 @@ describe("scrolling capture", () => {
       expect(popover).toHaveClass("overlay-options-popover");
     });
 
+    it("never makes Recording options a scroll container, and opens its menus the way they fit", async () => {
+      // jsdom lays nothing out, but it does cascade the overlay's styles.
+      const style = document.createElement("style");
+      const fs = await vi.importActual<{ readFileSync: (path: string, encoding: "utf8") => string }>("node:fs");
+      const here = (import.meta as ImportMeta & { dirname: string }).dirname;
+      style.textContent = fs.readFileSync(`${here}/overlay.css`, "utf8");
+      document.head.append(style);
+      // Each menu's control sits where `at` says, on an 800 px tall screen.
+      let at = { top: 700, bottom: 730 };
+      const rect = vi
+        .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+        .mockImplementation(() => ({ ...at, left: 0, right: 100, width: 100, height: at.bottom - at.top, x: 0, y: at.top, toJSON: () => ({}) }));
+      try {
+        mockOverlay({ allInOne: true, choice: { intent: "record", mode: "region", delaySeconds: 0 } });
+        render(<RegionOverlay />);
+        await ready();
+        const options = await screen.findByTestId("overlay-record-setup");
+        // The toolbar at the top: the panel opens below it.
+        at = { top: 12, bottom: 46 };
+        fireEvent.click(within(options).getByRole("button", { name: "Recording options" }));
+        const panel = screen.getByRole("dialog", { name: "Recording options" });
+        expect(panel).toHaveAttribute("data-up", "false");
+        const placed = getComputedStyle(panel);
+        expect(placed.overflowY).toBe("visible");
+        expect(placed.maxHeight).not.toMatch(/px|vh|calc/);
+
+        // Format's row near the bottom of the screen: its menu opens upward, over the panel.
+        at = { top: 700, bottom: 730 };
+        fireEvent.click(within(panel).getByRole("button", { name: "Format" }));
+        expect(screen.getByRole("menu", { name: "Format" })).toHaveAttribute("data-up", "true");
+        fireEvent.click(within(panel).getByRole("button", { name: "Format" }));
+
+        // With room below, it opens downward.
+        at = { top: 120, bottom: 150 };
+        fireEvent.click(within(panel).getByRole("button", { name: "Countdown" }));
+        expect(screen.getByRole("menu", { name: "Countdown" })).toHaveAttribute("data-up", "false");
+      } finally {
+        rect.mockRestore();
+        style.remove();
+      }
+    });
+
     it("lays Recording options out as the prototype: heading, rows and switches", async () => {
       mockOverlay({ allInOne: true, choice: { intent: "record", mode: "region", delaySeconds: 0 } });
       render(<RegionOverlay />);

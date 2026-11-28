@@ -6,6 +6,7 @@ import {
   countdownText,
   microphoneLabel,
   nextCountdown,
+  opensUp,
   perceivedLevel,
   withCamera,
   withMicrophone,
@@ -78,5 +79,18 @@ describe("perceivedLevel", () => {
     expect(perceivedLevel(10 ** (-24 / 20))).toBeCloseTo(0.6, 2);
     expect(perceivedLevel(10 ** (-60 / 20))).toBeCloseTo(0, 5);
     expect(perceivedLevel(Number.NaN)).toBe(0);
+  });
+});
+
+describe("opensUp", () => {
+  it("opens the preferred way while it fits, else the way with more room", () => {
+    // 800 px screen; a 200 px list.
+    expect(opensUp(false, { top: 100, bottom: 130 }, 800, 200)).toBe(false);
+    expect(opensUp(false, { top: 700, bottom: 730 }, 800, 200)).toBe(true);
+    expect(opensUp(true, { top: 700, bottom: 730 }, 800, 200)).toBe(true);
+    expect(opensUp(true, { top: 100, bottom: 130 }, 800, 200)).toBe(false);
+    // Neither fits: the bigger side.
+    expect(opensUp(false, { top: 200, bottom: 230 }, 600, 400)).toBe(false);
+    expect(opensUp(false, { top: 330, bottom: 360 }, 600, 400)).toBe(true);
   });
 });
