@@ -86,16 +86,27 @@ impl Action {
         matches!(self, Self::Record | Self::AllInOne)
     }
 
-    /// Whether the overlay opens with Capture & record…'s toolbar.
-    fn chooser(self) -> bool {
-        matches!(self, Self::AllInOne | Self::Scroll)
+    /// Whether the overlay opens with Capture & record…'s toolbar. Region
+    /// opens it too when `region_toolbar` (Settings → Capture) is on.
+    fn chooser(self, region_toolbar: bool) -> bool {
+        match self {
+            Self::AllInOne | Self::Scroll => true,
+            Self::Region => region_toolbar,
+            _ => false,
+        }
     }
 
-    /// What the toolbar starts with already picked.
-    fn choice(self) -> Option<overlay::Choice> {
-        (self == Self::Scroll).then_some(overlay::Choice {
-            intent: Some(Intent::Scroll),
-            mode: None,
+    /// What the toolbar starts with already picked: Scroll for Scrolling
+    /// capture, and Capture → Region for Region when it has the toolbar.
+    fn choice(self, region_toolbar: bool) -> Option<overlay::Choice> {
+        let (intent, mode) = match self {
+            Self::Scroll => (Intent::Scroll, None),
+            Self::Region if region_toolbar => (Intent::Capture, Some(CaptureMode::Region)),
+            _ => return None,
+        };
+        Some(overlay::Choice {
+            intent: Some(intent),
+            mode,
             delay_seconds: None,
             scroll_by_hand: None,
         })
@@ -234,7 +245,12 @@ fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool) {
         Screen,
         Monitor(usize),
     }
-    let chooser = action.chooser();
+    let region_toolbar = lock(&app.state::<SettingsState>())
+        .get()
+        .preferences
+        .region_toolbar;
+    let chooser = action.chooser(region_toolbar);
+    let choice = action.choice(region_toolbar);
     let job = match action {
         Action::Region
         | Action::Window
@@ -256,14 +272,9 @@ fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool) {
     let app = app.clone();
     std::thread::spawn(move || {
         let result = match job {
-            CaptureJob::Overlay(id) => overlay::open(
-                &app,
-                action.mode(),
-                action.intent(),
-                chooser,
-                action.choice(),
-                id,
-            ),
+            CaptureJob::Overlay(id) => {
+                overlay::open(&app, action.mode(), action.intent(), chooser, choice, id)
+            }
             CaptureJob::Repeat => {
                 let foreground = screen::foreground();
                 overlay::capture_last_region(&app).map(|(image, scale, pointer)| {
@@ -882,21 +893,43 @@ mod tests {
 
     #[test]
     fn scrolling_capture_opens_the_chooser_with_scroll_picked() {
-        assert!(Action::Scroll.chooser());
-        assert!(Action::AllInOne.chooser());
-        assert!(!Action::Region.chooser());
+        for region_toolbar in [false, true] {
+            assert!(Action::Scroll.chooser(region_toolbar));
+            assert!(Action::AllInOne.chooser(region_toolbar));
+            assert_eq!(
+                Action::Scroll.choice(region_toolbar),
+                Some(overlay::Choice {
+                    intent: Some(Intent::Scroll),
+                    mode: None,
+                    delay_seconds: None,
+                    scroll_by_hand: None,
+                })
+            );
+            assert_eq!(Action::AllInOne.choice(region_toolbar), None);
+        }
         assert_eq!(Action::Scroll.mode(), CaptureMode::Region);
+        // The shortcut that opens it does not stop a recording.
+        assert!(!Action::Scroll.stops_recording());
+    }
+
+    #[test]
+    fn region_opens_the_toolbar_on_capture_region_only_when_set() {
+        assert!(!Action::Region.chooser(false));
+        assert_eq!(Action::Region.choice(false), None);
+        assert!(Action::Region.chooser(true));
         assert_eq!(
-            Action::Scroll.choice(),
+            Action::Region.choice(true),
             Some(overlay::Choice {
-                intent: Some(Intent::Scroll),
-                mode: None,
+                intent: Some(Intent::Capture),
+                mode: Some(CaptureMode::Region),
                 delay_seconds: None,
                 scroll_by_hand: None,
             })
         );
-        assert_eq!(Action::AllInOne.choice(), None);
-        // The shortcut that opens it does not stop a recording.
-        assert!(!Action::Scroll.stops_recording());
+        // Window and Screen ignore the setting.
+        for action in [Action::Window, Action::Screen, Action::Text, Action::Record] {
+            assert!(!action.chooser(true));
+            assert_eq!(action.choice(true), None);
+        }
     }
 }

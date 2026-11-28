@@ -118,6 +118,8 @@ function settings(backend: Backend): Settings_Serialize {
     updateChannel: "stable",
     afterCapture: "quickAccess",
     copyToClipboard: true,
+    regionToolbar: false,
+    toolbarTick: false,
     copySound: true,
     copySoundVolume: 50,
     ai: {

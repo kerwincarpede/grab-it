@@ -19,6 +19,8 @@ export function testSettings(overrides: Partial<Settings_Serialize> = {}): Setti
     },
     afterCapture: "quickAccess",
     copyToClipboard: true,
+    regionToolbar: false,
+    toolbarTick: false,
     copySound: true,
     copySoundVolume: 50,
     ai: DEFAULT_AI_PREFERENCES,

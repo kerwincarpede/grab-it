@@ -49,6 +49,9 @@ interface Backend {
   autostart?: boolean;
   afterCapture: AfterCapture;
   copyToClipboard: boolean;
+  /** Settings › Capture's region toolbar and done tick switches. */
+  regionToolbar: boolean;
+  toolbarTick: boolean;
   copySound: boolean;
   copySoundVolume: number;
   recordingActive: boolean;
@@ -112,6 +115,8 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
   const backend: Backend = {
     afterCapture: "quickAccess",
     copyToClipboard: true,
+    regionToolbar: false,
+    toolbarTick: false,
     copySound: false,
     copySoundVolume: 50,
     recordingActive: false,
@@ -148,6 +153,8 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
     hotkeys: backend.hotkeys,
     afterCapture: backend.afterCapture,
     copyToClipboard: backend.copyToClipboard,
+    regionToolbar: backend.regionToolbar,
+    toolbarTick: backend.toolbarTick,
     copySound: backend.copySound,
     copySoundVolume: backend.copySoundVolume,
     ai: backend.ai,
@@ -249,6 +256,8 @@ function mockBackend(initial: Partial<Backend> = {}): Backend {
         guard();
         backend.afterCapture = preferences.afterCapture;
         backend.copyToClipboard = preferences.copyToClipboard;
+        backend.regionToolbar = preferences.regionToolbar ?? backend.regionToolbar;
+        backend.toolbarTick = preferences.toolbarTick ?? backend.toolbarTick;
         const { automaticDescriptions, ...ai } = preferences.ai ?? {};
         // Saved as the backend writes it: an unset switch is left out.
         backend.ai = { ...backend.ai, ...ai, ...(automaticDescriptions == null ? {} : { automaticDescriptions }) };
@@ -430,7 +439,15 @@ describe("SettingsWindow", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Saved.");
     expect(backend.calls[backend.calls.length - 1]).toEqual({
       cmd: "set_preferences",
-      payload: { preferences: { afterCapture: "editor", copyToClipboard: true, ai: DEFAULT_AI_PREFERENCES } },
+      payload: {
+        preferences: {
+          afterCapture: "editor",
+          copyToClipboard: true,
+          ai: DEFAULT_AI_PREFERENCES,
+          regionToolbar: false,
+          toolbarTick: false,
+        },
+      },
     });
   });
 
@@ -444,8 +461,59 @@ describe("SettingsWindow", () => {
 
     await waitFor(() => expect(copy).not.toBeChecked());
     expect(backend.calls[backend.calls.length - 1].payload).toEqual({
-      preferences: { afterCapture: "nothing", copyToClipboard: false, ai: DEFAULT_AI_PREFERENCES },
+      preferences: {
+        afterCapture: "nothing",
+        copyToClipboard: false,
+        ai: DEFAULT_AI_PREFERENCES,
+        regionToolbar: false,
+        toolbarTick: false,
+      },
     });
+  });
+
+  it("shows the toolbar switches off and saves each at once, keeping the other choices", async () => {
+    const backend = mockBackend({ afterCapture: "editor", copyToClipboard: false });
+    const saved = () => backend.calls.filter((call) => call.cmd === "set_preferences").pop()?.payload;
+    render(<SettingsWindow section="capture" />);
+    const region = await screen.findByRole("switch", { name: /Show the toolbar for region captures/ });
+    const tick = screen.getByRole("switch", { name: /Show a tick in the toolbar after a capture/ });
+    await waitFor(() => expect(region).toBeEnabled());
+    expect(region).not.toBeChecked();
+    expect(tick).not.toBeChecked();
+
+    await userEvent.click(region);
+    await waitFor(() => expect(region).toBeChecked());
+    expect(saved()).toEqual({
+      preferences: {
+        afterCapture: "editor",
+        copyToClipboard: false,
+        ai: DEFAULT_AI_PREFERENCES,
+        regionToolbar: true,
+        toolbarTick: false,
+      },
+    });
+
+    await userEvent.click(tick);
+    await waitFor(() => expect(tick).toBeChecked());
+    expect(region).toBeChecked();
+    expect(saved()).toEqual({
+      preferences: {
+        afterCapture: "editor",
+        copyToClipboard: false,
+        ai: DEFAULT_AI_PREFERENCES,
+        regionToolbar: true,
+        toolbarTick: true,
+      },
+    });
+    expect(backend.regionToolbar && backend.toolbarTick).toBe(true);
+  });
+
+  it("shows the region toolbar on as a new install saves it", async () => {
+    mockBackend({ regionToolbar: true });
+    render(<SettingsWindow section="capture" />);
+    const region = await screen.findByRole("switch", { name: /Show the toolbar for region captures/ });
+    await waitFor(() => expect(region).toBeChecked());
+    expect(screen.getByRole("switch", { name: /Show a tick in the toolbar/ })).not.toBeChecked();
   });
 
   it("previews while the sound preference is off and saves the toggle independently", async () => {
@@ -876,6 +944,8 @@ describe("SettingsWindow AI descriptions", () => {
       expect(lastPreferences(backend)).toEqual({
         afterCapture: "editor",
         copyToClipboard: true,
+        regionToolbar: false,
+        toolbarTick: false,
         ai: {
           ...DEFAULT_AI_PREFERENCES,
           enabled: true,

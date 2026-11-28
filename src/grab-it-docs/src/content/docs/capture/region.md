@@ -9,6 +9,8 @@ sidebar:
 
 ![Dragging a region over a window: the rest of the screen dims and the size shows at the corner.](../../../assets/capture/region-overlay.png)
 
+When **Settings → Capture → Show the toolbar for region captures** is on (the default for new installs), the [Capture & record…](/grab-it/capture/all-in-one/) toolbar opens with **Capture → Region** picked, so you can switch to another mode or set a timer first. Turn it off to start selecting at once, as an updated install does until you turn it on.
+
 Every monitor freezes at once and dims, so menus, tooltips and videos stay exactly as they were. Each monitor gets its own overlay, so you can drag on whichever one you like.
 
 ## Drag a region
