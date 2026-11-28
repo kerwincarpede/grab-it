@@ -114,6 +114,22 @@ describe("placePopup", () => {
     expect(placed).toMatchObject({ top: 8, maxHeight: 584 });
   });
 
+  it("keeps the same 6 px gap from its control above as below", () => {
+    const toolbar = { top: 540, bottom: 590, left: 600, right: 640 };
+    const above = placePopup(toolbar, { width: 300, height: 420 }, { width: 1000, height: 600 }, true, "end");
+    expect(above.up).toBe(true);
+    expect(toolbar.top - (above.top + 420)).toBe(6);
+    const top = { top: 10, bottom: 60, left: 600, right: 640 };
+    const below = placePopup(top, { width: 300, height: 420 }, { width: 1000, height: 600 }, false, "end");
+    expect(below.up).toBe(false);
+    expect(below.top - top.bottom).toBe(6);
+    // A row's menu opening upward keeps it too.
+    const row = { top: 500, bottom: 530, left: 600, right: 700 };
+    const menu = placePopup(row, { width: 200, height: 120 }, { width: 1000, height: 600 }, false, "end");
+    expect(menu.up).toBe(true);
+    expect(row.top - (menu.top + 120)).toBe(6);
+  });
+
   it("opens below with room, above without", () => {
     expect(placePopup({ ...chip, top: 40, bottom: 70 }, { width: 200, height: 120 }, screen, false, "start")).toMatchObject({
       up: false,

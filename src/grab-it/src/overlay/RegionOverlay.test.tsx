@@ -2961,7 +2961,8 @@ describe("scrolling capture", () => {
       Object.defineProperty(window, "innerHeight", { configurable: true, value: viewport.height });
       const rows = (element: HTMLElement) => element.querySelectorAll('[role^="menuitem"], .overlay-options-row').length;
       const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-        const { top, bottom } = this.matches(".overlay-chip-menu") ? at() : { top: 0, bottom: 0 };
+        // A toolbar's popups keep their gap from the toolbar itself, here the same span.
+        const { top, bottom } = this.matches(".overlay-chip-menu, .overlay-toolbar, .overlay-setup") ? at() : { top: 0, bottom: 0 };
         return { top, bottom, left: 400, right: 440, width: 40, height: bottom - top, x: 400, y: top, toJSON: () => ({}) };
       });
       const height = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
@@ -3031,6 +3032,7 @@ describe("scrolling capture", () => {
         fireEvent.click(within(options).getByRole("button", { name: "Recording options" }));
         const panel = screen.getByRole("dialog", { name: "Recording options" });
         expect(panel).toHaveAttribute("data-up", "false");
+        expect(onScreen(panel, at.top).top - at.bottom).toBe(6);
         const placed = getComputedStyle(panel);
         expect(placed.overflowY).toBe("visible");
         expect(placed.maxHeight).not.toMatch(/px|vh|calc/);

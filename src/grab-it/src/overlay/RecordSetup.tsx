@@ -79,9 +79,14 @@ function swallowClick() {
 function placeIn(anchor: HTMLElement, popup: HTMLElement, preferUp: boolean, align: "start" | "end") {
   popup.style.maxHeight = "";
   const rect = anchor.getBoundingClientRect();
+  // A toolbar's own popups keep their gap from the toolbar's pill, above
+  // or below alike; a row's menu in Recording options, from its row.
+  const bar = anchor.closest(".overlay-options-popover") ? null : anchor.closest(".overlay-toolbar, .overlay-setup");
+  const edge = bar?.getBoundingClientRect() ?? rect;
   const placed = placePopup(
-    rect,
-    { width: popup.offsetWidth, height: popup.scrollHeight },
+    { top: edge.top, bottom: edge.bottom, left: rect.left, right: rect.right },
+    // The whole box, borders included, so the gap is the same both ways.
+    { width: popup.offsetWidth, height: Math.max(popup.offsetHeight, popup.scrollHeight) },
     { width: window.innerWidth, height: window.innerHeight },
     preferUp,
     align,
