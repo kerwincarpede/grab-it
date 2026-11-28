@@ -1211,6 +1211,8 @@ fn take_session(
 }
 
 fn dismiss(app: &AppHandle, session: &Session, give_back: bool) {
+    // Record setup's microphone stops with its overlay.
+    crate::audio::stop_setup_level();
     // Before the windows go, so an active Grab-it does not move the focus
     // to another of its windows on the way.
     if give_back {
@@ -1284,6 +1286,9 @@ pub struct OverlayInfo {
     /// The area held last is on another display, so Scroll's guide shows
     /// there instead. Asked again on each `HOLD_EVENT`.
     pub held_elsewhere: bool,
+    /// Settings → Capture's Show a tick in the toolbar after a capture: the
+    /// toolbar shows a tick and the result before the overlay closes.
+    pub toolbar_tick: bool,
 }
 
 /// The last region as a starting selection for an overlay on `monitor`
@@ -1517,6 +1522,9 @@ pub fn overlay_info(
 ) -> Option<OverlayInfo> {
     // Read before the session is locked, so the two locks are never nested.
     let scroll_by_hand = remembered_scroll_by_hand(&app);
+    let toolbar_tick = app
+        .try_state::<crate::commands::SettingsState>()
+        .is_some_and(|state| crate::commands::lock(&state).get().preferences.toolbar_tick);
     let mut guard = state.lock();
     let Phase::Open(session) = &mut *guard else {
         return None;
@@ -1556,6 +1564,7 @@ pub fn overlay_info(
         monitor_name: frame.monitor.name.clone(),
         scroll_by_hand,
         held_elsewhere: session.held_elsewhere(window.label()),
+        toolbar_tick,
     })
 }
 
@@ -1931,6 +1940,28 @@ pub fn overlay_scroll_docs(app: AppHandle, window: WebviewWindow) {
     if let Err(err) = app.opener().open_url(SCROLL_DOCS_URL, None::<&str>) {
         eprintln!("Grab-it: could not open the scrolling capture docs: {err}");
     }
+}
+
+/// Tab in a bare Region capture: the session takes Capture & record's
+/// toolbar, so the choice it makes from here is honoured as All-in-one's.
+#[tauri::command]
+#[specta::specta]
+pub fn overlay_show_toolbar(
+    window: WebviewWindow,
+    state: State<'_, OverlayState>,
+) -> Result<(), String> {
+    let mut guard = state.lock();
+    let Phase::Open(session) = &mut *guard else {
+        return Err("no capture in progress".into());
+    };
+    if !session.frames.contains_key(window.label()) {
+        return Err("this window is not a capture overlay".into());
+    }
+    if session.intent != Intent::Capture || session.mode != CaptureMode::Region {
+        return Err("only a Region capture can show the toolbar".into());
+    }
+    session.all_in_one = true;
+    Ok(())
 }
 
 /// Closes the overlays and saves the selection. An All-in-one overlay
@@ -2860,6 +2891,7 @@ mod tests {
             monitor_name: "eDP-1".into(),
             scroll_by_hand: false,
             held_elsewhere: false,
+            toolbar_tick: false,
         };
         let value = serde_json::to_value(&info).unwrap();
         assert_eq!(value["allInOne"], true);
@@ -3013,6 +3045,7 @@ mod tests {
             monitor_name: "DELL U2720Q".into(),
             scroll_by_hand: true,
             held_elsewhere: true,
+            toolbar_tick: false,
         };
         let value = serde_json::to_value(&info).unwrap();
         assert_eq!(

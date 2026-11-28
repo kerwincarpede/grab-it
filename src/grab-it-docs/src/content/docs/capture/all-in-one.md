@@ -15,27 +15,36 @@ The screen freezes with one toolbar at the top. Press the same shortcut again to
 
 From left to right:
 
-- **Region**, **Window** and **Screen**: what to capture.
-- **Text**, **Colour**, **Record** and **Scroll**: the tools.
-- A middle section that changes with what you're doing: the selection's width, height and ratio once you've selected a region, the colour under the pointer in **Colour**, or the recording options in **Record**.
-- **Timer** (the countdown in **Record**), then the main button, named for the mode: **Capture**, **Capture in 3 s**, **Copy text**, **Copy colour**, **Start scrolling** or a red **Record**. It's dimmed until there's something to act on. In **Window** and **Colour** it acts on the window or pixel you last paused on, so the pointer can cross the screen to reach it.
+- **Capture**, **Record**, **Text**, **Colour** and **Scroll**: the five modes. A highlight slides to the one you pick, and only that one shows its name.
+- The picked mode's own controls, which fold in as you switch: **Region**, **Window** and **Screen** for **Capture** and **Record**, the colour under the pointer in **Colour**, or the microphone, camera and **Recording options** in **Record**.
+- **Timer** (the countdown in **Record**), then the main button, named for what it does: **Capture**, **Capture in 3 s**, **Copy text**, **Copy colour**, **Start scrolling** or a red **Record**. It's dimmed until there's something to act on. In **Window** and **Colour** it acts on the window or pixel you last paused on, so the pointer can cross the screen to reach it.
 - **×** to cancel.
 
 Point at any item, or move to it with `Tab`, to see a tooltip with its name, its key in the chooser, its global shortcut if it has one, and what it does. A dimmed main button's tooltip says what to do first, for example *Drag an area or click a window first.*
 
 `Tab` moves into the toolbar and `←` `→` move between the buttons of a group. The first `Esc` leaves the toolbar; the next one cancels.
 
-If a selected region is under the toolbar, the toolbar moves to the bottom edge of the screen. On a narrower display the modes you haven't picked shrink to their icon and key, the ratios fold into one menu, and on the narrowest the size and ratio move to a second row of the toolbar.
+If a selected region is under the toolbar, the toolbar moves to the bottom edge of the screen. The selection's width, height and ratio sit in a chip under the region, not in the toolbar.
+
+With **Reduce motion** on in your system settings, the toolbar's controls fade in and out instead of sliding and folding.
+
+### From a Region capture
+
+In a plain Region capture, with **Settings → Capture → Region toolbar** off, press `Tab` to bring up this toolbar on **Capture → Region**. A region you're dragging stays selected.
+
+### A tick after a capture
+
+Turn on **Settings → Capture → Show a tick in the toolbar after a capture** and the toolbar shows a green tick and what was done, such as *Captured* or *Text copied*, for about a second before it closes. It's off by default, since the Quick Access card already shows the result.
 
 ## Modes
 
-Click a mode, or press its number while the chooser is open. You can switch modes as often as you like before you capture.
+Click a mode or target, or press its number while the chooser is open. You can switch as often as you like before you capture. `1`, `2` and `3` pick **Capture**'s targets (or **Record**'s, while it's on).
 
 | Key | Mode | What it does |
 | --- | --- | --- |
-| `1` | **Region** | Drag a region, or click a window ([Region](/grab-it/capture/region/)) |
-| `2` | **Window** | Click a window, or press `Enter` for the one under the pointer ([Window](/grab-it/capture/window/)) |
-| `3` | **Screen** | Captures every monitor straight away, as it was frozen ([Screen and monitor](/grab-it/capture/screen/)) |
+| `1` | **Capture → Region** | Drag a region, or click a window ([Region](/grab-it/capture/region/)) |
+| `2` | **Capture → Window** | Click a window, or press `Enter` for the one under the pointer ([Window](/grab-it/capture/window/)) |
+| `3` | **Capture → Screen** | Captures every monitor straight away, as it was frozen ([Screen and monitor](/grab-it/capture/screen/)) |
 | `4` | **Text** | Drag over text or a code to copy it ([Text and codes](/grab-it/capture/text-and-codes/)) |
 | `5` | **Colour** | Click a pixel, or press `Enter`, to copy the colour under the pointer ([Pick a colour](/grab-it/capture/colour/)) |
 | `6` | **Record** | Choose what to record and start a recording (see below) |
@@ -66,7 +75,7 @@ In **Region** and **Text**, a region you drag doesn't capture when you let go. I
 
 ### Exact size
 
-In the middle of the toolbar are the selection's **width** and **height**. Type an exact size, such as `1280` × `720`, and press `Enter` or click away to apply it. The size is in the pixels the capture will have, so on a Retina or high-DPI screen it's the real image size, not the size in points. A size that would run off the screen moves the selection back onto it, and one larger than the screen is cut to fit.
+In the chip under the selection are its **width** and **height**. Type an exact size, such as `1280` × `720`, and press `Enter` or click away to apply it. The size is in the pixels the capture will have, so on a Retina or high-DPI screen it's the real image size, not the size in points. A size that would run off the screen moves the selection back onto it, and one larger than the screen is cut to fit.
 
 `Enter` in a size field only sets the size. Press `Enter` again (outside the field) to capture.
 
@@ -82,8 +91,8 @@ The last region you captured starts out selected on the monitor it was on, ready
 
 **Record** stays in the same toolbar, with a red dot on its icon. While it's on:
 
-- **Region**, **Window** and **Screen** (or `1`, `2` and `3`) pick what to record. A region keeps its size and ratio chip beside it.
-- The middle of the toolbar holds the format, microphone, webcam, system sound, clicks and keys. See [Recording options](/grab-it/recording/options/).
+- **Region**, **Window** and **Screen** (or `1`, `2` and `3`) pick what to record. A region keeps its size and ratio chip under it.
+- The microphone and camera buttons each list **Default**, your devices and **Off**. The microphone button shows its level as you speak. **Recording options** holds the format, system sound, noise removal, clicks and keys. See [Recording options](/grab-it/recording/options/).
 - The **Timer** button is the countdown, on `8`.
 - The main button is a red **Record**. Press it or `Enter` to start.
 

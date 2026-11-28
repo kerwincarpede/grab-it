@@ -29,7 +29,7 @@ There are three choices. Press `1`, `2` or `3` to switch between them, or click 
 
 Record opens on the choice you used last.
 
-The rest of the toolbar sets the format, sound, webcam, clicks, keys and countdown. In Capture & record… they're in the middle of its toolbar, and the countdown takes the Timer's place on `8`. Each change is saved to **Settings → Recording** straight away, so the next recording starts the same way. See [Recording options](/grab-it/recording/options/).
+The rest of the toolbar has a microphone button, a camera button, **Recording options** (the format, system sound, noise removal, clicks and keys) and the countdown. The microphone button shows its level while you set up, so you can check it hears you before you start. In Capture & record… the countdown takes the Timer's place on `8`. Each change is saved to **Settings → Recording** straight away, so the next recording starts the same way. See [Recording options](/grab-it/recording/options/).
 
 When you're ready, press **Record** or `Enter`. **Record** is dimmed until you've picked something, and its tooltip says what to pick. Press **×** or `Esc` to cancel. In Capture & record…, press **Record** or `6` again to go back to screenshots.
 

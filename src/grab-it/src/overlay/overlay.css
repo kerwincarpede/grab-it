@@ -544,6 +544,122 @@
   align-items: center;
 }
 
+/*
+ * Modes and targets share one highlight per group, which slides to the
+ * picked button (see useSlide); the buttons themselves stay clear.
+ */
+.overlay-slider {
+  position: relative;
+}
+
+.overlay-slide {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 34px;
+  background: #34373f;
+  border-radius: 999px;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    width 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 120ms ease-out;
+}
+
+.overlay-slider > .overlay-tip-anchor {
+  position: relative;
+}
+
+.overlay-slider .overlay-tool[aria-pressed="true"],
+.overlay-slider .overlay-tool[data-picked="true"] {
+  background: transparent;
+}
+
+.overlay-mode-label {
+  animation: overlay-label-in 180ms ease-out;
+}
+
+/* A mode's own controls fold in from its side as the mode is picked. */
+.overlay-fold {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  animation: overlay-fold-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.overlay-fold:empty {
+  display: none;
+}
+
+@keyframes overlay-fold-in {
+  from {
+    opacity: 0;
+    clip-path: inset(0 100% 0 0);
+  }
+
+  to {
+    opacity: 1;
+    clip-path: inset(0);
+  }
+}
+
+@keyframes overlay-label-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes overlay-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* After a capture, with Show a tick on: a green tick and what was done. */
+.overlay-toolbar-done {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  padding: 0 12px 0 4px;
+  font-weight: 500;
+  animation: overlay-fade-in 160ms ease-out;
+}
+
+.overlay-done-tick {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: #fff;
+  background: #2ea043;
+  border-radius: 999px;
+}
+
+/* The selection's size and ratios, in a chip under the selected region. */
+.overlay-size-panel[data-chip="true"] {
+  border-radius: 999px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay-slide {
+    transition: opacity 120ms ease-out;
+  }
+
+  /* Only fades: nothing slides or folds. */
+  .overlay-fold {
+    animation-name: overlay-fade-in;
+  }
+}
+
 .overlay-toolbar-middle {
   display: flex;
   gap: 4px;
@@ -1506,4 +1622,43 @@
 .scroll-direction-arrow {
   font-size: 18px;
   line-height: 18px;
+}
+
+/* Recording options: the format, then the option toggles in a row. */
+.overlay-options-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 220px;
+  padding: 8px;
+}
+
+.overlay-options-toggles {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+/* The setup microphone's level: a short bar that fills from the bottom. */
+.overlay-mic-level {
+  position: relative;
+  width: 3px;
+  height: 14px;
+  overflow: hidden;
+  background: rgb(255 255 255 / 12%);
+  border-radius: 2px;
+}
+
+.overlay-mic-level > span {
+  position: absolute;
+  inset: 0;
+  background: #3fb950;
+  transform-origin: bottom;
+  transition: transform 80ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay-mic-level > span {
+    transition: none;
+  }
 }

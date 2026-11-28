@@ -706,6 +706,118 @@ impl Drop for Sound {
     }
 }
 
+/// Record setup's microphone level: the chosen microphone, listened to
+/// only while setup is open, so its button can show that it hears you.
+/// Nothing it hears is kept: its scratch WAV goes when it stops.
+pub struct SetupListener {
+    current: Mutex<Option<Listening>>,
+    /// Counts the stops, so a start that finishes after a stop is dropped.
+    stops: AtomicU64,
+}
+
+/// A microphone being listened to on its own thread, which stops it once
+/// this is dropped.
+struct Listening {
+    meter: Meter,
+    stop: std::sync::mpsc::Sender<()>,
+}
+
+impl Drop for Listening {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+    }
+}
+
+impl SetupListener {
+    const fn new() -> Self {
+        Self {
+            current: Mutex::new(None),
+            stops: AtomicU64::new(0),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Option<Listening>> {
+        self.current
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Stops listening, and any start still on its way.
+    fn stop(&self) {
+        self.stops.fetch_add(1, Ordering::Relaxed);
+        drop(self.lock().take());
+    }
+
+    /// Listens with `listening`, unless a stop came after `since`.
+    fn begin(&self, since: u64, listening: Listening) {
+        let mut current = self.lock();
+        if self.stops.load(Ordering::Relaxed) == since {
+            *current = Some(listening);
+        }
+        // Otherwise `listening` drops here and its microphone stops.
+    }
+
+    /// The loudest level since the last read, or None when not listening.
+    fn level(&self) -> Option<f32> {
+        self.lock().as_ref().map(|listening| listening.meter.take())
+    }
+}
+
+static SETUP_LISTENER: SetupListener = SetupListener::new();
+
+/// Starts listening to `microphone` (the default one when None) for Record
+/// setup's level, in place of any microphone listened to before. A
+/// microphone that cannot be opened shows no level.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn setup_level_start(app: AppHandle, microphone: Option<String>) -> Result<(), String> {
+    SETUP_LISTENER.stop();
+    let since = SETUP_LISTENER.stops.load(Ordering::Relaxed);
+    let ffmpeg = crate::ffmpeg::ready(&app)
+        .map(|ready| ready.path)
+        .unwrap_or_default();
+    let (started, meter) = std::sync::mpsc::channel();
+    let (stop, stopped) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        match Sound::start(&ffmpeg, Input::Microphone(microphone)) {
+            Ok(sound) => {
+                let _ = started.send(Ok(sound.meter()));
+                // Until stopped, or the listener is gone.
+                let _ = stopped.recv();
+                drop(sound);
+            }
+            Err(err) => {
+                let _ = started.send(Err(err));
+            }
+        }
+    });
+    let meter = meter
+        .recv()
+        .map_err(|_| "the microphone stopped before it started".to_owned())??;
+    SETUP_LISTENER.begin(since, Listening { meter, stop });
+    Ok(())
+}
+
+/// Stops listening to Record setup's microphone.
+#[tauri::command]
+#[specta::specta]
+pub fn setup_level_stop() {
+    stop_setup_level();
+}
+
+/// Stops Record setup's microphone, as its overlay closes.
+pub fn stop_setup_level() {
+    SETUP_LISTENER.stop();
+}
+
+/// How loud Record setup's microphone has been since this was last asked,
+/// from 0 to 1, or None when it is not being listened to.
+#[tauri::command]
+#[specta::specta]
+pub fn setup_level() -> Option<f32> {
+    SETUP_LISTENER.level()
+}
+
 /// The microphones that can be picked. On Linux `ffmpeg` lists them, so
 /// without it there are none to list.
 pub fn microphones(ffmpeg: Option<&Path>) -> Result<Vec<MicrophoneInfo>, String> {
@@ -1199,6 +1311,46 @@ mod platform {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn setup_listener_reads_its_meter_and_stops_its_microphone() {
+        let listener = SetupListener::new();
+        assert_eq!(listener.level(), None);
+        let meter = Meter::default();
+        let (stop, stopped) = std::sync::mpsc::channel();
+        listener.begin(
+            0,
+            Listening {
+                meter: meter.clone(),
+                stop,
+            },
+        );
+        meter.heard(&[0, i16::MAX / 2, -1]);
+        let level = listener.level().unwrap();
+        assert!((level - 0.5).abs() < 0.01, "{level}");
+        // Each read starts the next.
+        assert_eq!(listener.level(), Some(0.0));
+        listener.stop();
+        assert_eq!(listener.level(), None);
+        assert!(stopped.try_recv().is_ok());
+    }
+
+    #[test]
+    fn a_setup_start_after_a_stop_is_dropped() {
+        let listener = SetupListener::new();
+        let since = listener.stops.load(Ordering::Relaxed);
+        listener.stop();
+        let (stop, stopped) = std::sync::mpsc::channel();
+        listener.begin(
+            since,
+            Listening {
+                meter: Meter::default(),
+                stop,
+            },
+        );
+        assert_eq!(listener.level(), None);
+        assert!(stopped.try_recv().is_ok());
+    }
 
     #[test]
     fn a_wav_holds_its_samples_and_their_sizes() {
