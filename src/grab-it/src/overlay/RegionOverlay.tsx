@@ -139,15 +139,14 @@ const SCROLL_START_INSET = 16;
  */
 const WINDOW_RADIUS = 10;
 
-/** Room Capture & record's toolbar takes, gap included, in CSS px; a second row adds `TOOLBAR_ROW`. */
+/** Room Capture & record's toolbar takes, gap included, in CSS px. */
 const TOOLBAR_ROOM = 58;
-const TOOLBAR_ROW = 44;
 /** The toolbar's gap from the bottom edge, when it moves there out of a selection's way. */
 const TOOLBAR_BOTTOM = 12;
 /**
  * Room Record's options take in the toolbar, in CSS px: Record lays the
  * toolbar out as a display this much narrower would, so its options shrink
- * and then move to a second row sooner.
+ * to icons sooner.
  */
 const RECORD_ROOM = 434;
 
@@ -713,7 +712,8 @@ function RegionOverlay() {
       // The next capture starts with the card picked before.
     });
   }
-  const recording = useRecordingOptions(intent === "record");
+  // Read as the toolbar opens, so switching to Record does not wait on it.
+  const recording = useRecordingOptions(intent === "record", allInOne);
   // What a recording records: the source used last, until another is picked.
   const source: RecordingSource | null =
     intent === "record" ? (recording.recording?.source ?? "region") : null;
@@ -1274,8 +1274,6 @@ function RegionOverlay() {
   // mode that holds one; Record fills the toolbar's middle with its options.
   const sizeChip =
     !allInOne || intent === "record" ? source === "region" : intent === "capture" || intent === "text" || intent === "scroll";
-  const secondRow = layout === "stacked" && intent === "record";
-  const toolbarRoom = TOOLBAR_ROOM + (secondRow ? TOOLBAR_ROW : 0);
   // A held selection under the toolbar sends it to the bottom edge, if the
   // selection leaves room there. In Scroll the toolbar and guide stay put
   // while the area is resized or moved, and settle once it is let go.
@@ -1283,15 +1281,15 @@ function RegionOverlay() {
   const toolbarEdge: "top" | "bottom" =
     allInOne &&
     placedBy !== null &&
-    placedBy.y < top + toolbarRoom &&
-    placedBy.y + placedBy.height <= view.height - TOOLBAR_BOTTOM - toolbarRoom
+    placedBy.y < top + TOOLBAR_ROOM &&
+    placedBy.y + placedBy.height <= view.height - TOOLBAR_BOTTOM - TOOLBAR_ROOM
       ? "bottom"
       : "top";
   // Scroll's guide: under the toolbar, or above the bottom edge (and the
   // toolbar, when it went there). It starts at the bottom and moves only
   // when a held area lies under it.
-  const guideTop = top + (allInOne && toolbarEdge === "top" ? toolbarRoom : 0);
-  const guideBottom = SCROLL_GUIDE_BOTTOM + (allInOne && toolbarEdge === "bottom" ? toolbarRoom : 0);
+  const guideTop = top + (allInOne && toolbarEdge === "top" ? TOOLBAR_ROOM : 0);
+  const guideBottom = SCROLL_GUIDE_BOTTOM + (allInOne && toolbarEdge === "bottom" ? TOOLBAR_ROOM : 0);
   const guideHeight = guideBand ? guideBand.bottom - guideBand.top : SCROLL_GUIDE_HEIGHT;
   const guideWidth = guideBand
     ? guideBand.right - guideBand.left
@@ -1323,7 +1321,7 @@ function RegionOverlay() {
   const startAt =
     intent === "scroll" && held
       ? startLabelY(held.y, held.x + SCROLL_START_INSET, [
-          ...(allInOne && toolbarEdge === "top" ? [{ top, bottom: top + toolbarRoom, left: 0, right: view.width }] : []),
+          ...(allInOne && toolbarEdge === "top" ? [{ top, bottom: top + TOOLBAR_ROOM, left: 0, right: view.width }] : []),
           ...(guideBand ? [guideBand] : []),
         ])
       : null;
@@ -1379,7 +1377,7 @@ function RegionOverlay() {
   const setupLow = setupCentre.y > view.height / 2;
   // The hint (an error, there) goes under the setup toolbar, or over it in the lower half.
   const hintAt: { top: number; left?: number } = !showSetup
-    ? { top: top + (allInOne ? toolbarRoom : 0) }
+    ? { top: top + (allInOne ? TOOLBAR_ROOM : 0) }
     : {
         top: setupLow
           ? setupCentre.y - SETUP_HALF - SETUP_HINT_GAP - 34
@@ -1432,7 +1430,6 @@ function RegionOverlay() {
     view.width,
     view.height,
     top,
-    toolbarRoom,
     showGuide,
     placedGuide,
     guideTop,

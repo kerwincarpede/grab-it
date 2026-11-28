@@ -371,7 +371,8 @@ export function RecordOptionsFields({ options, up, level = null }: RecordOptions
         icon={
           <>
             {micIcon}
-            {level !== null && micOn && !gif && <MicLevel level={level} />}
+            {/* Unlit until the first level arrives, so the chip keeps its width. */}
+            {micOn && !gif && <MicLevel level={level ?? 0} />}
           </>
         }
         // An icon alone: its tooltip names the choice.
