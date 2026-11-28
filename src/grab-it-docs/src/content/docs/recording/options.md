@@ -71,6 +71,16 @@ The names come from a list Grab-it remembers, so opening the toolbar never turns
 
 You can also pick the **Camera** in **Settings → Recording**, which also sets the **Webcam shape** (**Squircle**, the default, **Round**, **Arch**, **Pill**, **Wide** or **Blob**, which slowly changes its outline) and whether to **Mirror webcam**. Mirroring is on by default, so you see yourself as in a mirror and pointing at the screen points the right way; turn it off when there's writing behind you, which would read backwards. You can hide and show the bubble while you record from the [toolbar's menu](/grab-it/recording/toolbar/#the-menu).
 
+### Background
+
+To keep your room out of a recording, set **Background** in **Settings → Recording**, under **Webcam shape**:
+
+- **None**, the default, shows your camera as it is.
+- **Blur** blurs everything behind you. **Blur amount** sets how much, from a hint at 1% to 100%; it starts at 50%.
+- **Colour** puts a solid colour behind you, dark grey until you pick another.
+
+Grab-it finds you in each camera frame with a small model it ships with, on your computer: nothing is downloaded and no frame leaves it. Until it has found you in the first frame, the bubble keeps its starting pulse, so your room isn't shown. On a slow computer it skips frames rather than slowing your camera. If it can't run, the bubble shows your camera as it is for the rest of the recording.
+
 ## Clicks
 
 The **Show clicks** switch draws a ring wherever you click, which grows and fades in half a second. It's drawn into the recording itself, not shown on your screen.

@@ -34,6 +34,8 @@
       "ocr-models/LICENSE.md": "ocr-models/LICENSE.md",
       "face-models/version-RFB-320.onnx": "face-models/version-RFB-320.onnx",
       "face-models/LICENSE.md": "face-models/LICENSE.md",
+      "segmentation-models/model.onnx": "segmentation-models/model.onnx",
+      "segmentation-models/LICENSE.md": "segmentation-models/LICENSE.md",
       "noise-models/bd.rnnn": "noise-models/bd.rnnn",
       "noise-models/LICENSE.md": "noise-models/LICENSE.md",
       "sounds/LICENSE.md": "sounds/LICENSE.md"

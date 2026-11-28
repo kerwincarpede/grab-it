@@ -38,6 +38,7 @@ use crate::{
     ocr::OcrLine,
     record::RECORDINGS_DIR,
     rt::WebviewWindow,
+    segmentation,
     settings::{SETTINGS_FILE, Settings, SettingsStore},
 };
 
@@ -97,6 +98,9 @@ impl Harness {
             ))
             .manage(Mutex::new(store))
             .manage(library::open_for_app(&dir.path().join("data")))
+            .manage(segmentation::SegmentationState::new(
+                Path::new(env!("CARGO_MANIFEST_DIR")).join(segmentation::MODELS_DIR),
+            ))
             .invoke_handler(crate::invoke_handler())
             .build(mock_context(noop_assets()))
             .expect("the app builds on the mock runtime");
@@ -2791,6 +2795,36 @@ fn byte_commands_reach_their_handler() {
             "{cmd} was not routed to its handler"
         );
     }
+}
+
+#[test]
+fn webcam_segment_sends_a_mask_for_the_frame_it_is_sent() {
+    let h = Harness::new();
+    let frame_size = segmentation::FRAME_SIZE as u32;
+    let frame = RgbaImage::from_pixel(frame_size, frame_size, image::Rgba([90, 120, 80, 255]));
+    let mask = match h.call(
+        "webcam_segment",
+        InvokeBody::Raw(frame.into_raw()),
+        HeaderMap::new(),
+    ) {
+        Ok(InvokeResponseBody::Raw(bytes)) => bytes,
+        other => panic!("webcam_segment did not send bytes: {other:?}"),
+    };
+    assert_eq!(
+        mask.len(),
+        segmentation::FRAME_SIZE * segmentation::FRAME_SIZE
+    );
+
+    // A frame of the wrong size, or no bytes at all, is refused with a
+    // message.
+    match h.invoke_raw("webcam_segment", vec![0; 16], HeaderMap::new()) {
+        Err(Value::String(message)) => assert!(message.contains("not 16 bytes"), "{message}"),
+        other => panic!("webcam_segment did not refuse a short frame: {other:?}"),
+    }
+    assert_eq!(
+        h.err("webcam_segment", json!({})),
+        "expected the frame's bytes"
+    );
 }
 
 #[test]

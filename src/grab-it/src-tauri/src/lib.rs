@@ -51,6 +51,7 @@ mod screen;
 mod scroll;
 mod scroll_bar;
 mod search;
+mod segmentation;
 mod settings;
 mod steps;
 mod steps_bar;
@@ -234,6 +235,11 @@ pub fn run() {
             app.manage(faces::FaceState::new(faces::models_dir(
                 &app.path().resource_dir()?,
             )));
+            // Separates the person in the webcam bubble from the room, for
+            // its backgrounds, loading the bundled model the first time.
+            app.manage(segmentation::SegmentationState::new(
+                segmentation::models_dir(&app.path().resource_dir()?),
+            ));
             // Has ffmpeg ready to record MP4, downloading it the first time.
             ffmpeg::start(handle, data_dir.clone(), records_mp4);
             // Describes captures with a vision model, once turned on. With
@@ -363,6 +369,7 @@ byte_commands![
     recording_suggest::recording_audition,
     waveform::recording_waveform,
     steps::guide_image,
+    webcam::webcam_segment,
 ];
 
 /// Every command except the byte ones, as tauri-specta sees them. The app

@@ -669,6 +669,33 @@ input.switch:disabled {
   width: 240px;
 }
 
+/* A colour well, such as the webcam background's. */
+.row .row-color {
+  flex: none;
+  width: 56px;
+  height: 34px;
+  padding: 3px;
+  background: var(--panel);
+  border: 1px solid var(--group-edge);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.row .row-color::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.row .row-color::-webkit-color-swatch {
+  border: none;
+  border-radius: 7px;
+}
+
+.row .row-color:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 /* A field with a small button beside it, together as wide as a plain field. */
 .row .row-field-with-action {
   display: flex;

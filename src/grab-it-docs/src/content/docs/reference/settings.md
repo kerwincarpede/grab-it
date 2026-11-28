@@ -96,6 +96,9 @@ is unavailable then.
 | **Camera** | System default | Which camera, when Show webcam is on. |
 | **Webcam shape** | Squircle | Squircle, Round, Arch, Pill, Wide or Blob. |
 | **Mirror webcam** | On | Shows you as a mirror would. Turn it off when there's writing behind you. |
+| **Background** | None | None, Blur or Colour: what the bubble shows behind you. Your camera never leaves your computer. |
+| **Blur amount** | 50% | How much the room behind you is blurred, when Background is Blur. |
+| **Colour** | Dark grey | What's shown behind you, when Background is Colour. |
 | **Countdown** | Off | Off, 3, 5 or 10 seconds, counted down on the recording toolbar before the first frame. |
 
 **Show keystrokes and passwords.** On macOS, keys you type into a password field are left out, and the first recording with clicks or keystrokes on asks for **Input Monitoring** permission. Windows and Linux can't tell when you're typing a password, so turn **Show keystrokes** off before you type one.

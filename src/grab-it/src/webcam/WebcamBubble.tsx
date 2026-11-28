@@ -3,7 +3,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./webcam.css";
 import { CameraIcon, CameraOffIcon } from "../app/icons";
 import { listCameras, rememberListing } from "../settings/api";
-import { cameraProblem, openCamera, webcamOptions, type WebcamOptions } from "./api";
+import { blurPixels, cameraProblem, openCamera, webcamOptions, type WebcamOptions } from "./api";
+import { startSegmenting } from "./background";
 import { BLOB_SECONDS, shapeOutline } from "./shapes";
 
 interface WebcamBubbleProps {
@@ -27,16 +28,30 @@ function prefersReducedMotion(): boolean {
  * borderless window, clipped to the chosen shape with a soft shadow
  * around it, and recorded along with the screen. Drag it anywhere; it
  * closes with the recording.
+ *
+ * With a Blur or Colour background, each frame is segmented and the person
+ * drawn on a canvas over the video, which is blurred or covered by the
+ * colour. Should segmenting fail, the plain camera is shown instead for as
+ * long as the bubble is open.
  */
 function WebcamBubble({ options = webcamOptions(window.location.hash) }: WebcamBubbleProps) {
   const video = useRef<HTMLVideoElement>(null);
+  const person = useRef<HTMLCanvasElement>(null);
   const [live, setLive] = useState(false);
   const [playing, setPlaying] = useState(false);
-  const [shown, setShown] = useState(false);
+  const [settled, setSettled] = useState(false);
+  const [masked, setMasked] = useState(false);
+  const [failed, setFailed] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [still] = useState(prefersReducedMotion);
   const { shape, mirror, camera } = options;
   const outline = shapeOutline(shape);
+  // What is behind the person: nothing once segmenting has failed.
+  const background = failed ? "none" : options.background;
+  const segmenting = background !== "none";
+  // Never the room with a background chosen: the pulse stays until the
+  // first frame with the person cut out is drawn.
+  const shown = settled && (!segmenting || masked);
 
   // The window is see-through: only the bubble may paint.
   useLayoutEffect(() => {
@@ -84,9 +99,22 @@ function WebcamBubble({ options = webcamOptions(window.location.hash) }: WebcamB
   // The video fades in once its picture has settled.
   useEffect(() => {
     if (!live) return;
-    const timer = window.setTimeout(() => setShown(true), playing ? SETTLE_MS : SHOW_ANYWAY_MS);
+    const timer = window.setTimeout(() => setSettled(true), playing ? SETTLE_MS : SHOW_ANYWAY_MS);
     return () => window.clearTimeout(timer);
   }, [live, playing]);
+
+  // With a background, every frame the model has time for is segmented.
+  useEffect(() => {
+    const element = video.current;
+    const canvas = person.current;
+    if (!live || !segmenting || !element || !canvas) return;
+    return startSegmenting(element, canvas, {
+      onDrawn: () => setMasked(true),
+      // The model's own error stays in the backend; the bubble shows the
+      // plain camera for the rest of the recording.
+      onFailed: () => setFailed(true),
+    });
+  }, [live, segmenting]);
 
   function onMouseDown(event: MouseEvent) {
     if (event.button !== 0) return;
@@ -107,6 +135,7 @@ function WebcamBubble({ options = webcamOptions(window.location.hash) }: WebcamB
       data-testid="webcam"
       data-live={live ? "true" : "false"}
       data-shown={shown ? "true" : "false"}
+      data-background={background}
       aria-label="Webcam"
       onMouseDown={onMouseDown}
       onContextMenu={(event) => event.preventDefault()}
@@ -152,11 +181,14 @@ function WebcamBubble({ options = webcamOptions(window.location.hash) }: WebcamB
         <video
           ref={video}
           className="webcam-video"
+          style={background === "blur" ? { filter: `blur(${blurPixels(options.blur)}px)` } : undefined}
           autoPlay
           muted
           playsInline
           onPlaying={() => setPlaying(true)}
         />
+        {background === "color" && <div className="webcam-backdrop" style={{ background: options.color }} />}
+        {segmenting && <canvas ref={person} className="webcam-person" />}
         <div className="webcam-sheen" />
         {problem && (
           <p className="webcam-problem" role="status">

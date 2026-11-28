@@ -67,7 +67,8 @@
  * It fades in once its picture has settled (data-shown), over the
  * waiting pulse.
  */
-.webcam-video {
+.webcam-video,
+.webcam-person {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -79,8 +80,29 @@
   transition: opacity 220ms ease-out;
 }
 
-.webcam[data-shown="true"] .webcam-video {
+.webcam[data-shown="true"] .webcam-video,
+.webcam[data-shown="true"] .webcam-person,
+.webcam[data-shown="true"] .webcam-backdrop {
   opacity: 1;
+}
+
+/*
+ * With a Blur or Colour background, the person is drawn on a canvas at the
+ * video's own size, with the video's fit, mirroring and clip, so it lands
+ * on the person in the video below it. The video is blurred (its filter is
+ * set on it) or hidden under the colour.
+ */
+.webcam-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  clip-path: url(#webcam-clip);
+  opacity: 0;
+  transition: opacity 220ms ease-out;
+}
+
+.webcam[data-background="color"] .webcam-video {
+  opacity: 0;
 }
 
 /*
@@ -88,7 +110,8 @@
  * way. The clip is flipped too, so once the video is turned round it lands
  * back on the bubble's outline.
  */
-.webcam-mirrored .webcam-video {
+.webcam-mirrored .webcam-video,
+.webcam-mirrored .webcam-person {
   transform: scaleX(-1);
   clip-path: url(#webcam-clip-flipped);
 }
@@ -182,7 +205,9 @@
     display: none;
   }
 
-  .webcam-video {
+  .webcam-video,
+  .webcam-person,
+  .webcam-backdrop {
     transition: none;
   }
 }

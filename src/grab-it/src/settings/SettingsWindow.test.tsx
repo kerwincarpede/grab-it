@@ -1885,6 +1885,60 @@ describe("SettingsWindow webcam", () => {
     expect(media.requests).toEqual([]);
   });
 
+  it("blurs the webcam background by the amount chosen, or covers it with a colour", async () => {
+    const backend = mockBackend({ recording: { ...DEFAULT_RECORDING, showWebcam: true } });
+    render(<SettingsWindow section="recording" />);
+    const background = await screen.findByRole("combobox", { name: "Background" });
+    await waitFor(() => expect(background).toBeEnabled());
+    expect(background).toHaveValue("none");
+    expect(within(background).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "None",
+      "Blur",
+      "Colour",
+    ]);
+    expect(screen.queryByRole("slider", { name: "Blur amount" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Colour")).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(background, "Blur");
+    await waitFor(() => expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, showWebcam: true, webcamBackground: "blur" }));
+    const amount = await screen.findByRole("slider", { name: "Blur amount" });
+    await waitFor(() => expect(amount).toBeEnabled());
+    expect(amount).toHaveValue("50");
+    expect(amount).toHaveAttribute("min", "1");
+    fireEvent.change(amount, { target: { value: "80" } });
+    expect(screen.getByText("80%", { selector: ".scale-value[data-for='recording-webcam-blur']" })).toBeInTheDocument();
+    expect(backend.recording?.webcamBlur).toBe(50);
+    fireEvent.pointerUp(amount);
+    await waitFor(() =>
+      expect(backend.recording).toEqual({ ...DEFAULT_RECORDING, showWebcam: true, webcamBackground: "blur", webcamBlur: 80 }),
+    );
+
+    await waitFor(() => expect(background).toBeEnabled());
+    await userEvent.selectOptions(background, "Colour");
+    const color = await screen.findByLabelText("Colour");
+    expect(screen.queryByRole("slider", { name: "Blur amount" })).not.toBeInTheDocument();
+    await waitFor(() => expect(color).toBeEnabled());
+    expect(color).toHaveValue("#202124");
+    // Picking saves once the picking stops.
+    fireEvent.change(color, { target: { value: "#336699" } });
+    expect(backend.recording?.webcamBackgroundColor).toBe("#202124");
+    await waitFor(() =>
+      expect(backend.recording).toEqual({
+        ...DEFAULT_RECORDING,
+        showWebcam: true,
+        webcamBackground: "color",
+        webcamBlur: 80,
+        webcamBackgroundColor: "#336699",
+      }),
+    );
+    // Leaving the field saves what was picked straight away.
+    await waitFor(() => expect(color).toBeEnabled());
+    fireEvent.change(color, { target: { value: "#aabbcc" } });
+    fireEvent.blur(color);
+    await waitFor(() => expect(backend.recording?.webcamBackgroundColor).toBe("#aabbcc"));
+    expect(backend.calls.filter(({ cmd }) => cmd === "set_recording")).toHaveLength(5);
+  });
+
   it("offers only the system default where the window cannot list cameras", async () => {
     mockBackend({ recording: { ...DEFAULT_RECORDING, showWebcam: true } });
     render(<SettingsWindow section="recording" />);
