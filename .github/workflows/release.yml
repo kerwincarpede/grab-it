@@ -138,7 +138,7 @@ jobs:
             gh api "repos/$GITHUB_REPOSITORY/releases" \
               -f tag_name="$TAG" \
               -f target_commitish="$GITHUB_SHA" \
-              -f name="$VERSION" \
+              -f name="$VERSION (building)" \
               -f body="$body" \
               -F draft=true \
               -F generate_release_notes=true \
@@ -221,6 +221,18 @@ jobs:
             "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=latest.json" \
             > /dev/null
 
+      # The title counts the Edge releases since Stable, such as "0.15.9-rc-3".
+      - name: Name the release
+        id: title
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[]' | jq -s . > releases.json
+          python3 .github/scripts/release_titles.py title \
+            --releases releases.json --version "$VERSION" | tee -a "$GITHUB_OUTPUT"
+
       # Publishing the draft creates its tag on the released commit. It is a
       # pre-release and never the latest release, so Stable copies, which
       # read releases/latest, do not see it.
@@ -228,7 +240,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.version.outputs.release_id }}
+          NAME: ${{ steps.title.outputs.name }}
         run: |
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
-            -F draft=false -F prerelease=true -f make_latest=false -F body=@release-notes.md \
-            --jq '"Published \(.tag_name): \(.html_url)"'
+            -F draft=false -F prerelease=true -f make_latest=false -f name="$NAME" -F body=@release-notes.md \
+            --jq '"Published \(.tag_name) as \(.name): \(.html_url)"'
+
+      # A failed run leaves its draft behind to keep its version reserved.
+      # Once a later version is out and the draft is a day old, nothing is
+      # building it, so it only clutters the releases page. Retrying that
+      # commit reserves its version again.
+      - name: Delete abandoned drafts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          python3 .github/scripts/release_titles.py stale-drafts \
+            --releases releases.json --version "$VERSION" |
+            while read -r id; do
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id" &&
+                echo "Deleted abandoned draft $id" ||
+                echo "::warning::Could not delete abandoned draft $id."
+            done
