@@ -55,6 +55,11 @@ export function stopRecording(): Promise<void> {
   return commands.recordStop();
 }
 
+/** Ends the countdown, so the recording starts at once. */
+export function startNow(): Promise<void> {
+  return commands.recordStartNow();
+}
+
 export function pauseRecording(paused: boolean): Promise<void> {
   return commands.recordPause(paused);
 }

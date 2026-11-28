@@ -1,6 +1,9 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState, type MouseEvent } from "react";
+import "../recordbar/countdown.css";
 import "./scrollbar.css";
-import { cancelScroll, finishScroll, onScrollBarState, scrollBarState, type ScrollBarState } from "./api";
+import { CloseIcon } from "../app/icons";
+import { isBareKey } from "../recordbar/countdownState";
+import { cancelScroll, finishScroll, stitchedHeight, onScrollBarState, scrollBarState, type ScrollBarState } from "./api";
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -11,16 +14,22 @@ function statusOf(state: ScrollBarState): string {
   if (state.saving) return "Saving…";
   if (state.message) return state.message;
   if (state.autoScrolling) return "Hands off the mouse. It stops and saves at the end.";
-  return "Scroll at a steady pace. Choose Done at the end.";
+  return "Scroll at a steady pace. Choose Finish at the end.";
+}
+
+/** A click on a bar button leaves the focus where it was, as the capture toolbar's do. */
+function keepFocus(event: MouseEvent) {
+  event.preventDefault();
 }
 
 /**
- * The bar shown while a scrolling capture runs (src-tauri/src/scroll_bar.rs):
- * a progress stripe toward the length limit, the length so far, who is
- * scrolling, a live preview of the newest part, what to do, Done and
- * Cancel. The bar never takes the focus, so Esc reaches Cancel through a
+ * The bar shown while a scrolling capture runs (src-tauri/src/scroll_bar.rs),
+ * in the capture toolbar's style: a pulsing blue dot, the stitched height,
+ * who is scrolling, Finish and Cancel, over a progress stripe toward the
+ * length limit, what to do and a live preview of the newest part. The bar never takes the focus, so Esc reaches Cancel through a
  * global shortcut the capture holds while it runs (src-tauri/src/scroll.rs);
- * the key is also handled here for a bar that has been clicked.
+ * the key is also handled here for a bar that has been clicked, as is
+ * Enter for Finish.
  */
 function ScrollBar() {
   const [state, setState] = useState<ScrollBarState | null>(null);
@@ -67,12 +76,13 @@ function ScrollBar() {
     });
   }
 
-  // Esc on a bar that has the focus; the global Esc covers the rest.
+  // Esc and Enter on a bar that has the focus; the global Esc covers the rest.
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
+      if (event.key === "Escape") end("cancel");
+      else if (event.key === "Enter" && isBareKey(event)) end("done");
+      else return;
       event.preventDefault();
-      end("cancel");
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -88,15 +98,42 @@ function ScrollBar() {
         </div>
         <div className="scrollbar-body">
           <div className="scrollbar-head">
-            <span className="scrollbar-title">Scrolling capture</span>
-            <span className="scrollbar-length">{state ? `${state.width} × ${state.height}` : "Starting…"}</span>
-          </div>
-          {/* A row of its own: the head has no room for it beside the title and length. */}
-          {state && !saving && !state.capped && (
-            <span className="scrollbar-who" data-who={state.autoScrolling ? "grab-it" : "me"}>
-              {state.autoScrolling ? "Grab-it is scrolling" : "You're scrolling"}
+            <span className="bar-dot" data-tone="capture" data-paused={saving ? "true" : "false"} aria-hidden="true" />
+            <span className="bar-strong scrollbar-title">{saving ? "Saving" : "Scrolling"}</span>
+            <span className="bar-sep" aria-hidden="true" />
+            <span className="scrollbar-length" title={state ? `${state.width} × ${state.height}` : undefined}>
+              {state ? stitchedHeight(state.height) : "Starting…"}
             </span>
-          )}
+            {state && !saving && !state.capped && (
+              <span className="scrollbar-who" data-who={state.autoScrolling ? "grab-it" : "me"}>
+                {state.autoScrolling ? "Grab-it is scrolling" : "You're scrolling"}
+              </span>
+            )}
+            <span className="scrollbar-spacer" />
+            <button
+              type="button"
+              className="bar-main scrollbar-done"
+              aria-keyshortcuts="Enter"
+              disabled={!state || ending !== null}
+              onMouseDown={keepFocus}
+              onClick={() => end("done")}
+            >
+              {saving ? "Saving…" : "Finish"}
+              {!saving && <kbd aria-hidden="true">↵</kbd>}
+            </button>
+            <button
+              type="button"
+              className="bar-tool scrollbar-cancel"
+              aria-label="Cancel"
+              title="Cancel (Esc)"
+              aria-keyshortcuts="Escape"
+              disabled={!state || ending !== null}
+              onMouseDown={keepFocus}
+              onClick={() => end("cancel")}
+            >
+              <CloseIcon size={16} />
+            </button>
+          </div>
           <div
             className="scrollbar-progress"
             role="progressbar"
@@ -111,20 +148,6 @@ function ScrollBar() {
           <p className="scrollbar-message" role="status">
             {error ?? (state ? statusOf(saving ? { ...state, saving } : state) : "Starting…")}
           </p>
-        </div>
-        <div className="scrollbar-actions">
-          <button type="button" className="scrollbar-done" disabled={!state || ending !== null} onClick={() => end("done")}>
-            {saving ? "Saving…" : "Done"}
-          </button>
-          <button
-            type="button"
-            className="scrollbar-cancel"
-            aria-keyshortcuts="Escape"
-            disabled={!state || ending !== null}
-            onClick={() => end("cancel")}
-          >
-            Cancel <kbd aria-hidden="true">Esc</kbd>
-          </button>
         </div>
       </div>
     </main>

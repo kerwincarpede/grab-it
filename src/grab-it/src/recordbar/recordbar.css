@@ -51,20 +51,8 @@
   border: 0;
 }
 
+/* The pill itself is `.bar-pill` (countdown.css); it is dragged by its body. */
 .recordbar-pill {
-  display: flex;
-  flex: none;
-  gap: 4px;
-  align-items: center;
-  width: max-content;
-  /* Room inside the edge so the buttons do not crowd it. */
-  padding: 6px 8px 6px 6px;
-  white-space: nowrap;
-  background: var(--rb-bg);
-  border-radius: 999px;
-  box-shadow:
-    inset 0 0 0 1px var(--rb-border),
-    0 6px 18px rgb(0 0 0 / 38%);
   cursor: grab;
 }
 
@@ -74,189 +62,72 @@
 
 .recordbar-grip {
   display: grid;
+  flex: none;
   place-items: center;
   width: 16px;
-  height: 30px;
-  margin-right: 2px;
+  height: 34px;
   color: var(--rb-muted);
 }
 
-.recordbar-dot {
-  flex: none;
-  width: 9px;
-  height: 9px;
-  margin: 0 2px 0 4px;
-  background: var(--rb-rec);
-  border-radius: 50%;
-  box-shadow: 0 0 0 4px rgb(255 77 79 / 22%);
-  animation: recordbar-pulse 1200ms ease-in-out infinite;
-}
-
-.recordbar-dot[data-paused="true"] {
-  background: var(--rb-paused);
-  box-shadow: 0 0 0 4px rgb(245 177 61 / 20%);
-  animation: none;
-}
-
-.recordbar-paused {
-  padding: 0 4px 0 0;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  color: var(--rb-paused);
-}
-
 .recordbar-time {
-  padding: 0 4px 0 6px;
+  margin-left: 8px;
   font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
+}
+
+/* Paused, the time blinks slowly. */
+.recordbar-pill[data-paused="true"] .recordbar-time {
+  animation: recordbar-blink 1.4s steps(1) infinite;
 }
 
 .recordbar-limit {
   color: var(--rb-muted);
 }
 
-.recordbar-sep {
-  width: 1px;
-  height: 18px;
-  margin: 0 4px;
-  background: var(--rb-border-strong);
-}
-
-.recordbar-tool {
-  display: inline-grid;
+.recordbar-gap {
   flex: none;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border-radius: 999px;
-  cursor: pointer;
+  width: 8px;
 }
 
-.recordbar-tool:hover:not(:disabled) {
-  background: var(--rb-fill-hover);
-}
-
-.recordbar-tool:active:not(:disabled) {
-  background: var(--rb-fill-pressed);
-}
-
-.recordbar-tool:focus-visible,
 .recordbar-item:focus-visible {
   outline: 2px solid var(--rb-accent);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
 
 /* A muted input reads as struck through, in soft red. */
-.recordbar-tool.recordbar-off {
+.bar-tool.recordbar-off {
   color: var(--rb-danger);
-}
-
-/* Pause and Stop say what they do: an icon and a word. */
-.recordbar-labelled {
-  display: inline-flex;
-  flex: none;
-  gap: 6px;
-  align-items: center;
-  height: 30px;
-  padding: 0 12px 0 10px;
-  border-radius: 999px;
-  cursor: pointer;
-}
-
-.recordbar-labelled:focus-visible,
-.recordbar-cancel:focus-visible {
-  outline: 2px solid var(--rb-accent);
-  outline-offset: 1px;
-}
-
-.recordbar .recordbar-pause:hover {
-  background: var(--rb-fill-hover);
-}
-
-.recordbar .recordbar-pause:active {
-  background: var(--rb-fill-pressed);
-}
-
-/* The same size and glow as the setup toolbar's Record, so the two read as a pair. */
-.recordbar .recordbar-stop {
-  height: 36px;
-  margin-left: 4px;
-  padding: 0 14px 0 12px;
-  color: #fff;
-  font-weight: 600;
-  background: var(--rb-rec);
-  box-shadow:
-    0 0 0 3px rgb(255 77 79 / 28%),
-    0 0 18px rgb(255 77 79 / 45%);
-}
-
-.recordbar .recordbar-stop:hover {
-  background: #ff6163;
-}
-
-.recordbar .recordbar-stop:focus-visible {
-  outline-color: #fff;
-  outline-offset: 2px;
-}
-
-.recordbar .recordbar-more[aria-expanded="true"] {
-  background: var(--rb-fill-pressed);
-}
-
-.recordbar .recordbar-cancel {
-  height: 26px;
-  margin-left: 2px;
-  padding: 0 12px;
-  background: var(--rb-fill-pressed);
-  border-radius: 999px;
-  cursor: pointer;
-}
-
-.recordbar .recordbar-cancel:hover {
-  background: rgb(255 255 255 / 20%);
 }
 
 .recordbar-meter {
   display: inline-flex;
   gap: 2px;
-  align-items: flex-end;
-  height: 14px;
-  margin: 0 4px 0 0;
+  align-items: center;
+  height: 16px;
+  margin: 0 4px 0 4px;
 }
 
 .recordbar-meter i {
-  width: 2px;
-  background: var(--rb-border-strong);
-  border-radius: 1px;
-  transition: background 80ms linear;
+  width: 3px;
+  height: 3px;
+  background: #4a4e57;
+  border-radius: 2px;
+  transition: height 70ms linear, background 200ms;
 }
 
-.recordbar-meter i:nth-child(1) { height: 4px; }
-.recordbar-meter i:nth-child(2) { height: 7px; }
-.recordbar-meter i:nth-child(3) { height: 10px; }
-.recordbar-meter i:nth-child(4) { height: 14px; }
+.recordbar-meter i[data-on="true"]:nth-child(1) { height: 6px; }
+.recordbar-meter i[data-on="true"]:nth-child(2) { height: 10px; }
+.recordbar-meter i[data-on="true"]:nth-child(3) { height: 13px; }
+.recordbar-meter i[data-on="true"]:nth-child(4) { height: 16px; }
 
 .recordbar-meter i[data-on="true"] {
-  background: var(--rb-accent);
-}
-
-.recordbar-count {
-  min-width: 24px;
-  font-family: var(--font-mono);
-  font-size: 17px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-  color: var(--rb-rec);
+  background: #c9ccd3;
 }
 
 .recordbar-note {
-  padding: 0 6px 0 2px;
+  padding: 0 10px 0 2px;
   color: var(--rb-muted);
 }
 
@@ -268,11 +139,6 @@
   border-top-color: var(--rb-accent);
   border-radius: 50%;
   animation: recordbar-spin 800ms linear infinite;
-}
-
-.recordbar-pill[data-phase="saving"],
-.recordbar-pill[data-phase="countdown"] {
-  min-height: 30px;
 }
 
 .recordbar-menu-wrap {
@@ -367,6 +233,12 @@
   }
 }
 
+@keyframes recordbar-blink {
+  50% {
+    opacity: 0.35;
+  }
+}
+
 @keyframes recordbar-spin {
   to {
     transform: rotate(360deg);
@@ -374,8 +246,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .recordbar-dot,
-  .recordbar-spinner {
+  .recordbar-spinner,
+  .recordbar-pill[data-paused="true"] .recordbar-time {
     animation: none;
   }
 

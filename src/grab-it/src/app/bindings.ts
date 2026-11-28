@@ -162,6 +162,11 @@ export const commands = {
 	recordDiscard: (options?: InvokeOptions) => __TAURI_INVOKE<void>("record_discard", undefined, options),
 	/**  Throws the recording under way away and starts again on the same area. */
 	recordRestart: (options?: InvokeOptions) => __TAURI_INVOKE<void>("record_restart", undefined, options),
+	/**
+	 *  Ends the countdown of the recording about to start, so it starts at
+	 *  once. A recording past its countdown is left alone.
+	 */
+	recordStartNow: (options?: InvokeOptions) => __TAURI_INVOKE<void>("record_start_now", undefined, options),
 	/**  What the recording toolbar shows, or None when nothing is recording. */
 	recordBarStatus: (options?: InvokeOptions) => __TAURI_INVOKE<BarStatus_Serialize | null>("record_bar_status", undefined, options),
 	/**
@@ -201,6 +206,12 @@ export const commands = {
 	 *  the pill has closed the capture is under way and this does nothing.
 	 */
 	timerBarCancel: (options?: InvokeOptions) => __TAURI_INVOKE<void>("timer_bar_cancel", undefined, options),
+	/**
+	 *  Ends the timed capture's countdown early, from the pill's Start now or
+	 *  Enter, so it captures at once. Once the pill has closed the capture is
+	 *  under way and this does nothing.
+	 */
+	timerBarStartNow: (options?: InvokeOptions) => __TAURI_INVOKE<void>("timer_bar_start_now", undefined, options),
 	/**  The cameras last listed with their names. */
 	knownCameras: (options?: InvokeOptions) => __TAURI_INVOKE<Camera[]>("known_cameras", undefined, options),
 	/**  Remembers `cameras`, a listing in which every camera had its name. */
@@ -3208,6 +3219,7 @@ export type MockCommandHandlers = {
     recordWebcam: (args: { shown: boolean }) => void | Promise<void>,
     recordDiscard: () => void | Promise<void>,
     recordRestart: () => void | Promise<void>,
+    recordStartNow: () => void | Promise<void>,
     recordBarStatus: () => BarStatus_Serialize | null | Promise<BarStatus_Serialize | null>,
     recordBarLevel: () => number | null | Promise<number | null>,
     recordBarFit: (args: { width: number | null; height: number | null; menu: number | null }) => BarLayout | Promise<BarLayout>,
@@ -3215,6 +3227,7 @@ export type MockCommandHandlers = {
     recordBarRemember: (args: { centre: CssPoint }) => null | Promise<null>,
     stepsBarStop: () => void | Promise<void>,
     timerBarCancel: () => void | Promise<void>,
+    timerBarStartNow: () => void | Promise<void>,
     knownCameras: () => Camera[] | Promise<Camera[]>,
     rememberCameras: (args: { cameras: Camera[] }) => null | Promise<null>,
     ffmpegStatus: () => FfmpegStatus_Serialize | Promise<FfmpegStatus_Serialize>,
@@ -3402,6 +3415,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "record_webcam": return mockCommandHandler(mockHandlers.recordWebcam, "record_webcam", args);
             case "record_discard": return mockCommandHandler(mockHandlers.recordDiscard, "record_discard", args);
             case "record_restart": return mockCommandHandler(mockHandlers.recordRestart, "record_restart", args);
+            case "record_start_now": return mockCommandHandler(mockHandlers.recordStartNow, "record_start_now", args);
             case "record_bar_status": return mockCommandHandler(mockHandlers.recordBarStatus, "record_bar_status", args);
             case "record_bar_level": return mockCommandHandler(mockHandlers.recordBarLevel, "record_bar_level", args);
             case "record_bar_fit": return mockCommandHandler(mockHandlers.recordBarFit, "record_bar_fit", args);
@@ -3409,6 +3423,7 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "record_bar_remember": return mockCommandHandler(mockHandlers.recordBarRemember, "record_bar_remember", args);
             case "steps_bar_stop": return mockCommandHandler(mockHandlers.stepsBarStop, "steps_bar_stop", args);
             case "timer_bar_cancel": return mockCommandHandler(mockHandlers.timerBarCancel, "timer_bar_cancel", args);
+            case "timer_bar_start_now": return mockCommandHandler(mockHandlers.timerBarStartNow, "timer_bar_start_now", args);
             case "known_cameras": return mockCommandHandler(mockHandlers.knownCameras, "known_cameras", args);
             case "remember_cameras": return mockCommandHandler(mockHandlers.rememberCameras, "remember_cameras", args);
             case "ffmpeg_status": return mockCommandHandler(mockHandlers.ffmpegStatus, "ffmpeg_status", args);

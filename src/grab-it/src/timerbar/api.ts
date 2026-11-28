@@ -17,3 +17,8 @@ export function secondsLeft(ends: number | null, now: number): number {
 export function cancelTimer(): Promise<void> {
   return commands.timerBarCancel();
 }
+
+/** Ends the timed capture's countdown early, so it captures at once. */
+export function startTimerNow(): Promise<void> {
+  return commands.timerBarStartNow();
+}

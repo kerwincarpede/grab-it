@@ -30,6 +30,11 @@ This works the other way round: you pick the area *first*, on the frozen screen.
 
 ## The countdown
 
-While a timed capture waits, from the tray, the hub's **Timed** items or the Capture & record… **Timer**, a small pill at the top of the screen under the pointer counts down the seconds left, next to **Capturing…**. Click **Cancel** on it to stop the capture from starting.
+While a timed capture waits, from the tray, the hub's **Timed** items or the Capture & record… **Timer**, a small pill at the top of the screen under the pointer shows **Capturing in** and the seconds left, beside a blue ring that empties as each second goes.
+
+- Click **Start now**, or press `Enter`, to capture straight away.
+- Click **✕** (Cancel), or press `Esc`, to stop the capture from starting.
+
+The keys work once you've clicked the pill; the pill doesn't take the focus on its own, so a menu you opened stays open.
 
 The pill closes just before the capture is taken, so it is never in your screenshot or on the frozen screen. Starting another timed capture while one is counting down replaces it.

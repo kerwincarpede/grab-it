@@ -41,7 +41,9 @@ describe("ScrollBar", () => {
   it("shows the length, progress, preview and what is happening", async () => {
     backend();
     render(<ScrollBar />);
-    expect(await screen.findByText("1200 × 4800")).toBeInTheDocument();
+    expect(await screen.findByText("4,800 px")).toBeInTheDocument();
+    expect(screen.getByText("Scrolling")).toBeInTheDocument();
+    expect(screen.getByTestId("scrollbar").querySelector(".bar-dot")).toHaveAttribute("data-tone", "capture");
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "16");
     expect(screen.getByRole("img")).toHaveAttribute("src", STATE.preview);
     expect(screen.getByRole("status")).toHaveTextContent("Hands off the mouse. It stops and saves at the end.");
@@ -52,7 +54,7 @@ describe("ScrollBar", () => {
     backend({ ...STATE, autoScrolling: false });
     render(<ScrollBar />);
     await screen.findByText("You're scrolling");
-    expect(screen.getByRole("status")).toHaveTextContent("Scroll at a steady pace. Choose Done at the end.");
+    expect(screen.getByRole("status")).toHaveTextContent("Scroll at a steady pace. Choose Finish at the end.");
   });
 
   it("switches the chip when the user takes over", async () => {
@@ -63,7 +65,7 @@ describe("ScrollBar", () => {
       emit(SCROLL_BAR_STATE_EVENT, {
         ...STATE,
         autoScrolling: false,
-        message: "You moved the mouse, so you're scrolling now. Keep going, then choose Done.",
+        message: "You moved the mouse, so you're scrolling now. Keep going, then choose Finish.",
       }),
     );
     expect(await screen.findByText("You're scrolling")).toBeInTheDocument();
@@ -74,7 +76,7 @@ describe("ScrollBar", () => {
   it("follows the states the capture sends, such as scrolling too fast", async () => {
     backend();
     render(<ScrollBar />);
-    await screen.findByText("1200 × 4800");
+    await screen.findByText("4,800 px");
     await act(() =>
       emit(SCROLL_BAR_STATE_EVENT, {
         ...STATE,
@@ -83,42 +85,46 @@ describe("ScrollBar", () => {
         message: "Too fast to join. Scroll back a little.",
       }),
     );
-    expect(await screen.findByText("1200 × 6000")).toBeInTheDocument();
+    expect(await screen.findByText("6,000 px")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Too fast to join. Scroll back a little.");
   });
 
-  it("puts the chip on a row of its own, clear of the title and length", async () => {
+  it("puts the chip in the toolbar row, after the stitched height", async () => {
     backend();
     render(<ScrollBar />);
     const chip = await screen.findByText("Grab-it is scrolling");
-    const head = screen.getByText("Scrolling capture").parentElement as HTMLElement;
-    expect(head).toContainElement(screen.getByText("1200 × 4800"));
-    expect(head).not.toContainElement(chip);
+    const head = screen.getByText("4,800 px").parentElement as HTMLElement;
+    expect(head).toContainElement(chip);
+    expect(head).toContainElement(screen.getByRole("button", { name: /Finish/ }));
   });
 
   it("hides the chip once the limit stops the image growing", async () => {
-    backend({ ...STATE, capped: true, message: "Reached the 30,000 px limit. Choose Done to save it." });
+    backend({ ...STATE, capped: true, message: "Reached the 30,000 px limit. Choose Finish to save it." });
     render(<ScrollBar />);
-    await screen.findByText("Reached the 30,000 px limit. Choose Done to save it.");
+    await screen.findByText("Reached the 30,000 px limit. Choose Finish to save it.");
     expect(screen.queryByText("Grab-it is scrolling")).not.toBeInTheDocument();
     expect(screen.queryByText("You're scrolling")).not.toBeInTheDocument();
   });
 
   it("marks the length limit", async () => {
-    backend({ ...STATE, progress: 1, capped: true, message: "Reached the 30,000 px limit. Choose Done to save it." });
+    backend({ ...STATE, progress: 1, capped: true, message: "Reached the 30,000 px limit. Choose Finish to save it." });
     render(<ScrollBar />);
     await waitFor(() => expect(screen.getByRole("progressbar")).toHaveAttribute("data-capped", "true"));
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
   });
 
-  it("saves once with Done and says it is saving", async () => {
+  it("saves once with Finish and says it is saving", async () => {
     const calls = backend();
     render(<ScrollBar />);
-    const done = await screen.findByRole("button", { name: "Done" });
+    const done = await screen.findByRole("button", { name: /Finish/ });
+    expect(done).toHaveClass("bar-main");
+    expect(done).toHaveAttribute("aria-keyshortcuts", "Enter");
     await waitFor(() => expect(done).toBeEnabled());
     await userEvent.click(done);
     expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent("Saving…");
+    expect(screen.getByText("Saving")).toBeInTheDocument();
+    expect(screen.getByTestId("scrollbar").querySelector(".bar-dot")).toHaveAttribute("data-paused", "true");
     expect(calls.filter((call) => call.cmd === "scroll_done").map((call) => call.payload)).toEqual([{ sessionId: 7 }]);
   });
 
@@ -137,7 +143,7 @@ describe("ScrollBar", () => {
     const cancel = await screen.findByRole("button", { name: "Cancel" });
     await waitFor(() => expect(cancel).toBeEnabled());
     expect(cancel).toHaveAttribute("aria-keyshortcuts", "Escape");
-    expect(cancel).toHaveTextContent("Esc");
+    expect(cancel).toHaveAttribute("title", "Cancel (Esc)");
     fireEvent.keyDown(window, { key: "Escape" });
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() =>
@@ -145,13 +151,23 @@ describe("ScrollBar", () => {
     );
   });
 
-  it("can be pressed again when Done failed", async () => {
+  it("finishes with Enter", async () => {
+    const calls = backend();
+    render(<ScrollBar />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /Finish/ })).toBeEnabled());
+    fireEvent.keyDown(window, { key: "Enter" });
+    await waitFor(() =>
+      expect(calls.filter((call) => call.cmd === "scroll_done").map((call) => call.payload)).toEqual([{ sessionId: 7 }]),
+    );
+  });
+
+  it("can be pressed again when Finish failed", async () => {
     backend(STATE, true);
     render(<ScrollBar />);
-    const done = await screen.findByRole("button", { name: "Done" });
+    const done = await screen.findByRole("button", { name: /Finish/ });
     await waitFor(() => expect(done).toBeEnabled());
     await userEvent.click(done);
     expect(await screen.findByText("not running")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Done" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Finish/ })).toBeEnabled();
   });
 });

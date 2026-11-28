@@ -1,0 +1,286 @@
+/*
+ * The pieces the recording, timer and scroll bars share with the capture
+ * toolbar (src/overlay/overlay.css): the 50 px pill, its round buttons,
+ * the 34 px main button, the countdown ring and the rolling seconds.
+ */
+.bar-pill {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  align-items: center;
+  box-sizing: border-box;
+  width: max-content;
+  height: 50px;
+  padding: 8px;
+  white-space: nowrap;
+  color: #ecedef;
+  background: #101113;
+  border-radius: 999px;
+  box-shadow:
+    inset 0 0 0 1px #2a2c31,
+    0 12px 32px rgb(0 0 0 / 40%);
+}
+
+.bar-sep {
+  flex: none;
+  width: 1px;
+  height: 22px;
+  margin: 0 6px;
+  background: #2d3036;
+}
+
+.bar-strong {
+  font-weight: 600;
+}
+
+/* A round icon button, its focus ring inside it. */
+.bar-tool {
+  display: inline-flex;
+  flex: none;
+  gap: 7px;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 34px;
+  box-sizing: border-box;
+  padding: 0 9px;
+  color: inherit;
+  font: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 140ms, color 140ms;
+}
+
+.bar-tool:hover:not(:disabled) {
+  background: rgb(255 255 255 / 9%);
+}
+
+.bar-tool[aria-expanded="true"] {
+  color: #fff;
+  background: rgb(255 255 255 / 14%);
+}
+
+.bar-tool:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -2px;
+}
+
+.bar-tool:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.bar-tool.bar-labelled {
+  padding: 0 14px 0 12px;
+  font-weight: 600;
+}
+
+/* The main button: the capture toolbar's size, blue, or red for recording. */
+.bar-main {
+  display: inline-flex;
+  flex: none;
+  gap: 7px;
+  align-items: center;
+  height: 34px;
+  margin-left: 4px;
+  padding: 0 10px 0 14px;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  background: #2f81f7;
+  border: 0;
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px rgb(47 129 247 / 28%), 0 0 18px rgb(47 129 247 / 45%);
+  cursor: pointer;
+  transition: background-color 240ms, box-shadow 240ms, transform 120ms;
+}
+
+.bar-main:hover:not(:disabled) {
+  background: #4a93f8;
+}
+
+.bar-main:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.bar-main:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.bar-main:disabled {
+  color: rgb(255 255 255 / 55%);
+  background: rgb(47 129 247 / 32%);
+  box-shadow: none;
+  cursor: default;
+}
+
+.bar-main[data-tone="record"] {
+  background: #ff4d4f;
+  box-shadow: 0 0 0 3px rgb(255 77 79 / 28%), 0 0 18px rgb(255 77 79 / 45%);
+}
+
+.bar-main[data-tone="record"]:hover:not(:disabled) {
+  background: #ff6163;
+}
+
+.bar-main kbd {
+  min-width: 16px;
+  padding: 0 3px;
+  font: 500 11px/16px ui-monospace, "SF Mono", Menlo, monospace;
+  text-align: center;
+  background: rgb(255 255 255 / 22%);
+  border-radius: 4px;
+}
+
+/* The white dot or square at the start of a recording's main button. */
+.bar-main-dot,
+.bar-main-square {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin: 0 1px;
+  background: #fff;
+  border-radius: 50%;
+}
+
+.bar-main-square {
+  border-radius: 2px;
+}
+
+/* A dot that fades and rings outwards while something runs. */
+.bar-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin: 0 9px 0 8px;
+  background: #ff4d4f;
+  border-radius: 50%;
+  transition: background 240ms;
+  animation: bar-pulse 1.6s ease-in-out infinite;
+}
+
+.bar-dot[data-tone="capture"] {
+  background: #2f81f7;
+  animation-name: bar-pulse-blue;
+}
+
+.bar-dot[data-paused="true"] {
+  background: #f5b13d;
+  animation: none;
+}
+
+.bar-ring {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin: 0 8px 0 6px;
+  transform: rotate(-90deg);
+}
+
+.bar-ring circle {
+  fill: none;
+  stroke-width: 2.4;
+}
+
+.bar-ring-bg {
+  stroke: #2d3036;
+}
+
+.bar-ring-fg {
+  stroke: #ff4d4f;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 1s linear;
+}
+
+.bar-ring[data-tone="capture"] .bar-ring-fg {
+  stroke: #2f81f7;
+}
+
+/* The seconds left, each new one rolling up into place. */
+.bar-roll {
+  position: relative;
+  display: inline-block;
+  min-width: 12px;
+  height: 18px;
+  margin-left: 6px;
+  overflow: hidden;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  text-align: center;
+}
+
+.bar-roll > span {
+  display: block;
+  animation: bar-roll 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Two labels in one place: the shown one settles in, the other waits below. */
+.bar-stack {
+  display: inline-grid;
+}
+
+.bar-stack > * {
+  grid-area: 1 / 1;
+  transition: opacity 180ms, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.bar-stack > [data-shown="false"] {
+  opacity: 0;
+  transform: translateY(5px);
+}
+
+@keyframes bar-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgb(255 77 79 / 45%);
+  }
+
+  50% {
+    opacity: 0.45;
+    box-shadow: 0 0 0 5px rgb(255 77 79 / 0%);
+  }
+}
+
+@keyframes bar-pulse-blue {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgb(47 129 247 / 45%);
+  }
+
+  50% {
+    opacity: 0.45;
+    box-shadow: 0 0 0 5px rgb(47 129 247 / 0%);
+  }
+}
+
+@keyframes bar-roll {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+}
+
+/* Reduced motion: fades only, no loops. */
+@media (prefers-reduced-motion: reduce) {
+  .bar-dot {
+    animation: none;
+  }
+
+  .bar-roll > span {
+    animation: none;
+  }
+
+  .bar-stack > [data-shown="false"] {
+    transform: none;
+  }
+
+  .bar-ring-fg {
+    transition: none;
+  }
+}

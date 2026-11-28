@@ -25,3 +25,8 @@ export function finishScroll(sessionId: number): Promise<void> {
 export function cancelScroll(sessionId: number): Promise<void> {
   return commands.scrollCancel(sessionId);
 }
+
+/** The stitched height so far, as `4,800 px`. */
+export function stitchedHeight(height: number): string {
+  return `${height.toLocaleString("en-GB")} px`;
+}

@@ -11,21 +11,23 @@ While you record, a small toolbar floats over the screen. On Windows and macOS i
 
 From left to right it shows:
 
-- a red dot and the time recorded so far (a GIF also shows its one-minute limit, like `0:12 / 1:00`),
-- the microphone button and a small level meter, when you record a microphone,
+- a pulsing red dot, **Recording** and the time recorded so far (a GIF also shows its one-minute limit, like `0:12 / 1:00`),
+- a small level meter and the microphone button, when you record a microphone,
 - **Pause**,
 - **⋯**, which opens the menu,
 - and a red **Stop**.
 
+When the toolbar has the focus, `Enter` stops and saves and `Space` pauses or resumes. `Esc` never stops or throws away a recording.
+
 ## Mute
 
-Click the microphone to mute it, and again to turn it back on. While it's muted, silence is recorded in its place, so the video and its sound stay in step. The meter beside it shows how loud the microphone is, so you can tell it's working.
+Click the microphone to mute it, and again to turn it back on. While it's muted, silence is recorded in its place, so the video and its sound stay in step. The meter before it shows how loud the microphone is, so you can tell it's working.
 
 When you record the system sound but no microphone, the button mutes the system sound instead. The [menu](#the-menu) mutes either one.
 
 ## Pause
 
-Click **Pause** to stop recording for a while, for example while you set up the next step. The dot turns amber, the time stops, and the toolbar says **PAUSED**. Nothing is recorded until you click **Resume**, and the time you were paused is left out of the video.
+Click **Pause** to stop recording for a while, for example while you set up the next step. The dot turns amber and stops pulsing, **Recording** changes to **Paused**, the time stops and blinks, and **Pause** slides to **Resume**. Nothing is recorded until you click **Resume**, and the time you were paused is left out of the video.
 
 ## Stop
 
@@ -50,7 +52,10 @@ Click **⋯** for the rest:
 
 ## The countdown
 
-With a [countdown](/grab-it/recording/options/#countdown) on, the toolbar shows the seconds left and **Starting…** before the first frame. Click **Cancel** to stop without recording anything.
+With a [countdown](/grab-it/recording/options/#countdown) on, the toolbar shows **Recording in** and the seconds left before the first frame, beside a red ring that empties as each second goes.
+
+- Click **Start now**, or press `Enter`, to skip the rest of the countdown and start recording at once.
+- Click **✕** (Cancel recording), or press `Esc`, to stop without recording anything.
 
 ## Move it
 

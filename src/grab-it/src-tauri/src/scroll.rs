@@ -79,25 +79,25 @@ fn bar_state(
 }
 
 /// Shown when the user chose to scroll by hand.
-const BY_HAND: &str = "Scroll at a steady pace. Choose Done at the end.";
+const BY_HAND: &str = "Scroll at a steady pace. Choose Finish at the end.";
 /// Shown once the image has reached its length limit, [`crate::stitch::MAX_LENGTH`].
-const CAPPED: &str = "Reached the 30,000 px limit. Choose Done to save it.";
+const CAPPED: &str = "Reached the 30,000 px limit. Choose Finish to save it.";
 /// Shown by hand while frames cannot be placed.
 const TOO_FAST: &str = "Too fast to join. Scroll back a little.";
 /// Shown when Grab-it may not post scroll events.
 const NO_ACCESSIBILITY: &str =
-    "Grab-it can't scroll without Accessibility permission. Scroll yourself, then choose Done.";
+    "Grab-it can't scroll without Accessibility permission. Scroll yourself, then choose Finish.";
 /// Shown once the pointer moved while Grab-it was scrolling.
 const MOUSE_MOVED: &str =
-    "You moved the mouse, so you're scrolling now. Keep going, then choose Done.";
+    "You moved the mouse, so you're scrolling now. Keep going, then choose Finish.";
 /// Shown when Grab-it's scrolling never moved the page.
 const DID_NOT_SCROLL: &str =
-    "This page didn't scroll for Grab-it. Scroll it yourself, then choose Done.";
+    "This page didn't scroll for Grab-it. Scroll it yourself, then choose Finish.";
 /// Shown when the page moved under Grab-it's scrolling but no frame lined up.
 const NOT_JOINED: &str =
-    "The page moved, but the views didn't line up. Scroll it yourself, slowly, then choose Done.";
+    "The page moved, but the views didn't line up. Scroll it yourself, slowly, then choose Finish.";
 /// Shown when the pointer could not be placed or a scroll event not posted.
-const CANNOT_SCROLL: &str = "Grab-it can't scroll here. Scroll it yourself, then choose Done.";
+const CANNOT_SCROLL: &str = "Grab-it can't scroll here. Scroll it yourself, then choose Finish.";
 
 /// A session never resumes synthetic input after yielding to the user.
 struct AutoScroll {

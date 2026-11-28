@@ -1,6 +1,6 @@
 //! The timed capture pill: a small window at the top centre of the display
 //! under the pointer while a timed capture waits, counting down the
-//! seconds left, with a Cancel button (see src/timerbar/).
+//! seconds left, with Start now and Cancel buttons (see src/timerbar/).
 //!
 //! It closes a moment before the capture starts on every platform, so it
 //! is never in the image or the frozen overlay, even on X11 and Wayland,
@@ -10,6 +10,8 @@
 //! Each countdown has a generation. Starting another one or pressing
 //! Cancel moves the generation on, and a countdown that wakes to find it
 //! is no longer current returns without touching the pill or capturing.
+//! Start now marks the current countdown as skipped, and it captures as
+//! soon as its pill has gone.
 
 use std::{
     sync::{
@@ -30,7 +32,7 @@ use crate::{
 pub const LABEL: &str = "timer-bar";
 /// The window's size in points: the pill and the room for its shadow
 /// around it (`.timerbar` padding in src/timerbar/timerbar.css).
-const SIZE: (f64, f64) = (236.0, 56.0);
+const SIZE: (f64, f64) = (340.0, 66.0);
 /// Delays shorter than this, such as the hub's wait for itself to hide,
 /// start without a pill.
 const SHORTEST: Duration = Duration::from_secs(1);
@@ -43,6 +45,10 @@ const CLOSE_WAIT: Duration = Duration::from_millis(500);
 /// The current countdown. Moved on by each new countdown, by Cancel and by
 /// a countdown as it finishes.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
+/// The countdown Start now was pressed for, so it ends early.
+static SKIPPED: AtomicU64 = AtomicU64::new(0);
+/// How often a countdown checks whether Start now was pressed.
+const SKIP_POLL: Duration = Duration::from_millis(20);
 /// Opening and closing the pill one at a time, so two countdowns never
 /// make two windows with the same label.
 static WINDOW: Mutex<()> = Mutex::new(());
@@ -64,6 +70,26 @@ fn finish(generation: &AtomicU64, countdown: u64) -> bool {
 /// it, which a countdown started since would have moved on.
 fn cancel(generation: &AtomicU64) -> u64 {
     generation.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// Ends whatever countdown is current early, from Start now.
+fn skip(generation: &AtomicU64, skipped: &AtomicU64) {
+    skipped.store(generation.load(Ordering::SeqCst), Ordering::SeqCst);
+}
+
+/// Waits until `deadline`, or until Start now is pressed for `countdown`.
+/// True when it was.
+fn wait_or_skip(skipped: &AtomicU64, countdown: u64, deadline: Instant) -> bool {
+    loop {
+        if skipped.load(Ordering::SeqCst) == countdown {
+            return true;
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        std::thread::sleep(left.min(SKIP_POLL));
+    }
 }
 
 /// The pill's top-left corner and size in physical pixels on `display`:
@@ -97,12 +123,19 @@ where
         let ends = Instant::now() + delay;
         let ends_ms = crate::storage::now_ms() + delay.as_millis() as i64;
         show(&app, countdown, ends_ms);
-        std::thread::sleep(ends.saturating_duration_since(Instant::now() + CLOSE_AHEAD));
+        let closes = ends.checked_sub(CLOSE_AHEAD).unwrap_or(ends);
+        let skipped = wait_or_skip(&SKIPPED, countdown, closes);
         if !finish(&GENERATION, countdown) {
             return;
         }
         close(&app, countdown + 1);
-        std::thread::sleep(ends.saturating_duration_since(Instant::now()));
+        // The pill needs as long to go after Start now as at the end.
+        let starts = if skipped {
+            Instant::now() + CLOSE_AHEAD
+        } else {
+            ends
+        };
+        std::thread::sleep(starts.saturating_duration_since(Instant::now()));
         run(&app);
     });
 }
@@ -200,9 +233,55 @@ pub fn timer_bar_cancel(app: AppHandle) {
     std::thread::spawn(move || close(&app, generation));
 }
 
+/// Ends the timed capture's countdown early, from the pill's Start now or
+/// Enter, so it captures at once. Once the pill has closed the capture is
+/// under way and this does nothing.
+#[tauri::command]
+#[specta::specta]
+pub fn timer_bar_start_now() {
+    skip(&GENERATION, &SKIPPED);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_now_ends_the_current_countdown_early() {
+        let generation = AtomicU64::new(0);
+        let skipped = AtomicU64::new(0);
+        let countdown = begin(&generation);
+        skip(&generation, &skipped);
+        let began = Instant::now();
+        assert!(wait_or_skip(
+            &skipped,
+            countdown,
+            began + Duration::from_secs(60)
+        ));
+        assert!(began.elapsed() < Duration::from_secs(1));
+        // Still current, so it goes on to capture.
+        assert!(finish(&generation, countdown));
+    }
+
+    #[test]
+    fn a_countdown_left_alone_waits_to_its_end() {
+        let generation = AtomicU64::new(0);
+        let skipped = AtomicU64::new(0);
+        let countdown = begin(&generation);
+        let deadline = Instant::now() + Duration::from_millis(30);
+        assert!(!wait_or_skip(&skipped, countdown, deadline));
+        assert!(Instant::now() >= deadline);
+    }
+
+    #[test]
+    fn start_now_for_an_older_countdown_leaves_a_newer_one_alone() {
+        let generation = AtomicU64::new(0);
+        let skipped = AtomicU64::new(0);
+        begin(&generation);
+        skip(&generation, &skipped);
+        let newer = begin(&generation);
+        assert!(!wait_or_skip(&skipped, newer, Instant::now()));
+    }
     use crate::record_bar::Area;
 
     fn display(work: Area, scale: f64) -> Display {
@@ -222,8 +301,8 @@ mod tests {
             height: 1055,
         };
         let ((x, y), size) = placement(&display(work, 1.0));
-        assert_eq!(size, (236, 56));
-        assert_eq!(x, (1920 - 236) / 2);
+        assert_eq!(size, (340, 66));
+        assert_eq!(x, (1920 - 340) / 2);
         assert_eq!(y, 25 + 12);
     }
 
@@ -236,8 +315,8 @@ mod tests {
             height: 2830,
         };
         let ((x, y), size) = placement(&display(work, 2.0));
-        assert_eq!(size, (472, 112));
-        assert_eq!(x, 2560 + (5120 - 472) / 2);
+        assert_eq!(size, (680, 132));
+        assert_eq!(x, 2560 + (5120 - 680) / 2);
         assert_eq!(y, 50 + 24);
     }
 
