@@ -104,3 +104,39 @@ export function opensUp(
   if (preferUp) return above >= height || above >= below;
   return below < height && above > below;
 }
+
+/** A popup's distance from the screen's edges, in CSS px. */
+const SCREEN_MARGIN = 8;
+
+/** Where a list or panel goes, in viewport CSS px. */
+export interface PopupPlacement {
+  top: number;
+  left: number;
+  up: boolean;
+  /** Set only for one taller than the whole screen, which then scrolls. */
+  maxHeight: number | null;
+}
+
+/**
+ * Places a popup of `size` by its control's `anchor`, both measured: above
+ * or below as {@link opensUp} chooses, lined up with the control's start or
+ * end, then kept inside the screen with a margin. So any popup shorter
+ * than the screen shows in full, even if that means it overlaps its
+ * control.
+ */
+export function placePopup(
+  anchor: { top: number; bottom: number; left: number; right: number },
+  size: { width: number; height: number },
+  viewport: { width: number; height: number },
+  preferUp: boolean,
+  align: "start" | "end",
+): PopupPlacement {
+  const room = viewport.height - 2 * SCREEN_MARGIN;
+  const height = Math.min(size.height, room);
+  const up = opensUp(preferUp, anchor, viewport.height, height);
+  const wanted = up ? anchor.top - POPUP_GAP - height : anchor.bottom + POPUP_GAP;
+  const top = Math.max(SCREEN_MARGIN, Math.min(wanted, viewport.height - SCREEN_MARGIN - height));
+  const across = align === "end" ? anchor.right - size.width : anchor.left;
+  const left = Math.max(SCREEN_MARGIN, Math.min(across, viewport.width - SCREEN_MARGIN - size.width));
+  return { top, left, up, maxHeight: size.height > room ? room : null };
+}

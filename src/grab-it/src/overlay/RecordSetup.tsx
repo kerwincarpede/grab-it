@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import {
   CameraIcon,
   CameraOffIcon,
@@ -24,8 +24,8 @@ import {
   COUNTDOWN_USE,
   countdownText,
   microphoneLabel,
-  opensUp,
   perceivedLevel,
+  placePopup,
   nextCountdown,
   withCamera,
   withMicrophone,
@@ -70,17 +70,29 @@ function swallowClick() {
 }
 
 /**
- * How tall a chip's list is, in CSS px, from the sizes in overlay.css:
- * its padding, and each row by its kind. Known before it opens, so it
- * opens the way it fits.
+ * Places an open popup by its control, both measured once it has
+ * rendered: the way it fits, inside the screen (see placePopup). Called
+ * after every render while open, so rows that arrive later (a device list
+ * loading, Refresh camera list) move it too. The popup is absolutely
+ * placed inside `anchor`, so it is moved relative to that.
  */
-function listHeight(rows: ChipRow[]): number {
-  const heights = { option: 29, action: 29, separator: 7, heading: 23, meter: 37 };
-  return 10 + rows.reduce((sum, row) => sum + heights[row.kind ?? "option"], 0);
+function placeIn(anchor: HTMLElement, popup: HTMLElement, preferUp: boolean, align: "start" | "end") {
+  popup.style.maxHeight = "";
+  const rect = anchor.getBoundingClientRect();
+  const placed = placePopup(
+    rect,
+    { width: popup.offsetWidth, height: popup.scrollHeight },
+    { width: window.innerWidth, height: window.innerHeight },
+    preferUp,
+    align,
+  );
+  popup.style.top = `${placed.top - rect.top}px`;
+  popup.style.left = `${placed.left - rect.left}px`;
+  popup.style.bottom = "auto";
+  popup.style.right = "auto";
+  popup.style.maxHeight = placed.maxHeight === null ? "" : `${placed.maxHeight}px`;
+  popup.dataset.up = placed.up ? "true" : "false";
 }
-
-/** How tall Recording options is at most, in CSS px: heading, four rows, two rules and five switches. */
-const OPTIONS_HEIGHT = 440;
 
 /** A row of a chip's list: an option to pick, or a separator, heading or action between them. */
 type ChipRow =
@@ -106,15 +118,30 @@ interface ChipMenuProps {
   tip?: TipText;
   /** An icon button with no chevron, as the toolbar's microphone and camera. */
   bare?: boolean;
+  /** Lines the list up with the chip's start (the default) or end. */
+  align?: "start" | "end";
   options: ChipRow[];
 }
 
 /** A chip that opens a short list to pick from. */
-export function ChipMenu({ label, icon, title, disabled, up, checks = false, tip, bare = false, options }: ChipMenuProps) {
+export function ChipMenu({
+  label,
+  icon,
+  title,
+  disabled,
+  up,
+  checks = false,
+  tip,
+  bare = false,
+  align = "start",
+  options,
+}: ChipMenuProps) {
   const [open, setOpen] = useState(false);
-  // Which way the list opened, chosen from the room there was.
-  const [placedUp, setPlacedUp] = useState(up);
+  const list = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (open && root.current && list.current) placeIn(root.current, list.current, up, align);
+  });
   useEffect(() => {
     if (!open) return;
     // A first click outside only closes it: the overlay never sees it.
@@ -144,12 +171,7 @@ export function ChipMenu({ label, icon, title, disabled, up, checks = false, tip
       aria-describedby={describedBy}
       title={tip ? undefined : title}
       disabled={disabled}
-      onClick={() => {
-        if (!open && root.current) {
-          setPlacedUp(opensUp(up, root.current.getBoundingClientRect(), window.innerHeight, listHeight(options)));
-        }
-        setOpen((was) => !was);
-      }}
+      onClick={() => setOpen((was) => !was)}
     >
       {icon}
       {label !== undefined && <span>{label}</span>}
@@ -161,10 +183,10 @@ export function ChipMenu({ label, icon, title, disabled, up, checks = false, tip
       {tip ? <Tipped tip={tip}>{chip}</Tipped> : chip()}
       {open && (
         <div
+          ref={list}
           className="overlay-chip-list"
           role="menu"
           aria-label={title}
-          data-up={placedUp ? "true" : "false"}
           data-checks={checks ? "true" : undefined}
         >
           {options.map((row) => {
@@ -366,6 +388,7 @@ export function RecordOptionsFields({ options, up, level = null }: RecordOptions
           <ChipMenu
             title="Format"
             up={false}
+            align="end"
             checks
             label={format}
             tip={{ name: "Format", use: "MP4 at 30 or 60 fps, or a silent GIF of up to a minute." }}
@@ -381,6 +404,7 @@ export function RecordOptionsFields({ options, up, level = null }: RecordOptions
           <ChipMenu
             title="Countdown"
             up={false}
+            align="end"
             checks
             label={countdown.text}
             tip={{ name: "Countdown", use: COUNTDOWN_USE }}
@@ -397,6 +421,7 @@ export function RecordOptionsFields({ options, up, level = null }: RecordOptions
           <ChipMenu
             title="Microphone device"
             up={false}
+            align="end"
             checks
             disabled={gif}
             label={gif ? "No sound" : micOn ? (recording.microphone === null ? "Default" : micLabel) : "Off"}
@@ -408,6 +433,7 @@ export function RecordOptionsFields({ options, up, level = null }: RecordOptions
           <ChipMenu
             title="Camera device"
             up={false}
+            align="end"
             checks
             label={webcamOn ? (recording.camera === null ? "Default" : webcamLabel) : "Off"}
             tip={{ name: "Camera", use: webcamUse }}
@@ -504,9 +530,11 @@ function MicLevel({ level }: { level: number }) {
  */
 function OptionsPopover({ up, countdown, children }: { up: boolean; countdown: string | null; children: ReactNode }) {
   const [open, setOpen] = useState(false);
-  // Which way the panel opened, chosen from the room there was.
-  const [placedUp, setPlacedUp] = useState(up);
   const root = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (open && root.current && panel.current) placeIn(root.current, panel.current, up, "end");
+  });
   useEffect(() => {
     if (!open) return;
     // A first click outside only closes it: the overlay never sees it.
@@ -536,12 +564,7 @@ function OptionsPopover({ up, countdown, children }: { up: boolean; countdown: s
             aria-expanded={open}
             aria-label="Recording options"
             aria-describedby={describedBy}
-            onClick={() => {
-              if (!open && root.current) {
-                setPlacedUp(opensUp(up, root.current.getBoundingClientRect(), window.innerHeight, OPTIONS_HEIGHT));
-              }
-              setOpen((was) => !was);
-            }}
+            onClick={() => setOpen((was) => !was)}
           >
             <SlidersIcon size={16} />
             {countdown && <span className="overlay-options-countdown">{countdown}</span>}
@@ -550,11 +573,11 @@ function OptionsPopover({ up, countdown, children }: { up: boolean; countdown: s
       </Tipped>
       {open && (
         <div
+          ref={panel}
           className="overlay-options-popover"
           role="dialog"
           aria-label="Recording options"
           data-testid="overlay-record-options-popover"
-          data-up={placedUp ? "true" : "false"}
         >
           {children}
         </div>

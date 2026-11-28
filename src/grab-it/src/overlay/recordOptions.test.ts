@@ -7,6 +7,7 @@ import {
   microphoneLabel,
   nextCountdown,
   opensUp,
+  placePopup,
   perceivedLevel,
   withCamera,
   withMicrophone,
@@ -92,5 +93,35 @@ describe("opensUp", () => {
     // Neither fits: the bigger side.
     expect(opensUp(false, { top: 200, bottom: 230 }, 600, 400)).toBe(false);
     expect(opensUp(false, { top: 330, bottom: 360 }, 600, 400)).toBe(true);
+  });
+});
+
+describe("placePopup", () => {
+  const screen = { width: 1000, height: 600 };
+  const chip = { top: 300, bottom: 330, left: 900, right: 960 };
+
+  it("keeps a list shorter than the screen in full on it, overlapping its chip if it must", () => {
+    const placed = placePopup(chip, { width: 240, height: 450 }, screen, false, "start");
+    expect(placed.top).toBeGreaterThanOrEqual(8);
+    expect(placed.top + 450).toBeLessThanOrEqual(592);
+    expect(placed.maxHeight).toBeNull();
+    // Kept inside the right edge too.
+    expect(placed.left + 240).toBeLessThanOrEqual(992);
+  });
+
+  it("gives only a list taller than the screen a height to scroll in", () => {
+    const placed = placePopup(chip, { width: 240, height: 900 }, screen, false, "end");
+    expect(placed).toMatchObject({ top: 8, maxHeight: 584 });
+  });
+
+  it("opens below with room, above without", () => {
+    expect(placePopup({ ...chip, top: 40, bottom: 70 }, { width: 200, height: 120 }, screen, false, "start")).toMatchObject({
+      up: false,
+      top: 76,
+    });
+    expect(placePopup({ ...chip, top: 520, bottom: 550 }, { width: 200, height: 120 }, screen, false, "start")).toMatchObject({
+      up: true,
+      top: 394,
+    });
   });
 });

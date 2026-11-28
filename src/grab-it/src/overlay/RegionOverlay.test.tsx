@@ -2950,25 +2950,84 @@ describe("scrolling capture", () => {
       expect(popover).toHaveClass("overlay-options-popover");
     });
 
+    /**
+     * Lays the popups out as a browser would: each chip-menu control at
+     * `at.top`..`at.bottom`, and a popup's height from its rows. Returns a
+     * function that puts layout back.
+     */
+    function fakeLayout(at: () => { top: number; bottom: number }, viewport: { width: number; height: number }) {
+      const was = { width: window.innerWidth, height: window.innerHeight };
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: viewport.width });
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: viewport.height });
+      const rows = (element: HTMLElement) => element.querySelectorAll('[role^="menuitem"], .overlay-options-row').length;
+      const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+        const { top, bottom } = this.matches(".overlay-chip-menu") ? at() : { top: 0, bottom: 0 };
+        return { top, bottom, left: 400, right: 440, width: 40, height: bottom - top, x: 400, y: top, toJSON: () => ({}) };
+      });
+      const height = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
+        return this.matches('[role="menu"], [role="dialog"]') ? 10 + 29 * rows(this) : 0;
+      });
+      const width = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) {
+        return this.matches('[role="menu"], [role="dialog"]') ? 240 : 0;
+      });
+      return () => {
+        rect.mockRestore();
+        height.mockRestore();
+        width.mockRestore();
+        Object.defineProperty(window, "innerWidth", { configurable: true, value: was.width });
+        Object.defineProperty(window, "innerHeight", { configurable: true, value: was.height });
+      };
+    }
+
+    /** A popup's top and bottom on screen, from its control and its placed offset. */
+    function onScreen(popup: HTMLElement, controlTop: number) {
+      const top = controlTop + Number.parseFloat(popup.style.top);
+      return { top, bottom: top + popup.scrollHeight };
+    }
+
+    it("shows a 12-microphone list in full on a 600 px screen, from a chip halfway down", async () => {
+      const microphones = Array.from({ length: 12 }, (_, at) => ({ id: `mic-${at}`, name: `Microphone ${at + 1}`, isDefault: at === 0 }));
+      const at = { top: 300, bottom: 330 };
+      const restore = fakeLayout(() => at, { width: 1000, height: 600 });
+      try {
+        mockOverlay(
+          { allInOne: true, choice: { intent: "record", mode: "region", delaySeconds: 0 } },
+          {},
+          KNOWN_CAMERAS,
+          { recording_microphones: () => microphones },
+        );
+        render(<RegionOverlay />);
+        await ready();
+        const options = await screen.findByTestId("overlay-record-setup");
+        fireEvent.click(within(options).getByRole("button", { name: "Microphone" }));
+        const menu = screen.getByRole("menu", { name: "Microphone" });
+        // Re-placed as the devices arrive.
+        await waitFor(() => expect(within(menu).getAllByRole("menuitemradio")).toHaveLength(14));
+        const placed = onScreen(menu, at.top);
+        expect(menu.scrollHeight).toBeGreaterThan(300);
+        expect(placed.top).toBeGreaterThanOrEqual(8);
+        expect(placed.bottom).toBeLessThanOrEqual(592);
+        // Shorter than the screen: no scrolling.
+        expect(menu.style.maxHeight).toBe("");
+      } finally {
+        restore();
+      }
+    });
+
     it("never makes Recording options a scroll container, and opens its menus the way they fit", async () => {
-      // jsdom lays nothing out, but it does cascade the overlay's styles.
       const style = document.createElement("style");
       const fs = await vi.importActual<{ readFileSync: (path: string, encoding: "utf8") => string }>("node:fs");
       const here = (import.meta as ImportMeta & { dirname: string }).dirname;
       style.textContent = fs.readFileSync(`${here}/overlay.css`, "utf8");
       document.head.append(style);
-      // Each menu's control sits where `at` says, on an 800 px tall screen.
-      let at = { top: 700, bottom: 730 };
-      const rect = vi
-        .spyOn(HTMLElement.prototype, "getBoundingClientRect")
-        .mockImplementation(() => ({ ...at, left: 0, right: 100, width: 100, height: at.bottom - at.top, x: 0, y: at.top, toJSON: () => ({}) }));
+      let at = { top: 12, bottom: 46 };
+      const restore = fakeLayout(() => at, { width: 1000, height: 800 });
       try {
         mockOverlay({ allInOne: true, choice: { intent: "record", mode: "region", delaySeconds: 0 } });
         render(<RegionOverlay />);
         await ready();
         const options = await screen.findByTestId("overlay-record-setup");
-        // The toolbar at the top: the panel opens below it.
-        at = { top: 12, bottom: 46 };
+        // The toolbar at the top: the panel opens below it, in full.
         fireEvent.click(within(options).getByRole("button", { name: "Recording options" }));
         const panel = screen.getByRole("dialog", { name: "Recording options" });
         expect(panel).toHaveAttribute("data-up", "false");
@@ -2979,7 +3038,9 @@ describe("scrolling capture", () => {
         // Format's row near the bottom of the screen: its menu opens upward, over the panel.
         at = { top: 700, bottom: 730 };
         fireEvent.click(within(panel).getByRole("button", { name: "Format" }));
-        expect(screen.getByRole("menu", { name: "Format" })).toHaveAttribute("data-up", "true");
+        const format = screen.getByRole("menu", { name: "Format" });
+        expect(format).toHaveAttribute("data-up", "true");
+        expect(onScreen(format, at.top).bottom).toBeLessThanOrEqual(at.top);
         fireEvent.click(within(panel).getByRole("button", { name: "Format" }));
 
         // With room below, it opens downward.
@@ -2987,7 +3048,7 @@ describe("scrolling capture", () => {
         fireEvent.click(within(panel).getByRole("button", { name: "Countdown" }));
         expect(screen.getByRole("menu", { name: "Countdown" })).toHaveAttribute("data-up", "false");
       } finally {
-        rect.mockRestore();
+        restore();
         style.remove();
       }
     });
