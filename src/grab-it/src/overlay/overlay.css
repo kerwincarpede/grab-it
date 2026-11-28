@@ -435,34 +435,44 @@
   right: 0;
 }
 
-/* Hint pill, top centre. */
 /*
- * The hint, in the Grab-it window's look: a quiet dark panel with a hairline
- * edge, plain text, and keys drawn as small keycaps. It sits just below the
- * menu bar or camera notch (its `top` comes from the backend).
+ * The hint, in Capture & record's toolbar's pill and palette: 50px tall,
+ * 8px round its 34px line and keys, which are keycaps as the toolbar draws
+ * them. It sits just below the menu bar or camera notch (its `top` comes
+ * from the backend), centred by its margins as the toolbar is, or on the
+ * setup toolbar's centre when it is anchored there. Its width eases as its
+ * line or keys change (Fold in ChooserToolbar.tsx).
  */
 .overlay-hint {
   position: absolute;
-  top: 12px;
-  left: 50%;
+  right: 0;
+  left: 0;
   display: flex;
-  gap: 12px;
   align-items: center;
+  box-sizing: border-box;
+  width: max-content;
   max-width: calc(100% - 32px);
-  padding: 7px 8px 7px 14px;
+  height: 50px;
+  margin: 0 auto;
+  padding: 8px;
   color: #ecedef;
   font-family: "Instrument Sans Variable", system-ui, -apple-system, sans-serif;
   font-size: 13px;
   line-height: 18px;
   white-space: nowrap;
-  background: rgb(23 24 27 / 92%);
-  border: 1px solid #2a2c31;
-  border-radius: 10px;
-  box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
-  backdrop-filter: blur(16px) saturate(140%);
-  transform: translateX(-50%);
+  background: #101113;
+  border-radius: 999px;
+  box-shadow:
+    inset 0 0 0 1px #2a2c31,
+    0 12px 32px rgb(0 0 0 / 40%);
   transition: opacity 120ms ease-out;
   pointer-events: none;
+}
+
+.overlay-hint[data-anchored="true"] {
+  right: auto;
+  margin: 0;
+  transform: translateX(-50%);
 }
 
 /* Out of the way while a selection is being drawn underneath it. */
@@ -471,10 +481,28 @@
   opacity: 0;
 }
 
+/*
+ * No wider than the pill can be (the viewport less its 16px gutters and
+ * 8px padding), so a long line ends in an ellipsis, and the fold still
+ * measures the contents' own width.
+ */
+.overlay-hint-fold {
+  min-width: 0;
+}
+
+.overlay-hint-fold .overlay-fold-contents {
+  gap: 0;
+  max-width: calc(100vw - 48px);
+}
+
 .overlay-hint-text {
+  flex: 0 1 auto;
+  min-width: 0;
   margin: 0;
+  padding: 0 8px 0 10px;
   overflow: hidden;
   text-overflow: ellipsis;
+  animation: overlay-fold-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .overlay-hint-text[data-error="true"] {
@@ -975,39 +1003,43 @@
 
 .overlay-keys {
   display: flex;
-  gap: 10px;
+  flex: none;
+  gap: 2px;
+  align-items: center;
   margin: 0;
-  padding: 0 0 0 12px;
-  color: #8d919a;
-  font-size: 12px;
+  padding: 0;
+  color: #c9ccd2;
   list-style: none;
-  border-left: 1px solid #2a2c31;
 }
 
+/* Each key as the toolbar's items: 34px tall, a newly shown one fading in. */
 .overlay-keys li {
   display: flex;
-  gap: 5px;
+  gap: 6px;
   align-items: center;
+  height: 34px;
+  padding: 0 8px;
+  animation: overlay-fold-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .overlay-keys kbd {
-  display: inline-grid;
-  place-items: center;
-  min-width: 18px;
-  height: 19px;
   box-sizing: border-box;
-  padding: 0 5px;
-  color: #c9ccd2;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 500;
-  background: #1c1e22;
-  border: 1px solid #2e3036;
-  border-bottom-width: 2px;
-  border-radius: 5px;
+  min-width: 16px;
+  padding: 0 4px;
+  color: #8d919a;
+  font: 500 11px/16px ui-monospace, "SF Mono", Menlo, monospace;
+  text-align: center;
+  background: rgb(255 255 255 / 6%);
+  border-radius: 4px;
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* The hint's line and keys only fade, as a fold's parts do. */
+  .overlay-hint-text,
+  .overlay-keys li {
+    animation-name: overlay-fade-in;
+  }
+
   .overlay,
   .overlay-window,
   .overlay-hint,

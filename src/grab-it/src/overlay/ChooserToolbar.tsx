@@ -215,14 +215,14 @@ function Slider({ label, picked, children }: { label: string; picked: string | n
  * themselves the rest of the time. Under reduced motion only the contents
  * fade (see overlay.css).
  */
-function Fold({
+export function Fold({
   mode,
   className,
   testId = "overlay-fold",
   children,
 }: {
   mode: string;
-  /** Another class beside `overlay-fold`, for a fold elsewhere than the mode's controls. */
+  /** Another class beside `overlay-fold`, for a fold elsewhere than the mode's controls, such as the hint's. */
   className?: string;
   testId?: string;
   children: ReactNode;

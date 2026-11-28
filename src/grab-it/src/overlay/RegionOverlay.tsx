@@ -82,7 +82,7 @@ import { nextGuideEdge, showsGuide, type GuideEdge } from "./guidePlace";
 import { startLabelY, type Blocker } from "./scrollStart";
 import { useAccessibility } from "./useAccessibility";
 import { nextCountdown } from "./recordOptions";
-import { ChooserToolbar, SizeFields } from "./ChooserToolbar";
+import { ChooserToolbar, Fold, SizeFields } from "./ChooserToolbar";
 import { EMPTY_TRAIL, movedTo, pointedAt, reachedToolbar } from "./pointerRest";
 import { RATIOS, TIMER_KEY, TIMER_STEPS, TOOLS, toolbarLayout, type RatioId, type Tool } from "./chooser";
 import { SOURCES, useRecordingOptions } from "./recordSources";
@@ -121,6 +121,8 @@ const SIZE_CHIP: Size = { width: 300, height: 46 };
 /** Half the setup toolbar's height, and room for the hint beside it, in CSS px. */
 const SETUP_HALF = 23;
 const SETUP_HINT_GAP = 10;
+/** The hint's height (`.overlay-hint`), in CSS px. */
+const HINT_HEIGHT = 50;
 /** How near the edge the setup toolbar's centre may be dragged. */
 const SETUP_EDGE = 40;
 /** Scroll's guide's height until it has been measured, and its widest, in CSS px. */
@@ -1380,7 +1382,7 @@ function RegionOverlay() {
     ? { top: top + (allInOne ? TOOLBAR_ROOM : 0) }
     : {
         top: setupLow
-          ? setupCentre.y - SETUP_HALF - SETUP_HINT_GAP - 34
+          ? setupCentre.y - SETUP_HALF - SETUP_HINT_GAP - HINT_HEIGHT
           : setupCentre.y + SETUP_HALF + SETUP_HINT_GAP,
         left: setupCentre.x,
       };
@@ -1402,6 +1404,8 @@ function RegionOverlay() {
       : windowMode
         ? WINDOW_HINT
         : HINTS[intent]);
+  // What the hint shows: a change of line or keys folds it to its new width.
+  const hintMode = [hintText, allInOne, source, held !== null, canDrag].join("|");
 
   // Measured once laid out: the panel's height follows its text and its
   // place follows the held area.
@@ -1725,41 +1729,46 @@ function RegionOverlay() {
         <div
           className="overlay-hint"
           data-hidden={active && !error ? "true" : "false"}
+          data-anchored={hintAt.left === undefined ? "false" : "true"}
           style={hintAt.left === undefined ? { top: hintAt.top } : { top: hintAt.top, left: hintAt.left }}
         >
-          <p className="overlay-hint-text" role="status" data-error={error ? "true" : "false"}>
-            {hintText}
-          </p>
-          <ul className="overlay-keys" aria-label="Keyboard shortcuts">
-            <li>
-              <kbd>Esc</kbd> Cancel
-            </li>
-            {allInOne && (
+          {/* Its width eases from one line and set of keys to the next. */}
+          <Fold mode={hintMode} className="overlay-hint-fold" testId="overlay-hint-fold">
+            <p className="overlay-hint-text" role="status" data-error={error ? "true" : "false"} key={hintText}>
+              {hintText}
+            </p>
+            <span className="overlay-toolbar-gap" aria-hidden="true" />
+            <ul className="overlay-keys" aria-label="Keyboard shortcuts">
               <li>
-                <kbd>1</kbd>–<kbd>{TIMER_KEY}</kbd> In this chooser
+                <kbd>Esc</kbd> Cancel
               </li>
-            )}
-            {source && !allInOne && (
-              <li>
-                <kbd>1</kbd>–<kbd>{SOURCES.length}</kbd> Source
-              </li>
-            )}
-            {held && (
-              <li>
-                <kbd>Enter</kbd> {CONFIRM_LABELS[intent]}
-              </li>
-            )}
-            {canDrag && (
-              <>
+              {allInOne && (
                 <li>
-                  <kbd>Shift</kbd> Square
+                  <kbd>1</kbd>–<kbd>{TIMER_KEY}</kbd> In this chooser
                 </li>
+              )}
+              {source && !allInOne && (
                 <li>
-                  <kbd>Space</kbd> Move
+                  <kbd>1</kbd>–<kbd>{SOURCES.length}</kbd> Source
                 </li>
-              </>
-            )}
-          </ul>
+              )}
+              {held && (
+                <li>
+                  <kbd>Enter</kbd> {CONFIRM_LABELS[intent]}
+                </li>
+              )}
+              {canDrag && (
+                <>
+                  <li>
+                    <kbd>Shift</kbd> Square
+                  </li>
+                  <li>
+                    <kbd>Space</kbd> Move
+                  </li>
+                </>
+              )}
+            </ul>
+          </Fold>
         </div>
       )}
     </div>
