@@ -1574,7 +1574,7 @@ function RegionOverlay() {
       )}
       {sizeChip && held && !dragging && placement && heldSize && (
         <div ref={sizePanel}>
-          {allInOne && intent !== "record" ? (
+          {allInOne ? (
             <SizeChip
               size={heldSize}
               ratio={ratio}

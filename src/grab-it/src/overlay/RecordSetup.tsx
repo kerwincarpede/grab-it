@@ -70,7 +70,9 @@ function swallowClick() {
 
 /** A row of a chip's list: an option to pick, or a separator, heading or action between them. */
 type ChipRow =
-  | { kind?: "option"; key: string; title: string; selected: boolean; onPick: () => void }
+  | { kind?: "option"; key: string; title: string; detail?: string; selected: boolean; onPick: () => void }
+  /** A level, 0 to 1 before scaling, as a bar; empty while nothing is heard. */
+  | { kind: "meter"; key: string; title: string; level: number | null }
   | { kind: "separator"; key: string }
   | { kind: "heading"; key: string; title: string }
   /** Does something rather than pick; the list stays open, as it may change the list. */
@@ -148,6 +150,15 @@ export function ChipMenu({ label, icon, title, disabled, up, checks = false, tip
             switch (row.kind) {
               case "separator":
                 return <div key={row.key} role="separator" className="overlay-chip-separator" />;
+              case "meter":
+                return (
+                  <div key={row.key} role="presentation" className="overlay-chip-meter" data-testid="overlay-input-level">
+                    <span>{row.title}</span>
+                    <span className="overlay-chip-meter-track" aria-hidden="true">
+                      <span style={{ transform: `scaleX(${perceivedLevel(row.level ?? 0)})` }} />
+                    </span>
+                  </div>
+                );
               case "heading":
                 return (
                   <div key={row.key} role="presentation" className="overlay-chip-heading">
@@ -190,6 +201,7 @@ export function ChipMenu({ label, icon, title, disabled, up, checks = false, tip
                       </span>
                     )}
                     <span>{row.title}</span>
+                    {row.detail && <span className="overlay-chip-detail">{row.detail}</span>}
                   </button>
                 );
             }
@@ -238,10 +250,15 @@ export function RecordOptionsFields({ options, up, level = null }: RecordOptions
   const silent = "A GIF is silent.";
   const micOn = recordsMicrophone(recording.audio);
   // Default, each device, then Off, as the camera's list is.
+  // As the prototype: a heading, Default with the device it stands for,
+  // each device, Off, then the input level while setup listens.
+  const defaultMic = microphones.find((mic) => mic.isDefault)?.name;
   const micOptions: ChipRow[] = [
+    { kind: "heading", key: "microphone-heading", title: "Microphone" },
     {
       key: "default",
       title: "Default",
+      detail: defaultMic,
       selected: micOn && recording.microphone === null,
       onPick: () => save(withMicrophone(recording, { kind: "default" })),
     },
@@ -251,8 +268,9 @@ export function RecordOptionsFields({ options, up, level = null }: RecordOptions
       selected: micOn && recording.microphone === mic.id,
       onPick: () => save(withMicrophone(recording, { kind: "device", id: mic.id })),
     })),
-    { kind: "separator", key: "off-separator" },
     { key: "none", title: "Off", selected: !micOn, onPick: () => save(withMicrophone(recording, { kind: "none" })) },
+    { kind: "separator", key: "input-separator" },
+    { kind: "meter", key: "input", title: "Input", level: micOn && !gif ? level : null },
   ];
   const micLabel = gif ? "No sound" : microphoneLabel(recording, microphones);
   const micUse = gif ? silent : "Picks the microphone that records your voice.";
@@ -263,8 +281,6 @@ export function RecordOptionsFields({ options, up, level = null }: RecordOptions
     cameras.length === 0
       ? []
       : [
-          { kind: "separator", key: "cameras-separator" },
-          { kind: "heading", key: "cameras-heading", title: "Cameras" },
           ...cameras.map((camera) => ({
             key: `camera-${camera.id}`,
             title: camera.name,
@@ -273,6 +289,7 @@ export function RecordOptionsFields({ options, up, level = null }: RecordOptions
           })),
         ];
   const cameraRows: ChipRow[] = [
+    { kind: "heading", key: "camera-heading", title: "Camera" },
     {
       key: "default",
       title: "Default",
@@ -505,7 +522,7 @@ function OptionsPopover({ up, countdown, children }: { up: boolean; countdown: s
       </Tipped>
       {open && (
         <div
-          className="overlay-chip-list overlay-options-popover"
+          className="overlay-options-popover"
           role="dialog"
           aria-label="Recording options"
           data-testid="overlay-record-options-popover"

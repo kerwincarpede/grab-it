@@ -1651,8 +1651,22 @@
   line-height: 18px;
 }
 
-/* Recording options: a heading, labelled rows, then switches. */
+/*
+ * Recording options: a heading, labelled rows, then switches. Its own
+ * panel, not a chip's list, so every row shows; it scrolls only when the
+ * screen below the toolbar is shorter than it.
+ */
 .overlay-options-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 2;
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+  background: #17181b;
+  border: 1px solid #2a2c31;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 45%);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1816,4 +1830,56 @@
   .overlay-mic-level > span {
     transition: none;
   }
+}
+
+.overlay-options-popover[data-up="true"] {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+/* A menu option's detail, such as the device Default stands for. */
+.overlay-chip-detail {
+  margin-left: auto;
+  padding-left: 16px;
+  color: #8d919a;
+  font-size: 12px;
+}
+
+/* The microphone menu's input level, on the setup level's decibel scale. */
+.overlay-chip-meter {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 10px;
+  color: #8d919a;
+  font-size: 12px;
+}
+
+.overlay-chip-meter-track {
+  position: relative;
+  flex: 1;
+  min-width: 140px;
+  height: 4px;
+  overflow: hidden;
+  background: rgb(255 255 255 / 10%);
+  border-radius: 2px;
+}
+
+.overlay-chip-meter-track > span {
+  position: absolute;
+  inset: 0;
+  background: #3fb950;
+  transform-origin: left;
+  transition: transform 80ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay-chip-meter-track > span {
+    transition: none;
+  }
+}
+
+.overlay-chip-option:has(.overlay-chip-detail) {
+  display: flex;
+  align-items: center;
 }

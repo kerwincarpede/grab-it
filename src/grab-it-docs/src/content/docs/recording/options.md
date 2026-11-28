@@ -29,11 +29,11 @@ An MP4 needs ffmpeg. Grab-it uses one already on your computer, or downloads one
 
 The microphone button records your voice with an MP4. Its menu offers:
 
-- **Default**: the input chosen in your system's sound settings,
+- **Default**: the input chosen in your system's sound settings, named beside it,
 - any microphone connected, by name,
 - or **Off**.
 
-While you set up a recording, a bar beside the microphone icon shows how loud it hears you. Grab-it listens only while the setup toolbar is open and keeps nothing it hears. Where the system can't report a level, no bar shows.
+While you set up a recording, bars beside the microphone icon, and the **Input** bar at the foot of its menu, show how loud it hears you. Grab-it listens only while the setup toolbar is open and keeps nothing it hears. Where the system can't report a level, no bar shows.
 
 A tick marks the current choice in the **Microphone** menu. A GIF is silent, so the chip says **No sound** and can't be changed.
 

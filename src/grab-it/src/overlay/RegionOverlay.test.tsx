@@ -94,6 +94,7 @@ function mockOverlay(
       },
       setup_level_stop: () => undefined,
       setup_level: () => 0.5,
+      recording_microphones: () => [{ id: "usb", name: "USB Microphone", isDefault: false }],
       ...extra,
       overlay_info: () =>
         overlayInfo({
@@ -108,7 +109,6 @@ function mockOverlay(
       get_settings: () => settings({ ...DEFAULT_RECORDING, audio: "microphone", ...recording }),
       // The shortcuts the desktop registered, as the tray and hub show them.
       effective_hotkeys: () => ({ allInOne: "Ctrl+Alt+PrintScreen", region: "Ctrl+Shift+2", screen: "Ctrl+Shift+3" }),
-      recording_microphones: () => [{ id: "usb", name: "USB Microphone", isDefault: false }],
       recording_system_audio: () => true,
       known_cameras: () => cameras,
       remember_cameras: () => null,
@@ -2109,8 +2109,10 @@ describe("RegionOverlay", () => {
         await within(chooser()).findByRole("group", { name: "Recording options" });
 
         dragOver(overlay, [300, 300], [500, 400]);
-        expect(screen.getByTestId("overlay-size-panel")).toBeInTheDocument();
-        expect(within(chooser()).queryByRole("textbox", { name: "Width" })).not.toBeInTheDocument();
+        // The same read-only chip as Capture's, under the bottom-left corner.
+        expect(screen.getByTestId("overlay-size-panel")).toHaveClass("overlay-size-chip");
+        expect(screen.getByTestId("overlay-size")).toHaveTextContent("200 × 100 px");
+        expect(screen.queryByRole("textbox", { name: "Width" })).not.toBeInTheDocument();
       });
 
       it("shrinks the microphone and webcam to icons when the toolbar runs short of room", async () => {
@@ -2255,8 +2257,9 @@ describe("RegionOverlay", () => {
         const list = screen.getByRole("menu", { name: "Camera" });
         await waitFor(() => expect(choices()).toEqual(["Default", "FaceTime HD Camera", "Logitech C920", "Off"]));
         expect(screen.getByRole("menuitemradio", { name: "Off" })).toHaveAttribute("aria-checked", "true");
-        expect(within(list).getByText("Cameras")).toBeInTheDocument();
-        expect(within(list).getAllByRole("separator")).toHaveLength(3);
+        // A CAMERA heading, as the microphone's menu has.
+        expect(within(list).getByText("Camera")).toHaveClass("overlay-chip-heading");
+        expect(within(list).getAllByRole("separator")).toHaveLength(2);
         expect(within(list).getByRole("menuitem", { name: "Refresh camera list" })).toBeInTheDocument();
         expect(media.requests).toEqual([]);
       });
@@ -2899,6 +2902,52 @@ describe("scrolling capture", () => {
       expect(overlay).toHaveAttribute("data-intent", "record");
       fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
       await waitFor(() => expect(calls.map((c) => c.cmd)).toContain("overlay_finish"));
+    });
+
+    it("lists the microphone as the prototype: heading, Default's device, Off, then the input level", async () => {
+      mockOverlay(
+        { allInOne: true, choice: { intent: "record", mode: "region", delaySeconds: 0 } },
+        {},
+        KNOWN_CAMERAS,
+        {
+          setup_level_start: () => null,
+          setup_level: () => 10 ** (-24 / 20),
+          recording_microphones: () => [
+            { id: "built-in", name: "MacBook Pro Microphone", isDefault: true },
+            { id: "usb", name: "USB Microphone", isDefault: false },
+          ],
+        },
+      );
+      render(<RegionOverlay />);
+      await ready();
+      const options = await screen.findByTestId("overlay-record-setup");
+      await screen.findByTestId("overlay-mic-level");
+      fireEvent.click(within(options).getByRole("button", { name: "Microphone" }));
+      const menu = screen.getByRole("menu", { name: "Microphone" });
+      expect(within(menu).getByText("Microphone")).toHaveClass("overlay-chip-heading");
+      await waitFor(() =>
+        expect(within(menu).getByRole("menuitemradio", { name: /Default/ })).toHaveTextContent("DefaultMacBook Pro Microphone"),
+      );
+      expect(within(menu).getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual([
+        "DefaultMacBook Pro Microphone",
+        "MacBook Pro Microphone",
+        "USB Microphone",
+        "Off",
+      ]);
+      // -24 dB fills 60% of the bar.
+      const bar = within(menu).getByTestId("overlay-input-level").querySelector<HTMLElement>(".overlay-chip-meter-track > span");
+      await waitFor(() => expect(bar?.style.transform).toBe("scaleX(0.6)"));
+    });
+
+    it("keeps Recording options' rows out of a chip list, so none is cut off", async () => {
+      mockOverlay({ allInOne: true, choice: { intent: "record", mode: "region", delaySeconds: 0 } });
+      render(<RegionOverlay />);
+      await ready();
+      const options = await screen.findByTestId("overlay-record-setup");
+      fireEvent.click(within(options).getByRole("button", { name: "Recording options" }));
+      const popover = screen.getByRole("dialog", { name: "Recording options" });
+      expect(popover).not.toHaveClass("overlay-chip-list");
+      expect(popover).toHaveClass("overlay-options-popover");
     });
 
     it("lays Recording options out as the prototype: heading, rows and switches", async () => {
