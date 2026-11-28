@@ -576,17 +576,41 @@
   background: transparent;
 }
 
-/* The active mode's label opens from zero width and fades in. */
+/*
+ * Each mode's label, open only on the picked mode: Slider in
+ * ChooserToolbar.tsx sets its width, which moves with the pill, so the old
+ * label closes as the new one opens. The gap to the icon is inside it, so
+ * a closed label takes no room.
+ */
+.overlay-toolbar .overlay-mode {
+  gap: 0;
+}
+
 .overlay-mode-label {
   display: inline-block;
+  flex: none;
+  width: 0;
   overflow: hidden;
-  animation: overlay-label-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  white-space: nowrap;
+  opacity: 0;
+  transition:
+    width 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 160ms ease-out;
+}
+
+.overlay-mode-label[data-open="true"] {
+  opacity: 1;
+}
+
+.overlay-mode-label > span {
+  display: inline-block;
+  padding-left: 6px;
 }
 
 /*
  * A mode's own controls. Their width opens or closes as the mode changes
- * (Fold in ChooserToolbar.tsx sets it for the length of the fold); the
- * new contents fade, settle 3 px and lose a 2 px blur.
+ * (Fold in ChooserToolbar.tsx sets it for the length of the fold); each
+ * newly shown part fades, settles 3 px and loses a 2 px blur.
  */
 .overlay-fold {
   display: flex;
@@ -601,6 +625,12 @@
 .overlay-fold-contents {
   display: flex;
   flex: none;
+  gap: 2px;
+  align-items: center;
+}
+
+.overlay-fold-part {
+  display: flex;
   gap: 2px;
   align-items: center;
   animation: overlay-fold-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -621,18 +651,6 @@
     opacity: 1;
     filter: none;
     transform: none;
-  }
-}
-
-@keyframes overlay-label-in {
-  from {
-    max-width: 0;
-    opacity: 0;
-  }
-
-  to {
-    max-width: 120px;
-    opacity: 1;
   }
 }
 
@@ -681,9 +699,12 @@
     transition: none;
   }
 
-  .overlay-fold-contents,
-  .overlay-mode-label {
+  .overlay-fold-part {
     animation-name: overlay-fade-in;
+  }
+
+  .overlay-mode-label {
+    transition: opacity 120ms ease-out;
   }
 }
 
@@ -696,8 +717,30 @@
   border-inline: 1px solid #2a2c31;
 }
 
+/*
+ * No gap of its own: the Timer's fold is empty outside Capture, and a gap
+ * beside it would stay. The Timer brings its own space instead.
+ */
 .overlay-toolbar-actions {
+  gap: 0;
   margin-left: auto;
+}
+
+.overlay-toolbar-actions > .overlay-tip-anchor + .overlay-tip-anchor {
+  margin-left: 2px;
+}
+
+.overlay-timer-fold .overlay-fold-part {
+  padding-right: 2px;
+}
+
+/* The main button's dot and label, which fold from one label to the next. */
+.overlay-main-fold .overlay-fold-contents {
+  gap: 7px;
+}
+
+.overlay-main-label {
+  animation: overlay-fade-in 160ms ease-out;
 }
 
 /* The picked colour's hex value, copied from the loupe as it draws. */
@@ -716,9 +759,9 @@
 }
 
 /*
- * Too narrow for one row: the middle section takes a row of its own inside
- * the same panel, and the actions wrap below the modes when they do not fit
- * beside them.
+ * Too narrow for one row: the actions wrap below the modes when they do
+ * not fit beside them. A mode's own controls stay in the row: they fold in
+ * and out with the mode, so they cannot take a row of their own.
  */
 .overlay-toolbar[data-layout="stacked"] {
   flex-wrap: wrap;
@@ -727,16 +770,6 @@
   height: auto;
   min-height: 50px;
   border-radius: 25px;
-}
-
-.overlay-toolbar[data-layout="stacked"] .overlay-toolbar-middle {
-  order: 1;
-  flex-basis: 100%;
-  justify-content: center;
-  margin: 0;
-  padding: 8px 0 0;
-  border-inline: 0;
-  border-top: 1px solid #2a2c31;
 }
 
 /* The main button: blue with a glow when it can act, dimmed until then. */

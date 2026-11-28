@@ -151,27 +151,51 @@ function arrowWithinGroup(event: KeyboardEvent<HTMLDivElement>) {
 
 /**
  * A group with one highlight that slides under its picked button: a pill
- * placed by a transform and a width, so it moves rather than jumps. It is
- * measured after every render, as the picked button's label changes its
- * width; `picked` names it for tests and styles.
+ * placed by a transform and a width, so it moves rather than jumps.
+ *
+ * Every mode button has a label, open only on the picked one. The labels'
+ * widths are set here, so the old one closes as the new one opens, with
+ * the pill's own timing (see `.overlay-mode-label`). The pill goes straight
+ * to where the picked button ends up once they finish: as measured now,
+ * the labels have only begun to move, and nothing renders again while the
+ * pointer rests on the toolbar to correct it. It is measured after every
+ * render; `picked` names it for tests and styles.
  */
 function Slider({ label, picked, children }: { label: string; picked: string | null; children: ReactNode }) {
   const group = useRef<HTMLDivElement>(null);
   const slide = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
     const pill = slide.current;
-    const button = group.current?.querySelector<HTMLElement>('[data-picked="true"]');
-    if (!pill) return;
+    const box = group.current;
+    if (!pill || !box) return;
     pill.dataset.picked = picked ?? "";
+    const labels = [...box.querySelectorAll<HTMLElement>(".overlay-mode-label")];
+    // Each label's width once it has opened or closed.
+    const ends = new Map<HTMLElement, number>();
+    for (const each of labels) {
+      const open = each.dataset.open === "true";
+      const end = open ? (each.firstElementChild?.getBoundingClientRect().width ?? 0) : 0;
+      ends.set(each, end);
+      each.style.width = `${end}px`;
+    }
+    const button = box.querySelector<HTMLElement>('[data-picked="true"]');
     if (!button) {
       pill.style.opacity = "0";
       return;
     }
+    // How far a label still has to go, read after its new width is set:
+    // it is still where it was, as its transition has only just begun.
+    const still = (each: HTMLElement | null) => (each ? (ends.get(each) ?? 0) - each.getBoundingClientRect().width : 0);
     // The button sits in its tooltip's anchor, so its place is the anchor's.
     const anchor = (button.parentElement as HTMLElement | null) ?? button;
+    let left = anchor.getBoundingClientRect().left - box.getBoundingClientRect().left;
+    for (const each of labels) {
+      if (anchor.compareDocumentPosition(each) & Node.DOCUMENT_POSITION_PRECEDING) left += still(each);
+    }
+    const width = button.getBoundingClientRect().width + still(button.querySelector(".overlay-mode-label"));
     pill.style.opacity = "1";
-    pill.style.width = `${button.offsetWidth}px`;
-    pill.style.transform = `translateX(${anchor.offsetLeft}px)`;
+    pill.style.width = `${width}px`;
+    pill.style.transform = `translateX(${left}px)`;
   });
   return (
     <div className="overlay-toolbar-group overlay-slider" role="group" aria-label={label} ref={group}>
@@ -184,13 +208,27 @@ function Slider({ label, picked, children }: { label: string; picked: string | n
 /**
  * A mode's own controls, which fold open and closed as the mode changes:
  * the width goes from what the last mode's controls took to what this
- * mode's take, both ways, while the new contents fade in and settle. The
- * width is set only for the fold and cleared after it, so the controls
- * size themselves the rest of the time. Under reduced motion only the
- * contents fade (see overlay.css).
+ * mode's take, both ways, while the new mode's own controls fade in and
+ * settle. Contents that change width during the fold, as a mode's own
+ * controls can once they load, send it on to their new width. The width is
+ * set only for the fold and cleared after it, so the controls size
+ * themselves the rest of the time. Under reduced motion only the contents
+ * fade (see overlay.css).
  */
-function Fold({ mode, children }: { mode: string; children: ReactNode }) {
+function Fold({
+  mode,
+  className,
+  testId = "overlay-fold",
+  children,
+}: {
+  mode: string;
+  /** Another class beside `overlay-fold`, for a fold elsewhere than the mode's controls. */
+  className?: string;
+  testId?: string;
+  children: ReactNode;
+}) {
   const fold = useRef<HTMLDivElement>(null);
+  const contents = useRef<HTMLDivElement>(null);
   const width = useRef(0);
   const shown = useRef(mode);
   // The fold's end, kept across renders: the toolbar re-renders often
@@ -199,28 +237,39 @@ function Fold({ mode, children }: { mode: string; children: ReactNode }) {
   useEffect(() => () => window.clearTimeout(ending.current), []);
   useLayoutEffect(() => {
     const element = fold.current;
-    if (!element) return;
+    if (!element || !contents.current) return;
     const from = width.current;
-    const to = element.scrollWidth;
+    // The contents' own box, which sizes itself: the fold's scrollWidth
+    // would count the hidden tooltips that reach past the last control.
+    const to = contents.current.getBoundingClientRect().width;
     width.current = to;
-    if (shown.current === mode) return;
+    const end = () => {
+      window.clearTimeout(ending.current);
+      ending.current = window.setTimeout(() => {
+        element.dataset.folding = "false";
+        element.style.width = "";
+      }, FOLD_MS + 40);
+    };
+    if (shown.current === mode) {
+      // Mid-fold, the contents changed width: carry on to the new one.
+      if (element.dataset.folding === "true" && from !== to) {
+        element.style.width = `${to}px`;
+        end();
+      }
+      return;
+    }
     shown.current = mode;
     if (from === to || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
-    window.clearTimeout(ending.current);
     element.dataset.folding = "true";
     element.style.width = `${from}px`;
     // Laid out at the old width first, so the change animates.
     void element.offsetWidth;
     element.style.width = `${to}px`;
-    ending.current = window.setTimeout(() => {
-      element.dataset.folding = "false";
-      element.style.width = "";
-    }, FOLD_MS + 40);
+    end();
   });
   return (
-    <div className="overlay-fold" ref={fold} data-testid="overlay-fold" data-mode={mode}>
-      {/* Keyed by mode, so a new mode's contents fade in afresh. */}
-      <div className="overlay-fold-contents" key={mode}>
+    <div className={className ? `overlay-fold ${className}` : "overlay-fold"} ref={fold} data-testid={testId} data-mode={mode}>
+      <div className="overlay-fold-contents" ref={contents}>
         {children}
       </div>
     </div>
@@ -335,7 +384,10 @@ export function ChooserToolbar({
             }}
           >
             {icon}
-            {picked && <span className="overlay-mode-label">{label}</span>}
+            {/* Sized by Slider; its inner span is the label's full width. */}
+            <span className="overlay-mode-label" data-open={picked ? "true" : "false"} aria-hidden="true">
+              <span>{label}</span>
+            </span>
           </button>
         )}
       </Tipped>
@@ -427,22 +479,27 @@ export function ChooserToolbar({
             {MODES.map(modeButton)}
           </Slider>
           <Fold mode={mode}>
+            {/* Capture and Record share their targets, which stay put between them. */}
             {hasTargets && (
-              <>
+              <div className="overlay-fold-part">
                 <span className="overlay-toolbar-gap" aria-hidden="true" />
                 <Slider label={recording ? "What to record" : "What to capture"} picked={pickedTarget}>
                   {TARGETS.map(targetButton)}
                 </Slider>
-              </>
+              </div>
             )}
+            {/* Keyed by mode, so a new mode's own controls fade in afresh. */}
             {middle && (
-              <div className="overlay-toolbar-middle" data-testid="overlay-toolbar-middle">
+              <div className="overlay-toolbar-middle overlay-fold-part" data-testid="overlay-toolbar-middle" key={mode}>
                 {middle}
               </div>
             )}
           </Fold>
           <div className="overlay-toolbar-group overlay-toolbar-actions" role="group" aria-label="Actions">
-            {timerButton}
+            {/* Capture's alone: it folds in and out with the mode, and as its label changes. */}
+            <Fold mode={timerButton ? `timer-${timer}` : "none"} className="overlay-timer-fold" testId="overlay-timer-fold">
+              {timerButton && <div className="overlay-fold-part">{timerButton}</div>}
+            </Fold>
             <Tipped tip={{ name: mainLabel, keyLabel: "Enter", use: mainUse }}>
               {(describedBy) => (
                 <button
@@ -457,8 +514,13 @@ export function ChooserToolbar({
                     if (ready) onMain();
                   }}
                 >
-                  {recording && <span className="overlay-setup-dot" aria-hidden="true" />}
-                  <span>{mainLabel}</span>
+                  {/* Its width eases from one label to the next as the mode changes. */}
+                  <Fold mode={`${recording}-${mainLabel}`} className="overlay-main-fold" testId="overlay-main-fold">
+                    {recording && <span className="overlay-setup-dot" aria-hidden="true" />}
+                    <span className="overlay-main-label" key={mainLabel}>
+                      {mainLabel}
+                    </span>
+                  </Fold>
                   <kbd aria-hidden="true">↵</kbd>
                 </button>
               )}

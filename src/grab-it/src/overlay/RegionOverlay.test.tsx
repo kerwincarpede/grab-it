@@ -1217,7 +1217,7 @@ describe("RegionOverlay", () => {
       const widths = (toolbar: HTMLElement) =>
         within(within(toolbar).getByRole("group", { name: "Modes" }))
           .getAllByRole("button")
-          .map((button) => button.textContent);
+          .map((button) => button.querySelector('.overlay-mode-label[data-open="true"]')?.textContent ?? "");
 
       it("labels only the picked mode at any width, and keeps the ratios in the chip under the region", async () => {
         Object.defineProperty(window, "innerWidth", { configurable: true, value: 1100 });
@@ -2124,7 +2124,7 @@ describe("RegionOverlay", () => {
 
         const mic = within(options).getByRole("button", { name: "Microphone" });
         const webcam = within(options).getByRole("button", { name: "Camera" });
-        // Short of room, the options take a second row and the chips their icons.
+        // Short of room, the chips show their icons.
         expect(chooser()).toHaveAttribute("data-layout", "stacked");
         expect(mic).toHaveAttribute("data-icon-only", "true");
         expect(mic).not.toHaveTextContent("Default microphone");
@@ -2672,6 +2672,9 @@ describe("scrolling capture", () => {
   describe("the adaptive toolbar", () => {
     const toolbar = () => screen.getByRole("toolbar", { name: "Capture & record" });
     const group = (name: string) => within(within(toolbar()).getByRole("group", { name }));
+    // The mode's label as shown: every mode has one, open only on the picked mode.
+    const openLabel = (button: HTMLElement) =>
+      button.querySelector('.overlay-mode-label[data-open="true"]')?.textContent ?? "";
 
     it("labels only the active mode, and shows targets for Capture and Record alone", async () => {
       mockOverlay({ allInOne: true });
@@ -2679,15 +2682,15 @@ describe("scrolling capture", () => {
       await ready();
       const modes = group("Modes");
       expect(modes.getByRole("button", { name: "Capture" })).toHaveAttribute("aria-pressed", "true");
-      expect(modes.getByRole("button", { name: "Capture" })).toHaveTextContent("Capture");
-      expect(modes.getByRole("button", { name: "Text" })).not.toHaveTextContent("Text");
+      expect(openLabel(modes.getByRole("button", { name: "Capture" }))).toBe("Capture");
+      expect(openLabel(modes.getByRole("button", { name: "Text" }))).toBe("");
       expect(group("What to capture").getByRole("button", { name: "Region" })).toHaveAttribute("aria-pressed", "true");
       expect(toolbar()).toHaveAttribute("data-mode", "capture");
 
       fireEvent.click(modes.getByRole("button", { name: "Text" }));
       expect(toolbar()).toHaveAttribute("data-mode", "text");
-      expect(modes.getByRole("button", { name: "Text" })).toHaveTextContent("Text");
-      expect(modes.getByRole("button", { name: "Capture" })).not.toHaveTextContent("Capture");
+      expect(openLabel(modes.getByRole("button", { name: "Text" }))).toBe("Text");
+      expect(openLabel(modes.getByRole("button", { name: "Capture" }))).toBe("");
       expect(within(toolbar()).queryByRole("group", { name: "What to capture" })).not.toBeInTheDocument();
       expect(screen.getByTestId("overlay-confirm")).toHaveTextContent("Copy text");
 
@@ -2701,42 +2704,75 @@ describe("scrolling capture", () => {
       expect(within(toolbar()).getByRole("group", { name: "What to record" })).toBeInTheDocument();
     });
 
-    it("slides one highlight to the picked mode and target", async () => {
-      // jsdom lays nothing out: each button is 40 px wide, each anchor 50 px on from the last.
-      const width = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) {
-        return this.matches("button") ? 40 : 0;
-      });
-      const left = vi.spyOn(HTMLElement.prototype, "offsetLeft", "get").mockImplementation(function (this: HTMLElement) {
+    /**
+     * jsdom lays nothing out: each button is 40 px wide, each anchor 50 px on
+     * from the last, and a label 60 px when open. Capture's label is still
+     * open, as it is when a switch away from Capture has only just begun.
+     */
+    function mockLayout() {
+      const rect = (left: number, width: number) => ({ left, width }) as DOMRect;
+      return vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+        if (this.matches(".overlay-mode-label > span")) return rect(0, 60);
+        if (this.matches(".overlay-mode-label")) {
+          return rect(0, this.closest("button")?.getAttribute("data-tool") === "capture" ? 60 : 0);
+        }
+        if (this.matches("button")) return rect(0, 40);
         const parent = this.parentElement;
-        return parent ? [...parent.children].filter((child) => child.matches(".overlay-tip-anchor")).indexOf(this) * 50 : 0;
+        if (parent && this.matches(".overlay-tip-anchor")) {
+          return rect([...parent.children].filter((child) => child.matches(".overlay-tip-anchor")).indexOf(this) * 50, 0);
+        }
+        return rect(0, 0);
       });
+    }
+
+    it("slides one highlight to the picked mode and target", async () => {
+      const layout = mockLayout();
       try {
         mockOverlay({ allInOne: true });
         render(<RegionOverlay />);
         await ready();
         const pills = () => within(toolbar()).getAllByTestId("overlay-slide");
+        // Capture's label is already open, so its button's own width is the pill's.
         expect(pills()[0].style).toMatchObject({ opacity: "1", width: "40px", transform: "translateX(0px)" });
-        expect(pills()[1].style).toMatchObject({ opacity: "1", transform: "translateX(0px)" });
+        expect(pills()[1].style).toMatchObject({ opacity: "1", width: "40px", transform: "translateX(0px)" });
 
         fireEvent.keyDown(window, { key: "3", code: "Digit3" });
         fireEvent.keyDown(window, { key: "2", code: "Digit2" });
         expect(pills()[1].style.transform).toBe("translateX(50px)");
-
-        // Colour is the fourth mode.
-        fireEvent.keyDown(window, { key: "5", code: "Digit5" });
-        expect(pills()).toHaveLength(1);
-        expect(pills()[0].style).toMatchObject({ opacity: "1", transform: "translateX(150px)" });
       } finally {
-        width.mockRestore();
-        left.mockRestore();
+        layout.mockRestore();
       }
     });
 
-    it("ends a fold after FOLD_MS even when the toolbar re-renders during it", async () => {
-      // jsdom lays nothing out: Capture's controls are 200 px, Record's 300 px.
-      const scroll = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
-        return this.dataset.mode === "record" ? 300 : this.dataset.mode === "capture" ? 200 : 0;
+    it("sends the mode pill to where the picked label ends up, as the labels open and close", async () => {
+      const layout = mockLayout();
+      try {
+        mockOverlay({ allInOne: true });
+        render(<RegionOverlay />);
+        await ready();
+        const labels = () => [...toolbar().querySelectorAll<HTMLElement>(".overlay-mode-label")];
+        const pill = () => within(toolbar()).getAllByTestId("overlay-slide")[0];
+        // Colour is the fourth mode; nothing renders again while the pointer rests.
+        fireEvent.keyDown(window, { key: "5", code: "Digit5" });
+        expect(within(toolbar()).getAllByTestId("overlay-slide")).toHaveLength(1);
+        expect(labels().map((each) => each.style.width)).toEqual(["0px", "0px", "0px", "60px", "0px"]);
+        // 150 px on, less Capture's label that is still closing; 40 px and its label.
+        expect(pill().style).toMatchObject({ opacity: "1", width: "100px", transform: "translateX(90px)" });
+      } finally {
+        layout.mockRestore();
+      }
+    });
+
+    /** jsdom lays nothing out: a fold's contents are 200 px in Capture, `record()` px in Record. */
+    function mockFoldWidths(record: () => number) {
+      return vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+        const mode = this.matches(".overlay-fold-contents") ? this.closest<HTMLElement>(".overlay-fold")?.dataset.mode : null;
+        return { left: 0, width: mode === "record" ? record() : mode === "capture" ? 200 : 0 } as DOMRect;
       });
+    }
+
+    it("ends a fold after FOLD_MS even when the toolbar re-renders during it", async () => {
+      const scroll = mockFoldWidths(() => 300);
       try {
         mockOverlay({ allInOne: true });
         render(<RegionOverlay />);
@@ -2759,6 +2795,43 @@ describe("scrolling capture", () => {
       } finally {
         scroll.mockRestore();
       }
+    });
+
+    it("carries a fold on to the new width when the contents change during it", async () => {
+      let record = 300;
+      const scroll = mockFoldWidths(() => record);
+      try {
+        mockOverlay({ allInOne: true });
+        render(<RegionOverlay />);
+        const overlay = await ready();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        try {
+          fireEvent.keyDown(window, { key: "6", code: "Digit6" });
+          const fold = within(toolbar()).getByTestId("overlay-fold");
+          expect(fold.style.width).toBe("300px");
+          // Record's controls narrow mid-fold.
+          record = 250;
+          fireEvent.mouseMove(overlay, { clientX: 400, clientY: 400 });
+          expect(fold.style.width).toBe("250px");
+          act(() => vi.advanceTimersByTime(FOLD_MS + 50));
+          expect(fold.style.width).toBe("");
+        } finally {
+          vi.useRealTimers();
+        }
+      } finally {
+        scroll.mockRestore();
+      }
+    });
+
+    it("opens Record with its options in place, read as the toolbar opened", async () => {
+      mockOverlay({ allInOne: true });
+      render(<RegionOverlay />);
+      await ready();
+      // Let the settings read as the toolbar opened land.
+      await act(async () => {});
+      fireEvent.keyDown(window, { key: "6", code: "Digit6" });
+      expect(screen.getByTestId("overlay-record-setup")).toBeInTheDocument();
+      expect(screen.queryByText("Loading recording options…")).not.toBeInTheDocument();
     });
 
     it("gives each mode a tooltip with its toolbar key and global shortcut", async () => {

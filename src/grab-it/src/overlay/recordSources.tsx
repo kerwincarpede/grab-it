@@ -66,10 +66,12 @@ export interface RecordingOptions {
 
 /**
  * Settings → Recording for the setup toolbar, read when it is first
- * needed. Each change is saved as it is made, so Settings and the next
- * recording follow it.
+ * needed, or ahead of that with `preload`, so Record opens with its
+ * controls in place rather than a note that they are loading. The devices
+ * are listed only once it is needed. Each change is saved as it is made,
+ * so Settings and the next recording follow it.
  */
-export function useRecordingOptions(enabled: boolean): RecordingOptions {
+export function useRecordingOptions(enabled: boolean, preload = false): RecordingOptions {
   const [recording, setLocal] = useState<RecordingSettings | null>(null);
   const [microphones, setMicrophones] = useState<Microphone[]>([]);
   const [cameras, setCameras] = useState<Camera[]>([]);
@@ -77,8 +79,9 @@ export function useRecordingOptions(enabled: boolean): RecordingOptions {
   const [system, setSystem] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const wanted = enabled || preload;
   useEffect(() => {
-    if (!enabled) return;
+    if (!wanted) return;
     let cancelled = false;
     getSettings()
       .then((settings) => {
@@ -87,6 +90,14 @@ export function useRecordingOptions(enabled: boolean): RecordingOptions {
       .catch((err: unknown) => {
         if (!cancelled) setError(String(err));
       });
+    return () => {
+      cancelled = true;
+    };
+  }, [wanted]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
     listMicrophones()
       .then((listed) => {
         if (!cancelled) setMicrophones(listed);
