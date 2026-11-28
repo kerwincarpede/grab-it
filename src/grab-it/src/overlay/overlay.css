@@ -576,40 +576,62 @@
   background: transparent;
 }
 
+/* The active mode's label opens from zero width and fades in. */
 .overlay-mode-label {
-  animation: overlay-label-in 180ms ease-out;
+  display: inline-block;
+  overflow: hidden;
+  animation: overlay-label-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-/* A mode's own controls fold in from its side as the mode is picked. */
+/*
+ * A mode's own controls. Their width opens or closes as the mode changes
+ * (Fold in ChooserToolbar.tsx sets it for the length of the fold); the
+ * new contents fade, settle 3 px and lose a 2 px blur.
+ */
 .overlay-fold {
   display: flex;
+  align-items: center;
+  transition: width 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.overlay-fold[data-folding="true"] {
+  overflow: hidden;
+}
+
+.overlay-fold-contents {
+  display: flex;
+  flex: none;
   gap: 2px;
   align-items: center;
   animation: overlay-fold-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.overlay-fold:empty {
+.overlay-fold-contents:empty {
   display: none;
 }
 
 @keyframes overlay-fold-in {
   from {
     opacity: 0;
-    clip-path: inset(0 100% 0 0);
+    filter: blur(2px);
+    transform: translateY(3px);
   }
 
   to {
     opacity: 1;
-    clip-path: inset(0);
+    filter: none;
+    transform: none;
   }
 }
 
 @keyframes overlay-label-in {
   from {
+    max-width: 0;
     opacity: 0;
   }
 
   to {
+    max-width: 120px;
     opacity: 1;
   }
 }
@@ -656,6 +678,11 @@
 
   /* Only fades: nothing slides or folds. */
   .overlay-fold {
+    transition: none;
+  }
+
+  .overlay-fold-contents,
+  .overlay-mode-label {
     animation-name: overlay-fade-in;
   }
 }

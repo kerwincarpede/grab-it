@@ -152,18 +152,13 @@ const TOOLBAR_BOTTOM = 12;
 const RECORD_ROOM = 434;
 
 /** What confirms each kind of selection: the main button's label, and the key tip's. */
-/** What the toolbar's tick says was done, for the modes that finish at once. */
-const TICK_TEXT: Partial<Record<OverlayIntent, string>> = {
-  capture: "Captured",
-  text: "Text copied",
-  color: "Colour copied",
-};
-
-/** How long the tick shows before the overlay closes, in ms. */
-export const TICK_HOLD_MS = 1300;
-
 /** How often Record setup's microphone level is read, in ms. */
 const MIC_LEVEL_MS = 80;
+
+/** Counts this page's setup microphone starts, to name each one. */
+let setupStarts = 0;
+/** This page's name among the displays' pages, for its setup microphone starts. */
+const PAGE_ID = Math.random().toString(36).slice(2);
 
 const CONFIRM_LABELS: Record<OverlayIntent, string> = {
   capture: "Capture",
@@ -498,7 +493,8 @@ function RegionOverlay() {
     };
   }, []);
 
-  const loadsHotkeys = info?.allInOne === true;
+  // Tab in a bare Region capture shows the toolbar too, with its shortcuts.
+  const loadsHotkeys = info?.allInOne === true || toolbarShown;
   useEffect(() => {
     if (!loadsHotkeys) return;
     let cancelled = false;
@@ -792,20 +788,26 @@ function RegionOverlay() {
     // Recording uses region geometry for each target.
     const mode =
       picked.kind === "screen" ? "screen" : windowMode && intent !== "record" ? "window" : "region";
-    const send = () =>
-      finishOverlay(picked, allInOne ? toolbarChoice(mode) : undefined).catch((err: unknown) => {
-        done.current = false;
-        setDoneText(null);
-        setError(String(err));
-      });
-    // A timed capture, a recording or a scroll has nothing done yet to tick.
-    const tick = allInOne && info?.toolbarTick === true && !(intent === "capture" && timer > 0) ? TICK_TEXT[intent] : null;
-    if (tick) {
-      setDoneText(tick);
-      window.setTimeout(() => void send(), TICK_HOLD_MS);
-      return;
-    }
-    void send();
+    // The backend copies and saves at once, then keeps the overlay up for
+    // the tick (`TICK_HOLD` in overlay.rs) before it closes it. A timed
+    // capture, a recording or a scroll has nothing done yet to tick.
+    const tick = allInOne && info?.toolbarTick === true && !(intent === "capture" && timer > 0) ? tickText(picked) : null;
+    if (tick) setDoneText(tick);
+    finishOverlay(picked, allInOne ? toolbarChoice(mode) : undefined).catch((err: unknown) => {
+      done.current = false;
+      setDoneText(null);
+      setError(String(err));
+    });
+  }
+
+  /** What the toolbar's tick says was done with `picked`, or null for no tick. */
+  function tickText(picked: Selection): string | null {
+    if (intent === "color") return `Copied ${colourText.current?.textContent ?? ""}`.trim();
+    if (intent === "text") return "Copied the text";
+    if (intent !== "capture") return null;
+    if (picked.kind === "screen") return "Copied every screen · Saved";
+    if (picked.kind === "window") return "Copied the window · Saved";
+    return "Copied · Saved to Library";
   }
 
   function chooseTool(chosen: Tool) {
@@ -1200,7 +1202,8 @@ function RegionOverlay() {
   const layout = toolbarLayout(view.width - (allInOne && intent === "record" ? RECORD_ROOM : 0));
   // The selection's size and ratios sit in a chip under the region, in every
   // mode that holds one; Record fills the toolbar's middle with its options.
-  const sizeChip = !allInOne || intent === "record" ? source === "region" : intent === "capture" || intent === "text";
+  const sizeChip =
+    !allInOne || intent === "record" ? source === "region" : intent === "capture" || intent === "text" || intent === "scroll";
   const secondRow = layout === "stacked" && intent === "record";
   const toolbarRoom = TOOLBAR_ROOM + (secondRow ? TOOLBAR_ROW : 0);
   // A held selection under the toolbar sends it to the bottom edge, if the
@@ -1272,19 +1275,14 @@ function RegionOverlay() {
   useEffect(() => {
     if (listenKey === null) return;
     let stopped = false;
-    let started = false;
     let timer: number | undefined;
+    // This start's own name: a stop ends only it, never a newer start
+    // here or another display's.
+    const owner = `${PAGE_ID}#${(setupStarts += 1)}`;
     const microphone = listenKey.slice(4) || null;
-    startSetupLevel(microphone)
+    startSetupLevel(microphone, owner)
       .then(() => {
-        started = true;
-        if (stopped) {
-          // Let go while it started: stop it now.
-          stopSetupLevel().catch(() => {
-            // Then it stops as the overlay closes.
-          });
-          return;
-        }
+        if (stopped) return;
         timer = window.setInterval(() => {
           setupLevel()
             .then((level) => {
@@ -1302,13 +1300,10 @@ function RegionOverlay() {
       stopped = true;
       window.clearInterval(timer);
       setMicLevel(null);
-      // A start still on its way stops itself once it lands; one that
-      // failed has nothing to stop.
-      if (started) {
-        stopSetupLevel().catch(() => {
-          // Then it stops as the overlay closes.
-        });
-      }
+      // At once, so a start still on its way is dropped as it lands.
+      stopSetupLevel(owner).catch(() => {
+        // Then it stops as the overlay closes.
+      });
     };
   }, [listenKey]);
   const setupLow = setupCentre.y > view.height / 2;

@@ -34,7 +34,7 @@ In a plain Region capture, with **Settings → Capture → Region toolbar** off,
 
 ### A tick after a capture
 
-Turn on **Settings → Capture → Show a tick in the toolbar after a capture** and the toolbar shows a green tick and what was done, such as *Captured* or *Text copied*, for about a second before it closes. It's off by default, since the Quick Access card already shows the result.
+Turn on **Settings → Capture → Show a tick in the toolbar after a capture** and Grab-it copies and saves the capture straight away, then the toolbar shows a green tick and what was done, such as *Copied · Saved to Library*, *Copied the text* or *Copied #8297FF*, for about a second before it closes. It's off by default, since the Quick Access card already shows the result.
 
 ## Modes
 

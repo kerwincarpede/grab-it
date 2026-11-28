@@ -182,6 +182,52 @@ function Slider({ label, picked, children }: { label: string; picked: string | n
   );
 }
 
+/**
+ * A mode's own controls, which fold open and closed as the mode changes:
+ * the width goes from what the last mode's controls took to what this
+ * mode's take, both ways, while the new contents fade in and settle. The
+ * width is set only for the fold and cleared after it, so the controls
+ * size themselves the rest of the time. Under reduced motion only the
+ * contents fade (see overlay.css).
+ */
+function Fold({ mode, children }: { mode: string; children: ReactNode }) {
+  const fold = useRef<HTMLDivElement>(null);
+  const width = useRef(0);
+  const shown = useRef(mode);
+  useLayoutEffect(() => {
+    const element = fold.current;
+    if (!element) return;
+    const from = width.current;
+    const to = element.scrollWidth;
+    width.current = to;
+    if (shown.current === mode) return;
+    shown.current = mode;
+    if (from === to || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    element.dataset.folding = "true";
+    element.style.width = `${from}px`;
+    // Laid out at the old width first, so the change animates.
+    void element.offsetWidth;
+    element.style.width = `${to}px`;
+    const done = () => {
+      element.dataset.folding = "false";
+      element.style.width = "";
+    };
+    const timer = window.setTimeout(done, FOLD_MS + 40);
+    return () => window.clearTimeout(timer);
+  });
+  return (
+    <div className="overlay-fold" ref={fold} data-testid="overlay-fold" data-mode={mode}>
+      {/* Keyed by mode, so a new mode's contents fade in afresh. */}
+      <div className="overlay-fold-contents" key={mode}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** How long a fold takes, in ms; matches `.overlay-fold`'s transition. */
+const FOLD_MS = 220;
+
 export interface ChooserToolbarProps {
   tool: Tool;
   timer: number;
@@ -403,8 +449,7 @@ export function ChooserToolbar({
           <Slider label="Modes" picked={mode}>
             {MODES.map(modeButton)}
           </Slider>
-          {/* Keyed by mode, so a new mode's controls fold in afresh. */}
-          <div className="overlay-fold" key={mode} data-testid="overlay-fold">
+          <Fold mode={mode}>
             {hasTargets && (
               <>
                 <span className="overlay-toolbar-gap" aria-hidden="true" />
@@ -418,7 +463,7 @@ export function ChooserToolbar({
                 {middle}
               </div>
             )}
-          </div>
+          </Fold>
           <div className="overlay-toolbar-group overlay-toolbar-actions" role="group" aria-label="Actions">
             {timerButton}
             <Tipped tip={{ name: mainLabel, keyLabel: "Enter", use: mainUse }}>

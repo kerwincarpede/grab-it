@@ -710,9 +710,18 @@ impl Drop for Sound {
 /// only while setup is open, so its button can show that it hears you.
 /// Nothing it hears is kept: its scratch WAV goes when it stops.
 pub struct SetupListener {
-    current: Mutex<Option<Listening>>,
-    /// Counts the stops, so a start that finishes after a stop is dropped.
+    slot: Mutex<Slot>,
+    /// Counts the starts and stops, so a start that lands after it was
+    /// stopped or replaced is dropped.
     stops: AtomicU64,
+}
+
+/// Who started the microphone listened to, and the microphone once it is.
+#[derive(Default)]
+struct Slot {
+    /// The page's own name for its start, so a page stops only its own.
+    owner: Option<String>,
+    listening: Option<Listening>,
 }
 
 /// A microphone being listened to on its own thread, which stops it once
@@ -731,55 +740,87 @@ impl Drop for Listening {
 impl SetupListener {
     const fn new() -> Self {
         Self {
-            current: Mutex::new(None),
+            slot: Mutex::new(Slot {
+                owner: None,
+                listening: None,
+            }),
             stops: AtomicU64::new(0),
         }
     }
 
-    fn lock(&self) -> MutexGuard<'_, Option<Listening>> {
-        self.current
+    fn lock(&self) -> MutexGuard<'_, Slot> {
+        self.slot
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Stops listening, and any start still on its way.
-    fn stop(&self) {
-        self.stops.fetch_add(1, Ordering::Relaxed);
-        drop(self.lock().take());
+    /// Stops what is listened to, and any start on its way, for `owner`'s
+    /// start. Returns the count its listening must still match.
+    fn claim(&self, owner: String) -> u64 {
+        let mut slot = self.lock();
+        let since = self.stops.fetch_add(1, Ordering::Relaxed) + 1;
+        slot.listening = None;
+        slot.owner = Some(owner);
+        since
     }
 
-    /// Listens with `listening`, unless a stop came after `since`.
+    /// Stops listening, and any start still on its way.
+    fn stop(&self) {
+        let mut slot = self.lock();
+        self.stops.fetch_add(1, Ordering::Relaxed);
+        slot.listening = None;
+        slot.owner = None;
+    }
+
+    /// Stops listening if `owner` started what is listened to, or on its way.
+    fn stop_owned(&self, owner: &str) {
+        let mut slot = self.lock();
+        if slot.owner.as_deref() == Some(owner) {
+            self.stops.fetch_add(1, Ordering::Relaxed);
+            slot.listening = None;
+            slot.owner = None;
+        }
+    }
+
+    /// Listens with `listening`, unless a start or stop came after `since`.
     fn begin(&self, since: u64, listening: Listening) {
-        let mut current = self.lock();
+        let mut slot = self.lock();
         if self.stops.load(Ordering::Relaxed) == since {
-            *current = Some(listening);
+            slot.listening = Some(listening);
         }
         // Otherwise `listening` drops here and its microphone stops.
     }
 
     /// The loudest level since the last read, or None when not listening.
     fn level(&self) -> Option<f32> {
-        self.lock().as_ref().map(|listening| listening.meter.take())
+        self.lock()
+            .listening
+            .as_ref()
+            .map(|listening| listening.meter.take())
     }
 }
 
 static SETUP_LISTENER: SetupListener = SetupListener::new();
 
 /// Starts listening to `microphone` (the default one when None) for Record
-/// setup's level, in place of any microphone listened to before. A
-/// microphone that cannot be opened shows no level.
+/// setup's level, in place of any microphone listened to before. `owner`
+/// is the page's own name for this start, which [`setup_level_stop`]
+/// takes. A microphone that cannot be opened shows no level.
 #[tauri::command(async)]
 #[specta::specta]
-pub fn setup_level_start(app: AppHandle, microphone: Option<String>) -> Result<(), String> {
-    SETUP_LISTENER.stop();
-    let since = SETUP_LISTENER.stops.load(Ordering::Relaxed);
+pub fn setup_level_start(
+    app: AppHandle,
+    microphone: Option<String>,
+    owner: String,
+) -> Result<(), String> {
+    let since = SETUP_LISTENER.claim(owner);
     let ffmpeg = crate::ffmpeg::ready(&app)
         .map(|ready| ready.path)
         .unwrap_or_default();
     let (started, meter) = std::sync::mpsc::channel();
     let (stop, stopped) = std::sync::mpsc::channel::<()>();
-    std::thread::spawn(move || {
-        match Sound::start(&ffmpeg, Input::Microphone(microphone)) {
+    std::thread::spawn(
+        move || match Sound::start(&ffmpeg, Input::Microphone(microphone)) {
             Ok(sound) => {
                 let _ = started.send(Ok(sound.meter()));
                 // Until stopped, or the listener is gone.
@@ -789,8 +830,8 @@ pub fn setup_level_start(app: AppHandle, microphone: Option<String>) -> Result<(
             Err(err) => {
                 let _ = started.send(Err(err));
             }
-        }
-    });
+        },
+    );
     let meter = meter
         .recv()
         .map_err(|_| "the microphone stopped before it started".to_owned())??;
@@ -798,11 +839,12 @@ pub fn setup_level_start(app: AppHandle, microphone: Option<String>) -> Result<(
     Ok(())
 }
 
-/// Stops listening to Record setup's microphone.
+/// Stops listening to Record setup's microphone, if `owner` started it:
+/// another display's page may have started one since.
 #[tauri::command]
 #[specta::specta]
-pub fn setup_level_stop() {
-    stop_setup_level();
+pub fn setup_level_stop(owner: String) {
+    SETUP_LISTENER.stop_owned(&owner);
 }
 
 /// Stops Record setup's microphone, as its overlay closes.
@@ -1318,8 +1360,9 @@ mod tests {
         assert_eq!(listener.level(), None);
         let meter = Meter::default();
         let (stop, stopped) = std::sync::mpsc::channel();
+        let since = listener.claim("a".into());
         listener.begin(
-            0,
+            since,
             Listening {
                 meter: meter.clone(),
                 stop,
@@ -1335,21 +1378,50 @@ mod tests {
         assert!(stopped.try_recv().is_ok());
     }
 
-    #[test]
-    fn a_setup_start_after_a_stop_is_dropped() {
-        let listener = SetupListener::new();
-        let since = listener.stops.load(Ordering::Relaxed);
-        listener.stop();
+    fn listening() -> (Listening, std::sync::mpsc::Receiver<()>) {
         let (stop, stopped) = std::sync::mpsc::channel();
-        listener.begin(
-            since,
+        (
             Listening {
                 meter: Meter::default(),
                 stop,
             },
-        );
+            stopped,
+        )
+    }
+
+    #[test]
+    fn a_setup_start_that_lands_after_its_stop_or_a_newer_start_is_dropped() {
+        let listener = SetupListener::new();
+        // Stopped while on its way.
+        let since = listener.claim("a".into());
+        listener.stop_owned("a");
+        let (late, stopped) = listening();
+        listener.begin(since, late);
         assert_eq!(listener.level(), None);
         assert!(stopped.try_recv().is_ok());
+
+        // Replaced while on its way: the newer one keeps listening.
+        let old = listener.claim("a".into());
+        let new = listener.claim("b".into());
+        let (current, _current_stopped) = listening();
+        listener.begin(new, current);
+        let (late, stopped) = listening();
+        listener.begin(old, late);
+        assert!(stopped.try_recv().is_ok());
+        assert_eq!(listener.level(), Some(0.0));
+    }
+
+    #[test]
+    fn a_page_stops_only_the_microphone_it_started() {
+        let listener = SetupListener::new();
+        let since = listener.claim("b".into());
+        let (current, stopped) = listening();
+        listener.begin(since, current);
+        listener.stop_owned("a");
+        assert_eq!(listener.level(), Some(0.0));
+        assert!(stopped.try_recv().is_err());
+        listener.stop_owned("b");
+        assert_eq!(listener.level(), None);
     }
 
     #[test]

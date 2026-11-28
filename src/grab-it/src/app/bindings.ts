@@ -220,12 +220,16 @@ export const commands = {
 	recordingSystemAudio: (options?: InvokeOptions) => __TAURI_INVOKE<boolean>("recording_system_audio", undefined, options),
 	/**
 	 *  Starts listening to `microphone` (the default one when None) for Record
-	 *  setup's level, in place of any microphone listened to before. A
-	 *  microphone that cannot be opened shows no level.
+	 *  setup's level, in place of any microphone listened to before. `owner`
+	 *  is the page's own name for this start, which [`setup_level_stop`]
+	 *  takes. A microphone that cannot be opened shows no level.
 	 */
-	setupLevelStart: (microphone: string | null, options?: InvokeOptions) => __TAURI_INVOKE<null>("setup_level_start", { microphone }, options),
-	/**  Stops listening to Record setup's microphone. */
-	setupLevelStop: (options?: InvokeOptions) => __TAURI_INVOKE<void>("setup_level_stop", undefined, options),
+	setupLevelStart: (microphone: string | null, owner: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("setup_level_start", { microphone, owner }, options),
+	/**
+	 *  Stops listening to Record setup's microphone, if `owner` started it:
+	 *  another display's page may have started one since.
+	 */
+	setupLevelStop: (owner: string, options?: InvokeOptions) => __TAURI_INVOKE<void>("setup_level_stop", { owner }, options),
 	/**
 	 *  How loud Record setup's microphone has been since this was last asked,
 	 *  from 0 to 1, or None when it is not being listened to.
@@ -3207,8 +3211,8 @@ export type MockCommandHandlers = {
     ffmpegRetry: () => FfmpegStatus_Serialize | Promise<FfmpegStatus_Serialize>,
     recordingMicrophones: () => MicrophoneInfo[] | Promise<MicrophoneInfo[]>,
     recordingSystemAudio: () => boolean | Promise<boolean>,
-    setupLevelStart: (args: { microphone: string | null }) => null | Promise<null>,
-    setupLevelStop: () => void | Promise<void>,
+    setupLevelStart: (args: { microphone: string | null; owner: string }) => null | Promise<null>,
+    setupLevelStop: (args: { owner: string }) => void | Promise<void>,
     setupLevel: () => number | null | Promise<number | null>,
     pauseHotkeys: () => void | Promise<void>,
     resumeHotkeys: () => void | Promise<void>,

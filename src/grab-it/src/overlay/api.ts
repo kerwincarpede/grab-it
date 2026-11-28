@@ -212,14 +212,17 @@ export async function showOverlayToolbar(): Promise<void> {
   await commands.overlayShowToolbar();
 }
 
-/** Listens to `microphone` (the default one when null) for Record setup's level. */
-export async function startSetupLevel(microphone: string | null): Promise<void> {
-  await commands.setupLevelStart(microphone);
+/**
+ * Listens to `microphone` (the default one when null) for Record setup's
+ * level. `owner` names this start, so only its own stop ends it.
+ */
+export async function startSetupLevel(microphone: string | null, owner: string): Promise<void> {
+  await commands.setupLevelStart(microphone, owner);
 }
 
-/** Stops listening to Record setup's microphone. */
-export function stopSetupLevel(): Promise<void> {
-  return commands.setupLevelStop();
+/** Stops listening to Record setup's microphone, if `owner`'s start is what listens. */
+export function stopSetupLevel(owner: string): Promise<void> {
+  return commands.setupLevelStop(owner);
 }
 
 /** Record setup's microphone level since last asked, 0 to 1, or null when not listening. */
