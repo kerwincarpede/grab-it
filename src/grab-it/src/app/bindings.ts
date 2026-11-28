@@ -218,6 +218,23 @@ export const commands = {
 	recordingMicrophones: (options?: InvokeOptions) => __TAURI_INVOKE<MicrophoneInfo[]>("recording_microphones", undefined, options),
 	/**  Whether Settings offers System and Both. */
 	recordingSystemAudio: (options?: InvokeOptions) => __TAURI_INVOKE<boolean>("recording_system_audio", undefined, options),
+	/**
+	 *  Starts listening to `microphone` (the default one when None) for Record
+	 *  setup's level, in place of any microphone listened to before. `owner`
+	 *  is the page's own name for this start, which [`setup_level_stop`]
+	 *  takes. A microphone that cannot be opened shows no level.
+	 */
+	setupLevelStart: (microphone: string | null, owner: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("setup_level_start", { microphone, owner }, options),
+	/**
+	 *  Stops listening to Record setup's microphone, if `owner` started it:
+	 *  another display's page may have started one since.
+	 */
+	setupLevelStop: (owner: string, options?: InvokeOptions) => __TAURI_INVOKE<void>("setup_level_stop", { owner }, options),
+	/**
+	 *  How loud Record setup's microphone has been since this was last asked,
+	 *  from 0 to 1, or None when it is not being listened to.
+	 */
+	setupLevel: (options?: InvokeOptions) => __TAURI_INVOKE<number | null>("setup_level", undefined, options),
 	pauseHotkeys: (options?: InvokeOptions) => __TAURI_INVOKE<void>("pause_hotkeys", undefined, options),
 	resumeHotkeys: (options?: InvokeOptions) => __TAURI_INVOKE<void>("resume_hotkeys", undefined, options),
 	/**
@@ -225,6 +242,11 @@ export const commands = {
 	 *  yet: its page then waits for [`START_EVENT`].
 	 */
 	overlayInfo: (options?: InvokeOptions) => __TAURI_INVOKE<OverlayInfo_Serialize | null>("overlay_info", undefined, options),
+	/**
+	 *  Tab in a bare Region capture: the session takes Capture & record's
+	 *  toolbar, so the choice it makes from here is honoured as All-in-one's.
+	 */
+	overlayShowToolbar: (options?: InvokeOptions) => __TAURI_INVOKE<null>("overlay_show_toolbar", undefined, options),
 	/**  The bench's switches, or nothing when `GRAB_IT_OVERLAY_BENCH` is not set. */
 	overlayBenchConfig: (options?: InvokeOptions) => __TAURI_INVOKE<string | null>("overlay_bench_config", undefined, options),
 	/**
@@ -1631,6 +1653,16 @@ export type OverlayInfo_Deserialize = {
 	 *  there instead. Asked again on each `HOLD_EVENT`.
 	 */
 	heldElsewhere: boolean,
+	/**
+	 *  Settings → Capture's Show a tick in the toolbar after a capture: the
+	 *  toolbar shows a tick and the result before the overlay closes.
+	 */
+	toolbarTick: boolean,
+	/**
+	 *  Settings → Capture's Copy to clipboard: the tick says Copied only
+	 *  when a screenshot was copied.
+	 */
+	copyToClipboard: boolean,
 };
 
 export type OverlayInfo_Serialize = {
@@ -1686,6 +1718,16 @@ export type OverlayInfo_Serialize = {
 	 *  there instead. Asked again on each `HOLD_EVENT`.
 	 */
 	heldElsewhere: boolean,
+	/**
+	 *  Settings → Capture's Show a tick in the toolbar after a capture: the
+	 *  toolbar shows a tick and the result before the overlay closes.
+	 */
+	toolbarTick: boolean,
+	/**
+	 *  Settings → Capture's Copy to clipboard: the tick says Copied only
+	 *  when a screenshot was copied.
+	 */
+	copyToClipboard: boolean,
 };
 
 /**
@@ -3179,9 +3221,13 @@ export type MockCommandHandlers = {
     ffmpegRetry: () => FfmpegStatus_Serialize | Promise<FfmpegStatus_Serialize>,
     recordingMicrophones: () => MicrophoneInfo[] | Promise<MicrophoneInfo[]>,
     recordingSystemAudio: () => boolean | Promise<boolean>,
+    setupLevelStart: (args: { microphone: string | null; owner: string }) => null | Promise<null>,
+    setupLevelStop: (args: { owner: string }) => void | Promise<void>,
+    setupLevel: () => number | null | Promise<number | null>,
     pauseHotkeys: () => void | Promise<void>,
     resumeHotkeys: () => void | Promise<void>,
     overlayInfo: () => OverlayInfo_Serialize | null | Promise<OverlayInfo_Serialize | null>,
+    overlayShowToolbar: () => null | Promise<null>,
     overlayBenchConfig: () => string | null | Promise<string | null>,
     overlayBenchLog: (args: { line: string }) => void | Promise<void>,
     overlayBenchOpaque: () => void | Promise<void>,
@@ -3369,9 +3415,13 @@ export function mockCommands(handlers: Partial<MockCommandHandlers> = {}): void 
             case "ffmpeg_retry": return mockCommandHandler(mockHandlers.ffmpegRetry, "ffmpeg_retry", args);
             case "recording_microphones": return mockCommandHandler(mockHandlers.recordingMicrophones, "recording_microphones", args);
             case "recording_system_audio": return mockCommandHandler(mockHandlers.recordingSystemAudio, "recording_system_audio", args);
+            case "setup_level_start": return mockCommandHandler(mockHandlers.setupLevelStart, "setup_level_start", args);
+            case "setup_level_stop": return mockCommandHandler(mockHandlers.setupLevelStop, "setup_level_stop", args);
+            case "setup_level": return mockCommandHandler(mockHandlers.setupLevel, "setup_level", args);
             case "pause_hotkeys": return mockCommandHandler(mockHandlers.pauseHotkeys, "pause_hotkeys", args);
             case "resume_hotkeys": return mockCommandHandler(mockHandlers.resumeHotkeys, "resume_hotkeys", args);
             case "overlay_info": return mockCommandHandler(mockHandlers.overlayInfo, "overlay_info", args);
+            case "overlay_show_toolbar": return mockCommandHandler(mockHandlers.overlayShowToolbar, "overlay_show_toolbar", args);
             case "overlay_bench_config": return mockCommandHandler(mockHandlers.overlayBenchConfig, "overlay_bench_config", args);
             case "overlay_bench_log": return mockCommandHandler(mockHandlers.overlayBenchLog, "overlay_bench_log", args);
             case "overlay_bench_opaque": return mockCommandHandler(mockHandlers.overlayBenchOpaque, "overlay_bench_opaque", args);

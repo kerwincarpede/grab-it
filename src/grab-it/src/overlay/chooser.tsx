@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import {
   ColourIcon,
+  PhotoIcon,
   RecordIcon,
   RegionIcon,
   ScreenIcon,
@@ -40,6 +41,35 @@ export const TOOL_ITEMS: ToolInfo[] = [
   { tool: "scroll", label: "Scroll", icon: <ScrollIcon />, use: "Choose an area or window and stitch it as it scrolls." },
 ];
 export const TOOLS: ToolInfo[] = [...TARGETS, ...TOOL_ITEMS];
+
+/**
+ * The toolbar's five modes, in the order shown. Capture's targets are
+ * Region, Window and Screen; Record picks among the same three.
+ */
+export type Mode = "capture" | "record" | "text" | "color" | "scroll";
+
+export interface ModeInfo {
+  mode: Mode;
+  label: string;
+  icon: ReactNode;
+  hotkey?: CaptureKind;
+  use: string;
+}
+
+const toolInfo = (tool: Tool) => TOOL_ITEMS.find((each) => each.tool === tool) as ToolInfo;
+
+export const MODES: ModeInfo[] = [
+  { mode: "capture", label: "Capture", icon: <PhotoIcon />, hotkey: "region", use: "Captures a region, a window or the screen." },
+  ...(["record", "text", "color", "scroll"] as const).map((mode) => {
+    const { label, icon, hotkey, use } = toolInfo(mode);
+    return { mode, label, icon, hotkey, use };
+  }),
+];
+
+/** The mode a tool belongs to: Region, Window and Screen are Capture's. */
+export function modeOf(tool: Tool): Mode {
+  return tool === "region" || tool === "window" || tool === "screen" ? "capture" : tool;
+}
 
 /** The Timer's settings in seconds, in the order a click steps through them. */
 export const TIMER_STEPS = [0, 3, 5, 10];

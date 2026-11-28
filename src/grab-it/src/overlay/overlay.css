@@ -544,6 +544,149 @@
   align-items: center;
 }
 
+/*
+ * Modes and targets share one highlight per group, which slides to the
+ * picked button (see useSlide); the buttons themselves stay clear.
+ */
+.overlay-slider {
+  position: relative;
+}
+
+.overlay-slide {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 34px;
+  background: #34373f;
+  border-radius: 999px;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    width 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 120ms ease-out;
+}
+
+.overlay-slider > .overlay-tip-anchor {
+  position: relative;
+}
+
+.overlay-slider .overlay-tool[aria-pressed="true"],
+.overlay-slider .overlay-tool[data-picked="true"] {
+  background: transparent;
+}
+
+/* The active mode's label opens from zero width and fades in. */
+.overlay-mode-label {
+  display: inline-block;
+  overflow: hidden;
+  animation: overlay-label-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/*
+ * A mode's own controls. Their width opens or closes as the mode changes
+ * (Fold in ChooserToolbar.tsx sets it for the length of the fold); the
+ * new contents fade, settle 3 px and lose a 2 px blur.
+ */
+.overlay-fold {
+  display: flex;
+  align-items: center;
+  transition: width 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.overlay-fold[data-folding="true"] {
+  overflow: hidden;
+}
+
+.overlay-fold-contents {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  align-items: center;
+  animation: overlay-fold-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.overlay-fold-contents:empty {
+  display: none;
+}
+
+@keyframes overlay-fold-in {
+  from {
+    opacity: 0;
+    filter: blur(2px);
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    filter: none;
+    transform: none;
+  }
+}
+
+@keyframes overlay-label-in {
+  from {
+    max-width: 0;
+    opacity: 0;
+  }
+
+  to {
+    max-width: 120px;
+    opacity: 1;
+  }
+}
+
+@keyframes overlay-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* After a capture, with Show a tick on: a green tick and what was done. */
+.overlay-toolbar-done {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  padding: 0 12px 0 4px;
+  font-weight: 500;
+  animation: overlay-fade-in 160ms ease-out;
+}
+
+.overlay-done-tick {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: #fff;
+  background: #2ea043;
+  border-radius: 999px;
+}
+
+/* The selection's size and ratios, in a chip under the selected region. */
+.overlay-size-panel[data-chip="true"] {
+  border-radius: 999px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay-slide {
+    transition: opacity 120ms ease-out;
+  }
+
+  /* Only fades: nothing slides or folds. */
+  .overlay-fold {
+    transition: none;
+  }
+
+  .overlay-fold-contents,
+  .overlay-mode-label {
+    animation-name: overlay-fade-in;
+  }
+}
+
 .overlay-toolbar-middle {
   display: flex;
   gap: 4px;
@@ -914,7 +1057,9 @@
   flex-direction: column;
   gap: 1px;
   min-width: 200px;
-  max-height: 260px;
+  /* Placed from its measured size inside the screen (placeIn in
+     RecordSetup.tsx), which sets a max-height only for a list taller than
+     the whole screen. */
   overflow-y: auto;
   padding: 4px;
   background: #17181b;
@@ -1506,4 +1651,242 @@
 .scroll-direction-arrow {
   font-size: 18px;
   line-height: 18px;
+}
+
+/*
+ * Recording options: a heading, labelled rows, then switches. Its own
+ * panel, never a scroll container: every row shows, it opens the way
+ * there is room for it (OptionsPopover), and the menus its rows open draw
+ * over it in full.
+ */
+.overlay-options-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 2;
+  overflow: visible;
+  background: #17181b;
+  border: 1px solid #2a2c31;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 45%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 290px;
+  padding: 12px 14px;
+}
+
+.overlay-options-heading {
+  padding-bottom: 6px;
+  color: #8d919a;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.overlay-options-row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 36px;
+  color: #ecedef;
+}
+
+.overlay-options-rule {
+  height: 1px;
+  margin: 4px 0;
+  background: #2a2c31;
+}
+
+.overlay-options-switch {
+  width: 100%;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.overlay-options-switch:disabled {
+  color: #5d6068;
+  cursor: default;
+}
+
+.overlay-switch {
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 18px;
+  background: #3a3d45;
+  border-radius: 999px;
+  transition: background 160ms ease-out;
+}
+
+.overlay-switch::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: #fff;
+  border-radius: 999px;
+  transition: transform 160ms ease-out;
+  content: "";
+}
+
+.overlay-options-switch[aria-pressed="true"] .overlay-switch {
+  background: var(--overlay-accent, #2f81f7);
+}
+
+.overlay-options-switch[aria-pressed="true"] .overlay-switch::after {
+  transform: translateX(12px);
+}
+
+.overlay-options-countdown {
+  color: #c9ccd2;
+  font-size: 12px;
+}
+
+/* The toolbar's microphone and camera: icons alone, no chevron. */
+.overlay-chip[data-bare="true"] {
+  gap: 4px;
+  background: transparent;
+}
+
+/* The setup microphone's level: three bars, lit from the left. */
+.overlay-mic-level {
+  display: inline-flex;
+  gap: 1.5px;
+  align-items: flex-end;
+  height: 10px;
+}
+
+.overlay-mic-level > span {
+  width: 2.5px;
+  background: rgb(255 255 255 / 22%);
+  border-radius: 1px;
+  transition: background 80ms linear;
+}
+
+.overlay-mic-level > span:nth-child(1) {
+  height: 4px;
+}
+
+.overlay-mic-level > span:nth-child(2) {
+  height: 7px;
+}
+
+.overlay-mic-level > span:nth-child(3) {
+  height: 10px;
+}
+
+.overlay-mic-level > span[data-lit="true"] {
+  background: #3fb950;
+}
+
+/* Capture & record's size chip under the region's bottom-left corner. */
+.overlay-size-chip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  height: 26px;
+  padding: 0 3px 0 10px;
+  color: #ecedef;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: #101113;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px #2a2c31;
+}
+
+.overlay-size-chip .overlay-chip {
+  height: 20px;
+  padding: 0 8px;
+  font-size: 12px;
+  background: #2a2c31;
+}
+
+.overlay-toolbar-hint {
+  padding: 0 8px;
+  color: #c9ccd2;
+}
+
+.overlay-format-chip {
+  padding: 2px 8px;
+  color: #c9ccd2;
+  font: 600 11px/16px ui-monospace, "SF Mono", Menlo, monospace;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px #2a2c31;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay-switch,
+  .overlay-switch::after,
+  .overlay-mic-level > span {
+    transition: none;
+  }
+}
+
+.overlay-options-popover[data-up="true"] {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+/* A menu option's detail, such as the device Default stands for. */
+.overlay-chip-detail {
+  margin-left: auto;
+  padding-left: 16px;
+  color: #8d919a;
+  font-size: 12px;
+}
+
+/* The microphone menu's input level, on the setup level's decibel scale. */
+.overlay-chip-meter {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 10px;
+  color: #8d919a;
+  font-size: 12px;
+}
+
+.overlay-chip-meter-track {
+  position: relative;
+  flex: 1;
+  min-width: 140px;
+  height: 4px;
+  overflow: hidden;
+  background: rgb(255 255 255 / 10%);
+  border-radius: 2px;
+}
+
+.overlay-chip-meter-track > span {
+  position: absolute;
+  inset: 0;
+  background: #3fb950;
+  transform-origin: left;
+  transition: transform 80ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay-chip-meter-track > span {
+    transition: none;
+  }
+}
+
+.overlay-chip-option:has(.overlay-chip-detail) {
+  display: flex;
+  align-items: center;
+}
+
+/* A row's menu draws over the panel (placed by placeIn). */
+.overlay-options-popover .overlay-chip-list {
+  z-index: 3;
 }

@@ -203,3 +203,29 @@ export function overlayBenchLog(line: string): Promise<void> {
 export function overlayBenchOpaque(): Promise<void> {
   return commands.overlayBenchOpaque();
 }
+
+/**
+ * Tab in a bare Region capture: this overlay takes Capture & record's
+ * toolbar, so the backend honours what the toolbar chooses from here.
+ */
+export async function showOverlayToolbar(): Promise<void> {
+  await commands.overlayShowToolbar();
+}
+
+/**
+ * Listens to `microphone` (the default one when null) for Record setup's
+ * level. `owner` names this start, so only its own stop ends it.
+ */
+export async function startSetupLevel(microphone: string | null, owner: string): Promise<void> {
+  await commands.setupLevelStart(microphone, owner);
+}
+
+/** Stops listening to Record setup's microphone, if `owner`'s start is what listens. */
+export function stopSetupLevel(owner: string): Promise<void> {
+  return commands.setupLevelStop(owner);
+}
+
+/** Record setup's microphone level since last asked, 0 to 1, or null when not listening. */
+export function setupLevel(): Promise<number | null> {
+  return commands.setupLevel();
+}

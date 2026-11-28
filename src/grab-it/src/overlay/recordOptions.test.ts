@@ -6,6 +6,9 @@ import {
   countdownText,
   microphoneLabel,
   nextCountdown,
+  opensUp,
+  placePopup,
+  perceivedLevel,
   withCamera,
   withMicrophone,
   withSystemSound,
@@ -66,5 +69,75 @@ describe("the recording options", () => {
   it("names the countdown off or by its seconds", () => {
     expect(countdownText(0)).toEqual({ text: "Off", label: "No countdown" });
     expect(countdownText(5)).toEqual({ text: "5 s", label: "Countdown 5 s" });
+  });
+});
+
+describe("perceivedLevel", () => {
+  it("moves clearly for speech and quiet sounds, on a decibel scale", () => {
+    expect(perceivedLevel(0)).toBe(0);
+    expect(perceivedLevel(1)).toBe(1);
+    // -24 dB, quiet speech: well over a third, where a linear bar shows 6%.
+    expect(perceivedLevel(10 ** (-24 / 20))).toBeCloseTo(0.6, 2);
+    expect(perceivedLevel(10 ** (-60 / 20))).toBeCloseTo(0, 5);
+    expect(perceivedLevel(Number.NaN)).toBe(0);
+  });
+});
+
+describe("opensUp", () => {
+  it("opens the preferred way while it fits, else the way with more room", () => {
+    // 800 px screen; a 200 px list.
+    expect(opensUp(false, { top: 100, bottom: 130 }, 800, 200)).toBe(false);
+    expect(opensUp(false, { top: 700, bottom: 730 }, 800, 200)).toBe(true);
+    expect(opensUp(true, { top: 700, bottom: 730 }, 800, 200)).toBe(true);
+    expect(opensUp(true, { top: 100, bottom: 130 }, 800, 200)).toBe(false);
+    // Neither fits: the bigger side.
+    expect(opensUp(false, { top: 200, bottom: 230 }, 600, 400)).toBe(false);
+    expect(opensUp(false, { top: 330, bottom: 360 }, 600, 400)).toBe(true);
+  });
+});
+
+describe("placePopup", () => {
+  const screen = { width: 1000, height: 600 };
+  const chip = { top: 300, bottom: 330, left: 900, right: 960 };
+
+  it("keeps a list shorter than the screen in full on it, overlapping its chip if it must", () => {
+    const placed = placePopup(chip, { width: 240, height: 450 }, screen, false, "start");
+    expect(placed.top).toBeGreaterThanOrEqual(8);
+    expect(placed.top + 450).toBeLessThanOrEqual(592);
+    expect(placed.maxHeight).toBeNull();
+    // Kept inside the right edge too.
+    expect(placed.left + 240).toBeLessThanOrEqual(992);
+  });
+
+  it("gives only a list taller than the screen a height to scroll in", () => {
+    const placed = placePopup(chip, { width: 240, height: 900 }, screen, false, "end");
+    expect(placed).toMatchObject({ top: 8, maxHeight: 584 });
+  });
+
+  it("keeps the same 6 px gap from its control above as below", () => {
+    const toolbar = { top: 540, bottom: 590, left: 600, right: 640 };
+    const above = placePopup(toolbar, { width: 300, height: 420 }, { width: 1000, height: 600 }, true, "end");
+    expect(above.up).toBe(true);
+    expect(toolbar.top - (above.top + 420)).toBe(6);
+    const top = { top: 10, bottom: 60, left: 600, right: 640 };
+    const below = placePopup(top, { width: 300, height: 420 }, { width: 1000, height: 600 }, false, "end");
+    expect(below.up).toBe(false);
+    expect(below.top - top.bottom).toBe(6);
+    // A row's menu opening upward keeps it too.
+    const row = { top: 500, bottom: 530, left: 600, right: 700 };
+    const menu = placePopup(row, { width: 200, height: 120 }, { width: 1000, height: 600 }, false, "end");
+    expect(menu.up).toBe(true);
+    expect(row.top - (menu.top + 120)).toBe(6);
+  });
+
+  it("opens below with room, above without", () => {
+    expect(placePopup({ ...chip, top: 40, bottom: 70 }, { width: 200, height: 120 }, screen, false, "start")).toMatchObject({
+      up: false,
+      top: 76,
+    });
+    expect(placePopup({ ...chip, top: 520, bottom: 550 }, { width: 200, height: 120 }, screen, false, "start")).toMatchObject({
+      up: true,
+      top: 394,
+    });
   });
 });

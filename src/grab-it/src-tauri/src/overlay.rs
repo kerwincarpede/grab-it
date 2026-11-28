@@ -452,6 +452,10 @@ pub fn clear_stale(app: &AppHandle) -> bool {
 
 /// Dismisses only the chooser claimed by an earlier invocation.
 pub fn cancel_chooser(app: &AppHandle) -> bool {
+    // The chooser's shortcut during the tick closes it, as it would the chooser.
+    if release_tick_hold(app) {
+        return true;
+    }
     let state = app.state::<OverlayState>();
     let Some(previous) = state.lock().take_chooser() else {
         return false;
@@ -1194,23 +1198,143 @@ fn take_session(
     matches: impl FnOnce(&Session) -> bool,
     give_back: impl FnOnce(&Session) -> bool,
 ) -> Option<Session> {
-    // Taken before the windows go, so their `Destroyed` events find nothing.
-    let session = {
-        let state = app.state::<OverlayState>();
-        let mut phase = state.lock();
-        match std::mem::take(&mut *phase) {
-            Phase::Open(session) if matches(&session) => session,
-            other => {
-                *phase = other;
-                return None;
-            }
-        }
-    };
+    let session = take_open_session(app, matches)?;
     dismiss(app, &session, give_back(&session));
     Some(session)
 }
 
+/// Takes the open session if it `matches`, leaving its windows up: the
+/// caller dismisses them. Taken before the windows go, so their
+/// `Destroyed` events find nothing.
+fn take_open_session(app: &AppHandle, matches: impl FnOnce(&Session) -> bool) -> Option<Session> {
+    let state = app.state::<OverlayState>();
+    let mut phase = state.lock();
+    match std::mem::take(&mut *phase) {
+        Phase::Open(session) if matches(&session) => Some(session),
+        other => {
+            *phase = other;
+            None
+        }
+    }
+}
+
+/// How long the toolbar's tick holds the overlay after a capture, once the
+/// copy and save have started.
+const TICK_HOLD: Duration = Duration::from_millis(1300);
+
+/// Whether a finish shows the toolbar's tick: Settings → Capture's Show a
+/// tick is on, the overlay has the toolbar, and the capture is done at
+/// once without opening the editor (a screenshot, text or a colour).
+fn holds_for_tick(
+    tick: bool,
+    all_in_one: bool,
+    intent: Intent,
+    delay: Option<Duration>,
+    editor: bool,
+) -> bool {
+    tick && all_in_one
+        && delay.is_none()
+        && !editor
+        && matches!(intent, Intent::Capture | Intent::Text | Intent::Colour)
+}
+
+/// A finished session kept on screen for the toolbar's tick, so a new
+/// start or the chooser's shortcut can dismiss it first, and the delayed
+/// dismiss knows when it already went.
+struct TickHold<T> {
+    next: u64,
+    held: Option<(u64, T)>,
+}
+
+impl<T> TickHold<T> {
+    const fn new() -> Self {
+        Self {
+            next: 0,
+            held: None,
+        }
+    }
+
+    /// Holds `item`, giving back any held before it, and its id.
+    fn hold(&mut self, item: T) -> (u64, Option<T>) {
+        self.next += 1;
+        let before = self.held.replace((self.next, item)).map(|(_, item)| item);
+        (self.next, before)
+    }
+
+    /// Lets the held item go now, for a new start or the chooser's shortcut.
+    fn release(&mut self) -> Option<T> {
+        self.held.take().map(|(_, item)| item)
+    }
+
+    /// Lets the item held as `id` go, if nothing released it before.
+    fn release_if(&mut self, id: u64) -> Option<T> {
+        match &self.held {
+            Some((held, _)) if *held == id => self.release(),
+            _ => None,
+        }
+    }
+}
+
+/// The session held for the tick, with whether its dismiss gives the
+/// focus back.
+static TICK_HELD: Mutex<TickHold<(Session, bool)>> = Mutex::new(TickHold::new());
+
+fn tick_held() -> std::sync::MutexGuard<'static, TickHold<(Session, bool)>> {
+    TICK_HELD.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// About a frame at 30 Hz or faster: long enough for hidden windows to
+/// leave the screen before it is grabbed.
+pub(crate) const OFF_SCREEN_WAIT: Duration = Duration::from_millis(50);
+
+/// Dismisses a session held for the tick at once, ahead of a new start:
+/// before the screens are grabbed, which would show the old overlay, and
+/// without giving the focus back, as the new overlay takes it. Its
+/// windows are hidden first, since destroying them is not in step with
+/// the compositor. Returns whether one was held.
+///
+/// It does not wait for the windows to leave the screen: this runs on the
+/// main thread, whose event loop has to turn before the platform shows
+/// the change. A start that released a hold waits [`OFF_SCREEN_WAIT`] on
+/// its capture thread instead, before anything is grabbed.
+pub(crate) fn release_tick_hold(app: &AppHandle) -> bool {
+    let released = tick_held().release();
+    match released {
+        Some((session, _)) => {
+            for label in session.frames.keys() {
+                if let Some(window) = app.get_webview_window(label) {
+                    let _ = window.hide();
+                }
+            }
+            dismiss(app, &session, false);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Dismisses `session`'s windows once the tick has shown for [`TICK_HOLD`],
+/// unless a new start or the chooser's shortcut dismissed it before.
+fn dismiss_after_tick(app: AppHandle, session: Session, give_back: bool) {
+    let (id, before) = tick_held().hold((session, give_back));
+    if let Some((before, _)) = before {
+        dismiss(&app, &before, false);
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(TICK_HOLD);
+        let main = app.clone();
+        let _ = main.run_on_main_thread(move || {
+            let released = tick_held().release_if(id);
+            if let Some((session, give_back)) = released {
+                dismiss(&app, &session, give_back);
+            }
+        });
+    });
+}
+
 fn dismiss(app: &AppHandle, session: &Session, give_back: bool) {
+    // Record setup's microphone stops with its overlay.
+    crate::audio::stop_setup_level();
     // Before the windows go, so an active Grab-it does not move the focus
     // to another of its windows on the way.
     if give_back {
@@ -1284,6 +1408,12 @@ pub struct OverlayInfo {
     /// The area held last is on another display, so Scroll's guide shows
     /// there instead. Asked again on each `HOLD_EVENT`.
     pub held_elsewhere: bool,
+    /// Settings → Capture's Show a tick in the toolbar after a capture: the
+    /// toolbar shows a tick and the result before the overlay closes.
+    pub toolbar_tick: bool,
+    /// Settings → Capture's Copy to clipboard: the tick says Copied only
+    /// when a screenshot was copied.
+    pub copy_to_clipboard: bool,
 }
 
 /// The last region as a starting selection for an overlay on `monitor`
@@ -1517,6 +1647,13 @@ pub fn overlay_info(
 ) -> Option<OverlayInfo> {
     // Read before the session is locked, so the two locks are never nested.
     let scroll_by_hand = remembered_scroll_by_hand(&app);
+    let (toolbar_tick, copy_to_clipboard) = app
+        .try_state::<crate::commands::SettingsState>()
+        .map_or((false, true), |state| {
+            let settings = crate::commands::lock(&state);
+            let preferences = &settings.get().preferences;
+            (preferences.toolbar_tick, preferences.copy_to_clipboard)
+        });
     let mut guard = state.lock();
     let Phase::Open(session) = &mut *guard else {
         return None;
@@ -1556,6 +1693,8 @@ pub fn overlay_info(
         monitor_name: frame.monitor.name.clone(),
         scroll_by_hand,
         held_elsewhere: session.held_elsewhere(window.label()),
+        toolbar_tick,
+        copy_to_clipboard,
     })
 }
 
@@ -1933,6 +2072,28 @@ pub fn overlay_scroll_docs(app: AppHandle, window: WebviewWindow) {
     }
 }
 
+/// Tab in a bare Region capture: the session takes Capture & record's
+/// toolbar, so the choice it makes from here is honoured as All-in-one's.
+#[tauri::command]
+#[specta::specta]
+pub fn overlay_show_toolbar(
+    window: WebviewWindow,
+    state: State<'_, OverlayState>,
+) -> Result<(), String> {
+    let mut guard = state.lock();
+    let Phase::Open(session) = &mut *guard else {
+        return Err("no capture in progress".into());
+    };
+    if !session.frames.contains_key(window.label()) {
+        return Err("this window is not a capture overlay".into());
+    }
+    if session.intent != Intent::Capture || session.mode != CaptureMode::Region {
+        return Err("only a Region capture can show the toolbar".into());
+    }
+    session.all_in_one = true;
+    Ok(())
+}
+
 /// Closes the overlays and saves the selection. An All-in-one overlay
 /// sends the `choice` its toolbar made with it; with a Timer, the area is
 /// captured live once the overlays are gone and the time is up.
@@ -1944,24 +2105,48 @@ pub fn overlay_finish(
     selection: Selection,
     choice: Option<Choice>,
 ) -> Result<(), String> {
-    let after_capture = crate::commands::lock(&app.state::<crate::commands::SettingsState>())
-        .get()
-        .preferences
-        .after_capture;
-    let session = take_session(
-        &app,
-        |s| s.frames.contains_key(window.label()),
-        |session| {
-            let Resolved { intent, delay, .. } = resolve(
-                session.all_in_one,
-                session.intent,
-                session.mode,
-                choice.or(session.choice),
-            );
-            !opens_editor(intent, delay, &selection, after_capture)
-        },
-    )
-    .ok_or("no capture in progress")?;
+    let (after_capture, tick) = {
+        let state = app.state::<crate::commands::SettingsState>();
+        let settings = crate::commands::lock(&state);
+        let preferences = &settings.get().preferences;
+        (preferences.after_capture, preferences.toolbar_tick)
+    };
+    let session = take_open_session(&app, |s| s.frames.contains_key(window.label()))
+        .ok_or("no capture in progress")?;
+    let (give_back, hold) = {
+        let Resolved { intent, delay, .. } = resolve(
+            session.all_in_one,
+            session.intent,
+            session.mode,
+            choice.or(session.choice),
+        );
+        let editor = opens_editor(intent, delay, &selection, after_capture);
+        (
+            !editor,
+            holds_for_tick(tick, session.all_in_one, intent, delay, editor),
+        )
+    };
+    if !hold {
+        dismiss(&app, &session, give_back);
+    }
+    // With the tick, the copy and save start now and the windows stay up
+    // for the tick, then go.
+    let result = finish_session(&window, &app, &session, selection, choice);
+    if hold {
+        dismiss_after_tick(app, session, give_back);
+    }
+    result
+}
+
+/// The rest of [`overlay_finish`], with the session taken.
+fn finish_session(
+    window: &WebviewWindow,
+    app: &AppHandle,
+    session: &Session,
+    selection: Selection,
+    choice: Option<Choice>,
+) -> Result<(), String> {
+    let app = app.clone();
     let frame = session
         .frames
         .get(window.label())
@@ -2466,6 +2651,57 @@ mod tests {
     }
 
     #[test]
+    fn a_new_start_releases_the_tick_hold_and_the_late_dismiss_does_nothing() {
+        let mut hold = TickHold::new();
+        let (first, before) = hold.hold("first");
+        assert_eq!(before, None);
+        // A new start (or the chooser's shortcut) dismisses it at once.
+        assert_eq!(hold.release(), Some("first"));
+        assert_eq!(hold.release(), None);
+        // Its delayed dismiss then finds nothing, even with another held.
+        let (second, _) = hold.hold("second");
+        assert_eq!(hold.release_if(first), None);
+        assert_eq!(hold.release_if(second), Some("second"));
+        assert_eq!(hold.release_if(second), None);
+        // A hold over a hold gives the older one back to dismiss.
+        hold.hold("third");
+        assert_eq!(hold.hold("fourth").1, Some("third"));
+    }
+
+    #[test]
+    fn the_tick_holds_only_a_toolbar_capture_done_at_once() {
+        let at_once = None;
+        for intent in [Intent::Capture, Intent::Text, Intent::Colour] {
+            assert!(holds_for_tick(true, true, intent, at_once, false));
+        }
+        // Setting off, no toolbar, a Timer, the editor, a recording or a scroll.
+        assert!(!holds_for_tick(
+            false,
+            true,
+            Intent::Capture,
+            at_once,
+            false
+        ));
+        assert!(!holds_for_tick(
+            true,
+            false,
+            Intent::Capture,
+            at_once,
+            false
+        ));
+        assert!(!holds_for_tick(
+            true,
+            true,
+            Intent::Capture,
+            Some(Duration::from_secs(3)),
+            false
+        ));
+        assert!(!holds_for_tick(true, true, Intent::Capture, at_once, true));
+        assert!(!holds_for_tick(true, true, Intent::Record, at_once, false));
+        assert!(!holds_for_tick(true, true, Intent::Scroll, at_once, false));
+    }
+
+    #[test]
     fn only_the_chooser_can_be_dismissed_by_its_shortcut() {
         let mut phase = Phase::Idle;
         let direct = phase.begin(false).unwrap();
@@ -2860,6 +3096,8 @@ mod tests {
             monitor_name: "eDP-1".into(),
             scroll_by_hand: false,
             held_elsewhere: false,
+            toolbar_tick: false,
+            copy_to_clipboard: true,
         };
         let value = serde_json::to_value(&info).unwrap();
         assert_eq!(value["allInOne"], true);
@@ -3013,6 +3251,8 @@ mod tests {
             monitor_name: "DELL U2720Q".into(),
             scroll_by_hand: true,
             held_elsewhere: true,
+            toolbar_tick: false,
+            copy_to_clipboard: true,
         };
         let value = serde_json::to_value(&info).unwrap();
         assert_eq!(

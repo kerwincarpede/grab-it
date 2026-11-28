@@ -73,3 +73,70 @@ export function cameraLabel(recording: RecordingSettings, cameras: Camera[]): st
   if (recording.camera === null) return "Default camera";
   return cameras.find((camera) => camera.id === recording.camera)?.name ?? "Saved camera";
 }
+
+/**
+ * The microphone level on a perceptual scale: the peak in decibels, from
+ * -60 dB (nothing) to 0 dB (full), so speech clearly moves it.
+ */
+export function perceivedLevel(level: number): number {
+  if (!(level > 0)) return 0;
+  const decibels = 20 * Math.log10(Math.min(1, level));
+  return Math.max(0, Math.min(1, (decibels + 60) / 60));
+}
+
+/** The gap between a control and the list or panel it opens, in CSS px. */
+const POPUP_GAP = 6;
+
+/**
+ * Whether a list or panel `height` px tall opens above its control, which
+ * spans `anchor` on a screen `viewportHeight` px tall: the way it prefers
+ * while it fits, else the way with more room, so it draws in full and
+ * nothing has to scroll.
+ */
+export function opensUp(
+  preferUp: boolean,
+  anchor: { top: number; bottom: number },
+  viewportHeight: number,
+  height: number,
+): boolean {
+  const below = viewportHeight - anchor.bottom - POPUP_GAP;
+  const above = anchor.top - POPUP_GAP;
+  if (preferUp) return above >= height || above >= below;
+  return below < height && above > below;
+}
+
+/** A popup's distance from the screen's edges, in CSS px. */
+const SCREEN_MARGIN = 8;
+
+/** Where a list or panel goes, in viewport CSS px. */
+export interface PopupPlacement {
+  top: number;
+  left: number;
+  up: boolean;
+  /** Set only for one taller than the whole screen, which then scrolls. */
+  maxHeight: number | null;
+}
+
+/**
+ * Places a popup of `size` by its control's `anchor`, both measured: above
+ * or below as {@link opensUp} chooses, lined up with the control's start or
+ * end, then kept inside the screen with a margin. So any popup shorter
+ * than the screen shows in full, even if that means it overlaps its
+ * control.
+ */
+export function placePopup(
+  anchor: { top: number; bottom: number; left: number; right: number },
+  size: { width: number; height: number },
+  viewport: { width: number; height: number },
+  preferUp: boolean,
+  align: "start" | "end",
+): PopupPlacement {
+  const room = viewport.height - 2 * SCREEN_MARGIN;
+  const height = Math.min(size.height, room);
+  const up = opensUp(preferUp, anchor, viewport.height, height);
+  const wanted = up ? anchor.top - POPUP_GAP - height : anchor.bottom + POPUP_GAP;
+  const top = Math.max(SCREEN_MARGIN, Math.min(wanted, viewport.height - SCREEN_MARGIN - height));
+  const across = align === "end" ? anchor.right - size.width : anchor.left;
+  const left = Math.max(SCREEN_MARGIN, Math.min(across, viewport.width - SCREEN_MARGIN - size.width));
+  return { top, left, up, maxHeight: size.height > room ? room : null };
+}

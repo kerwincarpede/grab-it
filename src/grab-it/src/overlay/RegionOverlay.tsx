@@ -29,6 +29,10 @@ import {
   overlayInfo,
   overlayReady,
   rememberScrollByHand,
+  setupLevel,
+  showOverlayToolbar,
+  startSetupLevel,
+  stopSetupLevel,
   type OverlayChoice,
   type OverlayInfo,
   type OverlayIntent,
@@ -72,7 +76,7 @@ import {
 import { drawBackdrop } from "./backdrop";
 import Loupe from "./Loupe";
 import { benchMark, benchOpaque, benchSpan, benchSwitch, runBench, setupBench } from "./bench";
-import RecordSetup, { RecordOptionsFields } from "./RecordSetup";
+import RecordSetup, { ChipMenu, RecordOptionsFields } from "./RecordSetup";
 import ScrollGuide from "./ScrollGuide";
 import { nextGuideEdge, showsGuide, type GuideEdge } from "./guidePlace";
 import { startLabelY, type Blocker } from "./scrollStart";
@@ -82,7 +86,7 @@ import { ChooserToolbar, SizeFields } from "./ChooserToolbar";
 import { EMPTY_TRAIL, movedTo, pointedAt, reachedToolbar } from "./pointerRest";
 import { RATIOS, TIMER_KEY, TIMER_STEPS, TOOLS, toolbarLayout, type RatioId, type Tool } from "./chooser";
 import { SOURCES, useRecordingOptions } from "./recordSources";
-import type { RecordingSource } from "../settings/api";
+import { recordsMicrophone, type RecordingSource } from "../settings/api";
 import { effectiveHotkeys, type BindingLabels } from "../app/api";
 import "./overlay.css";
 
@@ -148,6 +152,14 @@ const TOOLBAR_BOTTOM = 12;
 const RECORD_ROOM = 434;
 
 /** What confirms each kind of selection: the main button's label, and the key tip's. */
+/** How often Record setup's microphone level is read, in ms. */
+const MIC_LEVEL_MS = 80;
+
+/** Counts this page's setup microphone starts, to name each one. */
+let setupStarts = 0;
+/** This page's name among the displays' pages, for its setup microphone starts. */
+const PAGE_ID = Math.random().toString(36).slice(2);
+
 const CONFIRM_LABELS: Record<OverlayIntent, string> = {
   capture: "Capture",
   text: "Copy text",
@@ -284,6 +296,68 @@ function SelectionFrame({ box, label, placement, handles = false }: SelectionFra
   );
 }
 
+/** Room the size chip takes below a region, gap included, in CSS px. */
+const SIZE_CHIP_ROOM = 40;
+
+/**
+ * Under the region's bottom-left corner, or inside it above that corner
+ * when the region reaches the bottom of the screen.
+ */
+function sizeChipTransform(box: Box, view: Size): string {
+  const bottom = box.y + box.height;
+  return bottom + SIZE_CHIP_ROOM > view.height
+    ? `translate3d(${box.x + 8}px, ${bottom - 8}px, 0) translate(0, -100%)`
+    : `translate3d(${box.x}px, ${bottom + 8}px, 0)`;
+}
+
+/**
+ * Capture & record's size chip: the held region's size in image pixels,
+ * read-only, and its ratio as a menu (Free, 16:9, 4:3, 1:1).
+ */
+function SizeChip({
+  size,
+  ratio,
+  transform,
+  up,
+  onRatio,
+}: {
+  size: Size;
+  ratio: RatioId;
+  transform: string;
+  up: boolean;
+  onRatio: (ratio: RatioId) => void;
+}) {
+  const current = RATIOS.find((each) => each.id === ratio) ?? RATIOS[0];
+  return (
+    <div
+      className="overlay-size-chip"
+      data-testid="overlay-size-panel"
+      data-chip="true"
+      style={{ transform }}
+      onMouseDown={(event) => {
+        if ((event.target as HTMLElement).closest("button")) event.preventDefault();
+      }}
+    >
+      <span data-testid="overlay-size">
+        {size.width} × {size.height} px
+      </span>
+      <ChipMenu
+        title="Aspect ratio"
+        up={up}
+        checks
+        label={current.label}
+        tip={{ name: "Aspect ratio", use: "Keeps the selection at a shape, or Free for any." }}
+        options={RATIOS.map(({ id, label }) => ({
+          key: id,
+          title: label,
+          selected: id === ratio,
+          onPick: () => onRatio(id),
+        }))}
+      />
+    </div>
+  );
+}
+
 interface SizePanelProps {
   /** The selection's size in image pixels. */
   size: Size;
@@ -304,6 +378,7 @@ function SizePanel({ size, ratio, transform, onSize, onRatio }: SizePanelProps) 
     <div
       className="overlay-size-panel"
       data-testid="overlay-size-panel"
+      data-chip="true"
       style={{ transform }}
       // A click on a button leaves the focus where it was, so Enter never
       // presses it again; the fields take the focus as fields do.
@@ -362,6 +437,14 @@ function RegionOverlay() {
   // The window may be given its size after the page has loaded.
   const [, resized] = useReducer((count: number) => count + 1, 0);
   const done = useRef(false);
+  // Tab in a bare Region capture switched this overlay to the toolbar.
+  const [toolbarShown, setToolbarShown] = useState(false);
+  // With Show a tick on: what the toolbar says was done, until the overlay closes.
+  const [doneText, setDoneText] = useState<string | null>(null);
+  // Record setup's microphone level, while it is listened to.
+  const [micLevel, setMicLevel] = useState<number | null>(null);
+  // The pointer is over a toolbar, a chip or their popovers.
+  const [overBar, setOverBar] = useState(false);
   const reported = useRef(false);
   const backdrop = useRef<HTMLCanvasElement>(null);
   // The blurred screen around a hovered window has been drawn.
@@ -474,7 +557,8 @@ function RegionOverlay() {
     };
   }, []);
 
-  const loadsHotkeys = info?.allInOne === true;
+  // Tab in a bare Region capture shows the toolbar too, with its shortcuts.
+  const loadsHotkeys = info?.allInOne === true || toolbarShown;
   useEffect(() => {
     if (!loadsHotkeys) return;
     let cancelled = false;
@@ -611,7 +695,8 @@ function RegionOverlay() {
     });
   }, [image]);
 
-  const allInOne = info?.allInOne === true;
+  // Tab in a bare Region capture shows the toolbar on this overlay too.
+  const allInOne = info?.allInOne === true || toolbarShown;
   const intent = allInOne ? toolIntent(tool) : (info?.intent ?? "capture");
   const accessibility = useAccessibility(intent === "scroll");
   const scrollManual = scrollByHand || accessibility === false;
@@ -767,10 +852,29 @@ function RegionOverlay() {
     // Recording uses region geometry for each target.
     const mode =
       picked.kind === "screen" ? "screen" : windowMode && intent !== "record" ? "window" : "region";
+    // The backend copies and saves at once, then keeps the overlay up for
+    // the tick (`TICK_HOLD` in overlay.rs) before it closes it. A timed
+    // capture, a recording or a scroll has nothing done yet to tick.
+    const tick = allInOne && info?.toolbarTick === true && !(intent === "capture" && timer > 0) ? tickText(picked) : null;
+    if (tick) setDoneText(tick);
     finishOverlay(picked, allInOne ? toolbarChoice(mode) : undefined).catch((err: unknown) => {
       done.current = false;
+      setDoneText(null);
       setError(String(err));
     });
+  }
+
+  /** What the toolbar's tick says was done with `picked`, or null for no tick. */
+  function tickText(picked: Selection): string | null {
+    if (intent === "color") return `Copied ${colourText.current?.textContent ?? ""}`.trim();
+    // The text is read after the overlay goes; the copy follows then.
+    if (intent === "text") return "Reading the text to copy";
+    if (intent !== "capture") return null;
+    // Only a screenshot follows Copy to clipboard; it is always saved.
+    const copies = info?.copyToClipboard !== false;
+    if (picked.kind === "screen") return copies ? "Copied every screen · Saved" : "Saved every screen";
+    if (picked.kind === "window") return copies ? "Copied the window · Saved" : "Saved the window";
+    return copies ? "Copied · Saved to Library" : "Saved to Library";
   }
 
   function chooseTool(chosen: Tool) {
@@ -913,6 +1017,25 @@ function RegionOverlay() {
   }, []);
 
   const onToolKey = useEffectEvent((event: KeyboardEvent) => {
+    // Tab in a bare Region capture: this overlay takes the toolbar, on
+    // Capture → Region, keeping what is held.
+    if (
+      event.key === "Tab" &&
+      !allInOne &&
+      info?.intent === "capture" &&
+      info.mode === "region" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      setTool("region");
+      setToolbarShown(true);
+      showOverlayToolbar().catch(() => {
+        // Then the toolbar's choices other than Region are not honoured.
+      });
+      return;
+    }
     // All-in-one's keys, and Enter and the sources' keys for a recording.
     const recordKeys = intent === "record";
     if (!(allInOne || adjustable || recordKeys) || event.ctrlKey || event.metaKey || event.altKey || event.repeat) {
@@ -1010,11 +1133,14 @@ function RegionOverlay() {
     // main button acts on the window or pixel pointed at, not on what lies
     // under the toolbar or what the pointer crossed on its way there.
     if (!drag && !grab && !gripping && onToolbar(event)) {
+      // The loupe and crosshair go while the pointer is on the toolbar.
+      setOverBar(true);
       trail.current = reachedToolbar(trail.current, event.timeStamp);
       const target = pointedAt(trail.current);
       if (target) setPointer(target);
       return;
     }
+    setOverBar(false);
     const point = pointOf(event);
     trail.current = movedTo(trail.current, point, event.timeStamp);
     const follow = () => {
@@ -1144,10 +1270,11 @@ function RegionOverlay() {
 
   const top = hintTop(info?.topInset, view.height);
   const layout = toolbarLayout(view.width - (allInOne && intent === "record" ? RECORD_ROOM : 0));
-  // Capture & record's size fields; Record keeps its size chip beside the
-  // region, as the Record overlay does, and fills the middle with its options.
-  const sizeInToolbar = allInOne && intent !== "record" && held !== null && !dragging && heldSize !== null;
-  const secondRow = layout === "stacked" && (sizeInToolbar || intent === "record");
+  // The selection's size and ratios sit in a chip under the region, in every
+  // mode that holds one; Record fills the toolbar's middle with its options.
+  const sizeChip =
+    !allInOne || intent === "record" ? source === "region" : intent === "capture" || intent === "text" || intent === "scroll";
+  const secondRow = layout === "stacked" && intent === "record";
   const toolbarRoom = TOOLBAR_ROOM + (secondRow ? TOOLBAR_ROW : 0);
   // A held selection under the toolbar sends it to the bottom edge, if the
   // selection leaves room there. In Scroll the toolbar and guide stay put
@@ -1206,6 +1333,49 @@ function RegionOverlay() {
   const showSetup =
     info !== null && !allInOne && intent === "record" && (info.pointerHere !== false || held !== null);
   const setupCentre: Point = setupAt ?? info?.barCentre ?? { x: view.width / 2, y: top + SETUP_HALF };
+
+  // Record setup listens to the chosen microphone, so its button shows a
+  // level; only while setup is open, and never for a silent GIF.
+  const settingsNow = recording.recording;
+  const listensTo =
+    intent === "record" && (allInOne || showSetup) && settingsNow && settingsNow.format !== "gif" && recordsMicrophone(settingsNow.audio)
+      ? { microphone: settingsNow.microphone }
+      : null;
+  const listenKey = listensTo ? `mic:${listensTo.microphone ?? ""}` : null;
+  useEffect(() => {
+    if (listenKey === null) return;
+    let stopped = false;
+    let timer: number | undefined;
+    // This start's own name: a stop ends only it, never a newer start
+    // here or another display's.
+    const owner = `${PAGE_ID}#${(setupStarts += 1)}`;
+    const microphone = listenKey.slice(4) || null;
+    startSetupLevel(microphone, owner)
+      .then(() => {
+        if (stopped) return;
+        timer = window.setInterval(() => {
+          setupLevel()
+            .then((level) => {
+              if (!stopped) setMicLevel(level);
+            })
+            .catch(() => {
+              // Then the button shows no level.
+            });
+        }, MIC_LEVEL_MS);
+      })
+      .catch(() => {
+        // A microphone that cannot be read shows no level.
+      });
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      setMicLevel(null);
+      // At once, so a start still on its way is dropped as it lands.
+      stopSetupLevel(owner).catch(() => {
+        // Then it stops as the overlay closes.
+      });
+    };
+  }, [listenKey]);
   const setupLow = setupCentre.y > view.height / 2;
   // The hint (an error, there) goes under the setup toolbar, or over it in the lower half.
   const hintAt: { top: number; left?: number } = !showSetup
@@ -1402,15 +1572,25 @@ function RegionOverlay() {
           {nameTag}
         </span>
       )}
-      {(!allInOne || intent === "record") && held && !dragging && placement && heldSize && source === "region" && (
+      {sizeChip && held && !dragging && placement && heldSize && (
         <div ref={sizePanel}>
-          <SizePanel
-            size={heldSize}
-            ratio={ratio}
-            transform={labelTransform(held, placement)}
-            onSize={applySize}
-            onRatio={chooseRatio}
-          />
+          {allInOne ? (
+            <SizeChip
+              size={heldSize}
+              ratio={ratio}
+              transform={sizeChipTransform(held, view)}
+              up={held.y + held.height + SIZE_CHIP_ROOM > view.height}
+              onRatio={chooseRatio}
+            />
+          ) : (
+            <SizePanel
+              size={heldSize}
+              ratio={ratio}
+              transform={labelTransform(held, placement)}
+              onSize={applySize}
+              onRatio={chooseRatio}
+            />
+          )}
         </div>
       )}
       {hovered && !framed && placement && (
@@ -1429,7 +1609,7 @@ function RegionOverlay() {
           </span>
         </div>
       )}
-      {canDrag && pointer && !active && (
+      {canDrag && pointer && !active && !overBar && (
         <>
           <div
             className="overlay-guide overlay-guide-x"
@@ -1449,6 +1629,7 @@ function RegionOverlay() {
       {!windowMode &&
         !screenSource &&
         pointer &&
+        !overBar &&
         !(windows && image === null) &&
         !benchSwitch("noloupe") && (
         <Loupe
@@ -1466,7 +1647,6 @@ function RegionOverlay() {
           timer={timer}
           showTimer={isTimed(tool)}
           source={source}
-          countdown={recording.recording?.countdown ?? null}
           mainLabel={intent === "capture" && timer > 0 ? `Capture in ${timer} s` : CONFIRM_LABELS[intent]}
           ready={ready}
           mainUse={
@@ -1481,29 +1661,34 @@ function RegionOverlay() {
           edge={toolbarEdge}
           offset={toolbarEdge === "top" ? top : TOOLBAR_BOTTOM}
           hidden={active}
+          done={doneText}
           middle={
-            sizeInToolbar && heldSize ? (
-              <SizeFields
-                size={heldSize}
-                ratio={ratio}
-                folded={layout === "folded" || layout === "stacked"}
+            intent === "record" ? (
+              <RecordOptionsFields
+                options={recording}
                 up={toolbarEdge === "bottom"}
-                onSize={applySize}
-                onRatio={chooseRatio}
+                iconsOnly={layout !== "wide"}
+                level={micLevel}
               />
-            ) : intent === "record" ? (
-              <RecordOptionsFields options={recording} up={toolbarEdge === "bottom"} iconsOnly={layout !== "wide"} />
             ) : intent === "color" ? (
-              <span className="overlay-toolbar-colour" data-testid="overlay-toolbar-colour">
-                <span ref={colourSwatch} className="overlay-loupe-swatch" aria-hidden="true" />
-                <span ref={colourText}>—</span>
+              <>
+                <span className="overlay-toolbar-colour" data-testid="overlay-toolbar-colour">
+                  <span ref={colourSwatch} className="overlay-loupe-swatch" aria-hidden="true" />
+                  <span ref={colourText}>—</span>
+                </span>
+                <span className="overlay-format-chip" data-testid="overlay-colour-format">
+                  HEX
+                </span>
+              </>
+            ) : intent === "text" ? (
+              <span className="overlay-toolbar-hint" data-testid="overlay-text-hint">
+                Drag over text
               </span>
             ) : null
           }
           onTool={chooseTool}
           onSource={chooseSource}
           onTimer={stepTimer}
-          onCountdown={stepCountdown}
           onMain={confirmMain}
           onCancel={cancel}
         />
@@ -1512,6 +1697,7 @@ function RegionOverlay() {
         <div ref={setup} data-hidden={active ? "true" : "false"}>
           <RecordSetup
             options={recording}
+            level={micLevel}
             source={source}
             canRecord={held !== null && isDrag(held)}
             up={setupLow}
