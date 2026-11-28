@@ -138,7 +138,7 @@ jobs:
             gh api "repos/$GITHUB_REPOSITORY/releases" \
               -f tag_name="$TAG" \
               -f target_commitish="$GITHUB_SHA" \
-              -f name="$VERSION · Edge (building)" \
+              -f name="$VERSION (building)" \
               -f body="$body" \
               -F draft=true \
               -F generate_release_notes=true \
@@ -221,8 +221,7 @@ jobs:
             "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=latest.json" \
             > /dev/null
 
-      # The title says the release is Edge and counts the Edge releases since
-      # Stable, such as "0.15.9 · Edge RC 3".
+      # The title counts the Edge releases since Stable, such as "0.15.9-rc-3".
       - name: Name the release
         id: title
         env:

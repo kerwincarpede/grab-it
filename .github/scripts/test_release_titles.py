@@ -28,20 +28,20 @@ class EdgeTitle(unittest.TestCase):
             release("v0.15.2", prerelease=True),
             release("v0.15.3", prerelease=True),
         ]
-        self.assertEqual(self.title(releases, "0.15.4"), "0.15.4 · Edge RC 3")
+        self.assertEqual(self.title(releases, "0.15.4"), "0.15.4-rc-3")
 
     def test_starts_at_one_after_a_promotion(self):
         releases = [release("v0.15.1", prerelease=True), release("v0.15.2")]
-        self.assertEqual(self.title(releases, "0.15.3"), "0.15.3 · Edge RC 1")
+        self.assertEqual(self.title(releases, "0.15.3"), "0.15.3-rc-1")
 
     def test_counts_from_the_start_before_any_stable(self):
         releases = [release("v0.1.0", prerelease=True)]
-        self.assertEqual(self.title(releases, "0.1.1"), "0.1.1 · Edge RC 2")
+        self.assertEqual(self.title(releases, "0.1.1"), "0.1.1-rc-2")
 
     def test_a_lower_version_still_building_keeps_its_number(self):
         # 0.15.4 finishes first while 0.15.3 is still building.
         releases = [release("v0.15.2"), release("v0.15.3", age=timedelta(minutes=20), draft=True)]
-        self.assertEqual(self.title(releases, "0.15.4"), "0.15.4 · Edge RC 2")
+        self.assertEqual(self.title(releases, "0.15.4"), "0.15.4-rc-2")
 
     def test_ignores_abandoned_drafts_higher_versions_and_other_tags(self):
         releases = [
@@ -50,10 +50,10 @@ class EdgeTitle(unittest.TestCase):
             release("v0.15.5", prerelease=True),
             release("edge", prerelease=True),
         ]
-        self.assertEqual(self.title(releases, "0.15.4"), "0.15.4 · Edge RC 1")
+        self.assertEqual(self.title(releases, "0.15.4"), "0.15.4-rc-1")
 
     def test_accepts_a_leading_v(self):
-        self.assertEqual(self.title([], "v0.2.0"), "0.2.0 · Edge RC 1")
+        self.assertEqual(self.title([], "v0.2.0"), "0.2.0-rc-1")
 
 
 class StaleDrafts(unittest.TestCase):

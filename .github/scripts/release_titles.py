@@ -7,10 +7,10 @@
 --releases holds every release (as `GET /releases` returns them, all pages
 in one array). --version is the version being published, such as 0.15.9.
 
-`title` prints `name=0.15.9 · Edge RC 3`: the Nth Edge release since the
+`title` prints `name=0.15.9-rc-3`: the Nth Edge release since the
 current Stable one. Lower versions still being built count too, so two
 overlapping releases never share a number. promote.yml renames a promoted
-release to `0.15.9 · Stable`.
+release to its plain version, `0.15.9`.
 
 `stale-drafts` prints the ids of drafts for lower versions that are more
 than a day old. Their runs failed and nothing is building them; retrying
@@ -65,7 +65,7 @@ def edge_title(releases, version, now):
             or r.get("draft") and now - created(r) < DRAFT_LIFETIME
         )
     ]
-    return f"{version} · Edge RC {len(earlier) + 1}"
+    return f"{version}-rc-{len(earlier) + 1}"
 
 
 def stale_drafts(releases, version, now):
