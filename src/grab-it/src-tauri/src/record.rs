@@ -97,6 +97,8 @@ pub struct Controls {
     discard: AtomicBool,
     /// Throw it away and start again on the same area once it stops.
     restart: AtomicBool,
+    /// End the countdown now and start recording.
+    start_now: AtomicBool,
     paused: AtomicBool,
     microphone_muted: AtomicBool,
     system_muted: AtomicBool,
@@ -536,6 +538,18 @@ pub fn record_discard(app: AppHandle) {
         session.controls.discard.store(true, Ordering::SeqCst);
     }
     stop(&app);
+}
+
+/// Ends the countdown of the recording about to start, so it starts at
+/// once. A recording past its countdown is left alone.
+#[tauri::command]
+#[specta::specta]
+pub fn record_start_now(app: AppHandle) {
+    if let Some(session) = session(&app)
+        && session.status().phase == Phase::Countdown
+    {
+        session.controls.start_now.store(true, Ordering::SeqCst);
+    }
 }
 
 /// Throws the recording under way away and starts again on the same area.
@@ -995,7 +1009,10 @@ pub fn start_with(
         .spawn(move || {
             let session = recorder;
             let controls = Arc::clone(&session.controls);
-            let counted = count_down(&controls, recording.countdown);
+            let counted = count_down(
+                &controls,
+                Duration::from_secs(u64::from(recording.countdown)),
+            );
             let result = if counted {
                 // The overlay was closed a moment ago; give the desktop time
                 // to repaint so the first frame shows the screen, not the
@@ -1148,13 +1165,17 @@ pub fn start_with(
     Ok(session)
 }
 
-/// Waits `seconds` before a recording starts. False when it was stopped
-/// meanwhile, so there is nothing to record.
-fn count_down(controls: &Controls, seconds: u32) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(u64::from(seconds));
+/// Waits `length` before a recording starts, or until Start now ends the
+/// countdown early. False when it was stopped meanwhile, so there is
+/// nothing to record.
+fn count_down(controls: &Controls, length: Duration) -> bool {
+    let deadline = Instant::now() + length;
     while Instant::now() < deadline {
         if controls.stopped() {
             return false;
+        }
+        if controls.start_now.load(Ordering::SeqCst) {
+            break;
         }
         std::thread::sleep(PAUSE_POLL);
     }
@@ -1502,6 +1523,32 @@ fn write_frame(
 mod tests {
     use super::*;
     use image::{AnimationDecoder, Rgba, codecs::gif::GifDecoder};
+
+    #[test]
+    fn start_now_ends_the_countdown_early() {
+        let controls = Controls::default();
+        controls.start_now.store(true, Ordering::SeqCst);
+        let began = Instant::now();
+        assert!(count_down(&controls, Duration::from_secs(60)));
+        assert!(began.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_countdown_stopped_records_nothing_even_after_start_now() {
+        let controls = Controls::default();
+        controls.start_now.store(true, Ordering::SeqCst);
+        controls.stop.store(true, Ordering::SeqCst);
+        assert!(!count_down(&controls, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn a_countdown_left_alone_runs_its_length() {
+        let controls = Controls::default();
+        let length = Duration::from_millis(60);
+        let began = Instant::now();
+        assert!(count_down(&controls, length));
+        assert!(began.elapsed() >= length);
+    }
 
     #[test]
     fn a_recording_is_refused_while_a_step_capture_runs() {

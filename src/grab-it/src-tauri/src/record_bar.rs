@@ -43,7 +43,8 @@ pub const RECORD_BAR_EVENT: &str = "record-bar-status";
 /// Where the toolbar's spots are kept, in the app data directory.
 const MEMORY_FILE: &str = "record-bar.json";
 /// The window's size before the page has measured itself, in points.
-const INITIAL_SIZE: (f64, f64) = (300.0, 60.0);
+/// The 50 pt pill and the 10 pt room for its shadow (`.recordbar` padding).
+const INITIAL_SIZE: (f64, f64) = (300.0, 70.0);
 /// The gap between the toolbar and the work area's edge at its default
 /// spot, and between it and the recorded area when it is moved clear.
 const GAP: f64 = 12.0;
@@ -620,6 +621,10 @@ fn create(
             .content_protected(true)
             // The toolbar must not pull the keyboard away from what is recorded.
             .focused(false)
+            // Because it is never focused, macOS would spend the first click
+            // on activating it while another app is in front, so Stop or
+            // Start now would need two clicks. Let that first click through.
+            .accept_first_mouse(true)
             .shadow(false)
             .visible(false)
             .build()?;

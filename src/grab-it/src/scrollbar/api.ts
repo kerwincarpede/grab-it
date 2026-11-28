@@ -25,3 +25,8 @@ export function finishScroll(sessionId: number): Promise<void> {
 export function cancelScroll(sessionId: number): Promise<void> {
   return commands.scrollCancel(sessionId);
 }
+
+/** The stitched length along the scroll axis so far, as `4,800 px`: the height, or the width of a sideways scroll. */
+export function stitchedLength(length: number): string {
+  return `${length.toLocaleString("en-GB")} px`;
+}

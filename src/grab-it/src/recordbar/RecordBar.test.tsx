@@ -1,8 +1,8 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { emit } from "@tauri-apps/api/event";
 import { mockCommands, type CommandCall } from "../test/mockCommands";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import RecordBar from "./RecordBar";
 import { RECORD_BAR_EVENT, countdownLeft, formatClock, recordedMs, type BarStatus } from "./api";
 
@@ -49,9 +49,10 @@ describe("the clock", () => {
     expect(recordedMs({ ...status, startedAt: null }, 20_000)).toBe(0);
   });
 
-  it("reads as minutes and seconds, and hours once it runs that long", () => {
-    expect(formatClock(0)).toBe("0:00");
-    expect(formatClock(65_400)).toBe("1:05");
+  it("reads as two-digit minutes and seconds, and hours once it runs that long", () => {
+    expect(formatClock(0)).toBe("00:00");
+    expect(formatClock(16_200)).toBe("00:16");
+    expect(formatClock(65_400)).toBe("01:05");
     expect(formatClock(3_725_000)).toBe("1:02:05");
   });
 
@@ -67,7 +68,7 @@ describe("RecordBar", () => {
   it("shows the time, the microphone, Pause and Stop while it records", async () => {
     mockBackend(RECORDING);
     render(<RecordBar />);
-    expect(await screen.findByRole("timer")).toHaveTextContent(/^1:0\d$/);
+    expect(await screen.findByRole("timer")).toHaveTextContent(/^01:0\d$/);
     expect(screen.getByRole("button", { name: "Mute the microphone" })).toBeInTheDocument();
     expect(screen.getByTestId("recordbar-meter")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
@@ -83,16 +84,23 @@ describe("RecordBar", () => {
     expect(stop).toHaveAttribute("title", "Stop and save");
     expect(screen.getByRole("button", { name: "Pause" })).toHaveTextContent("Pause");
     expect(screen.getByRole("button", { name: "More" })).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByText("PAUSED")).not.toBeInTheDocument();
+    expect(stop).toHaveAttribute("data-tone", "record");
+    expect(stop).toHaveClass("bar-main");
+    expect(screen.getByText("Recording")).toHaveAttribute("data-shown", "true");
+    expect(screen.getByText("Paused")).toHaveAttribute("data-shown", "false");
   });
 
-  it("turns the dot amber and says PAUSED while paused, with Resume in place of Pause", async () => {
+  it("turns the dot amber while paused and slides Pause to Resume", async () => {
     const backend = mockBackend({ ...RECORDING, pausedAt: Date.now() });
     render(<RecordBar />);
     const resume = await screen.findByRole("button", { name: "Resume" });
     expect(resume).toHaveTextContent("Resume");
     expect(screen.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
-    expect(screen.getByText("PAUSED")).toBeInTheDocument();
+    // Both words stay in place, so the button slides between them.
+    expect(screen.getByText("Resume")).toHaveAttribute("data-shown", "true");
+    expect(screen.getByText("Pause")).toHaveAttribute("data-shown", "false");
+    expect(screen.getByText("Paused")).toHaveAttribute("data-shown", "true");
+    expect(screen.getByText("Recording")).toHaveAttribute("data-shown", "false");
     const bar = screen.getByTestId("recordbar");
     expect(bar.querySelector(".recordbar-dot")).toHaveAttribute("data-paused", "true");
     expect(bar.querySelector(".recordbar-pill")).toHaveAttribute("data-paused", "true");
@@ -114,7 +122,7 @@ describe("RecordBar", () => {
   it("shows a GIF's limit beside its time", async () => {
     mockBackend({ ...RECORDING, format: "gif", maxSeconds: 60, microphone: null });
     render(<RecordBar />);
-    expect(await screen.findByRole("timer")).toHaveTextContent(/^1:0\d \/ 1:00$/);
+    expect(await screen.findByRole("timer")).toHaveTextContent(/^01:0\d \/ 01:00$/);
     expect(screen.queryByRole("button", { name: /microphone/ })).not.toBeInTheDocument();
   });
 
@@ -144,7 +152,7 @@ describe("RecordBar", () => {
     await act(() => emit(RECORD_BAR_EVENT, { ...RECORDING, pausedAt: Date.now(), microphone: true }));
     expect(await screen.findByRole("button", { name: "Resume" })).toBeInTheDocument();
     expect(screen.getByRole("timer")).toHaveAccessibleName("Paused");
-    expect(screen.getByText("PAUSED")).toBeInTheDocument();
+    expect(screen.getByText("Paused")).toHaveAttribute("data-shown", "true");
     expect(screen.getByRole("button", { name: "Turn the microphone on" })).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -194,14 +202,84 @@ describe("RecordBar", () => {
     expect(bar.firstElementChild).toContainElement(screen.getByRole("menu"));
   });
 
-  it("counts down with a way to cancel", async () => {
+  it("counts down with a ring, Start now and a way to cancel", async () => {
     const backend = mockBackend({ ...RECORDING, phase: "countdown", startedAt: null, countdownEndsAt: Date.now() + 2_500 });
     render(<RecordBar />);
-    expect(await screen.findByText("3")).toBeInTheDocument();
+    expect(await screen.findByRole("timer", { name: "Seconds left" })).toHaveTextContent("3");
+    expect(screen.getByText("Recording in")).toBeInTheDocument();
+    expect(screen.getByTestId("recordbar").querySelector(".bar-ring")).toHaveAttribute("data-tone", "record");
     expect(screen.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Cancel recording" })).toHaveTextContent("Cancel");
+    const startNow = screen.getByRole("button", { name: /Start now/ });
+    expect(startNow).toHaveAttribute("data-tone", "record");
+    expect(startNow).toHaveAttribute("aria-keyshortcuts", "Enter");
     await userEvent.click(screen.getByRole("button", { name: "Cancel recording" }));
     await waitFor(() => expect(called(backend, "record_stop")).toHaveLength(1));
+    expect(called(backend, "record_start_now")).toHaveLength(0);
+  });
+
+  it("starts the recording now from Start now", async () => {
+    const backend = mockBackend({ ...RECORDING, phase: "countdown", startedAt: null, countdownEndsAt: Date.now() + 5_000 });
+    render(<RecordBar />);
+    await userEvent.click(await screen.findByRole("button", { name: /Start now/ }));
+    await waitFor(() => expect(called(backend, "record_start_now")).toHaveLength(1));
+    expect(called(backend, "record_stop")).toHaveLength(0);
+  });
+
+  it("starts now with Enter and cancels with Esc during the countdown", async () => {
+    const backend = mockBackend({ ...RECORDING, phase: "countdown", startedAt: null, countdownEndsAt: Date.now() + 5_000 });
+    render(<RecordBar />);
+    await screen.findByRole("button", { name: /Start now/ });
+    fireEvent.keyDown(window, { key: "Enter" });
+    await waitFor(() => expect(called(backend, "record_start_now")).toHaveLength(1));
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(called(backend, "record_stop")).toHaveLength(1));
+  });
+
+  it("pauses with Space and never stops on Esc while recording", async () => {
+    // No microphone, so no level is polled while the keys are pressed.
+    const backend = mockBackend({ ...RECORDING, microphone: null });
+    render(<RecordBar />);
+    await screen.findByRole("button", { name: "Pause" });
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(window, { key: " " });
+    await waitFor(() => expect(called(backend, "record_pause")).toHaveLength(1));
+    expect(called(backend, "record_pause")[0].payload).toEqual({ paused: true });
+    expect(called(backend, "record_stop")).toHaveLength(0);
+  });
+
+  it("stops and saves with Enter while recording", async () => {
+    const backend = mockBackend({ ...RECORDING, microphone: null });
+    render(<RecordBar />);
+    await screen.findByRole("button", { name: "Stop" });
+    fireEvent.keyDown(window, { key: "Enter" });
+    await waitFor(() => expect(called(backend, "record_stop")).toHaveLength(1));
+  });
+
+  it("leaves Enter to a focused button", async () => {
+    const backend = mockBackend(RECORDING);
+    render(<RecordBar />);
+    const pause = await screen.findByRole("button", { name: "Pause" });
+    fireEvent.keyDown(pause, { key: "Enter" });
+    expect(called(backend, "record_stop")).toHaveLength(0);
+  });
+
+  it("empties the ring as the seconds go", () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      vi.setSystemTime(1_000_000);
+      mockBackend(null);
+      const status: BarStatus = { ...RECORDING, phase: "countdown", startedAt: null, countdownEndsAt: 1_003_000 };
+      render(<RecordBar status={status} />);
+      const ring = () => Number(screen.getByTestId("recordbar").querySelector(".bar-ring-fg")?.getAttribute("stroke-dashoffset"));
+      const full = ring();
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(screen.getByRole("timer", { name: "Seconds left" })).toHaveTextContent("1");
+      expect(ring()).toBeGreaterThan(full);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says it is saving once stopped", async () => {

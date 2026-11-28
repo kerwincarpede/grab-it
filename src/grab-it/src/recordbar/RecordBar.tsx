@@ -1,8 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./recordbar.css";
+import { CountdownRing, Rolling } from "./countdown";
+import { isBareKey, useCountdownTotal } from "./countdownState";
 import {
   CameraIcon,
+  CloseIcon,
   GripIcon,
   MicIcon,
   MicOffIcon,
@@ -12,7 +15,6 @@ import {
   RestartIcon,
   SpeakerIcon,
   SpeakerOffIcon,
-  StopIcon,
   TrashIcon,
 } from "../app/icons";
 import {
@@ -29,6 +31,7 @@ import {
   resetBarPosition,
   restartRecording,
   showWebcam,
+  startNow,
   stopRecording,
   type BarStatus,
 } from "./api";
@@ -115,6 +118,11 @@ function useLevel(listening: boolean): number {
   return listening ? level : 0;
 }
 
+/** A click on a bar button leaves the focus where it was, as the capture toolbar's do. */
+function keepFocus(event: MouseEvent) {
+  event.preventDefault();
+}
+
 function startDragging() {
   try {
     void getCurrentWindow()
@@ -150,35 +158,16 @@ function Tool({ label, onClick, children, className, pressed, expanded, disabled
   return (
     <button
       type="button"
-      className={className ? `recordbar-tool ${className}` : "recordbar-tool"}
+      className={className ? `bar-tool ${className}` : "bar-tool"}
       aria-label={label}
       title={label}
       aria-pressed={pressed}
       aria-expanded={expanded}
       disabled={disabled}
+      onMouseDown={keepFocus}
       onClick={onClick}
     >
       {children}
-    </button>
-  );
-}
-
-interface LabelledProps {
-  /** Shown beside the icon, and the button's name. */
-  label: string;
-  /** Said when the pointer rests on it. */
-  tip: string;
-  icon: ReactNode;
-  onClick: () => void;
-  className: string;
-}
-
-/** A button that says what it does in words, beside its icon. */
-function Labelled({ label, tip, icon, onClick, className }: LabelledProps) {
-  return (
-    <button type="button" className={`recordbar-labelled ${className}`} title={tip} onClick={onClick}>
-      {icon}
-      <span>{label}</span>
     </button>
   );
 }
@@ -238,8 +227,10 @@ interface RecordBarProps {
 }
 
 /**
- * The recording toolbar: a small pill with the time, the microphone, a
- * labelled Pause, a labelled red Stop and a menu of the rest (⋯). Dragged
+ * The recording toolbar, in the capture toolbar's pill: a ring with rolling
+ * seconds, Start now and Cancel while it counts down; then a pulsing dot,
+ * the time, the microphone's level, Pause, a menu of the rest (⋯) and a red
+ * Stop. Paused, the dot turns amber and still and Pause slides to Resume. Dragged
  * by its body, it remembers where it was left on each display (see
  * src-tauri/src/record_bar.rs).
  */
@@ -259,6 +250,28 @@ function RecordBar({ status: given }: RecordBarProps) {
   // Saving has nothing left to change.
   const menuOpen = menuChosen && phase !== "saving";
   const level = useLevel(micOn && phase === "recording" && !paused);
+  const left = status?.phase === "countdown" ? countdownLeft(status, now) : 0;
+  const total = useCountdownTotal(status?.countdownEndsAt ?? null, left);
+
+  // Enter presses the main button and Esc cancels a countdown, when the bar
+  // has the focus. Space pauses and resumes. Esc never stops a recording.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!status || menuOpen || !isBareKey(event)) return;
+      if (status.phase === "countdown") {
+        if (event.key === "Enter") run(startNow);
+        else if (event.key === "Escape") run(stopRecording);
+        else return;
+      } else if (status.phase === "recording") {
+        if (event.key === "Enter") run(stopRecording);
+        else if (event.key === " ") run(() => pauseRecording(!paused));
+        else return;
+      } else return;
+      event.preventDefault();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
 
   // The window is see-through: only the pill and its menu may paint.
   useLayoutEffect(() => {
@@ -304,18 +317,33 @@ function RecordBar({ status: given }: RecordBarProps) {
   if (status.phase === "countdown") {
     body = (
       <>
-        <span className="recordbar-count" aria-live="polite">
-          {countdownLeft(status, now)}
-        </span>
-        <span className="recordbar-note">Starting…</span>
+        <CountdownRing left={left} total={total} tone="record" />
+        <span className="bar-strong">Recording in</span>
+        <Rolling value={left} label="Seconds left" />
+        <span className="recordbar-gap" aria-hidden="true" />
         <button
           type="button"
-          className="recordbar-cancel"
+          className="bar-main"
+          data-tone="record"
+          title="Skip the countdown and start recording"
+          aria-keyshortcuts="Enter"
+          onMouseDown={keepFocus}
+          onClick={() => run(startNow)}
+        >
+          <span className="bar-main-dot" aria-hidden="true" />
+          Start now
+          <kbd aria-hidden="true">↵</kbd>
+        </button>
+        <button
+          type="button"
+          className="bar-tool recordbar-cancel"
           aria-label="Cancel recording"
           title="Cancel recording"
+          aria-keyshortcuts="Escape"
+          onMouseDown={keepFocus}
           onClick={() => run(stopRecording)}
         >
-          Cancel
+          <CloseIcon size={16} />
         </button>
       </>
     );
@@ -331,19 +359,23 @@ function RecordBar({ status: given }: RecordBarProps) {
   } else {
     body = (
       <>
-        <span className="recordbar-dot" data-paused={paused ? "true" : "false"} aria-hidden="true" />
+        <span className="bar-dot recordbar-dot" data-paused={paused ? "true" : "false"} aria-hidden="true" />
+        <span className="bar-stack bar-strong" aria-hidden="true">
+          <span data-shown={paused ? "false" : "true"}>Recording</span>
+          <span data-shown={paused ? "true" : "false"}>Paused</span>
+        </span>
         <span className="recordbar-time" role="timer" aria-label={paused ? "Paused" : "Recording"}>
           {formatClock(recorded)}
           {status.maxSeconds !== null && <span className="recordbar-limit"> / {formatClock(status.maxSeconds * 1000)}</span>}
         </span>
-        {paused && (
-          <span className="recordbar-paused" aria-hidden="true">
-            PAUSED
-          </span>
-        )}
-        <span className="recordbar-sep" aria-hidden="true" />
+        <span className="bar-sep" aria-hidden="true" />
         {status.microphone !== null && (
           <>
+            <span className="recordbar-meter" data-testid="recordbar-meter" data-off={micOn && !paused ? "false" : "true"} aria-hidden="true">
+              {METER_STEPS.map((step) => (
+                <i key={step} data-on={level >= step ? "true" : "false"} />
+              ))}
+            </span>
             <Tool
               label={status.microphone ? "Turn the microphone on" : "Mute the microphone"}
               className={status.microphone ? "recordbar-off" : undefined}
@@ -352,11 +384,6 @@ function RecordBar({ status: given }: RecordBarProps) {
             >
               {status.microphone ? <MicOffIcon size={16} /> : <MicIcon size={16} />}
             </Tool>
-            <span className="recordbar-meter" data-testid="recordbar-meter" aria-hidden="true">
-              {METER_STEPS.map((step) => (
-                <i key={step} data-on={level >= step ? "true" : "false"} />
-              ))}
-            </span>
           </>
         )}
         {status.microphone === null && status.system !== null && (
@@ -369,23 +396,45 @@ function RecordBar({ status: given }: RecordBarProps) {
             {status.system ? <SpeakerOffIcon size={16} /> : <SpeakerIcon size={16} />}
           </Tool>
         )}
-        <Labelled
-          label={paused ? "Resume" : "Pause"}
-          tip={paused ? "Resume recording" : "Pause recording"}
-          icon={paused ? <PlayIcon size={14} /> : <PauseIcon size={14} />}
-          className="recordbar-pause"
+        <button
+          type="button"
+          className="bar-tool bar-labelled recordbar-pause"
+          aria-label={paused ? "Resume" : "Pause"}
+          title={paused ? "Resume recording (Space)" : "Pause recording (Space)"}
+          aria-keyshortcuts="Space"
+          onMouseDown={keepFocus}
           onClick={() => run(() => pauseRecording(!paused))}
-        />
+        >
+          <span className="bar-stack" aria-hidden="true">
+            <span data-shown={paused ? "false" : "true"}>
+              <PauseIcon size={14} />
+            </span>
+            <span data-shown={paused ? "true" : "false"}>
+              <PlayIcon size={14} />
+            </span>
+          </span>
+          <span className="bar-stack" aria-hidden="true">
+            <span data-shown={paused ? "false" : "true"}>Pause</span>
+            <span data-shown={paused ? "true" : "false"}>Resume</span>
+          </span>
+        </button>
         <Tool label="More" className="recordbar-more" expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>
           <MoreIcon size={16} />
         </Tool>
-        <Labelled
-          label="Stop"
-          tip="Stop and save"
-          icon={<StopIcon size={14} />}
-          className="recordbar-stop"
+        <button
+          type="button"
+          className="bar-main recordbar-stop"
+          data-tone="record"
+          aria-label="Stop"
+          title="Stop and save"
+          aria-keyshortcuts="Enter"
+          onMouseDown={keepFocus}
           onClick={() => run(stopRecording)}
-        />
+        >
+          <span className="bar-main-square" aria-hidden="true" />
+          Stop
+          <kbd aria-hidden="true">↵</kbd>
+        </button>
       </>
     );
   }
@@ -400,7 +449,7 @@ function RecordBar({ status: given }: RecordBarProps) {
       {up && openMenu}
       <div
         ref={pill}
-        className="recordbar-pill"
+        className="bar-pill recordbar-pill"
         data-phase={status.phase}
         data-paused={paused ? "true" : "false"}
         title="Drag to move"

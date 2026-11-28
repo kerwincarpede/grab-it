@@ -45,7 +45,7 @@ const WHAT_HAPPENS: Record<"auto" | "byHand", readonly string[]> = {
   byHand: [
     "Starts from what's on screen now.",
     "Scroll at a steady pace. If the bar says you went too fast, scroll back a little.",
-    "Choose Done on the bar at the top of the screen when you reach the end.",
+    "Choose Finish on the bar at the top of the screen when you reach the end.",
   ],
 };
 
