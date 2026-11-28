@@ -1810,29 +1810,36 @@ export type PopupCorner = "bottomLeft" | "bottomRight" | "topLeft" | "topRight";
 export type Preferences = Preferences_Serialize | Preferences_Deserialize;
 
 /**
- *  What `set_preferences` takes: [`Preferences`], where a missing `ai`
- *  keeps the current AI settings (frontends from before it existed).
+ *  What `set_preferences` takes: [`Preferences`], where a missing `ai`,
+ *  `regionToolbar` or `toolbarTick` keeps the current value (frontends
+ *  from before it existed).
  */
 export type PreferencesUpdate = PreferencesUpdate_Serialize | PreferencesUpdate_Deserialize;
 
 /**
- *  What `set_preferences` takes: [`Preferences`], where a missing `ai`
- *  keeps the current AI settings (frontends from before it existed).
+ *  What `set_preferences` takes: [`Preferences`], where a missing `ai`,
+ *  `regionToolbar` or `toolbarTick` keeps the current value (frontends
+ *  from before it existed).
  */
 export type PreferencesUpdate_Deserialize = {
 	afterCapture: AfterCapture,
 	copyToClipboard: boolean,
 	ai?: AiSettings_Deserialize | null,
+	regionToolbar?: boolean | null,
+	toolbarTick?: boolean | null,
 };
 
 /**
- *  What `set_preferences` takes: [`Preferences`], where a missing `ai`
- *  keeps the current AI settings (frontends from before it existed).
+ *  What `set_preferences` takes: [`Preferences`], where a missing `ai`,
+ *  `regionToolbar` or `toolbarTick` keeps the current value (frontends
+ *  from before it existed).
  */
 export type PreferencesUpdate_Serialize = {
 	afterCapture: AfterCapture,
 	copyToClipboard: boolean,
 	ai: AiSettings_Serialize | null,
+	regionToolbar: boolean | null,
+	toolbarTick: boolean | null,
 };
 
 /**  The choices on the Settings window's Capture and AI sections. */
@@ -1842,6 +1849,14 @@ export type Preferences_Deserialize = {
 	copyToClipboard: boolean,
 	/**  Describing captures with a vision model. */
 	ai?: AiSettings_Deserialize,
+	/**
+	 *  The Region shortcut and the tray's Region open the toolbar on
+	 *  Capture → Region instead of a bare region capture. Off for files
+	 *  from before it existed; a first run turns it on.
+	 */
+	regionToolbar?: boolean,
+	/**  Show a tick in the toolbar after a capture is copied and saved. */
+	toolbarTick?: boolean,
 };
 
 /**  The choices on the Settings window's Capture and AI sections. */
@@ -1851,6 +1866,14 @@ export type Preferences_Serialize = {
 	copyToClipboard: boolean,
 	/**  Describing captures with a vision model. */
 	ai: AiSettings_Serialize,
+	/**
+	 *  The Region shortcut and the tray's Region open the toolbar on
+	 *  Capture → Region instead of a bare region capture. Off for files
+	 *  from before it existed; a first run turns it on.
+	 */
+	regionToolbar: boolean,
+	/**  Show a tick in the toolbar after a capture is copied and saved. */
+	toolbarTick: boolean,
 };
 
 /**  What a button on the card does. Mirrors `QuickAction` in src/quick/api.ts. */

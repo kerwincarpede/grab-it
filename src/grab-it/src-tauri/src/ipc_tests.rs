@@ -267,10 +267,12 @@ fn get_settings_returns_the_settings_shape() {
             "hotkeys",
             "permissions",
             "recording",
+            "regionToolbar",
             "retention",
             "saveFolder",
             "saveLayout",
             "showInDock",
+            "toolbarTick",
             "updateChannel",
         ]
     );

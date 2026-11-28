@@ -68,6 +68,8 @@ function settings(recording: RecordingSettings): Settings_Serialize {
     updateChannel: "stable",
     afterCapture: "quickAccess",
     copyToClipboard: true,
+    regionToolbar: false,
+    toolbarTick: false,
     copySound: true,
     copySoundVolume: 50,
     ai: DEFAULT_AI_PREFERENCES,

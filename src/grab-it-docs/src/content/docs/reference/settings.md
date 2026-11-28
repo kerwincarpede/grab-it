@@ -65,6 +65,13 @@ chosen volume while the switch is off or on. Both clipboard confirmations and
 preview are silent during countdown, recording and pause, and the play button
 is unavailable then.
 
+**Toolbar**
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Show the toolbar for region captures** | On for new installs, off after an update | The Region shortcut and the tray's **Capture region** open the [Capture & record…](/grab-it/capture/all-in-one/) toolbar on **Capture → Region**. Off, they start selecting a region at once. The Window and Screen shortcuts never show it. |
+| **Show a tick in the toolbar after a capture** | Off | A green tick shows in the toolbar for a moment once the capture is copied and saved. The Quick Access card shows either way. |
+
 ## Editor
 
 **Frame new captures with the last backdrop** (off by default): the [editor](/grab-it/image-editor/mark-it-up/) adds the backdrop you used last when it first opens a capture. The saved capture and its clipboard copy stay unframed.

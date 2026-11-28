@@ -502,6 +502,8 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
       afterCapture: settings.afterCapture,
       copyToClipboard: settings.copyToClipboard,
       ai: settings.ai ?? DEFAULT_AI_PREFERENCES,
+      regionToolbar: settings.regionToolbar ?? false,
+      toolbarTick: settings.toolbarTick ?? false,
       ...change,
     };
     setBusy(true);
@@ -813,6 +815,46 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
               letters={false}
               onCommit={changeCopySoundVolume}
             />
+          </div>
+        </section>
+      )}
+      {showsCapture && (
+        <section aria-labelledby="toolbar-heading">
+          <h2 className="group-heading" id="toolbar-heading">
+            Toolbar
+          </h2>
+          <div className="group">
+            <label className="row">
+              <span className="row-text">
+                <span className="row-title">Show the toolbar for region captures</span>
+                <span className="row-hint">
+                  The Region shortcut opens the toolbar on Capture → Region. When this is off, it starts selecting at
+                  once.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                className="switch"
+                checked={settings?.regionToolbar ?? false}
+                disabled={busy || settings === null}
+                onChange={(event) => void changePreferences({ regionToolbar: event.target.checked })}
+              />
+            </label>
+            <label className="row">
+              <span className="row-text">
+                <span className="row-title">Show a tick in the toolbar after a capture</span>
+                <span className="row-hint">A green tick shows once the capture is copied and saved.</span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                className="switch"
+                checked={settings?.toolbarTick ?? false}
+                disabled={busy || settings === null}
+                onChange={(event) => void changePreferences({ toolbarTick: event.target.checked })}
+              />
+            </label>
           </div>
         </section>
       )}

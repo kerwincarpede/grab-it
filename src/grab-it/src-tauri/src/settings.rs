@@ -250,6 +250,14 @@ pub struct Preferences {
     /// Describing captures with a vision model.
     #[serde(default)]
     pub ai: AiSettings,
+    /// The Region shortcut and the tray's Region open the toolbar on
+    /// Capture → Region instead of a bare region capture. Off for files
+    /// from before it existed; a first run turns it on.
+    #[serde(default)]
+    pub region_toolbar: bool,
+    /// Show a tick in the toolbar after a capture is copied and saved.
+    #[serde(default)]
+    pub toolbar_tick: bool,
 }
 
 impl Default for Preferences {
@@ -258,12 +266,15 @@ impl Default for Preferences {
             after_capture: AfterCapture::default(),
             copy_to_clipboard: true,
             ai: AiSettings::default(),
+            region_toolbar: false,
+            toolbar_tick: false,
         }
     }
 }
 
-/// What `set_preferences` takes: [`Preferences`], where a missing `ai`
-/// keeps the current AI settings (frontends from before it existed).
+/// What `set_preferences` takes: [`Preferences`], where a missing `ai`,
+/// `regionToolbar` or `toolbarTick` keeps the current value (frontends
+/// from before it existed).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PreferencesUpdate {
@@ -271,6 +282,10 @@ pub struct PreferencesUpdate {
     pub copy_to_clipboard: bool,
     #[serde(default)]
     pub ai: Option<AiSettings>,
+    #[serde(default)]
+    pub region_toolbar: Option<bool>,
+    #[serde(default)]
+    pub toolbar_tick: Option<bool>,
 }
 
 impl PreferencesUpdate {
@@ -279,6 +294,8 @@ impl PreferencesUpdate {
             after_capture: self.after_capture,
             copy_to_clipboard: self.copy_to_clipboard,
             ai: self.ai.unwrap_or_else(|| current.ai.clone()),
+            region_toolbar: self.region_toolbar.unwrap_or(current.region_toolbar),
+            toolbar_tick: self.toolbar_tick.unwrap_or(current.toolbar_tick),
         }
     }
 }
@@ -289,6 +306,8 @@ impl From<Preferences> for PreferencesUpdate {
             after_capture: preferences.after_capture,
             copy_to_clipboard: preferences.copy_to_clipboard,
             ai: Some(preferences.ai),
+            region_toolbar: Some(preferences.region_toolbar),
+            toolbar_tick: Some(preferences.toolbar_tick),
         }
     }
 }
@@ -1072,6 +1091,10 @@ struct StoredSettings {
     /// Read leniently by [`copy_sound_volume`].
     copy_sound_volume: Option<serde_json::Value>,
     ai: Option<AiSettings>,
+    #[serde(default)]
+    region_toolbar: Option<bool>,
+    #[serde(default)]
+    toolbar_tick: Option<bool>,
     /// Read leniently by [`EditorPreferences::from_stored`].
     editor: Option<serde_json::Value>,
     show_in_dock: Option<bool>,
@@ -1152,6 +1175,14 @@ impl StoredSettings {
                     .copy_to_clipboard
                     .unwrap_or(defaults.preferences.copy_to_clipboard),
                 ai: self.ai.unwrap_or(defaults.preferences.ai),
+                // Missing means a file from before the toolbar setting:
+                // an update keeps the bare region capture.
+                region_toolbar: self
+                    .region_toolbar
+                    .unwrap_or(defaults.preferences.region_toolbar),
+                toolbar_tick: self
+                    .toolbar_tick
+                    .unwrap_or(defaults.preferences.toolbar_tick),
             },
             copy_sound: self.copy_sound.unwrap_or(defaults.copy_sound),
             copy_sound_volume: self
@@ -1251,6 +1282,8 @@ struct SettingsOnDisk<'a> {
     copy_sound: bool,
     copy_sound_volume: u8,
     ai: AiOnDisk<'a>,
+    region_toolbar: bool,
+    toolbar_tick: bool,
     editor: &'a EditorPreferences,
     show_in_dock: bool,
     appearance: Appearance,
@@ -1322,6 +1355,8 @@ impl<'a> SettingsOnDisk<'a> {
                 tidy_text: *tidy_text,
                 notice_pending: *notice_pending,
             },
+            region_toolbar: settings.preferences.region_toolbar,
+            toolbar_tick: settings.preferences.toolbar_tick,
             editor: &settings.editor,
             show_in_dock: settings.show_in_dock,
             appearance: settings.appearance,
@@ -1479,6 +1514,9 @@ impl SettingsStore {
         if self.first_run {
             let mut next = self.current.clone();
             next.preferences.ai.notice_pending = true;
+            // New installs start with the region toolbar; updates keep
+            // the bare region capture they had.
+            next.preferences.region_toolbar = true;
             save(&self.path, &next)?;
             self.current = next;
             self.first_run = false;
@@ -1944,6 +1982,8 @@ mod tests {
                     api_key: Some("sk-test".into()),
                     ..AiSettings::default()
                 },
+                region_toolbar: true,
+                toolbar_tick: true,
             },
             copy_sound: false,
             copy_sound_volume: 30,
@@ -2883,6 +2923,8 @@ mod tests {
                 after_capture: AfterCapture::Editor,
                 copy_to_clipboard: false,
                 ai: AiSettings::default(),
+                region_toolbar: true,
+                toolbar_tick: true,
             })
             .unwrap();
         assert_eq!(updated.preferences.after_capture, AfterCapture::Editor);
@@ -2892,6 +2934,9 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(json["afterCapture"], "editor");
         assert_eq!(json["copyToClipboard"], false);
+        assert_eq!(json["regionToolbar"], true);
+        assert_eq!(json["toolbarTick"], true);
+        assert!(updated.preferences.region_toolbar && updated.preferences.toolbar_tick);
         assert!(json["hotkeys"]["text"].is_string());
     }
 
@@ -2904,13 +2949,61 @@ mod tests {
         store.finish_first_run().unwrap();
         assert!(!store.is_first_run());
         // The defaults, with the Library's AI invitation pending.
+        // and the region toolbar on for a new install.
         let mut expected = defaults(&dir);
         expected.preferences.ai.notice_pending = true;
+        expected.preferences.region_toolbar = true;
+        assert!(store.get().preferences.region_toolbar);
         assert_eq!(load(&path, defaults(&dir)).unwrap(), expected);
 
         // The next launch finds the file: not a first run.
         let again = open_store(path, defaults(&dir));
         assert!(!again.is_first_run());
+    }
+
+    #[test]
+    fn an_update_keeps_the_bare_region_capture_and_no_tick() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // A settings file from before the toolbar settings existed.
+        fs::write(&path, r#"{"afterCapture": "editor"}"#).unwrap();
+        let mut store = open_store(path.clone(), defaults(&dir));
+        assert!(!store.is_first_run());
+        store.finish_first_run().unwrap();
+        let preferences = &store.get().preferences;
+        assert!(!preferences.region_toolbar);
+        assert!(!preferences.toolbar_tick);
+        let loaded = load(&path, defaults(&dir)).unwrap().preferences;
+        assert!(!loaded.region_toolbar);
+        assert!(!loaded.toolbar_tick);
+    }
+
+    #[test]
+    fn set_preferences_without_the_toolbar_settings_keeps_them() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let mut store = open_store(path.clone(), defaults(&dir));
+        store
+            .set_preferences(Preferences {
+                region_toolbar: true,
+                toolbar_tick: true,
+                ..Preferences::default()
+            })
+            .unwrap();
+        let update: PreferencesUpdate =
+            serde_json::from_str(r#"{"afterCapture": "editor", "copyToClipboard": true}"#).unwrap();
+        let updated = store.set_preferences(update).unwrap();
+        assert!(updated.preferences.region_toolbar);
+        assert!(updated.preferences.toolbar_tick);
+        let update: PreferencesUpdate = serde_json::from_str(
+            r#"{"afterCapture": "editor", "copyToClipboard": true, "regionToolbar": false}"#,
+        )
+        .unwrap();
+        let updated = store.set_preferences(update).unwrap();
+        assert!(!updated.preferences.region_toolbar);
+        assert!(updated.preferences.toolbar_tick);
+        assert_eq!(load(&path, defaults(&dir)).unwrap(), updated);
     }
 
     #[test]
