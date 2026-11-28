@@ -2288,6 +2288,18 @@ export type RecordingSettings_Deserialize = {
 	 *  pointing at the screen points the right way in the recording.
 	 */
 	mirrorWebcam?: boolean,
+	/**  What the bubble shows behind the person in it. */
+	webcamBackground?: WebcamBackground,
+	/**
+	 *  The colour behind the person with [`WebcamBackground::Color`], as
+	 *  `#rrggbb`.
+	 */
+	webcamBackgroundColor?: string,
+	/**
+	 *  How much the background is blurred with [`WebcamBackground::Blur`],
+	 *  in percent: 1 to [`MAX_WEBCAM_BLUR`].
+	 */
+	webcamBlur?: number,
 	/**
 	 *  Seconds counted down on the recording toolbar before the first
 	 *  frame: one of [`RECORDING_COUNTDOWNS`].
@@ -2345,6 +2357,18 @@ export type RecordingSettings_Serialize = {
 	 *  pointing at the screen points the right way in the recording.
 	 */
 	mirrorWebcam: boolean,
+	/**  What the bubble shows behind the person in it. */
+	webcamBackground: WebcamBackground,
+	/**
+	 *  The colour behind the person with [`WebcamBackground::Color`], as
+	 *  `#rrggbb`.
+	 */
+	webcamBackgroundColor: string,
+	/**
+	 *  How much the background is blurred with [`WebcamBackground::Blur`],
+	 *  in percent: 1 to [`MAX_WEBCAM_BLUR`].
+	 */
+	webcamBlur: number,
 	/**
 	 *  Seconds counted down on the recording toolbar before the first
 	 *  frame: one of [`RECORDING_COUNTDOWNS`].
@@ -3105,6 +3129,19 @@ export type Usage = {
 };
 
 export type Value = null | boolean | number | string | Value[] | { [key in string]: Value };
+
+/**
+ *  What the webcam bubble shows behind the person in it (see
+ *  src/webcam/WebcamBubble.tsx). Mirrors `WebcamBackground` in
+ *  src/settings/api.ts.
+ */
+export type WebcamBackground =
+/**  The camera as it is. */
+"none" |
+/**  The camera's own picture, blurred by [`RecordingSettings::webcam_blur`]. */
+"blur" |
+/**  [`RecordingSettings::webcam_background_color`]. */
+"color";
 
 /**
  *  The webcam bubble's outline while recording (see webcam.rs). Mirrors

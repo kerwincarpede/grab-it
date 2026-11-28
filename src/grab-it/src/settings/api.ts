@@ -9,6 +9,7 @@ import {
   type Removal,
   type TextSizeStep,
   type UpdateChannel,
+  type WebcamBackground,
   type AgentSkill as GeneratedAgentSkill,
   type AiClis_Serialize,
   type AiSettings_Serialize,
@@ -43,6 +44,7 @@ export type {
   Removal,
   TextSizeStep,
   UpdateChannel,
+  WebcamBackground,
 } from "../app/bindings";
 
 /** `Preferences` in src-tauri/src/settings.rs. */
@@ -398,6 +400,9 @@ export const DEFAULT_RECORDING: RecordingSettings = {
   camera: null,
   webcamShape: "squircle",
   mirrorWebcam: true,
+  webcamBackground: "none",
+  webcamBackgroundColor: "#202124",
+  webcamBlur: 50,
   countdown: 0,
   source: "region",
 };
@@ -455,6 +460,12 @@ export const WEBCAM_SHAPES: { value: WebcamShape; title: string }[] = [
   { value: "pill", title: "Pill" },
   { value: "wide", title: "Wide" },
   { value: "blob", title: "Blob (moves)" },
+];
+
+export const WEBCAM_BACKGROUNDS: { value: WebcamBackground; title: string }[] = [
+  { value: "none", title: "None" },
+  { value: "blur", title: "Blur" },
+  { value: "color", title: "Colour" },
 ];
 
 /** A camera the webview can show: `Camera` in src-tauri/src/webcam.rs. `id` is the webview's `deviceId`. */

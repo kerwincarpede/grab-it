@@ -19,6 +19,7 @@ import {
   RECORDING_FPS,
   RECORDING_QUALITIES,
   ffmpegStatus,
+  WEBCAM_BACKGROUNDS,
   WEBCAM_SHAPES,
   keystrokesHint as keystrokesHintFor,
   listCameras,
@@ -37,6 +38,7 @@ import {
   type RecordingAudio,
   type RecordingSettings,
   type Retention,
+  type WebcamBackground,
   type WebcamShape,
   POPUP_SECONDS,
   TEXT_SCALE,
@@ -101,6 +103,50 @@ const SAVE_LAYOUT_OPTIONS = [
 
 /** The copy sound's volume slider: every whole percent from 0 to 100. */
 const VOLUME_RANGE = { min: 0, max: 100, step: 1 };
+/** Mirrors `MAX_WEBCAM_BLUR` in src-tauri/src/settings.rs. */
+const WEBCAM_BLUR_RANGE = { min: 1, max: 100, step: 1 };
+/** How long a colour picked rests before it is saved, so dragging in the picker saves once. */
+const COLOR_SAVE_MS = 400;
+
+interface ColorFieldProps {
+  id: string;
+  value: string;
+  disabled: boolean;
+  onCommit: (color: string) => void;
+}
+
+/** A colour well that saves what is picked once the picking stops, or the field is left. */
+function ColorField({ id, value, disabled, onCommit }: ColorFieldProps) {
+  // What is being picked, tied to the saved value it started from, as in ScaleSlider.
+  const [picking, setPicking] = useState<{ from: string; to: string } | null>(null);
+  const draft = picking && picking.from === value ? picking.to : value;
+  const timer = useRef<number | null>(null);
+  const cancel = () => {
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = null;
+  };
+  useEffect(() => cancel, []);
+  const commit = (color: string) => {
+    cancel();
+    if (color.toLowerCase() !== value.toLowerCase()) onCommit(color.toLowerCase());
+  };
+  return (
+    <input
+      id={id}
+      type="color"
+      className="row-color"
+      value={draft}
+      disabled={disabled}
+      onChange={(event) => {
+        const color = event.target.value;
+        setPicking({ from: value, to: color });
+        cancel();
+        timer.current = window.setTimeout(() => commit(color), COLOR_SAVE_MS);
+      }}
+      onBlur={() => commit(draft)}
+    />
+  );
+}
 
 /**
  * A percent slider, such as text size. It shows the value while dragging but
@@ -1144,6 +1190,55 @@ function SettingsWindow({ section }: SettingsWindowProps = {}) {
                     ))}
                   </select>
                 </div>
+                <div className="row">
+                  <span className="row-text">
+                    <label className="row-title" htmlFor="recording-webcam-background">
+                      Background
+                    </label>
+                    <span className="row-hint">Blurs the room behind you or covers it with a colour. Your camera never leaves this computer.</span>
+                  </span>
+                  <select
+                    id="recording-webcam-background"
+                    className="row-field"
+                    value={recording.webcamBackground}
+                    disabled={recordingOff}
+                    onChange={(event) => void changeRecording({ webcamBackground: event.target.value as WebcamBackground })}
+                  >
+                    {WEBCAM_BACKGROUNDS.map((choice) => (
+                      <option key={choice.value} value={choice.value}>
+                        {choice.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {recording.webcamBackground === "blur" && (
+                  <ScaleSlider
+                    id="recording-webcam-blur"
+                    label="Blur amount"
+                    hint="How much the room behind you is blurred."
+                    value={recording.webcamBlur}
+                    disabled={recordingOff}
+                    range={WEBCAM_BLUR_RANGE}
+                    letters={false}
+                    onCommit={(webcamBlur) => void changeRecording({ webcamBlur })}
+                  />
+                )}
+                {recording.webcamBackground === "color" && (
+                  <div className="row">
+                    <span className="row-text">
+                      <label className="row-title" htmlFor="recording-webcam-color">
+                        Colour
+                      </label>
+                      <span className="row-hint">Shown behind you instead of the room.</span>
+                    </span>
+                    <ColorField
+                      id="recording-webcam-color"
+                      value={recording.webcamBackgroundColor}
+                      disabled={recordingOff}
+                      onCommit={(webcamBackgroundColor) => void changeRecording({ webcamBackgroundColor })}
+                    />
+                  </div>
+                )}
                 <label className="row">
                   <span className="row-text">
                     <span className="row-title">Mirror webcam</span>

@@ -387,10 +387,7 @@ pub const MAX_FAVORITE_COLORS: usize = 8;
 fn keep_favorite_colors<'a>(colors: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     let mut kept: Vec<String> = Vec::new();
     for color in colors {
-        let is_hex = color.len() == 7
-            && color.starts_with('#')
-            && color[1..].chars().all(|c| c.is_ascii_hexdigit());
-        if !is_hex {
+        if !is_hex_color(color) {
             continue;
         }
         let color = color.to_ascii_lowercase();
@@ -735,6 +732,46 @@ impl WebcamShape {
     }
 }
 
+/// What the webcam bubble shows behind the person in it (see
+/// src/webcam/WebcamBubble.tsx). Mirrors `WebcamBackground` in
+/// src/settings/api.ts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum WebcamBackground {
+    /// The camera as it is.
+    #[default]
+    None,
+    /// The camera's own picture, blurred by [`RecordingSettings::webcam_blur`].
+    Blur,
+    /// [`RecordingSettings::webcam_background_color`].
+    Color,
+}
+
+impl WebcamBackground {
+    /// The name the settings file and the bubble's page use.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Blur => "blur",
+            Self::Color => "color",
+        }
+    }
+}
+
+/// The webcam background's colour when none has been chosen: a dark grey.
+/// Mirrors `DEFAULT_RECORDING` in src/settings/api.ts.
+pub const DEFAULT_WEBCAM_BACKGROUND_COLOR: &str = "#202124";
+/// How much the webcam background is blurred when no amount has been
+/// chosen, in percent.
+pub const DEFAULT_WEBCAM_BLUR: u8 = 50;
+/// The most the webcam background can be blurred, in percent; the least is 1.
+pub const MAX_WEBCAM_BLUR: u8 = 100;
+
+/// Whether `color` is a `#rrggbb` colour.
+fn is_hex_color(color: &str) -> bool {
+    color.len() == 7 && color.starts_with('#') && color[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// What the Record overlay's setup toolbar records: a dragged region, a
 /// picked window's area or a whole display. Mirrors `RecordingSource` in
 /// src/settings/api.ts.
@@ -783,6 +820,14 @@ pub struct RecordingSettings {
     /// Whether the bubble shows the camera mirrored, as a mirror would, so
     /// pointing at the screen points the right way in the recording.
     pub mirror_webcam: bool,
+    /// What the bubble shows behind the person in it.
+    pub webcam_background: WebcamBackground,
+    /// The colour behind the person with [`WebcamBackground::Color`], as
+    /// `#rrggbb`.
+    pub webcam_background_color: String,
+    /// How much the background is blurred with [`WebcamBackground::Blur`],
+    /// in percent: 1 to [`MAX_WEBCAM_BLUR`].
+    pub webcam_blur: u8,
     /// Seconds counted down on the recording toolbar before the first
     /// frame: one of [`RECORDING_COUNTDOWNS`].
     pub countdown: u32,
@@ -806,6 +851,9 @@ impl Default for RecordingSettings {
             camera: None,
             webcam_shape: WebcamShape::default(),
             mirror_webcam: true,
+            webcam_background: WebcamBackground::default(),
+            webcam_background_color: DEFAULT_WEBCAM_BACKGROUND_COLOR.into(),
+            webcam_blur: DEFAULT_WEBCAM_BLUR,
             countdown: 0,
             source: RecordingSource::default(),
         }
@@ -858,6 +906,17 @@ impl RecordingSettings {
             mirror_webcam: field("mirrorWebcam")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(defaults.mirror_webcam),
+            webcam_background: field("webcamBackground")
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or(defaults.webcam_background),
+            webcam_background_color: field("webcamBackgroundColor")
+                .and_then(|v| v.as_str().map(str::to_ascii_lowercase))
+                .filter(|color| is_hex_color(color))
+                .unwrap_or(defaults.webcam_background_color),
+            webcam_blur: field("webcamBlur")
+                .and_then(|v| serde_json::from_value::<u8>(v).ok())
+                .filter(|blur| (1..=MAX_WEBCAM_BLUR).contains(blur))
+                .unwrap_or(defaults.webcam_blur),
             countdown: field("countdown")
                 .and_then(|v| serde_json::from_value::<u32>(v).ok())
                 .filter(|seconds| RECORDING_COUNTDOWNS.contains(seconds))
@@ -1778,10 +1837,23 @@ impl SettingsStore {
                 recording.countdown
             )));
         }
+        if !is_hex_color(&recording.webcam_background_color) {
+            return Err(SettingsError::Invalid(format!(
+                "a webcam background colour is #rrggbb, not {:?}",
+                recording.webcam_background_color
+            )));
+        }
+        if !(1..=MAX_WEBCAM_BLUR).contains(&recording.webcam_blur) {
+            return Err(SettingsError::Invalid(format!(
+                "a webcam background is blurred 1 to {MAX_WEBCAM_BLUR}%, not {}",
+                recording.webcam_blur
+            )));
+        }
         let next = Settings {
             recording: RecordingSettings {
                 microphone: recording.microphone.filter(|name| !name.is_empty()),
                 camera: recording.camera.filter(|id| !id.is_empty()),
+                webcam_background_color: recording.webcam_background_color.to_ascii_lowercase(),
                 ..recording
             },
             ..self.current.clone()
@@ -2007,6 +2079,9 @@ mod tests {
                 camera: Some("3f9a1c".into()),
                 webcam_shape: WebcamShape::Arch,
                 mirror_webcam: false,
+                webcam_background: WebcamBackground::Color,
+                webcam_background_color: "#336699".into(),
+                webcam_blur: 80,
                 countdown: 5,
                 source: RecordingSource::Screen,
             },
@@ -2250,6 +2325,9 @@ mod tests {
                 "camera": null,
                 "webcamShape": "squircle",
                 "mirrorWebcam": true,
+                "webcamBackground": "none",
+                "webcamBackgroundColor": "#202124",
+                "webcamBlur": 50,
                 "countdown": 0,
                 "source": "region",
             })
@@ -2373,6 +2451,9 @@ mod tests {
                 "camera": null,
                 "webcamShape": "squircle",
                 "mirrorWebcam": true,
+                "webcamBackground": "none",
+                "webcamBackgroundColor": "#202124",
+                "webcamBlur": 50,
                 "countdown": 0,
                 "source": "region",
             })
@@ -2458,6 +2539,81 @@ mod tests {
         assert_eq!(loaded.camera.as_deref(), Some("cam"));
         assert_eq!(loaded.webcam_shape, WebcamShape::Squircle);
         assert!(!loaded.mirror_webcam);
+    }
+
+    #[test]
+    fn the_webcam_background_is_off_by_default_and_remembered() {
+        let dir = TempDir::new().unwrap();
+        let path = settings_path(&dir);
+        let recording = defaults(&dir).recording;
+        assert_eq!(recording.webcam_background, WebcamBackground::None);
+        assert_eq!(recording.webcam_background_color, "#202124");
+        assert_eq!(recording.webcam_blur, 50);
+        for (background, name) in [
+            (WebcamBackground::None, "none"),
+            (WebcamBackground::Blur, "blur"),
+            (WebcamBackground::Color, "color"),
+        ] {
+            assert_eq!(background.as_str(), name);
+            assert_eq!(serde_json::to_value(background).unwrap(), name);
+        }
+
+        let mut store = open_store(path.clone(), defaults(&dir));
+        let chosen = RecordingSettings {
+            webcam_background: WebcamBackground::Blur,
+            webcam_background_color: "#0a0B0c".into(),
+            webcam_blur: 100,
+            ..RecordingSettings::default()
+        };
+        let saved = store.set_recording(chosen.clone()).unwrap().recording;
+        assert_eq!(saved.webcam_background, WebcamBackground::Blur);
+        // Colours are kept lower-cased.
+        assert_eq!(saved.webcam_background_color, "#0a0b0c");
+        assert_eq!(saved.webcam_blur, 100);
+        assert_eq!(load(&path, defaults(&dir)).unwrap().recording, saved);
+
+        // A colour that is not #rrggbb, or a blur outside 1 to 100, is refused.
+        for bad in [
+            RecordingSettings {
+                webcam_background_color: "red".into(),
+                ..chosen.clone()
+            },
+            RecordingSettings {
+                webcam_background_color: "#12345".into(),
+                ..chosen.clone()
+            },
+            RecordingSettings {
+                webcam_blur: 0,
+                ..chosen.clone()
+            },
+            RecordingSettings {
+                webcam_blur: 101,
+                ..chosen.clone()
+            },
+        ] {
+            assert!(store.set_recording(bad).is_err());
+        }
+        assert_eq!(load(&path, defaults(&dir)).unwrap().recording, saved);
+
+        // Unknown or out-of-range values keep their defaults.
+        fs::write(
+            &path,
+            r#"{"recording": {"webcamBackground": "image", "webcamBackgroundColor": "blue", "webcamBlur": 0}}"#,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap().recording;
+        assert_eq!(loaded.webcam_background, WebcamBackground::None);
+        assert_eq!(loaded.webcam_background_color, "#202124");
+        assert_eq!(loaded.webcam_blur, 50);
+        fs::write(
+            &path,
+            r##"{"recording": {"webcamBackground": "color", "webcamBackgroundColor": "#FFAA00", "webcamBlur": 300}}"##,
+        )
+        .unwrap();
+        let loaded = load(&path, defaults(&dir)).unwrap().recording;
+        assert_eq!(loaded.webcam_background, WebcamBackground::Color);
+        assert_eq!(loaded.webcam_background_color, "#ffaa00");
+        assert_eq!(loaded.webcam_blur, 50);
     }
 
     #[test]

@@ -33,7 +33,8 @@ use crate::windows::E2eBrowserArgs;
 use crate::{
     capture::Rect,
     screen::MonitorInfo,
-    settings::{RecordingSettings, WebcamShape},
+    segmentation,
+    settings::{RecordingSettings, WebcamBackground, WebcamShape},
 };
 
 pub const LABEL: &str = "webcam";
@@ -229,6 +230,23 @@ fn sane_scale(scale: f64) -> f64 {
     }
 }
 
+/// The person mask of the camera frame in the request body, for the
+/// bubble's Blur and Colour backgrounds: the frame is
+/// [`segmentation::FRAME_SIZE`] square RGBA, and the mask is one byte a
+/// pixel, from 0 (the room) to 255 (the person).
+#[tauri::command(async)]
+pub fn webcam_segment(
+    request: tauri::ipc::Request<'_>,
+    app: AppHandle,
+) -> Result<tauri::ipc::Response, String> {
+    let tauri::ipc::InvokeBody::Raw(frame) = request.body() else {
+        return Err("expected the frame's bytes".to_owned());
+    };
+    segmentation::segment_now(&app, frame)
+        .map(tauri::ipc::Response::new)
+        .map_err(|err| err.to_string())
+}
+
 /// Closes the bubble, if it is open.
 pub fn close(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(LABEL)
@@ -238,8 +256,9 @@ pub fn close(app: &AppHandle) {
     }
 }
 
-/// The bubble's page, told the shape, whether to mirror and the camera in
-/// its hash, so it needs nothing from the backend.
+/// The bubble's page, told the shape, whether to mirror, the camera and
+/// what to show behind the person in its hash, so it needs nothing from the
+/// backend.
 fn page_url(recording: &RecordingSettings) -> String {
     let mut url = format!(
         "index.html#/webcam?shape={}",
@@ -251,6 +270,22 @@ fn page_url(recording: &RecordingSettings) -> String {
     if let Some(camera) = &recording.camera {
         url.push_str("&camera=");
         url.push_str(&encode_component(camera));
+    }
+    let background = recording.webcam_background;
+    if background != WebcamBackground::None {
+        url.push_str("&background=");
+        url.push_str(background.as_str());
+    }
+    match background {
+        WebcamBackground::None => {}
+        WebcamBackground::Blur => {
+            url.push_str(&format!("&blur={}", recording.webcam_blur));
+        }
+        WebcamBackground::Color => {
+            let color = recording.webcam_background_color.trim_start_matches('#');
+            url.push_str("&color=");
+            url.push_str(&encode_component(color));
+        }
     }
     url
 }
@@ -556,5 +591,34 @@ mod tests {
             page_url(&recording),
             "index.html#/webcam?shape=arch&mirror=0&camera=a%20b%2Fc%2Bd%3D%C3%A9"
         );
+    }
+
+    #[test]
+    fn the_page_is_told_the_background() {
+        let blur = RecordingSettings {
+            webcam_background: WebcamBackground::Blur,
+            webcam_blur: 72,
+            ..RecordingSettings::default()
+        };
+        assert_eq!(
+            page_url(&blur),
+            "index.html#/webcam?shape=squircle&background=blur&blur=72"
+        );
+        let color = RecordingSettings {
+            webcam_background: WebcamBackground::Color,
+            webcam_background_color: "#336699".into(),
+            ..RecordingSettings::default()
+        };
+        assert_eq!(
+            page_url(&color),
+            "index.html#/webcam?shape=squircle&background=color&color=336699"
+        );
+        // None says nothing, whatever the colour and blur.
+        let none = RecordingSettings {
+            webcam_background_color: "#336699".into(),
+            webcam_blur: 10,
+            ..RecordingSettings::default()
+        };
+        assert_eq!(page_url(&none), "index.html#/webcam?shape=squircle");
     }
 }
