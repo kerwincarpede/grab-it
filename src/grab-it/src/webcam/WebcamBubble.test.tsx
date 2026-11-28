@@ -265,15 +265,21 @@ describe("WebcamBubble", () => {
 });
 
 /** A 2D context that draws nothing, for jsdom, which has no canvas. */
-function fakeContext() {
-  return {
+function fakeContext(canvas?: HTMLCanvasElement) {
+  const context = {
+    canvas,
     globalCompositeOperation: "source-over",
-    drawImage: vi.fn(),
+    /** What each `drawImage` drew, with the composite operation it drew with. */
+    draws: [] as [string, unknown][],
+    drawImage: vi.fn((source: unknown) => {
+      context.draws.push([context.globalCompositeOperation, source]);
+    }),
     clearRect: vi.fn(),
     putImageData: vi.fn(),
     getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(MASK_SIZE * MASK_SIZE * 4).fill(7) })),
     createImageData: vi.fn((width: number, height: number) => ({ data: new Uint8ClampedArray(width * height * 4) })),
   };
+  return context;
 }
 
 /** Where the video frame callbacks live, which jsdom's videos lack. */
@@ -358,8 +364,8 @@ describe("startSegmenting", () => {
   it("cuts the person out of the frame that was segmented", async () => {
     frames = fakeFrames();
     const contexts: ReturnType<typeof fakeContext>[] = [];
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => {
-      const context = fakeContext();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
+      const context = fakeContext(this);
       contexts.push(context);
       return context as unknown as CanvasRenderingContext2D;
     });
@@ -379,7 +385,12 @@ describe("startSegmenting", () => {
     expect(masks.putImageData).toHaveBeenCalledTimes(1);
     const alpha = masks.putImageData.mock.calls[0][0] as { data: Uint8ClampedArray };
     expect(alpha.data[3]).toBe(255);
-    expect(cutOut.drawImage).toHaveBeenCalledTimes(2);
+    expect(cutOut.canvas).toBe(person);
+    // The frame that was sent, then the mask keeping only the person in it.
+    expect(cutOut.draws).toEqual([
+      ["source-over", sent.canvas],
+      ["destination-in", masks.canvas],
+    ]);
     expect(cutOut.globalCompositeOperation).toBe("source-over");
     stop();
     expect(frames.cancelled()).toBe(1);
@@ -490,7 +501,7 @@ describe("WebcamBubble with a background", () => {
     const { container } = render(<WebcamBubble options={{ ...SQUIRCLE, background: "blur", blur: 50 }} />);
     const bubble = screen.getByTestId("webcam");
     await waitFor(() => expect(bubble).toHaveAttribute("data-live", "true"));
-    fireEvent.playing(container.querySelector("video")!);
+    fireEvent.playing(container.querySelector("video.webcam-video")!);
     await act(() => settle(250));
     // Settled, but the room is never shown with a background chosen.
     expect(bubble).toHaveAttribute("data-shown", "false");
@@ -500,7 +511,10 @@ describe("WebcamBubble with a background", () => {
     await waitFor(() => expect(bubble).toHaveAttribute("data-shown", "true"));
     expect(sent).toHaveLength(1);
     expect(bubble).toHaveAttribute("data-background", "blur");
-    expect(container.querySelector("video")).toHaveStyle({ filter: "blur(12px)" });
+    expect(container.querySelector("video.webcam-video")).toHaveStyle({ filter: "blur(12px)" });
+    // The blurred copy behind it reaches past the bubble's edge.
+    expect(container.querySelector(".webcam-backing")).toBeVisible();
+    expect(container.querySelector("video.webcam-backing-video")).toHaveStyle({ filter: "blur(12px)" });
     expect(container.querySelector("canvas.webcam-person")).not.toBeNull();
     expect(container.querySelector(".webcam-backdrop")).toBeNull();
     expect(container.querySelector(".webcam-waiting")).toBeNull();
@@ -537,7 +551,8 @@ describe("WebcamBubble with a background", () => {
     await waitFor(() => expect(bubble).toHaveAttribute("data-shown", "true"));
     expect(bubble).toHaveAttribute("data-background", "color");
     expect(container.querySelector(".webcam-backdrop")).toHaveStyle({ background: "#336699" });
-    expect(container.querySelector("video")?.style.filter).toBe("");
+    expect(container.querySelector<HTMLVideoElement>("video.webcam-video")?.style.filter).toBe("");
+    expect(container.querySelector(".webcam-backing")).toBeNull();
   });
 
   it("shows the plain camera for good once segmenting fails", async () => {
@@ -551,9 +566,10 @@ describe("WebcamBubble with a background", () => {
     act(() => frames!.next());
     await waitFor(() => expect(bubble).toHaveAttribute("data-background", "none"));
     expect(container.querySelector("canvas")).toBeNull();
-    expect(container.querySelector("video")?.style.filter).toBe("");
+    expect(container.querySelector<HTMLVideoElement>("video.webcam-video")?.style.filter).toBe("");
+    expect(container.querySelector(".webcam-backing")).not.toBeVisible();
     // The plain camera fades in as it would with no background.
-    fireEvent.playing(container.querySelector("video")!);
+    fireEvent.playing(container.querySelector("video.webcam-video")!);
     await waitFor(() => expect(bubble).toHaveAttribute("data-shown", "true"));
     // Nothing more is sent.
     act(() => frames!.next());

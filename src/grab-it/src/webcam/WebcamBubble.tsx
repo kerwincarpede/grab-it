@@ -37,6 +37,7 @@ function prefersReducedMotion(): boolean {
 function WebcamBubble({ options = webcamOptions(window.location.hash) }: WebcamBubbleProps) {
   const video = useRef<HTMLVideoElement>(null);
   const person = useRef<HTMLCanvasElement>(null);
+  const backing = useRef<HTMLVideoElement>(null);
   const [live, setLive] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [settled, setSettled] = useState(false);
@@ -69,8 +70,8 @@ function WebcamBubble({ options = webcamOptions(window.location.hash) }: WebcamB
           return;
         }
         stream = opened;
-        const element = video.current;
-        if (element) {
+        for (const element of [video.current, backing.current]) {
+          if (!element) continue;
           element.srcObject = opened;
           // jsdom has no media playback, and returns nothing here.
           const playing = element.play() as Promise<void> | undefined;
@@ -176,6 +177,24 @@ function WebcamBubble({ options = webcamOptions(window.location.hash) }: WebcamB
           <div className="webcam-waiting" aria-hidden="true">
             <span className="webcam-pulse" />
             <CameraIcon size={28} />
+          </div>
+        )}
+        {/*
+          A blur fades the video's edge to see-through, as it blurs in the
+          nothing outside it. A second copy, blurred as much but scaled up
+          past the bubble, fills in behind that edge, so the blurred room
+          reaches the outline. Being blurred, it need not line up.
+        */}
+        {options.background === "blur" && (
+          <div className="webcam-backing" hidden={background !== "blur"} aria-hidden="true">
+            <video
+              ref={backing}
+              className="webcam-backing-video"
+              style={{ filter: `blur(${blurPixels(options.blur)}px)` }}
+              autoPlay
+              muted
+              playsInline
+            />
           </div>
         )}
         <video

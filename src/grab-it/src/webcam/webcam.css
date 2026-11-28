@@ -106,6 +106,43 @@
 }
 
 /*
+ * Behind the blurred video: the same camera, blurred as much and scaled
+ * well past the bubble, so the see-through rim the blur leaves at the
+ * video's edge shows blurred room rather than the frame's dark fill. Its
+ * own edge, and the rim there, fall outside the clip.
+ */
+.webcam-backing {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  clip-path: url(#webcam-clip);
+  opacity: 0;
+  transition: opacity 220ms ease-out;
+}
+
+.webcam-backing[hidden] {
+  display: none;
+}
+
+.webcam[data-shown="true"] .webcam-backing {
+  opacity: 1;
+}
+
+.webcam-backing-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.5);
+}
+
+.webcam-mirrored .webcam-backing-video {
+  transform: scale(-1.5, 1.5);
+}
+
+/*
  * Mirrored as a mirror would, so pointing at the screen points the right
  * way. The clip is flipped too, so once the video is turned round it lands
  * back on the bubble's outline.
@@ -207,7 +244,8 @@
 
   .webcam-video,
   .webcam-person,
-  .webcam-backdrop {
+  .webcam-backdrop,
+  .webcam-backing {
     transition: none;
   }
 }
