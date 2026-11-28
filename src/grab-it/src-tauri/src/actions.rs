@@ -162,10 +162,9 @@ fn releases_tick_hold(action: Action, toggle_chooser: bool) -> bool {
 
 fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool) {
     // Screen, Monitor and Repeat grab the screens without an overlay of
-    // their own, so this comes before any capture is chosen.
-    if releases_tick_hold(action, toggle_chooser) {
-        overlay::release_tick_hold(app);
-    }
+    // their own, so this comes before any capture is chosen. The capture
+    // thread waits for the released windows to leave the screen.
+    let released = releases_tick_hold(action, toggle_chooser) && overlay::release_tick_hold(app);
     if action == Action::Steps {
         crate::steps::toggle(app, crate::steps::Trigger::Keys);
         return;
@@ -284,6 +283,11 @@ fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool) {
     };
     let app = app.clone();
     std::thread::spawn(move || {
+        // Off the main thread, so its event loop can take the held tick's
+        // hidden windows off the screen before they would be grabbed.
+        if released {
+            std::thread::sleep(overlay::OFF_SCREEN_WAIT);
+        }
         let result = match job {
             CaptureJob::Overlay(id) => {
                 overlay::open(&app, action.mode(), action.intent(), chooser, choice, id)

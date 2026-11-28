@@ -350,7 +350,6 @@ pub fn is_open(app: &AppHandle) -> bool {
 
 /// Claims a new session before its capture thread starts.
 pub fn begin(app: &AppHandle, chooser: bool) -> Option<u64> {
-    release_tick_hold(app);
     app.state::<OverlayState>().lock().begin(chooser)
 }
 
@@ -1286,14 +1285,18 @@ fn tick_held() -> std::sync::MutexGuard<'static, TickHold<(Session, bool)>> {
 
 /// About a frame at 30 Hz or faster: long enough for hidden windows to
 /// leave the screen before it is grabbed.
-const OFF_SCREEN_WAIT: Duration = Duration::from_millis(50);
+pub(crate) const OFF_SCREEN_WAIT: Duration = Duration::from_millis(50);
 
 /// Dismisses a session held for the tick at once, ahead of a new start:
 /// before the screens are grabbed, which would show the old overlay, and
 /// without giving the focus back, as the new overlay takes it. Its
-/// windows are hidden first and given a frame to leave the screen, since
-/// destroying them is not in step with the compositor. Returns whether
-/// one was held.
+/// windows are hidden first, since destroying them is not in step with
+/// the compositor. Returns whether one was held.
+///
+/// It does not wait for the windows to leave the screen: this runs on the
+/// main thread, whose event loop has to turn before the platform shows
+/// the change. A start that released a hold waits [`OFF_SCREEN_WAIT`] on
+/// its capture thread instead, before anything is grabbed.
 pub(crate) fn release_tick_hold(app: &AppHandle) -> bool {
     let released = tick_held().release();
     match released {
@@ -1304,7 +1307,6 @@ pub(crate) fn release_tick_hold(app: &AppHandle) -> bool {
                 }
             }
             dismiss(app, &session, false);
-            std::thread::sleep(OFF_SCREEN_WAIT);
             true
         }
         None => false,
