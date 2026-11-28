@@ -39,6 +39,19 @@ pub const FRAME_SIZE: usize = 256;
 /// The bytes of a frame: [`FRAME_SIZE`] square, RGBA.
 pub const FRAME_BYTES: usize = FRAME_SIZE * FRAME_SIZE * 4;
 
+/// Below this the model is not sure enough a pixel is the person, and it
+/// is left out: such faint values are scattered over an empty room and
+/// would show the sharp camera through the blur in specks. Above it, the
+/// rest is stretched back to 0..1, so the person's edge stays soft.
+pub const MIN_PERSON: f32 = 0.25;
+
+/// One mask byte from the model's `alpha`, after [`MIN_PERSON`].
+pub fn mask_value(alpha: f32) -> u8 {
+    let alpha = if alpha.is_nan() { 0. } else { alpha };
+    let person = ((alpha - MIN_PERSON) / (1. - MIN_PERSON)).clamp(0., 1.);
+    (person * 255.).round() as u8
+}
+
 #[derive(Debug, Clone)]
 pub enum SegmentationError {
     /// The model could not be loaded.
@@ -126,10 +139,7 @@ impl Segmenter {
                 alphas.shape()
             )));
         }
-        Ok(alphas
-            .iter()
-            .map(|alpha| (alpha.clamp(0., 1.) * 255.).round() as u8)
-            .collect())
+        Ok(alphas.iter().map(|alpha| mask_value(*alpha)).collect())
     }
 }
 
@@ -289,6 +299,21 @@ mod tests {
                 "{err:?}"
             );
         }
+    }
+
+    #[test]
+    fn faint_mask_values_are_dropped_and_confident_ones_kept() {
+        assert_eq!(mask_value(-0.5), 0);
+        assert_eq!(mask_value(0.), 0);
+        assert_eq!(mask_value(0.05), 0);
+        assert_eq!(mask_value(MIN_PERSON), 0);
+        assert_eq!(mask_value(f32::NAN), 0);
+        // Above the cut-off the edge ramps up softly to the person.
+        let edge = mask_value(0.625);
+        assert!((120..=135).contains(&edge), "{edge}");
+        assert!(mask_value(0.4) < mask_value(0.6));
+        assert_eq!(mask_value(1.), 255);
+        assert_eq!(mask_value(1.5), 255);
     }
 
     #[test]
