@@ -255,7 +255,10 @@ function RecordBar({ status: given }: RecordBarProps) {
 
   // Enter presses the main button and Esc cancels a countdown, when the bar
   // has the focus. Space pauses and resumes. Esc never stops a recording.
-  useEffect(() => {
+  // A layout effect, so the listener sees the status as soon as the bar shows
+  // it: a passive effect can run after the next key press, which the stale
+  // listener would then drop.
+  useLayoutEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (!status || menuOpen || !isBareKey(event)) return;
       if (status.phase === "countdown") {
