@@ -350,6 +350,7 @@ pub fn is_open(app: &AppHandle) -> bool {
 
 /// Claims a new session before its capture thread starts.
 pub fn begin(app: &AppHandle, chooser: bool) -> Option<u64> {
+    release_tick_hold(app);
     app.state::<OverlayState>().lock().begin(chooser)
 }
 
@@ -452,6 +453,10 @@ pub fn clear_stale(app: &AppHandle) -> bool {
 
 /// Dismisses only the chooser claimed by an earlier invocation.
 pub fn cancel_chooser(app: &AppHandle) -> bool {
+    // The chooser's shortcut during the tick closes it, as it would the chooser.
+    if release_tick_hold(app) {
+        return true;
+    }
     let state = app.state::<OverlayState>();
     let Some(previous) = state.lock().take_chooser() else {
         return false;
@@ -1234,12 +1239,82 @@ fn holds_for_tick(
         && matches!(intent, Intent::Capture | Intent::Text | Intent::Colour)
 }
 
-/// Dismisses `session`'s windows once the tick has shown for [`TICK_HOLD`].
+/// A finished session kept on screen for the toolbar's tick, so a new
+/// start or the chooser's shortcut can dismiss it first, and the delayed
+/// dismiss knows when it already went.
+struct TickHold<T> {
+    next: u64,
+    held: Option<(u64, T)>,
+}
+
+impl<T> TickHold<T> {
+    const fn new() -> Self {
+        Self {
+            next: 0,
+            held: None,
+        }
+    }
+
+    /// Holds `item`, giving back any held before it, and its id.
+    fn hold(&mut self, item: T) -> (u64, Option<T>) {
+        self.next += 1;
+        let before = self.held.replace((self.next, item)).map(|(_, item)| item);
+        (self.next, before)
+    }
+
+    /// Lets the held item go now, for a new start or the chooser's shortcut.
+    fn release(&mut self) -> Option<T> {
+        self.held.take().map(|(_, item)| item)
+    }
+
+    /// Lets the item held as `id` go, if nothing released it before.
+    fn release_if(&mut self, id: u64) -> Option<T> {
+        match &self.held {
+            Some((held, _)) if *held == id => self.release(),
+            _ => None,
+        }
+    }
+}
+
+/// The session held for the tick, with whether its dismiss gives the
+/// focus back.
+static TICK_HELD: Mutex<TickHold<(Session, bool)>> = Mutex::new(TickHold::new());
+
+fn tick_held() -> std::sync::MutexGuard<'static, TickHold<(Session, bool)>> {
+    TICK_HELD.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Dismisses a session held for the tick at once, ahead of a new start:
+/// before it freezes the screens, which would show the old overlay, and
+/// without giving the focus back, as the new overlay takes it. Returns
+/// whether one was held.
+fn release_tick_hold(app: &AppHandle) -> bool {
+    let released = tick_held().release();
+    match released {
+        Some((session, _)) => {
+            dismiss(app, &session, false);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Dismisses `session`'s windows once the tick has shown for [`TICK_HOLD`],
+/// unless a new start or the chooser's shortcut dismissed it before.
 fn dismiss_after_tick(app: AppHandle, session: Session, give_back: bool) {
+    let (id, before) = tick_held().hold((session, give_back));
+    if let Some((before, _)) = before {
+        dismiss(&app, &before, false);
+    }
     std::thread::spawn(move || {
         std::thread::sleep(TICK_HOLD);
         let main = app.clone();
-        let _ = main.run_on_main_thread(move || dismiss(&app, &session, give_back));
+        let _ = main.run_on_main_thread(move || {
+            let released = tick_held().release_if(id);
+            if let Some((session, give_back)) = released {
+                dismiss(&app, &session, give_back);
+            }
+        });
     });
 }
 
@@ -2551,6 +2626,24 @@ mod tests {
         assert!(abandoned(late, &[false, false]));
         // Every window gone.
         assert!(abandoned(late, &[]));
+    }
+
+    #[test]
+    fn a_new_start_releases_the_tick_hold_and_the_late_dismiss_does_nothing() {
+        let mut hold = TickHold::new();
+        let (first, before) = hold.hold("first");
+        assert_eq!(before, None);
+        // A new start (or the chooser's shortcut) dismisses it at once.
+        assert_eq!(hold.release(), Some("first"));
+        assert_eq!(hold.release(), None);
+        // Its delayed dismiss then finds nothing, even with another held.
+        let (second, _) = hold.hold("second");
+        assert_eq!(hold.release_if(first), None);
+        assert_eq!(hold.release_if(second), Some("second"));
+        assert_eq!(hold.release_if(second), None);
+        // A hold over a hold gives the older one back to dismiss.
+        hold.hold("third");
+        assert_eq!(hold.hold("fourth").1, Some("third"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { CheckIcon, CloseIcon, TimerIcon } from "../app/icons";
 import type { RecordingSource } from "../settings/api";
 import type { CaptureKind } from "../app/api";
@@ -194,6 +194,10 @@ function Fold({ mode, children }: { mode: string; children: ReactNode }) {
   const fold = useRef<HTMLDivElement>(null);
   const width = useRef(0);
   const shown = useRef(mode);
+  // The fold's end, kept across renders: the toolbar re-renders often
+  // (pointer moves, the loupe, the microphone level) while a fold runs.
+  const ending = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(ending.current), []);
   useLayoutEffect(() => {
     const element = fold.current;
     if (!element) return;
@@ -203,17 +207,16 @@ function Fold({ mode, children }: { mode: string; children: ReactNode }) {
     if (shown.current === mode) return;
     shown.current = mode;
     if (from === to || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    window.clearTimeout(ending.current);
     element.dataset.folding = "true";
     element.style.width = `${from}px`;
     // Laid out at the old width first, so the change animates.
     void element.offsetWidth;
     element.style.width = `${to}px`;
-    const done = () => {
+    ending.current = window.setTimeout(() => {
       element.dataset.folding = "false";
       element.style.width = "";
-    };
-    const timer = window.setTimeout(done, FOLD_MS + 40);
-    return () => window.clearTimeout(timer);
+    }, FOLD_MS + 40);
   });
   return (
     <div className="overlay-fold" ref={fold} data-testid="overlay-fold" data-mode={mode}>
@@ -226,7 +229,7 @@ function Fold({ mode, children }: { mode: string; children: ReactNode }) {
 }
 
 /** How long a fold takes, in ms; matches `.overlay-fold`'s transition. */
-const FOLD_MS = 220;
+export const FOLD_MS = 220;
 
 export interface ChooserToolbarProps {
   tool: Tool;
