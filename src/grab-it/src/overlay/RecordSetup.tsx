@@ -56,13 +56,16 @@ function withFormat(recording: RecordingSettings, choice: FormatChoice): Recordi
  * the overlay, which would otherwise let go of the held selection.
  */
 function swallowClick() {
-  const stop = (event: Event) => event.stopPropagation();
-  window.addEventListener("mouseup", stop, { capture: true, once: true });
-  window.addEventListener("click", stop, { capture: true, once: true });
-  window.setTimeout(() => {
-    window.removeEventListener("mouseup", stop, true);
-    window.removeEventListener("click", stop, true);
-  }, 500);
+  const stopClick = (event: Event) => event.stopPropagation();
+  const stopUp = (event: globalThis.MouseEvent) => {
+    if (event.button !== 0) return;
+    event.stopPropagation();
+    window.removeEventListener("mouseup", stopUp, true);
+    // The click, if any, comes straight after its mouseup.
+    window.setTimeout(() => window.removeEventListener("click", stopClick, true), 0);
+  };
+  window.addEventListener("mouseup", stopUp, true);
+  window.addEventListener("click", stopClick, { capture: true, once: true });
 }
 
 /** A row of a chip's list: an option to pick, or a separator, heading or action between them. */
@@ -99,8 +102,11 @@ export function ChipMenu({ label, icon, title, disabled, up, checks = false, tip
     // A first click outside only closes it: the overlay never sees it.
     const close = (event: globalThis.MouseEvent) => {
       if (root.current?.contains(event.target as Node)) return;
-      if (!(event.target instanceof Element && event.target.closest('[role="menu"], [role="dialog"]'))) {
+      const inList = event.target instanceof Element && event.target.closest('[role="menu"], [role="dialog"]');
+      if (event.button === 0 && !inList) {
         event.stopPropagation();
+        // The focus stays where it was, as for any click on the toolbar.
+        event.preventDefault();
         swallowClick();
       }
       setOpen(false);
@@ -466,8 +472,11 @@ function OptionsPopover({ up, countdown, children }: { up: boolean; countdown: s
     // A first click outside only closes it: the overlay never sees it.
     const close = (event: globalThis.MouseEvent) => {
       if (root.current?.contains(event.target as Node)) return;
-      if (!(event.target instanceof Element && event.target.closest('[role="menu"], [role="dialog"]'))) {
+      const inList = event.target instanceof Element && event.target.closest('[role="menu"], [role="dialog"]');
+      if (event.button === 0 && !inList) {
         event.stopPropagation();
+        // The focus stays where it was, as for any click on the toolbar.
+        event.preventDefault();
         swallowClick();
       }
       setOpen(false);

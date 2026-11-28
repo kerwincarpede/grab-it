@@ -2877,6 +2877,30 @@ describe("scrolling capture", () => {
       expect(overlay).toHaveAttribute("data-selected", "true");
     });
 
+    it("closes a popover from a toolbar button without moving the focus, so Enter still records", async () => {
+      const calls = mockOverlay({ allInOne: true, choice: { intent: "record", mode: "region", delaySeconds: 0 } });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+      fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 100 });
+      fireEvent.mouseMove(overlay, { clientX: 300, clientY: 200 });
+      fireEvent.mouseUp(overlay, { button: 0, clientX: 300, clientY: 200 });
+      const options = await screen.findByTestId("overlay-record-setup");
+      fireEvent.click(within(options).getByRole("button", { name: "Recording options" }));
+      const record = group("Modes").getByRole("button", { name: "Record" });
+
+      const press = fireEvent.mouseDown(record, { button: 0 });
+      // Its default, which would focus the button, is prevented.
+      expect(press).toBe(false);
+      fireEvent.mouseUp(record, { button: 0 });
+      fireEvent.click(record);
+      expect(screen.queryByRole("dialog", { name: "Recording options" })).not.toBeInTheDocument();
+      expect(record).not.toHaveFocus();
+      // Record stays on, and Enter starts the recording.
+      expect(overlay).toHaveAttribute("data-intent", "record");
+      fireEvent.keyDown(window, { key: "Enter", code: "Enter" });
+      await waitFor(() => expect(calls.map((c) => c.cmd)).toContain("overlay_finish"));
+    });
+
     it("lays Recording options out as the prototype: heading, rows and switches", async () => {
       mockOverlay({ allInOne: true, choice: { intent: "record", mode: "region", delaySeconds: 0 } });
       render(<RegionOverlay />);
