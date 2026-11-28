@@ -1284,15 +1284,27 @@ fn tick_held() -> std::sync::MutexGuard<'static, TickHold<(Session, bool)>> {
     TICK_HELD.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+/// About a frame at 30 Hz or faster: long enough for hidden windows to
+/// leave the screen before it is grabbed.
+const OFF_SCREEN_WAIT: Duration = Duration::from_millis(50);
+
 /// Dismisses a session held for the tick at once, ahead of a new start:
-/// before it freezes the screens, which would show the old overlay, and
-/// without giving the focus back, as the new overlay takes it. Returns
-/// whether one was held.
-fn release_tick_hold(app: &AppHandle) -> bool {
+/// before the screens are grabbed, which would show the old overlay, and
+/// without giving the focus back, as the new overlay takes it. Its
+/// windows are hidden first and given a frame to leave the screen, since
+/// destroying them is not in step with the compositor. Returns whether
+/// one was held.
+pub(crate) fn release_tick_hold(app: &AppHandle) -> bool {
     let released = tick_held().release();
     match released {
         Some((session, _)) => {
+            for label in session.frames.keys() {
+                if let Some(window) = app.get_webview_window(label) {
+                    let _ = window.hide();
+                }
+            }
             dismiss(app, &session, false);
+            std::thread::sleep(OFF_SCREEN_WAIT);
             true
         }
         None => false,

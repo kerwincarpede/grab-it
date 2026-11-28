@@ -152,7 +152,20 @@ pub fn start_from_hotkey(app: &AppHandle, action: Action) {
     dispatch(app, action, action == Action::AllInOne);
 }
 
+/// Whether a start first closes an overlay still held for the toolbar's
+/// tick, so its windows are off screen before anything is grabbed: every
+/// start does, except the chooser's own shortcut, whose
+/// [`overlay::cancel_chooser`] closes it instead of opening a new chooser.
+fn releases_tick_hold(action: Action, toggle_chooser: bool) -> bool {
+    !(toggle_chooser && action == Action::AllInOne)
+}
+
 fn dispatch(app: &AppHandle, action: Action, toggle_chooser: bool) {
+    // Screen, Monitor and Repeat grab the screens without an overlay of
+    // their own, so this comes before any capture is chosen.
+    if releases_tick_hold(action, toggle_chooser) {
+        overlay::release_tick_hold(app);
+    }
     if action == Action::Steps {
         crate::steps::toggle(app, crate::steps::Trigger::Keys);
         return;
@@ -681,6 +694,27 @@ pub fn report_failure(app: &AppHandle, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_start_but_the_chooser_toggle_first_closes_a_held_tick() {
+        for action in [
+            Action::Screen,
+            Action::Monitor(0),
+            Action::Repeat,
+            Action::Region,
+            Action::Window,
+            Action::Text,
+            Action::Colour,
+            Action::Record,
+            Action::Scroll,
+            Action::Steps,
+            Action::AllInOne,
+        ] {
+            assert!(releases_tick_hold(action, false), "{action:?}");
+        }
+        // The chooser's shortcut closes the held one through cancel_chooser.
+        assert!(!releases_tick_hold(Action::AllInOne, true));
+    }
 
     #[test]
     fn actions_know_their_capture_mode() {
