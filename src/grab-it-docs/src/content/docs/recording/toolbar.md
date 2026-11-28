@@ -11,7 +11,7 @@ While you record, a small toolbar floats over the screen. On Windows and macOS i
 
 From left to right it shows:
 
-- a pulsing red dot, **Recording** and the time recorded so far (a GIF also shows its one-minute limit, like `0:12 / 1:00`),
+- a pulsing red dot, **Recording** and the time recorded so far (a GIF also shows its one-minute limit, like `00:12 / 01:00`),
 - a small level meter and the microphone button, when you record a microphone,
 - **Pause**,
 - **⋯**, which opens the menu,

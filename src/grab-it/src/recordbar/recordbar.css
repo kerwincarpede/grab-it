@@ -44,7 +44,8 @@
   justify-content: flex-end;
 }
 
-.recordbar button {
+/* A base the `.bar-*` buttons build on: no weight here outranks theirs. */
+:where(.recordbar) button {
   font: inherit;
   color: inherit;
   background: transparent;

@@ -621,6 +621,10 @@ fn create(
             .content_protected(true)
             // The toolbar must not pull the keyboard away from what is recorded.
             .focused(false)
+            // Because it is never focused, macOS would spend the first click
+            // on activating it while another app is in front, so Stop or
+            // Start now would need two clicks. Let that first click through.
+            .accept_first_mouse(true)
             .shadow(false)
             .visible(false)
             .build()?;

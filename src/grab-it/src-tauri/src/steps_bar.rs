@@ -130,6 +130,10 @@ pub(crate) fn open_pill(
         // It must not pull the keyboard away from the task being shown,
         // or close a menu that is about to be captured.
         .focused(false)
+        // As the recording toolbar: never focused, so macOS would otherwise
+        // spend the first click on a button such as Start now or Finish on
+        // activating the pill.
+        .accept_first_mouse(true)
         .shadow(false)
         .visible(false)
         .build()?;

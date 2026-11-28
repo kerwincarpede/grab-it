@@ -49,9 +49,10 @@ describe("the clock", () => {
     expect(recordedMs({ ...status, startedAt: null }, 20_000)).toBe(0);
   });
 
-  it("reads as minutes and seconds, and hours once it runs that long", () => {
-    expect(formatClock(0)).toBe("0:00");
-    expect(formatClock(65_400)).toBe("1:05");
+  it("reads as two-digit minutes and seconds, and hours once it runs that long", () => {
+    expect(formatClock(0)).toBe("00:00");
+    expect(formatClock(16_200)).toBe("00:16");
+    expect(formatClock(65_400)).toBe("01:05");
     expect(formatClock(3_725_000)).toBe("1:02:05");
   });
 
@@ -67,7 +68,7 @@ describe("RecordBar", () => {
   it("shows the time, the microphone, Pause and Stop while it records", async () => {
     mockBackend(RECORDING);
     render(<RecordBar />);
-    expect(await screen.findByRole("timer")).toHaveTextContent(/^1:0\d$/);
+    expect(await screen.findByRole("timer")).toHaveTextContent(/^01:0\d$/);
     expect(screen.getByRole("button", { name: "Mute the microphone" })).toBeInTheDocument();
     expect(screen.getByTestId("recordbar-meter")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
@@ -121,7 +122,7 @@ describe("RecordBar", () => {
   it("shows a GIF's limit beside its time", async () => {
     mockBackend({ ...RECORDING, format: "gif", maxSeconds: 60, microphone: null });
     render(<RecordBar />);
-    expect(await screen.findByRole("timer")).toHaveTextContent(/^1:0\d \/ 1:00$/);
+    expect(await screen.findByRole("timer")).toHaveTextContent(/^01:0\d \/ 01:00$/);
     expect(screen.queryByRole("button", { name: /microphone/ })).not.toBeInTheDocument();
   });
 
