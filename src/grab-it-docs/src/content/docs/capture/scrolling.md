@@ -48,7 +48,7 @@ If the page doesn't move when Grab-it scrolls, or moves but the views don't line
 
 ## Finish
 
-While it runs, a capture bar at the top of the screen shows a pulsing blue dot, **Scrolling**, the stitched height so far (like **4,800 px**), who is scrolling (**Grab-it is scrolling** or **You're scrolling**), a stripe for how far the image is toward its 30,000 px limit, a live preview of the newest part and what to do next. The bar stays out of the image. **Finish**, or `Enter` once you've clicked the bar, saves one stitched image and shows **Saving…** until it is saved; **✕** (Cancel) or `Esc` throws it away. At 30,000 px along the scroll direction the image stops growing and the bar says **Reached the 30,000 px limit. Choose Finish to save it.**
+While it runs, a capture bar at the top of the screen shows a pulsing blue dot, **Scrolling**, the stitched length so far along the scroll direction (like **4,800 px**), who is scrolling (**Grab-it is scrolling** or **You're scrolling**), a stripe for how far the image is toward its 30,000 px limit, a live preview of the newest part and what to do next. The bar stays out of the image. **Finish**, or `Enter` once you've clicked the bar, saves one stitched image and shows **Saving…** until it is saved; **✕** (Cancel) or `Esc` throws it away. At 30,000 px along the scroll direction the image stops growing and the bar says **Reached the 30,000 px limit. Choose Finish to save it.**
 
 On Linux (X11) the bar moves outside the area you chose. When the area leaves it no room, it hides briefly for each view Grab-it reads.
 

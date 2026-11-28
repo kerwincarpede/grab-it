@@ -235,13 +235,21 @@ describe("RecordBar", () => {
   });
 
   it("pauses with Space and never stops on Esc while recording", async () => {
-    const backend = mockBackend(RECORDING);
+    // No microphone, so no level is polled while the keys are pressed.
+    const backend = mockBackend({ ...RECORDING, microphone: null });
     render(<RecordBar />);
     await screen.findByRole("button", { name: "Pause" });
     fireEvent.keyDown(window, { key: "Escape" });
     fireEvent.keyDown(window, { key: " " });
-    await waitFor(() => expect(called(backend, "record_pause")[0].payload).toEqual({ paused: true }));
+    await waitFor(() => expect(called(backend, "record_pause")).toHaveLength(1));
+    expect(called(backend, "record_pause")[0].payload).toEqual({ paused: true });
     expect(called(backend, "record_stop")).toHaveLength(0);
+  });
+
+  it("stops and saves with Enter while recording", async () => {
+    const backend = mockBackend({ ...RECORDING, microphone: null });
+    render(<RecordBar />);
+    await screen.findByRole("button", { name: "Stop" });
     fireEvent.keyDown(window, { key: "Enter" });
     await waitFor(() => expect(called(backend, "record_stop")).toHaveLength(1));
   });

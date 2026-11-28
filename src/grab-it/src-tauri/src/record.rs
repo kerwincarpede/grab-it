@@ -1009,7 +1009,10 @@ pub fn start_with(
         .spawn(move || {
             let session = recorder;
             let controls = Arc::clone(&session.controls);
-            let counted = count_down(&controls, recording.countdown);
+            let counted = count_down(
+                &controls,
+                Duration::from_secs(u64::from(recording.countdown)),
+            );
             let result = if counted {
                 // The overlay was closed a moment ago; give the desktop time
                 // to repaint so the first frame shows the screen, not the
@@ -1162,11 +1165,11 @@ pub fn start_with(
     Ok(session)
 }
 
-/// Waits `seconds` before a recording starts, or until Start now ends the
+/// Waits `length` before a recording starts, or until Start now ends the
 /// countdown early. False when it was stopped meanwhile, so there is
 /// nothing to record.
-fn count_down(controls: &Controls, seconds: u32) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(u64::from(seconds));
+fn count_down(controls: &Controls, length: Duration) -> bool {
+    let deadline = Instant::now() + length;
     while Instant::now() < deadline {
         if controls.stopped() {
             return false;
@@ -1526,7 +1529,7 @@ mod tests {
         let controls = Controls::default();
         controls.start_now.store(true, Ordering::SeqCst);
         let began = Instant::now();
-        assert!(count_down(&controls, 60));
+        assert!(count_down(&controls, Duration::from_secs(60)));
         assert!(began.elapsed() < Duration::from_secs(1));
     }
 
@@ -1535,13 +1538,16 @@ mod tests {
         let controls = Controls::default();
         controls.start_now.store(true, Ordering::SeqCst);
         controls.stop.store(true, Ordering::SeqCst);
-        assert!(!count_down(&controls, 60));
+        assert!(!count_down(&controls, Duration::from_secs(60)));
     }
 
     #[test]
     fn a_countdown_left_alone_runs_its_length() {
         let controls = Controls::default();
-        assert!(count_down(&controls, 0));
+        let length = Duration::from_millis(60);
+        let began = Instant::now();
+        assert!(count_down(&controls, length));
+        assert!(began.elapsed() >= length);
     }
 
     #[test]

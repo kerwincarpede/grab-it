@@ -81,12 +81,20 @@ describe("ScrollBar", () => {
       emit(SCROLL_BAR_STATE_EVENT, {
         ...STATE,
         height: 6000,
+        length: 6000,
         autoScrolling: false,
         message: "Too fast to join. Scroll back a little.",
       }),
     );
     expect(await screen.findByText("6,000 px")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Too fast to join. Scroll back a little.");
+  });
+
+  it("shows the length along the scroll axis, so a sideways scroll grows too", async () => {
+    backend({ ...STATE, width: 9600, height: 900, length: 9600 });
+    render(<ScrollBar />);
+    expect(await screen.findByText("9,600 px")).toBeInTheDocument();
+    expect(screen.queryByText("900 px")).not.toBeInTheDocument();
   });
 
   it("puts the chip in the toolbar row, after the stitched height", async () => {

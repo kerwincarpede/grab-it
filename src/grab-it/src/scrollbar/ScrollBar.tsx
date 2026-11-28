@@ -3,7 +3,7 @@ import "../recordbar/countdown.css";
 import "./scrollbar.css";
 import { CloseIcon } from "../app/icons";
 import { isBareKey } from "../recordbar/countdownState";
-import { cancelScroll, finishScroll, stitchedHeight, onScrollBarState, scrollBarState, type ScrollBarState } from "./api";
+import { cancelScroll, finishScroll, stitchedLength, onScrollBarState, scrollBarState, type ScrollBarState } from "./api";
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -24,7 +24,7 @@ function keepFocus(event: MouseEvent) {
 
 /**
  * The bar shown while a scrolling capture runs (src-tauri/src/scroll_bar.rs),
- * in the capture toolbar's style: a pulsing blue dot, the stitched height,
+ * in the capture toolbar's style: a pulsing blue dot, the stitched length,
  * who is scrolling, Finish and Cancel, over a progress stripe toward the
  * length limit, what to do and a live preview of the newest part. The bar never takes the focus, so Esc reaches Cancel through a
  * global shortcut the capture holds while it runs (src-tauri/src/scroll.rs);
@@ -102,7 +102,7 @@ function ScrollBar() {
             <span className="bar-strong scrollbar-title">{saving ? "Saving" : "Scrolling"}</span>
             <span className="bar-sep" aria-hidden="true" />
             <span className="scrollbar-length" title={state ? `${state.width} × ${state.height}` : undefined}>
-              {state ? stitchedHeight(state.height) : "Starting…"}
+              {state ? stitchedLength(state.length) : "Starting…"}
             </span>
             {state && !saving && !state.capped && (
               <span className="scrollbar-who" data-who={state.autoScrolling ? "grab-it" : "me"}>
