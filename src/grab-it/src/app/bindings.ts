@@ -1658,6 +1658,11 @@ export type OverlayInfo_Deserialize = {
 	 *  toolbar shows a tick and the result before the overlay closes.
 	 */
 	toolbarTick: boolean,
+	/**
+	 *  Settings → Capture's Copy to clipboard: the tick says Copied only
+	 *  when a screenshot was copied.
+	 */
+	copyToClipboard: boolean,
 };
 
 export type OverlayInfo_Serialize = {
@@ -1718,6 +1723,11 @@ export type OverlayInfo_Serialize = {
 	 *  toolbar shows a tick and the result before the overlay closes.
 	 */
 	toolbarTick: boolean,
+	/**
+	 *  Settings → Capture's Copy to clipboard: the tick says Copied only
+	 *  when a screenshot was copied.
+	 */
+	copyToClipboard: boolean,
 };
 
 /**

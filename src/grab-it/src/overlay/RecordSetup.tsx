@@ -4,19 +4,16 @@ import {
   CameraOffIcon,
   CheckIcon,
   ChevronDownIcon,
-  ClickIcon,
   CloseIcon,
   GripIcon,
-  KeyboardIcon,
   MicIcon,
   MicOffIcon,
-  NoiseIcon,
   RestartIcon,
   SlidersIcon,
-  SpeakerIcon,
   TimerIcon,
 } from "../app/icons";
 import {
+  RECORDING_COUNTDOWNS,
   recordsMicrophone,
   recordsSystemSound,
   type RecordingSettings,
@@ -27,6 +24,7 @@ import {
   COUNTDOWN_USE,
   countdownText,
   microphoneLabel,
+  perceivedLevel,
   nextCountdown,
   withCamera,
   withMicrophone,
@@ -53,6 +51,20 @@ function withFormat(recording: RecordingSettings, choice: FormatChoice): Recordi
   return { ...recording, format: "mp4", fps: choice === "mp4-60" ? 60 : 30 };
 }
 
+/**
+ * Keeps the mouseup and click of a press that closed a list from reaching
+ * the overlay, which would otherwise let go of the held selection.
+ */
+function swallowClick() {
+  const stop = (event: Event) => event.stopPropagation();
+  window.addEventListener("mouseup", stop, { capture: true, once: true });
+  window.addEventListener("click", stop, { capture: true, once: true });
+  window.setTimeout(() => {
+    window.removeEventListener("mouseup", stop, true);
+    window.removeEventListener("click", stop, true);
+  }, 500);
+}
+
 /** A row of a chip's list: an option to pick, or a separator, heading or action between them. */
 type ChipRow =
   | { kind?: "option"; key: string; title: string; selected: boolean; onPick: () => void }
@@ -73,26 +85,35 @@ interface ChipMenuProps {
   checks?: boolean;
   /** Its tooltip; without one, the title is. */
   tip?: TipText;
+  /** An icon button with no chevron, as the toolbar's microphone and camera. */
+  bare?: boolean;
   options: ChipRow[];
 }
 
 /** A chip that opens a short list to pick from. */
-export function ChipMenu({ label, icon, title, disabled, up, checks = false, tip, options }: ChipMenuProps) {
+export function ChipMenu({ label, icon, title, disabled, up, checks = false, tip, bare = false, options }: ChipMenuProps) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
+    // A first click outside only closes it: the overlay never sees it.
     const close = (event: globalThis.MouseEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
+      if (root.current?.contains(event.target as Node)) return;
+      if (!(event.target instanceof Element && event.target.closest('[role="menu"], [role="dialog"]'))) {
+        event.stopPropagation();
+        swallowClick();
+      }
+      setOpen(false);
     };
-    window.addEventListener("mousedown", close);
-    return () => window.removeEventListener("mousedown", close);
+    window.addEventListener("mousedown", close, true);
+    return () => window.removeEventListener("mousedown", close, true);
   }, [open]);
   const chip = (describedBy?: string) => (
     <button
       type="button"
       className="overlay-tool overlay-chip"
       data-icon-only={label === undefined ? "true" : undefined}
+      data-bare={bare ? "true" : undefined}
       aria-haspopup="menu"
       aria-expanded={open}
       aria-label={title}
@@ -103,7 +124,7 @@ export function ChipMenu({ label, icon, title, disabled, up, checks = false, tip
     >
       {icon}
       {label !== undefined && <span>{label}</span>}
-      <ChevronDownIcon size={12} />
+      {!bare && <ChevronDownIcon size={12} />}
     </button>
   );
   return (
@@ -176,9 +197,8 @@ export function ChipMenu({ label, icon, title, disabled, up, checks = false, tip
 /** What Remove background noise does, on the toolbar. */
 const NOISE_USE = "Cleans fan hum, keyboard clatter and room noise from your microphone.";
 
-interface IconToggleProps {
+interface SwitchRowProps {
   label: string;
-  icon: ReactNode;
   on: boolean;
   disabled?: boolean;
   /** What its tooltip says it does. */
@@ -186,33 +206,12 @@ interface IconToggleProps {
   onToggle: () => void;
 }
 
-/** An option as an icon, tinted when on; its tooltip names it. */
-function IconToggle({ label, icon, on, disabled, use, onToggle }: IconToggleProps) {
-  return (
-    <Tipped tip={{ name: `${label} · ${on ? "on" : "off"}`, use }}>
-      {(describedBy) => (
-        <button
-          type="button"
-          className="overlay-tool overlay-setup-icon"
-          aria-pressed={on}
-          aria-label={label}
-          aria-describedby={describedBy}
-          disabled={disabled}
-          onClick={onToggle}
-        >
-          {icon}
-        </button>
-      )}
-    </Tipped>
-  );
-}
-
 interface RecordOptionsFieldsProps {
   options: RecordingOptions;
   /** Lists and tooltips open above, for a toolbar in the lower half. */
   up: boolean;
-  /** The microphone and webcam chips as icons alone, for a toolbar short of room. */
-  iconsOnly: boolean;
+  /** Unused: the microphone and camera are always icons, their tooltips name the choice. */
+  iconsOnly?: boolean;
   /** The chosen microphone's level, 0 to 1, while setup listens to it; null for none. */
   level?: number | null;
 }
@@ -224,7 +223,7 @@ interface RecordOptionsFieldsProps {
  * toolbar and in the middle of Capture & record's toolbar while Record
  * is on.
  */
-export function RecordOptionsFields({ options, up, iconsOnly, level = null }: RecordOptionsFieldsProps) {
+export function RecordOptionsFields({ options, up, level = null }: RecordOptionsFieldsProps) {
   const { recording, microphones, cameras, refreshingCameras, refreshCameras, system, error, save } = options;
   if (!recording) {
     return <span className="overlay-record-note">{error ?? "Loading recording options…"}</span>;
@@ -288,13 +287,15 @@ export function RecordOptionsFields({ options, up, iconsOnly, level = null }: Re
     },
   ];
   const format = FORMAT_CHOICES.find((choice) => choice.value === formatChoice(recording))?.title;
-  const micIcon = micOn && !gif ? <MicIcon size={14} /> : <MicOffIcon size={14} />;
+  const micIcon = micOn && !gif ? <MicIcon size={16} /> : <MicOffIcon size={16} />;
+  const countdown = countdownText(recording.countdown);
   return (
     <div className="overlay-record-setup" data-testid="overlay-record-setup" role="group" aria-label="Recording options">
       <ChipMenu
         title="Microphone"
         up={up}
         checks
+        bare
         disabled={gif}
         icon={
           <>
@@ -302,67 +303,102 @@ export function RecordOptionsFields({ options, up, iconsOnly, level = null }: Re
             {level !== null && micOn && !gif && <MicLevel level={level} />}
           </>
         }
-        label={iconsOnly ? undefined : micLabel}
-        // Shrunk to its icon, the chip's tooltip names the choice.
-        tip={{ name: "Microphone", use: iconsOnly ? `${micLabel}. ${micUse}` : micUse }}
+        // An icon alone: its tooltip names the choice.
+        tip={{ name: "Microphone", use: `${micLabel}. ${micUse}` }}
         options={micOptions}
       />
       <ChipMenu
         title="Camera"
         up={up}
         checks
-        icon={webcamOn ? <CameraIcon size={14} /> : <CameraOffIcon size={14} />}
-        label={iconsOnly ? undefined : webcamLabel}
-        tip={{ name: "Camera", use: iconsOnly ? `${webcamLabel}. ${webcamUse}` : webcamUse }}
+        bare
+        icon={webcamOn ? <CameraIcon size={16} /> : <CameraOffIcon size={16} />}
+        tip={{ name: "Camera", use: `${webcamLabel}. ${webcamUse}` }}
         options={cameraRows}
       />
-      <OptionsPopover up={up}>
-        <ChipMenu
-          title="Format"
-          up={false}
-          label={format}
-          tip={{ name: "Format", use: "MP4 at 30 or 60 fps, or a silent GIF of up to a minute." }}
-          options={FORMAT_CHOICES.map((choice) => ({
-            key: choice.value,
-            title: choice.title,
-            selected: choice.value === formatChoice(recording),
-            onPick: () => save(withFormat(recording, choice.value)),
-          }))}
+      <OptionsPopover up={up} countdown={recording.countdown > 0 ? countdown.text : null}>
+        <div className="overlay-options-heading">Recording options</div>
+        <OptionRow label="Format">
+          <ChipMenu
+            title="Format"
+            up={false}
+            checks
+            label={format}
+            tip={{ name: "Format", use: "MP4 at 30 or 60 fps, or a silent GIF of up to a minute." }}
+            options={FORMAT_CHOICES.map((choice) => ({
+              key: choice.value,
+              title: choice.title,
+              selected: choice.value === formatChoice(recording),
+              onPick: () => save(withFormat(recording, choice.value)),
+            }))}
+          />
+        </OptionRow>
+        <OptionRow label="Countdown">
+          <ChipMenu
+            title="Countdown"
+            up={false}
+            checks
+            label={countdown.text}
+            tip={{ name: "Countdown", use: COUNTDOWN_USE }}
+            options={RECORDING_COUNTDOWNS.map((seconds) => ({
+              key: String(seconds),
+              title: countdownText(seconds).text,
+              selected: seconds === recording.countdown,
+              onPick: () => save({ ...recording, countdown: seconds }),
+            }))}
+          />
+        </OptionRow>
+        <div className="overlay-options-rule" role="separator" />
+        <OptionRow label="Microphone">
+          <ChipMenu
+            title="Microphone device"
+            up={false}
+            checks
+            disabled={gif}
+            label={gif ? "No sound" : micOn ? (recording.microphone === null ? "Default" : micLabel) : "Off"}
+            tip={{ name: "Microphone", use: micUse }}
+            options={micOptions}
+          />
+        </OptionRow>
+        <OptionRow label="Camera">
+          <ChipMenu
+            title="Camera device"
+            up={false}
+            checks
+            label={webcamOn ? (recording.camera === null ? "Default" : webcamLabel) : "Off"}
+            tip={{ name: "Camera", use: webcamUse }}
+            options={cameraRows}
+          />
+        </OptionRow>
+        <div className="overlay-options-rule" role="separator" />
+        {system && (
+          <SwitchRow
+            label="System sound"
+            on={!gif && recordsSystemSound(recording.audio)}
+            disabled={gif}
+            use={gif ? silent : "Records what your computer plays."}
+            onToggle={() => save(withSystemSound(recording, !recordsSystemSound(recording.audio)))}
+          />
+        )}
+        <SwitchRow
+          label="Remove background noise"
+          on={!gif && micOn && recording.removeNoise}
+          disabled={gif || !micOn}
+          use={gif ? silent : micOn ? NOISE_USE : "Turn on a microphone first."}
+          onToggle={() => save({ ...recording, removeNoise: !recording.removeNoise })}
         />
-        <div className="overlay-options-toggles">
-          {system && (
-            <IconToggle
-              label="System sound"
-              icon={<SpeakerIcon size={16} />}
-              on={!gif && recordsSystemSound(recording.audio)}
-              disabled={gif}
-              use={gif ? silent : "Records what your computer plays."}
-              onToggle={() => save(withSystemSound(recording, !recordsSystemSound(recording.audio)))}
-            />
-          )}
-          <IconToggle
-            label="Remove background noise"
-            icon={<NoiseIcon size={16} />}
-            on={!gif && micOn && recording.removeNoise}
-            disabled={gif || !micOn}
-            use={gif ? silent : micOn ? NOISE_USE : "Turn on a microphone first."}
-            onToggle={() => save({ ...recording, removeNoise: !recording.removeNoise })}
-          />
-          <IconToggle
-            label="Clicks"
-            icon={<ClickIcon size={16} />}
-            on={recording.showClicks}
-            use="Draws a ring where you click."
-            onToggle={() => save({ ...recording, showClicks: !recording.showClicks })}
-          />
-          <IconToggle
-            label="Keys"
-            icon={<KeyboardIcon size={16} />}
-            on={recording.showKeystrokes}
-            use="Shows the keys you press at the bottom of the recording."
-            onToggle={() => save({ ...recording, showKeystrokes: !recording.showKeystrokes })}
-          />
-        </div>
+        <SwitchRow
+          label="Show clicks"
+          on={recording.showClicks}
+          use="Draws a ring where you click."
+          onToggle={() => save({ ...recording, showClicks: !recording.showClicks })}
+        />
+        <SwitchRow
+          label="Show keystrokes"
+          on={recording.showKeystrokes}
+          use="Shows the keys you press at the bottom of the recording."
+          onToggle={() => save({ ...recording, showKeystrokes: !recording.showKeystrokes })}
+        />
       </OptionsPopover>
       {error && (
         <span className="overlay-record-note overlay-record-error" role="alert">
@@ -373,12 +409,46 @@ export function RecordOptionsFields({ options, up, iconsOnly, level = null }: Re
   );
 }
 
-/** The microphone's level, 0 to 1, as a bar beside its icon. */
-function MicLevel({ level }: { level: number }) {
-  const shown = Math.max(0, Math.min(1, level));
+/** A labelled row of Recording options, its control on the right. */
+function OptionRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <span className="overlay-mic-level" data-testid="overlay-mic-level" aria-hidden="true">
-      <span style={{ transform: `scaleY(${shown})` }} />
+    <div className="overlay-options-row">
+      <span>{label}</span>
+      {children}
+    </div>
+  );
+}
+
+/** An option that is on or off: its label, and a switch on the right. */
+function SwitchRow({ label, on, disabled, use, onToggle }: SwitchRowProps) {
+  return (
+    <Tipped tip={{ name: `${label} · ${on ? "on" : "off"}`, use }}>
+      {(describedBy) => (
+        <button
+          type="button"
+          className="overlay-options-row overlay-options-switch"
+          aria-pressed={on}
+          aria-label={label}
+          aria-describedby={describedBy}
+          disabled={disabled}
+          onClick={onToggle}
+        >
+          <span>{label}</span>
+          <span className="overlay-switch" aria-hidden="true" />
+        </button>
+      )}
+    </Tipped>
+  );
+}
+
+/** The microphone's level as three bars beside its icon, lit from the left. */
+function MicLevel({ level }: { level: number }) {
+  const shown = perceivedLevel(level);
+  return (
+    <span className="overlay-mic-level" data-testid="overlay-mic-level" data-level={shown.toFixed(2)} aria-hidden="true">
+      {[0.2, 0.5, 0.8].map((at) => (
+        <span key={at} data-lit={shown >= at ? "true" : "false"} />
+      ))}
     </span>
   );
 }
@@ -388,16 +458,22 @@ function MicLevel({ level }: { level: number }) {
  * clicks and keys, in a popover that a button opens, so the toolbar's
  * row keeps to the microphone and camera.
  */
-function OptionsPopover({ up, children }: { up: boolean; children: ReactNode }) {
+function OptionsPopover({ up, countdown, children }: { up: boolean; countdown: string | null; children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
+    // A first click outside only closes it: the overlay never sees it.
     const close = (event: globalThis.MouseEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
+      if (root.current?.contains(event.target as Node)) return;
+      if (!(event.target instanceof Element && event.target.closest('[role="menu"], [role="dialog"]'))) {
+        event.stopPropagation();
+        swallowClick();
+      }
+      setOpen(false);
     };
-    window.addEventListener("mousedown", close);
-    return () => window.removeEventListener("mousedown", close);
+    window.addEventListener("mousedown", close, true);
+    return () => window.removeEventListener("mousedown", close, true);
   }, [open]);
   return (
     <div className="overlay-chip-menu" ref={root}>
@@ -414,6 +490,7 @@ function OptionsPopover({ up, children }: { up: boolean; children: ReactNode }) 
             onClick={() => setOpen((was) => !was)}
           >
             <SlidersIcon size={16} />
+            {countdown && <span className="overlay-options-countdown">{countdown}</span>}
           </button>
         )}
       </Tipped>

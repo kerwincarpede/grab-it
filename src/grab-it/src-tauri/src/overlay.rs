@@ -1411,6 +1411,9 @@ pub struct OverlayInfo {
     /// Settings → Capture's Show a tick in the toolbar after a capture: the
     /// toolbar shows a tick and the result before the overlay closes.
     pub toolbar_tick: bool,
+    /// Settings → Capture's Copy to clipboard: the tick says Copied only
+    /// when a screenshot was copied.
+    pub copy_to_clipboard: bool,
 }
 
 /// The last region as a starting selection for an overlay on `monitor`
@@ -1644,9 +1647,13 @@ pub fn overlay_info(
 ) -> Option<OverlayInfo> {
     // Read before the session is locked, so the two locks are never nested.
     let scroll_by_hand = remembered_scroll_by_hand(&app);
-    let toolbar_tick = app
+    let (toolbar_tick, copy_to_clipboard) = app
         .try_state::<crate::commands::SettingsState>()
-        .is_some_and(|state| crate::commands::lock(&state).get().preferences.toolbar_tick);
+        .map_or((false, true), |state| {
+            let settings = crate::commands::lock(&state);
+            let preferences = &settings.get().preferences;
+            (preferences.toolbar_tick, preferences.copy_to_clipboard)
+        });
     let mut guard = state.lock();
     let Phase::Open(session) = &mut *guard else {
         return None;
@@ -1687,6 +1694,7 @@ pub fn overlay_info(
         scroll_by_hand,
         held_elsewhere: session.held_elsewhere(window.label()),
         toolbar_tick,
+        copy_to_clipboard,
     })
 }
 
@@ -3089,6 +3097,7 @@ mod tests {
             scroll_by_hand: false,
             held_elsewhere: false,
             toolbar_tick: false,
+            copy_to_clipboard: true,
         };
         let value = serde_json::to_value(&info).unwrap();
         assert_eq!(value["allInOne"], true);
@@ -3243,6 +3252,7 @@ mod tests {
             scroll_by_hand: true,
             held_elsewhere: true,
             toolbar_tick: false,
+            copy_to_clipboard: true,
         };
         let value = serde_json::to_value(&info).unwrap();
         assert_eq!(

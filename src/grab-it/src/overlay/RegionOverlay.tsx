@@ -76,7 +76,7 @@ import {
 import { drawBackdrop } from "./backdrop";
 import Loupe from "./Loupe";
 import { benchMark, benchOpaque, benchSpan, benchSwitch, runBench, setupBench } from "./bench";
-import RecordSetup, { RecordOptionsFields } from "./RecordSetup";
+import RecordSetup, { ChipMenu, RecordOptionsFields } from "./RecordSetup";
 import ScrollGuide from "./ScrollGuide";
 import { nextGuideEdge, showsGuide, type GuideEdge } from "./guidePlace";
 import { startLabelY, type Blocker } from "./scrollStart";
@@ -296,6 +296,68 @@ function SelectionFrame({ box, label, placement, handles = false }: SelectionFra
   );
 }
 
+/** Room the size chip takes below a region, gap included, in CSS px. */
+const SIZE_CHIP_ROOM = 40;
+
+/**
+ * Under the region's bottom-left corner, or inside it above that corner
+ * when the region reaches the bottom of the screen.
+ */
+function sizeChipTransform(box: Box, view: Size): string {
+  const bottom = box.y + box.height;
+  return bottom + SIZE_CHIP_ROOM > view.height
+    ? `translate3d(${box.x + 8}px, ${bottom - 8}px, 0) translate(0, -100%)`
+    : `translate3d(${box.x}px, ${bottom + 8}px, 0)`;
+}
+
+/**
+ * Capture & record's size chip: the held region's size in image pixels,
+ * read-only, and its ratio as a menu (Free, 16:9, 4:3, 1:1).
+ */
+function SizeChip({
+  size,
+  ratio,
+  transform,
+  up,
+  onRatio,
+}: {
+  size: Size;
+  ratio: RatioId;
+  transform: string;
+  up: boolean;
+  onRatio: (ratio: RatioId) => void;
+}) {
+  const current = RATIOS.find((each) => each.id === ratio) ?? RATIOS[0];
+  return (
+    <div
+      className="overlay-size-chip"
+      data-testid="overlay-size-panel"
+      data-chip="true"
+      style={{ transform }}
+      onMouseDown={(event) => {
+        if ((event.target as HTMLElement).closest("button")) event.preventDefault();
+      }}
+    >
+      <span data-testid="overlay-size">
+        {size.width} × {size.height} px
+      </span>
+      <ChipMenu
+        title="Aspect ratio"
+        up={up}
+        checks
+        label={current.label}
+        tip={{ name: "Aspect ratio", use: "Keeps the selection at a shape, or Free for any." }}
+        options={RATIOS.map(({ id, label }) => ({
+          key: id,
+          title: label,
+          selected: id === ratio,
+          onPick: () => onRatio(id),
+        }))}
+      />
+    </div>
+  );
+}
+
 interface SizePanelProps {
   /** The selection's size in image pixels. */
   size: Size;
@@ -381,6 +443,8 @@ function RegionOverlay() {
   const [doneText, setDoneText] = useState<string | null>(null);
   // Record setup's microphone level, while it is listened to.
   const [micLevel, setMicLevel] = useState<number | null>(null);
+  // The pointer is over a toolbar, a chip or their popovers.
+  const [overBar, setOverBar] = useState(false);
   const reported = useRef(false);
   const backdrop = useRef<HTMLCanvasElement>(null);
   // The blurred screen around a hovered window has been drawn.
@@ -803,11 +867,14 @@ function RegionOverlay() {
   /** What the toolbar's tick says was done with `picked`, or null for no tick. */
   function tickText(picked: Selection): string | null {
     if (intent === "color") return `Copied ${colourText.current?.textContent ?? ""}`.trim();
-    if (intent === "text") return "Copied the text";
+    // The text is read after the overlay goes; the copy follows then.
+    if (intent === "text") return "Reading the text to copy";
     if (intent !== "capture") return null;
-    if (picked.kind === "screen") return "Copied every screen · Saved";
-    if (picked.kind === "window") return "Copied the window · Saved";
-    return "Copied · Saved to Library";
+    // Only a screenshot follows Copy to clipboard; it is always saved.
+    const copies = info?.copyToClipboard !== false;
+    if (picked.kind === "screen") return copies ? "Copied every screen · Saved" : "Saved every screen";
+    if (picked.kind === "window") return copies ? "Copied the window · Saved" : "Saved the window";
+    return copies ? "Copied · Saved to Library" : "Saved to Library";
   }
 
   function chooseTool(chosen: Tool) {
@@ -1066,11 +1133,14 @@ function RegionOverlay() {
     // main button acts on the window or pixel pointed at, not on what lies
     // under the toolbar or what the pointer crossed on its way there.
     if (!drag && !grab && !gripping && onToolbar(event)) {
+      // The loupe and crosshair go while the pointer is on the toolbar.
+      setOverBar(true);
       trail.current = reachedToolbar(trail.current, event.timeStamp);
       const target = pointedAt(trail.current);
       if (target) setPointer(target);
       return;
     }
+    setOverBar(false);
     const point = pointOf(event);
     trail.current = movedTo(trail.current, point, event.timeStamp);
     const follow = () => {
@@ -1504,13 +1574,23 @@ function RegionOverlay() {
       )}
       {sizeChip && held && !dragging && placement && heldSize && (
         <div ref={sizePanel}>
-          <SizePanel
-            size={heldSize}
-            ratio={ratio}
-            transform={labelTransform(held, placement)}
-            onSize={applySize}
-            onRatio={chooseRatio}
-          />
+          {allInOne && intent !== "record" ? (
+            <SizeChip
+              size={heldSize}
+              ratio={ratio}
+              transform={sizeChipTransform(held, view)}
+              up={held.y + held.height + SIZE_CHIP_ROOM > view.height}
+              onRatio={chooseRatio}
+            />
+          ) : (
+            <SizePanel
+              size={heldSize}
+              ratio={ratio}
+              transform={labelTransform(held, placement)}
+              onSize={applySize}
+              onRatio={chooseRatio}
+            />
+          )}
         </div>
       )}
       {hovered && !framed && placement && (
@@ -1529,7 +1609,7 @@ function RegionOverlay() {
           </span>
         </div>
       )}
-      {canDrag && pointer && !active && (
+      {canDrag && pointer && !active && !overBar && (
         <>
           <div
             className="overlay-guide overlay-guide-x"
@@ -1549,6 +1629,7 @@ function RegionOverlay() {
       {!windowMode &&
         !screenSource &&
         pointer &&
+        !overBar &&
         !(windows && image === null) &&
         !benchSwitch("noloupe") && (
         <Loupe
@@ -1566,7 +1647,6 @@ function RegionOverlay() {
           timer={timer}
           showTimer={isTimed(tool)}
           source={source}
-          countdown={recording.recording?.countdown ?? null}
           mainLabel={intent === "capture" && timer > 0 ? `Capture in ${timer} s` : CONFIRM_LABELS[intent]}
           ready={ready}
           mainUse={
@@ -1591,16 +1671,24 @@ function RegionOverlay() {
                 level={micLevel}
               />
             ) : intent === "color" ? (
-              <span className="overlay-toolbar-colour" data-testid="overlay-toolbar-colour">
-                <span ref={colourSwatch} className="overlay-loupe-swatch" aria-hidden="true" />
-                <span ref={colourText}>—</span>
+              <>
+                <span className="overlay-toolbar-colour" data-testid="overlay-toolbar-colour">
+                  <span ref={colourSwatch} className="overlay-loupe-swatch" aria-hidden="true" />
+                  <span ref={colourText}>—</span>
+                </span>
+                <span className="overlay-format-chip" data-testid="overlay-colour-format">
+                  HEX
+                </span>
+              </>
+            ) : intent === "text" ? (
+              <span className="overlay-toolbar-hint" data-testid="overlay-text-hint">
+                Drag over text
               </span>
             ) : null
           }
           onTool={chooseTool}
           onSource={chooseSource}
           onTimer={stepTimer}
-          onCountdown={stepCountdown}
           onMain={confirmMain}
           onCancel={cancel}
         />

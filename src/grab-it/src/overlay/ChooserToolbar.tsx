@@ -18,7 +18,6 @@ import {
   type ToolbarLayout,
 } from "./chooser";
 
-import { COUNTDOWN_USE, countdownText } from "./recordOptions";
 import { SOURCES } from "./recordSources";
 import { Tipped } from "./Tipped";
 
@@ -241,8 +240,6 @@ export interface ChooserToolbarProps {
    * Window and Screen pick. Null outside Record.
    */
   source: RecordingSource | null;
-  /** Record's countdown in seconds, in the Timer's place on 8; null until it is known. */
-  countdown: number | null;
   /** The main button's label, named for its action. */
   mainLabel: string;
   /** The main button can act; dimmed until then, its tooltip says what to do first. */
@@ -267,7 +264,6 @@ export interface ChooserToolbarProps {
   onTool: (tool: Tool) => void;
   onSource: (source: RecordingSource) => void;
   onTimer: () => void;
-  onCountdown: () => void;
   onMain: () => void;
   onCancel: () => void;
 }
@@ -289,7 +285,6 @@ export function ChooserToolbar({
   timer,
   showTimer,
   source,
-  countdown,
   mainLabel,
   ready,
   mainUse,
@@ -304,7 +299,6 @@ export function ChooserToolbar({
   onTool,
   onSource,
   onTimer,
-  onCountdown,
   onMain,
   onCancel,
 }: ChooserToolbarProps) {
@@ -372,34 +366,15 @@ export function ChooserToolbar({
             onClick={() => (target ? onSource(target.source) : onTool(each))}
           >
             {icon}
-            <kbd aria-hidden="true">{key}</kbd>
           </button>
         )}
       </Tipped>
     );
   }
 
+  // Record's countdown is in Recording options; key 8 still steps it.
   const timerButton =
-    recording && countdown !== null ? (
-      <Tipped tip={{ name: "Countdown", keyLabel: String(TIMER_KEY), use: COUNTDOWN_USE }}>
-        {(describedBy) => (
-          <button
-            type="button"
-            className="overlay-tool"
-            data-testid="overlay-countdown"
-            aria-label={countdownText(countdown).label}
-            aria-describedby={describedBy}
-            aria-pressed={countdown > 0}
-            aria-keyshortcuts={String(TIMER_KEY)}
-            onClick={onCountdown}
-          >
-            <TimerIcon />
-            <span>{countdownText(countdown).text}</span>
-            <kbd aria-hidden="true">{TIMER_KEY}</kbd>
-          </button>
-        )}
-      </Tipped>
-    ) : showTimer && !recording ? (
+    showTimer && !recording ? (
       <Tipped tip={{ name: "Timer", keyLabel: String(TIMER_KEY), use: "Waits off, 3, 5 or 10 s before capturing." }}>
         {(describedBy) => (
           <button
@@ -413,8 +388,7 @@ export function ChooserToolbar({
             onClick={onTimer}
           >
             <TimerIcon />
-            <span>{timer > 0 ? `${timer} s` : "Timer"}</span>
-            <kbd aria-hidden="true">{TIMER_KEY}</kbd>
+            {timer > 0 && <span>{timer} s</span>}
           </button>
         )}
       </Tipped>

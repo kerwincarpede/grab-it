@@ -1651,40 +1651,168 @@
   line-height: 18px;
 }
 
-/* Recording options: the format, then the option toggles in a row. */
+/* Recording options: a heading, labelled rows, then switches. */
 .overlay-options-popover {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  min-width: 220px;
-  padding: 8px;
-}
-
-.overlay-options-toggles {
-  display: flex;
   gap: 2px;
-  align-items: center;
+  min-width: 290px;
+  padding: 12px 14px;
 }
 
-/* The setup microphone's level: a short bar that fills from the bottom. */
-.overlay-mic-level {
+.overlay-options-heading {
+  padding-bottom: 6px;
+  color: #8d919a;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.overlay-options-row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 36px;
+  color: #ecedef;
+}
+
+.overlay-options-rule {
+  height: 1px;
+  margin: 4px 0;
+  background: #2a2c31;
+}
+
+.overlay-options-switch {
+  width: 100%;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.overlay-options-switch:disabled {
+  color: #5d6068;
+  cursor: default;
+}
+
+.overlay-switch {
   position: relative;
-  width: 3px;
+  flex: none;
+  width: 30px;
+  height: 18px;
+  background: #3a3d45;
+  border-radius: 999px;
+  transition: background 160ms ease-out;
+}
+
+.overlay-switch::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
   height: 14px;
-  overflow: hidden;
-  background: rgb(255 255 255 / 12%);
-  border-radius: 2px;
+  background: #fff;
+  border-radius: 999px;
+  transition: transform 160ms ease-out;
+  content: "";
+}
+
+.overlay-options-switch[aria-pressed="true"] .overlay-switch {
+  background: var(--overlay-accent, #2f81f7);
+}
+
+.overlay-options-switch[aria-pressed="true"] .overlay-switch::after {
+  transform: translateX(12px);
+}
+
+.overlay-options-countdown {
+  color: #c9ccd2;
+  font-size: 12px;
+}
+
+/* The toolbar's microphone and camera: icons alone, no chevron. */
+.overlay-chip[data-bare="true"] {
+  gap: 4px;
+  background: transparent;
+}
+
+/* The setup microphone's level: three bars, lit from the left. */
+.overlay-mic-level {
+  display: inline-flex;
+  gap: 1.5px;
+  align-items: flex-end;
+  height: 10px;
 }
 
 .overlay-mic-level > span {
-  position: absolute;
-  inset: 0;
+  width: 2.5px;
+  background: rgb(255 255 255 / 22%);
+  border-radius: 1px;
+  transition: background 80ms linear;
+}
+
+.overlay-mic-level > span:nth-child(1) {
+  height: 4px;
+}
+
+.overlay-mic-level > span:nth-child(2) {
+  height: 7px;
+}
+
+.overlay-mic-level > span:nth-child(3) {
+  height: 10px;
+}
+
+.overlay-mic-level > span[data-lit="true"] {
   background: #3fb950;
-  transform-origin: bottom;
-  transition: transform 80ms linear;
+}
+
+/* Capture & record's size chip under the region's bottom-left corner. */
+.overlay-size-chip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  height: 26px;
+  padding: 0 3px 0 10px;
+  color: #ecedef;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: #101113;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px #2a2c31;
+}
+
+.overlay-size-chip .overlay-chip {
+  height: 20px;
+  padding: 0 8px;
+  font-size: 12px;
+  background: #2a2c31;
+}
+
+.overlay-toolbar-hint {
+  padding: 0 8px;
+  color: #c9ccd2;
+}
+
+.overlay-format-chip {
+  padding: 2px 8px;
+  color: #c9ccd2;
+  font: 600 11px/16px ui-monospace, "SF Mono", Menlo, monospace;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px #2a2c31;
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .overlay-switch,
+  .overlay-switch::after,
   .overlay-mic-level > span {
     transition: none;
   }

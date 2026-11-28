@@ -6,6 +6,7 @@ import {
   countdownText,
   microphoneLabel,
   nextCountdown,
+  perceivedLevel,
   withCamera,
   withMicrophone,
   withSystemSound,
@@ -66,5 +67,16 @@ describe("the recording options", () => {
   it("names the countdown off or by its seconds", () => {
     expect(countdownText(0)).toEqual({ text: "Off", label: "No countdown" });
     expect(countdownText(5)).toEqual({ text: "5 s", label: "Countdown 5 s" });
+  });
+});
+
+describe("perceivedLevel", () => {
+  it("moves clearly for speech and quiet sounds, on a decibel scale", () => {
+    expect(perceivedLevel(0)).toBe(0);
+    expect(perceivedLevel(1)).toBe(1);
+    // -24 dB, quiet speech: well over a third, where a linear bar shows 6%.
+    expect(perceivedLevel(10 ** (-24 / 20))).toBeCloseTo(0.6, 2);
+    expect(perceivedLevel(10 ** (-60 / 20))).toBeCloseTo(0, 5);
+    expect(perceivedLevel(Number.NaN)).toBe(0);
   });
 });

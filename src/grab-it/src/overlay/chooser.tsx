@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import {
   ColourIcon,
+  PhotoIcon,
   RecordIcon,
   RegionIcon,
   ScreenIcon,
@@ -58,7 +59,7 @@ export interface ModeInfo {
 const toolInfo = (tool: Tool) => TOOL_ITEMS.find((each) => each.tool === tool) as ToolInfo;
 
 export const MODES: ModeInfo[] = [
-  { mode: "capture", label: "Capture", icon: <RegionIcon />, hotkey: "region", use: "Captures a region, a window or the screen." },
+  { mode: "capture", label: "Capture", icon: <PhotoIcon />, hotkey: "region", use: "Captures a region, a window or the screen." },
   ...(["record", "text", "color", "scroll"] as const).map((mode) => {
     const { label, icon, hotkey, use } = toolInfo(mode);
     return { mode, label, icon, hotkey, use };

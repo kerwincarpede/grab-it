@@ -73,3 +73,13 @@ export function cameraLabel(recording: RecordingSettings, cameras: Camera[]): st
   if (recording.camera === null) return "Default camera";
   return cameras.find((camera) => camera.id === recording.camera)?.name ?? "Saved camera";
 }
+
+/**
+ * The microphone level on a perceptual scale: the peak in decibels, from
+ * -60 dB (nothing) to 0 dB (full), so speech clearly moves it.
+ */
+export function perceivedLevel(level: number): number {
+  if (!(level > 0)) return 0;
+  const decibels = 20 * Math.log10(Math.min(1, level));
+  return Math.max(0, Math.min(1, (decibels + 60) / 60));
+}

@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-The recording setup toolbar holds the options you change most, and so does the Capture & record… toolbar while **Record** is on: a microphone button, a camera button and **Recording options**, which opens the format, system sound, noise removal, clicks and keys. Point at an item for a tooltip with its name, whether it's on and what it does; an option that's on is tinted (a grey pill in Capture & record…). When the Capture & record… toolbar is short of room, the microphone and camera buttons shrink to their icons, and their tooltips name the choice. Every change is saved to **Settings → Recording**, so the next recording starts the same way, and Settings has a few more.
+The recording setup toolbar holds the options you change most, and so does the Capture & record… toolbar while **Record** is on: a microphone button, a camera button and **Recording options**. The microphone and camera are icons, and their tooltips name the choice. **Recording options** opens a panel with the **Format**, **Countdown**, **Microphone** and **Camera**, then switches for **System sound**, **Remove background noise**, **Show clicks** and **Show keystrokes**. A click outside the panel only closes it. Every change is saved to **Settings → Recording**, so the next recording starts the same way, and Settings has a few more.
 
 ![The recording options: Region, Window or Screen, the format, the microphone, sound, webcam, clicks, keys and countdown.](../../../assets/recording/options-bar.png)
 
@@ -39,11 +39,11 @@ A tick marks the current choice in the **Microphone** menu. A GIF is silent, so 
 
 ## System sound
 
-The speaker icon records what your computer plays, such as a video's sound or a notification. With the microphone on too, both are mixed into the MP4's one sound track, so it plays the same anywhere.
+The **System sound** switch records what your computer plays, such as a video's sound or a notification. With the microphone on too, both are mixed into the MP4's one sound track, so it plays the same anywhere.
 
 ## Remove background noise
 
-The sound wave icon beside the speaker cleans fan hum, keyboard clatter and room noise from your microphone, so your voice comes through clearly in a noisy room. It's off by default. Only the microphone is cleaned: system sound is left as it is.
+The **Remove background noise** switch cleans fan hum, keyboard clatter and room noise from your microphone, so your voice comes through clearly in a noisy room. It's off by default. Only the microphone is cleaned: system sound is left as it is.
 
 The noise is removed on your computer when the recording is saved, with the [RNNoise](https://github.com/GregorR/rnnoise-models) model that comes with Grab-it, and nothing is sent anywhere. The sound kept apart beside the recording (below) stays as it was heard.
 
@@ -73,19 +73,19 @@ You can also pick the **Camera** in **Settings → Recording**, which also sets 
 
 ## Clicks
 
-The pointer icon draws a ring wherever you click, which grows and fades in half a second. It's drawn into the recording itself, not shown on your screen.
+The **Show clicks** switch draws a ring wherever you click, which grows and fades in half a second. It's drawn into the recording itself, not shown on your screen.
 
 ## Keys
 
-The keyboard icon shows the keys you press as a label at the bottom centre of the recording, like `⌘ ⇧ 4` on macOS or `Ctrl Shift 4` on Windows and Linux. A modifier pressed on its own shows nothing. The label stays for a moment after the last key, then fades.
+The **Show keystrokes** switch shows the keys you press as a label at the bottom centre of the recording, like `⌘ ⇧ 4` on macOS or `Ctrl Shift 4` on Windows and Linux. A modifier pressed on its own shows nothing. The label stays for a moment after the last key, then fades.
 
 :::caution
-On macOS, keys typed into a password field are left out. Windows and Linux can't tell when you're typing a password, so turn **Keys** off before you type one.
+On macOS, keys typed into a password field are left out. Windows and Linux can't tell when you're typing a password, so turn **Show keystrokes** off before you type one.
 :::
 
 ## Countdown
 
-The countdown button steps through **Off**, **3 s**, **5 s** and **10 s**. In Capture & record… it's in the Timer's place, and `8` steps it too. With a countdown, the recording toolbar counts down and the number shows big in the middle of the area, giving you time to get ready. Press **Cancel** on the toolbar during the countdown and nothing is recorded.
+The countdown is **Off**, **3 s**, **5 s** or **10 s**. In Capture & record… it's in **Recording options**, its seconds show on that button once set, and `8` steps it too. With a countdown, the recording toolbar counts down and the number shows big in the middle of the area, giving you time to get ready. Press **Cancel** on the toolbar during the countdown and nothing is recorded.
 
 ## Only in Settings
 
@@ -93,6 +93,6 @@ The countdown button steps through **Off**, **3 s**, **5 s** and **10 s**. In Ca
 
 - **Show cursor**: on by default. Turn it off to leave the pointer out of the recording.
 - **Frame rate** and **Audio**: the same choices as the setup toolbar's format and sound.
-- **Remove background noise**: the same as the toolbar's sound wave icon.
+- **Remove background noise**: the same as the switch in **Recording options**.
 
 See [Settings](/grab-it/reference/settings/) for the rest.

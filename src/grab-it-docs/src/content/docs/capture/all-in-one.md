@@ -34,7 +34,7 @@ In a plain Region capture, with **Settings → Capture → Region toolbar** off,
 
 ### A tick after a capture
 
-Turn on **Settings → Capture → Show a tick in the toolbar after a capture** and Grab-it copies and saves the capture straight away, then the toolbar shows a green tick and what was done, such as *Copied · Saved to Library*, *Copied the text* or *Copied #8297FF*, for about a second before it closes. It's off by default, since the Quick Access card already shows the result.
+Turn on **Settings → Capture → Show a tick in the toolbar after a capture** and Grab-it copies and saves the capture straight away, then the toolbar shows a green tick and what was done, such as *Copied · Saved to Library* (or *Saved to Library* with **Copy to clipboard** off), *Copied #8297FF*, or *Reading the text to copy* for **Text**, whose text is read once the overlay has gone. It shows for about a second before the overlay closes. It's off by default, since the Quick Access card already shows the result.
 
 ## Modes
 
@@ -55,7 +55,7 @@ Click a mode or target, or press its number while the chooser is open. You can s
 
 ## The Timer
 
-The **Timer** button, beside the main button, shows *Timer*, or the delay it's set to, like *5 s*. Each click (or press of `8`) steps it on: off, 3 s, 5 s, 10 s, then off again. While it's set, the main button reads **Capture in 5 s**. It works with **Region**, **Window** and **Screen**, and is hidden for **Text**, **Colour** and **Scroll**. In **Record** the same button is the recording's countdown, still on `8`.
+The **Timer** button, beside the main button, shows its icon, and the delay once it's set, like *5 s*. Each click (or press of `8`) steps it on: off, 3 s, 5 s, 10 s, then off again. While it's set, the main button reads **Capture in 5 s**. It works with **Region**, **Window** and **Screen**, and is hidden for **Text**, **Colour** and **Scroll**. In **Record**, `8` steps the recording's countdown instead, which is in **Recording options**.
 
 With the Timer on, you pick the area first. The overlay then closes, and when the time is up Grab-it captures that area **as the screen looks then**. Handy for opening a menu inside the area you chose. See [Timed capture](/grab-it/capture/timed/).
 
@@ -73,15 +73,13 @@ In **Region** and **Text**, a region you drag doesn't capture when you let go. I
 
 `Shift` keeps a new drag square and `Space` moves it while you drag, as for a [region](/grab-it/capture/region/).
 
-### Exact size
+### Size and ratio
 
-In the chip under the selection are its **width** and **height**. Type an exact size, such as `1280` × `720`, and press `Enter` or click away to apply it. The size is in the pixels the capture will have, so on a Retina or high-DPI screen it's the real image size, not the size in points. A size that would run off the screen moves the selection back onto it, and one larger than the screen is cut to fit.
-
-`Enter` in a size field only sets the size. Press `Enter` again (outside the field) to capture.
+A chip under the selection's bottom-left corner shows its size, such as *1552 × 700 px*, in the pixels the capture will have, so on a Retina or high-DPI screen it's the real image size, not the size in points.
 
 ### Ratio locks
 
-Next to the size are **Free**, **16:9**, **4:3** and **1:1**, or one **Aspect ratio** menu on a narrower display. Pick a ratio and the selection is reshaped to it around its centre, as large as its width allows. While a ratio is locked, dragging a handle keeps that shape: a corner grows from the opposite corner, and an edge from the opposite edge. **Free** unlocks it again.
+The chip's ratio menu offers **Free**, **16:9**, **4:3** and **1:1**. Pick a ratio and the selection is reshaped to it around its centre, as large as its width allows. While a ratio is locked, dragging a handle keeps that shape: a corner grows from the opposite corner, and an edge from the opposite edge. **Free** unlocks it again.
 
 ## Your last region
 
@@ -92,8 +90,8 @@ The last region you captured starts out selected on the monitor it was on, ready
 **Record** stays in the same toolbar, with a red dot on its icon. While it's on:
 
 - **Region**, **Window** and **Screen** (or `1`, `2` and `3`) pick what to record. A region keeps its size and ratio chip under it.
-- The microphone and camera buttons each list **Default**, your devices and **Off**. The microphone button shows its level as you speak. **Recording options** holds the format, system sound, noise removal, clicks and keys. See [Recording options](/grab-it/recording/options/).
-- The **Timer** button is the countdown, on `8`.
+- The microphone and camera buttons each list **Default**, your devices and **Off**. The microphone button shows its level as you speak. **Recording options** holds the format, countdown, microphone, camera, and switches for system sound, noise removal, clicks and keystrokes. See [Recording options](/grab-it/recording/options/).
+- The countdown is in **Recording options**, and its seconds show on that button once it's set. `8` steps it.
 - The main button is a red **Record**. Press it or `Enter` to start.
 
 Press **Record** or `6` again to go back to screenshots, or pick another tool. Press the Capture & record… shortcut again to stop the recording. See [Record your screen](/grab-it/recording/record/).
