@@ -95,7 +95,6 @@ function mockOverlay(
       setup_level_stop: () => undefined,
       setup_level: () => 0.5,
       recording_microphones: () => [{ id: "usb", name: "USB Microphone", isDefault: false }],
-      ...extra,
       overlay_info: () =>
         overlayInfo({
           // Twice the viewport: a 2x monitor.
@@ -122,6 +121,7 @@ function mockOverlay(
       overlay_cancel: () => undefined,
       overlay_scroll_docs: () => undefined,
       remember_scroll_by_hand: () => null,
+      ...extra,
     },
     { shouldMockEvents: true },
   );
@@ -512,6 +512,52 @@ describe("RegionOverlay", () => {
     expect(tips).toHaveTextContent("Esc Cancel");
     expect(tips).toHaveTextContent("Shift Square");
     expect(tips).toHaveTextContent("Space Move");
+  });
+
+  it("eases the hint to its new width when an error replaces its line", async () => {
+    // jsdom lays nothing out: the hint's contents are 300 px, or 420 px with the error.
+    const layout = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const width = this.matches("[data-testid='overlay-hint-fold'] > .overlay-fold-contents")
+        ? this.textContent?.includes("Could not save")
+          ? 420
+          : 300
+        : 0;
+      return { left: 0, width } as DOMRect;
+    });
+    try {
+      mockOverlay({}, {}, KNOWN_CAMERAS, {
+        overlay_finish: () => {
+          throw new Error("Could not save the capture");
+        },
+      });
+      render(<RegionOverlay />);
+      const overlay = await ready();
+      const fold = screen.getByTestId("overlay-hint-fold");
+      expect(fold.style.width).toBe("");
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        fireEvent.mouseDown(overlay, { button: 0, clientX: 100, clientY: 100 });
+        fireEvent.mouseMove(overlay, { clientX: 300, clientY: 300 });
+        fireEvent.mouseUp(overlay, { button: 0, clientX: 300, clientY: 300 });
+        await act(async () => {});
+
+        const status = screen.getByRole("status");
+        expect(status).toHaveTextContent("Could not save the capture");
+        expect(status).toHaveAttribute("data-error", "true");
+        expect(status.closest(".overlay-hint")).toHaveAttribute("data-hidden", "false");
+        // From the old line's width to the error's, then left to size itself.
+        expect(fold).toHaveAttribute("data-folding", "true");
+        expect(fold.style.width).toBe("420px");
+        act(() => vi.advanceTimersByTime(FOLD_MS + 50));
+        expect(fold.style.width).toBe("");
+        expect(fold).toHaveAttribute("data-folding", "false");
+      } finally {
+        vi.useRealTimers();
+      }
+    } finally {
+      layout.mockRestore();
+    }
   });
 
   describe("revealing the window", () => {
